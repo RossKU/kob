@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PairSummaryView, StatsView } from '../../data/indexer-types';
 import type { TokenInfo } from '../../kob/registry';
 import {
-  ariaSort, changeCell, DEFAULT_SORT, filterPairs, firstDir, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, priceCell, runPool, sortEntries,
+  ariaSort, changeCell, DEFAULT_SORT, filterPairs, firstDir, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, priceCell, runPool, sortEntries,
   tokenEntry, volumeCell, type ListEntry, type Slot,
 } from './market-list';
 import type { TokenRow } from './token-model';
@@ -148,6 +148,17 @@ describe('market list pairs', () => {
     expect(keys('exkcc/exusd')).toEqual(['EXKCC/EXUSD']);
     expect(keys('/exkcc')).toEqual(['EXUSD/EXKCC']);
     expect(keys('zzz')).toEqual([]);
+  });
+});
+
+describe('rows only kascov.io names', () => {
+  it('say "no orders", fetch nothing (never loading or unavailable) and have no figure', () => {
+    const e = kascovEntry(row('ROCKET', ID('9'), { source: 'kascov', info: null, openAsks: null, openBids: null, decimals: null, scale: null, tick: null }));
+    expect(e).toMatchObject({ key: ID('9'), kind: 'token', loading: false, unavailable: false, noOrders: true });
+    expect(e.cells.orders.text).toBe('no orders');
+    expect(e.cells.orders.title).toContain('kascov.io');
+    for (const k of ['last', 'change', 'volume', 'spread'] as const) expect(e.cells[k]).toEqual({ text: null, title: null });
+    expect(e.sort).toEqual({ last: null, change: null, volume: null, spread: null, orders: null });
   });
 });
 

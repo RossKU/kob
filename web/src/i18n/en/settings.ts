@@ -1,4 +1,10 @@
 export default {
+  'settings.icons.title': 'Token names and icons',
+  'settings.icons.explain': "The market list is completed with tokens, names and icons from a token list service (by default kascov.io): what each token's creator claimed in its creation record, shown as declared by its creator and not checked by KOB. Opening the list asks that service, which sees your IP address. Facts (supply, decimals, prices, orders) never come from it.",
+  'settings.icons.source': 'Source of token names and icons: {url}',
+  'settings.icons.off': 'This deployment has the token list service turned off: the list shows only what the registry and the indexer give.',
+  'settings.icons.label': 'Load token icons from third-party hosts',
+  'settings.icons.hint': "On by default. An icon is fetched from the service's saved copy of it, or from the creator's own host, and shown only if its bytes match the hash the creator committed to; those hosts then see your IP address. Off: letters instead of pictures and no request to any image host.",
   'settings.connection.title': 'Servers and network',
   'settings.servers.warnTitle': 'Only point KOB at servers you trust',
   'settings.servers.warn': 'The node, the indexer and the registry decide what this app shows you: prices, order status, balances and which tokens exist. A wrong or malicious server can show wrong data. Signing stays protected, because every transaction is decoded locally from the transaction itself before you sign, but wrong data can still lead you to make bad trades.',

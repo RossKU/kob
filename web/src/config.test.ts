@@ -40,7 +40,7 @@ describe('mergeConfig', () => {
     expect(mergeConfig()).toEqual({
       network: 'mainnet', indexerUrl: '', extraIndexerUrls: [], nodeUrl: '', registryUrl: './registry/tokens.json',
       features: { kastle: false, test: false, priorityFee: false }, fees: { dynamic: true, maxRate: 1000, maxFeeKas: 1 }, allowQueryOverrides: false,
-      quoteTokens: {}, home: 'auto', explorerUrl: '', marketStartToleranceBps: 1000,
+      quoteTokens: {}, home: 'auto', explorerUrl: '', tokenNamesUrl: 'https://kascov.io/data', marketStartToleranceBps: 1000,
     });
     expect(DEFAULT_CONFIG.features.kastle).toBe(false);
   });
@@ -294,6 +294,31 @@ describe('block explorer links (kaspa.stream)', () => {
     expect(resolveConfig({ file: { explorerUrl: 'ws://x' } }).warnings.some((w) => w.field === 'explorerUrl')).toBe(true);
     expect(explorerTxUrl(c, 'xyz')).toBeNull();
     expect(explorerTxUrl(c, null)).toBeNull();
+  });
+});
+
+describe('tokenNamesUrl: where the market list reads token names and icons from', () => {
+  it('defaults to the kascov.io data set', () => {
+    expect(resolveConfig({}).config.tokenNamesUrl).toBe('https://kascov.io/data');
+  });
+  it('config.json / __KOB_CONFIG__ set it (https only, a trailing slash dropped); an empty value turns the feature off', () => {
+    expect(resolveConfig({ file: { tokenNamesUrl: 'https://names.example.org/data/' } }).config.tokenNamesUrl).toBe('https://names.example.org/data');
+    expect(resolveConfig({ injected: { tokenNamesUrl: 'https://names.example.org/data' } }).config.tokenNamesUrl).toBe('https://names.example.org/data');
+    const off = resolveConfig({ file: { tokenNamesUrl: '' } });
+    expect(off.config.tokenNamesUrl).toBe('');
+    expect(off.warnings).toEqual([]);
+  });
+  it('http, other schemes, credentials and junk are refused with a warning and leave the default', () => {
+    for (const bad of ['http://names.example.org/data', 'ws://x', 'ftp://x', 'https://u:p@names.example.org', 'names.example.org', 42]) {
+      const r = resolveConfig({ file: { tokenNamesUrl: bad } });
+      expect(r.config.tokenNamesUrl, String(bad)).toBe('https://kascov.io/data');
+      expect(r.warnings.some((w) => w.field === 'tokenNamesUrl'), String(bad)).toBe(true);
+    }
+  });
+  it('a stored setting or a link must not repoint it', () => {
+    const r = resolveConfig({ settings: { tokenNamesUrl: 'https://evil.example/data' } });
+    expect(r.config.tokenNamesUrl).toBe('https://kascov.io/data');
+    expect(r.warnings.some((w) => w.field === 'tokenNamesUrl')).toBe(true);
   });
 });
 

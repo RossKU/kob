@@ -66,6 +66,7 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_EXTRA_INDEXER_URLS` | no | further indexers, comma-separated `https://` URLs, at most 4: they cross-check the primary and take over its reads when it is down (see "Further indexers: cross-check and failover") |
 | `KOB_PAGES_NODE_URL` | no | a `wss://` wRPC node **with its path** (see "The node and the SDK resolver"); empty (default) = a public node the Kaspa SDK resolver names, reached over Borsh |
 | `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
+| `KOB_PAGES_TOKEN_NAMES_URL` | no | the source of token names and icons: the base of a kascov.io-shaped data set, `https://...` (default `https://kascov.io/data`); `off` = none (see "Token names and icons" below) |
 | `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
 
 ### Further indexers: cross-check and failover
@@ -121,6 +122,67 @@ mainnet-specific path and no other fallback. Two things to know:
 
 A node that does not answer is never "checking..." for ever: after about 25 seconds the status bar says "unreachable" and a red banner says
 whether no node URL is set (use Settings > Node URL, or ask whoever hosts the page) or the URL set did not answer.
+
+### Token names and icons: an external dependency (kascov.io)
+
+KOB keeps no token list of its own: not in the repository, not in the indexer. The market list is completed in the visitor's browser from a
+third-party explorer, kascov.io (MIT, `github.com/Knitser/kascov`), which serves a static data set per network:
+
+```
+https://kascov.io/data/{mainnet|testnet-10}/tokens.json        the tokens (CORS *, Cache-Control max-age=30, no ETag or Last-Modified)
+https://kascov.io/img/{mainnet|testnet-10}/<covenant id>        kascov's saved copy of a token's hash-committed picture (CORS *)
+```
+
+What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web/src/ui/market/kascov-merge.ts`):
+
+* **Taken:** the creator's claimed ticker, name and image hash/URL (`claimed_*`), the declared decimals (only to flag a disagreement) and
+  the program hash (`standard.view_template_hash`). **Never read:** kascov's `status`, `review`, `alive`, `invalid_reason`, `listed_*`.
+  Supply, decimals used for trading, prices and orders stay the chain's and the KOB indexer's.
+* **Which tokens:** one kascov knows and no KOB source lists is added (as a "no orders" row) only if the program hash it names is one of the
+  programs this build pins (`crates/kob-protocol/data/programs.json`) and enables for the network: on mainnet a `reviewed` program, and the
+  profile's `networks` (KaspaRocket and KForge: testnet-10 only). The 46-byte KRON family has no hash in kascov's data set, so those
+  tokens appear only through the registry or the indexer, as before.
+* **Icons:** shown only when the fetched bytes hash (SHA-256 of the raw bytes, checked on real tokens of both networks) to the
+  `claimed_image_hash`; otherwise a letter. The creators' own hosts (mostly `storage.googleapis.com`) send no CORS header, so the browser
+  cannot read their bytes: the app fetches kascov's saved copy first (its `/img/` route is part of the kascov web app, not of its documented
+  data API, so it is best effort; a 404 falls back to the creator's own https URL, which works only where that host allows CORS). The
+  verified bytes are shown from a `blob:` URL; `img-src` is therefore `'self' data: blob:` and never names a host.
+* **Failure:** unreachable, slow (8 s), not JSON, a changed shape, a file for another network, larger than 12 MB: the list is exactly what
+  the registry and the indexer give, plus a one-line "unavailable" hint. Nothing is thrown into the UI and nothing is stored as authority
+  (the only persistent item is the visitor's icon switch, `kob.icons`).
+
+**Refresh policy** (one constant, `KASCOV_REFRESH_MS` = 120 s in `web/src/data/kascov.ts`; kascov rebuilds the file about every 2 minutes):
+
+* fetched when a view that needs names or icons is shown (the market list, a token page); while that view stays visible, again at most every
+  2 minutes; no polling on other pages, none while `document.hidden`, none after the view is left (coming back to a stale list fetches once);
+* one in-flight request and one in-memory cache are shared by every component of the page; nothing is kept between page loads;
+* after a failure the next try waits 30 s, then 60 s, doubling to 10 minutes, and the list already shown stays on screen;
+* when `generated_at_ms` did not advance the parsed result is kept as it is and nothing re-renders;
+* load per visitor with the list open: mainnet about 0.8 MB (about 120 KB gzipped) and testnet-10 about 2.4 MB per 2 minutes, plus the pictures
+  of the rows scrolled into view (about 70 KB on average, 0.5 MB at most; at most 4 at a time, each fetched once per visit).
+
+**The source is a host setting.** `KOB_PAGES_TOKEN_NAMES_URL` (config.json `tokenNamesUrl`, the variables table above): the base of the
+data set, read as `<base>/<network>/tokens.json` in kascov's shape, `https://` only; unset or empty in the workflow = `https://kascov.io/data`;
+`off` in the workflow (an empty `"tokenNamesUrl": ""` in a hand-written config.json) turns the feature off: no request is made and the
+Settings toggle is disabled (GitHub cannot tell an empty variable from an unset one, hence the word). The saved pictures are read from `img`
+beside the last segment of the base (`https://kascov.io/data` -> `https://kascov.io/img`). Only the deployment can set it: a link or a stored
+setting is ignored. A host can put a caching proxy in front of kascov without a code change: serve the same two routes with
+`Access-Control-Allow-Origin: *`, keep `Cache-Control` of 30 s or more, and do not rewrite the bodies (the app checks every picture against its
+hash, but names are the creators' claims as the source gives them).
+
+**CSP.** The shipped `connect-src` allows `https:`, so the default works as built. A deployment that **pins `connect-src` to exact origins**
+(`web/README.md`, "Deployment headers") must add the origin of the token-names source (`https://kascov.io` by default, your proxy's
+origin otherwise); without it the list silently shows no names or icons. The pictures of creators' own hosts are the fallback only and need
+`https:` in `connect-src`; a pinned policy turns them into letters, which is safe. `img-src 'self' data: blob:` stays as shipped.
+
+**Privacy.** The visitor's browser asks the source for the list (it sees the visitor's IP and that the market list was opened) and for the
+pictures of the rows in view (kascov.io, or the creator's host when kascov has no copy). The founder accepted this for a DEX; there is no
+proxy through the host. The visitor can switch pictures off in Settings ("Load token icons from third-party hosts", on by default): letters
+only, and no image host is contacted. The host sees nothing of this.
+
+**Neutrality.** The names are the creators' own claims, labelled "declared by its creator"; the list is not curated, ranked or marked
+"verified" by KOB or by the host, and kascov's ratings are not used. A host that repoints `KOB_PAGES_TOKEN_NAMES_URL` to a curated source
+changes what the page says about tokens: section 9 applies.
 
 Every URL must be `https://` (a node `wss://`) on a public host, without user name, password, query or fragment: the page is
 served over https, so a browser refuses `http://` and `ws://` from it, and `config.json` is public (never put an API key in a
@@ -227,6 +289,10 @@ own indexer (`docs/ops/chart-server.md`, section 7). Users who saved a network o
   "following"), or by hand `curl -si -H "Origin: https://kob-web.pages.dev" https://chart.example.org/v1/health` must answer `200`, carry
   `access-control-allow-origin`, and show `"network"` equal to `KOB_PAGES_NETWORK`. A wrong host, a server without CORS or a down tunnel
   deploys green; the app then shows its "no indexer" or wrong-network banner.
+* Token names: the page's request to the names source, in the browser's network tab, is `<tokenNamesUrl>/<network>/tokens.json` and answers
+  `200` with `access-control-allow-origin`; `curl -s https://kob-web.pages.dev/config.json` shows `tokenNamesUrl` (absent = kascov.io). If you
+  pinned `connect-src`, the origin must be in it (section 3). The app works without it, so a wrong source deploys green and the list simply
+  shows no names.
 * Hashes: the run's summary lists the sha256 of every deployed file; anyone can rebuild the commit and compare (`ci.yml` job
   `reproducible` checks that the bundle does not depend on the build directory). `curl -s https://kob-web.pages.dev/config.json`
   shows the configuration in force.
@@ -243,6 +309,9 @@ stay on the old version, revert the commit (or clear `KOB_PAGES_PROJECT`, which 
 * **No fee.** The hosted app adds no fee, tip or surcharge to any order beyond what the user sets in the ticket.
 * **No ranking, no curation.** No token, market, indexer or executor is promoted, hidden, labelled "verified" or ordered by
   anything but the app's own neutral columns. `quoteTokens` and `home` are not used to favour a token.
+* **Token names are the creators' claims.** The market list shows names, tickers and icons that a token's creator recorded on chain, as a
+  third-party service passes them on ("Token names and icons" in section 3), labelled "declared by its creator". A deployment must not
+  turn that into a recommendation: no "verified" or "official" marks, no ordering by it, no source that rates or hides tokens.
 * **No default routing to an executor.** The app talks to an indexer (read only) and to Kaspa nodes; orders are covenants on
   chain that any executor may fill. The deployment names no executor, matcher or facilitator, and the host runs none.
 * **Several indexers welcome.** `KOB_PAGES_EXTRA_INDEXER_URLS` should list independent third-party indexers when they exist;

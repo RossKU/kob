@@ -56,6 +56,13 @@ export interface AppConfig {
    */
   explorerUrl: string;
   /**
+   * Where the market list gets token NAMES and ICONS from (data/kascov.ts): the base of a kascov.io-shaped data set, read as
+   * `<tokenNamesUrl>/<network>/tokens.json` (the creators' claimed ticker, name and image hash; KOB keeps no token list of its own). https only;
+   * '' turns the feature off (no request is made, the list is what the registry and the indexer give). Default `https://kascov.io/data`.
+   * config.json / `__KOB_CONFIG__` only: a link or a stored setting must not repoint it (docs/ops/web-hosting.md).
+   */
+  tokenNamesUrl: string;
+  /**
    * How far (basis points) the start of a market / close order (the best price of the indexer book) may be on the costly side of an independent
    * reference (another indexer's best price, `extraIndexerUrls`) before the order cannot be placed. config.json / `__KOB_CONFIG__` only (a link or
    * a stored setting must not loosen it); 10 to 5000, default 1000 (10 %).
@@ -74,6 +81,9 @@ export { DEFAULT_FEES, FEE_MAX_KAS_MAX, FEE_MAX_RATE_MAX, FEE_MAX_RATE_MIN, pars
 export const SETTINGS_KEY = 'kob.settings';
 export const CONFIG_JSON_PATH = './config.json';
 
+/** The token-names source of a deployment that sets none (`AppConfig.tokenNamesUrl`). */
+export const DEFAULT_TOKEN_NAMES_URL = 'https://kascov.io/data';
+
 export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   network: 'mainnet' as NetworkName,
   indexerUrl: '',
@@ -86,6 +96,7 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   quoteTokens: Object.freeze({}) as Record<string, QuoteCurrency>,
   home: 'auto' as HomeSetting,
   explorerUrl: '',
+  tokenNamesUrl: DEFAULT_TOKEN_NAMES_URL,
   marketStartToleranceBps: 1_000,
 });
 
@@ -185,6 +196,7 @@ export interface ConfigPatch {
   quoteTokens?: Record<string, QuoteCurrency>;
   home?: HomeSetting;
   explorerUrl?: string;
+  tokenNamesUrl?: string;
   marketStartToleranceBps?: number;
 }
 
@@ -267,6 +279,14 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
       const u = validateUrl(raw.explorerUrl, HTTP_SCHEMES);
       if (u !== null) out.explorerUrl = u;
       else bad('explorerUrl', 'URL (use http or https)');
+    }
+  }
+  if ('tokenNamesUrl' in raw) {
+    if (!deployment) warnings.push({ layer, field: 'tokenNamesUrl', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
+    else {
+      const u = validateUrl(raw.tokenNamesUrl, ['https:']);
+      if (u !== null) out.tokenNamesUrl = u;
+      else bad('tokenNamesUrl', 'URL (use https; empty turns the token names off)');
     }
   }
   if ('marketStartToleranceBps' in raw) {
@@ -355,6 +375,7 @@ function apply(base: AppConfig, p: ConfigPatch): AppConfig {
     quoteTokens: p.quoteTokens ?? base.quoteTokens,
     home: p.home ?? base.home,
     explorerUrl: p.explorerUrl ?? base.explorerUrl,
+    tokenNamesUrl: p.tokenNamesUrl ?? base.tokenNamesUrl,
     marketStartToleranceBps: p.marketStartToleranceBps ?? base.marketStartToleranceBps,
   };
 }

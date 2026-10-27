@@ -62,6 +62,22 @@ identified by its **covenant id**, a 64-character hex string; the ticker is only
 * **Declared by its creator.** A name that is not in the page's registry comes from the token's own on-chain record (KCC-23). The
   page marks it "declared by its creator": the creator's claim, which nobody has checked. KOB keeps no list of good tokens and
   decides nothing about any token.
+* **Names and icons from kascov.io.** KOB keeps no list of tokens of its own. The Market list is completed from the public
+  explorer kascov.io: it adds the tokens of a program this build trades on this network that no order has named yet (they read
+  "no orders" and sit after the others), and gives a token its **name, ticker and icon** where KOB has none. These are what the
+  token's creator claimed in its creation record, and the page says so: "name from kascov.io (declared by its creator)". Nobody
+  has checked them, and kascov.io's own ratings are not used. KOB's own ticker and decimals always win: if kascov.io says
+  something else you see a small note ("kascov.io says FAKE", "kascov.io says 2 decimals, KOB uses 8"). Supply, decimals,
+  prices and orders still come from the chain and the KOB indexer, never from kascov.io. If kascov.io cannot be reached the list is
+  what the registry and the indexer give, with a short "unavailable" line.
+* **Icons.** A picture is shown only if its bytes match the fingerprint (SHA-256) the creator committed to in the token's creation
+  record. Otherwise, or if the picture cannot be fetched, you see a coloured circle with a letter. The app fetches the picture
+  itself, checks it and shows its own copy, and loads pictures only for rows you scroll to. Settings > "Token names and icons" >
+  **"Load token icons from third-party hosts"** (on by default) turns all of this off: letters only, and the app contacts no image
+  host.
+* **Who sees what.** Icons: the image host and kascov.io see your IP address (kascov.io also answers the list itself, and it is
+  the image host unless it has no copy); transactions: the public Kaspa node you submit through sees them; browsing: the host's
+  indexer serves what you view.
 * **Not tradable.** "{ticker} cannot be traded in this app" / "Not tradable in this build" means the token's program is one this
   build does not support. You can still see balances and orders.
 
@@ -314,7 +330,7 @@ KOB backup or a maker recovery file; every record is re-checked and only orders 
 reads them again. If the browser cannot store the records the page warns "Your order records are not saved" and keeps them in the
 tab only: export a backup now.
 
-**Settings** also holds the node, indexer and registry URLs, "Local data" (what this browser stores) and "Clear local data". Export a
+**Settings** also holds the node, indexer and registry URLs, the switch for token icons (kept in this browser as `kob.icons`), "Local data" (what this browser stores) and "Clear local data". Export a
 backup first: orders on chain stay, but without their records the app can only find them through the indexer.
 
 ## 14. Words you will meet

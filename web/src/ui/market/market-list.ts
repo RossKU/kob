@@ -111,6 +111,8 @@ export interface ListEntry {
   loading: boolean;
   /** the 24 h figures could not be read (no indexer, a route it does not serve, an error) */
   unavailable: boolean;
+  /** a token listed from kascov.io that no order of the KOB indexer names: the row says "no orders" and sorts after every other row without a figure */
+  noOrders?: boolean;
   /** the values the columns sort by (null: none, always last) */
   sort: { last: Rational | null; change: number | null; volume: number | null; spread: number | null; orders: number | null };
   cells: { last: Cell; change: Cell; volume: Cell; spread: Cell; orders: Cell };
@@ -125,6 +127,15 @@ export function tokenPriceDp(row: Pick<TokenRow, 'tick' | 'scale'>, decimals: nu
 
 const ordersCell = (asks: number | null, bids: number | null): Cell =>
   asks === null && bids === null ? EMPTY : { text: String((asks ?? 0) + (bids ?? 0)), title: t('market.list.ordersTitle', { asks: asks ?? 0, bids: bids ?? 0 }) };
+
+/** A token only kascov.io names (`source: 'kascov'`): nothing is fetched for it, every figure is empty and the orders cell says "no orders". */
+export function kascovEntry(row: TokenRow): ListEntry {
+  return {
+    key: row.covenantId, kind: 'token', name: tokenLabel(row).toLowerCase(), loading: false, unavailable: false, noOrders: true,
+    sort: { last: null, change: null, volume: null, spread: null, orders: null },
+    cells: { last: EMPTY, change: EMPTY, volume: EMPTY, spread: EMPTY, orders: { text: t('market.list.noOrders'), title: t('market.list.noOrdersTitle') } },
+  };
+}
 
 /** A token's KAS market (TOKEN/KAS) from its `/v1/stats` slot; the open order counts of `/v1/tokens` are there before the stats. */
 export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
@@ -262,15 +273,19 @@ export const ariaSort = (cur: SortState, key: SortKey): 'ascending' | 'descendin
 const cmpValue = (a: Rational | number, b: Rational | number): number =>
   typeof a === 'number' && typeof b === 'number' ? a - b : typeof a === 'object' && typeof b === 'object' ? cmpRational(a, b) : 0;
 
-/** The entries in the chosen order. Missing figures go last in both directions; ties keep the name order (then the key). */
-export function sortEntries<E extends Pick<ListEntry, 'key' | 'name' | 'sort'>>(entries: readonly E[], s: SortState): E[] {
+/** The entries in the chosen order. Missing figures go last in both directions (rows with no orders after those); ties keep the name order (then the key). */
+export function sortEntries<E extends Pick<ListEntry, 'key' | 'name' | 'sort'> & { noOrders?: boolean }>(entries: readonly E[], s: SortState): E[] {
   const sign = s.dir === 'asc' ? 1 : -1;
   const byName = (a: E, b: E): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
   return [...entries].sort((a, b) => {
     if (s.key === 'market') return sign * byName(a, b);
     const x = a.sort[s.key];
     const y = b.sort[s.key];
-    if (x === null || y === null) return x === null && y === null ? byName(a, b) : x === null ? 1 : -1;
+    if (x === null || y === null) {
+      if (x !== null || y !== null) return x === null ? 1 : -1;
+      // neither has the figure: a row with no orders at all goes after the rows that merely lack it
+      return (a.noOrders ? 1 : 0) - (b.noOrders ? 1 : 0) || byName(a, b);
+    }
     const c = cmpValue(x, y);
     return c !== 0 ? sign * Math.sign(c) : byName(a, b);
   });

@@ -42,12 +42,14 @@ export function parseOpenDecimals(text: string): number | null {
 }
 
 /**
- * Whether this build trades a token of `program` without a registry entry on `network`: on mainnet only a program the profile table marks
- * `reviewed` (`programs.generated.ts`); on a test network every embedded program (the indexer's strict list decides there).
+ * Whether this build trades a token of `program` without a registry entry on `network`: the program must be one whose tokens exist on the network
+ * (the profile's `networks`; empty = any), and on mainnet only a program the profile table marks `reviewed` (`programs.generated.ts`); on a test
+ * network every other embedded program (the indexer's strict list decides there).
  */
 export function programAllowed(program: string, network: string | null | undefined): boolean {
   const p = TOKEN_PROGRAMS.find((x) => x.name === program);
   if (!p) return false;
+  if (network && p.networks.length > 0 && !(p.networks as readonly string[]).includes(network)) return false;
   return network !== 'mainnet' || p.review === 'reviewed';
 }
 

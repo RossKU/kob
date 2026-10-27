@@ -35,6 +35,8 @@ export function render(json) {
     if (ids.has(p.registry_id)) throw new Error(`${w}: duplicate registry_id`);
     ids.add(p.registry_id);
     if (!CODECS.includes(p.codec)) throw new Error(`${w}: unknown codec ${String(p.codec)}`);
+    const networks = p.networks ?? [];
+    if (!Array.isArray(networks) || !networks.every((n) => typeof n === 'string' && /^[a-z0-9-]+$/.test(n))) throw new Error(`${w}: networks must be an array of network ids`);
     const trailing = p.witness?.trailing_pushes ?? [];
     if (!Array.isArray(trailing)) throw new Error(`${w}: witness.trailing_pushes must be an array`);
     return [
@@ -55,6 +57,7 @@ export function render(json) {
       `    trailingPushes: [${trailing.map(q).join(', ')}],`,
       `    routerIntents: ${p.router_intents === true ? 'true' : 'false'},`,
       `    review: ${q(p.review.status)},`,
+      `    networks: [${networks.map(q).join(', ')}],`,
       '  },',
     ].join('\n');
   });

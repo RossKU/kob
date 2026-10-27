@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
+import { useIconPref } from '../../app/icon-pref';
 import { displayToken } from '../../app/token-display';
 import type { TrackedToken } from '../../data/token-tracker';
 import { TokenNote } from '../market/TokenNote';
@@ -82,6 +83,23 @@ function ConnectionSettings() {
         {saved === 'ok' ? <Banner tone="ok" data-testid="settings-saved">{t('settings.saved')}</Banner> : null}
         {saved === 'failed' ? <Banner tone="error" data-testid="settings-save-failed">{t('settings.saveFailed')}</Banner> : null}
       </div>
+    </Section>
+  );
+}
+
+/** Token names and icons of the market list: where they come from and the viewer's choice to load icons from third-party hosts (on by default, per browser). */
+function TokenIconsSettings() {
+  const { config } = useServices();
+  const [on, setOn] = useIconPref();
+  return (
+    <Section title={t('settings.icons.title')} data-testid="settings-icons">
+      <p class="small muted">{t('settings.icons.explain')}</p>
+      {config.tokenNamesUrl ? (
+        <p class="small muted wrap-anywhere" data-testid="settings-icons-source">{t('settings.icons.source', { url: config.tokenNamesUrl })}</p>
+      ) : (
+        <Banner tone="info" data-testid="settings-icons-off">{t('settings.icons.off')}</Banner>
+      )}
+      <Checkbox checked={on} onChange={setOn} label={t('settings.icons.label')} hint={t('settings.icons.hint')} disabled={!config.tokenNamesUrl} data-testid="settings-icons-toggle" />
     </Section>
   );
 }
@@ -367,6 +385,7 @@ export function SettingsView(props: { warnings?: ConfigWarning[] }) {
       <div class="grid-2">
         <div class="stack">
           <ConnectionSettings />
+          <TokenIconsSettings />
           <NotifySettingsSection />
           <Versions />
         </div>

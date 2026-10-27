@@ -80,6 +80,8 @@ the official SDK there when its injected config has `features.test`). Options: `
 `window.__KOB_CONFIG__ = {network:'testnet-10', indexerUrl, nodeUrl, registryUrl, features:{test:true, kastle:true}}`, the wallet installed and `/` opened;
 fails on uncaught page errors), `wallet` (the handle). Options via `test.use`: `walletId` (null = none), `walletKey`, `walletOptions`, `appConfig`,
 `autoOpen`, `appPath`, `failOnPageError`. `e2e/testids.ts` is the authoritative `data-testid` contract (`orderRow(id)`, `field(name)` ...).
+The real kascov.io (token names and icons of the market list) is never reached: `appPage` answers every request to `https://kascov.io/` with an empty token
+list, and a spec that needs tokens, pictures or a failure installs `mockKascov(page, {...})` from `e2e/helpers/kascov.ts` (`e2e/ui/kascov-list.spec.ts`).
 The specs in `e2e/infra/` prove the stack with the placeholder page; the per-order-type specs are in `e2e/orders/` (below).
 
 `e2e-real/common.mjs` holds the helpers for the real-wallet TN10 runs (unpack / cache extensions, launch, onboard, approve popups); it runs nothing on import.

@@ -5,6 +5,8 @@ import { longId } from '../../kob/registry';
 import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
+import { KascovNote } from './KascovNote';
+import { TokenIcon } from './TokenIcon';
 import { TokenNote } from './TokenNote';
 import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
 import { shortCovenantId, templateDetail, type TokenRow } from './token-model';
@@ -96,6 +98,7 @@ export function TokenHeader(props: {
       <div class="mkt-top">
         <div class="mkt-title">
           {props.pair}
+          <TokenIcon row={r} />
           <h1 class="token-name" style="margin:0" data-testid="token-title" data-covenant-id={r.covenantId}>
             {tokenTitle(r)}
           </h1>
@@ -103,6 +106,7 @@ export function TokenHeader(props: {
           <span class="small muted" title={r.covenantId} data-testid="token-short-id">{r.info && !r.info.openList ? shortCovenantId(r.covenantId) : longId(r.covenantId)}</span>
           {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
           <TokenNote token={props.note} />
+          <KascovNote row={r} />
           {props.badges}
         </div>
         {props.tools}

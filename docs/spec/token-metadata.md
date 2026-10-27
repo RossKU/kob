@@ -182,6 +182,11 @@ Whether the issued tokens can be found again depends on whether the genesis name
      reviewed);
   2. without a declaration (a token created before KCC-23: its id cannot commit to one), as before: the registry entry, this
      browser's issuance record, the decimals of its market's price scale, else 8 assumed.
+* **Names from a token list service (display only).** The market list of the web app is completed from a service such as kascov.io
+  (`data/kascov.ts`, `docs/ops/web-hosting.md`): it supplies the creator's claimed ticker, name and image for tokens the steps above
+  name nothing for, labelled "declared by its creator", and the tokens of a program this build trades that no order has named yet.
+  Nothing it says is a fact: the ticker and decimals above win and a disagreement is a note, an image is shown only if its bytes
+  hash to the hash committed in the token's creation record, and its ratings are not read. KOB keeps no list of its own.
 * **CLI** (`kob place`, `send`, `merge`, the order actions): the indexer's proof, verified against the covenant id, the same read
   order and the same refusals; a declared token without orders is traded by its covenant id from a wallet holding it
   (`crates/kob-cli/README.md`).

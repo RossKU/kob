@@ -7,7 +7,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 
 | Document | What it covers |
 |---|---|
-| [user-guide.md](user-guide.md) | Trading in the web app: connecting KasWare / Kaspire or the private-key option, buying and selling, limit and market orders, partial fills, cancel and refund, merging token UTXOs, the token fact badges, the node and indexer banners, fees, recovering a token you created |
+| [user-guide.md](user-guide.md) | Trading in the web app: connecting KasWare / Kaspire or the private-key option, buying and selling, limit and market orders, partial fills, cancel and refund, merging token UTXOs, the token fact badges, where token names and icons come from (kascov.io) and the icon switch, the node and indexer banners, fees, recovering a token you created |
 | [api.md](api.md) | The executor's read API: every HTTP endpoint and query parameter, response fields, `/v1/health`, the WebSocket messages, errors, limits and the `[api]` configuration |
 | [../crates/kob-cli/README.md](../crates/kob-cli/README.md) | The `kob` command line: trading, token issuance, recovery; the `--json` output and exit codes for scripts and bots |
 
@@ -32,7 +32,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 |---|---|
 | [ops/executor-quickstart.md](ops/executor-quickstart.md) | Run an executor from a prebuilt download: setup, funding, what to watch, withdraw, services, upgrade, Docker, Android |
 | [ops/executor.md](ops/executor.md) | Running `kob-executor`: one process (`run`), the indexer (Part B: node, storage, read API, runbook) and the matcher and keepers (Part C: keys, economics, flags) |
-| [ops/web-hosting.md](ops/web-hosting.md) | Hosting the web app on Cloudflare Pages: account, token, repository variables, the deploy gate, rollback, neutrality rules |
+| [ops/web-hosting.md](ops/web-hosting.md) | Hosting the web app on Cloudflare Pages: account, token, repository variables, the deploy gate, the token-names source (kascov.io: refresh policy, CSP, privacy), rollback, neutrality rules |
 | [ops/chart-server.md](ops/chart-server.md) | A public read server (`kob-executor index` behind Cloudflare Tunnel): setup order, tunnel, backups, alerts, upgrading without downtime |
 | [ops/release.md](ops/release.md) | Cutting a mainnet release: gates, registry, reproducible build, hashes to publish, upgrade order, operator requirements |
 

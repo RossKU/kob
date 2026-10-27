@@ -16,6 +16,10 @@ describe('strict Content-Security-Policy and framing protection', () => {
     expect(META_DIRECTIVES['require-trusted-types-for']).toEqual(["'script'"]);
     expect(META_DIRECTIVES['trusted-types']).toEqual(['default']); // one policy, installed at boot (src/app/trusted-types.ts)
     expect(META_DIRECTIVES['form-action']).toEqual(["'none'"]);
+    // token icons: the app fetches the bytes (connect-src), checks their hash and shows them from a blob: URL it made (data/kascov.ts); an <img> may NOT load a
+    // third-party URL, so img-src never names a host or https:
+    expect(META_DIRECTIVES['img-src']).toEqual(["'self'", 'data:', 'blob:']);
+    expect(CSP_META).not.toMatch(/img-src[^;]*(https:|http:|\*)/);
     expect(CSP_META).not.toMatch(/frame-ancestors/); // not expressible in a <meta>
     expect(CSP_HEADER).toBe(`${CSP_META}; frame-ancestors 'none'`);
   });

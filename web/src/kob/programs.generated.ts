@@ -19,6 +19,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: true,
     review: 'reviewed',
+    networks: [],
   },
   {
     name: 'KCC20Ref_4x5',
@@ -37,6 +38,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: true,
     review: 'test-only',
+    networks: [],
   },
   {
     name: 'KCC20Ref_8x8',
@@ -55,6 +57,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: true,
     review: 'pending-review',
+    networks: [],
   },
   {
     name: 'KCC20Ref_16x16',
@@ -73,6 +76,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: true,
     review: 'test-only',
+    networks: [],
   },
   {
     name: 'KCC20P2',
@@ -91,6 +95,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: true,
     review: 'test-only',
+    networks: [],
   },
   {
     name: 'KCC20KaspaCom_0_2_5',
@@ -109,6 +114,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: false,
     review: 'pending-review',
+    networks: [],
   },
   {
     name: 'KCC20PublicMint',
@@ -127,6 +133,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: true,
     review: 'reviewed',
+    networks: [],
   },
   {
     name: 'KronToken2433',
@@ -145,6 +152,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: true,
     review: 'reviewed',
+    networks: [],
   },
   {
     name: 'KronToken2732',
@@ -163,6 +171,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: true,
     review: 'reviewed',
+    networks: [],
   },
   {
     name: 'KForgeToken1785',
@@ -181,6 +190,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [''],
     routerIntents: false,
     review: 'pending-review',
+    networks: ['testnet-10'],
   },
   {
     name: 'KaspaRocketToken11458',
@@ -199,6 +209,7 @@ export const TOKEN_PROGRAMS = [
     trailingPushes: [],
     routerIntents: false,
     review: 'pending-review',
+    networks: ['testnet-10'],
   },
 ] as const;
 

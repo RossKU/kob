@@ -3,7 +3,7 @@ import { displayToken } from '../../app/token-display';
 import { useDeclaration, useDeclarationLookup } from '../../app/use-declaration';
 import { useServices, useWallet } from '../../app/context';
 import type { TicketPreset } from '../../app/router';
-import { sanitizeUntrusted } from '../../kob/registry';
+import { longId, sanitizeUntrusted } from '../../kob/registry';
 import { t } from '../../i18n';
 import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
@@ -33,6 +33,8 @@ import { PriceChart } from './PriceChart';
 import { TokenFacts } from './TokenBadges';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
+import { applyKascov } from './kascov-merge';
+import { useKascov } from './use-kascov';
 import { buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
 import { TradeTape } from './TradesPanel';
 import { tradeRows } from './trades-model';
@@ -103,6 +105,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       ? { ...named, info: open.info, decimals: open.info.decimals, scale: scaleOfDecimals(open.info.decimals), tick: 1n, tradable: true, reason: null }
       : named;
   }, [baseRow, open.info, shown, onChain]);
+
+  // the creator's name, ticker and icon from kascov.io for the title bar, where KOB has none of its own (kascov-merge.ts; the facts below stay KOB's)
+  const kascov = useKascov();
+  const headerRow = useMemo(() => (row && kascov.status === 'ok' ? applyKascov(row, kascov.tokens, longId(row.covenantId)) : row), [row, kascov]);
 
   const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: 60, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
   // the trade tape: `/v1/trades`, or the fill events of an indexer without it
@@ -283,7 +289,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       attrs={{ 'data-token': id }}
       header={
         <TokenHeader
-          row={row}
+          row={headerRow ?? row}
           sharedTicker={sharedTicker}
           note={onChain ? shown : null}
           badges={liveBadge}

@@ -1,6 +1,6 @@
 export const NETWORKS: string[];
 export const MAX_EXTRA_INDEXERS: number;
-export interface PagesConfig { network: string; indexerUrl: string; extraIndexerUrls: string[]; nodeUrl: string; explorerUrl?: string }
+export interface PagesConfig { network: string; indexerUrl: string; extraIndexerUrls: string[]; nodeUrl: string; explorerUrl?: string; tokenNamesUrl?: string }
 /** True for a host name that is not reachable from the public internet (loopback, private, link-local, unspecified). */
 export function isPrivateHost(hostname: string): boolean;
 /** A public URL of one of `schemes`, trailing slashes removed; or an error message. */

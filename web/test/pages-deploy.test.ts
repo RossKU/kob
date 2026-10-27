@@ -46,8 +46,29 @@ describe('pages-config: config.json from the repository variables', () => {
     expect(warnings).toEqual([]);
   });
 
+  it('KOB_PAGES_TOKEN_NAMES_URL: unset or blank is the default of the app (no key), a public https URL is taken, `off` turns the names off (an empty string in config.json)', () => {
+    expect(pagesConfig({ KOB_PAGES_INDEXER_URL: IDX }).config).not.toHaveProperty('tokenNamesUrl');
+    expect(pagesConfig({ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_TOKEN_NAMES_URL: '  ' }).config).not.toHaveProperty('tokenNamesUrl');
+    const own = pagesConfig({ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_TOKEN_NAMES_URL: 'https://names.example.org/data/' });
+    expect(own.errors).toEqual([]);
+    expect(own.config).toMatchObject({ tokenNamesUrl: 'https://names.example.org/data' });
+    const off = pagesConfig({ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_TOKEN_NAMES_URL: 'off' });
+    expect(off.config).toMatchObject({ tokenNamesUrl: '' });
+    expect(off.notes.join(' ')).toContain('no token names');
+    // and the app accepts every one of them
+    for (const c of [own.config, off.config]) {
+      const warnings: ConfigWarning[] = [];
+      sanitizeLayer('config.json', c, false, warnings);
+      expect(warnings).toEqual([]);
+    }
+  });
+
   it.each([
     [{}, 'KOB_PAGES_INDEXER_URL is empty'],
+    [{ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_TOKEN_NAMES_URL: 'http://names.example.org/data' }, 'must use https'],
+    [{ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_TOKEN_NAMES_URL: 'https://localhost/data' }, 'not a public host'],
+    [{ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_TOKEN_NAMES_URL: 'https://names.example.org/data?key=1' }, 'query'],
+    [{ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_TOKEN_NAMES_URL: 'names.example.org' }, 'not a URL'],
     [{ KOB_PAGES_INDEXER_URL: '   ' }, 'KOB_PAGES_INDEXER_URL is empty'],
     [{ KOB_PAGES_INDEXER_URL: 'http://idx.example.org' }, 'must use https'],
     [{ KOB_PAGES_INDEXER_URL: 'wss://idx.example.org' }, 'must use https'],
@@ -224,6 +245,6 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     expect(job('deploy')).toMatch(/\n    environment: production\n/);
     expect(job('config')).not.toContain('environment:');
     for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) expect(wf).toContain(`secrets.${name}`);
-    for (const name of ['KOB_PAGES_PROJECT', 'KOB_PAGES_INDEXER_URL', 'KOB_PAGES_BRANCH', 'KOB_PAGES_NETWORK', 'KOB_PAGES_EXTRA_INDEXER_URLS', 'KOB_PAGES_NODE_URL', 'KOB_PAGES_EXPLORER_URL']) expect(wf).toContain(`vars.${name}`);
+    for (const name of ['KOB_PAGES_PROJECT', 'KOB_PAGES_INDEXER_URL', 'KOB_PAGES_BRANCH', 'KOB_PAGES_NETWORK', 'KOB_PAGES_EXTRA_INDEXER_URLS', 'KOB_PAGES_NODE_URL', 'KOB_PAGES_EXPLORER_URL', 'KOB_PAGES_TOKEN_NAMES_URL']) expect(wf).toContain(`vars.${name}`);
   });
 });

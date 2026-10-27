@@ -21,6 +21,8 @@ Configuration (`config.json` next to `index.html`, `window.__KOB_CONFIG__`, Sett
 empty = the SDK's public resolver; an `http(s)://` URL is the offline mock node and only a test build (`features.test`) or `npm run dev` accepts it), `registryUrl` (default `./registry/tokens.json`), `features.kastle`, `fees` (`dynamic`, `maxRate`, `maxFeeKas`: see Fees). URL query overrides are off unless
 `allowQueryOverrides` is set.
 
+Token names and icons: the market list (and a token page's title bar) is completed from a kascov.io-shaped data set (`<tokenNamesUrl>/<network>/tokens.json`, default `https://kascov.io/data`; `tokenNamesUrl` is config.json / `__KOB_CONFIG__` only, https only, `""` turns it off): tokens of a program this build trades on the network that no order names, and the creators' claimed ticker, name and icon where KOB has none, all labelled "declared by its creator". KOB's own ticker and decimals win; no fact comes from it (`src/data/kascov.ts`, `src/ui/market/kascov-merge.ts`, `docs/ops/web-hosting.md`). A picture is shown only if its bytes hash to the hash the creator committed to, from a `blob:` URL (CSP `img-src 'self' data: blob:`); the Settings switch "Load token icons from third-party hosts" (`kob.icons`, on by default) turns pictures off.
+
 Transaction links: a recent-trades row, an order's placement transaction and its fill rows open the transaction on the block explorer in a new tab (`https://tn10.kaspa.stream/transactions/<txid>` on testnet-10, `https://kaspa.stream/transactions/<txid>` on mainnet); `explorerUrl` (config.json / `__KOB_CONFIG__` only) replaces the base.
 
 The landing screen and the USD reference token: `quoteTokens` (config.json / `__KOB_CONFIG__` only, `{ "<covenant id>": "USD" }`) marks a registry token as the USD
@@ -240,7 +242,7 @@ The build embeds a strict Content-Security-Policy as a `<meta>` (`csp.mjs`); `pu
 real header plus `frame-ancestors 'none'` (a `<meta>` cannot express it), `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`. Other hosts must set the
 same headers (nginx: `add_header Content-Security-Policy "..." always;`, value = `CSP_HEADER` of `csp.mjs`). The node and indexer are user-configurable, so the
 shipped `connect-src` only names schemes (`'self' https: wss: http: ws:`): **a production deployment should replace it with the exact origins** of its
-node and indexer, e.g. `connect-src 'self' https://indexer.example wss://node.example:18210`. The SDK zip that `npm run fetch-sdk` downloads is checked against a pinned
+node and indexer, e.g. `connect-src 'self' https://indexer.example wss://node.example:18210` (add the token-names source too, `https://kascov.io` by default: `docs/ops/web-hosting.md`). The SDK zip that `npm run fetch-sdk` downloads is checked against a pinned
 sha256 (`scripts/fetch-sdk.mjs`); a mismatch aborts before anything is unpacked.
 
 The private-key signer (`signer.html`, see below) is a second page with its own policy (`SIGNER_CSP_HEADER`: no network beyond its own bundle,

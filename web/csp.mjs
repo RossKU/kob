@@ -13,6 +13,11 @@
 //     config.json; the testnet node of the project is a plain ws:// address), so hosts cannot be pinned in the shipped build. The directive
 //     therefore only names the schemes. A PRODUCTION DEPLOYMENT SHOULD REPLACE IT with the exact node and indexer origins (README, "Deployment
 //     headers"): that is what closes the exfiltration channel, the other directives already stop script injection and framing.
+//   * img-src 'self' data: blob:: token icons. The app never lets the browser load an image from a third-party host: it fetches the bytes
+//     (connect-src above already allows https:), accepts them only when their SHA-256 equals the hash the token's creator committed to
+//     (data/kascov.ts), and shows them from a blob: URL it made itself. So img-src is NOT widened to https:, and a page script cannot be made
+//     to leak through an <img> request to an arbitrary host. A production deployment that pins connect-src (README, "Deployment headers") adds
+//     `https://kascov.io` to it for the token names and icons (docs/ops/web-hosting.md); without it the list simply shows no names or icons.
 //   * frame-src 'self': the only frame is the app's own private-key signer (signer.html, sandboxed without allow-same-origin).
 //   * everything else is denied: no plugins, no base-uri, no form posts, no workers.
 //
@@ -26,7 +31,7 @@ export const META_DIRECTIVES = {
   'default-src': ["'none'"],
   'script-src': ["'self'", "'wasm-unsafe-eval'"],
   'style-src': ["'self'", "'unsafe-inline'"],
-  'img-src': ["'self'", 'data:'],
+  'img-src': ["'self'", 'data:', 'blob:'],
   'font-src': ["'self'"],
   'connect-src': CONNECT_SRC,
   'object-src': ["'none'"],

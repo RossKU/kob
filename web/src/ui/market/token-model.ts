@@ -84,8 +84,30 @@ function registryWarnings(info: TokenInfo | null): string[] {
 }
 const warningsOf = (v: IndexerTokenView | null): string[] => (v && Array.isArray(v.warnings) ? v.warnings : []);
 
-/** `held`: a token the indexer does not list, known from the wallet's node-verified holdings of it (`kob/open-token.ts` `heldTokenView`) */
-export type TokenSource = 'registry' | 'indexer' | 'pasted' | 'held';
+/**
+ * `held`: a token the indexer does not list, known from the wallet's node-verified holdings of it (`kob/open-token.ts` `heldTokenView`).
+ * `kascov`: a token only the third-party list kascov.io names (data/kascov.ts; no order of it is known to the KOB indexer).
+ */
+export type TokenSource = 'registry' | 'indexer' | 'pasted' | 'held' | 'kascov';
+
+/**
+ * What kascov.io contributed to a row (ui/market/kascov-merge.ts). A DISPLAY layer: the creator's claims, never facts. `ticker` / `name` are shown only
+ * where KOB has none of its own (`usedTicker` / `usedName`); a claim that differs from what KOB derives is flagged, and KOB's value stays.
+ */
+export interface KascovMeta {
+  ticker: string | null;
+  name: string | null;
+  usedTicker: boolean;
+  usedName: boolean;
+  /** kascov's ticker differs from the one KOB derived (registry, declaration, indexer) */
+  tickerDiffers: boolean;
+  /** kascov's declared decimals differ from the decimals KOB derived */
+  decimalsDiffers: boolean;
+  decimals: number | null;
+  /** the icon's committed hash and sources (data/kascov.ts `iconSources`); null without one */
+  imageHash: string | null;
+  imageUrl: string | null;
+}
 
 export interface TokenRow {
   covenantId: string;
@@ -117,6 +139,8 @@ export interface TokenRow {
   /** the market's scale: base units per whole token (the denominator of its prices; `10^decimals` capped at 10^9), null when unknown */
   scale: bigint | null;
   tick: bigint | null;
+  /** the name, ticker and icon a third-party list (kascov.io) gave this token, when it was merged into a list */
+  kascov?: KascovMeta | null;
 }
 
 const powersOf = (v: IndexerTokenView | null): string[] => (v && Array.isArray(v.powers) ? v.powers : []);

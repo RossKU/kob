@@ -122,6 +122,7 @@ jobs:
           KOB_PAGES_EXTRA_INDEXER_URLS: ${{ vars.KOB_PAGES_EXTRA_INDEXER_URLS }}
           KOB_PAGES_NODE_URL: ${{ vars.KOB_PAGES_NODE_URL }}
           KOB_PAGES_EXPLORER_URL: ${{ vars.KOB_PAGES_EXPLORER_URL }}
+          KOB_PAGES_TOKEN_NAMES_URL: ${{ vars.KOB_PAGES_TOKEN_NAMES_URL }}
         run: node web/scripts/pages-config.mjs --check
 
   deploy:
@@ -182,6 +183,7 @@ jobs:
           KOB_PAGES_EXTRA_INDEXER_URLS: ${{ vars.KOB_PAGES_EXTRA_INDEXER_URLS }}
           KOB_PAGES_NODE_URL: ${{ vars.KOB_PAGES_NODE_URL }}
           KOB_PAGES_EXPLORER_URL: ${{ vars.KOB_PAGES_EXPLORER_URL }}
+          KOB_PAGES_TOKEN_NAMES_URL: ${{ vars.KOB_PAGES_TOKEN_NAMES_URL }}
         run: node scripts/pages-config.mjs --dist dist | tee "$RUNNER_TEMP/pages-config.txt"
       - name: sha256 of every file deployed (the logic of scripts/release-hashes.sh)
         working-directory: .

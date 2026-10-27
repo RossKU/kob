@@ -7,14 +7,18 @@ import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
 import { Banner, Button, CopyText, ErrorBanner, Field, Loading, Section, Table, TableMessage, toError, useAsync } from '../kit';
 import { SharedTickerNote, StatusBadges, TokenFacts, tokenTitle } from './TokenBadges';
+import { KascovNote } from './KascovNote';
+import { mergeKascov } from './kascov-merge';
+import { TokenIcon } from './TokenIcon';
 import { TokenNote } from './TokenNote';
 import './market.css';
 import {
-  ariaSort, DEFAULT_SORT, filterPairs, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, sortEntries, tokenEntry,
+  ariaSort, DEFAULT_SORT, filterPairs, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, sortEntries, tokenEntry,
   type Cell, type ListedPair, type ListEntry, type Slot, type SortKey, type SortState,
 } from './market-list';
 import { pairVolumeOf, type PairVolume } from './pair-market';
 import { buildTokenRows, filterTokens, isNameless, parseCovenantId, sharedTickerIds, tradableHere, tradableRows, type TokenRow } from './token-model';
+import { useKascov } from './use-kascov';
 import { usePooledSlots } from './use-market-list';
 
 function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
@@ -132,18 +136,26 @@ function TokenTableRow({ row, entry, shared }: { row: TokenRow; entry: ListEntry
   return (
     <tr data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
       <td>
-        <a href={`#/market/${row.covenantId}`} class="token-name" data-testid={`token-link-${row.covenantId}`}>
-          {tokenTitle(row)}
-        </a>
-        {row.name || row.declared ? (
-          <div class="small muted" data-testid={`token-name-${row.covenantId}`}>
-            {row.name}
-            {row.declared && row.decimals !== null ? <TokenNote token={{ decimalsSource: 'declared', decimals: row.decimals }} /> : null}
+        <div class="ml-name">
+          <TokenIcon row={row} />
+          <div class="ml-name-text">
+            <a href={`#/market/${row.covenantId}`} class="token-name" data-testid={`token-link-${row.covenantId}`}>
+              {tokenTitle(row)}
+            </a>
+            {row.name || row.declared || row.kascov || row.source === 'kascov' ? (
+              <div class="small muted" data-testid={`token-name-${row.covenantId}`}>
+                {row.name}
+                {row.declared && row.decimals !== null ? <TokenNote token={{ decimalsSource: 'declared', decimals: row.decimals }} /> : null}
+                <KascovNote row={row} />
+                {/* the orders column is hidden on a phone: the row says it here */}
+                {row.source === 'kascov' ? <span class="ml-only-narrow" data-testid={`token-no-orders-narrow-${row.covenantId}`}> · {t('market.list.noOrders')}</span> : null}
+              </div>
+            ) : null}
+            <div class="ml-badges"><StatusBadges row={row} /></div>
+            <TokenFacts rows={[row]} compact data-testid={`token-facts-${row.covenantId}`} />
+            <SharedTickerNote shared={shared} data-testid={`shared-ticker-${row.covenantId}`} />
           </div>
-        ) : null}
-        <div class="ml-badges"><StatusBadges row={row} /></div>
-        <TokenFacts rows={[row]} compact data-testid={`token-facts-${row.covenantId}`} />
-        <SharedTickerNote shared={shared} data-testid={`shared-ticker-${row.covenantId}`} />
+        </div>
       </td>
       {FIGURES.map((f) => <Figure key={f.key} cell={entry.cells[f.key]} entry={entry} testid={`token-${f.key}-${row.covenantId}`} cls={f.cls} />)}
       <td class="token-hash-cell ml-lg">
@@ -175,7 +187,7 @@ const pairToken = (r: TokenRow): PairToken => ({ covenantId: r.covenantId, ticke
  * volume first), searchable, add by covenant id. A phone shows the name, the price and the change.
  */
 export function TokenList(props: { invalidToken?: string }) {
-  const { registry, indexer, kob } = useServices();
+  const { registry, indexer, kob, config } = useServices();
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
   const pairs = useAsync((signal) => (indexer ? indexer.pairs(undefined, { signal }) : Promise.resolve(null)), [indexer]);
   const [query, setQuery] = useState('');
@@ -187,13 +199,21 @@ export function TokenList(props: { invalidToken?: string }) {
   // a token this build cannot trade is not listed (a direct link to it shows a short "not tradable" page)
   // a token the registry does not list is named by its verified KCC-23 declaration (its ticker, name and decimals)
   const declared = useDeclarationLookup();
-  const rows = useMemo(() => tradableRows(buildTokenRows(registry, tokens.data ?? null, pasted, declared), kob.templates()), [registry, tokens.data, pasted, kob, declared]);
+  // the names, icons and tokens kascov.io adds (kascov-merge.ts): only tokens of a program this build trades on this network; none of its facts
+  const kascov = useKascov();
+  const kascovTokens = kascov.status === 'ok' ? kascov.tokens : null;
+  const rows = useMemo(() => {
+    const built = buildTokenRows(registry, tokens.data ?? null, pasted, declared);
+    const templates = kob.templates();
+    const known = new Set(built.map((r) => r.covenantId.toLowerCase()));
+    return mergeKascov(tradableRows(built, templates), kascovTokens, { network: config.network, templates, registry, declared, known });
+  }, [registry, tokens.data, pasted, kob, declared, kascovTokens, config.network]);
   const shared = useMemo(() => sharedTickerIds(rows), [rows]);
   const listed = useMemo(() => listedPairs(pairs.data, rows), [pairs.data, rows]);
 
   // the 24 h figures: one `/v1/stats` per listed token and one 24 h pair volume per listed pair, once the token list is in (a few calls at a time)
   const ready = !indexer || tokens.data !== undefined || tokens.error !== null;
-  const statKeys = useMemo(() => (ready ? rows.map((r) => r.covenantId) : null), [ready, rows]);
+  const statKeys = useMemo(() => (ready ? rows.filter((r) => r.source !== 'kascov').map((r) => r.covenantId) : null), [ready, rows]);
   const loadStats = useMemo(() => (indexer ? (id: string, signal: AbortSignal) => indexer.stats(id, { signal }) : null), [indexer]);
   const stats = usePooledSlots(statKeys, loadStats, generation);
   const pairKeys = useMemo(() => (pairs.data !== undefined || pairs.error ? listed.map((p) => p.key) : null), [pairs.data, pairs.error, listed]);
@@ -214,7 +234,7 @@ export function TokenList(props: { invalidToken?: string }) {
     const byId = new Map(rows.map((r) => [r.covenantId, r]));
     // tokens without metadata only on a search or on request
     const visible = query.trim() || showNameless ? rows : rows.filter((r) => !isNameless(r));
-    const entries = filterTokens(visible, query).map((r) => tokenEntry(r, slotOf(r.covenantId)));
+    const entries = filterTokens(visible, query).map((r) => (r.source === 'kascov' ? kascovEntry(r) : tokenEntry(r, slotOf(r.covenantId))));
     return sortEntries(entries, sort).map((e) => ({ entry: e, row: byId.get(e.key)! }));
   }, [rows, query, sort, stats, indexer, showNameless]);
   const namelessCount = useMemo(() => rows.filter(isNameless).length, [rows]);
@@ -273,6 +293,7 @@ export function TokenList(props: { invalidToken?: string }) {
           </p>
         ) : null}
         {!indexer ? <p class="small muted">{t('market.list.noIndexer')}</p> : null}
+        {kascov.status === 'unavailable' ? <p class="small muted" data-testid="kascov-unavailable">{t('market.list.kascovDown')}</p> : null}
         {listed.length > 0 ? (
           <div class="ml-pairs" data-testid="pair-list">
             <h3 class="ml-subtitle">{t('market.pairs.title')}</h3>

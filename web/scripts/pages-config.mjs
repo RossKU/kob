@@ -14,6 +14,9 @@
 //   KOB_PAGES_NODE_URL            optional: a wRPC node (wss) WITH its path, e.g. wss://<host>/kaspa/testnet-10/wrpc/json (a bare host answers 404 at the
 //                                 handshake; a note says so); empty = a public node the Kaspa SDK's resolver names (reached over Borsh)
 //   KOB_PAGES_EXPLORER_URL        optional: block explorer base (https); empty = kaspa.stream of the network
+//   KOB_PAGES_TOKEN_NAMES_URL     optional: the base of the token names and icons the market list reads, `<base>/<network>/tokens.json` in the shape of
+//                                 kascov.io's data set (https); empty or unset = https://kascov.io/data (the app's default); `off` = no token names
+//                                 (config.json `tokenNamesUrl: ""`; GitHub cannot tell an empty variable from an unset one, hence the word)
 //
 // A public page is served over https, so every URL must be https / wss (a browser blocks http / ws from it anyway), name a public
 // host (not localhost or a private address) and carry no user name, password, query or fragment (config.json is public: an API key
@@ -114,9 +117,22 @@ export function pagesConfig(env) {
     else explorerUrl = r.url;
   }
 
+  // undefined = the app's default (kascov.io); '' = the feature is off
+  let tokenNamesUrl;
+  const names = (env.KOB_PAGES_TOKEN_NAMES_URL ?? '').trim();
+  if (names.toLowerCase() === 'off') {
+    tokenNamesUrl = '';
+    notes.push('KOB_PAGES_TOKEN_NAMES_URL=off: the market list shows no token names or icons from a third party');
+  } else if (names) {
+    const r = publicUrl('KOB_PAGES_TOKEN_NAMES_URL', names, ['https:']);
+    if (r.error) errors.push(r.error);
+    else tokenNamesUrl = r.url;
+  }
+
   if (errors.length) return { config: null, errors, notes };
   const config = { network, indexerUrl, extraIndexerUrls, nodeUrl };
   if (explorerUrl) config.explorerUrl = explorerUrl;
+  if (tokenNamesUrl !== undefined) config.tokenNamesUrl = tokenNamesUrl;
   return { config, errors, notes };
 }
 
