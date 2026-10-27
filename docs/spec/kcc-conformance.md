@@ -14,7 +14,7 @@ upstream.
 | KCC-1 Covenant Concepts, Byte Layouts, and ABI | `main` `411b41b` (compliance rewrite #27, Last Call #32) | Last Call | `crates/kob-tests/vectors/kcc1/conformance.json` |
 | KCC-2 Authority Schemes | `main` `411b41b` (#30: unkeyed P2PKH hash, scheme ranges; Last Call #33) | Last Call | `crates/kob-tests/vectors/kcc2/authority-schemes.json` |
 | KCC-20 Fungible Token | `main` `3fbec52` (#31 merged 2026-10-07) | Last Call | `crates/kob-tests/vectors/kcc20/conformance.json` |
-| KCC-20 reference program | argent-lang/kcc20-reference `master` `c8a0871` (PR #1 merged 2026-10-07; argentc `9a9f4b1`) | merged | `contracts/third-party/kcc20-reference/` (verbatim), built as `contracts/kcc20/KCC20Ref.sil` |
+| KCC-20 reference program | argent-lang/kcc20-reference `master` `c8a0871` (PR #1 merged 2026-10-07; argentc `9a9f4b1`); the `PublicMint` / `TokenSeed` issuers also at `27f8403` (2026-10-21, adds `rebalance_value`; the `KCC20` actor is unchanged), section 4.3 | merged | `contracts/third-party/kcc20-reference/` (verbatim), built as `contracts/kcc20/KCC20Ref.sil` |
 | KCC-23 MJ: Metadata JSON | `main` `1516a6c` (#26 merged 2026-10-14) | Draft | `crates/kob-tests/vectors/kcc23/conformance.json`; every vector passes (`--test kcc23_conformance_tests`); format and KOB's field convention in [token-metadata.md](token-metadata.md) |
 
 Every vector file is vendored unmodified (CC0) with a `PROVENANCE.md` and pinned by sha256 in the test that runs it.
@@ -162,9 +162,15 @@ it as not an instance of the program. It now accepts it, for the template `kcc20
 | Output | Accepted when | Reported |
 |---|---|---|
 | `KCC20` holder | an instance of the pinned handle (context `9703112e...`), amount >= 0 | its amount in `supply` |
-| `PublicMint` | exactly the app's program (Sil `14b0f06bc176b78c94f19292e409c622636f31dae6bb31ff3d4d3308a6053b49`, taken from the vendored `public-mint.artifact.json`), template fields `gen__kcc20_template` = `9703112e...` and its own = its Sil hash, canonical state, `remaining >= 0`, `mint_amount >= 1` | index in `minter_outputs`, `remaining` added to `mint_allowance` |
-| `TokenSeed` | exactly the app's program (Sil `f79a3fccf6f87d7076662410a17e54d1531889d9b60f630f9fbb8465a384e62d`), template fields as above, canonical state | index in `seed_outputs` |
+| `PublicMint` | exactly the app's program of either pinned build (Sil `14b0f06bc176b78c94f19292e409c622636f31dae6bb31ff3d4d3308a6053b49` at `c8a0871`, taken from the vendored `public-mint.artifact.json`; `8c87ce6e88755277c4d243cf4690e43d05eb4c4213d4a1824dcbefd13061ac53` at `27f8403`, from `public-mint.27f8403.artifact.json`), template fields `gen__kcc20_template` = `9703112e...` and its own = its Sil hash, canonical state, `remaining >= 0`, `mint_amount >= 1` | index in `minter_outputs`, `remaining` added to `mint_allowance` |
+| `TokenSeed` | exactly the app's program of either pinned build (Sil `f79a3fccf6f87d7076662410a17e54d1531889d9b60f630f9fbb8465a384e62d` at `c8a0871`; `6ea2c53a45cc4dcd6156bc7d135ca9b6466bd691465206d660d0ef29ebc6c2ec` at `27f8403`), template fields as above, canonical state | index in `seed_outputs` |
 | anything else | never | `NotTemplate` |
+
+A genesis never mixes the two builds' issuers (refused as `BadState`); it is read against the build its actors are instances of, and the
+check reports which one: `GenesisReport::issuer` / the registry record's `issuer`, `kcc20-reference@c8a0871` or
+`kcc20-reference@27f8403` (`kob registry verify-genesis` prints it; a genesis of holders only has none). The `KCC20` holders are the same
+program in both builds, so tokens of either are the same token program to every order. A `PublicMint` of one build splits and merges only
+with its own build (each checks its own template field), so a token's issuers stay in the build of its genesis.
 
 Every output must carry the token's one extension commitment (a minter or seed of another commitment would issue another
 class under the same covenant id). The template fields are checked because they decide what an actor creates: a minter
@@ -186,6 +192,31 @@ record stays undetermined until the minters' lineage is traced to the live `Publ
 minting is closed the record says `[]` and the supply is final at `supply + mint_allowance`. The `kcc20-ref-public-mint`
 template is `reviewed` (internal review only, 2026-10-13: this build supports trading it): its tokens are tradable with or
 without a registry entry; an entry only records these facts.
+
+#### The issuers at `27f8403` and `rebalance_value` (2026-10-27)
+
+Upstream `b782466` (#3, in `27f8403`) gives `PublicMint` and `TokenSeed` one more entry, `rebalance_value(owner_signature)`, dispatch
+tag `498fa185`. Both new issuer programs were rebuilt: upstream's own build at `27f8403` (argentc `9a9f4b1`) reproduces upstream's
+`fixtures/public-mint/` byte for byte, and KOB's silverc compiles the generated issuer sources to the same hashes
+(`kcc20_reference_tests.rs`, `contracts/third-party/kcc20-reference/UPSTREAM.md`). `PublicMint` is 2,074 B (was 2,019), template
+`8c87ce6e88755277c4d243cf4690e43d05eb4c4213d4a1824dcbefd13061ac53`; `TokenSeed` 1,408 B (was 1,355), template
+`6ea2c53a45cc4dcd6156bc7d135ca9b6466bd691465206d660d0ef29ebc6c2ec`. The `KCC20` actor is byte for byte unchanged (4,031 B, Sil
+`9703112e...`; handle `734850b0...`). Without this pin a genesis built with the new issuers fails `verify-genesis` (unknown companion)
+and its token carries `genesis_unverified`. As of 2026-10-27 kascov (`data/mainnet`, `data/testnet-10`) lists no token and no template
+of the new issuers: nothing issued with them is on chain yet to compare the hashes against, so they rest on the two rebuilds.
+
+What `rebalance_value` lets the owner do (engine-checked, `kcc20_issuer_27f8403_tests.rs`; source `public_mint.27f8403.ag`,
+`token_seed.27f8403.ag`): spend exactly this issuer cell (no other input of its covenant id, so no holder, minter or seed beside it),
+signed by the issuer's `owner` key, into exactly one output with the identical script public key. The state (`remaining`, `mint_amount`,
+`owner`, `extension_commitment`) cannot change, no holder and no other issuer is created, and the value of the cell is unrestricted:
+the owner can lower or raise the deposit, and can withdraw a lone seed's deposit (`reclaim` leaves a seed alive). Against the bar of
+`docs/spec/token-programs.md` section 5 (item 5: every entry other than the transfer is listed with what it lets someone do): it is not a
+mint-authority or supply power. Supply, `mint_allowance` and `live_mint_authority` are functions of `remaining` and the holders, none
+of which it can touch; the powers KOB reports (mint, burn, freeze, seize, blacklist) are unchanged and no new fact or badge is needed.
+Residual effect, a liveness note and not a safety one: an owner can leave a minter or seed at the lowest value the chain accepts, and
+whoever funds a later `mint` / `create` keeps that value (`minter.value == self.value`). A reader that traces a minter's lineage to
+its live cells (`live_minters`) must follow a `rebalance_value` spend to its identical successor cell; the indexer reads such a spend
+as no mint (`created_holder` is `None` for it).
 
 Evidence: `crates/kob-tests/tests/kcc20_public_mint_genesis_tests.rs` (rusty-kaspa v2.1.0 engine: the genesis passes the
 covenant context and `verify_genesis`; the genesis minter mints a holder of the pinned handle, the seed creates a
@@ -229,7 +260,7 @@ transactions of the same tick (`crates/kob-executor/tests/matcher_scenarios.rs`,
 | KCC-20 notation | The merged text cites KCC-1 3.8.1 and 3.9 but still writes `P2PKHHash(pubkey)` where KCC-2 says `Hash(pubkey)` | Notation | None on bytes: its vector values for `P2PKHHash` are the unkeyed BLAKE3 (`7caa514a...` = `Hash(22^32)`), which the KCC-20 test asserts |
 | KCC-20 record name | Default configuration names the record `KCC20State`; the standalone build's artifacts name it `State` (the public-mint build: `KCC20State` parameter, `State` runtime record) | Possibly a name alignment | None: dispatch tags omit record names (`transfer` `79c71c23`, `transfer_delegator` `fd3ef14a`) |
 | KCC-20 Final | Last Call on `main` `3fbec52` | Final, possibly new vector bytes | Re-vendor `vectors/kcc20/` (the sha256 pin fails on any change) and rerun |
-| Reference program | kcc20-reference `master` `c8a0871`, published only as the `KCC20PublicMint` build | A new commit, or a published single-actor build | Rerun section 4; if the standalone bytes change, regenerate the pinned artifacts (orders under the old template become unsupported: [template-retirement.md](template-retirement.md)) |
+| Reference program | kcc20-reference `master` `27f8403` (token program `c8a0871`, issuers `c8a0871` and `27f8403`, both pinned), published only as the `KCC20PublicMint` build | A new commit, or a published single-actor build; a new issuer build is added beside the pinned ones (`public_mint::IssuerVersion`) | Rerun section 4; if the standalone bytes change, regenerate the pinned artifacts (orders under the old template become unsupported: [template-retirement.md](template-retirement.md)) |
 
 Observation for upstream: the `covenant-id/v1` minimum check also passes when `owner` is the token's own covenant id
 (`covenant-self` is approved, and KOB's programs approve it as the vector requires), so such a state can be moved by any

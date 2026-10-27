@@ -151,7 +151,7 @@ the output count, the supply and the outputs that carry a mint authority. Record
 (not clean: the data model then warns `genesis_unverified`), and the facts as the token's `genesis` record:
 
 ```
-genesis: { txid, daa_score, outputs: [..], supply, minter_outputs: [..], mint_allowance (optional),
+genesis: { txid, daa_score, outputs: [..], supply, minter_outputs: [..], mint_allowance (optional), issuer (optional),
            live_minters: ["txid:index", ..] (optional), checked_at_daa, source }
 ```
 
@@ -160,6 +160,12 @@ genesis: { txid, daa_score, outputs: [..], supply, minter_outputs: [..], mint_al
 `supply` is what the genesis holders carry; the token's maximum supply is `supply + mint_allowance`, fixed at genesis (a mint
 moves allowance into a holder, a split or merge of minters keeps their sum, and only a `PublicMint` creates a `PublicMint`),
 and the amount minted so far is that maximum less the `remaining` of the live minters (`kob_protocol::public_mint`).
+
+`issuer` names the upstream build of the public-mint app (argent-lang/kcc20-reference) the genesis's `PublicMint` / `TokenSeed` actors
+are instances of: `kcc20-reference@c8a0871` or `kcc20-reference@27f8403` (the latter adds the owner-signed `rebalance_value` entry to both
+issuers, which changes neither the supply nor any allowance, see `docs/spec/kcc-conformance.md` 4.3). Both builds share one `KCC20` holder
+program (`kcc20-ref-public-mint`); a genesis never mixes the two builds, and a genesis of holders only has no `issuer`. `verify-genesis`
+derives it and prints it.
 
 `live_minters` is condition C2 of the KRON review: `[]` = no live mint authority, absent = not determined, non-empty = those cells
 can still mint (the data model warns `live_mint_authority`). For the KRON programs it follows from the genesis: only a transaction that

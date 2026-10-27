@@ -7,6 +7,7 @@
 | Compiler pinned there | argentc `9a9f4b107116d0b259fae629f200fa3b663e7e9d` (argent-lang/argent, "Embed current-actor template lengths as fixed-width constants (#68)"; `Cargo.toml` `argent` / `argent-runtime`) |
 | Licence | ISC, as declared in that repository's `Cargo.toml` (no LICENSE file at that commit) |
 | Status | Not audited. Implements KCC-20 as merged on kaspanet/kccs `main` `3fbec52` (Last Call) |
+| Issuers, later commit | `27f8403fee55863125b044c73b2c9449d997a6ca` (`master`, "Add .gitattributes (#5)", 2026-10-21; its parent `b782466`, "Add owner-authorized minter and seed value rebalancing (#3)", is the functional change). Pinned **in addition**, for the `PublicMint` and `TokenSeed` issuers only (below); the token program is the `c8a0871` one |
 
 | File | Upstream path | Git blob | sha256 |
 |---|---|---|---|
@@ -20,6 +21,49 @@ values. The fixtures are renamed so that they are not mistaken for KOB files. `K
 own Sil template hash, then the example state of `contracts/kcc20/KCC20Ref.ctor.json`); the build writes
 `contracts/artifacts/KCC20PublicMint.json` from the unmodified fixture, the only file of `contracts/third-party/` it
 compiles.
+
+## The issuers at `27f8403` (`PublicMint`, `TokenSeed`)
+
+Between `c8a0871` and `27f8403` upstream changed nine files; only `contracts/public_mint.ag` and `contracts/token_seed.ag` (and
+what is generated from them) are programs. Each issuer gains one entry, `rebalance_value(owner_signature)` (dispatch tag
+`498fa185` on both). `contracts/kcc20.ag` (blob `581c9b7`) and the generated `fixtures/public-mint/sil/KCC20.sil` (blob `cab6cc2`) are
+the very blobs of `c8a0871`, so the token program and its hash are unchanged: the `KCC20` contract inside the new
+`artifact.json` is byte for byte the old one (4,031 B, state 1+145, Sil template hash `9703112e...`), and so are the holders'
+handle `734850b0...` and every order. The unchanged `public-mint.artifact.json` above is the `c8a0871` build; the `27f8403` files are
+vendored beside it (same rules: unmodified blobs, pinned by sha256 in `crates/kob-tests/tests/kcc20_reference_tests.rs`):
+
+| File | Upstream path | Git blob | sha256 |
+|---|---|---|---|
+| `public-mint.27f8403.artifact.json` | `fixtures/public-mint/artifact.json` | `381de343337b86ad5956c978ba11cfce3ffb4903` | `b5f93220b005f39ece92347f5226b2dd4b2f8f8c65b38b359c95133fdcf1c41e` |
+| `public_mint.27f8403.ag` | `contracts/public_mint.ag` | `38df5c74434715344d83702409751d2912ed8117` | `5736d002fb8c3094d1951d83ba097bf653e9f9686f9b603545ec80bcab784872` |
+| `token_seed.27f8403.ag` | `contracts/token_seed.ag` | `242062003bf50762004af2871808cc33c823f611` | `f429951f7e10356656dc24526b987abcc15131c9f6c4dce643f1f61032d0986b` |
+| `PublicMint.27f8403.sil` | `fixtures/public-mint/sil/PublicMint.sil` | `af0ddc0d754a7cd494ce3f3bf6c548597da35d9a` | `635537763557cc8a38a71337a1e86b4dd0c987ac7a3192054337a021cd20bdd5` |
+| `TokenSeed.27f8403.sil` | `fixtures/public-mint/sil/TokenSeed.sil` | `2ba4df81483b726e719a74e78769e9479ebfde88` | `a2a221a5fbf23ea230e9a236a203a9fb4f610b539d687102e20fb8bcada4e465` |
+
+| Issuer | `c8a0871` (Sil template hash, size) | `27f8403` (Sil template hash, size) |
+|---|---|---|
+| `PublicMint` (state 150 B) | `14b0f06bc176b78c94f19292e409c622636f31dae6bb31ff3d4d3308a6053b49`, 2,019 B (prefix 1, suffix 1,868) | `8c87ce6e88755277c4d243cf4690e43d05eb4c4213d4a1824dcbefd13061ac53`, 2,074 B (prefix 1, suffix 1,923) |
+| `TokenSeed` (state 132 B) | `f79a3fccf6f87d7076662410a17e54d1531889d9b60f630f9fbb8465a384e62d`, 1,355 B (prefix 1, suffix 1,222) | `6ea2c53a45cc4dcd6156bc7d135ca9b6466bd691465206d660d0ef29ebc6c2ec`, 1,408 B (prefix 1, suffix 1,275) |
+
+Reproduced two ways (2026-10-27). (1) Upstream's own build, `cargo +1.94.1 run --locked --example build_contracts` at `27f8403`
+(argentc `9a9f4b1`): `fixtures/public-mint/` comes out byte for byte, the `.sil` files and every hash of `artifact.json` included; only the
+`root` / `modules` path strings of `artifact.json` and `manifest.json` differ (absolute Windows paths of the build machine). (2) KOB's
+silverc (silverscript v1.0.0): `kobs_silverc_rebuilds_the_27f8403_issuers_to_the_pinned_hashes` compiles the vendored generated
+`PublicMint.27f8403.sil` and `TokenSeed.27f8403.sil` to the same template hashes, cuts and `rebalance_value` tag. KOB's own pinned
+argentc (`argent/upstream.lock`, `b312deda`) is older than `9a9f4b1` and cannot rebuild a multi-actor app to these bytes (it emits other
+dispatch tags and a different `KCC20` hash for the same sources), so these issuers are reproduced with upstream's pin, not with
+`scripts/build-argent.sh`.
+
+`rebalance_value(owner_signature)` (both issuers): `checkSig(owner_signature, owner)`, exactly one input of the issuer's covenant id
+(`OpCovInputCount == 1`), exactly one authorised output, and that output's script public key must equal the spent input's. The whole
+state (allowance, per-mint limit, owner, extension commitment) is therefore kept; only the cell's KAS value may change (upstream:
+"unrestricted" value, no contract-level restriction). It mints nothing, creates no holder and no other issuer, and does not touch
+`remaining`. The new capability is that the deposit owner can lower or raise the deposit of a live issuer, and withdraw a lone seed's
+deposit (`reclaim` forbids that, as every seed transition leaves a seed alive). KOB's facts (maximum supply `supply + mint_allowance`,
+`live_mint_authority`) do not depend on the cell's value; see `docs/spec/kcc-conformance.md` 4.3.
+
+KOB's genesis check accepts the issuers of either build and reports which (`GenesisReport::issuer`, the registry genesis record's
+`issuer`: `kcc20-reference@c8a0871` or `kcc20-reference@27f8403`); a genesis never mixes the two (`kob_protocol::public_mint::IssuerVersion`).
 
 ## Two builds of one actor
 
@@ -65,7 +109,7 @@ A token issued the way upstream recommends (a genesis of one `PublicMint` and `T
 pre-minted holders) is verified too: `kob registry verify-genesis` reads the app's `PublicMint` and `TokenSeed` programs
 from `public-mint.artifact.json` (`crates/kob-protocol/src/public_mint.rs`, Sil template hashes
 `14b0f06bc176b78c94f19292e409c622636f31dae6bb31ff3d4d3308a6053b49` and
-`f79a3fccf6f87d7076662410a17e54d1531889d9b60f630f9fbb8465a384e62d`), requires their template fields to name the app's
+`f79a3fccf6f87d7076662410a17e54d1531889d9b60f630f9fbb8465a384e62d` at `c8a0871`; `8c87ce6e...` and `6ea2c53a...` at `27f8403`), requires their template fields to name the app's
 own programs and one extension commitment, and reports the minters' allowance: the maximum supply is the genesis holders'
 amounts plus that allowance, fixed at genesis. Rules and evidence: `docs/spec/kcc-conformance.md` section 4.3,
 `crates/kob-tests/tests/kcc20_public_mint_genesis_tests.rs`.

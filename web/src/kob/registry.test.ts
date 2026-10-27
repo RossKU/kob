@@ -448,6 +448,8 @@ describe('registry genesis record (C1 / C2)', () => {
     expect(codes(doc({ genesis: { ...GENESIS, live_minters: undefined } }))).toEqual([]);
     // a live minter is a fact the API reports as the warning `live_mint_authority` (derived, never maintainer text)
     expect(codes(doc({ genesis: { ...GENESIS, live_minters: ['cd'.repeat(32) + ':3'] } }))).toEqual([]);
+    // the pinned upstream builds of the public-mint app a genesis may name (their issuers differ only by rebalance_value)
+    for (const issuer of ['kcc20-reference@c8a0871', 'kcc20-reference@27f8403']) expect(codes(doc({ genesis: { ...GENESIS, issuer } }))).toEqual([]);
   });
   it('checks the record shape', () => {
     const bad: [string, Record<string, unknown>, RegistryIssueCode][] = [
@@ -461,6 +463,8 @@ describe('registry genesis record (C1 / C2)', () => {
       ['empty source', { genesis: { ...GENESIS, source: '' } }, 'wrong-type'],
       ['bad outpoint', { genesis: { ...GENESIS, live_minters: ['xyz:1'] } }, 'wrong-type'],
       ['unknown field', { genesis: { ...GENESIS, extra: 1 } }, 'unknown-field'],
+      ['an issuer build KOB does not pin', { genesis: { ...GENESIS, issuer: 'kcc20-reference@0000000' } }, 'wrong-type'],
+      ['an issuer that is not text', { genesis: { ...GENESIS, issuer: 27 } }, 'wrong-type'],
     ];
     for (const [name, over, code] of bad) expect(codes(doc(over)), name).toContain(code);
   });

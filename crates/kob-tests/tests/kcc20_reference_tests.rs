@@ -52,6 +52,15 @@ const PUBLIC_MINT_SIL_SHA256: &str = "9c61d62a1b90ad541bbf5c48ec53faaff1826cbc6f
 const PUBLIC_MINT_ARTIFACT_SHA256: &str = "a419f2aa5f18f2917bf1cd69fbf04942ef746fc832f8e1fcd7625582d4c6c771";
 /// `template_hash` of the `KCC20` contract in upstream `fixtures/public-mint/artifact.json` at `c8a0871`.
 const PUBLIC_MINT_TEMPLATE: &str = "9703112ee6e3555107cd168858992b77d3b74f655205b2b463b1f9ec2ec73cf7";
+/// The later upstream commit whose `PublicMint` and `TokenSeed` issuers add `rebalance_value` (the `KCC20` actor is unchanged).
+const ISSUER_COMMIT: &str = "27f8403fee55863125b044c73b2c9449d997a6ca";
+const ISSUER_FILES: [(&str, &str); 5] = [
+    ("public-mint.27f8403.artifact.json", "b5f93220b005f39ece92347f5226b2dd4b2f8f8c65b38b359c95133fdcf1c41e"),
+    ("public_mint.27f8403.ag", "5736d002fb8c3094d1951d83ba097bf653e9f9686f9b603545ec80bcab784872"),
+    ("token_seed.27f8403.ag", "f429951f7e10356656dc24526b987abcc15131c9f6c4dce643f1f61032d0986b"),
+    ("PublicMint.27f8403.sil", "635537763557cc8a38a71337a1e86b4dd0c987ac7a3192054337a021cd20bdd5"),
+    ("TokenSeed.27f8403.sil", "a2a221a5fbf23ea230e9a236a203a9fb4f610b539d687102e20fb8bcada4e465"),
+];
 /// Template hash of the standalone build (argentc `9a9f4b1` and KOB's pinned argentc agree, `scripts/build-argent.sh`).
 const STANDALONE_TEMPLATE: &str = "173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b";
 
@@ -219,6 +228,75 @@ fn vendored_reference_is_the_merged_upstream() {
     }
     let reference = read("contracts/kcc20/KCC20Ref.sil");
     assert!(reference.contains(UPSTREAM_COMMIT), "KCC20Ref.sil provenance must name {UPSTREAM_COMMIT}");
+}
+
+/// The issuer files of `27f8403` are the upstream blobs, and the `KCC20` actor did not change between the two commits: the
+/// artifact's `KCC20` contract is the one of `c8a0871` (same bytes, same template hash), and so is the vendored `.sil`.
+#[test]
+fn vendored_issuers_of_27f8403_are_upstream_and_the_holder_program_is_unchanged() {
+    for (f, want) in ISSUER_FILES {
+        let path = format!("contracts/third-party/kcc20-reference/{f}");
+        let bytes = std::fs::read(common::repo_root().join(&path)).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let bytes: Vec<u8> = bytes.into_iter().filter(|b| *b != b'\r').collect();
+        assert_eq!(hexs(&Sha256::digest(&bytes)), want, "{path} is not the upstream blob of {ISSUER_COMMIT} (UPSTREAM.md)");
+    }
+    let kcc20 = |f: &str| {
+        let doc: serde_json::Value = serde_json::from_str(&read(&format!("contracts/third-party/kcc20-reference/{f}"))).unwrap();
+        doc["sil_abi"]["contracts"]["KCC20"]["compiled"].clone()
+    };
+    let (old, new) = (kcc20("public-mint.artifact.json"), kcc20("public-mint.27f8403.artifact.json"));
+    assert_eq!(old, new, "the KCC20 contract of the 27f8403 artifact is the c8a0871 one");
+    let recorded: Vec<u8> = new["template_hash"].as_array().unwrap().iter().map(|b| b.as_u64().unwrap() as u8).collect();
+    assert_eq!(hexs(&recorded), PUBLIC_MINT_TEMPLATE);
+    assert_eq!(new["bytecode"].as_array().unwrap().len(), 4031);
+}
+
+/// KOB's silverc (silverscript v1.0.0) compiles the generated issuer sources of `27f8403` to the very programs of the
+/// vendored artifact (argentc `9a9f4b1` + silverscript, `cargo run --example build_contracts` upstream), i.e. to the template
+/// hashes KOB pins; the new entry is `rebalance_value` (dispatch tag `498fa185`) on both. The hash does not cover the state.
+#[test]
+fn kobs_silverc_rebuilds_the_27f8403_issuers_to_the_pinned_hashes() {
+    use kob_protocol::public_mint::{
+        public_mint_of, token_seed_of, IssuerVersion, KCC20_SIL_HASH, PUBLIC_MINT_SIL_HASH_27F8403, TOKEN_SEED_SIL_HASH_27F8403,
+    };
+    let kcc20: ArtifactValue = silverscript_abi::ArtifactValue::from(
+        (0..32).map(|i| u8::from_str_radix(&KCC20_SIL_HASH[2 * i..2 * i + 2], 16).unwrap()).collect::<Vec<u8>>(),
+    );
+    let z32 = || ArtifactValue::from(vec![0u8; 32]);
+    for (src, name, want, sizes, args) in [
+        (
+            "PublicMint.27f8403.sil",
+            "PublicMint",
+            PUBLIC_MINT_SIL_HASH_27F8403,
+            (1usize, 150usize, 1923usize),
+            vec![
+                kcc20.clone(),
+                z32(),
+                ArtifactValue::Int(1000),
+                ArtifactValue::Int(10),
+                vec![3u8; 32].into(),
+                vec![0xeeu8; 32].into(),
+            ],
+        ),
+        (
+            "TokenSeed.27f8403.sil",
+            "TokenSeed",
+            TOKEN_SEED_SIL_HASH_27F8403,
+            (1, 132, 1275),
+            vec![kcc20.clone(), z32(), vec![3u8; 32].into(), vec![0xeeu8; 32].into()],
+        ),
+    ] {
+        let art = compile_contract(&read(&format!("contracts/third-party/kcc20-reference/{src}")), &args, CompileOptions::default())
+            .unwrap_or_else(|e| panic!("compile {src}: {e}"));
+        let (prefix, suffix, hash) = compiled_template_parts_and_hash(&art);
+        assert_eq!(hexs(&hash), want, "{name}: KOB's silverc and the pinned hash");
+        assert_eq!((prefix.len(), common::state_layout(&art).len, suffix.len()), sizes, "{name}: cut");
+        let c = common::single_contract(&art);
+        assert_eq!(c.entries["rebalance_value"].dispatch_tag.to_hex(), "498fa185", "{name}: rebalance_value tag");
+        // and it is the program KOB's genesis check embeds
+        let p = if name == "PublicMint" { public_mint_of(IssuerVersion::F27f8403) } else { token_seed_of(IssuerVersion::F27f8403) };
+        assert_eq!((p.prefix.clone(), p.suffix.clone()), (prefix, suffix), "{name}: embedded program");
+    }
 }
 
 #[test]

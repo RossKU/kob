@@ -346,6 +346,11 @@ pub struct GenesisReport {
     /// to the token's covenant id; `genesis.companions` of `data/programs.json`): no amount, no mint authority.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub companion_outputs: Vec<CompanionOutput>,
+    /// The upstream build of the published public-mint app whose `PublicMint` / `TokenSeed` actors the genesis holds
+    /// ([`crate::public_mint::IssuerVersion::label`], e.g. `kcc20-reference@27f8403`); absent when the genesis holds none of
+    /// them. A genesis never mixes builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
 }
 
 /// An opaque companion output of a genesis group (see [`GenesisReport::companion_outputs`]).
@@ -383,6 +388,10 @@ pub struct GenesisRecord {
     /// public minter. The maximum supply is `supply + mint_allowance`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mint_allowance: Option<i64>,
+    /// The upstream build of the published public-mint app the genesis's `PublicMint` / `TokenSeed` actors are instances of
+    /// (see [`GenesisReport::issuer`]); absent: the genesis holds none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
     /// Live mint-authority cells (`txid:index`) at `checked_at_daa`: empty = none (condition C2 holds), absent = not
     /// determined. A token with a live minter carries the warning [`TokenWarning::LiveMintAuthority`] (its supply can still grow).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -967,6 +976,9 @@ impl Registry {
                         e.push(gbad("genesis.mint_allowance needs the genesis minter outputs that hold it"));
                     }
                 }
+                if g.issuer.as_deref().is_some_and(|l| crate::public_mint::IssuerVersion::from_label(l).is_none()) {
+                    e.push(gbad("genesis.issuer must name a pinned upstream build of the public-mint app (kcc20-reference@<commit>)"));
+                }
                 if g.source.is_empty() || g.source.chars().count() > 512 || has_bad_char(&g.source) {
                     e.push(gbad("genesis.source must be 1-512 characters without control, zero-width or bidi characters"));
                 }
@@ -1203,6 +1215,8 @@ pub fn verify_genesis_with(
     let mut seed_outputs = vec![];
     let mut companion_outputs = vec![];
     let mut mint_allowance: i64 = 0;
+    // the build of the public-mint app the issuer actors are from (a genesis never mixes the two)
+    let mut issuer: Option<crate::public_mint::IssuerVersion> = None;
     // the token's one extension commitment: the one named, else the first output's
     let mut ext = extension_commitment;
     for o in outputs {
@@ -1215,7 +1229,20 @@ pub fn verify_genesis_with(
             // launchpad's curve or pool bound to the token's id); anything else is genesis contamination
             let found = crate::profile::match_companion(profile, redeem).map_err(|e| GenesisError::BadState(o.index, e))?;
             let c = match found.ok_or_else(|| GenesisError::NotTemplate(o.index, template.id.clone()))? {
-                crate::profile::CompanionMatch::Decoded(c) => c,
+                crate::profile::CompanionMatch::Decoded(v, c) => {
+                    if let Some(first) = issuer.filter(|f| *f != v) {
+                        return Err(GenesisError::BadState(
+                            o.index,
+                            format!(
+                                "the genesis mixes issuer builds ({} and {}): its actors must all be of one build",
+                                first.label(),
+                                v.label()
+                            ),
+                        ));
+                    }
+                    issuer = Some(v);
+                    c
+                }
                 crate::profile::CompanionMatch::Opaque(role) => {
                     companion_outputs.push(CompanionOutput { index: o.index, role: role.as_str().to_string() });
                     continue;
@@ -1272,6 +1299,7 @@ pub fn verify_genesis_with(
         mint_allowance,
         seed_outputs,
         companion_outputs,
+        issuer: issuer.map(|v| v.label().to_string()),
     })
 }
 
@@ -1785,7 +1813,7 @@ mod tests {
         let mut full_tok = serde_json::to_value(&ex.tokens[0]).unwrap();
         full_tok["genesis_verified"] = json!(true);
         full_tok["genesis"] = json!({"txid": "11".repeat(32), "daa_score": 1, "outputs": [1, 2], "supply": 3, "minter_outputs": [],
-            "mint_allowance": 0, "live_minters": [], "checked_at_daa": 4, "source": "s"});
+            "mint_allowance": 0, "issuer": "kcc20-reference@27f8403", "live_minters": [], "checked_at_daa": 4, "source": "s"});
         // the legacy lot and tick (read and ignored) are declared optional by the schema
         full_tok["lot_size"] = json!(1);
         full_tok["tick"] = json!(1);
@@ -1803,7 +1831,8 @@ mod tests {
         }
         assert_eq!(keys(&full_tok["display"]), props(&defs["display"]), "display properties");
         assert_eq!(keys(&full_tok["genesis"]), props(&defs["genesis_record"]), "genesis record properties");
-        let optional_gen: BTreeSet<String> = ["live_minters".to_string(), "mint_allowance".to_string()].into_iter().collect();
+        let optional_gen: BTreeSet<String> =
+            ["live_minters".to_string(), "mint_allowance".to_string(), "issuer".to_string()].into_iter().collect();
         let expect: BTreeSet<String> = keys(&full_tok["genesis"]).difference(&optional_gen).cloned().collect();
         assert_eq!(req(&defs["genesis_record"]), expect, "genesis record required");
         assert_eq!(defs["genesis_record"]["additionalProperties"], false);

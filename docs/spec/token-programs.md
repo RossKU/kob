@@ -86,8 +86,10 @@ transactions. Two cases:
   `a_kasseal_launch_genesis_verifies_as_a_fixed_supply_public_mint_token`.
 * **Companions bound to the token's own covenant id** are accepted only when the program's profile declares them
   (`genesis.companions`), by role: `minter`, `seed`, `curve`, `pool`, `vault`. A companion is either *decoded* (`decoder`:
-  `kcc20-public-mint/PublicMint` and `kcc20-public-mint/TokenSeed`, the issuance actors of the published public-mint app; a
-  minter's `remaining` is summed into `mint_allowance`) or *opaque* (`template_hash` plus `layout`: recognised by the template
+  `kcc20-public-mint/PublicMint` and `kcc20-public-mint/TokenSeed`, the issuance actors of the published public-mint app, in
+  both upstream builds KOB pins: argent-lang/kcc20-reference `c8a0871` and `27f8403`, which adds the owner-signed
+  `rebalance_value` to both issuers and leaves the `KCC20` holder program unchanged; the check reports the build, and a genesis
+  never mixes them: `docs/spec/kcc-conformance.md` 4.3; a minter's `remaining` is summed into `mint_allowance`) or *opaque* (`template_hash` plus `layout`: recognised by the template
   hash of its cut, reported in `GenesisReport::companion_outputs`, carrying no amount and no mint authority). Anything else in
   the group is refused (`NotTemplate`). `registry::verify_genesis_with` checks a group under a candidate profile, so a
   launchpad's genesis shape can be tried before its profile is committed (`registry` test
@@ -170,6 +172,7 @@ notes:
 | Launchpad | Program | What onboarding needed |
 |---|---|---|
 | Kasseal | `kcc20-ref-public-mint` (no new program) | Nothing new: its launches use the reference's published public-mint build. Curve and pool are their own covenants, outside the token's genesis group; the SEAL launch genesis verifies as a fixed supply |
+| Reference issuers `27f8403` | `kcc20-ref-public-mint` (no new program) | Data and a second pinned build of the genesis companions: the `PublicMint` / `TokenSeed` issuers gained `rebalance_value`, the holder program did not change; reviewed against section 5 item 5 (no supply or mint-authority power) in `docs/spec/kcc-conformance.md` 4.3 |
 | KaspaCom 0.2.5 | `kcc20-kaspacom-0-2-5` | Data: profile with `carrier_floor` 0.5 KAS (measured), `router_intents: false`, `minters: unknown` (minter lanes behind the extension commitment). Stays `pending-review` (finding K-1) |
 | KRON launchpad | `kron-2433`, `kron-2732` | The KRON codec family (orders and builders, reviewed B2); both programs are data on it |
 | KForge (testnet-10) | `KForgeToken1785` | Code: the delivery id_type 0 builds of the KRON order kinds and id_type 0 holder spends (a token-level signature in the signature column). Data: profile with holder 0, slots 1 / 3, `networks: [testnet-10]`, `pending-review`; see below |

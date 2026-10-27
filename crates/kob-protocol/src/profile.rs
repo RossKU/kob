@@ -240,8 +240,9 @@ impl CompanionRule {
 /// A genesis output recognised as one of a profile's declared companions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompanionMatch {
-    /// A companion whose state KOB reads (a decoder of [`COMPANION_DECODERS`]).
-    Decoded(crate::public_mint::Companion),
+    /// A companion whose state KOB reads (a decoder of [`COMPANION_DECODERS`]), with the upstream build of the published
+    /// app it is an instance of.
+    Decoded(crate::public_mint::IssuerVersion, crate::public_mint::Companion),
     /// An opaque companion (recognised by its template hash): no amount, no mint authority.
     Opaque(CompanionRole),
 }
@@ -257,9 +258,9 @@ pub fn match_companion(p: &ProgramProfile, redeem: &[u8]) -> Result<Option<Compa
                     "kcc20-public-mint/TokenSeed" => false,
                     other => return Err(format!("unknown companion decoder {other}")),
                 };
-                if let Some(c) = crate::public_mint::decode_companion(redeem)? {
+                if let Some((v, c)) = crate::public_mint::decode_companion_versioned(redeem)? {
                     if matches!(c, crate::public_mint::Companion::Minter(_)) == want_minter {
-                        return Ok(Some(CompanionMatch::Decoded(c)));
+                        return Ok(Some(CompanionMatch::Decoded(v, c)));
                     }
                 }
             }

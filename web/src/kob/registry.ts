@@ -76,6 +76,8 @@ export interface RegistryGenesisJson {
   txid: Hex; daa_score: number; outputs: number[]; supply: number; minter_outputs: number[];
   /** allowance of the genesis PublicMint outputs (kcc20-ref-public-mint); absent = no public minter; max supply = supply + mint_allowance */
   mint_allowance?: number;
+  /** the upstream build of the public-mint app whose PublicMint / TokenSeed actors the genesis holds (`kcc20-reference@c8a0871` or `kcc20-reference@27f8403`); absent = it holds none */
+  issuer?: string;
   /** live mint-authority cells (`txid:index`): [] = none, absent = not determined; non-empty = the supply can still grow (API warning `live_mint_authority`) */
   live_minters?: string[];
   checked_at_daa: number; source: string;
@@ -252,7 +254,9 @@ const SOURCE_KEYS = ['path', 'upstream', 'note'];
 const TOKEN_KEYS = ['ticker', 'name', 'family', 'covenant_id', 'template_id', 'extension_commitment', 'extension_class', 'decimals', 'lot_size', 'tick', 'max_token_inputs', 'max_token_outputs', 'verified', 'genesis_verified', 'genesis', 'display',
   // removed per-token judgements of older files: read and ignored, never honoured (see RegistryTokenJson)
   'status', 'official', 'warning'];
-const GENESIS_KEYS = ['txid', 'daa_score', 'outputs', 'supply', 'minter_outputs', 'mint_allowance', 'live_minters', 'checked_at_daa', 'source'];
+const GENESIS_KEYS = ['txid', 'daa_score', 'outputs', 'supply', 'minter_outputs', 'mint_allowance', 'issuer', 'live_minters', 'checked_at_daa', 'source'];
+/** The pinned upstream builds of the public-mint app a genesis record may name (mirrors `IssuerVersion::label` of public_mint.rs). */
+const ISSUER_BUILDS = ['kcc20-reference@c8a0871', 'kcc20-reference@27f8403'];
 const OUTPOINT = /^[0-9a-f]{64}:(0|[1-9][0-9]{0,9})$/;
 const DISPLAY_KEYS = ['description', 'website', 'icon', 'x', 'telegram', 'kcc23'];
 const STATE_LEN: Record<Family, number> = { kcc20: 112, kron: 46 };
@@ -403,6 +407,7 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
           if (!isInt(g.mint_allowance) || g.mint_allowance < 0) gbad('genesis.mint_allowance must be a non-negative integer');
           else if (!Array.isArray(g.minter_outputs) || g.minter_outputs.length === 0) gbad('genesis.mint_allowance needs the genesis minter outputs that hold it');
         }
+        if (g.issuer !== undefined && (typeof g.issuer !== 'string' || !ISSUER_BUILDS.includes(g.issuer))) gbad('genesis.issuer must name a pinned upstream build of the public-mint app (kcc20-reference@<commit>)');
         if (typeof g.source !== 'string' || !g.source || [...g.source].length > 512 || hasBadChar(g.source)) gbad('genesis.source must be 1..=512 printable characters');
         if (g.live_minters !== undefined) {
           if (!Array.isArray(g.live_minters) || g.live_minters.some((o) => typeof o !== 'string' || !OUTPOINT.test(o))) gbad('genesis.live_minters entries must be <txid>:<index>');

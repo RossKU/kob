@@ -607,6 +607,7 @@ fn registry_token(ticker: &str, cov: [u8; 32], template_id: &str, prog: Template
             supply: 1,
             minter_outputs: vec![],
             mint_allowance: None,
+            issuer: None,
             live_minters: Some(vec![]),
             checked_at_daa: 2,
             source: "test".into(),

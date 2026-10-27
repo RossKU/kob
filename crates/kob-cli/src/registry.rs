@@ -159,6 +159,9 @@ pub fn run_verify_genesis(args: &[&str]) -> i32 {
                 match g.mint_allowance {
                     Some(a) => format!(" + mint allowance {a} (max supply {})", g.supply.saturating_add(a)),
                     None => String::new(),
+                } + &match &g.issuer {
+                    Some(i) => format!(", issuer programs {i}"),
+                    None => String::new(),
                 },
                 match &g.live_minters {
                     Some(l) if l.is_empty() => format!("none (genesis minter outputs {:?})", g.minter_outputs),

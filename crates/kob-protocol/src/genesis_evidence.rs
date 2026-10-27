@@ -409,6 +409,7 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
         supply: report.supply,
         mint_allowance: (program.is_some_and(crate::public_mint::is_app_holder) && !report.minter_outputs.is_empty())
             .then_some(report.mint_allowance),
+        issuer: report.issuer,
         minter_outputs: report.minter_outputs,
         live_minters,
         checked_at_daa,
@@ -452,6 +453,7 @@ pub fn registry_mismatches(reg: &Registry, verdicts: &[TokenVerdict]) -> Vec<Str
                                 r.supply,
                                 r.minter_outputs.clone(),
                                 r.mint_allowance,
+                                r.issuer.clone(),
                                 r.live_minters.clone(),
                             )
                         };
