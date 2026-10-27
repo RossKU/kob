@@ -87,6 +87,13 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
   signer verifies that from its own decoding of both transactions), else the updated confirmation is shown once more. My orders actions
   (cancel, amend, refund, sweep, merge) run the same way; their balances (tokens in orders, KAS locked) are at the top of My orders. Token
   issuance keeps its confirmation screen (a token's facts never change).
+* **Ladder.** The protocol has no ladder order: a ladder is N ordinary orders, each its own covenant, transaction and signature, planned and
+  signed one after the other (`src/ui/ticket/ladder.ts`). A limit order has a "Ladder" switch (2 to 20 orders, "Step between orders" in percent
+  or "Or end price"; a buy ladder goes down from the typed price, a sell ladder up); a repeat IFD / IFO has "Ladder levels" (1 to 20) with a
+  "Ladder step" that shifts the entry and the exit prices together. The ticket lists the levels and the total locked before the first
+  signature. Stopping keeps the levels already placed ("Stopped: N of M levels placed"); nothing is batched and a half-placed ladder is not
+  remembered across a reload, so the rest has to be placed again by hand (the placed ones are in My orders). With the private-key signer every
+  level has its own Approve.
 * **Fills of an order that takes liquidity.** One transaction takes at most the token's input slots of asks (3 on KOB's standard program; a
   sell at most its output slots of bids, one less while it leaves a rest), so a large market buy against many small asks fills only part in
   one transaction. A market order has a Fills box (Advanced; both sides of a KAS market, not with all-or-nothing, not on a pair: pair market

@@ -128,6 +128,15 @@ kob registry add-program <ARTIFACT.json | REDEEM.bin | REDEEM.hex | HEX> --name 
    and `scripts/build-deploy.sh mainnet` (the deployment record pins the registry).
 6. Run the full suite: `cargo test --workspace`, `cd web && npm run gen:programs && npx vitest run`.
 
+**How a launchpad or program author asks for support.** There is no intake desk and no promised turnaround: KOB is pre-audit
+and support for a program is a change to this repository like any other (`CONTRIBUTING.md`). Open an issue on the repository
+first, then (or instead) a pull request that follows the steps above, with: the program's source or artifact and its licence, its
+KCC-20 (or KRON) conformance results, the genesis shapes it produces (section 3) with a real example on the network, its owner and
+slot limits and its authority powers (mint, burn, freeze, seize, blacklist). A reviewed program becomes tradable only in a release
+that embeds it, and operators of indexers and matchers must upgrade to it before the web app lists its tokens
+(`docs/ops/release.md`, 7). Until then its tokens are not tradable in this build (`pending-review`), whatever the launchpad says. Tokens of a
+supported program need no listing step.
+
 ## 5. Reviewer checklist
 
 A reviewer signs off a program only when every item has a test or a written answer in the program's `UPSTREAM.md` / review

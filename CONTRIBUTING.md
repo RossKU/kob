@@ -2,7 +2,7 @@
 
 Thanks for looking. KOB is pre-audit and moves quickly; small, focused changes with tests are
 the easiest to review. For anything that changes a contract, the protocol encoding or a
-specification, please open an issue first.
+specification, please open an issue first (the repository's issue tracker at https://github.com/RossKU/kob/issues).
 
 ## Build and test
 
@@ -19,7 +19,14 @@ scripts/build-wasm.sh --install-bindgen --test                  # wasm bindings 
 
 Web UI (Node >= 22): `scripts/build-wasm.sh --install-bindgen --web --slim` at the repo root, then from `web/`:
 `npm ci`, `npm run fetch-sdk`, `npm run build:wasm -- --copy`, `npm run typecheck`, `npm test`,
-`npm run e2e`. `.github/workflows/ci.yml` is the authoritative list of what must pass.
+`npm run e2e`. `.github/workflows/ci.yml` is the authoritative list of what must pass; besides the commands above it also runs
+`scripts/build-deploy.sh testnet-10 --check` and `mainnet --check`, `node scripts/check-pins.mjs`, `cargo deny --locked check` and
+`npm audit` on the three lockfiles.
+
+**Hashes in documents.** `node scripts/check-pins.mjs` fails when a 64-hex constant in a pinned file (the docs, the Rust pin
+tables, the TypeScript SDK constants, the registry) is not a hash that the generated artifacts carry. Editing or pasting a
+covenant id, a transaction id or a hash into a document therefore fails CI with a message naming the file: write a placeholder
+(`<64 hex>`) or change the hash with the artifact it pins (`scripts/build-contracts.sh`, `scripts/build-deploy.sh`).
 
 ## Rules of the road
 

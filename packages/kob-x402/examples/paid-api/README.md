@@ -9,6 +9,12 @@ payer client  --GET-->  paywall (server.ts)  --POST /settle-->  facilitator (kob
               --GET + PAYMENT-SIGNATURE-->   serves /report after the settlement shows YOUR offer
 ```
 
+## Prerequisites
+
+Node >= 22, and the Rust toolchain of `rust-toolchain.toml` (with the `wasm32-unknown-unknown` target): the kob-wasm node bindings are built
+from this repository by `scripts/build-wasm.sh` (below), and `npm run fetch-sdk` downloads the official Kaspa wasm SDK. Without a Rust toolchain
+you cannot run this example yet. `@kob/x402` is not published to npm; the example imports it from this repository.
+
 ## One-time setup
 
 ```

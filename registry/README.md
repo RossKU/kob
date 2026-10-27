@@ -22,6 +22,14 @@ hash; nothing of that is implemented (feature freeze). Until then KOB states no 
 listing status and no free-text warning in this format, and the risk a UI shows is derived from facts by code (the template
 `capabilities`, the warnings below), never written per token by a maintainer.
 
+## Do I need a registry entry? (token issuers)
+
+No. A token of a supported program trades without one: the chain carries what an app needs. The name, ticker and decimals an issuer
+chooses are recorded on chain with the token (KCC-23, `docs/spec/token-metadata.md`), and apps that read that record, KOB's web app
+and `kob` among them, show them marked as the creator's own claim. The "Token facts (registry format)" entry that the issue form
+hands back is optional output for anyone who wants to keep or publish those facts; there is no place to submit it, and mainnet
+registry changes happen only in a release (`docs/ops/release.md`, 3).
+
 ## Two lists: supported programs, open tokens
 
 * **`templates` is the program allowlist.** Only token programs marked `review_status: reviewed` are supported for trading by this build:

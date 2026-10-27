@@ -22,6 +22,20 @@ off-chain custody.
 * **Payments.** A [x402](https://github.com/elldeeone/kaspa-x402) profile for KCC-20 payments and
   a swap-and-pay router (pay a merchant in token B from token A or KAS) built as an Argent app.
 
+## Start here
+
+* **Trade.** Open the web app, connect KasWare or Kaspire (a desktop extension) and place an order: [docs/user-guide.md](docs/user-guide.md)
+  (connect, buy and sell, limit and market orders, partial fills, cancel, merge, the status banners, fees, the private-key option,
+  recovering a token you created). Testnet-10 coins have no value; use them first.
+* **Run an executor** (match orders and earn the spread and tips, or serve the order book): download a prebuilt archive from the
+  [GitHub releases](https://github.com/RossKU/kob/releases), check its hash and double-click `kob-executor`; it needs no Rust and no
+  node of your own by default: [docs/ops/executor-quickstart.md](docs/ops/executor-quickstart.md) (Windows, Linux, Docker, Android).
+* **Host the web app and a public read server:** [docs/ops/web-hosting.md](docs/ops/web-hosting.md) and
+  [docs/ops/chart-server.md](docs/ops/chart-server.md).
+* **Build a bot or an integration:** the read API is documented in [docs/api.md](docs/api.md); orders are placed with the command
+  line [crates/kob-cli/README.md](crates/kob-cli/README.md) (`--json`) or the web app.
+* **Build from source:** the Quickstart below.
+
 ## Status
 
 **Pre-audit. Mainnet launches as a canary: use at your own risk, only funds you can afford to lose.**
@@ -124,6 +138,9 @@ flags, keys, monitoring and the runbook.
 
 See [docs/README.md](docs/README.md) for the index. The main entries:
 
+* `docs/user-guide.md`: how to trade in the web app (wallets, orders, fees, recovery)
+* `docs/api.md`: the executor's read API (HTTP and WebSocket) reference
+* `docs/ops/executor-quickstart.md`: run an executor from a download; `docs/ops/web-hosting.md`, `docs/ops/chart-server.md`: host the app and a public read server
 * `docs/spec/matcher.md`: normative matcher, executor and wallet rules
 * `docs/spec/order-types.md`: the order types and their semantics
 * `docs/spec/kob1-payload.md`: the `KOB1` payload and placement record
