@@ -215,7 +215,8 @@ export class KaspaRpcNode implements NodeApi {
     this.setState('connecting');
     const cfg = this.url
       ? { url: this.url, networkId: this.network, encoding: sdk.Encoding.SerdeJson }
-      : { resolver: new sdk.Resolver(), networkId: this.network, encoding: sdk.Encoding.SerdeJson };
+      : // the public resolvers (`/v2/kaspa/<network>/any/wrpc/...`) answer 404 for `json` and serve `borsh` only, so a resolver-picked node is reached over Borsh
+        { resolver: new sdk.Resolver(), networkId: this.network, encoding: sdk.Encoding.Borsh };
     let rpc: SdkRpcClient;
     try {
       rpc = new sdk.RpcClient(cfg);

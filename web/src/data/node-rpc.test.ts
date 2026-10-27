@@ -249,6 +249,8 @@ describe('KaspaRpcNode', () => {
     expect(st.configs[0]!.resolver).toBeDefined();
     expect(st.configs[0]!.url).toBeUndefined();
     expect(st.configs[0]!.networkId).toBe('testnet-10');
+    // the resolvers serve Borsh only (their `json` path is a 404)
+    expect(st.configs[0]!.encoding).toBe(realSdk.Encoding.Borsh);
   });
 
   it('refuses a node on another network (accepting the node spelling of mainnet)', async () => {
