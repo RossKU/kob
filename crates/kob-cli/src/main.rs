@@ -24,7 +24,8 @@ const USAGE: &str = "\
 kob: KOB command line
 
 USAGE
-  kob token issue [OPTIONS]    create a fixed-supply KCC-20 token: KCC-23 declaration, then the genesis (`kob token issue --help`)
+  kob token issue [OPTIONS]    create a fixed-supply KCC-20 token: KCC-23 declaration, then the genesis (`kob token issue --help`);
+                               submits only with --yes or a terminal's confirmation; --dry-run stops before submitting
   kob token resume <DIR>       send a creation whose genesis did not go out (`kob token resume --help`)
   kob token verify-declaration <PROOF>
                                check a KCC-23 launch proof from any source and print the declaration
@@ -34,13 +35,15 @@ USAGE
   kob registry programs [--json]   the token-program profiles this build embeds
   kob registry add-program <ARTIFACT|REDEEM> [--name N] [--slots I/O] [--write] [...]
                                derive a new token program's profile from its bytes (`kob registry add-program --help`)
-  kob recover --from <FILE>... --node ws://HOST:PORT [--amount-left <AMOUNT>] [--cancel --key <KEY> ...]
-                               find orders on the node from a backup / export / indexer view; cancel them
+  kob recover --from <FILE>... --node ws://HOST:PORT [--amount-left <AMOUNT>] [--cancel --key <KEY> [--yes] ...]
+                               find orders on the node from a backup / export / indexer view; cancel them (--cancel signs and
+                               submits only with --yes or a terminal's confirmation; --dry-run stops before submitting)
                                (`kob recover --help`; `--amount-left` names the amount a partly filled order has left)
-  kob order sweep  --view <FILE>... --key <KEY> --node ws://HOST:PORT [...]
+  kob order sweep  --view <FILE>... --key <KEY> --node ws://HOST:PORT [--yes] [...]
                                return an order's strays to the maker, the order continues (`kob order --help`)
-  kob order cancel --view <FILE>... --key <KEY> --node ws://HOST:PORT [...]
-                               the maker's cancel with custody and strays from an indexer view (older contract versions too)
+  kob order cancel --view <FILE>... --key <KEY> --node ws://HOST:PORT [--yes] [...]
+                               the maker's cancel with custody and strays from an indexer view (older contract versions too);
+                               both submit only with --yes or a terminal's confirmation; --dry-run stops before submitting
   kob place <KIND> --token T [--quote B] --side buy|sell --amount A [...]
                                place an order as the web wallet plans it: limit, ioc, fok, market, streaming, close,
                                twap, dca, dutch, stop-market, stop-limit, trailing-stop, take-profit, oco, ifd, ifo,
@@ -60,7 +63,8 @@ USAGE
                                the maker's orders (--maker KEY|ADDRESS, else the signing key's public key)
   kob balances                 free KAS and tokens, and what the maker's live orders hold (custody, strays, KAS)
                                the trading commands read the key from --key-file or $KOB_KEY (never --key), show the
-                               plan and sign only with --yes or a terminal's confirmation; --dry-run stops before signing
+                               plan and sign only with --yes or a terminal's confirmation; --dry-run stops before signing;
+                               --json prints one JSON document (`crates/kob-cli/README.md`)
   kob --version
 ";
 

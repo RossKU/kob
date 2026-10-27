@@ -37,7 +37,7 @@ their owners from the genesis on, so the holder's key finds and spends them from
 USAGE
   kob token issue --name <NAME> --ticker <TICKER> --decimals <N> --fund-utxo <TXID:INDEX:AMOUNT:OWNER>...
                   [--supply <UNITS>] [--holder <OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]>...]
-                  [--key <HEX | env:VAR | file:PATH>] [--out-dir <DIR>] [--dry-run] [--node ws://HOST:PORT]
+                  [--key <HEX | env:VAR | file:PATH>] [--out-dir <DIR>] [--yes | --dry-run] [--node ws://HOST:PORT]
 
 REQUIRED
   --name, --ticker      display name (1..=64 chars) and ticker (2..=12 of A-Z 0-9)
@@ -78,8 +78,10 @@ OUTPUT
                         decimals) and copied to the registry entry; --x and --telegram take a handle or the address
   --network             mainnet or testnet-10, recorded in metadata/supply; required unless the build is a deployment
                         build (deploy-mainnet, deploy-tn10), which implies its own
+  --yes, -y             submit without asking. Without it a terminal is shown the plan and asked (type yes); without a
+                        terminal nothing is written or submitted. Not needed with --dry-run.
   --dry-run             build and verify everything offline (signs and executes the funding inputs when --key is
-                        given, else the transaction stays unsigned); never submits
+                        given, else the transaction stays unsigned); never submits (excludes --yes)
   --node ws://HOST:PORT submit the signed transactions via wRPC JSON (`submitTransaction`; JSON port 18110 mainnet,
                         18210 testnet-10). Required unless --dry-run; default $KOB_NODE_WRPC (a URL with a password or
                         an API key belongs there: arguments are visible in `ps`).
@@ -167,6 +169,8 @@ pub struct IssueArgs {
     pub network: String,
     /// Dry run.
     pub dry_run: bool,
+    /// Submit without asking.
+    pub yes: bool,
     /// Node URL.
     pub node: Option<String>,
     /// The issued program.
@@ -297,6 +301,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
         telegram: None,
         network: String::new(),
         dry_run: false,
+        yes: false,
         node: None,
         program: IssueProgram::default(),
     };
@@ -347,6 +352,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
             "--website" => a.website = Some(val("--website")?),
             "--network" => a.network = val("--network")?,
             "--dry-run" => a.dry_run = true,
+            "--yes" | "-y" => a.yes = true,
             "--node" => a.node = Some(val("--node")?),
             "--program" => a.program = IssueProgram::parse(&val("--program")?).map_err(|e| e.to_string())?,
             other => return Err(format!("unknown argument `{other}` (see `kob token issue --help`)")),
@@ -360,6 +366,9 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
     }
     if a.holders.is_empty() && a.supply.is_none() {
         return Err("give --supply and/or at least one --holder".into());
+    }
+    if a.yes && a.dry_run {
+        return Err("--yes and --dry-run exclude each other".into());
     }
     a.node = crate::wrpc::node_arg(a.node.take());
     if !a.dry_run && a.node.is_none() {
@@ -533,7 +542,15 @@ fn issue(args: &[String]) -> Result<(), String> {
     for w in plan.warnings() {
         println!("warning      {w}");
     }
-    // a submitting run always keeps the signed transactions: they are what `kob token resume` sends
+    // a submitting run asks first (the same rule as every other submitting command: `--yes`, or a terminal; else nothing is
+    // written or sent), then always keeps the signed transactions: they are what `kob token resume` sends
+    if !a.dry_run {
+        crate::trade::opts::confirm_with(
+            a.yes,
+            &a.network,
+            &format!("the creation of {} (the preparation, then the genesis {})", g.spec.ticker, g.txid()),
+        )?;
+    }
     let dir = match (&a.out_dir, a.dry_run) {
         (Some(d), _) => Some(d.clone()),
         (None, false) => Some(PathBuf::from(format!("kob-create-{}", &hex(g.covenant_id.as_bytes().as_slice())[..16]))),
@@ -893,6 +910,17 @@ mod tests {
             .ends_with(r#""logo":"ipfs://cid","x":"https://x.com/kaspa","telegram":"https://t.me/kaspa_chat"}"#));
     }
 
+    /// `--yes` and `--dry-run` exclude each other, as in every submitting command.
+    #[test]
+    fn yes_and_dry_run_exclude_each_other() {
+        let base =
+            format!("--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:1:5000000000:{PK} --supply 1 --network testnet-10");
+        assert!(parse_issue_args(&v(&format!("{base} --dry-run --yes"))).unwrap_err().contains("exclude each other"));
+        assert!(parse_issue_args(&v(&format!("{base} --dry-run -y"))).is_err());
+        let a = parse_issue_args(&v(&format!("{base} --node ws://x:1 --key {PK} --yes"))).unwrap();
+        assert!(a.yes && !a.dry_run);
+    }
+
     /// A submitting run sends the preparation, then the genesis spending it; `kob token resume` sends the saved pair again.
     #[test]
     fn submit_sends_the_preparation_then_the_genesis_and_resume_resends_them() {
@@ -908,7 +936,13 @@ mod tests {
             hex(&pk),
             dir.display()
         );
-        assert_eq!(run_issue(&v(&cmd)), 0);
+        // without --yes and without a terminal nothing is written and nothing is sent
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            assert_eq!(run_issue(&v(&cmd)), 1, "refused without --yes");
+            assert!(state.lock().unwrap().submitted.is_empty(), "nothing submitted");
+            assert!(!dir.exists(), "nothing written");
+        }
+        assert_eq!(run_issue(&v(&format!("{cmd} --yes"))), 0);
         let ids: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("creation.json")).unwrap()).unwrap();
         let sent = state.lock().unwrap().submitted.clone();
         assert_eq!(sent.len(), 2, "preparation, then genesis");

@@ -468,8 +468,17 @@ fn recover_finds_cancels_and_submits() {
     assert_eq!(by_cov(&report, A3)["cancel"]["funding"], format!("{}:0", to_hex(&[0x91; 32])), "the smallest SUFFICIENT UTXO");
     assert!(node.lock().unwrap().submitted.is_empty(), "a dry run submits nothing");
 
-    // submit: one transaction per live order of the key
-    let a = recover::parse_args(&v(&format!("{base} --cancel --key {}", to_hex(&sk(1))))).unwrap();
+    // submit without --yes: with no terminal to ask, every cancel is refused and nothing is signed or sent
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        let a = recover::parse_args(&v(&format!("{base} --cancel --key {}", to_hex(&sk(1))))).unwrap();
+        let (report, ok) = recover::execute(&a).unwrap();
+        assert!(!ok, "a refusal is an exit code 1: {report}");
+        assert_eq!(by_cov(&report, A1)["cancel"]["status"], "refused");
+        assert!(by_cov(&report, A1)["cancel"]["reason"].as_str().unwrap().contains("pass --yes"), "{report}");
+        assert!(node.lock().unwrap().submitted.is_empty(), "nothing submitted");
+    }
+    // with --yes: one transaction per live order of the key
+    let a = recover::parse_args(&v(&format!("{base} --cancel --yes --key {}", to_hex(&sk(1))))).unwrap();
     let (report, ok) = recover::execute(&a).unwrap();
     assert!(ok, "{report}");
     assert_eq!(by_cov(&report, A7)["cancel"]["status"], "submitted");
@@ -541,6 +550,13 @@ fn amount_left_hint_finds_a_partial_fill_the_fallback_misses() {
     let s = signed_from(c["file"].as_str().unwrap());
     assert_eq!(s.tx.inputs.len(), 2, "order + custody of 6500");
     // arguments
+    // --yes belongs to --cancel and excludes --dry-run
+    let e = recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --yes")).unwrap_err();
+    assert!(e.contains("belong to --cancel"), "{e}");
+    let e =
+        recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key 00 --yes --dry-run")).unwrap_err();
+    assert!(e.contains("exclude each other"), "{e}");
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key 00 -y")).unwrap().yes);
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left abc")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left 1.2.3")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left zz=5")).is_err());
@@ -700,11 +716,43 @@ fn order_sweep_and_cancel_from_views() {
         vec![tview(P, TOKEN, 0x63, 1, A6, false, true)],
     );
     let page = json!({"items": [a1_view(&f, (0x11, 0)), other], "next_cursor": null});
-    let (report, ok) = sweep(&write(&dir, "page.json", &page), "");
+    let pagef = write(&dir, "page.json", &page);
+    // without --yes and without a terminal the sweep is refused: nothing is signed or sent (the other maker's order is skipped)
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        let (report, ok) = sweep(&pagef, "");
+        assert!(!ok, "a refusal is an exit code 1: {report}");
+        assert_eq!(report["orders"][0]["status"], "refused");
+        assert!(report["orders"][0]["reason"].as_str().unwrap().contains("pass --yes"), "{report}");
+        assert_eq!(report["orders"][1]["status"], "skipped");
+        assert!(node.lock().unwrap().submitted.is_empty(), "nothing submitted");
+    }
+    let (report, ok) = sweep(&pagef, "--yes");
     assert!(ok, "{report}");
     assert_eq!(report["orders"][0]["status"], "submitted");
     assert_eq!(report["orders"][1]["status"], "skipped");
     assert_eq!(node.lock().unwrap().submitted.len(), 1);
+
+    // the maker's cancel: refused without --yes, submitted with it
+    let cancel = |extra: &str| {
+        let a = order::parse_args(
+            order::Op::Cancel,
+            &v(&format!("--view {} --key {key} --node {url} --network {NET} {extra}", p.display())),
+        )
+        .unwrap();
+        order::execute(&a).unwrap()
+    };
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        let (report, ok) = cancel("");
+        assert!(!ok && report["orders"][0]["status"] == "refused", "{report}");
+        assert_eq!(node.lock().unwrap().submitted.len(), 1, "nothing more submitted");
+    }
+    let (report, ok) = cancel("-y");
+    assert!(ok && report["orders"][0]["status"] == "submitted", "{report}");
+    assert_eq!(node.lock().unwrap().submitted.len(), 2);
+    // --yes and --dry-run exclude each other
+    let e = order::parse_args(order::Op::Cancel, &v(&format!("--view {} --key {key} --node {url} --yes --dry-run", p.display())))
+        .unwrap_err();
+    assert!(e.contains("exclude each other"), "{e}");
 
     // the maker's cancel from the view: custody, own and foreign strays back to the maker
     let a = order::parse_args(

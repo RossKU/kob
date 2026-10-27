@@ -28,7 +28,7 @@ kob order: the maker's stray sweep in place and the maker's cancel, from an inde
 
 USAGE
   kob order sweep  --view <FILE>... --key <HEX | env:VAR | file:PATH> --node ws://HOST:PORT
-                   [--network NET] [--dry-run] [--fee-rate N] [--out-dir <DIR>] [--out <report.json>]
+                   [--network NET] [--yes | --dry-run] [--fee-rate N] [--out-dir <DIR>] [--out <report.json>]
   kob order cancel --view <FILE>... --key <KEY> --node ws://HOST:PORT [same options]
 
 INPUT
@@ -62,7 +62,9 @@ CANCEL (every order given)
   order's own cancel entry).
 
 OUTPUT
-  --dry-run     build, sign and engine-validate, write, never submit
+  --yes, -y     sign and submit without asking. Without it, each order is described and a terminal asks (type yes);
+                without a terminal the order is refused (status `refused`, exit 1) and nothing is signed.
+  --dry-run     build, sign and engine-validate, write, never submit (excludes --yes)
   --fee-rate    sompi per gram (default 100)
   --out-dir     write <covenant id>.sweep.json / <covenant id>.cancel.json (signed transaction and submitRequest) here
   --out         write the JSON report here (default: stdout); one line per order goes to stderr
@@ -92,6 +94,8 @@ pub struct Args {
     pub network: String,
     /// Never submit.
     pub dry_run: bool,
+    /// Submit without asking.
+    pub yes: bool,
     /// Fee rate.
     pub fee_rate: u64,
     /// Where the signed transactions go.
@@ -109,6 +113,7 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
         node: String::new(),
         network: String::new(),
         dry_run: false,
+        yes: false,
         fee_rate: MIN_FEE_RATE,
         out_dir: None,
         out: None,
@@ -122,6 +127,7 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
             "--node" => a.node = val("--node")?,
             "--network" => a.network = val("--network")?,
             "--dry-run" => a.dry_run = true,
+            "--yes" | "-y" => a.yes = true,
             "--fee-rate" => {
                 let v = val("--fee-rate")?;
                 a.fee_rate = v.parse().map_err(|_| format!("--fee-rate must be a positive integer, got `{v}`"))?;
@@ -130,6 +136,9 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
             "--out" => a.out = Some(PathBuf::from(val("--out")?)),
             other => return Err(format!("unknown argument `{other}` (see `kob order --help`)")),
         }
+    }
+    if a.yes && a.dry_run {
+        return Err("--yes and --dry-run exclude each other".into());
     }
     if a.views.is_empty() {
         return Err("at least one --view file is required".into());
@@ -242,6 +251,16 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
         Err(o) => return Ok(o),
     };
     let Prepared { built, name, info, disclosure, funding, returned, left } = p;
+    if !a.dry_run {
+        // the same rule as every other submitting command: `--yes`, or a terminal asks, else nothing is signed
+        if crate::trade::opts::would_ask(a.yes) {
+            eprintln!("{disclosure}");
+        }
+        let what = format!("the {} of {}", if a.op == Op::Sweep { "sweep" } else { "cancel" }, to_hex(&v.covenant_id));
+        if let Err(e) = crate::trade::opts::confirm_with(a.yes, &a.network, &what) {
+            return Ok(refuse(e));
+        }
+    }
     let sent = sign_validate_send(&built, signer, a.out_dir.as_deref(), &name, info, a.dry_run, &a.node, &a.network)?;
     Ok(Outcome {
         status: if sent.submitted.is_some() { "submitted" } else { "signed" },

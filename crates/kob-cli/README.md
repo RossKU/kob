@@ -24,9 +24,9 @@ wrong argument prints their usage line and exits 2).
 | `kob book <TOKEN> [--quote B]` | the order book on KAS or of a pair (the indexer's view) |
 | `kob orders` | the maker's orders, live or (`--all`) every status |
 | `kob balances` | free KAS and tokens, and what the maker's live orders hold (custody, strays, KAS locked) |
-| `kob order sweep\|cancel --view FILE` | the maker's stray sweep in place and cancel from saved indexer views |
-| `kob recover --from FILE` | find the maker's orders from a backup / export / view on a node alone, and cancel them |
-| `kob token issue` | issue a fixed-supply KCC-20 token (a KCC-23 declaration, then the genesis) |
+| `kob order sweep\|cancel --view FILE` | the maker's stray sweep in place and cancel from saved indexer views (`--yes` or a terminal's confirmation to submit) |
+| `kob recover --from FILE` | find the maker's orders from a backup / export / view on a node alone, and cancel them (`--cancel`, with `--yes` or a terminal's confirmation) |
+| `kob token issue` | issue a fixed-supply KCC-20 token (a KCC-23 declaration, then the genesis; `--yes` or a terminal's confirmation to submit) |
 | `kob token resume <DIR>` | send a creation whose genesis did not go out, from the files `kob token issue` saved |
 | `kob token verify-declaration <PROOF>` | check a KCC-23 launch proof from any source and print the declaration |
 | `kob registry validate\|verify-genesis\|programs\|add-program` | the token registry and token-program profiles |
@@ -35,7 +35,10 @@ wrong argument prints their usage line and exits 2).
 
 `place`, `replace`, `cancel`, `refund`, `take`, `send` and `merge` read the node (wRPC JSON, `--node` or `$KOB_NODE_WRPC`) and the
 indexer (`--indexer` or `$KOB_INDEXER_URL`, `http://`; `docs/ops/executor.md` Part B), plan the transaction, print it and
-sign only after confirmation.
+sign only after confirmation. Every command that submits a transaction asks the same way: `--yes` (or `-y`) goes ahead, a
+terminal is asked (`yes` to continue), anything else is refused and nothing is signed; `--dry-run` stops before signing and
+cannot be combined with `--yes`. That includes `kob token issue`, `kob recover --cancel` and `kob order sweep|cancel`
+(below, "Token commands" and "JSON output"), which keep their own option parsers but follow the same rule.
 
 **Same transactions as the web wallet.** `kob place` is a port of the web app's planner (`web/src/kob/plan.ts` and
 `orders/`): the same order states, the same `createOrder` requests and therefore the same transactions and `KOB1`
@@ -181,7 +184,7 @@ kob orders --all $N
 kob balances --maker kaspatest:qq... --network testnet-10
 ```
 
-`--json` prints the plan and the result as JSON (the order states, the `createOrder` request, the decoded
+`--json` prints the plan and the result as one JSON document (the order states, the `createOrder` request, the decoded
 transaction, the new covenant ids, the transaction id); the keys, the types and what `--yes` and `--dry-run` change are
 under "JSON output" below, the exit codes under "Exit codes".
 
@@ -230,8 +233,9 @@ protocol library's JSON (`crates/kob-protocol/src/json.rs`: 64-bit integers as d
 integers as numbers). The shapes below are what the current code prints; this is a pre-release interface (see "Bots and
 scripts"). In the examples `<64 hex>` stands for a 64-character hex string.
 
-**The signing commands** (`place`, `replace`, `cancel`, `refund`, `take`, `send`) print one **plan document** on stdout once
-a transaction has been built:
+**The signing commands** (`place`, `replace`, `cancel`, `refund`, `take`, `send`) print **one JSON document** on stdout once a
+transaction has been built: the plan, with the result of the submission in its `result` key (`null` when nothing was
+submitted):
 
 ```json
 {
@@ -247,7 +251,8 @@ a transaction has been built:
     "net": { "kas": "-250002036", "tokens": {} },
     "signatures": 1
   },
-  "new_covenant_ids": []
+  "new_covenant_ids": [],
+  "result": null
 }
 ```
 
@@ -263,6 +268,7 @@ a transaction has been built:
 | `transaction.net` | object | the net effect on the key's own wallet: `kas` (string, sompi, negative when KAS leaves, fee included) and `tokens` (an object of covenant id to a signed base-unit string; tokens that net to zero are left out) |
 | `transaction.signatures` | number | inputs the key signs |
 | `new_covenant_ids` | array of strings | the covenant ids the transaction creates: the new order(s) of a `place`, or of a `replace` that makes a new order; empty for a cancel, refund, take or send |
+| `result` | object or `null` | `null` unless the transaction was submitted; then the object below |
 
 `plan` per command:
 
@@ -276,7 +282,7 @@ a transaction has been built:
 | `send` of KAS | `to` (as typed), `amount` (string, sompi) |
 | `send` of a token | `to`, `token` (covenant id), `amount` (string, base units), `carrier` (string, sompi on the recipient's token output) |
 
-After a successful submission the same command prints a second, **result document** on stdout, right after the plan document:
+After a successful submission `result` holds:
 
 ```json
 {
@@ -289,29 +295,32 @@ After a successful submission the same command prints a second, **result documen
 }
 ```
 
-`status` is always `"submitted"` (a failure prints no result document and exits 1); `covenant_ids` repeats
+`status` is always `"submitted"` (a failure leaves `result` `null` and exits 1); `covenant_ids` repeats
 `new_covenant_ids`; `file` is the path written under `--out-dir`, else `null`; `engine_validated` is always `true` (the
-transaction passed the script engine before it was submitted). The two documents are pretty-printed one after the other, not
-wrapped in an array: read them as a stream of JSON values (`jq -s` slurps both). `kob cancel A B` runs the ids one after the
-other and prints a plan document (and a result document) per id; one id's failure does not stop the next.
+transaction passed the script engine before it was submitted). The document is printed once, when the outcome is known, so
+stdout is a single JSON value in every case (pretty-printed; it is not a stream). `kob cancel A B` runs the ids one after the
+other and prints one document per id (the one-document rule holds per id: read them as a stream of JSON values, `jq -s`
+slurps them); one id's failure does not stop the next.
 
 **What `--yes` and `--dry-run` change** (the two together are refused, exit 2):
 
 | invocation | stdout | stderr | exit |
 |---|---|---|---|
-| `--json --dry-run` | the plan document only | `dry run: nothing signed or submitted` | 0 |
-| `--json --yes` | the plan document, then the result document | nothing (a warning if the node reports another transaction id) | 0 |
-| `--json`, no `--yes`, no terminal | the plan document | `not signed: pass --yes to sign and submit ...` | 1 |
-| `--json`, no `--yes`, a terminal | the plan document | the prompt `Sign and submit ... Type yes to continue:`; `yes` or `y` signs, anything else prints `not signed: cancelled` | 0 or 1 |
-| a plan with an `error` issue | the plan document | `error: the plan has errors: nothing signed` | 1 |
-| a transaction that needs another key's signature | the plan document | `error: the transaction needs signatures of other keys: nothing signed` | 1 |
+| `--json --dry-run` | the document, `result` null | `dry run: nothing signed or submitted` | 0 |
+| `--json --yes` | the document, its `result` filled | nothing (a warning if the node reports another transaction id) | 0 |
+| `--json`, no `--yes`, no terminal | the document, `result` null | `not signed: pass --yes to sign and submit ...` | 1 |
+| `--json`, no `--yes`, a terminal | the document, `result` null if not signed | the plan as text, then the prompt `Sign and submit ... Type yes to continue:`; `yes` or `y` signs, anything else prints `not signed: cancelled` | 0 or 1 |
+| a plan with an `error` issue | the document, `result` null | `error: the plan has errors: nothing signed` | 1 |
+| a transaction that needs another key's signature | the document, `result` null | `error: the transaction needs signatures of other keys: nothing signed` | 1 |
+| signing, validation or submission failed | the document, `result` null | `error: ...` | 1 |
 | nothing could be planned (node or indexer error, not enough KAS, bad terms) | nothing | `error: ...` | 1, or 2 for a usage error (see "Exit codes") |
 
 With `--json` the findings are in `issues` and are not also printed on stderr; without it they are printed on stderr as
 `severity: message [CODE]`. The one exception: when `place` cannot build any transaction, it prints the findings on stderr as
 text even with `--json`, and stdout stays empty.
 
-**`merge`** prints a summary document and then, unless `--dry-run`, one compact single-line document per submitted link:
+**`merge`** prints one summary document, with a `links` array of the links submitted (empty for `--dry-run`, and when it stops
+before the first; a link that fails leaves the earlier ones in the array and exits 1):
 
 ```json
 {
@@ -322,16 +331,13 @@ text even with `--json`, and stdout stays empty.
   "utxos_after": 1,
   "transactions": 1,
   "merged_amount": "3500000000",
-  "fee": "4500"
+  "fee": "4500",
+  "links": [{ "link": 1, "status": "submitted", "txid": "<64 hex>", "fee": "4500" }]
 }
 ```
 
-```json
-{"link":1,"status":"submitted","txid":"<64 hex>","fee":"4500"}
-```
-
 `utxos_before`, `utxos_after` and `transactions` are numbers; `merged_amount` (base units) and `fee` (the whole chain's, sompi;
-a link line carries its own) are strings. `--dry-run` prints the summary and stops (exit 0); a link that fails after earlier
+a link carries its own) are strings. `--dry-run` prints the summary and stops (exit 0); a link that fails after earlier
 links were submitted exits 1 and the message says to run `kob merge` again.
 
 **The views** (`book`, `orders`, `balances`) print one document on stdout and sign nothing; `--yes` and `--dry-run` are
@@ -366,8 +372,10 @@ accepted and have no effect. A `book` for a KAS market:
   people). `skipped` lists orders not counted: `{"covenant_id", "reason"}`.
 
 **`kob order sweep|cancel` and `kob recover`** print a report on stdout (or write it to `--out FILE`); one line per order and a
-summary go to stderr. They sign and submit as soon as they have a key: there is no `--yes` and no prompt (`--dry-run` signs and
-engine-validates but never submits).
+summary go to stderr. They follow the same confirmation rule as the other submitting commands, order by order (`kob recover`
+only with `--cancel`): `--yes` (or `-y`) signs and submits; without it a terminal is shown the order's description and asked
+(`yes` to continue); without a terminal the order is `refused` (reason `not signed: pass --yes ...`, nothing is signed) and the
+exit code is 1. `--dry-run` signs and engine-validates but never submits, and cannot be combined with `--yes` (exit 2).
 
 * `kob order`: `{"action": "sweep" or "cancel", "network", "orders": [...], "rejected": [{"source", "reason"}]}`. Each order has
   `covenant_id`, `kind`, `source` and a `status`: `submitted`, `signed` (a dry run), `skipped` or `refused` (with `reason`), or
@@ -393,13 +401,12 @@ The code separates three outcomes; the finer causes are told by the message on s
 |---|---|
 | 0 | success: the work was done, or `--dry-run` stopped after the plan, or a view was printed, or `--help` / `--version` |
 | 1 | the command ran and did not do its work: an error from the node, the indexer or the network check (a node of another network, unreachable), a planning error, a plan with an `error` issue, a transaction that needs another key's signature, signing, script-engine validation or submission failed, **and a refusal to sign: no `--yes` without a terminal, or an answer at the prompt other than `yes`** |
-| 2 | usage: an unknown command or option, a missing or malformed argument, no `--network`, no signing key (signing commands), a key on the command line (`--key` of a trading command), `--yes` together with `--dry-run`, `kob place` without a kind; for `kob place` also an invalid order term (an amount without a unit, a required option of the kind missing) |
+| 2 | usage: an unknown command or option, a missing or malformed argument, no `--network`, no signing key (signing commands), a key on the command line (`--key` of a trading command), `--yes` together with `--dry-run`, `kob place` without a kind; also an order term that does not read (an amount, price, tip or carrier without a unit or out of range, a covenant id that is not 64 hex, a required option of the kind missing) in `place`, `replace`, `take`, `send` and `refund` alike |
 
 So the code does not distinguish a refusal (no `--yes`), a plan error, a node error and a user who declined: all are 1. Read
 stderr (`error: ...` for failures, `not signed: ...` for a refusal or a declined prompt) or, with `--json`, the `issues` array
-of the plan document. A bad term is 2 only where it is read before planning: `place` reports its option errors as 2, while
-`replace`, `take`, `send` and the views report a term they cannot read (for example a bare `2.5` for an amount) while planning,
-as 1. `kob` with no command, `kob help` and `--help` print the usage on stdout and exit 0; an unknown command (also `kob token
+of the document. A term that cannot be read (for example a bare `2.5` for an amount) is 2 in `place`, `replace`, `take` and
+`send` alike; the views (`book`, `orders`, `balances`) report one they cannot read while planning, as 1. `kob` with no command, `kob help` and `--help` print the usage on stdout and exit 0; an unknown command (also `kob token
 --help` and `kob registry --help`) prints the usage on stderr and exits 2; `kob place`, `kob order` and `kob token resume` with no
 arguments print their usage and exit 2.
 
@@ -407,10 +414,10 @@ Per family:
 
 * Trading commands: `kob cancel A B` tries every id; the exit code is that of the last id that failed (0 when none did).
 * `kob order sweep|cancel`, `kob recover`: 0 when every attempted order was handled, 1 when an order is `failed` or `refused`
-  (for `kob order` also when a file was `rejected`), when the report could not be written, or on an error such as an unreadable
-  file or an unreachable node; 2 for an argument error. An order that is only `skipped` does not make the code 1. `kob recover`
+  (a refusal includes "no `--yes` and no terminal"; for `kob order` also when a file was `rejected`), when the report could not be written, or on an error such as an unreadable
+  file or an unreachable node; 2 for an argument error (`--yes` with `--dry-run` included). An order that is only `skipped` does not make the code 1. `kob recover`
   without `--cancel` is 0 whatever it found.
-* `kob token issue`: 0 on success (or a dry run) and 1 on any error, a bad option included; `resume`: 0 or 1, and 2 with no
+* `kob token issue`: 0 on success (or a dry run) and 1 on any error, a bad option and a refusal (no `--yes`, no terminal) included; `resume`: 0 or 1, and 2 with no
   argument; `verify-declaration`: 0 when the proof verifies, 1 when it does not or cannot be read, 2 for a wrong number of arguments.
 * `kob registry validate`: 0 valid, 1 invalid, 2 usage or an unreadable file; `verify-genesis`: 0 when the registry says exactly
   what the evidence proves, 1 on a mismatch or an invalid registry or evidence file, 2 for usage or an unreadable file;
@@ -438,13 +445,15 @@ TXID:INDEX:AMOUNT:OWNER` (sompi; all of one key; OWNER is a 64-hex x-only key or
 `--holder OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]` (without `--holder` the whole supply goes to the funding key). Optional:
 `--program 3x3|public-mint|8x8-prototype|kasparocket-testnet` (default `3x3`), `--carrier`, `--fee`, `--fee-rate`, `--change-to`,
 `--extension-commitment`, `--allow-borrow`, `--description`, `--logo` (or `--icon`), `--website`, `--x`, `--telegram`, `--out-dir`,
-`--network`, `--node`, `--dry-run` and `--key HEX|env:VAR|file:PATH`. `kob token issue --help` lists them all.
+`--network`, `--node`, `--yes` (or `-y`), `--dry-run` and `--key HEX|env:VAR|file:PATH`. `kob token issue --help` lists them all.
 
 * **Dry run.** `--dry-run` builds and verifies everything offline and never submits. With `--key` it signs and executes every
   input in the script engine; without it the transactions stay unsigned and script execution is skipped (the output says so).
   Nothing is written unless `--out-dir` is given.
-* **Submitting.** Without `--dry-run`, `--key` and `--node` (or `$KOB_NODE_WRPC`) are required, and the command submits at once:
-  there is no `--yes` and no confirmation prompt. The files (`preparation_tx.json`, `genesis_tx.json`, `submit_preparation.json`,
+* **Submitting.** Without `--dry-run`, `--key` and `--node` (or `$KOB_NODE_WRPC`) are required, and the command shows its plan
+  and asks like the trading commands do: `--yes` submits, a terminal is asked (`yes` to continue), without either it stops with
+  `error: not signed: pass --yes ...` (exit 1) before anything is written or sent; `--yes` together with `--dry-run` is
+  refused. The files (`preparation_tx.json`, `genesis_tx.json`, `submit_preparation.json`,
   `submit_request.json`, `supply.json`, `metadata.json`, `metadata.payload.hex`, `launch_proof.json`, `registry_entry.json`,
   `creation.json`) go to `--out-dir`, else to `./kob-create-<first 16 hex of the covenant id>`. The output is text, there is no
   `--json`.
@@ -457,7 +466,7 @@ kob token issue --name "Test USD" --ticker TUSD --decimals 6 --supply 1000000000
   --network testnet-10 --key file:$HOME/.kob/maker.key --out-dir ./tusd-creation --dry-run
 ```
 
-The same command without `--dry-run` and with `--node ws://127.0.0.1:18210` submits the preparation and the genesis. The
+The same command without `--dry-run` and with `--node ws://127.0.0.1:18210 --yes` submits the preparation and the genesis. The
 supply is in base units (here 1,000,000 TUSD at 6 decimals), all to the funding key.
 
 `kob token resume <DIR> [--node ws://HOST:PORT]` sends a creation whose genesis did not go out. `DIR` is the directory

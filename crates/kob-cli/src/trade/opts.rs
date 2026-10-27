@@ -32,7 +32,7 @@ COMMON OPTIONS
   --fee-rate N      sompi per gram (default: the relay floor, 100)
   --dry-run         show the plan and stop: nothing is signed
   --yes, -y         sign and submit without asking (otherwise a terminal asks; without a terminal, refused)
-  --json            print the plan and the result as JSON
+  --json            print the plan and the result as one JSON document (the result is in its `result` key)
   --out-dir DIR     also write the signed transaction (and its submitRequest) here
 
   The token outputs the key's own transactions create are recorded in $KOB_STATE_DIR (default: the per-user state
@@ -195,14 +195,26 @@ impl Common {
 
 /// Ask before signing: `--yes` proceeds, a terminal is asked, anything else is refused.
 pub fn confirm(c: &Common, what: &str) -> Result<(), String> {
-    if c.yes {
+    confirm_with(c.yes, &c.network, what)
+}
+
+/// Whether [`confirm_with`] would put a question to a person (no `--yes`, and a terminal to ask): what the command is about to
+/// do is worth showing first.
+pub fn would_ask(yes: bool) -> bool {
+    !yes && std::io::stdin().is_terminal()
+}
+
+/// [`confirm`] for the commands that keep their own options (`kob token issue`, `kob recover`, `kob order`): the same
+/// rule, the same prompt and the same refusal.
+pub fn confirm_with(yes: bool, network: &str, what: &str) -> Result<(), String> {
+    if yes {
         return Ok(());
     }
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
         return Err(format!("not signed: pass --yes to sign and submit {what} (or --dry-run to only see the plan)"));
     }
-    eprint!("Sign and submit {what} on {}? Type yes to continue: ", c.network);
+    eprint!("Sign and submit {what} on {network}? Type yes to continue: ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     stdin.lock().read_line(&mut line).map_err(|e| e.to_string())?;

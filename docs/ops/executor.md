@@ -1930,7 +1930,7 @@ N is corrupt: chain hash mismatch`); the lock makes that impossible.
 ```
 kob recover --from backup.json --from orders.json --node ws://127.0.0.1:18210 --network testnet-10 [--maker <pubkey>] [--out report.json]
 kob recover --from orders.json --node ws://127.0.0.1:18210 --network testnet-10 --amount-left <covenant id>=6.5   # the amount a partly filled order has left
-kob recover --from backup.json --node ws://127.0.0.1:18210 --network testnet-10 --cancel --key file:maker.key [--dry-run] [--out-dir signed/]
+kob recover --from backup.json --node ws://127.0.0.1:18210 --network testnet-10 --cancel --key file:maker.key [--yes | --dry-run] [--out-dir signed/]
 ```
 
 Inputs: the web wallet's backup (`kob-backup`), this export format (version 1 or 2), or indexer order views
@@ -1957,12 +1957,15 @@ this build, or the state does not decode. The report is JSON (one entry per orde
 transaction per order: custody and KAS back to the maker, fee from the order's released KAS, else the smallest sufficient
 plain KAS UTXO of the maker on the node. Every transaction is signed with the key (a key that is not the maker is
 refused), validated in the script engine before anything is written or submitted, written to `<covenant id>.cancel.json`
-(signed transaction and `submitTransaction` request), and submitted unless `--dry-run`. Strays are not swept: the node
-alone cannot tell them apart. With an indexer view, `kob order cancel --view <file>` cancels with the custody (a pair order: every
+(signed transaction and `submitTransaction` request), and submitted unless `--dry-run`. Like every command that submits, it
+asks first: `--yes` (or `-y`) goes ahead, a terminal is shown each cancel and asked (type `yes`), and without a terminal
+the cancel is `refused` and nothing is signed (exit 1); `--yes` and `--dry-run` exclude each other. Strays are not swept: the node
+alone cannot tell them apart. With an indexer view, `kob order cancel --view <file> [--yes]` cancels with the custody (a pair order: every
 custody of its state, the second one, a sell-first entry's B prefund, from `pair.custodies[1].utxo`; a view without it is refused), the strays
 of the order's tokens (a pair order: of A and of B; within each program's token inputs) and foreign strays, and reports the strays left behind;
-`kob order sweep --view <file>` returns the strays without ending the order (the maker's sweep in place: same covenant id,
-same script, custody untouched; the 90-day idle window restarts). Both look up the view's order UTXO, custody and strays on
+`kob order sweep --view <file> [--yes]` returns the strays without ending the order (the maker's sweep in place: same covenant id,
+same script, custody untouched; the 90-day idle window restarts). Both ask before submitting in the same way as `kob recover --cancel`
+(`--yes`, a terminal, else refused; `--dry-run` signs and validates only). Both look up the view's order UTXO, custody and strays on
 the node first and refuse a view whose order UTXO the node does not hold (stale view).
 
 #### 7.6 Database lost or outdated, record log intact (`replay`)

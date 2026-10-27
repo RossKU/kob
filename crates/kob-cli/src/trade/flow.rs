@@ -5,7 +5,7 @@ use kob_protocol::json::to_hex;
 use kob_protocol::tx::BuiltTx;
 use serde_json::{json, Value};
 
-use super::opts::{confirm, Common};
+use super::opts::{confirm, would_ask, Common};
 use super::plan::{Issue, Severity};
 use super::show::{self, Units};
 use crate::common::{sign_validate_send, Signer};
@@ -67,38 +67,62 @@ pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &
     let decoded = show::decode(&r.built, &signer.pubkey, units);
     let failed = print_issues(&r.issues, c.json);
     let new_ids: Vec<String> = r.built.covenants.iter().map(|x| to_hex(&x.covenant_id)).collect();
-    let plan_json = json!({
+    // `result` is null until the transaction is submitted
+    let mut plan_json = json!({
         "action": r.title,
         "network": c.network,
         "plan": r.json,
         "issues": issues_json(&r.issues),
         "transaction": show::json_of(&decoded, &r.built),
         "new_covenant_ids": new_ids,
+        "result": Value::Null,
     });
-    if c.json {
-        println!("{}", serde_json::to_string_pretty(&plan_json).unwrap_or_default());
-    } else {
-        println!("{}", r.title);
-        for l in &r.lines {
-            println!("  {l}");
+    // --json prints exactly one document on stdout, once the outcome is known (the plan, with the result in it when the
+    // transaction was submitted); a person at a terminal who is going to be asked reads the plan as text on stderr meanwhile
+    let print_json = |doc: &Value| println!("{}", serde_json::to_string_pretty(doc).unwrap_or_default());
+    let text_plan = |to_stderr: bool| {
+        let mut out = vec![r.title.clone()];
+        out.extend(r.lines.iter().map(|l| format!("  {l}")));
+        out.extend(show::lines(&decoded, units, &r.built.tx.id));
+        for l in out {
+            if to_stderr {
+                eprintln!("{l}");
+            } else {
+                println!("{l}");
+            }
         }
-        for l in show::lines(&decoded, units, &r.built.tx.id) {
-            println!("{l}");
-        }
+    };
+    if !c.json {
+        text_plan(false);
     }
     if failed {
+        if c.json {
+            print_json(&plan_json);
+        }
         eprintln!("error: the plan has errors: nothing signed");
         return 1;
     }
     if decoded.foreign_signatures > 0 {
+        if c.json {
+            print_json(&plan_json);
+        }
         eprintln!("error: the transaction needs signatures of other keys: nothing signed");
         return 1;
     }
     if c.dry_run {
+        if c.json {
+            print_json(&plan_json);
+        }
         eprintln!("dry run: nothing signed or submitted");
         return 0;
     }
+    if c.json && would_ask(c.yes) {
+        text_plan(true);
+    }
     if let Err(e) = confirm(c, argv_hint) {
+        if c.json {
+            print_json(&plan_json);
+        }
         eprintln!("{e}");
         return 1;
     }
@@ -120,7 +144,8 @@ pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &
                 "engine_validated": true,
             });
             if c.json {
-                println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+                plan_json["result"] = out;
+                print_json(&plan_json);
             } else {
                 println!("submitted: txid {}", sent.txid);
                 for id in out["covenant_ids"].as_array().into_iter().flatten() {
@@ -130,6 +155,9 @@ pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &
             0
         }
         Err(e) => {
+            if c.json {
+                print_json(&plan_json);
+            }
             eprintln!("error: {e}");
             1
         }

@@ -27,7 +27,7 @@ use serde_json::json;
 
 use super::data;
 use super::market::{self, TokenMarket};
-use super::opts::{confirm, parse, Common, COMMON_HELP};
+use super::opts::{confirm, parse, would_ask, Common, COMMON_HELP};
 use super::plan::{token_carrier_floor, usable_token_utxos, MAX_TOKEN_INPUTS};
 use super::show::{self, Units};
 use super::units;
@@ -265,6 +265,9 @@ pub fn run(args: &[String]) -> i32 {
         return fail(e, 1);
     }
     let [key] = p.pos.as_slice() else { return fail("give exactly one token (ticker or covenant id)".into(), 2) };
+    // --json: the summary is held until the outcome is known and printed once, with the links submitted so far
+    let held: std::cell::RefCell<Option<serde_json::Value>> = std::cell::RefCell::new(None);
+    let links_done: std::cell::RefCell<Vec<serde_json::Value>> = std::cell::RefCell::new(vec![]);
     let r = (|| -> Result<i32, String> {
         let node = c.need_node()?;
         let indexer = c.need_indexer()?;
@@ -301,7 +304,8 @@ pub fn run(args: &[String]) -> i32 {
             "fee": fee_total.to_string(),
         });
         if c.json {
-            println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
+            // one document on stdout, printed when the outcome is known (below): the summary with a `links` array
+            *held.borrow_mut() = Some(summary.clone());
         } else {
             println!("merge {} of {}", units::tokens(amount as i128, &m.unit()), m.name());
             println!(
@@ -329,6 +333,16 @@ pub fn run(args: &[String]) -> i32 {
             eprintln!("dry run: nothing signed or submitted");
             return Ok(0);
         }
+        if c.json && would_ask(c.yes) {
+            eprintln!(
+                "merge {} of {}: {before} UTXOs of the key become {} in {} transaction(s); network fees {}",
+                units::tokens(amount as i128, &m.unit()),
+                m.name(),
+                before - merged + 1,
+                links.len(),
+                units::kas(fee_total as i128)
+            );
+        }
         if let Err(e) = confirm(&c, &format!("{} merge transaction(s)", links.len())) {
             eprintln!("{e}");
             return Ok(1);
@@ -352,7 +366,9 @@ pub fn run(args: &[String]) -> i32 {
             let sent = sign_validate_send(&link.built, &signer, c.out_dir.as_deref(), &file, summary.clone(), false, node, &c.network)
                 .map_err(|e| format!("link {} of {total}: {e} (earlier links were submitted; run kob merge again)", k + 1))?;
             if c.json {
-                println!("{}", json!({"link": k + 1, "status": "submitted", "txid": sent.txid, "fee": sent.fee.to_string()}));
+                links_done
+                    .borrow_mut()
+                    .push(json!({"link": k + 1, "status": "submitted", "txid": sent.txid, "fee": sent.fee.to_string()}));
             } else {
                 println!("submitted link {} of {total}: txid {}", k + 1, sent.txid);
             }
@@ -361,6 +377,10 @@ pub fn run(args: &[String]) -> i32 {
         }
         Ok(0)
     })();
+    if let Some(mut doc) = held.into_inner() {
+        doc["links"] = serde_json::Value::Array(links_done.into_inner());
+        println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+    }
     match r {
         Ok(code) => code,
         Err(e) => fail(e, 1),

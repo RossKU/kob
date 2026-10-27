@@ -86,6 +86,30 @@ fn ctx(args: &[String], value_flags: &[&str], bool_flags: &[&str], usage: &str) 
     Ok((p, c, s))
 }
 
+/// Why a command stopped before signing: `code` is the process exit code (the README's "Exit codes": 2 for a malformed argument,
+/// such as an amount that does not read, 1 for everything the command met while working).
+pub struct Fail {
+    code: i32,
+    message: String,
+}
+
+impl From<String> for Fail {
+    fn from(message: String) -> Fail {
+        Fail { code: 1, message }
+    }
+}
+
+impl From<&str> for Fail {
+    fn from(message: &str) -> Fail {
+        Fail { code: 1, message: message.to_string() }
+    }
+}
+
+/// A malformed argument: exit code 2.
+fn usage(e: impl Into<String>) -> Fail {
+    Fail { code: 2, message: e.into() }
+}
+
 fn cov_arg(s: &str) -> Result<[u8; 32], String> {
     kob_protocol::registry::parse_hex32(s).ok_or_else(|| format!("`{s}` is not a covenant id (64 hex)"))
 }
@@ -516,9 +540,9 @@ pub fn run_replace(args: &[String]) -> i32 {
         Ok(x) => x,
         Err(code) => return code,
     };
-    let r = (|| -> Result<(Ready, Units), String> {
-        let [id] = p.pos.as_slice() else { return Err("give exactly one covenant id".into()) };
-        let cov = cov_arg(id)?;
+    let r = (|| -> Result<(Ready, Units), Fail> {
+        let [id] = p.pos.as_slice() else { return Err(usage("give exactly one covenant id")) };
+        let cov = cov_arg(id).map_err(usage)?;
         let node = c.need_node()?;
         let indexer = c.need_indexer()?;
         let live = data::live_order(indexer, node, &c.network, &cov)?;
@@ -531,22 +555,22 @@ pub fn run_replace(args: &[String]) -> i32 {
         }
         for k in ["--take-profit", "--exit-tip", "--trail-step", "--trail-gap", "--entry-stop", "--carrier"] {
             if p.get(k).is_some() {
-                return Err(format!(
+                return Err(Fail::from(format!(
                     "{k} does not apply to a {} (it is amended with --price, --stop, --stop-limit, --amount, --tip, --add-kas, --renew)",
                     live.order.state.template_id().name()
-                ));
+                )));
             }
         }
         let m = &ms[0];
         let u = m.unit();
-        let price = |k: &str| p.get(k).map(|v| parse_kas_price(v, &u, live.order.state.scale(), k, false)).transpose();
+        let price = |k: &str| p.get(k).map(|v| parse_kas_price(v, &u, live.order.state.scale(), k, false)).transpose().map_err(usage);
         let input = AmendInput {
             price: price("--price")?,
             stop: price("--stop")?,
             stop_limit: price("--stop-limit")?,
-            amount: p.get("--amount").map(|v| parse_token_amount(v, &u, "--amount")).transpose()?,
-            tip: p.get("--tip").map(|v| parse_kas_price(v, &u, live.order.state.scale(), "--tip", true)).transpose()?,
-            add_kas: p.get("--add-kas").map(|v| parse_kas(v, "--add-kas", false)).transpose()?.unwrap_or(0),
+            amount: p.get("--amount").map(|v| parse_token_amount(v, &u, "--amount")).transpose().map_err(usage)?,
+            tip: p.get("--tip").map(|v| parse_kas_price(v, &u, live.order.state.scale(), "--tip", true)).transpose().map_err(usage)?,
+            add_kas: p.get("--add-kas").map(|v| parse_kas(v, "--add-kas", false)).transpose().map_err(usage)?.unwrap_or(0),
             renew: p.has("--renew"),
         };
         if input == AmendInput::default() {
@@ -585,8 +609,8 @@ pub fn run_replace(args: &[String]) -> i32 {
     match r {
         Ok((ready, units)) => finish(&c, &signer, ready, &units, "this amendment"),
         Err(e) => {
-            eprintln!("error: {e}");
-            1
+            eprintln!("error: {}", e.message);
+            e.code
         }
     }
 }
@@ -607,7 +631,7 @@ fn order_carrier(live: &Live) -> Option<u64> {
 
 /// `kob replace` of a trailing stop, an if-done entry or a pair order: the order as its intent with the changes, re-planned
 /// where the order's own KAS and custody come back, then cancelled and replaced in one transaction.
-fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[TokenMarket]) -> Result<(Ready, Units), String> {
+fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[TokenMarket]) -> Result<(Ready, Units), Fail> {
     use super::replan::{intent_from_order, lifetime_of, replace_env, Changes};
     let node = c.need_node()?;
     if p.get("--add-kas").is_some() {
@@ -618,29 +642,31 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     let b = ms.get(1);
     let ua = a.unit();
     let scale = s.scale();
-    let price = |k: &str| -> Result<Option<i64>, String> {
+    let price = |k: &str| -> Result<Option<i64>, Fail> {
         p.get(k)
             .map(|v| match b {
                 Some(bm) => units::parse_pair_price(v, &ua, scale, &bm.unit(), k),
                 None => parse_kas_price(v, &ua, scale, k, false),
             })
             .transpose()
+            .map_err(usage)
     };
-    let delta = |k: &str| -> Result<Option<i64>, String> {
+    let delta = |k: &str| -> Result<Option<i64>, Fail> {
         p.get(k)
             .map(|v| match b {
                 Some(bm) => units::parse_pair_delta(v, &ua, scale, &bm.unit(), k),
                 None => parse_kas_price(v, &ua, scale, k, true),
             })
             .transpose()
+            .map_err(usage)
     };
-    let tip = |k: &str| p.get(k).map(|v| parse_kas_price(v, &ua, scale, k, true)).transpose();
+    let tip = |k: &str| p.get(k).map(|v| parse_kas_price(v, &ua, scale, k, true)).transpose().map_err(usage);
     let ch = Changes {
         price: price("--price")?,
         take_profit: price("--take-profit")?,
         stop: price("--stop")?,
         stop_limit: price("--stop-limit")?,
-        amount: p.get("--amount").map(|v| parse_token_amount(v, &ua, "--amount")).transpose()?,
+        amount: p.get("--amount").map(|v| parse_token_amount(v, &ua, "--amount")).transpose().map_err(usage)?,
         tip: tip("--tip")?,
         exit_tip: tip("--exit-tip")?,
         trail_step: delta("--trail-step")?,
@@ -658,7 +684,7 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     // what the replacement draws on: the order's own KAS and custody (stand-ins) and the maker's free tokens of A and B
     let needs = super::place::Needs { a: true, b: b.is_some() };
     let (mut env, notes) = super::place::env_of(c, a, b, needs, signer.pubkey)?;
-    env.carrier = super::place::carrier_arg(p)?.or(order_carrier(live));
+    env.carrier = super::place::carrier_arg(p).map_err(usage)?.or(order_carrier(live));
     env.guards_acknowledged = p.has("--ack-no-guards");
     env.market_start_ack = true;
     let penv = replace_env(&env, &live.cov, s, live.order.utxo.amount);
@@ -739,6 +765,7 @@ pub fn run_cancel(args: &[String]) -> i32 {
                 node: node.clone(),
                 network: c.network.clone(),
                 dry_run: true,
+                yes: false,
                 fee_rate: c.fee_rate.unwrap_or(kob_protocol::tx::MIN_FEE_RATE),
                 out_dir: None,
                 out: None,
@@ -774,7 +801,7 @@ pub fn run_cancel(args: &[String]) -> i32 {
                 units_of(&ms),
             ))
         })();
-        let c2 = finish_or(&c, &signer, r, "this cancel");
+        let c2 = finish_or(&c, &signer, r.map_err(Fail::from), "this cancel");
         if c2 != 0 {
             code = c2;
         }
@@ -782,12 +809,12 @@ pub fn run_cancel(args: &[String]) -> i32 {
     code
 }
 
-fn finish_or(c: &Common, signer: &Signer, r: Result<(Ready, Units), String>, what: &str) -> i32 {
+fn finish_or(c: &Common, signer: &Signer, r: Result<(Ready, Units), Fail>, what: &str) -> i32 {
     match r {
         Ok((ready, units)) => finish(c, signer, ready, &units, what),
         Err(e) => {
-            eprintln!("error: {e}");
-            1
+            eprintln!("error: {}", e.message);
+            e.code
         }
     }
 }
@@ -813,16 +840,16 @@ pub fn run_refund(args: &[String]) -> i32 {
         Ok(x) => x,
         Err(code) => return code,
     };
-    let r = (|| -> Result<(Ready, Units), String> {
-        let [id] = p.pos.as_slice() else { return Err("give exactly one covenant id".into()) };
-        let cov = cov_arg(id)?;
+    let r = (|| -> Result<(Ready, Units), Fail> {
+        let [id] = p.pos.as_slice() else { return Err(usage("give exactly one covenant id")) };
+        let cov = cov_arg(id).map_err(usage)?;
         let node = c.need_node()?;
         let indexer = c.need_indexer()?;
         let live = data::live_order(indexer, node, &c.network, &cov)?;
         let clock = data::clock(node)?;
         let due = live.order.state.refund_due(live.order.utxo.block_daa_score as i64).ok_or("no refund time")?;
         if due > clock.daa {
-            return Err(format!("not refundable before DAA {due} (now {}, about {} s)", clock.daa, (due - clock.daa) / 10));
+            return Err(format!("not refundable before DAA {due} (now {}, about {} s)", clock.daa, (due - clock.daa) / 10).into());
         }
         let ms = markets_of(&c, &live).unwrap_or_default();
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
@@ -870,7 +897,7 @@ pub fn run_refund(args: &[String]) -> i32 {
             }
             (Some(a), Err(_)) => a,
             (None, Ok(b)) => b,
-            (None, Err(e)) => return Err(format!("the protocol refused the refund: {e}")),
+            (None, Err(e)) => return Err(format!("the protocol refused the refund: {e}").into()),
         };
         let gain = earned(&built);
         let mut lines = order_lines(&live, &ms);
@@ -934,9 +961,9 @@ pub fn run_take(args: &[String]) -> i32 {
         Ok(x) => x,
         Err(code) => return code,
     };
-    let r = (|| -> Result<(Ready, Units), String> {
-        let [id] = p.pos.as_slice() else { return Err("give exactly one covenant id".into()) };
-        let cov = cov_arg(id)?;
+    let r = (|| -> Result<(Ready, Units), Fail> {
+        let [id] = p.pos.as_slice() else { return Err(usage("give exactly one covenant id")) };
+        let cov = cov_arg(id).map_err(usage)?;
         let node = c.need_node()?;
         let indexer = c.need_indexer()?;
         let live = data::live_order(indexer, node, &c.network, &cov)?;
@@ -945,13 +972,14 @@ pub fn run_take(args: &[String]) -> i32 {
         }
         let ms = markets_of(&c, &live)?;
         let m = &ms[0];
-        let amount = parse_token_amount(p.get("--amount").ok_or("--amount is required")?, &m.unit(), "--amount")?;
+        let amount = parse_token_amount(p.get("--amount").ok_or_else(|| usage("--amount is required"))?, &m.unit(), "--amount")
+            .map_err(usage)?;
         let carrier = match p.get("--carrier") {
-            Some(v) => parse_kas(v, "--carrier", false)?,
+            Some(v) => parse_kas(v, "--carrier", false).map_err(usage)?,
             None => DEFAULT_ORDER_CARRIER,
         };
         if carrier < super::place::MIN_CARRIER {
-            return Err("--carrier must be at least 0.08KAS".into());
+            return Err(usage("--carrier must be at least 0.08KAS"));
         }
         let clock = data::clock(node)?;
         let lock = (clock.daa - LOCK_MARGIN_DAA).max(0);
@@ -991,7 +1019,8 @@ pub fn run_take(args: &[String]) -> i32 {
                 return Err(format!(
                     "a {} is not taken here (pair orders and stop legs fill through the matchers)",
                     other.template_id().name()
-                ))
+                )
+                .into())
             }
         };
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
@@ -1032,7 +1061,7 @@ pub fn run_take(args: &[String]) -> i32 {
                 }
                 Err(e @ kob_protocol::Error::InsufficientFunds { .. }) => last = e.to_string(),
                 Err(e) if n == 0 && !coins.is_empty() => last = e.to_string(),
-                Err(e) => return Err(format!("the protocol refused the fill: {e}")),
+                Err(e) => return Err(format!("the protocol refused the fill: {e}").into()),
             }
         }
         let built = built.ok_or_else(|| format!("cannot fund the fill: {last}"))?;
@@ -1129,8 +1158,8 @@ pub fn run_send(args: &[String]) -> i32 {
         Ok(x) => x,
         Err(code) => return code,
     };
-    let r = (|| -> Result<(Ready, Units), String> {
-        let [what, to, amount] = p.pos.as_slice() else { return Err("usage: kob send <TOKEN|KAS> <TO> <AMOUNT>".into()) };
+    let r = (|| -> Result<(Ready, Units), Fail> {
+        let [what, to, amount] = p.pos.as_slice() else { return Err(usage("usage: kob send <TOKEN|KAS> <TO> <AMOUNT>")) };
         let node = c.need_node()?;
         let (spk, key) = recipient(to, &c.network)?;
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
@@ -1141,7 +1170,7 @@ pub fn run_send(args: &[String]) -> i32 {
             if p.get("--carrier").is_some() {
                 return Err("--carrier applies to a token send".into());
             }
-            let sompi = parse_kas(amount, "the amount", false)?;
+            let sompi = parse_kas(amount, "the amount", false).map_err(usage)?;
             let mut built = None;
             let mut last = String::new();
             for n in 1..=coins.len().min(super::plan::MAX_FUNDING_INPUTS) {
@@ -1180,14 +1209,14 @@ pub fn run_send(args: &[String]) -> i32 {
         };
         let m = market::resolve_with(what, &reg, &idx, Some(&open))?;
         let key = key.ok_or("a token goes to a P2PK address or an x-only key (the token state names its owner key)")?;
-        let base = parse_token_amount(amount, &m.unit(), "the amount")?;
+        let base = parse_token_amount(amount, &m.unit(), "the amount").map_err(usage)?;
         let carrier = match p.get("--carrier") {
-            Some(v) => parse_kas(v, "--carrier", false)?,
+            Some(v) => parse_kas(v, "--carrier", false).map_err(usage)?,
             None => DEFAULT_ORDER_CARRIER,
         };
         let floor = super::plan::token_carrier_floor(&m).max(super::place::MIN_CARRIER as i64) as u64;
         if carrier < floor {
-            return Err(format!("--carrier must be at least {} for a token output of {}", units::kas(floor as i128), m.name()));
+            return Err(usage(format!("--carrier must be at least {} for a token output of {}", units::kas(floor as i128), m.name())));
         }
         let mine = data::token_utxos(indexer, node, &c.network, &m, &signer.pubkey)?;
         let usable = usable_token_utxos(&m, &signer.pubkey, &mine);
@@ -1195,7 +1224,7 @@ pub fn run_send(args: &[String]) -> i32 {
         let change: i64 = tokens.iter().map(|t| t.state.amount()).sum::<i64>() - base;
         let outputs = 1 + usize::from(change > 0);
         if outputs > m.slots.1 {
-            return Err(format!("{} allows {} token outputs per transfer", m.program.name(), m.slots.1));
+            return Err(format!("{} allows {} token outputs per transfer", m.program.name(), m.slots.1).into());
         }
         let make = |f: Vec<KeyUtxo>| SendTokens {
             token: TokenRef { covenant_id: m.cov, program: m.program },
@@ -1218,7 +1247,7 @@ pub fn run_send(args: &[String]) -> i32 {
                 }
                 Err(e @ kob_protocol::Error::InsufficientFunds { .. }) => last = e.to_string(),
                 Err(e) if n == 0 && !coins.is_empty() => last = e.to_string(),
-                Err(e) => return Err(format!("the protocol refused the transfer: {e}")),
+                Err(e) => return Err(format!("the protocol refused the transfer: {e}").into()),
             }
         }
         let built = built.ok_or_else(|| format!("cannot fund the transfer: {last}"))?;

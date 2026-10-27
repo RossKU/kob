@@ -35,7 +35,7 @@ kob recover: find orders on the node from a backup, a recovery / export file or 
 USAGE
   kob recover --from <FILE>... --node ws://HOST:PORT [--network NET] [--maker <PUBKEY>] [--out <report.json>]
               [--amount-left [<COVENANT ID>=]<AMOUNT>]...
-              [--cancel --key <HEX | env:VAR | file:PATH> [--dry-run] [--fee-rate N] [--out-dir <DIR>]]
+              [--cancel --key <HEX | env:VAR | file:PATH> [--yes | --dry-run] [--fee-rate N] [--out-dir <DIR>]]
 
 INPUT
   --from        repeatable. The web wallet's backup ({\"format\":\"kob-backup\",..}), the indexer recovery / export file
@@ -79,7 +79,9 @@ CANCEL
                 of the maker on the node is added.
   --key         the maker's signing secret (64 hex; env:NAME and file:PATH keep it out of shell history); a key that is
                 not the order's maker is refused
-  --dry-run     build, sign and engine-validate, write, never submit
+  --yes, -y     sign and submit without asking. Without it, each cancel is described and a terminal asks (type yes);
+                without a terminal the cancel is refused (status `refused`, exit 1) and nothing is signed.
+  --dry-run     build, sign and engine-validate, write, never submit (excludes --yes)
   --fee-rate    sompi per gram (default 100)
   --out-dir     write <covenant id>.cancel.json (the signed transaction and its submitRequest) here
 ";
@@ -108,6 +110,8 @@ pub struct Args {
     pub key: Option<String>,
     /// Never submit.
     pub dry_run: bool,
+    /// Submit without asking.
+    pub yes: bool,
     /// Fee rate.
     pub fee_rate: u64,
     /// Where the signed cancels go.
@@ -143,6 +147,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
         cancel: false,
         key: None,
         dry_run: false,
+        yes: false,
         fee_rate: MIN_FEE_RATE,
         out_dir: None,
     };
@@ -159,6 +164,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
             "--cancel" => a.cancel = true,
             "--key" => a.key = Some(val("--key")?),
             "--dry-run" => a.dry_run = true,
+            "--yes" | "-y" => a.yes = true,
             "--fee-rate" => {
                 let v = val("--fee-rate")?;
                 a.fee_rate = v.parse().map_err(|_| format!("--fee-rate must be a positive integer, got `{v}`"))?;
@@ -178,8 +184,11 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
     if a.cancel && a.key.is_none() {
         return Err("--cancel needs --key".into());
     }
-    if !a.cancel && (a.key.is_some() || a.dry_run || a.out_dir.is_some()) {
-        return Err("--key, --dry-run and --out-dir belong to --cancel".into());
+    if !a.cancel && (a.key.is_some() || a.dry_run || a.yes || a.out_dir.is_some()) {
+        return Err("--key, --yes, --dry-run and --out-dir belong to --cancel".into());
+    }
+    if a.yes && a.dry_run {
+        return Err("--yes and --dry-run exclude each other".into());
     }
     if a.fee_rate < MIN_FEE_RATE {
         return Err(format!("--fee-rate must be at least {MIN_FEE_RATE}"));
@@ -631,6 +640,22 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
     })?;
     let cov = to_hex(&f.entry.covenant_id);
     let info = json!({"action": "cancel", "covenant_id": cov, "kind": state.template_id().name()});
+    if !a.dry_run {
+        // the same rule as every other submitting command: `--yes`, or a terminal asks, else nothing is signed
+        if crate::trade::opts::would_ask(a.yes) {
+            eprintln!(
+                "cancel {cov} ({}): ends the order; returns its custody and its KAS to the maker; fee paid by {}",
+                state.template_id().name(),
+                match &funding {
+                    Funding::Own => "the order's own KAS".to_string(),
+                    Funding::Key(k) => format!("the maker's UTXO {}", outpoint_str(&k.utxo.transaction_id, k.utxo.index)),
+                }
+            );
+        }
+        if let Err(e) = crate::trade::opts::confirm_with(a.yes, &a.network, &format!("the cancel of {cov}")) {
+            return Ok(json!({"status": "refused", "reason": e}));
+        }
+    }
     let sent =
         sign_validate_send(&built, signer, a.out_dir.as_deref(), &format!("{cov}.cancel.json"), info, a.dry_run, &a.node, &a.network)?;
     Ok(json!({
@@ -671,7 +696,12 @@ pub fn execute(a: &Args) -> Result<(Value, bool), String> {
                 continue;
             }
             f.cancel = Some(match cancel_one(f, &signer, a) {
-                Ok(v) => v,
+                Ok(v) => {
+                    if v["status"] == "refused" {
+                        ok = false;
+                    }
+                    v
+                }
                 Err(e) => {
                     ok = false;
                     json!({"status": "failed", "reason": e})

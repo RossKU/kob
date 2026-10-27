@@ -436,6 +436,10 @@ fn cancel_take_and_refund() {
     // the maker cannot take its own order; a fill below the minimum fill is refused by the protocol
     assert_eq!(run(actions, w.args(0x11, &format!("{} --amount 4TST --yes", to_hex(&a)))), 1);
     assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 0.5TST --yes", to_hex(&a)))), 1);
+    // an amount that does not read (no unit) is a usage error, 2 as in `place`
+    assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 4 --yes", to_hex(&a)))), 2);
+    assert_eq!(run(actions, w.args(0x22, "not-an-id --amount 4TST --yes")), 2);
+    assert_eq!(run(actions, w.args(0x22, &format!("{} --yes", to_hex(&a)))), 2, "--amount is required");
     // the maker cancels the ask: the custody and the KAS come back
     assert_eq!(run(crate::trade::actions::run_cancel, w.args(0x11, &to_hex(&a))), 1, "no --yes: refused");
     assert_eq!(run(crate::trade::actions::run_cancel, w.args(0x11, &format!("{} --yes", to_hex(&a)))), 0);
@@ -471,8 +475,11 @@ fn send_kas_and_tokens() {
     // a mainnet address on testnet, a bare amount, more than held
     let main = address_of(&p2pk_spk(&taker), "mainnet").unwrap();
     assert_eq!(run(send, w.args(0x11, &format!("KAS {main} 1KAS --yes"))), 1);
-    assert_eq!(run(send, w.args(0x11, &format!("KAS {to} 1 --yes"))), 1);
+    assert_eq!(run(send, w.args(0x11, &format!("KAS {to} 1 --yes"))), 2, "an amount without a unit is a usage error");
     assert_eq!(run(send, w.args(0x11, &format!("TST {to} 101TST --yes"))), 1);
+    assert_eq!(run(send, w.args(0x11, &format!("TST {to} 12.5 --yes"))), 2, "a token amount without a unit");
+    assert_eq!(run(send, w.args(0x11, &format!("KAS {to} 1KAS --carrier 1 --yes"))), 1, "--carrier does not apply to KAS");
+    assert_eq!(run(send, w.args(0x11, &format!("TST {to} 1TST --carrier 0.01KAS --yes"))), 2, "a carrier below the floor");
     assert_eq!(w.submitted(), 2);
     let _ = Path::new(".");
 }
@@ -808,6 +815,8 @@ fn replace_replans_trailing_if_done_and_pair_orders() {
     assert_eq!(r.custody.unwrap().state.amount(), 5 * SCALE);
     assert_eq!(w.submitted(), 3);
     // refused: --add-kas on a re-planned order, --trail-step on an order that does not trail, nothing to change
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --price 2 --yes", to_hex(&p_cov)))), 2, "a price without a unit");
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --amount 2 --yes", to_hex(&t_cov)))), 2, "an amount without a unit");
     assert_eq!(run(replace, w.args(0x11, &format!("{} --add-kas 1KAS --yes", to_hex(&t_cov)))), 1);
     assert_eq!(run(replace, w.args(0x11, &format!("{} --trail-step 0.01KAS --yes", to_hex(&i_cov)))), 1);
     assert_eq!(run(replace, w.args(0x11, &format!("{} --yes", to_hex(&p_cov)))), 1);
@@ -883,11 +892,11 @@ fn book_orders_and_balances_views() {
     assert_eq!(w.submitted(), 0);
 }
 
-#[test]
-fn merge_chains_transfers_to_the_key() {
+/// A key holding five UTXOs of the token (two links of a merge).
+fn merge_world(name: &str) -> World {
     let maker = pk(0x11);
     let extra = [(0x06u8, 5 * SCALE), (0x07, 7 * SCALE), (0x08, SCALE), (0x09, 2 * SCALE)];
-    let w = world_x("merge", &[], |utxos, routes| {
+    world_x(name, &[], |utxos, routes| {
         let mut items = vec![token_item(0x03, &user_token(maker, 100 * SCALE))];
         for (tag, a) in extra {
             utxos.push(node_utxo(&token_spk(&user_token(maker, a)), tag, 0, KAS, Some(TOKEN)));
@@ -897,7 +906,74 @@ fn merge_chains_transfers_to_the_key() {
             format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(&maker), to_hex(&TOKEN)),
             json!({"items": items, "next_cursor": null}),
         );
-    });
+    })
+}
+
+/// `--json` prints exactly one JSON document on stdout, whatever happens. The commands print with `println!`, so each case runs
+/// in a child process (this test binary again, told by the environment which command to run) and its stdout between two
+/// markers is read as a stream of JSON values.
+#[test]
+fn json_output_is_one_document() {
+    const BEGIN: &str = "<<<JSON-BEGIN";
+    const END: &str = "JSON-END>>>";
+    if let Ok(mode) = std::env::var("KOB_JSON_CHILD") {
+        let w = if mode.starts_with("merge") { merge_world(&mode) } else { world(&mode, &[]) };
+        let to = address_of(&p2pk_spk(&pk(0x22)), NET).unwrap();
+        let (f, args): (fn(&[String]) -> i32, String) = match mode.as_str() {
+            "send-yes" => (crate::trade::actions::run_send, format!("KAS {to} 1KAS --json --yes")),
+            "send-dry" => (crate::trade::actions::run_send, format!("KAS {to} 1KAS --json --dry-run")),
+            "send-ask" => (crate::trade::actions::run_send, format!("KAS {to} 1KAS --json")),
+            "merge-yes" => (crate::trade::merge::run, "TST --json --yes --wait-secs 0".to_string()),
+            "merge-dry" => (crate::trade::merge::run, "TST --json --dry-run".to_string()),
+            other => panic!("{other}"),
+        };
+        println!("{BEGIN}");
+        let code = f(&w.args(0x11, &args));
+        println!("{END}");
+        println!("exit {code}");
+        return;
+    }
+    let case = |mode: &str| -> (Vec<Value>, i32) {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "trade::tests_e2e::json_output_is_one_document", "--nocapture", "--test-threads=1"])
+            .env("KOB_JSON_CHILD", mode)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let (_, rest) = text.split_once(BEGIN).unwrap_or_else(|| panic!("{mode}: no output: {text}"));
+        let (body, tail) = rest.split_once(END).unwrap_or_else(|| panic!("{mode}: unfinished: {text}"));
+        let docs: Vec<Value> = serde_json::Deserializer::from_str(body).into_iter::<Value>().map(|d| d.unwrap()).collect();
+        let code = tail.split_once("exit ").and_then(|(_, c)| c.lines().next()).unwrap().trim().parse().unwrap();
+        (docs, code)
+    };
+    // submitted: the plan document with the result in it
+    let (docs, code) = case("send-yes");
+    assert_eq!((docs.len(), code), (1, 0), "{docs:?}");
+    assert_eq!(docs[0]["result"]["status"], "submitted");
+    assert_eq!(docs[0]["result"]["txid"], docs[0]["transaction"]["txid"]);
+    // a dry run, and a refusal (no --yes, no terminal): the plan document, the result null
+    let (docs, code) = case("send-dry");
+    assert_eq!((docs.len(), code), (1, 0), "{docs:?}");
+    assert!(docs[0]["result"].is_null() && docs[0]["transaction"]["txid"].is_string());
+    let (docs, code) = case("send-ask");
+    assert_eq!((docs.len(), code), (1, 1), "{docs:?}");
+    assert!(docs[0]["result"].is_null());
+    // a merge: the summary with the links
+    let (docs, code) = case("merge-yes");
+    assert_eq!((docs.len(), code), (1, 0), "{docs:?}");
+    let links = docs[0]["links"].as_array().unwrap();
+    assert_eq!(links.len(), 2, "{docs:?}");
+    assert!(links.iter().all(|l| l["status"] == "submitted" && l["txid"].is_string()));
+    let (docs, code) = case("merge-dry");
+    assert_eq!((docs.len(), code), (1, 0), "{docs:?}");
+    assert_eq!(docs[0]["links"], json!([]));
+}
+
+#[test]
+fn merge_chains_transfers_to_the_key() {
+    let maker = pk(0x11);
+    let w = merge_world("merge");
     let merge = crate::trade::merge::run;
     // the plan alone; a key with one UTXO has nothing to merge
     assert_eq!(run(merge, w.args(0x11, "TST --dry-run")), 0);
