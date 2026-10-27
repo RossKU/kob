@@ -301,17 +301,21 @@ async fn the_read_api_serves_the_tip_store_with_the_backfill_and_follows_the_swi
     let cfg = config(dir.path(), &node, Some(addr));
     let job = Job::start(&cfg, &node, false);
 
+    // The API answers as soon as it listens, which is before the tip store's follower has made its first step (state
+    // `starting`, cursor 0): wait, bounded, until the health is the tip store's and it is following. (Asserting the state on the
+    // first answer failed on a slow Windows runner: `starting` against `following`.)
     let mut health = None;
+    let mut last = None;
     let t0 = Instant::now();
     while health.is_none() {
-        assert!(t0.elapsed() < Duration::from_secs(30), "the read API never answered");
-        health = get_json(addr, "/v1/health").await.filter(|h| h.get("backfill").is_some());
+        assert!(t0.elapsed() < Duration::from_secs(30), "the tip store did not report following in 30 s; last health: {last:?}");
+        last = get_json(addr, "/v1/health").await.filter(|h| h.get("backfill").is_some());
+        health = last.clone().filter(|h| h["state"] == "following");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let h = health.unwrap();
     assert_eq!(h["book_complete"], false, "{h}");
     assert!(h["backfill"]["tip_since_unix"].as_u64().unwrap() > 0, "{h}");
-    assert_eq!(h["state"], "following", "the tip store is current at once: {h}");
     let orders = get_json(addr, "/v1/orders?status=open").await.unwrap();
     assert_eq!(orders["items"].as_array().map_or(0, Vec::len), 0, "the history is not on the tip store: {orders}");
 
