@@ -56,10 +56,15 @@ test('a market buy against many small asks: one transaction takes 3, with Fills 
   await settlePlan(page);
   await expect(page.getByTestId('field-maxFills-note')).toHaveText('The visible book needs about 3 fill(s) for this amount (3 asks per transaction). 3 fill(s) deposit 6 KAS in carriers; unused ones come back.');
   await expect(page.getByTestId('order-fills-short')).toHaveCount(0);
+  // a bid is a KAS budget: the carriers of fills that need not happen buy more tokens, so the ticket says the most it may deliver (the 9 asked + 2 carriers
+  // of 2 KAS at the worst price), and the Fills value is not cut here (3 fills of at least 1 token for 9)
+  await expect(page.getByTestId('order-fills-receive')).toContainText(/^You may receive up to 1\d\d[.]\d+ EXSTD, not only 9 EXSTD: a buy is a KAS budget/);
+  await expect(page.getByTestId('order-fills-receive')).not.toContainText('Fills limited');
 
   await clickPlaceOnly(page);
   const receipt = await readReceipt(page);
   const card = receipt.orders[0]!;
+  expect(card.rows['You may receive up to']).toMatch(/^1\d\d[.]\d+ EXSTD$/);
   expect(card.title).toBe('Buy market order (auction, several fills)');
   expect(card.rows['Time in force']).toMatch(/^fills in up to 3 transactions within the worst price; what is not filled returns after .+$/);
   expect(card.rows['Delivery carriers deposited']).toBe('6 KAS');
@@ -98,6 +103,8 @@ test('a market sell with Fills: no carrier per fill; FOK hides the box', async (
   await fillFields(page, { amount: '2', maxFills: '2' });
   await settlePlan(page);
   await expect(page.getByTestId('field-maxFills-note')).toHaveText(/A sell deposits no carrier per fill\.$/);
+  // the minimum fill (the smallest bid, 2 tokens) leaves one fill for 2 tokens: the typed 2 fills are cut to 1, and the ticket says so
+  await expect(page.getByTestId('order-fills-receive')).toHaveText('Fills limited to 1 (you asked for 2): with a minimum fill of 2 EXKCC, 2 EXKCC cannot be split into more.');
   await clickPlaceOnly(page);
   const receipt = await readReceipt(page);
   expect(receipt.orders[0]!.title).toBe('Sell market order (auction, several fills)');

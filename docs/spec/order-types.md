@@ -125,7 +125,7 @@ that ask is at most twice that bid: an ask nobody has to take never sets it, nor
 several fills (tif 0) takes the smaller of the 10 KAS amount at its worst price and the smallest crossing counterparty of
 the visible book: a fill of at least one whole counterparty (at most 3 per transaction on the standard program) is never
 below it, and a filler can at most spend its N budgeted fills on fills of that size (the carriers stay the maker's on the
-delivered token UTXOs; the rest is refunded at the expiry, within a minute). At the default carrier the
+delivered token UTXOs; the rest is refunded at the expiry, within a minute). A `KobBid`'s quantity is its KAS escrow, not an amount: the carriers budgeted for fills that never happen are buying power too (`BidState::buying_power` leaves only one carrier), so a multi-fill market buy whose book lets one fill take everything can deliver up to `amount + (fills - 1) x deliveryCarrier / worst price` (typed 0.6 TUSD at a worst price of 29.58 KAS and 2 fills delivered 0.6676 on TN10, 2026-10-27), never more KAS than it locks. The wallet states the bound (`PlanFills.maxReceive`: the ticket's Fills line, the signer's "You may receive up to" row) and the Fills value the minimum fill cut. At the default carrier the
 carriers a filler can make the maker lock are at most 20% of the order's notional, and one fill's fee (paid by the filler)
 is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fill (KaspaCom on both sides the highest;
 `DEFAULT_MIN_FILL_SOMPI`).

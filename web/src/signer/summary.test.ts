@@ -3,7 +3,9 @@
 import { describe, expect, it } from 'vitest';
 import { summarize } from './summary';
 import { goldenRequest } from '../testing/golden';
-import { goldenRequest as chainGoldenRequest } from '../testing/chain-fixtures';
+import { goldenRequest as chainGoldenRequest, MAKER as CHAIN_MAKER, OTHER as CHAIN_OTHER, TOKEN as CHAIN_TOKEN, keyUtxo, tokenUtxo as chainTokenUtxo } from '../testing/chain-fixtures';
+import { planMerge } from '../kob/merge';
+import { loadKobNode } from '../kob/wasm.node';
 import { MAKER_PK, TOKEN_COV_ID } from '../testing/token-fixtures';
 import { kob } from '../testing/wallet-fixtures';
 import type { ActionRequest, BuiltTx } from '../kob/types';
@@ -12,6 +14,7 @@ import { MAKER_PK as FIXTURE_MAKER, TOKEN_COV } from '../testing/fixtures';
 import { buildIntent } from '../ui/ticket/form-state';
 import { CTX, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 
+const KAS_SOMPI = 100_000_000n;
 const HINTS = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 3 }];
 
 function build(name: string, edit: (state: Record<string, string>) => void = () => undefined): BuiltTx {
@@ -67,6 +70,42 @@ describe('signer summary: order terms', () => {
   it('a cancel creates no order and lists none', () => {
     const s = summarize(kob, kob.build(goldenRequest('cancel.ask', MAKER_PK)), MAKER_PK, HINTS);
     expect(s.orders).toEqual([]);
+  });
+});
+
+describe('signer summary: a token merge', () => {
+  const hints = [{ covenantId: CHAIN_TOKEN.covenantId, ticker: 'TUSD', decimals: 8 }];
+  const mergeBuilt = (n: number) => {
+    const chainKob = loadKobNode();
+    const set = Array.from({ length: n }, (_, i) => chainTokenUtxo(BigInt((i + 1) * 100_000_000), CHAIN_MAKER.pk, 0x40 + i, 2n * KAS_SOMPI));
+    const std = { covenantId: CHAIN_TOKEN.covenantId, program: CHAIN_TOKEN.program, templateHash: CHAIN_TOKEN.templateHash, extensionCommitment: CHAIN_TOKEN.ext, slots: { inputs: 3, outputs: 3 } };
+    const plan = planMerge({ kob: chainKob, maker: CHAIN_MAKER.pk, funding: [keyUtxo(CHAIN_MAKER.pk, 50n * KAS_SOMPI, 201)] }, std, set);
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    return { chainKob, built: plan.links[0]!.built, plan };
+  };
+
+  it('is not titled "Send" with KAS only: it says N token UTXOs become 1, the token amount unchanged, and the KAS freed', () => {
+    const { chainKob, built } = mergeBuilt(3);
+    const s = summarize(chainKob, built, CHAIN_MAKER.pk, hints);
+    expect(s.title).toBe('Merge token UTXOs');
+    const line = s.lines.find((l) => /merged$/.test(l.label))!;
+    expect(line.label).toContain('TUSD');
+    expect(line.value).toBe('3 UTXOs into 1: 6 in total, unchanged');
+    // no token leaves or arrives: the net effect lists no TUSD movement line
+    expect(s.lines.filter((l) => l.dir !== null && /TUSD/.test(l.label))).toEqual([]);
+    // the KAS the freed carriers make spendable is still said
+    expect(s.lines.find((l) => /freed/.test(l.label))!.value).toMatch(/ KAS$/);
+    expect(s.orders).toEqual([]);
+  });
+
+  it('read for another key, the same request is no merge of its own tokens (no merge title or line)', () => {
+    const { chainKob, built } = mergeBuilt(2);
+    const edited = summarize(chainKob, built, CHAIN_MAKER.pk, hints);
+    expect(edited.title).toBe('Merge token UTXOs');
+    // the same request read for ANOTHER key: its token inputs are not that key's, so it is no merge of its own tokens
+    const other = summarize(chainKob, built, CHAIN_OTHER.pk, hints);
+    expect(other.title).not.toBe('Merge token UTXOs');
+    expect(other.lines.some((l) => /merged$/.test(l.label))).toBe(false);
   });
 });
 
@@ -139,6 +178,24 @@ describe('signer summary: prices that cannot be misread, the flipped view in its
     expect(one.title).toBe('Buy market order (auction)');
     expect(one.rows.map((r) => r.id)).not.toContain('tifFills');
     expect(one.rows.map((r) => r.id)).not.toContain('fillCarriers');
+  });
+
+  it('a market buy of several fills says plainly that it may deliver MORE than the amount, and that Fills is cut to what the minimum fill allows', () => {
+    // 10 tokens, minimum fill 2.5: 4 fills at most, so the 5 typed are cut to 4; 4 carriers of 10 KAS in the escrow
+    const o = summarize(kob, plan(form('market', 'buy', { amount: '10', maxFills: '5' })), FIXTURE_MAKER, hint(false)).orders[0]!;
+    const by = Object.fromEntries(o.rows.map((r) => [r.id, r.value]));
+    expect(by.tifFills).toMatch(/^fills in up to 4 transactions/);
+    expect(by.fillsLimit).toBe('at most 4 transactions: with a minimum fill of 2.5 TUSD the amount cannot be split into more (a larger Fills value is cut to this)');
+    // the most the escrow lets the fills deliver: 10 tokens plus the 3 carriers (30 KAS) of fills that need not happen, at the worst price 2.575
+    expect(by.maxReceive).toMatch(/^2[1-3][.]\d+ TUSD$/);
+    expect(Number(by.maxReceive!.split(' ')[0])).toBeCloseTo(10 + 30 / 2.575, 0);
+    // a one-transaction market buy can never deliver more than its amount: no such row
+    const one = summarize(kob, plan(form('market', 'buy', { amount: '5' })), FIXTURE_MAKER, hint(false)).orders[0]!;
+    expect(one.rows.map((r) => r.id)).not.toContain('maxReceive');
+    expect(one.rows.map((r) => r.id)).not.toContain('fillsLimit');
+    // on the flipped view the receive line is an upper bound too
+    const flip = summarize(kob, plan({ ...form('market', 'buy', { amount: '10', maxFills: '3' }), kas: true }), FIXTURE_MAKER, [{ covenantId: TOKEN_COV, ticker: 'TUSD', decimals: 8, inverted: true }]).orders[0]!;
+    expect(flip.rows.find((r) => r.label === 'You receive')!.value).toMatch(/^up to /);
   });
 
   it('a market sell of several fills: no carrier per fill, the tokens not sold return after its expiry', () => {

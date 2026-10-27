@@ -259,6 +259,8 @@ export default {
   'ticket.ph.maxFills.market': '1',
   'ticket.fills.estimate': 'The visible book needs about {needed} fill(s) for this amount ({perTx} {counterparty} per transaction).',
   'ticket.fills.estimateCross': 'What crosses now needs about {needed} fill(s) ({perTx} {counterparty} per transaction).',
+  'ticket.fills.clamped': 'Fills limited to {fills} (you asked for {requested}): with a minimum fill of {minFill}, {amount} cannot be split into more.',
+  'ticket.fills.maxReceive': 'You may receive up to {max}, not only {amount}: a buy is a KAS budget, and the carrier of a fill that does not happen buys more tokens at your worst price or better. You never pay more than the budget.',
   'ticket.fills.nothing': 'Nothing in the visible book is within reach now.',
   'ticket.fills.deposit': '{fills} fill(s) deposit {deposit} KAS in carriers; unused ones come back.',
   'ticket.fills.noCarrier': 'A sell deposits no carrier per fill.',

@@ -314,7 +314,15 @@ function pairRows(d: OrderDescription, f: Fmt): Row[] {
  * What the caller knows of an order beyond its state: its value, the KAS it locks, a day order's deadline, and for a multi-fill market buy the
  * fills its escrow budgets (signer/summary.ts `bidAmountOf`) with the delivery carrier each one pays.
  */
-export interface OrderExtra { value: bigint | null; locked: LockedKas | null; deadline: bigint | null; fills?: { count: bigint; carrier: bigint } | null }
+export interface OrderExtra { value: bigint | null; locked: LockedKas | null; deadline: bigint | null; fills?: MarketFillsFacts | null }
+
+/**
+ * A multi-fill market buy as its escrow reads (signer/summary.ts `marketFillsOf`): the fills the escrow budgets with the delivery carrier each
+ * pays; `amount` the quantity the escrow was sized for and `maxReceive` the most the escrow lets the fills deliver (kob-wasm `bidBuyingPower`:
+ * a bid's quantity is its KAS, so the carrier of a fill that does not happen buys tokens too); `minFillLimit` the count is the most the minimum
+ * fill allows for that amount (`ceil(amount / minFill)`), so a larger Fills value the user typed was cut to it.
+ */
+export interface MarketFillsFacts { count: bigint; carrier: bigint; amount?: bigint; maxReceive?: bigint; minFillLimit?: boolean }
 
 /** Rows that describe one order state: quantity, prices (all-in), timing, auction, trigger, entry, repeat. */
 export function orderRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[] {
@@ -444,6 +452,14 @@ function marketFillsRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[] 
   const rows = [row('tifFills', tr('confirm.f.tif'), n !== null ? tr('confirm.f.tifFillsBuy', { fills: n.toString(), time: at }) : tr('confirm.f.tifFillsBuyAny', { time: at }), 'warn', tr('confirm.f.tifFillsRefund'))];
   if (n !== null && extra.fills && extra.fills.carrier > 0n) {
     rows.push(row('fillCarriers', tr('confirm.f.fillCarriers'), kas(n * extra.fills.carrier), 'muted', tr('confirm.f.fillCarriersHint', { fills: n.toString(), each: kas(extra.fills.carrier) })));
+  }
+  const x = extra.fills;
+  if (x && x.minFillLimit && n !== null && n > 0n && d.minFill > 0n) {
+    // the Fills value is cut to what the minimum fill allows: said, not left to look like a smaller request
+    rows.push(row('fillsLimit', tr('confirm.f.fillsLimit'), tr('confirm.f.fillsLimitValue', { fills: n.toString(), minFill: tokenAmountText(f.ref, d.minFill, tr) }), 'muted', tr('confirm.f.fillsLimitHint')));
+  }
+  if (x && x.maxReceive !== undefined && x.amount !== undefined && x.maxReceive > x.amount) {
+    rows.push(row('maxReceive', tr('confirm.f.maxReceive'), tokenAmountText(f.ref, x.maxReceive, tr), 'warn', tr('confirm.f.maxReceiveHint', { amount: tokenAmountText(f.ref, x.amount, tr) })));
   }
   return rows;
 }

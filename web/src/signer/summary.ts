@@ -13,7 +13,7 @@ import type { BuiltTx, Hex } from '../kob/types';
 import { formatKas, formatTokenAmount } from '../kob/units';
 import type { KobWasm } from '../kob/wasm';
 import { ASSUMED_TOKEN_DECIMALS, formatDateTime, t } from '../i18n';
-import { orderRows, orderTitle, orderTypeCode, type Fmt } from '../ui/confirm/confirm-model';
+import { orderRows, orderTitle, orderTypeCode, type Fmt, type MarketFillsFacts } from '../ui/confirm/confirm-model';
 import type { GenesisClaim, TokenHint } from './protocol';
 import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './words';
 
@@ -152,7 +152,9 @@ function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWa
     const { amount: n, fills } = bidAmountOf(o, kob, scale, end + d.tip);
     const budget = o.value - (fills > 0n ? fills - 1n : 0n) - fills * BigInt(st.deliveryCarrier ?? '0') - BigInt(st.reserve ?? '0');
     rows.push({ label: t('signer.flip.youSell'), value: t('signer.flip.upTo', { amount: kasT(budget > 0n ? budget : 0n, 'up') }) });
-    rows.push({ label: t('signer.flip.youReceive'), value: tokT(n, 'down') });
+    // a multi-fill market order can deliver more than the amount its budget was sized for (the carrier of a fill that does not happen buys tokens)
+    const power = kob && isMultiFillMarket(d) ? maxReceiveOf(o, kob) : undefined;
+    rows.push({ label: t('signer.flip.youReceive'), value: power !== undefined && power > n ? t('signer.flip.upTo', { amount: tokT(power, 'down') }) : tokT(n, 'down') });
     rows.push({ label: t(decays ? 'signer.flip.expected' : 'signer.flip.price'), value: per(start, 'down') });
     if (decays || d.tip > 0n) rows.push({ label: t('signer.flip.worst'), value: per(end + d.tip, 'down') });
   } else {
@@ -224,13 +226,25 @@ function bidAmountOf(o: DecodedOrder, kob: KobWasm | undefined, scale: bigint, r
  * The fills a multi-fill market BUY budgets (its escrow is `bidEscrow(order, amount, fills)`: `bidAmountOf` finds the count that makes it
  * exact) and the delivery carrier each pays; null for every other order, or without kob-wasm.
  */
-function marketFillsOf(o: DecodedOrder, kob: KobWasm | undefined): { count: bigint; carrier: bigint } | null {
+function marketFillsOf(o: DecodedOrder, kob: KobWasm | undefined): MarketFillsFacts | null {
   const d = o.description;
   if (!kob || baseKind(d.kind) !== 'KobBid' || !isMultiFillMarket(d) || d.scale <= 0n) return null;
   const end = d.auction && d.auction.slope > 0n && d.auction.priceEnd > 0n ? d.auction.priceEnd : d.price;
-  const { fills } = bidAmountOf(o, kob, d.scale, end + d.tip);
+  const { amount, fills } = bidAmountOf(o, kob, d.scale, end + d.tip);
   const carrier = BigInt((o.state.state as unknown as { deliveryCarrier?: string }).deliveryCarrier ?? '0');
-  return { count: fills, carrier };
+  return { count: fills, carrier, amount, maxReceive: maxReceiveOf(o, kob), minFillLimit: d.minFill > 0n && amount > 0n && fills === (amount + d.minFill - 1n) / d.minFill };
+}
+
+/**
+ * The most a bid's escrow lets its fills deliver: kob-wasm `bidBuyingPower` of the order state and the KAS on its UTXO (the covenant's remaining
+ * buying power). A bid's quantity is its KAS, so it is the amount the escrow was sized for plus what the carriers of fills that do not happen buy.
+ */
+function maxReceiveOf(o: DecodedOrder, kob: KobWasm): bigint | undefined {
+  try {
+    return kob.bidBuyingPower(o.state, o.value);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -245,6 +259,38 @@ export function freedFromTokens(s: Pick<SigningSummary, 'maker' | 'inputs' | 'ou
   const kasIn = s.inputs.filter((i) => i.type === 'token' && i.ownedBy === 'maker').reduce((sum, i) => sum + i.amount, 0n);
   const kasOut = outs.reduce((sum, o) => sum + o.value, 0n);
   return kasIn > kasOut ? kasIn - kasOut : 0n;
+}
+
+/** One token a pure merge folds: how many of the wallet's UTXOs go in, how many come out, and the amount (the same on both sides). */
+export interface MergedToken { ref: TokenRef; inCount: number; outCount: number; amount: bigint }
+
+/**
+ * The tokens a request merges, or null when it is not a pure merge: a self-transfer of the wallet's own token UTXOs (no order created or spent,
+ * every token input and output the wallet's own plain UTXO) that puts each token's amount into FEWER UTXOs and keeps it unchanged. A merge moves
+ * no token to anyone and changes no balance, so the net effect lists no token line: this says what is signed (N UTXOs into M, the same amount).
+ */
+export function mergedTokens(s: Pick<SigningSummary, 'kind' | 'maker' | 'inputs' | 'outputs' | 'orders' | 'spends'>): MergedToken[] | null {
+  if (s.kind !== 'send' || s.orders.length > 0 || s.spends.length > 0) return null;
+  const ins = s.inputs.filter((i) => i.token !== null);
+  const outs = s.outputs.filter((o) => o.token !== null);
+  if (ins.length === 0 || outs.length === 0 || ins.some((i) => i.ownedBy !== 'maker' || i.token!.escrowOf !== null || i.token!.owner !== s.maker)) return null;
+  if (outs.some((o) => o.token!.owner !== s.maker || o.token!.escrowOf !== null)) return null;
+  const byToken = new Map<string, MergedToken>();
+  for (const i of ins) {
+    const m = byToken.get(i.token!.ref.covenantId) ?? { ref: i.token!.ref, inCount: 0, outCount: 0, amount: 0n };
+    m.inCount += 1;
+    m.amount += i.token!.amount;
+    byToken.set(i.token!.ref.covenantId, m);
+  }
+  const outAmount = new Map<string, bigint>();
+  for (const o of outs) {
+    const m = byToken.get(o.token!.ref.covenantId);
+    if (!m) return null;
+    m.outCount += 1;
+    outAmount.set(o.token!.ref.covenantId, (outAmount.get(o.token!.ref.covenantId) ?? 0n) + o.token!.amount);
+  }
+  const merged = [...byToken.values()];
+  return merged.every((m) => m.outCount >= 1 && m.outCount < m.inCount && outAmount.get(m.ref.covenantId) === m.amount) ? merged : null;
 }
 
 /** How many delivery counts `bidAmountOf` tries for a bid whose fills the user chose. */
@@ -263,6 +309,12 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
     if (tok.walletDelta !== 0n) lines.push({ label, value: signed(tok.walletDelta, amount), dir: tok.walletDelta < 0n ? 'out' : 'in' });
     if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: amount(tok.toOthers), dir: 'out' });
   }
+  const merged = mergedTokens(s);
+  for (const m of merged ?? []) {
+    const hint = hints.find((h) => h.covenantId === m.ref.covenantId);
+    const amount = formatTokenAmount(m.amount, hint ? hint.decimals : ASSUMED_TOKEN_DECIMALS);
+    lines.push({ label: t('signer.net.merged', { token: tokenName(m.ref.covenantId, hint) }), value: t('signer.net.mergedValue', { inCount: m.inCount, outCount: m.outCount, amount }), dir: null });
+  }
   if (k.locked.total > 0n) lines.push({ label: t('signer.net.locked'), value: kas(k.locked.total), dir: null });
   if (k.released > 0n) lines.push({ label: t('signer.net.released'), value: kas(k.released), dir: null });
   if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
@@ -273,7 +325,7 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry);
     return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain) ?? chain;
   });
-  return { title: t(TITLE[s.kind] ?? TITLE.other), lines, orders, fee: kas(k.fee), problems: s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)).length, decoded: s };
+  return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), problems: s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)).length, decoded: s };
 }
 
 /** Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. */

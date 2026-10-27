@@ -405,7 +405,7 @@ function planAuction(env: PlanEnv, r: AuctionRequest, pre: PlanIssue[]): OrderPl
     if (r.allOrNothing) return place(env, d, pre);
     // a market order can raise its fills; streaming and close are one transaction (their warning says so without a Fills box)
     const facts = fillsFacts(env, r.side, r.amount, end, r.tip, 1n, r.fillsBox ? 'market' : 'ioc', pre);
-    return withFills(place(env, d, pre), facts);
+    return withBuyingPower(env, withFills(place(env, d, pre), facts));
   }
   const est = estimateFills({ side: r.side, amount: r.amount, limit: end, tip: r.tip, slots: env.token.slots, book: env.book });
   const wallet = defaultMinFillFor(env, r.amount, end);
@@ -420,7 +420,19 @@ function planAuction(env: PlanEnv, r: AuctionRequest, pre: PlanIssue[]): OrderPl
   d.fills = r.side === 'buy' ? allowed : 1n;
   d.notes.push('auction', 'marketFills', ...r.notes);
   const facts = fillsFacts(env, r.side, r.amount, end, r.tip, allowed, null, pre);
-  return withFills(place(env, d, pre), facts);
+  const clamp = wanted > allowed ? { requested: wanted, minFill } : { minFill };
+  return withBuyingPower(env, withFills(place(env, d, pre), { ...facts, ...clamp }));
+}
+
+/**
+ * Adds a buy's `maxReceive` to its fills: what its escrow lets the fills deliver (kob-wasm `bidBuyingPower` of the order state and its escrow).
+ * A bid's quantity is its KAS escrow, so the carriers of budgeted fills that do not happen buy tokens too: a multi-fill market buy can deliver more
+ * than the typed amount (never more KAS than it locks). A sell, or a plan that did not build, is returned as it is.
+ */
+function withBuyingPower(env: PlanEnv, p: OrderPlan): OrderPlan {
+  const order = p.states[0];
+  if (!p.fills || !order || !p.request || (order.kind !== 'KobBid' && order.kind !== 'KobBidKron')) return p;
+  return { ...p, fills: { ...p.fills, maxReceive: env.kob.bidBuyingPower(order, BigInt(p.request.value)) } };
 }
 
 function planMarket(env: PlanEnv, i: MarketIntent): OrderPlan {

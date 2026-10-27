@@ -246,6 +246,17 @@ export interface PlanFills {
   carrierDeposit: bigint;
   /** 'amount': the counts are for the whole amount (market, IOC); 'crossing': for the part of a resting buy that crosses now */
   scope: 'amount' | 'crossing';
+  /**
+   * A buy only: the most the order's escrow lets the fills deliver (kob-wasm `bidBuyingPower` of the escrow, the covenant's "remaining buying
+   * power"). A bid's quantity IS its KAS escrow, not an amount: the delivery carriers budgeted for fills that do not happen buy tokens at the
+   * bound price, so a book that lets one fill take everything delivers up to `amount + (budgeted - 1) x carrier / price`. Above `amount` only
+   * for a multi-fill market buy; the spend never exceeds the KAS locked.
+   */
+  maxReceive?: bigint;
+  /** A multi-fill market order: the Fills value the user asked for, when the minimum fill allows fewer (`budgeted` is then the clamp) */
+  requested?: bigint;
+  /** A multi-fill market order: its minimum fill (base units): the user's, else the smaller of the 10 KAS default and the smallest crossing counterparty */
+  minFill?: bigint;
 }
 
 export const errors = (p: { issues: PlanIssue[] }): PlanIssue[] => p.issues.filter((i) => i.severity === 'error');

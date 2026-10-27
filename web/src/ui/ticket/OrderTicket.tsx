@@ -678,6 +678,12 @@ export function OrderTicket(props: OrderTicketProps) {
           </p>
         ) : null}
 
+        {fills?.receive ? (
+          <p class="tk-fills-short" data-testid="order-fills-receive">
+            <span key={fills.receive}>{fills.receive}</span>
+          </p>
+        ) : null}
+
         {maxNote ? (
           <p class="muted" data-testid="order-max-note">
             {maxNote}

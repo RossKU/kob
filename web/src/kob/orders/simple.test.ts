@@ -931,6 +931,44 @@ describe('fills against the visible book (market, IOC, crossing buys)', () => {
     expect(bid(fok).tif).toBe('2');
   });
 
+  it('a multi-fill market buy can deliver MORE than the typed amount: the carriers of fills that do not happen buy tokens (the escrow is the quantity)', () => {
+    // one counterparty of 0.5 token sets the minimum fill (500); 1.2 tokens in fills of at least 500: 3 fills at most, the 5 typed are cut to 3
+    const small = [bookOrder(P, 500n), bookOrder(P + 100_000n, 5n * TOK)];
+    const e = makeEnv({ book: { asks: small.map((o) => level(o.price, o.amount)), bids: book.bids, askOrders: small, bidOrders: bids } });
+    const amount = 1_200n;
+    const p = planValid(e, market({ amount, maxFills: 5n }));
+    const st = bid(p);
+    expect(BigInt(st.minFill)).toBe(500n);
+    expect(p.fills).toMatchObject({ budgeted: 3n, requested: 5n, minFill: 500n, carrierDeposit: 3n * DC });
+    // the covenant's own rule (KobBid.fill): a fill may consume the escrow down to the carrier of its delivery and the reserve, so the book's
+    // buying power is the amount PLUS what the 2 carriers of fills that need not happen buy at the worst price
+    const value = BigInt(p.request!.value);
+    const rate = BigInt(st.priceEnd) + BigInt(st.tip);
+    const budget = value - DC - BigInt(st.reserve);
+    const max = p.fills!.maxReceive!;
+    expect(max).toBe(K.bidBuyingPower(p.states[0], value));
+    expect(ceilDiv(max * rate, SCALE)).toBeLessThanOrEqual(budget);
+    expect(ceilDiv((max + 1n) * rate, SCALE)).toBeGreaterThan(budget);
+    expect(max).toBeGreaterThan(amount);
+    // = the amount plus 2 carriers at the worst price, to the sompi of rounding
+    const extra = (2n * DC * SCALE) / rate;
+    expect(max - amount).toBeGreaterThanOrEqual(extra - 1n);
+    expect(max - amount).toBeLessThanOrEqual(extra + 1n);
+    // the KAS it can ever spend is bounded by the escrow it locks
+    expect(ceilDiv(max * rate, SCALE)).toBeLessThanOrEqual(value);
+    // a typed value the minimum fill allows is not a clamp
+    const exact = planValid(e, market({ amount, maxFills: 2n }));
+    expect(exact.fills!.requested).toBeUndefined();
+    expect(exact.fills!.budgeted).toBe(2n);
+    expect(exact.fills!.maxReceive! - amount).toBeLessThan(max - amount);
+  });
+
+  it('a one-transaction buy (IOC market) and a sell can never deliver more than asked', () => {
+    const one = planValid(env(), market({ amount: 6n * TOK }));
+    expect(one.fills!.maxReceive).toBe(6n * TOK);
+    expect(planValid(env(), { type: 'market', side: 'sell', amount: 6n * TOK, maxFills: 2n }).fills!.maxReceive).toBeUndefined();
+  });
+
   it('a sell of several fills: tif 0, no carrier per fill (the custody carries the order)', () => {
     const p = planValid(env(), { type: 'market', side: 'sell', amount: 20n * TOK, maxFills: 5n });
     const s = ask(p);
