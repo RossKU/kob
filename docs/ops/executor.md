@@ -49,7 +49,8 @@ step-by-step page is `docs/ops/executor-quickstart.md`.
   existing key file is offered again and never replaced; the secret is never printed); it shows the address, waits for at
   least 100 KAS (Enter skips) and asks for the x402 facilitator (off by default). A build without a pinned registry
   (testnet-10) also gets `kob-tokens.json`: the embedded registry's programs for its network and no token entries, so every
-  order of a supported program is listed (B 4, *Token allowlist*). This is the no-curation policy, not a convenience: KOB lists
+  order of a supported program is listed by the API (B 4, *Token allowlist*; the web app's market list keeps the tokens with no ticker and no
+  declared decimals behind "Show N token(s) without a name"). This is the no-curation policy, not a convenience: KOB lists
   no token by name and refuses none for what it is, exactly as the mainnet build lists with its pinned registry; the mainnet
   token entries are left out because they name mainnet covenant ids (facts that do not exist on testnet-10).
 * **`kob-executor.toml`** is an ordinary `--config` file (B 4) plus the `[launch]` table (`role = "run" | "index"`,

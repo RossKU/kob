@@ -12,7 +12,7 @@
 // when a cell would be too wide, never a cut digit (the exact figure is in the tooltip). A row whose figures are still loading or unavailable shows
 // skeletons / `—`. Sorting by any column, missing figures always last; search over pairs by either token (or `BASE/QUOTE`). Pure.
 import type { PairSummaryView, StatsView } from '../../data/indexer-types';
-import { t } from '../../i18n';
+import { ASSUMED_TOKEN_DECIMALS, t } from '../../i18n';
 import { cmpRational, formatRational, significantDp, type Rational } from '../../kob/pair';
 import { fitAmountColumn, fitDecimalTexts, tickPriceFraction } from '../kit/format';
 import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, priceDecimals, toneOf, unitsToNumber, type Tone } from './market-model';
@@ -139,7 +139,10 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
   };
   if (!v) return base;
   const basis = basisOf(v.price_basis);
-  const decimals = row.decimals ?? finiteInt(v.decimals) ?? 0;
+  // a token without registry entry or declaration: the indexer reports 0 decimals for "unknown", which would show its price per base unit (1e8 too low
+  // against its page); the page's rule applies, 8 assumed, never base units (token page `decimals`)
+  const reported = finiteInt(v.decimals);
+  const decimals = row.decimals ?? (reported !== null && reported > 0 ? reported : ASSUMED_TOKEN_DECIMALS);
   const unit = t('market.stats.unitOf', { base: row.ticker || label, quote: 'KAS' });
   const last = bigOrNull(v.last);
   const bid = bigOrNull(v.best_bid);

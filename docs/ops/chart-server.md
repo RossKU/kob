@@ -24,8 +24,9 @@ you and the chain; `docs/ops/executor-quickstart.md`, section 2), or the public 
 
 **Setup.** Run `kob-executor setup` in the folder of the binary and answer: the node (public nodes, or your own), **role:
 index only**, the data directory (`kob-data`). There is no key question for this role. It writes `kob-executor.toml` (and on
-testnet-10 `kob-tokens.json`, the supported token programs with no token entries: every token of a supported program is listed
-and none is named). Then add the read API settings for the tunnel at the end of `kob-executor.toml`:
+testnet-10 `kob-tokens.json`, the supported token programs with no token entries: every token of a supported program is indexed
+and listed by the API, and none is named; the web app's market list shows the tokens that have a ticker or declared decimals and keeps the
+others behind "Show N token(s) without a name"). Then add the read API settings for the tunnel at the end of `kob-executor.toml`:
 
 ```toml
 [api]

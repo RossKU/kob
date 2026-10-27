@@ -366,7 +366,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           ) : (
             <Section title={t('market.ticket.title')} data-testid="ticket-unavailable" class="mkt-card">
               <Banner tone="warn" data-testid="ticket-untradable">
-                {open.reason
+                {open.reason === 'book-unavailable'
+                  ? t('market.ticket.untradableBook', { reason: t(`market.open.${open.reason}`) })
+                  : open.reason
                   ? t('market.ticket.untradable', { reason: t(`market.open.${open.reason}`) })
                   : open.loading
                     ? t('market.open.loading')

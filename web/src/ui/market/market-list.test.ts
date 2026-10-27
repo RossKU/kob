@@ -44,6 +44,19 @@ describe('market list cells', () => {
     expect(e.sort.last).toEqual({ num: 251n, den: 10_000n });
   });
 
+  it('a token with unknown decimals (no registry entry, no declaration; the indexer reports 0) shows the price per whole token on the assumed 8 decimals, as its page does', () => {
+    const r = row('', ID('c'), { decimals: null, scale: null, tick: null, source: 'indexer', info: null });
+    const e = tokenEntry(r, ok(stats(r.covenantId, { decimals: 0, last: '2877252083', mid: '2877252083', best_bid: '2877000000', best_ask: '2878000000' })));
+    expect(e.cells.last.text).toMatch(/^28[.]77/);
+    expect(e.sort.last).toEqual({ num: 2877252083n, den: 100_000_000n });
+    // the same figures as a row that knows its 8 decimals
+    expect(e.sort.last).toEqual(tokenEntry(row('X', ID('f')), ok(stats(ID('f'), { last: '2877252083', mid: '2877252083' }))).sort.last);
+    // a known count wins over the indexer's 0, and a positive count the indexer reports is used when the row has none
+    const at = (decimals: number | null, reported: number) => tokenEntry(row('X', ID('d'), { decimals }), ok(stats(ID('d'), { decimals: reported, last: '28772' }))).sort.last;
+    expect(at(3, 0)).toEqual(at(null, 3));
+    expect(at(3, 0)).not.toEqual(at(null, 0));
+  });
+
   it('a row still loading has no figure but its order counts; an unavailable row is flagged, never a zero', () => {
     const r = row('EXKCC', ID('a'));
     const loading = tokenEntry(r, LOADING);

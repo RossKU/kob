@@ -140,7 +140,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
               'data-testid': 'token-tick',
             },
             { label: t('market.token.powers'), value: <span data-testid="token-powers">{r.powers.map(powerName).join(', ')}</span>, show: r.powers.length > 0 },
-            { label: t('market.token.openOrders'), value: r.openAsks !== null ? t('market.token.openOrdersValue', { asks: r.openAsks, bids: r.openBids ?? 0 }) : '-', show: r.index !== null },
+            { label: t('market.token.openOrders'), value: r.openAsks !== null ? t('market.token.openOrdersValue', { asks: r.openAsks, bids: r.openBids ?? 0 }) : t('market.token.openOrdersUnknown'), show: r.index !== null },
           ]}
         />
       </Section>

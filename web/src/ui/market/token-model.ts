@@ -157,7 +157,8 @@ export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: T
     badges: [],
     // this build's own registry does not list the token: it cannot trade it from the list
     tradable: false, reason: 'unregistered',
-    indexerProblems: [], openAsks: view.open_asks, openBids: view.open_bids,
+    // a token known only from the wallet's holdings (`held`) has a made-up view: its order counts are not known, never 0
+    indexerProblems: [], openAsks: source === 'held' ? null : view.open_asks, openBids: source === 'held' ? null : view.open_bids,
     decimals,
     scale: view.scale != null ? BigInt(view.scale) : decimals != null ? 10n ** BigInt(Math.min(decimals, 9)) : null,
     tick: null,

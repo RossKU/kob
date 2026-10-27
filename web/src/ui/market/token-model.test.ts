@@ -137,6 +137,13 @@ describe('filterTokens / parseCovenantId', () => {
     expect([isNameless(rows[0]), isNameless(named), isNameless(nameless), isNameless(noDecimals)]).toEqual([false, false, true, false]);
   });
 
+  it('a token known only from the wallet holdings (a made-up view) has unknown order counts, never 0 asks and 0 bids', () => {
+    const v = view('', ID('8'), 0, 0, { decimals: null });
+    expect([unknownRow(reg, v, 'held').openAsks, unknownRow(reg, v, 'held').openBids]).toEqual([null, null]);
+    // an indexer's own view keeps its counts
+    expect([unknownRow(reg, view('PEN', ID('9'), 2, 1)).openAsks, unknownRow(reg, view('PEN', ID('9'), 2, 1)).openBids]).toEqual([2, 1]);
+  });
+
   it('accepts a pasted covenant id in common spellings only', () => {
     expect(parseCovenantId(`  0x${ID('A')}\n`)).toBe(ID('a'));
     expect(parseCovenantId(ID('a').slice(1))).toBeNull();
