@@ -39,8 +39,8 @@ records" in contracts/README.md.
 | | |
 |---|---|
 | File | `registry/tokens.json` (schema 1) |
-| sha256 (LF) | `80ea945d9ffe240e6e473f1205411fec244b0698f564507513f43e568bda17b8` |
-| Supported programs (strict templates) | kcc20-ref-3x3 `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e`, kcc20-ref-public-mint `734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498` |
+| sha256 (LF) | `13db2ae7ba4383a12958cca495bf5598eacbcd66749ba3f313e9ba87936e7f2e` |
+| Supported programs (strict templates) | kcc20-ref-3x3 `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e`, kcc20-ref-public-mint `734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498`, kasparocket-token-11458 `3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1` |
 | Pending review | kcc20-ref-8x8, kcc20-kaspacom-0-2-5 |
 
 The deploy-mainnet build embeds this file as its default registry and checks this hash. An operator may load another

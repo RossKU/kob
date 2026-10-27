@@ -1140,6 +1140,14 @@ pub fn mixed_pairs_pm() -> [(TemplateId, TemplateId); 2] {
     [(Kcc20PublicMint, KronToken2433), (KronToken2433, Kcc20PublicMint)]
 }
 
+/// The mixed pairs on KaspaRocket's token program (KaspaRocketToken11458: the public-mint actor at 10 / 10 slots, tradable on
+/// mainnet since its review of 2026-10-27). Its slots exceed the eight token inputs a KOB order transaction carries, so no scenario
+/// is skipped on it: the order's own bound refuses a ninth input (`kob_ifd_pair_tests` NIS8 / NIS9).
+pub fn mixed_pairs_kr() -> [(TemplateId, TemplateId); 2] {
+    use TemplateId::{KaspaRocketToken11458, KronToken2433};
+    [(KaspaRocketToken11458, KronToken2433), (KronToken2433, KaspaRocketToken11458)]
+}
+
 /// Opt-in of a test binary (the KobCondPair / KobIfdPair suites, which run their KCC-20 mixes on the 3 / 3 program too)
 /// to skip the scenarios that exceed a 3 / 3 program's slots ([`slot_excess`]). Off by default: the other binaries of
 /// this harness run every scenario as written.

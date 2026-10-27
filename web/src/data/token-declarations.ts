@@ -168,10 +168,35 @@ export function subscribeDeclarations(f: () => void): () => void {
   return () => listeners.delete(f);
 }
 
+// ---------------------------------------------------------------------------------------------- token programs
+
+/**
+ * The token program of a covenant id as the chain shows it: the program the indexer lists the token under (its template hash, a fact of the
+ * token's scripts) or the one the wallet's own token UTXOs of it verified under on the node. Kept in memory per network; a token shown without a
+ * registry entry or a declaration takes its program's default decimals from it (app/token-display.ts: KaspaRocket 3). Views re-render when one
+ * becomes known (the same listeners as the declarations).
+ */
+const programs = new Map<string, string>();
+
+/** Remembers the program of a token (call it from an effect or an async callback, never while rendering). */
+export function noteTokenProgram(network: string, covenantId: Hex | null | undefined, program: string | null | undefined): void {
+  if (!covenantId || !program || !/^[0-9a-fA-F]{64}$/.test(covenantId)) return;
+  const key = k(network, covenantId);
+  if (programs.get(key) === program) return;
+  programs.set(key, program);
+  notify();
+}
+
+/** The program a token was seen under (`noteTokenProgram`), else null. */
+export function tokenProgramOf(network: string, covenantId: Hex | null | undefined): string | null {
+  return covenantId ? (programs.get(k(network, covenantId)) ?? null) : null;
+}
+
 /** Tests only: forget everything. */
 export function resetDeclarationsForTests(): void {
   memo.clear();
   inflight.clear();
+  programs.clear();
   loadedFrom = undefined;
 }
 

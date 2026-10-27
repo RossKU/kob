@@ -48,6 +48,7 @@ export default {
   'signer.net.fromTokens': 'KAS freed from your token UTXOs (now spendable)',
   'signer.fee': 'Network fee',
   'signer.net.tokenAssumed': '{id} (decimals assumed {decimals})',
+  'signer.net.tokenProgram': '{id} ({decimals} decimals, {source})',
   'signer.net.tokenIssued': '{ticker} ({id}, unverified)',
   'signer.net.tokenDeclared': '{ticker} ({id}, declared by its creator, unverified)',
   'signer.updated': 'Updated: some figures changed since this request was first shown.',

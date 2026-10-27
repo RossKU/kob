@@ -197,16 +197,23 @@ export interface TokenInfo {
   /**
    * DISPLAY ONLY (app/token-display.ts): a token the registry does not list, named for showing its amounts: `declared` = name, ticker and
    * decimals from its KCC-23 declaration on chain (verified against its covenant id), `issued` = decimals and ticker from this browser's issuance
-   * of it, `assumed` = 8 decimals (the Kaspa convention) and its covenant id as the name. Never traded or verified.
+   * of it, `program` = the default decimals of its token program for a token that declares none (a launchpad's convention: KaspaRocket 3,
+   * `decimalsConvention` names it), `assumed` = 8 decimals (the Kaspa convention) and its covenant id as the name. Never traded or verified.
    */
-  decimalsSource?: 'declared' | 'issued' | 'assumed';
+  decimalsSource?: 'declared' | 'issued' | 'program' | 'assumed';
+  /** the source of a program default's decimals as the app names it (`KaspaRocket convention`): with `decimalsSource` or `openScale` `program` */
+  decimalsConvention?: string;
   /**
    * DISPLAY ONLY: the facts on which the token's registry entry (or its market's price scale) and its KCC-23 declaration disagree; the on-chain
    * values are shown, flagged. Absent when they agree or the token declares nothing.
    */
   declarationConflicts?: ('decimals' | 'symbol' | 'name')[];
-  /** an open-list token: its decimals (and scale) from its KCC-23 declaration (`declared`; its orders, if any, agree), else from the scale its orders use (`orders`), else `entered` by the user for its first order */
-  openScale?: 'orders' | 'entered' | 'declared';
+  /**
+   * an open-list token: its decimals (and scale) from its KCC-23 declaration (`declared`; its orders, if any, agree), else from its token program's
+   * default (`program`: a launchpad's convention, KaspaRocket 3; its orders, if any, agree), else from the scale its orders use (`orders`), else
+   * `entered` by the user for its first order
+   */
+  openScale?: 'orders' | 'entered' | 'declared' | 'program';
   /** an open-list KCC-20 token: where its extension commitment came from and how it compares with commitments known without the indexer */
   extension?: ExtensionCheck;
   /** kob-wasm program (null when this build cannot handle the template) */

@@ -60,7 +60,7 @@ SUPPLY
                         holds only KCC20 holders (no PublicMint, no TokenSeed): a fixed supply. 8x8-prototype: the
                         8 / 8 slot variant, a prototype that is not KOB's issuance (the plan warns).
                         kasparocket-testnet: KaspaRocket's program (the public-mint actor at 10 / 10 slots,
-                        KaspaRocketToken11458, pending-review), testnet-10 only, to test KOB against that launchpad.
+                        KaspaRocketToken11458), issued on testnet-10 only, to test KOB against that launchpad.
 
 TRANSACTION
   --carrier             sompi on each token output (default 1000000000 = 10 KAS)

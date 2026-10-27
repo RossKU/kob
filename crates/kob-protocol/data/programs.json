@@ -219,7 +219,7 @@
       "variant": "KaspaRocketToken11458",
       "registry_id": "kasparocket-token-11458",
       "record_code": 11,
-      "summary": "KaspaRocket launchpad token program (testnet-10): the KCC20 actor of the reference KCC20PublicMint app built with 10 / 10 token slots (9 delegates), 11,458-byte redeem script, 34-byte prefix with the gen__kcc20_template context field.",
+      "summary": "KaspaRocket launchpad token program (mainnet and testnet-10): the KCC20 actor of the reference KCC20PublicMint app built with 10 / 10 token slots (9 delegates), 11,458-byte redeem script, 34-byte prefix with the gen__kcc20_template context field.",
       "source": {
         "kind": "silverc-artifact",
         "path": "contracts/artifacts/KaspaRocketToken11458.json",
@@ -248,15 +248,20 @@
       },
       "router_intents": false,
       "genesis": {
-        "minters": "unknown"
+        "minters": "genesis-only"
       },
       "review": {
-        "status": "pending-review",
-        "basis": "derived by kob registry add-program from the build that reproduces the launchpad's on-chain redeem scripts; measured in the engine (crates/kob-tests/tests/program_kasparockettoken11458.rs): the witness reproduced byte for byte, real launch transactions run, custody 4 and holder 0, slots 10 / 10, carrier floor 1 sompi, exact conservation; the borrow paths, minters and the order suites not reviewed"
+        "status": "reviewed",
+        "basis": "internal review (maintainer decision 2026-10-27, docs/spec/token-programs.md section 6): the KCC20 actor of kcc20-reference c8a0871 (the reviewed KCC20PublicMint) with only its slot bounds raised to 10 / 10; the publisher's kcc20.sil (La-Gauffre/KaspaRocket-Silverscript-Contract 86fe1e8) compiles with silverc v1.0.0 to these bytes; all 136 mainnet tokens of the program (2026-10-27) are these bytes and their genesis verifies (kob registry verify-genesis: one token output each, no other program in the group); no mint, burn or authority entry (minters genesis-only); the order grid, the pair attacks and the nine-input refusal on its holders (kcc20_public_mint_tests, audit_pair_sec_tests), the ablation of the KCC-20 and pair suites on it, the executor flow test; decimals: the KaspaRocket convention (3) for a token that declares none"
       },
       "networks": [
+        "mainnet",
         "testnet-10"
-      ]
+      ],
+      "default_decimals": {
+        "decimals": 3,
+        "source": "KaspaRocket convention"
+      }
     }
   ]
 }

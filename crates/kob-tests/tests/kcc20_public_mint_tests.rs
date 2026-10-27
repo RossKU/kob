@@ -1,6 +1,8 @@
 //! KOB orders on tokens of the published build of the KCC-20 reference: the `KCC20` actor of upstream's `KCC20PublicMint`
 //! app (argent-lang/kcc20-reference `c8a0871`, `fixtures/public-mint/sil/KCC20.sil`, vendored in
-//! `contracts/third-party/kcc20-reference`), embedded as `TemplateId::Kcc20PublicMint`.
+//! `contracts/third-party/kcc20-reference`), embedded as `TemplateId::Kcc20PublicMint`, and KaspaRocket's build of the same
+//! actor at 10 / 10 token slots (`contracts/third-party/kasparocket`, `TemplateId::KaspaRocketToken11458`, handle `3d689d62...`,
+//! suffix 11,312 B). Every test below runs on both builds (`BUILDS`).
 //!
 //! Its state is `0x20 ‖ gen__kcc20_template` (the compiler-owned context: the program's own Sil template hash, the same in
 //! every UTXO) followed by the standard 112-byte `KCC20State`. KOB pins the program as its KCC-1 actor-type handle, the
@@ -15,10 +17,12 @@
 //!   - every KAS-book scenario, branch shape and pair scenario on the published build (fills, refunds, IOC / FOK ends,
 //!     updates, repeat merges, cancels; KobAsk / KobBid, conditional, if-done, pair kinds) passes on every input,
 //!     including the token program's own leader / delegator template checks when several holders (custodies of
-//!     different orders) are spent in one transaction (up to the program's 3 token inputs; a fourth is refused);
+//!     different orders) are spent in one transaction (up to the program's 3 token inputs, a fourth refused; on the
+//!     10 / 10 build eight custodies, the most a KOB order transaction carries, and a ninth refused);
 //!   - negatives: the same transactions with the custody / delivery tokens' context field replaced (a consistent holder of
 //!     another `gen__kcc20_template` value under the same covenant id), or with the tokens moved to the standalone build
-//!     (and the standalone scenarios moved to the published build), are refused by every order that settles against them;
+//!     (and the standalone scenarios moved to the published build; the two published builds swapped), are refused by every
+//!     order that settles against them;
 //!     an order that pins the Sil cut (`9703112e...`, prefix 1) refuses the custody, and the builders refuse such terms.
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_public_mint_tests -- --nocapture
@@ -44,9 +48,38 @@ use ph::*;
 use silverscript_abi::{encode_runtime_state_script, ArtifactValue};
 
 const PM: TemplateId = TemplateId::Kcc20PublicMint;
+const KR: TemplateId = TemplateId::KaspaRocketToken11458;
 const SA: TemplateId = TemplateId::Kcc20Ref;
-const SIL_HASH: &str = "9703112ee6e3555107cd168858992b77d3b74f655205b2b463b1f9ec2ec73cf7";
-const HANDLE_HASH: &str = "734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498";
+
+/// A build of the published `KCC20` actor KOB trades: the public-mint build (3 / 3) and KaspaRocket's 10 / 10 build of it
+/// (`contracts/third-party/kasparocket`): its Sil template hash (the context value), the handle KOB pins, the program and
+/// suffix lengths and its token slots.
+struct Build {
+    p: TemplateId,
+    sil: &'static str,
+    handle: &'static str,
+    len: usize,
+    suffix: usize,
+    slots: usize,
+}
+const BUILDS: [Build; 2] = [
+    Build {
+        p: PM,
+        sil: "9703112ee6e3555107cd168858992b77d3b74f655205b2b463b1f9ec2ec73cf7",
+        handle: "734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498",
+        len: 4_031,
+        suffix: 3_885,
+        slots: 3,
+    },
+    Build {
+        p: KR,
+        sil: "ff3ae732e3a2819bf9181f5aed6b1e9d0f7abea70a1dd655b8e777cbcbd2422b",
+        handle: "3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1",
+        len: 11_458,
+        suffix: 11_312,
+        slots: 10,
+    },
+];
 /// A context value that is not the program's template hash.
 const OTHER_CTX: [u8; 32] = [0x5a; 32];
 
@@ -159,8 +192,8 @@ fn sig(tx: &Transaction, entries: &[UtxoEntry], i: usize, key: &[u8; 32], ht: u8
 /// `e` assembled, then every holder of token `tok` (inputs and outputs, all on the published build) rewritten to carry
 /// `ctx` in its context field (a consistent holder of another `gen__kcc20_template` value: its own transfer accepts its
 /// continuations), and every signature made again over the result.
-fn with_context(e: &Ed, tok: [u8; 32], ctx: [u8; 32]) -> (Transaction, Vec<UtxoEntry>) {
-    let tpl = token_template(PM);
+fn with_context(e: &Ed, p: TemplateId, tok: [u8; 32], ctx: [u8; 32]) -> (Transaction, Vec<UtxoEntry>) {
+    let tpl = token_template(p);
     let swap = |r: &[u8]| {
         let mut v = r.to_vec();
         v[2..34].copy_from_slice(&ctx);
@@ -211,16 +244,22 @@ fn failing(res: &[Result<u64, String>]) -> BTreeSet<usize> {
 
 #[test]
 fn a_published_holder_is_the_handle_prefix_then_the_standard_112_byte_state() {
-    let t = template(PM);
-    let pm = token_template(PM);
+    for b in &BUILDS {
+        layout(b);
+    }
+}
+
+fn layout(b: &Build) {
+    let t = template(b.p);
+    let pm = token_template(b.p);
     let sa = token_template(SA);
     let c = t.contract();
     let bc = &c.compiled.bytecode;
     // the Sil cut (what silverc records) and the handle cut (what KOB pins)
-    assert_eq!((c.compiled.state_span.offset, c.compiled.state_span.len, bc.len()), (1, 145, 4_031));
-    assert_eq!((hexs(&t.sil_hash), hexs(&c.compiled.template_hash)), (SIL_HASH.to_string(), SIL_HASH.to_string()));
-    assert_eq!(hexs(&pm.hash), HANDLE_HASH);
-    assert_eq!((pm.prefix.len(), pm.state_len, pm.suffix.len()), (34, 112, 3_885));
+    assert_eq!((c.compiled.state_span.offset, c.compiled.state_span.len, bc.len()), (1, 145, b.len));
+    assert_eq!((hexs(&t.sil_hash), hexs(&c.compiled.template_hash)), (b.sil.to_string(), b.sil.to_string()));
+    assert_eq!(hexs(&pm.hash), b.handle);
+    assert_eq!((pm.prefix.len(), pm.state_len, pm.suffix.len(), pm.slots), (34, 112, b.suffix, (b.slots, b.slots)));
     assert_eq!(pm.prefix, [&bc[..1], &[0x20u8][..], &t.sil_hash[..]].concat(), "prefix = Sil prefix ‖ push32 ‖ gen__kcc20_template");
     assert_eq!(pm.suffix, bc[146..]);
     assert_eq!((pm.prefix[0], sa.prefix.as_slice()), (0x6b, &[0x6bu8][..]), "both builds open with the same byte");
@@ -260,9 +299,12 @@ fn a_published_holder_is_the_handle_prefix_then_the_standard_112_byte_state() {
     other[2..34].copy_from_slice(&OTHER_CTX);
     assert!(pm.state_of(&other).is_none());
     println!(
-        "LAYOUT prefix {} B = 6b 20 <{SIL_HASH}>, state 112 B at [34..146) = standalone state, suffix {} B; handle {HANDLE_HASH}",
+        "LAYOUT {}: prefix {} B = 6b 20 <{}>, state 112 B at [34..146) = standalone state, suffix {} B; handle {}",
+        b.p.name(),
         pm.prefix.len(),
-        pm.suffix.len()
+        b.sil,
+        pm.suffix.len(),
+        b.handle
     );
 }
 
@@ -270,13 +312,19 @@ fn a_published_holder_is_the_handle_prefix_then_the_standard_112_byte_state() {
 
 #[test]
 fn every_order_shape_runs_on_the_published_build() {
+    for b in &BUILDS {
+        order_grid(b.p);
+    }
+}
+
+fn order_grid(p: TemplateId) {
     let subs = pinned();
-    let run = Run { subs: &subs, pair: PM.name().into() };
+    let run = Run { subs: &subs, pair: p.name().into() };
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     let mut on_pm = 0;
-    for (name, a) in shapes(PM) {
+    for (name, a) in shapes(p) {
         let e = Ed::new(&name, &built(a));
-        if tokens_on(&e, PM).is_empty() {
+        if tokens_on(&e, p).is_empty() {
             continue; // a creation without tokens, or a shape whose tokens run another program (the 8/8 batch fixtures)
         }
         on_pm += 1;
@@ -287,7 +335,7 @@ fn every_order_shape_runs_on_the_published_build() {
             }
         }
     }
-    println!("COVERAGE {on_pm} transactions with published-build tokens: {seen:?}");
+    println!("COVERAGE {}: {on_pm} transactions with its tokens: {seen:?}", p.name());
     for want in [
         "KobAsk.fill",
         "KobAsk.refund",
@@ -304,15 +352,25 @@ fn every_order_shape_runs_on_the_published_build() {
         "KobCondPair.fill",
         "KobIfdPair.fill",
     ] {
-        assert!(seen.contains_key(want), "{want} not covered: {seen:?}");
+        assert!(seen.contains_key(want), "{}: {want} not covered: {seen:?}", p.name());
     }
 }
 
+/// Three custodies under one leader on each build; beyond the slots: the 3 / 3 build refuses a fourth token input, and on
+/// KaspaRocket's 10 / 10 build eight custodies (the most a KOB order transaction carries) run and a ninth is refused by the
+/// builders (and by the orders on chain: `kob_ifd_pair_tests` NIS8 / NIS9).
 #[test]
 fn custodies_of_three_orders_share_one_transfer_and_a_fourth_is_refused() {
+    for b in &BUILDS {
+        sweeps(b);
+    }
+}
+
+fn sweeps(b: &Build) {
+    let p = b.p;
     let subs = pinned();
-    let run = Run { subs: &subs, pair: PM.name().into() };
-    let e = Ed::new("sweep3", &built(sweep(PM, 2).unwrap()));
+    let run = Run { subs: &subs, pair: p.name().into() };
+    let e = Ed::new("sweep3", &built(sweep(p, 2).unwrap()));
     let tok = TOKEN_COV;
     let holders: Vec<usize> = (0..e.plans.len())
         .filter(|i| cov_of(&e.entries[*i]) == Some(tok) && !matches!(e.plans[*i], SigPlan::Entry { .. } | SigPlan::P2pk { .. }))
@@ -320,14 +378,24 @@ fn custodies_of_three_orders_share_one_transfer_and_a_fourth_is_refused() {
     assert_eq!(holders.len(), 3, "a leader and two delegators");
     assert_eq!(readers(&e, tok).len(), 3, "three asks, each owning one of them");
     run.ok(&e);
-    let four = sweep(PM, 3).unwrap();
-    assert!(build_with(&four, &budgets).is_err(), "a fourth token input is beyond the program's 3 / 3 slots");
+    if b.slots == 3 {
+        let four = sweep(p, 3).unwrap();
+        assert!(build_with(&four, &budgets).is_err(), "a fourth token input is beyond the program's 3 / 3 slots");
+    } else {
+        let eight = Ed::new("sweep8", &built(sweep(p, 7).unwrap()));
+        assert_eq!(readers(&eight, TOKEN_COV).len(), 8, "eight asks, each owning one custody");
+        run.ok(&eight);
+        let nine = sweep(p, 8).unwrap();
+        let e = build_with(&nine, &budgets).expect_err("a ninth token input is beyond the eight a KOB order transaction carries");
+        println!("SWEEP9 {}: refused by the builders: {e}", p.name());
+    }
     // the token program's own checks: every holder refuses a leader that is not a KCC20 of its template, so the same
     // transaction with another context value fails at the two delegators too (and at the three orders)
-    let (tx, entries) = with_context(&e, tok, OTHER_CTX);
+    let (tx, entries) = with_context(&e, p, tok, OTHER_CTX);
     let bad = failing(&exec(&tx, &entries));
     let delegators: BTreeSet<usize> = holders[1..].iter().copied().collect();
     assert!(readers(&e, tok).is_subset(&bad) && delegators.is_subset(&bad), "failing {bad:?}");
+    print!("{}: ", p.name());
     println!("SWEEP3 accepted; another context: inputs {bad:?} refuse (orders {:?}, delegators {delegators:?})", readers(&e, tok));
 }
 
@@ -335,19 +403,25 @@ fn custodies_of_three_orders_share_one_transfer_and_a_fourth_is_refused() {
 
 #[test]
 fn another_context_field_is_refused_by_every_order_that_settles_against_it() {
+    for b in &BUILDS {
+        context_negatives(b.p);
+    }
+}
+
+fn context_negatives(p: TemplateId) {
     let (mut cases, mut checked) = (0, BTreeMap::<String, usize>::new());
-    for (name, a) in shapes(PM) {
+    for (name, a) in shapes(p) {
         let e = Ed::new(&name, &built(a));
-        for tok in tokens_on(&e, PM) {
+        for tok in tokens_on(&e, p) {
             let want = readers(&e, tok);
             if want.is_empty() {
                 continue;
             }
             // control: the machinery with the program's own context value changes nothing
-            let sil: [u8; 32] = template(PM).sil_hash;
-            let (tx, entries) = with_context(&e, tok, sil);
+            let sil: [u8; 32] = template(p).sil_hash;
+            let (tx, entries) = with_context(&e, p, tok, sil);
             assert!(failing(&exec(&tx, &entries)).is_empty(), "{name}: control");
-            let (tx, entries) = with_context(&e, tok, OTHER_CTX);
+            let (tx, entries) = with_context(&e, p, tok, OTHER_CTX);
             let bad = failing(&exec(&tx, &entries));
             assert!(want.is_subset(&bad), "{name}: orders {want:?} must refuse; failing {bad:?}");
             cases += 1;
@@ -356,7 +430,7 @@ fn another_context_field_is_refused_by_every_order_that_settles_against_it() {
             }
         }
     }
-    println!("NEGATIVE context field: {cases} transactions, refused at {checked:?}");
+    println!("NEGATIVE {} context field: {cases} transactions, refused at {checked:?}", p.name());
     assert!(cases > 40, "{cases}");
 }
 
@@ -382,7 +456,8 @@ fn move_program(e: &mut Ed, from: TemplateId, to: TemplateId) -> Vec<[u8; 32]> {
 fn the_standalone_build_and_the_published_build_are_different_tokens_to_an_order() {
     let subs = pinned();
     let mut cases = 0;
-    for (from, to) in [(PM, SA), (SA, PM)] {
+    // the standalone build, the public-mint build and KaspaRocket's 10 / 10 build: three different tokens to an order
+    for (from, to) in [(PM, SA), (SA, PM), (KR, PM), (PM, KR), (KR, SA)] {
         for (name, a) in shapes(from) {
             let mut e = Ed::new(&name, &built(a));
             let toks = tokens_on(&e, from);
@@ -403,20 +478,28 @@ fn the_standalone_build_and_the_published_build_are_different_tokens_to_an_order
 
 #[test]
 fn an_order_that_pins_the_sil_cut_refuses_the_custody() {
-    let sil: [u8; 32] = template(PM).sil_hash;
-    let handle = token_template(PM).hash;
+    for b in &BUILDS {
+        sil_cut(b);
+    }
+}
+
+fn sil_cut(b: &Build) {
+    let p = b.p;
+    let sil: [u8; 32] = template(p).sil_hash;
+    let handle = token_template(p).hash;
+    let (suffix, sil_suffix) = (b.suffix as i64, b.suffix as i64 + 33);
     // the builders know the program only by its handle
-    assert_eq!(kob_protocol::build::token_program(&handle, 34, 3_885).unwrap(), PM);
-    for (pre, suf) in [(1, 3_885), (1, 3_918), (34, 3_885)] {
+    assert_eq!(kob_protocol::build::token_program(&handle, 34, suffix).unwrap(), p);
+    for (pre, suf) in [(1, suffix), (1, sil_suffix), (34, suffix)] {
         assert!(kob_protocol::build::token_program(&sil, pre, suf).is_err(), "Sil cut {pre}/{suf}");
     }
-    assert!(kob_protocol::build::token_program(&handle, 1, 3_918).is_err());
+    assert!(kob_protocol::build::token_program(&handle, 1, sil_suffix).is_err());
     // in the engine: a refund whose order state names the Sil cut instead (prefix 1, the context counted in the suffix so
     // that the lengths still add up to the program) is refused by the order
     let subs = pinned();
-    let run = Run { subs: &subs, pair: PM.name().into() };
+    let run = Run { subs: &subs, pair: p.name().into() };
     let mut cases = 0;
-    for (name, a) in shapes(PM) {
+    for (name, a) in shapes(p) {
         let e = Ed::new(&name, &built(a));
         for j in 0..e.plans.len() {
             if !matches!(e.plans[j], SigPlan::Entry { .. }) || label(&what(&e, j)) != "KobAsk.refund" {
@@ -427,7 +510,7 @@ fn an_order_that_pins_the_sil_cut_refuses_the_custody() {
             if a.token_tpl_hash != handle {
                 continue;
             }
-            for (pre, suf) in [(1, 3_918), (1, 3_885)] {
+            for (pre, suf) in [(1, sil_suffix), (1, suffix)] {
                 let mut x = e.clone().named(&format!("{name}.sil-cut-{pre}-{suf}"));
                 let odd = AskState { token_tpl_hash: sil, tpl_prefix_len: pre, tpl_suffix_len: suf, ..a.clone() };
                 x.set_entry_state(j, AnyState::KobAsk(odd).encode());

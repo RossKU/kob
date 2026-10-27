@@ -50,11 +50,12 @@ pub const NR: i64 = 4 * WHOLE + 1;
 // ---------------------------------------------------------------- fixtures
 
 /// The two mixed pairs (each family as A and as B) on the 8 / 8 KCC-20 program, then on the published public-mint build (3 / 3,
-/// audit AUD-PM; a scenario beyond its token slots is skipped there, `SKIP-SLOTS`).
-pub fn mixed() -> [(TemplateId, TemplateId); 4] {
+/// audit AUD-PM; a scenario beyond its token slots is skipped there, `SKIP-SLOTS`), then on KaspaRocket's 10 / 10 build of it.
+pub fn mixed() -> [(TemplateId, TemplateId); 6] {
     let m = family_mixes();
     let pm = mixed_pairs_pm();
-    [m[1], m[2], pm[0], pm[1]]
+    let kr = mixed_pairs_kr();
+    [m[1], m[2], pm[0], pm[1], kr[0], kr[1]]
 }
 
 pub fn ftag(p: TemplateId) -> &'static str {
@@ -551,7 +552,14 @@ fn positives(r: &Run, pa: TemplateId, pb: TemplateId) {
 #[test]
 fn pair_positives() {
     suite(
-        &[family_mixes().as_slice(), &mixed_pairs_pm(), &[(TemplateId::Kcc20PublicMint, TemplateId::Kcc20PublicMint)]].concat(),
+        &[
+            family_mixes().as_slice(),
+            &mixed_pairs_pm(),
+            &[(TemplateId::Kcc20PublicMint, TemplateId::Kcc20PublicMint)],
+            &mixed_pairs_kr(),
+            &[(TemplateId::KaspaRocketToken11458, TemplateId::KaspaRocketToken11458)],
+        ]
+        .concat(),
         positives,
     );
 }

@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import type { TokenInfo } from '../kob/registry';
 import { rememberIssuedToken } from '../data/issued-decimals';
-import { ASSUMED_DECIMALS, decimalsNote, displayToken } from './token-display';
+import { noteTokenProgram, resetDeclarationsForTests } from '../data/token-declarations';
+import { ASSUMED_DECIMALS, decimalsNote, decimalsOrigin, displayToken } from './token-display';
 import { tokenLabel } from '../ui/market/token-model';
 
 const mem = () => {
@@ -64,5 +65,27 @@ describe('displayToken: the price scale of its orders before the assumed 8', () 
     expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, s, 1_000_000n)!.decimals).toBe(2);
     expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 1n)!.decimals).toBe(8);
     expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 250n)!.decimals).toBe(8);
+  });
+});
+
+describe('displayToken: a program with default decimals (KaspaRocket convention)', () => {
+  it('a KaspaRocket token without a registry entry or a declaration is shown with 3 decimals, its source named, before an issuance or a scale', () => {
+    resetDeclarationsForTests();
+    const s = mem();
+    rememberIssuedToken('mainnet', ID, { decimals: 8, ticker: 'XYZ' }, s);
+    const tk = displayToken({ byCovenantId: new Map() }, 'mainnet', ID, s, 100_000_000n, 'KaspaRocketToken11458')!;
+    expect(tk).toMatchObject({ decimals: 3, decimalsSource: 'program', decimalsConvention: 'KaspaRocket convention', ticker: 'XYZ', tradable: false });
+    expect(decimalsNote(tk)).toMatchObject({ text: 'KaspaRocket convention' });
+    expect(decimalsNote(tk)!.title).toContain('3 decimals, the KaspaRocket convention');
+    expect(decimalsOrigin(tk)).toBe('program');
+    // the program the token was seen under (the indexer's list, the wallet's verified holdings) when the caller does not name it
+    expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem())!.decimalsSource).toBe('assumed');
+    noteTokenProgram('mainnet', ID, 'KaspaRocketToken11458');
+    expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem())).toMatchObject({ decimals: 3, decimalsSource: 'program' });
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem())!.decimalsSource).toBe('assumed');
+    // a program without a default changes nothing; a registry entry comes first
+    expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem(), null, 'KCC20PublicMint')).toMatchObject({ decimals: 8, decimalsSource: 'assumed' });
+    expect(displayToken(registry, 'mainnet', REG, mem(), null, 'KaspaRocketToken11458')).toMatchObject({ decimals: 6 });
+    resetDeclarationsForTests();
   });
 });

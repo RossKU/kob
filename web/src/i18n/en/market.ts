@@ -235,6 +235,7 @@ export default {
   'market.open.fullId': 'Full covenant id:',
   // the decimals of an open-list market and where they come from (app/token-display.ts decimalsOrigin)
   'market.open.decimals.declared': "Not in the token registry: amounts are whole tokens of {decimals} decimals, as its creator declared at creation (the creator's own claim, not checked); the price step is 1 sompi.",
+  'market.open.decimals.program': 'Not in the token registry: amounts are whole tokens of {decimals} decimals, the {source} for the tokens of its program (the token declares no decimals on chain); the price step is 1 sompi.',
   'market.open.decimals.scale': 'Not in the token registry: amounts are whole tokens of {decimals} decimals, the price scale its first order set (the token declares no decimals on chain); the price step is 1 sompi.',
   'market.open.decimals.entered': 'The token declares no decimals on chain and no order of it exists yet: amounts and prices use the {decimals} decimals you entered, and the price step is 1 sompi.',
   'market.open.decimals.registry': 'Amounts are whole tokens of {decimals} decimals, as the token registry lists it.',

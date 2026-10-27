@@ -54,6 +54,9 @@ pub enum DecimalsFrom {
     /// The token's KCC-23 declaration (`docs/spec/token-metadata.md` section 4), verified against its covenant id: the scale of
     /// its orders is `10^min(decimals, 9)`.
     Declared,
+    /// The default of the token's program for a token that declares none (profile `default_decimals`: a launchpad's convention,
+    /// KaspaRocket 3): the scale of its orders is `10^decimals`.
+    Program,
 }
 
 /// Everything a planner needs of one token.
@@ -197,28 +200,37 @@ impl TokenMarket {
                 severity: if trades { Severity::Error } else { Severity::Warning },
                 message: format!("{} is not tradable in the registry: {why}", self.name()),
             }),
-            Listing::Unlisted => Some(Issue {
-                code: "TOKEN_UNLISTED",
-                severity: Severity::Warning,
-                message: format!(
-                    "{} is not in the registry: its ticker comes from {} and its decimals ({}, which read every amount and \
+            Listing::Unlisted => {
+                // the program default's source, as the apps name it (`KaspaRocket convention`)
+                let program_source = match kob_protocol::profile::of(self.program).and_then(|p| p.default_decimals.as_ref()) {
+                    Some(d) => format!("are the {} for the tokens of its program (it declares none on chain)", d.source),
+                    None => "are the default of its token program".to_string(),
+                };
+                Some(Issue {
+                    code: "TOKEN_UNLISTED",
+                    severity: Severity::Warning,
+                    message: format!(
+                        "{} is not in the registry: its ticker comes from {} and its decimals ({}, which read every amount and \
                      price) {}; check its covenant id {} yourself",
-                    self.name(),
-                    if self.decimals_from == DecimalsFrom::Declared { "its KCC-23 declaration" } else { "the indexer" },
-                    self.decimals,
-                    match self.decimals_from {
-                        DecimalsFrom::Declared => {
-                            "are the ones its KCC-23 declaration records on chain (verified against its covenant id; declared by its \
+                        self.name(),
+                        if self.decimals_from == DecimalsFrom::Declared { "its KCC-23 declaration" } else { "the indexer" },
+                        self.decimals,
+                        match self.decimals_from {
+                            DecimalsFrom::Declared => {
+                                "are the ones its KCC-23 declaration records on chain (verified against its covenant id; declared by its \
                              creator, not reviewed)"
-                        }
-                        DecimalsFrom::Entered => "are the ones --decimals names for its first order",
-                        DecimalsFrom::Remembered => "are the ones --decimals named for your first order of it (kept on this machine)",
-                        DecimalsFrom::Unknown => "are unknown (no order of it yet)",
-                        DecimalsFrom::Lists | DecimalsFrom::Market => "come from the indexer or the scale of its orders",
-                    },
-                    to_hex(&self.cov)
-                ),
-            }),
+                            }
+                            DecimalsFrom::Entered => "are the ones --decimals names for its first order",
+                            DecimalsFrom::Remembered =>
+                                "are the ones --decimals named for your first order of it (kept on this machine)",
+                            DecimalsFrom::Unknown => "are unknown (no order of it yet)",
+                            DecimalsFrom::Lists | DecimalsFrom::Market => "come from the indexer or the scale of its orders",
+                            DecimalsFrom::Program => program_source.as_str(),
+                        },
+                        to_hex(&self.cov)
+                    ),
+                })
+            }
         }
     }
 
@@ -505,6 +517,46 @@ fn declared_decimals(
     Ok(Some(d))
 }
 
+/// The default decimals of a token's program (`d`, profile `default_decimals`) for a token that declares none and that no list
+/// names, checked like a declaration: a market whose orders use another scale (a token without a registry entry), this machine's
+/// first order of it naming other decimals, or a `--decimals` of another scale is refused, never silently resolved.
+fn program_decimals(
+    key: &str,
+    d: &kob_protocol::profile::DefaultDecimals,
+    r: Option<&TokenFacts>,
+    i: Option<&TokenFacts>,
+    open: Option<&OpenToken>,
+    entered: Option<u32>,
+    cov: &[u8; 32],
+) -> Result<u32, String> {
+    let (n, source) = (d.decimals, d.source.as_str());
+    let scale = default_scale(n);
+    if let Some(e) = entered.filter(|e| default_scale(*e) != scale) {
+        return Err(format!(
+            "--decimals {e} differs from the decimals of `{key}` ({n}, the {source}: {scale} base units per whole token)"
+        ));
+    }
+    if let (None, Some(o)) = (r, open) {
+        let market = match i.and_then(|t| t.market_scale).flatten() {
+            Some(s) => Some(s),
+            None => (o.order_scale)(cov)?,
+        };
+        if let Some(s) = market.filter(|s| *s != scale) {
+            return Err(format!(
+                "`{key}`: scale conflict: the orders of its market use {s} base units per whole token, the {source} {n} decimals \
+                 ({scale} per whole token): no order of it is planned until they agree"
+            ));
+        }
+        if let Some(m) = o.remembered.and_then(|f| f(cov)).filter(|m| default_scale(*m) != scale) {
+            return Err(format!(
+                "`{key}`: scale conflict: your first order of it named {m} decimals (kept on this machine), the {source} {n}: no \
+                 order of it is planned until they agree"
+            ));
+        }
+    }
+    Ok(n)
+}
+
 /// [`resolve`], and for a token without a registry entry (`open`): the network's program review, and its decimals from the
 /// indexer, else from the scale of its orders, else from `--decimals` (its first order). Decimals are never assumed: without
 /// any of these the token is refused.
@@ -609,9 +661,16 @@ pub fn resolve_with(
     if let Some(e) = entered.filter(|e| *e > MAX_ENTERED_DECIMALS) {
         return Err(format!("--decimals {e}: a first order names 0 to {MAX_ENTERED_DECIMALS} decimals (the scale is at most 10^9)"));
     }
-    // the decimals the token declared on chain come first ([`declared_decimals`])
-    let (decimals, from) = match (declared_decimals(key, declared.as_ref(), known, r, i, open, entered, &cov)?, known, open) {
+    // the decimals the token declared on chain come first ([`declared_decimals`]); then a list's; then its program's default
+    // ([`program_decimals`]: a launchpad's convention for the tokens of its program that declare none)
+    let declared_d = declared_decimals(key, declared.as_ref(), known, r, i, open, entered, &cov)?;
+    let program_d = match (declared_d, known, kob_protocol::profile::of(program).and_then(|p| p.default_decimals.as_ref())) {
+        (None, None, Some(d)) => Some(program_decimals(key, d, r, i, open, entered, &cov)?),
+        _ => None,
+    };
+    let (decimals, from) = match (declared_d, known, open) {
         (Some(d), _, _) => (d, DecimalsFrom::Declared),
+        (None, None, _) if program_d.is_some() => (program_d.unwrap_or_default(), DecimalsFrom::Program),
         (None, Some(d), _) => {
             if let Some(e) = entered.filter(|e| default_scale(*e) != default_scale(d)) {
                 return Err(format!("--decimals {e} differs from the decimals of `{key}` ({d})"));
@@ -887,6 +946,62 @@ mod tests {
         assert!(resolve_with(&to_hex(&[4; 32]), &[], &idx, Some(&open(&none, Some(0), "mainnet")))
             .unwrap_err()
             .contains("unknown token"));
+    }
+
+    /// A KaspaRocket token (its genesis declares no decimals) takes its program's default, the KaspaRocket convention (3), on
+    /// mainnet too, before the market's scale and --decimals; its own KCC-23 declaration and a list's decimals come first, and a
+    /// market, a first order of this machine or a --decimals of another scale is refused.
+    #[test]
+    fn a_kasparocket_token_takes_its_programs_default_decimals() {
+        let p = TemplateId::KaspaRocketToken11458;
+        let d = kob_protocol::profile::of(p).and_then(|x| x.default_decimals.clone()).expect("a default");
+        assert_eq!((d.decimals, d.source.as_str()), (3, "KaspaRocket convention"));
+        assert!(kob_protocol::profile::of(TemplateId::Kcc20PublicMint).unwrap().default_decimals.is_none());
+        let key = to_hex(&[7; 32]);
+        let idx = vec![open_facts(7, p)];
+        let none = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(None) };
+        let scale = |s: i64| move |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(Some(s)) };
+        let (s3, s8) = (scale(1000), scale(100_000_000));
+        let open = |f, entered, network| OpenToken { entered, ..OpenToken::new(network, f) };
+        for net in ["mainnet", "testnet-10"] {
+            let m = resolve_with(&key, &[], &idx, Some(&open(&none, None, net))).unwrap();
+            assert_eq!((m.decimals, m.scale, m.decimals_from, m.program), (3, 1000, DecimalsFrom::Program, p));
+            assert!(m.listing_issue(true).unwrap().message.contains("KaspaRocket convention"), "{:?}", m.listing_issue(true));
+        }
+        // a view (no orders, nothing else): the same, never base units
+        let m = resolve_with(&key, &[], &idx, Some(&OpenToken { view: true, ..OpenToken::new("mainnet", &none) })).unwrap();
+        assert_eq!((m.decimals, m.decimals_from), (3, DecimalsFrom::Program));
+        assert_eq!(resolve(&key, &[], &idx).unwrap().decimals, 3);
+        // orders of its scale and the same --decimals are fine; another scale is refused, never silently used
+        assert_eq!(resolve_with(&key, &[], &idx, Some(&open(&s3, Some(3), "mainnet"))).unwrap().decimals, 3);
+        let e = resolve_with(&key, &[], &idx, Some(&open(&s8, None, "mainnet"))).unwrap_err();
+        assert!(e.contains("scale conflict") && e.contains("KaspaRocket convention"), "{e}");
+        let e = resolve_with(
+            &key,
+            &[],
+            &[TokenFacts { market_scale: Some(Some(100)), ..idx[0].clone() }],
+            Some(&open(&none, None, "mainnet")),
+        )
+        .unwrap_err();
+        assert!(e.contains("scale conflict"), "{e}");
+        let e = resolve_with(&key, &[], &idx, Some(&open(&none, Some(8), "mainnet"))).unwrap_err();
+        assert!(e.contains("--decimals 8 differs") && e.contains("KaspaRocket convention"), "{e}");
+        let two = |_: &[u8; 32]| Some(2u32);
+        let remembered = OpenToken { remembered: Some(&two), ..OpenToken::new("mainnet", &none) };
+        assert!(resolve_with(&key, &[], &idx, Some(&remembered)).unwrap_err().contains("scale conflict"));
+        // a list's decimals (a registry entry) come first
+        let reg = vec![facts(7, "RKT", 8, p, 0xdd)];
+        let m = resolve_with("RKT", &reg, &[], Some(&open(&none, None, "mainnet"))).unwrap();
+        assert_eq!((m.decimals, m.decimals_from), (8, DecimalsFrom::Lists));
+        // a token of the program that declares its decimals (KCC-23) overrides the default
+        let c = test_creation(6);
+        let cov = c.genesis.covenant_id.as_bytes();
+        let proof = proof_json(&c);
+        let declaration = |id: &[u8; 32]| -> Result<Option<Declared>, String> { declared_from_proof(id, &proof).map(Some) };
+        let listed = TokenFacts { cov, declared: true, ..open_facts(0, p) };
+        let o = OpenToken { declaration: Some(&declaration), ..OpenToken::new("mainnet", &none) };
+        let m = resolve_with(&to_hex(&cov), &[], std::slice::from_ref(&listed), Some(&o)).unwrap();
+        assert_eq!((m.decimals, m.scale, m.decimals_from), (6, 1_000_000, DecimalsFrom::Declared));
     }
 
     /// TN10 2026-10-15 O-3: the market of a token without decimals keeps the scale its first order set after every order of

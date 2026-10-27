@@ -236,3 +236,33 @@ describe('findHeldToken: the programs of the stored candidates and of the node-c
     expect(await findHeldToken(src(3), kob, OWNER, ID, 'testnet-10')).toEqual({ ok: false, reason: 'not-held' });
   });
 });
+
+describe('a token of a program with default decimals (KaspaRocket: 3, its convention)', () => {
+  const kr = kob.templates().find((t) => t.name === 'KaspaRocketToken11458')!;
+  const rocket = (over: Partial<IndexerTokenView> = {}) => view({ template_hash: kr.hash, ...over });
+
+  it('is tradable on mainnet without orders, at 3 decimals (scale 1000), the source named', () => {
+    const r = synthesizeOpenToken(kob, rocket(), [], null, null, [], { network: 'mainnet' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.info).toMatchObject({
+      program: 'KaspaRocketToken11458', decimals: 3, openScale: 'program', decimalsConvention: 'KaspaRocket convention', slots: { inputs: 10, outputs: 10 }, tradable: true,
+    });
+    expect(toTokenMarket(kob, r.info.json)).toMatchObject({ scale: 1000n, decimals: 3 });
+    expect(programAllowed('KaspaRocketToken11458', 'mainnet')).toBe(true);
+  });
+
+  it('orders of its scale agree; a market of another scale is a scale conflict; entered decimals are not asked for', () => {
+    expect(synthesizeOpenToken(kob, rocket(), [{ scale: 1000 }], null, null, [], { network: 'mainnet' })).toMatchObject({ ok: true, info: { decimals: 3, openScale: 'program' } });
+    expect(synthesizeOpenToken(kob, rocket(), [{ scale: 100_000_000 }], null, null, [], { network: 'mainnet' })).toEqual({ ok: false, reason: 'scale-conflict' });
+    expect(synthesizeOpenToken(kob, rocket({ market_scale: 100 }), [], null, null, [], { network: 'mainnet' })).toEqual({ ok: false, reason: 'scale-conflict' });
+    expect(synthesizeOpenToken(kob, rocket(), [], null, null, [], { network: 'mainnet', decimals: 8 })).toMatchObject({ ok: true, info: { decimals: 3, openScale: 'program' } });
+  });
+
+  it('a token of the program that declares its decimals (KCC-23) uses its own', () => {
+    const declared = { decimals: 6, symbol: 'RKT', name: 'Rocket' };
+    const r = synthesizeOpenToken(kob, rocket(), [], null, null, [], { network: 'mainnet', declared });
+    expect(r).toMatchObject({ ok: true, info: { decimals: 6, openScale: 'declared', ticker: 'RKT' } });
+    expect(r.ok && r.info.decimalsConvention).toBeFalsy();
+  });
+});

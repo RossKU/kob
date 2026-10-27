@@ -99,7 +99,7 @@ pub const REGISTRY_TEMPLATE_ID: &str = "kcc20-ref-3x3";
 pub const REGISTRY_TEMPLATE_ID_PUBLIC_MINT: &str = "kcc20-ref-public-mint";
 /// Id of the 8 / 8 prototype in `registry/tokens.json` ([`IssueProgram::Ref8x8Prototype`]).
 pub const REGISTRY_TEMPLATE_ID_8X8_PROTOTYPE: &str = "kcc20-ref-8x8";
-/// Template id of KaspaRocket's program in a testnet-10 registry ([`IssueProgram::KaspaRocketTestnet`]; the profile's
+/// Template id of KaspaRocket's program in the registry ([`IssueProgram::KaspaRocketTestnet`]; the profile's
 /// `registry_id`).
 pub const REGISTRY_TEMPLATE_ID_KASPAROCKET: &str = "kasparocket-token-11458";
 
@@ -129,7 +129,7 @@ pub enum IssueProgram {
     /// `kcc20-ref-8x8`). Only the CLI issues it, when it is named `8x8-prototype`, and every plan carries a warning.
     Ref8x8Prototype,
     /// Third-party, testnet-10 only, not KOB's issuance: the token program of the KaspaRocket launchpad, the public-mint
-    /// `KCC20` actor at 10 / 10 slots (`KaspaRocketToken11458`, `pending-review`; `contracts/third-party/kasparocket`).
+    /// `KCC20` actor at 10 / 10 slots (`KaspaRocketToken11458`, reviewed; `contracts/third-party/kasparocket`).
     /// Issued only on testnet-10 and only when named `kasparocket-testnet`, to test KOB against that launchpad's tokens.
     KaspaRocketTestnet,
 }
@@ -587,7 +587,7 @@ impl IssueSpec {
         }
         if self.program.is_testnet_third_party() {
             warnings.push(
-                "KaspaRocketToken11458 is KaspaRocket's testnet-10 program (pending-review), not KOB's issuance: issued to test KOB \
+                "KaspaRocketToken11458 is KaspaRocket's program (its tokens trade on mainnet too), not KOB's issuance: issued to test KOB \
                  against that launchpad's tokens"
                     .into(),
             );

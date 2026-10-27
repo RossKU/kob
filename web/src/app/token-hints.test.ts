@@ -6,6 +6,7 @@ import { goldenRequest } from '../testing/golden';
 import { MAKER_PK, TOKEN_COV_ID } from '../testing/token-fixtures';
 import { kob } from '../testing/wallet-fixtures';
 import { summarize } from '../signer/summary';
+import { noteTokenProgram, resetDeclarationsForTests } from '../data/token-declarations';
 import { signerTokenHints } from './token-hints';
 
 const registry: TokenRegistry = {
@@ -53,5 +54,16 @@ describe('signerTokenHints: a token the registry does not list (founder 2026-10-
     // a registry entry wins over the issuing browser's record
     expect(signerTokenHints(kob, ask, MAKER_PK, registry, 'testnet-10')).toEqual([{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 3 }]);
     m.clear();
+  });
+
+  it('a token of a program with default decimals: no ticker, its decimals and their source (KaspaRocket convention), named so in the frame', () => {
+    const ask = kob.build(goldenRequest('create.ask', MAKER_PK));
+    m.clear();
+    resetDeclarationsForTests();
+    noteTokenProgram('mainnet', TOKEN_COV_ID, 'KaspaRocketToken11458');
+    const hints = signerTokenHints(kob, ask, MAKER_PK, empty, 'mainnet');
+    expect(hints).toEqual([{ covenantId: TOKEN_COV_ID, ticker: '', decimals: 3, source: 'program', convention: 'KaspaRocket convention' }]);
+    expect(summarize(kob, ask, MAKER_PK, hints).orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(3 decimals, KaspaRocket convention\)$/);
+    resetDeclarationsForTests();
   });
 });

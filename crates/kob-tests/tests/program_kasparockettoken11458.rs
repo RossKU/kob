@@ -1,11 +1,13 @@
 //! Conformance tests of the token program `KaspaRocketToken11458`: the token program of the KaspaRocket launchpad
-//! (kasparocket.fun, testnet-10, template `3d689d62...`). It is the `KCC20` actor of upstream's published `KCC20PublicMint` app
+//! (kasparocket.fun, mainnet and testnet-10, template `3d689d62...`). It is the `KCC20` actor of upstream's published `KCC20PublicMint` app
 //! (`contracts/third-party/kcc20-reference/KCC20.public-mint.sil`, KOB's reviewed `Kcc20PublicMint`) built with 9 delegates and
 //! 10 token outputs instead of 2 and 3: `contracts/third-party/kasparocket/KCC20.public-mint.10x10.sil`, seven lines apart from
 //! the vendored fixture, compiled by `scripts/build-contracts.sh` (silverc v1.0.0) into `contracts/artifacts/KaspaRocketToken11458.json`,
 //! reproduces the 11,458-byte redeem scripts of the launchpad's token UTXOs byte for byte. Fixture of a real launch:
 //! `contracts/third-party/kasparocket/observed.json` (genesis, the move of the supply into the launch's pool, the pool's genesis,
-//! the first buy). The profile is in `crates/kob-protocol/data/programs.json` (`pending-review`, `networks: [testnet-10]`).
+//! the first buy). The profile is in `crates/kob-protocol/data/programs.json` (`reviewed`, `networks: [mainnet, testnet-10]`, `minters: genesis-only`, default decimals 3: the
+//! KaspaRocket convention). The order grid and the pair attacks on its holders: `kcc20_public_mint_tests.rs` and
+//! `audit_pair_sec_tests.rs`; the review: `docs/spec/token-programs.md` section 6.
 //!
 //! What the reviewer checklist of `docs/spec/token-programs.md` (section 5) asks, item by item:
 //!
@@ -175,13 +177,17 @@ fn profile_matches_the_embedded_bytes() {
     assert_eq!((p.layout.prefix_len, p.layout.state_len, p.layout.suffix_len), (34, 112, 11_312));
     assert_eq!(&t.prefix[2..34], &h32(SIL_HASH), "the context field is the program's own Sil template hash");
     assert_eq!((p.codec, p.owners.custody, p.owners.holder, p.witness.scheme), (Family::Kcc20, 4, 0, WitnessScheme::Kcc20Transfer));
-    assert_eq!(p.review.status, ProgramReview::PendingReview);
-    assert_eq!(p.networks, vec!["testnet-10".to_string()]);
+    assert_eq!(p.review.status, ProgramReview::Reviewed);
+    assert_eq!(p.networks, vec!["mainnet".to_string(), "testnet-10".to_string()]);
     assert!(!p.router_intents);
+    assert_eq!(p.genesis.minters, kob_protocol::profile::MinterSource::GenesisOnly);
+    assert!(p.genesis.companions.is_empty(), "KaspaRocket ships no issuer actor for this build");
+    let d = p.default_decimals.as_ref().expect("default decimals");
+    assert_eq!((d.decimals, d.source.as_str()), (3, "KaspaRocket convention"));
 }
 
 /// `kob registry add-program contracts/artifacts/KaspaRocketToken11458.json --name KaspaRocketToken11458 --slots 10/10
-/// --network testnet-10` derives the embedded profile's byte facts from the artifact alone.
+/// --network mainnet --network testnet-10` derives the embedded profile's byte facts from the artifact alone.
 #[test]
 fn the_profile_derives_from_the_artifact() {
     let p = program().profile().unwrap();
@@ -190,7 +196,7 @@ fn the_profile_derives_from_the_artifact() {
         &DeriveOptions {
             name: Some("KaspaRocketToken11458".into()),
             slots: Some(Slots { inputs: 10, outputs: 10 }),
-            networks: vec!["testnet-10".into()],
+            networks: vec!["mainnet".into(), "testnet-10".into()],
             ..Default::default()
         },
     )

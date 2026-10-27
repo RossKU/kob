@@ -6,6 +6,7 @@ import type { OrderView, StrayView } from '../../data/indexer-types';
 import type { OrderSnapshot } from '../../kob/cancel';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
+import { noteTokenProgram } from '../../data/token-declarations';
 import { toError } from '../kit/hooks';
 import { combineBalances, type CombinedBalances } from './balances-model';
 
@@ -49,6 +50,9 @@ export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonl
   const [kasFree, freeTokens, held] = await Promise.all([kasP, tokensP, heldP]);
   const programs = new Map<Hex, TokenProgram>();
   for (const u of held) if (!read.has(u.covenantId)) programs.set(u.covenantId, u.program);
+  // the program the node verified each held token under: the display of a token without a registry entry takes its program's default decimals
+  const network = s.config?.network;
+  if (network) for (const [id, p] of programs) noteTokenProgram(network, id, p);
   const programOf = new Map<Hex, TokenProgram>(programs);
   for (const t of tokens) if (t.program) programOf.set(t.covenantId, t.program);
   return { kasFree, freeTokens: [...freeTokens, ...held.map(({ program: _p, ...u }) => u)], programs, programOf, errors };

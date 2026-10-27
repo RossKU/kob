@@ -33,14 +33,15 @@ use kob_protocol::build::{Action, Batch, BatchUpdate, Leg};
 use kob_protocol::state::*;
 use kob_protocol::tx::SigPlan;
 use ph::*;
-use TemplateId::{Kcc20PublicMint, Kcc20Ref, Kcc20Ref8x8, KronToken2433};
+use TemplateId::{KaspaRocketToken11458, Kcc20PublicMint, Kcc20Ref, Kcc20Ref8x8, KronToken2433};
 
 /// Another extension commitment than the fixtures' (`EXT`): another token of A's covenant id.
 const OTHER_EXT: [u8; 32] = [0xdd; 32];
 const OID: [u8; 32] = X_ID;
 const ODAA: u64 = 1_000;
 
-/// The pairs whose A is a KCC-20 token, on both KCC-20 programs (8 / 8 and the tradable 3 / 3 reference program).
+/// The pairs whose A is a KCC-20 token, on the KCC-20 programs (8 / 8, the tradable 3 / 3 reference program, its public-mint
+/// build and KaspaRocket's 10 / 10 build of it).
 fn a_kcc_mixes() -> Vec<(TemplateId, TemplateId)> {
     vec![
         (Kcc20Ref8x8, Kcc20Ref8x8),
@@ -49,6 +50,8 @@ fn a_kcc_mixes() -> Vec<(TemplateId, TemplateId)> {
         (Kcc20Ref, KronToken2433),
         (Kcc20PublicMint, Kcc20PublicMint),
         (Kcc20PublicMint, KronToken2433),
+        (KaspaRocketToken11458, KaspaRocketToken11458),
+        (KaspaRocketToken11458, KronToken2433),
     ]
 }
 
@@ -386,7 +389,7 @@ fn reext_evidence(e: &mut Ed, ev_in: usize, ev: [u8; 32], ext: [u8; 32]) {
 #[test]
 fn aud_ext_kas_stops_refuse_evidence_of_another_extension_commitment() {
     let subs = Subs::compile_asks();
-    for prog in [Kcc20Ref8x8, Kcc20Ref, Kcc20PublicMint] {
+    for prog in [Kcc20Ref8x8, Kcc20Ref, Kcc20PublicMint, KaspaRocketToken11458] {
         ph::SLOT_GATE.store(true, std::sync::atomic::Ordering::Relaxed);
         let r = Run { subs: &subs, pair: prog.name().to_string() };
         let all = fx::scenarios_on(prog);
@@ -468,6 +471,8 @@ fn aud_rb_ifd_pair_rearm_bound() {
         (Kcc20Ref, Kcc20Ref),
         (Kcc20PublicMint, KronToken2433),
         (Kcc20PublicMint, Kcc20PublicMint),
+        (KaspaRocketToken11458, KronToken2433),
+        (KaspaRocketToken11458, KaspaRocketToken11458),
     ] {
         ph::SLOT_GATE.store(true, std::sync::atomic::Ordering::Relaxed);
         let r = Run { subs: &subs, pair: pair_name(pa, pb) };

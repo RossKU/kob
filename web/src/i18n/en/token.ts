@@ -7,6 +7,7 @@ export default {
   'token.note.field.decimals': 'decimals',
   'token.note.field.symbol': 'ticker',
   'token.note.field.name': 'name',
+  'token.note.programTitle': 'Not in the token registry and it declares no decimals on chain: its amounts use {decimals} decimals, the {source} for the tokens of its program.',
   'token.note.issued': 'unverified',
   'token.note.issuedTitle': "Not in the token registry: its name and decimals ({decimals}) come from this browser's creation of it.",
   'token.note.assumed': 'decimals assumed {decimals}',

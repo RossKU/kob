@@ -4,7 +4,7 @@
 // orders takes the decimals the user entered for its first order (`decimals`); a book that cannot be read never lets them stand in for the
 // scale of orders that may exist.
 import { issuedToken } from '../../data/issued-decimals';
-import type { DeclaredToken } from '../../data/token-declarations';
+import { noteTokenProgram, type DeclaredToken } from '../../data/token-declarations';
 import { useMemo } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { extensionReferences, synthesizeOpenToken, type ScaleSample, type OpenTokenIssue } from '../../kob/open-token';
@@ -41,13 +41,14 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
       }
       // the wallet's own holdings of a KCC-20 token, each confirmed by the node (a failure leaves the pick unchecked, never blocks the page)
       const program = kob.templates().find((t) => t.hash === view.template_hash && t.tokenSlots)?.name as TokenProgram | undefined;
+      noteTokenProgram(config.network, view.covenant_id, program);
       const holdings =
         pubkey && tracker && program && familyOfProgram(program) === 'kcc20'
           ? await tracker.tokenUtxosFor(pubkey, { covenantId: view.covenant_id, program }).catch(() => [])
           : [];
       return { scales, ext, holdings };
     },
-    [indexer, view?.covenant_id, view?.template_hash, pubkey],
+    [indexer, view?.covenant_id, view?.template_hash, pubkey, config.network],
     { refreshKey },
   );
   return useMemo((): OpenTokenState => {

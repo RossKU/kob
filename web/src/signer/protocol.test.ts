@@ -14,6 +14,13 @@ describe('signer protocol: what the signer accepts from the app', () => {
     expect(parseAppMessage({ p: P, type: 'sign', id: 'r2', built: buildCancel(), tokens: [] })?.type).toBe('sign');
     // the orientation of the token's market is a label too (a boolean or absent)
     expect(parseAppMessage(clone({ p: P, type: 'sign', id: 'r3', built, tokens: [{ covenantId: '70'.repeat(32), ticker: 'EXKCC', decimals: 8, inverted: true }] }))?.type).toBe('sign');
+    // a token shown on its program's default decimals (KaspaRocket convention): no ticker, the convention a short label, with that source only
+    const prog = (h: Record<string, unknown>) => parseAppMessage(clone({ p: P, type: 'sign', id: 'r4', built, tokens: [{ covenantId: '70'.repeat(32), ticker: '', decimals: 3, ...h }] }));
+    expect(prog({ source: 'program', convention: 'KaspaRocket convention' })?.type).toBe('sign');
+    expect(prog({ source: 'program' })).toBeNull();
+    expect(prog({ source: 'program', convention: 'x'.repeat(41) })).toBeNull();
+    expect(prog({ source: 'program', convention: 'KaspaRocket convention', ticker: 'RKT' })).toBeNull();
+    expect(prog({ source: 'assumed', convention: 'KaspaRocket convention' })).toBeNull();
     expect(parseAppMessage({ p: P, type: 'cancel', id: 'r1' })).toEqual({ p: P, type: 'cancel', id: 'r1' });
     expect(parseAppMessage({ p: P, type: 'forget' })).toEqual({ p: P, type: 'forget' });
   });

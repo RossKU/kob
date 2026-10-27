@@ -20,6 +20,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: true,
     review: 'reviewed',
     networks: [],
+    defaultDecimals: null,
   },
   {
     name: 'KCC20Ref_4x5',
@@ -39,6 +40,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: true,
     review: 'test-only',
     networks: [],
+    defaultDecimals: null,
   },
   {
     name: 'KCC20Ref_8x8',
@@ -58,6 +60,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: true,
     review: 'pending-review',
     networks: [],
+    defaultDecimals: null,
   },
   {
     name: 'KCC20Ref_16x16',
@@ -77,6 +80,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: true,
     review: 'test-only',
     networks: [],
+    defaultDecimals: null,
   },
   {
     name: 'KCC20P2',
@@ -96,6 +100,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: true,
     review: 'test-only',
     networks: [],
+    defaultDecimals: null,
   },
   {
     name: 'KCC20KaspaCom_0_2_5',
@@ -115,6 +120,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: false,
     review: 'pending-review',
     networks: [],
+    defaultDecimals: null,
   },
   {
     name: 'KCC20PublicMint',
@@ -134,6 +140,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: true,
     review: 'reviewed',
     networks: [],
+    defaultDecimals: null,
   },
   {
     name: 'KronToken2433',
@@ -153,6 +160,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: true,
     review: 'reviewed',
     networks: [],
+    defaultDecimals: null,
   },
   {
     name: 'KronToken2732',
@@ -172,6 +180,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: true,
     review: 'reviewed',
     networks: [],
+    defaultDecimals: null,
   },
   {
     name: 'KForgeToken1785',
@@ -191,6 +200,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: false,
     review: 'pending-review',
     networks: ['testnet-10'],
+    defaultDecimals: null,
   },
   {
     name: 'KaspaRocketToken11458',
@@ -208,8 +218,9 @@ export const TOKEN_PROGRAMS = [
     witnessScheme: 'kcc20-transfer',
     trailingPushes: [],
     routerIntents: false,
-    review: 'pending-review',
-    networks: ['testnet-10'],
+    review: 'reviewed',
+    networks: ['mainnet', 'testnet-10'],
+    defaultDecimals: { decimals: 3, source: 'KaspaRocket convention' },
   },
 ] as const;
 
@@ -228,4 +239,13 @@ export const CODEC_OF_PROGRAM: Readonly<Record<TokenProgram, 'kcc20' | 'kron'>> 
 
 export function isTokenProgram(name: string): name is TokenProgram {
   return Object.hasOwn(CODEC_OF_PROGRAM, name);
+}
+
+/**
+ * The decimals a program's tokens are shown and traded with when a token declares none (its profile's `default_decimals`: a launchpad's
+ * convention, KaspaRocket 3), with the source the apps name for them; null: the program has none.
+ */
+export function programDefaultDecimals(name: string | null | undefined): { decimals: number; source: string } | null {
+  const p = TOKEN_PROGRAMS.find((x) => x.name === name);
+  return p?.defaultDecimals ?? null;
 }

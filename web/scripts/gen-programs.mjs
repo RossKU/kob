@@ -39,6 +39,10 @@ export function render(json) {
     if (!Array.isArray(networks) || !networks.every((n) => typeof n === 'string' && /^[a-z0-9-]+$/.test(n))) throw new Error(`${w}: networks must be an array of network ids`);
     const trailing = p.witness?.trailing_pushes ?? [];
     if (!Array.isArray(trailing)) throw new Error(`${w}: witness.trailing_pushes must be an array`);
+    const dd = p.default_decimals ?? null;
+    if (dd !== null && (!Number.isInteger(dd.decimals) || dd.decimals < 0 || dd.decimals > 9 || typeof dd.source !== 'string' || !dd.source.trim())) {
+      throw new Error(`${w}: default_decimals must be {decimals 0..=9, source}`);
+    }
     return [
       '  {',
       `    name: ${q(p.name)},`,
@@ -58,6 +62,7 @@ export function render(json) {
       `    routerIntents: ${p.router_intents === true ? 'true' : 'false'},`,
       `    review: ${q(p.review.status)},`,
       `    networks: [${networks.map(q).join(', ')}],`,
+      `    defaultDecimals: ${dd === null ? 'null' : `{ decimals: ${dd.decimals}, source: ${q(dd.source)} }`},`,
       '  },',
     ].join('\n');
   });
@@ -83,6 +88,15 @@ export const CODEC_OF_PROGRAM: Readonly<Record<TokenProgram, 'kcc20' | 'kron'>> 
 
 export function isTokenProgram(name: string): name is TokenProgram {
   return Object.hasOwn(CODEC_OF_PROGRAM, name);
+}
+
+/**
+ * The decimals a program's tokens are shown and traded with when a token declares none (its profile's \`default_decimals\`: a launchpad's
+ * convention, KaspaRocket 3), with the source the apps name for them; null: the program has none.
+ */
+export function programDefaultDecimals(name: string | null | undefined): { decimals: number; source: string } | null {
+  const p = TOKEN_PROGRAMS.find((x) => x.name === name);
+  return p?.defaultDecimals ?? null;
 }
 `;
 }

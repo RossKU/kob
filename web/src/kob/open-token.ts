@@ -9,6 +9,8 @@
 //     known without the indexer (`extensionReferences`: a genesis-verified registry entry, the wallet's node-verified holdings; audit A1-2);
 //   * scale: a token created under KCC-23 declares its decimals on chain (`opts.declared`, verified against its covenant id): its scale is
 //     10^min(decimals, 9), and a market whose orders use another scale is a `scale-conflict` (`openScale: 'declared'`, with or without orders). A token
+//     without a declaration whose program has default decimals (profile `default_decimals`: a launchpad's convention, KaspaRocket 3) takes them the
+//     same way (`openScale: 'program'`, `decimalsConvention` names the source). Any other token
 //     without a declaration (created before KCC-23): the scale its first order set, open or ended, as the indexer reports it (`market_scale`), else
 //     (an older indexer) the one shared by most open orders of the token, so the wallet's orders quote the same whole token as the book; decimals =
 //     its exponent (amounts are shown in that whole token, prices per it). No order ever: the decimals the user entered for the token's first
@@ -23,7 +25,7 @@
 //   * tick: 1 sompi.
 import type { IndexerTokenView } from '../data/indexer-types';
 import type { Hex, TokenProgram, TokenState, TokenUtxo } from './types';
-import { TOKEN_PROGRAMS } from './programs.generated';
+import { TOKEN_PROGRAMS, programDefaultDecimals } from './programs.generated';
 import type { KobWasm } from './wasm';
 import { extensionOfState, familyOfProgram, isKeyOwned } from './token-state';
 import { TEMPLATE_ID_PROGRAM, toTokenMarket } from './token-market';
@@ -162,13 +164,16 @@ export function synthesizeOpenToken(
   // decimals entered for a first order while the market has a scale: the same scale is fine, another is refused (never silently replaced: the
   // amount and the price typed for them would then mean other quantities)
   if (fromOrders !== null && typed !== null && 10 ** typed !== fromOrders) return { ok: false, reason: 'scale-conflict' };
-  // the decimals the token declared on chain decide its scale; a market whose orders use another one disagrees with the chain
-  const declaredScale = declared !== null ? 10 ** Math.min(declared, MAX_OPEN_DECIMALS) : null;
+  // the decimals the token declared on chain decide its scale, else its program's default (a launchpad's convention for the tokens of its program that
+  // declare none); a market whose orders use another one disagrees with them
+  const convention = declared === null ? programDefaultDecimals(program) : null;
+  const fixed = declared ?? convention?.decimals ?? null;
+  const declaredScale = fixed !== null ? 10 ** Math.min(fixed, MAX_OPEN_DECIMALS) : null;
   if (declaredScale !== null && fromOrders !== null && fromOrders !== declaredScale) return { ok: false, reason: 'scale-conflict' };
   const entered = fromOrders === null && declaredScale === null ? typed : null;
   const scale = fromOrders ?? declaredScale ?? (entered !== null ? 10 ** entered : null);
   if (scale === null) return { ok: false, reason: 'no-scale' };
-  const decimals = declared ?? exponentOf(scale);
+  const decimals = fixed ?? exponentOf(scale);
   if (decimals === null) return { ok: false, reason: 'scale-invalid' };
 
   const id = view.covenant_id;
@@ -193,7 +198,8 @@ export function synthesizeOpenToken(
     ok: true,
     info: {
       ticker: shownTicker, name: shownName, family, covenantId: id, templateId, templateHash: tpl.hash, extensionCommitment: ext, extensionClass: 'other', decimals,
-      tick: 1n, capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : declaredScale !== null ? 'declared' : 'orders', program,
+      tick: 1n, capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : declared !== null ? 'declared' : convention ? 'program' : 'orders', program,
+      ...(convention ? { decimalsConvention: convention.source } : {}),
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,
       ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, opts.fromHoldings ? 'holdings' : view.extension_commitment ? 'indexer' : 'orders', references) } : {}),

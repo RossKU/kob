@@ -41,14 +41,16 @@ pub fn check_generated_source(name: &str, generated: &str) {
 /// The KCC-20 program the default token of the KAS-kind suites runs on (`kob_v2_tests`, `kob_v2_buy_tests`: `Token::new()`,
 /// the 3 / 3 runs). Unset (or `KCC20Ref`): the reference 3 / 3 program. `KCC20PublicMint`: the published public-mint build
 /// (`TemplateId::Kcc20PublicMint`, 3 / 3, pinned template), how the KAS-kind suites and their ablation catalogs are run on
-/// that program (audit AUD-PM). Anything else panics.
+/// that program (audit AUD-PM). `KaspaRocketToken11458`: KaspaRocket's 10 / 10 build of the same actor (its review of
+/// 2026-10-27). Anything else panics.
 #[allow(dead_code)]
 pub fn kcc20_33_program() -> kob_protocol::artifacts::TemplateId {
     use kob_protocol::artifacts::TemplateId;
     match std::env::var("KOB_KCC20_PROGRAM").as_deref() {
         Err(_) | Ok("") | Ok("KCC20Ref") => TemplateId::Kcc20Ref,
         Ok("KCC20PublicMint") => TemplateId::Kcc20PublicMint,
-        Ok(other) => panic!("KOB_KCC20_PROGRAM={other}: expected KCC20Ref or KCC20PublicMint"),
+        Ok("KaspaRocketToken11458") => TemplateId::KaspaRocketToken11458,
+        Ok(other) => panic!("KOB_KCC20_PROGRAM={other}: expected KCC20Ref, KCC20PublicMint or KaspaRocketToken11458"),
     }
 }
 

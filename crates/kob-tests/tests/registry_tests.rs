@@ -33,6 +33,9 @@ fn source_byte(src: &str, name: &str) -> u8 {
 const PUBLIC_MINT_ARTIFACT: &str = "contracts/artifacts/KCC20PublicMint.json";
 const PUBLIC_MINT_UPSTREAM: &str = "contracts/third-party/kcc20-reference/public-mint.artifact.json";
 const PUBLIC_MINT_SIL: &str = "contracts/third-party/kcc20-reference/KCC20.public-mint.sil";
+/// KaspaRocket's 10 / 10 build of the same actor (`contracts/third-party/kasparocket`): the same handle cut.
+const KASPAROCKET_ARTIFACT: &str = "contracts/artifacts/KaspaRocketToken11458.json";
+const KASPAROCKET_SIL: &str = "contracts/third-party/kasparocket/KCC20.public-mint.10x10.sil";
 
 fn check_kcc20(t: &Template) {
     let json = String::from_utf8(read(&t.source.path)).unwrap();
@@ -42,12 +45,15 @@ fn check_kcc20(t: &Template) {
     let mut len = c.compiled.state_span.len;
     let total = c.compiled.bytecode.len();
     let bc = &c.compiled.bytecode;
-    if t.source.path == PUBLIC_MINT_ARTIFACT {
+    let handle = t.source.path == PUBLIC_MINT_ARTIFACT || t.source.path == KASPAROCKET_ARTIFACT;
+    if handle {
         // the context field (0x20 ‖ the Sil template hash) ends the handle's prefix; the open state is the 112-byte KCC20State
         assert_eq!(bc[off], 0x20, "{}: context push", t.id);
         assert_eq!(bc[off + 1..off + 33], c.compiled.template_hash, "{}: the context is the program's own Sil template hash", t.id);
         off += 33;
         len -= 33;
+    }
+    if t.source.path == PUBLIC_MINT_ARTIFACT {
         // the same view as upstream's own artifact names for actor_type<KCC20State>
         let up: serde_json::Value = serde_json::from_slice(&read(PUBLIC_MINT_UPSTREAM)).unwrap();
         let tpl = up["argent"]["template_plan"]["templates"].as_array().unwrap().iter().find(|x| x["actor"] == "KCC20").unwrap();
@@ -61,7 +67,7 @@ fn check_kcc20(t: &Template) {
         assert_eq!(bytes(&h["template"]["suffix"]), bc[off + len..], "{}: handle suffix", t.id);
         assert_eq!(hexs(&bytes(&h["template"]["hash"])), t.template_hash, "{}: handle hash", t.id);
         assert_eq!(hexs(&bytes(&tpl["sil_template_hash"])), hexs(&c.compiled.template_hash), "{}: Sil template hash", t.id);
-    } else {
+    } else if !handle {
         assert_eq!(t.template_hash, hexs(&c.compiled.template_hash), "{}: template hash", t.id);
     }
     assert_eq!(t.prefix_len as usize, off, "{}: prefix_len", t.id);
@@ -71,8 +77,9 @@ fn check_kcc20(t: &Template) {
     assert_eq!(hexs(&template_hash(&bc[..off], &bc[off + len..])), t.template_hash, "{}: recomputed template hash", t.id);
     // slot limits: from the compiled program's source, or (third-party programs, no source here) from the artifact's own
     // program information, which must also carry the draft's transfer entries and owner schemes
-    if t.source.path == PUBLIC_MINT_ARTIFACT {
-        let src = String::from_utf8(read(PUBLIC_MINT_SIL)).unwrap();
+    if handle {
+        let src =
+            String::from_utf8(read(if t.source.path == PUBLIC_MINT_ARTIFACT { PUBLIC_MINT_SIL } else { KASPAROCKET_SIL })).unwrap();
         assert_eq!(t.max_token_inputs as i64, source_int(&src, "MAX_DELEGATES") + 1, "{}: max token inputs", t.id);
         assert_eq!(t.max_token_outputs as i64, source_int(&src, "MAX_TOKEN_OUTPUTS"), "{}: max token outputs", t.id);
     } else if t.source.path.starts_with("contracts/third-party/") {
@@ -118,7 +125,7 @@ fn check_kron(t: &Template) {
 #[test]
 fn shipped_registry_templates_match_the_pinned_programs() {
     let r: Registry = Registry::parse(&String::from_utf8(read("registry/tokens.json")).unwrap()).expect("tokens.json validates");
-    assert_eq!(r.templates.len(), 6);
+    assert_eq!(r.templates.len(), 7);
     for t in &r.templates {
         match t.family {
             Family::Kcc20 => check_kcc20(t),
@@ -130,7 +137,15 @@ fn shipped_registry_templates_match_the_pinned_programs() {
         );
     }
     // the ids the order/issue tooling refers to
-    for id in ["kcc20-ref-3x3", "kcc20-ref-8x8", "kron-2433", "kron-2732", "kcc20-kaspacom-0-2-5", "kcc20-ref-public-mint"] {
+    for id in [
+        "kcc20-ref-3x3",
+        "kcc20-ref-8x8",
+        "kron-2433",
+        "kron-2732",
+        "kcc20-kaspacom-0-2-5",
+        "kcc20-ref-public-mint",
+        "kasparocket-token-11458",
+    ] {
         assert!(r.template(id).is_some(), "template {id} missing");
     }
     // every template of the file is a program this build embeds (same hash, same slots): the strict list is the pinned list

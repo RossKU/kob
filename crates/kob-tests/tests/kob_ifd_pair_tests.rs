@@ -73,7 +73,7 @@ fn ifd_pair_dump() {
 
 use kob_protocol::build::{CancelOrder, RefundOrder};
 use kob_protocol::tx::{TokenUtxo, Witness};
-use TemplateId::{Kcc20PublicMint, Kcc20Ref, Kcc20Ref8x8, KronToken2433};
+use TemplateId::{KaspaRocketToken11458, Kcc20PublicMint, Kcc20Ref, Kcc20Ref8x8, KronToken2433};
 
 const IFD: TemplateId = TemplateId::KobIfdPair;
 const COND: TemplateId = TemplateId::KobCondPair;
@@ -105,6 +105,8 @@ fn all_mixes() -> Vec<(TemplateId, TemplateId)> {
         &[(Kcc20Ref, Kcc20Ref)],
         &ph::mixed_pairs_pm(),
         &[(Kcc20PublicMint, Kcc20PublicMint)],
+        &ph::mixed_pairs_kr(),
+        &[(KaspaRocketToken11458, KaspaRocketToken11458)],
     ]
     .concat()
 }
@@ -117,15 +119,27 @@ fn mixed() -> Vec<(TemplateId, TemplateId)> {
         (KronToken2433, Kcc20Ref),
         (Kcc20PublicMint, KronToken2433),
         (KronToken2433, Kcc20PublicMint),
+        (KaspaRocketToken11458, KronToken2433),
+        (KronToken2433, KaspaRocketToken11458),
     ]
 }
 /// The mixed pairs whose A is KCC-20 (B KRON).
 fn a_kcc() -> Vec<(TemplateId, TemplateId)> {
-    vec![(Kcc20Ref8x8, KronToken2433), (Kcc20Ref, KronToken2433), (Kcc20PublicMint, KronToken2433)]
+    vec![
+        (Kcc20Ref8x8, KronToken2433),
+        (Kcc20Ref, KronToken2433),
+        (Kcc20PublicMint, KronToken2433),
+        (KaspaRocketToken11458, KronToken2433),
+    ]
 }
 /// The mixed pairs whose A is KRON (B KCC-20).
 fn a_kron() -> Vec<(TemplateId, TemplateId)> {
-    vec![(KronToken2433, Kcc20Ref8x8), (KronToken2433, Kcc20Ref), (KronToken2433, Kcc20PublicMint)]
+    vec![
+        (KronToken2433, Kcc20Ref8x8),
+        (KronToken2433, Kcc20Ref),
+        (KronToken2433, Kcc20PublicMint),
+        (KronToken2433, KaspaRocketToken11458),
+    ]
 }
 
 /// Runs `f` on each program pair with a `Run` of the templates under test.
@@ -1648,15 +1662,19 @@ fn ifd_stray_slots() {
             r.bad(&e, i);
         }
     });
-    // NIS8 nine inputs of a 16-input KCC-20 program: the scan covers eight, so a ninth input fails the scan bound
-    let wide = [(TemplateId::Kcc20Ref16x16, KronToken2433)];
+    // NIS8 nine inputs of a KCC-20 program with more than eight token slots (the 16-input prototype, KaspaRocket's 10 / 10 program):
+    // the scan covers eight, so a ninth input fails the scan bound
+    let wide = [(TemplateId::Kcc20Ref16x16, KronToken2433), (TemplateId::KaspaRocketToken11458, KronToken2433)];
     each(&subs, &wide, |r, pa, pb| {
-        let e = stray_at("NIS8 stray of A at token-input slot 8 (a 16-input program)", pa, pb, TOKEN_COV, 8);
+        let e = stray_at("NIS8 stray of A at token-input slot 8 (a program of more than 8 token inputs)", pa, pb, TOKEN_COV, 8);
         let i = ein(&e);
         r.bad(&e, i);
         // NIS9 the same nine A inputs without any stray: refused too (the bound is unconditional: a 16-input program can
         // carry at most eight inputs of a token into an entry spend; fail closed)
-        let mut e = ed_of("NIS9 nine A inputs, no stray (a 16-input program)", refund_entry(ifd_pair(MAKER_A, true, pa, pb), pa, pb));
+        let mut e = ed_of(
+            "NIS9 nine A inputs, no stray (a program of more than 8 token inputs)",
+            refund_entry(ifd_pair(MAKER_A, true, pa, pb), pa, pb),
+        );
         e.programs.entry(TOKEN_COV).or_insert(pa);
         for j in 0..9 {
             take(&mut e, TOKEN_COV, 170 + j as u8, 1);

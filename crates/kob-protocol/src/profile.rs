@@ -18,6 +18,7 @@
 //! | `record_code` | the executor's persisted one-byte program code (never reused) |
 //! | `review` | review status (`reviewed`, `pending-review`, `test-only`) and its basis; equal to the shipped registry's |
 //! | `networks` | the networks the program's tokens exist on (empty: any); a program not on mainnet is not on the shipped registry |
+//! | `default_decimals` | decimals for the program's tokens that declare none (a launchpad's convention): CLI and web token resolution |
 //!
 //! The compute budgets and keeper tips are measured, not declared: `data/compute_budgets.json`, `data/keeper_tips.json` and
 //! `data/pair_keeper_tips.json` are regenerated over every profile (`KOB_REGEN=1`), keyed by `name`.
@@ -303,6 +304,18 @@ pub struct Review {
     pub basis: String,
 }
 
+/// The decimals a program's tokens are shown and traded with when a token declares none (no KCC-23 declaration of its own): a
+/// launchpad's display convention for every token of its program (KaspaRocket: 3), not a fact on chain. A token's own declaration
+/// overrides it, and a registry entry naming decimals comes before it (`docs/spec/token-programs.md` section 1).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefaultDecimals {
+    /// 0..=9 (the scale of an order is `10^decimals`, at most 10^9).
+    pub decimals: u32,
+    /// Where the convention comes from, as the apps name the source of a token's decimals (`KaspaRocket convention`).
+    pub source: String,
+}
+
 /// Everything KOB needs to know about one token program (see the module docs).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -336,6 +349,10 @@ pub struct ProgramProfile {
     /// not on mainnet is not on the shipped (mainnet) registry, and no mainnet build trades it (KForge: testnet-10 only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks: Vec<String>,
+    /// Decimals for the program's tokens that declare none ([`DefaultDecimals`]); absent: none (a token's decimals then come from
+    /// its registry entry, its market's scale or its first order).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_decimals: Option<DefaultDecimals>,
 }
 
 // ------------------------------------------------------------------------------------------------ codec families
@@ -531,6 +548,11 @@ impl ProgramProfile {
             return e("a KRON program with id_type 0 holders takes the *KronD0 order builds, which are testnet only: list its \
                       networks (without mainnet)"
                 .into());
+        }
+        if let Some(d) = &self.default_decimals {
+            if d.decimals > 9 || d.source.trim().is_empty() {
+                return e("default_decimals: decimals 0..=9 (the scale is at most 10^9) and a non-empty source".into());
+            }
         }
         if self.slots.inputs == 0 || self.slots.outputs == 0 || self.slots.inputs > 127 || self.slots.outputs > 255 {
             return e(format!("slots {}/{} out of range", self.slots.inputs, self.slots.outputs));
@@ -1087,6 +1109,7 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
         genesis: GenesisRules { minters: MinterSource::Unknown, companions: vec![] },
         review: Review { status: ProgramReview::PendingReview, basis: "derived by kob registry add-program; not reviewed".into() },
         networks: opt.networks.clone(),
+        default_decimals: None,
         name,
     };
     let blocked = (!c.witness.contains(&profile.witness.scheme)).then(|| {
