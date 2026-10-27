@@ -778,7 +778,14 @@ fn wait_for_funds(io: &mut dyn Console, node: &mut dyn SetupNode, url: &str, add
         match io.poll(every) {
             Poll::Nothing => {}
             Poll::Line(_) => {
-                io.say("Not waiting for the funds: the executor starts with what is there and reports its funds.");
+                match last {
+                    // funds are there, only fewer than the recommended minimum: say so instead of "not waiting"
+                    Some(b) if b > 0 => io.say(&format!(
+                        "Going on with the {} KAS there; the executor reports its funds and warns below {MIN_FUNDS_KAS} KAS.",
+                        kas_text(b as i64)
+                    )),
+                    _ => io.say("Not waiting for the funds: the executor starts with what is there and reports its funds."),
+                }
                 return Ok(());
             }
             Poll::Closed => return Err(ended()),
@@ -1024,11 +1031,27 @@ mod tests {
         assert_eq!(std::fs::read_to_string(d.path().join(KEY_FILE)).unwrap(), secret, "the key file is untouched");
         let mut io = Script::new(&["y", "", "", "", "", "<enter>", "", "n"]);
         // (replace, public nodes, role, data dir, use the key, Enter while waiting, x402, start)
-        node.balances = [5].into();
+        node.balances = [30 * 100_000_000].into();
         assert_eq!(run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap(), None);
         let out = io.text();
-        assert!(out.contains("Found the key file") && out.contains("Not waiting for the funds"), "{out}");
+        assert!(out.contains("Found the key file") && out.contains("Going on with the 30 KAS there"), "{out}");
+        assert!(!out.contains("Not waiting for the funds"), "funds had arrived: {out}");
         assert!(out.contains(&k.address("testnet-10").to_string()), "the same key: {out}");
+    }
+
+    /// Enter while waiting: with nothing there the setup says it is not waiting, with some funds it says it goes on with them.
+    #[test]
+    fn going_on_without_waiting_tells_whether_funds_arrived() {
+        let mut node = FakeNode::new("testnet-10");
+        node.balances = [0].into();
+        let mut io = Script::new(&["<enter>"]);
+        wait_for_funds(&mut io, &mut node, "resolver", "kaspatest:x", Duration::from_secs(1)).unwrap();
+        assert!(io.text().contains("Not waiting for the funds"), "{}", io.text());
+        let mut node = FakeNode::new("testnet-10");
+        node.balances = [30 * 100_000_000].into();
+        let mut io = Script::new(&["<enter>"]);
+        wait_for_funds(&mut io, &mut node, "resolver", "kaspatest:x", Duration::from_secs(1)).unwrap();
+        assert!(io.text().contains("Going on with the 30 KAS there") && !io.text().contains("Not waiting"), "{}", io.text());
     }
 
     #[test]

@@ -164,6 +164,12 @@ pub struct Follower<S: ChainSource> {
 const LEAN_BUSY_EVERY: Duration = Duration::from_millis(500);
 const LEAN_IDLE_EVERY: Duration = Duration::from_secs(30);
 
+/// A step failure that is routine and not worth a warning: the two nodes' tips differing for a moment, until it repeats as
+/// often as it takes to replace a node (`attempt` failures in a row).
+fn retry_is_routine(reason: &str, attempt: u32) -> bool {
+    reason.contains(crate::rpc::multi::TIPS_DIFFER) && attempt < crate::rpc::multi::STALLS_BEFORE_REPLACING
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -838,7 +844,11 @@ impl<S: ChainSource> Follower<S> {
                 }
                 StepOutcome::Retry(r) => {
                     failures = failures.saturating_add(1);
-                    tracing::warn!(attempt = failures, "{r}");
+                    if retry_is_routine(r, failures) {
+                        tracing::debug!(attempt = failures, "{r}");
+                    } else {
+                        tracing::warn!(attempt = failures, "{r}");
+                    }
                     let d = self.cfg.backoff.saturating_mul(1u32 << failures.min(10).saturating_sub(1));
                     d.min(self.cfg.max_backoff)
                 }
@@ -875,5 +885,20 @@ impl<S: ChainSource> Follower<S> {
             }
         });
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_is_routine;
+    use crate::rpc::multi::TIPS_DIFFER;
+
+    #[test]
+    fn differing_tips_warn_only_when_they_repeat() {
+        let r = format!("node error: {TIPS_DIFFER} (chain block #0 differs): nothing is indexed until they agree");
+        assert!(retry_is_routine(&r, 1) && retry_is_routine(&r, 2));
+        assert!(!retry_is_routine(&r, 3));
+        assert!(!retry_is_routine("node error: the nodes disagree on the next chain block (x): nothing is indexed", 1));
+        assert!(!retry_is_routine("transport: closed", 1));
     }
 }

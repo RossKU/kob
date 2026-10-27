@@ -1310,6 +1310,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         tokio::pin!(shutdown);
         // the first status line comes after the first tick, then one every `status_every`
         let mut status_at: Option<std::time::Instant> = None;
+        // when and at what balance the low-funds warning was last logged (the status line shows the funds every minute)
+        let mut low_funds_logged: Option<(std::time::Instant, u64)> = None;
         loop {
             let res = {
                 let step = self.step();
@@ -1352,7 +1354,13 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     // only a funding actually read is judged (a step that planned nothing read none: not `0`), and on the
                     // whole balance: coins pending transactions hold are still the operator's (a busy operator's free
                     // coins are often a few KAS while its balance is large)
-                    if let Some(f) = r.funding_total.filter(|f| *f < self.cfg.low_funds && !self.cfg.dry_run) {
+                    let low = r.funding_total.filter(|f| *f < self.cfg.low_funds && !self.cfg.dry_run);
+                    if low.is_none() && r.funding_total.is_some() {
+                        // funded again: the next fall below the threshold is reported at once
+                        low_funds_logged = None;
+                    }
+                    if let Some(f) = low.filter(|f| low_funds_due(low_funds_logged, *f, std::time::Instant::now())) {
+                        low_funds_logged = Some((std::time::Instant::now(), f));
                         tracing::warn!(
                             funding = f,
                             spendable = r.funding.unwrap_or(0),
@@ -1369,6 +1377,16 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             }
         }
     }
+}
+
+/// How long the low-funds warning stays quiet after it was logged, unless the balance moves a lot.
+const LOW_FUNDS_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Whether the low-funds warning for `funding` (sompi) is due: the first time, every ten minutes after, or when the balance is
+/// a quarter (at least 1 KAS) above or below the one last reported. `last`: when and at what balance it was last logged.
+fn low_funds_due(last: Option<(std::time::Instant, u64)>, funding: u64, now: std::time::Instant) -> bool {
+    let Some((at, then)) = last else { return true };
+    now.saturating_duration_since(at) >= LOW_FUNDS_LOG_EVERY || funding.abs_diff(then) >= (then / 4).max(100_000_000)
 }
 
 /// What the console status line ([`status_line`]) reports: the book source's own line, the last step's state, the
@@ -1616,6 +1634,21 @@ fn write_metrics<N: NodeApi, S: BookSource>(p: &Path, r: &mut Runner<N, S>, rep:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_low_funds_warning_is_logged_now_and_then() {
+        use super::{low_funds_due, LOW_FUNDS_LOG_EVERY};
+        let t0 = std::time::Instant::now();
+        let kas = 100_000_000u64;
+        assert!(low_funds_due(None, 30 * kas, t0), "the first time");
+        let last = Some((t0, 30 * kas));
+        let soon = t0 + std::time::Duration::from_secs(60);
+        assert!(!low_funds_due(last, 30 * kas, soon) && !low_funds_due(last, 31 * kas, soon), "the same balance stays quiet");
+        assert!(low_funds_due(last, 20 * kas, soon) && low_funds_due(last, 40 * kas, soon), "a big move is reported");
+        assert!(low_funds_due(last, 30 * kas, t0 + LOW_FUNDS_LOG_EVERY), "and every ten minutes");
+        let empty = Some((t0, 0));
+        assert!(!low_funds_due(empty, 0, soon) && low_funds_due(empty, 2 * kas, soon), "an empty key does not spam");
+    }
+
     use super::*;
 
     #[test]

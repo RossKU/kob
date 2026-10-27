@@ -180,7 +180,8 @@ pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
     if raw.removed_chain_block_hashes != ids.removed_chain_block_hashes {
         return Agreement {
             keep: 0,
-            at_tip: false,
+            // a shallow difference at the cursor is a reorg one node has seen before the other (the tips differing)
+            at_tip: raw.removed_chain_block_hashes.len().max(ids.removed_chain_block_hashes.len()) <= TIP_BLOCKS,
             contradiction: Some(format!(
                 "the start left the selected chain for one node ({} removed blocks) and not for the other ({})",
                 raw.removed_chain_block_hashes.len(),
@@ -361,7 +362,7 @@ mod tests {
     }
 
     /// A different chain block among the newest ones both report is the tips differing for a moment (`at_tip`); one deep
-    /// inside the answer, a different accepted set or a start left on one side only are contradictions of agreed history.
+    /// inside the answer, a different accepted set or a deep reorg seen by one side only are contradictions of agreed history.
     #[test]
     fn a_disagreement_at_the_newest_blocks_is_told_from_one_in_agreed_history() {
         // the last of five differs (the live case: applied 4 of 5)
@@ -389,9 +390,12 @@ mod tests {
         let a = agreement(&r, &ids(&[1, 2, 3]));
         assert_eq!((a.keep, a.at_tip), (2, false));
         assert!(a.contradiction.is_some());
-        // a start that left the selected chain for one node only
+        // a start that left the selected chain for one node only: a shallow reorg is the tips again, a deep one is history
         let mut r = raw(&[1]);
         r.removed_chain_block_hashes = vec![h(5)];
+        let a = agreement(&r, &ids(&[1]));
+        assert_eq!((a.keep, a.at_tip), (0, true));
+        r.removed_chain_block_hashes = (0..=TIP_BLOCKS as u8).map(h).collect();
         let a = agreement(&r, &ids(&[1]));
         assert_eq!((a.keep, a.at_tip), (0, false));
     }

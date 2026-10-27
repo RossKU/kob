@@ -115,6 +115,12 @@ pub fn attach_file(opts: LogOptions) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Shows or hides the log on the console (the file, when attached, keeps it either way). The setup dialogue hides it: raw log
+/// lines would interrupt the questions.
+pub fn set_console(on: bool) {
+    CONSOLE.store(on, Ordering::Relaxed);
+}
+
 /// Whether the console shows the log (false: only the file has it).
 pub fn console_shows_log() -> bool {
     CONSOLE.load(Ordering::Relaxed)

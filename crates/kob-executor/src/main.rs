@@ -109,6 +109,7 @@ fn start_on(rt: &tokio::runtime::Runtime, argv: Vec<OsString>) -> anyhow::Result
         let json_out = matches!(&cli.cmd, Cmd::AddressBalance(_) | Cmd::Setup(SetupArgs { non_interactive: true, .. }));
         logging::init(json_out);
         if !json_out {
+            refuse_second_writer(&cli.cmd)?;
             attach_log(&cli)?;
         }
         match &cli.cmd {
@@ -178,8 +179,16 @@ fn withdraw_cmd(rt: &tokio::runtime::Runtime, a: &WithdrawArgs) -> anyhow::Resul
 /// The interactive setup into `dir`; then, unless declined, the configuration it wrote.
 fn setup_then_launch(rt: &tokio::runtime::Runtime, program: OsString, dir: std::path::PathBuf, no_start: bool) -> anyhow::Result<()> {
     std::fs::create_dir_all(&dir)?;
+    // the dialogue stays clean: the log lines of the node checks go to the log file only (the one a run appends to), and the
+    // console shows the log again for what follows
+    let console_was = logging::console_shows_log();
+    if logging::attach_file(LogOptions::new(dir.join(setup::LOG_FILE), 10, 5)).is_ok() {
+        logging::set_console(false);
+    }
     let opts = SetupOptions::for_build(dir);
-    match setup::run_setup(&mut StdConsole, &mut WrpcSetupNode { rt }, &opts)? {
+    let done = setup::run_setup(&mut StdConsole, &mut WrpcSetupNode { rt }, &opts);
+    logging::set_console(console_was);
+    match done? {
         Some(cfg) if !no_start => {
             println!();
             launch(rt, program, &cfg)
@@ -191,20 +200,27 @@ fn setup_then_launch(rt: &tokio::runtime::Runtime, program: OsString, dir: std::
 /// Runs the configuration at `cfg` as the command line it stands for (`setup::launch_args`), in the file's directory.
 fn launch(rt: &tokio::runtime::Runtime, program: OsString, cfg: &std::path::Path) -> anyhow::Result<()> {
     let l = setup::launch_args(cfg)?;
+    // read while the working directory is still the caller's (`cfg` may be a relative path)
+    let address = app::operator_address(cfg);
+    // the command line and the data directory first: a second instance is refused before it prints a banner or touches the log
+    std::env::set_current_dir(&l.dir).map_err(|e| anyhow::anyhow!("cannot change to {}: {e}", l.dir.display()))?;
+    let cli = Cli::try_parse_from(std::iter::once(program).chain(l.args.iter().map(OsString::from)))
+        .map_err(|e| anyhow::anyhow!("the [launch] table of {} is not a valid command line:\n{e}", cfg.display()))?;
+    refuse_second_writer(&cli.cmd)?;
     println!("Running {} (the same as):", cfg.display());
     for line in setup::command_line(&l, &setup::program_path()).lines() {
         println!("    {line}");
     }
     match l.role {
         LaunchRole::Run => {
-            println!("The indexer first catches up with the chain (a new node's whole retention: up to some hours); the matcher and keepers start once it has.");
+            println!("{}", start_note(&cli.cmd));
             if let Some(p) = &l.pause_file {
                 println!("Pause trading without stopping: create the file {} (delete it to resume).", l.dir.join(p).display());
             }
         }
         LaunchRole::Index => println!("Index only: the indexer and its read API, no key."),
     }
-    if let Some(a) = app::operator_address(cfg) {
+    if let Some(a) = address {
         println!("Funding address (send KAS here; `{} address-balance` shows it and its balance): {a}", setup::program_path());
     }
     if let Some(a) = l.api {
@@ -212,11 +228,37 @@ fn launch(rt: &tokio::runtime::Runtime, program: OsString, cfg: &std::path::Path
     }
     println!("Stop it with Ctrl+C. A status line follows every minute.");
     println!();
-    std::env::set_current_dir(&l.dir).map_err(|e| anyhow::anyhow!("cannot change to {}: {e}", l.dir.display()))?;
-    let cli = Cli::try_parse_from(std::iter::once(program).chain(l.args.into_iter().map(OsString::from)))
-        .map_err(|e| anyhow::anyhow!("the [launch] table of {} is not a valid command line:\n{e}", cfg.display()))?;
     attach_log(&cli)?;
     rt.block_on(dispatch(cli.cmd))
+}
+
+/// Refuses a command that writes a data directory another kob-executor process holds, before anything is printed or written
+/// to the log file (the running process has it open, and it may be the same file).
+fn refuse_second_writer(cmd: &Cmd) -> anyhow::Result<()> {
+    let opts = match cmd {
+        Cmd::Run(a) => &a.index,
+        Cmd::Index(a) if matches!(a.sub, None | Some(kob_executor::index_cli::IndexSub::Run)) => &a.opts,
+        _ => return Ok(()),
+    };
+    // a configuration that does not build is reported by the command itself
+    if let Ok(cfg) = kob_executor::index_cli::build_config(opts) {
+        kob_executor::indexer::lock::WriterLock::check(&cfg)?;
+    }
+    Ok(())
+}
+
+/// What the banner says about the start of `run`: whether trading waits for the history (it does not with the fast start).
+fn start_note(cmd: &Cmd) -> String {
+    use kob_executor::faststart::Plan;
+    let Cmd::Run(a) = cmd else { return String::new() };
+    let Ok(cfg) = kob_executor::index_cli::build_config(&a.index) else { return String::new() };
+    // the facilitator's book is bound to one store: no fast start with it
+    let plan = if a.x402_config.is_some() { Plan::Normal } else { kob_executor::faststart::plan(&cfg) };
+    match plan {
+        Plan::Fresh | Plan::Resume => "Fast start: the matcher and keepers start within seconds, on the orders seen from now on. The history is indexed in the background (up to some hours on a new node), and the executor switches to the full book by itself.".into(),
+        Plan::Normal if cfg.db_path().exists() => "The indexer resumes from its stored position; the matcher and keepers start once it has caught up (usually seconds).".into(),
+        Plan::Normal => "The indexer first catches up with the chain (a new node's whole retention: up to some hours); the matcher and keepers start once it has.".into(),
+    }
 }
 
 /// The configuration file a command reads (`--config`), if it takes one.

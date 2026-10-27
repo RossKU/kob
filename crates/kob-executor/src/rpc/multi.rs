@@ -21,8 +21,9 @@
 //! its windows) is compared with that node's acceptance data from the same start (`verify::agreement`: the same chain block
 //! at every position, the same accepted transactions in it). Only what both report is applied: at the first contradiction the
 //! answer is cut before it, and when the very next chain block is contradicted nothing is applied until the two agree (a race
-//! at the tip settles within seconds). A contradiction is logged and counted (`disagreements`); one that blocks the cursor
-//! three times in a row gives the cross-checking node up for another (its resolver entry resolves a replacement), and three
+//! at the tip settles within seconds). A contradiction is logged and counted (`disagreements`; the tips differing for a
+//! moment are only counted apart, as `tip_differs`, and logged at debug); one that blocks the cursor three times in a row
+//! gives the cross-checking node up for another (its resolver entry resolves a replacement), and three
 //! more the primary's node (the cross-checking one becomes the authority, `resolver::replace`). A cross-checking node that
 //! cannot answer is skipped (backoff) and the primary goes on alone meanwhile: no stall, and no contradiction is ignored,
 //! only none can be seen while there is no second node.
@@ -61,8 +62,11 @@ pub struct NodeStatus {
     pub node: Option<String>,
     /// How many times a resolver entry gave its node up (failed, or replaced after disagreeing).
     pub replaced: u32,
-    /// Answers of the primary it contradicted (a cross-checking node, `NodeSpec::cross_check`).
+    /// Answers of the primary it contradicted (a cross-checking node, `NodeSpec::cross_check`): other accepted transactions, a
+    /// different chain block deep in the answer, a deep reorg seen by one node only. Not the tips differing for a moment.
     pub disagreements: u64,
+    /// Times the two nodes' newest chain blocks differed for a moment (routine on a public pair; settles by the next poll).
+    pub tip_differs: u64,
     /// `primary` (the chain authority) or `secondary`.
     pub role: String,
     /// `ok`, `backoff` (failed lately: skipped until `backoff_secs`), `dropped` (contradicted the primary) or `idle` (neither
@@ -168,10 +172,15 @@ impl NodeBoard {
     }
 
     /// The cross-checking node `i` contradicted the primary.
-    fn disagreed(&self, i: usize, why: &str) {
+    fn disagreed(&self, i: usize, why: &str, at_tip: bool) {
         self.with(i, |p| {
-            p.status.disagreements += 1;
-            p.status.last_error = Some(why.to_string());
+            if at_tip {
+                // the tips differing for a moment is no contradiction: counted apart, and no error to show
+                p.status.tip_differs += 1;
+            } else {
+                p.status.disagreements += 1;
+                p.status.last_error = Some(why.to_string());
+            }
         })
     }
 
@@ -353,6 +362,10 @@ pub struct MultiNode<N: ChainSource> {
     last_warn: Mutex<Option<Instant>>,
 }
 
+/// The start of the error when the two nodes' newest chain blocks differ and nothing can be applied yet (routine on a public
+/// pair: the next poll settles it); the follower does not warn about it until it repeats.
+pub const TIPS_DIFFER: &str = "the two nodes' newest chain blocks differ for a moment";
+
 /// Contradictions in a row that block the cursor before the cross-checking node is given up for another (and twice this
 /// many before the primary's node is: `MultiNode::vouched`).
 pub const STALLS_BEFORE_REPLACING: u32 = 3;
@@ -446,7 +459,7 @@ impl<N: ChainSource> MultiNode<N> {
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
             return Ok(raw);
         };
-        self.board.disagreed(j, &why);
+        self.board.disagreed(j, &why, a.at_tip);
         let total = raw.added_chain_block_hashes.len();
         let log = {
             let mut l = self.last_warn.lock().unwrap_or_else(|e| e.into_inner());
@@ -489,6 +502,10 @@ impl<N: ChainSource> MultiNode<N> {
         } else if n >= 2 * STALLS_BEFORE_REPLACING {
             give_up(0);
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+        if a.at_tip {
+            // the follower logs this at debug until it repeats (`STALLS_BEFORE_REPLACING` times in a row)
+            return Err(RpcError::Node(format!("{TIPS_DIFFER} ({why}): nothing is indexed until they agree")));
         }
         Err(RpcError::Node(format!("the nodes disagree on the next chain block ({why}): nothing is indexed until they agree")))
     }
@@ -841,7 +858,9 @@ mod tests {
         let r = m.vspc_v2(req()).await.unwrap();
         assert_eq!(r.added_chain_block_hashes, vec![Hash32([1; 32]), Hash32([2; 32])]);
         assert_eq!(r.chain_block_accepted_transactions.len(), 2);
-        assert_eq!(m.board.snapshot()[1].disagreements, 1);
+        // the tips differing for a moment: counted apart, not a disagreement
+        assert_eq!((m.board.snapshot()[1].disagreements, m.board.snapshot()[1].tip_differs), (0, 1));
+        assert_eq!(m.board.snapshot()[1].last_error, None);
         // the cross-checking node does not answer: the primary goes on alone, the node backs off
         let m = pair(Fixed::new(&[1, 2], Ok(&[])), Fixed::new(&[], Err("connection closed")));
         assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
@@ -852,7 +871,7 @@ mod tests {
         let m = pair(Fixed::new(&[1, 2], Ok(&[])), Fixed::new(&[], Ok(&[7, 8])));
         for n in 1..=6u32 {
             let e = m.vspc_v2(req()).await.unwrap_err();
-            assert!(e.to_string().contains("disagree on the next chain block"), "{e}");
+            assert!(e.to_string().contains(TIPS_DIFFER), "{e}");
             match n {
                 1 | 2 => assert_eq!(super::super::resolver::current("resolver:2"), Some(b.clone())),
                 3 => {
@@ -868,6 +887,6 @@ mod tests {
                 _ => {}
             }
         }
-        assert_eq!(m.board.snapshot()[1].disagreements, 6);
+        assert_eq!(m.board.snapshot()[1].tip_differs, 6);
     }
 }

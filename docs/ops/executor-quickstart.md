@@ -97,8 +97,10 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
 7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6).
 
 It then writes `kob-executor.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
-testnet-10; the mainnet binary carries its pinned registry), prints the command line the file stands for, and starts the
-executor. From then on, a double-click runs that configuration directly.
+testnet-10; the mainnet binary carries its pinned registry), prints the command line the file stands for, and asks
+`Start the executor now? [Y/n]`: Enter starts it, `n` leaves the files and ends the setup (`setup --no-start` does not ask).
+From then on, a double-click runs that configuration directly. If another kob-executor already runs from the same folder,
+the start is refused at once with a message naming it, before anything else is printed or logged.
 
 **Which tokens it lists.** Every order of a token program the binary supports, whatever the token. KOB makes no listing
 decision: the registry is a pinned snapshot of facts and of the supported programs, no token is listed by name and none is
@@ -121,15 +123,19 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
 
 * With public nodes the line ends with both hosts and their state, e.g. `nodes: muon-10.kaspa.blue (authority, ok),
   vector-10.kaspa.green (cross-check, ok, replaced 1x)`: `replaced` counts nodes given up (failed, or disagreeing), and
-  `disagreements` answers of the authority the other node contradicted (nothing contradicted is indexed).
+  `disagreements` answers of the authority the other node contradicted (nothing contradicted is indexed). The two public
+  nodes' newest blocks often differ for a moment; that settles by the next poll, is not a disagreement, and is only counted
+  (`tip_differs` in `/v1/health`) and logged at debug level. A warning appears if it does not settle.
 * The first start trades within seconds: the setup turns on the fast start, so the executor follows the chain from the node's
   current tip at once (`fast start: trading on orders seen since 14:32 UTC; full book in about 7 h 40 min`) while the
   history is indexed in the background; it misses the orders created before it started until the full book is there
   (`/v1/health`: `book_complete: false`), then switches over by itself (`docs/ops/executor.md`, A.1.1). Without it (an older
   configuration, `fast_start = false`) the indexer first catches up with everything the node retains and the matcher and
-  keepers plan nothing until it is close to the tip.
+  keepers plan nothing until it is close to the tip. The banner at the start says which of the two applies.
 * `WARNING:` names what needs you: the node not synced or unreachable, funds below 100 KAS (`--low-funds-kas`; the warning
-  names the address to send KAS to), the pause file present, transactions the node rejected.
+  names the address to send KAS to; it is logged at the start, then at most every 10 minutes or when the balance changes by a
+  quarter, and the status line shows the funds every minute; the executor trades with less than 100 KAS, the number is an alert
+  threshold), the pause file present, transactions the node rejected.
 * The read API answers on `http://127.0.0.1:8090/v1/health` (loopback only).
 * For real monitoring use the metrics file (`--metrics-file`, `docs/ops/executor.md`, Part C *Monitoring*).
 

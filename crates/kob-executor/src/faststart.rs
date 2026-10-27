@@ -399,10 +399,12 @@ where
 {
     debug_assert!(plan != Plan::Normal, "a normal start has no fast start");
     let tip_cfg = tip_config(&cfg);
+    // the full store first: it takes the writer lock, and a second instance must be refused before it touches the tip store
+    // (a leftover tip store that cannot be opened is deleted)
+    let full = Indexer::open(cfg.clone())?;
     let tip = open_tip(&tip_cfg, plan, tip_chain.as_ref()).await?;
     let since = tip_since(&tip_cfg.data_dir);
     tip.health.update(|h| h.book_complete = false);
-    let full = Indexer::open(cfg.clone())?;
     tracing::info!(
         tip = %tip_cfg.data_dir.display(),
         full = %cfg.data_dir.display(),

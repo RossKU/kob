@@ -2533,7 +2533,9 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   report is indexed. A contradiction cuts the answer before it (a race at the tip settles within seconds); one at the very
   next chain block applies nothing until the two agree, and when it persists (three times in a row) the cross-checking node
   is given up for another, then (three more) the authority's. Counted per node (`disagreements` in `/v1/health` `nodes`, the
-  status line).
+  status line). The tips of the two nodes differing for a moment (a different chain block among the newest ten, or a shallow
+  reorg one node has seen first) is no contradiction: it is counted apart as `tip_differs`, logged at debug, and warned about
+  only when it repeats as often as it takes to replace a node.
 * A node that cannot be reached or drops its connection gets one reconnect first (public nodes close connections now and
   then under load): the same node is tried once more with a 5 s connect timeout (`GRACE_CONNECT_TIMEOUT`). When it is the
   authority's, the other node is the authority from the next call on (no resolution, no wait) and the dropped node is

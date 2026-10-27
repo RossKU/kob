@@ -36,8 +36,7 @@ pub enum LockError {
 }
 
 impl WriterLock {
-    /// Lock the data directory and the record-log directory of `cfg`.
-    pub fn acquire(cfg: &IndexerConfig) -> Result<WriterLock, LockError> {
+    fn lock_files(cfg: &IndexerConfig) -> Result<(Vec<PathBuf>, Vec<File>), LockError> {
         let mut dirs = vec![cfg.data_dir.clone()];
         if cfg.records.enabled {
             // the log has its own lock: another data directory configured with the same `records.dir` is a second writer too
@@ -47,6 +46,28 @@ impl WriterLock {
         for d in &dirs {
             files.push(lock_dir(d)?);
         }
+        Ok((dirs, files))
+    }
+
+    /// Whether a writer could lock the directories of `cfg` now: the same refusal as [`acquire`](Self::acquire), nothing kept
+    /// and nothing written (not even the owner note). For a command to refuse before it prints or logs anything.
+    pub fn check(cfg: &IndexerConfig) -> Result<(), LockError> {
+        let mut dirs = vec![cfg.data_dir.clone()];
+        if cfg.records.enabled {
+            dirs.push(cfg.records_dir());
+        }
+        for d in &dirs {
+            // no lock file, no holder: and a check creates nothing (a command that fails later must not have touched the directory)
+            if d.join(LOCK_FILE).exists() {
+                lock_dir(d)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Lock the data directory and the record-log directory of `cfg`.
+    pub fn acquire(cfg: &IndexerConfig) -> Result<WriterLock, LockError> {
+        let (dirs, files) = Self::lock_files(cfg)?;
         let owner = format!(
             "pid {} ({}), since unix {}\n",
             std::process::id(),
@@ -118,6 +139,19 @@ fn try_lock_exclusive(file: &File) -> Result<(), TryLockError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_check_refuses_like_an_acquire_and_keeps_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let cfg = IndexerConfig { data_dir: d.path().join("data"), ..IndexerConfig::default() };
+        WriterLock::check(&cfg).expect("free");
+        assert!(!cfg.data_dir.exists(), "a check creates nothing");
+        assert!(!cfg.data_dir.join(OWNER_FILE).exists(), "a check writes no owner note");
+        let held = WriterLock::acquire(&cfg).unwrap();
+        assert!(matches!(WriterLock::check(&cfg), Err(LockError::Busy { .. })));
+        drop(held);
+        WriterLock::check(&cfg).expect("the check kept no lock, and the real one is released");
+    }
 
     #[test]
     fn a_second_writer_of_a_directory_is_refused_until_the_first_lets_go() {
