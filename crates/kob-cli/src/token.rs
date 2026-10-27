@@ -30,6 +30,10 @@ covenant id commits to the declaration. Both are signed at once; the genesis is 
 does not go out, the preparation output stays an ordinary UTXO of the funding key, and `kob token resume <DIR>` sends
 the saved genesis.
 
+The genesis's payload names the states of its token outputs (KOBG, docs/spec/token-metadata.md 3): an indexer lists them to
+their owners from the genesis on, so the holder's key finds and spends them from any machine and browser (`kob place`,
+`kob send`, the web app) without any file of this run.
+
 USAGE
   kob token issue --name <NAME> --ticker <TICKER> --decimals <N> --fund-utxo <TXID:INDEX:AMOUNT:OWNER>...
                   [--supply <UNITS>] [--holder <OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]>...]
