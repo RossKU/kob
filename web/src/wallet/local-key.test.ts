@@ -112,6 +112,31 @@ describe('private-key adapter (the app side of the signer frame)', () => {
     expect(live.signed).toBe(second);
   });
 
+  it('the node clock goes to the frame BEFORE the request, so its first view already says every time from it', async () => {
+    const sent: string[] = [];
+    let host!: SignerHost;
+    const core = createSignerCore({ sdk, kob, post: (m) => queueMicrotask(() => host.receive(structuredClone(m))) });
+    host = new SignerHost(
+      (m) =>
+        queueMicrotask(() => {
+          sent.push(m.type === 'clock' ? `clock ${m.daa}` : m.type);
+          const parsed = parseAppMessage(structuredClone(m));
+          const req = parsed ? core.receive(parsed) : null;
+          if (req) core.approve(req.id);
+        }),
+      { onConnected: () => undefined, onRequest: () => undefined, onForgotten: () => undefined },
+    );
+    const adapter = createLocalKeyAdapter({ host: () => host, sdk });
+    core.importKey(MAKER_SK);
+    await new Promise((r) => setTimeout(r, 0));
+    await adapter.connect(NET);
+    const built = buildSend();
+    const node = seeded(built);
+    await signAndSubmit({ kob, node, adapter, built, network: NET, clockDaa: 685_000_000n });
+    expect(sent.indexOf('clock 685000000')).toBeGreaterThanOrEqual(0);
+    expect(sent.indexOf('clock 685000000')).toBeLessThan(sent.indexOf('sign'));
+  });
+
   it('a rejection in the frame is the neutral "rejected by user" outcome; nothing is submitted', async () => {
     const { adapter, connect } = pair(() => 'reject');
     await connect();

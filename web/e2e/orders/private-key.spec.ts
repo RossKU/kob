@@ -340,6 +340,10 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
   await page.getByTestId('order-place').click();
   const f = signer(page);
   await expect(f.getByTestId('signer-title')).toBeVisible({ timeout: 30_000 });
+  // the clock reaches the frame before the request: the first view already says every time as "in 20 s | DAA ...", never a bare "DAA score ..."
+  const timeCells = await f.getByTestId('signer-order-0').locator('dd[data-daa]').allTextContents();
+  expect(timeCells.length).toBeGreaterThan(0);
+  for (const text of timeCells) expect(text).toMatch(/^(now|in \d+ \w+)DAA \d+$/);
   const t0 = Date.now();
   const receipt = await readReceipt(page);
   expect(receipt.title).toBe('Place order');

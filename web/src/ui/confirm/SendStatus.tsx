@@ -252,6 +252,8 @@ export function useSend(): Sender {
     };
     set(id, { phase: 'checking' });
     const w = session.current;
+    // the node's clock read alongside the check: the private-key signer is told it before the request (its first view says "in 90 d", not a bare DAA score)
+    const clock0 = w.adapter?.id === 'local-key' ? readClock(services).then((c) => ({ daa: c.daa, at: Date.now() }), () => null) : null;
     let checked;
     try {
       checked = await checkBeforeSigning(services, w, job);
@@ -301,8 +303,10 @@ export function useSend(): Sender {
       try {
         // no `inputAddress`: `checkBeforeSigning` has just re-read every input on the node (the decoder stops any it does not confirm); a second
         // read would only add a round trip before the wallet's popup
+        const first = clock0 ? await Promise.race([clock0, sleep(LIVE_MS).then(() => null)]) : null;
         const res = await signAndSubmit({
           kob: services.kob, node: services.node, adapter: w.adapter!, built: final.built, network: services.config.network,
+          ...(first ? { clockDaa: first.daa + (BigInt(Date.now() - first.at) * DAA_PER_SECOND) / 1000n } : {}),
           ...(final.submitByDaa != null ? { submitByDaa: final.submitByDaa } : {}),
           ...(final.retimed ? { retime: true } : {}),
           ...(live ? { live: { signing: live, submitByOf: (b) => jobs.get(b.tx.id)?.submitByDaa ?? undefined } } : {}),

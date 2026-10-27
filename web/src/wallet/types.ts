@@ -93,6 +93,11 @@ export interface SignOptions {
    */
   retime?: boolean;
   /**
+   * the node's DAA score now (display only), said to the private-key signer BEFORE the request so that its first view already reads every time
+   * as "in 90 d | DAA ..." instead of switching from a bare DAA score once the live clock arrives
+   */
+  clockDaa?: bigint;
+  /**
    * `signChain` of a token creation: the states its genesis token outputs are claimed to hold (the private-key signer checks each output's
    * script against them, and names the supply and the holders only then)
    */

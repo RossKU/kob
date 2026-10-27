@@ -246,6 +246,8 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
       const pubkey = pub();
       if (!host) throw new WalletError('other', 'No private key is loaded.');
       if (built.sign.some((s) => s.pubkey !== pubkey)) throw new WalletError('other', 'This transaction asks for a signature of another key.');
+      // the clock first: the frame's first view of the request already says its times from it
+      if (opts.clockDaa !== undefined) host.clock(opts.clockDaa);
       const pending = host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.retime === true);
       opts.live?.attach({ replace: (b) => host.update(b, deps.tokenHints?.(b) ?? []), clock: (daa) => host.clock(daa) });
       const sigs = await pending;

@@ -70,6 +70,8 @@ export interface SignAndSubmitArgs {
   submitByDaa?: bigint;
   /** the transaction re-times the one the wallet signed last (`SignOptions.retime`) */
   retime?: boolean;
+  /** the node's DAA score now, for the times the private-key signer says (`SignOptions.clockDaa`) */
+  clockDaa?: bigint;
   /**
    * the transaction may be replaced while the user reads it (`SignOptions.live`): `submitByOf` gives the `submitByDaa` of a replacement the
    * wallet signed, which is then the one finalized, checked and sent
@@ -182,7 +184,7 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   if (a.inputAddress) await assertInputsOnNode(node, built, a.inputAddress);
   let sigs;
   try {
-    sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.live ? { live: a.live.signing } : {}) });
+    sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.live ? { live: a.live.signing } : {}) });
   } catch (e) {
     const code = e instanceof WalletError ? e.code : 'other';
     throw new SignFlowError('signing', e, msg(e), code);
