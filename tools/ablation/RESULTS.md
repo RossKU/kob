@@ -1,5 +1,30 @@
 # Ablation results
 
+## KaspaRocket's program (2026-10-27, its mainnet review)
+
+`kasparocket-token-11458` (`KaspaRocketToken11458`: the public-mint `KCC20` actor at 10 / 10 slots, reviewed 2026-10-27) was run
+through every KCC-20 and pair catalog: the KAS-kind suites with `KOB_KCC20_PROGRAM=KaspaRocketToken11458` (every test fn but the
+8/8 and `_pm` ones), the pair suites with their permanent KaspaRocket mixes (`pair_harness::mixed_pairs_kr`, `KKKR`, the
+`audit_pair_sec_tests` reproducers and NIS8 / NIS9 on it). `lib/parse.mjs` now also reads `KaspaRocketToken` / `KForgeToken`
+program names in the verdict lines (they were not recorded before).
+
+Runs: debug executables built from the branch (pinned in a private `--exe-dir`), `--jobs 4`, baselines clean in every run:
+
+| Suites | Program | Entries | Confirmed | Held | Seen on KaspaRocket's program | Wall time |
+|---|---|---|---|---|---|---|
+| `kcc20-sell` | `KOB_KCC20_PROGRAM=KaspaRocketToken11458` | 301 | 295 / 295 | 6 / 6 | 297 | 1,668 s |
+| `kcc20-buy` | `KOB_KCC20_PROGRAM=KaspaRocketToken11458` | 222 | 214 / 214 | 8 / 8 | 220 | 2,679 s |
+| `pair`, `cond-pair`, `cond-pair-rpt`, `ifd-pair` | 8/8, 3/3, public-mint and KaspaRocket mixes | 362 | 344 / 344 | 18 / 18 | 360 | 595 s |
+
+No `NOT-CONFIRMED`, `EDIT-ERROR` or `BASELINE-DIRTY`. Completion (`coverage.mjs --suite kcc20-sell,kcc20-buy,pair,cond-pair,cond-pair-rpt,ifd-pair
+--results <the three result files> --program KaspaRocketToken11458`): of the 758 `require` lines of the nine KCC-20 and pair templates, 30 are
+not witnessed on KaspaRocket's program: the 22 documented lines of the static check (`sb.length == 65`, `refundTip >= 0`, the side checks after
+`touch()`, `tScale > 0` / `bScale > 0`, KobIfdPair's fill `n > 0`); the scan bound `cnt <= MAX_TOK_IN` of the six KAS kinds (6: their
+nine-input witnesses run on the 8/8 program, where the order is the only input that flips; on KaspaRocket's program the bound is witnessed in
+the pair suites, KobIfdPair NIS8, and by `kcc20_public_mint_tests` at the builders); KobIfdPair's `OpInputCovenantId(idx) == tok` /
+`OpInputCovenantId(src) == tok` (2: their KCC / KCC witnesses NIH4 / NIP1 run on the 8/8 program). Unlike a 3 / 3 program, the stray-scan
+slots 3..7 are witnessed on it.
+
 ## Public-mint program (2026-10-13, audit AUD-PM)
 
 `kcc20-ref-public-mint` (`KCC20PublicMint`, the published build of the KCC-20 reference, 3 / 3, tradable since `41b7fdb`) was

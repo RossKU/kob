@@ -8,8 +8,8 @@
 // A scenario id is the first whitespace-delimited token of the scenario name. The rest of a verdict line names the token
 // program(s) the scenario ran on: the pair tag `<A>+<B>` of the pair suites, `@<program>` of the KCC-20 KAS-kind suites.
 
-/** Token program names in a scenario line (KCC-20 programs, KRON token programs). */
-export const programsOf = name => [...name.matchAll(/\b(KCC20\w*|KronToken\d+)\b/g)].map(m => m[1]);
+/** Token program names in a scenario line (KCC-20 programs, the launchpad programs, KRON token programs). */
+export const programsOf = name => [...name.matchAll(/\b(KCC20\w*|KaspaRocketToken\d+|KForgeToken\d+|KronToken\d+)\b/g)].map(m => m[1]);
 
 export const idOf = name => name.trim().split(/\s+/)[0];
 

@@ -140,7 +140,7 @@ What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web
   Supply, decimals used for trading, prices and orders stay the chain's and the KOB indexer's.
 * **Which tokens:** one kascov knows and no KOB source lists is added (as a "no orders" row) only if the program hash it names is one of the
   programs this build pins (`crates/kob-protocol/data/programs.json`) and enables for the network: on mainnet a `reviewed` program, and the
-  profile's `networks` (KaspaRocket and KForge: testnet-10 only). The 46-byte KRON family has no hash in kascov's data set, so those
+  profile's `networks` (KForge: testnet-10 only; KaspaRocket: mainnet and testnet-10). The 46-byte KRON family has no hash in kascov's data set, so those
   tokens appear only through the registry or the indexer, as before.
 * **Icons:** shown only when the fetched bytes hash (SHA-256 of the raw bytes, checked on real tokens of both networks) to the
   `claimed_image_hash`; otherwise a letter. The creators' own hosts (mostly `storage.googleapis.com`) send no CORS header, so the browser

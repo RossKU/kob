@@ -9,6 +9,7 @@ import {
   longId, normalizeTicker, sanitizeUntrusted, verifyIndexerToken, type TokenInfo, type TokenRegistry, type UntradableReason,
 } from '../../kob/registry';
 import type { TemplateInfo } from '../../kob/types';
+import { TOKEN_PROGRAMS, programDefaultDecimals } from '../../kob/programs.generated';
 
 export type BadgeKind = 'untradable';
 export type BadgeTone = 'ok' | 'warn' | 'bad' | 'info' | 'neutral';
@@ -171,7 +172,9 @@ export type DeclarationLookup = (covenantId: string) => DeclaredToken | null | u
 export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: TokenSource = 'indexer', declared?: DeclaredToken | null): TokenRow {
   const decl = declared && declared.covenantId.toLowerCase() === view.covenant_id.toLowerCase() ? declared : null;
   const ticker = sanitizeUntrusted(view.ticker ?? '', 16) || (decl?.symbol ? sanitizeUntrusted(decl.symbol, 16) : '');
-  const decimals = view.decimals ?? decl?.decimals ?? null;
+  // the indexer's (a registry entry of its operator), else the token's KCC-23 declaration, else its program's default (KaspaRocket convention: 3)
+  const program = TOKEN_PROGRAMS.find((p) => (view.template_hash && p.templateHash === view.template_hash) || (view.template_id && p.registryId === view.template_id));
+  const decimals = view.decimals ?? decl?.decimals ?? programDefaultDecimals(program?.name)?.decimals ?? null;
   // the template's capabilities in the shipped registry (found by template hash / id) always apply; the indexer's powers are added
   const tpl = reg.templates.find((t) => (view.template_hash && t.template_hash === view.template_hash) || (view.template_id && t.id === view.template_id));
   const powers = unionPowers(tpl?.capabilities ?? [], powersOf(view));

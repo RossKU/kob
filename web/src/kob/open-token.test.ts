@@ -161,9 +161,9 @@ describe('program review: prototypes are not traded on mainnet without a registr
     expect(programAllowed('KCC20Ref_8x8', 'mainnet')).toBe(false);
     expect(programAllowed('KCC20Ref_8x8', 'testnet-10')).toBe(true);
     expect(programAllowed('NoSuchProgram', 'testnet-10')).toBe(false);
-    // a program whose profile lists its networks is allowed on those only (KaspaRocket and KForge: testnet-10)
+    // a program whose profile lists its networks is allowed on those only (KaspaRocket: mainnet and testnet-10; KForge: testnet-10)
     expect(programAllowed('KaspaRocketToken11458', 'testnet-10')).toBe(true);
-    expect(programAllowed('KaspaRocketToken11458', 'mainnet')).toBe(false);
+    expect(programAllowed('KaspaRocketToken11458', 'mainnet')).toBe(true);
     expect(programAllowed('KForgeToken1785', 'testnet-10')).toBe(true);
     expect(programAllowed('KForgeToken1785', 'mainnet')).toBe(false);
     expect(programAllowed('KaspaRocketToken11458', 'testnet-11')).toBe(false);

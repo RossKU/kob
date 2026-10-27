@@ -3,6 +3,7 @@ import type { IndexerTokenView } from '../../data/indexer-types';
 import { normalizeTokenView } from '../../data/indexer';
 import { parseRegistry, displayName, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
+import { TOKEN_PROGRAMS } from '../../kob/programs.generated';
 import { tokenTitle } from './TokenBadges';
 import { buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow } from './token-model';
 
@@ -135,6 +136,15 @@ describe('filterTokens / parseCovenantId', () => {
     const nameless = unknownRow(reg, view('', ID('8'), 0, 0, { decimals: null }));
     const noDecimals = unknownRow(reg, view('NODEC', ID('7'), 0, 0, { decimals: null }));
     expect([isNameless(rows[0]), isNameless(named), isNameless(nameless), isNameless(noDecimals)]).toEqual([false, false, true, false]);
+  });
+
+  it('a token of a program with default decimals and no decimals of its own (KaspaRocket) takes the default: 3, scale 1000', () => {
+    const kr = TOKEN_PROGRAMS.find((p) => p.name === 'KaspaRocketToken11458')!;
+    const r = unknownRow(reg, view('', ID('8'), 0, 0, { decimals: null, scale: null, template_hash: kr.templateHash }));
+    expect([r.decimals, r.scale]).toEqual([3, 1000n]);
+    // the indexer's decimals (its operator's registry entry) come first; another program has no default
+    expect(unknownRow(reg, view('', ID('8'), 0, 0, { decimals: 6, scale: null, template_hash: kr.templateHash })).decimals).toBe(6);
+    expect(unknownRow(reg, view('', ID('8'), 0, 0, { decimals: null, scale: null })).decimals).toBeNull();
   });
 
   it('a token known only from the wallet holdings (a made-up view) has unknown order counts, never 0 asks and 0 bids', () => {

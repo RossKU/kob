@@ -257,6 +257,21 @@ node tools/ablation/coverage.mjs --suite kcc20-sell,kcc20-buy,pair,cond-pair,con
   --results target/ablation-pm-sell/results.json,target/ablation-pm-buy/results.json,target/ablation-pm-pair/results.json --program KCC20PublicMint
 ```
 
+## KaspaRocket's program (10 / 10, reviewed 2026-10-27)
+
+`KOB_KCC20_PROGRAM=KaspaRocketToken11458` runs the KAS-kind suites' default token on KaspaRocket's 10 / 10 build of the
+public-mint actor (`kasparocket-token-11458`, the pinned template). Its slots are above the eight token inputs a KOB order
+transaction carries, so the scenarios the 3 / 3 programs skip for slots run on it like on 8/8, and the stray-scan slots
+beyond the third input are witnessed on it. The pair suites run it permanently (`pair_harness::mixed_pairs_kr`, `KKKR`), and
+`kob_ifd_pair_tests` NIS8 / NIS9 refuse a ninth token input of it at the order. A full run (results: RESULTS.md):
+
+```
+KOB_KCC20_PROGRAM=KaspaRocketToken11458 node tools/ablation/ablate.mjs --suite kcc20-sell --exe-dir <exes> --out target/ablation-kr-sell
+KOB_KCC20_PROGRAM=KaspaRocketToken11458 node tools/ablation/ablate.mjs --suite kcc20-buy  --exe-dir <exes> --out target/ablation-kr-buy
+node tools/ablation/ablate.mjs --suite pair,cond-pair,cond-pair-rpt,ifd-pair --exe-dir <exes> --out target/ablation-kr-pair
+node tools/ablation/coverage.mjs --suite kcc20-sell,kcc20-buy,pair,cond-pair,cond-pair-rpt,ifd-pair   --results target/ablation-kr-sell/results.json,target/ablation-kr-buy/results.json,target/ablation-kr-pair/results.json --program KaspaRocketToken11458
+```
+
 ## Runtime
 
 Debug-build executables, one machine, one suite per invocation with `--jobs 2`: 736 s (kcc20-sell), 1,165 s (kcc20-buy),

@@ -42,9 +42,9 @@ describe('kascovTradable: the program hash decides, on this network', () => {
     expect(kascovTradable(REF_8X8, 'testnet-10', templates)).toBe(true);
   });
 
-  it('a program of the profile table that is not on this network: KaspaRocket and KForge are testnet-10 only', () => {
+  it('a program of the profile table that is not on this network: KForge is testnet-10 only, KaspaRocket mainnet and testnet-10', () => {
     expect(kascovTradable(ROCKET, 'testnet-10', templates)).toBe(true);
-    expect(kascovTradable(ROCKET, 'mainnet', templates)).toBe(false);
+    expect(kascovTradable(ROCKET, 'mainnet', templates)).toBe(true);
     expect(kascovTradable(FORGE, 'testnet-10', templates)).toBe(true);
     expect(kascovTradable(FORGE, 'mainnet', templates)).toBe(false);
     expect(kascovTradable(ROCKET, 'testnet-11', templates)).toBe(false);
@@ -80,16 +80,18 @@ describe('mergeKascov: tokens kascov adds', () => {
     expect(out).toHaveLength(1);
     const r = out[0]!;
     expect(r).toMatchObject({
-      covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', source: 'kascov', info: null, openAsks: null, openBids: null, decimals: null, scale: null, reason: 'unregistered',
+      covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', source: 'kascov', info: null, openAsks: null, openBids: null, decimals: 3, scale: 1000n, reason: 'unregistered',
       templateId: 'kasparocket-token-11458',
     });
     expect(r.kascov).toMatchObject({ usedTicker: true, usedName: true, tickerDiffers: false, decimalsDiffers: false, decimals: 3, imageHash: 'ab'.repeat(32), imageUrl: 'https://img.example/a.png' });
+    // its decimals are the program's default (the KaspaRocket convention), which kascov's claim agrees with
     // the facts a trader needs are the ones of any token KOB has not verified
     expect(r.facts).toContain('genesis_unverified');
   });
 
   it('not on mainnet when the program is testnet-10 only, not without a program hash, not when the program is not pinned', () => {
-    expect(mergeKascov([], [k()], ctx('mainnet'))).toEqual([]);
+    expect(mergeKascov([], [k({ templateHash: FORGE })], ctx('mainnet'))).toEqual([]);
+    expect(mergeKascov([], [k()], ctx('mainnet'))).toHaveLength(1);
     expect(mergeKascov([], [k({ templateHash: null })], ctx('testnet-10'))).toEqual([]);
     expect(mergeKascov([], [k({ templateHash: 'ff'.repeat(32) })], ctx('testnet-10'))).toEqual([]);
     expect(mergeKascov([], [k({ templateHash: PUBLIC_MINT })], ctx('mainnet'))).toHaveLength(1);
