@@ -40,8 +40,9 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button:disabled { color: var(--muted); background: var(--bg); border-color: var(--border); cursor: default; }
 .lines { margin: 0; }
 .line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
-.line dt { color: var(--muted); }
-.line dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.line dt { color: var(--muted); flex: 1 1 0; min-width: 0; }
+/* the value keeps its own width (a long label wraps instead of squeezing a number into "-10" / "0"); only a value wider than 70% of the row breaks */
+.line dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; flex: 0 0 auto; max-width: 70%; }
 .line.out dd { color: var(--bad); }
 .line.in dd { color: var(--ok); }
 .line.fee { border-bottom: 0; }
