@@ -114,6 +114,10 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await expect(facts.nth(1).getByTestId('token-covenant-id')).toContainText(QUOTE);
   await expect(facts.nth(1).getByTestId('token-scale')).toContainText('per 1 EXUSD (6 decimals)');
   await expect(facts.nth(0).getByTestId('template-verification')).toBeVisible();
+  // no box and no bullet sentences: one line of badges per token (the sentence is each badge's tooltip, the program and decimals the chip's)
+  await expect(page.getByTestId('pair-details')).not.toContainText(/Not in the token registry|Full covenant id|Token program:/);
+  await expect(page.getByTestId('pair-details').locator('.banner')).toHaveCount(0);
+  await expect(page.getByTestId('pair-details').getByTestId('badge-family')).toHaveCount(2);
   await expect(facts.nth(1).getByTestId('template-verification')).toBeVisible();
   // the same places as a KAS market: depth and trades under the chart, the facts below everything
   const box = async (id: string) => (await page.getByTestId(id).boundingBox())!;

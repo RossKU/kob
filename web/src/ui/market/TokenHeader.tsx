@@ -10,7 +10,7 @@ import { IdCopy } from './IdCopy';
 import { KascovLink, programTitle } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
 import { TokenNote } from './TokenNote';
-import { GenesisFailedBanner, OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
+import { GenesisFailedBanner, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
 import { templateDetail, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
@@ -62,10 +62,10 @@ function TemplateVerification(props: { row: TokenRow; services: Pick<Services, '
 
 /**
  * What a token page must say wherever it is read, never behind a tap: the shared-ticker note, the cross-check findings between the indexer and the
- * registry, the issuer powers, and why a token cannot be traded. `full` (the facts of a pair) adds the fact badges with their sentences and the box of an
- * open-list token (its decimals and full covenant id); a token page has neither (its program and decimals are the tooltip of the token-family chip).
+ * registry, the issuer powers, and why a token cannot be traded. The fact badges and the program / decimals lines are not here: they are badges
+ * with their sentence as the tooltip and the tooltip of the token-family chip (token page header, pair facts).
  */
-export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean; full?: boolean }) {
+export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) {
   const r = props.row;
   return (
     <>
@@ -73,8 +73,6 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean; fu
       <IndexerProblems codes={r.indexerProblems} />
       <GenesisFailedBanner row={r} />
       <PowersWarning powers={r.powers} />
-      {props.full ? <TokenFacts rows={[r]} data-testid="token-facts" /> : null}
-      {props.full ? <OpenTokenNote token={r.info} data-testid="token-open-caution" /> : null}
       {!r.tradable && r.reason && r.source !== 'kascov' ? (
         <p class="small" style="margin:0" data-testid="token-untradable">
           <strong>{t('market.notTradable')}</strong> {t(`market.reason.${r.reason}`)}
@@ -180,10 +178,13 @@ export function PairDetails(props: { rows: readonly TokenRow[]; shared?: Readonl
           <div class="mkt-title">
             <IdentityBlock row={r} data-testid="pair-token-identity" />
             <h2 class="token-name" style="margin:0;font-size:1.05rem" data-testid="pair-token-title">{tokenTitle(r)}</h2>
-            <StatusBadges row={r} />
             {r.name ? <span class="mkt-name">{r.name}</span> : null}
           </div>
-          <TokenWarnings row={r} sharedTicker={props.shared?.has(r.covenantId) ?? false} full />
+          <div class="mkt-badges">
+            <StatusBadges row={r} familyNote={programTitle(r)} />
+            <TokenFacts rows={[r]} inline data-testid="token-facts" />
+          </div>
+          <TokenWarnings row={r} sharedTicker={props.shared?.has(r.covenantId) ?? false} />
           <TokenDetails row={r} services={props.services} />
         </div>
       ))}
