@@ -57,7 +57,8 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       await expect(genesis).toHaveAttribute('title', /not checked against its token program/);
       await expect(mint).toHaveAttribute('title', /anyone create more/);
       const [g, m] = [await genesis.boundingBox(), await mint.boundingBox()];
-      expect(Math.abs(g!.y - m!.y)).toBeLessThan(4);
+      // one line on a desktop; on a phone "Genesis not verified" may carry its reason (KOB's own check could not be done) and the badges wrap
+      if (size.width >= 600) expect(Math.abs(g!.y - m!.y)).toBeLessThan(4);
       // the program (with its review) and the decimals are the tooltip of the family chip
       const chip = header.getByTestId('badge-family');
       await expect(chip).toHaveAttribute('title', /Token program: KCC20PublicMint \(reviewed\), as pinned in this build\./);
@@ -71,7 +72,7 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       const header = (await page.getByTestId('token-header').boundingBox())!;
       const stats = (await page.getByTestId('market-stats').boundingBox())!;
       // the header is the identity block, the pair selector and two short lines (the preamble was about 440 px on a phone, 270 on a desktop; on a phone the genesis badge may carry its reason on a second line)
-      expect(header.height).toBeLessThan(size.width < 600 ? 280 : 170);
+      expect(header.height).toBeLessThan(size.width < 600 ? 330 : 170);
       expect(stats.y - (header.y + header.height)).toBeLessThan(40);
     });
 
