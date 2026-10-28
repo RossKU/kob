@@ -16,11 +16,11 @@ export function StatusBadge(props: { badge: TokenBadge; 'data-testid'?: string }
   );
 }
 
-export function StatusBadges(props: { row: Pick<TokenRow, 'badges' | 'covenantId'> & { info?: { family: 'kcc20' | 'kron' } | null; powers?: readonly string[] } }) {
+export function StatusBadges(props: { row: Pick<TokenRow, 'badges' | 'covenantId'> & { info?: { family: 'kcc20' | 'kron' } | null; powers?: readonly string[] }; /** more lines for the family chip's tooltip (the program, the decimals) */ familyNote?: string | null }) {
   const r = props.row;
   return (
     <span class="row" data-testid={`token-badges-${r.covenantId}`} style="gap:4px">
-      {r.info ? <Badge tone="neutral" title={t('market.badge.familyHint')} data-testid="badge-family">{t(`market.badge.family.${r.info.family}`)}</Badge> : null}
+      {r.info ? <Badge tone="neutral" title={props.familyNote ? `${t('market.badge.familyHint')}\n${props.familyNote}` : t('market.badge.familyHint')} data-testid="badge-family">{t(`market.badge.family.${r.info.family}`)}</Badge> : null}
       {r.badges.map((b) => (
         <StatusBadge key={b.kind} badge={b} />
       ))}
@@ -59,20 +59,10 @@ export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'dat
  */
 export function OpenTokenNote(props: {
   token: (Pick<TokenInfo, 'covenantId' | 'openList'> & Partial<Pick<TokenInfo, 'openScale' | 'decimals' | 'decimalsSource' | 'declarationConflicts' | 'decimalsConvention'>>) | null | undefined;
-  /** the decimals fact as one plain line (no box, no title): where a token page keeps it inside its collapsed "Token details" */
-  plain?: boolean;
   'data-testid'?: string;
 }) {
   const tk = props.token;
   if (!tk || tk.openList !== true) return null;
-  if (props.plain)
-    return (
-      <div data-testid={props['data-testid'] ?? 'open-token-caution'}>
-        <p class="small" style="margin:0" data-testid="open-token-decimals" data-origin={decimalsOrigin(tk)}>
-          {t(`market.open.decimals.${decimalsOrigin(tk)}`, { decimals: tk.decimals ?? 8, source: tk.decimalsConvention ?? '' })}
-        </p>
-      </div>
-    );
   return (
     <Banner tone="info" title={t('market.open.title', { id: longId(tk.covenantId) })} data-testid={props['data-testid'] ?? 'open-token-caution'}>
       <span data-testid="open-token-decimals" data-origin={decimalsOrigin(tk)}>{t(`market.open.decimals.${decimalsOrigin(tk)}`, { decimals: tk.decimals ?? 8, source: tk.decimalsConvention ?? '' })}</span>
@@ -86,11 +76,10 @@ export function OpenTokenNote(props: {
 /**
  * The facts about a token (token-model.ts `tokenFactIds`): neutral badges that say what the token's creation record and program allow (genesis not
  * verified, a live mint authority, who can mint, who can blacklist), each with a plain sentence. No tone: it is not a rating. `block` prints the
- * sentences (pair facts); `inline` the badges alone on one line, the sentence being each badge's tooltip (list rows, the token header); `sentences` the sentences
- * alone (the token header's "Token details"); `compact` shows the badges and opens the sentences on a tap (list rows, the ticket), because a tooltip does
+ * sentences (pair facts); `inline` the badges alone on one line, the sentence being each badge's tooltip (list rows, the token header); `compact` shows the badges and opens the sentences on a tap (list rows, the ticket), because a tooltip does
  * not exist on a touch screen. Several tokens (a pair) name each token before its facts. Renders nothing without facts.
  */
-export function TokenFacts(props: { rows: readonly Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'>[]; compact?: boolean; inline?: boolean; sentences?: boolean; 'data-testid'?: string }) {
+export function TokenFacts(props: { rows: readonly Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'>[]; compact?: boolean; inline?: boolean; 'data-testid'?: string }) {
   const rows = props.rows.filter((r) => r.facts.length > 0);
   if (rows.length === 0) return null;
   const named = props.rows.length > 1;
@@ -115,13 +104,6 @@ export function TokenFacts(props: { rows: readonly Pick<TokenRow, 'covenantId' |
     )),
   );
   const testid = props['data-testid'] ?? 'token-facts';
-  // only the sentences (a token page keeps them in its "Token details"; the badges are on the line above)
-  if (props.sentences)
-    return (
-      <div class="tf" role="note" data-testid={testid}>
-        {sentences}
-      </div>
-    );
   // list rows: the badges only, small and on one line; the legend above the list (FactsLegend) says what each one means once
   if (props.inline)
     return (

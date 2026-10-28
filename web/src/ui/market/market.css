@@ -275,8 +275,6 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .mkt-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
 .mkt-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .mkt-badges:empty { display: none; }
-.mkt-more > summary { cursor: pointer; color: var(--muted); width: max-content; max-width: 100%; }
-.mkt-more-body { margin-top: 6px; }
 .mkt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-width: 0; }
 .mkt-head > .mkt-title { flex: 1 1 16rem; min-width: 0; }
 .mkt-head > .mkt-title.mkt-title-fit { flex: 0 1 auto; }

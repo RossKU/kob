@@ -73,8 +73,8 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('token-title')).toHaveText(`KASC (${SHORT(REF_ID)})`);
       await expect(page.getByTestId('token-name')).toHaveText('Kasc Token');
       await expect(page.getByTestId(`kascov-source-${REF_ID}`)).toHaveText('name and ticker from kascov.io (declared by their creator)');
-      await expect(page.getByTestId('token-program')).toHaveText('Token program: KCC20Ref (reviewed), as pinned in this build.');
-      await expect(page.getByTestId('token-decimals-rule')).toContainText('the first order names them');
+      // (no family chip yet: the token has no entry; the first order opens it)
+      await expect(page.getByTestId('badge-family')).toHaveCount(0);
       await expect(page.getByTestId('kascov-link')).toHaveAttribute('href', `https://kascov.io/#/testnet-10/token/${REF_ID}`);
       await expect(page.getByTestId('kascov-link')).toHaveAttribute('rel', 'noopener noreferrer');
       // unverified facts are badges, never a refusal (non-blocking)
@@ -94,7 +94,7 @@ for (const vp of VIEWPORTS) {
       await page.getByTestId('first-order-decimals').fill('2');
       await page.getByTestId('first-order-use').click();
       await expect(page.getByTestId('order-ticket')).toBeVisible();
-      await expect(page.getByTestId('open-token-decimals')).toContainText('2 decimals you entered');
+      await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /2 decimals you entered/);
       expect(await horizontalOverflow(page)).toBe(0);
 
       // a buy: no wallet holding of the token is needed (the wallet holds none)
@@ -113,11 +113,10 @@ for (const vp of VIEWPORTS) {
       await openKascov(page, '/market');
       await page.getByTestId(`token-link-${ROCKET_ID}`).click();
       await expect(page.getByTestId('token-title')).toHaveText(`ROCK (${SHORT(ROCKET_ID)})`);
-      await expect(page.getByTestId('token-program')).toHaveText('Token program: KaspaRocketToken11458 (reviewed), as pinned in this build.');
+      await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /Token program: KaspaRocketToken11458 \(reviewed\), as pinned in this build\./);
       // no decimals asked for: the program's convention
       await expect(page.getByTestId('first-order')).toHaveCount(0);
-      await expect(page.getByTestId('open-token-decimals')).toHaveAttribute('data-origin', 'program');
-      await expect(page.getByTestId('open-token-decimals')).toContainText('3 decimals, the KaspaRocket convention');
+      await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /3 decimals, the KaspaRocket convention/);
       await expect(page.getByTestId('book-empty')).toHaveText('No orders yet');
       expect(await page.title()).toBe('ROCK - KOB');
 
@@ -139,7 +138,6 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('token-page')).toBeVisible();
       await expect(page.getByTestId('token-not-found')).toHaveCount(0);
       await expect(page.getByTestId('token-title')).toHaveText(`GHST (${SHORT(GHOST_ID)})`);
-      await expect(page.getByTestId('token-program')).toContainText('KCC20Ref (reviewed)');
       // the one fact it lacks, exactly
       const why = page.getByTestId('ticket-untradable');
       await expect(why).toContainText('extension commitment');

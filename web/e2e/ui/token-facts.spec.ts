@@ -44,11 +44,9 @@ test.describe('token facts', () => {
     await connectWallet(page);
     const header = page.getByTestId('token-header');
     await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveText('Genesis not verified');
-    // the badge is on the header's one line of badges; its sentence is in the collapsed "Token details"
-    await expect(header.getByTestId('token-fact-text-genesis_unverified')).toBeHidden();
-    await header.getByTestId('token-more').locator('summary').click();
-    await expect(header.getByTestId('token-fact-text-genesis_unverified')).toBeVisible();
-    await expect(header.getByTestId('token-fact-text-genesis_unverified')).toContainText('not checked against its token program');
+    // the badge is on the header's one line of badges; its sentence is its tooltip (the ticket's badge opens it on a tap)
+    await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveAttribute('title', /not checked against its token program/);
+    await expect(header.getByTestId('token-fact-text-genesis_unverified')).toHaveCount(0);
     await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveClass(/badge-neutral/);
     // the ticket: the badge is in the text, the sentence opens on a tap
     const ticket = page.getByTestId('ticket-token-facts');
@@ -70,9 +68,10 @@ test.describe('token facts', () => {
     await page.goto(`/#/market/${id}`);
     const header = page.getByTestId('token-header');
     for (const f of ['genesis_unverified', 'live_mint_authority', 'public-mint', 'blacklist']) await expect(header.getByTestId(`token-fact-${f}`)).toBeVisible();
-    await expect(header.getByTestId('token-fact-text-live_mint_authority')).toContainText('more of this token can be created');
-    await expect(header.getByTestId('token-fact-text-public-mint')).toContainText('anyone create more');
-    await expect(header.getByTestId('token-fact-text-blacklist')).toContainText('block addresses');
+    // the sentences are the badges' tooltips
+    await expect(header.getByTestId('token-fact-live_mint_authority')).toHaveAttribute('title', /more of this token can be created/);
+    await expect(header.getByTestId('token-fact-public-mint')).toHaveAttribute('title', /anyone create more/);
+    await expect(header.getByTestId('token-fact-blacklist')).toHaveAttribute('title', /block addresses/);
     // the market list: the same badges on the row, small and on one line with the covenant id; the sentence is the badge's tooltip and every sentence is
     // in the legend above the list, behind one tap (no "what is this?" on a row)
     await page.goto('/#/market');

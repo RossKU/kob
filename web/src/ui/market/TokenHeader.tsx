@@ -7,7 +7,7 @@ import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
 import { KascovNote } from './KascovNote';
 import { IdCopy } from './IdCopy';
-import { KascovLink, ProgramNote } from './ProgramNote';
+import { KascovLink, programTitle } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
 import { TokenNote } from './TokenNote';
 import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
@@ -63,7 +63,7 @@ function TemplateVerification(props: { row: TokenRow; services: Pick<Services, '
 /**
  * What a token page must say wherever it is read, never behind a tap: the shared-ticker note, the cross-check findings between the indexer and the
  * registry, the issuer powers, and why a token cannot be traded. `full` (the facts of a pair) adds the fact badges with their sentences and the box of an
- * open-list token (its decimals and full covenant id); a token page keeps those in its collapsed "Token details" instead (`TokenMore`).
+ * open-list token (its decimals and full covenant id); a token page has neither (its program and decimals are the tooltip of the token-family chip).
  */
 export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean; full?: boolean }) {
   const r = props.row;
@@ -84,31 +84,10 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean; fu
 }
 
 /**
- * The collapsed "Token details" of a token page (closed by default): the sentence of each fact badge, the token program, where the decimals come
- * from with the price step (an open-list token's one line: no registry entry says it) and the full covenant id.
- */
-export function TokenMore(props: { row: TokenRow }) {
-  const r = props.row;
-  return (
-    <details class="mkt-more small" data-testid="token-more">
-      <summary>{t('market.token.info')}</summary>
-      <div class="stack-sm mkt-more-body">
-        <TokenFacts rows={[r]} sentences data-testid="token-fact-sentences" />
-        <ProgramNote row={r} />
-        <OpenTokenNote token={r.info} plain data-testid="token-open-caution" />
-        <div class="wrap-anywhere" data-testid="token-more-id">
-          {t('market.open.fullId')} <CopyText value={r.covenantId} short={false} data-testid="token-full-id" />
-        </div>
-      </div>
-    </details>
-  );
-}
-
-/**
  * Token title bar (top of the page), compact so the trading content starts right below it: the identity block and the pair selector, one line with the
- * short covenant id (copy button), the name, where its facts come from, the link to kascov.io and the live state, one line of badges (the facts as
- * small badges: their sentences are in "Token details"), the warnings that must be seen, and the collapsed "Token details". The title itself is
- * for screen readers: the pair selector already names the token.
+ * short covenant id (copy button), the name, where its facts come from, the link to kascov.io and the live state, one line of badges (the token
+ * family, whose tooltip names the program and the decimals, and the facts, each with its sentence as the tooltip) and the warnings that must be seen. The
+ * title itself is for screen readers: the pair selector already names the token.
  */
 export function TokenHeader(props: {
   row: TokenRow;
@@ -143,11 +122,10 @@ export function TokenHeader(props: {
         {props.badges}
       </div>
       <div class="mkt-badges">
-        <StatusBadges row={r} />
+        <StatusBadges row={r} familyNote={programTitle(r)} />
         <TokenFacts rows={[r]} inline data-testid="token-facts" />
       </div>
       <TokenWarnings row={r} sharedTicker={props.sharedTicker} />
-      <TokenMore row={r} />
     </div>
   );
 }

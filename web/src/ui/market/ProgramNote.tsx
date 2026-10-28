@@ -1,8 +1,9 @@
-// What a token page says about a token's PROGRAM and DECIMALS where no registry entry does (a token only the indexer, the wallet or kascov.io names):
-// the token program as KOB pins it (matched by template hash, so a name here is KOB's own table, never a claim of a third party) with its review status,
-// and where the decimals come from, by the rules the whole app uses (declaration, the program's default such as KaspaRocket's 3, else the first order
-// names them). Plus the link to the token on kascov.io for a row kascov.io named. Pure facts and labels: nothing here is a rating.
+// What a token page says about a token's PROGRAM and DECIMALS where no registry entry does (a token only the indexer, the wallet or kascov.io names),
+// as the tooltip of the token-family chip: the token program as KOB pins it (matched by template hash, so a name here is KOB's own table, never a claim of a third
+// party) with its review status, and where the decimals come from, by the rules the whole app uses (declaration, the program's default such as KaspaRocket's 3,
+// else the first order names them). Plus the link to the token on kascov.io for a row kascov.io named. Pure facts and labels: nothing here is a rating.
 import { useServices } from '../../app/context';
+import { decimalsOrigin } from '../../app/token-display';
 import { kascovNetwork, kascovTokenUrl } from '../../data/kascov';
 import { t } from '../../i18n';
 import { TOKEN_PROGRAMS, programDefaultDecimals } from '../../kob/programs.generated';
@@ -27,17 +28,20 @@ export function decimalsLine(row: Pick<TokenRow, 'declared' | 'decimals' | 'info
   return t('market.program.decimalsUnknown');
 }
 
-export function ProgramNote(props: { row: TokenRow }) {
-  const r = props.row;
-  if (r.source === 'registry') return null;
-  const program = programOfRow(r);
-  if (!program) return null;
-  return (
-    <p class="small" style="margin:0" data-testid="token-program-note">
-      <span data-testid="token-program">{t('market.program.line', { program: program.name, review: reviewText(program.review) })}</span>
-      {r.info ? null : <span data-testid="token-decimals-rule"> {decimalsLine(r)}</span>}
-    </p>
-  );
+/**
+ * What a token page says about a token's program and decimals where no registry entry does, as the tooltip text of the token-family chip (no box, no line
+ * of its own): the program as KOB pins it with its review status, and where the decimals (and the price step) come from.
+ */
+export function programTitle(row: TokenRow): string | null {
+  const lines: string[] = [];
+  if (row.source !== 'registry') {
+    const program = programOfRow(row);
+    if (program) lines.push(t('market.program.line', { program: program.name, review: reviewText(program.review) }));
+    if (!row.info) lines.push(decimalsLine(row));
+  }
+  const info = row.info;
+  if (info && info.openList === true) lines.push(t(`market.open.decimals.${decimalsOrigin(info)}`, { decimals: info.decimals ?? 8, source: info.decimalsConvention ?? '' }));
+  return lines.length ? lines.join('\n') : null;
 }
 
 /** The link to the token on kascov.io, for a row kascov.io named (a new tab, no referrer). */

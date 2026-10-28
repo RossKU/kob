@@ -225,10 +225,9 @@ test('without the registry the banner matches what the page does: indexer tokens
   await expect(page.getByTestId('banner-registry')).toContainText('unlisted tokens named by their covenant id');
   await expect(page.getByTestId('banner-registry')).not.toContainText('not tradable');
   await expect(page.getByTestId('order-ticket')).not.toHaveAttribute('data-state', 'untradable');
-  // the decimals line of an unlisted token is in the collapsed "Token details", not in a box in the page's flow
-  await expect(page.getByTestId('token-open-caution')).toBeHidden();
-  await page.getByTestId('token-more').locator('summary').click();
-  await expect(page.getByTestId('token-open-caution')).toBeVisible();
+  // the decimals of an unlisted token are no box in the page: they are the tooltip of the token-family chip
+  await expect(page.getByTestId('token-open-caution')).toHaveCount(0);
+  await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /whole tokens of 8 decimals/);
 });
 
 test('a side or type switch keeps the amount and the price; the stop, exit and tip start over', async ({ appPage: page, mock }) => {

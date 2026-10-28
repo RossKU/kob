@@ -54,7 +54,7 @@ test('its market page names it everywhere (title, stats, book, chart, hints) and
   await expect(page.getByTestId('order-book')).toContainText(`Price (KAS per ${SHORT})`);
   await expect(page.getByTestId('order-book')).toContainText(`Size (${SHORT})`);
   await expect(page.getByTestId('chart-unit')).toHaveText(`KAS per ${SHORT}`);
-  await expect(page.getByTestId('token-open-caution')).toContainText('amounts are whole tokens of 8 decimals');
+  await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /amounts are whole tokens of 8 decimals/);
   const body = (await page.locator('main').textContent()) ?? '';
   expect(body).not.toMatch(/base units/);
   expect(body).not.toMatch(/KAS per \)|KAS per $|\(\)| of ,|\/ KAS/);

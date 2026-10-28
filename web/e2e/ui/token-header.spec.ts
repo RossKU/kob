@@ -1,6 +1,6 @@
 // The token page header is compact so the trading content comes first: the identity block and the pair selector, one line (short id with a copy button,
-// name, where its facts come from, Live), one line of fact badges, and a collapsed "Token details" that holds the sentences, the program, the decimals
-// and the full covenant id. A real warning is never in the disclosure.
+// name, where its facts come from, Live) and one line of badges (the token family, whose tooltip names the program and the decimals, and the facts, each
+// with its sentence as the tooltip). No box, no bullet sentences, no disclosure. A real warning stays in the page as a one-line note.
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures';
 
@@ -26,37 +26,32 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
   test.describe(`token header, ${name}`, () => {
     test.use({ viewport: size });
 
-    test('no blue box and no duplicate id: one short id with a copy button, one line of badges, a collapsed "Token details"', async ({ appPage: page, mock }) => {
+    test('no blue box, no bullet sentences, no program line, no disclosure; one short id with a copy button; the badges on one line with their meaning as tooltips', async ({ appPage: page, mock }) => {
       await seedOpenToken(page, mock);
       await page.goto(`/#/market/${ID}`);
       const header = page.getByTestId('token-header');
       await expect(page.getByTestId('order-book')).toBeVisible();
-      // the box of an open-list token is gone from the flow: its facts are in the closed disclosure
       await expect(header.locator('.banner')).toHaveCount(0);
-      await expect(page.getByTestId('token-open-caution')).toBeHidden();
-      await expect(page.getByTestId('token-program-note')).toBeHidden();
+      for (const gone of ['token-open-caution', 'open-token-decimals', 'token-program-note', 'token-more', 'token-fact-text-genesis_unverified', 'token-fact-text-public-mint']) await expect(header.getByTestId(gone)).toHaveCount(0);
+      await expect(header.locator('details')).toHaveCount(0);
+      await expect(header).not.toContainText(/Its creation was not checked|lets anyone create more|Not in the token registry|Token program:/);
       // the covenant id is said once, short, with a copy button (the title for screen readers is not drawn)
       await expect(header.getByTestId('token-short-id')).toHaveText(SHORT);
       await expect(header.getByTestId('token-short-id-copy')).toBeVisible();
       await expect(header.getByTestId('token-meta').getByText(SHORT)).toHaveCount(1);
-      // the facts are badges on one line; their sentences wait in the details
+      // the facts are badges on one line; the sentence of each is its tooltip
       const genesis = header.getByTestId('token-fact-genesis_unverified');
       const mint = header.getByTestId('token-fact-public-mint');
       await expect(genesis).toHaveText('Genesis not verified');
       await expect(mint).toHaveText('Public mint');
+      await expect(genesis).toHaveAttribute('title', /not checked against its token program/);
+      await expect(mint).toHaveAttribute('title', /anyone create more/);
       const [g, m] = [await genesis.boundingBox(), await mint.boundingBox()];
       expect(Math.abs(g!.y - m!.y)).toBeLessThan(4);
-      await expect(header.getByTestId('token-fact-text-genesis_unverified')).toBeHidden();
-      // the disclosure is closed, then opens with everything the box and the bullets said
-      const more = header.getByTestId('token-more');
-      await expect(more).not.toHaveAttribute('open', '');
-      await more.locator('summary').click();
-      await expect(header.getByTestId('token-fact-text-genesis_unverified')).toContainText('not checked against its token program');
-      await expect(header.getByTestId('token-fact-text-public-mint')).toContainText('anyone create more');
-      await expect(header.getByTestId('token-program')).toContainText('KCC20PublicMint (reviewed)');
-      await expect(header.getByTestId('open-token-decimals')).toContainText('amounts are whole tokens of 8 decimals');
-      await expect(header.getByTestId('open-token-decimals')).toContainText('the price step is 1 sompi');
-      await expect(header.getByTestId('token-more-id')).toContainText(ID);
+      // the program (with its review) and the decimals are the tooltip of the family chip
+      const chip = header.getByTestId('badge-family');
+      await expect(chip).toHaveAttribute('title', /Token program: KCC20PublicMint \(reviewed\), as pinned in this build\./);
+      await expect(chip).toHaveAttribute('title', /whole tokens of 8 decimals/);
     });
 
     test('the trading content starts right below the header', async ({ appPage: page, mock }) => {
@@ -65,17 +60,15 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       await expect(page.getByTestId('order-book')).toBeVisible();
       const header = (await page.getByTestId('token-header').boundingBox())!;
       const stats = (await page.getByTestId('market-stats').boundingBox())!;
-      // the header is at most the identity block, the pair selector and two short lines (the tall preamble was about 440 px on a phone, 270 on a desktop)
-      expect(header.height).toBeLessThan(size.width < 600 ? 280 : 190);
+      // the header is the identity block, the pair selector and two short lines (the preamble was about 440 px on a phone, 270 on a desktop)
+      expect(header.height).toBeLessThan(size.width < 600 ? 260 : 170);
       expect(stats.y - (header.y + header.height)).toBeLessThan(40);
     });
 
-    test('a real warning is one line in the page, never behind the disclosure', async ({ appPage: page, mock }) => {
+    test('a real warning is one line in the page', async ({ appPage: page, mock }) => {
       await seedOpenToken(page, mock, { powers: ['freeze'] });
       await page.goto(`/#/market/${ID}`);
-      const warning = page.getByTestId('token-header').getByTestId('powers-warning');
-      await expect(warning).toBeVisible();
-      await expect(page.getByTestId('token-more')).not.toHaveAttribute('open', '');
+      await expect(page.getByTestId('token-header').getByTestId('powers-warning')).toBeVisible();
     });
   });
 }

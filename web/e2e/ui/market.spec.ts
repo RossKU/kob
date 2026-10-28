@@ -223,7 +223,7 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
     await expect(appPage.getByTestId('first-order')).toHaveCount(0);
     await expect(appPage.getByTestId('first-order-entered')).toHaveCount(0);
-    await expect(appPage.getByTestId('token-header').getByTestId('token-open-caution')).toContainText('first order set');
+    await expect(appPage.getByTestId('badge-family')).toHaveAttribute('title', /first order set/);
   });
 
   test('an unknown covenant id is reported, not blank', async ({ appPage }) => {
