@@ -7,7 +7,7 @@ import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
 import { KascovNote } from './KascovNote';
 import { KascovLink, ProgramNote } from './ProgramNote';
-import { TokenIcon } from './TokenIcon';
+import { IdentityBlock } from './Fingerprint';
 import { TokenNote } from './TokenNote';
 import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
 import { shortCovenantId, templateDetail, type TokenRow } from './token-model';
@@ -97,19 +97,21 @@ export function TokenHeader(props: {
   return (
     <div class="stack-sm" data-testid="token-header">
       <div class="mkt-top">
-        <div class="mkt-title">
-          {props.pair}
-          <TokenIcon row={r} />
-          <h1 class="token-name" style="margin:0" data-testid="token-title" data-covenant-id={r.covenantId}>
-            {tokenTitle(r)}
-          </h1>
-          <StatusBadges row={r} />
-          <span class="small muted" title={r.covenantId} data-testid="token-short-id">{r.info && !r.info.openList ? shortCovenantId(r.covenantId) : longId(r.covenantId)}</span>
-          {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
-          <TokenNote token={props.note} />
-          <KascovNote row={r} />
-          <KascovLink row={r} />
-          {props.badges}
+        <div class="mkt-head">
+          <IdentityBlock row={r} size="lg" data-testid="token-identity" />
+          <div class="mkt-title">
+            {props.pair}
+            <h1 class="token-name" style="margin:0" data-testid="token-title" data-covenant-id={r.covenantId}>
+              {tokenTitle(r)}
+            </h1>
+            <StatusBadges row={r} />
+            <span class="small muted" title={r.covenantId} data-testid="token-short-id">{r.info && !r.info.openList ? shortCovenantId(r.covenantId) : longId(r.covenantId)}</span>
+            {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
+            <TokenNote token={props.note} />
+            <KascovNote row={r} />
+            <KascovLink row={r} />
+            {props.badges}
+          </div>
         </div>
         {props.tools}
       </div>
@@ -166,6 +168,7 @@ export function PairDetails(props: { rows: readonly TokenRow[]; shared?: Readonl
       {props.rows.map((r) => (
         <div class="stack-sm" key={r.covenantId} data-testid="pair-token-details" data-token={r.covenantId}>
           <div class="mkt-title">
+            <IdentityBlock row={r} data-testid="pair-token-identity" />
             <h2 class="token-name" style="margin:0;font-size:1.05rem" data-testid="pair-token-title">{tokenTitle(r)}</h2>
             <StatusBadges row={r} />
             {r.name ? <span class="mkt-name">{r.name}</span> : null}

@@ -3,13 +3,18 @@
 import { t } from '../../i18n';
 import type { TokenRow } from './token-model';
 
-export function KascovNote(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'decimals' | 'kascov'> }) {
+/** `compact` (list rows): the source is the small marker "via kascov", the sentence is its tooltip and the legend above the list says it once. */
+export function KascovNote(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'decimals' | 'kascov'>; compact?: boolean }) {
   const { covenantId, decimals, kascov: k, ticker } = props.row;
   if (!k) return null;
   const what = k.usedName && k.usedTicker ? 'nameTicker' : k.usedName ? 'name' : k.usedTicker ? 'ticker' : null;
   return (
     <>
-      {what ? (
+      {what && props.compact ? (
+        <span class="ml-via small muted" title={t(`market.kascov.source.${what}`)} data-testid={`kascov-source-${covenantId}`} data-what={what}>
+          {t('market.kascov.via')}
+        </span>
+      ) : what ? (
         <span class="small muted token-note" title={t('market.kascov.sourceTitle')} data-testid={`kascov-source-${covenantId}`} data-what={what}>
           {' '}
           {t(`market.kascov.source.${what}`)}

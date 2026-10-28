@@ -93,7 +93,8 @@ the page prints neutral badges. They are facts the indexer derives from the chai
 | Can blacklist | The program lets the issuer block addresses from moving the token. |
 | issuer can freeze or seize | The program can freeze or seize balances; escrowed orders can fail or be lost at the issuer's discretion. |
 
-"what is this?" next to a badge opens its sentence (a touch screen has no tooltip, so it is printed or opens on a tap). A token
+On a token page each badge has its sentence printed under it. In the market list a badge shows its sentence as a tooltip, and the
+legend above the list ("What do the badges mean?") opens every sentence, which a touch screen without tooltips needs. A token
 without badges is not thereby safe: the badges only report what could be checked.
 
 ## 4. Buy and sell

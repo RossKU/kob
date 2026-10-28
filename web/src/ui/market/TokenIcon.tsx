@@ -16,13 +16,15 @@ export function avatarLetter(ticker: string, covenantId: string): string {
 /** A hue 0..359 from the first bytes of the covenant id: a token keeps its colour. */
 export const avatarHue = (covenantId: string): number => (parseInt(covenantId.slice(0, 4), 16) || 0) % 360;
 
-export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'> }) {
+/** `size` (px) is the diameter when the icon is not sized by its container (`.idb`, `.ml-name`); the default is 24 px; the letter follows it. */
+export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: number }) {
   const { config } = useServices();
   const [iconsOn] = useIconPref();
   const root = useRef<HTMLSpanElement>(null);
   const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined');
   const [src, setSrc] = useState<string | null>(null);
   const { covenantId, ticker, kascov } = props.row;
+  const size = props.size;
   const net = kascovNetwork(config.network);
   const base = config.tokenNamesUrl;
   const hash = kascov?.imageHash ?? null;
@@ -52,8 +54,8 @@ export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' |
   }, [iconsOn, seen, net, hash, url, covenantId, base]);
 
   return (
-    <span ref={root} class="tk-icon" style={`--tk-h:${avatarHue(covenantId)}`} aria-hidden="true" data-testid={`token-icon-${covenantId}`} data-icon={src ? 'image' : 'letter'}>
-      {src ? <img src={src} alt="" width="24" height="24" decoding="async" referrerpolicy="no-referrer" /> : avatarLetter(ticker, covenantId)}
+    <span ref={root} class="tk-icon" style={`--tk-h:${avatarHue(covenantId)}${size ? `;--tk-size:${size}px` : ''}`} aria-hidden="true" data-testid={`token-icon-${covenantId}`} data-icon={src ? 'image' : 'letter'}>
+      {src ? <img src={src} alt="" decoding="async" referrerpolicy="no-referrer" /> : avatarLetter(ticker, covenantId)}
     </span>
   );
 }

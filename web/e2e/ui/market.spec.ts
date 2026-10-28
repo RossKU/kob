@@ -13,12 +13,15 @@ async function seeded(mock: import('../fixtures').MockClient) {
 test.describe('shell and token list', () => {
   test.use({ appPath: '/#/market' });
 
-  test('lists the registry token as `TICKER (abcd…1234)` with no verification wording, and never the ticker without its covenant id', async ({ appPage, mock }) => {
-    const { id, short } = await seeded(mock);
+  test('lists the registry token as its ticker over its shortened covenant id (copyable) with no verification wording', async ({ appPage, mock }) => {
+    const { id } = await seeded(mock);
     await expect(appPage.getByTestId(TESTID.navMarket)).toHaveAttribute('aria-current', 'page');
     const row = appPage.getByTestId(`token-row-${id}`);
     await expect(row).toBeVisible();
-    await expect(row.getByTestId(`token-link-${id}`)).toHaveText(`EXKCC (${short})`);
+    await expect(row.getByTestId(`token-link-${id}`)).toHaveText('EXKCC');
+    // the identity block: the icon and the fingerprint of the covenant id (its three words are the tooltip and the accessible name)
+    await expect(row.getByTestId(`identity-${id}`)).toBeVisible();
+    await expect(row.getByTestId(`fingerprint-${id}`)).toHaveAttribute('aria-label', /^Covenant id fingerprint: [a-z]+ [a-z]+ [a-z]+$/);
     // token issuance is permissionless and KOB makes no per-token judgement: the row never says verified / official / pending review (the neutral fact "Genesis not verified" is not a verdict)
     await expect(row).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review|registry/i);
     await expect(row.getByTestId('badge-family')).toBeVisible();
@@ -28,12 +31,15 @@ test.describe('shell and token list', () => {
     // the indexer's open order counts are merged in (one column: asks + bids, the split in the tooltip)
     await expect(row.getByTestId(`token-orders-${id}`)).toHaveText('22');
     await expect(row.getByTestId(`token-orders-${id}`)).toHaveAttribute('title', '11 asks · 11 bids');
-    // the full token hash (covenant id) is shown, monospace, never truncated; no market / pair column and no size-convention column; the figure
-    // headers sort (the list opens by 24 h volume) and the program badges sit under the name
+    // the covenant id is shortened (8 + 8 hex), monospace, with the whole id in its tooltip and behind the copy button; there is no id column, no
+    // market / pair column and no size-convention column; the figure headers sort (the list opens by 24 h volume) and the badges sit by the id
     const hash = row.getByTestId(`token-hash-${id}`);
-    await expect(hash).toHaveText(id);
+    await expect(hash).toHaveText(`${id.slice(0, 8)}…${id.slice(-8)}`);
+    await expect(hash).toHaveAttribute('title', id);
+    await expect(hash).toHaveAttribute('data-value', id);
     await expect(hash).toHaveCSS('font-family', /mono|Consolas|Courier/i);
-    await expect(appPage.locator('[data-testid="token-table"] thead th')).toHaveText([/^Token/, /^Price \(KAS\)/, /^24h/, /^24h volume \(KAS\)/, /^Spread/, /^Orders/, 'Token hash (covenant id)']);
+    await expect(row.getByTestId(`token-hash-${id}-copy`)).toHaveAccessibleName('Copy covenant id');
+    await expect(appPage.locator('[data-testid="token-table"] thead th')).toHaveText([/^Token/, /^Price \(KAS\)/, /^24h/, /^24h volume \(KAS\)/, /^Spread/, /^Orders/]);
     await expect(row.locator('[data-testid^="token-pair-"]')).toHaveCount(0);
     await expect(appPage.getByTestId('network-badge')).toHaveText('testnet-10');
     await expect(appPage.getByTestId('footer-statement')).toContainText('non-custodial');
@@ -74,8 +80,12 @@ test.describe('shell and token list', () => {
     const soloRow = appPage.getByTestId(`token-row-${solo}`);
     await expect(twinRow).toBeVisible();
     await expect(twinRow).toHaveAttribute('data-source', 'indexer');
-    await expect(regRow.getByTestId(`shared-ticker-${id}`)).toHaveText(note);
-    await expect(twinRow.getByTestId(`shared-ticker-${twin}`)).toHaveText(note);
+    // a row shows a small warning sign: the sentence is its tooltip and accessible name (the fingerprints beside the two tickers differ)
+    await expect(regRow.getByTestId(`shared-ticker-${id}`)).toHaveAttribute('title', note);
+    await expect(regRow.getByTestId(`shared-ticker-${id}`)).toHaveAccessibleName(note);
+    await expect(twinRow.getByTestId(`shared-ticker-${twin}`)).toHaveAttribute('title', note);
+    await expect(regRow.getByTestId(`shared-ticker-${id}`)).not.toContainText('Another token');
+    expect(await regRow.getByTestId(`fingerprint-${id}`).getAttribute('data-words')).not.toBe(await twinRow.getByTestId(`fingerprint-${twin}`).getAttribute('data-words'));
     await expect(soloRow).toBeVisible();
     await expect(soloRow.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0);
     // no row says whether a token is verified or official

@@ -45,13 +45,15 @@ test.describe('my orders', () => {
 
   test('the same token reads the same on the market list, the token page and My orders, with no verification wording (registry says verified, the mock indexer says unverified)', async ({ appPage, mock }) => {
     // EXKCC `verified` in a registry served by the spec; the mock executor serves no verification state at all. Token issuance is permissionless and
-    // KOB makes no per-token judgement: the label is `TICKER (abcd…1234)` whatever either side says
+    // KOB makes no per-token judgement: the label is `TICKER (abcd…1234)` whatever either side says (the list row leads with the ticker and prints the
+    // id under it, with its fingerprint beside it)
     await listExkcc(appPage);
     const { tok, order } = await seedAsk(mock);
     const short = `${tok.covenant_id.slice(0, 4)}…${tok.covenant_id.slice(-4)}`;
     await appPage.goto('/#/market');
-    const listText = (await appPage.getByTestId(`token-link-${tok.covenant_id}`).textContent()) ?? '';
-    expect(listText).toBe(`EXKCC (${short})`);
+    const listText = `EXKCC (${short})`;
+    await expect(appPage.getByTestId(`token-link-${tok.covenant_id}`)).toHaveText('EXKCC');
+    await expect(appPage.getByTestId(`token-hash-${tok.covenant_id}`)).toHaveText(`${tok.covenant_id.slice(0, 8)}…${tok.covenant_id.slice(-8)}`);
     await expect(appPage.getByTestId(`token-row-${tok.covenant_id}`)).not.toContainText(/unverified|(?<!Genesis not )verified|official|registry/i);
     await expect(appPage.getByTestId(`token-row-${tok.covenant_id}`).getByTestId('badge-unverified')).toHaveCount(0);
     await appPage.goto(`/#/market/${tok.covenant_id}`);

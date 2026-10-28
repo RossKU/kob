@@ -5,8 +5,11 @@ import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import type { IndexerTokenView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
-import { Banner, Button, CopyText, ErrorBanner, Field, Loading, Section, Table, TableMessage, toError, useAsync } from '../kit';
-import { SharedTickerNote, StatusBadges, TokenFacts, tokenTitle } from './TokenBadges';
+import { Banner, Button, ErrorBanner, Field, Loading, Section, Table, TableMessage, toError, useAsync } from '../kit';
+import { SharedTickerNote, StatusBadges, TokenFacts } from './TokenBadges';
+import { IdentityBlock } from './Fingerprint';
+import { IdCopy } from './IdCopy';
+import { ListLegend } from './ListLegend';
 import { KascovNote } from './KascovNote';
 import { mergeKascov } from './kascov-merge';
 import { TokenIcon } from './TokenIcon';
@@ -109,8 +112,8 @@ function Figure(props: { cell: Cell; entry: ListEntry; testid: string; cls?: str
 
 /** The figure columns of both tables, in order: key, header, the class that hides it on a narrow screen. */
 const FIGURES: { key: Exclude<SortKey, 'market'>; label: (kas: boolean) => string; hint?: string; cls?: string }[] = [
-  { key: 'last', label: (kas) => (kas ? t('market.col.lastIn', { quote: 'KAS' }) : t('market.col.last')), hint: 'market.col.lastHint' },
-  { key: 'change', label: () => t('market.col.change'), hint: 'market.col.changeHint' },
+  { key: 'last', label: (kas) => (kas ? t('market.col.lastIn', { quote: 'KAS' }) : t('market.col.last')), hint: 'market.col.lastHint', cls: 'ml-last' },
+  { key: 'change', label: () => t('market.col.change'), hint: 'market.col.changeHint', cls: 'ml-change' },
   { key: 'volume', label: (kas) => (kas ? t('market.col.volumeIn', { quote: 'KAS' }) : t('market.col.volume')), cls: 'ml-md' },
   { key: 'spread', label: () => t('market.col.spread'), cls: 'ml-md' },
   { key: 'orders', label: () => t('market.col.orders'), cls: 'ml-md' },
@@ -133,34 +136,41 @@ function SortHeader(props: { k: SortKey; label: string; hint?: string | undefine
 const rowState = (e: ListEntry): string => (e.loading ? 'loading' : e.unavailable ? 'unavailable' : 'ready');
 
 function TokenTableRow({ row, entry, shared }: { row: TokenRow; entry: ListEntry; shared: boolean }) {
+  // line 1: the ticker (bold) and the name; line 2: the covenant id shortened, with a copy button, and the badges. A token without a ticker is led by its name
+  const headline = row.ticker || row.name || t('market.list.unnamed');
+  const sub = row.ticker ? row.name : '';
   return (
     <tr data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
       <td>
         <div class="ml-name">
-          <TokenIcon row={row} />
+          <IdentityBlock row={row} />
           <div class="ml-name-text">
-            <a href={`#/market/${row.covenantId}`} class="token-name" data-testid={`token-link-${row.covenantId}`}>
-              {tokenTitle(row)}
-            </a>
-            {row.name || row.declared || row.kascov || row.source === 'kascov' ? (
-              <div class="small muted" data-testid={`token-name-${row.covenantId}`}>
-                {row.name}
-                {row.declared && row.decimals !== null ? <TokenNote token={{ decimalsSource: 'declared', decimals: row.decimals }} /> : null}
-                <KascovNote row={row} />
-                {/* the orders column is hidden on a phone: the row says it here */}
-                {row.source === 'kascov' ? <span class="ml-only-narrow" data-testid={`token-no-orders-narrow-${row.covenantId}`}> · {t('market.list.noOrders')}</span> : null}
-              </div>
-            ) : null}
-            <div class="ml-badges"><StatusBadges row={row} /></div>
-            <TokenFacts rows={[row]} compact data-testid={`token-facts-${row.covenantId}`} />
-            <SharedTickerNote shared={shared} data-testid={`shared-ticker-${row.covenantId}`} />
+            <div class="ml-line1">
+              <a href={`#/market/${row.covenantId}`} class="token-name" data-testid={`token-link-${row.covenantId}`}>
+                {headline}
+              </a>
+              {sub || row.declared || row.kascov || row.source === 'kascov' ? (
+                <span class="small muted ml-sub" data-testid={`token-name-${row.covenantId}`}>
+                  {sub}
+                  {row.declared && row.decimals !== null ? <TokenNote token={{ decimalsSource: 'declared', decimals: row.decimals }} /> : null}
+                  <KascovNote row={row} compact />
+                  {/* the orders column is hidden on a phone: the row says it here */}
+                  {row.source === 'kascov' ? <span class="ml-only-narrow" data-testid={`token-no-orders-narrow-${row.covenantId}`}> · {t('market.list.noOrders')}</span> : null}
+                </span>
+              ) : null}
+              <SharedTickerNote shared={shared} icon data-testid={`shared-ticker-${row.covenantId}`} />
+            </div>
+            <div class="ml-line2">
+              <IdCopy value={row.covenantId} data-testid={`token-hash-${row.covenantId}`} />
+              <span class="ml-badges">
+                <StatusBadges row={row} />
+                <TokenFacts rows={[row]} inline data-testid={`token-facts-${row.covenantId}`} />
+              </span>
+            </div>
           </div>
         </div>
       </td>
       {FIGURES.map((f) => <Figure key={f.key} cell={entry.cells[f.key]} entry={entry} testid={`token-${f.key}-${row.covenantId}`} cls={f.cls} />)}
-      <td class="token-hash-cell ml-lg">
-        <CopyText value={row.covenantId} short={false} class="token-hash" data-testid={`token-hash-${row.covenantId}`} />
-      </td>
     </tr>
   );
 }
@@ -253,7 +263,7 @@ export function TokenList(props: { invalidToken?: string }) {
     pairs.reload();
     setGeneration((g) => g + 1);
   };
-  const cols = FIGURES.length + 2;
+  const cols = FIGURES.length + 1;
 
   return (
     <div class="stack" data-testid="token-list-view">
@@ -266,13 +276,13 @@ export function TokenList(props: { invalidToken?: string }) {
         <div style="max-width:420px;margin-bottom:12px">
           <Field label={t('market.search.label')} type="search" value={query} onValue={setQuery} placeholder={t('market.search.placeholder')} data-testid="token-search" />
         </div>
+        <ListLegend />
         <ErrorBanner error={tokens.error} title={t('market.list.indexerError')} onRetry={tokens.reload} data-testid="token-list-error" />
-        <Table dense class="ml-table" data-testid="token-table">
+        <Table dense class="ml-table ml-tokens" data-testid="token-table">
           <thead>
             <tr>
               <SortHeader k="market" label={t('market.col.token')} sort={sort} onSort={onSort} />
               {FIGURES.map((f) => <SortHeader key={f.key} k={f.key} label={f.label(true)} hint={f.hint ? t(f.hint) : undefined} sort={sort} onSort={onSort} right cls={f.cls} />)}
-              <th class="ml-lg">{t('market.col.hash')}</th>
             </tr>
           </thead>
           <tbody>

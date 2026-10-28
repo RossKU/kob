@@ -70,13 +70,18 @@ test.describe('token facts', () => {
     await expect(header.getByTestId('token-fact-text-live_mint_authority')).toContainText('more of this token can be created');
     await expect(header.getByTestId('token-fact-text-public-mint')).toContainText('anyone create more');
     await expect(header.getByTestId('token-fact-text-blacklist')).toContainText('block addresses');
-    // the market list: the same badges on the row, the sentences behind a tap
+    // the market list: the same badges on the row, small and on one line with the covenant id; the sentence is the badge's tooltip and every sentence is
+    // in the legend above the list, behind one tap (no "what is this?" on a row)
     await page.goto('/#/market');
     const row = page.getByTestId(`token-row-${id}`);
     await expect(row.getByTestId('token-fact-live_mint_authority')).toBeVisible();
-    await expect(row.getByTestId('token-fact-text-public-mint')).toBeHidden();
-    await row.locator('summary').click();
-    await expect(row.getByTestId('token-fact-text-public-mint')).toBeVisible();
+    await expect(row.getByTestId('token-fact-live_mint_authority')).toHaveAttribute('title', /more of this token can be created/);
+    await expect(row.locator('summary, [data-testid^="token-fact-text-"]')).toHaveCount(0);
+    await expect(page.getByTestId('legend-fact-public-mint')).toBeHidden();
+    await page.getByTestId('legend-badges').locator('summary').click();
+    await expect(page.getByTestId('legend-fact-public-mint')).toContainText('anyone create more');
+    const [hash, badge] = await Promise.all([row.getByTestId(`token-hash-${id}`).boundingBox(), row.getByTestId('token-fact-live_mint_authority').boundingBox()]);
+    expect(Math.abs((hash!.y + hash!.height / 2) - (badge!.y + badge!.height / 2))).toBeLessThan(12);
   });
 
   test('a token whose registry entry verified its genesis (no live mint authority) has no fact of its own', async ({ appPage: page, mock }) => {

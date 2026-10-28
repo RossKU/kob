@@ -41,6 +41,10 @@ Vendored data and token programs
   crates/kob-x402/vectors/kaspa-x402-v1.0.1/. MIT License, Copyright (c) 2026 Kaspa x402
   contributors (LICENSE and PROVENANCE.md there).
 
+* Hallmarks v1.0 (GBKS/hallmarks 1.0.0, Christoph Ono) -- web/src/third-party/hallmarks/. The covenant-id fingerprint of the market list
+  follows its specification (CC0 1.0); the conformance vectors there are CC0 1.0 and the BIP-39 wordlist is the one its MIT-licensed
+  reference code ships (LICENSE and UPSTREAM.md there). KOB's implementation is its own.
+
 * KRON token program templates -- contracts/adapters/kron/templates/*.bin.
   Public on-chain programs of the KRON launchpad, pinned as byte strings so that tests can
   compare against them (templates/README.md). KOB does not own or audit them.

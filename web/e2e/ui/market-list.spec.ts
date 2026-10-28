@@ -171,13 +171,16 @@ test.describe('phone', () => {
     // a token without metadata (no ticker, no decimals) is out of the default list until asked for
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveCount(0);
     await page.getByTestId('token-list-nameless').click();
-    await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveText('0f0f0f0f…0f0f0f0f');
+    await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveText('Unnamed token');
+    await expect(page.getByTestId(`token-hash-${'0f'.repeat(32)}`)).toHaveText('0f0f0f0f…0f0f0f0f');
     const row = page.getByTestId(`token-row-${exkcc}`);
     await expect(row.getByTestId(`token-link-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-last-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-change-${exkcc}`)).toBeVisible();
     for (const k of ['volume', 'spread', 'orders']) await expect(row.getByTestId(`token-${k}-${exkcc}`)).toBeHidden();
-    await expect(row.getByTestId(`token-hash-${exkcc}`)).toBeHidden();
+    // the identity block stays on the left, the shortened id under the name
+    await expect(row.getByTestId(`identity-${exkcc}`)).toBeVisible();
+    await expect(row.getByTestId(`token-hash-${exkcc}`)).toBeVisible();
     await expect(page.getByTestId('sort-volume').first()).toBeHidden();
     await expect(page.getByTestId('pair-table').getByTestId('sort-last')).toBeVisible();
     const overflow = await page.evaluate(() => {
