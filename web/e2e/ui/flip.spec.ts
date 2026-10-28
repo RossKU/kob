@@ -53,11 +53,12 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     await expect(flip).toHaveText('');
     await expect(flip).toHaveAttribute('data-flip-to', 'KAS/EXKCC');
     await expect(flip).toHaveAttribute('aria-pressed', 'false');
-    // icon only, and just left of the pair title on the same row
+    // icon only, and just right of the pair title on the same row
     await expect(flip).toHaveAttribute('title', 'Flip pair');
     const fb = (await flip.boundingBox())!;
     const pb = (await page.getByTestId('market-pair').boundingBox())!;
-    expect(fb.x + fb.width).toBeLessThanOrEqual(pb.x + 1);
+    expect(pb.x + pb.width).toBeLessThanOrEqual(fb.x + 1);
+    expect(fb.x - (pb.x + pb.width)).toBeLessThan(24);
     expect(Math.abs(fb.y + fb.height / 2 - (pb.y + pb.height / 2))).toBeLessThan(24);
 
     // native figures
