@@ -182,7 +182,8 @@ test.describe('phone', () => {
     await expect(page.getByTestId('theme-toggle')).not.toHaveAttribute('data-theme', before!);
   });
 
-  test('Connect opens a sheet: Wallet connects the extension, the connected header shows the short address in one row', async ({ appPage: page }) => {
+  test('Connect opens a sheet: Wallet connects the extension, the connected header shows the short address in one row (on a wide font too)', async ({ appPage: page }) => {
+    await wideFonts(page);
     await page.setViewportSize({ width: 375, height: 800 });
     await page.goto('/#/market');
     await page.getByTestId('wallet-connect').click();
@@ -192,10 +193,18 @@ test.describe('phone', () => {
     await sheet.getByRole('button', { name: 'Wallet' }).click();
     await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{3}…\w{4}$/);
     await expect(page.getByTestId('wallet-sheet')).toHaveCount(0);
+    // the runner's fonts are wider still than Verdana: a little more letter spacing stands for them
+    await page.addStyleTag({ content: '.header * { letter-spacing: 0.5px; }' });
     const { ys, right } = await rowOf(page, ['menu-button', 'brand', 'network-chip', 'wallet-connected', 'notify-bell']);
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
     expect(right).toBeLessThanOrEqual(375);
     expect(await noScroll(page)).toBe(true);
+    // nothing sits on top of anything: each item of the row ends before the next begins
+    const order = ['brand', 'network-chip', 'wallet-connected', 'notify-bell', 'menu-button'];
+    const boxes = await Promise.all(order.map((id) => page.getByTestId(id).boundingBox()));
+    for (let i = 0; i + 1 < order.length; i++) expect(boxes[i]!.x + boxes[i]!.width, `${order[i]} ends before ${order[i + 1]}`).toBeLessThanOrEqual(boxes[i + 1]!.x + 0.5);
+    // the connected chip's disconnect button can be pressed
+    await page.getByTestId('wallet-disconnect').click({ trial: true });
   });
 
   test('a problem is a full-width banner under the header and the menu button shows it as a dot', async ({ appPage: page }) => {

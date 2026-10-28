@@ -433,9 +433,14 @@ body.modal-open { overflow: hidden; }
   .header .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .header-tools { gap: 6px; }
   .net-chip { font-size: 0.7rem; padding: 2px 6px; }
+  .header-tools { min-width: 0; }
   .wallet-kind, .wallet-disconnect-text, .wallet-chip .copy-btn { display: none; }
   .wallet-chip { padding-left: 8px; }
   .toast-host { left: 12px; right: 12px; width: auto; }
+}
+/* a small phone: the chip keeps the dot and the network; "pre-audit" is in its tooltip, the menu and the banner (so a connected row fits on any font) */
+@media (max-width: 430px) {
+  .net-chip .net-pre { display: none; }
 }
 /* a desktop that is not wide: the brand shrinks to the logo, the chip, the tabs and the buttons tighten (so the whole row fits down to about 900 px even on wide fonts) */
 @media (min-width: 720px) and (max-width: 1199px) {

@@ -17,8 +17,8 @@ export function NetworkChip(props: { network: string; short?: boolean; /** the s
     >
       {props.level ? <span class={`dot ${props.level === 'unknown' ? '' : props.level}`} aria-hidden="true" data-testid="chip-dot" /> : null}
       <span data-testid="network-badge" data-network={props.network}>{name}</span>
-      <span aria-hidden="true"> {'·'} </span>
-      <span data-testid="preaudit-badge">{t('preaudit.badge')}</span>
+      <span class="net-pre" aria-hidden="true"> {'·'} </span>
+      <span class="net-pre" data-testid="preaudit-badge">{t('preaudit.badge')}</span>
     </span>
   );
 }
