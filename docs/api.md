@@ -235,7 +235,7 @@ curl -s $API/v1/health
   "min_order_value_sompi": "100000000",
   "counters": { "orders_total": 295, "orders_listed": 240, "orders_by_status": { "open": 12, "filled": 200, "cancelled": 83 },
                 "rejects_total": 7, "fills_total": 270, "last_block_seq": 812345, "last_block_daa": 123456789 },
-  "version": "0.0.0",
+  "version": "0.1.0",
   "commit": null,
   "payload_version": 4
 }
@@ -250,7 +250,7 @@ Every key the handler returns:
 
 | Key | Type | Meaning |
 |---|---|---|
-| `version` | string | The crate version of the running build. `0.0.0` until the release bump ([ops/release.md](ops/release.md), section 7). |
+| `version` | string | The crate version of the running build, the release tag without the `v` (`0.1.0` is the first release; a build of an earlier commit says `0.0.0`; [ops/release.md](ops/release.md), section 7). |
 | `commit` | string or `null` | The git commit the build was made from; `null` when the build did not set `KOB_GIT_COMMIT` (a plain `cargo build`). |
 | `payload_version` | number | The `KOB1` payload version this build reads and writes ([spec/kob1-payload.md](spec/kob1-payload.md)); currently 4. |
 

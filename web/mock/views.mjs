@@ -100,7 +100,7 @@ export function healthView(chain) {
     settle_depth_daa: chain.settleDepthDaa,
     counters: counters(chain),
     // the build and the history flags of docs/api.md section 3.1 (a store that began late: book_complete false + history_from_daa)
-    version: '0.0.0',
+    version: '0.1.0',
     commit: null,
     payload_version: chain.health.payloadVersion ?? 4,
     book_complete: chain.health.bookComplete !== false,

@@ -2584,7 +2584,7 @@ dependencies = [
 
 [[package]]
 name = "kob-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "kaspa-addresses",
  "kaspa-consensus-core",
@@ -2598,7 +2598,7 @@ dependencies = [
 
 [[package]]
 name = "kob-executor"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2641,7 +2641,7 @@ dependencies = [
 
 [[package]]
 name = "kob-protocol"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "faster-hex 0.10.1",
@@ -2658,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "kob-tests"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "kaspa-consensus-core",
@@ -2675,7 +2675,7 @@ dependencies = [
 
 [[package]]
 name = "kob-wasm"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "kaspa-addresses",
  "kaspa-consensus-core",
@@ -2689,7 +2689,7 @@ dependencies = [
 
 [[package]]
 name = "kob-x402"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "blake2b_simd",
@@ -4106,7 +4106,7 @@ dependencies = [
 
 [[package]]
 name = "sil2argent"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "argent-artifact",
  "faster-hex 0.10.1",

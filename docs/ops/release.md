@@ -201,14 +201,14 @@ would list none of the orders the new wallets place.
    `KOB_GIT_COMMIT` give the same binary bytes (a build with another commit differs in that string only; to compare a
    rebuild with a published binary, set the same value).
 
-   **`version` is `0.0.0` until the release bump.** It is the workspace version (`[workspace.package] version` in the root
-   `Cargo.toml`, which every crate inherits), and that stays `0.0.0` on `master` until the release manager sets the release
-   version, in the commit that is tagged (the release commit; the bump is the release manager's decision and is not made on a
-   feature branch). A binary built from `master` before the bump therefore reports `"version": "0.0.0"`, which is not a defect of
-   the build: tell such builds apart by `commit` (it is the git commit the build was made from) and compare that with the commit
-   you mean. Once the release is tagged, `version` is the tag without the `v` and step 3 below can compare it; before that,
-   "`version` equals the release" cannot be checked, only `commit` and `payload_version`. `kob --version` reports the same
-   workspace version (the web app shows its own package version, `web/package.json`).
+   **`version` is the workspace version.** It is `[workspace.package] version` in the root `Cargo.toml`, which every crate
+   inherits. The release manager sets it in the commit that is tagged (the release commit; the bump is the release manager's
+   decision and is not made on a feature branch): `0.1.0` is the first release (testnet-10 only, pre-audit). A binary built from a
+   commit before that bump reports `"version": "0.0.0"`, which is not a defect of the build: tell builds of one version apart by
+   `commit` (it is the git commit the build was made from) and compare that with the commit you mean. Between two releases
+   `master` keeps the last release's version, so `version` equals the release only for the build of the tagged commit; `commit`
+   and `payload_version` are what a later build adds. `kob --version` reports the same workspace version (the web app shows its
+   own package version, `web/package.json`, kept at the release version).
 2. Then the **web app** and other wallets (`kob-cli`, bots) are published with the new builders.
 3. Announce the order in the release notes; a host serving the web app should point it only at indexers
    whose `/v1/health` reports the release `version` (after the bump; before it, the release `commit`) (and, for a payload version

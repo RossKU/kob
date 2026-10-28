@@ -310,7 +310,7 @@ program changes. The program is not replaced while it runs, and it does not upda
    `docs/ops/release.md`, 7) or the database (brought up to date in place, or rebuilt: step 6).
 2. **Note what runs now:** `kob-executor --version` (the crate version, the release tag without the `v`) and
    `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback only unless you
-   changed it). A build made from `master` before the release bump says `0.0.0`; tell such builds apart by `commit`.
+   changed it). A build of a commit before the `0.1.0` release says `0.0.0`; tell builds of the same version apart by `commit`.
 3. **Download and check** the new archive (section 1). Unzip it into a new folder; the archive holds the programs and this page,
    never your configuration.
 4. **Stop gracefully** and swap:
