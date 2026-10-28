@@ -2,7 +2,7 @@
 // order, Escape closes it and puts the focus back on the button, so does moving the focus out of it), closes on a press outside and on every navigation
 // (a hash change). `anchor: 'header'` makes the panel as wide as the header and hang under it (the phone menu); otherwise it hangs under the button.
 import type { ComponentChildren } from 'preact';
-import { useEffect, useId, useRef, useState } from 'preact/hooks';
+import { useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
 
 export interface PopoverProps {
   /** accessible name of the button and of the panel */
@@ -24,7 +24,8 @@ export function Popover(props: PopoverProps) {
   const id = `hp-${useId()}`;
   const wrap = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
+  // a layout effect: the listeners are on as soon as the panel is in the page (a post-paint effect can lag behind a fast Escape)
+  useLayoutEffect(() => {
     if (!open) return;
     const onDown = (e: Event) => {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false);
