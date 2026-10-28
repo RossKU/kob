@@ -77,7 +77,7 @@ for (const id of ['kasware', 'kaspire', 'kastle'] as WalletName[]) {
     test('the wallet locks: the session closes with a banner, the ticket asks for a wallet, listeners are gone after disconnect', async ({ appPage: page, mock, wallet }) => {
       await fund(mock, 'alice');
       await openMarket(page, mock, { wallet: id });
-      expect(await wallet!.listenerCount(), 'the app listens to the wallet while connected').toBeGreaterThan(0);
+      await expect.poll(() => wallet!.listenerCount(), { message: 'the app listens to the wallet while connected' }).toBeGreaterThan(0);
       await sellTicket(page);
       await expect(page.getByTestId('order-place')).toBeEnabled();
 
@@ -89,7 +89,7 @@ for (const id of ['kasware', 'kaspire', 'kastle'] as WalletName[]) {
       await expect(page.getByTestId('order-place')).toBeDisabled();
       expect(await wallet!.calls()).toHaveLength(0);
       expect(await mock.submitted(false)).toHaveLength(0);
-      expect(await wallet!.listenerCount(), 'the session is closed: no listener stays behind').toBe(0);
+      await expect.poll(() => wallet!.listenerCount(), { message: 'the session is closed: no listener stays behind' }).toBe(0);
     });
   });
 }
@@ -98,13 +98,16 @@ test.describe('listeners follow the session', () => {
   test('connect registers the listeners once, disconnect and reconnect never stack them', async ({ appPage: page, mock, wallet }) => {
     await fund(mock, 'alice');
     await openMarket(page, mock);
+    // The listeners are registered and removed by the session's effect, which the UI runs after it has painted the change: the address chip
+    // can already show the new state while the provider still holds the old listeners. So each count is polled (bounded by the expect
+    // timeout) until it reaches the state the page shows, never read once right after the DOM changed.
+    await expect.poll(() => wallet!.listenerCount()).toBeGreaterThan(0);
     const connected = await wallet!.listenerCount();
-    expect(connected).toBeGreaterThan(0);
     await page.getByTestId('wallet-disconnect').click();
     await expect(page.getByTestId('wallet-address')).toHaveCount(0);
-    expect(await wallet!.listenerCount()).toBe(0);
+    await expect.poll(() => wallet!.listenerCount()).toBe(0);
     await page.getByTestId('wallet-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toBeVisible();
-    expect(await wallet!.listenerCount()).toBe(connected);
+    await expect.poll(() => wallet!.listenerCount()).toBe(connected);
   });
 });
