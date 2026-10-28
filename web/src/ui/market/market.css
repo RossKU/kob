@@ -257,7 +257,6 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .ml-line1 .token-name { font-size: 1rem; overflow-wrap: anywhere; }
 .ml-sub { overflow-wrap: anywhere; min-width: 0; }
 .ml-via { margin-left: 4px; font-size: 0.72rem; border-bottom: 1px dotted var(--muted); cursor: help; white-space: nowrap; }
-.ml-warn { display: inline-flex; align-self: center; color: var(--warn); cursor: help; }
 .ml-id { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .ml-id code { font-size: 0.8rem; color: var(--muted); }
 .ml-copy { display: inline-flex; align-items: center; justify-content: center; padding: 2px 4px; min-height: 22px; min-width: 22px; line-height: 1; }

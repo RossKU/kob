@@ -6,7 +6,7 @@ import type { IndexerTokenView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
 import { Banner, Button, ErrorBanner, Field, Loading, Section, Table, TableMessage, toError, useAsync } from '../kit';
-import { SharedTickerNote, StatusBadges, TokenFacts } from './TokenBadges';
+import { StatusBadges, TokenFacts } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { IdCopy } from './IdCopy';
 import { ListLegend } from './ListLegend';
@@ -20,7 +20,7 @@ import {
   type Cell, type ListedPair, type ListEntry, type Slot, type SortKey, type SortState,
 } from './market-list';
 import { pairVolumeOf, type PairVolume } from './pair-market';
-import { buildTokenRows, filterTokens, isNameless, parseCovenantId, sharedTickerIds, tradableHere, tradableRows, type TokenRow } from './token-model';
+import { buildTokenRows, filterTokens, isNameless, parseCovenantId, tradableHere, tradableRows, type TokenRow } from './token-model';
 import { useKascov } from './use-kascov';
 import { usePooledSlots } from './use-market-list';
 
@@ -135,7 +135,7 @@ function SortHeader(props: { k: SortKey; label: string; hint?: string | undefine
 
 const rowState = (e: ListEntry): string => (e.loading ? 'loading' : e.unavailable ? 'unavailable' : 'ready');
 
-function TokenTableRow({ row, entry, shared }: { row: TokenRow; entry: ListEntry; shared: boolean }) {
+function TokenTableRow({ row, entry }: { row: TokenRow; entry: ListEntry }) {
   // line 1: the ticker (bold) and the name; line 2: the covenant id shortened, with a copy button, and the badges. A token without a ticker is led by its name
   const headline = row.ticker || row.name || t('market.list.unnamed');
   const sub = row.ticker ? row.name : '';
@@ -158,7 +158,6 @@ function TokenTableRow({ row, entry, shared }: { row: TokenRow; entry: ListEntry
                   {row.source === 'kascov' ? <span class="ml-only-narrow" data-testid={`token-no-orders-narrow-${row.covenantId}`}> · {t('market.list.noOrders')}</span> : null}
                 </span>
               ) : null}
-              <SharedTickerNote shared={shared} icon data-testid={`shared-ticker-${row.covenantId}`} />
             </div>
             <div class="ml-line2">
               <IdCopy value={row.covenantId} data-testid={`token-hash-${row.covenantId}`} />
@@ -218,7 +217,6 @@ export function TokenList(props: { invalidToken?: string }) {
     const known = new Set(built.map((r) => r.covenantId.toLowerCase()));
     return mergeKascov(tradableRows(built, templates), kascovTokens, { network: config.network, templates, registry, declared, known });
   }, [registry, tokens.data, pasted, kob, declared, kascovTokens, config.network]);
-  const shared = useMemo(() => sharedTickerIds(rows), [rows]);
   const listed = useMemo(() => listedPairs(pairs.data, rows), [pairs.data, rows]);
 
   // the 24 h figures: one `/v1/stats` per listed token and one 24 h pair volume per listed pair, once the token list is in (a few calls at a time)
@@ -291,7 +289,7 @@ export function TokenList(props: { invalidToken?: string }) {
             ) : shownRows.length === 0 ? (
               <TableMessage colSpan={cols} data-testid="token-list-empty">{query ? t('market.list.noMatch') : t('market.list.empty')}</TableMessage>
             ) : (
-              shownRows.map(({ row, entry }) => <TokenTableRow key={row.covenantId} row={row} entry={entry} shared={shared.has(row.covenantId)} />)
+              shownRows.map(({ row, entry }) => <TokenTableRow key={row.covenantId} row={row} entry={entry} />)
             )}
           </tbody>
         </Table>

@@ -64,7 +64,7 @@ test.describe('shell and token list', () => {
     await expect(appPage.getByTestId('status-indexer')).toContainText('following');
   });
 
-  test('two listed tokens with one ticker: both rows and the token page header carry the shared-ticker note (the ticket does not repeat it); a unique ticker has none', async ({ appPage, mock }) => {
+  test('two listed tokens with one ticker: the list rows carry no warning (the fingerprints tell them apart), the token page header carries the shared-ticker note (the ticket does not repeat it); a unique ticker has none', async ({ appPage, mock }) => {
     const { id } = await seeded(mock);
     const twin = 'bb'.repeat(32);
     const solo = 'dd'.repeat(32);
@@ -80,11 +80,11 @@ test.describe('shell and token list', () => {
     const soloRow = appPage.getByTestId(`token-row-${solo}`);
     await expect(twinRow).toBeVisible();
     await expect(twinRow).toHaveAttribute('data-source', 'indexer');
-    // a row shows a small warning sign: the sentence is its tooltip and accessible name (the fingerprints beside the two tickers differ)
-    await expect(regRow.getByTestId(`shared-ticker-${id}`)).toHaveAttribute('title', note);
-    await expect(regRow.getByTestId(`shared-ticker-${id}`)).toHaveAccessibleName(note);
-    await expect(twinRow.getByTestId(`shared-ticker-${twin}`)).toHaveAttribute('title', note);
-    await expect(regRow.getByTestId(`shared-ticker-${id}`)).not.toContainText('Another token');
+    // a list row carries no ticker warning: the fingerprints beside the two tickers differ, and the short covenant id is under each
+    for (const r of [regRow, twinRow]) {
+      await expect(r.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0);
+      await expect(r).not.toContainText('Another token');
+    }
     expect(await regRow.getByTestId(`fingerprint-${id}`).getAttribute('data-words')).not.toBe(await twinRow.getByTestId(`fingerprint-${twin}`).getAttribute('data-words'));
     await expect(soloRow).toBeVisible();
     await expect(soloRow.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0);

@@ -53,8 +53,8 @@ covenant inputs reliably yet).
 **Market** (the first page) lists the tokens. Search by ticker, name or covenant id ("Ticker, name or covenant id"). A token is
 identified by its **covenant id**, a 64-character hex string; the ticker is only a label that anyone can pick.
 
-* **Same ticker, different token.** If two tokens the page shows share a ticker (look-alike letters count), the page says "Another
-  token uses this ticker — check the covenant id". The list shows the start and end of the id, and the token page the full id with a
+* **Same ticker, different token.** If two tokens the page shows share a ticker (look-alike letters count), a token's page says "Another
+  token uses this ticker — check the covenant id". The list marks nothing: each row has its own fingerprint and shows the start and end of the id, and the token page the full id with a
   copy button. Compare it with the id the token's own project gave you.
 * **Tokens without a name.** A token that has no ticker and declared no decimals is hidden behind "Show N token(s) without a name".
   A search or a pasted covenant id finds it anyway. A token the list does not know can be added with "Add an unknown token" (paste

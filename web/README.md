@@ -214,8 +214,8 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   list is marked "declared by its creator": the creator's own claim, not checked.
   A token this build cannot trade (its program is not one this build supports and embeds) is not listed, not offered in selectors and has no market
   page; no token is ever refused for what it is (KOB makes no listing decision, the registry is a pinned snapshot of facts and curation belongs to
-  the community token lists a user chooses). When two or more tokens the app shows share a ticker (look-alike letters and homoglyphs count as the same), the list row (a small warning sign, the sentence is its tooltip), the token page header, the pair
-  facts and the order ticket say "Another token uses this ticker — check the covenant id". The covenant id, not the ticker, is the identity.
+  the community token lists a user chooses). When two or more tokens the app shows share a ticker (look-alike letters and homoglyphs count as the same), the token page header and the pair
+  facts say "Another token uses this ticker — check the covenant id". The covenant id, not the ticker, is the identity.
 * **Several indexers.** `extraIndexerUrls` (config.json / `__KOB_CONFIG__`, at most 4) are cross-checked on the token page: powers, the market's price scale and best ask / bid are
   compared and any disagreement is shown. With one indexer the footer and Settings say "single indexer, not cross-checked".
 * **Indexer failover.** The same list is the failover set (`src/data/indexer-failover.ts`, `docs/ops/web-hosting.md`): when the primary is unreachable, failing or not

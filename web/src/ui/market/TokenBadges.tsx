@@ -39,22 +39,12 @@ export const powerName = (p: string): string => ((KNOWN_POWERS as readonly strin
 
 /**
  * Short note for a token whose ticker another listed token uses too: tickers are not unique, the covenant id is the identity. `block` renders a
- * paragraph (token page header, ticket), `icon` a small warning sign with the sentence as its tooltip (a list row), otherwise an inline line. Renders nothing for other tokens.
+ * paragraph (token page header), otherwise an inline line. Renders nothing for other tokens. The market list shows no such note: its rows tell tokens
+ * apart by the fingerprint and the short covenant id.
  */
-export function SharedTickerNote(props: { shared: boolean; block?: boolean; icon?: boolean; 'data-testid'?: string }) {
+export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'data-testid'?: string }) {
   if (!props.shared) return null;
   const testid = props['data-testid'] ?? 'shared-ticker-note';
-  // a list row: a small warning sign, the sentence in its tooltip and accessible name (the fingerprint beside the ticker shows the difference)
-  if (props.icon)
-    return (
-      <span class="ml-warn" role="img" aria-label={t('market.sharedTicker')} title={t('market.sharedTicker')} data-testid={testid}>
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
-          <path d="M8 1.5 15 14H1z" fill="currentColor" />
-          <path d="M8 6v4" stroke="var(--surface, #fff)" stroke-width="1.6" stroke-linecap="round" />
-          <circle cx="8" cy="12" r="0.9" fill="var(--surface, #fff)" />
-        </svg>
-      </span>
-    );
   return props.block ? (
     <p class="small" style="margin:0" role="note" data-testid={testid}>{t('market.sharedTicker')}</p>
   ) : (
