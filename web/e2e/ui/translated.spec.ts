@@ -9,7 +9,7 @@
 // same way), and records each replaced node's text. A text vnode whose replaced node Preact changed afterwards is a stale text on screen.
 import type { Page } from '@playwright/test';
 import { expect, test, TEST_KEYS } from '../fixtures';
-import { fund, openMarket, gotoNav, openConnect } from '../helpers/env';
+import { fund, openMarket, gotoNav, clickConnectOption, openStatus } from '../helpers/env';
 import { seedOrders } from '../helpers/orders';
 import { clickPlace, confirmReceipt, fillFields, pickType, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -83,8 +83,7 @@ const seen = async (page: Page, testid: string): Promise<string> => ((await page
 
 async function connectKey(page: Page): Promise<void> {
   // the translator's marks make every text wider: a header row that does not fit takes the phone layout, where the key is behind "Connect"
-  await openConnect(page, 'wallet-connect-local-key');
-  await page.getByTestId('wallet-connect-local-key').click();
+  await clickConnectOption(page, 'wallet-connect-local-key');
   await expect(page.getByTestId('signer-overlay')).toBeVisible();
   const f = page.frameLocator('[data-testid="signer-frame"]');
   await f.getByTestId('signer-key').fill(TEST_KEYS.alice.secretKey);
@@ -100,8 +99,8 @@ test('a machine-translated page shows every changed text afresh: status bar, tic
 
   // the page is translated (what the translator replaced is on screen) and the status bar reached the node after that: no "checking..." left
   await expect(page.locator('html')).toHaveClass(/translated-ltr/);
-  await expect(page.getByTestId('status-dot')).toHaveAttribute('data-node-level', 'ok');
-  await page.getByTestId('status-dot').click();
+  await openStatus(page);
+  await expect(page.getByTestId('status-node')).toHaveAttribute('data-level', 'ok');
   await expect.poll(() => seen(page, 'status-node')).toContain('Node: reachable');
   expect(await page.getByTestId('status-node').locator('font[data-gt]').count(), 'the status text is a translation').toBeGreaterThan(0);
   expect(await seen(page, 'status-node')).not.toContain('checking');

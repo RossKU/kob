@@ -59,13 +59,41 @@ export async function openConnect(page: Page, optionTestId: string): Promise<voi
 /** Follows a tab of the header (`nav-orders` ...): on a phone the tabs are in the menu, which is opened first. */
 export async function gotoNav(page: Page, testid: string): Promise<void> {
   const link = page.getByTestId(testid);
-  if (!(await link.isVisible())) await page.getByTestId('menu-button').click();
-  await link.click();
+  await expect(async () => {
+    if (!(await link.isVisible())) await page.getByTestId('menu-button').click();
+    await link.click({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+}
+
+/**
+ * Clicks a connect option wherever the header has it right now, retried as a whole: a header row that does not fit (long translations, wide fonts) takes
+ * the phone layout, possibly just after the page was first measured, and the option then moves behind `wallet-connect`.
+ */
+export async function clickConnectOption(page: Page, optionTestId: string): Promise<void> {
+  const option = page.getByTestId(optionTestId);
+  await expect(async () => {
+    if (!(await option.isVisible())) {
+      const opener = page.getByTestId('wallet-connect');
+      if (await opener.isVisible()) await opener.click();
+      await expect(option).toBeVisible({ timeout: 1_500 });
+    }
+    await option.click({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+}
+
+/** Opens the status lines (`status-node`, `status-indexer`): the status dot of the desktop row, or the menu of the phone layout. */
+export async function openStatus(page: Page): Promise<void> {
+  await expect(async () => {
+    if (await page.getByTestId('status-node').isVisible()) return;
+    const dot = page.getByTestId('status-dot');
+    if (await dot.isVisible()) await dot.click();
+    else await page.getByTestId('menu-button').click();
+    await expect(page.getByTestId('status-node')).toBeVisible({ timeout: 1_500 });
+  }).toPass({ timeout: 20_000 });
 }
 
 export async function connectWallet(page: Page, wallet: WalletName = 'kasware'): Promise<void> {
-  await openConnect(page, `wallet-connect-${wallet}`);
-  await page.getByTestId(`wallet-connect-${wallet}`).click();
+  await clickConnectOption(page, `wallet-connect-${wallet}`);
   await expect(page.getByTestId('wallet-address')).toBeVisible();
 }
 
