@@ -1,8 +1,9 @@
+import { useState } from 'preact/hooks';
 import { useWallet } from '../../app/context';
 import { useServices } from '../../app/context';
 import { t } from '../../i18n';
 import { visibilityCheckSupported } from '../../signer/seen';
-import { Badge, Button, CopyText } from '../kit';
+import { Badge, Button, CopyText, Modal } from '../kit';
 import { isPhoneBrowser } from './platform';
 
 /** The address in the chip as a wallet address reads: its network prefix, then the head and tail of the body ("kaspatest:qq776p…wutfav"). */
@@ -20,13 +21,11 @@ const KASWARE_URL = 'https://chromewebstore.google.com/detail/kasware-wallet/hkl
 const KASPIRE_URL = 'https://github.com/KaspaHUB21/Kaspire-Kaspa-Wallet';
 
 /**
- * Wallet area of the header. Not connected: one connect button per DETECTED wallet (extensions inject late, the list updates by itself),
- * or an install hint while none is found. Connected: one compact chip with the address (shortened, copyable) as its text, a small wallet icon
- * whose tooltip says how it is connected, the wallet's network ONLY when it differs from the app's (the header's network badge already names the
- * app's), and a disconnect button (an icon on a phone).
+ * Wallet area of the header. Not connected: two buttons, "Connect wallet" and "Private key" (ConnectBar). Connected: one compact chip with the address
+ * (shortened, copyable) as its text, a small wallet icon whose tooltip says how it is connected, the wallet's network ONLY when it differs from the app's
+ * (the header's network badge already names the app's), and a disconnect button (an icon on a phone).
  */
 export function WalletButton() {
-  const { config } = useServices();
   const w = useWallet();
 
   if (w.info && w.adapter) {
@@ -55,59 +54,88 @@ export function WalletButton() {
     );
   }
 
-  // the private key is typed into the sandboxed signer frame (SignerFrame.tsx), never into this page. Where the browser cannot run its visibility
-  // check the option is disabled and says why in text (a tooltip does not exist on a touch screen)
+  return <ConnectBar />;
+}
+
+/**
+ * Not connected: exactly two buttons on one line, "Connect wallet" and "Private key"; nothing else stays in the bar. One detected extension wallet
+ * connects at once; several are listed in a dialog; none (or a browser that cannot run the private key signer) says why in a dialog, with the install
+ * links. The private key is typed into the sandboxed signer frame (SignerFrame.tsx), never into this page.
+ */
+function ConnectBar() {
+  const { config } = useServices();
+  const w = useWallet();
+  const [dialog, setDialog] = useState<'wallets' | 'none' | 'key' | null>(null);
   const supported = visibilityCheckSupported();
   const phone = isPhoneBrowser();
-  const privateKey = (
-    <>
+  const only = w.detected.length === 1 ? w.detected[0]! : null;
+
+  const onConnect = () => {
+    if (only) void w.connect(only.id);
+    else setDialog(w.detected.length > 1 ? 'wallets' : 'none');
+  };
+  // where the browser cannot check what the signer shows the button stays, looks off and explains why when pressed (a disabled button cannot be tapped)
+  const onKey = () => {
+    if (supported) w.openPrivateKey();
+    else setDialog('key');
+  };
+  // an extension that appears while the "none" dialog is open (they inject late) takes its place
+  const shown = dialog === 'none' && w.detected.length > 0 ? 'wallets' : dialog;
+
+  return (
+    <div class="wallet-actions" data-testid="wallet-connect-list" data-network={config.network}>
+      <Button small variant="primary" data-testid={only ? `wallet-connect-${only.id}` : 'wallet-connect'} loading={w.connecting} onClick={onConnect}>
+        {w.connecting ? t('shell.wallet.connecting') : t('shell.wallet.connectButton')}
+      </Button>
       <Button
         small
-        variant="ghost"
         data-testid="wallet-connect-local-key"
-        disabled={w.connecting || !supported}
-        onClick={w.openPrivateKey}
+        disabled={w.connecting}
+        data-state={supported ? undefined : 'unavailable'}
+        class={supported ? undefined : 'btn-off'}
+        onClick={onKey}
         title={supported ? t('signer.recommend') : t('signer.unsupported')}
       >
         {t('signer.option')}
       </Button>
-      {supported ? null : (
-        <p class="small muted wallet-note" data-testid="wallet-key-unsupported">
-          {t(phone ? 'signer.unsupportedWhyPhone' : 'signer.unsupportedWhy')}
-        </p>
-      )}
-    </>
-  );
-
-  if (w.detected.length === 0) {
-    return (
-      <div class="row">
-        {/* a phone browser has no extension to install: the install links and "in this browser" would mislead */}
-        <div class="small muted" data-testid="wallet-install-hint" {...(phone ? {} : { title: t('shell.wallet.none') })}>
-          <strong>{t('shell.wallet.noneTitle')}</strong>{' '}
-          {phone ? (
-            <span data-testid="wallet-install-phone">{t('shell.wallet.nonePhone')}</span>
-          ) : (
-            <>
-              <a href={KASWARE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKasware')}</a>
-              {' / '}
-              <a href={KASPIRE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKaspire')}</a>
-            </>
-          )}
-        </div>
-        {privateKey}
-      </div>
-    );
-  }
-
-  return (
-    <div class="row" data-testid="wallet-connect-list" data-network={config.network}>
-      {w.detected.map((a) => (
-        <Button key={a.id} small variant="primary" data-testid={`wallet-connect-${a.id}`} loading={w.connecting} onClick={() => void w.connect(a.id)}>
-          {w.connecting ? t('shell.wallet.connecting') : t('shell.wallet.connect', { wallet: a.label })}
-        </Button>
-      ))}
-      {privateKey}
+      {shown === 'wallets' ? (
+        <Modal title={t('shell.wallet.chooseTitle')} onClose={() => setDialog(null)} data-testid="wallet-dialog">
+          <div class="stack-sm" data-testid="wallet-choose">
+            {w.detected.map((a) => (
+              <Button key={a.id} variant="primary" block data-testid={`wallet-connect-${a.id}`} loading={w.connecting} onClick={() => void w.connect(a.id).then(() => setDialog(null))}>
+                {w.connecting ? t('shell.wallet.connecting') : t('shell.wallet.connect', { wallet: a.label })}
+              </Button>
+            ))}
+          </div>
+        </Modal>
+      ) : null}
+      {shown === 'none' ? (
+        <Modal title={t('shell.wallet.noneTitle')} onClose={() => setDialog(null)} data-testid="wallet-dialog">
+          <div class="stack-sm" data-testid="wallet-install-hint">
+            {/* a phone browser has no extension to install: the install links and "in this browser" would mislead */}
+            {phone ? (
+              <p data-testid="wallet-install-phone">{t('shell.wallet.nonePhone')}</p>
+            ) : (
+              <>
+                <p>{t('shell.wallet.none')}</p>
+                <p>
+                  <a href={KASWARE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKasware')}</a>
+                  {' / '}
+                  <a href={KASPIRE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKaspire')}</a>
+                </p>
+              </>
+            )}
+            {supported ? (
+              <p class="small muted">{t('shell.wallet.noneOrKey')}</p>
+            ) : null}
+          </div>
+        </Modal>
+      ) : null}
+      {shown === 'key' ? (
+        <Modal title={t('signer.unsupportedTitle')} onClose={() => setDialog(null)} data-testid="wallet-dialog">
+          <p data-testid="wallet-key-unsupported">{t(phone ? 'signer.unsupportedWhyPhone' : 'signer.unsupportedWhy')}</p>
+        </Modal>
+      ) : null}
     </div>
   );
 }

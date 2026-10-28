@@ -3,6 +3,7 @@ export default {
   'signer.option': 'Private key',
   'signer.recommend': 'A browser extension wallet is recommended.',
   'signer.signHead': 'Sign with your key',
+  'signer.unsupportedTitle': 'Private key is not available here',
   'signer.unsupported': 'Not available in this browser. Use a browser extension wallet.',
   'signer.unsupportedWhy': 'This browser cannot use the in-page private key signer: it cannot check what the signer shows. On a desktop, use an extension wallet (KasWare or Kaspire).',
   'signer.unsupportedWhyPhone': 'This browser cannot use the in-page private key signer: it cannot check what the signer shows (iOS browsers and Firefox lack the feature). Use Chrome on Android, or open this page on a desktop with an extension wallet (KasWare or Kaspire).',

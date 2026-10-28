@@ -273,9 +273,34 @@ test.describe('wallet', () => {
 
   test.describe('no wallet installed', () => {
     test.use({ walletId: null });
-    test('shows install links instead of connect buttons', async ({ appPage }) => {
-      await expect(appPage.getByTestId('wallet-install-hint')).toContainText('No Kaspa wallet detected');
+    test('the bar is two buttons; "Connect wallet" says what is missing and links the extensions in a dialog', async ({ appPage }) => {
+      const bar = appPage.getByTestId('wallet-connect-list');
+      await expect(bar.getByRole('button')).toHaveText(['Connect wallet', 'Private key']);
+      await expect(appPage.getByTestId('wallet-install-hint')).toHaveCount(0);
       await expect(appPage.getByTestId(TESTID.walletConnectKasware)).toHaveCount(0);
+      // one row, balanced
+      const [a, b] = [await bar.getByRole('button').nth(0).boundingBox(), await bar.getByRole('button').nth(1).boundingBox()];
+      expect(Math.abs(a!.y - b!.y)).toBeLessThan(4);
+      await bar.getByTestId('wallet-connect').click();
+      const hint = appPage.getByTestId('wallet-install-hint');
+      await expect(appPage.getByTestId('wallet-dialog')).toContainText('No Kaspa wallet detected');
+      await expect(hint.getByRole('link', { name: 'Get KasWare' })).toBeVisible();
+      await expect(hint.getByRole('link', { name: 'Get Kaspire' })).toBeVisible();
+      await appPage.keyboard.press('Escape');
+      await expect(appPage.getByTestId('wallet-dialog')).toHaveCount(0);
+    });
+
+    test.describe('phone width', () => {
+      test.use({ viewport: { width: 375, height: 800 } });
+      test('the two buttons share one row and fit the screen', async ({ appPage }) => {
+        const buttons = appPage.getByTestId('wallet-connect-list').getByRole('button');
+        await expect(buttons).toHaveText(['Connect wallet', 'Private key']);
+        const [a, b] = [await buttons.nth(0).boundingBox(), await buttons.nth(1).boundingBox()];
+        expect(Math.abs(a!.y - b!.y)).toBeLessThan(4);
+        expect(Math.abs(a!.width - b!.width)).toBeLessThan(4);
+        expect(b!.x + b!.width).toBeLessThanOrEqual(375);
+        expect(await appPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      });
     });
   });
 });

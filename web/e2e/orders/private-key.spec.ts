@@ -266,9 +266,11 @@ test('a browser without IntersectionObserver v2 (no isVisible on the entry) is n
   expect(await page.evaluate(() => 'isVisible' in IntersectionObserverEntry.prototype)).toBe(false);
   const button = page.getByTestId('wallet-connect-local-key');
   await expect(button).toBeVisible();
-  await expect(button).toBeDisabled();
+  await expect(button).toHaveAttribute('data-state', 'unavailable');
   await expect(button).toHaveAttribute('title', 'Not available in this browser. Use a browser extension wallet.');
-  // the reason is text on the page, not only a tooltip (there is none on a touch screen)
+  // nothing about it stays in the bar; pressing the button says why, as text in a dialog (a tooltip does not exist on a touch screen)
+  await expect(page.getByTestId('wallet-key-unsupported')).toHaveCount(0);
+  await button.click();
   const why = page.getByTestId('wallet-key-unsupported');
   await expect(why).toBeVisible();
   await expect(why).toContainText('This browser cannot use the in-page private key signer');
@@ -283,13 +285,21 @@ test.describe('an iPhone (no IntersectionObserver v2, no extension wallets)', ()
       delete (IntersectionObserverEntry.prototype as { isVisible?: boolean }).isVisible;
     });
     await openMarket(page, mock, { connect: false });
+    // the bar is two buttons and nothing else
+    await expect(page.getByTestId('wallet-key-unsupported')).toHaveCount(0);
+    await expect(page.getByTestId('wallet-install-hint')).toHaveCount(0);
+    await expect(page.getByTestId('wallet-connect-list').getByRole('button')).toHaveText(['Connect wallet', 'Private key']);
+    await page.getByTestId('wallet-connect-local-key').click();
     const why = page.getByTestId('wallet-key-unsupported');
     await expect(why).toBeVisible();
     await expect(why).toContainText('iOS browsers and Firefox lack the feature');
     await expect(why).toContainText('Chrome on Android, or open this page on a desktop with an extension wallet (KasWare or Kaspire)');
-    await expect(page.getByTestId('wallet-connect-local-key')).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('wallet-dialog')).toHaveCount(0);
+    // "Connect wallet" with no extension: the reason (phone browsers have none) and what to do, in a dialog; no install links on a phone
+    await page.getByTestId('wallet-connect').click();
     const hint = page.getByTestId('wallet-install-hint');
-    await expect(hint).toContainText('Extension wallets do not run in phone browsers');
+    await expect(hint).toContainText('Extension wallets do not run in phone browsers. Use Private key instead.');
     await expect(hint).not.toContainText('Install');
     await expect(hint.locator('a')).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

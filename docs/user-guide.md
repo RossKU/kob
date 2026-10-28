@@ -26,10 +26,12 @@ Contents: [1 What you need](#1-what-you-need) | [2 Connect a wallet](#2-connect-
 
 ## 2. Connect a wallet
 
-1. Install **KasWare** or **Kaspire** in your desktop browser. If the page finds none it says "No Kaspa wallet detected", with the
-   buttons "Get KasWare" and "Get Kaspire". The page notices a new extension by itself; extensions can take a few seconds to appear.
-2. Press **Connect KasWare** (or **Connect Kaspire**) in the header. Approve in the wallet popup. The header then shows
-   "Connected with KasWare" and your address.
+1. Install **KasWare** or **Kaspire** in your desktop browser. The header has two buttons, **Connect wallet** and **Private key**. If the page
+   finds no extension, **Connect wallet** opens a dialog that says "No Kaspa wallet detected" with the links "Get KasWare" and "Get Kaspire" (on a
+   phone: extension wallets do not run in phone browsers, use Private key). The page notices a new extension by itself; extensions can take a few
+   seconds to appear.
+2. Press **Connect wallet** in the header (with two or more extensions it asks which one). Approve in the wallet popup. The header then shows
+   your address with the wallet's icon ("Connected with: KasWare" is its tooltip).
 3. Check the network. If your wallet is on another network than the page, you see "Wrong wallet network: trading is blocked".
    Switch the network in the wallet; nothing can be signed until they match.
 4. **Cancelling needs a wallet that can sign a contract input.** KasWare, Kaspire and the Private key option are known to do it.
