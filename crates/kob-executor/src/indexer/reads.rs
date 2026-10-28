@@ -74,6 +74,10 @@ pub struct TokenView {
     /// `kcc20` or `kron`, when the allowlist names the token's family.
     pub family: Option<&'static str>,
     pub decimals: Option<u32>,
+    /// Where `decimals` come from: `declaration` (the token's verified KCC-23 declaration), `registry` (the registry entry) or
+    /// `program` (the default of the token's program, a launchpad's convention); absent without `decimals`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimals_source: Option<&'static str>,
     /// The standard scale of the token's orders (`10^decimals`, at most `10^9`): an order is listed only at this scale, so the
     /// listed orders of a token quote the same whole token. `null` without `decimals`.
     pub scale: Option<i64>,
@@ -171,6 +175,7 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 extension_commitment: t.extension_commitment.map(|h| h.to_hex()),
                 family: t.family.map(|f| f.as_str()),
                 decimals: t.decimals,
+                decimals_source: t.decimals.map(|_| "registry"),
                 scale: t.scale(),
                 market_scale: None,
                 registry: tokens.info().cloned(),
@@ -216,6 +221,7 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 extension_commitment,
                 family: Some(strict.family.as_str()),
                 decimals: None,
+                decimals_source: None,
                 scale: None,
                 market_scale: market_scale(conn, &cov)?,
                 registry: tokens.info().cloned(),
@@ -229,15 +235,66 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
             });
         }
     }
-    // the KCC-23 declarations the indexer holds (one primary-key lookup per row)
+    // the KCC-23 declarations the indexer holds (one primary-key lookup per row), and so the decimals of each token: its
+    // declaration, else its registry entry, else its program's default ([`resolve_decimals`])
     for v in &mut out {
         if let Ok(id) = crate::hex::Hash32::parse(&v.covenant_id) {
-            if super::kcc23::declared(conn, &id)? {
+            let declared = super::kcc23::declaration_decimals(conn, &id)?;
+            if declared.is_some() {
                 v.declaration = Some(true);
+            }
+            let program = program_default_of(
+                v.template_hash.as_deref().and_then(|h| crate::hex::Hash32::parse(h).ok()).as_ref(),
+                v.template_id.as_deref(),
+            );
+            if let Some((d, source)) = resolve_decimals(declared.flatten(), v.decimals, program) {
+                (v.decimals, v.decimals_source) = (Some(d), Some(source));
             }
         }
     }
     Ok(out)
+}
+
+/// The decimals of a token and where they come from, in this order: the token's verified KCC-23 declaration, its registry entry,
+/// the default of its program (a launchpad's convention, profile `default_decimals`: KaspaRocket 3). `None`: none of them says
+/// (the price basis is then the scale of the token's first order).
+pub fn resolve_decimals(declared: Option<u32>, registry: Option<u32>, program: Option<u32>) -> Option<(u32, &'static str)> {
+    declared.map(|d| (d, "declaration")).or(registry.map(|d| (d, "registry"))).or(program.map(|d| (d, "program")))
+}
+
+/// The default decimals of the program with this template hash, else registry id (`None`: the program has none, or is unknown).
+fn program_default_of(hash: Option<&Hash32>, registry_id: Option<&str>) -> Option<u32> {
+    let profile = hash
+        .and_then(|h| kob_protocol::profile::by_hash(&h.0))
+        .or_else(|| registry_id.and_then(kob_protocol::profile::by_registry_id))?;
+    profile.default_decimals.as_ref().map(|d| d.decimals)
+}
+
+/// The decimals of a token ([`resolve_decimals`]) for the market views (trades, candles, stats, depth, pair candles): their price
+/// basis is its standard scale. The program of a token the registry does not name is read from the template hashes its order
+/// placements recorded; two programs for one covenant id name none. `None` falls back to the scale of the first order.
+pub fn token_decimals(conn: &Connection, tokens: &TokenAllowlist, token: &Hash32) -> DbResult<Option<u32>> {
+    let declared = super::kcc23::declaration_decimals(conn, token)?.flatten();
+    let entry = tokens.get(token);
+    let registry = entry.and_then(|t| t.decimals);
+    if declared.is_some() || registry.is_some() {
+        return Ok(resolve_decimals(declared, registry, None).map(|(d, _)| d));
+    }
+    let from_entry = entry.and_then(|t| program_default_of(t.template_hash.as_ref(), t.template_id.as_deref()));
+    let program = match from_entry {
+        Some(d) => Some(d),
+        None => {
+            let mut st = conn.prepare_cached(
+                "SELECT tpl_hash FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS NOT NULL                  UNION SELECT token_tpl_hash FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash IS NOT NULL LIMIT 2",
+            )?;
+            let hashes = st.query_map([&token.0[..]], |r| r.get::<_, Vec<u8>>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            match hashes.as_slice() {
+                [one] => <[u8; 32]>::try_from(one.as_slice()).ok().and_then(|h| program_default_of(Some(&Hash32(h)), None)),
+                _ => None,
+            }
+        }
+    };
+    Ok(resolve_decimals(None, None, program).map(|(d, _)| d))
 }
 
 /// A (token, program, family) row of the open token list.

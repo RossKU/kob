@@ -39,15 +39,14 @@ export function ticketNotes(issues: readonly PlanIssue[]): PlanIssue[] {
 /**
  * The executor's default minimum order value, in sompi (1 KAS): `ListingRules::min_order_value_sompi` in crates/kob-executor/src/tokens.rs. An order
  * worth less is indexed (status, cancel) but never listed (`unlisted_reason: "order_value_below_minimum"`), so it is in no book and never fills.
- * Each operator can set another value under `[rules]` of the executor config, and the indexer API (docs/api.md section 3.1, `/v1/health`) does not
- * report it, so the web app assumes this default (see {@link minOrderValueOf}).
+ * Each operator can set another value under `[rules]` of the executor config; `/v1/health` reports the executor's own (`min_order_value_sompi`,
+ * docs/api.md section 3.1) and the web app follows it, assuming this default only for an executor that does not (see {@link minOrderValueOf}).
  */
 export const DEFAULT_MIN_ORDER_VALUE_SOMPI = 100_000_000n;
 
 /**
- * The minimum order value to warn at: the indexer's, when `/v1/health` reports it, else the executor default. No server sends such a field today
- * (`min_order_value_sompi`, sompi as a decimal string or a safe integer): this optional reader only makes the warning follow an executor that starts
- * to report it. `source` says which one it is, so the note can say that the number is only the default.
+ * The minimum order value to warn at: the indexer's, when `/v1/health` reports it (`min_order_value_sompi`, sompi as a decimal string or a safe
+ * integer; executors from 0.1.0 do), else the executor default. `source` says which one it is, so the note can say that the number is only the default.
  */
 export function minOrderValueOf(health: unknown): { sompi: bigint; source: 'indexer' | 'default' } {
   const v = health && typeof health === 'object' ? (health as { min_order_value_sompi?: unknown }).min_order_value_sompi : undefined;

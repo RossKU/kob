@@ -208,6 +208,7 @@ impl Indexer {
             settle_depth_daa: self.cfg.settle_depth_daa,
             daa_per_second: self.cfg.daa_per_second,
             lag_alarm_hours: self.cfg.lag_alarm_hours.clone(),
+            min_order_value_sompi: self.cfg.rules.min_order_value_sompi,
         };
         st.validate().map_err(IndexerError::Config)?;
         if let Some(w) = self.cfg.api.proxy_warning() {

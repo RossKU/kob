@@ -127,6 +127,8 @@ async fn rest_and_websocket_follow_the_chain() {
     assert_eq!(st, 200);
     assert_eq!(hl["state"], "following", "{hl}");
     assert!(hl.get("records_next_n").is_some(), "{hl}");
+    // the effective listing minimum of the config ('rules.min_order_value_sompi'), as a decimal string
+    assert_eq!(hl["min_order_value_sompi"], "1", "{hl}");
     let (st, _) = http_get(addr, "/v1/orders/zz").await;
     assert_eq!(st, 400);
 

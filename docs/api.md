@@ -97,8 +97,10 @@ token base-unit quantity is a decimal string**. Counts, scales, DAA scores, ids 
 
 **Prices are sompi per whole token** (`scale` base units of the order's token; a pair order's price is token B base units per
 whole A). `scale` is `10^decimals` of the token, at most `10^9`. Market views (trades, candles, stats, depth) report prices per
-`price_basis` base units, which is the token's standard scale when the registry knows its decimals, else the scale of its first
-order; they also carry `decimals` (`null` without a registry entry).
+`price_basis` base units, which is the token's standard scale when its decimals are known, else the scale of its first order; they
+also carry `decimals` (`null` when unknown). The decimals of a token are, in this order: its verified KCC-23 declaration, its
+registry entry, the default of its token program (a launchpad's convention: KaspaRocket 3; `default_decimals` of the program
+profile), the same order the web app and `kob-cli` use. `GET /v1/tokens` names the source (`decimals_source`).
 
 Fields marked "may be null" are present with value `null`; fields marked "omitted" are absent when they do not apply (section 7
 lists the omitted ones).
@@ -230,6 +232,7 @@ curl -s $API/v1/health
   "bytes_per_tx": 910,
   "alarms": [],
   "settle_depth_daa": 100,
+  "min_order_value_sompi": "100000000",
   "counters": { "orders_total": 295, "orders_listed": 240, "orders_by_status": { "open": 12, "filled": 200, "cancelled": 83 },
                 "rejects_total": 7, "fills_total": 270, "last_block_seq": 812345, "last_block_daa": 123456789 },
   "version": "0.0.0",
@@ -274,6 +277,7 @@ Every key the handler returns:
 | `lag_blue` | number or `null` | Blue score between the cursor and the node's sink at the last request; `null` before it is measured. |
 | `alarms` | array | One entry `{"lag_hours_at_least": h, "lag_seconds": s}` per configured threshold the lag has reached. Thresholds are the top-level `lag_alarm_hours` (default `[1, 6, 12, 24]`). Empty while `lag_seconds` is unknown. |
 | `settle_depth_daa` | number | The depth (in DAA) at which a view counts as `settled`; default 100. |
+| `min_order_value_sompi` | string | The smallest order this executor lists, in sompi as a decimal string (`[rules] min_order_value_sompi` of its config; default `"100000000"`, 1 KAS): the order's amount at its quote, a bid's escrow. A smaller order is indexed (status, cancel) but never listed (`unlisted_reason: "order_value_below_minimum"`), so it is in no book and never fills. The web app warns below it. |
 
 **Counters and totals** (all numbers)
 
@@ -348,7 +352,7 @@ curl -s $API/v1/tokens
 ```json
 { "tokens": [ {
     "ticker": "KRON", "covenant_id": "<hex32>", "template_hash": "<hex32>", "extension_commitment": "<hex32>",
-    "family": "kcc20", "decimals": 3, "scale": 1000, "market_scale": null,
+    "family": "kcc20", "decimals": 3, "decimals_source": "registry", "scale": 1000, "market_scale": null,
     "registry": { "source": "kob-tokens.json", "sha256": "<hex32>" },
     "genesis_verified": null, "warnings": ["genesis_unverified"], "powers": [], "template_id": "KCC20Ref_8x8",
     "open_asks": 4, "open_bids": 3, "declaration": true
@@ -362,8 +366,10 @@ curl -s $API/v1/tokens
 | `template_hash`, `template_id` | hex / string, may be null | The token program's hash and registry id. |
 | `extension_commitment` | hex, may be null | KCC-20 extension commitment. Without an entry: the one commitment the token's order placements named; `null` when they named several or none. |
 | `family` | `"kcc20"`, `"kron"` or null | The token's program family. |
-| `decimals`, `scale` | number or null | Decimals and the standard scale `10^decimals` (at most `10^9`); `null` without a registry entry. |
-| `market_scale` | number or null | Only for a token without `decimals`: the scale of its earliest order, which stays the market's scale; `null` otherwise. |
+| `decimals` | number or null | The token's decimals: its verified KCC-23 declaration, else its registry entry, else the default of its token program (KaspaRocket 3); `null` when none of them says. |
+| `decimals_source` | `"declaration"`, `"registry"`, `"program"`, **omitted** | Where `decimals` come from; omitted with `decimals: null`. |
+| `scale` | number or null | The standard scale `10^decimals` (at most `10^9`) of a registry entry that has `decimals`; `null` otherwise (a token whose decimals are derived has no enforced scale: its orders keep the market's `market_scale`). |
+| `market_scale` | number or null | Only for a token without a registry `scale`: the scale of its earliest order, which stays the market's scale; `null` otherwise. |
 | `registry` | object or null | The registry document the facts come from: `source` (path or `inline`) and `sha256` of its exact bytes. The operator's copy, not chain data. |
 | `genesis_verified` | bool or null | The registry's fact: every genesis output was checked against the pinned program; `null` when it does not say. |
 | `warnings` | array of string | Derived from facts: `genesis_unverified` (unless `genesis_verified` is true), `live_mint_authority` (a genesis record lists a live mint authority; supply can still grow). Show them. |

@@ -102,6 +102,8 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
         o.insert("bytes_per_tx".into(), json!(snap.bytes_per_tx()));
         o.insert("alarms".into(), json!(alarms));
         o.insert("settle_depth_daa".into(), json!(app.state.settle_depth_daa));
+        // the smallest order the executor lists (sompi, a decimal string like every amount): a smaller one is indexed, never listed
+        o.insert("min_order_value_sompi".into(), json!(app.state.min_order_value_sompi.to_string()));
         o.insert("counters".into(), json!(counters));
         // which build answers: the crate version, the commit it was built from (null when the build did not say), and the KOB1
         // payload version it reads and writes (docs/ops/release.md, 7)
@@ -205,11 +207,14 @@ pub async fn pair_candles(State(app): State<Arc<App>>, Path((base, quote)): Path
         }
     }
     let n = limit(&q, "limit", 500, 1500)?;
-    let decimals = (decimals_of(&app, &base), decimals_of(&app, &quote));
+    let tokens = app.state.tokens.clone();
     let v = app
         .state
         .pool
-        .with(move |c| crate::indexer::pairs::pair_candles(c, &base, &quote, decimals, &interval, iv, from, to, n))
+        .with(move |c| {
+            let decimals = (reads::token_decimals(c, &tokens, &base)?, reads::token_decimals(c, &tokens, &quote)?);
+            crate::indexer::pairs::pair_candles(c, &base, &quote, decimals, &interval, iv, from, to, n)
+        })
         .await?;
     json_ok(v)
 }
@@ -346,19 +351,25 @@ pub async fn token_utxos(State(app): State<Arc<App>>, Query(q): Params) -> ApiRe
 
 // ------------------------------------------------------------------------------------------------ market data (B 5.3)
 
-/// The token's decimals (registry / allowlist entry): the market views' price basis is its standard scale.
-fn decimals_of(app: &App, token: &Hash32) -> Option<u32> {
-    app.state.tokens.get(token).and_then(|t| t.decimals)
-}
+// The market views' price basis is the token's standard scale: its decimals from its KCC-23 declaration, else its registry entry,
+// else its program's default ([`reads::token_decimals`]); without any the scale of its first order. Each read resolves them in
+// its own database connection.
 
 /// `GET /v1/trades/{token}?limit=&before=`: trades (fills grouped per transaction), newest first.
 pub async fn trades(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
     let token = parse_hash("token", &token)?;
     let before = opt_i64(&q, "before")?;
     let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
-    let decimals = decimals_of(&app, &token);
+    let tokens = app.state.tokens.clone();
     let ctx = app.ctx();
-    let v = app.state.pool.with(move |c| market::trades(c, &ctx, &token, decimals, before, n)).await?;
+    let v = app
+        .state
+        .pool
+        .with(move |c| {
+            let decimals = reads::token_decimals(c, &tokens, &token)?;
+            market::trades(c, &ctx, &token, decimals, before, n)
+        })
+        .await?;
     json_ok(v)
 }
 
@@ -375,26 +386,38 @@ pub async fn candles(State(app): State<Arc<App>>, Path(token): Path<String>, Que
         }
     }
     let n = limit(&q, "limit", 500, 1500)?;
-    let decimals = decimals_of(&app, &token);
+    let tokens = app.state.tokens.clone();
     let key = format!("candles {token} {interval} {from:?} {to:?} {n}");
-    cached(&app, key, move |c| market::candles(c, &token, decimals, &interval, iv, from, to, n)).await
+    cached(&app, key, move |c| {
+        let decimals = reads::token_decimals(c, &tokens, &token)?;
+        market::candles(c, &token, decimals, &interval, iv, from, to, n)
+    })
+    .await
 }
 
 /// `GET /v1/stats/{token}`: 24 h statistics and the top of the book.
 pub async fn stats(State(app): State<Arc<App>>, Path(token): Path<String>) -> ApiResult {
     let token = parse_hash("token", &token)?;
-    let decimals = decimals_of(&app, &token);
+    let tokens = app.state.tokens.clone();
     let ctx = app.ctx();
     let key = format!("stats {token} {:?} {:?}", ctx.node_daa, ctx.now_unix);
-    cached(&app, key, move |c| market::stats(c, &ctx, &token, decimals)).await
+    cached(&app, key, move |c| {
+        let decimals = reads::token_decimals(c, &tokens, &token)?;
+        market::stats(c, &ctx, &token, decimals)
+    })
+    .await
 }
 
 /// `GET /v1/depth/{token}?levels=`: cumulative depth of the listed book, levels merged by per-basis price.
 pub async fn depth(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
     let token = parse_hash("token", &token)?;
     let n = limit(&q, "levels", 50, app.state.cfg.max_page_size)?;
-    let decimals = decimals_of(&app, &token);
+    let tokens = app.state.tokens.clone();
     let ctx = app.ctx();
     let key = format!("depth {token} {n} {:?} {:?}", ctx.node_daa, ctx.now_unix);
-    cached(&app, key, move |c| market::depth(c, &ctx, &token, decimals, n)).await
+    cached(&app, key, move |c| {
+        let decimals = reads::token_decimals(c, &tokens, &token)?;
+        market::depth(c, &ctx, &token, decimals, n)
+    })
+    .await
 }

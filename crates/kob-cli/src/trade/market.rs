@@ -367,7 +367,12 @@ pub fn indexer_tokens(v: &serde_json::Value) -> Result<Vec<TokenFacts>, String> 
             Ok(TokenFacts {
                 cov: h(t.get("covenant_id")).ok_or("indexer token without covenant_id")?,
                 ticker: t.get("ticker").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-                decimals: t.get("decimals").and_then(|d| d.as_u64()).map(|d| d as u32),
+                // an executor reports the decimals of a registry entry as list facts; the ones it derives itself (a declaration, a
+                // program default: `decimals_source`) are resolved here, with the checks against the market's scale
+                decimals: match t.get("decimals_source").and_then(|s| s.as_str()) {
+                    Some("declaration" | "program") => None,
+                    _ => t.get("decimals").and_then(|d| d.as_u64()).map(|d| d as u32),
+                },
                 tpl_hash: h(t.get("template_hash")),
                 ext: h(t.get("extension_commitment")),
                 tick: None,
@@ -1049,6 +1054,16 @@ mod tests {
         let null = indexer_tokens(&serde_json::json!({"tokens": [{"covenant_id": key, "market_scale": null}]})).unwrap();
         assert_eq!(null[0].market_scale, Some(None));
         assert!(v(serde_json::json!("1000")).is_err());
+        // decimals an executor derived itself (a declaration, a program default) are not list facts: resolved here, with the market checks
+        let dec = |src: Option<&str>| {
+            let mut t = serde_json::json!({"covenant_id": key, "ticker": "", "decimals": 3});
+            if let Some(src) = src {
+                t["decimals_source"] = src.into();
+            }
+            indexer_tokens(&serde_json::json!({ "tokens": [t] })).unwrap()[0].decimals
+        };
+        assert_eq!((dec(None), dec(Some("registry"))), (Some(3), Some(3)));
+        assert_eq!((dec(Some("program")), dec(Some("declaration"))), (None, None));
     }
 
     /// TN10 2026-10-15 O-1 and O-2: the decimals of this machine's own first order stand in for --decimals while the indexer

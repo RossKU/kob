@@ -69,6 +69,7 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
         settle_depth_daa: 100,
         daa_per_second: 10,
         lag_alarm_hours: vec![1, 6, 12, 24],
+        min_order_value_sompi: 100_000_000,
     };
     Env { _dir: dir, w, state }
 }
@@ -204,6 +205,8 @@ async fn health_and_ready() {
     assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(v["commit"].as_str(), option_env!("KOB_GIT_COMMIT").map(str::trim).filter(|c| !c.is_empty()));
     assert_eq!(v["payload_version"], kob_protocol::payload::PAYLOAD_VERSION);
+    // the smallest order the executor lists, in sompi as a decimal string (the web app warns below it)
+    assert_eq!(v["min_order_value_sompi"], "100000000");
     let (s, v) = get(&app, "/v1/health/ready").await;
     assert_eq!((s, &v["ready"]), (StatusCode::OK, &Value::Bool(true)));
 
@@ -1391,6 +1394,92 @@ async fn token_declarations_are_served_as_launch_proofs() {
     let row = |id: &str| v["tokens"].as_array().unwrap().iter().find(|t| t["covenant_id"] == id).cloned().unwrap();
     assert_eq!(row(&cov.to_hex())["declaration"], true);
     assert!(row(&h(TOKEN)).get("declaration").is_none(), "absent without a declaration (older clients see no new key)");
+}
+
+/// `/v1/health` reports the minimum order value the executor lists, whatever its configuration sets.
+#[tokio::test]
+async fn health_reports_the_configured_minimum_order_value() {
+    let mut e = env(|_| {});
+    e.state.min_order_value_sompi = 250_000_000;
+    let (s, v) = get(&router(e.state.clone()), "/v1/health").await;
+    assert_eq!((s, v["min_order_value_sompi"].as_str()), (StatusCode::OK, Some("250000000")));
+    e.state.min_order_value_sompi = 0;
+    let (_, v) = get(&router(e.state.clone()), "/v1/health").await;
+    assert_eq!(v["min_order_value_sompi"], "0");
+}
+
+/// The decimals of a token, which are the price basis of the market views (candles, stats, trades, depth, pair candles) and the `decimals`
+/// of `GET /v1/tokens`: its verified KCC-23 declaration, else its registry entry, else its program's default (KaspaRocket: 3), else
+/// none (the scale of its first order); `decimals_source` names which.
+#[tokio::test]
+async fn token_decimals_follow_the_declaration_then_the_registry_then_the_program_default() {
+    use crate::indexer::kcc23::{apply, proof_tx, DeclSection};
+    use crate::testkit::{kcc23_genesis, kcc23_prep, kcc23_txid, kcc23_wire, KCC23_EXAMPLE};
+    use crate::tokens::StrictTemplate;
+    const ROCKET: u8 = 0x61; // a KaspaRocket token without an entry or a declaration
+    const REGISTERED: u8 = 0x62; // a KaspaRocket token with a registry entry that says 5
+    const PLAIN: u8 = 0x63; // a token nothing is known about
+    let mut e = env(|_| {});
+    seed_all(&e.w);
+    let profile = kob_protocol::profile::by_name("KaspaRocketToken11458").expect("the KaspaRocket program");
+    assert_eq!(profile.default_decimals.as_ref().map(|d| d.decimals), Some(3));
+    let tpl = Hash32::parse(&profile.template_hash).unwrap();
+    let seen = |cov: &Hash32| {
+        e.w.execute(
+            "INSERT INTO token_events (token_cov_id, tpl_hash, ext_commit, kind, txid, block_seq, daa) VALUES (?1, ?2, NULL, 'seen', ?3, 9, 990)",
+            params![&cov.0[..], &tpl.0[..], &cov.0[..]],
+        )
+        .unwrap();
+    };
+    seen(&Hash32([ROCKET; 32]));
+    seen(&Hash32([REGISTERED; 32]));
+    // a token that declared 8 decimals at its creation, and is of the KaspaRocket program too
+    let prep = kcc23_prep(1, kob_protocol::kcc23::encode(KCC23_EXAMPLE).unwrap());
+    let (gen, declared) = kcc23_genesis(&prep, 0, 1);
+    let ptx = |t| proof_tx(&kcc23_wire(t, false)).unwrap();
+    apply(&e.w, 9, 990, &kcc23_txid(&prep), &DeclSection { tx: ptx(&prep), preparation: true, binds: vec![] }).unwrap();
+    apply(&e.w, 9, 990, &kcc23_txid(&gen), &DeclSection { tx: ptx(&gen), preparation: false, binds: vec![ptx(&prep)] }).unwrap();
+    seen(&declared);
+    let mut entries = e.state.tokens.list().into_iter().cloned().collect::<Vec<_>>();
+    entries.push(TokenEntry {
+        ticker: "REG".into(),
+        covenant_id: Hash32([REGISTERED; 32]),
+        template_hash: Some(tpl),
+        decimals: Some(5),
+        ..entries[0].clone()
+    });
+    let strict = StrictTemplate { id: profile.registry_id.clone(), family: kob_protocol::Family::Kcc20, powers: vec![] };
+    e.state.tokens = Arc::new(TokenAllowlist::from_entries(entries).with_strict_templates([(tpl, strict)]));
+    let app = router(e.state.clone());
+
+    for (token, want) in [
+        (h(ROCKET), Some(3)),         // the program default
+        (h(REGISTERED), Some(5)),     // the registry entry, not the program default
+        (declared.to_hex(), Some(8)), // the declaration, not the program default
+        (h(TOKEN), Some(3)),          // the registry entry of the fixture
+        (h(PLAIN), None),             // nothing says: the first order's scale
+    ] {
+        for path in ["stats", "candles", "trades", "depth"] {
+            let (s, v) = get(&app, &format!("/v1/{path}/{token}")).await;
+            assert_eq!(s, StatusCode::OK, "{path} {token}");
+            assert_eq!(v["decimals"].as_i64(), want, "{path} of {token}: {v}");
+        }
+    }
+    let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/candles", h(ROCKET), h(REGISTERED))).await;
+    assert_eq!((v["decimals"].as_i64(), v["quote_decimals"].as_i64()), (Some(3), Some(5)), "{v}");
+
+    let (_, v) = get(&app, "/v1/tokens").await;
+    let row = |id: &str| {
+        v["tokens"].as_array().unwrap().iter().find(|t| t["covenant_id"] == id).cloned().unwrap_or_else(|| panic!("{id} listed"))
+    };
+    let facts = |id: &str| {
+        let r = row(id);
+        (r["decimals"].as_i64(), r["decimals_source"].as_str().map(str::to_string), r["scale"].as_i64())
+    };
+    assert_eq!(facts(&h(ROCKET)), (Some(3), Some("program".into()), None), "the default of the program; the scale stays the market's");
+    assert_eq!(facts(&h(REGISTERED)), (Some(5), Some("registry".into()), Some(100_000)));
+    assert_eq!(facts(&declared.to_hex()), (Some(8), Some("declaration".into()), None));
+    assert_eq!(facts(&h(TOKEN)), (Some(3), Some("registry".into()), Some(1000)));
 }
 
 /// While the store catches up with a lag below the first alarm threshold the probe answers 200 (it is not "caught up": that is

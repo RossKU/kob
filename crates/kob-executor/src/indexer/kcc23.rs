@@ -359,6 +359,18 @@ pub fn declared(conn: &Connection, covenant_id: &Hash32) -> DbResult<bool> {
     Ok(conn.prepare_cached("SELECT 1 FROM kcc23_declarations WHERE covenant_id = ?1")?.exists([&covenant_id.0[..]])?)
 }
 
+/// The decimals the indexer's declaration of a covenant id names: `None` without a declaration, `Some(None)` for one that names no
+/// usable `decimals`. The stored proof was verified when it was kept, so only the declaration's own payload is read again.
+pub fn declaration_decimals(conn: &Connection, covenant_id: &Hash32) -> DbResult<Option<Option<u32>>> {
+    let Some(json) = proof_json(conn, covenant_id)? else { return Ok(None) };
+    let decimals = serde_json::from_str::<LaunchProof>(&json)
+        .ok()
+        .and_then(|p| kcc23::TokenDeclaration::from_payload(&p.preparation.payload).ok())
+        .and_then(|d| d.decimals)
+        .map(u32::from);
+    Ok(Some(decimals))
+}
+
 #[cfg(test)]
 #[path = "kcc23_tests.rs"]
 mod tests;

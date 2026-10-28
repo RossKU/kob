@@ -59,6 +59,9 @@ pub struct ApiState {
     pub settle_depth_daa: u64,
     pub daa_per_second: u64,
     pub lag_alarm_hours: Vec<u64>,
+    /// The executor's effective minimum order value in sompi (`ListingRules::min_order_value_sompi`): an order worth less is
+    /// indexed but never listed. Reported by `/v1/health` so a client can warn before an order is placed.
+    pub min_order_value_sompi: i64,
 }
 
 impl ApiState {
