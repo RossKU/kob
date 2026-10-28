@@ -1189,6 +1189,14 @@ tick. Planning time with pair books is not measured.
    `priceEnd` = the touch ∓ slippage bound (default 3%), `decayStep = 1`, slope (sompi per whole token per DAA) so that
    the bound is reached after the auction length (default 200 DAA = 20 s), `activeFrom` = current DAA + 30,
    `expiryDaa = activeFrom + 300`, `minFill` 1 base unit. Show "worst price" = the bound and "expected" = the touch.
+   **The touch must not rest on an indexer alone.** Before signing, a client that reads the book from an indexer confirms the orders at the touch
+   (and the few behind it) on a node: each order's UTXO must exist unspent at the script derived from the state the indexer reported (price,
+   side, scale, owner), holding the KAS value (and, for an ask, the custody tokens) the book row lists. The P2SH commits that state, so an
+   existing UTXO at that script proves the price and the amount. An order the node does not confirm (invented, spent, changed) is left out of
+   the book the order is priced from, with one line saying so; when none of the first orders of the side is confirmed the side has no liquidity
+   (the order is refused, not priced from an unverified quote). A node that cannot answer within a short bound stops the order; the check
+   adds no acknowledgement and shows nothing when every order is confirmed. Further indexers (a second opinion on the best price) complement
+   this check and do not replace it.
 3. **Streaming / quote-and-execute**: as market, starting at the displayed price with the user's
    slippage tolerance; FOK when the user asked for all-or-nothing.
 4. **FOK / IOC**: default life 300 DAA (30 s; the covenant kills at 600); `minFill` 1 base unit. Reject a FOK at

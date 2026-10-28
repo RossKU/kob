@@ -77,6 +77,8 @@ network; each is a `kob-executor` read API (`docs/api.md`).
 1. **Cross-check** (always): the key facts a decision rests on (a token's powers, an open-list market's price scale, the best ask and bid, the
    start of a market order) are compared with the indexer in use; a disagreement is shown and a market order whose start is too far from another
    indexer's is refused.
+   These are a second opinion on prices. They do not replace the node check: whatever indexers are configured, the top of the book a market or close
+   order starts from is confirmed on the user's node before signing (`web/README.md`, *Book against the node*).
 2. **Failover for reads**: when the primary (`KOB_PAGES_INDEXER_URL`) is unreachable, failing or not ready, the app reads the book, charts, tokens and
    orders from a healthy further indexer, shows the banner "Using backup indexer <host>", and goes back to the primary, dropping the banner, once the
    primary has answered well twice in a row. Nothing is built from the node: a node alone would give a partial book, so with no healthy backup the

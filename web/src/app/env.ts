@@ -5,7 +5,7 @@ import { declaredToken } from '../data/token-declarations';
 import type { CancelEnv } from '../kob/cancel';
 import { normalizePolicy, readFeeContext, type FeeContext } from '../kob/fee-policy';
 import type { FeeMode, KeyUtxo, TokenUtxo } from '../kob/types';
-import { isPairEnv, type BookLevel, type BookOrder, type BookView, type Clock, type OwnOrderRef, type PairPlanEnv, type PlanEnv, type TokenMarket } from '../kob/plan-types';
+import { isPairEnv, type BookLevel, type BookOrder, type BookView, type Clock, type DroppedBookOrder, type OwnOrderRef, type PairPlanEnv, type PlanEnv, type TokenMarket } from '../kob/plan-types';
 import type { TokenInfo } from '../kob/registry';
 import { impliedPairRate, isPairOrderView, ownPairOrderRefs, pairBookToBookView } from '../kob/pair';
 import { firmReferencePrice } from '../kob/guards';
@@ -13,6 +13,8 @@ import { toTokenMarket } from '../kob/token-market';
 import type { Hex } from '../kob/types';
 import type { WalletInfo } from '../wallet/types';
 import { pendingSpends } from './pending-spends';
+import { spkStringToAddress } from '../data/kaspa-sdk';
+import { verifyBook } from './book-verify';
 import type { Services } from './services';
 
 const bi = (v: string | number | null | undefined): bigint => (v === null || v === undefined ? 0n : BigInt(v));
@@ -35,7 +37,7 @@ const isBookOrder = (o: LevelView | BookOrderView): o is BookOrderView => 'coven
  * an order of another scale quotes another whole token, so it is not part of the standard book and is skipped (the indexer lists it only when its
  * own rule accepts it). An order without a scale (an older view) is taken as the standard one.
  */
-const sameScale = (market: TokenMarket, o: { scale?: number | null }): boolean => o.scale === null || o.scale === undefined || BigInt(o.scale) === market.scale;
+export const sameScale = (market: TokenMarket, o: { scale?: number | null }): boolean => o.scale === null || o.scale === undefined || BigInt(o.scale) === market.scale;
 
 /** Indexer book (aggregate=false preferred: per-order entries make the FOK pre-check exact) -> planner BookView (prices per whole token, base units). */
 export function bookFromIndexer(market: TokenMarket, view: { asks: (LevelView | BookOrderView)[]; bids: (LevelView | BookOrderView)[] }): BookView {
@@ -133,6 +135,8 @@ export interface BuildEnvOptions {
 /** The wallet-independent part: the book per order and the newest trade. Never rejects: an unreadable book is reported (`bookUnavailable`). */
 export interface MarketPart {
   book: BookView;
+  /** book orders the node did not confirm, left out of `book` (app/book-verify.ts); empty when all are confirmed */
+  dropped: DroppedBookOrder[];
   bookUnavailable: boolean;
   lastFillPrice: bigint | null;
 }
@@ -150,16 +154,27 @@ export interface HoldingsPart {
   ownOrders: OwnOrderRef[] | null;
 }
 
-export async function readMarketPart(s: Pick<Services, 'indexer'>, market: TokenMarket, o: Pick<BuildEnvOptions, 'offline'> = {}): Promise<MarketPart> {
-  if (!s.indexer || o.offline) return { book: { asks: [], bids: [] }, bookUnavailable: false, lastFillPrice: null };
-  const [bv, trades] = await Promise.all([
-    s.indexer.book(market.covenantId, { depth: 100, aggregate: false }).catch(() => null),
-    s.indexer.trades(market.covenantId, { limit: 1 }).catch(() => null),
+/**
+ * The market: the book per order, checked against the NODE (app/book-verify.ts: the first orders of each side must exist unspent at the script their
+ * state derives; an order the node does not confirm is left out, `dropped`), and the newest trade. Rejects only with a `NodeError` when the node cannot
+ * be asked for that check (the ticket then shows its node banner and plans nothing); an unreadable book is reported (`bookUnavailable`).
+ */
+export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node' | 'sdk' | 'config'>, market: TokenMarket, o: Pick<BuildEnvOptions, 'offline'> = {}): Promise<MarketPart> {
+  // the indexer in use now, for the book and the order reads behind it alike (with failover `s.indexer` follows the active one from call to call)
+  const ix = s.indexer;
+  if (!ix || o.offline) return { book: { asks: [], bids: [] }, dropped: [], bookUnavailable: false, lastFillPrice: null };
+  const [bv0, trades] = await Promise.all([
+    ix.book(market.covenantId, { depth: 100, aggregate: false }).catch(() => null),
+    ix.trades(market.covenantId, { limit: 1 }).catch(() => null),
   ]);
+  const checked = bv0
+    ? await verifyBook({ kob: s.kob, node: s.node, indexer: ix, toAddress: (spk) => spkStringToAddress(s.sdk, spk, s.config.network), inScale: (r) => sameScale(market, r) }, bv0)
+    : null;
+  const bv = checked?.view ?? null;
   const last = trades?.items?.[0];
   // trades are priced per `price_basis` base units (the token's standard scale): convert to the market's scale (per whole token)
   const lastFillPrice = last && trades.price_basis && BigInt(trades.price_basis) > 0n ? (BigInt(last.price) * market.scale) / BigInt(trades.price_basis) : null;
-  return { book: bv ? bookFromIndexer(market, bv) : { asks: [], bids: [] }, bookUnavailable: !bv, lastFillPrice };
+  return { book: bv ? bookFromIndexer(market, bv) : { asks: [], bids: [] }, dropped: checked?.dropped ?? [], bookUnavailable: !bv, lastFillPrice };
 }
 
 export async function readCoinsPart(s: Pick<Services, 'node' | 'utxos' | 'fees'>, wallet: Pick<WalletInfo, 'pubkey'>): Promise<CoinsPart> {
@@ -198,7 +213,7 @@ export function assemblePlanEnv(
   if (parts.holdings && parts.holdings.ownOrders === null) guardsUnavailable.push('own-orders');
   return {
     kob: s.kob, token: market, maker: wallet.pubkey, clock: parts.coins.clock, book: parts.market.book, ownOrders: parts.holdings?.ownOrders ?? [],
-    ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice: parts.market.lastFillPrice,
+    ...(guardsUnavailable.length ? { guardsUnavailable } : {}), ...(parts.market.dropped.length ? { bookDropped: parts.market.dropped } : {}), lastFillPrice: parts.market.lastFillPrice,
     funding: pendingSpends.funding(parts.coins.funding, wallet.pubkey), tokenUtxos: pendingSpends.without(parts.holdings?.tokenUtxos ?? []),
     ...feeModeOf(s), fees: parts.coins.fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
   };

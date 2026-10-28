@@ -6,13 +6,14 @@ import type { OrderState } from '../../kob/types';
 import { quoteOf } from '../../kob/units';
 
 /**
- * What the ticket notes: a price far through the market (a typing error), a market reference that disagrees with the last fill, a high slippage, a
+ * What the ticket notes: a price far through the market (a typing error), a market reference that disagrees with the last fill, book orders
+ * the node does not hold (left out of the price the order starts from), a high slippage, a
  * day order about to end, a limit that crosses the market (it fills at the limit, the difference goes to the matcher), the conditional orders'
  * market checks (every `COND_*` warning, and the pair planner's take-profit twin) and a stop on a token whose genesis was not verified. The pair
  * planner's own spellings of the price and reference codes are the same warnings on a pair.
  */
 const NOTE_CODES: ReadonlySet<string> = new Set([
-  'PRICE_AGGRESSIVE_VS_MARKET', 'MARKET_REFERENCE_DIVERGES', 'SLIPPAGE_HIGH', 'DAY_ORDER_ENDS_SOON', 'MARKETABLE_LIMIT_FILLS_AT_LIMIT', 'STOP_EVIDENCE_GENESIS_UNVERIFIED',
+  'PRICE_AGGRESSIVE_VS_MARKET', 'MARKET_REFERENCE_DIVERGES', 'BOOK_ORDERS_NOT_ON_NODE', 'SLIPPAGE_HIGH', 'DAY_ORDER_ENDS_SOON', 'MARKETABLE_LIMIT_FILLS_AT_LIMIT', 'STOP_EVIDENCE_GENESIS_UNVERIFIED',
   'PAIR_PRICE_AGGRESSIVE_VS_MARKET', 'PAIR_MARKET_REFERENCE_DIVERGES', 'PAIR_MARKETABLE_LIMIT_FILLS_AT_LIMIT', 'PAIR_TP_CROSSES', 'PAIR_TP_NOT_PROFITABLE',
 ]);
 

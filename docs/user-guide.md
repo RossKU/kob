@@ -166,6 +166,12 @@ toward your worst price over about 20 seconds. **Slippage allowed** (default 3%)
 The confirmation shows the "Expected price (auction start)" and the "Worst price (all-in)". Anything that is not filled is
 returned to you.
 
+The best price a market or close order starts from is not taken on the indexer's word: before the order is signed, the app asks your Kaspa
+node whether the orders at the top of the book really exist (unspent, with the price and amount the book lists). An order the node does not
+hold, for example one that was just filled or one an indexer made up, is left out and the order starts from the best order that is there; the
+ticket then notes "... order(s) the indexer lists on the ask side are not on the node as listed ...". You do nothing: there is nothing to
+tick, and when everything matches nothing is shown. If the node cannot be asked, the order is not placed ("Node not answering").
+
 One transaction takes at most as many counterparties as the token program has token input slots (3 on KOB's standard program), so a
 large market order against many small orders can fill only in part. Under Advanced, **Fills (transactions)** lets a market order
 keep trading across several transactions for its short life (default 1). The ticket shows how many fills the visible book needs.
@@ -254,7 +260,7 @@ your transactions.
 | "No indexer is configured" | No book and no order history. Set an indexer URL in Settings. |
 | "No connection to a Kaspa node" | Balances, DAA time and sending are unavailable. Check the node URL in Settings (a `wss://` node of the right network, with its path). With no node URL the page asks the Kaspa SDK's public resolver; if none works it says so. After about 25 seconds the status says "unreachable". |
 | "Using backup indexer <host>" | The site's main indexer is down, not ready or on another network, so the book, prices and orders come from another indexer the site lists. The banner goes away by itself within a minute or two of the main one coming back. If it adds "History may be incomplete", that indexer started late: the live book is right, but charts and older orders can be missing. Other indexers keep cross-checking prices where there are any; with none left, the footer says "single indexer". |
-| "Single indexer, not cross-checked" | Only one indexer is configured. With two or more, token powers, price scales and best prices are cross-checked and a disagreement is shown ("Indexers disagree": check the covenant id and price yourself). |
+| "Single indexer, not cross-checked" | Only one indexer is configured. With two or more, token powers, price scales and best prices are cross-checked and a disagreement is shown ("Indexers disagree": check the covenant id and price yourself). Independently of this, the top of the book is always checked against your node before a market or close order is signed (section 5), so even one indexer cannot invent the price such an order starts from. |
 | "Deep chain reorganisation" badge | The chain replaced many blocks; the data was refreshed and recent confirmations may have changed. |
 | "Node saved in this browser ..." / "Indexer saved in this browser ..." | A node or indexer chosen in Settings overrides the site's default. If you did not set it, reset it ("Use the site's servers"). |
 

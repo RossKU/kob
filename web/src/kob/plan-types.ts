@@ -81,6 +81,19 @@ export interface BookView {
   bidOrders?: BookOrder[];
 }
 
+/**
+ * A book order the node did not confirm (app/book-verify.ts): left out of `PlanEnv.book`. `not-on-node`: no unspent UTXO at the script of the
+ * state the indexer reported (a phantom or a spent order); `changed`: the node's order differs from the book row (price, side, scale, value or
+ * tokens); `unproven`: the indexer gave no state to check; `unchecked`: behind a side with no confirmed order, or listed without orders.
+ */
+export interface DroppedBookOrder {
+  covenantId: Hex;
+  /** the side of the ORDER: an ask sells the token */
+  side: 'sell' | 'buy';
+  price: bigint;
+  reason: 'not-on-node' | 'changed' | 'unproven' | 'unchecked';
+}
+
 /** The best prices of the market as another indexer reports them (`label`: its URL). */
 export interface ReferenceTouch {
   label: string;
@@ -117,6 +130,11 @@ export interface PlanEnv {
    * pre-check and price bands run on an empty book. Planning then reports GUARDS_UNAVAILABLE (an error: the order waits for the data).
    */
   guardsUnavailable?: readonly ('own-orders' | 'book')[];
+  /**
+   * Book orders the node did not confirm when the book was read (app/book-verify.ts): they are NOT in `book`; a taking order says so (BOOK_ORDERS_NOT_ON_NODE).
+   * Absent = nothing was left out (or the book was not checked: a pair's, whose levels carry no orders).
+   */
+  bookDropped?: readonly DroppedBookOrder[];
   /** price (sompi per whole token) of the newest fill (indexer trades: a data path independent of the book), to cross-check the book reference price */
   lastFillPrice?: bigint | null;
   /**

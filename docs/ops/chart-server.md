@@ -11,7 +11,7 @@ programs before it builds a transaction; `web/README.md`). Executors that match 
 
 **It is one indexer among others.** The app must work against any operator's indexer. List independent third-party indexers in
 the deployment's `KOB_PAGES_EXTRA_INDEXER_URLS` when they exist: the app cross-checks the key facts of a token (powers, price
-scale, best prices) against them and refuses a market order whose start disagrees (`web/README.md`, *Several indexers*), and when this
+scale, best prices) against them and refuses a market order whose start disagrees (`web/README.md`, *Several indexers*; the touch of the book is also confirmed on the user's node before every market or close order, `web/README.md`, *Book against the node*, so this server cannot invent a price), and when this
 server is down, not caught up or on another network it reads the book, charts and orders from a healthy one of them (banner "Using
 backup indexer ...", back to this server once it has recovered; `web-hosting.md`, *Further indexers: cross-check and failover*).
 Users can switch the indexer in Settings. This server is a convenience, not an authority.

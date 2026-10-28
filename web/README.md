@@ -225,11 +225,18 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   environment is read from one indexer, and the cross-check continues against the others (the primary only while it answers well). No book is built from the node.
 * **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the order cannot be placed: one error line
   ("Could not read the token's guard data; try again in a moment") until the ticket's background refresh reads them, then it clears by itself.
-* **Market start.** A market or close order starts at the best price of the indexer book, which is not checked against the node. Its start is compared
+* **Book against the node.** Every read of the order book for a KAS market (`readMarketPart`, `src/app/book-verify.ts`) checks the first orders of each
+  side against the NODE: the indexer's view of each order (decoded state, current outpoint) gives its script, and one batched `getUtxosByAddresses`
+  (`kob/node-verify.ts` `confirmSnapshotsOnNode`, the reconciliation cancel and amend use) must find the order UTXO (and an ask's custody) unspent at that
+  script, with the KAS value and token amount the book row lists and the side, price and scale the state commits. An order the node does not confirm is
+  left out of `PlanEnv.book` (`PlanEnv.bookDropped` names it; a taking order shows the warning `BOOK_ORDERS_NOT_ON_NODE`); when none of the first 3 x 3 orders of a
+  side is confirmed, the side is empty. A node that does not answer within 5 s rejects the read with a `NodeError`, so the ticket shows its node banner and plans
+  nothing. The check is invisible when everything matches and needs no acknowledgement. Pair books (aggregated levels, no orders) are not covered.
+* **Market start.** A market or close order starts at the best price of the indexer book, whose touch is confirmed on the node (above). Its start is compared
   with the best price of every `extraIndexerUrls` indexer (a pair market: the rate the further indexer's two KAS books imply); more than
   `marketStartToleranceBps` (config.json / `__KOB_CONFIG__`, 10 to 5000, default 1000 = 10 %) on the costly side of one is an error: the order
   cannot be placed at that start. The last fill comes from the same indexer as the book, so it is no independent reference: without a further
-  indexer (none is configured by default) the start is accepted.
+  indexer (none is configured by default) the start rests on the node check above.
 * **Stored settings.** A node, indexer or `extraIndexerUrls` list, or `allowQueryOverrides: true`, saved in this browser's settings is named in a banner
   on every page.
 

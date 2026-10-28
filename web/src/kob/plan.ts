@@ -50,7 +50,7 @@ export function orderUrgency(env: Pick<PlanEnv, 'book'> & { pair?: unknown }, in
 export function planOrder(env0: PlanEnv, intent: Intent): OrderPlan {
   const env = withUrgency(env0, orderUrgency(env0, intent));
   const plan = isPairEnv(env) ? planPair(env, intent) : isCondIntent(intent) ? planCond(env, intent) : planSimple(env, intent);
-  const extra = [...envIssues(env), ...marketStartIssues(env, intent, plan), ...stopEvidenceIssues(env, plan)];
+  const extra = [...envIssues(env), ...bookCheckIssues(env, intent), ...marketStartIssues(env, intent, plan), ...stopEvidenceIssues(env, plan)];
   if (!extra.length) return plan;
   return { ...plan, issues: [...plan.issues, ...extra], ok: plan.ok && !extra.some((i) => i.severity === 'error') };
 }
@@ -75,6 +75,23 @@ export function stopEvidenceIssues(env: PlanEnv, plan: Pick<OrderPlan, 'states'>
   return tokens
     .filter((t) => t.family === 'kcc20' && t.genesisVerified !== true)
     .map((t) => issue('STOP_EVIDENCE_GENESIS_UNVERIFIED', { token: t.ticker && t.ticker !== longId(t.covenantId) ? `${t.ticker} (${longId(t.covenantId)})` : longId(t.covenantId) }));
+}
+
+/**
+ * Orders of the book the node did not confirm (`env.bookDropped`, app/book-verify.ts) that an order taking liquidity now would have met: the order
+ * is priced against the best order the node does hold, and says so (a warning, one line; nothing to acknowledge). Orders of the side the order itself
+ * adds to are of no concern to it. An order that rests (a limit away from the market, a stop ...) takes nothing and says nothing.
+ */
+export function bookCheckIssues(env: PlanEnv, intent: Intent): PlanIssue[] {
+  if (!env.bookDropped?.length || orderUrgency(env, intent) !== 'high') return [];
+  const side = intent.type === 'close' ? 'sell' : 'side' in intent ? intent.side : undefined;
+  // the user buys from asks (the orders that sell) and sells to bids
+  const met = env.bookDropped.filter((d) => side === undefined || (side === 'buy' ? d.side === 'sell' : d.side === 'buy'));
+  if (!met.length) return [];
+  const asks = met.some((d) => d.side === 'sell');
+  const prices = met.filter((d) => (asks ? d.side === 'sell' : d.side === 'buy') && d.price > 0n).map((d) => d.price);
+  const best = prices.length ? prices.reduce((a, b) => ((asks ? b < a : b > a) ? b : a)) : 0n;
+  return [issue('BOOK_ORDERS_NOT_ON_NODE', { count: met.length, side: asks ? 'ask' : 'bid', price: best })];
 }
 
 /** A book price and the newest fill this far apart (bps) are flagged: one lying data path cannot move the reference unnoticed. */
@@ -112,8 +129,8 @@ export function envIssues(env: PlanEnv): PlanIssue[] {
 export const MARKET_START_TOLERANCE_BPS = 1_000n;
 
 /**
- * A market or close order is an auction that starts at the best price of the indexer order book. That book is not checked against the node, so the
- * start is compared with the best price of every further indexer (`referenceTouches`, config `extraIndexerUrls`): a start more than the tolerance
+ * A market or close order is an auction that starts at the best price of the indexer order book. The orders at its touch were checked against the node
+ * when the book was read (app/book-verify.ts), so a price nobody holds is not a start; the start is also compared with the best price of every further indexer (`referenceTouches`, config `extraIndexerUrls`): a start more than the tolerance
  * on the costly side of one (above it for a buy, below for a sell) is an error (MARKET_START_VS_INDEXER), the order cannot be placed at that start.
  * The last fill comes from the same indexer as the book, so it is no independent reference: without a further indexer the start is accepted.
  */

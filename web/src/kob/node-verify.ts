@@ -100,6 +100,48 @@ export async function confirmSnapshotOnNode(
   snap: OrderSnapshot,
   spkToAddress: (spk: string) => string,
 ): Promise<OrderSnapshot> {
+  const check = snapshotCheck(kob, snap);
+  return check.finish(await fetchNodeInputFacts(node, check.refs, spkToAddress));
+}
+
+/**
+ * Several snapshots confirmed with ONE node read (the outpoints of all of them in one `getUtxosByAddresses`). Each result is the node-confirmed
+ * snapshot, or the `SnapshotError` (`node-mismatch`) of the one the node does not confirm: one bad order does not hide the others. Rejects only when
+ * the node cannot be asked.
+ */
+export async function confirmSnapshotsOnNode(
+  kob: KobWasm,
+  node: Pick<NodeApi, 'getUtxosByAddresses'>,
+  snaps: readonly OrderSnapshot[],
+  spkToAddress: (spk: string) => string,
+): Promise<(OrderSnapshot | SnapshotError)[]> {
+  // a state the wasm cannot derive a script from is that snapshot's own failure (`bad-state`), not the batch's
+  const checks = snaps.map((s): SnapshotCheck | SnapshotError => {
+    try {
+      return snapshotCheck(kob, s);
+    } catch (e) {
+      return new SnapshotError('bad-state', `order ${s.covenantId}: its script cannot be derived from the state (${e instanceof Error ? e.message : String(e)})`);
+    }
+  });
+  const facts = await fetchNodeInputFacts(node, checks.flatMap((c) => (c instanceof SnapshotError ? [] : c.refs)), spkToAddress);
+  return checks.map((c) => {
+    if (c instanceof SnapshotError) return c;
+    try {
+      return c.finish(facts);
+    } catch (e) {
+      if (e instanceof SnapshotError) return e;
+      throw e;
+    }
+  });
+}
+
+/** What `confirmSnapshotOnNode` reads from the node for one snapshot (`refs`) and how it judges the answer (`finish`: throws SnapshotError `node-mismatch`). */
+export interface SnapshotCheck {
+  refs: OutpointRef[];
+  finish(facts: ReadonlyMap<string, NodeInputFact>): OrderSnapshot;
+}
+
+export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck {
   const st = snap.order.state;
   const own = ownTokenFacts(st);
   const tplOf = (token: Hex | null | undefined): Hex => own.find((t) => t.covenantId === token)?.tplHash ?? own[0]!.tplHash;
@@ -136,39 +178,41 @@ export async function confirmSnapshotOnNode(
     const spk = foreignSpks[k]![i];
     if (spk) refs.push({ transactionId: u.transactionId, index: u.index, scriptPublicKey: spk });
   }));
-  const facts = await fetchNodeInputFacts(node, refs, spkToAddress);
-  const confirmed = (u: { transactionId: Hex; index: number }, spk: string | null, covenantId: Hex): NodeInputFact | null => {
-    const f = facts.get(outpointKey(u.transactionId, u.index));
-    return f && spk !== null && f.scriptPublicKey === spk && f.covenantId === covenantId ? f : null;
+  const finish = (facts: ReadonlyMap<string, NodeInputFact>): OrderSnapshot => {
+    const confirmed = (u: { transactionId: Hex; index: number }, spk: string | null, covenantId: Hex): NodeInputFact | null => {
+      const f = facts.get(outpointKey(u.transactionId, u.index));
+      return f && spk !== null && f.scriptPublicKey === spk && f.covenantId === covenantId ? f : null;
+    };
+    const orderFact = confirmed(snap.order, orderSpk, snap.covenantId);
+    if (!orderFact) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its current UTXO is not on the node with the claimed script and covenant id`);
+    let custody: TokenUtxo | null = null;
+    if (snap.custody) {
+      const cf = confirmed(snap.custody, custodySpk, custodyToken);
+      if (!cf) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its custody token UTXO is not on the node with the claimed script and token covenant id`);
+      custody = { ...snap.custody, amount: cf.amount.toString(), covenantId: custodyToken };
+    }
+    let prefund: TokenUtxo | null = null;
+    if (snap.prefund) {
+      const pf = prefundToken ? confirmed(snap.prefund, prefundSpk, prefundToken) : null;
+      if (!pf || !prefundToken) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its prefund custody UTXO is not on the node with the claimed script and token covenant id`);
+      prefund = { ...snap.prefund, amount: pf.amount.toString(), covenantId: prefundToken };
+    }
+    const strays: TokenUtxo[] = [];
+    snap.strays.forEach((s, i) => {
+      const cov = strayToken(s).cov;
+      const f = confirmed(s, straySpks[i], cov);
+      if (f) strays.push({ ...s, amount: f.amount.toString(), covenantId: cov });
+    });
+    const foreign = (snap.foreign ?? [])
+      .map((g, k) => ({
+        token: g.token,
+        utxos: g.utxos.flatMap((u, i) => {
+          const f = confirmed(u, foreignSpks[k]![i] ?? null, g.token.covenantId);
+          return f ? [{ ...u, amount: f.amount.toString(), covenantId: g.token.covenantId }] : [];
+        }),
+      }))
+      .filter((g) => g.utxos.length > 0);
+    return { ...snap, order: { ...snap.order, amount: orderFact.amount.toString() }, custody, ...(snap.prefund ? { prefund } : {}), strays, ...(snap.foreign ? { foreign } : {}) };
   };
-  const orderFact = confirmed(snap.order, orderSpk, snap.covenantId);
-  if (!orderFact) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its current UTXO is not on the node with the claimed script and covenant id`);
-  let custody: TokenUtxo | null = null;
-  if (snap.custody) {
-    const cf = confirmed(snap.custody, custodySpk, custodyToken);
-    if (!cf) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its custody token UTXO is not on the node with the claimed script and token covenant id`);
-    custody = { ...snap.custody, amount: cf.amount.toString(), covenantId: custodyToken };
-  }
-  let prefund: TokenUtxo | null = null;
-  if (snap.prefund) {
-    const pf = prefundToken ? confirmed(snap.prefund, prefundSpk, prefundToken) : null;
-    if (!pf || !prefundToken) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its prefund custody UTXO is not on the node with the claimed script and token covenant id`);
-    prefund = { ...snap.prefund, amount: pf.amount.toString(), covenantId: prefundToken };
-  }
-  const strays: TokenUtxo[] = [];
-  snap.strays.forEach((s, i) => {
-    const cov = strayToken(s).cov;
-    const f = confirmed(s, straySpks[i], cov);
-    if (f) strays.push({ ...s, amount: f.amount.toString(), covenantId: cov });
-  });
-  const foreign = (snap.foreign ?? [])
-    .map((g, k) => ({
-      token: g.token,
-      utxos: g.utxos.flatMap((u, i) => {
-        const f = confirmed(u, foreignSpks[k]![i] ?? null, g.token.covenantId);
-        return f ? [{ ...u, amount: f.amount.toString(), covenantId: g.token.covenantId }] : [];
-      }),
-    }))
-    .filter((g) => g.utxos.length > 0);
-  return { ...snap, order: { ...snap.order, amount: orderFact.amount.toString() }, custody, ...(snap.prefund ? { prefund } : {}), strays, ...(snap.foreign ? { foreign } : {}) };
+  return { refs, finish };
 }

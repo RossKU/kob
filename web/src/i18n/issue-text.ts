@@ -73,6 +73,7 @@ declare('price', {
   MARKETABLE_LIMIT_FILLS_AT_LIMIT: ['touch'],
   MARKETABLE_REJECTED: ['touch'],
   MARKET_REFERENCE_SOURCE: ['reference', 'worst'],
+  BOOK_ORDERS_NOT_ON_NODE: ['price'],
   MARKET_REFERENCE_DIVERGES: ['reference', 'lastFill'],
   MARKET_START_VS_INDEXER: ['start', 'reference'],
   COND_TP_CROSSES: ['touch'],
