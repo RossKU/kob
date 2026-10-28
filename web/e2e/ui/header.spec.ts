@@ -30,6 +30,23 @@ for (const width of [1280, 1024, 900]) {
   });
 }
 
+test('desktop: texts much wider than the row (a long translation, wide fonts) wrap to a second line, nothing overlaps', async ({ appPage: page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/#/market');
+  await expect(page.getByTestId('wallet-connect-list')).toBeVisible();
+  await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip, .header .brand span { letter-spacing: 6px; }' });
+  const ids = ['brand', 'nav-market', 'nav-orders', 'nav-create', 'nav-settings', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'wallet-connect-local-key', 'theme-toggle'];
+  const boxes = await Promise.all(ids.map((id) => page.getByTestId(id).boundingBox()));
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const [a, b] = [boxes[i]!, boxes[j]!];
+      const apart = a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5 || a.y + a.height <= b.y + 0.5 || b.y + b.height <= a.y + 0.5;
+      expect(apart, `${ids[i]} and ${ids[j]} do not overlap`).toBe(true);
+    }
+  }
+  await page.getByTestId('wallet-connect-local-key').click({ trial: true });
+});
+
 test('desktop: the status popover is keyboard accessible and closes on Escape and outside', async ({ appPage: page }) => {
   await page.goto('/#/market');
   const dot = page.getByTestId('status-dot');
