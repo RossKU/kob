@@ -6,7 +6,7 @@ import { useTheme } from './theme';
 import { NotifyBell } from '../notify/NotificationPanel';
 import { WalletButton } from './WalletButton';
 import { NetworkChip } from './NetworkBadge';
-import { useNarrow, useSqueezeCheck } from './narrow';
+import { TIGHT_QUERY, useMedia, useNarrow, useSqueezeCheck } from './narrow';
 import { useRef } from 'preact/hooks';
 import { Popover } from './Popover';
 import { StatusDot, StatusLines, useStatusLevel } from './StatusBar';
@@ -60,7 +60,7 @@ function ReorgIndicator() {
   );
 }
 
-/** The three bars of the menu button; a small dot on it shows the status (a problem is also a banner under the header). */
+/** The three bars of the menu button. */
 function MenuIcon() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -95,19 +95,13 @@ function NavLinks(props: { active: ReturnType<typeof navOf> }) {
 
 /** The phone menu: the four tabs, the theme toggle, what the network chip and the pre-audit word mean, and the status lines. It closes on every navigation. */
 function Menu(props: { active: ReturnType<typeof navOf>; network: string }) {
-  const level = useStatusLevel();
   return (
     <Popover
       label={t('shell.menu')}
       anchor="header"
       triggerClass="menu-button"
-      triggerAttrs={{ 'data-testid': 'menu-button', 'data-level': level }}
-      trigger={
-        <>
-          <MenuIcon />
-          <span class={`menu-dot dot ${level === 'unknown' ? '' : level}`} aria-hidden="true" />
-        </>
-      }
+      triggerAttrs={{ 'data-testid': 'menu-button' }}
+      trigger={<MenuIcon />}
       panelTestId="menu-panel"
     >
       <nav class="menu-nav" aria-label={t('shell.nav.label')}>
@@ -125,20 +119,21 @@ function Menu(props: { active: ReturnType<typeof navOf>; network: string }) {
 }
 
 /**
- * Top bar, ONE row. A desktop (900 px and wider): the brand, the four tabs, then the status dot, the network chip, the wallet buttons, the theme toggle and
- * the bell. A phone: the logo, a menu button (the tabs, the theme toggle, the network and status explanation), the shortened network chip, one "Connect"
- * button (or the connected address) and the bell.
+ * Top bar, ONE row. The wide row (when it fits): the brand, the four tabs, then the status dot, the network chip, the wallet buttons, the theme toggle and
+ * the bell. The narrow row (a phone, or a row that does not fit): the logo, the shortened network chip with the status as a dot in it, one "Connect" button (or
+ * the connected address), the bell and, last, a menu button (the tabs, the theme toggle, the network and status explanation).
  */
 export function Header(props: { route: Route }) {
   const { config } = useServices();
   const narrow = useNarrow();
+  const tight = useMedia(TIGHT_QUERY);
+  const level = useStatusLevel();
   const inner = useRef<HTMLDivElement>(null);
   useSqueezeCheck(inner, narrow);
   const active = navOf(props.route);
   return (
     <header class="header" data-layout={narrow ? 'narrow' : 'wide'}>
       <div class="container header-inner" ref={inner}>
-        {narrow ? <Menu active={active} network={config.network} /> : null}
         <a class="brand" href="#/market" data-testid="brand">
           <Logo />
           <span>{t('common.appName')}</span>
@@ -151,12 +146,13 @@ export function Header(props: { route: Route }) {
         <div class="header-tools">
           <ReorgIndicator />
           {narrow ? null : <StatusDot />}
-          <NetworkChip network={config.network} short={narrow} />
+          <NetworkChip network={config.network} short={narrow || tight} {...(narrow ? { level } : {})} />
           <div class="header-wallet">
             <WalletButton />
           </div>
           {narrow ? null : <ThemeToggle />}
           <NotifyBell />
+          {narrow ? <Menu active={active} network={config.network} /> : null}
         </div>
       </div>
     </header>

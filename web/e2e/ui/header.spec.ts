@@ -14,8 +14,19 @@ const rowOf = async (page: Page, ids: string[]): Promise<{ ys: number[]; right: 
 const noScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 // 900 px and wider is the desktop row; on a font so wide that the row does not fit (the CI runner's fonts at 900 px) the header takes the phone layout, still ONE row
-for (const width of [1280, 1024, 900]) {
+/** A wide font like the CI runner's (DejaVu Sans, close to Verdana): the header must fit, or take the phone layout, on it too. */
+const wideFonts = (page: Page) =>
+  page.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => {
+      const s = document.createElement('style');
+      s.textContent = 'html, body, button, input, select { font-family: Verdana, "DejaVu Sans", sans-serif !important; }';
+      document.head.append(s);
+    });
+  });
+
+for (const width of [1280, 1024, 900, 880]) {
   test(`desktop ${width} px: one row, in the desktop layout or (when it does not fit) the phone layout`, async ({ appPage: page }) => {
+    await wideFonts(page);
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/#/market');
     await expect(page.getByTestId('wallet-connect-list')).toBeVisible();
@@ -25,10 +36,10 @@ for (const width of [1280, 1024, 900]) {
     // the layout settles after the first measurement
     await expect.poll(async () => (await page.getByTestId('nav-market').count()) + (await page.getByTestId('menu-button').count())).toBe(1);
     const wide = (await page.getByTestId('nav-market').count()) === 1;
-    if (width === 1280) expect(wide, 'the desktop row fits 1280 px').toBe(true);
+    if (width >= 880) expect(wide, `the desktop row fits ${width} px on a wide font`).toBe(true);
     const ids = wide
       ? ['brand', 'nav-market', 'nav-settings', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'wallet-connect-local-key', 'theme-toggle', 'notify-bell']
-      : ['menu-button', 'brand', 'network-chip', 'wallet-connect', 'notify-bell'];
+      : ['brand', 'network-chip', 'wallet-connect', 'notify-bell', 'menu-button'];
     const { ys, right } = await rowOf(page, ids);
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
     expect(right).toBeLessThanOrEqual(width);
@@ -58,6 +69,38 @@ test('desktop: a row that does not fit (wide fonts, a long translation) becomes 
   await page.setViewportSize({ width: 1500, height: 800 });
   await expect(page.getByTestId('nav-market')).toBeVisible();
   await expect(page.getByTestId('menu-button')).toHaveCount(0);
+});
+
+test('a header that started narrow comes back to the full row when the window is widened (an unfolded phone at 880 px, then 900 and 1200)', async ({ appPage: page }) => {
+  await wideFonts(page);
+  await page.setViewportSize({ width: 600, height: 800 });
+  await page.goto('/#/market');
+  await expect(page.getByTestId('menu-button')).toBeVisible();
+  await expect(page.getByTestId('nav-market')).toHaveCount(0);
+  for (const width of [880, 900, 1200]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(page.getByTestId('nav-market'), `the tabs at ${width} px`).toBeVisible();
+    await expect(page.getByTestId('nav-settings')).toBeVisible();
+    await expect(page.getByTestId('menu-button')).toHaveCount(0);
+    const { ys, right } = await rowOf(page, ['brand', 'nav-market', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'wallet-connect-local-key', 'theme-toggle', 'notify-bell']);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
+    expect(right).toBeLessThanOrEqual(width);
+  }
+  // and narrow again
+  await page.setViewportSize({ width: 500, height: 800 });
+  await expect(page.getByTestId('menu-button')).toBeVisible();
+});
+
+test('a row squeezed by wide texts comes back when the room is there: tabs again after the texts are normal and the window grows', async ({ appPage: page }) => {
+  await page.setViewportSize({ width: 1000, height: 800 });
+  await page.goto('/#/market');
+  await expect(page.getByTestId('nav-market')).toBeVisible();
+  await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip { letter-spacing: 6px; }' });
+  await expect(page.getByTestId('menu-button')).toBeVisible();
+  await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip { letter-spacing: 0 !important; }' });
+  // the same width: the texts are normal again and the row fits, so it is shown again without any resize
+  await page.setViewportSize({ width: 1020, height: 800 });
+  await expect(page.getByTestId('nav-market')).toBeVisible();
 });
 
 test('desktop: the status popover is keyboard accessible and closes on Escape and outside', async ({ appPage: page }) => {
@@ -91,9 +134,12 @@ test.describe('phone', () => {
       await page.setViewportSize({ width, height: 800 });
       await page.goto('/#/market');
       await expect(page.getByTestId('wallet-connect')).toBeVisible();
-      const { ys, right } = await rowOf(page, ['menu-button', 'brand', 'network-chip', 'wallet-connect', 'notify-bell']);
+      const { ys, right } = await rowOf(page, ['brand', 'network-chip', 'wallet-connect', 'notify-bell', 'menu-button']);
       expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
       expect(right).toBeLessThanOrEqual(width);
+      // the order of the row: the logo, the chip, Connect, the bell and, last, the menu
+      const xs = (await Promise.all(['brand', 'network-chip', 'wallet-connect', 'notify-bell', 'menu-button'].map((id) => page.getByTestId(id).boundingBox()))).map((b) => b!.x);
+      expect([...xs].sort((a, b) => a - b)).toEqual(xs);
       expect((await page.locator('header.header').boundingBox())!.height).toBeLessThan(56);
       await expect(page.getByTestId('network-badge')).toHaveText('tn10');
       await expect(page.getByTestId('wallet-connect')).toHaveText('Connect');
@@ -157,6 +203,7 @@ test.describe('phone', () => {
     await page.route('**/node/**', (route) => route.abort());
     await page.goto('/#/market');
     await expect(page.getByTestId('banner-node')).toBeVisible();
-    await expect(page.getByTestId('menu-button')).toHaveAttribute('data-level', 'bad');
+    await expect(page.getByTestId('network-chip')).toHaveAttribute('data-level', 'bad');
+    await expect(page.getByTestId('chip-dot')).toBeVisible();
   });
 });

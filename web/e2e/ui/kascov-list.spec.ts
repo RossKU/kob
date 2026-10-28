@@ -60,6 +60,7 @@ test.describe('with kascov.io', () => {
     // the source is a small marker; the sentence is its tooltip and the legend above the list says it once
     await expect(page.getByTestId(`kascov-source-${SAVED}`)).toHaveText('via kascov');
     await expect(page.getByTestId(`kascov-source-${SAVED}`)).toHaveAttribute('title', 'name and ticker from kascov.io (declared by their creator)');
+    await page.getByTestId('legend-toggle').click();
     await expect(page.getByTestId('legend-source')).toContainText('name and ticker from kascov.io (declared by their creator)');
     await expect(page.getByTestId('token-table')).not.toContainText('declared by their creator');
     await expect(page.getByTestId(`token-orders-${SAVED}`)).toHaveText('no orders');

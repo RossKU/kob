@@ -239,11 +239,12 @@ a.tape-row:hover .tape-time { color: var(--text); }
 }
 .tk-icon img { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--surface, #fff); }
 
-/* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, both as tall as --idb */
+/* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, the icon is --idb tall, the fingerprint 80 % of it */
 .idb { --idb: 40px; flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .idb-lg { --idb: 64px; gap: 8px; }
 .idb .tk-icon { --tk-size: var(--idb); }
-.idb .fp { flex: none; display: block; height: var(--idb); width: calc(var(--idb) * 100 / 132); border-radius: calc(var(--idb) * 0.12); }
+/* the fingerprint is one size smaller than the icon and centred on it (the block aligns its items in the middle) */
+.idb .fp { flex: none; display: block; height: calc(var(--idb) * 0.8); width: calc(var(--idb) * 0.8 * 100 / 132); border-radius: calc(var(--idb) * 0.1); }
 @media (max-width: 759px) {
   .idb-md { --idb: 36px; gap: 4px; }
   .idb-lg { --idb: 52px; gap: 6px; }
@@ -268,6 +269,10 @@ a.tape-row:hover .tape-time { color: var(--text); }
 /* the legend above the list: said once, not on every row */
 .ml-legend { margin: 0 0 10px; max-width: 70rem; }
 .ml-legend p { margin: 0 0 4px; }
+.ml-legend-bar { display: flex; align-items: center; gap: 8px; }
+.ml-info { flex: none; width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font: italic 700 0.8rem/1 Georgia, serif; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.ml-info:hover, .ml-info[aria-expanded='true'] { color: var(--text); background: var(--surface-3); }
+.ml-legend-body { margin-top: 6px; }
 .ml-legend-badges > summary { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; width: fit-content; }
 .ml-legend-badges .tf-list { margin-top: 6px; }
 

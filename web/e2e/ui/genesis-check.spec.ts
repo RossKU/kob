@@ -61,6 +61,7 @@ for (const vp of VIEWPORTS) {
       await expect(kqa.getByTestId('token-fact-genesis_unverified')).toHaveText('Genesis not verified');
       await expect(kqa.getByTestId('token-fact-genesis_kascov')).toHaveCount(0);
       // the legend explains both
+      await page.getByTestId('legend-toggle').click();
       await page.getByTestId('legend-badges').locator('summary').click();
       await expect(page.getByTestId('legend-fact-genesis_kascov')).toContainText('Verified by kascov');
       await expect(page.getByTestId('legend-fact-genesis_verified')).toContainText('KOB checked this token');

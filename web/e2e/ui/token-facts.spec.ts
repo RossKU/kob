@@ -79,6 +79,10 @@ test.describe('token facts', () => {
     await expect(row.getByTestId('token-fact-live_mint_authority')).toBeVisible();
     await expect(row.getByTestId('token-fact-live_mint_authority')).toHaveAttribute('title', /more of this token can be created/);
     await expect(row.locator('summary, [data-testid^="token-fact-text-"]')).toHaveCount(0);
+    // the legend is collapsed behind one info control; the attribution stays as a short label
+    await expect(page.getByTestId('legend-attribution')).toHaveText('names via kascov');
+    await expect(page.getByTestId('legend-body')).toHaveCount(0);
+    await page.getByTestId('legend-toggle').click();
     await expect(page.getByTestId('legend-fact-public-mint')).toBeHidden();
     await page.getByTestId('legend-badges').locator('summary').click();
     await expect(page.getByTestId('legend-fact-public-mint')).toContainText('anyone create more');

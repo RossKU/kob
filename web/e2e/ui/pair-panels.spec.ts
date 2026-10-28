@@ -58,6 +58,14 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await page.goto(`/#/market/${base}/${QUOTE}`);
   await expect(page.getByTestId('pair-page')).toHaveAttribute('data-base', base);
 
+  // the header: icon, fingerprint, the pair text, then the swap button right after it
+  const [icon, fp, sel, flipBtn] = await Promise.all([`token-icon-${base}`, `fingerprint-${base}`, 'market-pair', 'market-flip'].map((id) => page.getByTestId('pair-page').getByTestId(id).first().boundingBox()));
+  expect(icon!.x).toBeLessThan(fp!.x);
+  expect(fp!.x + fp!.width).toBeLessThan(sel!.x);
+  expect(sel!.x + sel!.width).toBeLessThanOrEqual(flipBtn!.x + 1);
+  expect(fp!.height).toBeLessThan(icon!.height - 4);
+  expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
+
   // 24 h strip: prices from the two KAS markets, the volumes and the fill count from the pair's own fills (2: the ask and the bid)
   await expectFigures(page, [...PRICE_TILES, ...VOLUME_TILES]);
   await expect(page.getByTestId('market-stats')).toHaveAttribute('data-volume-source', 'fills');

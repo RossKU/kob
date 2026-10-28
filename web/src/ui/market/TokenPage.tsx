@@ -328,8 +328,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           badges={liveBadge}
           pair={
             <>
-              {canFlip ? <FlipButton pair={pairLabel(name, !inverted)} pressed={inverted} onClick={toggleInverted} /> : null}
               <PairSelector pair={displayedPair(id, null, inverted)} rows={selectorRows} onChange={onPair} />
+              {canFlip ? <FlipButton pair={pairLabel(name, !inverted)} pressed={inverted} onClick={toggleInverted} /> : null}
             </>
           }
         />

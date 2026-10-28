@@ -35,6 +35,16 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       for (const gone of ['token-open-caution', 'open-token-decimals', 'token-program-note', 'token-more', 'token-fact-text-genesis_unverified', 'token-fact-text-public-mint']) await expect(header.getByTestId(gone)).toHaveCount(0);
       await expect(header.locator('details')).toHaveCount(0);
       await expect(header).not.toContainText(/Its creation was not checked|lets anyone create more|Not in the token registry|Token program:/);
+      // the identity block, then the pair text, then the swap button right after it
+      const [icon, fp, pair, flip] = await Promise.all([`token-icon-${ID}`, `fingerprint-${ID}`, 'market-pair', 'market-flip'].map((id) => header.getByTestId(id).boundingBox()));
+      expect(icon!.x).toBeLessThan(fp!.x);
+      if (size.width >= 600) {
+        expect(fp!.x + fp!.width).toBeLessThan(pair!.x);
+        expect(pair!.x + pair!.width).toBeLessThanOrEqual(flip!.x + 1);
+      }
+      // the fingerprint is one size smaller than the icon and centred on it
+      expect(fp!.height).toBeLessThan(icon!.height - 4);
+      expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
       // the covenant id is said once, short, with a copy button (the title for screen readers is not drawn)
       await expect(header.getByTestId('token-short-id')).toHaveText(SHORT);
       await expect(header.getByTestId('token-short-id-copy')).toBeVisible();

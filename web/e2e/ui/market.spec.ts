@@ -21,6 +21,12 @@ test.describe('shell and token list', () => {
     await expect(row.getByTestId(`token-link-${id}`)).toHaveText('EXKCC');
     // the identity block: the icon and the fingerprint of the covenant id (its three words are the tooltip and the accessible name)
     await expect(row.getByTestId(`identity-${id}`)).toBeVisible();
+    {
+      // the fingerprint is one size smaller than the icon and centred on it
+      const [icon, fp] = await Promise.all([`token-icon-${id}`, `fingerprint-${id}`].map((t) => row.getByTestId(t).boundingBox()));
+      expect(fp!.height).toBeLessThan(icon!.height - 3);
+      expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
+    }
     await expect(row.getByTestId(`fingerprint-${id}`)).toHaveAttribute('aria-label', /^Covenant id fingerprint: [a-z]+ [a-z]+ [a-z]+$/);
     // token issuance is permissionless and KOB makes no per-token judgement: the row never says verified / official / pending review (the neutral fact "Genesis not verified" is not a verdict)
     await expect(row).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review|registry/i);

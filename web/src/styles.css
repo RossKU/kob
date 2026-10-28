@@ -206,9 +206,8 @@ small, .small { font-size: 0.85em; }
 .hp-header { position: static; }
 .hp-header .hp-panel { left: 0; right: 0; top: 100%; max-width: none; min-width: 0; border-radius: 0 0 var(--radius) var(--radius); border-top: 0; }
 .status-lines { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 0.85rem; }
-.status-dot .dot, .menu-button .dot { margin-right: 0; width: 10px; height: 10px; }
-.menu-button { position: relative; }
-.menu-button .menu-dot { position: absolute; right: 2px; top: 2px; width: 8px; height: 8px; border: 1px solid var(--surface); }
+.status-dot .dot { margin-right: 0; width: 10px; height: 10px; }
+.net-chip .dot { margin-right: 5px; width: 8px; height: 8px; flex: none; }
 .menu-nav { display: flex; flex-direction: column; gap: 2px; }
 .menu-nav a { padding: 10px 8px; border-radius: var(--radius-sm); text-decoration: none; color: var(--text); font-weight: 600; }
 .menu-nav a[aria-current='page'] { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--primary); }
@@ -429,7 +428,7 @@ body.modal-open { overflow: hidden; }
 .pill-step { width: 1.4em; text-align: center; }
 
 /* a phone or a small tablet (below 900 px): the logo alone (the name stays for screen readers), the menu, the chip, one Connect button, the bell */
-@media (max-width: 899px) {
+@media (max-width: 719px) {
   .header-inner { gap: 6px; flex-wrap: nowrap; }
   .header .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .header-tools { gap: 6px; }
@@ -438,11 +437,16 @@ body.modal-open { overflow: hidden; }
   .wallet-chip { padding-left: 8px; }
   .toast-host { left: 12px; right: 12px; width: auto; }
 }
-/* a desktop that is not wide: the brand shrinks to the logo, the chip and the tabs tighten */
-@media (min-width: 900px) and (max-width: 1099px) {
+/* a desktop that is not wide: the brand shrinks to the logo, the chip, the tabs and the buttons tighten (so the whole row fits down to about 900 px even on wide fonts) */
+@media (min-width: 720px) and (max-width: 1199px) {
   .header .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-  .nav a { padding: 6px 7px; }
-  .header-inner { gap: 8px; }
+  .nav { gap: 0; }
+  .nav a { padding: 6px 5px; font-size: 0.88rem; }
+  .header-inner { gap: 6px; }
+  .header-tools { gap: 4px; }
+  .header-tools .btn-sm { padding: 2px 7px; font-size: 0.8rem; }
+  .wallet-actions { gap: 4px; }
+  .net-chip { font-size: 0.66rem; padding: 2px 5px; }
 }
 .raw-details { margin-top: 2px; }
 .raw-details summary { cursor: pointer; }

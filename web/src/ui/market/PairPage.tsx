@@ -186,6 +186,7 @@ export function PairPage(props: { base: string; quote: string }) {
             {/* the base token's block is where the token page has it, so the selector does not move when a quote is chosen; the quote's follows the selector */}
             <IdentityBlock row={baseRow ?? { covenantId: props.base, ticker: baseInfo.ticker, kascov: null }} size="lg" data-testid="pair-base-identity" />
             <div class="mkt-title">
+              <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={choiceRows} onChange={openPair} />
               <FlipButton
                 pair={`${quoteInfo.ticker}/${baseInfo.ticker}`}
                 onClick={() => {
@@ -194,7 +195,6 @@ export function PairPage(props: { base: string; quote: string }) {
                   navigate(pairRoute(props.quote, props.base));
                 }}
               />
-              <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={choiceRows} onChange={openPair} />
               <span data-testid="pair-identities">
                 <IdentityBlock row={quoteRow ?? { covenantId: props.quote, ticker: quoteInfo.ticker, kascov: null }} size="lg" data-testid="pair-quote-identity" />
               </span>
