@@ -10,7 +10,7 @@ import { IdCopy } from './IdCopy';
 import { KascovLink, programTitle } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
 import { TokenNote } from './TokenNote';
-import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
+import { GenesisFailedBanner, OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
 import { templateDetail, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
@@ -71,6 +71,7 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean; fu
     <>
       <SharedTickerNote shared={!!props.sharedTicker} block data-testid="token-shared-ticker" />
       <IndexerProblems codes={r.indexerProblems} />
+      <GenesisFailedBanner row={r} />
       <PowersWarning powers={r.powers} />
       {props.full ? <TokenFacts rows={[r]} data-testid="token-facts" /> : null}
       {props.full ? <OpenTokenNote token={r.info} data-testid="token-open-caution" /> : null}

@@ -42,7 +42,7 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       // the facts are badges on one line; the sentence of each is its tooltip
       const genesis = header.getByTestId('token-fact-genesis_unverified');
       const mint = header.getByTestId('token-fact-public-mint');
-      await expect(genesis).toHaveText('Genesis not verified');
+      await expect(genesis).toHaveText(/^Genesis not verified(: history not available)?$/);
       await expect(mint).toHaveText('Public mint');
       await expect(genesis).toHaveAttribute('title', /not checked against its token program/);
       await expect(mint).toHaveAttribute('title', /anyone create more/);
@@ -60,8 +60,8 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       await expect(page.getByTestId('order-book')).toBeVisible();
       const header = (await page.getByTestId('token-header').boundingBox())!;
       const stats = (await page.getByTestId('market-stats').boundingBox())!;
-      // the header is the identity block, the pair selector and two short lines (the preamble was about 440 px on a phone, 270 on a desktop)
-      expect(header.height).toBeLessThan(size.width < 600 ? 260 : 170);
+      // the header is the identity block, the pair selector and two short lines (the preamble was about 440 px on a phone, 270 on a desktop; on a phone the genesis badge may carry its reason on a second line)
+      expect(header.height).toBeLessThan(size.width < 600 ? 280 : 170);
       expect(stats.y - (header.y + header.height)).toBeLessThan(40);
     });
 

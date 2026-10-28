@@ -17,7 +17,7 @@ const hashOf = (name: string): string => templates.find((x) => x.name === name)!
 const ID = (c: string) => c.repeat(64);
 const registry: TokenRegistry = { network: 'testnet-10', templates: [], templateChecks: [], tokens: [], byCovenantId: new Map() };
 const k = (over: Partial<KascovToken> = {}): KascovToken => ({
-  covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: hashOf('KaspaRocketToken11458'), imageHash: null, imageUrl: null, ...over,
+  covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: hashOf('KaspaRocketToken11458'), imageHash: null, imageUrl: null, verified: false, ...over,
 });
 const rowOf = (over: Partial<KascovToken> = {}) => kascovRowOf(ID('1'), [k(over)], { network: 'testnet-10', templates, registry })!;
 

@@ -36,8 +36,9 @@ import { TokenFacts } from './TokenBadges';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
 import { applyKascov, kascovRowOf } from './kascov-merge';
+import { useGenesisCheck } from './use-genesis-check';
 import { useKascov } from './use-kascov';
-import { buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
+import { applyGenesisCheck, buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
 import { TradeTape } from './TradesPanel';
 import { tradeRows } from './trades-model';
 import './market.css';
@@ -121,6 +122,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
 
   // the title bar's row: the creator's name, ticker and icon from kascov.io where KOB has none of its own (the facts below stay KOB's)
   const headerRow = useMemo(() => (row && kascov.status === 'ok' ? applyKascov(row, kascov.tokens, longId(row.covenantId)) : row), [row, kascov]);
+  // KOB's own genesis check of the token (once per token and session, data/genesis-check.ts): "Genesis verified", "Genesis check failed", or "Genesis not verified" with the
+  // reason, replacing kascov's remark; a token the registry verified is not checked. The result gates nothing.
+  const genesisCheck = useGenesisCheck(headerRow ?? row ?? null);
+  const checkedRow = useMemo(() => (headerRow ? applyGenesisCheck(headerRow, genesisCheck) : headerRow), [headerRow, genesisCheck]);
 
   // the ticket names the token as the page does: the creator's ticker (kascov.io) where KOB has no name of its own; a label, the id stays the identity
   // the pair selector's rows: the tradable tokens, this token named as the page names it (a token no list names has no row of its own: it is added)
@@ -317,7 +322,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       attrs={{ 'data-token': id }}
       header={
         <TokenHeader
-          row={headerRow ?? row}
+          row={checkedRow ?? row}
           sharedTicker={sharedTicker}
           note={onChain ? shown : null}
           badges={liveBadge}
@@ -395,7 +400,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
                 </Banner>
               ) : null}
               {wallet.networkMismatch ? <Banner tone="error" data-testid="ticket-network-blocked">{t('market.ticket.networkBlocked')}</Banner> : null}
-              <OrderTicket token={ticketInfo ?? info} prefill={prefill} inverted={inverted} facts={<TokenFacts rows={[row]} compact data-testid="ticket-token-facts" />} />
+              <OrderTicket token={ticketInfo ?? info} prefill={prefill} inverted={inverted} facts={<TokenFacts rows={[checkedRow ?? row]} compact data-testid="ticket-token-facts" />} />
             </div>
           ) : open.reason === 'no-scale' ? (
             <FirstOrderDecimals key={id} known={issuedDecimals(services.config.network, id)} claim={headerRow?.kascov?.decimals ?? null} onSet={(d) => setEntered({ id, decimals: d })} />

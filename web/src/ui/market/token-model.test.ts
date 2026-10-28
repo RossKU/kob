@@ -5,7 +5,8 @@ import { parseRegistry, displayName, type TokenInfo, type TokenRegistry } from '
 import { loadKobNode } from '../../kob/wasm.node';
 import { TOKEN_PROGRAMS } from '../../kob/programs.generated';
 import { tokenTitle } from './TokenBadges';
-import { buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow } from './token-model';
+import type { GenesisCheck } from '../../data/genesis-check';
+import { applyGenesisCheck, buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
 
 const kob = await loadKobNode();
 const tpl = kob.templates().find((t) => t.name === 'KCC20Ref_8x8')!;
@@ -346,5 +347,43 @@ describe('the registry always wins over the indexer for issuer powers', () => {
     expect(row.badges).toEqual([]);
     expect(tokenLabel(row)).toBe('KASPER (eeeeeeee…eeeeeeee)');
     expect(row.tradable).toBe(false);
+  });
+});
+
+describe('the genesis line of a row: kascov\'s remark and KOB\'s own check', () => {
+  const row = (facts: TokenRow['facts']): TokenRow => ({ ...buildTokenRows(registry('reviewed', [tokJson('GOOD', ID('a'))]), null)[0]!, facts });
+  const verified = (over: Record<string, unknown> = {}): GenesisCheck => ({ status: 'verified', source: 'kascov', txid: 'ab'.repeat(32), program: 'KCC20PublicMint', supply: 1000n, mintAllowance: null, mintersUnspent: null, ...over }) as GenesisCheck;
+
+  it('a pass is KOB\'s own "Genesis verified" and replaces both "Genesis not verified" and kascov\'s chip; a public minter adds the allowance fact', () => {
+    expect(applyGenesisCheck(row(['genesis_unverified']), verified()).facts).toEqual(['genesis_verified']);
+    expect(applyGenesisCheck(row(['genesis_kascov', 'blacklist']), verified()).facts).toEqual(['genesis_verified', 'blacklist']);
+    const mint = applyGenesisCheck(row(['genesis_unverified', 'public-mint']), verified({ mintAllowance: 500n, mintersUnspent: true }));
+    expect(mint.facts).toEqual(['genesis_verified', 'public-mint', 'mint_allowance']);
+    expect(mint.genesis).toMatchObject({ status: 'verified', mintAllowance: 500n });
+  });
+
+  it('a failure is the warning "Genesis check failed", even if kascov says verified', () => {
+    const failed: GenesisCheck = { status: 'failed', code: 'contaminated', message: 'x' };
+    expect(applyGenesisCheck(row(['genesis_kascov']), failed).facts).toEqual(['genesis_failed']);
+    expect(applyGenesisCheck(row(['genesis_unverified', 'live_mint_authority']), failed).facts).toEqual(['genesis_failed', 'live_mint_authority']);
+  });
+
+  it('data that is not available changes no fact (kascov\'s chip or "not verified" stays) and records the reason', () => {
+    const un: GenesisCheck = { status: 'unavailable', reason: 'history' };
+    expect(applyGenesisCheck(row(['genesis_unverified']), un).facts).toEqual(['genesis_unverified']);
+    expect(applyGenesisCheck(row(['genesis_kascov']), un)).toMatchObject({ facts: ['genesis_kascov'], genesis: un });
+    expect(applyGenesisCheck(row(['genesis_unverified']), null).facts).toEqual(['genesis_unverified']);
+  });
+
+  it('a token whose genesis the registry verified is not touched by a check, and the chip is never added to it', () => {
+    const r = row([]);
+    expect(applyGenesisCheck(r, { status: 'failed', code: 'mismatch', message: '' })).toBe(r);
+    expect(applyGenesisCheck(r, verified())).toBe(r);
+    expect(withKascovRemark(r, true)).toBe(r);
+    expect(withKascovRemark(row(['genesis_unverified']), false).facts).toEqual(['genesis_unverified']);
+  });
+
+  it('the facts an indexer may state exclude the derived ones', () => {
+    expect(tokenFactIds(['genesis_verified', 'genesis_failed', 'genesis_kascov', 'mint_allowance'], ['mint_allowance'])).toEqual([]);
   });
 });

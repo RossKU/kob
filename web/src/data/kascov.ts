@@ -11,8 +11,11 @@
 //     own claims, recorded in its genesis (the same status as a KCC-23 declaration: "declared by its creator"). Nobody has checked them.
 //   * Never a fact: supply, powers, the decimals a market trades with, prices and orders come from the chain and the KOB indexer exactly as before. Where
 //     kascov's ticker or decimals disagree with what KOB derives, KOB wins and the list says so (ui/market/kascov-merge.ts).
-//   * Never an authority: kascov's `status`, `review`, `alive` or `invalid_reason` are not read at all. Whether a token is listed is decided by the program
-//     hash alone, against the programs this build pins and enables for the network (`kascovTradable`).
+//   * Never an authority: kascov's `review`, `alive` or `invalid_reason` are not read at all, and its `status` only as a labelled third-party remark: a token it
+//     marks `verified` shows a small "Verified by kascov" chip instead of "Genesis not verified" (the chip says kascov checked the token's history and KOB has not
+//     checked it itself; founder decision 2026-10-28). It changes no warning, no fact and no rule. Whether a token is listed is decided by the program hash
+//     alone, against the programs this build pins and enables for the network (`kascovTradable`). kascov's `lineage_complete` ("provably genesis") is not
+//     read: it only says kascov's index began before the token did.
 //   * Every failure (unreachable, slow, not JSON, a changed shape, a response for another network) is an `ok: false` result, never a throw: the list is then
 //     what it was before this module existed.
 //
@@ -72,6 +75,8 @@ export interface KascovToken {
   imageHash: string | null;
   /** the creator's own https URL of the image; only kept with a hash (without one nothing could be checked) */
   imageUrl: string | null;
+  /** kascov marks the token `verified` (`status`): its own, third-party remark; KOB has not checked the token by it */
+  verified: boolean;
 }
 
 export type KascovFailure = 'unsupported' | 'network' | 'timeout' | 'http' | 'too-large' | 'shape';
@@ -121,6 +126,7 @@ export function parseKascovToken(raw: unknown): KascovToken | null {
     templateHash: hex64(asObject(o.standard)?.view_template_hash),
     imageHash,
     imageUrl: imageHash ? safeImageUrl(o.claimed_image) : null,
+    verified: o.status === 'verified',
   };
 }
 

@@ -84,7 +84,7 @@ the official SDK there when its injected config has `features.test`). Options: `
 fails on uncaught page errors), `wallet` (the handle). Options via `test.use`: `walletId` (null = none), `walletKey`, `walletOptions`, `appConfig`,
 `autoOpen`, `appPath`, `failOnPageError`. `e2e/testids.ts` is the authoritative `data-testid` contract (`orderRow(id)`, `field(name)` ...).
 The real kascov.io (token names and icons of the market list) is never reached: `appPage` answers every request to `https://kascov.io/` with an empty token
-list, and a spec that needs tokens, pictures or a failure installs `mockKascov(page, {...})` from `e2e/helpers/kascov.ts` (`e2e/ui/kascov-list.spec.ts`).
+list, and a spec that needs tokens, pictures or a failure installs `mockKascov(page, {...})` from `e2e/helpers/kascov.ts` (`e2e/ui/kascov-list.spec.ts`). The Kaspa REST explorers (`api.kaspa.org`, `api-tn10.kaspa.org`) that KOB's own genesis check falls back to are never reached either: `appPage` answers them 404, and `mockExplorer(page, {txs})` serves a recorded genesis transaction; `mockKascov(page, {files})` serves a token's per-token file (`e2e/ui/genesis-check.spec.ts`, over recorded chain data of `src/testing/genesis-chain.json`).
 The specs in `e2e/infra/` prove the stack with the placeholder page; the per-order-type specs are in `e2e/orders/` (below).
 
 `e2e-real/common.mjs` holds the helpers for the real-wallet TN10 runs (unpack / cache extensions, launch, onboard, approve popups); it runs nothing on import.

@@ -138,7 +138,10 @@ https://kascov.io/img/{mainnet|testnet-10}/<covenant id>        kascov's saved c
 What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web/src/ui/market/kascov-merge.ts`):
 
 * **Taken:** the creator's claimed ticker, name and image hash/URL (`claimed_*`), the declared decimals (only to flag a disagreement) and
-  the program hash (`standard.view_template_hash`). **Never read:** kascov's `status`, `review`, `alive`, `invalid_reason`, `listed_*`.
+  the program hash (`standard.view_template_hash`), and `status`, only as a labelled third-party remark: `status: "verified"` shows the chip "Verified by
+  kascov" in place of "Genesis not verified" (its tooltip says kascov checked the token's history and KOB has not yet; it changes no warning and no rule).
+  **Never read:** `review`, `alive`, `invalid_reason`, `listed_*`, and `lineage_complete` (kascov's "provably genesis": it only says kascov's index began
+  before the token did).
   Supply, decimals used for trading, prices and orders stay the chain's and the KOB indexer's.
 * **Which tokens:** one kascov knows and no KOB source lists is added (as a "no orders" row) only if the program hash it names is one of the
   programs this build pins (`crates/kob-protocol/data/programs.json`) and enables for the network: on mainnet a `reviewed` program, and the
@@ -152,6 +155,35 @@ What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web
 * **Failure:** unreachable, slow (8 s), not JSON, a changed shape, a file for another network, larger than 12 MB: the list is exactly what
   the registry and the indexer give, plus a one-line "unavailable" hint. Nothing is thrown into the UI and nothing is stored as authority
   (the only persistent item is the visitor's icon switch, `kob.icons`).
+
+### KOB's own genesis check: more external sources (a token page only)
+
+When a token page opens, the app checks the token's genesis itself (`web/src/data/genesis-check.ts`; rules in `crates/kob-protocol/src/genesis_open.rs`, the
+wasm export `verifyGenesis`). The bytes come from public history, **once per token and session** (an in-memory cache; the market list makes none of these requests):
+
+```
+https://kascov.io/data/{mainnet|testnet-10}/c/<covenant id>.json   the token's file: genesis txid, the genesis outputs (value, script, revealed redeem script), the KCC-23 binding (CORS *)
+https://api.kaspa.org/transactions/<genesis txid>?inputs=true&outputs=true&resolve_previous_outpoints=no
+                                                                   mainnet, only when kascov's file is not enough (CORS *); api-tn10.kaspa.org for testnet-10
+https://api.kaspa.org/addresses/<script address>/full-transactions?limit=50&offset=0&resolve_previous_outpoints=no
+                                                                   the spend that revealed a genesis script (at most 3 pages; at most 6 explorer requests per token for scripts)
+```
+
+* **Trust.** None: the covenant id commits to the authorising outpoint and to the index, value and script public key of every genesis output, and each redeem script
+  is hashed against its output, so a source can make the check fail or come back empty but cannot make a wrong group pass. Kascov's file is needed only for the
+  genesis transaction id (no source maps a covenant id to its genesis); `KOB_PAGES_TOKEN_NAMES_URL` = `off` therefore turns the check off ("Genesis not verified:
+  history not available").
+* **Result.** `verified` (the badge "Genesis verified", KOB's own fact), `failed` (a warning "Genesis check failed", also when kascov says verified) or
+  `unavailable` (the badge stays "Genesis not verified" with a reason; asked again after 5 minutes when the page is opened later). Nothing is gated by it.
+* **Saved evidence.** The evidence of a token that verified (its genesis group, at most 24 tokens, at most 150 KB each) is kept in the visitor's `localStorage`
+  (`kob.genesis-evidence.v1`) so the sources are not asked again; it is verified again on every use, so it is a convenience and never authority. Without storage
+  the check simply runs again.
+* **Coverage.** Mainnet: the explorer is effectively archival (tokens up to 100 days old were checked). Testnet-10: the explorer keeps about 7 days; older tokens verify only
+  from kascov's file (tokens with a KCC-23 declaration). A token whose genesis holds an unspent output of a program that no spend has revealed stays unverified until that cell is spent: in the samples checked (about 14 tokens of the roughly 150 such cases) it is a launchpad's curve cell, which the public-mint profile does not declare as a companion, and kascov lists no live `PublicMint` for them (so there is no minter state to rebuild). Public-mint tokens whose unspent genesis output is a `TokenSeed` are rebuilt and verified.
+* **CSP.** The shipped `connect-src` allows `https:`, so nothing changes. A deployment that **pins `connect-src`** adds `https://api.kaspa.org` and
+  `https://api-tn10.kaspa.org` (for its network) beside `https://kascov.io`; without them the check answers "sources unreachable" or "history not available" and
+  the page is otherwise unchanged.
+* **Privacy.** The explorers see the visitor's IP address and the genesis transaction of the token opened (kascov.io sees the token's covenant id).
 
 **Refresh policy** (one constant, `KASCOV_REFRESH_MS` = 120 s in `web/src/data/kascov.ts`; kascov rebuilds the file about every 2 minutes):
 
@@ -182,8 +214,9 @@ pictures of the rows in view (kascov.io, or the creator's host when kascov has n
 proxy through the host. The visitor can switch pictures off in Settings ("Load token icons from third-party hosts", on by default): letters
 only, and no image host is contacted. The host sees nothing of this.
 
-**Neutrality.** The names are the creators' own claims, labelled "declared by its creator"; the list is not curated, ranked or marked
-"verified" by KOB or by the host, and kascov's ratings are not used. A host that repoints `KOB_PAGES_TOKEN_NAMES_URL` to a curated source
+**Neutrality.** The names are the creators' own claims, labelled "declared by its creator"; the list is not curated or ranked, and KOB marks nothing
+"verified" on a third party's word: kascov's `status` appears only as the chip "Verified by kascov" (a third-party remark that says KOB has not checked the token itself),
+and "Genesis verified" is KOB's own check. A host that repoints `KOB_PAGES_TOKEN_NAMES_URL` to a curated source
 changes what the page says about tokens: section 9 applies.
 
 Every URL must be `https://` (a node `wss://`) on a public host, without user name, password, query or fragment: the page is

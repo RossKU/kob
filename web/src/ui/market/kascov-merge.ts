@@ -5,13 +5,15 @@
 //
 //   * WHICH TOKENS. A token kascov knows that KOB's own sources do not (no registry entry, nothing on the KOB indexer: no order names it yet) is added only
 //     if the program hash kascov names for it is one of the programs this build pins (`kob.templates()`, from crates/kob-protocol/data/programs.json) and
-//     trades on this network (`programAllowed`: the profile's `networks` and, on mainnet, its review). kascov's `status`, `review` and `alive` are not
+//     trades on this network (`programAllowed`: the profile's `networks` and, on mainnet, its review). kascov's `review` and `alive` are not
 //     read. Such a token is a row with no orders; opening it goes through the same checks as any token (the token page re-derives everything from the
 //     indexer or the wallet's node-verified holdings, kob/open-token.ts). A token kascov names without a program hash (the 46-byte KRON family) is never
 //     added from kascov: it appears when the registry or the indexer lists it, as before.
 //   * WHICH WORDS. A row KOB already names keeps its ticker and name. Where it has none, kascov's claim fills the gap and the row says where it came from
 //     (`kascov.usedTicker` / `usedName`). If kascov's ticker or declared decimals differ from what KOB derived, KOB's stand and the row carries a note.
 //     A row whose program hash KOB knows and kascov contradicts is not touched at all: kascov is describing another program.
+//   * WHICH REMARK. kascov's `status: "verified"` is shown as a small chip "Verified by kascov" in place of "Genesis not verified" (third party, labelled: kascov
+//     checked the token's history, KOB has not yet; a token page runs KOB's own check and replaces it). It is no fact and changes no warning.
 //   * WHICH ICON. Every matched row may carry the hash and sources of an icon; whether it is shown is decided by the bytes (data/kascov.ts).
 import type { IndexerTokenView } from '../../data/indexer-types';
 import type { KascovToken } from '../../data/kascov';
@@ -20,7 +22,7 @@ import { programAllowed } from '../../kob/open-token';
 import type { TokenRegistry } from '../../kob/registry';
 import { TEMPLATE_ID_PROGRAM } from '../../kob/token-market';
 import type { TemplateInfo } from '../../kob/types';
-import { unknownRow, type KascovMeta, type TokenRow } from './token-model';
+import { unknownRow, withKascovRemark, type KascovMeta, type TokenRow } from './token-model';
 
 /**
  * Whether a token of program hash `hash` is one this build can trade on `network`: the hash is a pinned token program (not an order template) and the
@@ -53,12 +55,12 @@ function enrich(row: TokenRow, k: KascovToken, noTicker = false): TokenRow {
   const usedTicker = (row.ticker === '' || noTicker) && k.ticker !== null;
   const usedName = !row.name && k.name !== null;
   const meta: KascovMeta = {
-    ticker: k.ticker, name: k.name, usedTicker, usedName,
+    ticker: k.ticker, name: k.name, usedTicker, usedName, verified: k.verified,
     tickerDiffers: row.ticker !== '' && !noTicker && k.ticker !== null && row.ticker.toUpperCase() !== k.ticker.toUpperCase(),
     decimalsDiffers: row.decimals !== null && k.decimals !== null && row.decimals !== k.decimals,
     decimals: k.decimals, imageHash: k.imageHash, imageUrl: k.imageUrl,
   };
-  return { ...row, ticker: usedTicker ? k.ticker! : row.ticker, name: usedName ? k.name : row.name, kascov: meta };
+  return withKascovRemark({ ...row, ticker: usedTicker ? k.ticker! : row.ticker, name: usedName ? k.name : row.name, kascov: meta }, k.verified);
 }
 
 /**

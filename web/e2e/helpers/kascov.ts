@@ -42,12 +42,16 @@ export interface MockKascovOptions {
   hosts?: Record<string, Buffer>;
   /** replaces the tokens.json answer: `down` aborts the request, `shape` answers a changed document, `http` a 503 */
   tokensMode?: 'ok' | 'down' | 'shape' | 'http';
+  /** the per-token files `<data>/<network>/c/<covenant id>.json` (what KOB's own genesis check reads): a body, `'down'` or a status number; a token without one answers 404 */
+  files?: Record<string, unknown>;
 }
 
 export interface KascovLog {
   /** every URL requested of kascov.io or a creator's host, in order */
   requests: string[];
   tokenRequests: number;
+  /** the covenant ids whose per-token file was asked for, in order */
+  fileRequests: string[];
 }
 
 const body = (o: MockKascovOptions) => ({
@@ -60,7 +64,8 @@ const body = (o: MockKascovOptions) => ({
     ...(t.claimed_decimals !== undefined ? { claimed_decimals: t.claimed_decimals } : {}),
     ...(t.claimed_image !== undefined ? { claimed_image: t.claimed_image } : {}),
     ...(t.claimed_image_hash !== undefined ? { claimed_image_hash: t.claimed_image_hash } : {}),
-    status: t.status ?? 'verified',
+    // kascov's remark: only `verified` shows the chip "Verified by kascov" (ui/genesis-check.spec.ts); the other specs are not about it
+    status: t.status ?? 'unvalidated',
     alive: true,
     ...(t.program ? { standard: { kcc: 20, review: 'reviewed', template_hash: 'f'.repeat(64), view_template_hash: t.program } } : {}),
   })),
@@ -70,7 +75,7 @@ const CORS = { 'access-control-allow-origin': '*' };
 
 /** Installs the mock on `page` (call before the first navigation, with `autoOpen: false`). */
 export async function mockKascov(page: Page, o: MockKascovOptions): Promise<KascovLog> {
-  const log: KascovLog = { requests: [], tokenRequests: 0 };
+  const log: KascovLog = { requests: [], tokenRequests: 0, fileRequests: [] };
   const net = o.network ?? 'testnet-10';
   const origin = o.origin ?? 'https://kascov.io';
   await page.route(`${origin}/**`, (route: Route) => {
@@ -89,6 +94,15 @@ export async function mockKascov(page: Page, o: MockKascovOptions): Promise<Kasc
           return route.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify(body(o)) });
       }
     }
+    const filePrefix = `${origin}/data/${net}/c/`;
+    const fileId = url.startsWith(filePrefix) && url.endsWith('.json') ? url.slice(filePrefix.length, -5) : '';
+    if (/^[0-9a-f]{64}$/.test(fileId)) {
+      log.fileRequests.push(fileId);
+      const f = o.files?.[fileId];
+      if (f === 'down') return route.abort('failed');
+      if (typeof f === 'number') return route.fulfill({ status: f, headers: CORS, body: '{}' });
+      return f === undefined ? route.fulfill({ status: 404, headers: CORS, body: 'not found' }) : route.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify(f) });
+    }
     const prefix = `${origin}/img/${net}/`;
     const id = url.startsWith(prefix) ? url.slice(prefix.length) : '';
     const saved = /^[0-9a-f]{64}$/.test(id) ? o.images?.[id] : undefined;
@@ -102,5 +116,27 @@ export async function mockKascov(page: Page, o: MockKascovOptions): Promise<Kasc
       return route.fulfill({ status: 200, contentType: 'image/png', body: bytes });
     });
   }
+  return log;
+}
+
+export interface ExplorerLog {
+  /** every URL requested of the explorer, in order */
+  requests: string[];
+}
+
+/**
+ * A mocked Kaspa REST explorer (api.kaspa.org / api-tn10.kaspa.org, CORS `*`) for KOB's own genesis check: `txs` by transaction id (a token's genesis
+ * transaction); anything else answers 404. The real explorers are never reached from a test.
+ */
+export async function mockExplorer(page: Page, o: { txs?: Record<string, unknown>; down?: boolean } = {}): Promise<ExplorerLog> {
+  const log: ExplorerLog = { requests: [] };
+  await page.route(/^https:\/\/api(-tn10)?\.kaspa\.org\//, (route: Route) => {
+    const url = route.request().url();
+    log.requests.push(url);
+    if (o.down) return route.abort('failed');
+    const m = /\/transactions\/([0-9a-f]{64})\?/.exec(url);
+    const tx = m ? o.txs?.[m[1]!] : undefined;
+    return tx ? route.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify(tx) }) : route.fulfill({ status: 404, headers: CORS, body: '{}' });
+  });
   return log;
 }

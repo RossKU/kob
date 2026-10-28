@@ -49,14 +49,16 @@ describe('safeImageUrl', () => {
 });
 
 describe('parseKascovToken', () => {
-  it('reads the claims and the program hash, nothing about status, review or alive', () => {
+  it('reads the claims, the program hash and whether kascov marks the token verified, nothing about review or alive', () => {
     const t = parseKascovToken(entry());
     expect(t).toEqual({
       covenantId: ID('a'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: ID('b'), imageHash: sha(PNG), imageUrl: 'https://storage.googleapis.com/bucket/a.png',
+      verified: true,
     });
-    expect(Object.keys(t!)).not.toContain('status');
-    // a different status / review / alive changes nothing
-    expect(parseKascovToken(entry({ status: 'invalid', alive: false, standard: { view_template_hash: ID('b'), review: 'rejected' } }))).toEqual(t);
+    // review / alive change nothing; status only flips the third-party remark (kascov's `verified`, no other word counts)
+    expect(parseKascovToken(entry({ alive: false, standard: { view_template_hash: ID('b'), review: 'rejected' } }))).toEqual(t);
+    for (const status of ['invalid', 'unvalidated', 'active', undefined, 7]) expect(parseKascovToken(entry({ status }))!.verified, String(status)).toBe(false);
+    expect(parseKascovToken(entry({ status: 'Verified' }))!.verified).toBe(false);
   });
 
   it('restricts every string (control and bidi characters become U+FFFD, length capped), normalises ids and hashes to lower case', () => {
@@ -69,7 +71,7 @@ describe('parseKascovToken', () => {
 
   it('missing, empty or wrongly typed fields are null; an image URL without a hash is dropped (nothing could be checked); bad decimals are null', () => {
     const t = parseKascovToken({ covenant_id: ID('a'), claimed_ticker: 7, claimed_name: '   ', claimed_decimals: 2.5, claimed_image: 'https://x.example/a.png', standard: 'weird' })!;
-    expect(t).toEqual({ covenantId: ID('a'), ticker: null, name: null, decimals: null, templateHash: null, imageHash: null, imageUrl: null });
+    expect(t).toEqual({ covenantId: ID('a'), ticker: null, name: null, decimals: null, templateHash: null, imageHash: null, imageUrl: null, verified: false });
     expect(parseKascovToken(entry({ claimed_decimals: 19 }))!.decimals).toBeNull();
     expect(parseKascovToken(entry({ claimed_decimals: 0 }))!.decimals).toBe(0);
     expect(parseKascovToken(entry({ claimed_image: 'http://x.example/a.png' }))!.imageUrl).toBeNull();

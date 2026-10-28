@@ -4,6 +4,7 @@
 // a token is verified, genuine or approved, and only technical facts (its program) decide whether this build trades it.
 // Pure.
 import type { IndexerTokenView } from '../../data/indexer-types';
+import type { GenesisCheck } from '../../data/genesis-check';
 import type { DeclaredToken } from '../../data/token-declarations';
 import {
   longId, normalizeTicker, sanitizeUntrusted, verifyIndexerToken, type TokenInfo, type TokenRegistry, type UntradableReason,
@@ -66,13 +67,32 @@ export const hasIssuerControl = (powers: readonly string[] | null | undefined): 
  * two warnings the indexer derives from the registry's genesis record, and the program powers that let someone create more of it or block
  * addresses (freeze and seize have their own warning above). Facts, not a rating: nothing here says a token is safe or unsafe.
  */
-export const TOKEN_FACT_IDS = ['genesis_unverified', 'live_mint_authority', 'mint-authority', 'public-mint', 'blacklist'] as const;
-export type TokenFactId = (typeof TOKEN_FACT_IDS)[number];
+export const INDEXER_FACT_IDS = ['genesis_unverified', 'live_mint_authority', 'mint-authority', 'public-mint', 'blacklist'] as const;
+/**
+ * The facts KOB derives itself and never takes from an indexer's words: `genesis_kascov` (a token kascov.io marks verified: a third-party chip in place of
+ * "Genesis not verified"), `genesis_verified` and `genesis_failed` (the result of KOB's own genesis check, run when a token page opens:
+ * data/genesis-check.ts), `mint_allowance` (the public minter a verified genesis holds). An indexer that sends one of these names as a warning is ignored.
+ */
+export const DERIVED_FACT_IDS = ['genesis_failed', 'genesis_kascov', 'genesis_verified', 'mint_allowance'] as const;
+/** The facts the legend above the market list explains, in the order of a token's facts (the failure first). */
+export const TOKEN_FACT_IDS = [
+  'genesis_failed', 'genesis_unverified', 'genesis_kascov', 'genesis_verified', 'live_mint_authority', 'mint-authority', 'public-mint', 'blacklist',
+] as const;
+export type TokenFactId = (typeof INDEXER_FACT_IDS)[number] | (typeof DERIVED_FACT_IDS)[number];
+const FACT_ORDER: readonly TokenFactId[] = [...TOKEN_FACT_IDS, 'mint_allowance'];
 
-/** The facts out of a token's warnings and powers, in the order of `TOKEN_FACT_IDS`; anything else in them is not a fact the UI has a sentence for. */
+/** The facts out of a token's warnings and powers, in the order of `TOKEN_FACT_IDS`; anything else in them (a derived fact's name included) is not a fact an indexer can state. */
 export const tokenFactIds = (warnings: readonly string[], powers: readonly string[]): TokenFactId[] => {
   const have = new Set([...warnings, ...powers]);
-  return TOKEN_FACT_IDS.filter((id) => have.has(id));
+  return FACT_ORDER.filter((id) => (INDEXER_FACT_IDS as readonly string[]).includes(id) && have.has(id));
+};
+
+const GENESIS_OPEN: readonly TokenFactId[] = ['genesis_unverified', 'genesis_kascov'];
+/** The facts of a row with its genesis line replaced by `id` (null: removed) and `extra` added, in fact order. */
+const withGenesisFact = (facts: readonly TokenFactId[], id: TokenFactId | null, extra: readonly TokenFactId[] = []): TokenFactId[] => {
+  const rest = facts.filter((f) => !GENESIS_OPEN.includes(f));
+  const next = new Set<TokenFactId>([...rest, ...(id ? [id] : []), ...extra]);
+  return FACT_ORDER.filter((f) => next.has(f));
 };
 
 /**
@@ -101,6 +121,8 @@ export interface KascovMeta {
   name: string | null;
   usedTicker: boolean;
   usedName: boolean;
+  /** kascov marks the token verified (third party: a chip in place of "Genesis not verified", never KOB's own fact) */
+  verified: boolean;
   /** kascov's ticker differs from the one KOB derived (registry, declaration, indexer) */
   tickerDiffers: boolean;
   /** kascov's declared decimals differ from the decimals KOB derived */
@@ -126,8 +148,10 @@ export interface TokenRow {
   powers: string[];
   /** the token program can freeze or seize balances: escrowed orders are at the issuer's discretion */
   issuerControl: boolean;
-  /** the facts to show next to the token (`tokenFactIds` of its warnings and powers) */
+  /** the facts to show next to the token (`tokenFactIds` of its warnings and powers; kascov's chip and KOB's own genesis check replace the genesis line, see the end of this file) */
   facts: TokenFactId[];
+  /** KOB's own genesis check of the token (a token page only, `applyGenesisCheck`): what the genesis fact's sentence adds (why it stays unverified, the public mint allowance) */
+  genesis?: GenesisCheck;
   templateId: string | null;
   badges: TokenBadge[];
   tradable: boolean;
@@ -308,4 +332,32 @@ export function templateDetail(token: TokenInfo, reg: TokenRegistry, pinned: rea
     program: token.program,
     slots: token.slots,
   };
+}
+
+// ------------------------------------------------------------------------------------------------ the genesis line of a row
+
+/**
+ * kascov's remark on a row: a token it marks verified shows the chip "Verified by kascov" in place of "Genesis not verified". Third party and labelled
+ * as such; KOB's own check (`applyGenesisCheck`) replaces it once it has run. A row whose genesis KOB's registry verified has no such line and is untouched.
+ */
+export function withKascovRemark(row: TokenRow, verified: boolean): TokenRow {
+  if (!verified || !row.facts.includes('genesis_unverified')) return row;
+  return { ...row, facts: withGenesisFact(row.facts, 'genesis_kascov') };
+}
+
+/**
+ * The genesis line of a row after KOB's own check (a token page): verified = "Genesis verified" (KOB's own fact), plus the public mint the genesis holds;
+ * failed = "Genesis check failed", whatever kascov says; unavailable = the row keeps what it had (kascov's chip, else "Genesis not verified") and the
+ * reason. A row the registry verified (no genesis line) is untouched.
+ */
+export function applyGenesisCheck(row: TokenRow, check: GenesisCheck | null | undefined): TokenRow {
+  if (!check || !row.facts.some((f) => GENESIS_OPEN.includes(f))) return row;
+  switch (check.status) {
+    case 'verified':
+      return { ...row, genesis: check, facts: withGenesisFact(row.facts, 'genesis_verified', check.mintAllowance !== null ? ['mint_allowance'] : []) };
+    case 'failed':
+      return { ...row, genesis: check, facts: withGenesisFact(row.facts, 'genesis_failed') };
+    case 'unavailable':
+      return { ...row, genesis: check };
+  }
 }

@@ -16,7 +16,7 @@ const NO_CORS = ID(0xa3); // no saved copy; the creator's own host sends no CORS
 const NO_IMAGE = ID(0xa4); // no image at all
 const UNPINNED = ID(0xa5); // a program this build does not pin
 const PUBLIC_MINT = ID(0xa6); // KCC20PublicMint
-const INVALID = ID(0xa7); // kascov calls it invalid: its status is never read
+const INVALID = ID(0xa7); // kascov calls it invalid: its status never decides the listing (only a `verified` one shows the chip)
 const MAINNET_ONLY = ID(0xa8); // pinned but not enabled on... (KForge: testnet-10 only, so this one IS listed on testnet-10)
 /** the second token the mock stack lists (its registry), with KOB's own ticker */
 const KOB_OTHER = ID(0xe6);
@@ -66,7 +66,7 @@ test.describe('with kascov.io', () => {
     // nothing of its figures is invented
     for (const f of ['last', 'change', 'volume', 'spread']) await expect(page.getByTestId(`token-${f}-${SAVED}`)).toHaveText('—');
 
-    // the program decides: a pinned program on this network is listed (kascov's status is not read), an unpinned one is not
+    // the program decides: a pinned program on this network is listed (kascov's status does not decide it), an unpinned one is not
     for (const id of [SAVED, MISMATCH, NO_CORS, NO_IMAGE, PUBLIC_MINT, INVALID, MAINNET_ONLY]) await expect(page.getByTestId(`token-row-${id}`)).toHaveCount(1);
     await expect(page.getByTestId(`token-row-${UNPINNED}`)).toHaveCount(0);
 

@@ -84,16 +84,28 @@ identified by its **covenant id**, a 64-character hex string; the ticker is only
   build does not support. You can still see balances and orders.
 
 **Token fact badges.** Wherever a token is shown (list rows, the token page header, next to the order button, each token of a pair)
-the page prints neutral badges. They are facts the indexer derives from the chain or the token program, not a verdict:
+the page prints badges. They are facts the indexer derives from the chain or the token program, or the result of KOB's own genesis check, not a verdict on whether to trade (only a pass is green and only a failed check a warning; the rest are neutral):
 
 | Badge | What it says |
 |---|---|
-| Genesis not verified | The token's creation was not checked against its token program, so units minted outside the program may exist. |
+| Genesis verified | KOB checked the token's creation itself, in this app, when you opened its page: every output created with the token is an instance of its token program, so nothing was minted outside the program at creation. KOB's own fact (it says nothing about mint powers the program itself gives; see the other badges). |
+| Genesis check failed | KOB's own check of the creation failed: the creation data does not match the token's covenant id or its scripts, or an output created with the token is not an instance of its program (units minted outside the program may exist). A warning, shown even if a third party says the token is verified. |
+| Verified by kascov | A third-party remark in the market list, not KOB's own fact: the explorer kascov.io says it checked the token's history, and KOB has not checked it itself yet. Opening the token page runs KOB's own check, whose result replaces this chip. |
+| Genesis not verified | The token's creation was not checked against its token program, so units minted outside the program may exist. On a token page, after KOB tried and could not, a short reason follows ("history not available", "program not supported", "sources unreachable"). |
+| Mint left | A token page only, next to "Genesis verified" for a token whose creation set up a public mint: how much anyone can still create, so that "verified" is not read as a fixed supply. "Mint left: N" when the creation's public minter has not been used yet (according to kascov.io); "Mint left: up to N" when it has been spent since (some may be minted already; KOB does not trace how much is left). |
 | Live mint authority | A mint authority still exists: more of this token can be created. |
 | Mint authority | The token's program has a mint authority: whoever holds it can create more. |
 | Public mint | The token's program lets anyone create more. |
 | Can blacklist | The program lets the issuer block addresses from moving the token. |
 | issuer can freeze or seize | The program can freeze or seize balances; escrowed orders can fail or be lost at the issuer's discretion. |
+
+**How KOB's genesis check works.** When a token page opens, KOB asks the public history for the token's creation (once per token and session, in
+your browser; the market list asks for nothing extra): the token's file on kascov.io first, the Kaspa REST explorer (api.kaspa.org, api-tn10.kaspa.org) only
+when that is not enough. The data source only supplies bytes. KOB recomputes the token's covenant id from them and checks every output created with the token
+against its token program, with the same rules as `kob registry verify-genesis` (an unspent TokenSeed of the public-mint app is rebuilt from the creator's key and
+class and then checked against its hash), so a wrong, incomplete or tampered answer can make the check fail but never pass. If the history cannot be had (an
+output of the creation that nobody has spent hides its program until it is spent, typically a launchpad curve cell, or no source still has the history), the badge stays "Genesis not verified" with the
+reason. A copy of the evidence of a token that verified is kept in this browser to avoid asking again; it is verified again each time and never trusted.
 
 On a token page the badges sit on one line under the pair selector and each badge's sentence is its tooltip (the order ticket's badge opens the
 same sentence on a tap). The token-family chip ("KCC-20") has the token program with its review status and, for a token the registry does not list,

@@ -36,6 +36,7 @@ pub mod defaults;
 pub mod error;
 pub mod family;
 pub mod genesis_evidence;
+pub mod genesis_open;
 pub mod genesis_states;
 pub mod issue;
 pub mod json;

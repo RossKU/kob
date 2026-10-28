@@ -14,7 +14,7 @@ const FORGE = hashOf('KForgeToken1785');
 const ID = (c: string) => c.repeat(64);
 const registry: TokenRegistry = { network: 'testnet-10', templates: [], templateChecks: [], tokens: [], byCovenantId: new Map() };
 const k = (over: Partial<KascovToken> = {}): KascovToken => ({
-  covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: ROCKET, imageHash: 'ab'.repeat(32), imageUrl: 'https://img.example/a.png', ...over,
+  covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: ROCKET, imageHash: 'ab'.repeat(32), imageUrl: 'https://img.example/a.png', verified: false, ...over,
 });
 const ctx = (network: string) => ({ network, templates, registry });
 

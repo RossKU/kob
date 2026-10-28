@@ -245,6 +245,33 @@ export default {
   'market.fact.public-mint.text': 'Its program lets anyone create more of this token.',
   'market.fact.blacklist.label': 'Can blacklist',
   'market.fact.blacklist.text': 'Its program lets the issuer block addresses from moving this token.',
+  // the genesis line (token-model.ts applyGenesisCheck / withKascovRemark): kascov's remark in the list, KOB's own check on the token page
+  'market.fact.genesis_kascov.label': 'Verified by kascov',
+  'market.fact.genesis_kascov.text':
+    "kascov.io, a third-party explorer, says it checked this token's history. KOB has not checked it itself yet: open the token and KOB runs its own check.",
+  'market.fact.genesis_verified.label': 'Genesis verified',
+  'market.fact.genesis_verified.text':
+    "KOB checked this token's creation itself, in this app: every output created with the token is an instance of its token program, so nothing was minted outside the program at creation. It says nothing about the mint powers the program itself gives (see the other facts).",
+  'market.fact.genesis_failed.label': 'Genesis check failed',
+  'market.fact.genesis_failed.text': "KOB's own check of this token's creation failed, whatever a third party says of it. Treat the token with caution.",
+  'market.fact.mint_allowance.label': 'Mint left: {amount}',
+  'market.fact.mint_allowance.labelUpTo': 'Mint left: up to {amount}',
+  'market.fact.mint_allowance.text':
+    "The creation set up a public mint of {amount}, and no mint has used it yet (kascov.io reports its minter unspent), so the whole allowance is still there: anyone can still create that much more of this token. 'Genesis verified' does not mean a fixed supply.",
+  'market.fact.mint_allowance.textUpTo':
+    "The creation set up a public mint with an allowance of {amount}. Some or all of it may already be minted; KOB has not traced how much is left, so {amount} is the most that can still be created. 'Genesis verified' does not mean a fixed supply.",
+  'market.genesis.reason.history': 'history not available',
+  'market.genesis.reason.program': 'program not supported',
+  'market.genesis.reason.unreachable': 'sources unreachable',
+  'market.genesis.reasonSentence.history':
+    'KOB tried to check it and could not: the creation history is not available (an output of it that nobody has spent hides its program, or no source still has the history).',
+  'market.genesis.reasonSentence.program': 'KOB tried to check it and could not: its token program is not one this build can check.',
+  'market.genesis.reasonSentence.unreachable': 'KOB tried to check it and could not: the history sources could not be reached. It asks again when the page is opened later.',
+  'market.genesis.failed.title': 'Genesis check failed',
+  'market.genesis.failed.mismatch':
+    "KOB's own check of this token's creation failed: the creation data a source gave does not match the token's covenant id or its scripts. Whatever a third party says of it, treat the token with caution.",
+  'market.genesis.failed.contaminated':
+    "KOB's own check of this token's creation failed: an output created with the token is not an instance of its token program, so units minted outside the program may exist. Whatever a third party says of it, treat the token with caution.",
   'market.powers.title': 'The issuer has special powers over this token',
   'market.powers.warning': "This token's program can freeze or seize balances. Escrowed orders can fail or be lost at the issuer's discretion.",
   'market.token.powers': 'Program powers',

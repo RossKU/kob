@@ -302,7 +302,11 @@ export const test = base.extend<AppOptions & TestFixtures, WorkerFixtures>({
       if (m.type() === 'error') pageErrors.push(`console.error: ${m.text()}`);
     });
     // the real kascov.io is never reached from a test: the market list asks it for names and icons (data/kascov.ts), and every spec gets an empty answer
-    // unless it installs its own route (e2e/helpers/kascov.ts; a later route wins)
+    // unless it installs its own route (e2e/helpers/kascov.ts; a later route wins). Nor are the Kaspa REST explorers KOB's own genesis check falls back to
+    // (data/genesis-check.ts) ever reached: 404 unless a spec installs its own route
+    await page.route(/^https:\/\/api(-tn10)?\.kaspa\.org\//, (route) =>
+      route.fulfill({ status: 404, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{}' }),
+    );
     await page.route(/^https:\/\/kascov\.io\//, (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ network: 'testnet-10', generated_at_ms: 1, tokens: [] }) }),
     );

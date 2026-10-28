@@ -13,6 +13,7 @@
 
 use wasm_bindgen::prelude::*;
 
+mod genesis;
 mod issue;
 
 /// Implementations with `String` errors (native-testable).
@@ -881,6 +882,10 @@ pub mod api {
     pub fn kcc23_decode(payload_hex: &str) -> R<String> {
         crate::issue::kcc23_decode(payload_hex)
     }
+    /// Genesis check of a token outside the registry (see `crate::genesis`).
+    pub fn verify_genesis(request: &str) -> R<String> {
+        crate::genesis::verify_genesis(request)
+    }
     /// Constants and rules of the issuance flow.
     pub fn issue_limits() -> R<String> {
         crate::issue::issue_limits()
@@ -1086,6 +1091,15 @@ pub fn kcc23_verify(proof: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = kcc23Decode)]
 pub fn kcc23_decode(payload_hex: &str) -> Result<String, JsError> {
     js(api::kcc23_decode(payload_hex))
+}
+
+/// Genesis check of a token no registry lists: recomputes the covenant id from the supplied genesis group (outpoint, index, value
+/// and script public key of every output) and requires every output to be an instance of a pinned token program, as
+/// `kob registry verify-genesis` does for the registry (`crate::genesis` for the request and result shapes). The data
+/// source only supplies bytes: a group that is not the covenant id's, or a script that does not hash to its output, fails.
+#[wasm_bindgen(js_name = verifyGenesis)]
+pub fn verify_genesis(request: &str) -> Result<String, JsError> {
+    js(api::verify_genesis(request))
 }
 
 /// Limits and rules of the issuance flow (maximum supply and genesis outputs, default carrier, ticker / name rules).

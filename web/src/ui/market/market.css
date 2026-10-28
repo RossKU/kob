@@ -275,6 +275,8 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .mkt-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
 .mkt-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .mkt-badges:empty { display: none; }
+/* a fact badge that names an amount or a reason ("Mint left: up to ...", "Genesis not verified: history not available") may be longer than a phone is wide: it wraps */
+.mkt-badges .badge { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
 .mkt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-width: 0; }
 .mkt-head > .mkt-title { flex: 1 1 16rem; min-width: 0; }
 .mkt-head > .mkt-title.mkt-title-fit { flex: 0 1 auto; }

@@ -43,7 +43,7 @@ test.describe('token facts', () => {
     await page.goto(`/#/market/${id}`);
     await connectWallet(page);
     const header = page.getByTestId('token-header');
-    await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveText('Genesis not verified');
+    await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveText(/^Genesis not verified(: history not available)?$/);
     // the badge is on the header's one line of badges; its sentence is its tooltip (the ticket's badge opens it on a tap)
     await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveAttribute('title', /not checked against its token program/);
     await expect(header.getByTestId('token-fact-text-genesis_unverified')).toHaveCount(0);

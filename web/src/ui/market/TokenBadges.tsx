@@ -1,8 +1,52 @@
-import { t } from '../../i18n';
+import { t, tokenAmountText } from '../../i18n';
 import { decimalsOrigin } from '../../app/token-display';
 import { Badge, Banner } from '../kit';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { hasIssuerControl, KNOWN_POWERS, tokenLabel, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
+
+/** What a row's facts are printed from: the facts, and (a token page) KOB's own genesis check, which adds a reason and the public mint to some of them. */
+type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis'>>;
+
+/** The badge text of a fact. "Genesis not verified" says why when KOB's check could not be done; the mint allowance names its amount. */
+export function factLabel(r: FactRow, id: TokenFactId): string {
+  const g = r.genesis;
+  if (id === 'genesis_unverified' && g?.status === 'unavailable') return `${t('market.fact.genesis_unverified.label')}: ${t(`market.genesis.reason.${g.reason}`)}`;
+  if (id === 'mint_allowance' && g?.status === 'verified' && g.mintAllowance !== null) {
+    return t(g.mintersUnspent === true ? 'market.fact.mint_allowance.label' : 'market.fact.mint_allowance.labelUpTo', { amount: tokenAmountText(r.covenantId, g.mintAllowance) });
+  }
+  return t(`market.fact.${id}.label`);
+}
+
+/** The sentence of a fact (a tooltip, or printed behind "what is this?"). */
+export function factText(r: FactRow, id: TokenFactId): string {
+  const g = r.genesis;
+  if (id === 'genesis_failed' && g?.status === 'failed') return t(`market.genesis.failed.${g.code}`);
+  if ((id === 'genesis_unverified' || id === 'genesis_kascov') && g?.status === 'unavailable') return `${t(`market.fact.${id}.text`)} ${t(`market.genesis.reasonSentence.${g.reason}`)}`;
+  if (id === 'mint_allowance' && g?.status === 'verified' && g.mintAllowance !== null) {
+    return t(g.mintersUnspent === true ? 'market.fact.mint_allowance.text' : 'market.fact.mint_allowance.textUpTo', { amount: tokenAmountText(r.covenantId, g.mintAllowance) });
+  }
+  return t(`market.fact.${id}.text`);
+}
+
+/**
+ * The badge text of a fact as elements: the reason that "Genesis not verified" gets once KOB's check could not be done is a NEW element after the text that was
+ * already there, never an edit of that text node (a page translator that replaced the node would show the translation of the old text: e2e/ui/translated.spec.ts).
+ */
+function FactLabel(props: { row: FactRow; id: TokenFactId }) {
+  const g = props.row.genesis;
+  if (props.id === 'genesis_unverified' && g?.status === 'unavailable') return <>{t('market.fact.genesis_unverified.label')}<span>{`: ${t(`market.genesis.reason.${g.reason}`)}`}</span></>;
+  return <>{factLabel(props.row, props.id)}</>;
+}
+
+/** The sentence of a fact as elements (the reason a check could not be done follows the sentence in an element of its own, as in `FactLabel`). */
+function FactSentence(props: { row: FactRow; id: TokenFactId }) {
+  const g = props.row.genesis;
+  if ((props.id === 'genesis_unverified' || props.id === 'genesis_kascov') && g?.status === 'unavailable') return <>{t(`market.fact.${props.id}.text`)}<span>{` ${t(`market.genesis.reasonSentence.${g.reason}`)}`}</span></>;
+  return <>{factText(props.row, props.id)}</>;
+}
+
+/** Facts are neutral, except KOB's own genesis result: a pass is green, a failure is a warning. */
+const factTone = (id: TokenFactId): 'neutral' | 'ok' | 'warn' => (id === 'genesis_verified' ? 'ok' : id === 'genesis_failed' ? 'warn' : 'neutral');
 
 /** One status badge: `untradable`, with the reason (about the token's program) in its text and tooltip. */
 export function StatusBadge(props: { badge: TokenBadge; 'data-testid'?: string }) {
@@ -75,11 +119,11 @@ export function OpenTokenNote(props: {
 
 /**
  * The facts about a token (token-model.ts `tokenFactIds`): neutral badges that say what the token's creation record and program allow (genesis not
- * verified, a live mint authority, who can mint, who can blacklist), each with a plain sentence. No tone: it is not a rating. `block` prints the
+ * verified, a live mint authority, who can mint, who can blacklist), each with a plain sentence. No tone: it is not a rating (the one exception is KOB's own genesis check on a token page: a pass is green, a failure a warning). `block` prints the
  * sentences (pair facts); `inline` the badges alone on one line, the sentence being each badge's tooltip (list rows, the token header); `compact` shows the badges and opens the sentences on a tap (list rows, the ticket), because a tooltip does
  * not exist on a touch screen. Several tokens (a pair) name each token before its facts. Renders nothing without facts.
  */
-export function TokenFacts(props: { rows: readonly Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'>[]; compact?: boolean; inline?: boolean; 'data-testid'?: string }) {
+export function TokenFacts(props: { rows: readonly FactRow[]; compact?: boolean; inline?: boolean; 'data-testid'?: string }) {
   const rows = props.rows.filter((r) => r.facts.length > 0);
   if (rows.length === 0) return null;
   const named = props.rows.length > 1;
@@ -89,7 +133,7 @@ export function TokenFacts(props: { rows: readonly Pick<TokenRow, 'covenantId' |
         r.facts.map((id: TokenFactId) => (
           <li key={`${r.covenantId}-${id}`} data-fact={id} data-testid={`token-fact-text-${id}`}>
             {named ? <strong>{tokenLabel(r)}: </strong> : null}
-            {t(`market.fact.${id}.text`)}
+            <FactSentence row={r} id={id} />
           </li>
         )),
       )}
@@ -97,9 +141,9 @@ export function TokenFacts(props: { rows: readonly Pick<TokenRow, 'covenantId' |
   );
   const badges = rows.map((r) =>
     r.facts.map((id: TokenFactId) => (
-      <Badge key={`${r.covenantId}-${id}`} tone="neutral" data-testid={`token-fact-${id}`}>
+      <Badge key={`${r.covenantId}-${id}`} tone={factTone(id)} data-testid={`token-fact-${id}`}>
         {named ? `${r.ticker || tokenLabel(r)}: ` : ''}
-        {t(`market.fact.${id}.label`)}
+        <FactLabel row={r} id={id} />
       </Badge>
     )),
   );
@@ -110,8 +154,8 @@ export function TokenFacts(props: { rows: readonly Pick<TokenRow, 'covenantId' |
       <span class="tf-inline" data-testid={testid}>
         {rows.map((r) =>
           r.facts.map((id: TokenFactId) => (
-            <Badge key={`${r.covenantId}-${id}`} tone="neutral" title={t(`market.fact.${id}.text`)} data-testid={`token-fact-${id}`}>
-              {t(`market.fact.${id}.label`)}
+            <Badge key={`${r.covenantId}-${id}`} tone={factTone(id)} title={factText(r, id)} data-testid={`token-fact-${id}`}>
+              <FactLabel row={r} id={id} />
             </Badge>
           )),
         )}
@@ -130,6 +174,17 @@ export function TokenFacts(props: { rows: readonly Pick<TokenRow, 'covenantId' |
       <div class="tf-badges">{badges}</div>
       {sentences}
     </div>
+  );
+}
+
+/** KOB's own genesis check of the token failed: a warning that must be seen on the page, not behind a tap, whatever a third party says. Nothing otherwise. */
+export function GenesisFailedBanner(props: { row: Pick<TokenRow, 'genesis'>; 'data-testid'?: string }) {
+  const g = props.row.genesis;
+  if (g?.status !== 'failed') return null;
+  return (
+    <Banner tone="warn" title={t('market.genesis.failed.title')} data-testid={props['data-testid'] ?? 'genesis-failed-warning'}>
+      {t(`market.genesis.failed.${g.code}`)}
+    </Banner>
   );
 }
 

@@ -19,7 +19,7 @@ const ID = (c: string) => c.repeat(64);
 const registry: TokenRegistry = { network: 'testnet-10', templates: [], templateChecks: [], tokens: [], byCovenantId: new Map() };
 
 const k = (over: Partial<KascovToken> = {}): KascovToken => ({
-  covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: ROCKET, imageHash: 'ab'.repeat(32), imageUrl: 'https://img.example/a.png', ...over,
+  covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: ROCKET, imageHash: 'ab'.repeat(32), imageUrl: 'https://img.example/a.png', verified: false, ...over,
 });
 const ctx = (network: string, over: Record<string, unknown> = {}) => ({ network, templates, registry, ...over });
 
@@ -179,5 +179,35 @@ describe('applyKascov (a token page)', () => {
     expect(named.kascov).toMatchObject({ usedTicker: false, tickerDiffers: true });
     expect(applyKascov(row, [], standIn)).toBe(row);
     expect(applyKascov(row, null, standIn)).toBe(row);
+  });
+});
+
+describe('kascov\'s remark: a token it marks verified shows the chip "Verified by kascov" in place of "Genesis not verified" (third party, no fact)', () => {
+  const row = (over: Partial<TokenRow> = {}): TokenRow => ({ ...buildTokenRows(registry, [view(ID('1'))])[0]!, ...over });
+
+  it('swaps the unverified line for the chip, in a list and on a page, and only for a token kascov marks verified', () => {
+    expect(row().facts).toEqual(['genesis_unverified']);
+    const [chip] = mergeKascov([row()], [k({ templateHash: REF_8X8, verified: true })], ctx('testnet-10'));
+    expect(chip!.facts).toEqual(['genesis_kascov']);
+    expect(chip!.kascov).toMatchObject({ verified: true });
+    expect(applyKascov(row(), [k({ templateHash: REF_8X8, verified: true })]).facts).toEqual(['genesis_kascov']);
+    // not verified (any other status), or kascov names another program: untouched
+    expect(mergeKascov([row()], [k({ templateHash: REF_8X8, verified: false })], ctx('testnet-10'))[0]!.facts).toEqual(['genesis_unverified']);
+    expect(mergeKascov([row()], [k({ templateHash: ROCKET, verified: true })], ctx('testnet-10'))[0]!.facts).toEqual(['genesis_unverified']);
+    // a kascov-only row it adds (its program is pinned) carries the chip too; the other facts stay
+    const added = mergeKascov([], [k({ covenantId: ID('2'), templateHash: PUBLIC_MINT, verified: true })], ctx('testnet-10'));
+    expect(added[0]!.facts).toEqual(['genesis_kascov']);
+    const withMint = mergeKascov([row({ facts: ['genesis_unverified', 'live_mint_authority', 'public-mint'] })], [k({ templateHash: REF_8X8, verified: true })], ctx('testnet-10'));
+    expect(withMint[0]!.facts).toEqual(['genesis_kascov', 'live_mint_authority', 'public-mint']);
+  });
+
+  it('a token whose genesis the registry verified has no genesis line to replace', () => {
+    const verified = row({ facts: [] });
+    expect(mergeKascov([verified], [k({ templateHash: REF_8X8, verified: true })], ctx('testnet-10'))[0]!.facts).toEqual([]);
+  });
+
+  it('is never a warning: the indexer\'s warnings are untouched and an indexer cannot state the chip', () => {
+    const r = buildTokenRows(registry, [view(ID('1'), { warnings: ['genesis_kascov', 'genesis_verified', 'genesis_failed', 'mint_allowance', 'genesis_unverified'] })])[0]!;
+    expect(r.facts).toEqual(['genesis_unverified']);
   });
 });
