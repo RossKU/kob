@@ -9,7 +9,7 @@
 // same way), and records each replaced node's text. A text vnode whose replaced node Preact changed afterwards is a stale text on screen.
 import type { Page } from '@playwright/test';
 import { expect, test, TEST_KEYS } from '../fixtures';
-import { fund, openMarket, gotoNav } from '../helpers/env';
+import { fund, openMarket, gotoNav, openConnect } from '../helpers/env';
 import { seedOrders } from '../helpers/orders';
 import { clickPlace, confirmReceipt, fillFields, pickType, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -82,6 +82,8 @@ async function staleTexts(page: Page): Promise<string[]> {
 const seen = async (page: Page, testid: string): Promise<string> => ((await page.getByTestId(testid).textContent()) ?? '').split(MARK).join('');
 
 async function connectKey(page: Page): Promise<void> {
+  // the translator's marks make every text wider: a header row that does not fit takes the phone layout, where the key is behind "Connect"
+  await openConnect(page, 'wallet-connect-local-key');
   await page.getByTestId('wallet-connect-local-key').click();
   await expect(page.getByTestId('signer-overlay')).toBeVisible();
   const f = page.frameLocator('[data-testid="signer-frame"]');

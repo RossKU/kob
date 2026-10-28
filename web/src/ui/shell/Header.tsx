@@ -6,7 +6,8 @@ import { useTheme } from './theme';
 import { NotifyBell } from '../notify/NotificationPanel';
 import { WalletButton } from './WalletButton';
 import { NetworkChip } from './NetworkBadge';
-import { useNarrow } from './narrow';
+import { useNarrow, useSqueezeCheck } from './narrow';
+import { useRef } from 'preact/hooks';
 import { Popover } from './Popover';
 import { StatusDot, StatusLines, useStatusLevel } from './StatusBar';
 import { useReorgNotice } from './reorg-notice';
@@ -131,10 +132,12 @@ function Menu(props: { active: ReturnType<typeof navOf>; network: string }) {
 export function Header(props: { route: Route }) {
   const { config } = useServices();
   const narrow = useNarrow();
+  const inner = useRef<HTMLDivElement>(null);
+  useSqueezeCheck(inner, narrow);
   const active = navOf(props.route);
   return (
     <header class="header" data-layout={narrow ? 'narrow' : 'wide'}>
-      <div class="container header-inner">
+      <div class="container header-inner" ref={inner}>
         {narrow ? <Menu active={active} network={config.network} /> : null}
         <a class="brand" href="#/market" data-testid="brand">
           <Logo />

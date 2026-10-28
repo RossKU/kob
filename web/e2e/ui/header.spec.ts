@@ -13,38 +13,51 @@ const rowOf = async (page: Page, ids: string[]): Promise<{ ys: number[]; right: 
 };
 const noScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
+// 900 px and wider is the desktop row; on a font so wide that the row does not fit (the CI runner's fonts at 900 px) the header takes the phone layout, still ONE row
 for (const width of [1280, 1024, 900]) {
-  test(`desktop ${width} px: one row`, async ({ appPage: page }) => {
+  test(`desktop ${width} px: one row, in the desktop layout or (when it does not fit) the phone layout`, async ({ appPage: page }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/#/market');
     await expect(page.getByTestId('wallet-connect-list')).toBeVisible();
-    const { ys, right } = await rowOf(page, ['brand', 'nav-market', 'nav-settings', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'wallet-connect-local-key', 'theme-toggle']);
+    await expect(page.getByTestId('network-badge')).toHaveText(/^(testnet-10|tn10)$/);
+    await expect(page.getByTestId('preaudit-badge')).toHaveText('pre-audit');
+    await expect(page.getByTestId('status-bar')).toHaveCount(0);
+    // the layout settles after the first measurement
+    await expect.poll(async () => (await page.getByTestId('nav-market').count()) + (await page.getByTestId('menu-button').count())).toBe(1);
+    const wide = (await page.getByTestId('nav-market').count()) === 1;
+    if (width === 1280) expect(wide, 'the desktop row fits 1280 px').toBe(true);
+    const ids = wide
+      ? ['brand', 'nav-market', 'nav-settings', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'wallet-connect-local-key', 'theme-toggle', 'notify-bell']
+      : ['menu-button', 'brand', 'network-chip', 'wallet-connect', 'notify-bell'];
+    const { ys, right } = await rowOf(page, ids);
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
     expect(right).toBeLessThanOrEqual(width);
     expect((await page.locator('header.header').boundingBox())!.height).toBeLessThan(64);
-    await expect(page.getByTestId('network-badge')).toHaveText('testnet-10');
-    await expect(page.getByTestId('preaudit-badge')).toHaveText('pre-audit');
-    await expect(page.getByTestId('menu-button')).toHaveCount(0);
-    await expect(page.getByTestId('status-bar')).toHaveCount(0);
     expect(await noScroll(page)).toBe(true);
   });
 }
 
-test('desktop: texts much wider than the row (a long translation, wide fonts) wrap to a second line, nothing overlaps', async ({ appPage: page }) => {
+test('desktop: a row that does not fit (wide fonts, a long translation) becomes the phone layout, still one row, and comes back when the window is wider', async ({ appPage: page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/#/market');
-  await expect(page.getByTestId('wallet-connect-list')).toBeVisible();
+  await expect(page.getByTestId('wallet-connect-local-key')).toBeVisible();
+  await expect(page.getByTestId('nav-market')).toBeVisible();
   await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip, .header .brand span { letter-spacing: 6px; }' });
-  const ids = ['brand', 'nav-market', 'nav-orders', 'nav-create', 'nav-settings', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'wallet-connect-local-key', 'theme-toggle'];
-  const boxes = await Promise.all(ids.map((id) => page.getByTestId(id).boundingBox()));
-  for (let i = 0; i < ids.length; i++) {
-    for (let j = i + 1; j < ids.length; j++) {
-      const [a, b] = [boxes[i]!, boxes[j]!];
-      const apart = a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5 || a.y + a.height <= b.y + 0.5 || b.y + b.height <= a.y + 0.5;
-      expect(apart, `${ids[i]} and ${ids[j]} do not overlap`).toBe(true);
-    }
-  }
-  await page.getByTestId('wallet-connect-local-key').click({ trial: true });
+  await expect(page.getByTestId('menu-button')).toBeVisible();
+  await expect(page.getByTestId('nav-market')).toHaveCount(0);
+  const { ys, right } = await rowOf(page, ['menu-button', 'brand', 'network-chip', 'wallet-connect', 'notify-bell']);
+  expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
+  expect(right).toBeLessThanOrEqual(1280);
+  expect(await noScroll(page)).toBe(true);
+  // the way to every control stays: Connect opens the sheet with Private key
+  await page.getByTestId('wallet-connect').click();
+  await expect(page.getByTestId('wallet-sheet').getByRole('button', { name: 'Private key' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  // a much wider window fits the row again
+  await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip, .header .brand span { letter-spacing: 0 !important; }' });
+  await page.setViewportSize({ width: 1500, height: 800 });
+  await expect(page.getByTestId('nav-market')).toBeVisible();
+  await expect(page.getByTestId('menu-button')).toHaveCount(0);
 });
 
 test('desktop: the status popover is keyboard accessible and closes on Escape and outside', async ({ appPage: page }) => {
