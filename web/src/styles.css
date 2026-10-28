@@ -166,16 +166,18 @@ small, .small { font-size: 0.85em; }
   position: sticky; top: 0; z-index: 20;
   background: var(--surface); border-bottom: 1px solid var(--border);
 }
-.header-inner { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding-top: 8px; padding-bottom: 8px; }
+/* ONE row on every width: the brand, (a desktop) the tabs, then the tools at the end; the menu of a phone is a popover under the header */
+.header-inner { display: flex; flex-wrap: nowrap; gap: 8px 12px; align-items: center; padding-top: 8px; padding-bottom: 8px; min-width: 0; }
+.header .brand { flex: 0 0 auto; }
 .brand { font-weight: 700; font-size: 1.2rem; letter-spacing: 0.02em; color: var(--text); text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
 .brand-mark { width: 26px; height: 26px; flex: none; }
-.nav { display: flex; flex-wrap: wrap; gap: 2px; }
+.nav { display: flex; flex-wrap: nowrap; gap: 2px; min-width: 0; }
 .nav a {
-  padding: 6px 12px; border-radius: var(--radius-sm); text-decoration: none; color: var(--muted); font-weight: 600;
+  padding: 6px 10px; white-space: nowrap; border-radius: var(--radius-sm); text-decoration: none; color: var(--muted); font-weight: 600;
 }
 .nav a:hover { background: var(--surface-2); color: var(--text); }
 .nav a[aria-current='page'] { background: var(--surface-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--primary); }
-.header-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; }
+.header-tools { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin-left: auto; min-width: 0; }
 .header-wallet { display: flex; align-items: center; min-width: 0; }
 /* the connected wallet: one chip (name, address, a network badge only when it differs from the app's, disconnect) */
 .wallet-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
@@ -187,8 +189,30 @@ small, .small { font-size: 0.85em; }
 .btn-off { opacity: 0.6; }
 .wallet-kind { display: inline-flex; align-items: center; cursor: help; }
 
-.statusbar { background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 0.85rem; color: var(--muted); }
-.statusbar-inner { display: flex; flex-wrap: wrap; gap: 4px 16px; padding-top: 4px; padding-bottom: 4px; align-items: center; }
+/* the combined network chip ("testnet-10 · pre-audit") */
+.net-chip { display: inline-flex; align-items: center; white-space: pre; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; cursor: default; }
+.net-chip-warn { background: var(--warn-bg); color: var(--warn); }
+.net-chip-info { background: var(--info-bg); color: var(--info); }
+/* the header's popovers (status dot, phone menu) */
+.hp { position: relative; display: inline-flex; }
+.hp-trigger { display: inline-flex; align-items: center; gap: 4px; }
+.hp-panel {
+  position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; min-width: 16rem; max-width: min(24rem, calc(100vw - 2 * var(--gutter)));
+  padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  display: flex; flex-direction: column; gap: 8px; font-size: 0.9rem;
+}
+.hp-panel.hp-start { right: auto; left: 0; }
+.hp-header { position: static; }
+.hp-header .hp-panel { left: 0; right: 0; top: 100%; max-width: none; min-width: 0; border-radius: 0 0 var(--radius) var(--radius); border-top: 0; }
+.status-lines { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 0.85rem; }
+.status-dot .dot, .menu-button .dot { margin-right: 0; width: 10px; height: 10px; }
+.menu-button { position: relative; }
+.menu-button .menu-dot { position: absolute; right: 2px; top: 2px; width: 8px; height: 8px; border: 1px solid var(--surface); }
+.menu-nav { display: flex; flex-direction: column; gap: 2px; }
+.menu-nav a { padding: 10px 8px; border-radius: var(--radius-sm); text-decoration: none; color: var(--text); font-weight: 600; }
+.menu-nav a[aria-current='page'] { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--primary); }
+.menu-row { display: flex; align-items: center; gap: 8px; }
+.menu-note { margin: 0; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: middle; }
 .dot.ok { background: var(--ok); }
 .dot.warn { background: var(--warn); }
@@ -403,20 +427,21 @@ body.modal-open { overflow: hidden; }
 .progress li { display: flex; gap: 8px; align-items: center; }
 .pill-step { width: 1.4em; text-align: center; }
 
-@media (max-width: 640px) {
-  .header-inner { gap: 6px 10px; }
-  /* a phone: brand and tools on the first line, the navigation on one scrolling line, the wallet chip below */
-  .header .nav { order: 3; flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-  .header .nav { gap: 0; }
-  .header .nav a { padding: 4px 6px; white-space: nowrap; font-size: 0.86rem; }
-  .header-tools { gap: 4px; }
-  /* the logo alone (the name stays for screen readers): the tools fit beside it */
+/* a phone or a small tablet (below 900 px): the logo alone (the name stays for screen readers), the menu, the chip, one Connect button, the bell */
+@media (max-width: 899px) {
+  .header-inner { gap: 6px; }
   .header .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-  .header-wallet { order: 4; flex: 1 0 100%; }
-  .wallet-actions { width: 100%; }
-  .wallet-actions .btn { flex: 1 1 0; }
-  .wallet-disconnect-text { display: none; }
+  .header-tools { gap: 6px; }
+  .net-chip { font-size: 0.7rem; padding: 2px 6px; }
+  .wallet-kind, .wallet-disconnect-text, .wallet-chip .copy-btn { display: none; }
+  .wallet-chip { padding-left: 8px; }
   .toast-host { left: 12px; right: 12px; width: auto; }
+}
+/* a desktop that is not wide: the brand shrinks to the logo, the chip and the tabs tighten */
+@media (min-width: 900px) and (max-width: 1099px) {
+  .header .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .nav a { padding: 6px 7px; }
+  .header-inner { gap: 8px; }
 }
 .raw-details { margin-top: 2px; }
 .raw-details summary { cursor: pointer; }

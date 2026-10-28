@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { fund, openMarket } from '../helpers/env';
+import { fund, openMarket, gotoNav, openConnect } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -29,6 +29,7 @@ const PROFILES: Profile[] = [
 const signer = (page: Page) => page.frameLocator('[data-testid="signer-frame"]');
 
 async function connectKey(page: Page): Promise<void> {
+  await openConnect(page, 'wallet-connect-local-key');
   await page.getByTestId('wallet-connect-local-key').click();
   await expect(page.getByTestId('signer-overlay')).toBeVisible();
   await signer(page).getByTestId('signer-key').fill(TEST_KEYS.alice.secretKey);
@@ -115,7 +116,7 @@ for (const p of PROFILES) {
       await mock.until(() => mock.ordersOf('alice'), (o) => o.length === 1);
       const id = placed.views[0].covenant_id as string;
 
-      await page.getByTestId('nav-orders').click();
+      await gotoNav(page, 'nav-orders');
       await page.getByTestId(`order-cancel-${id}`).click();
       await approveAndroid(page, `${p.name} cancel`);
       const [cancelled] = await runFlow(page, mock, null, { steps: 1 });

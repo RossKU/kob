@@ -58,10 +58,19 @@ test.describe('shell and token list', () => {
     await expect(appPage.getByTestId('token-list-view')).toBeVisible();
   });
 
-  test('status bar shows node and indexer health', async ({ appPage }) => {
-    await expect(appPage.getByTestId('status-node')).toHaveAttribute('data-level', 'ok');
-    await expect(appPage.getByTestId('status-indexer')).toHaveAttribute('data-code', 'ok');
+  test('the status dot shows node and indexer health; a press lists them; nothing else of it stays in the header', async ({ appPage }) => {
+    const dot = appPage.getByTestId('status-dot');
+    await expect(dot).toHaveAttribute('data-node-level', 'ok');
+    await expect(dot).toHaveAttribute('data-indexer-code', 'ok');
+    await expect(dot).toHaveAttribute('data-level', 'ok');
+    await expect(dot).toHaveAttribute('title', /Node: reachable .* Indexer: following/);
+    await expect(appPage.getByTestId('status-popover')).toHaveCount(0);
+    await dot.click();
+    await expect(appPage.getByTestId('status-node')).toContainText('Node: reachable');
     await expect(appPage.getByTestId('status-indexer')).toContainText('following');
+    await appPage.keyboard.press('Escape');
+    await expect(appPage.getByTestId('status-popover')).toHaveCount(0);
+    await expect(appPage.getByTestId('status-bar')).toHaveCount(0);
   });
 
   test('two listed tokens with one ticker: the list rows carry no warning (the fingerprints tell them apart), the token page header carries the shared-ticker note (the ticket does not repeat it); a unique ticker has none', async ({ appPage, mock }) => {
@@ -292,14 +301,18 @@ test.describe('wallet', () => {
 
     test.describe('phone width', () => {
       test.use({ viewport: { width: 375, height: 800 } });
-      test('the two buttons share one row and fit the screen', async ({ appPage }) => {
-        const buttons = appPage.getByTestId('wallet-connect-list').getByRole('button');
-        await expect(buttons).toHaveText(['Connect wallet', 'Private key']);
-        const [a, b] = [await buttons.nth(0).boundingBox(), await buttons.nth(1).boundingBox()];
-        expect(Math.abs(a!.y - b!.y)).toBeLessThan(4);
-        expect(Math.abs(a!.width - b!.width)).toBeLessThan(4);
-        expect(b!.x + b!.width).toBeLessThanOrEqual(375);
-        expect(await appPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      test('one "Connect" button opens a sheet with Wallet and Private key and the explanation', async ({ appPage }) => {
+        const bar = appPage.getByTestId('wallet-connect-list');
+        await expect(bar.getByRole('button')).toHaveText(['Connect']);
+        await expect(appPage.getByTestId('wallet-install-hint')).toHaveCount(0);
+        await bar.getByTestId('wallet-connect').click();
+        const sheet = appPage.getByTestId('wallet-sheet');
+        await expect(sheet.getByRole('button', { name: 'Wallet' })).toBeDisabled();
+        await expect(sheet.getByRole('button', { name: 'Private key' })).toBeVisible();
+        await expect(sheet.getByTestId('wallet-install-hint')).toContainText('Install KasWare or Kaspire');
+        await expect(sheet.getByRole('link', { name: 'Get KasWare' })).toBeVisible();
+        await appPage.keyboard.press('Escape');
+        await expect(appPage.getByTestId('wallet-sheet')).toHaveCount(0);
       });
     });
   });
@@ -312,7 +325,8 @@ test.describe('health banners', () => {
     await mock.setHealth('following', 20_000); // 2000 s behind
     await appPage.goto('/');
     await expect(appPage.getByTestId('banner-indexer')).toContainText('behind');
-    await expect(appPage.getByTestId('status-indexer')).toHaveAttribute('data-level', 'bad');
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-level', 'bad');
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-level', 'bad');
     const { id } = await seeded(mock);
     await appPage.goto(`/#/market/${id}`);
     await expect(appPage.getByTestId('book-stale')).toBeVisible();
@@ -323,12 +337,12 @@ test.describe('health banners', () => {
     const { id } = await seeded(mock);
     await mock.setHealth('catching_up', 400); // 40 s behind: nothing to announce
     await appPage.goto(`/#/market/${id}`);
-    await expect(appPage.getByTestId('status-indexer')).toHaveAttribute('data-level', 'ok');
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-level', 'ok');
     await expect(appPage.getByTestId('banner-indexer')).toHaveCount(0);
     await expect(appPage.getByTestId('book-stale')).toHaveCount(0);
     await mock.setHealth('following', 1190); // 119 s
     await appPage.reload();
-    await expect(appPage.getByTestId('status-indexer')).toHaveAttribute('data-level', 'ok');
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-level', 'ok');
     await expect(appPage.getByTestId('banner-indexer')).toHaveCount(0);
     await mock.setHealth('following', 1300); // 130 s: announced
     await appPage.reload();
@@ -339,8 +353,9 @@ test.describe('health banners', () => {
   test('an unreachable node says so with what to do, never "checking..." for ever', async ({ appPage }) => {
     await appPage.route('**/node/**', (route) => route.abort());
     await appPage.goto('/#/market');
-    await expect(appPage.getByTestId('status-node')).toHaveAttribute('data-level', 'bad');
-    await expect(appPage.getByTestId('status-node')).toContainText('unreachable');
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-node-level', 'bad');
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-level', 'bad');
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('title', /Node: unreachable/);
     // a node URL is set (the mock): the banner names it and sends the user to Settings
     const banner = appPage.getByTestId('banner-node');
     await expect(banner).toContainText('cannot be reached');
@@ -354,6 +369,6 @@ test.describe('health banners', () => {
     await expect(appPage.getByTestId('banner-indexer')).toContainText('cannot be reached');
     await expect(appPage.getByTestId('token-list-view')).toBeVisible();
     await expect(appPage.getByTestId('token-list-error')).toBeVisible();
-    await expect(appPage.getByTestId('status-indexer')).toHaveAttribute('data-code', 'unreachable');
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-code', 'unreachable');
   });
 });

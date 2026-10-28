@@ -86,7 +86,7 @@ network; each is a `kob-executor` read API (`docs/api.md`).
 
 How a backup is chosen (`web/src/data/indexer-failover.ts`):
 
-* **Healthy** is what the status bar already means for the primary: `/v1/health` answers, `network` is the app's, and the state is `following` (or
+* **Healthy** is what the header's status dot already means for the primary: `/v1/health` answers, `network` is the app's, and the state is `following` (or
   `catching_up` within the lag tolerance), at most 2 minutes behind. A backup must also report `payload_version` equal to the one this app build
   writes (4); an older executor without the field is not used. A backup on another network, of another payload version, lagging, catching up or
   starting is never used.
@@ -122,7 +122,7 @@ mainnet-specific path and no other fallback. Two things to know:
   testnet-10 that is `wss://<host>/kaspa/testnet-10/wrpc/json`; a bare `wss://<host>` answers 404 at the WebSocket handshake, and the page
   shows "Node: unreachable". `web/scripts/pages-config.mjs` prints a note when the URL has no `/wrpc/` path.
 
-A node that does not answer is never "checking..." for ever: after about 25 seconds the status bar says "unreachable" and a red banner says
+A node that does not answer is never "checking..." for ever: after about 25 seconds the header's status dot turns red ("Node: unreachable" when pressed) and a red banner says
 whether no node URL is set (use Settings > Node URL, or ask whoever hosts the page) or the URL set did not answer.
 
 ### Token names and icons: an external dependency (kascov.io)

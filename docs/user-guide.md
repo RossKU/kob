@@ -250,7 +250,11 @@ first (My orders, Balances)."
 
 ## 9. Status banners: node and indexer
 
-The strip under the header shows the **Node** ("reachable", "unreachable", "checking...", with the DAA score) and the **Indexer**.
+The header is one row: the logo, the tabs (Market, My orders, Create token, Settings), a status dot, the chip "testnet-10 · pre-audit", the wallet
+buttons, the theme toggle and the bell. On a phone the tabs, the theme toggle and the status are behind the menu button (it closes when you open a page),
+the chip reads "tn10 · pre-audit" and one **Connect** button opens a sheet with "Wallet" and "Private key". The status dot is green, amber or red for the
+worse of the **Node** ("reachable", "unreachable", "checking...", with the DAA score) and the **Indexer**; press it (or hover it) to read both. A
+problem is never only a dot: it is also a full-width banner under the header, as listed below.
 The indexer is the server that lists the book, trades and order status; the node is a Kaspa node that gives balances and takes
 your transactions.
 

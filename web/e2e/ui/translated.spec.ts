@@ -9,7 +9,7 @@
 // same way), and records each replaced node's text. A text vnode whose replaced node Preact changed afterwards is a stale text on screen.
 import type { Page } from '@playwright/test';
 import { expect, test, TEST_KEYS } from '../fixtures';
-import { fund, openMarket } from '../helpers/env';
+import { fund, openMarket, gotoNav } from '../helpers/env';
 import { seedOrders } from '../helpers/orders';
 import { clickPlace, confirmReceipt, fillFields, pickType, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -98,7 +98,8 @@ test('a machine-translated page shows every changed text afresh: status bar, tic
 
   // the page is translated (what the translator replaced is on screen) and the status bar reached the node after that: no "checking..." left
   await expect(page.locator('html')).toHaveClass(/translated-ltr/);
-  await expect(page.getByTestId('status-node')).toHaveAttribute('data-level', 'ok');
+  await expect(page.getByTestId('status-dot')).toHaveAttribute('data-node-level', 'ok');
+  await page.getByTestId('status-dot').click();
   await expect.poll(() => seen(page, 'status-node')).toContain('Node: reachable');
   expect(await page.getByTestId('status-node').locator('font[data-gt]').count(), 'the status text is a translation').toBeGreaterThan(0);
   expect(await seen(page, 'status-node')).not.toContain('checking');
@@ -133,7 +134,7 @@ test('a machine-translated page shows every changed text afresh: status bar, tic
   // flipped again after the order (balances, book and ticket all changed)
   await page.getByTestId('market-flip').click();
   await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '1');
-  await page.getByTestId('nav-orders').click();
+  await gotoNav(page, 'nav-orders');
   await expect(page.getByTestId('orders-view')).toBeVisible();
   await page.goBack();
   await expect(page.getByTestId('order-ticket')).toBeVisible();

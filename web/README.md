@@ -219,7 +219,7 @@ After connect the adapters listen for account and network changes (`WalletAdapte
 * **Several indexers.** `extraIndexerUrls` (config.json / `__KOB_CONFIG__`, at most 4) are cross-checked on the token page: powers, the market's price scale and best ask / bid are
   compared and any disagreement is shown. With one indexer the footer and Settings say "single indexer, not cross-checked".
 * **Indexer failover.** The same list is the failover set (`src/data/indexer-failover.ts`, `docs/ops/web-hosting.md`): when the primary is unreachable, failing or not
-  ready (the status bar's own health judgement) the book, charts, tokens and orders are read from a healthy further indexer on the same network that reports the
+  ready (the header status dot's own health judgement) the book, charts, tokens and orders are read from a healthy further indexer on the same network that reports the
   payload version of this build (`book_complete: true` first; a store that began late is used last and the banner says "History may be incomplete"), under the
   banner "Using backup indexer <host>"; the app switches back after two good probes of the primary. The feed reconnects to the indexer in use, one ticket's
   environment is read from one indexer, and the cross-check continues against the others (the primary only while it answers well). No book is built from the node.

@@ -5,7 +5,10 @@ import { Badge, Button } from '../kit';
 import { useTheme } from './theme';
 import { NotifyBell } from '../notify/NotificationPanel';
 import { WalletButton } from './WalletButton';
-import { NetworkBadge } from './NetworkBadge';
+import { NetworkChip } from './NetworkBadge';
+import { useNarrow } from './narrow';
+import { Popover } from './Popover';
+import { StatusDot, StatusLines, useStatusLevel } from './StatusBar';
 import { useReorgNotice } from './reorg-notice';
 import { useSystemStatus } from './StatusProvider';
 
@@ -56,47 +59,101 @@ function ReorgIndicator() {
   );
 }
 
-/** Top bar: brand, navigation, network badge, theme toggle, wallet area. */
-export function Header(props: { route: Route }) {
-  const { config } = useServices();
+/** The three bars of the menu button; a small dot on it shows the status (a problem is also a banner under the header). */
+function MenuIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </svg>
+  );
+}
+
+function ThemeToggle(props: { withLabel?: boolean }) {
   const [theme, setTheme] = useTheme();
   const dark = theme === 'dark';
+  const label = t(dark ? 'shell.theme.toLight' : 'shell.theme.toDark');
+  return (
+    <Button small variant="ghost" data-testid="theme-toggle" data-theme={theme} aria-label={label} title={label} onClick={() => setTheme(dark ? 'light' : 'dark')}>
+      <ThemeIcon dark={dark} />
+      {props.withLabel ? <span>{label}</span> : null}
+    </Button>
+  );
+}
+
+function NavLinks(props: { active: ReturnType<typeof navOf> }) {
+  return (
+    <>
+      {NAV.map((n) => (
+        <a key={n.name} href={n.href} data-testid={n.testid} aria-current={props.active === n.name ? 'page' : undefined}>
+          {t(n.key)}
+        </a>
+      ))}
+    </>
+  );
+}
+
+/** The phone menu: the four tabs, the theme toggle, what the network chip and the pre-audit word mean, and the status lines. It closes on every navigation. */
+function Menu(props: { active: ReturnType<typeof navOf>; network: string }) {
+  const level = useStatusLevel();
+  return (
+    <Popover
+      label={t('shell.menu')}
+      anchor="header"
+      triggerClass="menu-button"
+      triggerAttrs={{ 'data-testid': 'menu-button', 'data-level': level }}
+      trigger={
+        <>
+          <MenuIcon />
+          <span class={`menu-dot dot ${level === 'unknown' ? '' : level}`} aria-hidden="true" />
+        </>
+      }
+      panelTestId="menu-panel"
+    >
+      <nav class="menu-nav" aria-label={t('shell.nav.label')}>
+        <NavLinks active={props.active} />
+      </nav>
+      <div class="menu-row">
+        <ThemeToggle withLabel />
+      </div>
+      <p class="small muted menu-note" data-testid="menu-network">
+        {t('shell.network.label', { network: props.network })}. {t('preaudit.badgeTip')}
+      </p>
+      <StatusLines />
+    </Popover>
+  );
+}
+
+/**
+ * Top bar, ONE row. A desktop (900 px and wider): the brand, the four tabs, then the status dot, the network chip, the wallet buttons, the theme toggle and
+ * the bell. A phone: the logo, a menu button (the tabs, the theme toggle, the network and status explanation), the shortened network chip, one "Connect"
+ * button (or the connected address) and the bell.
+ */
+export function Header(props: { route: Route }) {
+  const { config } = useServices();
+  const narrow = useNarrow();
   const active = navOf(props.route);
   return (
-    <header class="header">
+    <header class="header" data-layout={narrow ? 'narrow' : 'wide'}>
       <div class="container header-inner">
+        {narrow ? <Menu active={active} network={config.network} /> : null}
         <a class="brand" href="#/market" data-testid="brand">
           <Logo />
           <span>{t('common.appName')}</span>
         </a>
-        <nav class="nav" aria-label={t('shell.nav.label')}>
-          {NAV.map((n) => (
-            <a key={n.name} href={n.href} data-testid={n.testid} aria-current={active === n.name ? 'page' : undefined}>
-              {t(n.key)}
-            </a>
-          ))}
-        </nav>
+        {narrow ? null : (
+          <nav class="nav" aria-label={t('shell.nav.label')}>
+            <NavLinks active={active} />
+          </nav>
+        )}
         <div class="header-tools">
           <ReorgIndicator />
-          <NetworkBadge network={config.network} />
-          <Badge tone="warn" title={t('preaudit.badgeTip')} data-testid="preaudit-badge">
-            {t('preaudit.badge')}
-          </Badge>
-          <Button
-            small
-            variant="ghost"
-            data-testid="theme-toggle"
-            data-theme={theme}
-            aria-label={t(dark ? 'shell.theme.toLight' : 'shell.theme.toDark')}
-            title={t(dark ? 'shell.theme.toLight' : 'shell.theme.toDark')}
-            onClick={() => setTheme(dark ? 'light' : 'dark')}
-          >
-            <ThemeIcon dark={dark} />
-          </Button>
+          {narrow ? null : <StatusDot />}
+          <NetworkChip network={config.network} short={narrow} />
+          <div class="header-wallet">
+            <WalletButton />
+          </div>
+          {narrow ? null : <ThemeToggle />}
           <NotifyBell />
-        </div>
-        <div class="header-wallet">
-          <WalletButton />
         </div>
       </div>
     </header>

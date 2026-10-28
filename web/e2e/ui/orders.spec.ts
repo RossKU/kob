@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test, TEST_KEYS, type MockClient } from '../fixtures';
 import { TESTID, orderCancel, orderReplace, orderRow } from '../testids';
 import { loadKobNode } from '../../src/kob/wasm.node';
-import { listExkcc } from '../helpers/env';
+import { listExkcc, openConnect } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 
 /** an ask of `tokens` whole EXKCC at `price` sompi per whole token (2_505_000 = 0.02505 EXKCC per KAS) */
@@ -145,6 +145,7 @@ test.describe('my orders', () => {
   test('the page has no horizontal scroll on a phone', async ({ appPage, mock }) => {
     await seedAsk(mock);
     await appPage.setViewportSize({ width: 390, height: 800 });
+    await openConnect(appPage, TESTID.walletConnectKasware);
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
     await appPage.goto('/#/orders');
     await expect(appPage.getByTestId(TESTID.ordersList)).toBeVisible();

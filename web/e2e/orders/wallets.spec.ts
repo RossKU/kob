@@ -2,7 +2,7 @@
 // accepted order: a wallet that declines, a wallet that signs the wrong thing, a network mismatch, a node that refuses the transaction.
 // Wallet popups are blind to token semantics, so the failure modes are what protects the user: none of them may broadcast anything.
 import { test, expect } from '../fixtures';
-import { fund, openMarket } from '../helpers/env';
+import { fund, openMarket, gotoNav } from '../helpers/env';
 import { runFlow, seedOrders } from '../helpers/orders';
 import { clickPlace, expectStopped, expectWalletSigned, fillFields, pickType, placeOrder, placedBy, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -37,7 +37,7 @@ test.describe('Kaspire', () => {
     expect(placed.views[0].contract).toBe('KobAsk');
 
     // cancel it: the only argument of `cancel` is the signature, so Kaspire can assemble the whole script (ordered-args)
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     await page.getByTestId(`order-cancel-${id}`).click();
     const [step] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(step!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
@@ -205,7 +205,7 @@ test.describe('network mismatch', () => {
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '1', price: '0.027' });
     await expect(page.getByTestId('order-place')).toBeDisabled();
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     await expect(page.getByTestId('orders-network-blocked')).toBeVisible();
     await expect(page.getByTestId(`order-cancel-${id}`)).toBeDisabled();
     await expect(page.getByTestId('orders-cancel-all')).toBeDisabled();

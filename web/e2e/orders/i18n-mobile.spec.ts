@@ -1,7 +1,7 @@
 // Dictionary leaks and layout: the whole ticket + inline status + My orders flow with no untranslated dictionary key anywhere (and the trading terms in
 // English), and the same flow on a 390 px phone (no horizontal scroll, the key controls reachable, the status lines fit the screen).
 import { test, expect } from '../fixtures';
-import { fund, openMarket } from '../helpers/env';
+import { fund, openMarket, gotoNav } from '../helpers/env';
 import { expectNoLeakedKeys, horizontalOverflow } from '../helpers/i18n';
 import { runFlow } from '../helpers/orders';
 import { clickPlaceOnly, confirmReceipt, expectWalletSigned, fillFields, pickType, placedBy, placeOrder, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
@@ -64,7 +64,7 @@ test.describe('English text', () => {
     const id = placed.views[0].covenant_id;
 
     // My orders
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     await expect(page.locator('h1')).toHaveText('My orders');
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toBeVisible();
@@ -130,7 +130,7 @@ test.describe('phone, 390 px wide', () => {
     expect(await wallet!.calls()).toHaveLength(1);
 
     // My orders and its cancel action: the flow starts at once
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const id = placed.views[0].covenant_id;
     await expect(page.getByTestId(`order-row-${id}`)).toBeVisible();
     expect(await horizontalOverflow(page), 'My orders').toBe(0);
@@ -148,7 +148,7 @@ test.describe('phone, 390 px wide', () => {
     const tokenId = await openMarket(page, mock);
     for (const route of ['/market', '/orders', '/create', '/settings']) {
       await page.goto(`/#${route}`);
-      await expect(page.getByTestId('nav-market')).toBeVisible();
+      await expect(page.getByTestId('brand')).toBeVisible();
       expect(await horizontalOverflow(page), route).toBe(0);
     }
     // a heavy ticket: the if-done order with all its fields

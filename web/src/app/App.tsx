@@ -12,7 +12,6 @@ import { GlobalBanners } from '../ui/shell/Banners';
 import { Footer } from '../ui/shell/Footer';
 import { Header } from '../ui/shell/Header';
 import { PreAuditBanner } from '../ui/shell/PreAuditBanner';
-import { StatusBar } from '../ui/shell/StatusBar';
 import { StatusProvider } from '../ui/shell/StatusProvider';
 import { NotifyProvider } from '../ui/notify/NotifyProvider';
 import { ViewBoundary } from '../ui/shell/ViewBoundary';
@@ -168,7 +167,6 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
               unable to re-render ever again (Preact drops the rest of its queue), e.g. a button whose click changes nothing */}
           <ViewBoundary resetKey={routeKey}>
             <Header route={route} />
-            <StatusBar />
           </ViewBoundary>
           <main class="container main" id="main" tabIndex={-1} data-testid="main" data-route={routeToHash(route)}>
             <ViewBoundary resetKey={routeKey}>

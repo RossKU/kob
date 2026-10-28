@@ -3,7 +3,7 @@
 // local data, import; My orders with the indexer down from placement records + the node).
 import { readFileSync } from 'node:fs';
 import { test, expect, type MockClient } from '../fixtures';
-import { KAS, TOKEN, connectWallet, fund, openMarket } from '../helpers/env';
+import { KAS, TOKEN, connectWallet, fund, openMarket, gotoNav } from '../helpers/env';
 import { openOrders, runFlow, seedOrders, statusesOf } from '../helpers/orders';
 import { fillFields, pickType, placeOrder, type Placed } from '../helpers/ticket';
 
@@ -109,7 +109,7 @@ test.describe('cancel', () => {
     const placed = await placeOrder(page, mock);
     const id = placed.views[0].covenant_id as string;
     const before = (await mock.order(id)).state.state;
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toHaveAttribute('data-type', 'twap');
     await row.getByTestId(`order-replace-${id}`).click();
@@ -140,7 +140,7 @@ test.describe('cancel', () => {
     const before = (await mock.order(id)).state.state;
     // day 86 of 90: the renewal is due
     await mock.advanceSeconds(86 * 86_400);
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toHaveAttribute('data-type', 'dca');
     await expect(row.getByTestId('order-renewal-due')).toBeVisible({ timeout: 30_000 });
@@ -171,7 +171,7 @@ test.describe('cancel', () => {
     const exitId = kids[0]!;
     expect((await mock.order(exitId)).contract).toBe('KobCondAsk');
 
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const card = page.locator('[data-testid^="position-"][data-kind]').first();
     await expect(card).toBeVisible();
     await expect(card.getByTestId(`order-row-${entryId}`)).toBeVisible();
@@ -305,7 +305,7 @@ test.describe('recovery', () => {
     const placed = await placeOrder(page, mock);
     const id = placed.views[0].covenant_id;
 
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     await expect(page.getByTestId('recover-count')).toContainText('1 placement');
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('orders-export').click()]);
     const file = await download.path();
@@ -315,7 +315,7 @@ test.describe('recovery', () => {
     expect(backup.records[0].label).toBe('Sell · Limit');
 
     // clear the local data through Settings
-    await page.getByTestId('nav-settings').click();
+    await gotoNav(page, 'nav-settings');
     await expect(page.getByTestId('local-data-list')).toContainText('Placement record');
     await page.getByTestId('settings-clear').click();
     await page.getByTestId('clear-confirm-yes').click(); // reloads the page
@@ -353,7 +353,7 @@ test.describe('recovery', () => {
     await page.route('**/v1/**', (r) => r.abort());
     await page.reload();
     await connectWallet(page);
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     await expect(page.getByTestId('orders-indexer-down')).toBeVisible();
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toBeVisible();

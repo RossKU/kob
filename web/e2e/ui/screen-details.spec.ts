@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { connectWallet, fund, listExkcc, openMarket } from '../helpers/env';
+import { connectWallet, fund, listExkcc, openMarket, gotoNav } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { fillFields, peekReceipt, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
 
@@ -52,7 +52,7 @@ test.describe('market panels when the indexer cannot be reached', () => {
 
 test('a new page takes the keyboard focus to its content', async ({ appPage: page, mock }) => {
   await openMarket(page, mock, { connect: false });
-  await page.getByTestId('nav-orders').click();
+  await gotoNav(page, 'nav-orders');
   await expect(page).toHaveURL(/#\/orders/);
   await expect(page.getByTestId('main')).toBeFocused();
   await page.getByTestId('nav-settings').focus();
@@ -198,7 +198,7 @@ test('closing a buy-first position that bought nothing yet does not offer to sel
   await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
   const placed = await placeOrder(page, mock);
   const entryId = placed.views[0].covenant_id as string;
-  await page.getByTestId('nav-orders').click();
+  await gotoNav(page, 'nav-orders');
   await page.getByTestId(`position-close-${entryId}`).click();
   await runFlow(page, mock, wallet, { steps: 1 });
   const banner = page.getByTestId('orders-close-followup');
@@ -266,11 +266,13 @@ test('the header after connecting: one network badge, a compact wallet chip, sho
   await expect(page.getByTestId('wallet-disconnect')).toHaveAccessibleName('Disconnect');
   const wide = await header.boundingBox();
   expect(wide!.height).toBeLessThan(70);
-  // 375 px: brand and tools, one line of navigation, the wallet chip (it took ~220 px)
+  // 375 px: still ONE row (the logo, the menu, the shortened network chip, the short address, the bell)
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(page.getByTestId('wallet-address')).toBeVisible();
+  await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{3}…\w{4}$/);
+  await expect(page.getByTestId('network-badge')).toHaveText('tn10');
   const phone = await header.boundingBox();
-  expect(phone!.height).toBeLessThan(130);
+  expect(phone!.height).toBeLessThan(60);
   expect(await noPageScroll(page)).toBe(true);
   await page.getByTestId('wallet-disconnect').click();
   await expect(page.getByTestId('wallet-connected')).toHaveCount(0);

@@ -44,7 +44,27 @@ export async function openMarket(page: Page, mock: MockClient, opts: OpenOptions
   return token.covenant_id;
 }
 
+/**
+ * Opens the way to a connect option: a desktop with one extension wallet shows its button at once (`wallet-connect-<id>`); a phone (one "Connect" button
+ * that opens a sheet), a desktop with several or no extension (a dialog) first press `wallet-connect`.
+ */
+export async function openConnect(page: Page, optionTestId: string): Promise<void> {
+  const option = page.getByTestId(optionTestId);
+  // extensions inject late: a button of one detected wallet may be about to appear
+  if (await option.waitFor({ state: 'visible', timeout: 1_500 }).then(() => true, () => false)) return;
+  await page.getByTestId('wallet-connect').click();
+  await expect(option).toBeVisible();
+}
+
+/** Follows a tab of the header (`nav-orders` ...): on a phone the tabs are in the menu, which is opened first. */
+export async function gotoNav(page: Page, testid: string): Promise<void> {
+  const link = page.getByTestId(testid);
+  if (!(await link.isVisible())) await page.getByTestId('menu-button').click();
+  await link.click();
+}
+
 export async function connectWallet(page: Page, wallet: WalletName = 'kasware'): Promise<void> {
+  await openConnect(page, `wallet-connect-${wallet}`);
   await page.getByTestId(`wallet-connect-${wallet}`).click();
   await expect(page.getByTestId('wallet-address')).toBeVisible();
 }

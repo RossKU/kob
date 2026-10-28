@@ -3,7 +3,7 @@
 // token; the app shows no popup of its own for this wallet) and signs only after a click on its own Confirm button.
 import type { Frame, Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { fund, mockClock, openMarket } from '../helpers/env';
+import { fund, mockClock, openMarket, gotoNav } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted, type ReceiptRead } from '../helpers/ticket';
 import { formatKas } from '../../src/kob/units';
@@ -109,7 +109,7 @@ test('connect with a private key in the signer frame, place and cancel an order 
   const id = placed.views[0].covenant_id as string;
 
   // cancel: the action asks the wallet at once (the frame is the confirmation)
-  await page.getByTestId('nav-orders').click();
+  await gotoNav(page, 'nav-orders');
   await page.getByTestId(`order-cancel-${id}`).click();
   const cancelShown = await approveInFrame(page, { title: 'Cancel order' });
   const [cancelled] = await runFlow(page, mock, null, { steps: 1 });
@@ -285,19 +285,17 @@ test.describe('an iPhone (no IntersectionObserver v2, no extension wallets)', ()
       delete (IntersectionObserverEntry.prototype as { isVisible?: boolean }).isVisible;
     });
     await openMarket(page, mock, { connect: false });
-    // the bar is two buttons and nothing else
+    // the bar is one "Connect" button and nothing else; the sheet it opens has the reason, as text
     await expect(page.getByTestId('wallet-key-unsupported')).toHaveCount(0);
     await expect(page.getByTestId('wallet-install-hint')).toHaveCount(0);
-    await expect(page.getByTestId('wallet-connect-list').getByRole('button')).toHaveText(['Connect wallet', 'Private key']);
-    await page.getByTestId('wallet-connect-local-key').click();
+    await expect(page.getByTestId('wallet-connect-list').getByRole('button')).toHaveText(['Connect']);
+    await page.getByTestId('wallet-connect').click();
     const why = page.getByTestId('wallet-key-unsupported');
     await expect(why).toBeVisible();
     await expect(why).toContainText('iOS browsers and Firefox lack the feature');
     await expect(why).toContainText('Chrome on Android, or open this page on a desktop with an extension wallet (KasWare or Kaspire)');
-    await page.keyboard.press('Escape');
-    await expect(page.getByTestId('wallet-dialog')).toHaveCount(0);
-    // "Connect wallet" with no extension: the reason (phone browsers have none) and what to do, in a dialog; no install links on a phone
-    await page.getByTestId('wallet-connect').click();
+    await expect(page.getByTestId('wallet-connect-local-key')).toBeDisabled();
+    // no extension: what to do instead, no install links on a phone
     const hint = page.getByTestId('wallet-install-hint');
     await expect(hint).toContainText('Extension wallets do not run in phone browsers. Use Private key instead.');
     await expect(hint).not.toContainText('Install');

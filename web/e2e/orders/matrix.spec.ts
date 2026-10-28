@@ -10,7 +10,7 @@ import { p2pkSpk } from '../../mock/address.mjs';
 import { loadKobNode } from '../../src/kob/wasm.node';
 import ticketText from '../../src/i18n/en/ticket';
 import { formatKas } from '../../src/kob/units';
-import { browserTzOffset, fund, mockClock, openMarket } from '../helpers/env';
+import { browserTzOffset, fund, mockClock, openMarket, gotoNav } from '../helpers/env';
 import { clickPlaceAndRead, expectWalletSigned, fillFields, pickType, placedBy, waitReviewable, waitSubmitted } from '../helpers/ticket';
 import { CASES, type Ctx, type Timing } from './cases';
 
@@ -172,7 +172,7 @@ for (const c of CASES) {
     await checkTiming(c.timing, { state, view, daa: placed.submission.daa, unix: at }, ctx);
 
     // ---- My orders
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const row = page.getByTestId(`order-row-${view.covenant_id}`);
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute('data-type', c.listType);

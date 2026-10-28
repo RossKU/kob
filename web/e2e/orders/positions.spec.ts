@@ -1,7 +1,7 @@
 // Position cards in My orders (mock indexer available): an IFD / repeat entry with its exits is ONE card with the phase chip, the price path,
 // amount entered / exited / open, the repeat state, and realised fills on demand. Mock KasWare wallet, default mock seed.
 import { test, expect, type MockClient } from '../fixtures';
-import { fund, openMarket } from '../helpers/env';
+import { fund, openMarket, gotoNav } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { fillFields, pickType, placeOrder } from '../helpers/ticket';
 
@@ -24,7 +24,7 @@ async function placeAndFill(page: import('@playwright/test').Page, mock: MockCli
 test.describe('position cards', () => {
   test('an IFD in progress: phase, price path, amounts and the realised fills', async ({ appPage: page, mock }) => {
     const entryId = await placeAndFill(page, mock, 'ifd', { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' }, 1);
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const card = page.getByTestId(`position-${entryId}`);
     await expect(card).toBeVisible();
     await expect(card).toHaveAttribute('data-kind', 'ifd');
@@ -45,7 +45,7 @@ test.describe('position cards', () => {
   test('a repeat IFD shows its re-arms left; the entry and the exit are sub-rows of the same card', async ({ appPage: page, mock }) => {
     const entryId = await placeAndFill(page, mock, 'repeatIfd', { amount: '2', minFill: '1', price: '0.0245', 'exit.takeProfit': '0.04', 'repeat.count': '3' }, 1);
     const exitId = ((await mock.order(entryId)).children as string[])[0]!;
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const card = page.getByTestId(`position-${entryId}`);
     await expect(card).toHaveAttribute('data-kind', 'repeat');
     await expect(card.getByTestId('position-title')).toContainText('Repeat');
@@ -57,7 +57,7 @@ test.describe('position cards', () => {
 
   test('an IFO waiting for entry shows the take-profit and stop its entry commits, marked planned with the amount', async ({ appPage: page, mock }) => {
     const entryId = await placeAndFill(page, mock, 'ifo', { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026', 'exit.stop': '0.023' }, 0);
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const card = page.getByTestId(`position-${entryId}`);
     await expect(card).toHaveAttribute('data-phase', 'entry-waiting');
     const tp = card.getByTestId('position-exit-prices');
@@ -78,7 +78,7 @@ test.describe('position cards', () => {
 
   test('an IFD entry with nothing filled is a card (waiting for entry); cancelling it moves the card to history as cancelled', async ({ appPage: page, mock, wallet }) => {
     const entryId = await placeAndFill(page, mock, 'ifd', { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' }, 0);
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const card = page.getByTestId(`position-${entryId}`);
     await expect(card).toHaveAttribute('data-phase', 'entry-waiting');
     await expect(card.getByTestId('position-status')).toHaveText('waiting for entry');
@@ -100,7 +100,7 @@ test.describe('position cards', () => {
     const entryId = placed.views[0].covenant_id as string;
     await mock.fill(entryId);
     await mock.until(async () => (await mock.order(entryId)).children as string[], (c) => c.length >= 1);
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     const card = page.getByTestId(`position-${entryId}`);
     await expect(card).toBeVisible();
     await card.getByTestId(`position-close-${entryId}`).click();
@@ -119,7 +119,7 @@ test.describe('position cards', () => {
   // close of a partly filled BUY-first position: the ticket sells what the entry bought (1 of 2), not the wallet's whole free balance
   test('close a partly filled buy-first position: the ticket opens on a market sell of the amount bought', async ({ appPage: page, mock, wallet }) => {
     const entryId = await placeAndFill(page, mock, 'ifd', { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' }, 1);
-    await page.getByTestId('nav-orders').click();
+    await gotoNav(page, 'nav-orders');
     await page.getByTestId(`position-close-${entryId}`).click();
     const [closed] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(closed!.submission.closed.map((c) => c.covenantId)).toContain(entryId);
