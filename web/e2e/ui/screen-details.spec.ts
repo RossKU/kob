@@ -225,6 +225,9 @@ test('without the registry the banner matches what the page does: indexer tokens
   await expect(page.getByTestId('banner-registry')).toContainText('unlisted tokens named by their covenant id');
   await expect(page.getByTestId('banner-registry')).not.toContainText('not tradable');
   await expect(page.getByTestId('order-ticket')).not.toHaveAttribute('data-state', 'untradable');
+  // the decimals line of an unlisted token is in the collapsed "Token details", not in a box in the page's flow
+  await expect(page.getByTestId('token-open-caution')).toBeHidden();
+  await page.getByTestId('token-more').locator('summary').click();
   await expect(page.getByTestId('token-open-caution')).toBeVisible();
 });
 

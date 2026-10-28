@@ -6,11 +6,12 @@ import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
 import { KascovNote } from './KascovNote';
+import { IdCopy } from './IdCopy';
 import { KascovLink, ProgramNote } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
 import { TokenNote } from './TokenNote';
 import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
-import { shortCovenantId, templateDetail, type TokenRow } from './token-model';
+import { templateDetail, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
 export function IndexerProblems(props: { codes: string[] }) {
@@ -60,18 +61,19 @@ function TemplateVerification(props: { row: TokenRow; services: Pick<Services, '
 }
 
 /**
- * The shared-ticker note, indexer warnings, the note of an open-list token (amounts in base units, its full covenant id) and why a token cannot be
- * traded: shown under the title of a token market and in the facts of each token of a pair.
+ * What a token page must say wherever it is read, never behind a tap: the shared-ticker note, the cross-check findings between the indexer and the
+ * registry, the issuer powers, and why a token cannot be traded. `full` (the facts of a pair) adds the fact badges with their sentences and the box of an
+ * open-list token (its decimals and full covenant id); a token page keeps those in its collapsed "Token details" instead (`TokenMore`).
  */
-export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) {
+export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean; full?: boolean }) {
   const r = props.row;
   return (
     <>
       <SharedTickerNote shared={!!props.sharedTicker} block data-testid="token-shared-ticker" />
       <IndexerProblems codes={r.indexerProblems} />
       <PowersWarning powers={r.powers} />
-      <TokenFacts rows={[r]} data-testid="token-facts" />
-      <OpenTokenNote token={r.info} data-testid="token-open-caution" />
+      {props.full ? <TokenFacts rows={[r]} data-testid="token-facts" /> : null}
+      {props.full ? <OpenTokenNote token={r.info} data-testid="token-open-caution" /> : null}
       {!r.tradable && r.reason && r.source !== 'kascov' ? (
         <p class="small" style="margin:0" data-testid="token-untradable">
           <strong>{t('market.notTradable')}</strong> {t(`market.reason.${r.reason}`)}
@@ -81,7 +83,33 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) 
   );
 }
 
-/** Token title bar (top of the page): labelled name, badges, name, the shared-ticker note, indexer warnings, why it cannot be traded. */
+/**
+ * The collapsed "Token details" of a token page (closed by default): the sentence of each fact badge, the token program, where the decimals come
+ * from with the price step (an open-list token's one line: no registry entry says it) and the full covenant id.
+ */
+export function TokenMore(props: { row: TokenRow }) {
+  const r = props.row;
+  return (
+    <details class="mkt-more small" data-testid="token-more">
+      <summary>{t('market.token.info')}</summary>
+      <div class="stack-sm mkt-more-body">
+        <TokenFacts rows={[r]} sentences data-testid="token-fact-sentences" />
+        <ProgramNote row={r} />
+        <OpenTokenNote token={r.info} plain data-testid="token-open-caution" />
+        <div class="wrap-anywhere" data-testid="token-more-id">
+          {t('market.open.fullId')} <CopyText value={r.covenantId} short={false} data-testid="token-full-id" />
+        </div>
+      </div>
+    </details>
+  );
+}
+
+/**
+ * Token title bar (top of the page), compact so the trading content starts right below it: the identity block and the pair selector, one line with the
+ * short covenant id (copy button), the name, where its facts come from, the link to kascov.io and the live state, one line of badges (the facts as
+ * small badges: their sentences are in "Token details"), the warnings that must be seen, and the collapsed "Token details". The title itself is
+ * for screen readers: the pair selector already names the token.
+ */
 export function TokenHeader(props: {
   row: TokenRow;
   /** another listed token uses this ticker */
@@ -99,24 +127,27 @@ export function TokenHeader(props: {
       <div class="mkt-top">
         <div class="mkt-head">
           <IdentityBlock row={r} size="lg" data-testid="token-identity" />
-          <div class="mkt-title">
-            {props.pair}
-            <h1 class="token-name" style="margin:0" data-testid="token-title" data-covenant-id={r.covenantId}>
-              {tokenTitle(r)}
-            </h1>
-            <StatusBadges row={r} />
-            <span class="small muted" title={r.covenantId} data-testid="token-short-id">{r.info && !r.info.openList ? shortCovenantId(r.covenantId) : longId(r.covenantId)}</span>
-            {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
-            <TokenNote token={props.note} />
-            <KascovNote row={r} />
-            <KascovLink row={r} />
-            {props.badges}
-          </div>
+          <div class="mkt-title mkt-title-fit">{props.pair}</div>
         </div>
         {props.tools}
       </div>
-      <ProgramNote row={r} />
+      <h1 class="sr-only" data-testid="token-title" data-covenant-id={r.covenantId}>
+        {tokenTitle(r)}
+      </h1>
+      <div class="mkt-meta small" data-testid="token-meta">
+        <IdCopy value={r.covenantId} data-testid="token-short-id" />
+        {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
+        <TokenNote token={props.note} />
+        <KascovNote row={r} />
+        <KascovLink row={r} />
+        {props.badges}
+      </div>
+      <div class="mkt-badges">
+        <StatusBadges row={r} />
+        <TokenFacts rows={[r]} inline data-testid="token-facts" />
+      </div>
       <TokenWarnings row={r} sharedTicker={props.sharedTicker} />
+      <TokenMore row={r} />
     </div>
   );
 }
@@ -173,7 +204,7 @@ export function PairDetails(props: { rows: readonly TokenRow[]; shared?: Readonl
             <StatusBadges row={r} />
             {r.name ? <span class="mkt-name">{r.name}</span> : null}
           </div>
-          <TokenWarnings row={r} sharedTicker={props.shared?.has(r.covenantId) ?? false} />
+          <TokenWarnings row={r} sharedTicker={props.shared?.has(r.covenantId) ?? false} full />
           <TokenDetails row={r} services={props.services} />
         </div>
       ))}

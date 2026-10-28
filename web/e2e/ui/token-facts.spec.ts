@@ -44,6 +44,9 @@ test.describe('token facts', () => {
     await connectWallet(page);
     const header = page.getByTestId('token-header');
     await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveText('Genesis not verified');
+    // the badge is on the header's one line of badges; its sentence is in the collapsed "Token details"
+    await expect(header.getByTestId('token-fact-text-genesis_unverified')).toBeHidden();
+    await header.getByTestId('token-more').locator('summary').click();
     await expect(header.getByTestId('token-fact-text-genesis_unverified')).toBeVisible();
     await expect(header.getByTestId('token-fact-text-genesis_unverified')).toContainText('not checked against its token program');
     await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveClass(/badge-neutral/);

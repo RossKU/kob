@@ -210,7 +210,7 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   It also shows facts (matcher.md 1.2a, "wallets MUST show the warnings wherever the token is shown"), as neutral badges with a plain sentence in the
   token header, next to the order button and on the list rows: the indexer's `genesis_unverified` and `live_mint_authority` (the same rule applied to
   the registry entry, so they show without an indexer too) and the program powers mint-authority, public-mint and blacklist
-  (`src/ui/market/TokenBadges.tsx` `TokenFacts`; on the token page the sentence is printed, on the ticket it opens on a tap, in a list row it is the badge's tooltip and the legend above the list prints every sentence). A name the registry does not
+  (`src/ui/market/TokenBadges.tsx` `TokenFacts`; on the token page the badges are one line under the pair selector and the sentences are in the collapsed "Token details" (`TokenMore`, with the program, the decimals line and the full covenant id), on the ticket it opens on a tap, in a list row it is the badge's tooltip and the legend above the list prints every sentence). A name the registry does not
   list is marked "declared by its creator": the creator's own claim, not checked.
   A token this build cannot trade (its program is not one this build supports and embeds) is not listed, not offered in selectors and has no market
   page; no token is ever refused for what it is (KOB makes no listing decision, the registry is a pinned snapshot of facts and curation belongs to

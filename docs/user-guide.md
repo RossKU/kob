@@ -93,7 +93,10 @@ the page prints neutral badges. They are facts the indexer derives from the chai
 | Can blacklist | The program lets the issuer block addresses from moving the token. |
 | issuer can freeze or seize | The program can freeze or seize balances; escrowed orders can fail or be lost at the issuer's discretion. |
 
-On a token page each badge has its sentence printed under it. In the market list a badge shows its sentence as a tooltip, and the
+On a token page the badges sit on one line under the pair selector; each badge's sentence is in "Token details" just below them (closed until you open it), with
+the token program, where the decimals come from (a token the registry does not list: "whole tokens of N decimals ... the price step is 1 sompi") and the
+full covenant id. The header itself is one short covenant id with a copy button, the name, "declared by its creator" where that applies, the link to
+kascov.io and "Live"; a real warning (issuer powers, a cross-check problem, a decimals conflict) is never in the disclosure. In the market list a badge shows its sentence as a tooltip, and the
 legend above the list ("What do the badges mean?") opens every sentence, which a touch screen without tooltips needs. A token
 without badges is not thereby safe: the badges only report what could be checked.
 
