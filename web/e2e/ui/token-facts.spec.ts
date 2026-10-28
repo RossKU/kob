@@ -80,8 +80,8 @@ test.describe('token facts', () => {
     await expect(page.getByTestId('legend-fact-public-mint')).toBeHidden();
     await page.getByTestId('legend-badges').locator('summary').click();
     await expect(page.getByTestId('legend-fact-public-mint')).toContainText('anyone create more');
-    const [hash, badge] = await Promise.all([row.getByTestId(`token-hash-${id}`).boundingBox(), row.getByTestId('token-fact-live_mint_authority').boundingBox()]);
-    expect(Math.abs((hash!.y + hash!.height / 2) - (badge!.y + badge!.height / 2))).toBeLessThan(12);
+    // the id and the badges are the second line of the row's text (they wrap on a narrow window, so the line is the check, not a pixel offset)
+    await expect(row.locator('.ml-line2').filter({ has: page.getByTestId(`token-hash-${id}`) }).filter({ has: page.getByTestId('token-fact-live_mint_authority') })).toHaveCount(1);
   });
 
   test('a token whose registry entry verified its genesis (no live mint authority) has no fact of its own', async ({ appPage: page, mock }) => {
