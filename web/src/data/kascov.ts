@@ -41,13 +41,13 @@ export const kascovTokensUrl = (n: KascovNetwork, base = DEFAULT_BASE): string =
 /** Where the saved copies of the images are: `img` beside the data set's last path segment (https://kascov.io/data -> https://kascov.io/img). */
 export const kascovImagesBase = (base = DEFAULT_BASE): string => new URL('../img', `${base.replace(TRAILING_SLASHES, '')}/`).href.replace(TRAILING_SLASHES, '');
 /**
- * The token's own page on the explorer (a link for the viewer to follow, never fetched by the app): `https://kascov.io/#/<network>/c/<covenant id>`, on the origin of
+ * The token's own page on the explorer (a link for the viewer to follow, never fetched by the app): `https://kascov.io/#/<network>/token/<covenant id>`, on the origin of
  * the data set (`https://kascov.io/data` -> `https://kascov.io`). Null when the data set is off or its base is not an https URL.
  */
 export function kascovTokenUrl(n: KascovNetwork, covenantId: string, base = DEFAULT_BASE): string | null {
   try {
     const u = new URL(base.replace(TRAILING_SLASHES, ''));
-    return u.protocol === 'https:' && u.username === '' && u.password === '' && /^[0-9a-f]{64}$/.test(covenantId) ? `${u.origin}/#/${n}/c/${covenantId}` : null;
+    return u.protocol === 'https:' && u.username === '' && u.password === '' && /^[0-9a-f]{64}$/.test(covenantId) ? `${u.origin}/#/${n}/token/${covenantId}` : null;
   } catch {
     return null;
   }

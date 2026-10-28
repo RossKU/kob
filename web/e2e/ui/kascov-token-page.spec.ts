@@ -75,7 +75,7 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId(`kascov-source-${REF_ID}`)).toHaveText('name and ticker from kascov.io (declared by their creator)');
       await expect(page.getByTestId('token-program')).toHaveText('Token program: KCC20Ref (reviewed), as pinned in this build.');
       await expect(page.getByTestId('token-decimals-rule')).toContainText('the first order names them');
-      await expect(page.getByTestId('kascov-link')).toHaveAttribute('href', `https://kascov.io/#/testnet-10/c/${REF_ID}`);
+      await expect(page.getByTestId('kascov-link')).toHaveAttribute('href', `https://kascov.io/#/testnet-10/token/${REF_ID}`);
       await expect(page.getByTestId('kascov-link')).toHaveAttribute('rel', 'noopener noreferrer');
       // unverified facts are badges, never a refusal (non-blocking)
       await expect(page.getByTestId('token-fact-genesis_unverified')).toBeVisible();

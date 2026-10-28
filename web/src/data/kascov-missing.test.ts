@@ -10,8 +10,8 @@ const PNG = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAA
 
 describe('kascovTokenUrl: the link to the token on the explorer', () => {
   it('the explorer origin of the data set, the network, the covenant id', () => {
-    expect(kascovTokenUrl('testnet-10', ID('a'))).toBe(`https://kascov.io/#/testnet-10/c/${ID('a')}`);
-    expect(kascovTokenUrl('mainnet', ID('a'), 'https://names.example.org/kascov/data/')).toBe(`https://names.example.org/#/mainnet/c/${ID('a')}`);
+    expect(kascovTokenUrl('testnet-10', ID('a'))).toBe(`https://kascov.io/#/testnet-10/token/${ID('a')}`);
+    expect(kascovTokenUrl('mainnet', ID('a'), 'https://names.example.org/kascov/data/')).toBe(`https://names.example.org/#/mainnet/token/${ID('a')}`);
   });
   it('https only, no credentials, a plain covenant id; nothing when the data set is off', () => {
     expect(kascovTokenUrl('mainnet', ID('a'), 'http://kascov.io/data')).toBeNull();
