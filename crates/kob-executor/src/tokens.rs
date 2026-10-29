@@ -393,6 +393,9 @@ pub struct ListingInput {
     /// continuation (`carrier - keeper_tip`) must clear the covenant-output bound, or the matcher's batch that carries the update
     /// could never be built (audit 2026-10-30 E1).
     pub keeper_tip: Option<i64>,
+    /// The template hashes of the programs the chain proves the order's token has (its holdings, `reads::proven_programs`); empty:
+    /// nothing proves one. An order that pins another program is not listed (audit 2026-10-30 V1).
+    pub proven_tpls: Vec<Hash32>,
 }
 
 impl ListingRules {
@@ -408,6 +411,11 @@ impl ListingRules {
                 (Some(t), Some(f)) if t.family == f => {}
                 (Some(_), Some(_)) => return Err("token_family_mismatch".into()),
                 _ => return Err("token_template_not_strict".into()),
+            }
+        }
+        if let Some(h) = o.token_tpl_hash.as_ref() {
+            if !o.proven_tpls.is_empty() && !o.proven_tpls.contains(h) {
+                return Err("token_program_conflict".into());
             }
         }
         if self.require_genesis_verified && tokens.genesis_verified(&tok_id) != Some(true) {

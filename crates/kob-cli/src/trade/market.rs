@@ -631,8 +631,19 @@ pub fn resolve_with(
             (a, b) => Ok(a.or(b)),
         }
     };
+    // Placements naming several programs leave the indexer with none: a token output of this wallet that the node confirms proves the
+    // program, as for a token no list names (audit 2026-10-30 V1); without one the token is not traded here
+    let proven_for_ambiguous = if r.is_none() && i.is_some_and(|t| t.program_ambiguous) {
+        match open.and_then(|o| o.held_program) {
+            Some(f) => f(&cov)?,
+            None => None,
+        }
+    } else {
+        None
+    };
     let tpl = match pick(&|t| t.tpl_hash.map(|h| to_hex(&h)), "the token program")? {
         Some(t) => kob_protocol::registry::parse_hex32(&t).unwrap_or_default(),
+        None if proven_for_ambiguous.is_some() => proven_for_ambiguous.map(|p| token_template(p).hash).unwrap_or_default(),
         // a declared token no list names: a declaration names no program, the wallet's own token UTXOs of it (confirmed on the
         // node) do
         None if r.is_none() && i.is_none() => {
@@ -938,12 +949,28 @@ mod tests {
     /// from a name or an id the indexer alone resolves, and the refusal says why.
     #[test]
     fn a_token_with_several_claimed_programs_is_not_resolved_from_the_indexer() {
-        let mut ambiguous = open_facts(3, TemplateId::Kcc20Ref);
-        ambiguous.tpl_hash = None;
-        ambiguous.ext = None;
-        ambiguous.program_ambiguous = true;
-        let e = resolve(&to_hex(&[3; 32]), &[], &[ambiguous]).unwrap_err();
+        let ambiguous = || {
+            let mut a = open_facts(3, TemplateId::Kcc20Ref);
+            a.tpl_hash = None;
+            a.ext = None;
+            a.program_ambiguous = true;
+            a
+        };
+        let e = resolve(&to_hex(&[3; 32]), &[], &[ambiguous()]).unwrap_err();
         assert!(e.contains("more than one token program"), "{e}");
+        // a token output of this wallet that the node confirms proves the program (audit 2026-10-30 V1), a wallet that holds none does not
+        let thousand = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(Some(1000)) };
+        let held = |_: &[u8; 32]| -> Result<Option<TemplateId>, String> { Ok(Some(TemplateId::Kcc20Ref)) };
+        let holds_none = |_: &[u8; 32]| -> Result<Option<TemplateId>, String> { Ok(None) };
+        fn open<'a>(h: HeldProgram<'a>, s: OrderScale<'a>) -> OpenToken<'a> {
+            OpenToken { held_program: Some(h), ..OpenToken::new("testnet-10", s) }
+        }
+        let e = resolve_with(&to_hex(&[3; 32]), &[], &[ambiguous()], Some(&open(&holds_none, &thousand))).unwrap_err();
+        assert!(e.contains("more than one token program"), "{e}");
+        match resolve_with(&to_hex(&[3; 32]), &[], &[ambiguous()], Some(&open(&held, &thousand))) {
+            Ok(m) => assert_eq!(m.program, TemplateId::Kcc20Ref),
+            Err(e) => assert!(!e.contains("more than one token program"), "{e}"),
+        }
     }
 
     #[test]

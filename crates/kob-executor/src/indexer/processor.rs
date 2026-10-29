@@ -991,7 +991,9 @@ impl Processor {
     ) -> DbResult<(bool, Option<String>)> {
         // a pair order needs both tokens acceptable: A as the order's token, B as any traded token (reasons `quote_...`);
         // neither is measured in KAS (a pair order has no KAS quote)
-        if let Some((ia, ib)) = pair_listing(state, daa, carrier) {
+        if let Some((mut ia, mut ib)) = pair_listing(state, daa, carrier) {
+            ia.proven_tpls = proven_hashes(conn, ia.token_cov_id)?;
+            ib.proven_tpls = proven_hashes(conn, ib.token_cov_id)?;
             let r = self
                 .rules
                 .evaluate(&self.tokens, &ia)
@@ -1033,6 +1035,7 @@ impl Processor {
                 genesis_daa: daa,
                 carrier,
                 keeper_tip: listing_keeper_tip(state, carrier),
+                proven_tpls: proven_hashes(conn, Some(Hash32(state.token_cov_id())))?,
             },
         );
         Ok(match r {
@@ -1677,9 +1680,16 @@ fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(Lis
             genesis_daa,
             carrier,
             keeper_tip: if base { state.keeper_tip() } else { None },
+            proven_tpls: vec![],
         }
     };
     Some((input(&t.a, ea, true), input(&t.b, eb, false)))
+}
+
+/// The programs the chain proves for a token ([`super::reads::proven_programs`]) as hashes.
+fn proven_hashes(conn: &Connection, token: Option<Hash32>) -> DbResult<Vec<Hash32>> {
+    let Some(t) = token else { return Ok(vec![]) };
+    Ok(super::reads::proven_programs(conn, &t.0)?.into_iter().filter_map(|h| <[u8; 32]>::try_from(h).ok().map(Hash32)).collect())
 }
 
 /// What a keeper's update may take from the order's output of `carrier` sompi: a buy stop pays its keeper only from what its buy

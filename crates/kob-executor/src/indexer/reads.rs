@@ -154,6 +154,22 @@ pub fn market_scale(conn: &Connection, cov: &[u8]) -> DbResult<Option<i64>> {
     Ok(st.query_row(rusqlite::params![cov, MARKET_SCALE_SCAN_MAX], |r| r.get(0)).optional()?)
 }
 
+/// The programs the chain proves a token has: the template hashes of the programs of its holdings (`token_holdings`: an output with
+/// the covenant id whose script is the P2SH of that program and a state, so the covenant itself created it under that program).
+/// KCC-20 holdings only (a KRON token has token programs of several slot counts under one covenant id). Empty: nothing proves it
+/// (no holding of the token was seen). Order placements prove nothing: anyone can pin any program for any
+/// covenant id (audit 2026-10-30 V1).
+pub fn proven_programs(conn: &Connection, token: &[u8]) -> DbResult<Vec<Vec<u8>>> {
+    let mut st = conn.prepare_cached("SELECT DISTINCT program FROM token_holdings WHERE token_cov_id = ?1 AND family = 1 LIMIT 8")?;
+    let names = st.query_map([token], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(names
+        .iter()
+        .filter_map(|n| kob_protocol::artifacts::TemplateId::from_name(n))
+        .filter_map(kob_protocol::artifacts::try_template)
+        .map(|t| t.hash.to_vec())
+        .collect())
+}
+
 /// Most (token, program) rows the open part of [`token_list`] reads (tokens without a registry entry).
 pub const OPEN_TOKEN_ROWS_MAX: i64 = 5_000;
 
@@ -231,7 +247,17 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 _ => claimed.push((cov, vec![(tpl, strict)])),
             }
         }
-        for (cov, programs) in claimed {
+        for (cov, mut programs) in claimed {
+            // The programs the chain proves win: a placement that pins another program for the covenant id is ignored (and the token
+            // is not listed under it when it is the only claim), whatever number of them there are. Nothing proven: the claims stand
+            // and several of them stay ambiguous (audit 2026-10-30 V1; the clients prove the program from a token output).
+            let proven = proven_programs(conn, &cov)?;
+            if !proven.is_empty() {
+                programs.retain(|(t, _)| proven.contains(t));
+                if programs.is_empty() {
+                    continue;
+                }
+            }
             let cid = crate::hex::Hash32(<[u8; 32]>::try_from(cov.as_slice()).expect("32-byte covenant id"));
             let (open_asks, open_bids) =
                 (counts.get(&(cov.clone(), 1)).copied().unwrap_or(0), counts.get(&(cov.clone(), 2)).copied().unwrap_or(0));
@@ -320,12 +346,20 @@ pub fn open_standard_scale(conn: &Connection, token: &Hash32, order_tpl: Option<
         Some(d) => d,
         None => {
             let Some(tpl) = order_tpl else { return Ok(None) };
-            let mut st = conn.prepare_cached(
-                "SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS NOT NULL AND tpl_hash <> ?2 \
-                 UNION ALL SELECT 1 FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash IS NOT NULL AND token_tpl_hash <> ?2 LIMIT 1",
-            )?;
-            if st.exists(rusqlite::params![&token.0[..], &tpl.0[..]])? {
-                return Ok(None);
+            // a program the chain proves is the token's whatever the placements claim; an order pinning another one has no say
+            let proven = proven_programs(conn, &token.0)?;
+            if !proven.is_empty() {
+                if !proven.contains(&tpl.0.to_vec()) {
+                    return Ok(None);
+                }
+            } else {
+                let mut st = conn.prepare_cached(
+                    "SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS NOT NULL AND tpl_hash <> ?2 \
+                     UNION ALL SELECT 1 FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash IS NOT NULL AND token_tpl_hash <> ?2 LIMIT 1",
+                )?;
+                if st.exists(rusqlite::params![&token.0[..], &tpl.0[..]])? {
+                    return Ok(None);
+                }
             }
             let Some(d) = program_default_of(Some(tpl), None) else { return Ok(None) };
             d
@@ -366,7 +400,12 @@ pub fn token_decimals(conn: &Connection, tokens: &TokenAllowlist, token: &Hash32
             let mut st = conn.prepare_cached(
                 "SELECT tpl_hash FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS NOT NULL                  UNION SELECT token_tpl_hash FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash IS NOT NULL LIMIT 2",
             )?;
-            let hashes = st.query_map([&token.0[..]], |r| r.get::<_, Vec<u8>>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut hashes = st.query_map([&token.0[..]], |r| r.get::<_, Vec<u8>>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            // the programs the chain proves outrank the claims of placements
+            let proven = proven_programs(conn, &token.0)?;
+            if !proven.is_empty() {
+                hashes = proven;
+            }
             match hashes.as_slice() {
                 [one] => <[u8; 32]>::try_from(one.as_slice()).ok().and_then(|h| program_default_of(Some(&Hash32(h)), None)),
                 _ => None,

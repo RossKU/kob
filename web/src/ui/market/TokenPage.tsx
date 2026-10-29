@@ -87,10 +87,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // a KCC-20 token in neither list (no order of it yet): its market opens from the wallet's node-verified holdings of it, else from token outputs of it
   // the indexer names and the node confirms, whoever holds them (kob/open-token.ts); the kascov.io row is only what the page shows while it checks, or
   // when nothing verifies (no ticket then: the page says which fact is missing)
-  const notListed = !listedRow && !tokens.loading;
+  // A listed row that names no program because several order placements claim different ones (`program_ambiguous`; anyone can place one) is
+  // resolved the same way: the program a token output of the wallet or of any holder shows, confirmed on the node, wins; with none the page says so
+  // (audit 2026-10-30 V1)
+  const ambiguous = listedRow?.index?.program_ambiguous === true;
+  const notListed = (!listedRow || ambiguous) && !tokens.loading;
   const held = useHeldToken(id, notListed);
   const pub = usePublicToken(id, notListed && !held.row && !held.loading);
-  const baseRow = listedRow ?? held.row ?? pub.row ?? kascovRow;
+  const baseRow = ambiguous ? (held.row ?? pub.row ?? listedRow) : (listedRow ?? held.row ?? pub.row ?? kascovRow);
   // the pair selector offers only tokens this build can trade
   const choiceRows = useMemo(() => tradableRows(allRows, kob.templates()), [allRows, kob]);
   // another listed token uses this ticker: a short note at the title and the ticket
