@@ -17,25 +17,25 @@ every network.
 |---|---|---|
 | KobAsk | `070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c` | 1 / 1407 |
 | KobBid | `b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3` | 1 / 1230 |
-| KobCondAsk | `02a346649370ad91eec9775a45cbfe7f113cbbfe3b6d841413e3754a89dd658f` | 1 / 3475 |
-| KobCondBid | `28d702e2aea1f090349644b7a8b7efcb88a87c29bce7aa5fbf5c4c2303c1e8f6` | 1 / 3216 |
-| KobIfdBid | `cc77a57d6e804837ce1ae3d5469a430470b537392b5c27292f623f33f4d29382` | 1 / 3238 |
-| KobIfdAsk | `eb2c6e97e8f4639866f5b15e5f7fba62b623517bdd0f49992cf90f6746f6e589` | 1 / 4585 |
+| KobCondAsk | `770314aa3391b20333c98037343f538f1903002362f31bd599abfca16aa67247` | 1 / 3491 |
+| KobCondBid | `26042aff0dc58c2cbaa0efd166c38944942d75524cc55033dde80502c4558166` | 1 / 3232 |
+| KobIfdBid | `5740a65dfdcb27685a10f951de281f556c4d2de86a7d3d101412c9c2244fd026` | 1 / 3255 |
+| KobIfdAsk | `afb74446c24e7e8e3d0587bffd659afdc2e9c516d633d02a0a6308589b4d9934` | 1 / 4602 |
 | KobPair | `c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6` | 1 / 2512 |
-| KobCondPair | `3cae3ae30e758bf71475149a7c9d5eea12e8ebcf02382960c873b5b7da525d10` | 1 / 6304 |
-| KobIfdPair | `670bbecf58c0c2fe97e0ba54982a44a19ea535492dd4bfb261794e53289adf1c` | 1 / 8342 |
+| KobCondPair | `699c30cc6355c82fee1bacd6fd5f7239a80d98fb222699ef8407dd671ddc923f` | 1 / 6318 |
+| KobIfdPair | `bb9937a199d1d7e1b1f62c2eb55418840670901a6042110129ad4368aaf6b8a4` | 1 / 8353 |
 | KobAskKron | `f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d` | 1 / 1243 |
 | KobBidKron | `6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc` | 1 / 1090 |
-| KobCondAskKron | `27fa0ee2b17e75aabb6cccf6cd68f3f56568caeb4170031e44e3cd954947d3b7` | 1 / 3120 |
-| KobCondBidKron | `296a2ffb289ee74abd936c2e1bc25692638d7efc5accfcd8cc2c9b9e96774dd3` | 1 / 2904 |
-| KobIfdBidKron | `b705e2c3db279403276d0d0ccfe1e26dd0775620e383d13c98a2dca00892a335` | 1 / 2925 |
-| KobIfdAskKron | `4797dc300d40ce968d8f26000c890e74f85f1c0d24ee227dac936a69ec034d12` | 1 / 4066 |
+| KobCondAskKron | `6326398362aef7a510dfafb97cbc5918b54c3489e9a9f114f51bc369205778c6` | 1 / 3136 |
+| KobCondBidKron | `f3181d85a5ecfa64066eb0f72ee2f32f984ac2ce4023ab59bfe7c16b89d0a975` | 1 / 2920 |
+| KobIfdBidKron | `b240e0ac9296b59db386aaf6024ff67c686964b2ea5288a3a24de8eebcc56179` | 1 / 2942 |
+| KobIfdAskKron | `f7e04243d361652339900cea285e2ec9edc31220780bf224b8dfeb0efed0c089` | 1 / 4083 |
 | KobAskKronD0 | `f43ae142343fe54313e2f742931c76da11cb49e66d823280829a3f91ed227c2c` | 1 / 1243 |
 | KobBidKronD0 | `436fbbbb676f05d6402745298976aa6f1fe59faa1d7eb354060ba87e97966531` | 1 / 1090 |
-| KobCondAskKronD0 | `e334e85e308e20bdeb3c3350f7fac0e97484d39f974409c9e09174c66a9c6c3e` | 1 / 3120 |
-| KobCondBidKronD0 | `f47fe24d8d4566d0074ecf5627031d69348fa4ec3ece48ba8739685775ea3fa3` | 1 / 2904 |
-| KobIfdBidKronD0 | `c9cbbbdbd0ecdde70c0f3130ca1a7d2802f8682bbde5532907ef3c2589252f52` | 1 / 2925 |
-| KobIfdAskKronD0 | `4ee20455e942d978f3be267c0b99deffa4c43ee55b9bfc49c53610500ca238f2` | 1 / 4066 |
+| KobCondAskKronD0 | `2a0e231b97a3e0d7ee2ffd0c037a6535bb8d93957ced62eefda407ddd30ca0b8` | 1 / 3136 |
+| KobCondBidKronD0 | `9d6203f395a6f7aa4e9cff03b0a79eb6ab8d0a39a18979b5aa332f41a799031e` | 1 / 2920 |
+| KobIfdBidKronD0 | `02ceb7781d99d861d214aa02a9f59571caa5bc351d04fa79148b50d0058954fc` | 1 / 2942 |
+| KobIfdAskKronD0 | `70b05a68bc1eca88c0231170a90d5f2b8e867e92b1e196b9288a481902fe64e7` | 1 / 4083 |
 
 The token programs are the reference artifacts too. Binaries embedding this record: see "Deployment
 records" in contracts/README.md.

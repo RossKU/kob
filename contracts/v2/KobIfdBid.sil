@@ -205,7 +205,10 @@ contract KobIfdBid(
         require(int(byte[8](o.slice(151, 159))) == scale);
         require(n >= minTouch);
         require(int(byte[8](o.slice(259, 267))) == 0);
-        int exposed = OpTxInputDaaScore(ev) + int(byte[8](o.slice(241, 249)));
+        // an evidence order's own interval is its state, so a raw-built order can carry a negative one: it must not shorten the rest
+        int iv = int(byte[8](o.slice(241, 249)));
+        require(iv >= 0);
+        int exposed = OpTxInputDaaScore(ev) + iv;
         int act = int(byte[8](o.slice(196, 204)));
         if (act > exposed) { exposed = act; }
         require(tx.daa >= exposed + minRestDaa);

@@ -140,7 +140,7 @@
 
 
 import "./kcc20_8x8.ag";
-import "./KOBOrders/artifact.json" id "dcb34ca9600d7a5b70877d8b10175d1d550ac0a275f050be262c4256dd8c7903";
+import "./KOBOrders/artifact.json" id "631c69fe0ec1854ae0af714475c56d5777ad56348f87e8195010e61b4e531f5d";
 import "./KOBOrdersKron/artifact.json" id "867d24a6c06fb8a38a30941a7f5a79d8dda05c4bee4b01f3dab2ba68c394442f";
 
 const int MAX_SOMPI = 2900000000000000000;

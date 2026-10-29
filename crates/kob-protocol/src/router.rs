@@ -39,7 +39,7 @@ use crate::json::to_hex;
 use crate::script::push_data;
 
 /// Id of the committed router artifact (`contracts/argent/router/artifact.json`, field `id`).
-pub const ROUTER_ARTIFACT_ID: &str = "2cb7d513ab28a5f63190000847c4d824696e4776ac094267ac05ac5bc5c02f47";
+pub const ROUTER_ARTIFACT_ID: &str = "7e2bed5bd5bf0bd697f657b056ca686ab85f79b8b9d07f2f76611b61f7b842ad";
 
 /// Most sompi an `expire` may keep of the intent's KAS (`EXPIRE_MAX_FEE` of `tools/router-gen/router_head.ag`).
 pub const EXPIRE_MAX_FEE: u64 = 10_000_000;

@@ -2590,6 +2590,55 @@ fn touch_battery(f: &Fx, kind: Kind) {
         "04",
         "TWAP/DCA evidence: its slice opened R - 1 DAA before (the interval counts)",
     );
+    // Audit 2026-10-29 F1: the evidence order's own state is untrusted, so a NEGATIVE interval (which would cancel the UTXO's age
+    // and switch the rest time off) is refused: exposure R DAA short, interval -1 / -R / -10^12 with a UTXO one DAA old. The sign of
+    // activeFrom and slope flipped on an evidence that rested one DAA too short must not help either (a negated quote or scale builds no
+    // transaction in this harness; the sign battery of audit_rest_interval_tests covers them).
+    bad(
+        &good.with(|e| {
+            e.daa = NOW - R + 1;
+            e.interval = -1;
+        }),
+        1,
+        "04n1",
+        "negative interval -1 on an evidence UTXO R - 1 DAA old",
+    );
+    bad(
+        &good.with(|e| {
+            e.daa = NOW - 1;
+            e.interval = -(R as i64);
+        }),
+        1,
+        "04n2",
+        "negative interval -R on an evidence UTXO one DAA old",
+    );
+    bad(
+        &good.with(|e| {
+            e.daa = NOW - 1;
+            e.interval = -1_000_000_000_000;
+        }),
+        1,
+        "04n3",
+        "interval -10^12 on an evidence UTXO one DAA old",
+    );
+    bad(
+        &good.with(|e| {
+            e.daa = NOW - R + 1;
+            e.active_from = -(NOW as i64);
+        }),
+        1,
+        "04n4",
+        "negative activeFrom on an evidence UTXO R - 1 DAA old",
+    );
+    bad(
+        &good.with(|e| {
+            e.daa = NOW - R + 1;
+            e.slope = -1;
+        }),
+        1,
+        "04n5",
+        "negative slope on an evidence UTXO R - 1 DAA old",
+    );
     bad(&good.with(|e| e.slope = 1), 1, "05", "decaying evidence (Dutch ask / rising bid): a moving price is not a quote");
     bad(&good.with(|e| e.ask = !e.ask), 1, "06", "evidence of the wrong side (a bid for a sell stop, an ask for a buy stop)");
     bad(&good.with(|e| e.token = OTHER_COV), 1, "07", "evidence of another token");

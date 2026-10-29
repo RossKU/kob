@@ -1986,6 +1986,11 @@ pub fn touch_of(leg: &Leg) -> Result<Touch> {
             if s.slope != 0 {
                 return invalid("a decaying ask is never trigger evidence");
             }
+            if s.interval < 0 {
+                return invalid(
+                    "an evidence order with a negative interval is never trigger evidence (it would shorten the rest time)",
+                );
+            }
             let exposed = (order.utxo.block_daa_score as i64 + s.interval).max(custody.utxo.block_daa_score as i64).max(s.active_from);
             Ok(Touch {
                 side: SIDE_ASK,
@@ -2000,6 +2005,11 @@ pub fn touch_of(leg: &Leg) -> Result<Touch> {
             let s = &order.state;
             if s.slope != 0 {
                 return invalid("a rising bid is never trigger evidence");
+            }
+            if s.interval < 0 {
+                return invalid(
+                    "an evidence order with a negative interval is never trigger evidence (it would shorten the rest time)",
+                );
             }
             let exposed = (order.utxo.block_daa_score as i64 + s.interval).max(s.active_from);
             Ok(Touch {

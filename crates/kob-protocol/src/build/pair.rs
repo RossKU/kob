@@ -684,6 +684,14 @@ pub(crate) fn pair_evidence(
             if *amount < min_touch {
                 return invalid("trigger evidence below the order's minTouch");
             }
+            if s.interval < 0 {
+                // the covenant of this build refuses it too (a negative interval would shorten the rest time)
+                return Err(blame(
+                    "evidence",
+                    k,
+                    Error::Invalid("an evidence order with a negative interval is never trigger evidence".into()),
+                ));
+            }
             let exposed = (order.utxo.block_daa_score as i64 + s.interval).max(s.active_from).max(custody.utxo.block_daa_score as i64);
             if exposed.saturating_add(min_rest) > lock {
                 return invalid("trigger evidence was exposed for less than minRestDaa before the lock time");

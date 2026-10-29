@@ -145,7 +145,10 @@ contract KobIfdAskKron(
         require(int(byte[8](o.slice(118, 126))) == scale);
         require(n >= minTouch);
         require(int(byte[8](o.slice(208, 216))) == 0);
-        int exposed = OpTxInputDaaScore(ev) + int(byte[8](o.slice(190, 198)));
+        // an evidence order's own interval is its state, so a raw-built order can carry a negative one: it must not shorten the rest
+        int iv = int(byte[8](o.slice(190, 198)));
+        require(iv >= 0);
+        int exposed = OpTxInputDaaScore(ev) + iv;
         int act = int(byte[8](o.slice(163, 171)));
         if (act > exposed) { exposed = act; }
         require(OpInputCovenantId(tk) == tokenCovId);

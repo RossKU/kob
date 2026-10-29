@@ -367,7 +367,10 @@ contract KobCondPair(
             require(byte[32](o.slice(118, 150)) == ext);
         }
         require(int(byte[8](r.slice(18, 26))) == 0);
-        int exposed = OpTxInputDaaScore(ev) + int(byte[8](r.slice(0, 8)));
+        // an evidence order's own interval is its state, so a raw-built order can carry a negative one: it must not shorten the rest
+        int iv = int(byte[8](r.slice(0, 8)));
+        require(iv >= 0);
+        int exposed = OpTxInputDaaScore(ev) + iv;
         int act = int(byte[8](q.slice(45, 53)));
         if (act > exposed) { exposed = act; }
         if (ask) {
@@ -489,7 +492,10 @@ contract KobCondPair(
         }
         require(got == want);
         require(int(byte[8](o.slice(208 + w, 216 + w))) == 0);
-        int exposed = OpTxInputDaaScore(ev) + int(byte[8](o.slice(190 + w, 198 + w)));
+        // an evidence order's own interval is its state, so a raw-built order can carry a negative one: it must not shorten the rest
+        int iv = int(byte[8](o.slice(190 + w, 198 + w)));
+        require(iv >= 0);
+        int exposed = OpTxInputDaaScore(ev) + iv;
         int act = int(byte[8](o.slice(163 + d, 171 + d)));
         if (act > exposed) { exposed = act; }
         if (cust) {

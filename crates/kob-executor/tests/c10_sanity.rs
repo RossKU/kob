@@ -75,3 +75,17 @@ fn a_decay_path_is_still_bounded_over_a_long_window() {
     let p_gtc = PairState { tif: 0, expiry_daa: p.active_from + (1 << 40), slope: i64::MAX / 1_000, ..p.clone() };
     assert_eq!(check(&AnyState::KobPair(p_gtc)).unwrap_err(), "bad_state:slope:overflow");
 }
+
+/// Audit 2026-10-29 F1: the `interval` of an order is the DAA its slice opens after its UTXO's, and a trigger reads it out of the evidence
+/// order's own state. A negative one (a raw-built order: nothing in the covenant validates a creation) would count as rested at once, so no
+/// order carrying one is listed, planned or offered to a matcher as evidence (`bad_state:interval`); the library builders refuse it too.
+#[test]
+fn an_order_with_a_negative_interval_is_not_listed_and_so_is_never_evidence() {
+    for iv in [-1, -1_000_000_000_000] {
+        let a = AskState { interval: iv, ..ask(1, 250_000_000) };
+        assert_eq!(check(&AnyState::KobAsk(a)).unwrap_err(), "bad_state:interval:below_minimum");
+        let b = BidState { interval: iv, ..bid(1, 250_000_000) };
+        assert_eq!(check(&AnyState::KobBid(b)).unwrap_err(), "bad_state:interval:below_minimum");
+    }
+    assert!(check(&AnyState::KobAsk(AskState { interval: 0, ..ask(1, 250_000_000) })).is_ok());
+}

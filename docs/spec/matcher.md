@@ -711,7 +711,9 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
 - **Exposure.** `exposedSince = max(evidence UTXO DAA + its interval (TWAP / DCA, else 0), its
   custody UTXO DAA (ask), its activeFrom)`. The covenant requires `tx.daa ≥ exposedSince +
   minRestDaa`, `tx.daa` proven by CLTV against the lock time, so the lock time must reach that bound
-  (§2.2). Evidence that is itself an unaccepted continuation is not chain-safe (§7).
+  (§2.2). The evidence order's `interval` is read out of its own state, which nothing validated when the order was created, so the
+  covenant requires `interval >= 0` (a negative one would shorten the rest time: audit 2026-10-29 F1); `touch_of` and the indexer's
+  sanity gate refuse such an order as evidence. Evidence that is itself an unaccepted continuation is not chain-safe (§7).
 - **Book.** The covenant needs the same token covenant id, `scale` (prices are comparable only at the same `scale`) and
   KCC-20 extension commitment (an ask's custody, a bid's `extensionCommitment`: units of the covenant id of another
   commitment are another token; `order-types.md`, Evidence identity); the reference planner takes evidence only from the
