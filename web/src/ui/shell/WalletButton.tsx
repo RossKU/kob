@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { useWallet } from '../../app/context';
 import { useServices } from '../../app/context';
 import { t } from '../../i18n';
@@ -78,12 +78,24 @@ function ConnectBar() {
   const noExtension = w.detected.length === 0;
 
   const connectOne = (id: Parameters<typeof w.connect>[0]) => void w.connect(id).then(() => setDialog(null));
-  const onConnect = () => {
+  // a click before the first look for extensions is over (they inject a moment after the page loads) waits for it, then decides: "no wallet" is never
+  // taken from a list that has not been filled yet, so a user who has an extension is not sent to the private key entry
+  const [waiting, setWaiting] = useState(false);
+  const decide = () => {
     if (only) void w.connect(only.id);
     else if (w.detected.length > 1) setDialog('wallets');
     else if (supported) w.openPrivateKey();
     else setDialog('key');
   };
+  const onConnect = () => {
+    if (!w.discovered) setWaiting(true);
+    else decide();
+  };
+  useEffect(() => {
+    if (!waiting || !w.discovered) return;
+    setWaiting(false);
+    decide();
+  }, [waiting, w.discovered, w.detected]);
   // no extension: the button opens the private key entry, and is named for it (the tests and the page's own scripts find it by that name)
   const testid = narrow ? 'wallet-connect' : only ? `wallet-connect-${only.id}` : w.detected.length > 1 ? 'wallet-connect' : 'wallet-connect-local-key';
 
@@ -93,11 +105,11 @@ function ConnectBar() {
         small
         variant="primary"
         data-testid={testid}
-        loading={w.connecting}
+        loading={w.connecting || waiting}
         onClick={onConnect}
         {...(noExtension && !supported ? { 'data-state': 'unavailable', class: 'btn-off', title: t('signer.unsupported') } : {})}
       >
-        {w.connecting ? t('shell.wallet.connecting') : t('shell.wallet.connectShort')}
+        {w.connecting || waiting ? t('shell.wallet.connecting') : t('shell.wallet.connectShort')}
       </Button>
       {dialog === 'wallets' ? (
         <Modal title={t('shell.wallet.chooseTitle')} onClose={() => setDialog(null)} data-testid="wallet-dialog">

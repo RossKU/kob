@@ -27,6 +27,8 @@ export function useServices(): Services {
 export interface WalletSession {
   /** installed wallets (extensions inject late: this list grows) */
   detected: WalletAdapter[];
+  /** the first look for installed wallets is over: one was found, or DISCOVERY_WAIT_MS passed. Until then "no wallet detected" is not an answer (Connect waits). */
+  discovered: boolean;
   adapter: WalletAdapter | null;
   info: WalletInfo | null;
   /** wallet network differs from the app network (trading must be blocked) */
@@ -62,9 +64,13 @@ const safeStorage = (): Storage | null => {
   }
 };
 
+/** How long Connect waits for an extension that has not injected yet, ms, before it takes "none" as the answer (the private key entry). */
+export const DISCOVERY_WAIT_MS = 1500;
+
 export function WalletProvider(props: { services: Services; children: ComponentChildren }) {
   const { config } = props.services;
   const [detected, setDetected] = useState<WalletAdapter[]>([]);
+  const [discovered, setDiscovered] = useState(false);
   const [adapter, setAdapter] = useState<WalletAdapter | null>(null);
   const [info, setInfo] = useState<WalletInfo | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -77,7 +83,20 @@ export function WalletProvider(props: { services: Services; children: ComponentC
   // Kaspire: `ordered-args` where the plan is just [signature, dispatch tag] (the wallet then emits the very script kob-wasm assembles: an independent check of the ABI
   // encoding), else `wrap-signature`; finalize verifies every signature either way (real Kaspire 0.5.1 accepts both on TN10)
   const kob = props.services.kob;
-  useEffect(() => watchWallets(setDetected, { kastle: config.features.kastle, timeoutMs: 8000, kaspire: { dispatchTag: dispatchTagFrom(kob) } }), [config.features.kastle, kob]);
+  useEffect(() => {
+    const stop = watchWallets(
+      (d) => {
+        setDetected(d);
+        if (d.length) setDiscovered(true);
+      },
+      { kastle: config.features.kastle, timeoutMs: 8000, kaspire: { dispatchTag: dispatchTagFrom(kob) } },
+    );
+    const h = setTimeout(() => setDiscovered(true), DISCOVERY_WAIT_MS);
+    return () => {
+      stop();
+      clearTimeout(h);
+    };
+  }, [config.features.kastle, kob]);
 
   // ---- the private-key signer frame (wallet/local-key.ts, ui/shell/SignerFrame.tsx): mounted while its session lives, removing it forgets the key
   const [signerMode, setSignerMode] = useState<SignerMode>('closed');
@@ -185,7 +204,7 @@ export function WalletProvider(props: { services: Services; children: ComponentC
   );
 
   const session: WalletSession = {
-    detected, adapter, info, connecting, error, epoch, notice, dismissNotice, connect, openPrivateKey, disconnect, records,
+    detected, discovered, adapter, info, connecting, error, epoch, notice, dismissNotice, connect, openPrivateKey, disconnect, records,
     networkMismatch: info !== null && info.network !== config.network,
   };
   return (
