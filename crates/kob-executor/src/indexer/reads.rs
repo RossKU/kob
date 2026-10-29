@@ -83,9 +83,18 @@ pub struct TokenView {
     pub scale: Option<i64>,
     /// A token without `decimals` (no registry entry): the scale of its earliest order, open or ended ([`market_scale`]). The
     /// first order of such a token sets its market's price scale, and it stays the market's after every order of it has ended:
-    /// a client prices new orders at it and refuses decimals that give another scale. `null` for a token with `decimals` (its
-    /// `scale` is the market's) and for one no order of which was ever seen.
+    /// a client prices new orders at it and refuses decimals that give another scale. `null` for a token with `decimals` (a declared or program-default scale is the market's: the executor lists only
+    /// orders at it) and for one no order of which was ever seen.
     pub market_scale: Option<i64>,
+    /// `true` when order placements name more than one program of the strict list for this covenant id: the indexer holds no
+    /// token output, so it cannot tell which one is the token's, and names none (`template_hash`, `template_id`, `family` and
+    /// `extension_commitment` are `null`; `candidate_templates` lists the claimed programs). A client proves the program
+    /// from a token output of the covenant id that the node confirms. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program_ambiguous: Option<bool>,
+    /// The programs claimed for an ambiguous token (template hashes, hex).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub candidate_templates: Vec<String>,
     /// The registry document the token's facts (`decimals`, `genesis_verified`, the derived `warnings`) come from: this
     /// operator's copy, not chain data. A client verifies against `registry.sha256` (or ignores it). No standing is served: KOB
     /// makes no judgement about a token (tickers collide: identify it by covenant id plus template hash).
@@ -178,6 +187,8 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 decimals_source: t.decimals.map(|_| "registry"),
                 scale: t.scale(),
                 market_scale: None,
+                program_ambiguous: None,
+                candidate_templates: Vec::new(),
                 registry: tokens.info().cloned(),
                 genesis_verified: tokens.genesis_verified(&t.covenant_id),
                 warnings: tokens.warnings_for(&t.covenant_id),
@@ -195,13 +206,13 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
     // shows the token's program, so the token is in the list and its first listed order can be placed from it. The strict-list
     // check below applies to every row; at most `OPEN_TOKEN_ROWS_MAX` rows are read.
     if tokens.is_open() {
-        let mut seen: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+        // the strict-list programs the rows name, per token (rows come in token order, rows of listed orders first)
+        let mut claimed: Vec<ClaimedPrograms<'_>> = Vec::new();
         for (cov, tpl, _fam) in open_token_rows(conn, OPEN_TOKEN_ROWS_MAX as usize)? {
             let (Ok(cov32), Ok(tpl32)) = (<[u8; 32]>::try_from(cov.as_slice()), <[u8; 32]>::try_from(tpl.as_slice())) else {
                 continue;
             };
-            let cid = crate::hex::Hash32(cov32);
-            if tokens.get(&cid).is_some() || seen.contains(&cov) {
+            if tokens.get(&crate::hex::Hash32(cov32)).is_some() {
                 continue;
             }
             // a token whose program is not on the strict list is not listed, whatever listed orders it still has in the history (a retired
@@ -211,28 +222,69 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
             let Some(strict) = tokens.strict_template(&crate::hex::Hash32(tpl32)) else {
                 continue;
             };
-            seen.insert(cov.clone());
-            let extension_commitment =
-                if strict.family == kob_protocol::Family::Kcc20 { sole_extension(conn, &cov, &tpl)? } else { None };
-            out.push(TokenView {
-                ticker: String::new(),
-                covenant_id: cid.to_hex(),
-                template_hash: Some(hex::encode(&tpl32)),
-                extension_commitment,
-                family: Some(strict.family.as_str()),
-                decimals: None,
-                decimals_source: None,
-                scale: None,
-                market_scale: market_scale(conn, &cov)?,
-                registry: tokens.info().cloned(),
-                genesis_verified: None,
-                warnings: tokens.warnings_for(&cid),
-                powers: strict.powers.clone(),
-                template_id: Some(strict.id.clone()),
-                open_asks: counts.get(&(cov.clone(), 1)).copied().unwrap_or(0),
-                open_bids: counts.get(&(cov, 2)).copied().unwrap_or(0),
-                declaration: None,
-            });
+            match claimed.last_mut() {
+                Some((c, programs)) if *c == cov => {
+                    if !programs.iter().any(|(t, _)| *t == tpl) {
+                        programs.push((tpl, strict));
+                    }
+                }
+                _ => claimed.push((cov, vec![(tpl, strict)])),
+            }
+        }
+        for (cov, programs) in claimed {
+            let cid = crate::hex::Hash32(<[u8; 32]>::try_from(cov.as_slice()).expect("32-byte covenant id"));
+            let (open_asks, open_bids) =
+                (counts.get(&(cov.clone(), 1)).copied().unwrap_or(0), counts.get(&(cov.clone(), 2)).copied().unwrap_or(0));
+            if let [(tpl, strict)] = programs.as_slice() {
+                let extension_commitment =
+                    if strict.family == kob_protocol::Family::Kcc20 { sole_extension(conn, &cov, tpl)? } else { None };
+                out.push(TokenView {
+                    ticker: String::new(),
+                    covenant_id: cid.to_hex(),
+                    template_hash: Some(hex::encode(tpl)),
+                    extension_commitment,
+                    family: Some(strict.family.as_str()),
+                    decimals: None,
+                    decimals_source: None,
+                    scale: None,
+                    market_scale: market_scale(conn, &cov)?,
+                    program_ambiguous: None,
+                    candidate_templates: Vec::new(),
+                    registry: tokens.info().cloned(),
+                    genesis_verified: None,
+                    warnings: tokens.warnings_for(&cid),
+                    powers: strict.powers.clone(),
+                    template_id: Some(strict.id.clone()),
+                    open_asks,
+                    open_bids,
+                    declaration: None,
+                });
+            } else {
+                // Placements of one covenant id name several programs. Anyone can place an order that pins any strict program for any
+                // covenant id (the indexer holds no token output to compare it with), so a pick here would let such an order replace the
+                // token's real program in this list: it names none, and the client proves the program from the chain (audit 2026-10-29 F3)
+                out.push(TokenView {
+                    ticker: String::new(),
+                    covenant_id: cid.to_hex(),
+                    template_hash: None,
+                    extension_commitment: None,
+                    family: None,
+                    decimals: None,
+                    decimals_source: None,
+                    scale: None,
+                    market_scale: market_scale(conn, &cov)?,
+                    program_ambiguous: Some(true),
+                    candidate_templates: programs.iter().map(|(t, _)| hex::encode(t)).collect(),
+                    registry: tokens.info().cloned(),
+                    genesis_verified: None,
+                    warnings: tokens.warnings_for(&cid),
+                    powers: Vec::new(),
+                    template_id: None,
+                    open_asks,
+                    open_bids,
+                    declaration: None,
+                });
+            }
         }
     }
     // the KCC-23 declarations the indexer holds (one primary-key lookup per row), and so the decimals of each token: its
@@ -249,10 +301,37 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
             );
             if let Some((d, source)) = resolve_decimals(declared.flatten(), v.decimals, program) {
                 (v.decimals, v.decimals_source) = (Some(d), Some(source));
+                // decimals fix the scale (and the executor lists orders at it only): the first order's scale is not a second opinion
+                v.market_scale = None;
             }
         }
     }
     Ok(out)
+}
+
+/// The scale every listed order of an open-list token (no registry entry) must quote, when its decimals are known without any order:
+/// the token's verified KCC-23 declaration, else the default of the program the order names (a launchpad's convention, profile
+/// `default_decimals`), as `10^min(decimals, 9)`. `None`: nothing fixes it (the first order sets the market's scale), or other
+/// programs are named for the covenant id too (`order_tpl` is a claim like any other there: an order pinning the wrong program
+/// must not set the convention).
+pub fn open_standard_scale(conn: &Connection, token: &Hash32, order_tpl: Option<&Hash32>) -> DbResult<Option<i64>> {
+    let declared = super::kcc23::declaration_decimals(conn, token)?.flatten();
+    let d = match declared {
+        Some(d) => d,
+        None => {
+            let Some(tpl) = order_tpl else { return Ok(None) };
+            let mut st = conn.prepare_cached(
+                "SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS NOT NULL AND tpl_hash <> ?2 \
+                 UNION ALL SELECT 1 FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash IS NOT NULL AND token_tpl_hash <> ?2 LIMIT 1",
+            )?;
+            if st.exists(rusqlite::params![&token.0[..], &tpl.0[..]])? {
+                return Ok(None);
+            }
+            let Some(d) = program_default_of(Some(tpl), None) else { return Ok(None) };
+            d
+        }
+    };
+    Ok(Some(10_i64.pow(d.min(9))))
 }
 
 /// The decimals of a token and where they come from, in this order: the token's verified KCC-23 declaration, its registry entry,
@@ -296,6 +375,9 @@ pub fn token_decimals(conn: &Connection, tokens: &TokenAllowlist, token: &Hash32
     };
     Ok(resolve_decimals(None, None, program).map(|(d, _)| d))
 }
+
+/// The strict-list programs the placements name for one token: (covenant id, [(template hash, template)]).
+type ClaimedPrograms<'a> = (Vec<u8>, Vec<(Vec<u8>, &'a crate::tokens::StrictTemplate)>);
 
 /// A (token, program, family) row of the open token list.
 type OpenTokenRow = (Vec<u8>, Vec<u8>, i64);

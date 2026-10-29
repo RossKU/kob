@@ -878,7 +878,7 @@ impl Processor {
         let (listed, reason) = match n.inherit_listed {
             _ if sane.is_err() => (false, sane.err()),
             Some((l, r)) => (l, r),
-            None => self.listing(&n.state, ext, n.daa, n.out_value),
+            None => self.listing(conn, &n.state, ext, n.daa, n.out_value)?,
         };
         conn.prepare_cached(
             "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id)
@@ -976,7 +976,14 @@ impl Processor {
 
     /// The listing rules (`tokens::ListingRules`) on an order's state as of `daa` (its genesis, or an in-place amend's
     /// block) with `carrier` on its output.
-    fn listing(&self, state: &AnyState, ext: Option<[u8; 32]>, daa: u64, carrier: u64) -> (bool, Option<String>) {
+    fn listing(
+        &self,
+        conn: &Connection,
+        state: &AnyState,
+        ext: Option<[u8; 32]>,
+        daa: u64,
+        carrier: u64,
+    ) -> DbResult<(bool, Option<String>)> {
         // a pair order needs both tokens acceptable: A as the order's token, B as any traded token (reasons `quote_...`);
         // neither is measured in KAS (a pair order has no KAS quote)
         if let Some((ia, ib)) = pair_listing(state, daa, carrier) {
@@ -984,10 +991,10 @@ impl Processor {
                 .rules
                 .evaluate(&self.tokens, &ia)
                 .and_then(|()| self.rules.evaluate(&self.tokens, &ib).map_err(|r| format!("quote_{r}")));
-            return match r {
+            return Ok(match r {
                 Ok(()) => (true, None),
                 Err(r) => (false, Some(r)),
-            };
+            });
         }
         let terms = model::terms_of(state);
         // a conditional order is measured at its take-profit leg, or at its stop when it has none (`tpPrice` 0: a stop-market,
@@ -997,9 +1004,16 @@ impl Processor {
             AnyState::KobCondBid(c) | AnyState::KobCondBidKron(c) => Some(if c.tp_price > 0 { c.tp_price } else { c.stop_price }),
             _ => terms.price,
         };
+        // the scale an open-list token's decimals fix (its KCC-23 declaration, else its program's convention), see `ListingInput`
+        let standard_scale = if self.tokens.get(&Hash32(state.token_cov_id())).is_none() {
+            super::reads::open_standard_scale(conn, &Hash32(state.token_cov_id()), state.token_tpl_hash().map(Hash32).as_ref())?
+        } else {
+            None
+        };
         let r = self.rules.evaluate(
             &self.tokens,
             &ListingInput {
+                standard_scale,
                 token_cov_id: Some(Hash32(state.token_cov_id())),
                 token_tpl_hash: state.token_tpl_hash().map(Hash32),
                 extension_commitment: ext.map(Hash32),
@@ -1015,10 +1029,10 @@ impl Processor {
                 carrier,
             },
         );
-        match r {
+        Ok(match r {
             Ok(()) => (true, None),
             Err(r) => (false, Some(r)),
-        }
+        })
     }
 
     /// The state an in-place amend (AMEND record) continues a maker-cancelled order with at output `j`, and the record's
@@ -1135,7 +1149,7 @@ impl Processor {
         let t = model::terms_of(state);
         let (listed, reason) = match crate::sanity::check(state) {
             Err(why) => (false, Some(why)),
-            Ok(()) => self.listing(state, order_ext_commit(conn, cov)?, ctx.header.daa_score, carrier),
+            Ok(()) => self.listing(conn, state, order_ext_commit(conn, cov)?, ctx.header.daa_score, carrier)?,
         };
         conn.prepare_cached(
             "UPDATE orders SET price = ?2, tip = ?3, tif = ?4, expiry_daa = ?5, active_from = ?6, deadline = ?7, listed = ?8, \
@@ -1648,6 +1662,7 @@ fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(Lis
             extension_commitment: if fam == Some(Family::Kcc20) { e.map(Hash32) } else { None },
             family: fam,
             scale: Some(k.scale).filter(|s| *s > 0),
+            standard_scale: None,
             min_fill: base.then_some(terms.min_fill),
             amount: if base { state.amount_left() } else { None },
             price: None,

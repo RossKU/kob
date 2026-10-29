@@ -280,6 +280,9 @@ pub struct TokenFacts {
     pub market_scale: Option<Option<i64>>,
     /// The indexer holds a verified KCC-23 declaration of the token (`GET /v1/tokens` row `declaration: true`).
     pub declared: bool,
+    /// Order placements name several token programs for the covenant id and the indexer names none (`program_ambiguous`): the
+    /// program is proven from a token output on the chain, or the token is not traded (audit 2026-10-29 F3).
+    pub program_ambiguous: bool,
 }
 
 /// What a token's KCC-23 declaration names under KOB's convention (`docs/spec/token-metadata.md` section 2), read from a launch
@@ -352,6 +355,7 @@ pub fn registry_tokens(json: &str, network: &str) -> Result<Vec<TokenFacts>, Str
             not_tradable,
             market_scale: None,
             declared: false,
+            program_ambiguous: false,
         });
     }
     Ok(out)
@@ -384,6 +388,7 @@ pub fn indexer_tokens(v: &serde_json::Value) -> Result<Vec<TokenFacts>, String> 
                     Some(v) => Some(Some(v.as_i64().ok_or("indexer /v1/tokens: a `market_scale` that is not an integer")?)),
                 },
                 declared: t.get("declaration").and_then(|d| d.as_bool()) == Some(true),
+                program_ambiguous: t.get("program_ambiguous").and_then(|d| d.as_bool()) == Some(true),
             })
         })
         .collect()
@@ -637,6 +642,11 @@ pub fn resolve_with(
                 )
             })?;
             token_template(p).hash
+        }
+        None if i.is_some_and(|t| t.program_ambiguous) => {
+            return Err(format!(
+                "`{key}`: order placements name more than one token program for this token, and only a token output on the chain can show \n                 which one is its: it is not traded here until one is shown"
+            ))
         }
         None => return Err(format!("`{key}`: the token program is unknown")),
     };
@@ -899,11 +909,24 @@ mod tests {
             not_tradable: None,
             market_scale: None,
             declared: false,
+            program_ambiguous: false,
         }
     }
 
     fn open_facts(cov: u8, program: TemplateId) -> TokenFacts {
         TokenFacts { decimals: None, ticker: String::new(), ..facts(cov, "", 0, program, 0xdd) }
+    }
+
+    /// Placements naming several programs for one covenant id leave the indexer with none (audit 2026-10-29 F3): the token is not traded
+    /// from a name or an id the indexer alone resolves, and the refusal says why.
+    #[test]
+    fn a_token_with_several_claimed_programs_is_not_resolved_from_the_indexer() {
+        let mut ambiguous = open_facts(3, TemplateId::Kcc20Ref);
+        ambiguous.tpl_hash = None;
+        ambiguous.ext = None;
+        ambiguous.program_ambiguous = true;
+        let e = resolve(&to_hex(&[3; 32]), &[], &[ambiguous]).unwrap_err();
+        assert!(e.contains("more than one token program"), "{e}");
     }
 
     #[test]

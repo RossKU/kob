@@ -372,6 +372,10 @@ pub struct ListingInput {
     pub family: Option<Family>,
     /// Base units per whole token of the order (the price denominator).
     pub scale: Option<i64>,
+    /// The scale every order of this token must quote when its decimals are known without any order (an open-list token: its
+    /// verified KCC-23 declaration, else the default of its program): `10^min(decimals, 9)`. `None`: nothing fixes it (the first
+    /// order of the token sets the market's scale), or the token has a registry entry (its own `scale` decides).
+    pub standard_scale: Option<i64>,
     /// The order's smallest fill, base units.
     pub min_fill: Option<i64>,
     /// The order's amount in base units (`amountLeft`); `None` for a bid, whose quantity is its escrow (`carrier`).
@@ -407,7 +411,16 @@ impl ListingRules {
         }
         match tokens.get(&tok_id) {
             None if self.require_allowlist && !tokens.is_open() => return Err("token_not_allowlisted".into()),
-            None => {}
+            None => {
+                // an open-list token: the decimals its creator declared on chain, else its program's convention, fix the scale the
+                // same way a registry entry does. Without this an order of any other scale (one cheap bid before the first honest
+                // order) set the market's scale beside decimals the clients refuse to trade against (audit 2026-10-29 F3)
+                if let (Some(want), Some(scale)) = (o.standard_scale, o.scale) {
+                    if scale != want {
+                        return Err("non_standard_scale".into());
+                    }
+                }
+            }
             Some(t) => {
                 if let (Some(want), Some(got)) = (t.template_hash, o.token_tpl_hash) {
                     if want != got {
@@ -740,6 +753,33 @@ mod tests {
         let plain = TokenAllowlist::from_entries([entry(1, 8)]);
         assert!(!plain.is_open());
         assert_eq!(rules.evaluate(&plain, &order(2, 8, Family::Kron)), Err("token_not_allowlisted".into()));
+    }
+
+    /// An open-list token whose decimals are known without any order (a declaration, a program default) lists only orders at the
+    /// scale they give; one whose decimals nothing fixes lists any scale (the first order sets the market's).
+    #[test]
+    fn open_token_scale_follows_the_decimals_that_fix_it() {
+        let strict = (h(8), StrictTemplate { id: "t8".into(), family: Family::Kcc20, powers: vec![] });
+        let toks = TokenAllowlist::from_entries([]).with_strict_templates([strict]);
+        let rules = ListingRules { max_expiry_span_daa: 1 << 40, min_order_value_sompi: 0, ..ListingRules::default() };
+        let order = |scale: i64, standard: Option<i64>| ListingInput {
+            token_cov_id: Some(h(2)),
+            token_tpl_hash: Some(h(8)),
+            family: Some(Family::Kcc20),
+            scale: Some(scale),
+            standard_scale: standard,
+            min_fill: Some(5),
+            amount: Some(5),
+            price: Some(1),
+            expiry_daa: Some(1),
+            genesis_daa: 1,
+            carrier: 1,
+            ..Default::default()
+        };
+        assert_eq!(rules.evaluate(&toks, &order(1, Some(1000))), Err("non_standard_scale".into()));
+        assert_eq!(rules.evaluate(&toks, &order(1_000_000, Some(1000))), Err("non_standard_scale".into()));
+        assert_eq!(rules.evaluate(&toks, &order(1000, Some(1000))), Ok(()));
+        assert_eq!(rules.evaluate(&toks, &order(1, None)), Ok(()));
     }
 
     /// A covenant id only commits to the genesis output hashes, so the registry says per token whether every genesis
