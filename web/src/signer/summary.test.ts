@@ -23,6 +23,20 @@ function build(name: string, edit: (state: Record<string, string>) => void = () 
   return kob.build(req);
 }
 
+describe('signer summary: audit round 2 (S1, S7)', () => {
+  it('S7: a cancel names the order it closes by 8 + 8 hex of its covenant id; a create names none', () => {
+    const cancel = summarize(kob, build('cancel.ask'), MAKER_PK, HINTS);
+    const closes = cancel.lines.filter((l) => l.label === 'Closes order');
+    expect(closes).toHaveLength(1);
+    expect(closes[0]!.value).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8}$/);
+    expect(summarize(kob, build('create.ask'), MAKER_PK, HINTS).lines.some((l) => l.label === 'Closes order')).toBe(false);
+  });
+  it('S1: a cancel spends inputs the wallet does not sign and says their KAS is the word of the node; a plain create does not', () => {
+    expect(summarize(kob, build('cancel.ask'), MAKER_PK, HINTS).unsignedKas).toBe(true);
+    expect(summarize(kob, build('create.ask'), MAKER_PK, HINTS).unsignedKas).toBeUndefined();
+  });
+});
+
 describe('signer summary: order terms', () => {
   it('a sell order at another price shows another summary (the net effect alone is the same)', () => {
     const fair = summarize(kob, build('create.ask'), MAKER_PK, HINTS);

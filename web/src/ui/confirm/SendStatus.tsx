@@ -476,6 +476,11 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
             <dt><span>{t('signer.fee')}</span></dt>
             <dd data-testid="confirm-order-fee"><span key={s.fee}>{s.fee}</span></dd>
           </div>
+          {s.unsignedKas ? (
+            <div class="send-line send-fee send-unsigned" data-testid="confirm-order-unsigned-kas">
+              <dt class="muted"><span>{t('signer.unsignedKas')}</span></dt>
+            </div>
+          ) : null}
         </dl>
         {s.orders.map((o, i) => (
           <OrderTable order={o} testid={`confirm-order-order-${i}`} cell={`o:${i}`} live={live} key={i} />

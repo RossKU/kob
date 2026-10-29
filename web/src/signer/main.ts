@@ -297,6 +297,8 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const fee = el('dd', { 'data-testid': 'signer-fee' }, s.fee);
   cells.text.set('fee', fee);
   list.append(el('div', { class: 'line fee' }, el('dt', {}, t('signer.fee')), fee));
+  // the KAS of the order UTXOs, custodies and strays this transaction spends is not covered by the wallet's signature: it is the node's word (S1, accepted: the user chooses the node)
+  if (s.unsignedKas) list.append(el('div', { class: 'line fee muted', 'data-testid': 'signer-unsigned-kas' }, el('dt', {}, t('signer.unsignedKas'))));
   const reject = el('button', { type: 'button', 'data-testid': 'signer-reject' }, t('signer.reject'));
   const approve = el('button', { type: 'button', class: 'primary', disabled: '', 'data-testid': 'signer-approve' }, t('signer.approve'));
   const actions = el('div', { class: 'row end' }, reject, approve);

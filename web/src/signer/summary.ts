@@ -46,6 +46,8 @@ export interface SignerSummary {
   /** the orders the transaction creates or amends (a sweep in place keeps its order's terms and is not listed) */
   orders: SummaryOrder[];
   fee: string;
+  /** the transaction spends inputs the wallet does not sign (an order's own UTXOs, custodies, strays): their KAS is the node's word, which the signature does not cover (audit round 2, S1) */
+  unsignedKas?: boolean;
   /** decoder findings that block signing on the app's confirmation screen (shown as one line here, never hidden) */
   problems: number;
   /** the codes of those findings (the frame names them, and Approve stays disabled while there are any) */
@@ -299,6 +301,9 @@ export function mergedTokens(s: Pick<SigningSummary, 'kind' | 'maker' | 'inputs'
   return merged.every((m) => m.outCount >= 1 && m.outCount < m.inCount && outAmount.get(m.ref.covenantId) === m.amount) ? merged : null;
 }
 
+/** Most "closes order" lines of one request (a position cancel names each of its orders). */
+const MAX_CLOSED_LINES = 8;
+
 /** How many delivery counts `bidAmountOf` tries for a bid whose fills the user chose. */
 const MAX_FILLS_SEARCHED = 64n;
 
@@ -323,6 +328,10 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
   }
   if (k.locked.total > 0n) lines.push({ label: t('signer.net.locked'), value: kas(k.locked.total), dir: null });
   if (k.released > 0n) lines.push({ label: t('signer.net.released'), value: kas(k.released), dir: null });
+  // WHICH of the wallet's orders a cancel closes (8 + 8 hex of its covenant id, as the token is named): a hostile indexer can only swap one of the user's own orders for another, and this makes the swap visible (S7)
+  for (const sp of s.spends.filter((x) => x.makerIsWallet && x.covenantId && (x.action === 'cancel' || x.action === 'refund' || x.action === 'sweep')).slice(0, MAX_CLOSED_LINES)) {
+    lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : 'signer.net.closes'), value: longId(sp.covenantId!), dir: null });
+  }
   if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
   const fromTokens = freedFromTokens(s);
   if (fromTokens > 0n) lines.push({ label: t('signer.net.fromTokens'), value: kas(fromTokens), dir: null });
@@ -331,7 +340,7 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry);
     return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain) ?? chain;
   });
-  return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...problemsOf(s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code))), decoded: s };
+  return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...(s.inputs.length > s.signatures ? { unsignedKas: true } : {}), ...problemsOf(s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code))), decoded: s };
 }
 
 /** Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. */
