@@ -7,7 +7,7 @@ import { normalizePolicy, readFeeContext, type FeeContext } from '../kob/fee-pol
 import type { FeeMode, KeyUtxo, TokenUtxo } from '../kob/types';
 import { isPairEnv, type BookLevel, type BookOrder, type BookView, type Clock, type DroppedBookOrder, type OwnOrderRef, type PairPlanEnv, type PlanEnv, type TokenMarket } from '../kob/plan-types';
 import type { TokenInfo } from '../kob/registry';
-import { impliedPairRate, isPairOrderView, ownPairOrderRefs, pairBookToBookView } from '../kob/pair';
+import { impliedPairRate, isPairOrderView, ownPairOrderRefs } from '../kob/pair';
 import { firmReferencePrice } from '../kob/guards';
 import { toTokenMarket } from '../kob/token-market';
 import type { Hex } from '../kob/types';
@@ -16,6 +16,7 @@ import { pendingSpends } from './pending-spends';
 import { spkStringToAddress } from '../data/kaspa-sdk';
 import { describeNodeError } from '../data/node-error';
 import { verifyBook } from './book-verify';
+import { routeLevels, verifyPairBook } from './pair-book';
 import type { Services } from './services';
 
 const bi = (v: string | number | null | undefined): bigint => (v === null || v === undefined ? 0n : BigInt(v));
@@ -187,6 +188,7 @@ export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node
   const bv = checked?.view ?? null;
   // the book the planners get holds only what the node confirmed; the user is told nothing of the rest (a note on every refresh was noise): the console has it
   if (checked?.dropped.length) console.info(`book check: ${checked.dropped.length} order(s) of the indexer's book left out (${[...new Set(checked.dropped.map((d) => d.reason))].join(', ')})`);
+  if (checked?.beyond) console.info(`book check: ${checked.beyond} order(s) behind the verified depth are not part of the book`);
   const last = trades?.items?.[0];
   // trades are priced per `price_basis` base units (the token's standard scale): convert to the market's scale (per whole token)
   const lastFillPrice = last && trades.price_basis && BigInt(trades.price_basis) > 0n ? (BigInt(last.price) * market.scale) / BigInt(trades.price_basis) : null;
@@ -355,8 +357,11 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
           kasReferenceOf(indexer, b),
         ])
       : null;
+  // the two KAS books the node confirms (app/book-verify.ts): the route of the pair book is derived from them, never taken from the indexer's levels
+  const kasBooks = indexer && !o.offline ? Promise.all([readMarketPart(s, a), readMarketPart(s, b)]) : null;
   // a malformed reference rejects the build when it is awaited below; until then a node failure must not leave that rejection unhandled
   indexed?.catch(() => undefined);
+  kasBooks?.catch(() => undefined);
   const [clock, funding, tokenUtxos, quoteTokenUtxos, fees] = await Promise.all([
     readClock(s),
     s.utxos.fundingFor(wallet.pubkey),
@@ -373,15 +378,35 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
   const guardsUnavailable: ('own-orders' | 'book')[] = [];
   if (indexed) {
     const [pv, mine, refA, refB] = await indexed;
+    const [ma, mb] = await kasBooks!;
     // an indexer without the pair routes (null) or a failed read: the crossing / FOK / band guards have no book
     if (pv) {
       view = pv;
-      book = pairBookToBookView(pv, a.scale);
+      // the book the planners get is what the node confirms (app/pair-book.ts): the resting pair orders one by one, the route from the two KAS books
+      const hasOrders = [...pv.asks, ...pv.bids].some((l) => l.source !== 'route');
+      const listed = hasOrders && indexer ? await indexer.allOrders({ token: a.covenantId, status: 'active' }).catch(() => null) : [];
+      if (listed === null) guardsUnavailable.push('book');
+      else {
+        const checked = await verifyPairBook(
+          {
+            kob: s.kob, node: s.node, indexer: indexer!, toAddress: (spk) => spkStringToAddress(s.sdk, spk, s.config.network), daa: clock.daa,
+            base: { covenantId: a.covenantId, templateHash: a.templateHash, extensionCommitment: a.extensionCommitment, scale: a.scale },
+            quote: { covenantId: b.covenantId, templateHash: b.templateHash, extensionCommitment: b.extensionCommitment, scale: b.scale },
+          },
+          listed,
+          routeLevels(ma.book, mb.book, a.scale, b.scale),
+        );
+        book = checked.book;
+        if (checked.dropped.length) console.info(`pair book check: ${checked.dropped.length} order(s) of the indexer's pair book left out (${[...new Set(checked.dropped.map((d) => d.reason))].join(', ')})`);
+        if (checked.beyond) console.info(`pair book check: ${checked.beyond} order(s) behind the verified depth are not part of the book`);
+      }
     } else guardsUnavailable.push('book');
     if (mine) ownOrders = ownPairOrderRefs(mine, a.covenantId, b.covenantId);
     else guardsUnavailable.push('own-orders');
-    kasPerWholeA = refA.book ?? refA.last;
-    kasPerWholeB = refB.book ?? refB.last;
+    // the KAS price of each token that sets the default minimum fill: from the KAS book the node confirmed (the indexer's own book is nobody's word for a
+    // signed field), else the newest trade the indexer reports
+    kasPerWholeA = firmReferencePrice(ma.book, a.scale) ?? refA.last;
+    kasPerWholeB = firmReferencePrice(mb.book, b.scale) ?? refB.last;
     lastFillPrice = impliedPairRate(refA.last, refB.last, b.scale);
   }
   return {

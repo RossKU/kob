@@ -10,7 +10,7 @@ import type { OrderState, TxJson } from '../kob/types';
 import { loadKobNode } from '../kob/wasm.node';
 import { FakeChain, MAKER, orderViewOf, placeGolden, testAddress, TOKEN } from '../testing/chain-fixtures';
 import { CLOCK, KAS, TOK, makeEnv } from '../testing/fixtures';
-import { BOOK_CHECK_MAX_ROWS, BOOK_CHECK_ROUNDS, verifyBook, type BookVerifyDeps } from './book-verify';
+import { BOOK_CHECK_MAX_ROWS, BOOK_CHECK_PER_SIDE, BOOK_CHECK_ROUNDS, verifyBook, type BookVerifyDeps } from './book-verify';
 import { readMarketPart } from './env';
 import type { Services } from './services';
 
@@ -143,7 +143,7 @@ describe('verifyBook: the orders of the book must exist on the node as the index
 
   it('the real order within the first rounds is found behind several phantoms', async () => {
     const real0 = world().real;
-    const phantoms = Array.from({ length: 5 }, (_, i) => forge(real0, 0xc0 + i, priceOf(real0) / 2n + BigInt(i)));
+    const phantoms = Array.from({ length: BOOK_CHECK_PER_SIDE }, (_, i) => forge(real0, 0xc0 + i, priceOf(real0) / 2n + BigInt(i)));
     const w = world(phantoms);
     const out = await verifyBook(w.deps, book([...phantoms.map((p) => rowOf(p)), rowOf(w.real)]));
     expect(ids(out.view.asks)).toEqual([w.real.covenantId]);

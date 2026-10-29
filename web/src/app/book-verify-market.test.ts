@@ -79,6 +79,97 @@ function world() {
 const buy = (book: { asks: { price: bigint; amount: bigint; orders: number }[]; bids: { price: bigint; amount: bigint; orders: number }[] }) =>
   planOrder({ ...makeEnv({ book, funding: [1_000_000n * KAS] }), clock: CLOCK }, { type: 'market', side: 'buy', amount: 5n * TOK });
 
+const hex4 = (n: number): string => n.toString(16).padStart(4, '0').repeat(16);
+const mfOf = (p: { states: { state: unknown }[] }): string => (p.states[0]!.state as Record<string, string>).minFill!;
+const planEnv = (book: unknown) => ({ ...makeEnv({ funding: [1_000_000n * KAS] }), book: book as never, clock: CLOCK });
+
+describe('the unchecked tail of the book sets nothing the order signs (audit 2026-10-29 round 2, R3)', () => {
+  /** three real asks, then `n` phantom rows (on no chain) behind them, each claiming `amount` tokens */
+  async function withTail(n: number, amount: string) {
+    const w = world();
+    const p = priceOf(w.real);
+    const r2 = w.reg(realOrder(w.real, 0xa1, { price: p + 100n }, w.chain));
+    const r3 = w.reg(realOrder(w.real, 0xa2, { price: p + 200n }, w.chain));
+    const real3 = [rowOf(w.real), rowOf(r2), rowOf(r3)];
+    const phantoms = Array.from({ length: n }, (_, i) => ({ ...rowOf(w.real), covenant_id: hex4(0x100 + i), price: (p + 300n + BigInt(i) * 100n).toString(), amount_left: amount }));
+    return { w, honest: await readMarketPart(w.services(real3), w.market), part: await readMarketPart(w.services([...real3, ...phantoms]), w.market) };
+  }
+
+  it('H1: phantom rows behind the confirmed ones change neither the signed minimum fill nor the depth warning', async () => {
+    // more rows than one round looks at, so the tail is real
+    const { honest, part } = await withTail(BOOK_CHECK_MIN_CONFIRMED + 12, '1');
+    const intent = { type: 'market', side: 'buy', amount: 40n * TOK, maxFills: 4n } as const;
+    expect(part.book.askOrders!.length).toBe(honest.book.askOrders!.length);
+    const hp = planOrder(planEnv(honest.book), intent);
+    const tp = planOrder(planEnv(part.book), intent);
+    expect(mfOf(tp)).toBe(mfOf(hp));
+    expect(mfOf(tp)).not.toBe('1');
+    expect(tp.issues.map((i) => i.code)).toEqual(hp.issues.map((i) => i.code));
+    expect(tp.disclosure!.expectedPrice).toBe(hp.disclosure!.expectedPrice);
+  });
+
+  it('H1b: the check reads one batch per side and round, whatever the tail (one node read here)', async () => {
+    const w = world();
+    const p = priceOf(w.real);
+    w.chain.calls.length = 0;
+    await readMarketPart(w.services([rowOf(w.real), ...Array.from({ length: 12 }, (_, i) => ({ ...rowOf(w.real), covenant_id: hex4(0x100 + i), price: (p + 300n + BigInt(i)).toString() }))]), w.market);
+    expect(w.chain.calls.length).toBeLessThanOrEqual(3);
+  });
+
+  it('H1c: with Fills = 64 a phantom row claiming one token does not lift the carrier clamp (the budgeted fills and the locked KAS stay)', async () => {
+    const { honest, part } = await withTail(BOOK_CHECK_MIN_CONFIRMED + 12, '1');
+    const intent = { type: 'market', side: 'buy', amount: 40n * TOK, maxFills: 64n } as const;
+    const hp = planOrder(planEnv(honest.book), intent);
+    const tp = planOrder(planEnv(part.book), intent);
+    expect(tp.fills!.budgeted).toBe(hp.fills!.budgeted);
+    expect(tp.disclosure!.kasLocked).toBe(hp.disclosure!.kasLocked);
+  });
+
+  it('H2: a bid claiming 10^12 tokens for a 1 KAS escrow is believed only up to what its confirmed KAS buys at its price', async () => {
+    const placed = placeGolden(kob, 'create.bid', MAKER);
+    const bid = placed.snapshots[0]!;
+    const w = world();
+    w.chain.applyTx(placed.signed.tx);
+    w.reg(bid);
+    const claim = async (left: string | null) => readMarketPart(w.services([], [rowOf(bid, { amount_left: left })]), w.market);
+    const honest = await claim(null);
+    const lie = await claim('1000000000000');
+    const cap = (BigInt(bid.order.amount) * 1000n) / priceOf(bid);
+    expect(honest.dropped).toEqual([]);
+    expect(lie.dropped).toEqual([]);
+    expect(lie.book.bidOrders![0]!.amount).toBe(cap);
+    expect(lie.book.bidOrders![0]!.amount).toBeLessThan(1_000_000_000_000n);
+    // a claim within the cap is kept as it is
+    expect((await claim('1')).book.bidOrders![0]!.amount).toBe(1n);
+  });
+});
+
+describe('the start of a market order is the node-confirmed best price, with or without a reference indexer (audit 2026-10-29 round 2, R2)', () => {
+  const intent = { type: 'market', side: 'buy', amount: 5n * TOK } as const;
+  const start = (book: unknown, extra: object = {}) => planOrder({ ...planEnv(book), ...extra } as never, intent);
+
+  it('H7b: a reference that is not configured, did not answer or is slow changes nothing about the start: the node-confirmed touch', async () => {
+    const w = world();
+    const p = priceOf(w.real);
+    // a phantom ask at a third of the real price: on no chain
+    const ghost = { ...rowOf(w.real), covenant_id: hex4(0x777), price: (p / 3n).toString() };
+    const part = await readMarketPart(w.services([ghost, rowOf(w.real)]), w.market);
+    expect(part.dropped.map((d) => d.reason)).toEqual(['unproven']);
+    for (const extra of [{}, { referenceTouches: [], referencesUnavailable: ['https://idx2.example'] }]) {
+      const plan = start(part.book, extra);
+      expect(plan.disclosure!.expectedPrice).toBe(p);
+      // never the phantom's price
+      expect(plan.disclosure!.expectedPrice).not.toBe(p / 3n);
+    }
+  });
+
+  it('no node confirmation possible: the book read rejects with the node error (the ticket shows its node banner and plans nothing), it does not fall back to the word of the indexer', async () => {
+    const w = world();
+    const svc = { ...w.services([rowOf(w.real)]), node: { getClock: async () => { throw new Error('node down'); }, getUtxosByAddresses: async () => { throw new Error('node down'); } } } as never;
+    await expect(readMarketPart(svc, w.market)).rejects.toMatchObject({ name: 'NodeError' });
+  });
+});
+
 describe('the node check binds the book to the market (audit 2026-10-29 F2)', () => {
   it('B1: asks listed dearest first: the book is sorted, the touch is the cheapest REAL ask, the auction starts there', async () => {
     const w = world();
@@ -149,7 +240,7 @@ describe('the node check binds the book to the market (audit 2026-10-29 F2)', ()
     expect(part.book.asks[0]!.price).toBe(p);
   });
 
-  it('B4b: the best rows are verified, the rows behind them follow unchecked; the size being planned (depth) verifies further and drops a phantom there', async () => {
+  it('B4b: the best rows are verified, the rows behind them are NOT part of the book; the size being planned (depth) verifies further and drops a phantom there', async () => {
     const w = world();
     const p = priceOf(w.real);
     const many = BOOK_CHECK_MIN_CONFIRMED + 3;
@@ -160,9 +251,9 @@ describe('the node check binds the book to the market (audit 2026-10-29 F2)', ()
     expect(BOOK_CHECK_PER_SIDE).toBeLessThanOrEqual(BOOK_CHECK_MIN_CONFIRMED);
     const listed = [rowOf(w.real), ...rows, rowOf(ghost)];
     const part = await readMarketPart(w.services(listed), w.market);
-    // the first round confirms the best rows; the others (the phantom included) stay behind them in price order, the indexer's word
+    // the first round confirms the best rows; the others (the phantom included) are the indexer's word and stay out of the book the planners get
     expect(part.dropped).toEqual([]);
-    expect(part.book.askOrders!.map((o) => o.covenantId)).toEqual(listed.map((r) => r.covenant_id));
+    expect(part.book.askOrders!.map((o) => o.covenantId)).toEqual(listed.slice(0, BOOK_CHECK_MIN_CONFIRMED).map((r) => r.covenant_id));
     // a plan that needs more than that asks for it: the check goes on until the size is covered, and the phantom does not survive it
     const deep = await readMarketPart(w.services(listed), w.market, { depth: 10n ** 30n });
     expect(deep.dropped.map((d) => d.covenantId)).toEqual([ghost.covenantId]);

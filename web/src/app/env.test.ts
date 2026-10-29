@@ -108,10 +108,10 @@ const services = (f: Fakes = {}) =>
   }) as unknown as Services;
 
 describe('buildPairPlanEnv', () => {
-  it('A is the env token, B the pair quote, the UTXOs of both tokens, the pair book in B per whole A (asks up, bids down)', async () => {
+  it('A is the env token, B the pair quote, the UTXOs of both tokens; the indexer pair levels are NOT the book (the node confirms the book: app/pair-book.test.ts)', async () => {
     const pv = {
       base: A.covenantId, quote: B.covenantId, daa_score: 5,
-      // 1 B base unit per 3 A base units: per whole A (1000) = 333.33 -> ask 334 (up), bid 333 (down); a direct, an entry and a route level
+      // a direct, an entry and a route level: no order behind any of them on the (empty) node
       asks: [{ source: 'direct', price_num: '1', price_den: '3', amount: '500', orders: 1 }, { source: 'entry', price_num: '1', price_den: '2', amount: '100', orders: 1 }],
       bids: [{ source: 'route', price_num: '1', price_den: '3', amount: '700', orders: 2 }],
     };
@@ -122,7 +122,7 @@ describe('buildPairPlanEnv', () => {
     expect((env.tokenUtxos[0] as unknown as { marker: string }).marker).toBe(A.covenantId);
     expect((env.pair.quoteTokenUtxos[0] as unknown as { marker: string }).marker).toBe(B.covenantId);
     expect(env.pair.view).toBe(pv);
-    expect(env.book).toEqual({ asks: [{ price: 334n, amount: 500n, orders: 1 }, { price: 500n, amount: 100n, orders: 1 }], bids: [{ price: 333n, amount: 700n, orders: 2, routeOrders: 2, routeRows: 1 }] });
+    expect(env.book).toEqual({ asks: [], bids: [] });
     expect(env.guardsUnavailable).toBeUndefined();
   });
 
