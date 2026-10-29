@@ -134,6 +134,10 @@ pub struct IntentRecord {
     /// DAA score of the block that accepted the creation, once the intent UTXO was seen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_daa: Option<u64>,
+    /// When the intent UTXO was first found spent while the chain follower had not yet reported who spent it (unix ms): the follower is given
+    /// a grace period to say whether another keeper's execution paid the merchant before the payment is given up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gone_ms: Option<u64>,
     /// The expiry of an intent that ended unexecuted (`intent_expired`): the facilitator expires it from its
     /// deadline on, which returns the payer's KAS and tokens; the entry itself is already `failed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

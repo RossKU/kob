@@ -462,12 +462,38 @@ impl Facilitator {
     /// Verifies a refused payment (a forged one is just rejected) and keeps it as evidence.
     fn refuse(&self, rec: &InvoiceRecord, req: &FacilitatorRequest, kind: &str, err: X402Error) -> Result<SettlementResponse> {
         let rt = self.inv_rt()?;
+        Metrics::inc(&self.metrics.invoice_refused);
+        // Verifying means looking the payer's addresses up on the node (up to eight, from hints the sender chose), and a paid or expired
+        // invoice is public: the evidence is kept only while the invoice has room for it, for a payment this invoice has not kept, and at
+        // most a burst per window per invoice (audit 2026-10-30 X5)
+        let cur = rt.store.get(&rec.id).unwrap_or_else(|| rec.clone());
+        if cur.extra.iter().filter(|e| e.kind != "released").count() >= rt.max_extra_payments {
+            Metrics::inc(&self.metrics.invoice_evidence_dropped);
+            return Err(err);
+        }
+        // what the transaction says by itself, with no node read: a payment this invoice kept, or one that spends the very outputs of a kept
+        // one (a fee variant), leaves no new evidence
+        let parsed = kob_x402::common::parse_tx(
+            &kob_x402::verify::VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy },
+            &req.payment_payload,
+        )
+        .ok();
+        if let Some(p) = &parsed {
+            let txid = hex(&p.tx.id().as_bytes());
+            let mut spends: Vec<String> = p.tx.inputs.iter().map(|i| kob_x402::common::outpoint_of(i).to_string()).collect();
+            spends.sort();
+            if cur.extra.iter().any(|e| e.txid == txid || e.spends == spends) {
+                return Err(err);
+            }
+        }
+        if !self.refused_verify_allowed(&rec.id, self.clock.now_ms()) {
+            return Err(err);
+        }
         let ctx = kob_x402::verify::VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy };
         let rh = req.request_hash.clone().unwrap_or_default();
         // A late payment's authorization may itself have expired: verify with the clock at the invoice's expiry
         // would be a lie; only a currently valid payment is evidence worth keeping, others are rejected as they are.
         let verified = kob_x402::verify::verify_payment(&ctx, &req.payment_requirements, &req.payment_payload, &rh);
-        Metrics::inc(&self.metrics.invoice_refused);
         if let Ok(v) = verified {
             // Kept once per funding (spent outputs) and at most `max_extra_payments` per invoice: anyone can submit refused payments
             // (one funded output gives endless fee variants, each a new txid), and every kept one rewrites the record and

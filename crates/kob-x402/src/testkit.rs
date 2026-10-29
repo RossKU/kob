@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction};
 
-use crate::chain::{ChainError, ChainUtxo, ChainView, Outpoint, OutputStatus, SubmitError, Txid};
+use crate::chain::{ChainError, ChainUtxo, ChainView, Outpoint, OutputStatus, SpentBy, SubmitError, Txid};
 
 /// Fixture secret key `[n; 32]` (n in 1..=255).
 pub fn secret(n: u8) -> [u8; 32] {
@@ -119,6 +119,8 @@ struct State {
     replaces: u64,
     /// Accepted transaction ids.
     accepted: BTreeSet<Txid>,
+    /// The accepted transaction that spent each outpoint: (txid, DAA score of its block, outputs).
+    spenders: BTreeMap<Outpoint, (Txid, u64, Vec<(ScriptPublicKey, u64)>)>,
     daa: u64,
     counter: u64,
     submits: u64,
@@ -208,8 +210,11 @@ impl MockChain {
         s.daa += 1;
         let daa = s.daa;
         for (txid, tx) in txs {
+            let outputs: Vec<(ScriptPublicKey, u64)> = tx.outputs.iter().map(|o| (o.script_public_key.clone(), o.value)).collect();
             for i in &tx.inputs {
-                s.utxos.remove(&Outpoint::new(i.previous_outpoint.transaction_id.as_bytes(), i.previous_outpoint.index));
+                let op = Outpoint::new(i.previous_outpoint.transaction_id.as_bytes(), i.previous_outpoint.index);
+                s.spenders.insert(op, (txid, daa, outputs.clone()));
+                s.utxos.remove(&op);
             }
             for (idx, o) in tx.outputs.iter().enumerate() {
                 s.utxos.insert(
@@ -279,6 +284,13 @@ impl ChainView for MockChain {
     fn utxos_of(&self, spk: &ScriptPublicKey) -> Result<Vec<(Outpoint, ChainUtxo)>, ChainError> {
         check_up(&self.state.lock().unwrap())?;
         Ok(self.unspent_of(spk))
+    }
+
+    fn spent_by(&self, out: &Outpoint) -> SpentBy {
+        match self.state.lock().unwrap().spenders.get(out) {
+            Some((txid, daa, outputs)) => SpentBy::Spent { txid: *txid, block_daa_score: *daa, outputs: outputs.clone() },
+            None => SpentBy::Unspent,
+        }
     }
 
     fn virtual_daa_score(&self) -> Result<u64, ChainError> {

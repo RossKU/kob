@@ -316,6 +316,9 @@ impl Drop for KeyGuard<'_> {
 
 /// Most `/verify` results remembered for [`Facilitator::settle`] (the oldest go first).
 const VERIFIED_MAX: usize = 4_096;
+/// Most verifications of refused payments of one invoice per window, and the window.
+const REFUSED_VERIFY_BURST: u32 = 16;
+const REFUSED_VERIFY_WINDOW_MS: u64 = 10_000;
 
 /// What a `/verify` established from trusted chain facts while the payment's inputs were unspent: the claim it would make.
 /// `/settle` uses it only for the SAME transaction, merchant, request and requirements, once that transaction is found
@@ -417,6 +420,10 @@ pub struct Facilitator {
     pub fees: crate::fee::FeeBoard,
     /// What `/verify` established for each merchant's recent payments ([`VerifiedRecord`]).
     verified: Mutex<VerifiedMemo>,
+    /// When each invoice's current window of verified refused payments began (unix ms) and how many it holds: a payment of a paid, expired
+    /// or full invoice is verified, for the evidence it leaves, at most [`REFUSED_VERIFY_BURST`] times per [`REFUSED_VERIFY_WINDOW_MS`] per
+    /// invoice (audit 2026-10-30 X5).
+    refused_gate: Mutex<HashMap<String, (u64, u32)>>,
 }
 
 fn kind_str(k: PaymentKind) -> &'static str {
@@ -483,6 +490,7 @@ impl Facilitator {
             node_probe: Mutex::new(None),
             node_probing: Mutex::new(()),
             verified: Mutex::new(VerifiedMemo::default()),
+            refused_gate: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1054,6 +1062,27 @@ impl Facilitator {
         self.verified.lock().unwrap_or_else(|p| p.into_inner()).insert((merchant.to_string(), v.txid), rec, now);
     }
 
+    /// Whether a refused payment of invoice `id` may be verified now (and marks the verification): a verification looks up the payer's
+    /// address UTXOs on the node, and anyone may send payments to a public invoice that is paid or expired.
+    pub(super) fn refused_verify_allowed(&self, id: &str, now: u64) -> bool {
+        let mut g = self.refused_gate.lock().unwrap_or_else(|p| p.into_inner());
+        if g.len() >= 4_096 {
+            g.retain(|_, (start, _)| now < start.saturating_add(REFUSED_VERIFY_WINDOW_MS));
+            if g.len() >= 4_096 {
+                return false;
+            }
+        }
+        let slot = g.entry(id.to_string()).or_insert((now, 0));
+        if now >= slot.0.saturating_add(REFUSED_VERIFY_WINDOW_MS) {
+            *slot = (now, 0);
+        }
+        if slot.1 >= REFUSED_VERIFY_BURST {
+            return false;
+        }
+        slot.1 += 1;
+        true
+    }
+
     /// `/settle` of a direct payment whose verification found an input spent (`err`): when it is the very transaction a
     /// `/verify` of this merchant verified for the same request and requirements, and that transaction is accepted (an output
     /// of it is in the UTXO set: the merchant or the payer broadcast it first), the payment is settled from the facts that
@@ -1096,8 +1125,12 @@ impl Facilitator {
             Ok(None) => return Err(err),
             Err(ce) => return Err(unavailable(format!("cannot read the chain: {ce}"))),
         }
-        // the payment identifier is the one this settle names (it never reaches the chain)
-        claim.payment_id = Some(common::payment_identifier(&req.payment_payload)?);
+        // The payment identifier never reaches the chain: it is the one the earlier /verify saw in this payload. A settle that names
+        // another one is not that payment (anyone who has the public transaction can re-wrap it under an identifier and a key of their own:
+        // audit 2026-10-30 X1), so it is refused like any spent-input payment that /verify did not establish.
+        if claim.payment_id.as_deref() != Some(common::payment_identifier(&req.payment_payload)?.as_str()) {
+            return Err(err);
+        }
         claim.now_ms = now;
         let e = match self.ledger.claim(claim)? {
             Claim::New(e) | Claim::Existing(e) => e,

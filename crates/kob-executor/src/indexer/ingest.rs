@@ -122,6 +122,20 @@ impl Watcher {
     }
 }
 
+/// The transaction of the selected chain that spent a watched outpoint ([`Ingest::watch_spend`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Spender {
+    pub txid: Hash32,
+    /// The chain block that accepted it, and its DAA score.
+    pub block: Hash32,
+    pub daa: u64,
+    /// Its outputs: (script public key version, script, KAS value).
+    pub outputs: Vec<(u16, Vec<u8>, u64)>,
+}
+
+/// Most outpoints whose spend is followed at once.
+const MAX_SPEND_WATCHES: usize = 4_096;
+
 /// A watched transaction: where the selected chain accepted it now, and the consumers following it.
 #[derive(Clone, Copy, Debug)]
 struct Watch {
@@ -137,6 +151,9 @@ pub struct Ingest {
     /// Transactions consumers (the matcher) asked to have followed, and where the selected chain
     /// accepted them now. In memory only: updated after each commit, reorgs included.
     watch: HashMap<Hash32, Watch>,
+    /// Outpoints (intent UTXOs of the x402 facilitator) whose spender consumers asked to have followed, and the transaction of the
+    /// selected chain that spent each now. In memory only, like `watch`; bounded by [`MAX_SPEND_WATCHES`].
+    spend_watch: HashMap<(Hash32, u32), Option<Spender>>,
     /// Bumped after every commit (`super::DataGeneration`).
     generation: super::DataGeneration,
 }
@@ -198,7 +215,15 @@ impl Blocks<'_> {
 
 impl Ingest {
     pub fn new(conn: Connection, proc: Processor, log: Option<RecordLog>) -> Self {
-        Ingest { conn, proc, log, cfg: IngestConfig::default(), watch: HashMap::new(), generation: Default::default() }
+        Ingest {
+            conn,
+            proc,
+            log,
+            cfg: IngestConfig::default(),
+            watch: HashMap::new(),
+            spend_watch: HashMap::new(),
+            generation: Default::default(),
+        }
     }
 
     pub fn with_config(mut self, cfg: IngestConfig) -> Self {
@@ -250,6 +275,24 @@ impl Ingest {
         self.watch.entry(txid).or_insert(Watch { acc: None, owners: 0 }).owners |= who.bit();
     }
 
+    /// Follow which transaction of the selected chain spends `out` from now on (a spend accepted before the call is not seen).
+    pub fn watch_spend(&mut self, out: (Hash32, u32)) {
+        if self.spend_watch.len() < MAX_SPEND_WATCHES {
+            self.spend_watch.entry(out).or_insert(None);
+        }
+    }
+
+    /// Stop following the spend of `out`.
+    pub fn unwatch_spend(&mut self, out: &(Hash32, u32)) {
+        self.spend_watch.remove(out);
+    }
+
+    /// The spender of a watched outpoint: `None` when it is not watched, `Some(None)` when watched and not spent (or its accepting block
+    /// was reorged away).
+    pub fn spender_of(&self, out: &(Hash32, u32)) -> Option<Option<Spender>> {
+        self.spend_watch.get(out).cloned()
+    }
+
     /// Stop following `txid` for `who` (other consumers keep their watch).
     pub fn unwatch_tx_for(&mut self, who: Watcher, txid: &Hash32) {
         if let Some(w) = self.watch.get_mut(txid) {
@@ -284,7 +327,7 @@ impl Ingest {
     /// After a commit: transactions of removed chain blocks lose their acceptance, transactions of
     /// the added blocks gain it (a transaction re-accepted by the new chain does both).
     fn track_acceptance(&mut self, removed: &[Hash32], blocks: &Blocks<'_>) {
-        if self.watch.is_empty() {
+        if self.watch.is_empty() && self.spend_watch.is_empty() {
             return;
         }
         for w in self.watch.values_mut() {
@@ -292,11 +335,38 @@ impl Ingest {
                 w.acc = None;
             }
         }
+        for s in self.spend_watch.values_mut() {
+            if s.as_ref().is_some_and(|s| removed.contains(&s.block)) {
+                *s = None;
+            }
+        }
         if let Blocks::Live(added) = blocks {
             for b in *added {
                 for t in &b.txs {
                     if let Some(w) = self.watch.get_mut(&t.verbose_data.transaction_id) {
                         w.acc = Some((b.header.hash, b.header.daa_score));
+                    }
+                    if self.spend_watch.is_empty() {
+                        continue;
+                    }
+                    for i in &t.inputs {
+                        let key = (i.previous_outpoint.transaction_id, i.previous_outpoint.index);
+                        if let Some(slot) = self.spend_watch.get_mut(&key) {
+                            let outputs = t
+                                .outputs
+                                .iter()
+                                .filter_map(|o| {
+                                    let spk = &o.script_public_key.0;
+                                    Some((u16::from_be_bytes([*spk.first()?, *spk.get(1)?]), spk[2..].to_vec(), o.value))
+                                })
+                                .collect();
+                            *slot = Some(Spender {
+                                txid: t.verbose_data.transaction_id,
+                                block: b.header.hash,
+                                daa: b.header.daa_score,
+                                outputs,
+                            });
+                        }
                     }
                 }
             }

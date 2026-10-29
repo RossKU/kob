@@ -96,6 +96,17 @@ pub enum Tracked {
     Accepted { block_daa_score: u64 },
 }
 
+/// What an acceptance tracker saw of the spend of an outpoint it was asked to watch ([`ChainView::watch_spend`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpentBy {
+    /// This view has no tracker, or the outpoint is not watched (a restart forgets watches): nothing is known.
+    Untracked,
+    /// Watched, and no transaction of the current selected chain has spent it yet.
+    Unspent,
+    /// A transaction of the current selected chain spent it (accepted at this DAA score): its outputs (script, KAS value).
+    Spent { txid: Txid, block_daa_score: u64, outputs: Vec<(ScriptPublicKey, u64)> },
+}
+
 /// Trusted chain facts and transaction submission.
 pub trait ChainView: Send + Sync {
     /// Looks up unspent outputs. `wanted` pairs each outpoint with the script it is claimed to be
@@ -126,6 +137,15 @@ pub trait ChainView: Send + Sync {
     /// Where the acceptance tracker places `txid` (see [`Tracked`]); [`Tracked::Untracked`] without one.
     fn tracked(&self, _txid: &Txid) -> Tracked {
         Tracked::Untracked
+    }
+    /// Starts following which transaction of the selected chain spends `out` (an intent UTXO: another keeper may execute it).
+    /// Views without a tracker ignore it.
+    fn watch_spend(&self, _out: &Outpoint) {}
+    /// Stops following the spend of `out`.
+    fn unwatch_spend(&self, _out: &Outpoint) {}
+    /// What the tracker saw of the spend of `out` (see [`SpentBy`]); [`SpentBy::Untracked`] without one.
+    fn spent_by(&self, _out: &Outpoint) -> SpentBy {
+        SpentBy::Untracked
     }
 }
 
@@ -159,6 +179,15 @@ impl<T: ChainView + ?Sized> ChainView for std::sync::Arc<T> {
     }
     fn tracked(&self, txid: &Txid) -> Tracked {
         (**self).tracked(txid)
+    }
+    fn watch_spend(&self, out: &Outpoint) {
+        (**self).watch_spend(out)
+    }
+    fn unwatch_spend(&self, out: &Outpoint) {
+        (**self).unwatch_spend(out)
+    }
+    fn spent_by(&self, out: &Outpoint) -> SpentBy {
+        (**self).spent_by(out)
     }
 }
 

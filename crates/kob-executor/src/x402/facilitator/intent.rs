@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kaspa_consensus_core::tx::ScriptPublicKey;
-use kob_x402::chain::{ChainError, Outpoint, OutputStatus, SubmitError, Tracked, Txid};
+use kob_x402::chain::{ChainError, Outpoint, OutputStatus, SpentBy, SubmitError, Tracked, Txid};
 use kob_x402::error::{Diag, Reason, Result, X402Error};
 use kob_x402::intent::{build_execution, build_expiry, BookView, IntentFacts, KeeperParams};
 use kob_x402::safe_tx::{spk_from_hex, spk_to_hex};
@@ -83,6 +83,9 @@ fn op_of(j: &OutpointJson) -> Option<Outpoint> {
 /// (never before the deadline: the node accepts the expiry once its past median time, which trails the wall clock by
 /// minutes, reached the deadline). A facilitator that was down past the deadline starts its window when it comes back.
 pub const EXPIRY_WINDOW_MS: u64 = 3_600_000;
+
+/// How long the chain follower may take to report who spent a watched intent UTXO (the node UTXO set can be ahead of it).
+const SPENDER_GRACE_MS: u64 = 60_000;
 
 /// Past [`EXPIRY_WINDOW_MS`] the expiry is still retried while the intent stands (it holds the payer's funds and stays
 /// executable by anyone), at most once per this interval.
@@ -322,7 +325,7 @@ impl Facilitator {
             },
             extension: v.response_extension.clone(),
             now_ms: self.clock.now_ms(),
-            intent: Some(IntentRecord { facts, executions: vec![], lost: vec![], seen_daa: None, expiry: None }),
+            intent: Some(IntentRecord { facts, executions: vec![], lost: vec![], seen_daa: None, gone_ms: None, expiry: None }),
             invoice: inv.map(|i| i.id.clone()),
         })?;
         let entry = match claim {
@@ -458,6 +461,9 @@ impl Facilitator {
     }
 
     fn give_up(&self, e: &Entry, reason: String) -> Drive {
+        if let Some(r) = e.intent.as_ref() {
+            self.chain.unwatch_spend(&r.facts.outpoint());
+        }
         Metrics::inc(&self.metrics.intent_failed);
         self.fail(&e.txid, &reason);
         Drive::Dead(reason)
@@ -518,6 +524,7 @@ impl Facilitator {
     }
 
     fn finish(&self, e: &Entry, rec: &IntentRecord, k: usize, accepted_daa: u64) -> Result<Drive> {
+        self.chain.unwatch_spend(&rec.facts.outpoint());
         let x = &rec.executions[k];
         let resp = self.intent_success(e, rec, x, accepted_daa);
         let value =
@@ -669,6 +676,8 @@ impl Facilitator {
         let facts: &IntentFacts = &rec.facts;
         let now = self.clock.now_ms();
         let node = |x: ChainError| unavailable(x.to_string());
+        // follow who spends the intent UTXO: another keeper may execute it, which pays the merchant all the same (idempotent)
+        self.chain.watch_spend(&facts.outpoint());
 
         // a. every execution of ours: final? (a dead one may have won a race), live ones in flight?
         for (k, x) in rec.executions.iter().enumerate() {
@@ -754,9 +763,54 @@ impl Facilitator {
                     return Ok(Drive::Waiting("confirmations"));
                 }
             }
+            // Spent outside this facilitator. Another keeper's execution pays the merchant exactly as ours would (the intent covenant
+            // sees to it, and any party may execute an intent): the payment is settled by the spending transaction when it pays the merchant
+            // the promised output, whoever broadcast it. The payer's cancel or expiry pays the payer instead (audit 2026-10-30 X3).
+            match self.chain.spent_by(&intent_op) {
+                SpentBy::Spent { txid: spender, block_daa_score, outputs } => {
+                    let merchant_spk = spk_from_hex(&facts.merchant_spk)
+                        .map_err(|_| X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "bad merchant script"))?;
+                    if let Some(at) = outputs.iter().position(|(spk, v)| *spk == merchant_spk && *v == facts.merchant_value) {
+                        if !self.deep_enough(block_daa_score, required).map_err(node)? {
+                            return Ok(Drive::Waiting("confirmations"));
+                        }
+                        let k = rec.executions.len();
+                        self.edit_intent(txid, |en| {
+                            if let Some(r) = en.intent.as_mut() {
+                                r.executions.push(ExecRecord {
+                                    txid: hex(&spender),
+                                    merchant_index: at as u32,
+                                    orders: vec![],
+                                    state: ExecState::Dead,
+                                    reason: Some("executed by another keeper".into()),
+                                    at_ms: now,
+                                });
+                            }
+                        })?;
+                        let (e2, rec2) = self.intent_entry(txid)?;
+                        return self.finish(&e2, &rec2, k, block_daa_score);
+                    }
+                }
+                // watched and nobody reported a spender yet: the node's UTXO set can be ahead of the chain follower, so give it a minute
+                // before the payment is given up
+                SpentBy::Unspent => {
+                    let since = rec.gone_ms.unwrap_or(now);
+                    if rec.gone_ms.is_none() {
+                        self.edit_intent(txid, |en| {
+                            if let Some(r) = en.intent.as_mut() {
+                                r.gone_ms = Some(now);
+                            }
+                        })?;
+                    }
+                    if now < since.saturating_add(SPENDER_GRACE_MS) {
+                        return Ok(Drive::Waiting("the intent was spent; waiting for the chain follower"));
+                    }
+                }
+                SpentBy::Untracked => {}
+            }
             return Ok(self.give_up(
                 &e,
-                "intent_spent: the intent was spent outside this facilitator (the payer's cancel or another keeper's execution)"
+                "intent_spent: the intent was spent outside this facilitator (the payer's cancel, or an execution that did not pay the merchant)"
                     .into(),
             ));
         };
