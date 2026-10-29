@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSignerCore, SignerKeyError } from './core';
+import { RETIME_MAX_COUNT } from './retime';
 import { SIGNER_PROTOCOL, parseAppMessage, parseSignerMessage, type SignerToApp } from './protocol';
 import { summarize, summaryLines } from './summary';
 import { loadKaspaSdkNode } from '../data/kaspa-sdk.node';
@@ -215,6 +216,23 @@ describe('signer core: a request re-timed after the user confirmed it', () => {
     core.reject('r4');
     now.t += 121_000;
     expect(send({ ...signReq(buildSend(), 'r5'), retimeOf: 'r2' })).not.toBeNull();
+  });
+});
+
+describe('signer core: a silent re-time is bounded (audit 2026-10-29 S3)', () => {
+  it('one approval covers at most RETIME_MAX_COUNT re-timed transactions; the next one is shown', () => {
+    const now = { t: 1_000 };
+    const sent: SignerToApp[] = [];
+    const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), now: () => now.t });
+    const send = (m: Record<string, unknown>) => core.receive(parseAppMessage(structuredClone({ p: P, ...m }))!);
+    core.importKey(MAKER_SK);
+    expect(send(signReq(buildSend(), 'r0'))).not.toBeNull();
+    expect(core.approve('r0')).toBe(true);
+    for (let i = 1; i <= RETIME_MAX_COUNT; i++) {
+      expect(send({ ...signReq(buildSend(), 'r' + i), retimeOf: 'r' + (i - 1) }), 'silent re-time ' + i).toBeNull();
+    }
+    expect(send({ ...signReq(buildSend(), 'rx'), retimeOf: 'r' + RETIME_MAX_COUNT })).not.toBeNull();
+    expect(core.pending()?.id).toBe('rx');
   });
 });
 

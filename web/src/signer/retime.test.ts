@@ -9,7 +9,7 @@ import { MAKER_PK, kob, level } from '../testing/fixtures';
 import { buildIntent } from '../ui/ticket/form-state';
 import { CASES, CTX, TOKEN, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 import { auctionSubmitBy } from '../wallet/sign';
-import { sameOrBetter } from './retime';
+import { RETIME_MAX_DELAY_DAA, sameOrBetter } from './retime';
 
 const K = kob();
 const decode = (p: OrderPlan): SigningSummary => decodeSigning({ kob: K, built: p.built!, maker: MAKER_PK, registry: null, nodeInputs: nodeFactsOf(p.built!) });
@@ -18,6 +18,14 @@ const at = (daa: bigint, o: Parameters<typeof ticketEnv>[0] = {}) => {
   return { ...env, clock: { ...env.clock, daa: env.clock.daa + daa, unixSeconds: env.clock.unixSeconds + daa / 10n } };
 };
 const market = buildIntent(form('market', 'buy', { amount: '2' }), CTX).intent!;
+
+describe('sameOrBetter: a re-time is bounded in distance (audit 2026-10-29 S3)', () => {
+  it('times later by a slow approval pass, by more than an hour of DAA they do not', () => {
+    const approved = decode(planOrder(at(0n), market));
+    expect(sameOrBetter(approved, decode(planOrder(at(150n), market)))).toBe(true);
+    expect(sameOrBetter(approved, decode(planOrder(at(RETIME_MAX_DELAY_DAA + 1_000n), market)))).toBe(false);
+  });
+});
 
 describe('sameOrBetter', () => {
   it('the same market buy planned 15 s later (a later auction start and life): no second confirmation', () => {

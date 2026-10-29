@@ -8,7 +8,7 @@ import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { toApp, type AppToSigner, type RejectReason, type SignerToApp, type TokenHint } from './protocol';
 import { creationSummary, summarize, type SignerSummary } from './summary';
-import { RETIME_WINDOW_MS, sameOrBetter } from './retime';
+import { RETIME_MAX_COUNT, RETIME_WINDOW_MS, sameOrBetter } from './retime';
 
 export class SignerKeyError extends Error {
   constructor() {
@@ -75,7 +75,9 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
   let pub: Hex | null = null;
   let pending: PendingRequest | null = null;
   // the request the user confirmed last (its decoding and when): the only one a re-timed request may stand in for
-  let approved: { id: string; summary: SignerSummary; at: number } | null = null;
+  // `summary` is what the USER approved (never a re-timed one: each re-time is compared with it, so small differences cannot add up over many re-times); `retimes` how many
+  // transactions were signed without asking on this approval
+  let approved: { id: string; summary: SignerSummary; at: number; retimes: number } | null = null;
   const now = deps.now ?? Date.now;
 
   const drop = (reason: RejectReason) => {
@@ -198,7 +200,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
         return null;
       }
-      const base = m.retimeOf !== undefined && approved && approved.id === m.retimeOf && now() - approved.at <= RETIME_WINDOW_MS ? approved : null;
+      const base = m.retimeOf !== undefined && approved && approved.id === m.retimeOf && now() - approved.at <= RETIME_WINDOW_MS && approved.retimes < RETIME_MAX_COUNT ? approved : null;
       if (base && summary.problems === 0 && sameOrBetter(base.summary.decoded, summary.decoded)) {
         // the transaction the user confirmed, planned again with a later clock: the same terms, so their confirmation covers it
         let sigs: InputSignature[];
@@ -208,7 +210,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
           post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
           return null;
         }
-        approved = { id: m.id, summary, at: base.at };
+        approved = { id: m.id, summary: base.summary, at: base.at, retimes: base.retimes + 1 };
         post(toApp({ type: 'signed', id: m.id, txid: m.built.tx.id, signatures: sigs }));
         return null;
       }
@@ -233,7 +235,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         return false;
       }
       // a creation is never what a re-timed request stands in for
-      approved = req.prep ? null : { id, summary: req.summary, at: now() };
+      approved = req.prep ? null : { id, summary: req.summary, at: now(), retimes: 0 };
       post(toApp({ type: 'signed', id, txid: req.built.tx.id, signatures: sigs, ...(prepSigs ? { prepSignatures: prepSigs } : {}) }));
       return true;
     },

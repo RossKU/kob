@@ -10,6 +10,10 @@ import type { OrderDescription } from '../kob/order-facts';
 export const RETIME_TOLERANCE_SOMPI = 10_000n;
 /** How long after an approval a re-timed transaction of it is still taken without asking again. */
 export const RETIME_WINDOW_MS = 120_000;
+/** How many re-timed transactions one approval covers without asking again (audit 2026-10-29 S3: the count was unbounded). */
+export const RETIME_MAX_COUNT = 8;
+/** How far later (DAA, one hour) a re-timed order may start or expire than the approved one: a slow approval moves times by seconds, never by days. */
+export const RETIME_MAX_DELAY_DAA = 36_000n;
 
 const json = (v: unknown): string => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? `${x}n` : x));
 
@@ -28,6 +32,8 @@ function orderKept(a: DecodedOrder, b: DecodedOrder): boolean {
   const y = b.description;
   if (fixedTerms(x) !== fixedTerms(y)) return false;
   if (y.activeFrom < x.activeFrom || (x.expiryDaa > 0n && y.expiryDaa < x.expiryDaa) || (x.expiryDaa === 0n) !== (y.expiryDaa === 0n)) return false;
+  // and not by more than a slow approval can explain (S3)
+  if (y.activeFrom - x.activeFrom > RETIME_MAX_DELAY_DAA || (x.expiryDaa > 0n && y.expiryDaa - x.expiryDaa > RETIME_MAX_DELAY_DAA)) return false;
   const buy = x.side === 'buy';
   const better = (old: bigint, now: bigint) => (buy ? now <= old : now >= old);
   if (!better(x.price, y.price)) return false;
