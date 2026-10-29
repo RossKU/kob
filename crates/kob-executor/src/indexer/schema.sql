@@ -291,8 +291,16 @@ CREATE TABLE IF NOT EXISTS kcc23_candidates (
 CREATE INDEX IF NOT EXISTS kcc23_candidates_created ON kcc23_candidates (created_block);
 CREATE INDEX IF NOT EXISTS kcc23_candidates_daa ON kcc23_candidates (daa);
 
+-- The transactions of the verified declarations (the genesis and the preparations it binds), in the record-log encoding, once per
+-- transaction id however many covenant ids a genesis creates. Deleted with the last declaration that names them.
+CREATE TABLE IF NOT EXISTS kcc23_txs (
+    txid BLOB PRIMARY KEY,
+    tx   BLOB NOT NULL
+);
+
 -- A verified KCC-23 declaration per covenant id: the launch proof (`kob-kcc23-proof/1` JSON, `GET /v1/tokens/{id}/declaration`)
--- of the genesis that spent a candidate's output. The first one stays; reverted with the genesis block.
+-- of the genesis that spent a candidate's output, assembled from `kcc23_txs` on read (`proof` is empty; a row an earlier build
+-- wrote holds the whole JSON until `kcc23::compact_legacy` moves it). The first one stays; reverted with the genesis block.
 CREATE TABLE IF NOT EXISTS kcc23_declarations (
     covenant_id      BLOB PRIMARY KEY,
     proof            TEXT NOT NULL,
@@ -303,6 +311,7 @@ CREATE TABLE IF NOT EXISTS kcc23_declarations (
 );
 CREATE INDEX IF NOT EXISTS kcc23_declarations_block ON kcc23_declarations (genesis_block);
 CREATE INDEX IF NOT EXISTS kcc23_declarations_preparation ON kcc23_declarations (preparation_txid);
+CREATE INDEX IF NOT EXISTS kcc23_declarations_genesis ON kcc23_declarations (genesis_txid);
 
 -- Row counts `GET /v1/health` reports (`reads::counters`), kept by the triggers below in the transaction of every write
 -- (a batch, a revert, a replay, an operator import), so a health check reads a few rows instead of counting the history.

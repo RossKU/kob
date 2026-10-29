@@ -146,6 +146,18 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if stops > 0 {
         tracing::info!(stops, "took the unarmed stop entries an earlier build listed as resting liquidity out of the books");
     }
+    // KCC-23 proofs an earlier build stored once per covenant id: shared per transaction, in short transactions of 200 rows
+    let mut compacted = 0;
+    loop {
+        let n = super::kcc23::compact_legacy(conn, 200)?;
+        compacted += n;
+        if n == 0 {
+            break;
+        }
+    }
+    if compacted > 0 {
+        tracing::info!(compacted, "KCC-23 declarations: the proofs are stored once per transaction instead of once per covenant id");
+    }
     let unknown = backfill_unknown_pair_extensions(conn)?;
     if unknown > 0 {
         tracing::info!(unknown, "token events: an unknown pair-token commitment an earlier build recorded as zero is now none");

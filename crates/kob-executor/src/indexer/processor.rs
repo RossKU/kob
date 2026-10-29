@@ -432,6 +432,11 @@ impl Processor {
             let p = pre.and_then(|m| m.get(&tx.verbose_data.transaction_id));
             if let Some(rec) = ex.extract_with(tx, pos as u32, p)? {
                 self.apply_tx(conn, &ctx, &rec, p, delta)?;
+                // a candidate KCC-23 preparation that no genesis has bound (a transaction with nothing of KOB in it) is kept in the
+                // database only: the record log is permanent and any transaction can carry a 16 KiB `0x00{..}` payload
+                if rec.kcc23.as_ref().is_some_and(|d| !d.is_logged()) && rec.is_declaration_only() {
+                    continue;
+                }
                 delta.relevant_txs += 1;
                 out.push(rec);
             }

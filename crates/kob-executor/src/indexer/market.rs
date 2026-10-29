@@ -467,9 +467,10 @@ pub fn candles(
         (None, Some(n)) => (n.div_euclid(iv) + 1) * iv,
         (None, None) => 0,
     };
-    let start = from.unwrap_or(end - iv * limit as i64);
-    // every fill of the window counts (no row cap): the newest `limit` candles of it
-    let items = window_candles(conn, token, basis, iv, start, end, limit)?;
+    // saturating: `to=-9223372036854775808` wrapped (release) or panicked (debug) here (audit 2026-10-30 I3)
+    let start = from.unwrap_or_else(|| end.saturating_sub(iv.saturating_mul(limit as i64)));
+    // every fill of the window counts (no row cap): the newest `limit` candles of it; an empty or inverted window has none
+    let items = if end > start { window_candles(conn, token, basis, iv, start, end, limit)? } else { vec![] };
     Ok(CandlesView {
         token: token.to_hex(),
         interval: interval.to_string(),

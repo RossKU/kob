@@ -866,6 +866,9 @@ pub struct OrderView {
     /// list.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strays: Option<Vec<TokenUtxoView>>,
+    /// How many live strays the order has when `strays` holds only the first [`MAX_VIEW_STRAYS`] of them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strays_total: Option<i64>,
     pub last_block: i64,
     pub last_daa: i64,
     pub confirmations: Option<i64>,
@@ -1170,6 +1173,7 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         repeat,
         custody: None,
         strays: None,
+        strays_total: None,
         last_block: r.get::<_, Option<i64>>(34)?.unwrap_or(0),
         confirmations: ctx.confirmations(last_daa),
         settled: ctx.settled(last_daa),
@@ -1309,15 +1313,21 @@ pub struct CustodyView {
     pub ok: bool,
 }
 
-fn live_token_utxos(conn: &Connection, ctx: &ReadCtx, owner: &Hash32, role: &str) -> DbResult<Vec<TokenUtxoView>> {
+fn live_token_utxos(conn: &Connection, ctx: &ReadCtx, owner: &Hash32, role: &str, limit: usize) -> DbResult<Vec<TokenUtxoView>> {
     let sql = format!(
         "SELECT {TOKEN_UTXO_COLUMNS} {TOKEN_UTXO_FROM} WHERE t.owner = ?1 AND t.role = ?2 AND t.spent_block IS NULL \
-         ORDER BY t.created_block, t.txid, t.idx"
+         ORDER BY t.created_block, t.txid, t.idx LIMIT ?3"
     );
     let mut st = conn.prepare(&sql)?;
-    let rows = st.query_map(rusqlite::params![owner.0.to_vec(), role], |r| token_utxo_from_row(r, ctx))?;
+    let rows = st.query_map(rusqlite::params![owner.0.to_vec(), role, limit as i64], |r| token_utxo_from_row(r, ctx))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
+
+/// Most strays an order view carries. Anyone can send token dust to an order id (about 0.08 KAS each), and the view is read on
+/// the light lane: an unbounded list made a 7 MB answer per request for 20,000 strays (audit 2026-10-30 I4). One cancel
+/// transaction cannot take anywhere near this many (the CLI reports what it leaves), and `strays_total` says how many more
+/// there are; `GET /v1/strays?maker=` pages all of a maker's.
+pub const MAX_VIEW_STRAYS: usize = 100;
 
 /// One order by covenant id, with the covenant ids of any exit orders it created, its custody and strays.
 ///
@@ -1344,7 +1354,7 @@ pub fn order(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32) -> DbResult
 fn attach_holdings(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32, v: &mut OrderView) -> DbResult<()> {
     if let Some(p) = v.pair.as_mut() {
         // a pair order: each custody of its current state (one per token), checked against the live custody rows of that token
-        let live = live_token_utxos(conn, ctx, covenant_id, "custody")?;
+        let live = live_token_utxos(conn, ctx, covenant_id, "custody", 2)?;
         let mut all_ok = live.len() == p.custodies.len();
         for c in p.custodies.iter_mut() {
             let mut mine: Vec<TokenUtxoView> = live.iter().filter(|u| u.token == c.token).cloned().collect();
@@ -1367,7 +1377,7 @@ fn attach_holdings(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32, v: &m
             .as_ref()
             .and_then(|s| serde_json::from_value::<AnyState>(s.clone()).ok())
             .and_then(|s| crate::indexer::processor::guarded(|| s.custody_amount()).flatten());
-        let mut live = live_token_utxos(conn, ctx, covenant_id, "custody")?;
+        let mut live = live_token_utxos(conn, ctx, covenant_id, "custody", 2)?;
         let ok = match expected {
             Some(0) => live.is_empty(),
             Some(e) => live.len() == 1 && live[0].amount == e.to_string(),
@@ -1379,7 +1389,15 @@ fn attach_holdings(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32, v: &m
             ok,
         });
     }
-    v.strays = Some(live_token_utxos(conn, ctx, covenant_id, "stray")?);
+    let strays = live_token_utxos(conn, ctx, covenant_id, "stray", MAX_VIEW_STRAYS + 1)?;
+    if strays.len() > MAX_VIEW_STRAYS {
+        v.strays_total = Some(conn.query_row(
+            "SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND role = 'stray' AND spent_block IS NULL",
+            [covenant_id.0.to_vec()],
+            |r| r.get(0),
+        )?);
+    }
+    v.strays = Some(strays.into_iter().take(MAX_VIEW_STRAYS).collect());
     Ok(())
 }
 

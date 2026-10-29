@@ -578,7 +578,7 @@ pub fn pair_candles(
         (None, Some(n)) => (n.div_euclid(iv) + 1) * iv,
         (None, None) => 0,
     };
-    let start = from.unwrap_or(end - iv * limit as i64);
+    let start = from.unwrap_or_else(|| end.saturating_sub(iv.saturating_mul(limit as i64)));
     let mut items = vec![];
     if end > start {
         // each side's newest `limit` candles hold every bucket of the union's newest `limit` (a bucket of A among them has

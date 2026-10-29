@@ -17,9 +17,17 @@
 //! never a wrong one.
 //!
 //! **Reorgs and the record log.** Both kinds of row are stamped with the chain block that accepted the transaction and
-//! deleted when it is reverted. The record of such a transaction carries a declaration section ([`DeclSection`]: its own
-//! fields, and for a genesis the preparations it binds), so a rebuild from the record log re-creates the candidates and the
-//! proofs with the code of the live path. Candidates no genesis spent are pruned once older than the declaration window
+//! deleted when it is reverted. The record of a genesis carries a declaration section ([`DeclSection`]: its own fields and the
+//! preparations it binds), so a rebuild from the record log re-creates the proofs with the code of the live path. A candidate
+//! preparation that no genesis has bound is kept in the database only, never in the permanent record log: any transaction
+//! can carry a `0x00{..}` payload of 16 KiB, and the log is permanent and shipped to followers (audit 2026-10-30 I2).
+//!
+//! **Proofs.** A proof is stored once per transaction, not once per covenant id: the genesis and the preparations it binds are
+//! rows of `kcc23_txs` (content-addressed by transaction id), and each covenant id's declaration row names them. The proof
+//! JSON a client fetches is assembled on read ([`proof_json`]), byte for byte the document the covenant id's verified
+//! [`LaunchProof`] serialises to. A genesis with K covenant outputs stored K proofs, each with the whole preparation and
+//! genesis: about 100x the chain data (audit 2026-10-30 I1). Rows an earlier build wrote (the proof column non-empty) are
+//! read as they are and moved to the shared form in bounded batches ([`compact_legacy`]). Candidates no genesis spent are pruned once older than the declaration window
 //! (`IndexerConfig::declaration_window_hours`, 72 h by default), unless a declaration of the reorg window still names them
 //! (a reverted genesis accepted again finds its preparation).
 
@@ -56,6 +64,12 @@ pub struct DeclSection {
 }
 
 impl DeclSection {
+    /// Whether a record whose only content is this section goes to the permanent record log: a genesis does (it carries the
+    /// preparations it binds, so a replay needs nothing else); a candidate no genesis has bound stays in the database only.
+    pub fn is_logged(&self) -> bool {
+        !self.binds.is_empty()
+    }
+
     /// Record-log encoding: flags, the transaction, then (genesis) the preparations.
     pub fn encode(&self, w: &mut Writer) {
         let flags = if self.preparation { PREPARATION } else { 0 } | if self.binds.is_empty() { 0 } else { GENESIS };
@@ -316,24 +330,44 @@ pub fn apply(conn: &Connection, seq: i64, daa: u64, txid: &Hash32, d: &DeclSecti
         return Ok(declared);
     }
     for b in bindings(&d.tx, txid, &d.binds) {
-        let json = serde_json::to_string(&b.proof).map_err(|e| DbError::Invalid(format!("launch proof: {e}")))?;
+        // the proof is assembled on read from the two transactions, stored once each (the proof column stays empty)
         let n = conn
             .prepare_cached(
                 "INSERT OR IGNORE INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 VALUES (?1, '', ?2, ?3, ?4, ?5)",
             )?
-            .execute(params![&b.covenant_id.0[..], json, &b.verified.preparation_txid[..], &txid.0[..], seq, daa as i64])?;
+            .execute(params![&b.covenant_id.0[..], &b.verified.preparation_txid[..], &txid.0[..], seq, daa as i64])?;
         if n > 0 {
+            let mut put = conn.prepare_cached("INSERT OR IGNORE INTO kcc23_txs (txid, tx) VALUES (?1, ?2)")?;
+            put.execute(params![&txid.0[..], encode_tx(&b.proof.genesis)])?;
+            put.execute(params![&b.verified.preparation_txid[..], encode_tx(&b.proof.preparation)])?;
             declared.push(b.covenant_id);
         }
     }
     Ok(declared)
 }
 
-/// Deletes what chain block `seq` added (its candidates and declarations). Returns the rows deleted.
+/// Deletes what chain block `seq` added (its candidates and declarations, and the transactions no declaration names any more).
+/// Returns the declarations deleted (a candidate no genesis bound is not in the record log, so it does not make a revert
+/// relevant to it).
 pub fn revert(conn: &Connection, seq: i64) -> DbResult<usize> {
-    Ok(conn.prepare_cached("DELETE FROM kcc23_candidates WHERE created_block = ?1")?.execute([seq])?
-        + conn.prepare_cached("DELETE FROM kcc23_declarations WHERE genesis_block = ?1")?.execute([seq])?)
+    conn.prepare_cached("DELETE FROM kcc23_candidates WHERE created_block = ?1")?.execute([seq])?;
+    let named: Vec<Vec<u8>> = {
+        let mut st = conn.prepare_cached(
+            "SELECT genesis_txid FROM kcc23_declarations WHERE genesis_block = ?1 UNION SELECT preparation_txid FROM kcc23_declarations WHERE genesis_block = ?1",
+        )?;
+        let v = st.query_map([seq], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        v
+    };
+    let n = conn.prepare_cached("DELETE FROM kcc23_declarations WHERE genesis_block = ?1")?.execute([seq])?;
+    for t in named {
+        conn.prepare_cached(
+            "DELETE FROM kcc23_txs WHERE txid = ?1 AND NOT EXISTS (SELECT 1 FROM kcc23_declarations WHERE genesis_txid = ?1) \
+             AND NOT EXISTS (SELECT 1 FROM kcc23_declarations WHERE preparation_txid = ?1)",
+        )?
+        .execute([t])?;
+    }
+    Ok(n)
 }
 
 /// Deletes the candidates accepted before DAA `before` that no declaration of the stored chain blocks (the reorg window) names.
@@ -348,10 +382,55 @@ pub fn prune(conn: &Connection, before: u64) -> DbResult<usize> {
 
 /// The launch proof (JSON, `kob-kcc23-proof/1`) the indexer holds for a covenant id.
 pub fn proof_json(conn: &Connection, covenant_id: &Hash32) -> DbResult<Option<String>> {
-    Ok(conn
-        .prepare_cached("SELECT proof FROM kcc23_declarations WHERE covenant_id = ?1")?
-        .query_row([&covenant_id.0[..]], |r| r.get(0))
-        .optional()?)
+    let row: Option<(String, Vec<u8>, Vec<u8>)> = conn
+        .prepare_cached("SELECT proof, preparation_txid, genesis_txid FROM kcc23_declarations WHERE covenant_id = ?1")?
+        .query_row([&covenant_id.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()?;
+    let Some((stored, prep, gen)) = row else { return Ok(None) };
+    if !stored.is_empty() {
+        return Ok(Some(stored)); // a row an earlier build wrote
+    }
+    let tx = |id: &[u8]| -> DbResult<ProofTx> {
+        let b: Vec<u8> = conn
+            .prepare_cached("SELECT tx FROM kcc23_txs WHERE txid = ?1")?
+            .query_row([id], |r| r.get(0))
+            .optional()?
+            .ok_or_else(|| DbError::Invalid("a KCC-23 declaration names a transaction the store lacks".into()))?;
+        decode_tx(&b).map_err(|e| DbError::Invalid(format!("stored KCC-23 transaction: {e}")))
+    };
+    let proof = LaunchProof { format: kcc23::PROOF_FORMAT.into(), covenant_id: covenant_id.0, preparation: tx(&prep)?, genesis: tx(&gen)? };
+    Ok(Some(serde_json::to_string(&proof).map_err(|e| DbError::Invalid(format!("launch proof: {e}")))?))
+}
+
+/// Moves up to `limit` declarations an earlier build stored with their whole proof (once per covenant id) to the shared form: the
+/// preparation and genesis go to `kcc23_txs` once, the proof column is emptied. A row whose proof does not parse, or does not
+/// serialise back to the stored document, is left as it is. Each call is one short transaction, so a large store is converted in
+/// steps (`compact_legacy` until it returns 0) and an interrupted run resumes. The pages the proofs held are reused by the
+/// database; the file shrinks only on a `VACUUM`. Returns the rows converted.
+pub fn compact_legacy(conn: &Connection, limit: usize) -> DbResult<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let rows: Vec<(Vec<u8>, String)> = {
+        let mut st = tx.prepare_cached("SELECT covenant_id, proof FROM kcc23_declarations WHERE proof != '' LIMIT ?1")?;
+        let v = st.query_map([limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        v
+    };
+    let mut done = 0;
+    for (cov, json) in rows {
+        let Ok(p) = serde_json::from_str::<LaunchProof>(&json) else { continue };
+        let (Some(pid), Some(gid)) = (proof_txid(&p.preparation), proof_txid(&p.genesis)) else { continue };
+        // only a proof that assembles back to the very document that was stored is replaced (nothing is lost)
+        if serde_json::to_string(&p).ok().as_deref() != Some(json.as_str()) {
+            continue;
+        }
+        let mut put = tx.prepare_cached("INSERT OR IGNORE INTO kcc23_txs (txid, tx) VALUES (?1, ?2)")?;
+        put.execute(params![&pid.0[..], encode_tx(&p.preparation)])?;
+        put.execute(params![&gid.0[..], encode_tx(&p.genesis)])?;
+        tx.prepare_cached("UPDATE kcc23_declarations SET proof = '' WHERE covenant_id = ?1 AND preparation_txid = ?2 AND genesis_txid = ?3")?
+            .execute(params![cov, &pid.0[..], &gid.0[..]])?;
+        done += 1;
+    }
+    tx.commit()?;
+    Ok(done)
 }
 
 /// Whether the indexer holds a declaration for a covenant id.

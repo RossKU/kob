@@ -387,6 +387,11 @@ impl TxRecord {
         TxRecord { txid, pos, payload: vec![], inputs: vec![], outputs: vec![], tok_outs: vec![], holds: vec![], kcc23: Some(d) }
     }
 
+    /// The record has nothing of KOB in it: only a declaration section.
+    pub fn is_declaration_only(&self) -> bool {
+        self.payload.is_empty() && self.inputs.is_empty() && self.outputs.is_empty() && self.tok_outs.is_empty() && self.holds.is_empty()
+    }
+
     pub fn encoded_len(&self) -> usize {
         let mut w = Writer::new();
         self.encode(&mut w);

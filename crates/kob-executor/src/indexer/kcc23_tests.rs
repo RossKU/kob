@@ -216,8 +216,9 @@ async fn unspent_candidates_are_pruned_after_the_declaration_window() {
     assert!(proof_of(&hs, &late_cov).is_none());
 }
 
-/// The record log carries the declaration sections: a rebuild yields the same rows, and a candidate still unspent at the end
-/// of the log is declared by a genesis the rebuilt database applies afterwards.
+/// The record log carries the declaration sections of a genesis: a rebuild yields the same declarations. A candidate no genesis
+/// has bound is in the database only (audit 2026-10-30 I2), so a rebuild does not have it: a genesis of it afterwards declares
+/// nothing there, and the live database keeps declaring it.
 #[tokio::test]
 async fn candidates_and_declarations_survive_a_replay_from_the_record_log() {
     let dir = tempfile::tempdir().unwrap();
@@ -241,20 +242,29 @@ async fn candidates_and_declarations_survive_a_replay_from_the_record_log() {
 
     let logged = recordlog::read_all(dir.path()).unwrap();
     assert!(logged.skipped.is_empty());
+    let logged_txs: Vec<(u64, LogBatch)> = logged.records.iter().map(|(n, b)| (*n, b.clone())).collect();
     let mut ing = Ingest::new(open_memory("testnet-10").unwrap(), processor(), None).with_config(wide_window());
     ing.init_cursor(&Cursor { hash: logged.records[0].1.start, daa: 0 }).unwrap();
     ing.replay(logged.records).unwrap();
-    assert_eq!(snapshot(ing.conn()), live);
+    let without_candidates = |s: &str| s.lines().filter(|l| !l.starts_with("kcc23_candidate ")).collect::<Vec<_>>().join("\n");
+    assert_eq!(without_candidates(&snapshot(ing.conn())), without_candidates(&live));
     assert!(proof_json(ing.conn(), &cov_a).unwrap().is_some());
+    // no frame of the log is a bare candidate: B was never bound
+    for (_, batch) in &logged_txs {
+        for b in &batch.blocks {
+            for r in &b.txs {
+                assert!(!(r.is_declaration_only() && r.kcc23.as_ref().is_some_and(|d| d.binds.is_empty())), "an unbound candidate was logged");
+            }
+        }
+    }
 
-    // B is still a candidate in the rebuilt database: its genesis is declared there
+    // B is not a candidate in the rebuilt database: its genesis declares nothing there
     let (gen_b, cov_b) = kcc23_genesis(&prep_b, 0, 2);
     let cursor = ing.cursor().unwrap().unwrap();
     let header = ChainBlockHeader { hash: h("after-replay", 1), daa_score: cursor.daa + 1, ..ChainBlockHeader::default() };
     let batch = VspcBatch { removed: vec![], added: vec![AddedBlock { header, txs: vec![kcc23_wire(&gen_b, false)] }], wire_bytes: 0 };
     ing.apply_batch(cursor.hash, &batch).unwrap();
-    let v: LaunchProof = serde_json::from_str(&proof_json(ing.conn(), &cov_b).unwrap().unwrap()).unwrap();
-    assert_eq!(v.verify().unwrap().preparation_txid, kcc23_txid(&prep_b).0);
+    assert!(proof_json(ing.conn(), &cov_b).unwrap().is_none());
 }
 
 /// A record's declaration section round-trips; a frame with one is format 3, any other frame stays format 2 byte for byte.
@@ -290,4 +300,122 @@ fn the_declaration_section_in_the_record_log() {
     // the database form of a candidate
     assert_eq!(decode_tx(&encode_tx(&ptx(&prep))).unwrap(), ptx(&prep));
     assert!(decode_tx(&[encode_tx(&ptx(&prep)), vec![0]].concat()).is_err());
+}
+
+/// A genesis of `k` covenant outputs, each authorised by its own input that spends output `i` of one preparation of `k` outputs.
+fn wide_launch(k: u32, salt: u64) -> (Transaction, Transaction, Vec<Hash32>) {
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
+    use kaspa_consensus_core::tx::{
+        CovenantBinding as Binding, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput,
+    };
+    let mut prep = kcc23_prep(salt, payload(KCC23_EXAMPLE));
+    prep.outputs = (0..k).map(|_| TransactionOutput::new(100_000_000, ScriptPublicKey::from_vec(0, vec![0x20, 0x51, 0xac]))).collect();
+    prep.finalize();
+    let pid = kcc23_txid(&prep);
+    let spk = |i: u32| ScriptPublicKey::from_vec(0, [&[0xaa, 0x20][..], &h("wide-covenant", salt * 1000 + i as u64).0, &[0x87]].concat());
+    let inputs = (0..k)
+        .map(|i| TransactionInput::new(TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes(pid.0), i), vec![], 0, 0))
+        .collect();
+    let outs = (0..k).map(|i| TransactionOutput::new(90_000_000, spk(i))).collect();
+    let mut g = Transaction::new(1, inputs, outs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+    let mut ids = vec![];
+    for i in 0..k {
+        let spent = g.inputs[i as usize].previous_outpoint;
+        let id = kaspa_consensus_core::hashing::covenant_id::covenant_id(spent, [(i, &g.outputs[i as usize])].into_iter());
+        g.outputs[i as usize].covenant = Some(Binding::new(i as u16, id));
+        ids.push(Hash32(id.as_bytes()));
+    }
+    g.finalize();
+    (prep, g, ids)
+}
+
+/// Audit 2026-10-30 I1: a genesis with K covenant outputs stored K proofs, each with the whole preparation and genesis (about
+/// 100x the chain data at K = 40). The two transactions are stored once, however many covenant ids; every proof a client fetches
+/// is still the whole, verifying document.
+#[tokio::test]
+async fn a_wide_genesis_stores_its_transactions_once() {
+    let hs = harness();
+    let k = 12;
+    let (prep, gen, ids) = wide_launch(k, 7);
+    push(&hs, vec![&prep], false).await;
+    push(&hs, vec![&gen], false).await;
+    assert_eq!(count(&hs, "kcc23_declarations"), k as i64);
+    assert_eq!(count(&hs, "kcc23_txs"), 2);
+    let stored: i64 = hs.query(
+        "SELECT (SELECT COALESCE(SUM(LENGTH(proof)), 0) FROM kcc23_declarations) + (SELECT SUM(LENGTH(tx)) FROM kcc23_txs)",
+        [],
+    );
+    let chain = (encode_tx(&proof_tx(&kcc23_wire(&prep, false)).unwrap()).len() + encode_tx(&proof_tx(&kcc23_wire(&gen, false)).unwrap()).len()) as i64;
+    assert!(stored <= chain, "stored {stored} bytes for {chain} bytes of chain data");
+    for (i, id) in ids.iter().enumerate() {
+        let p = proof_of(&hs, id).expect("a declaration");
+        assert_eq!(p.verify().unwrap().covenant_id, id.0, "covenant {i}");
+        assert_eq!(p, LaunchProof::of(&prep, &gen, kaspa_consensus_core::Hash::from_bytes(id.0)));
+    }
+    // a reorg of the genesis takes the declarations and the transactions with it
+    hs.node.reorg(1, vec![vec![]]);
+    hs.sync().await;
+    assert_eq!((count(&hs, "kcc23_declarations"), count(&hs, "kcc23_txs")), (0, 0));
+}
+
+/// Rows an earlier build wrote (the whole proof per covenant id) are read as they are and move to the shared form in bounded
+/// steps, the document a client fetches unchanged byte for byte.
+#[tokio::test]
+async fn legacy_proofs_are_compacted_in_steps_without_changing_what_is_served() {
+    let hs = harness();
+    let (prep, gen, ids) = wide_launch(5, 9);
+    push(&hs, vec![&prep], false).await;
+    push(&hs, vec![&gen], false).await;
+    let g = hs.ingest.lock().unwrap();
+    let conn = g.conn();
+    let served: Vec<String> = ids.iter().map(|id| proof_json(conn, id).unwrap().unwrap()).collect();
+    // an earlier build's rows: the whole proof in the row, no shared transactions
+    for (id, json) in ids.iter().zip(&served) {
+        conn.execute("UPDATE kcc23_declarations SET proof = ?1 WHERE covenant_id = ?2", rusqlite::params![json, &id.0[..]]).unwrap();
+    }
+    conn.execute("DELETE FROM kcc23_txs", []).unwrap();
+    let legacy: Vec<String> = ids.iter().map(|id| proof_json(conn, id).unwrap().unwrap()).collect();
+    assert_eq!(legacy, served, "a legacy row is served as stored");
+    let mut steps = vec![];
+    loop {
+        let n = compact_legacy(conn, 2).unwrap();
+        if n == 0 {
+            break;
+        }
+        steps.push(n);
+        // between steps, every proof is still served, converted or not
+        let now: Vec<String> = ids.iter().map(|id| proof_json(conn, id).unwrap().unwrap()).collect();
+        assert_eq!(now, served);
+    }
+    assert_eq!(steps, vec![2, 2, 1]);
+    let left: i64 = conn.query_row("SELECT COUNT(*) FROM kcc23_declarations WHERE proof != ''", [], |r| r.get(0)).unwrap();
+    let txs: i64 = conn.query_row("SELECT COUNT(*) FROM kcc23_txs", [], |r| r.get(0)).unwrap();
+    assert_eq!((left, txs), (0, 2));
+}
+
+/// Audit 2026-10-30 I2: a plain transaction with a `0x00{..}` payload of 16 KiB is a candidate preparation in the database
+/// (a later genesis can bind it) but never a frame of the permanent record log; a genesis that binds it is.
+#[tokio::test]
+async fn a_junk_declaration_payload_stays_out_of_the_record_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let (log, _) = RecordLog::open(dir.path(), 1 << 20, 0).unwrap();
+    let hs = Harness::new(open_memory("testnet-10").unwrap(), Some(log));
+    let mut body = br#"{"pad":""#.to_vec();
+    body.resize(kcc23::MAX_READ_PAYLOAD - 3, b'a');
+    body.extend_from_slice(br#""}"#);
+    let junk = [&[0u8][..], &body].concat();
+    assert_eq!(junk.len(), kcc23::MAX_READ_PAYLOAD);
+    let tx = kcc23_prep(5, junk);
+    push(&hs, vec![&tx], false).await;
+    assert_eq!(count(&hs, "kcc23_candidates"), 1, "kept as a candidate");
+    let logged = recordlog::read_all(dir.path()).unwrap();
+    let bytes: usize = logged.records.iter().map(|(_, b)| b.encode(0).len()).sum();
+    assert!(bytes < 1_000, "the 16 KiB payload reached the record log ({bytes} bytes)");
+    // a genesis of it is declared, and logged with the preparation it binds
+    let (gen, cov) = kcc23_genesis(&tx, 0, 5);
+    push(&hs, vec![&gen], false).await;
+    assert!(proof_of(&hs, &cov).is_some());
+    let logged = recordlog::read_all(dir.path()).unwrap();
+    let genesis_frames = logged.records.iter().flat_map(|(_, b)| b.blocks.iter()).flat_map(|b| b.txs.iter()).filter(|r| r.kcc23.as_ref().is_some_and(|d| !d.binds.is_empty())).count();
+    assert_eq!(genesis_frames, 1);
 }
