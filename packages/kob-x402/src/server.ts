@@ -329,6 +329,16 @@ export function createPaywall(config: PaywallConfig): Paywall {
       if (prior.state === 'settling') {
         return json(409, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'settlement_pending', retryable: true, message: 'this payment id is being settled' } } });
       }
+      // A repeat is served only inside the retry window of the payment (the offer's maxTimeoutSeconds after it settled): a lost answer is
+      // resent within it, but a settled payment is not a standing licence for free repeats of a metered call; later the caller is asked to pay
+      // again (audit 2026-10-30 X2)
+      if (now() > prior.at + offer.maxTimeoutSeconds * 1000) {
+        return challenge(url, accepts, {
+          reason: 'invalid_payload',
+          diagnostic: 'payment_retry_window_passed',
+          message: 'this payment was settled and its retry window has passed; pay again for a new call',
+        });
+      }
       const settlement = prior.settlement as SettlementResponse;
       return serve(request, paidContext(id, requestHash, settlement, offer, url, method, body, true));
     }
