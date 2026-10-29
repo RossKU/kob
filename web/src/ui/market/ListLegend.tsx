@@ -5,7 +5,7 @@ import { FINGERPRINT_ALGORITHM } from '../../app/fingerprint';
 import { t } from '../../i18n';
 import { TOKEN_FACT_IDS } from './token-model';
 
-export function ListLegend() {
+export function ListLegend(props: { names?: 'ok' | 'loading' | 'unavailable' | 'off' }) {
   const [open, setOpen] = useState(false);
   return (
     <div class="ml-legend small muted" data-testid="list-legend">
@@ -22,7 +22,9 @@ export function ListLegend() {
         >
           <span aria-hidden="true">i</span>
         </button>
-        <span data-testid="legend-attribution">{t('market.legend.attribution')}</span>
+        <span data-testid="legend-attribution" data-names={props.names ?? 'ok'}>
+          {t(props.names === 'unavailable' ? 'market.legend.attributionUnavailable' : props.names === 'loading' ? 'market.legend.attributionLoading' : 'market.legend.attribution')}
+        </span>
       </div>
       {open ? (
         <div id="ml-legend-body" class="ml-legend-body" data-testid="legend-body">

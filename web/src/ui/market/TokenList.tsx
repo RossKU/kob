@@ -274,7 +274,7 @@ export function TokenList(props: { invalidToken?: string }) {
         <div style="max-width:420px;margin-bottom:12px">
           <Field label={t('market.search.label')} type="search" value={query} onValue={setQuery} placeholder={t('market.search.placeholder')} data-testid="token-search" />
         </div>
-        <ListLegend />
+        <ListLegend names={kascov.status} />
         <ErrorBanner error={tokens.error} title={t('market.list.indexerError')} onRetry={tokens.reload} data-testid="token-list-error" />
         <Table dense class="ml-table ml-tokens" data-testid="token-table">
           <thead>

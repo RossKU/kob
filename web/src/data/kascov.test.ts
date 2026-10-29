@@ -178,6 +178,26 @@ describe('createKascovClient', () => {
       const k2 = createKascovClient({ fetch: (async () => json(doc(Array.from({ length: 50 }, (_, i) => entry({ covenant_id: String(i).padStart(64, '0') }))))) as unknown as typeof globalThis.fetch, maxBytes: 1_000 });
       expect(await k2.load('testnet-10')).toEqual({ ok: false, reason: 'too-large' });
     });
+    it('a slow phone link: an answer that takes 20 s is still taken (the default timeout is 30 s)', async () => {
+      vi.useFakeTimers();
+      try {
+        const slowOk = (_u: unknown, init?: RequestInit) => new Promise<Response>((res, rej) => {
+          init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+          setTimeout(() => res(json(doc([entry()]))), 20_000);
+        });
+        const k = createKascovClient({ fetch: slowOk as unknown as typeof globalThis.fetch });
+        const p = k.load('testnet-10');
+        await vi.advanceTimersByTimeAsync(20_001);
+        expect((await p).ok).toBe(true);
+        const never = (_u: unknown, init?: RequestInit) => new Promise<Response>((_r, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
+        const k2 = createKascovClient({ fetch: never as unknown as typeof globalThis.fetch });
+        const p2 = k2.load('testnet-10');
+        await vi.advanceTimersByTimeAsync(30_001);
+        expect(await p2).toEqual({ ok: false, reason: 'timeout' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
     it('slow: the request is cut after the timeout', async () => {
       const slow = (_u: unknown, init?: RequestInit) => new Promise<Response>((_res, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
       expect(await failing(slow as unknown as () => Promise<Response>, 20)).toEqual({ ok: false, reason: 'timeout' });

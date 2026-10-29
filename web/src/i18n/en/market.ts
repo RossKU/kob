@@ -27,6 +27,8 @@ export default {
   'market.legend.sourceVouch': "KOB does not vouch for it, and nothing but the name and ticker comes from kascov.io.",
   'market.legend.toggle': 'What is this? (the pictures, names via kascov, the badges)',
   'market.legend.attribution': 'names via kascov',
+  'market.legend.attributionLoading': 'names via kascov: loading',
+  'market.legend.attributionUnavailable': 'names via kascov unavailable: trying again',
   'market.legend.badges': 'What do the badges mean?',
   'market.list.noOrders': 'no orders',
   'market.list.noOrdersTitle': 'No order of this token is known to the KOB indexer yet. It is listed because kascov.io names it and its program is one this build trades; its page checks the rest.',

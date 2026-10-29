@@ -79,6 +79,12 @@ export interface KascovToken {
   verified: boolean;
 }
 
+/**
+ * How long the list request (about 2.4 MB, 380 KB gzipped) may take, headers and body together. It was 8 s: on a slow phone link the answer came later, the request was
+ * cut, every row stayed 'Unnamed token' and the next try waited out the backoff (e2e measured: an answer held back 9 s never arrived in time, at any retry).
+ */
+export const KASCOV_LIST_TIMEOUT_MS = 30_000;
+
 export type KascovFailure = 'unsupported' | 'network' | 'timeout' | 'http' | 'too-large' | 'shape';
 export type KascovResult = { ok: true; tokens: KascovToken[]; generatedAtMs: number | null } | { ok: false; reason: KascovFailure };
 
@@ -224,7 +230,7 @@ interface Entry {
 export function createKascovClient(o: KascovClientOptions = {}): KascovClient {
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const now = o.now ?? Date.now;
-  const timeoutMs = o.timeoutMs ?? 8_000;
+  const timeoutMs = o.timeoutMs ?? KASCOV_LIST_TIMEOUT_MS;
   const ttlMs = o.ttlMs ?? KASCOV_REFRESH_MS;
   const backoff = o.backoffMs ?? KASCOV_BACKOFF_BASE_MS;
   const maxBackoff = o.maxBackoffMs ?? KASCOV_BACKOFF_MAX_MS;

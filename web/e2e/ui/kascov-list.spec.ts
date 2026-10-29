@@ -224,6 +224,9 @@ for (const mode of ['down', 'shape', 'http'] as const) {
       await page.goto('/#/market');
       await expect(page.getByTestId(`token-row-${exkcc}`)).toHaveAttribute('data-state', 'ready');
       await expect(page.getByTestId('kascov-unavailable')).toHaveText(/unavailable/);
+      // the label beside the legend control says it too, where it is seen
+      await expect(page.getByTestId('legend-attribution')).toHaveAttribute('data-names', 'unavailable');
+      await expect(page.getByTestId('legend-attribution')).toHaveText('names via kascov unavailable: trying again');
       expect(new Set(await shownIds(page))).toEqual(new Set([exkcc, KOB_OTHER]));
       await expect(page.getByTestId(`token-link-${exkcc}`)).toContainText('EXKCC');
       await expect(page.getByTestId(`kascov-ticker-differs-${exkcc}`)).toHaveCount(0);
