@@ -101,19 +101,20 @@ function hintRegistry(hints: TokenHint[]): TokenRegistry {
 
 /**
  * Rows whose detail carries a signed term the value does not: the seconds of an auction (how fast the price falls to the bound), of the auction
- * after a stop entry's trigger, and the sizes a pair trigger needs to touch (the frame shows no detail line of its own: audit 2026-10-30 G2).
+ * after a stop entry's trigger, and the sizes a pair trigger needs to touch. The signer frame (`summarize`) shows no detail line of its own, so it
+ * says them in the value (audit 2026-10-30 G2); the app's confirmation shows the detail beside the value as before.
  */
 const SIGNED_TERM_DETAIL = new Set(['auction', 'entryStop', 'pairTrigger']);
 
-function orderSummary(d: OrderDescription, extra: Parameters<typeof orderRows>[1], hints: TokenHint[], registry: TokenRegistry): SummaryOrder {
+function orderSummary(d: OrderDescription, extra: Parameters<typeof orderRows>[1], hints: TokenHint[], registry: TokenRegistry, terms = false): SummaryOrder {
   const f: Fmt = { tr: t, ref: refOfHint(d.tokenCovId, hints), clock: null, time: (unix) => formatDateTime(unix), registry };
-  const exit = d.entry?.exit ? orderSummary(d.entry.exit, { value: null, locked: null, deadline: null }, hints, registry) : null;
+  const exit = d.entry?.exit ? orderSummary(d.entry.exit, { value: null, locked: null, deadline: null }, hints, registry, terms) : null;
   return {
     title: orderTitle(d, extra.deadline, f),
     token: f.ref.display,
     // a price of a token whose decimals the frame does not know (no hint: an unlisted token's first order) is per `scale` base units:
     // the frame keeps that detail, as amounts there are base units too (TN10 2026-10-15 B-13: "1000 base units" at "0.5 KAS")
-    rows: orderRows(d, extra, f).map((r) => ({ id: r.id, label: r.label, value: r.detail && ((f.ref.decimals === null && /^decimals assumed/.test(r.detail)) || SIGNED_TERM_DETAIL.has(r.id)) ? `${r.value} (${r.detail})` : r.value, ...timeOf(r, d) })),
+    rows: orderRows(d, extra, f).map((r) => ({ id: r.id, label: r.label, value: r.detail && ((f.ref.decimals === null && /^decimals assumed/.test(r.detail)) || (terms && SIGNED_TERM_DETAIL.has(r.id))) ? `${r.value} (${r.detail})` : r.value, ...timeOf(r, d) })),
     exit: exit ? { ...exit, title: t('confirm.exitOf', { title: exit.title }) } : null,
   };
 }
@@ -142,7 +143,7 @@ const FLIP_TYPE: Record<string, string> = {
  * the prices in tokens per KAS (rounded against the user); the chain-side terms (budget, escrow, minimum fill) follow as plainly labelled rows.
  * Null for every other order, a native view, or a token the app gave no ticker for.
  */
-function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWasm | undefined, chain: SummaryOrder): SummaryOrder | null {
+function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWasm | undefined, chain: SummaryOrder, terms = false): SummaryOrder | null {
   const d = o.description;
   const kind = baseKind(d.kind);
   if (!hint?.inverted || d.pair || d.entry || (kind !== 'KobAsk' && kind !== 'KobBid') || d.scale <= 0n || d.price <= 0n) return null;
@@ -184,7 +185,7 @@ function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWa
   }
   // how fast the price falls is a signed term the flipped prices do not say (audit 2026-10-30 G2)
   const seconds = auctionSeconds(d);
-  if (seconds !== null) rows.push({ label: t('confirm.f.auction'), value: t('confirm.f.auctionValue', { seconds }) });
+  if (terms && seconds !== null) rows.push({ label: t('confirm.f.auction'), value: t('confirm.f.auctionValue', { seconds }) });
   return {
     title: t('signer.flip.title', { side: t(side === 'sell' ? 'common.side.sell' : 'common.side.buy'), type: typeName }),
     // the token, and the order as the chain holds it: its terms follow
@@ -317,7 +318,7 @@ const MAX_CLOSED_LINES = 8;
 const MAX_FILLS_SEARCHED = 64n;
 
 /** Compact lines of a decoded request: KAS and every token, net for this key; KAS locked into orders and paid to other keys; the fee. */
-export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWasm): SignerSummary {
+export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWasm, terms = false): SignerSummary {
   const lines: SummaryLine[] = [];
   const k = s.net.kas;
   const kas = (v: bigint) => `${formatKas(v)} KAS`;
@@ -346,15 +347,15 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
   if (fromTokens > 0n) lines.push({ label: t('signer.net.fromTokens'), value: kas(fromTokens), dir: null });
   const registry = hintRegistry(hints);
   const orders = s.orders.filter((o) => o.sweptFrom === undefined).map((o) => {
-    const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry);
-    return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain) ?? chain;
+    const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry, terms);
+    return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain;
   });
   return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...(s.inputs.length > s.signatures ? { unsignedKas: true } : {}), ...problemsOf(s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code))), decoded: s };
 }
 
 /** Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. */
 export function summarize(kob: KobWasm, built: BuiltTx, maker: Hex, hints: TokenHint[]): SignerSummary {
-  return summaryLines(decodeSigning({ kob, built, maker, registry: null }), hints, kob);
+  return summaryLines(decodeSigning({ kob, built, maker, registry: null }), hints, kob, true);
 }
 
 /**
