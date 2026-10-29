@@ -294,8 +294,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
 
   // a registry token this build cannot trade (or an open-list token whose program it does not embed, or does not trade on this network) has
   // no market page here
-  if ((row.source === 'registry' && !row.tradable) || open.reason === 'program-unknown' || open.reason === 'program-unreviewed') {
-    const reason = open.reason === 'program-unknown' || open.reason === 'program-unreviewed' ? t(`market.open.${open.reason}`) : row.reason ? t(`market.reason.${row.reason}`) : null;
+  if ((row.source === 'registry' && !row.tradable) || open.reason === 'program-unknown' || open.reason === 'program-ambiguous' || open.reason === 'program-unreviewed') {
+    const reason = open.reason === 'program-unknown' || open.reason === 'program-ambiguous' || open.reason === 'program-unreviewed' ? t(`market.open.${open.reason}`) : row.reason ? t(`market.reason.${row.reason}`) : null;
     return <NotTradablePage ticker={row.ticker} covenantId={row.covenantId} reason={reason} />;
   }
 

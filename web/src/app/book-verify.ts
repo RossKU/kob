@@ -3,11 +3,17 @@
 // cheap ask the order would start from) or hide the real ones. The P2SH of an order commits its whole state (price, amount, owner ...), so an order
 // UTXO that EXISTS UNSPENT on the node at the script derived from the state the indexer reported proves that state: the touch of the book is real.
 //
-// `verifyBook` checks the first orders of each side (the touch and the few behind it) in ONE batched node read (kob/node-verify.ts
-// `confirmSnapshotsOnNode`, the same reconciliation cancel and amend use) and returns the book without the orders the node does not confirm,
-// with a list of what was left out and why. When none of the first orders of a side is confirmed, the whole side is left out (fail closed): the
-// planner then finds no liquidity rather than a price nobody can verify. Nothing is acknowledged by the user and nothing is shown when every order
-// is confirmed. A node that cannot answer in time rejects with a `NodeError` (`unavailable`): the ticket shows its node banner and plans nothing.
+// `verifyBook` sorts each side by price (best first: the indexer's order is nobody's word) and checks the best orders in batched node reads
+// (kob/node-verify.ts `confirmSnapshotsOnNode`, the same reconciliation cancel and amend use), BOOK_CHECK_PER_SIDE per side and round, until
+// BOOK_CHECK_MIN_CONFIRMED orders of the side are confirmed (and the size the caller asks for is covered), at most BOOK_CHECK_MAX_ROWS rows. It
+// returns the book without the orders the node does not confirm, with a list of what was left out and why. Beside "the order exists" it binds the
+// confirmed state to THE MARKET: the order's token covenant id, token template hash and extension commitment are the market's, and an order that has
+// expired or is not yet active is no liquidity. The touch of a side is therefore the best price the node confirms among the rows the indexer lists
+// (an order the indexer does not list at all cannot be missed by a node: a second, independent indexer covers that, see pages-config.mjs).
+// When none of the rows of a side is confirmed, the whole side is left out (fail closed): the planner then finds no liquidity rather than a price
+// nobody can verify. Rows behind the verified depth are not part of the returned book. Nothing is acknowledged by the user and nothing is shown
+// when every order is confirmed. A node that cannot answer in time rejects with a `NodeError` (`unavailable`): the ticket shows its node banner and
+// plans nothing.
 import type { IndexerApi } from '../data/indexer';
 import type { BookOrderView, BookView, LevelView, OrderView } from '../data/indexer-types';
 import type { NodeApi } from '../data/node';
@@ -19,14 +25,20 @@ import type { DroppedBookOrder } from '../kob/plan-types';
 import type { Hex } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 
-/** Orders checked per side and round: the touch and the few behind it (the planner prices from the first, the rest are its depth). */
+const ZERO32 = '0'.repeat(64);
+
+/** Rows read per side and round (best price first). */
 export const BOOK_CHECK_PER_SIDE = 3;
-/** Rounds for a side whose first orders are all refused: at most this many times BOOK_CHECK_PER_SIDE orders are looked at, then the side is left out. */
-export const BOOK_CHECK_ROUNDS = 3;
+/** A side is verified once this many of its orders are confirmed in the first round (more rounds while the size asked for in `BookVerifyDeps.depth` is not covered). Each round is one more answer of the indexer in a row: raising this costs ticket latency with a slow indexer (e2e ticket-latency). */
+export const BOOK_CHECK_MIN_CONFIRMED = 3;
+/** Most rows looked at per side, refused ones included: a side with none confirmed among them is left out. */
+export const BOOK_CHECK_MAX_ROWS = 18;
+/** Rounds: BOOK_CHECK_MAX_ROWS / BOOK_CHECK_PER_SIDE. */
+export const BOOK_CHECK_ROUNDS = BOOK_CHECK_MAX_ROWS / BOOK_CHECK_PER_SIDE;
 /** The whole check of one round (the order reads and the node read) is given this long; the node not answering by then is `unavailable`. */
 export const BOOK_CHECK_TIMEOUT_MS = 5_000;
-/** An order read from the indexer is reused this long while the book row it belongs to (price, amount, value) is unchanged. */
-const ORDER_VIEW_TTL_MS = 30_000;
+/** An order read from the indexer is reused this long while the book row it belongs to (price, amount, value) is unchanged (a stale one only fails the node check below: the order leaves the book, never enters it). */
+const ORDER_VIEW_TTL_MS = 120_000;
 
 export interface BookVerifyDeps {
   kob: KobWasm;
@@ -36,7 +48,21 @@ export interface BookVerifyDeps {
   toAddress: (spk: string) => string;
   /** a row of another scale than the market's is not part of the book the planners use: not checked (default: all rows count) */
   inScale?: (row: BookOrderView) => boolean;
+  /** the market the book belongs to: a confirmed order must be an order of THIS token (default: not bound, tests only) */
+  market?: BookMarket;
+  /** the node's DAA now: an order whose expiry has passed or whose activeFrom is still ahead is no liquidity (default: not applied) */
+  daa?: bigint;
+  /** token base units a side must offer in confirmed orders (the size of the order being planned) before it counts as verified */
+  depth?: bigint;
   timeoutMs?: number;
+}
+
+/** What an order of the market commits: the token it sells or buys. */
+export interface BookMarket {
+  covenantId: Hex;
+  templateHash: Hex;
+  /** KCC-20 extension commitment; all zeros for a KRON token */
+  extensionCommitment: Hex;
 }
 
 export interface VerifiedBook {
@@ -78,11 +104,36 @@ function readOrder(ix: Pick<IndexerApi, 'order'>, row: BookOrderView, ms: number
 // ------------------------------------------------------------------------------------------------ one batch
 
 /** Why the node (or the order itself) does not stand behind a book row, `null` when it does. Pure given the node-confirmed snapshot. */
-function judge(kob: KobWasm, row: BookOrderView, side: 'sell' | 'buy', claimed: OrderSnapshot, confirmed: OrderSnapshot | SnapshotError): DroppedBookOrder['reason'] | null {
+function judge(
+  deps: Pick<BookVerifyDeps, 'kob' | 'market' | 'daa'>,
+  row: BookOrderView,
+  side: 'sell' | 'buy',
+  claimed: OrderSnapshot,
+  confirmed: OrderSnapshot | SnapshotError,
+): Verdict {
   if (confirmed instanceof SnapshotError) return confirmed.code === 'node-mismatch' ? 'not-on-node' : 'unproven';
   try {
-    const d = describeOrder(confirmed.order.state, kob);
+    const d = describeOrder(confirmed.order.state, deps.kob);
     if (confirmed.covenantId !== row.covenant_id || d.side !== side || d.price !== BigInt(row.price)) return 'changed';
+    const m = deps.market;
+    if (m) {
+      // the state the node confirms commits the token: a real, unspent order of ANOTHER token (or of a look-alike program / commitment of this
+      // covenant id) is not an order of this market, whatever the indexer lists it under
+      const st = confirmed.order.state.state as unknown as Record<string, string | undefined>;
+      if (
+        d.tokenCovId?.toLowerCase() !== m.covenantId.toLowerCase() ||
+        (st.tokenTplHash ?? '').toLowerCase() !== m.templateHash.toLowerCase() ||
+        (st.extensionCommitment ?? ZERO32).toLowerCase() !== m.extensionCommitment.toLowerCase() ||
+        (confirmed.custody && confirmed.custody.covenantId?.toLowerCase() !== m.covenantId.toLowerCase())
+      ) {
+        return 'other-market';
+      }
+    }
+    if (deps.daa !== undefined) {
+      // the confirmed state's own clock, not the row's `expired` flag
+      if (d.expiryDaa > 0n && deps.daa >= d.expiryDaa) return 'expired';
+      if (d.activeFrom > deps.daa) return 'inactive';
+    }
     if (row.scale !== null && row.scale !== undefined && BigInt(row.scale) !== d.scale) return 'changed';
     // the KAS value of the order UTXO is the node's; so are the tokens of an ask's custody (its script commits the state that holds the amount): the
     // book row's claim must be the same
@@ -92,14 +143,17 @@ function judge(kob: KobWasm, row: BookOrderView, side: 'sell' | 'buy', claimed: 
       const left = !row.amount_estimated && row.amount_left != null ? row.amount_left : claimed.custody?.state.amount;
       if (left !== undefined && BigInt(left) !== BigInt(confirmed.custody.state.amount)) return 'changed';
     }
-    return null;
+    return { amount: confirmed.custody ? BigInt(confirmed.custody.state.amount) : null };
   } catch {
     return 'unproven';
   }
 }
 
-/** The verdict of each row (`null`: confirmed), the node read being ONE call for all of them. Rejects only when the node cannot be asked. */
-async function checkRows(deps: BookVerifyDeps, rows: readonly { row: BookOrderView; side: 'sell' | 'buy' }[]): Promise<(DroppedBookOrder['reason'] | null)[]> {
+/** The verdict on one row: why it is not part of the book, or what the node confirmed of it (an ask's custody amount: the node's, not the indexer's). */
+type Verdict = DroppedBookOrder['reason'] | 'expired' | 'inactive' | { amount: bigint | null };
+
+/** The verdict of each row, the node read being ONE call for all of them. Rejects only when the node cannot be asked. */
+async function checkRows(deps: BookVerifyDeps, rows: readonly { row: BookOrderView; side: 'sell' | 'buy' }[]): Promise<Verdict[]> {
   const ms = deps.timeoutMs ?? BOOK_CHECK_TIMEOUT_MS;
   const views = await Promise.all(rows.map((r) => readOrder(deps.indexer, r.row, ms)));
   const claimed = views.map((v, i): OrderSnapshot | null => {
@@ -123,9 +177,9 @@ async function checkRows(deps: BookVerifyDeps, rows: readonly { row: BookOrderVi
   } catch (e) {
     throw describeNodeError(e, 'read');
   }
-  const out: (DroppedBookOrder['reason'] | null)[] = rows.map(() => 'unproven');
+  const out: Verdict[] = rows.map(() => 'unproven');
   toCheck.forEach((c, k) => {
-    out[c.i] = judge(deps.kob, rows[c.i]!.row, rows[c.i]!.side, c.s, confirmed[k]!);
+    out[c.i] = judge(deps, rows[c.i]!.row, rows[c.i]!.side, c.s, confirmed[k]!);
   });
   return out;
 }
@@ -142,47 +196,76 @@ const dropOf = (row: LevelView | BookOrderView, side: 'sell' | 'buy', reason: Dr
   return { covenantId: isOrderRow(row) ? row.covenant_id : ('' as Hex), side, price, reason };
 };
 
+/** A price as a number for sorting; an unreadable one sorts last. */
+const priceKey = (row: BookOrderView): bigint | null => {
+  try {
+    return BigInt(row.price);
+  } catch {
+    return null;
+  }
+};
+
 /**
- * The book (`aggregate=false`: one row per order) with the orders the node does not confirm left out. The first BOOK_CHECK_PER_SIDE orders of each
- * side are checked together in one node read; a side whose checked orders are all refused goes on with the next ones (BOOK_CHECK_ROUNDS times at
- * most) and is left out entirely when none is confirmed. A side listed as aggregated levels cannot be checked and is left out too. Rejects with a
- * `NodeError` when the node cannot be asked in time.
+ * The book (`aggregate=false`: one row per order) with the orders the node does not confirm left out, each side sorted best price first (asks
+ * ascending, bids descending, the indexer's order within a price). The best BOOK_CHECK_PER_SIDE rows of each side are checked together in one node
+ * read; a side goes on with the next ones until BOOK_CHECK_MIN_CONFIRMED orders (and `deps.depth` token units) are confirmed or BOOK_CHECK_MAX_ROWS
+ * rows were looked at, and is left out entirely when none is confirmed. Rows behind the verified depth are cut. A side listed as aggregated levels
+ * cannot be checked and is left out too. Rejects with a `NodeError` when the node cannot be asked in time.
  */
 export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<VerifiedBook> {
   const inScale = deps.inScale ?? (() => true);
   const sides = (['sell', 'buy'] as const).map((side) => {
     const rows = side === 'sell' ? view.asks : view.bids;
-    return { side, rows, levels: rows.length > 0 && !rows.every(isOrderRow), cands: rows.filter(isOrderRow).filter(inScale), next: 0, confirmed: 0 };
+    const cands = rows
+      .filter(isOrderRow)
+      .filter(inScale)
+      .map((row, at) => ({ row, at, key: priceKey(row) }))
+      .sort((a, b) => {
+        if (a.key === b.key) return a.at - b.at;
+        if (a.key === null) return 1;
+        if (b.key === null) return -1;
+        return (side === 'sell' ? a.key < b.key : a.key > b.key) ? -1 : 1;
+      })
+      .map((c) => c.row);
+    return { side, rows, levels: rows.length > 0 && !rows.every(isOrderRow), cands, next: 0, confirmed: 0, depth: 0n, kept: [] as BookOrderView[] };
   });
   const dropped: DroppedBookOrder[] = [];
-  const out = new Set<string>();
   for (const s of sides) {
     if (!s.levels) continue;
     for (const r of s.rows) dropped.push(dropOf(r, s.side, 'unchecked'));
   }
+  const want = deps.depth ?? 0n;
+  const satisfied = (s: (typeof sides)[number]): boolean =>
+    s.levels || s.next >= Math.min(s.cands.length, BOOK_CHECK_MAX_ROWS) || (s.confirmed >= BOOK_CHECK_MIN_CONFIRMED && s.depth >= want);
   for (let round = 0; round < BOOK_CHECK_ROUNDS; round++) {
-    const batch = sides.flatMap((s) => (s.levels || s.confirmed > 0 ? [] : s.cands.slice(s.next, s.next + BOOK_CHECK_PER_SIDE).map((row) => ({ s, row }))));
+    const batch = sides.flatMap((s) => (satisfied(s) ? [] : s.cands.slice(s.next, Math.min(s.next + BOOK_CHECK_PER_SIDE, BOOK_CHECK_MAX_ROWS)).map((row) => ({ s, row }))));
     if (!batch.length) break;
-    for (const s of sides) if (!s.levels && s.confirmed === 0) s.next += BOOK_CHECK_PER_SIDE;
+    for (const s of sides) if (!satisfied(s)) s.next = Math.min(s.next + BOOK_CHECK_PER_SIDE, BOOK_CHECK_MAX_ROWS);
     const verdicts = await checkRows(deps, batch.map((b) => ({ row: b.row, side: b.s.side })));
     batch.forEach((b, i) => {
-      const reason = verdicts[i]!;
-      if (reason === null) b.s.confirmed++;
-      else {
-        out.add(b.row.covenant_id);
-        dropped.push(dropOf(b.row, b.s.side, reason));
+      const v = verdicts[i]!;
+      if (typeof v === 'object') {
+        // an ask's amount is the custody the node holds; the row's own word counts only where the order has no custody to read (a bid)
+        const amount = v.amount ?? (b.row.amount_left != null ? BigInt(b.row.amount_left) : 0n);
+        b.s.confirmed++;
+        b.s.depth += amount;
+        b.s.kept.push(b.row.amount_estimated && v.amount !== null ? { ...b.row, amount_left: v.amount.toString(), amount_estimated: false } : b.row);
+        return;
       }
+      // an order that is over or not yet live is no liquidity but is not a missing one either: it leaves the book without a note
+      if (v !== 'expired' && v !== 'inactive') dropped.push(dropOf(b.row, b.s.side, v));
     });
   }
   // a side with nothing confirmed after the last round: its remaining orders are not trusted either
   for (const s of sides) {
     if (s.levels || s.confirmed > 0) continue;
-    for (const row of s.cands.slice(s.next)) {
-      out.add(row.covenant_id);
-      dropped.push(dropOf(row, s.side, 'unchecked'));
-    }
+    for (const row of s.cands.slice(s.next)) dropped.push(dropOf(row, s.side, 'unchecked'));
   }
-  if (!dropped.length) return { view, dropped };
-  const keep = (rows: (LevelView | BookOrderView)[], levels: boolean) => (levels ? [] : rows.filter((r) => !(isOrderRow(r) && out.has(r.covenant_id))));
-  return { view: { ...view, asks: keep(view.asks, sides[0]!.levels), bids: keep(view.bids, sides[1]!.levels) }, dropped };
+  // the checked book: the confirmed rows in price order; rows behind the verified depth are not part of it
+  const same = (rows: readonly (LevelView | BookOrderView)[], kept: readonly BookOrderView[]) => rows.length === kept.length && rows.every((r, i) => r === kept[i]);
+  const [a, b] = sides as [(typeof sides)[number], (typeof sides)[number]];
+  const asks = a.levels ? [] : a.kept;
+  const bids = b.levels ? [] : b.kept;
+  if (!dropped.length && same(view.asks, asks) && same(view.bids, bids)) return { view, dropped };
+  return { view: { ...view, asks, bids }, dropped };
 }

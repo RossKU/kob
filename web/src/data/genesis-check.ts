@@ -17,6 +17,8 @@
 // Result: verified (KOB's own fact), failed (the data does not match, or the genesis is not clean: a warning), or unavailable (the check could not
 // be done: never a statement about the token).
 import type { GenesisRequest, GenesisVerdict } from '../kob/genesis';
+import { familyOfProgram } from '../kob/token-state';
+import type { TokenProgram } from '../kob/types';
 import { readCapped, kascovNetwork, type KascovNetwork } from './kascov';
 
 /** The public Kaspa REST explorer of each network. */
@@ -36,6 +38,8 @@ export type GenesisCheck =
       supply: bigint;
       /** the allowance of the genesis `PublicMint` outputs (the most anyone could mint beyond `supply` when the genesis was made); null without a public minter */
       mintAllowance: bigint | null;
+      /** the genesis holds a KRON minter (`is_minter = 1`): it mints any amount, so there is no allowance to state (`mintAllowance` is null) */
+      mintUnbounded?: boolean;
       /**
        * Every genesis public minter is still unspent according to the source, so no mint has used it: the allowance is all still there. False/null:
        * a mint may have used some (how much is left is not checked).
@@ -301,10 +305,13 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
 
   function verified(v: Extract<GenesisVerdict, { status: 'verified' }>, source: GenesisSource, live: (boolean | null)[], outputs: { index: number }[]): GenesisCheck {
     const minters = v.minterOutputs;
+    const kron = familyOfProgram(v.program as TokenProgram) === 'kron';
     const liveOf = (index: number) => live[outputs.findIndex((x) => x.index === index)] ?? null;
     return {
       status: 'verified', source, txid: v.txid, program: v.program, supply: v.supply,
-      mintAllowance: minters.length > 0 ? v.mintAllowance : null,
+      // a KRON minter has no allowance: it mints without bound (the verdict's allowance 0 is no 'Mint left: 0')
+      mintAllowance: minters.length > 0 && !kron ? v.mintAllowance : null,
+      ...(minters.length > 0 && kron ? { mintUnbounded: true } : {}),
       mintersUnspent: minters.length === 0 ? null : minters.every((m) => liveOf(m) === true) ? true : minters.some((m) => liveOf(m) === false) ? false : null,
     };
   }
@@ -330,7 +337,9 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
     if (!g) return { status: 'unavailable', reason: 'history' };
     const kascovOutputs = (): GenesisRequest['outputs'] => g.outputs.map((x) => ({ index: x.index, value: x.value, spk: x.spk, ...(x.redeem ? { redeemScript: x.redeem } : {}) }));
     const live = g.outputs.map((x) => x.live);
-    let firstFail: Extract<GenesisCheck, { status: 'failed' }> | null = null;
+    // kascov's file alone can only make a token 'unavailable', never 'failed' (a mismatch that only a supplier's incomplete or stale file shows is
+    // asked again later, audit 2026-10-29 F8): a failure needs the explorer's transaction too, or the self-authenticating contamination
+    let kascovMismatch = false;
     let reason: GenesisUnavailableReason = 'history';
 
     if (g.authorizing && g.outputs.length > 0) {
@@ -343,7 +352,7 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
       if (v.status === 'failed' && (v.code === 'contaminated' || !g.partial)) {
         // contamination is self-authenticating (the covenant id recomputed); a mismatch of a complete file is held back until the explorer has been asked
         if (v.code === 'contaminated') return { status: 'failed', code: 'contaminated', message: v.message };
-        firstFail = { status: 'failed', code: 'mismatch', message: v.message };
+        kascovMismatch = true;
       }
       if (v.status === 'unavailable' && v.code === 'unsupported_program') reason = 'program';
     }
@@ -351,9 +360,9 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
     // 2. the explorer: the genesis transaction (authorising input, group, the keys it pays to), and the spends that revealed scripts kascov did not give
     const api = explorer[network];
     const tx = await getJson(`${api}/transactions/${g.genesisTxid}?inputs=true&outputs=true&resolve_previous_outpoints=no`, EXPLORER_MAX, signal);
-    if (!tx.ok) return firstFail ?? { status: 'unavailable', reason: tx.notFound ? reason : 'unreachable' };
+    if (!tx.ok) return { status: 'unavailable', reason: kascovMismatch ? 'unreachable' : tx.notFound ? reason : 'unreachable' };
     const e = parseExplorerGenesis(tx.doc, g.genesisTxid, covenantId);
-    if (!e || !e.authorizing || e.outputs.length === 0) return firstFail ?? { status: 'unavailable', reason };
+    if (!e || !e.authorizing || e.outputs.length === 0) return { status: 'unavailable', reason };
     const byIndex = new Map(g.outputs.map((x) => [x.index, x]));
     const outputs: GenesisRequest['outputs'] = [];
     const outLive: (boolean | null)[] = [];
@@ -394,7 +403,7 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
       return verified(v, 'explorer', outLive, outputs);
     }
     if (v.status === 'failed') return { status: 'failed', code: v.code, message: v.message };
-    return firstFail ?? (v.code === 'unsupported_program' ? { status: 'unavailable', reason: 'program' } : { status: 'unavailable', reason });
+    return v.code === 'unsupported_program' ? { status: 'unavailable', reason: 'program' } : { status: 'unavailable', reason };
   }
 
   return {

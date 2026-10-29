@@ -174,6 +174,11 @@ export class FakeChain {
   has(txid: string, i: number): boolean {
     return this.utxos.has(this.key(txid, i));
   }
+  /** the node clock (a book check reads the expiry and activation of an order against it) */
+  clockDaa = 1_000_000n;
+  async getClock(): Promise<{ daa: bigint; unixSeconds: bigint; rateMilli: number | null }> {
+    return { daa: this.clockDaa, unixSeconds: 1_790_694_000n, rateMilli: 10_000 };
+  }
   async getUtxosByAddresses(addresses: string[]): Promise<NodeUtxo[]> {
     this.calls.push(addresses);
     const want = new Set(addresses);

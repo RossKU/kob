@@ -119,6 +119,13 @@ describe('verifying recorded tokens', () => {
     expect(await run(checkerFor(recorded(caseOf('brw'))), caseOf('brw'))).toMatchObject({ mintAllowance: null, mintersUnspent: null });
   });
 
+  it('a KRON minter is unbounded: no allowance of 0 is reported for it (audit 2026-10-29 F7)', async () => {
+    const c = caseOf('brw');
+    const asKron = (r: GenesisRequest) => ({ ...verifyGenesis(kob, r), program: 'KronToken2433', minterOutputs: [0], mintAllowance: 0n }) as ReturnType<typeof verifyGenesis>;
+    const r = await run(checkerFor(recorded(c), { verify: asKron }), c);
+    expect(r).toMatchObject({ status: 'verified', mintAllowance: null, mintUnbounded: true });
+  });
+
   it('every recorded group yields exactly its Rust vector\'s request and verdict', async () => {
     for (const v of vectors.cases) {
       const c = caseOf(v.name);
@@ -158,17 +165,18 @@ describe('failing and unavailable', () => {
     lie.utxos[0]!.value += 1;
     // explorer honest: the check recovers from the explorer's own bytes and verifies
     expect(await run(checkerFor(recorded(c, { kascov: lie })), c)).toMatchObject({ status: 'verified', source: 'explorer' });
-    // explorer down: the mismatch of a complete file stands
-    expect(await run(checkerFor(recorded(c, { kascov: lie, explorerStatus: 503 })), c)).toMatchObject({ status: 'failed', code: 'mismatch' });
+    // explorer down: a mismatch only kascov's file shows is a supplier's word, not a verdict (a stale or hostile file must not brand a clean token for the
+    // session, audit 2026-10-29 F8): unavailable, asked again later
+    expect(await run(checkerFor(recorded(c, { kascov: lie, explorerStatus: 503 })), c)).toMatchObject({ status: 'unavailable', reason: 'unreachable' });
     // both lie
     const tx = clone(c.explorerTx) as { outputs: { amount: number; covenant_id: string | null }[] };
     tx.outputs.find((o) => o.covenant_id)!.amount += 1;
     expect(await run(checkerFor(recorded(c, { kascov: lie, explorerTx: tx })), c)).toMatchObject({ status: 'failed', code: 'mismatch' });
-    // a script byte flipped in kascov's file: it no longer hashes to its output (explorer down)
+    // a script byte flipped in kascov's file: it no longer hashes to its output (explorer down: unavailable, as above)
     const flip = clone(c.kascov);
     const s = flip.utxos[0]!.revealed_hex!;
     flip.utxos[0]!.revealed_hex = `${s.slice(0, 500)}${s.slice(500, 502) === '00' ? '01' : '00'}${s.slice(502)}`;
-    expect(await run(checkerFor(recorded(c, { kascov: flip, explorerStatus: 503 })), c)).toMatchObject({ status: 'failed', code: 'mismatch' });
+    expect(await run(checkerFor(recorded(c, { kascov: flip, explorerStatus: 503 })), c)).toMatchObject({ status: 'unavailable' });
   });
 
   it('an explorer transaction that was changed fails (the Rocket token, whose group comes from the explorer)', async () => {

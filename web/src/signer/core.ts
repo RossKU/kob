@@ -218,6 +218,8 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
     pending: () => pending,
     approve(id) {
       if (!pending || pending.id !== id || !key) return false;
+      // a finding the decoder blocks signing on is never signed here, whatever asks: the page's Approve is off for it too (audit 2026-10-29 S2)
+      if (pending.summary.problems > 0) return false;
       const req = pending;
       pending = null;
       let sigs: InputSignature[];

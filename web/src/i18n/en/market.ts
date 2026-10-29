@@ -256,10 +256,16 @@ export default {
   'market.fact.genesis_verified.label': 'Genesis verified',
   'market.fact.genesis_verified.text':
     "KOB checked this token's creation itself, in this app: every output created with the token is an instance of its token program, so nothing was minted outside the program at creation. It says nothing about the mint powers the program itself gives (see the other facts).",
+  'market.fact.genesis_verified_unreviewed.label': 'Genesis verified, program not reviewed',
+  'market.fact.genesis_verified_unreviewed.text':
+    "KOB checked this token's creation itself, in this app: every output created with the token is an instance of the token program named on the page, so nothing was minted outside that program at creation. That program is a prototype or has not been reviewed: this check says nothing about what the program itself allows (it is not traded on mainnet).",
   'market.fact.genesis_failed.label': 'Genesis check failed',
   'market.fact.genesis_failed.text': "KOB's own check of this token's creation failed, whatever a third party says of it. Treat the token with caution.",
   'market.fact.mint_allowance.label': 'Mint left: {amount}',
   'market.fact.mint_allowance.labelUpTo': 'Mint left: up to {amount}',
+  'market.fact.mint_allowance.labelUnbounded': 'Mint: unbounded',
+  'market.fact.mint_allowance.textUnbounded':
+    "The creation gave this token a minter (a KRON holder with the minter flag): it can create any amount of the token, with no limit. 'Genesis verified' does not mean a fixed supply.",
   'market.fact.mint_allowance.text':
     "The creation set up a public mint of {amount}, and no mint has used it yet (kascov.io reports its minter unspent), so the whole allowance is still there: anyone can still create that much more of this token. 'Genesis verified' does not mean a fixed supply.",
   'market.fact.mint_allowance.textUpTo':
@@ -298,6 +304,7 @@ export default {
   'market.open.decimals.assumed': 'Not in the token registry and nothing states its decimals: amounts are whole tokens of {decimals} decimals (assumed); the price step is 1 sompi.',
   'market.open.loading': 'Reading the token from its open orders...',
   'market.open.program-unknown': 'this build does not contain the token program of this token',
+  'market.open.program-ambiguous': 'orders name more than one token program for this token and only a token output on the chain can tell which one is its: it is not traded here until one is shown',
   'market.open.no-scale': 'no price scale yet: this token has no registry entry and no open orders to infer its decimals from',
   'market.open.program-unreviewed': 'this build does not support trading its token program: it is not traded on mainnet',
   'market.open.book-unavailable': "the token's orders could not be read from the indexer, so its price scale is unknown",

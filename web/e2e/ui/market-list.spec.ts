@@ -162,6 +162,25 @@ test('while the figures load, each row shows placeholders and the names are alre
   await expect(row.getByTestId(`token-last-${id}`).locator('.skeleton')).toHaveCount(0);
 });
 
+test('a token icon has a thin ring from the theme token (light: black 12 %, dark: white 22 %) that does not change its size', async ({ appPage: page, mock }) => {
+  const id = (await mock.token()).covenant_id;
+  await page.goto('/#/market');
+  const icon = page.getByTestId(`token-icon-${id}`);
+  await expect(icon).toBeVisible();
+  const sizeOf = async () => {
+    const b = (await icon.boundingBox())!;
+    return [b.width, b.height];
+  };
+  const shadow = () => icon.evaluate((el) => getComputedStyle(el).boxShadow);
+  for (const [theme, ring] of [['light', 'rgba(0, 0, 0, 0.12)'], ['dark', 'rgba(255, 255, 255, 0.22)']] as const) {
+    const before = await sizeOf();
+    await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
+    await expect.poll(shadow).toContain(ring);
+    expect(await shadow()).toMatch(/ 0px 0px 0px 1px$/);
+    expect(await sizeOf()).toEqual(before);
+  }
+});
+
 test.describe('phone', () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
@@ -172,7 +191,7 @@ test.describe('phone', () => {
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveCount(0);
     await page.getByTestId('token-list-nameless').click();
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveText('Unnamed token');
-    await expect(page.getByTestId(`token-hash-${'0f'.repeat(32)}`)).toHaveText('0f0f0f0f…0f0f0f0f');
+    await expect(page.getByTestId(`token-hash-${'0f'.repeat(32)}`)).toHaveText('0f0f0f0f0f0f…0f0f0f0f0f0f');
     const row = page.getByTestId(`token-row-${exkcc}`);
     await expect(row.getByTestId(`token-link-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-last-${exkcc}`)).toBeVisible();

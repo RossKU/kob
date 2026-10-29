@@ -10,7 +10,8 @@
 // Variables (environment):
 //   KOB_PAGES_NETWORK             testnet-10 (default) or mainnet
 //   KOB_PAGES_INDEXER_URL         required: the indexer the app reads (https, a public host)
-//   KOB_PAGES_EXTRA_INDEXER_URLS  optional: further indexers: the app cross-checks against them and reads from one when the primary is down (comma-separated, https, at most 4)
+//   KOB_PAGES_EXTRA_INDEXER_URLS  further indexers: the app cross-checks the start price of a market / close order against them and reads from one when the primary is down
+//                                 (comma-separated, https, at most 4). Optional on testnet-10; REQUIRED on mainnet: another, independent indexer (another host)
 //   KOB_PAGES_NODE_URL            optional: a wRPC node (wss) WITH its path, e.g. wss://<host>/kaspa/testnet-10/wrpc/json (a bare host answers 404 at the
 //                                 handshake; a note says so); empty = a public node the Kaspa SDK's resolver names (reached over Borsh)
 //   KOB_PAGES_EXPLORER_URL        optional: block explorer base (https); empty = kaspa.stream of the network
@@ -97,6 +98,11 @@ export function pagesConfig(env) {
     }
   }
   if (extraIndexerUrls.length > MAX_EXTRA_INDEXERS) errors.push(`KOB_PAGES_EXTRA_INDEXER_URLS: ${extraIndexerUrls.length} indexers, at most ${MAX_EXTRA_INDEXERS}`);
+  // A node cannot prove that an order is ABSENT from the book: the app verifies every listed order on the node, but the best price among the orders an
+  // indexer does not list is known only to another, independent indexer. A mainnet deployment therefore needs one (audit 2026-10-29, F2).
+  if (network === 'mainnet' && extraIndexerUrls.length === 0 && !errors.some((e) => e.startsWith('KOB_PAGES_EXTRA_INDEXER_URLS'))) {
+    errors.push('KOB_PAGES_EXTRA_INDEXER_URLS: a mainnet deployment needs a second, independent indexer (a market or close order starts from the best price, which one indexer alone could hide: the node can confirm the orders listed, not the ones left out)');
+  }
   if (extras.length === 0) notes.push('no KOB_PAGES_EXTRA_INDEXER_URLS: the app shows "single indexer, not cross-checked"');
 
   let nodeUrl = '';

@@ -53,7 +53,7 @@ test.describe('my orders', () => {
     await appPage.goto('/#/market');
     const listText = `EXKCC (${short})`;
     await expect(appPage.getByTestId(`token-link-${tok.covenant_id}`)).toHaveText('EXKCC');
-    await expect(appPage.getByTestId(`token-hash-${tok.covenant_id}`)).toHaveText(`${tok.covenant_id.slice(0, 8)}…${tok.covenant_id.slice(-8)}`);
+    await expect(appPage.getByTestId(`token-hash-${tok.covenant_id}`)).toHaveText(`${tok.covenant_id.slice(0, 12)}…${tok.covenant_id.slice(-12)}`);
     await expect(appPage.getByTestId(`token-row-${tok.covenant_id}`)).not.toContainText(/unverified|(?<!Genesis not )verified|official|registry/i);
     await expect(appPage.getByTestId(`token-row-${tok.covenant_id}`).getByTestId('badge-unverified')).toHaveCount(0);
     await appPage.goto(`/#/market/${tok.covenant_id}`);

@@ -8,9 +8,9 @@ import type { OrderSnapshot } from '../kob/cancel';
 import { planOrder } from '../kob/plan';
 import type { OrderState, TxJson } from '../kob/types';
 import { loadKobNode } from '../kob/wasm.node';
-import { FakeChain, MAKER, orderViewOf, placeGolden, testAddress } from '../testing/chain-fixtures';
+import { FakeChain, MAKER, orderViewOf, placeGolden, testAddress, TOKEN } from '../testing/chain-fixtures';
 import { CLOCK, KAS, TOK, makeEnv } from '../testing/fixtures';
-import { BOOK_CHECK_ROUNDS, verifyBook, type BookVerifyDeps } from './book-verify';
+import { BOOK_CHECK_MAX_ROWS, BOOK_CHECK_ROUNDS, verifyBook, type BookVerifyDeps } from './book-verify';
 import { readMarketPart } from './env';
 import type { Services } from './services';
 
@@ -131,12 +131,13 @@ describe('verifyBook: the orders of the book must exist on the node as the index
 
   it('a side whose checked orders are all refused goes on to the next ones, then is left out entirely (fail closed)', async () => {
     const real0 = world().real;
-    const phantoms = Array.from({ length: 12 }, (_, i) => forge(real0, 0xb0 + i, priceOf(real0) / 2n + BigInt(i)));
+    const n = BOOK_CHECK_MAX_ROWS + 3;
+    const phantoms = Array.from({ length: n }, (_, i) => forge(real0, 0x40 + i, priceOf(real0) / 2n + BigInt(i)));
     const w = world(phantoms);
     const out = await verifyBook(w.deps, book([...phantoms.map((p) => rowOf(p)), rowOf(w.real)]));
     expect(out.view.asks).toEqual([]);
-    expect(out.dropped).toHaveLength(13);
-    expect(out.dropped.filter((d) => d.reason === 'unchecked')).toHaveLength(13 - 3 * BOOK_CHECK_ROUNDS);
+    expect(out.dropped).toHaveLength(n + 1);
+    expect(out.dropped.filter((d) => d.reason === 'unchecked')).toHaveLength(n + 1 - BOOK_CHECK_MAX_ROWS);
     expect(w.nodeCalls()).toBe(BOOK_CHECK_ROUNDS);
   });
 
@@ -189,8 +190,8 @@ describe('readMarketPart hands the planners the book the node confirms', () => {
     ScriptPublicKey: class { constructor(readonly version: number, readonly script: string) {} },
     addressFromScriptPublicKey: (s: { version: number; script: string }) => ({ toString: () => testAddress(joinSpkString(s.version, s.script)) }),
   };
-  const market = { covenantId: orderViewOf(kob, world().real).token!, scale: 1000n } as never;
-  const services = (w: World, node: { getUtxosByAddresses: (a: string[]) => Promise<never[]> } | FakeChain = w.chain, rows: BookOrderView[] = []): Pick<Services, 'indexer' | 'kob' | 'node' | 'sdk' | 'config'> =>
+  const market = { covenantId: TOKEN.covenantId, templateHash: TOKEN.templateHash, extensionCommitment: TOKEN.ext, scale: 1000n } as never;
+  const services = (w: World, node: { getClock: () => Promise<unknown>; getUtxosByAddresses: (a: string[]) => Promise<never[]> } | FakeChain = w.chain, rows: BookOrderView[] = []): Pick<Services, 'indexer' | 'kob' | 'node' | 'sdk' | 'config'> =>
     ({
       kob, sdk, node, config: { network: 'testnet-10' },
       indexer: { book: async () => book(rows), trades: async () => null, order: async (id: string) => w.views.get(id) ?? null },
@@ -208,7 +209,7 @@ describe('readMarketPart hands the planners the book the node confirms', () => {
 
   it('the node down rejects the read (nothing is planned on an unchecked book)', async () => {
     const w = world();
-    const down = { getUtxosByAddresses: async () => { throw new Error('connection refused'); } };
+    const down = { getClock: async () => w.chain.getClock(), getUtxosByAddresses: async () => { throw new Error('connection refused'); } };
     await expect(readMarketPart(services(w, down, [rowOf(w.real)]), market)).rejects.toMatchObject({ name: 'NodeError', code: 'unavailable' });
   });
 });

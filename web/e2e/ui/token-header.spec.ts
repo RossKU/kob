@@ -5,7 +5,7 @@ import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures';
 
 const ID = '3165ab67'.padEnd(64, '9');
-const SHORT = '3165ab67…99999999';
+const SHORT = '3165ab679999…999999999999';
 
 test.use({ autoOpen: false });
 

@@ -3,7 +3,8 @@
 // synthesised from what the chain and the indexer show, with the conservative conventions below. Nothing here vouches for the token: the
 // caller shows the long covenant id and a note on base units next to every order, and the pre-sign screen re-derives the rest.
 //
-//   * program / family: the token's template hash must be one this build embeds (kob.templates()); else `program-unknown`;
+//   * program / family: the token's template hash must be one this build embeds (kob.templates()); else `program-unknown`; a token whose covenant id
+//     several order placements pin to different programs is listed WITHOUT one (`program_ambiguous`): `program-ambiguous`, proven only from a token output;
 //   * extension commitment (KCC-20): the indexer row's, else the one of the token's listed orders; none found: `no-extension` (KRON has none).
 //     The pick and its source are kept on the TokenInfo (`extension`) so the pre-sign screen shows them, cross-checked against the commitments
 //     known without the indexer (`extensionReferences`: a genesis-verified registry entry, the wallet's node-verified holdings; audit A1-2);
@@ -33,7 +34,7 @@ import { extensionOfState, familyOfProgram, isKeyOwned } from './token-state';
 import { TEMPLATE_ID_PROGRAM, toTokenMarket } from './token-market';
 import { CAPABILITIES, longId, type Capability, type ExtensionCheck, type ExtensionReference, type TokenInfo, type TokenRegistry } from './registry';
 
-export type OpenTokenIssue = 'program-unknown' | 'program-unreviewed' | 'no-scale' | 'no-extension' | 'scale-invalid' | 'scale-conflict' | 'book-unavailable';
+export type OpenTokenIssue = 'program-unknown' | 'program-ambiguous' | 'program-unreviewed' | 'no-scale' | 'no-extension' | 'scale-invalid' | 'scale-conflict' | 'book-unavailable';
 export type OpenTokenResult = { ok: true; info: TokenInfo } | { ok: false; reason: OpenTokenIssue };
 
 /** Most decimals a first order can name: the scale is `10^decimals`, at most 10^9 (`MAX_SCALE`, kob-protocol `state.rs`). */
@@ -151,6 +152,8 @@ export function synthesizeOpenToken(
   references: readonly ExtensionReference[] = [],
   opts: OpenTokenOptions = {},
 ): OpenTokenResult {
+  // several programs claimed for the covenant id: the indexer named none (executor `program_ambiguous`); a pick here would let anyone's order choose it
+  if (view.program_ambiguous) return { ok: false, reason: 'program-ambiguous' };
   const tpl = view.template_hash ? kob.templates().find((t) => t.hash === view.template_hash && t.tokenSlots) : undefined;
   if (!tpl || !tpl.tokenSlots) return { ok: false, reason: 'program-unknown' };
   const program = tpl.name as TokenProgram;

@@ -236,6 +236,8 @@ a.tape-row:hover .tape-time { color: var(--text); }
   --tk-size: 24px;
   flex: none; display: inline-flex; align-items: center; justify-content: center; width: var(--tk-size); height: var(--tk-size); border-radius: 50%; overflow: hidden;
   background: hsl(var(--tk-h, 200) 42% 34%); color: #fff; font-size: max(0.75rem, calc(var(--tk-size) * 0.45)); font-weight: 700; line-height: 1; user-select: none;
+  /* a thin ring so the icon (a dark letter tile, or a picture with a transparent or page-coloured edge) keeps its edge in both themes; outside the box: no size change */
+  box-shadow: 0 0 0 1px var(--tk-outline);
 }
 .tk-icon img { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--surface, #fff); }
 

@@ -359,6 +359,10 @@ describe('the genesis line of a row: kascov\'s remark and KOB\'s own check', () 
     expect(applyGenesisCheck(row(['genesis_kascov', 'blacklist']), verified()).facts).toEqual(['genesis_verified', 'blacklist']);
     const mint = applyGenesisCheck(row(['genesis_unverified', 'public-mint']), verified({ mintAllowance: 500n, mintersUnspent: true }));
     expect(mint.facts).toEqual(['genesis_verified', 'public-mint', 'mint_allowance']);
+    // a program that is not reviewed (a prototype, one pending review) passes the check too, but the line says so (audit 2026-10-29 F6)
+    expect(applyGenesisCheck(row(['genesis_unverified']), verified({ program: 'KCC20Ref_8x8' })).facts).toEqual(['genesis_verified_unreviewed']);
+    // a KRON minter mints without bound: the fact is there, with no allowance (F7)
+    expect(applyGenesisCheck(row(['genesis_unverified', 'mint-authority']), verified({ program: 'KronToken2433', mintUnbounded: true })).facts).toEqual(['genesis_verified', 'mint-authority', 'mint_allowance']);
     expect(mint.genesis).toMatchObject({ status: 'verified', mintAllowance: 500n });
   });
 

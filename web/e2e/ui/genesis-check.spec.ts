@@ -102,18 +102,17 @@ for (const vp of VIEWPORTS) {
       expect(await horizontalOverflow(page)).toBe(0);
     });
 
-    test('a failure is a warning, even though kascov says the token is verified: data that does not match the covenant id', async ({ appPage: page }) => {
+    test('data that does not match the covenant id, shown by the kascov file alone, is not a failure but unavailable', async ({ appPage: page }) => {
       const tampered = JSON.parse(JSON.stringify(BRW.kascov)) as typeof BRW.kascov;
       tampered.utxos[0]!.value += 1;
       await open(page, `/market/${BRW.covenantId}`, { tokens: [listed(BRW, 'verified')], files: { [BRW.covenantId]: tampered } });
       const header = page.getByTestId('token-header');
-      await expect(header.getByTestId('token-fact-genesis_failed')).toHaveText('Genesis check failed');
-      await expect(header.getByTestId('token-fact-genesis_failed')).toHaveClass(/badge-warn/);
-      const warning = header.getByTestId('genesis-failed-warning');
-      await expect(warning).toBeVisible();
-      await expect(warning).toContainText('does not match the token\'s covenant id');
-      await expect(header.getByTestId('token-fact-genesis_kascov')).toHaveCount(0);
+      // a supplier's file that does not hash to the covenant id, with no explorer to confirm it, is not a verdict: the token is not branded failed
+      // for the session, kascov's own chip stays and the check is asked again later (audit 2026-10-29 F8)
+      await expect(header.getByTestId('token-fact-genesis_failed')).toHaveCount(0);
+      await expect(header.getByTestId('genesis-failed-warning')).toHaveCount(0);
       await expect(header.getByTestId('token-fact-genesis_verified')).toHaveCount(0);
+      await expect(header.getByTestId('token-fact-genesis_kascov')).toBeVisible();
       expect(await horizontalOverflow(page)).toBe(0);
     });
 

@@ -55,7 +55,7 @@ test.describe('with kascov.io', () => {
     const row = page.getByTestId(`token-row-${SAVED}`);
     await expect(row).toHaveAttribute('data-source', 'kascov');
     await expect(page.getByTestId(`token-link-${SAVED}`)).toHaveText('SAVED');
-    await expect(page.getByTestId(`token-hash-${SAVED}`)).toHaveText('a1a1a1a1…a1a1a1a1');
+    await expect(page.getByTestId(`token-hash-${SAVED}`)).toHaveText('a1a1a1a1a1a1…a1a1a1a1a1a1');
     await expect(page.getByTestId(`token-name-${SAVED}`)).toContainText('Saved Icon Token');
     // the source is a small marker; the sentence is its tooltip and the legend above the list says it once
     await expect(page.getByTestId(`kascov-source-${SAVED}`)).toHaveText('via kascov');

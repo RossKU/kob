@@ -10,6 +10,7 @@ type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<
 export function factLabel(r: FactRow, id: TokenFactId): string {
   const g = r.genesis;
   if (id === 'genesis_unverified' && g?.status === 'unavailable') return `${t('market.fact.genesis_unverified.label')}: ${t(`market.genesis.reason.${g.reason}`)}`;
+  if (id === 'mint_allowance' && g?.status === 'verified' && g.mintUnbounded === true) return t('market.fact.mint_allowance.labelUnbounded');
   if (id === 'mint_allowance' && g?.status === 'verified' && g.mintAllowance !== null) {
     return t(g.mintersUnspent === true ? 'market.fact.mint_allowance.label' : 'market.fact.mint_allowance.labelUpTo', { amount: tokenAmountText(r.covenantId, g.mintAllowance) });
   }
@@ -21,6 +22,7 @@ export function factText(r: FactRow, id: TokenFactId): string {
   const g = r.genesis;
   if (id === 'genesis_failed' && g?.status === 'failed') return t(`market.genesis.failed.${g.code}`);
   if ((id === 'genesis_unverified' || id === 'genesis_kascov') && g?.status === 'unavailable') return `${t(`market.fact.${id}.text`)} ${t(`market.genesis.reasonSentence.${g.reason}`)}`;
+  if (id === 'mint_allowance' && g?.status === 'verified' && g.mintUnbounded === true) return t('market.fact.mint_allowance.textUnbounded');
   if (id === 'mint_allowance' && g?.status === 'verified' && g.mintAllowance !== null) {
     return t(g.mintersUnspent === true ? 'market.fact.mint_allowance.text' : 'market.fact.mint_allowance.textUpTo', { amount: tokenAmountText(r.covenantId, g.mintAllowance) });
   }

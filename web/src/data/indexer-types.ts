@@ -40,6 +40,12 @@ export interface IndexerTokenView {
   covenant_id: Hex;
   template_hash: Hex | null;
   extension_commitment: Hex | null;
+  /**
+   * order placements name SEVERAL token programs for this covenant id and the indexer, which holds no token output, names none (`template_hash` is null,
+   * `candidate_templates` lists the claims): the program is proven from a token output the node confirms, or the token is not traded here. Absent otherwise.
+   */
+  program_ambiguous?: boolean;
+  candidate_templates?: Hex[];
   /** the token's standard scale (`10^decimals`, at most 10^9): an order is listed only when its `scale` equals it; null without decimals */
   scale?: number | null;
   /**

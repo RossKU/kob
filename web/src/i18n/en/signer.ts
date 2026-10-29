@@ -59,7 +59,7 @@ export default {
   'signer.rel.h': 'in {n} h',
   'signer.rel.d': 'in {n} d',
   'signer.rel.daa': 'DAA {daa}',
-  'signer.problems': 'The decoder found {count} problem(s) with this transaction. Reject it unless you know why.',
+  'signer.problems': 'The decoder found {count} problem(s) with this transaction ({codes}). It cannot be approved here: reject it.',
   'signer.flip.title': '{side} KAS · {type}',
   'signer.flip.onChain': '{token} · on chain: {order}',
   'signer.flip.youSell': 'You sell',

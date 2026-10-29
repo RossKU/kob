@@ -91,7 +91,7 @@ export interface DroppedBookOrder {
   /** the side of the ORDER: an ask sells the token */
   side: 'sell' | 'buy';
   price: bigint;
-  reason: 'not-on-node' | 'changed' | 'unproven' | 'unchecked';
+  reason: 'not-on-node' | 'changed' | 'unproven' | 'unchecked' | 'other-market';
 }
 
 /** The best prices of the market as another indexer reports them (`label`: its URL). */

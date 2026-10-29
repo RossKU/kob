@@ -539,6 +539,13 @@ export const shortId = (c: string): string => (c.length >= 8 ? `${c.slice(0, 4)}
  */
 export const longId = (c: string): string => (c.length > 16 ? `${c.slice(0, 8)}…${c.slice(-8)}` : c);
 
+/**
+ * `abcdef012345…123456789abc`: 12 + 12 hex (96 bits) of a covenant id, the fragment beside a token in the market list and in its header (`IdCopy`). Name, ticker and
+ * picture are free to copy and the picture carries about 35 bits, so the id is the only identity there; 96 bits cannot be ground for off chain
+ * (audit 2026-10-29 F4). The full id is the tooltip, what the button copies and what a confirmation checks.
+ */
+export const wideId = (c: string): string => (c.length > 24 ? `${c.slice(0, 12)}…${c.slice(-12)}` : c);
+
 /** The registry plus one more token (an open-list token synthesised from the indexer): what the pre-sign screen decodes against. */
 export function withExtraToken(reg: TokenRegistry, token: TokenInfo): TokenRegistry {
   if (reg.byCovenantId.has(token.covenantId)) return reg;

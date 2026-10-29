@@ -63,7 +63,7 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_PROJECT` | yes | the Pages project name, e.g. `kob-web` |
 | `KOB_PAGES_INDEXER_URL` | yes | the indexer the app reads, `https://...` (e.g. `https://chart.example.org`, `docs/ops/chart-server.md`) |
 | `KOB_PAGES_NETWORK` | no | `testnet-10` (default) or `mainnet` |
-| `KOB_PAGES_EXTRA_INDEXER_URLS` | no | further indexers, comma-separated `https://` URLs, at most 4: they cross-check the primary and take over its reads when it is down (see "Further indexers: cross-check and failover") |
+| `KOB_PAGES_EXTRA_INDEXER_URLS` | no on testnet-10, **yes on mainnet** | further indexers, comma-separated `https://` URLs, at most 4: they cross-check the primary and take over its reads when it is down (see "Further indexers: cross-check and failover"). A mainnet deployment without a second, independent indexer is refused by `pages-config.mjs`: the node confirms the orders an indexer lists, not the ones it leaves out, so the best price of the book is known to a second indexer alone |
 | `KOB_PAGES_NODE_URL` | no | a `wss://` wRPC node **with its path** (see "The node and the SDK resolver"); empty (default) = a public node the Kaspa SDK resolver names, reached over Borsh |
 | `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
 | `KOB_PAGES_TOKEN_NAMES_URL` | no | the source of token names and icons: the base of a kascov.io-shaped data set, `https://...` (default `https://kascov.io/data`); `off` = none (see "Token names and icons" below) |

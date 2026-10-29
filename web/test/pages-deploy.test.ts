@@ -37,10 +37,10 @@ describe('pages-config: config.json from the repository variables', () => {
     expect(empty.notes.join(' ')).toContain('SDK resolver names');
   });
 
-  it('takes mainnet, a wss node and an explorer', () => {
-    const { config, errors } = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_NODE_URL: 'wss://node.example.org/kaspa', KOB_PAGES_EXPLORER_URL: 'https://explorer.example.org/' });
+  it('takes mainnet, a second indexer, a wss node and an explorer', () => {
+    const { config, errors } = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_EXTRA_INDEXER_URLS: 'https://b.example.net', KOB_PAGES_NODE_URL: 'wss://node.example.org/kaspa', KOB_PAGES_EXPLORER_URL: 'https://explorer.example.org/' });
     expect(errors).toEqual([]);
-    expect(config).toEqual({ network: 'mainnet', indexerUrl: IDX, extraIndexerUrls: [], nodeUrl: 'wss://node.example.org/kaspa', explorerUrl: 'https://explorer.example.org' });
+    expect(config).toEqual({ network: 'mainnet', indexerUrl: IDX, extraIndexerUrls: ['https://b.example.net'], nodeUrl: 'wss://node.example.org/kaspa', explorerUrl: 'https://explorer.example.org' });
     const warnings: ConfigWarning[] = [];
     sanitizeLayer('config.json', config, false, warnings);
     expect(warnings).toEqual([]);
@@ -102,6 +102,15 @@ describe('pages-config: config.json from the repository variables', () => {
     const reg = parseRegistry(text, { kob: loadKobNode(), network: 'testnet-10' });
     expect(reg.templateChecks.length).toBe(shipped.templates.length);
     expect(() => parseRegistry(text, { kob: loadKobNode(), network: 'mainnet' })).toThrow();
+  });
+
+  it('refuses a mainnet deployment with a single indexer (the node cannot prove an order absent; audit 2026-10-29 F2), a testnet one may have one', () => {
+    const main = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX });
+    expect(main.config).toBeNull();
+    expect(main.errors.join(' ')).toContain('mainnet deployment needs a second, independent indexer');
+    // the primary listed again is no second indexer
+    expect(pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_EXTRA_INDEXER_URLS: IDX }).config).toBeNull();
+    expect(pagesConfig({ KOB_PAGES_NETWORK: 'testnet-10', KOB_PAGES_INDEXER_URL: IDX }).errors).toEqual([]);
   });
 
   it('writes config.json, and the program list only on testnet-10 (mainnet keeps the pinned registry of build:release)', () => {

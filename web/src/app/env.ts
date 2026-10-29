@@ -14,6 +14,7 @@ import type { Hex } from '../kob/types';
 import type { WalletInfo } from '../wallet/types';
 import { pendingSpends } from './pending-spends';
 import { spkStringToAddress } from '../data/kaspa-sdk';
+import { describeNodeError } from '../data/node-error';
 import { verifyBook } from './book-verify';
 import type { Services } from './services';
 
@@ -124,6 +125,8 @@ export interface BuildEnvOptions {
   carrier?: bigint;
   /** skip the indexer (book empty, no own orders): node-only mode */
   offline?: boolean;
+  /** token base units the book must offer in node-confirmed orders per side (the size being planned): the check reads deeper for it (app/book-verify.ts) */
+  depth?: bigint;
 }
 
 // ------------------------------------------------------------------------------------------------ the parts of a KAS-market environment
@@ -159,16 +162,27 @@ export interface HoldingsPart {
  * state derives; an order the node does not confirm is left out, `dropped`), and the newest trade. Rejects only with a `NodeError` when the node cannot
  * be asked for that check (the ticket then shows its node banner and plans nothing); an unreadable book is reported (`bookUnavailable`).
  */
-export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node' | 'sdk' | 'config'>, market: TokenMarket, o: Pick<BuildEnvOptions, 'offline'> = {}): Promise<MarketPart> {
+export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node' | 'sdk' | 'config'>, market: TokenMarket, o: Pick<BuildEnvOptions, 'offline' | 'depth'> = {}): Promise<MarketPart> {
   // the indexer in use now, for the book and the order reads behind it alike (with failover `s.indexer` follows the active one from call to call)
   const ix = s.indexer;
   if (!ix || o.offline) return { book: { asks: [], bids: [] }, dropped: [], bookUnavailable: false, lastFillPrice: null };
+  // the node's clock, asked beside the book: the expiry and activation of a confirmed order are read against it (an unreadable clock is the node being unavailable)
+  const daaP = readClock(s).then((c) => c.daa, (e) => { throw describeNodeError(e, 'read'); });
+  daaP.catch(() => undefined);
   const [bv0, trades] = await Promise.all([
     ix.book(market.covenantId, { depth: 100, aggregate: false }).catch(() => null),
     ix.trades(market.covenantId, { limit: 1 }).catch(() => null),
   ]);
+  const daa = bv0 ? await daaP : undefined;
   const checked = bv0
-    ? await verifyBook({ kob: s.kob, node: s.node, indexer: ix, toAddress: (spk) => spkStringToAddress(s.sdk, spk, s.config.network), inScale: (r) => sameScale(market, r) }, bv0)
+    ? await verifyBook(
+        {
+          kob: s.kob, node: s.node, indexer: ix, toAddress: (spk) => spkStringToAddress(s.sdk, spk, s.config.network), inScale: (r) => sameScale(market, r),
+          market: { covenantId: market.covenantId, templateHash: market.templateHash, extensionCommitment: market.extensionCommitment },
+          ...(daa !== undefined ? { daa } : {}), ...(o.depth !== undefined ? { depth: o.depth } : {}),
+        },
+        bv0,
+      )
     : null;
   const bv = checked?.view ?? null;
   const last = trades?.items?.[0];
@@ -251,8 +265,9 @@ export async function buildPlanEnv(services: Services, wallet: Pick<WalletInfo, 
   if (!token.tradable || !token.program) throw new Error(`token ${token.ticker} is not tradable in this build (${token.untradableReason ?? 'unsupported'})`);
   assertDeclaredDecimals(s, token);
   const market = tokenMarketOf(s, token);
-  // the market read never rejects; a holdings failure is awaited below, so a node failure first never leaves it unhandled
+  // the market read rejects only when the node cannot be asked (its clock, its UTXOs): a failure of the coins first must not leave that unhandled
   const marketPart = readMarketPart(s, market, o);
+  marketPart.catch(() => undefined);
   const holdings = readHoldingsPart(s, wallet, token, market, o);
   holdings.catch(() => undefined);
   const coins = await readCoinsPart(s, wallet);

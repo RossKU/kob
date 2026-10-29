@@ -312,13 +312,14 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   // an update worse for the user than what was shown says so (drawn anew when its table changed shape)
   const note = el('p', { class: 'updated', 'data-testid': 'signer-updated' }, t('signer.updated'));
   note.hidden = req.change !== 'shown';
-  const problems = s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t('signer.problems', { count: s.problems }))] : [];
+  const problems = s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t('signer.problems', { count: s.problems, codes: s.problemCodes.join(', ') }))] : [];
   if (!visibilityCheckSupported()) problems.push(el('p', { class: 'error', 'data-testid': 'signer-unsupported' }, t('signer.unsupported')));
   let delayOver = false;
   let visible = false;
   let heldUntil = 0;
   const update = () => {
-    approve.disabled = !(delayOver && visible && performance.now() >= heldUntil);
+    // a finding the decoder blocks signing on keeps Approve off (the app's confirmation screen refuses the same transaction): reject it
+    approve.disabled = !(delayOver && visible && performance.now() >= heldUntil && s.problems === 0);
   };
   setTimeout(() => {
     delayOver = true;

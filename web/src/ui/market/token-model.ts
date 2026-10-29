@@ -73,10 +73,10 @@ export const INDEXER_FACT_IDS = ['genesis_unverified', 'live_mint_authority', 'm
  * "Genesis not verified"), `genesis_verified` and `genesis_failed` (the result of KOB's own genesis check, run when a token page opens:
  * data/genesis-check.ts), `mint_allowance` (the public minter a verified genesis holds). An indexer that sends one of these names as a warning is ignored.
  */
-export const DERIVED_FACT_IDS = ['genesis_failed', 'genesis_kascov', 'genesis_verified', 'mint_allowance'] as const;
+export const DERIVED_FACT_IDS = ['genesis_failed', 'genesis_kascov', 'genesis_verified', 'genesis_verified_unreviewed', 'mint_allowance'] as const;
 /** The facts the legend above the market list explains, in the order of a token's facts (the failure first). */
 export const TOKEN_FACT_IDS = [
-  'genesis_failed', 'genesis_unverified', 'genesis_kascov', 'genesis_verified', 'live_mint_authority', 'mint-authority', 'public-mint', 'blacklist',
+  'genesis_failed', 'genesis_unverified', 'genesis_kascov', 'genesis_verified', 'genesis_verified_unreviewed', 'live_mint_authority', 'mint-authority', 'public-mint', 'blacklist',
 ] as const;
 export type TokenFactId = (typeof INDEXER_FACT_IDS)[number] | (typeof DERIVED_FACT_IDS)[number];
 const FACT_ORDER: readonly TokenFactId[] = [...TOKEN_FACT_IDS, 'mint_allowance'];
@@ -86,6 +86,9 @@ export const tokenFactIds = (warnings: readonly string[], powers: readonly strin
   const have = new Set([...warnings, ...powers]);
   return FACT_ORDER.filter((id) => (INDEXER_FACT_IDS as readonly string[]).includes(id) && have.has(id));
 };
+
+/** Whether the profile table marks the program (a name of `programs.generated.ts`) `reviewed`. */
+const programReviewed = (program: string): boolean => TOKEN_PROGRAMS.some((p) => p.name === program && p.review === 'reviewed');
 
 const GENESIS_OPEN: readonly TokenFactId[] = ['genesis_unverified', 'genesis_kascov'];
 /** The facts of a row with its genesis line replaced by `id` (null: removed) and `extra` added, in fact order. */
@@ -354,7 +357,8 @@ export function applyGenesisCheck(row: TokenRow, check: GenesisCheck | null | un
   if (!check || !row.facts.some((f) => GENESIS_OPEN.includes(f))) return row;
   switch (check.status) {
     case 'verified':
-      return { ...row, genesis: check, facts: withGenesisFact(row.facts, 'genesis_verified', check.mintAllowance !== null ? ['mint_allowance'] : []) };
+      // the check accepts every program this build embeds, prototypes and programs pending review included: only a reviewed program's pass is plain
+      return { ...row, genesis: check, facts: withGenesisFact(row.facts, programReviewed(check.program) ? 'genesis_verified' : 'genesis_verified_unreviewed', check.mintAllowance !== null || check.mintUnbounded === true ? ['mint_allowance'] : []) };
     case 'failed':
       return { ...row, genesis: check, facts: withGenesisFact(row.facts, 'genesis_failed') };
     case 'unavailable':

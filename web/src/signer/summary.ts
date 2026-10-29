@@ -37,6 +37,9 @@ export interface SummaryOrder {
   exit: SummaryOrder | null;
 }
 
+/** The count and the distinct codes of the findings the frame shows as one problems note. */
+const problemsOf = (found: readonly { code: string }[]): { problems: number; problemCodes: string[] } => ({ problems: found.length, problemCodes: [...new Set(found.map((b) => b.code))] });
+
 export interface SignerSummary {
   title: string;
   lines: SummaryLine[];
@@ -45,6 +48,8 @@ export interface SignerSummary {
   fee: string;
   /** decoder findings that block signing on the app's confirmation screen (shown as one line here, never hidden) */
   problems: number;
+  /** the codes of those findings (the frame names them, and Approve stays disabled while there are any) */
+  problemCodes: string[];
   /** the decoding it was made from (a re-timed request is compared with the approved one on it: retime.ts) */
   decoded: SigningSummary;
 }
@@ -326,7 +331,7 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry);
     return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain) ?? chain;
   });
-  return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), problems: s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)).length, decoded: s };
+  return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...problemsOf(s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code))), decoded: s };
 }
 
 /** Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. */
@@ -393,6 +398,6 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
     ...g.lines.slice(1),
   ];
   // the token outputs checked against the claim are not "unknown scripts": every other finding still counts
-  const problems = g.decoded.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code) && !(b.code === 'output-unknown' && b.output !== undefined && verified.has(b.output))).length;
-  return { ...g, title: t('signer.kind.createToken'), lines, fee: kas(k.fee + prepFee), problems };
+  const problems = g.decoded.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code) && !(b.code === 'output-unknown' && b.output !== undefined && verified.has(b.output)));
+  return { ...g, title: t('signer.kind.createToken'), lines, fee: kas(k.fee + prepFee), ...problemsOf(problems) };
 }

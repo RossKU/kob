@@ -40,7 +40,7 @@ test.describe('shell and token list', () => {
     // the covenant id is shortened (8 + 8 hex), monospace, with the whole id in its tooltip and behind the copy button; there is no id column, no
     // market / pair column and no size-convention column; the figure headers sort (the list opens by 24 h volume) and the badges sit by the id
     const hash = row.getByTestId(`token-hash-${id}`);
-    await expect(hash).toHaveText(`${id.slice(0, 8)}…${id.slice(-8)}`);
+    await expect(hash).toHaveText(`${id.slice(0, 12)}…${id.slice(-12)}`);
     await expect(hash).toHaveAttribute('title', id);
     await expect(hash).toHaveAttribute('data-value', id);
     await expect(hash).toHaveCSS('font-family', /mono|Consolas|Courier/i);
