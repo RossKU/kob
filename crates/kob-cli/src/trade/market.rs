@@ -315,10 +315,16 @@ pub fn declared_from_proof(cov: &[u8; 32], proof: &serde_json::Value) -> Result<
     Ok(Declared { decimals: v.token.decimals.map(u32::from), symbol: v.token.symbol, name: v.token.name })
 }
 
-/// A declared symbol as a ticker, when amounts can name it (`12.5SYM`): ASCII letters and digits, a letter first.
+/// The unit words of an amount (`1250base`, `2tok`, `2KAS`, `1000sompi`): a declared symbol equal to one of them (any case) would make `2base` mean
+/// something else than base units, so it is no ticker (audit 2026-10-29 F13).
+const RESERVED_UNITS: [&str; 6] = ["base", "tok", "token", "tokens", "kas", "sompi"];
+
+/// A declared symbol as a ticker, when amounts can name it (`12.5SYM`): ASCII letters and digits, a letter first, and not a unit word.
 fn ticker_of_symbol(symbol: Option<&str>) -> Option<String> {
     let s = symbol?;
-    let ok = s.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric());
+    let ok = s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && s.chars().all(|c| c.is_ascii_alphanumeric())
+        && !RESERVED_UNITS.iter().any(|u| s.eq_ignore_ascii_case(u));
     ok.then(|| s.to_string())
 }
 
@@ -778,6 +784,17 @@ pub(crate) fn test_creation(decimals: u8) -> kob_protocol::issue::CreationPlan {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_declared_symbol_that_is_a_unit_word_is_no_ticker() {
+        use super::ticker_of_symbol;
+        for w in ["base", "BASE", "Tok", "token", "TOKENS", "kas", "KAS", "sompi"] {
+            assert_eq!(ticker_of_symbol(Some(w)), None, "{w}");
+        }
+        assert_eq!(ticker_of_symbol(Some("BASEX")).as_deref(), Some("BASEX"));
+        assert_eq!(ticker_of_symbol(Some("TUSD")).as_deref(), Some("TUSD"));
+        assert_eq!(ticker_of_symbol(Some("1ABC")), None);
+    }
+
     use super::*;
 
     fn proof_json(c: &kob_protocol::issue::CreationPlan) -> serde_json::Value {
