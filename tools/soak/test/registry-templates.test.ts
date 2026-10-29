@@ -42,12 +42,12 @@ test('the launchpad test programs pin what the embedded profiles say, and are ad
       [p.registry_id, p.codec, p.template_hash, p.layout.prefix_len, p.layout.state_len, p.layout.suffix_len, p.slots.inputs, p.slots.outputs],
       name,
     );
-    assert.deepEqual(p.networks, ['testnet-10'], name);
+    assert.ok(p.networks?.includes('testnet-10'), name); // KaspaRocket's program is on mainnet too since the 2026-10-27 review
     // the custody owner the order templates pin; a KRON program's holder type is the build of the order kinds (0: *KronD0)
     if (t.family === 'kron') assert.deepEqual(t.escrow, { id_type: p.owners.custody, is_minter: 0, delivery_id_type: p.owners.holder });
     else assert.deepEqual(t.escrow, { owner_scheme: p.owners.custody, borrow_scheme: 0 });
     // the shipped (mainnet) registry does not carry them
-    assert.ok(!shipped.templates.some((x) => x.template_hash === t.template_hash), name);
+    if (!p.networks?.includes('mainnet')) assert.ok(!shipped.templates.some((x) => x.template_hash === t.template_hash), name);
   }
   const ids = (ts: unknown[]) => ts.map((t) => (t as { id: string }).id);
   assert.deepEqual(ids(soakTemplates([], ['KaspaRocketToken11458', 'KForgeToken1785'])), ['kcc20-ref-3x3', 'kforge-token-1785', 'kasparocket-token-11458']);
