@@ -253,7 +253,10 @@ async fn candidates_and_declarations_survive_a_replay_from_the_record_log() {
     for (_, batch) in &logged_txs {
         for b in &batch.blocks {
             for r in &b.txs {
-                assert!(!(r.is_declaration_only() && r.kcc23.as_ref().is_some_and(|d| d.binds.is_empty())), "an unbound candidate was logged");
+                assert!(
+                    !(r.is_declaration_only() && r.kcc23.as_ref().is_some_and(|d| d.binds.is_empty())),
+                    "an unbound candidate was logged"
+                );
             }
         }
     }
@@ -312,7 +315,8 @@ fn wide_launch(k: u32, salt: u64) -> (Transaction, Transaction, Vec<Hash32>) {
     prep.outputs = (0..k).map(|_| TransactionOutput::new(100_000_000, ScriptPublicKey::from_vec(0, vec![0x20, 0x51, 0xac]))).collect();
     prep.finalize();
     let pid = kcc23_txid(&prep);
-    let spk = |i: u32| ScriptPublicKey::from_vec(0, [&[0xaa, 0x20][..], &h("wide-covenant", salt * 1000 + i as u64).0, &[0x87]].concat());
+    let spk =
+        |i: u32| ScriptPublicKey::from_vec(0, [&[0xaa, 0x20][..], &h("wide-covenant", salt * 1000 + i as u64).0, &[0x87]].concat());
     let inputs = (0..k)
         .map(|i| TransactionInput::new(TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes(pid.0), i), vec![], 0, 0))
         .collect();
@@ -345,7 +349,8 @@ async fn a_wide_genesis_stores_its_transactions_once() {
         "SELECT (SELECT COALESCE(SUM(LENGTH(proof)), 0) FROM kcc23_declarations) + (SELECT SUM(LENGTH(tx)) FROM kcc23_txs)",
         [],
     );
-    let chain = (encode_tx(&proof_tx(&kcc23_wire(&prep, false)).unwrap()).len() + encode_tx(&proof_tx(&kcc23_wire(&gen, false)).unwrap()).len()) as i64;
+    let chain = (encode_tx(&proof_tx(&kcc23_wire(&prep, false)).unwrap()).len()
+        + encode_tx(&proof_tx(&kcc23_wire(&gen, false)).unwrap()).len()) as i64;
     assert!(stored <= chain, "stored {stored} bytes for {chain} bytes of chain data");
     for (i, id) in ids.iter().enumerate() {
         let p = proof_of(&hs, id).expect("a declaration");
@@ -416,6 +421,12 @@ async fn a_junk_declaration_payload_stays_out_of_the_record_log() {
     push(&hs, vec![&gen], false).await;
     assert!(proof_of(&hs, &cov).is_some());
     let logged = recordlog::read_all(dir.path()).unwrap();
-    let genesis_frames = logged.records.iter().flat_map(|(_, b)| b.blocks.iter()).flat_map(|b| b.txs.iter()).filter(|r| r.kcc23.as_ref().is_some_and(|d| !d.binds.is_empty())).count();
+    let genesis_frames = logged
+        .records
+        .iter()
+        .flat_map(|(_, b)| b.blocks.iter())
+        .flat_map(|b| b.txs.iter())
+        .filter(|r| r.kcc23.as_ref().is_some_and(|d| !d.binds.is_empty()))
+        .count();
     assert_eq!(genesis_frames, 1);
 }

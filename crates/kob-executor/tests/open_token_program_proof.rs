@@ -20,7 +20,10 @@ const KR: TemplateId = TemplateId::KaspaRocketToken11458;
 fn open_list() -> TokenAllowlist {
     let strict = |id: TemplateId| {
         let p = kob_protocol::profile::of(id).unwrap();
-        (kob_executor::hex::Hash32::parse(&p.template_hash).unwrap(), StrictTemplate { id: p.registry_id.clone(), family: kob_protocol::Family::Kcc20, powers: vec![] })
+        (
+            kob_executor::hex::Hash32::parse(&p.template_hash).unwrap(),
+            StrictTemplate { id: p.registry_id.clone(), family: kob_protocol::Family::Kcc20, powers: vec![] },
+        )
     };
     TokenAllowlist::from_entries([]).with_strict_templates([strict(T3), strict(KR)])
 }

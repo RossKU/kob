@@ -1679,7 +1679,7 @@ fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(Lis
             expiry_daa: base.then_some(terms.expiry_daa),
             genesis_daa,
             carrier,
-            keeper_tip: if base { state.keeper_tip() } else { None },
+            keeper_tip: if base { listing_keeper_tip(state, carrier) } else { None },
             proven_tpls: vec![],
         }
     };
@@ -1692,14 +1692,20 @@ fn proven_hashes(conn: &Connection, token: Option<Hash32>) -> DbResult<Vec<Hash3
     Ok(super::reads::proven_programs(conn, &t.0)?.into_iter().filter_map(|h| <[u8; 32]>::try_from(h).ok().map(Hash32)).collect())
 }
 
-/// What a keeper's update may take from the order's output of `carrier` sompi: a buy stop pays its keeper only from what its buy
-/// does not need ([`CondBid::keeper_take`], measured at its current stop), every other order its `keeperTip`.
+/// What a keeper's update may take from the order's output of `carrier` sompi, for an order a keeper can still arm (an unarmed stop, a
+/// stop entry: `matcher::candidate::updatable`); `None` for every other order, which is never updated. A buy stop pays its keeper only from
+/// what its buy does not need ([`CondBid::keeper_take`], measured at its current stop), every other order its `keeperTip`.
 fn listing_keeper_tip(state: &AnyState, carrier: u64) -> Option<i64> {
     match state {
-        AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => {
+        AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) if s.armed == 0 && s.stop_price > 0 => Some(s.keeper_tip),
+        AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) if s.armed == 0 && s.stop_price > 0 => {
             Some(s.keeper_take(carrier.min(i64::MAX as u64) as i64, s.stop_price).unwrap_or(i64::MAX))
         }
-        _ => state.keeper_tip(),
+        AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) if s.armed == 0 && s.entry_stop > 0 => Some(s.keeper_tip),
+        AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) if s.armed == 0 && s.entry_stop > 0 => Some(s.keeper_tip),
+        AnyState::KobCondPair(s) if s.armed == 0 && s.stop_price > 0 => Some(s.keeper_tip),
+        AnyState::KobIfdPair(s) if s.armed == 0 && s.entry_stop > 0 => Some(s.keeper_tip),
+        _ => None,
     }
 }
 

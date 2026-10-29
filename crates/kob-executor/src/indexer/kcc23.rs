@@ -398,7 +398,8 @@ pub fn proof_json(conn: &Connection, covenant_id: &Hash32) -> DbResult<Option<St
             .ok_or_else(|| DbError::Invalid("a KCC-23 declaration names a transaction the store lacks".into()))?;
         decode_tx(&b).map_err(|e| DbError::Invalid(format!("stored KCC-23 transaction: {e}")))
     };
-    let proof = LaunchProof { format: kcc23::PROOF_FORMAT.into(), covenant_id: covenant_id.0, preparation: tx(&prep)?, genesis: tx(&gen)? };
+    let proof =
+        LaunchProof { format: kcc23::PROOF_FORMAT.into(), covenant_id: covenant_id.0, preparation: tx(&prep)?, genesis: tx(&gen)? };
     Ok(Some(serde_json::to_string(&proof).map_err(|e| DbError::Invalid(format!("launch proof: {e}")))?))
 }
 
@@ -425,8 +426,10 @@ pub fn compact_legacy(conn: &Connection, limit: usize) -> DbResult<usize> {
         let mut put = tx.prepare_cached("INSERT OR IGNORE INTO kcc23_txs (txid, tx) VALUES (?1, ?2)")?;
         put.execute(params![&pid.0[..], encode_tx(&p.preparation)])?;
         put.execute(params![&gid.0[..], encode_tx(&p.genesis)])?;
-        tx.prepare_cached("UPDATE kcc23_declarations SET proof = '' WHERE covenant_id = ?1 AND preparation_txid = ?2 AND genesis_txid = ?3")?
-            .execute(params![cov, &pid.0[..], &gid.0[..]])?;
+        tx.prepare_cached(
+            "UPDATE kcc23_declarations SET proof = '' WHERE covenant_id = ?1 AND preparation_txid = ?2 AND genesis_txid = ?3",
+        )?
+        .execute(params![cov, &pid.0[..], &gid.0[..]])?;
         done += 1;
     }
     tx.commit()?;

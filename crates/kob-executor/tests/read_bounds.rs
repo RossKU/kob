@@ -15,7 +15,8 @@ fn candles_with_an_extreme_to_do_not_overflow() {
     for to in [i64::MIN, i64::MIN + 1, i64::MAX, 0, -1] {
         let r = market::candles(&conn, &tok, Some(3), "1d", 86_400_000, None, Some(to), 1500).unwrap();
         assert!(r.items.is_empty());
-        let p = pairs::pair_candles(&conn, &tok, &Hash32([0x71; 32]), (Some(3), Some(3)), "1d", 86_400_000, None, Some(to), 1500).unwrap();
+        let p =
+            pairs::pair_candles(&conn, &tok, &Hash32([0x71; 32]), (Some(3), Some(3)), "1d", 86_400_000, None, Some(to), 1500).unwrap();
         assert!(p.items.is_empty());
     }
     // an inverted window (`from` after `to`) is empty too

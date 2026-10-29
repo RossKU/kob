@@ -66,15 +66,16 @@ impl NodeApi for Node {
 #[tokio::test]
 async fn a_generic_node_rejection_does_not_back_off_every_order_of_the_batch() {
     let daa = NOW + 5;
-    let orders = vec![
-        l_bid(1, bid(1, P260, T3), 10 * WHOLE),
-        l_ask(6, ask(6, P250, 5 * WHOLE, T3)),
-        l_ask(100, ask(2, P245, 2 * WHOLE, T3)),
-    ];
+    let orders =
+        vec![l_bid(1, bid(1, P260, T3), 10 * WHOLE), l_ask(6, ask(6, P250, 5 * WHOLE, T3)), l_ask(100, ask(2, P245, 2 * WHOLE, T3))];
     let node = Node::default();
     node.0.lock().unwrap().daa = daa;
     // a refusal that names no outpoint and is no double spend / orphan / full mempool: what a node-only policy check says
-    node.0.lock().unwrap().replies.push_back(format!("Rejected transaction {}: transaction is not standard: some policy", "ee".repeat(32)));
+    node.0
+        .lock()
+        .unwrap()
+        .replies
+        .push_back(format!("Rejected transaction {}: transaction is not standard: some policy", "ee".repeat(32)));
     let cfg = RunConfig { roles: Roles { matcher: true, keeper: false }, verify_live_min_lag: u64::MAX, ..RunConfig::default() };
     let book = MemoryBook { daa_score: daa, orders, wallet_tokens: vec![], keeper_only: vec![] };
     let mut r = Runner::new(node.clone(), ViewSource(book), Box::new(signer()), cfg);

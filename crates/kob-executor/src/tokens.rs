@@ -847,7 +847,8 @@ mod tests {
     /// 2026-10-30 E1: the update could never be built).
     #[test]
     fn a_keeper_tip_that_leaves_a_dust_continuation_is_not_listed() {
-        let rules = ListingRules { require_allowlist: false, min_order_value_sompi: 0, max_expiry_span_daa: 1 << 40, ..Default::default() };
+        let rules =
+            ListingRules { require_allowlist: false, min_order_value_sompi: 0, max_expiry_span_daa: 1 << 40, ..Default::default() };
         let t = TokenAllowlist::default();
         let bound = kob_protocol::tx::COVENANT_OUTPUT_MIN;
         let order = |carrier: u64, tip: Option<i64>| ListingInput {
