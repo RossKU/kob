@@ -12,8 +12,11 @@ export const RETIME_TOLERANCE_SOMPI = 10_000n;
 export const RETIME_WINDOW_MS = 120_000;
 /** How many re-timed transactions one approval covers without asking again (audit 2026-10-29 S3: the count was unbounded). */
 export const RETIME_MAX_COUNT = 8;
-/** How far later (DAA, one hour) a re-timed order may start or expire than the approved one: a slow approval moves times by seconds, never by days. */
-export const RETIME_MAX_DELAY_DAA = 36_000n;
+/**
+ * How far later (DAA, 150 s at 10 DAA/s: a little more than the 120 s window) a re-timed order may start than the approved one: a slow approval moves
+ * times by seconds, never by minutes or hours (S3; the first cap was 36,000 DAA, an hour, 30 times the window: audit 2026-10-30 G3).
+ */
+export const RETIME_MAX_DELAY_DAA = 1_500n;
 
 const json = (v: unknown): string => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? `${x}n` : x));
 
@@ -23,7 +26,8 @@ function fixedTerms(d: OrderDescription): string {
   void _a;
   void _e;
   void _p;
-  return json({ ...rest, auction: auction ? { interval: auction.interval, maxFill: auction.maxFill, decayStep: auction.decayStep } : null });
+  // the decay speed (`slope` per `decayStep`) is checked in `orderKept`: it may be slower, never faster (audit 2026-10-30 G3)
+  return json({ ...rest, auction: auction ? { interval: auction.interval, maxFill: auction.maxFill } : null });
 }
 
 /** One order of the re-timed transaction against the approved one: same terms, times not earlier, prices not worse for its side. */
@@ -32,13 +36,23 @@ function orderKept(a: DecodedOrder, b: DecodedOrder): boolean {
   const y = b.description;
   if (fixedTerms(x) !== fixedTerms(y)) return false;
   if (y.activeFrom < x.activeFrom || (x.expiryDaa > 0n && y.expiryDaa < x.expiryDaa) || (x.expiryDaa === 0n) !== (y.expiryDaa === 0n)) return false;
-  // and not by more than a slow approval can explain (S3)
-  if (y.activeFrom - x.activeFrom > RETIME_MAX_DELAY_DAA || (x.expiryDaa > 0n && y.expiryDaa - x.expiryDaa > RETIME_MAX_DELAY_DAA)) return false;
+  // and not by more than a slow approval can explain (S3). Without an auction an expiry moves with the start (a lifetime counted from it) or not at
+  // all (an explicit date), never alone by its own amount; an auction's expiry follows the length of the auction, which the price it starts from
+  // changes, so it is only capped (G3)
+  const dStart = y.activeFrom - x.activeFrom;
+  if (dStart > RETIME_MAX_DELAY_DAA) return false;
+  if (x.expiryDaa > 0n) {
+    const dExpiry = y.expiryDaa - x.expiryDaa;
+    if (dExpiry > RETIME_MAX_DELAY_DAA || (!x.auction && dExpiry !== 0n && dExpiry !== dStart)) return false;
+  }
   const buy = x.side === 'buy';
   const better = (old: bigint, now: bigint) => (buy ? now <= old : now >= old);
   if (!better(x.price, y.price)) return false;
   if (!!x.auction !== !!y.auction) return false;
   if (x.auction && y.auction && !better(x.auction.priceEnd, y.auction.priceEnd)) return false;
+  // the price may not fall (a sell) or rise (a buy) faster per DAA than approved: the same auction from a better start is slower, one with a steeper
+  // slope would have reached the bound sooner (G3; compared by cross-multiplication, `slope / decayStep` DAA)
+  if (x.auction && y.auction && y.auction.slope * x.auction.decayStep > x.auction.slope * y.auction.decayStep) return false;
   // what the order holds: a buy's escrow (its most to pay) never larger, beyond the tolerance; the KAS of a sell's carriers the same
   return b.value <= a.value + RETIME_TOLERANCE_SOMPI && (a.custody?.amount ?? null) === (b.custody?.amount ?? null);
 }

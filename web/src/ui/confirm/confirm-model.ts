@@ -326,6 +326,14 @@ export interface OrderExtra { value: bigint | null; locked: LockedKas | null; de
  */
 export interface MarketFillsFacts { count: bigint; carrier: bigint; amount?: bigint; maxReceive?: bigint; minFillLimit?: boolean }
 
+/** Seconds a decaying auction takes to fall from its start price to its bound (null when it does not decay to a positive bound). */
+export function auctionSeconds(d: OrderDescription): string | null {
+  const a = d.auction;
+  if (!a || a.slope <= 0n || a.priceEnd <= 0n) return null;
+  const steps = (Number(d.price > a.priceEnd ? d.price - a.priceEnd : a.priceEnd - d.price) / Number(a.slope)) * Number(a.decayStep || 1n);
+  return (Math.ceil(steps) / DAA_PER_SECOND).toString();
+}
+
 /** Rows that describe one order state: quantity, prices (all-in), timing, auction, trigger, entry, repeat. */
 export function orderRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[] {
   const { tr } = f;
@@ -382,9 +390,8 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[]
       rows.push(row('schedule', tr('confirm.f.schedule'), tr('confirm.f.scheduleValue', { amount: tokenAmountText(f.ref, a.maxFill, tr), seconds: secondsOf(a.interval) })));
     }
     if (a.slope > 0n && a.priceEnd > 0n) {
-      const steps = a.slope > 0n ? (Number(d.price > a.priceEnd ? d.price - a.priceEnd : a.priceEnd - d.price) / Number(a.slope)) * Number(a.decayStep || 1n) : 0;
       const to = p(a.priceEnd);
-      rows.push(row('auction', tr('confirm.f.auction'), to.value, 'warn', tr('confirm.f.auctionValue', { seconds: (Math.ceil(steps) / DAA_PER_SECOND).toString() })));
+      rows.push(row('auction', tr('confirm.f.auction'), to.value, 'warn', tr('confirm.f.auctionValue', { seconds: auctionSeconds(d) ?? '0' })));
     }
   }
   if (d.tif === 'ioc') rows.push(row('tif', tr('confirm.f.tif'), tr('confirm.f.tifIoc')));
@@ -421,6 +428,8 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[]
       rows.push(row('entryStop', tr('confirm.f.entryStop'), s.value, 'warn', tr('confirm.f.entryStopDetail', { seconds: secondsOf(e.bandDaa) })));
       if (!pair) rows.push(row('entryExposure', tr('confirm.f.exposure'), tr(sell ? 'confirm.f.exposureValueSell' : 'confirm.f.exposureValueBuy', { amount: tokenAmountText(f.ref, e.minTouch, tr), seconds: secondsOf(e.minRestDaa) })));
     }
+    // what whoever arms the stop entry may take from the order's KAS (the covenant lets it take up to this much: audit 2026-10-30 G1)
+    if (e.entryStop > 0n && e.keeperTip > 0n) rows.push(row('keeperTip', tr('confirm.f.keeperTip'), kas(e.keeperTip), 'muted'));
     if (e.exitCarrier > 0n) rows.push(row('exitCarrier', tr('confirm.f.exitCarrier'), kas(e.exitCarrier), 'muted'));
     if (e.deliveryCarrier > 0n && !pair) rows.push(row('deliveryCarrier', tr('confirm.f.deliveryCarrier'), kas(e.deliveryCarrier), 'muted'));
     if (e.prefund > 0n) rows.push(row('prefund', tr('confirm.f.prefund'), p(e.prefund).value, 'muted'));
