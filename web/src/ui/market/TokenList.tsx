@@ -136,7 +136,8 @@ function SortHeader(props: { k: SortKey; label: string; hint?: string | undefine
 const rowState = (e: ListEntry): string => (e.loading ? 'loading' : e.unavailable ? 'unavailable' : 'ready');
 
 function TokenTableRow({ row, entry }: { row: TokenRow; entry: ListEntry }) {
-  // line 1: the ticker (bold) and the name; line 2: the covenant id shortened, with a copy button, and the badges. A token without a ticker is led by its name
+  // every row has the same three lines, so every row is as tall and the icons keep one pitch: line 1 the ticker (bold) and the name (one line, an ellipsis, the
+  // whole name in its title); line 2 the covenant id fragment with its copy button; line 3 the badges (one line, never wrapped). A token without a ticker is led by its name
   const headline = row.ticker || row.name || t('market.list.unnamed');
   const sub = row.ticker ? row.name : '';
   return (
@@ -146,11 +147,11 @@ function TokenTableRow({ row, entry }: { row: TokenRow; entry: ListEntry }) {
           <IdentityBlock row={row} />
           <div class="ml-name-text">
             <div class="ml-line1">
-              <a href={`#/market/${row.covenantId}`} class="token-name" data-testid={`token-link-${row.covenantId}`}>
+              <a href={`#/market/${row.covenantId}`} class="token-name" title={headline} data-testid={`token-link-${row.covenantId}`}>
                 {headline}
               </a>
               {sub || row.declared || row.kascov || row.source === 'kascov' ? (
-                <span class="small muted ml-sub" data-testid={`token-name-${row.covenantId}`}>
+                <span class="small muted ml-sub" title={sub || undefined} data-testid={`token-name-${row.covenantId}`}>
                   {sub}
                   {row.declared && row.decimals !== null ? <TokenNote token={{ decimalsSource: 'declared', decimals: row.decimals }} /> : null}
                   <KascovNote row={row} compact />
@@ -161,6 +162,8 @@ function TokenTableRow({ row, entry }: { row: TokenRow; entry: ListEntry }) {
             </div>
             <div class="ml-line2">
               <IdCopy value={row.covenantId} data-testid={`token-hash-${row.covenantId}`} />
+            </div>
+            <div class="ml-line3" data-testid={`token-badges-${row.covenantId}`}>
               <span class="ml-badges">
                 <StatusBadges row={row} />
                 <TokenFacts rows={[row]} inline data-testid={`token-facts-${row.covenantId}`} />

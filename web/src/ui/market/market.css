@@ -264,18 +264,24 @@ a.tape-row:hover .tape-time { color: var(--text); }
   .idb-lg { --idb: 52px; gap: 6px; }
 }
 
-/* ---- a list row: line 1 = ticker (bold), name, "via kascov", warning sign; line 2 = short covenant id with a copy button, badges */
+/* ---- a list row, always three lines (so every row is as tall and the icons keep one pitch): line 1 = ticker (bold) and name on one line, the name cut with an
+   ellipsis (the whole name is its title), "via kascov", warning sign; line 2 = the covenant id fragment with a copy button; line 3 = the badges on their own line,
+   never wrapped, what does not fit is cut. The line heights are fixed, whatever a row holds. */
 .ml-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ml-name-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.ml-line1, .ml-line2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
-.ml-line2 { align-items: center; gap: 2px 8px; }
-.ml-line1 .token-name { font-size: 1rem; overflow-wrap: anywhere; }
-.ml-sub { overflow-wrap: anywhere; min-width: 0; }
+.ml-line1, .ml-line2, .ml-line3 { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 0 8px; min-width: 0; overflow: hidden; }
+.ml-line1 { height: 1.5rem; }
+.ml-line2 { align-items: center; height: 22px; }
+.ml-line3 { align-items: center; height: 1.25rem; }
+.ml-line1 .token-name { flex: 0 1 auto; min-width: 0; font-size: 1rem; line-height: 1.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ml-sub { flex: 1 1 0; min-width: 0; line-height: 1.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ml-via { margin-left: 4px; font-size: 0.72rem; border-bottom: 1px dotted var(--muted); cursor: help; white-space: nowrap; }
 .ml-id { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .ml-id code { font-size: 0.8rem; color: var(--muted); }
+/* the 12 + 12 hex fragment keeps its length on a phone: its type follows the width instead (the text column of a card there is the viewport less the icon and the price) */
+@media (max-width: 439px) { .ml-id code { font-size: clamp(0.6rem, 2.9vw, 0.8rem); } }
 .ml-copy { display: inline-flex; align-items: center; justify-content: center; padding: 2px 4px; min-height: 22px; min-width: 22px; line-height: 1; }
-.ml-badges, .tf-inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.ml-badges, .tf-inline { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 4px; min-width: 0; }
 .ml-badges .badge { font-size: 0.68rem; padding: 0 6px; line-height: 1.5; white-space: nowrap; }
 .ml-only-narrow { display: none; }
 @media (max-width: 759px) { .ml-only-narrow { display: inline; } }
