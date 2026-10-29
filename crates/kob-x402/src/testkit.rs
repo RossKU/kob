@@ -108,6 +108,9 @@ pub mod hashtype {
     }
 }
 
+/// An accepted spend: the transaction, the DAA score of its block and its outputs (script, value).
+type Spend = (Txid, u64, Vec<(ScriptPublicKey, u64)>);
+
 #[derive(Default)]
 struct State {
     utxos: BTreeMap<Outpoint, ChainUtxo>,
@@ -120,7 +123,7 @@ struct State {
     /// Accepted transaction ids.
     accepted: BTreeSet<Txid>,
     /// The accepted transaction that spent each outpoint: (txid, DAA score of its block, outputs).
-    spenders: BTreeMap<Outpoint, (Txid, u64, Vec<(ScriptPublicKey, u64)>)>,
+    spenders: BTreeMap<Outpoint, Spend>,
     daa: u64,
     counter: u64,
     submits: u64,
