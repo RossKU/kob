@@ -50,7 +50,7 @@ describe('a saved copy kascov.io has none of is asked for once a day, not on eve
     expect(seen2).toEqual([]);
   });
 
-  it('the loader asks for the copy once, remembers the 404 in storage, then goes straight to the creator host (or nothing)', async () => {
+  it('the loader asks for the copy once, remembers the 404 in storage, then makes no request at all (never the creator host)', async () => {
     const storage = new Mem();
     let clock = 1_000;
     const fetch = vi.fn(async () => new Response('nope', { status: 404 }));
@@ -61,15 +61,15 @@ describe('a saved copy kascov.io has none of is asked for once a day, not on eve
     // a new page load (a new loader, the same storage): no request at all for it
     expect(await mk().load('testnet-10', tok('a'))).toBeNull();
     expect(fetch).toHaveBeenCalledTimes(1);
-    // with the creator's own URL the copy is skipped but the creator's host is still tried
+    // with the creator's own URL the copy is skipped and the creator's host is NOT tried (audit F10: the viewer's IP stays with kascov.io)
     expect(await mk().load('testnet-10', tok('a', 'https://img.example/a.png'))).toBeNull();
-    expect(fetch.mock.calls.map((c) => String((c as unknown as unknown[])[0]))).toEqual([copyOf('a'), 'https://img.example/a.png']);
+    expect(fetch.mock.calls.map((c) => String((c as unknown as unknown[])[0]))).toEqual([copyOf('a')]);
     // another token is not affected; a day later the copy is asked for again (kascov.io may have saved it by then)
     expect(await mk().load('testnet-10', tok('b'))).toBeNull();
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(2);
     clock += MISSING_COPY_TTL_MS + 1;
     expect(await mk().load('testnet-10', tok('a'))).toBeNull();
-    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it('a copy that answered is never marked missing; a storage that fails or holds rubbish is an empty one', async () => {

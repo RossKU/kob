@@ -350,7 +350,8 @@ describe('fetchVerifiedImage', () => {
 describe('iconSources', () => {
   it('kascov\'s saved copy first, then the creator\'s own URL; nothing without a committed hash', () => {
     const t = { covenantId: ID('a'), imageHash: sha(PNG), imageUrl: 'https://storage.googleapis.com/bucket/a.png' };
-    expect(iconSources('mainnet', t)).toEqual([`https://kascov.io/img/mainnet/${ID('a')}`, 'https://storage.googleapis.com/bucket/a.png']);
+    // the creator's own host is never a source (F10): the viewer's IP goes to kascov.io only
+    expect(iconSources('mainnet', t)).toEqual([`https://kascov.io/img/mainnet/${ID('a')}`]);
     expect(iconSources('mainnet', { ...t, imageUrl: null })).toEqual([`https://kascov.io/img/mainnet/${ID('a')}`]);
     expect(iconSources('mainnet', { ...t, imageHash: null })).toEqual([]);
     expect(iconSources('mainnet', t, 'https://names.example.org/data')[0]).toBe(`https://names.example.org/img/mainnet/${ID('a')}`);

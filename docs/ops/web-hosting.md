@@ -63,7 +63,7 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_PROJECT` | yes | the Pages project name, e.g. `kob-web` |
 | `KOB_PAGES_INDEXER_URL` | yes | the indexer the app reads, `https://...` (e.g. `https://chart.example.org`, `docs/ops/chart-server.md`) |
 | `KOB_PAGES_NETWORK` | no | `testnet-10` (default) or `mainnet` |
-| `KOB_PAGES_EXTRA_INDEXER_URLS` | no on testnet-10, **yes on mainnet** | further indexers, comma-separated `https://` URLs, at most 4: they cross-check the primary and take over its reads when it is down (see "Further indexers: cross-check and failover"). A mainnet deployment without a second, independent indexer is refused by `pages-config.mjs`: the node confirms the orders an indexer lists, not the ones it leaves out, so the best price of the book is known to a second indexer alone |
+| `KOB_PAGES_EXTRA_INDEXER_URLS` | no | further indexers, comma-separated `https://` URLs, at most 4: they cross-check the primary and take over its reads when it is down (see "Further indexers: cross-check and failover") |
 | `KOB_PAGES_NODE_URL` | no | a `wss://` wRPC node **with its path** (see "The node and the SDK resolver"); empty (default) = a public node the Kaspa SDK resolver names, reached over Borsh |
 | `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
 | `KOB_PAGES_TOKEN_NAMES_URL` | no | the source of token names and icons: the base of a kascov.io-shaped data set, `https://...` (default `https://kascov.io/data`); `off` = none (see "Token names and icons" below) |
@@ -150,7 +150,7 @@ What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web
 * **Icons:** shown only when the fetched bytes hash (SHA-256 of the raw bytes, checked on real tokens of both networks) to the
   `claimed_image_hash`; otherwise a letter. The creators' own hosts (mostly `storage.googleapis.com`) send no CORS header, so the browser
   cannot read their bytes: the app fetches kascov's saved copy first (its `/img/` route is part of the kascov web app, not of its documented
-  data API, so it is best effort; a 404 falls back to the creator's own https URL, which works only where that host allows CORS). The
+  data API, so it is best effort; a 404 means a letter avatar: the creator's own host is never contacted, redirects are refused). The
   verified bytes are shown from a `blob:` URL; `img-src` is therefore `'self' data: blob:` and never names a host.
 * **Failure:** unreachable, slow (8 s), not JSON, a changed shape, a file for another network, larger than 12 MB: the list is exactly what
   the registry and the indexer give, plus a one-line "unavailable" hint. Nothing is thrown into the UI and nothing is stored as authority
@@ -210,7 +210,7 @@ origin otherwise); without it the list silently shows no names or icons. The pic
 `https:` in `connect-src`; a pinned policy turns them into letters, which is safe. `img-src 'self' data: blob:` stays as shipped.
 
 **Privacy.** The visitor's browser asks the source for the list (it sees the visitor's IP and that the market list was opened) and for the
-pictures of the rows in view (kascov.io, or the creator's host when kascov has no copy). The founder accepted this for a DEX; there is no
+pictures of the rows in view (kascov.io only; never the creator's host). The founder accepted this for a DEX; there is no
 proxy through the host. The visitor can switch pictures off in Settings ("Load token icons from third-party hosts", on by default): letters
 only, and no image host is contacted. The host sees nothing of this.
 

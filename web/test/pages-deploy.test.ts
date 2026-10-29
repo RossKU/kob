@@ -104,13 +104,11 @@ describe('pages-config: config.json from the repository variables', () => {
     expect(() => parseRegistry(text, { kob: loadKobNode(), network: 'mainnet' })).toThrow();
   });
 
-  it('refuses a mainnet deployment with a single indexer (the node cannot prove an order absent; audit 2026-10-29 F2), a testnet one may have one', () => {
-    const main = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX });
-    expect(main.config).toBeNull();
-    expect(main.errors.join(' ')).toContain('mainnet deployment needs a second, independent indexer');
-    // the primary listed again is no second indexer
-    expect(pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_EXTRA_INDEXER_URLS: IDX }).config).toBeNull();
+  it('a single indexer is allowed on both networks (the start price of a market order rests on the node check; a second indexer is an optional extra)', () => {
+    expect(pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX }).errors).toEqual([]);
     expect(pagesConfig({ KOB_PAGES_NETWORK: 'testnet-10', KOB_PAGES_INDEXER_URL: IDX }).errors).toEqual([]);
+    // the primary listed again is still no second indexer
+    expect(pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_EXTRA_INDEXER_URLS: IDX }).config).toBeNull();
   });
 
   it('writes config.json, and the program list only on testnet-10 (mainnet keeps the pinned registry of build:release)', () => {

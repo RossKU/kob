@@ -24,9 +24,9 @@
 //
 //   * the creators' own hosts (`claimed_image`, mostly storage.googleapis.com) send NO `Access-Control-Allow-Origin`, so the browser may display such an
 //     image in an <img> but cannot read its bytes, hence cannot hash it. The app therefore never uses an <img> hotlink;
-//   * kascov.io keeps a copy of each hash-committed image (`https://kascov.io/img/{network}/{covenant_id}`, CORS `*`, immutable): those bytes are fetched
-//     FIRST, so the usual viewer's IP goes to kascov.io only, not to the creator's host. If kascov has no copy (404), the creator's own https URL is tried,
-//     and works only where that host allows CORS;
+//   * kascov.io keeps a copy of each hash-committed image (`https://kascov.io/img/{network}/{covenant_id}`, CORS `*`, immutable): those bytes are fetched, and
+//     ONLY those, so a viewer's IP goes to kascov.io and never to the creator's host (audit 2026-10-29 F10). If kascov has no copy (404) there is no icon (a
+//     letter avatar); a redirect is refused, so a copy cannot send the viewer on to another host;
 //   * the verified bytes are shown from a `blob:` URL the app makes itself (CSP `img-src 'self' data: blob:`, web/csp.mjs), so a hash mismatch, a host that
 //     swapped the file, or a refused fetch all end the same way: no icon (a letter avatar).
 // Only https URLs are used. Raster formats only (PNG, JPEG, WebP, GIF, by their magic bytes, never by the server's Content-Type): no SVG, no HTML.
@@ -364,7 +364,7 @@ export async function fetchVerifiedImage(urls: readonly string[], hash: string, 
     const onAbort = () => ctl.abort();
     o.signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      const res = await fetchFn(url, { signal: ctl.signal, credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'follow' });
+      const res = await fetchFn(url, { signal: ctl.signal, credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error' });
       if (!res.ok) {
         if (res.status === 404) o.onMissing?.(url);
         continue;
@@ -385,10 +385,10 @@ export async function fetchVerifiedImage(urls: readonly string[], hash: string, 
   return null;
 }
 
-/** The sources of a token's icon, best first: kascov's saved copy, then the creator's own https URL. Empty without a committed hash. */
-export function iconSources(n: KascovNetwork, t: Pick<KascovToken, 'covenantId' | 'imageHash' | 'imageUrl'>, base = DEFAULT_BASE): string[] {
-  if (!t.imageHash) return [];
-  return [...(base ? [kascovImageUrl(n, t.covenantId, base)] : []), ...(t.imageUrl ? [t.imageUrl] : [])];
+/** The sources of a token's icon: kascov's saved copy only, never the creator's own host (its URL would give the viewer's IP away). Empty without a committed hash. */
+export function iconSources(n: KascovNetwork, t: Pick<KascovToken, 'covenantId' | 'imageHash'> & Partial<Pick<KascovToken, 'imageUrl'>>, base = DEFAULT_BASE): string[] {
+  if (!t.imageHash || !base) return [];
+  return [kascovImageUrl(n, t.covenantId, base)];
 }
 
 export interface IconLoaderOptions extends IconFetchOptions {

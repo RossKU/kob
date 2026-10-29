@@ -12,7 +12,7 @@ test.use({ autoOpen: false });
 const ID = (n: number) => n.toString(16).padStart(2, '0').repeat(32);
 const SAVED = ID(0xa1); // a saved copy that hashes to the committed hash
 const MISMATCH = ID(0xa2); // the saved copy is another picture than the one committed (its hash is of other bytes than OTHER_PNG)
-const NO_CORS = ID(0xa3); // no saved copy; the creator's own host sends no CORS header
+const NO_CORS = ID(0xa3); // no saved copy; the creator's own host is not asked
 const NO_IMAGE = ID(0xa4); // no image at all
 const UNPINNED = ID(0xa5); // a program this build does not pin
 const PUBLIC_MINT = ID(0xa6); // KCC20PublicMint
@@ -95,10 +95,11 @@ test.describe('with kascov.io', () => {
     }
     await expect(page.getByTestId(`token-icon-${MISMATCH}`)).toHaveText('M');
     await expect(page.getByTestId(`token-icon-${NO_CORS}`)).toHaveText('N');
-    // the mismatching copy was fetched and refused; the creator's host (no CORS) was tried after kascov had no copy, and refused by the browser
+    // the mismatching copy was fetched and refused; the creator's host is never contacted, not even after kascov had no copy (audit F10: the viewer's IP stays with kascov.io)
     await expect.poll(() => log.requests.includes(`https://kascov.io/img/testnet-10/${MISMATCH}`)).toBe(true);
     await expect.poll(() => log.requests.includes(`https://kascov.io/img/testnet-10/${NO_CORS}`)).toBe(true);
-    await expect.poll(() => log.requests.includes(CREATOR_URL)).toBe(true);
+    await page.waitForTimeout(500);
+    expect(log.requests.includes(CREATOR_URL)).toBe(false);
     // no <img> ever points at a third-party URL, and the policy was never violated
     expect(await page.locator('img[src^="http"]').count()).toBe(0);
     expect(pageErrors.filter((e) => /Content.Security.Policy/i.test(e))).toEqual([]);
