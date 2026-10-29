@@ -1027,6 +1027,7 @@ impl Processor {
                 expiry_daa: Some(terms.expiry_daa),
                 genesis_daa: daa,
                 carrier,
+                keeper_tip: listing_keeper_tip(state, carrier),
             },
         );
         Ok(match r {
@@ -1670,9 +1671,21 @@ fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(Lis
             expiry_daa: base.then_some(terms.expiry_daa),
             genesis_daa,
             carrier,
+            keeper_tip: if base { state.keeper_tip() } else { None },
         }
     };
     Some((input(&t.a, ea, true), input(&t.b, eb, false)))
+}
+
+/// What a keeper's update may take from the order's output of `carrier` sompi: a buy stop pays its keeper only from what its buy
+/// does not need ([`CondBid::keeper_take`], measured at its current stop), every other order its `keeperTip`.
+fn listing_keeper_tip(state: &AnyState, carrier: u64) -> Option<i64> {
+    match state {
+        AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => {
+            Some(s.keeper_take(carrier.min(i64::MAX as u64) as i64, s.stop_price).unwrap_or(i64::MAX))
+        }
+        _ => state.keeper_tip(),
+    }
 }
 
 /// Step and candidate multiples of a trailing update: the multiples the trigger evidence in the transaction (the quotes of

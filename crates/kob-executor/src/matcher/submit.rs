@@ -129,6 +129,16 @@ fn conflict_orders(t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>) -> BT
     t.orders.clone()
 }
 
+/// The orders a node's generic refusal ([`SubmitOutcome::Rejected`]) backs off. The refusal names no order, so the batch is
+/// searched by halves across ticks: the lower half (by id) of a transaction with several orders sits out, the other half is
+/// planned again at once and, if the node refuses it again, loses its own lower half the same way, until a single order is
+/// the one backed off. So one order that makes a node-only policy refuse every batch it is in costs the others at most one
+/// backoff each (audit 2026-10-30 E2), never the whole batch every time.
+fn rejected_orders(orders: &BTreeSet<CovId>) -> BTreeSet<CovId> {
+    let half = orders.len().div_ceil(2);
+    orders.iter().take(half).copied().collect()
+}
+
 /// The orders of `t` whose inputs the node no longer holds, asked by address after a missing-input refusal: None when the
 /// node cannot tell (no address known, a node without its UTXO index (`--utxoindex`: an address query proves nothing
 /// there, so nothing is taken as spent), the query failed, or every order input is still there: the missing input is
@@ -235,7 +245,7 @@ impl Tracker {
             }
             SubmitOutcome::Rejected => {
                 self.rejected += 1;
-                self.back_off(&t.orders, daa);
+                self.back_off(&rejected_orders(&t.orders), daa);
             }
         }
         outcome
@@ -275,7 +285,7 @@ impl Tracker {
                             self.conflicts += 1;
                         }
                         let ids = if outcome == SubmitOutcome::Rejected {
-                            t.orders.clone()
+                            rejected_orders(&t.orders)
                         } else {
                             lost_orders(node, &t, outcome, msg.as_deref()).await
                         };

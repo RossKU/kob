@@ -389,6 +389,10 @@ pub struct ListingInput {
     pub genesis_daa: u64,
     /// KAS of the order's output (a bid's escrow).
     pub carrier: u64,
+    /// What a keeper's arming / trailing update may take from the order's output (`None`: the order has no update). The
+    /// continuation (`carrier - keeper_tip`) must clear the covenant-output bound, or the matcher's batch that carries the update
+    /// could never be built (audit 2026-10-30 E1).
+    pub keeper_tip: Option<i64>,
 }
 
 impl ListingRules {
@@ -465,6 +469,11 @@ impl ListingRules {
         }
         if o.carrier < self.min_carrier_sompi {
             return Err("carrier_below_minimum".into());
+        }
+        if let Some(tip) = o.keeper_tip {
+            if (o.carrier as i128) - (tip as i128) < kob_protocol::tx::COVENANT_OUTPUT_MIN as i128 {
+                return Err("keeper_tip_leaves_dust".into());
+            }
         }
         Ok(())
     }
@@ -824,6 +833,33 @@ mod tests {
         assert_eq!(rules.evaluate(&t, &order(9)), Err("genesis_not_verified".into()));
         // off by default
         assert!(!ListingRules::default().require_genesis_verified);
+    }
+
+    /// A keeper tip that leaves the continuation of an arming update below the covenant-output bound is not listed (audit
+    /// 2026-10-30 E1: the update could never be built).
+    #[test]
+    fn a_keeper_tip_that_leaves_a_dust_continuation_is_not_listed() {
+        let rules = ListingRules { require_allowlist: false, min_order_value_sompi: 0, max_expiry_span_daa: 1 << 40, ..Default::default() };
+        let t = TokenAllowlist::default();
+        let bound = kob_protocol::tx::COVENANT_OUTPUT_MIN;
+        let order = |carrier: u64, tip: Option<i64>| ListingInput {
+            token_cov_id: Some(h(1)),
+            scale: Some(1),
+            amount: Some(1),
+            price: Some(1),
+            expiry_daa: Some(1),
+            genesis_daa: 1,
+            carrier,
+            keeper_tip: tip,
+            ..Default::default()
+        };
+        let reason = |o: ListingInput| rules.evaluate(&t, &o).err();
+        // no update, or a tip that leaves the bound: not this rule's business (the other rules may still refuse)
+        assert_ne!(reason(order(bound + 1_000, Some(1_000))), Some("keeper_tip_leaves_dust".into()));
+        assert_ne!(reason(order(bound + 1_000, None)), Some("keeper_tip_leaves_dust".into()));
+        assert_eq!(reason(order(bound + 999, Some(1_000))), Some("keeper_tip_leaves_dust".into()));
+        assert_eq!(reason(order(50_000_000, Some(49_999_999))), Some("keeper_tip_leaves_dust".into()));
+        assert_eq!(reason(order(1, Some(i64::MAX))), Some("keeper_tip_leaves_dust".into()));
     }
 
     /// The list says which registry document it was read from (path and SHA-256), so a client can check the operator's judgements.

@@ -406,6 +406,11 @@ pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
             let Some(t) = s.keeper_take(o.order.utxo.amount.min(i64::MAX as u64) as i64, s.stop_price) else { continue };
             tip = t;
         }
+        // the continuation (the order's value less the keeper's take) must clear the covenant-output bound, or the builder
+        // refuses the whole transaction it is attached to (a hostile `keeperTip` near the order's value)
+        if o.order.utxo.amount.min(i64::MAX as u64) as i64 - tip < COV_OUTPUT_MIN {
+            continue;
+        }
         let fee_floor = token_program(&o.order.state)
             .and_then(|p| kob_protocol::defaults::tips(p).ok())
             .map(|x| x.update_fee.min(i64::MAX as u64) as i64)

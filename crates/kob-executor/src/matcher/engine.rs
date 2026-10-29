@@ -317,15 +317,17 @@ fn named_victim(plan: &Plan, lowered: &Lowered, err: &str) -> Option<CovId> {
 /// find it are planned again); a larger plan leaves out the lower-priority half of its fills for the next attempt, and a
 /// plan that then passes is the batch (the fills left out are planned in the next batches of the tick). So no order a
 /// refusal does not come from sits out more than the attempts that look for it, never the tick (`None`: nothing left).
+/// The arming updates of the plan are suspects too, after the fills (a refusal an update causes names no fill).
 fn bisect(plan: &Plan, probe: &mut BTreeSet<CovId>) -> Option<Option<CovId>> {
-    match plan.fills.len() {
+    let ids: Vec<CovId> = plan.fills.iter().map(|f| f.cand.id).chain(plan.updates.iter().map(|u| u.id)).collect();
+    match ids.len() {
         0 => None,
         1 => {
             probe.clear();
-            Some(Some(plan.fills[0].cand.id))
+            Some(Some(ids[0]))
         }
         k => {
-            probe.extend(plan.fills[k - k / 2..].iter().map(|f| f.cand.id));
+            probe.extend(ids[k - k / 2..].iter().copied());
             Some(None)
         }
     }
@@ -360,6 +362,12 @@ pub fn lowering_fill_leg(err: &str) -> Option<usize> {
 /// that the booked exit of leg `i` re-arms). That entry is left out of the batch, so the exit is not merged into it.
 pub fn lowering_entry_leg(err: &str) -> Option<usize> {
     leg_named(err, "entry of leg ")
+}
+
+/// The update (`plan.updates[i]`) whose continuation the builder refused (`arming update <i>: ...`, a continuation below the
+/// covenant-output bound). That order is left out of the batch.
+pub fn lowering_update(err: &str) -> Option<usize> {
+    leg_named(err, "arming update ")
 }
 
 fn leg_named(err: &str, prefix: &str) -> Option<usize> {
@@ -667,6 +675,13 @@ impl<'a> Tick<'a> {
                     // A refusal of the fill the plan chose for one order (its quantity, its continuation, its evidence): that
                     // order sits out this batch, the other legs (of any book) are planned again without it.
                     if let Some(id) = lowering_fill_leg(&e).and_then(|i| plan.fills.get(i)).map(|f| f.cand.id) {
+                        ex.insert(id);
+                        probe.clear();
+                        last = None;
+                        continue;
+                    }
+                    // A refusal of the continuation of an arming update: that order sits out this batch.
+                    if let Some(id) = lowering_update(&e).and_then(|i| plan.updates.get(i)).map(|u| u.id) {
                         ex.insert(id);
                         probe.clear();
                         last = None;

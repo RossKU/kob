@@ -3060,7 +3060,16 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
     for (k, (at, next, take)) in update_outs.into_iter().enumerate() {
         let u = &b.updates[k];
         let cov = u.order.utxo.covenant_id.expect("checked");
-        d.add_output(pos(u.order.utxo.amount as i64 - take, "update continuation")?, next.spk(), Some((at as u16, cov)));
+        // a continuation below the covenant-output bound could never be mined: refused here, naming the update (`seal` would
+        // refuse the whole transaction without knowing which update made it)
+        let cont = u.order.utxo.amount as i64 - take;
+        if cont < crate::tx::COVENANT_OUTPUT_MIN as i64 {
+            return invalid(format!(
+                "arming update {k}: the continuation of {cont} sompi is below {} sompi (the order's value less the keeper's take {take}): its KIP-9 storage mass alone exceeds the block limit",
+                crate::tx::COVENANT_OUTPUT_MIN
+            ));
+        }
+        d.add_output(pos(cont, "update continuation")?, next.spk(), Some((at as u16, cov)));
     }
     for p in &b.payments {
         d.add_output(pos(p.amount as i64, "payment")?, spk_from_string(&p.script_public_key)?, None);
