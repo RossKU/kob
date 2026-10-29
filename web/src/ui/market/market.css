@@ -245,13 +245,25 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .idb .tk-icon { --tk-size: var(--idb); }
 /* the fingerprint is one size smaller than the icon and centred on it (the block aligns its items in the middle) */
 .idb .fp { flex: none; display: block; height: calc(var(--idb) * 0.8); width: calc(var(--idb) * 0.8 * 100 / 132); border-radius: calc(var(--idb) * 0.1); }
+/* list rows: the icon is as tall as the row's text block allows, so the row keeps its height (two text lines on a wide screen: 48 px of text; the identity
+   block's width costs the text a little room, which a bigger icon on a narrow row would pay for with another wrapped line, so the sizes step down with the width;
+   measured with the e2e rows at 16 widths). The letter in a fallback icon follows the size (.tk-icon). */
+.idb-md { --idb: 48px; gap: 2px; }
+@media (max-width: 959px) {
+  .idb-md { --idb: 44px; }
+}
+@media (max-width: 599px) {
+  .idb-md { --idb: 46px; }
+}
+@media (max-width: 439px) {
+  .idb-md { --idb: 40px; }
+}
 @media (max-width: 759px) {
-  .idb-md { --idb: 36px; gap: 4px; }
   .idb-lg { --idb: 52px; gap: 6px; }
 }
 
 /* ---- a list row: line 1 = ticker (bold), name, "via kascov", warning sign; line 2 = short covenant id with a copy button, badges */
-.ml-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ml-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ml-name-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ml-line1, .ml-line2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
 .ml-line2 { align-items: center; gap: 2px 8px; }
