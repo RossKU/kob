@@ -61,7 +61,7 @@ identified by its **covenant id**, a 64-character hex string; the ticker is only
   A search or a pasted covenant id finds it anyway. A token the list does not know can be added with "Add an unknown token" (paste
   its covenant id, "Look up"); the indexer lists a token only after its first order was placed.
 * **Declared by its creator.** A name that is not in the page's registry comes from the token's own on-chain record (KCC-23). The
-  page marks it "declared by its creator": the creator's claim, which nobody has checked. KOB keeps no list of good tokens and
+  page marks it "declared, bound by ancestry": a declaration recorded on chain with the token (whoever funded the coin its creation spent chose it), which nobody has checked. KOB keeps no list of good tokens and
   decides nothing about any token.
 * **Names and icons from kascov.io.** KOB keeps no list of tokens of its own. The Market list is completed from the public
   explorer kascov.io: it adds the tokens of a program this build trades on this network that no order has named yet (they read
@@ -108,7 +108,7 @@ reason. A copy of the evidence of a token that verified is kept in this browser 
 
 On a token page the badges sit on one line under the pair selector and each badge's sentence is its tooltip (the order ticket's badge opens the
 same sentence on a tap). The token-family chip ("KCC-20") has the token program with its review status and, for a token the registry does not list,
-where its decimals come from as its tooltip. The header itself is one short covenant id with a copy button, the name, "declared by its creator" where
+where its decimals come from as its tooltip. The header itself is one short covenant id with a copy button, the name, "declared, bound by ancestry" where
 that applies, the link to kascov.io and "Live"; the full id and the decimals are in the token facts at the bottom of the page. A real warning (issuer
 powers, a cross-check problem, a decimals conflict) is a line in the page. In the market list a badge shows its sentence as a tooltip, and the
 legend above the list ("What do the badges mean?") opens every sentence, which a touch screen without tooltips needs. A token

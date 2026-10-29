@@ -178,10 +178,18 @@ Whether the issued tokens can be found again depends on whether the genesis name
   the creator's own (at once) are verified in kob-wasm
   against the covenant id asked for, kept in memory and, as proofs, in localStorage (re-verified when read back). The facts a token
   is shown with, in order (`app/token-display.ts`):
-  1. its verified declaration (marked "declared by its creator" for a token the registry does not list: the creator's own claim, not
-     reviewed);
-  2. without a declaration (a token created before KCC-23: its id cannot commit to one), as before: the registry entry, this
-     browser's issuance record, the decimals of its market's price scale, else 8 assumed.
+  1. its verified declaration (marked "declared, bound by ancestry" for a token the registry does not list: a declaration in a transaction whose output the
+     genesis spent, so whoever funded that coin chose it, which is not always the creator; not reviewed);
+  2. without a declaration (a token created before KCC-23: its id cannot commit to one), as before: the registry entry, the default of
+     the token's program (a launchpad's convention, e.g. KaspaRocket 3), this browser's issuance record, the decimals of its market's
+     price scale, else 8 assumed.
+
+  **One order of decimals everywhere** (the web app, the CLI and the executor's `/v1/tokens` use it; the audit of 2026-10-29 found them
+  in two orders): the verified declaration; then the registry entry (or the lists the executor reports; where the two name different
+  decimals nothing is planned, see "Registry and chain disagree" below); then the program's default decimals; then, in the web app
+  only, this browser's issuance record; then the decimals of the market's price scale (the scale of its orders is `10^min(decimals, 9)`;
+  the CLI's `--decimals` plays the same part for a token's first order); else 8, said to be assumed. The open-list gate (`evaluate`, since
+  `419bcdb7`) already holds an order whose `standard_scale` is not the one the declared decimals give.
 * **Names from a token list service (display only).** The market list of the web app is completed from a service such as kascov.io
   (`data/kascov.ts`, `docs/ops/web-hosting.md`): it supplies the creator's claimed ticker, name and image for tokens the steps above
   name nothing for, labelled "declared by its creator", and the tokens of a program this build trades that no order has named yet.

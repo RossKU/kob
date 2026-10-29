@@ -129,7 +129,7 @@ test.describe('token issuance', () => {
     await expect(header.getByTestId('token-name')).toHaveText('New Example Coin');
     await expect(header.getByTestId('token-title')).toContainText('NEWKCC');
     await expect(header.getByTestId('token-decimals-note')).toHaveAttribute('data-source', 'declared');
-    await expect(header.getByTestId('token-decimals-note')).toContainText('declared by its creator');
+    await expect(header.getByTestId('token-decimals-note')).toContainText('declared, bound by ancestry');
     await expect(header.getByTestId('badge-family')).toHaveAttribute('title', /whole tokens of 2 decimals, as its creator declared at creation/);
     await expect(header).not.toContainText('carries no decimals');
   });

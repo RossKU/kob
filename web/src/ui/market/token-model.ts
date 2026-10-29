@@ -141,7 +141,7 @@ export interface TokenRow {
   /** registry ticker, or the SANITIZED ticker the indexer reported */
   ticker: string;
   name: string | null;
-  /** a token the registry does not list, named by its verified KCC-23 declaration (`unknownRow`): marked "declared by its creator" where its name is shown */
+  /** a token the registry does not list, named by its verified KCC-23 declaration (`unknownRow`): marked "declared, bound by ancestry" where its name is shown */
   declared?: true;
   source: TokenSource;
   /** null for tokens that are not in the registry */

@@ -109,7 +109,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // browser's issuance ticker, else its covenant id), else the display name; never an empty name in a title, a unit or a hint
   const shown = useMemo(() => displayToken(registry, services.config.network, id), [registry, services.config.network, id, declared]);
   // where the token's facts are its declaration's (no registry entry, or one that disagrees with the chain): its name as declared, and the marker
-  // the wallet views show ("declared by its creator", "facts disagree"); never one of this browser's issuance or of assumed decimals here, where the
+  // the wallet views show ("declared, bound by ancestry", "facts disagree"); never one of this browser's issuance or of assumed decimals here, where the
   // decimals are the market's (the banner under the title says where they come from)
   const onChain = !!shown && (shown.decimalsSource === 'declared' || !!shown.declarationConflicts?.length);
   const row = useMemo(() => {
