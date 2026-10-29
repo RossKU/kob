@@ -182,6 +182,36 @@ test.describe('phone', () => {
     await expect(page.getByTestId('theme-toggle')).not.toHaveAttribute('data-theme', before!);
   });
 
+  test('the menu closes on a tap of the tab already open, on a tap outside and on Escape (and stays for the theme toggle)', async ({ appPage: page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto('/#/market');
+    const button = page.getByTestId('menu-button');
+    // the tab of the page already open: no navigation, the menu still closes
+    await button.click();
+    await expect(page.getByTestId('menu-panel')).toBeVisible();
+    await page.getByTestId('nav-market').click();
+    await expect(page.getByTestId('menu-panel')).toHaveCount(0);
+    await expect(page).toHaveURL(/#\/market$/);
+    // a tap outside the menu
+    await button.click();
+    await expect(page.getByTestId('menu-panel')).toBeVisible();
+    await page.mouse.click(20, 780);
+    await expect(page.getByTestId('menu-panel')).toHaveCount(0);
+    // another tab: navigation and closing
+    await button.click();
+    await page.getByTestId('nav-orders').click();
+    await expect(page.getByTestId('menu-panel')).toHaveCount(0);
+    await expect(page).toHaveURL(/#\/orders/);
+    // Escape
+    await button.click();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('menu-panel')).toHaveCount(0);
+    // the theme toggle changes the page in place: the menu stays open so the change is seen
+    await button.click();
+    await page.getByTestId('theme-toggle').click();
+    await expect(page.getByTestId('menu-panel')).toBeVisible();
+  });
+
   test('Connect opens a sheet: Wallet connects the extension, the connected header shows the short address in one row (on a wide font too)', async ({ appPage: page }) => {
     await wideFonts(page);
     await page.setViewportSize({ width: 375, height: 800 });

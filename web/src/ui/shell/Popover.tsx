@@ -16,6 +16,8 @@ export interface PopoverProps {
   /** the panel's align under the button: the end of the row by default */
   align?: 'start' | 'end';
   panelTestId?: string;
+  /** a tap on a link inside the panel closes it, also when the link leads to the page already open (no hash change then) */
+  closeOnLink?: boolean;
   children: ComponentChildren;
 }
 
@@ -67,7 +69,14 @@ export function Popover(props: PopoverProps) {
         {props.trigger}
       </button>
       {open ? (
-        <div id={id} class={`hp-panel${props.align === 'start' ? ' hp-start' : ''}`} role="region" aria-label={props.label} data-testid={props.panelTestId}>
+        <div
+          id={id}
+          class={`hp-panel${props.align === 'start' ? ' hp-start' : ''}`}
+          role="region"
+          aria-label={props.label}
+          data-testid={props.panelTestId}
+          onClick={props.closeOnLink ? (e) => (e.target as HTMLElement).closest('a[href]') && setOpen(false) : undefined}
+        >
           {props.children}
         </div>
       ) : null}

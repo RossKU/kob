@@ -99,6 +99,7 @@ function Menu(props: { active: ReturnType<typeof navOf>; network: string }) {
     <Popover
       label={t('shell.menu')}
       anchor="header"
+      closeOnLink
       triggerClass="menu-button"
       triggerAttrs={{ 'data-testid': 'menu-button' }}
       trigger={<MenuIcon />}
