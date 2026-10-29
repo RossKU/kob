@@ -270,6 +270,9 @@ small, .small { font-size: 0.85em; }
 }
 .spinner-lg { width: 2em; height: 2em; border-width: 3px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.refresh-glyph { display: inline-block; line-height: 1; }
+.refresh-glyph.is-spinning { animation: spin 0.8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .refresh-glyph.is-spinning { animation: none; opacity: 0.5; } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 .loading-row { display: flex; gap: 8px; align-items: center; color: var(--muted); padding: 12px 0; }
 

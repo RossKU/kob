@@ -42,8 +42,8 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
         expect(fp!.x + fp!.width).toBeLessThan(pair!.x);
         expect(pair!.x + pair!.width).toBeLessThanOrEqual(flip!.x + 1);
       }
-      // the fingerprint is one size smaller than the icon and centred on it
-      expect(fp!.height).toBeLessThan(icon!.height - 4);
+      // the fingerprint is 60 % of the icon and centred on it
+      expect(Math.abs(fp!.height / icon!.height - 0.6)).toBeLessThan(0.03);
       expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
       // the covenant id is said once, short, with a copy button (the title for screen readers is not drawn)
       await expect(header.getByTestId('token-short-id')).toHaveText(SHORT);

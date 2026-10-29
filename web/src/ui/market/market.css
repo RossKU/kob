@@ -118,14 +118,17 @@ body:has(.market-page) .container { max-width: 1520px; }
 
 .ob { display: flex; flex-direction: column; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 .ob-tools { display: flex; gap: 6px; align-items: center; }
-.ob-tools .select { min-height: 26px; padding: 1px 6px; font-size: 0.8rem; width: auto; }
+.ob-tools .select { min-height: 26px; padding: 1px 6px; font-size: 0.8rem; width: 7.5rem; text-overflow: ellipsis; } /* a fixed width: the tick step it shows changes with the book and must not move the header */
 .ob-head, .ob .book-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
-.ob-head { padding: 2px 8px 4px; color: var(--muted); font-size: 0.74rem; }
+.ob-head { padding: 2px 8px 4px; color: var(--muted); font-size: 0.74rem; height: 2.9em; overflow: hidden; } /* two lines of the column titles, whatever their text */
 /* the column titles carry their units ("Price (TICKER / KAS)"): they wrap instead of losing the unit to an ellipsis */
 .ob-head { align-items: end; }
 .ob-head > span { white-space: normal; overflow-wrap: break-word; min-width: 0; }
 .ob-head > span { text-align: right; } /* every numeric column is right-aligned so the decimal points line up (fixed decimals per column) */
-.ob .book-side { min-height: calc(var(--ob-rows, 12) * 21px); }
+/* a side is exactly its slots tall (levels, then blank slots): the block never grows or shrinks with the number of levels */
+.ob .book-side { position: relative; height: calc(var(--ob-rows, 12) * 21px); overflow: hidden; }
+.ob .book-blank { pointer-events: none; }
+.ob .ob-none { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .ob .book-side[data-testid='book-asks'] { justify-content: flex-end; }
 .ob .book-row { height: 21px; padding: 0 8px; align-items: center; font-size: 0.82rem; line-height: 21px; }
 .ob .book-row > span { text-align: right; }
@@ -133,19 +136,18 @@ body:has(.market-page) .container { max-width: 1520px; }
 .ob .book-bar { opacity: 1; }
 .ob .book-row:hover { background: var(--surface-3); }
 .ob-mid {
-  display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; justify-content: space-between; padding: 6px 8px; margin: 4px 0;
+  display: flex; flex-wrap: nowrap; gap: 2px 12px; align-items: center; justify-content: space-between; padding: 0 8px; margin: 4px 0; height: 36px; overflow: hidden; white-space: nowrap;
   border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
 }
 .ob-last { font-size: 1.1rem; font-weight: 700; }
 .ob-mid .small { font-size: 0.76rem; }
-.ob-foot { margin: 6px 0 0; font-size: 0.74rem; color: var(--muted); }
-.ob .muted.center { padding: 8px 0; }
+.ob-foot { margin: 6px 0 0; font-size: 0.74rem; color: var(--muted); height: 3.1em; overflow: hidden; } /* two lines: the note on estimated sizes comes and goes with the book */
 
 /* ------------------------------------------------------------------ trade tape */
 
 .tape { font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 .tape-head, .tape-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr); gap: 6px; padding: 0 8px; }
-.tape-head { color: var(--muted); font-size: 0.74rem; padding-bottom: 4px; }
+.tape-head { color: var(--muted); font-size: 0.74rem; padding-bottom: 4px; height: 2.9em; overflow: hidden; align-items: end; } /* two lines of titles, whatever their text */
 .tape-head > span, .tape-row > span { text-align: right; }
 .tape-body { height: 262px; overflow-y: auto; overscroll-behavior: contain; }
 .tape-row { height: 21px; line-height: 21px; }
@@ -211,6 +213,9 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .tf { font-size: 0.85rem; min-width: 0; }
 .tf-badges { display: flex; flex-wrap: wrap; gap: 4px; }
 .tf-list { margin: 4px 0 0; padding-left: 18px; color: var(--muted); }
+/* the sentences of a compact fact line open as an overlay under the chips: opening them (or a check result that changes their text) pushes nothing down */
+.tf-compact { position: relative; }
+.tf-compact[open] > .tf-list { position: absolute; left: 0; right: 0; top: 100%; z-index: 20; margin: 4px 0 0; padding: 8px 10px 8px 26px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .tf-compact > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; list-style: none; }
 .tf-compact > summary::-webkit-details-marker { display: none; }
 .tf-more { text-decoration: underline dotted; text-underline-offset: 2px; }
@@ -241,12 +246,12 @@ a.tape-row:hover .tape-time { color: var(--text); }
 }
 .tk-icon img { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--surface, #fff); }
 
-/* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, the icon is --idb tall, the fingerprint 80 % of it */
+/* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, the icon is --idb tall, the fingerprint 60 % of it */
 .idb { --idb: 40px; flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .idb-lg { --idb: 64px; gap: 8px; }
 .idb .tk-icon { --tk-size: var(--idb); }
-/* the fingerprint is one size smaller than the icon and centred on it (the block aligns its items in the middle) */
-.idb .fp { flex: none; display: block; height: calc(var(--idb) * 0.8); width: calc(var(--idb) * 0.8 * 100 / 132); border-radius: calc(var(--idb) * 0.1); }
+/* the fingerprint is 60 % of the icon and centred on it (the block aligns its items in the middle) */
+.idb .fp { flex: none; display: block; height: calc(var(--idb) * 0.6); width: calc(var(--idb) * 0.6 * 100 / 132); border-radius: calc(var(--idb) * 0.08); }
 /* list rows: the icon is as tall as the row's text block allows, so the row keeps its height (two text lines on a wide screen: 48 px of text; the identity
    block's width costs the text a little room, which a bigger icon on a narrow row would pay for with another wrapped line, so the sizes step down with the width;
    measured with the e2e rows at 16 widths). The letter in a fallback icon follows the size (.tk-icon). */

@@ -38,7 +38,7 @@ for (const width of [1280, 1024, 900, 880]) {
     const wide = (await page.getByTestId('nav-market').count()) === 1;
     if (width >= 880) expect(wide, `the desktop row fits ${width} px on a wide font`).toBe(true);
     const ids = wide
-      ? ['brand', 'nav-market', 'nav-settings', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'wallet-connect-local-key', 'theme-toggle', 'notify-bell']
+      ? ['brand', 'nav-market', 'nav-settings', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'theme-toggle', 'notify-bell']
       : ['brand', 'network-chip', 'wallet-connect', 'notify-bell', 'menu-button'];
     const { ys, right } = await rowOf(page, ids);
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
@@ -51,19 +51,15 @@ for (const width of [1280, 1024, 900, 880]) {
 test('desktop: a row that does not fit (wide fonts, a long translation) becomes the phone layout, still one row, and comes back when the window is wider', async ({ appPage: page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/#/market');
-  await expect(page.getByTestId('wallet-connect-local-key')).toBeVisible();
+  await expect(page.getByTestId('wallet-connect-kasware')).toBeVisible();
   await expect(page.getByTestId('nav-market')).toBeVisible();
-  await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip, .header .brand span { letter-spacing: 6px; }' });
+  await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip, .header .brand span { letter-spacing: 12px; }' });
   await expect(page.getByTestId('menu-button')).toBeVisible();
   await expect(page.getByTestId('nav-market')).toHaveCount(0);
   const { ys, right } = await rowOf(page, ['menu-button', 'brand', 'network-chip', 'wallet-connect', 'notify-bell']);
   expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
   expect(right).toBeLessThanOrEqual(1280);
   expect(await noScroll(page)).toBe(true);
-  // the way to every control stays: Connect opens the sheet with Private key
-  await page.getByTestId('wallet-connect').click();
-  await expect(page.getByTestId('wallet-sheet').getByRole('button', { name: 'Private key' })).toBeVisible();
-  await page.keyboard.press('Escape');
   // a much wider window fits the row again
   await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip, .header .brand span { letter-spacing: 0 !important; }' });
   await page.setViewportSize({ width: 1500, height: 800 });
@@ -82,7 +78,7 @@ test('a header that started narrow comes back to the full row when the window is
     await expect(page.getByTestId('nav-market'), `the tabs at ${width} px`).toBeVisible();
     await expect(page.getByTestId('nav-settings')).toBeVisible();
     await expect(page.getByTestId('menu-button')).toHaveCount(0);
-    const { ys, right } = await rowOf(page, ['brand', 'nav-market', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'wallet-connect-local-key', 'theme-toggle', 'notify-bell']);
+    const { ys, right } = await rowOf(page, ['brand', 'nav-market', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'theme-toggle', 'notify-bell']);
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
     expect(right).toBeLessThanOrEqual(width);
   }
@@ -95,7 +91,7 @@ test('a row squeezed by wide texts comes back when the room is there: tabs again
   await page.setViewportSize({ width: 1000, height: 800 });
   await page.goto('/#/market');
   await expect(page.getByTestId('nav-market')).toBeVisible();
-  await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip { letter-spacing: 6px; }' });
+  await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip { letter-spacing: 12px; }' });
   await expect(page.getByTestId('menu-button')).toBeVisible();
   await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip { letter-spacing: 0 !important; }' });
   // the same width: the texts are normal again and the row fits, so it is shown again without any resize
@@ -212,15 +208,12 @@ test.describe('phone', () => {
     await expect(page.getByTestId('menu-panel')).toBeVisible();
   });
 
-  test('Connect opens a sheet: Wallet connects the extension, the connected header shows the short address in one row (on a wide font too)', async ({ appPage: page }) => {
+  test('Connect connects the extension at once (no sheet), the connected header shows the short address in one row (on a wide font too)', async ({ appPage: page }) => {
     await wideFonts(page);
     await page.setViewportSize({ width: 375, height: 800 });
     await page.goto('/#/market');
     await page.getByTestId('wallet-connect').click();
-    const sheet = page.getByTestId('wallet-sheet');
-    await expect(sheet.getByRole('button', { name: 'Wallet' })).toBeVisible();
-    await expect(sheet.getByRole('button', { name: 'Private key' })).toBeVisible();
-    await sheet.getByRole('button', { name: 'Wallet' }).click();
+    await expect(page.getByTestId('wallet-sheet')).toHaveCount(0);
     await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{3}…\w{4}$/);
     await expect(page.getByTestId('wallet-sheet')).toHaveCount(0);
     // the runner's fonts are wider still than Verdana: a little more letter spacing stands for them

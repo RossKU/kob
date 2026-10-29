@@ -1,6 +1,5 @@
 // The private-key signer (signer.html, a sandboxed frame) and its entry point in the app. Keys `signer.*`.
 export default {
-  'signer.option': 'Private key',
   'signer.recommend': 'A browser extension wallet is recommended.',
   'signer.signHead': 'Sign with your key',
   'signer.unsupportedTitle': 'Private key is not available here',
@@ -13,8 +12,7 @@ export default {
   'signer.key.placeholder': 'Private key (64 hex characters)',
   'signer.key.connect': 'Connect',
   'signer.guide.what': 'Paste a private key: 64 hexadecimal characters (0-9, a-f). A seed phrase of 12 or 24 words does not work here.',
-  'signer.guide.forget': 'The key stays in this tab only. Reloading or closing the page forgets it, and you enter it again.',
-  'signer.guide.small': 'Use a dedicated key with a small balance, not your main wallet.',
+  'signer.guide.caution': 'The key stays in this tab\'s memory only (a reload forgets it). Testnet and small amounts only.',
   'signer.key.invalid': 'Not a valid private key (64 hex characters expected).',
   'signer.key.failed': 'The key could not be loaded.',
   'signer.idle': 'Key {key} is loaded in this tab only.',

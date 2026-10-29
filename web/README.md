@@ -259,7 +259,7 @@ stylesheet and wasm are cross-origin requests: `/assets/*` must be served with `
 
 ### Private key wallet
 
-"Private key" in the header opens `signer.html` in `<iframe sandbox="allow-scripts">` (no `allow-same-origin`). The key is typed into that frame and
+The header's one **Connect** button opens `signer.html` when no extension wallet is detected (on a desktop with an extension: Settings > Private key); it opens in `<iframe sandbox="allow-scripts">` (no `allow-same-origin`). The key is typed into that frame and
 held in its memory only (the SDK's `PrivateKey`; no storage of any kind, the frame has none); a reload, closing the tab, disconnecting or removing the
 frame forgets it. The app and the frame exchange only the validated messages of `src/signer/protocol.ts`: the unsigned transaction goes in, the
 public key and signatures come out. The frame decodes every request itself with kob-wasm (`decodeSigning`), shows the net effect and the fee, and

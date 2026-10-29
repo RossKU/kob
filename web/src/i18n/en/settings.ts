@@ -1,4 +1,8 @@
 export default {
+  'settings.key.title': 'Private key',
+  'settings.key.explain': 'Sign with a key held in this tab instead of a browser extension wallet. The key stays in the tab\'s memory only; use it on testnet or for small amounts.',
+  'settings.key.open': 'Use a private key',
+  'settings.key.disconnectFirst': 'Disconnect the connected wallet first.',
   'settings.icons.title': 'Token names and icons',
   'settings.icons.explain': "The market list is completed with tokens, names and icons from a token list service (by default kascov.io): what each token's creator claimed in its creation record, shown as declared by its creator and not checked by KOB. Opening the list asks that service, which sees your IP address. Facts (supply, decimals, prices, orders) never come from it.",
   'settings.icons.source': 'Source of token names and icons: {url}',

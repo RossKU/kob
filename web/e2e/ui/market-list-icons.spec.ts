@@ -1,5 +1,5 @@
 // The Market list's token icon is as tall as the row's text block allows, and never makes a row taller: the row is its text block plus its padding, whatever
-// the icon. The fingerprint is 80 % of the icon and centred on it; the letter of a fallback icon scales with the icon. Every row has the same three lines (the
+// the icon. The fingerprint is 60 % of the icon and centred on it; the letter of a fallback icon scales with the icon. Every row has the same three lines (the
 // ticker and the name on one line, the id fragment, the badges on their own line), so rows with no fact badge, one and two, and a long name are all as tall: one icon pitch.
 import { readFileSync } from 'node:fs';
 import { test, expect } from '../fixtures';
@@ -28,8 +28,8 @@ for (const [width, iconMin, iconMax] of [[1280, 46, 48], [880, 40, 48], [390, 38
       expect(r.row - r.text).toBeLessThan(width < 600 ? 14 : 8);
       expect(r.icon).toBeGreaterThanOrEqual(iconMin);
       expect(r.icon).toBeLessThanOrEqual(iconMax);
-      // the fingerprint: 80 % of the icon, centred on it
-      expect(Math.abs(r.fp - r.icon * 0.8)).toBeLessThan(1.5);
+      // the fingerprint: 60 % of the icon, centred on it
+      expect(Math.abs(r.fp - r.icon * 0.6)).toBeLessThan(1.5);
       expect(Math.abs(r.fpMid - r.iconMid)).toBeLessThan(1.5);
       // the letter follows the icon
       expect(Math.abs(r.letter - Math.max(12, r.icon * 0.45))).toBeLessThan(1);

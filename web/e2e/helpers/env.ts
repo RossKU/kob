@@ -45,15 +45,18 @@ export async function openMarket(page: Page, mock: MockClient, opts: OpenOptions
 }
 
 /**
- * Opens the way to a connect option: a desktop with one extension wallet shows its button at once (`wallet-connect-<id>`); a phone (one "Connect" button
- * that opens a sheet), a desktop with several or no extension (a dialog) first press `wallet-connect`.
+ * Presses the one Connect button of the header, whichever it is called: a desktop with one extension wallet shows `wallet-connect-<id>`, with none
+ * `wallet-connect-local-key` (it opens the private key entry), with several `wallet-connect` (a dialog with one button each); a phone has `wallet-connect`
+ * (one extension: connects at once; none: the private key entry; several: the dialog). Returns when the press is made; the caller waits for its effect.
  */
 export async function openConnect(page: Page, optionTestId: string): Promise<void> {
   const option = page.getByTestId(optionTestId);
   // extensions inject late: a button of one detected wallet may be about to appear
-  if (await option.waitFor({ state: 'visible', timeout: 1_500 }).then(() => true, () => false)) return;
+  if (await option.waitFor({ state: 'visible', timeout: 1_500 }).then(() => true, () => false)) {
+    await option.click();
+    return;
+  }
   await page.getByTestId('wallet-connect').click();
-  await expect(option).toBeVisible();
 }
 
 /** Follows a tab of the header (`nav-orders` ...): on a phone the tabs are in the menu, which is opened first. */
@@ -72,12 +75,13 @@ export async function gotoNav(page: Page, testid: string): Promise<void> {
 export async function clickConnectOption(page: Page, optionTestId: string): Promise<void> {
   const option = page.getByTestId(optionTestId);
   await expect(async () => {
-    if (!(await option.isVisible())) {
-      const opener = page.getByTestId('wallet-connect');
-      if (await opener.isVisible()) await opener.click();
-      await expect(option).toBeVisible({ timeout: 1_500 });
+    if (await option.isVisible()) {
+      await option.click({ timeout: 2_000 });
+      return;
     }
-    await option.click({ timeout: 2_000 });
+    // the phone layout: its one Connect button connects the one extension, opens the private key entry or (several wallets) a dialog with the options
+    await page.getByTestId('wallet-connect').click({ timeout: 2_000 });
+    if (await option.isVisible()) await option.click({ timeout: 2_000 });
   }).toPass({ timeout: 20_000 });
 }
 

@@ -11,7 +11,7 @@ async function open(page: Page, mock: import('../fixtures').MockClient): Promise
   return id;
 }
 
-const asks = (page: Page) => page.getByTestId(TESTID.bookAsks).locator('.book-row');
+const asks = (page: Page) => page.getByTestId(TESTID.bookAsks).locator('.book-row:not(.book-blank)');
 
 test.describe('order book keeps the last good book', () => {
   test.use({ autoOpen: false });

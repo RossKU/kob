@@ -143,7 +143,7 @@ export function TokenFacts(props: { rows: readonly FactRow[]; compact?: boolean;
     );
   return props.compact ? (
     <details class="tf tf-compact" data-testid={testid}>
-      <summary>
+      <summary title={rows.map((r) => r.facts.map((id: TokenFactId) => factText(r, id)).join(' ')).join(' ')}>
         <span class="tf-badges">{badges}</span>
         <span class="tf-more small muted">{t('market.fact.more')}</span>
       </summary>

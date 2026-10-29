@@ -146,7 +146,6 @@ test.describe('my orders', () => {
     await seedAsk(mock);
     await appPage.setViewportSize({ width: 390, height: 800 });
     await openConnect(appPage, TESTID.walletConnectKasware);
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
     await appPage.goto('/#/orders');
     await expect(appPage.getByTestId(TESTID.ordersList)).toBeVisible();
     const over = await appPage.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

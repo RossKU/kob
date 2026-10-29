@@ -355,8 +355,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
               {stale ? <Badge tone={health.assessment.level === 'bad' ? 'bad' : 'warn'} data-testid="book-stale">{t('market.book.stale')}</Badge> : null}
               {/* the steps come from the book's tick: no book on screen yet (loading, indexer unreachable), no grouping to offer */}
               {book.data ? <BookGrouping options={groupOptions} value={String(groupIdx)} onChange={(v) => (inverted ? setGroupIdxInv : setGroupIdxNative)(Math.max(0, Number(v) || 0))} /> : null}
-              <Button small variant="ghost" onClick={() => refreshAll(true)} loading={book.loading && !!book.data} title={t('common.refresh')} aria-label={t('common.refresh')} data-testid="book-refresh">
-                {'↻'}
+              {/* the glyph itself spins while the book is pulled: no spinner is added to the header, so the grouping box beside it never moves */}
+              <Button small variant="ghost" onClick={() => refreshAll(true)} title={t('common.refresh')} aria-label={t('common.refresh')} aria-busy={book.loading && !!book.data ? 'true' : undefined} data-testid="book-refresh">
+                <span class={`refresh-glyph${book.loading && !!book.data ? ' is-spinning' : ''}`} aria-hidden="true">{'↻'}</span>
               </Button>
             </>
           }

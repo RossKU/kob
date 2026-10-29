@@ -54,7 +54,7 @@ test.describe('indexer failover', () => {
     const reads = bookReads(page);
     const id = (await mock.token()).covenant_id as string;
     await page.goto(`/#/market/${id}`);
-    await expect(page.getByTestId('book-asks').locator('.book-row')).toHaveCount(10);
+    await expect(page.getByTestId('book-asks').locator('.book-row:not(.book-blank)')).toHaveCount(10);
     const primaryMid = await midOf(page);
     const primaryHost = new URL(mock.url).host;
     await expect(page.getByTestId('banner-backup-indexer')).toHaveCount(0);

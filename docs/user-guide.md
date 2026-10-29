@@ -17,7 +17,7 @@ Contents: [1 What you need](#1-what-you-need) | [2 Connect a wallet](#2-connect-
 ## 1. What you need
 
 * A **browser wallet extension on a desktop browser**: KasWare or Kaspire. This is the recommended setup.
-* Or, on a phone or where no extension exists, the app's own **Private key** option (section 11). It is for small balances.
+* Or, on a phone or where no extension exists, the app's own private key entry (section 11): the **Connect** button opens it by itself when there is no extension. It is for small balances.
 * A little KAS on the network the page uses. The header shows it as "Network: mainnet" or "Network: testnet-10", and your wallet
   must be on the same network. Testnet-10 coins have no value; you get them by mining or from a faucet (the repository's x402 example uses
   https://faucet-tn10.kaspanet.io, which sits behind a Cloudflare challenge, so open it in a browser).
@@ -26,15 +26,14 @@ Contents: [1 What you need](#1-what-you-need) | [2 Connect a wallet](#2-connect-
 
 ## 2. Connect a wallet
 
-1. Install **KasWare** or **Kaspire** in your desktop browser. The header has two buttons, **Connect wallet** and **Private key**. If the page
-   finds no extension, **Connect wallet** opens a dialog that says "No Kaspa wallet detected" with the links "Get KasWare" and "Get Kaspire" (on a
-   phone: extension wallets do not run in phone browsers, use Private key). The page notices a new extension by itself; extensions can take a few
-   seconds to appear.
-2. Press **Connect wallet** in the header (with two or more extensions it asks which one). Approve in the wallet popup. The header then shows
-   your address with the wallet's icon ("Connected with: KasWare" is its tooltip).
+1. Install **KasWare** or **Kaspire** in your desktop browser. The header has ONE button, **Connect**. With an extension it connects to it; with
+   both KasWare and Kaspire it asks which one. With no extension (every phone browser) it opens the private key entry straight away, with no menu
+   and no "no wallet detected" step. Extensions can take a few seconds to appear after the page opens: press **Connect** once they have.
+2. Press **Connect** in the header and approve in the wallet popup. The header then shows your address with the wallet's icon ("Connected with:
+   KasWare" is its tooltip) and the button becomes **Disconnect**.
 3. Check the network. If your wallet is on another network than the page, you see "Wrong wallet network: trading is blocked".
    Switch the network in the wallet; nothing can be signed until they match.
-4. **Cancelling needs a wallet that can sign a contract input.** KasWare, Kaspire and the Private key option are known to do it.
+4. **Cancelling needs a wallet that can sign a contract input.** KasWare, Kaspire and the private key entry are known to do it.
    For a wallet the app does not know, it asks once, before the first order, to "Sign a test cancel": a made-up cancel that is
    never sent. If that wallet cannot do it, the app says "{wallet} cannot cancel orders" and refuses to place orders with it (an
    order you cannot cancel would end only by a fill or by refund after expiry): use KasWare or Kaspire.
@@ -42,9 +41,9 @@ Contents: [1 What you need](#1-what-you-need) | [2 Connect a wallet](#2-connect-
 If you switch account in the wallet, the page reloads your balances and orders for the new account and resets any order form that
 was open. If the wallet locks or disconnects the site, the session closes ("no longer exposes an account"): unlock it and connect again.
 
-**Phone, iOS, Firefox.** Extension wallets do not run in phone browsers. The **Private key** option checks that you really see what
+**Phone, iOS, Firefox.** Extension wallets do not run in phone browsers. The **private key** entry checks that you really see what
 you sign, and it needs a browser feature (IntersectionObserver v2) that Chrome on Android and desktop Chromium browsers have, but
-**iOS browsers and Firefox do not**. There the option is greyed out and the page says why in text ("This browser cannot use the in-page
+**iOS browsers and Firefox do not**. There **Connect** says why in text ("This browser cannot use the in-page
 private key signer ... Use Chrome on Android, or open this page on a desktop with an extension wallet"). Section 11 covers the key.
 
 Kastle is off by default and not supported; the Settings switch "Offer the Kastle wallet" is experimental (Kastle cannot sign
@@ -262,9 +261,8 @@ first (My orders, Balances)."
 
 ## 9. Status banners: node and indexer
 
-The header is one row: the logo, the tabs (Market, My orders, Create token, Settings), a status dot, the chip "testnet-10 · pre-audit", the wallet
-buttons, the theme toggle and the bell. On a phone the tabs, the theme toggle and the status are behind the menu button (it closes when you open a page),
-the chip reads "tn10 · pre-audit" and one **Connect** button opens a sheet with "Wallet" and "Private key". The status dot is green, amber or red for the
+The header is one row: the logo, the tabs (Market, My orders, Create token, Settings), a status dot, the chip "testnet-10 · pre-audit", the **Connect** button (**Disconnect** and the address once connected), the theme toggle and the bell. On a phone the tabs, the theme toggle and the status are behind the menu button (it closes when you open a page),
+the chip reads "tn10 · pre-audit" and the one **Connect** button does what it does on a desktop. The status dot is green, amber or red for the
 worse of the **Node** ("reachable", "unreachable", "checking...", with the DAA score) and the **Indexer**; press it (or hover it) to read both. A
 problem is never only a dot: it is also a full-width banner under the header, as listed below.
 The indexer is the server that lists the book, trades and order status; the node is a Kaspa node that gives balances and takes
@@ -310,13 +308,15 @@ minimum). Neither is the "Priority tip" of the ticket, which goes to the matcher
 
 ## 11. Private-key guidance
 
-Use an extension wallet when you can. The **Private key** option exists for places where there is none.
+Use an extension wallet when you can. The private key entry exists for places where there is none.
 
-* Press **Private key** in the header. The key is typed into a separate, sandboxed frame ("Private key signer") that the page's own
+* Press **Connect** in the header: with no extension it opens the entry (on a desktop with an extension, **Settings > Private key > Use a private
+  key** does). The key is typed into a separate, sandboxed frame ("Private key signer") that the page's own
   code cannot read. It shows each transaction, decoded from the transaction itself, and signs only after you press **Approve**.
 * The frame asks for a **64-character hexadecimal key (0-9, a-f)**. A seed phrase of 12 or 24 words does **not** work.
-* **The key stays in this tab only.** Reloading or closing the page forgets it and you enter it again. If your phone discards the
-  background tab while you copy the key from another app, the session (and any ladder or cancel-all in progress) is lost.
+* **The key stays in this tab's memory only** (the form says so in one line: "Testnet and small amounts only"). Reloading or closing the page forgets it and you
+  enter it again. If your phone discards the background tab while you copy the key from another app, the session (and any ladder or
+  cancel-all in progress) is lost.
 * Use a **dedicated key with a small balance**, not your main wallet.
 * **Approve** stays locked until you have seen the whole request: "Keep this window fully on screen and scroll through every line.
   Anything over it, a zoomed page or a cut-off window keeps it locked."

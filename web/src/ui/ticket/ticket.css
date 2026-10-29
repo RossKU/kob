@@ -1,6 +1,10 @@
 /* Order ticket. Uses the CSS variables of src/styles.css (light + dark). Phone first, no horizontal scroll. */
-.tk { display: flex; flex-direction: column; gap: 12px; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px var(--gutter); }
+.tk { font-variant-numeric: tabular-nums; display: flex; flex-direction: column; gap: 12px; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px var(--gutter); }
 .tk h2 { margin: 0; }
+/* the title row has a fixed height; the "Calculating..." indicator is an overlay at its right end, so it never changes the layout of the ticket */
+.tk-titlerow { position: relative; display: flex; align-items: center; min-height: 2.25rem; }
+.tk-pending { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+.tk-pending .loading-row { margin: 0; }
 .tk h3 { margin: 0 0 6px; font-size: 1.05rem; }
 .tk h4 { margin: 12px 0 4px; font-size: 0.95rem; }
 .tk-form { display: flex; flex-direction: column; gap: 12px; }

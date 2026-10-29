@@ -32,11 +32,11 @@ async function connectKey(page: Page, key = SECRET): Promise<void> {
   await expect(f.getByTestId('signer-key')).toHaveAttribute('type', 'password');
   await expect(f.getByTestId('signer-key')).toHaveAttribute('autocomplete', 'off');
   await expect(f.getByTestId('signer-key')).toHaveAttribute('spellcheck', 'false');
-  // before anything is pasted: what the key is, what forgets it and which key to use
+  // before anything is pasted: what the key is, and the one line of caution (in memory of this tab only; testnet, small amounts)
   await expect(f.getByTestId('signer-guide')).toContainText('64 hexadecimal characters');
   await expect(f.getByTestId('signer-guide')).toContainText('seed phrase');
-  await expect(f.getByTestId('signer-guide')).toContainText('Reloading or closing the page forgets it');
-  await expect(f.getByTestId('signer-guide')).toContainText('dedicated key with a small balance');
+  await expect(f.getByTestId('signer-guide')).toContainText('stays in this tab');
+  await expect(f.getByTestId('signer-guide')).toContainText('Testnet and small amounts only');
   await f.getByTestId('signer-key').fill(key);
   await f.getByTestId('signer-connect').click();
 }
@@ -285,7 +285,7 @@ test.describe('an iPhone (no IntersectionObserver v2, no extension wallets)', ()
       delete (IntersectionObserverEntry.prototype as { isVisible?: boolean }).isVisible;
     });
     await openMarket(page, mock, { connect: false });
-    // the bar is one "Connect" button and nothing else; the sheet it opens has the reason, as text
+    // the bar is one "Connect" button and nothing else; with no extension it goes to the private key, which this browser cannot run: the reason, as text
     await expect(page.getByTestId('wallet-key-unsupported')).toHaveCount(0);
     await expect(page.getByTestId('wallet-install-hint')).toHaveCount(0);
     await expect(page.getByTestId('wallet-connect-list').getByRole('button')).toHaveText(['Connect']);
@@ -294,12 +294,9 @@ test.describe('an iPhone (no IntersectionObserver v2, no extension wallets)', ()
     await expect(why).toBeVisible();
     await expect(why).toContainText('iOS browsers and Firefox lack the feature');
     await expect(why).toContainText('Chrome on Android, or open this page on a desktop with an extension wallet (KasWare or Kaspire)');
-    await expect(page.getByTestId('wallet-connect-local-key')).toBeDisabled();
-    // no extension: what to do instead, no install links on a phone
-    const hint = page.getByTestId('wallet-install-hint');
-    await expect(hint).toContainText('Extension wallets do not run in phone browsers. Use Private key instead.');
-    await expect(hint).not.toContainText('Install');
-    await expect(hint.locator('a')).toHaveCount(0);
+    // no menu, no "no wallet detected" step, no install links on a phone
+    await expect(page.getByTestId('wallet-install-hint')).toHaveCount(0);
+    await expect(page.locator('[data-testid="wallet-dialog"] a')).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 });

@@ -14,6 +14,7 @@ import {
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
 import { IndexerTrust } from '../shell/IndexerTrust';
+import { visibilityCheckSupported } from '../../signer/seen';
 import { changedFields, changesServers, clearKobStorage, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
 
 const reload = () => window.location.reload();
@@ -100,6 +101,22 @@ function TokenIconsSettings() {
         <Banner tone="info" data-testid="settings-icons-off">{t('settings.icons.off')}</Banner>
       )}
       <Checkbox checked={on} onChange={setOn} label={t('settings.icons.label')} hint={t('settings.icons.hint')} disabled={!config.tokenNamesUrl} data-testid="settings-icons-toggle" />
+    </Section>
+  );
+}
+
+/** The private key mode, now that the header has one Connect button: a desktop with an extension wallet reaches it here (a browser without one is taken to it by Connect). */
+function PrivateKeySettings() {
+  const w = useWallet();
+  const supported = visibilityCheckSupported();
+  return (
+    <Section title={t('settings.key.title')} data-testid="settings-private-key-section">
+      <p class="small muted">{t('settings.key.explain')}</p>
+      {supported ? null : <p class="small muted" data-testid="settings-private-key-unsupported">{t('signer.unsupportedWhy')}</p>}
+      <Button disabled={!supported || !!w.info || w.connecting} onClick={w.openPrivateKey} data-testid="settings-private-key">
+        {t('settings.key.open')}
+      </Button>
+      {w.info ? <p class="small muted">{t('settings.key.disconnectFirst')}</p> : null}
     </Section>
   );
 }
@@ -386,6 +403,7 @@ export function SettingsView(props: { warnings?: ConfigWarning[] }) {
         <div class="stack">
           <ConnectionSettings />
           <TokenIconsSettings />
+          <PrivateKeySettings />
           <NotifySettingsSection />
           <Versions />
         </div>

@@ -9,6 +9,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { has, t } from '../../i18n';
+
 import { issueText, keyedText } from '../../i18n/issue-text';
 import { buildErrorText, rawOf } from '../../i18n/build-error';
 import { planOrder, type Intent } from '../../kob/plan';
@@ -78,6 +79,23 @@ interface PlanStop {
 const TOKEN_SHORT = new Set(['INSUFFICIENT_TOKENS', 'TOKEN_UTXOS_FRAGMENTED']);
 
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
+
+/** A plan that takes longer than this shows its "Calculating..." indicator; a background re-plan on a tick is over before and shows nothing. */
+const PENDING_SHOW_MS = 500;
+
+/** `on` once it has been on for `ms` (false again the moment it goes off). */
+function useDelayedFlag(on: boolean, ms: number): boolean {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (!on) {
+      setShown(false);
+      return;
+    }
+    const h = setTimeout(() => setShown(true), ms);
+    return () => clearTimeout(h);
+  }, [on, ms]);
+  return on && shown;
+}
 
 export function OrderTicket(props: OrderTicketProps) {
   const { token, quote } = props;
@@ -180,7 +198,10 @@ export function OrderTicket(props: OrderTicketProps) {
     setForm((f) => reorientAmounts(f, inverted, ctx));
   }, [inverted]);
   const built = useMemo(() => buildIntent(form, ctx), [form, ctx]);
-  const { plan, current, pending, crash } = useTicketPlan(enabled ? env : null, built.intent);
+  const { plan, current, pending, editPending, crash } = useTicketPlan(enabled ? env : null, built.intent);
+  // after an edit of the form it shows at once; a re-plan on a tick (a new environment) shows it only if it takes longer than PENDING_SHOW_MS
+  const slowPending = useDelayedFlag(pending, PENDING_SHOW_MS);
+  const pendingShown = editPending || slowPending;
 
   // prefill from the book: a price implies a limit-style form, a side the matching order type
   const prefillKey = props.prefill ? `${props.prefill.type ?? ''}|${props.prefill.side ?? ''}|${props.prefill.price ?? ''}|${props.prefill.amount ?? ''}` : '';
@@ -633,9 +654,11 @@ export function OrderTicket(props: OrderTicketProps) {
 
   return (
     <section class="tk" data-testid="order-ticket" data-type={form.type} data-side={form.side} data-shown-side={shownSide} data-inverted={inverted ? '1' : '0'} aria-busy={pending || envLoading ? 'true' : 'false'}>
-      <div class="row-between">
+      {/* the title row has a fixed height and the indicator an overlay of its own: it never changes the layout. It shows only when a plan takes longer than
+          PENDING_SHOW_MS (a background re-plan on a tick is over before that and shows nothing) */}
+      <div class="tk-titlerow">
         <h2>{t('ticket.title')}</h2>
-        {pending ? (
+        {pendingShown ? (
           <span class="tk-pending" data-testid="order-pending">
             <Loading text={t('ticket.pending')} />
           </span>

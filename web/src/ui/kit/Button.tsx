@@ -27,7 +27,7 @@ export function Button(props: ButtonProps) {
       type={type}
       class={classes}
       disabled={disabled || loading}
-      aria-busy={loading ? 'true' : undefined}
+      aria-busy={loading ? 'true' : (rest as { 'aria-busy'?: 'true' | 'false' })['aria-busy']}
       onClick={loading ? undefined : onClick}
     >
       {loading ? <Spinner /> : null}

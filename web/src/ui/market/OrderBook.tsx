@@ -60,9 +60,19 @@ function Row(props: { row: BookRowView; kind: 'ask' | 'bid'; onPick: OrderBookPr
   );
 }
 
-/** Aggregated order book: asks above (best at the bottom), the spread row with the last price, bids below; cumulative depth bars; price grouping. */
+/** An empty level slot: the same height as a level, so the block of a side never changes size when levels come and go. */
+function Blank(props: { kind: 'ask' | 'bid' }) {
+  return <div class={`book-row book-blank book-${props.kind}`} aria-hidden="true" data-testid={`ob-blank-${props.kind}`} />;
+}
+
+/**
+ * Aggregated order book: asks above (best at the bottom), the spread row with the last price, bids below; cumulative depth bars; price grouping. Each side
+ * is exactly `rows` slots (levels, then blank slots: the asks are bottom-anchored, the bids top-anchored), the header, the spread row and the foot have
+ * fixed heights: nothing in the book moves when a level appears, goes or changes its text.
+ */
 export function OrderBook(props: OrderBookProps) {
   const m = props.view;
+  const blanksOf = (n: number) => Math.max(0, props.rows - n);
   return (
     <div class="book ob" data-testid="order-book" style={{ '--ob-rows': String(props.rows) }}>
       <div class="ob-head" aria-hidden="true">
@@ -71,7 +81,9 @@ export function OrderBook(props: OrderBookProps) {
         <span>{m.head.total}</span>
       </div>
       <div class="book-side" data-testid="book-asks" role="list" aria-label={t('market.book.asks')}>
-        {m.asks.length ? m.asks.map((r) => <Row key={r.key} row={r} kind="ask" onPick={props.onPick} inverted={props.inverted} token={props.token} />) : <div class="muted small center">{t('market.book.noAsks')}</div>}
+        {Array.from({ length: blanksOf(m.asks.length) }, (_, i) => <Blank key={`ask-blank-${i}`} kind="ask" />)}
+        {m.asks.map((r) => <Row key={r.key} row={r} kind="ask" onPick={props.onPick} inverted={props.inverted} token={props.token} />)}
+        {m.asks.length ? null : <div class="ob-none muted small">{t('market.book.noAsks')}</div>}
       </div>
       <div class="ob-mid book-mid" data-testid="book-spread">
         <span class={`ob-last num ${props.last?.side === 'buy' ? 'buy' : props.last?.side === 'sell' ? 'sell' : ''}`} title={t('market.stats.last')} data-testid="book-last">
@@ -88,7 +100,9 @@ export function OrderBook(props: OrderBookProps) {
         </span>
       </div>
       <div class="book-side" data-testid="book-bids" role="list" aria-label={t('market.book.bids')}>
-        {m.bids.length ? m.bids.map((r) => <Row key={r.key} row={r} kind="bid" onPick={props.onPick} inverted={props.inverted} token={props.token} />) : <div class="muted small center">{t('market.book.noBids')}</div>}
+        {m.bids.map((r) => <Row key={r.key} row={r} kind="bid" onPick={props.onPick} inverted={props.inverted} token={props.token} />)}
+        {Array.from({ length: blanksOf(m.bids.length) }, (_, i) => <Blank key={`bid-blank-${i}`} kind="bid" />)}
+        {m.bids.length ? null : <div class="ob-none muted small">{t('market.book.noBids')}</div>}
       </div>
       <p class="ob-foot">
         {m.anyEstimated ? <span>{`~ ${estimatedNote(props.inverted, props.token)} `}</span> : null}

@@ -93,7 +93,7 @@ function connectView(core: SignerCore): void {
     if (e.key === 'Enter') go();
   });
   // what the key is, what forgets it and which key to use: said before the user pastes anything
-  const guide = el('ul', { class: 'guide muted', 'data-testid': 'signer-guide' }, el('li', {}, t('signer.guide.what')), el('li', {}, t('signer.guide.forget')), el('li', {}, t('signer.guide.small')));
+  const guide = el('ul', { class: 'guide muted', 'data-testid': 'signer-guide' }, el('li', {}, t('signer.guide.what')), el('li', {}, t('signer.guide.caution')));
   show(el('div', { class: 'row' }, input, button), error, guide);
   input.focus();
 }

@@ -22,9 +22,9 @@ test.describe('shell and token list', () => {
     // the identity block: the icon and the fingerprint of the covenant id (its three words are the tooltip and the accessible name)
     await expect(row.getByTestId(`identity-${id}`)).toBeVisible();
     {
-      // the fingerprint is one size smaller than the icon and centred on it
+      // the fingerprint is 60 % of the icon and centred on it
       const [icon, fp] = await Promise.all([`token-icon-${id}`, `fingerprint-${id}`].map((t) => row.getByTestId(t).boundingBox()));
-      expect(fp!.height).toBeLessThan(icon!.height - 3);
+      expect(Math.abs(fp!.height / icon!.height - 0.6)).toBeLessThan(0.03);
       expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
     }
     await expect(row.getByTestId(`fingerprint-${id}`)).toHaveAttribute('aria-label', /^Covenant id fingerprint: [a-z]+ [a-z]+ [a-z]+$/);
@@ -159,7 +159,7 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('book-spread')).toContainText('0.0002');
     // fixed decimals per column: every price, size and total of the book has the same number of decimals, right-aligned
     for (const col of [1, 2, 3]) {
-      const texts = await appPage.locator('[data-testid="book-asks"] .book-row, [data-testid="book-bids"] .book-row').evaluateAll((els, n) => els.map((e) => (e.children[n] as HTMLElement).textContent ?? ''), col);
+      const texts = await appPage.locator('[data-testid="book-asks"] .book-row:not(.book-blank), [data-testid="book-bids"] .book-row:not(.book-blank)').evaluateAll((els, n) => els.map((e) => (e.children[n] as HTMLElement).textContent ?? ''), col);
       const dec = new Set(texts.map((x) => (x.replace(/^~/, '').includes('.') ? x.replace(/^~/, '').split('.')[1]!.length : 0)));
       expect(texts.length).toBeGreaterThan(2);
       expect(dec.size, `column ${col}: ${texts.join(' | ')}`).toBe(1);
@@ -288,37 +288,28 @@ test.describe('wallet', () => {
 
   test.describe('no wallet installed', () => {
     test.use({ walletId: null });
-    test('the bar is two buttons; "Connect wallet" says what is missing and links the extensions in a dialog', async ({ appPage }) => {
+    test('the bar is ONE Connect button; with no extension it opens the private key entry at once: no menu, no "no wallet detected" step', async ({ appPage }) => {
       const bar = appPage.getByTestId('wallet-connect-list');
-      await expect(bar.getByRole('button')).toHaveText(['Connect wallet', 'Private key']);
+      await expect(bar.getByRole('button')).toHaveText(['Connect']);
       await expect(appPage.getByTestId('wallet-install-hint')).toHaveCount(0);
       await expect(appPage.getByTestId(TESTID.walletConnectKasware)).toHaveCount(0);
-      // one row, balanced
-      const [a, b] = [await bar.getByRole('button').nth(0).boundingBox(), await bar.getByRole('button').nth(1).boundingBox()];
-      expect(Math.abs(a!.y - b!.y)).toBeLessThan(4);
-      await bar.getByTestId('wallet-connect').click();
-      const hint = appPage.getByTestId('wallet-install-hint');
-      await expect(appPage.getByTestId('wallet-dialog')).toContainText('No Kaspa wallet detected');
-      await expect(hint.getByRole('link', { name: 'Get KasWare' })).toBeVisible();
-      await expect(hint.getByRole('link', { name: 'Get Kaspire' })).toBeVisible();
-      await appPage.keyboard.press('Escape');
+      await bar.getByRole('button').click();
+      await expect(appPage.getByTestId('signer-overlay')).toBeVisible();
       await expect(appPage.getByTestId('wallet-dialog')).toHaveCount(0);
+      // the one line of caution is in the entry form
+      await expect(appPage.frameLocator('[data-testid="signer-frame"]').getByTestId('signer-guide')).toContainText('Testnet and small amounts only');
     });
 
     test.describe('phone width', () => {
       test.use({ viewport: { width: 375, height: 800 } });
-      test('one "Connect" button opens a sheet with Wallet and Private key and the explanation', async ({ appPage }) => {
+      test('one "Connect" button goes straight to the private key entry: no sheet, no explanation of what is missing', async ({ appPage }) => {
         const bar = appPage.getByTestId('wallet-connect-list');
         await expect(bar.getByRole('button')).toHaveText(['Connect']);
         await expect(appPage.getByTestId('wallet-install-hint')).toHaveCount(0);
         await bar.getByTestId('wallet-connect').click();
-        const sheet = appPage.getByTestId('wallet-sheet');
-        await expect(sheet.getByRole('button', { name: 'Wallet' })).toBeDisabled();
-        await expect(sheet.getByRole('button', { name: 'Private key' })).toBeVisible();
-        await expect(sheet.getByTestId('wallet-install-hint')).toContainText('Install KasWare or Kaspire');
-        await expect(sheet.getByRole('link', { name: 'Get KasWare' })).toBeVisible();
-        await appPage.keyboard.press('Escape');
+        await expect(appPage.getByTestId('signer-overlay')).toBeVisible();
         await expect(appPage.getByTestId('wallet-sheet')).toHaveCount(0);
+        await expect(appPage.getByTestId('wallet-dialog')).toHaveCount(0);
       });
     });
   });

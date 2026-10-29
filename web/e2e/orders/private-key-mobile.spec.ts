@@ -30,7 +30,6 @@ const signer = (page: Page) => page.frameLocator('[data-testid="signer-frame"]')
 
 async function connectKey(page: Page): Promise<void> {
   await openConnect(page, 'wallet-connect-local-key');
-  await page.getByTestId('wallet-connect-local-key').click();
   await expect(page.getByTestId('signer-overlay')).toBeVisible();
   await signer(page).getByTestId('signer-key').fill(TEST_KEYS.alice.secretKey);
   await signer(page).getByTestId('signer-connect').click();

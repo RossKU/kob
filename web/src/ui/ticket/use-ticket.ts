@@ -317,6 +317,8 @@ export interface TicketPlan {
   current: boolean;
   /** a re-plan is waiting for the debounce or running */
   pending: boolean;
+  /** the pending re-plan answers an edit of the form (a user action), not only a new environment (a tick): only that one may show "Calculating..." at once */
+  editPending: boolean;
   /** planOrder threw: a bug, shown as an error (planners report user problems as issues) */
   crash: string | null;
 }
@@ -351,5 +353,6 @@ export function useTicketPlan(env: PlanEnv | null, intent: Intent | null): Ticke
     return () => clearTimeout(h);
   }, [env, k]);
   const current = out.k === k && out.envId === env;
-  return { plan: out.plan, current, pending: intent !== null && env !== null && !current, crash: out.crash };
+  const pending = intent !== null && env !== null && !current;
+  return { plan: out.plan, current, pending, editPending: pending && out.k !== k, crash: out.crash };
 }
