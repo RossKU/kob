@@ -130,8 +130,12 @@ order ticket. On a phone, the "Trade" button jumps to the ticket.
 
 1. Choose the **Order type** (Limit or Market to start; sections 5).
 2. Enter the **Amount**. Under "Available ..." the page shows the balance the order spends; pressing that figure fills in the
-   largest amount your balance allows ("Max"), after carriers, network fees and a small reserve. The slider under the box works in
-   percent of Max.
+   largest amount your balance allows ("Max"), after carriers, network fees and a small reserve. Under the box one muted line says what
+   the amount costs (a buy) or yields (a sell) in the other asset, from the node-confirmed book: "≈ 110.55 KAS · max 113.87 KAS" (a buy, with the
+   slippage the order allows and the fee), "≈ 110.55 KAS · min 107.23 KAS" (a sell), one value when the two are the same, "book covers only 40 TUSD"
+   when the book is too thin, "—" when there is nothing to say. The slider under it works in percent of Max, the width of the ticket, with the
+   labels 0 / 25 / 50 / 75 / 100 % under it (press one to set it); the thumb snaps to them within 3 % while you drag, a bubble reads the value,
+   the arrow keys move it by 1 % and Page Up / Page Down by 25 %.
 3. For a limit order enter the **Limit price**.
 4. Press the order button, labelled with what it does, for example **Buy Limit** or **Sell Market order**.
 5. The app re-checks everything silently (wallet account and network, your coins on the node, the built transaction). If something

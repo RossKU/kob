@@ -12,6 +12,8 @@ test.use({ autoOpen: false });
 const WATCHED = [
   'order-ticket',
   'order-place',
+  'order-cost-preview',
+  'order-amount-slider',
   'book-asks',
   'book-bids',
   'book-spread',

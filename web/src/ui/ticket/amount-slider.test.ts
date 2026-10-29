@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { planOrder, type Intent } from '../../kob/plan';
 import { errors, type PlanEnv } from '../../kob/plan-types';
-import { SLIDER_POINTS, amountPercent, percentAmount, pickAmount, pointEnabled } from './amount-slider';
+import { PAGE_STEP, SLIDER_POINTS, SNAP_RANGE, amountPercent, percentAmount, pickAmount, pointEnabled, snapPct } from './amount-slider';
 import { CTX, ticketEnv } from './ticket-fixtures';
 import { formatAmount } from './form-state';
 import { MAX_KAS_RESERVE, maxBuyAmount } from './max-amount';
@@ -82,5 +82,22 @@ describe('a buy: Max from the planner search, the points as shares of it', () =>
     const p = planOrder(env, limit(half));
     expect(errors(p)).toEqual([]);
     expect(p.disclosure!.kasLocked + (p.disclosure!.fee ?? 0n) + MAX_KAS_RESERVE).toBeLessThan(balance);
+  });
+});
+
+describe('the magnetic snap of a dragged thumb', () => {
+  it('snaps to a tick within 3 %, leaves the rest alone, and keeps the ticks themselves', () => {
+    expect(snapPct(27)).toBe(25);
+    expect(snapPct(22)).toBe(25);
+    expect(snapPct(21)).toBe(21);
+    expect(snapPct(28)).toBe(25);
+    expect(snapPct(29)).toBe(29);
+    expect(snapPct(73)).toBe(75);
+    expect(snapPct(98)).toBe(100);
+    expect(snapPct(2)).toBe(0);
+    expect(snapPct(40)).toBe(40);
+    for (const p of SLIDER_POINTS) expect(snapPct(p)).toBe(p);
+    expect(SNAP_RANGE).toBe(3);
+    expect(PAGE_STEP).toBe(25);
   });
 });

@@ -53,14 +53,49 @@
 .tk-notes { margin: 10px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 0.92rem; }
 @media (max-width: 560px) { .tk-row { grid-template-columns: 1fr; } }
 
-/* amount slider: 0..100 % of Max under the amount box, one compact row (works at 375 px) */
-.tk-slider { display: flex; align-items: center; gap: 8px; margin-top: -4px; min-width: 0; }
-.tk-slider-range { flex: 1 1 auto; min-width: 72px; margin: 0; accent-color: var(--primary); }
-.tk-slider-points { display: flex; flex: 0 0 auto; gap: 2px; }
-.tk-slider-pt {
-  padding: 2px 5px; border: 1px solid var(--border); border-radius: var(--radius-sm, 4px); background: var(--surface); color: var(--muted);
-  font: inherit; font-size: 0.72rem; line-height: 1.3; font-variant-numeric: tabular-nums; cursor: pointer;
+/* the cost preview under the amount box: one muted line of a fixed height, whatever it says (or "—"), tabular numbers, never wrapped */
+.tk-cost { height: 1.5rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 0.85rem; line-height: 1.5rem; font-variant-numeric: tabular-nums; }
+
+/* amount slider: 0..100 % of Max under the amount box, the width of the ticket. The track is filled up to the thumb in the colour of the side, the ticks
+   (0 / 25 / 50 / 75 / 100 %) are marks under the track with their labels (the buttons that set them) in one row, aligned to the thumb's travel; the thumb has a
+   44 px touch target on a phone (the circle drawn is 18 px); a bubble above the thumb reads the value while it is dragged. --p is the position 0..1. */
+.tk-slider { --thumb: 18px; --slider-fill: var(--primary); position: relative; display: block; margin-top: -4px; min-width: 0; }
+.tk-slider[data-side='buy'] { --slider-fill: var(--buy); }
+.tk-slider[data-side='sell'] { --slider-fill: var(--sell); }
+@media (max-width: 759px), (pointer: coarse) { .tk-slider { --thumb: 44px; } }
+.tk-slider-track { position: relative; }
+.tk-slider-range {
+  -webkit-appearance: none; appearance: none; display: block; width: 100%; height: var(--thumb); margin: 0; padding: 0; background: transparent; cursor: pointer;
+  --fill: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--p, 0));
 }
-.tk-slider-pt[aria-pressed='true'] { color: var(--text); border-color: var(--primary); }
+.tk-slider-range:disabled { cursor: default; opacity: 0.5; }
+.tk-slider-range:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm, 4px); }
+.tk-slider-range::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--slider-fill) var(--fill), var(--surface-3) var(--fill)); }
+.tk-slider-range::-moz-range-track { height: 6px; border-radius: 3px; background: var(--surface-3); }
+.tk-slider-range::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--slider-fill); }
+.tk-slider-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; box-sizing: border-box; width: var(--thumb); height: var(--thumb); margin-top: calc((6px - var(--thumb)) / 2); border-radius: 50%;
+  border: calc((var(--thumb) - 18px) / 2) solid transparent; background: var(--slider-fill); background-clip: padding-box;
+}
+.tk-slider-range::-moz-range-thumb {
+  box-sizing: border-box; width: var(--thumb); height: var(--thumb); border-radius: 50%;
+  border: calc((var(--thumb) - 18px) / 2) solid transparent; background: var(--slider-fill); background-clip: padding-box;
+}
+/* the value above the thumb while it is dragged: an overlay, nothing is pushed */
+.tk-slider-bubble {
+  position: absolute; bottom: calc(var(--thumb) / 2 + 12px); left: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--p, 0)); transform: translateX(-50%); z-index: 3;
+  padding: 2px 7px; border-radius: var(--radius-sm, 4px); background: var(--text); color: var(--bg); font-size: 0.78rem; font-weight: 600; line-height: 1.3;
+  font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
+}
+.tk-slider-bubble[hidden] { display: none; }
+/* the labels: one row under the track, each centred under its tick; a short mark above the label is the tick */
+.tk-slider-ticks { position: relative; height: 1.75rem; margin-top: calc(-1 * (var(--thumb) - 6px) / 2); }
+.tk-slider-pt {
+  position: absolute; top: 0; left: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--v, 0)); transform: translateX(-50%);
+  min-width: 2.75rem; padding: 10px 2px 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.72rem; line-height: 1.3;
+  font-variant-numeric: tabular-nums; cursor: pointer; text-align: center;
+}
+.tk-slider-pt::before { content: ''; position: absolute; top: 2px; left: 50%; width: 1px; height: 6px; background: var(--border); transform: translateX(-50%); }
+.tk-slider-pt[aria-pressed='true'] { color: var(--text); font-weight: 600; }
 .tk-slider-pt:disabled { opacity: 0.45; cursor: default; }
-@media (max-width: 400px) { .tk-slider { gap: 6px; } .tk-slider-pt { padding: 2px 3px; } }
+.tk-slider-pt:focus-visible { outline: 2px solid var(--focus); border-radius: var(--radius-sm, 4px); }

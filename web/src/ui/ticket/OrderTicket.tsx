@@ -16,6 +16,7 @@ import { planOrder, type Intent } from '../../kob/plan';
 import { errors, isPairEnv, type Clock, type OrderPlan } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
+import { costLine, costPreview } from './cost-preview';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { Banner, Button, Loading, RawDetails, Segmented, useAsync } from '../kit';
 import { bookFromIndexer, readClock } from '../../app/env';
@@ -333,6 +334,7 @@ export function OrderTicket(props: OrderTicketProps) {
       edited();
       setForm((f) => (b === null ? setValue(f, 'amount', '') : setAmountBase(f, 'amount', b, ctx)));
     },
+    side: (inverted ? oppositeSide(form.side) : form.side) as Side,
     disabled: !enabled || !env,
   };
 
@@ -351,6 +353,18 @@ export function OrderTicket(props: OrderTicketProps) {
 
   const shownPlan: OrderPlan | null = enabled && current ? plan : null;
   const planErrors = shownPlan ? errors(shownPlan) : [];
+  // under the amount box: what this amount costs (a buy) or yields (a sell) in the quote, from the book the planner sees; a fixed line, "—" when empty
+  const costText = useMemo(() => {
+    const pv = env
+      ? costPreview({ intent: built.intent, book: env.book, scale: env.token.scale, worstPrice: plan?.disclosure?.worstPrice ?? null, fee: quote ? null : plan?.disclosure?.fee ?? null })
+      : ({ kind: 'empty' } as const);
+    return costLine(
+      pv,
+      (v) => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`),
+      (v) => `${formatUnits(v, token.decimals, { group: ',' })} ${ticker}`,
+      (key, params) => t(`ticket.cost.${key}`, params),
+    );
+  }, [env, built.intent, plan, quote, token.decimals, ticker]);
   /** an amount of the market's quote (KAS, or a pair's token B) in words */
   const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`);
   // the LAST order of a limit ladder is the one furthest from the typed price: planned too, so a level that could never be placed is refused before the first is signed
@@ -699,7 +713,7 @@ export function OrderTicket(props: OrderTicketProps) {
         </div>
 
         <TicketFields
-          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} slider={slider}
+          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} slider={slider} cost={costText}
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})}
         />
 

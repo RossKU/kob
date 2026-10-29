@@ -27,6 +27,8 @@ export interface TicketFieldsProps {
   available?: string;
   /** the 0..100 % of Max slider under the amount field */
   slider?: AmountSliderProps;
+  /** the line under the amount box: what the amount costs or yields in the other asset (cost-preview.ts); a fixed-height line, "—" when there is nothing to say */
+  cost?: string;
   disabled?: boolean;
   /**
    * the market is shown inverted (KAS/TOKEN, orientation.ts): the PRICE inputs take tokens per KAS (`name` per KAS). The form still keeps native text
@@ -304,10 +306,15 @@ export function TicketFields(props: TicketFieldsProps) {
             suffix={suffix ? <span class="tk-suffix">{suffix}</span> : undefined}
           />
         );
-        return id === 'amount' && props.slider ? (
+        return id === 'amount' && (props.slider || props.cost !== undefined) ? (
           <Fragment key={id}>
             {field}
-            <AmountSlider {...props.slider} disabled={props.disabled || props.slider.disabled} />
+            {props.cost !== undefined ? (
+              <div class="tk-cost" aria-label={t('ticket.cost.aria')} data-testid="order-cost-preview">
+                <span key={props.cost}>{props.cost}</span>
+              </div>
+            ) : null}
+            {props.slider ? <AmountSlider {...props.slider} disabled={props.disabled || props.slider.disabled} /> : null}
           </Fragment>
         ) : (
           field

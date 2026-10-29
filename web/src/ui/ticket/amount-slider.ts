@@ -8,6 +8,18 @@
 /** The snap points, percent of Max. */
 export const SLIDER_POINTS = [0, 25, 50, 75, 100] as const;
 
+/** A drag within this many percent of a tick snaps to it. */
+export const SNAP_RANGE = 3;
+
+/** Page Up / Page Down move the slider by this many percent. */
+export const PAGE_STEP = 25;
+
+/** The magnetic snap of a dragged thumb: `v` percent, or the tick within SNAP_RANGE percent of it. */
+export function snapPct(v: number): number {
+  for (const p of SLIDER_POINTS) if (Math.abs(v - p) <= SNAP_RANGE) return p;
+  return v;
+}
+
 /** `pct` percent of `max`, rounded down to a whole base unit (100 % is exactly `max`). */
 export function percentAmount(max: bigint, pct: number): bigint {
   if (max <= 0n || pct <= 0) return 0n;
