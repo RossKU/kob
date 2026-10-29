@@ -149,18 +149,23 @@ describe('the node check binds the book to the market (audit 2026-10-29 F2)', ()
     expect(part.book.asks[0]!.price).toBe(p);
   });
 
-  it('B4b: the depth checked is a minimum number of confirmed orders; a larger size asked for reads further', async () => {
+  it('B4b: the best rows are verified, the rows behind them follow unchecked; the size being planned (depth) verifies further and drops a phantom there', async () => {
     const w = world();
     const p = priceOf(w.real);
     const many = BOOK_CHECK_MIN_CONFIRMED + 3;
     const rows = Array.from({ length: many }, (_, i) => rowOf(w.reg(realOrder(w.real, 0x10 + i, { price: p + BigInt(i) + 1n }, w.chain))));
+    // a phantom deep in the book: dearer than every real ask, on no chain
+    const ghost = { ...clone(realOrder(w.real, 0xd9, { price: p * 20n }, new FakeChain())), covenantId: 'f9'.repeat(32) };
+    w.reg(ghost);
     expect(BOOK_CHECK_PER_SIDE).toBeLessThanOrEqual(BOOK_CHECK_MIN_CONFIRMED);
-    const part = await readMarketPart(w.services([rowOf(w.real), ...rows]), w.market);
-    // 1 + `many` rows listed; the verified depth is whole rounds of BOOK_CHECK_PER_SIDE rows until BOOK_CHECK_MIN_CONFIRMED are confirmed
-    expect(part.book.askOrders!.length).toBe(Math.ceil(BOOK_CHECK_MIN_CONFIRMED / BOOK_CHECK_PER_SIDE) * BOOK_CHECK_PER_SIDE);
-    expect(part.book.askOrders![0]!.covenantId).toBe(w.real.covenantId);
-    // the size being planned asks for more than that: the check goes on until it is covered
-    const deep = await readMarketPart(w.services([rowOf(w.real), ...rows]), w.market, { depth: 10n ** 30n });
+    const listed = [rowOf(w.real), ...rows, rowOf(ghost)];
+    const part = await readMarketPart(w.services(listed), w.market);
+    // the first round confirms the best rows; the others (the phantom included) stay behind them in price order, the indexer's word
+    expect(part.dropped).toEqual([]);
+    expect(part.book.askOrders!.map((o) => o.covenantId)).toEqual(listed.map((r) => r.covenant_id));
+    // a plan that needs more than that asks for it: the check goes on until the size is covered, and the phantom does not survive it
+    const deep = await readMarketPart(w.services(listed), w.market, { depth: 10n ** 30n });
+    expect(deep.dropped.map((d) => d.covenantId)).toEqual([ghost.covenantId]);
     expect(deep.book.askOrders!.length).toBe(many + 1);
   });
 

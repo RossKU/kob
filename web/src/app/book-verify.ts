@@ -11,7 +11,8 @@
 // expired or is not yet active is no liquidity. The touch of a side is therefore the best price the node confirms among the rows the indexer lists
 // (an order the indexer does not list at all cannot be missed by a node: a second, independent indexer covers that, see pages-config.mjs).
 // When none of the rows of a side is confirmed, the whole side is left out (fail closed): the planner then finds no liquidity rather than a price
-// nobody can verify. Rows behind the verified depth are not part of the returned book. Nothing is acknowledged by the user and nothing is shown
+// nobody can verify. Rows behind the verified depth stay behind the verified ones, in price order: they are the indexer's word (depth for a plan that walks
+// past the verified rows), and a caller that knows the size it plans passes `depth` to have them verified. Nothing is acknowledged by the user and nothing is shown
 // when every order is confirmed. A node that cannot answer in time rejects with a `NodeError` (`unavailable`): the ticket shows its node banner and
 // plans nothing.
 import type { IndexerApi } from '../data/indexer';
@@ -209,7 +210,7 @@ const priceKey = (row: BookOrderView): bigint | null => {
  * The book (`aggregate=false`: one row per order) with the orders the node does not confirm left out, each side sorted best price first (asks
  * ascending, bids descending, the indexer's order within a price). The best BOOK_CHECK_PER_SIDE rows of each side are checked together in one node
  * read; a side goes on with the next ones until BOOK_CHECK_MIN_CONFIRMED orders (and `deps.depth` token units) are confirmed or BOOK_CHECK_MAX_ROWS
- * rows were looked at, and is left out entirely when none is confirmed. Rows behind the verified depth are cut. A side listed as aggregated levels
+ * rows were looked at, and is left out entirely when none is confirmed. Rows behind the verified depth follow the verified ones unchecked. A side listed as aggregated levels
  * cannot be checked and is left out too. Rejects with a `NodeError` when the node cannot be asked in time.
  */
 export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<VerifiedBook> {
@@ -261,11 +262,12 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
     if (s.levels || s.confirmed > 0) continue;
     for (const row of s.cands.slice(s.next)) dropped.push(dropOf(row, s.side, 'unchecked'));
   }
-  // the checked book: the confirmed rows in price order; rows behind the verified depth are not part of it
+  // the checked book: the confirmed rows in price order, then the rows never looked at (a side with nothing confirmed has none: all of them were dropped)
   const same = (rows: readonly (LevelView | BookOrderView)[], kept: readonly BookOrderView[]) => rows.length === kept.length && rows.every((r, i) => r === kept[i]);
   const [a, b] = sides as [(typeof sides)[number], (typeof sides)[number]];
-  const asks = a.levels ? [] : a.kept;
-  const bids = b.levels ? [] : b.kept;
+  const rowsOf = (x: typeof a): BookOrderView[] => (x.levels || x.confirmed === 0 ? [] : [...x.kept, ...x.cands.slice(x.next)]);
+  const asks = rowsOf(a);
+  const bids = rowsOf(b);
   if (!dropped.length && same(view.asks, asks) && same(view.bids, bids)) return { view, dropped };
   return { view: { ...view, asks, bids }, dropped };
 }
