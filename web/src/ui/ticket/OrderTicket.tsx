@@ -131,8 +131,11 @@ export function OrderTicket(props: OrderTicketProps) {
   const [maxNote, setMaxNote] = useState<string | null>(null);
 
   // one of the two environments is live: the token's KAS market, or the pair A/B (both tokens' UTXOs, the pair book, own pair orders)
-  const kasEnv = useTicketEnv(token, enabled && !quote);
-  const pairEnv = usePairTicketEnv(token, quote ?? token, enabled && !!quote);
+  // the book is verified on the node as deep as an order that walks it needs (a market / close / streaming / IOC / FOK order: its amount; `walkDepth` is set from the
+  // order built below, so the first read is the shallow one and a bigger order reads deeper once)
+  const [walkDepth, setWalkDepth] = useState(0n);
+  const kasEnv = useTicketEnv(token, enabled && !quote, walkDepth);
+  const pairEnv = usePairTicketEnv(token, quote ?? token, enabled && !!quote, walkDepth);
   const { env: rawEnv, error: envError, errorSource: envSource, loading: envLoading, refresh, since, snapshot, stale, waiting } = quote ? pairEnv : kasEnv;
   // the node clock, read every CLOCK_TICK_MS while an order can be placed (a visible page): a click plans with it projected to the click, with no
   // round trip before the wallet is asked (review-check.ts rule 1)
@@ -237,6 +240,16 @@ export function OrderTicket(props: OrderTicketProps) {
 
   // balances the wallet can spend (the planner does the exact funding check)
   const tokenBalance = env ? sum(env.tokenUtxos.map((u) => BigInt(u.state.amount))) : 0n;
+  // another market starts shallow again (declared before the effect that sets it, so a change of both in one pass ends with the set one)
+  useEffect(() => setWalkDepth(0n), [token.covenantId, quote?.covenantId]);
+  const intentType = built.intent?.type;
+  const intentAmount = (built.intent as { amount?: bigint } | null)?.amount;
+  useEffect(() => {
+    const walks = intentType === 'market' || intentType === 'streaming' || intentType === 'close' || intentType === 'fok' || intentType === 'ioc';
+    const need = walks ? (intentAmount ?? (intentType === 'close' ? tokenBalance : 0n)) : 0n;
+    // only ever deeper for this market (a smaller amount keeps the book already read)
+    setWalkDepth((d) => (need > d ? need : d));
+  }, [intentType, intentAmount, intentType === 'close' ? tokenBalance : 0n]);
   const kasBalance = env ? sum(env.funding.map((u) => BigInt(u.amount))) : 0n;
   const pairPart = env && isPairEnv(env) ? env.pair : null;
   /** a pair: the quote token B the wallet can spend (a buy pays in B) */

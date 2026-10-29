@@ -30,9 +30,9 @@ import type { KobWasm } from '../kob/wasm';
 const ZERO32 = '0'.repeat(64);
 
 /** Rows read per side and round (best price first). */
-export const BOOK_CHECK_PER_SIDE = 6;
+export const BOOK_CHECK_PER_SIDE = 3;
 /** A side is verified once this many of its orders are confirmed in the first round (more rounds while the size asked for in `BookVerifyDeps.depth` is not covered). Each round is one more answer of the indexer in a row: raising this costs ticket latency with a slow indexer (e2e ticket-latency). */
-export const BOOK_CHECK_MIN_CONFIRMED = 6;
+export const BOOK_CHECK_MIN_CONFIRMED = 3;
 /** Most rows looked at per side, refused ones included: a side with none confirmed among them is left out. */
 export const BOOK_CHECK_MAX_ROWS = 18;
 /** Rounds: BOOK_CHECK_MAX_ROWS / BOOK_CHECK_PER_SIDE. */

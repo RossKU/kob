@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Serialized } from './use-ticket';
+import { Serialized, depthBucket } from './use-ticket';
 
 const deferred = <T>() => {
   let resolve!: (v: T) => void;
@@ -153,5 +153,18 @@ describe('Serialized.since / settledSince (Review)', () => {
     await flush();
     expect(s.latest()?.value).toBe(1);
     expect(await s.since(at() - 1)).toBe(1);
+  });
+});
+
+describe('depthBucket: how deep the book is verified for the size being planned', () => {
+  it('rounds up to a power of two, so typing does not read the book again at every digit; no walk means no depth', () => {
+    expect(depthBucket(0n)).toBe(0n);
+    expect(depthBucket(-5n)).toBe(0n);
+    expect(depthBucket(1n)).toBe(1n);
+    expect(depthBucket(3000n)).toBe(4096n);
+    expect(depthBucket(4096n)).toBe(4096n);
+    expect(depthBucket(4097n)).toBe(8192n);
+    // every amount between two powers of two shares one bucket
+    expect(new Set([2049n, 3000n, 4000n, 4096n].map(depthBucket)).size).toBe(1);
   });
 });

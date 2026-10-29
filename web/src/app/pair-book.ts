@@ -46,6 +46,8 @@ export interface PairBookDeps {
   quote: PairToken;
   /** the node's DAA now: an order whose expiry has passed or whose activeFrom is still ahead is no liquidity (default: not applied) */
   daa?: bigint;
+  /** base units of A a side must offer in confirmed orders (the size being planned) before it counts as verified; more rounds while it is not covered */
+  depth?: bigint;
   timeoutMs?: number;
 }
 
@@ -174,10 +176,13 @@ export async function verifyPairBook(deps: PairBookDeps, orders: readonly OrderV
     cands: all.filter((r) => r.side === side).sort((x, y) => (x.price === y.price ? 0 : (side === 'sell' ? x.price < y.price : x.price > y.price) ? -1 : 1)),
     next: 0,
     confirmed: 0,
+    depth: 0n,
     levels: [] as BookLevel[],
   }));
   const dropped: DroppedBookOrder[] = [];
-  const satisfied = (s: (typeof sides)[number]): boolean => s.next >= Math.min(s.cands.length, BOOK_CHECK_MAX_ROWS) || s.confirmed >= BOOK_CHECK_MIN_CONFIRMED;
+  const want = deps.depth ?? 0n;
+  const satisfied = (s: (typeof sides)[number]): boolean =>
+    s.next >= Math.min(s.cands.length, BOOK_CHECK_MAX_ROWS) || (s.confirmed >= BOOK_CHECK_MIN_CONFIRMED && s.depth >= want);
   for (let round = 0; round < BOOK_CHECK_ROUNDS; round++) {
     const batch = sides.flatMap((s) => (satisfied(s) ? [] : s.cands.slice(s.next, Math.min(s.next + BOOK_CHECK_PER_SIDE, BOOK_CHECK_MAX_ROWS)).map((row) => ({ s, row }))));
     if (!batch.length) break;
@@ -188,6 +193,7 @@ export async function verifyPairBook(deps: PairBookDeps, orders: readonly OrderV
       const v: Verdict = g ? judge(deps, b.row, g.confirmed) : 'unproven';
       if (typeof v === 'object') {
         b.s.confirmed++;
+        b.s.depth += v.amount;
         b.s.levels.push({ price: v.price, amount: v.amount, orders: 1 });
       } else if (v !== 'expired' && v !== 'inactive') dropped.push(dropOf(b.row, v));
     });

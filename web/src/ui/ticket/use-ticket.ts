@@ -165,6 +165,17 @@ function usePart<T>(load: (() => Promise<T>) | null, deps: unknown[]): [Serializ
   return [runner, state];
 }
 
+/**
+ * The depth the book is verified to for an order that walks it: `amount` rounded up to a power of two (0: the order does not walk the book). The steps keep
+ * the market part from being read again at every digit typed.
+ */
+export function depthBucket(amount: bigint): bigint {
+  if (amount <= 0n) return 0n;
+  let b = 1n;
+  while (b < amount) b <<= 1n;
+  return b;
+}
+
 const quiet = (r: Serialized<unknown> | null): void => void r?.run().catch(() => undefined);
 const factsOf = (r: Serialized<unknown> | null, noticeAt: number): PartFacts => ({ at: r?.latest()?.at ?? null, busy: !!r?.busy(), noticeAt });
 
@@ -188,14 +199,16 @@ const maybe = <T,>(r: Serialized<T> | null, f: (r: Serialized<T>) => Promise<T>)
  * Keeps the environment of (wallet, token)'s KAS market (see the head of this file). `enabled` false (no wallet, wrong network, untradable token)
  * keeps only the market part, read once (so a wallet that connects plans at once), and stops every wallet read.
  */
-export function useTicketEnv(token: TokenInfo, enabled: boolean): TicketEnv {
+export function useTicketEnv(token: TokenInfo, enabled: boolean, depth: bigint = 0n): TicketEnv {
   const services = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
   const tradable = token.tradable && !!token.program;
   const market = useMemo(() => (tradable ? tokenMarketOf(services, token) : null), [services, token.covenantId, tradable]);
   const wallet = enabled && pubkey && market ? { pubkey } : null;
 
-  const [marketRun, marketState] = usePart<MarketPart>(market ? () => readMarketPart(services, market) : null, [services, market]);
+  // the book is verified as deep as the order being planned walks it (a market / close order: its amount), in steps so that typing does not read again at every digit
+  const bucket = depthBucket(depth);
+  const [marketRun, marketState] = usePart<MarketPart>(market ? () => readMarketPart(services, market, bucket > 0n ? { depth: bucket } : {}) : null, [services, market, bucket]);
   const [coinsRun, coinsState] = usePart<CoinsPart>(wallet ? () => readCoinsPart(services, wallet) : null, [services, wallet?.pubkey]);
   const [holdRun, holdState] = usePart<HoldingsPart>(wallet && market ? () => readHoldingsPart(services, wallet, token, market) : null, [services, wallet?.pubkey, market]);
 
@@ -275,11 +288,12 @@ export function useTicketEnv(token: TokenInfo, enabled: boolean): TicketEnv {
  * Keeps a PairPlanEnv for (wallet, base A, quote B): both tokens' UTXOs, the pair book, own pair orders of the pair (app/env.ts `buildPairPlanEnv`),
  * read as one part. A change of either token's book (`book:<A>`, `book:<B>`: a pair order notifies both) refreshes it.
  */
-export function usePairTicketEnv(base: TokenInfo, quote: TokenInfo, enabled: boolean): TicketEnv {
+export function usePairTicketEnv(base: TokenInfo, quote: TokenInfo, enabled: boolean, depth: bigint = 0n): TicketEnv {
   const services = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
   const on = enabled && !!pubkey;
-  const [run, state] = usePart<PlanEnv>(on && pubkey ? () => buildPairPlanEnv(services, { pubkey }, base, quote) : null, [services, pubkey, base.covenantId, quote.covenantId, on]);
+  const bucket = depthBucket(depth);
+  const [run, state] = usePart<PlanEnv>(on && pubkey ? () => buildPairPlanEnv(services, { pubkey }, base, quote, bucket > 0n ? { depth: bucket } : {}) : null, [services, pubkey, base.covenantId, quote.covenantId, on, bucket]);
   useInterval(() => quiet(run), ENV_REFRESH_MS, !!run);
   const notice = useNoticeClock(services.feed);
   useLiveRefresh(

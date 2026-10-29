@@ -389,7 +389,7 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
       else {
         const checked = await verifyPairBook(
           {
-            kob: s.kob, node: s.node, indexer: indexer!, toAddress: (spk) => spkStringToAddress(s.sdk, spk, s.config.network), daa: clock.daa,
+            kob: s.kob, node: s.node, indexer: indexer!, toAddress: (spk) => spkStringToAddress(s.sdk, spk, s.config.network), daa: clock.daa, ...(o.depth !== undefined ? { depth: o.depth } : {}),
             base: { covenantId: a.covenantId, templateHash: a.templateHash, extensionCommitment: a.extensionCommitment, scale: a.scale },
             quote: { covenantId: b.covenantId, templateHash: b.templateHash, extensionCommitment: b.extensionCommitment, scale: b.scale },
           },
