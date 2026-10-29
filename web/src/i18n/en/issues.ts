@@ -60,7 +60,6 @@ export default {
   'issues.PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the market ({reference}): unlikely to fill soon.',
   'issues.GUARDS_UNAVAILABLE': "Could not read the token's guard data; try again in a moment.",
   'issues.MARKET_REFERENCE_DIVERGES': 'The book shows {reference} per token, the last fill {lastFill} ({percent}% apart), both from the indexer: check the price before signing.',
-  'issues.BOOK_ORDERS_NOT_ON_NODE': '{count} order(s) the indexer lists on the {side} side are not on the node as listed (spent, changed or invented); the best was at {price} per token. They are left out: the order starts from the best price the node confirms.',
   'issues.MARKET_REFERENCE_SOURCE': 'Reference: {reference} per token (book checked against the node); worst fill {worst} per token.',
   'issues.MARKET_START_VS_INDEXER': 'The order book price ({start} per token) is {percent}% {direction} the reference price of another indexer ({reference}, {other}): nothing can be sent at this price.',
   'issues.MARKET_REFERENCE_INDEXER_UNAVAILABLE': 'A further indexer did not answer ({others}): the start is checked without it.',

@@ -185,6 +185,8 @@ export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node
       )
     : null;
   const bv = checked?.view ?? null;
+  // the book the planners get holds only what the node confirmed; the user is told nothing of the rest (a note on every refresh was noise): the console has it
+  if (checked?.dropped.length) console.info(`book check: ${checked.dropped.length} order(s) of the indexer's book left out (${[...new Set(checked.dropped.map((d) => d.reason))].join(', ')})`);
   const last = trades?.items?.[0];
   // trades are priced per `price_basis` base units (the token's standard scale): convert to the market's scale (per whole token)
   const lastFillPrice = last && trades.price_basis && BigInt(trades.price_basis) > 0n ? (BigInt(last.price) * market.scale) / BigInt(trades.price_basis) : null;
@@ -227,7 +229,7 @@ export function assemblePlanEnv(
   if (parts.holdings && parts.holdings.ownOrders === null) guardsUnavailable.push('own-orders');
   return {
     kob: s.kob, token: market, maker: wallet.pubkey, clock: parts.coins.clock, book: parts.market.book, ownOrders: parts.holdings?.ownOrders ?? [],
-    ...(guardsUnavailable.length ? { guardsUnavailable } : {}), ...(parts.market.dropped.length ? { bookDropped: parts.market.dropped } : {}), lastFillPrice: parts.market.lastFillPrice,
+    ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice: parts.market.lastFillPrice,
     funding: pendingSpends.funding(parts.coins.funding, wallet.pubkey), tokenUtxos: pendingSpends.without(parts.holdings?.tokenUtxos ?? []),
     ...feeModeOf(s), fees: parts.coins.fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
   };

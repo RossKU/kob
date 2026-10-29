@@ -214,26 +214,12 @@ describe('readMarketPart hands the planners the book the node confirms', () => {
   });
 });
 
-describe('a taking order says when the book was cut', () => {
-  const dropped = [{ covenantId: 'ab'.repeat(32), side: 'sell' as const, price: 1_000_000n, reason: 'not-on-node' as const }];
-  const codes = (p: { issues: { code: string }[] }) => p.issues.map((i) => i.code);
+describe('a book that was cut tells the planners nothing to show', () => {
   const book2 = { asks: [{ price: 250_000_000n, amount: 50n * TOK, orders: 1 }], bids: [{ price: 245_000_000n, amount: 50n * TOK, orders: 1 }] };
 
-  it('a market buy meets the asks that were left out: a warning with the best of them', () => {
-    const p = planOrder({ ...makeEnv({ book: book2, funding: [100_000n * KAS] }), bookDropped: dropped, clock: CLOCK }, { type: 'market', side: 'buy', amount: 5n * TOK });
-    const w = p.issues.find((i) => i.code === 'BOOK_ORDERS_NOT_ON_NODE')!;
-    expect(w.severity).toBe('warning');
-    expect(w.params).toMatchObject({ count: 1, side: 'ask', price: 1_000_000n });
+  it('a market buy against a book the node check cut carries no note about it (the unconfirmed orders are simply not in the book)', () => {
+    const p = planOrder({ ...makeEnv({ book: book2, funding: [100_000n * KAS] }), clock: CLOCK }, { type: 'market', side: 'buy', amount: 5n * TOK });
     expect(p.ok).toBe(true);
-  });
-
-  it('a market sell does not care about asks that were left out; a resting limit takes nothing', () => {
-    const env = { ...makeEnv({ book: book2, funding: [100_000n * KAS] }), bookDropped: dropped };
-    expect(codes(planOrder(env, { type: 'market', side: 'sell', amount: 5n * TOK }))).not.toContain('BOOK_ORDERS_NOT_ON_NODE');
-    expect(codes(planOrder(env, { type: 'limit', side: 'buy', amount: 5n * TOK, price: 100_000_000n }))).not.toContain('BOOK_ORDERS_NOT_ON_NODE');
-  });
-
-  it('no dropped order, no note', () => {
-    expect(codes(planOrder(makeEnv({ book: book2, funding: [100_000n * KAS] }), { type: 'market', side: 'buy', amount: 5n * TOK }))).not.toContain('BOOK_ORDERS_NOT_ON_NODE');
+    expect(p.issues.map((i) => i.code).filter((c) => /BOOK/.test(c))).toEqual([]);
   });
 });

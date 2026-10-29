@@ -1,6 +1,6 @@
 // The book against the node (app/book-verify.ts): a market order is an auction that starts at the best price of the indexer's book, so before it is
 // signed the orders at that touch must exist unspent on the NODE at the script their state derives. An indexer that lists a cheap ask nobody holds
-// (a phantom) cannot make a buyer's auction start from it: the ticket plans from the real ask and says so; with an honest book nothing is shown.
+// (a phantom) cannot make a buyer's auction start from it: the ticket plans from the real ask and shows nothing about it (the console has it), as with an honest book.
 import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
@@ -45,12 +45,12 @@ test.describe('market orders start from a price the node confirms', () => {
     await pickType(page, 'market', 'buy');
     await fillFields(page, { amount: '2' });
     await waitReviewable(page);
-    await expect(page.getByTestId('order-note-BOOK_ORDERS_NOT_ON_NODE')).toHaveCount(0);
+    await expect(page.getByText(/not on the node/i)).toHaveCount(0);
     const placed = await placeOrder(page, mock);
     expect(onChainTerms(placed)[0]!.state.price).toBe('2510000');
   });
 
-  test('the indexer lists a phantom cheap ask: the ticket re-plans to the real ask, says so, and signs only that price', async ({ appPage: page, mock }) => {
+  test('the indexer lists a phantom cheap ask: the ticket re-plans to the real ask, shows nothing about it, and signs only that price', async ({ appPage: page, mock }) => {
     await fund(mock);
     const { real, phantom } = await listPhantomAsk(page, mock);
     expect(phantom).toBeLessThan(real);
@@ -59,11 +59,8 @@ test.describe('market orders start from a price the node confirms', () => {
     await fillFields(page, { amount: '2' });
     await settlePlan(page);
     await waitReviewable(page);
-    // one line, no checkbox: the order button stays a single click
-    const note = page.getByTestId('order-note-BOOK_ORDERS_NOT_ON_NODE');
-    await expect(note).toBeVisible();
-    await expect(note).toContainText('not on the node');
-    await expect(note).toContainText('0.0125'); // the phantom's price (0.0251 / 2 = 0.01255): named so the user sees what was left out
+    // nothing is shown for the orders left out (a note on every refresh was noise; the console has it): the order button stays a single click
+    await expect(page.getByText(/not on the node/i)).toHaveCount(0);
     // the auction starts at the real best ask, not at the phantom
     const placed = await placeOrder(page, mock);
     const terms = onChainTerms(placed)[0]!;
@@ -96,7 +93,7 @@ test.describe('market orders start from a price the node confirms', () => {
     await fillFields(page, { amount: '2' });
     await settlePlan(page);
     await waitReviewable(page);
-    await expect(page.getByTestId('order-note-BOOK_ORDERS_NOT_ON_NODE')).toBeVisible();
+    await expect(page.getByText(/not on the node/i)).toHaveCount(0);
     const placed = await placeOrder(page, mock);
     expect(onChainTerms(placed)[0]!.state.price).toBe(bestBid.price);
   });

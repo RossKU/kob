@@ -57,7 +57,6 @@ export const ISSUE_CATALOG = {
   // ---- guards
   GUARDS_UNAVAILABLE: e('error', "Could not read the token's guard data: self-trade prevention and the price checks cannot run. The order waits until the data is read again."),
   MARKET_REFERENCE_DIVERGES: e('warning', 'The order book shows {reference:kas} per token, but the last fill was at {lastFill:kas} ({percent}% apart). Both come from the indexer: check the price yourself before signing.'),
-  BOOK_ORDERS_NOT_ON_NODE: e('warning', '{count} order(s) of the book on the {side} side are not on the node as the indexer lists them (spent, changed or invented); the best was at {price:kas} per token. They are left out: the order starts from the best price the node confirms.'),
   MARKET_REFERENCE_SOURCE: e('info', 'Market reference: {reference:kas} per token from the order book, checked against the node. The order can fill at {worst:kas} per token at worst.'),
   MARKET_START_VS_INDEXER: e('error', 'The order book price ({start:kas} per token) is {percent}% {direction} the best price another indexer reports ({reference:kas}, {other}): the book is not checked against the node, so nothing can be sent at this start.'),
   MARKET_REFERENCE_INDEXER_UNAVAILABLE: e('warning', 'A further indexer configured to check prices did not answer ({others}): the auction start is checked without it.'),
