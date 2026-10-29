@@ -28,6 +28,43 @@ const words: Record<string, string> = { dash: '—', exact: '{value}', buy: '≈
 const tr = (key: string, params: Record<string, string>) => words[key]!.replace(/\{(\w+)\}/g, (_m, k: string) => params[k] ?? '');
 const line = (p: CostPreview) => costLine(p, fmt, fmtBase, tr);
 
+describe('the cost preview includes its own tip and the fee (audit 2026-10-29 round 2, R4)', () => {
+  const TIP = KAS / 2n;
+  const withTip = (intent: Intent): Intent => ({ ...intent, tip: TIP }) as Intent;
+  it('a limit buy pays price + tip per token, a limit sell receives price - tip', () => {
+    expect(costPreview({ ...base, intent: withTip(limit('buy', 10n * TOK, 23n * KAS / 10n)) })).toMatchObject({ estimate: 10n * (23n * KAS / 10n + TIP) });
+    expect(costPreview({ ...base, intent: withTip(limit('sell', 10n * TOK, 26n * KAS / 10n)) })).toMatchObject({ estimate: 10n * (26n * KAS / 10n - TIP) });
+  });
+  it('the fee of a limit order is part of the total: a buy pays it on top, a sell receives it less', () => {
+    expect(costPreview({ ...base, intent: limit('buy', 10n * TOK, 2n * KAS), fee: KAS / 100n })).toMatchObject({ estimate: 20n * KAS + KAS / 100n, bound: null });
+    expect(costPreview({ ...base, intent: limit('sell', 10n * TOK, 2n * KAS), fee: KAS / 100n })).toMatchObject({ estimate: 20n * KAS - KAS / 100n, bound: null });
+  });
+  it('a market order: the walk and the bound both carry the tip', () => {
+    // 5 tokens: 3 at 2 KAS and 2 at 3 KAS = 12 KAS, plus 0.5 KAS a token of tip
+    const p = costPreview({ ...base, intent: withTip(market('buy', 5n * TOK)), worstPrice: 3n * KAS + KAS / 10n });
+    expect(p).toEqual({ kind: 'cost', side: 'buy', estimate: 12n * KAS + 5n * TIP, bound: 5n * (3n * KAS + KAS / 10n + TIP) });
+    // a sell's tip is paid out of its proceeds
+    const q = costPreview({ ...base, intent: withTip(market('sell', 6n * TOK)), worstPrice: 9n * KAS / 10n });
+    expect(q).toMatchObject({ estimate: 96n * KAS / 10n - 6n * TIP });
+  });
+  it('is the total the plan discloses (all-in + fee), tip and fee included', async () => {
+    const { planOrder } = await import('../../kob/plan');
+    const { TOKEN, ticketEnv } = await import('./ticket-fixtures');
+    const e = ticketEnv({ funding: [1_000_000n * KAS] });
+    for (const side of ['buy', 'sell'] as const) {
+      const intent = { type: 'limit', side, amount: 10n * TOKEN, price: side === 'buy' ? 230_000_000n : 260_000_000n, tip: TIP } as Intent;
+      const p = planOrder(e, intent);
+      expect(p.ok).toBe(true);
+      const pv = costPreview({ intent, book: e.book, scale: e.token.scale, worstPrice: null, fee: null }) as { estimate: bigint };
+      expect(pv.estimate).toBe(p.disclosure!.allInTotal);
+    }
+    const intent = { type: 'market', side: 'buy', amount: 10n * TOKEN, tip: TIP } as Intent;
+    const p = planOrder(e, intent);
+    const pv = costPreview({ intent, book: e.book, scale: e.token.scale, worstPrice: p.disclosure!.worstPrice ?? null, fee: p.disclosure!.fee ?? null }) as { bound: bigint };
+    expect(pv.bound).toBe((p.disclosure!.allInTotal ?? 0n) + (p.disclosure!.fee ?? 0n));
+  });
+});
+
 describe('the cost preview', () => {
   it('is empty without an amount, without an intent, and for orders that are no plain trade', () => {
     expect(costPreview({ ...base, intent: null })).toEqual({ kind: 'empty' });
@@ -46,15 +83,15 @@ describe('the cost preview', () => {
   it('a market buy walks the asks from the best level; the bound is the worst price it allows plus the fee', () => {
     // 5 tokens: 3 at 2 KAS and 2 at 3 KAS = 12 KAS
     const p = costPreview({ ...base, intent: market('buy', 5n * TOK), worstPrice: 3n * KAS + KAS / 10n, fee: KAS / 100n });
-    expect(p).toEqual({ kind: 'cost', side: 'buy', estimate: 12n * KAS, bound: 5n * (3n * KAS + KAS / 10n) + KAS / 100n });
-    expect(line(p)).toBe('≈ 12.00 KAS · max 15.51 KAS');
+    expect(p).toEqual({ kind: 'cost', side: 'buy', estimate: 12n * KAS + KAS / 100n, bound: 5n * (3n * KAS + KAS / 10n) + KAS / 100n });
+    expect(line(p)).toBe('≈ 12.01 KAS · max 15.51 KAS');
   });
 
   it('a market sell walks the bids; the bound is its min less the fee', () => {
     // 6 tokens: 4 at 1.9 KAS and 2 at 1 KAS = 9.6 KAS; the order allows 0.9 KAS at worst
     const p = costPreview({ ...base, intent: market('sell', 6n * TOK), worstPrice: 9n * KAS / 10n, fee: KAS / 100n });
-    expect(p).toMatchObject({ kind: 'cost', side: 'sell', estimate: 96n * KAS / 10n });
-    expect(line(p)).toBe('≈ 9.60 KAS · min 5.39 KAS');
+    expect(p).toMatchObject({ kind: 'cost', side: 'sell', estimate: 96n * KAS / 10n - KAS / 100n });
+    expect(line(p)).toBe('≈ 9.59 KAS · min 5.39 KAS');
   });
 
   it('shows one value when the estimate and the bound are the same at the precision shown (no slippage, the best level covers it, no fee)', () => {
