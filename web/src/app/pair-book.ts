@@ -71,9 +71,13 @@ const lower = (s: string | null | undefined): string => (s ?? '').toLowerCase();
 /** The listed pair orders of the pair A/B that the pair book counts as liquidity, as rows (a malformed one is skipped). */
 function rowsOf(orders: readonly OrderView[], base: PairToken, quote: PairToken): Row[] {
   const out: Row[] = [];
+  // one row per order: the indexer listing an order N times does not count it N times (audit 2026-10-30 W2)
+  const seen = new Set<string>();
   for (const o of orders) {
     const p = o.pair;
     if (!p || !BOOK_CONTRACTS.has(o.contract) || (o.status !== 'open' && o.status !== 'partial')) continue;
+    if (seen.has(o.covenant_id)) continue;
+    seen.add(o.covenant_id);
     if (lower(p.base) !== lower(base.covenantId) || lower(p.quote) !== lower(quote.covenantId)) continue;
     let price: bigint;
     try {
@@ -112,14 +116,36 @@ function judge(deps: PairBookDeps, row: Row, confirmed: OrderSnapshot | Snapshot
       if (d.expiryDaa > 0n && deps.daa >= d.expiryDaa) return 'expired';
       if (d.activeFrom > deps.daa) return 'inactive';
     }
-    // an auction's price moves between its two ends: the start is the end that is best for the taker (lowest ask, highest bid), never worse than the order can be
-    const price = p.priceEnd === null ? p.price : row.side === 'sell' ? (p.priceEnd < p.price ? p.priceEnd : p.price) : p.priceEnd > p.price ? p.priceEnd : p.price;
+    // an auction's price is what it is at the node's DAA now, between its start and its end (the covenant's `price(t)`): ranking it by its far end
+    // (a decay to 1 sompi that nobody can reach for hours) put a tiny ask at the head of the book and started every market order there (W1)
+    const price = priceNow(d, p, row.side, deps.daa);
     if (price <= 0n) return 'changed';
-    const amount = row.side === 'sell' ? p.escrowA : (p.escrowB * deps.base.scale) / price;
+    // what it holds is the node's: the state's escrow, no more than the custody UTXO the node confirms, and an order with no custody holds nothing (W2)
+    if (!confirmed.custody) return 'unproven';
+    const onNode = BigInt(confirmed.custody.state.amount);
+    const escrow = row.side === 'sell' ? p.escrowA : p.escrowB;
+    const had = escrow < onNode ? escrow : onNode;
+    const amount = row.side === 'sell' ? had : (had * deps.base.scale) / price;
     return amount > 0n ? { price, amount } : 'changed';
   } catch {
     return 'unproven';
   }
+}
+
+/**
+ * The price of a pair order at `daa`: a decaying ask is `max(priceEnd, price - slope * floor((daa - activeFrom) / decayStep))`, a rising bid
+ * `min(priceEnd, price + ...)` (KobPair.sil); the stated price when it does not decay, or without a clock (the start, never a far end).
+ */
+function priceNow(d: ReturnType<typeof describeOrder>, p: NonNullable<ReturnType<typeof describeOrder>['pair']>, side: 'sell' | 'buy', daa: bigint | undefined): bigint {
+  const a = d.auction;
+  if (p.priceEnd === null || !a || a.slope <= 0n || a.decayStep <= 0n || a.interval > 0n || daa === undefined) return p.price;
+  const moved = a.slope * ((daa > d.activeFrom ? daa - d.activeFrom : 0n) / a.decayStep);
+  if (side === 'sell') {
+    const now = p.price - moved;
+    return now < p.priceEnd ? p.priceEnd : now;
+  }
+  const now = p.price + moved;
+  return now > p.priceEnd ? p.priceEnd : now;
 }
 
 const dropOf = (row: Row, reason: DroppedBookOrder['reason']): DroppedBookOrder => ({ covenantId: row.id, side: row.side, price: row.price, reason });

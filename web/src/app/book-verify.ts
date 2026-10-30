@@ -143,11 +143,19 @@ function judge(
     // book row's claim must be the same
     const value = row.cur_value ?? claimed.order.amount;
     if (BigInt(value) !== BigInt(confirmed.order.amount)) return 'changed';
+    // an ask is liquidity only with the custody the node holds: its amount is that, and an ask with none has nothing to sell (W2)
+    if (side === 'sell' && !confirmed.custody) return 'unproven';
     if (confirmed.custody) {
       const left = !row.amount_estimated && row.amount_left != null ? row.amount_left : claimed.custody?.state.amount;
       if (left !== undefined && BigInt(left) !== BigInt(confirmed.custody.state.amount)) return 'changed';
     }
-    return { amount: confirmed.custody ? BigInt(confirmed.custody.state.amount) : null, cap: d.price > 0n ? (BigInt(confirmed.order.amount) * d.scale) / d.price : 0n };
+    return {
+      amount: confirmed.custody ? BigInt(confirmed.custody.state.amount) : null,
+      cap: d.price > 0n ? (BigInt(confirmed.order.amount) * d.scale) / d.price : 0n,
+      // the tip and the smallest fill shape the minimum fill a planner signs: the node-confirmed state's, not the row's (W3)
+      tip: d.tip,
+      minFill: d.minFill,
+    };
   } catch {
     return 'unproven';
   }
@@ -157,7 +165,7 @@ function judge(
  * The verdict on one row: why it is not part of the book, or what the node confirmed of it: an ask's custody amount (the node's, not the indexer's);
  * a bid has no custody, its `cap` is what its node-confirmed KAS buys at its price at most (the row's own amount is only believed up to it).
  */
-type Verdict = DroppedBookOrder['reason'] | 'expired' | 'inactive' | { amount: bigint | null; cap: bigint };
+type Verdict = DroppedBookOrder['reason'] | 'expired' | 'inactive' | { amount: bigint | null; cap: bigint; tip: bigint; minFill: bigint };
 
 /** A book row's identity for the order-view cache and the read: the covenant id and the row facts the cache key follows. */
 export type OrderKey = Pick<BookOrderView, 'covenant_id' | 'price' | 'amount_left' | 'cur_value'>;
@@ -238,9 +246,12 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
   const inScale = deps.inScale ?? (() => true);
   const sides = (['sell', 'buy'] as const).map((side) => {
     const rows = side === 'sell' ? view.asks : view.bids;
+    // one row per order: the indexer listing an order N times does not count it N times (audit 2026-10-30 W2)
+    const seenIds = new Set<string>();
     const cands = rows
       .filter(isOrderRow)
       .filter(inScale)
+      .filter((row) => !seenIds.has(row.covenant_id) && !!seenIds.add(row.covenant_id))
       .map((row, at) => ({ row, at, key: priceKey(row) }))
       .sort((a, b) => {
         if (a.key === b.key) return a.at - b.at;
@@ -273,9 +284,10 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
         const amount = v.amount ?? (claimed < v.cap ? claimed : v.cap);
         b.s.confirmed++;
         b.s.depth += amount;
-        b.s.kept.push(
-          v.amount !== null ? (b.row.amount_estimated ? { ...b.row, amount_left: v.amount.toString(), amount_estimated: false } : b.row) : amount !== claimed ? { ...b.row, amount_left: amount.toString() } : b.row,
-        );
+        const row0 = v.amount !== null ? (b.row.amount_estimated ? { ...b.row, amount_left: v.amount.toString(), amount_estimated: false } : b.row) : amount !== claimed ? { ...b.row, amount_left: amount.toString() } : b.row;
+        // the row's tip and minimum fill are the state's (the same object when they already are, so an unchanged book stays the same book)
+        const [tip, minFill] = [v.tip.toString(), v.minFill.toString()];
+        b.s.kept.push(row0.tip === tip && row0.min_fill === minFill ? row0 : { ...row0, tip, min_fill: minFill });
         return;
       }
       // an order that is over or not yet live is no liquidity but is not a missing one either: it leaves the book without a note
