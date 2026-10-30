@@ -254,7 +254,7 @@ async fn candidates_and_declarations_survive_a_replay_from_the_record_log() {
         for b in &batch.blocks {
             for r in &b.txs {
                 assert!(
-                    !(r.is_declaration_only() && r.kcc23.as_ref().is_some_and(|d| d.binds.is_empty())),
+                    !(r.is_declaration_only() && r.kcc23.as_ref().is_some_and(|d| !d.is_logged())),
                     "an unbound candidate was logged"
                 );
             }
@@ -277,8 +277,8 @@ fn the_declaration_section_in_the_record_log() {
     let (gen, _) = kcc23_genesis(&prep, 0, 1);
     let ptx = |t: &Transaction| proof_tx(&kcc23_wire(t, false)).expect("standard fields");
     let rec = |t: &Transaction, d: DeclSection| TxRecord::declaration_only(kcc23_txid(t), 3, d);
-    let candidate = rec(&prep, DeclSection { tx: ptx(&prep), preparation: true, binds: vec![] });
-    let genesis = rec(&gen, DeclSection { tx: ptx(&gen), preparation: false, binds: vec![ptx(&prep)] });
+    let candidate = rec(&prep, DeclSection { tx: ptx(&prep), preparation: true, binds: vec![], refs: vec![] });
+    let genesis = rec(&gen, DeclSection { tx: ptx(&gen), preparation: false, binds: vec![ptx(&prep)], refs: vec![] });
     for r in [&candidate, &genesis] {
         let mut w = Writer::new();
         r.encode(&mut w);
@@ -426,7 +426,10 @@ async fn a_junk_declaration_payload_stays_out_of_the_record_log() {
         .iter()
         .flat_map(|(_, b)| b.blocks.iter())
         .flat_map(|b| b.txs.iter())
-        .filter(|r| r.kcc23.as_ref().is_some_and(|d| !d.binds.is_empty()))
+        .filter(|r| r.kcc23.as_ref().is_some_and(|d| d.is_logged()))
         .count();
     assert_eq!(genesis_frames, 1);
 }
+
+#[path = "kcc23_bounds_tests.rs"]
+mod bounds;

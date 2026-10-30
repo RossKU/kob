@@ -430,12 +430,17 @@ impl Processor {
         let mut out = Vec::new();
         for (pos, tx) in txs.iter().enumerate() {
             let p = pre.and_then(|m| m.get(&tx.verbose_data.transaction_id));
-            if let Some(rec) = ex.extract_with(tx, pos as u32, p)? {
+            if let Some(mut rec) = ex.extract_with(tx, pos as u32, p)? {
                 self.apply_tx(conn, &ctx, &rec, p, delta)?;
-                // a candidate KCC-23 preparation that no genesis has bound (a transaction with nothing of KOB in it) is kept in the
-                // database only: the record log is permanent and any transaction can carry a 16 KiB `0x00{..}` payload
-                if rec.kcc23.as_ref().is_some_and(|d| !d.is_logged()) && rec.is_declaration_only() {
-                    continue;
+                // a candidate KCC-23 preparation that no genesis has bound is kept in the database only: the record log is permanent
+                // and any transaction can carry a 16 KiB `0x00{..}` payload. A transaction with nothing of KOB in it is not logged at
+                // all; one that is relevant to KOB for another reason (a token transfer, a stray send) is logged without the section
+                // (audit 2026-10-30 I2, I7)
+                if rec.kcc23.as_ref().is_some_and(|d| !d.is_logged()) {
+                    if rec.is_declaration_only() {
+                        continue;
+                    }
+                    rec.kcc23 = None;
                 }
                 delta.relevant_txs += 1;
                 out.push(rec);

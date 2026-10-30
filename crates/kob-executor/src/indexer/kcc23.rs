@@ -22,6 +22,13 @@
 //! preparation that no genesis has bound is kept in the database only, never in the permanent record log: any transaction
 //! can carry a `0x00{..}` payload of 16 KiB, and the log is permanent and shipped to followers (audit 2026-10-30 I2).
 //!
+//! **Bounds (audit 2026-10-30 I7, I8).** A genesis binds at most [`MAX_BOUND_PREPARATIONS`] preparations and declares at most
+//! [`MAX_BOUND_COVENANTS`] covenant ids ([`MAX_COVENANTS_TRIED`] are examined); the preparation and genesis of a pair are checked
+//! once, then each covenant id costs one binding check. A preparation is written to the record log once, in the frame of the first
+//! genesis that binds it; the frame of a later genesis names it by transaction id ([`DeclSection::refs`], resolved from
+//! `kcc23_txs` where the earlier genesis put it). A record that is relevant to KOB for another reason (a token transfer) carries a
+//! declaration section only when it binds: a preparation payload on it is a database candidate like any other.
+//!
 //! **Proofs.** A proof is stored once per transaction, not once per covenant id: the genesis and the preparations it binds are
 //! rows of `kcc23_txs` (content-addressed by transaction id), and each covenant id's declaration row names them. The proof
 //! JSON a client fetches is assembled on read ([`proof_json`]), byte for byte the document the covenant id's verified
@@ -35,7 +42,7 @@ use super::db::{DbError, DbResult};
 use crate::hex::Hash32;
 use crate::rpc::types::Tx;
 use crate::wire::{Reader, WireError, WireResult, Writer};
-use kob_protocol::kcc23::{self, LaunchProof, ProofCovenant, ProofInput, ProofOutput, ProofSpk, ProofTx, VerifiedDeclaration};
+use kob_protocol::kcc23::{self, LaunchProof, ProofCovenant, ProofInput, ProofOutput, ProofSpk, ProofTx};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 
@@ -44,12 +51,21 @@ use std::collections::HashSet;
 /// bytes; a larger transaction is not kept as a candidate.
 pub const MAX_CANDIDATE_BYTES: usize = 2 * kcc23::MAX_READ_PAYLOAD;
 
+/// Most preparations one genesis binds (the ones its covenant outputs' authorising inputs spend first, in output order).
+pub const MAX_BOUND_PREPARATIONS: usize = 4;
+/// Most covenant ids one genesis declares.
+pub const MAX_BOUND_COVENANTS: usize = 32;
+/// Most distinct (authorising input, covenant id) pairs of one transaction examined for a binding.
+pub const MAX_COVENANTS_TRIED: usize = 256;
+
 /// The subnetwork id of ordinary transactions.
 const NATIVE_SUBNETWORK: [u8; 20] = [0; 20];
 
 /// Section flags of a record ([`DeclSection::encode`]).
 const PREPARATION: u8 = 1;
 const GENESIS: u8 = 2;
+/// Some of the bound preparations are named by transaction id instead of carried (an earlier frame has them).
+const REFS: u8 = 4;
 
 /// The declaration section of a record: the transaction's id-relevant fields, whether it is a candidate preparation, and the
 /// candidate preparations its covenant outputs bind (a genesis; empty otherwise).
@@ -59,47 +75,69 @@ pub struct DeclSection {
     pub tx: ProofTx,
     /// Its payload is a declaration: kept as a candidate preparation.
     pub preparation: bool,
-    /// The preparations at least one of its covenant ids was verified against.
+    /// The preparations at least one of its covenant ids was verified against, that the record log does not hold yet.
     pub binds: Vec<ProofTx>,
+    /// Ids of preparations a genesis binds that an earlier declaration already put in `kcc23_txs` (and so in an earlier frame of the
+    /// log): not carried again.
+    pub refs: Vec<[u8; 32]>,
 }
 
 impl DeclSection {
     /// Whether a record whose only content is this section goes to the permanent record log: a genesis does (it carries the
     /// preparations it binds, so a replay needs nothing else); a candidate no genesis has bound stays in the database only.
     pub fn is_logged(&self) -> bool {
-        !self.binds.is_empty()
+        !self.binds.is_empty() || !self.refs.is_empty()
     }
 
-    /// Record-log encoding: flags, the transaction, then (genesis) the preparations.
+    /// Record-log encoding: flags, the transaction, then (genesis) the preparations carried, then the ones named. A frame that names
+    /// none is byte for byte what the first format wrote.
     pub fn encode(&self, w: &mut Writer) {
-        let flags = if self.preparation { PREPARATION } else { 0 } | if self.binds.is_empty() { 0 } else { GENESIS };
+        let flags = if self.preparation { PREPARATION } else { 0 }
+            | if self.is_logged() { GENESIS } else { 0 }
+            | if self.refs.is_empty() { 0 } else { REFS };
         w.u8(flags);
         put_tx(w, &self.tx);
-        if !self.binds.is_empty() {
+        if self.is_logged() {
             w.var(self.binds.len() as u64);
             for p in &self.binds {
                 put_tx(w, p);
+            }
+        }
+        if !self.refs.is_empty() {
+            w.var(self.refs.len() as u64);
+            for r in &self.refs {
+                w.raw(r);
             }
         }
     }
 
     pub fn decode(r: &mut Reader<'_>) -> WireResult<DeclSection> {
         let flags = r.u8()?;
-        if flags & !(PREPARATION | GENESIS) != 0 || flags == 0 {
+        if flags & !(PREPARATION | GENESIS | REFS) != 0 || flags == 0 || (flags & REFS != 0 && flags & GENESIS == 0) {
             return Err(WireError("declaration section flags"));
         }
         let tx = get_tx(r)?;
         let mut binds = Vec::new();
+        let mut refs = Vec::new();
         if flags & GENESIS != 0 {
             let n = r.count(7)?;
-            if n == 0 {
-                return Err(WireError("genesis without a preparation"));
-            }
             for _ in 0..n {
                 binds.push(get_tx(r)?);
             }
+            if flags & REFS != 0 {
+                let n = r.count(32)?;
+                if n == 0 {
+                    return Err(WireError("preparation references"));
+                }
+                for _ in 0..n {
+                    refs.push(r.raw(32)?.try_into().expect("32"));
+                }
+            }
+            if binds.is_empty() && refs.is_empty() {
+                return Err(WireError("genesis without a preparation"));
+            }
         }
-        Ok(DeclSection { tx, preparation: flags & PREPARATION != 0, binds })
+        Ok(DeclSection { tx, preparation: flags & PREPARATION != 0, binds, refs })
     }
 }
 
@@ -237,39 +275,51 @@ pub fn is_declaration(version: u16, payload: &[u8]) -> bool {
     version == 1 && kcc23::looks_like_declaration(payload) && kcc23::decode_limited(payload, kcc23::MAX_READ_PAYLOAD).is_ok()
 }
 
-/// A covenant id `genesis` creates from an output of one of `preps`, with its verified proof.
+/// A covenant id `genesis` creates from an output of one of `preps`, verified.
 pub struct Binding {
     /// Index into the preparations.
     pub prep: usize,
     pub covenant_id: Hash32,
-    pub proof: LaunchProof,
-    pub verified: VerifiedDeclaration,
+    /// The recomputed id of the preparation.
+    pub preparation_txid: [u8; 32],
 }
 
-/// Every covenant id of `genesis` (whose id is `genesis_id`) authorised by an input that spends an output of one of `preps`,
-/// with the launch proof, when [`LaunchProof::verify`] accepts it and the genesis it recomputes is `genesis_id`.
+/// Every covenant id of `genesis` (whose id is `genesis_id`) authorised by an input that spends an output of one of `preps` and bound
+/// to it as [`LaunchProof::verify`] demands, at most [`MAX_BOUND_COVENANTS`] of them out of [`MAX_COVENANTS_TRIED`] examined.
+///
+/// The transactions are rebuilt and hashed, and the declaration decoded, once per preparation and genesis (not once per covenant
+/// id: 41 ms at 100 ids, 241 ms at 300, audit 2026-10-30 I8); a covenant id then costs one binding check.
 pub fn bindings(genesis: &ProofTx, genesis_id: &Hash32, preps: &[ProofTx]) -> Vec<Binding> {
+    use kaspa_consensus_core::Hash;
+    // per preparation, built when a covenant output first names it: `Some(None)` = it fails the id-independent checks
+    type Built = Option<(kaspa_consensus_core::tx::Transaction, Hash)>;
     let ids: Vec<Option<Hash32>> = preps.iter().map(proof_txid).collect();
+    let mut prepared: Vec<Option<Built>> = (0..preps.len()).map(|_| None).collect();
+    let genesis_tx = match genesis.to_tx() {
+        Ok(t) if proof_txid(genesis).as_ref() == Some(genesis_id) => t,
+        _ => return Vec::new(),
+    };
     let mut seen: HashSet<(u16, [u8; 32])> = HashSet::new();
-    let mut out = Vec::new();
+    let mut out: Vec<Binding> = Vec::new();
     for c in genesis.outputs.iter().filter_map(|o| o.covenant.as_ref()) {
+        if out.len() >= MAX_BOUND_COVENANTS || seen.len() >= MAX_COVENANTS_TRIED {
+            break;
+        }
         if !seen.insert((c.authorizing_input, c.covenant_id)) || out.iter().any(|b: &Binding| b.covenant_id.0 == c.covenant_id) {
             continue;
         }
         let Some(input) = genesis.inputs.get(c.authorizing_input as usize) else { continue };
         let Some(k) = ids.iter().position(|id| id.is_some_and(|id| id.0 == input.transaction_id)) else { continue };
-        let proof = LaunchProof {
-            format: kcc23::PROOF_FORMAT.into(),
-            covenant_id: c.covenant_id,
-            preparation: preps[k].clone(),
-            genesis: genesis.clone(),
-        };
-        match proof.verify() {
-            Ok(v) if v.genesis_txid == genesis_id.0 => {
-                out.push(Binding { prep: k, covenant_id: Hash32(c.covenant_id), proof, verified: v })
+        let built = prepared[k].get_or_insert_with(|| {
+            let tx = preps[k].to_tx().ok()?;
+            kcc23::check_launch(&tx, &genesis_tx).ok()?;
+            Some((tx, Hash::from_bytes(input.transaction_id)))
+        });
+        match built {
+            Some((tx, id)) if kcc23::is_bound(tx, *id, &genesis_tx, Hash::from_bytes(c.covenant_id)) => {
+                out.push(Binding { prep: k, covenant_id: Hash32(c.covenant_id), preparation_txid: input.transaction_id })
             }
-            Ok(_) => {}
-            Err(e) => tracing::debug!(covenant_id = %Hash32(c.covenant_id), "not a KCC-23 genesis: {e}"),
+            _ => tracing::debug!(covenant_id = %Hash32(c.covenant_id), "not a KCC-23 genesis"),
         }
     }
     out
@@ -289,7 +339,11 @@ pub fn extract(conn: &Connection, tx: &Tx) -> DbResult<Option<DeclSection>> {
     let mut preps = Vec::new();
     if version >= 1 {
         let mut asked: HashSet<Hash32> = HashSet::new();
-        for c in tx.outputs.iter().filter_map(|o| o.covenant.as_ref()) {
+        // bounded: one primary-key lookup per distinct spent transaction, and only so many preparations are carried
+        for c in tx.outputs.iter().filter_map(|o| o.covenant.as_ref()).take(MAX_COVENANTS_TRIED) {
+            if preps.len() >= MAX_BOUND_PREPARATIONS {
+                break;
+            }
             let Some(input) = tx.inputs.get(c.authorizing_input as usize) else { continue };
             let prev = input.previous_outpoint.transaction_id;
             if asked.insert(prev) {
@@ -306,16 +360,28 @@ pub fn extract(conn: &Connection, tx: &Tx) -> DbResult<Option<DeclSection>> {
         return Ok(None);
     };
     let preparation = prepares && encode_tx(&me).len() <= MAX_CANDIDATE_BYTES;
-    let binds: Vec<ProofTx> = if preps.is_empty() {
-        vec![]
-    } else {
+    // the preparations a covenant id was verified against: carried in full the first time (nothing of the store names them), then by id
+    let (mut binds, mut refs): (Vec<ProofTx>, Vec<[u8; 32]>) = (vec![], vec![]);
+    if !preps.is_empty() {
         let found = bindings(&me, &txid, &preps);
-        preps.into_iter().enumerate().filter(|(k, _)| found.iter().any(|b| b.prep == *k)).map(|(_, p)| p).collect()
-    };
-    if !preparation && binds.is_empty() {
+        for p in preps.into_iter().enumerate().filter(|(k, _)| found.iter().any(|b| b.prep == *k)).map(|(_, p)| p) {
+            match proof_txid(&p) {
+                Some(id) if stored_tx(conn, &id.0)?.is_some() => refs.push(id.0),
+                _ => binds.push(p),
+            }
+        }
+    }
+    if !preparation && binds.is_empty() && refs.is_empty() {
         return Ok(None);
     }
-    Ok(Some(DeclSection { tx: me, preparation, binds }))
+    Ok(Some(DeclSection { tx: me, preparation, binds, refs }))
+}
+
+/// A transaction of `kcc23_txs` (the ones declarations name).
+fn stored_tx(conn: &Connection, id: &[u8; 32]) -> DbResult<Option<ProofTx>> {
+    let b: Option<Vec<u8>> =
+        conn.prepare_cached("SELECT tx FROM kcc23_txs WHERE txid = ?1")?.query_row([&id[..]], |r| r.get(0)).optional()?;
+    Ok(b.and_then(|b| decode_tx(&b).ok()))
 }
 
 /// Applies a record's declaration section in chain block `seq` (DAA `daa`): the candidate, and the verified proofs of a genesis
@@ -326,21 +392,31 @@ pub fn apply(conn: &Connection, seq: i64, daa: u64, txid: &Hash32, d: &DeclSecti
             .execute(params![&txid.0[..], encode_tx(&d.tx), seq, daa as i64])?;
     }
     let mut declared = Vec::new();
-    if d.binds.is_empty() {
+    if !d.is_logged() {
         return Ok(declared);
     }
-    for b in bindings(&d.tx, txid, &d.binds) {
+    // the preparations the frame carries, then the ones it names (an earlier declaration stored them)
+    let mut preps = d.binds.clone();
+    for r in &d.refs {
+        match stored_tx(conn, r)? {
+            Some(p) => preps.push(p),
+            None => {
+                tracing::warn!(preparation = %Hash32(*r), genesis = %txid, "a KCC-23 genesis names a preparation the store lacks: no declaration")
+            }
+        }
+    }
+    for b in bindings(&d.tx, txid, &preps) {
         // the proof is assembled on read from the two transactions, stored once each (the proof column stays empty)
         let n = conn
             .prepare_cached(
                 "INSERT OR IGNORE INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
                  VALUES (?1, '', ?2, ?3, ?4, ?5)",
             )?
-            .execute(params![&b.covenant_id.0[..], &b.verified.preparation_txid[..], &txid.0[..], seq, daa as i64])?;
+            .execute(params![&b.covenant_id.0[..], &b.preparation_txid[..], &txid.0[..], seq, daa as i64])?;
         if n > 0 {
             let mut put = conn.prepare_cached("INSERT OR IGNORE INTO kcc23_txs (txid, tx) VALUES (?1, ?2)")?;
-            put.execute(params![&txid.0[..], encode_tx(&b.proof.genesis)])?;
-            put.execute(params![&b.verified.preparation_txid[..], encode_tx(&b.proof.preparation)])?;
+            put.execute(params![&txid.0[..], encode_tx(&d.tx)])?;
+            put.execute(params![&b.preparation_txid[..], encode_tx(&preps[b.prep])])?;
             declared.push(b.covenant_id);
         }
     }

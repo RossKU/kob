@@ -589,6 +589,11 @@ impl World {
 
     /// [`World::stray`] for a token family (KRON: the recipient is re-targeted to `id_type` 2).
     pub fn stray_for(&self, fam: Family, order_cov: Hash32, amount: i64, sender: u8) -> SignedTx {
+        self.stray_with_payload(fam, order_cov, amount, sender, None)
+    }
+
+    /// [`World::stray_for`] carrying a payload (anyone can put one on a token transfer: a KCC-23 declaration, say).
+    pub fn stray_with_payload(&self, fam: Family, order_cov: Hash32, amount: i64, sender: u8, payload: Option<Vec<u8>>) -> SignedTx {
         let tok = self.token_for(fam, sender, amount + 5);
         let coin = self.coin(sender, 100);
         let (cov, program) = if fam == Family::Kron { (TOKEN_COV_KRON, K3) } else { (TOKEN_COV, T3) };
@@ -630,6 +635,12 @@ impl World {
             }
         }
         assert!(patched, "the leader authorises the recipient state");
+        if let Some(p) = payload {
+            // the payload is paid for by mass: the fee comes out of the recipient's carrier
+            let to_spk = spk_to_string(&TokenState::custody(fam, amount, order_cov.0, EXT).spk_with(token_template(program)));
+            built.tx.outputs.iter_mut().find(|o| o.script_public_key == to_spk).expect("recipient output").value -= 5_000_000;
+            built.tx.payload = p;
+        }
         self.resign(built, true)
     }
 

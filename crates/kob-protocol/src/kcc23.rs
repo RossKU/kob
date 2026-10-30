@@ -260,6 +260,16 @@ pub fn verify_binding<'a>(preparation: &'a Transaction, genesis: &Transaction, e
     }
     let text = decode(&preparation.payload)?;
     let preparation_id = tx_id(preparation);
+    if is_bound(preparation, preparation_id, genesis, expected) {
+        Ok(text)
+    } else {
+        Err(BindingError::NotBound { preparation: preparation_id, covenant_id: expected })
+    }
+}
+
+/// Whether `genesis` creates the covenant `expected` from an output of `preparation` (whose id is `preparation_id`): the binding half of
+/// [`verify_binding`], for a caller that has checked the versions and the declaration itself once for many covenant ids of one genesis.
+pub fn is_bound(preparation: &Transaction, preparation_id: Hash, genesis: &Transaction, expected: Hash) -> bool {
     for (input_index, input) in genesis.inputs.iter().enumerate() {
         let outpoint = input.previous_outpoint;
         if outpoint.transaction_id != preparation_id || preparation.outputs.get(outpoint.index as usize).is_none() {
@@ -274,10 +284,27 @@ pub fn verify_binding<'a>(preparation: &'a Transaction, genesis: &Transaction, e
             .map(|(i, o)| (i as u32, o))
             .collect();
         if !group.is_empty() && covenant_id(outpoint, group.into_iter()) == expected {
-            return Ok(text);
+            return true;
         }
     }
-    Err(BindingError::NotBound { preparation: preparation_id, covenant_id: expected })
+    false
+}
+
+/// The checks of [`LaunchProof::verify`] that do not depend on the covenant id, for a preparation and genesis (the versions, the size
+/// and the syntax of the declaration): `Ok(())` means [`is_bound`] decides each covenant id of the genesis (audit 2026-10-30 I8).
+pub fn check_launch(preparation: &Transaction, genesis: &Transaction) -> Result<(), String> {
+    if preparation.version != 1 {
+        return Err(BindingError::PreparationVersion(preparation.version).to_string());
+    }
+    if genesis.version < 1 {
+        return Err(BindingError::GenesisVersion(genesis.version).to_string());
+    }
+    if preparation.payload.len() > MAX_READ_PAYLOAD {
+        return Err(Kcc23Error::TooLarge { len: preparation.payload.len(), max: MAX_READ_PAYLOAD }.to_string());
+    }
+    let json = decode(&preparation.payload).map_err(|e| e.to_string())?;
+    parse_object(json).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ------------------------------------------------------------------------------------------------ KOB token convention

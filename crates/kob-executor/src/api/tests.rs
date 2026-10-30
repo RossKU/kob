@@ -1367,8 +1367,14 @@ async fn token_declarations_are_served_as_launch_proofs() {
     let prep = kcc23_prep(1, kob_protocol::kcc23::encode(KCC23_EXAMPLE).unwrap());
     let (gen, cov) = kcc23_genesis(&prep, 0, 1);
     let ptx = |t| proof_tx(&kcc23_wire(t, false)).unwrap();
-    apply(&e.w, 9, 990, &kcc23_txid(&prep), &DeclSection { tx: ptx(&prep), preparation: true, binds: vec![] }).unwrap();
-    let declared = apply(&e.w, 9, 990, &kcc23_txid(&gen), &DeclSection { tx: ptx(&gen), preparation: false, binds: vec![ptx(&prep)] });
+    apply(&e.w, 9, 990, &kcc23_txid(&prep), &DeclSection { tx: ptx(&prep), preparation: true, binds: vec![], refs: vec![] }).unwrap();
+    let declared = apply(
+        &e.w,
+        9,
+        990,
+        &kcc23_txid(&gen),
+        &DeclSection { tx: ptx(&gen), preparation: false, binds: vec![ptx(&prep)], refs: vec![] },
+    );
     assert_eq!(declared.unwrap(), vec![cov]);
     let mut entries = e.state.tokens.list().into_iter().cloned().collect::<Vec<_>>();
     entries.push(TokenEntry { ticker: "EXT".into(), covenant_id: cov, decimals: Some(8), ..entries[0].clone() });
@@ -1437,8 +1443,9 @@ async fn token_decimals_follow_the_declaration_then_the_registry_then_the_progra
     let prep = kcc23_prep(1, kob_protocol::kcc23::encode(KCC23_EXAMPLE).unwrap());
     let (gen, declared) = kcc23_genesis(&prep, 0, 1);
     let ptx = |t| proof_tx(&kcc23_wire(t, false)).unwrap();
-    apply(&e.w, 9, 990, &kcc23_txid(&prep), &DeclSection { tx: ptx(&prep), preparation: true, binds: vec![] }).unwrap();
-    apply(&e.w, 9, 990, &kcc23_txid(&gen), &DeclSection { tx: ptx(&gen), preparation: false, binds: vec![ptx(&prep)] }).unwrap();
+    apply(&e.w, 9, 990, &kcc23_txid(&prep), &DeclSection { tx: ptx(&prep), preparation: true, binds: vec![], refs: vec![] }).unwrap();
+    apply(&e.w, 9, 990, &kcc23_txid(&gen), &DeclSection { tx: ptx(&gen), preparation: false, binds: vec![ptx(&prep)], refs: vec![] })
+        .unwrap();
     seen(&declared);
     let mut entries = e.state.tokens.list().into_iter().cloned().collect::<Vec<_>>();
     entries.push(TokenEntry {
