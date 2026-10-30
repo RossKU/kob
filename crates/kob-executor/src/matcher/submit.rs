@@ -130,13 +130,18 @@ fn conflict_orders(t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>) -> BT
 }
 
 /// The orders a node's generic refusal ([`SubmitOutcome::Rejected`]) backs off. The refusal names no order, so the batch is
-/// searched by halves across ticks: the lower half (by id) of a transaction with several orders sits out, the other half is
-/// planned again at once and, if the node refuses it again, loses its own lower half the same way, until a single order is
-/// the one backed off. So one order that makes a node-only policy refuse every batch it is in costs the others at most one
-/// backoff each (audit 2026-10-30 E2), never the whole batch every time.
-fn rejected_orders(orders: &BTreeSet<CovId>) -> BTreeSet<CovId> {
+/// searched by halves across ticks: half of a transaction with several orders sits out, the other half is planned again at
+/// once and, if the node refuses it again, loses half of itself the same way, until a single order is the one backed off. So one
+/// order that makes a node-only policy refuse every batch it is in costs the others at most one backoff each (audit 2026-10-30
+/// E2), never the whole batch every time. The half is chosen by a keyed hash of the order id and the refusal count, the key random
+/// per process: it was the lower half by id, which an order with a ground low covenant id (cheap to make) made a fixed victim
+/// of the lowest honest ids of every batch it was in (audit 2026-10-30 E3).
+fn rejected_orders(salt: &std::collections::hash_map::RandomState, round: u64, orders: &BTreeSet<CovId>) -> BTreeSet<CovId> {
+    use std::hash::BuildHasher;
     let half = orders.len().div_ceil(2);
-    orders.iter().take(half).copied().collect()
+    let mut keyed: Vec<(u64, CovId)> = orders.iter().map(|id| (salt.hash_one((id, round)), *id)).collect();
+    keyed.sort_unstable();
+    keyed.into_iter().take(half).map(|(_, id)| id).collect()
 }
 
 /// The orders of `t` whose inputs the node no longer holds, asked by address after a missing-input refusal: None when the
@@ -168,6 +173,8 @@ pub struct Tracker {
     pub txs: BTreeMap<[u8; 32], Tracked>,
     /// Order id -> (back off until DAA, attempts).
     pub backoff: BTreeMap<CovId, (u64, u32)>,
+    /// The key of the keyed hash that picks the half of a refused batch to back off ([`rejected_orders`]): random per process.
+    half_salt: std::collections::hash_map::RandomState,
     /// Counters.
     pub submitted: u64,
     pub conflicts: u64,
@@ -245,7 +252,8 @@ impl Tracker {
             }
             SubmitOutcome::Rejected => {
                 self.rejected += 1;
-                self.back_off(&rejected_orders(&t.orders), daa);
+                let ids = rejected_orders(&self.half_salt, self.rejected, &t.orders);
+                self.back_off(&ids, daa);
             }
         }
         outcome
@@ -285,7 +293,7 @@ impl Tracker {
                             self.conflicts += 1;
                         }
                         let ids = if outcome == SubmitOutcome::Rejected {
-                            rejected_orders(&t.orders)
+                            rejected_orders(&self.half_salt, self.rejected, &t.orders)
                         } else {
                             lost_orders(node, &t, outcome, msg.as_deref()).await
                         };
@@ -419,6 +427,46 @@ impl Tracker {
 mod tests {
     use super::*;
     use crate::matcher::node::ChainBlock;
+
+    /// Audit 2026-10-30 E3: an order with a low (ground) covenant id is not a fixed victim of a refused batch: the half that sits out is
+    /// not the lower half by id, it differs from one refusal to the next, and the batch still converges on the one order.
+    #[test]
+    fn the_half_that_sits_out_is_not_the_lowest_ids() {
+        let salt = std::collections::hash_map::RandomState::new();
+        let batch: BTreeSet<CovId> = (1u8..=8).map(|n| [n; 32]).collect();
+        let lowest: BTreeSet<CovId> = batch.iter().take(4).copied().collect();
+        let mut seen_other = false;
+        let mut firsts = BTreeSet::new();
+        for round in 1..=64u64 {
+            let out = rejected_orders(&salt, round, &batch);
+            assert_eq!(out.len(), 4);
+            assert!(out.is_subset(&batch));
+            seen_other |= out != lowest;
+            firsts.insert(out.into_iter().collect::<Vec<_>>());
+        }
+        assert!(seen_other && firsts.len() > 3, "the same half every time: {firsts:?}");
+        // a single order is the one backed off; searching converges on the one bad order of eight in at most three refusals
+        assert_eq!(rejected_orders(&salt, 1, &[[9u8; 32]].into_iter().collect()), [[9u8; 32]].into_iter().collect());
+        for bad in 1u8..=8 {
+            let mut live = batch.clone();
+            let mut refusals = 0;
+            while live.len() > 1 || refusals == 0 {
+                if !live.contains(&[bad; 32]) {
+                    break;
+                }
+                refusals += 1;
+                let out = rejected_orders(&salt, refusals, &live);
+                if live.len() == 1 {
+                    break;
+                }
+                live = live.difference(&out).copied().collect();
+                if refusals > 6 {
+                    panic!("no convergence");
+                }
+            }
+            assert!(refusals <= 4, "order {bad}: {refusals} refusals");
+        }
+    }
 
     fn tracked(n: u8, daa: u64) -> Tracked {
         Tracked {
