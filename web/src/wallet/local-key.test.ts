@@ -242,6 +242,9 @@ describe('private-key adapter: a token creation (KCC-23) on one confirmation', (
     expect([line(/^Name/), line(/^Ticker/), line(/^Decimals/)]).toEqual(['Frame Coin', 'FRAME', '3']);
     // the genesis outputs checked against the claimed states: the supply and what this key receives are named, nothing is unknown
     expect([line(/^Total supply/), line(/^To you/)]).toEqual(['5000 FRAME', '+5000 FRAME']);
+    // the program and the extension commitment the outputs were checked against are lines of the frame (audit 2026-10-30 G4)
+    expect(line(/^Token program/)).toMatch(/^[A-Za-z0-9_]+$/);
+    expect(line(/^Extension commitment/)).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8}$/);
     expect(s.problems).toBe(0);
     // the fee and the KAS line cover both transactions
     expect(s.fee).toBe(`${formatKas(BigInt(plan.prep.fee.fee) + BigInt(plan.built.fee.fee))} KAS`);

@@ -82,7 +82,8 @@ const tokenName = (covenantId: Hex, hint: TokenHint | undefined): string => {
   if (hint.source === 'program') return t('signer.net.tokenProgram', { id: longId(covenantId), decimals: hint.decimals, source: hint.convention ?? '' });
   if (hint.source === 'issued') return t('signer.net.tokenIssued', { ticker: hint.ticker, id: longId(covenantId) });
   if (hint.source === 'declared') return t('signer.net.tokenDeclared', { ticker: hint.ticker, id: longId(covenantId) });
-  return `${hint.ticker} (${longId(covenantId)})`;
+  // a registry token: the ticker and decimals are the app's word (the covenant id is the transaction's)
+  return t('signer.net.tokenListed', { ticker: hint.ticker, id: longId(covenantId), decimals: hint.decimals });
 };
 
 /** A TokenRef from the app's hint (ticker and decimals are labels; without a hint amounts stay in base units). */
@@ -150,7 +151,8 @@ function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWa
   const T = hint.ticker || longId(d.tokenCovId);
   const dec = hint.decimals;
   const scale = d.scale;
-  const decays = !!d.auction && d.auction.slope > 0n && d.auction.priceEnd > 0n;
+  // a price that decays to 0 is a decay (the bound is 0 KAS, and it is said so: audit 2026-10-30 G6)
+  const decays = !!d.auction && d.auction.slope > 0n;
   const start = d.price;
   const end = decays ? d.auction!.priceEnd : start;
   const typeName = t(FLIP_TYPE[orderTypeCode(d, o.deadline)] ?? 'signer.flip.type.limit');
@@ -317,6 +319,23 @@ const MAX_CLOSED_LINES = 8;
 /** How many delivery counts `bidAmountOf` tries for a bid whose fills the user chose. */
 const MAX_FILLS_SEARCHED = 64n;
 
+/**
+ * The orders whose price scale does not fit the decimals the app gave their token (audit 2026-10-30 G7). A plain order of a token whose decimals the
+ * app says it knows (a registry, issued, declared or program-default token: not an `assumed` one) quotes its price per the standard scale
+ * `10^min(decimals, 9)` base units, which is what the app plans; the frame cannot check the decimals themselves, but an order whose scale
+ * disagrees with them reads differently under a different hint (the same order read as 0.5, 500,000,000 or 0.05 tokens). Blocks Approve.
+ */
+function scaleMismatches(s: SigningSummary, hints: TokenHint[]): { code: string }[] {
+  const out: { code: string }[] = [];
+  for (const o of s.orders) {
+    const d = o.description;
+    const h = hints.find((x) => x.covenantId === d.tokenCovId);
+    if (!h || h.source === 'assumed' || d.pair || d.scale <= 0n) continue;
+    if (d.scale !== 10n ** BigInt(Math.min(h.decimals, 9))) out.push({ code: 'token-scale' });
+  }
+  return out;
+}
+
 /** Compact lines of a decoded request: KAS and every token, net for this key; KAS locked into orders and paid to other keys; the fee. */
 export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWasm, terms = false): SignerSummary {
   const lines: SummaryLine[] = [];
@@ -350,7 +369,8 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry, terms);
     return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain;
   });
-  return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...(s.inputs.length > s.signatures ? { unsignedKas: true } : {}), ...problemsOf(s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code))), decoded: s };
+  const found = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...scaleMismatches(s, hints)];
+  return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...(s.inputs.length > s.signatures ? { unsignedKas: true } : {}), ...problemsOf(found), decoded: s };
 }
 
 /** Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. */
@@ -406,6 +426,14 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
     { label: t('signer.declare.symbol'), value: decl.symbol ?? '', dir: null },
     { label: t('signer.declare.decimals'), value: decl.decimals === null ? '' : String(decl.decimals), dir: null },
     { label: t('signer.declare.steps'), value: t('signer.declare.stepsValue'), dir: null },
+    // the program and the extension commitment of the token output scripts, as the outputs were checked against them (audit 2026-10-30 G4: two
+    // creations that differ only there looked the same)
+    ...(claim
+      ? [
+          { label: t('signer.declare.program'), value: claim.program, dir: null },
+          { label: t('signer.declare.extension'), value: longId(claim.extensionCommitment), dir: null },
+        ]
+      : []),
     ...(claim && decl.decimals !== null
       ? [
           { label: t('signer.declare.supply'), value: `${formatTokenAmount(supply, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null },

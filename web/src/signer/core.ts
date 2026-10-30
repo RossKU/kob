@@ -110,6 +110,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
 
   const forget = () => {
     drop('cancelled');
+    approved = null;
     free();
     post(toApp({ type: 'forgotten' }));
   };
@@ -135,6 +136,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         throw new SignerKeyError();
       }
       drop('cancelled');
+      approved = null;
       free();
       key = next;
       pub = x;

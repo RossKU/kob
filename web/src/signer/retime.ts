@@ -51,8 +51,13 @@ function orderKept(a: DecodedOrder, b: DecodedOrder): boolean {
   if (!!x.auction !== !!y.auction) return false;
   if (x.auction && y.auction && !better(x.auction.priceEnd, y.auction.priceEnd)) return false;
   // the price may not fall (a sell) or rise (a buy) faster per DAA than approved: the same auction from a better start is slower, one with a steeper
-  // slope would have reached the bound sooner (G3; compared by cross-multiplication, `slope / decayStep` DAA)
-  if (x.auction && y.auction && y.auction.slope * x.auction.decayStep > x.auction.slope * y.auction.decayStep) return false;
+  // slope would have reached the bound sooner (G3; compared by cross-multiplication, `slope / decayStep` DAA). A slope of 0 is no decay at all: the
+  // covenant asks for a decay step only when there is a slope, so an approved order with slope 0 and step 0 is flat, and a step of 0 counts as 1
+  // in the comparison (both sides were 0 before, which let a flat order become a steep one: audit 2026-10-30 G5)
+  if (x.auction && y.auction) {
+    const step = (a: { decayStep: bigint }) => (a.decayStep > 0n ? a.decayStep : 1n);
+    if (y.auction.slope * step(x.auction) > x.auction.slope * step(y.auction)) return false;
+  }
   // what the order holds: a buy's escrow (its most to pay) never larger, beyond the tolerance; the KAS of a sell's carriers the same
   return b.value <= a.value + RETIME_TOLERANCE_SOMPI && (a.custody?.amount ?? null) === (b.custody?.amount ?? null);
 }

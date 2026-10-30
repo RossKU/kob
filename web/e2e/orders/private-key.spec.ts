@@ -101,7 +101,7 @@ test('connect with a private key in the signer frame, place and cancel an order 
     orderTitles: ['Sell limit order'],
   });
   expect(shown.orders[0]!.rows).toMatchObject({ Amount: '2 EXKCC', 'Limit price': '0.027 KAS per EXKCC' });
-  expect(shown.orders[0]!.token).toMatch(/^EXKCC [(][0-9a-f]{8}…[0-9a-f]{8}[)]$/);
+  expect(shown.orders[0]!.token).toMatch(/^EXKCC [(][0-9a-f]{8}…[0-9a-f]{8}, 8 decimals as the app lists them[)]$/);
   const placed = await placedBy(mock, await waitSubmitted(page));
   expect(shown.fee).toBe(feeText(placed.submission.fee));
   expect(placed.views[0].contract).toBe('KobAsk');

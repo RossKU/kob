@@ -34,6 +34,8 @@ export default {
   'signer.declare.supply': 'Total supply',
   'signer.declare.toYou': 'To you',
   'signer.declare.toOthers': 'To other keys',
+  'signer.declare.program': 'Token program (checked against the outputs)',
+  'signer.declare.extension': 'Extension commitment (checked against the outputs)',
   'signer.declare.steps': 'Transactions',
   'signer.declare.stepsValue': '2: the details, then the token',
   'signer.net.kas': 'KAS',
@@ -53,6 +55,8 @@ export default {
   'signer.net.tokenProgram': '{id} ({decimals} decimals, {source})',
   'signer.net.tokenIssued': '{ticker} ({id}, unverified)',
   'signer.net.tokenDeclared': '{ticker} ({id}, declared on chain, unverified)',
+  // a token the app lists: its ticker and decimals are the app's word, which this frame cannot check (audit 2026-10-30 G7)
+  'signer.net.tokenListed': '{ticker} ({id}, {decimals} decimals as the app lists them)',
   'signer.updated': 'Updated: some figures changed since this request was first shown.',
   'signer.rel.now': 'now',
   'signer.rel.s': 'in {n} s',
