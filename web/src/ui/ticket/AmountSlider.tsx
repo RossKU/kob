@@ -5,7 +5,7 @@
 // a phone. Percent of Max is what it always was (of the available balance, or of the KAS budget when buying).
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
-import { PAGE_STEP, SLIDER_POINTS, amountPercent, pickAmount, pointEnabled, snapPct } from './amount-slider';
+import { PAGE_STEP, SLIDER_POINTS, pickAmount, picked, pointEnabled, snapPct, trackPercent, type SliderMemory } from './amount-slider';
 
 export interface AmountSliderProps {
   /** what Max gives now (base units); null while it is not known (no wallet, no environment, being computed) */
@@ -25,7 +25,10 @@ export interface AmountSliderProps {
 
 export function AmountSlider(p: AmountSliderProps) {
   const off = !!p.disabled || p.max === null || p.max <= 0n;
-  const pct = amountPercent(p.amount, p.max) ?? 0;
+  // the thumb keeps its position through ticks: it is converted from the amount once, when the amount changes (amount-slider.ts `trackPercent`)
+  const memory = useRef<SliderMemory | null>(null);
+  memory.current = trackPercent(memory.current, p.amount, p.max);
+  const pct = memory.current.pct;
   const [dragging, setDragging] = useState(false);
   const drag = useRef(false);
   // the pointer is released anywhere, also off the thumb or after the finger left the page
@@ -43,11 +46,14 @@ export function AmountSlider(p: AmountSliderProps) {
     };
   }, []);
   const pick = (v: number) => {
-    if (!off) p.onPick(pickAmount(v, p.max, p.minFill));
+    if (off) return;
+    const a = pickAmount(v, p.max, p.minFill);
+    memory.current = picked(v, a);
+    p.onPick(a);
   };
   const valueText = off || p.amount === null ? `${pct}%` : t('ticket.slider.value', { pct, amount: p.describe(p.amount) });
   return (
-    <div class="tk-slider" data-testid="order-amount-slider" data-pct={off ? '' : String(pct)} data-side={p.side ?? 'buy'} data-dragging={dragging ? '1' : '0'} style={`--p:${pct / 100}`}>
+    <div class="tk-slider" data-testid="order-amount-slider" data-pct={String(pct)} data-side={p.side ?? 'buy'} data-dragging={dragging ? '1' : '0'} style={`--p:${pct / 100}`}>
       <div class="tk-slider-track">
         <output class="tk-slider-bubble" aria-hidden="true" hidden={!dragging || off} data-testid="order-amount-bubble">{`${pct}%`}</output>
         <input

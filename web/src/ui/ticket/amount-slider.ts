@@ -36,6 +36,34 @@ export function amountPercent(amount: bigint | null, max: bigint | null): number
   return Math.min(100, Math.max(0, p));
 }
 
+/**
+ * Where the thumb is: what it was last told, not a function of Max. A tick of the book, the chart or the balances recomputes Max (and for a moment
+ * leaves it unknown while the book reloads); the amount in the box has not changed, so the thumb must not move. The position is converted from the
+ * amount once, when the amount changes (typed, Max, a reset), against the Max known then; with no Max to convert against it stays where it was and
+ * converts once Max is known. A drag sets it directly (`picked`).
+ */
+export interface SliderMemory {
+  /** the amount (base units) the position belongs to; null = the box is empty */
+  amount: bigint | null;
+  pct: number;
+  /** false: the amount changed while Max was unknown, the position is the previous one until it is converted */
+  settled: boolean;
+}
+
+/** The thumb position for `amount` given the last position (`prev`) and the Max now. Pure; the caller keeps the result for the next call. */
+export function trackPercent(prev: SliderMemory | null, amount: bigint | null, max: bigint | null): SliderMemory {
+  if (prev && prev.settled && prev.amount === amount) return prev;
+  if (amount === null || amount <= 0n) return { amount: null, pct: 0, settled: true };
+  const pct = amountPercent(amount, max);
+  if (pct !== null) return { amount, pct, settled: true };
+  return { amount, pct: prev?.pct ?? 0, settled: false };
+}
+
+/** The memory after the user moved the thumb to `pct`, which set the amount `amount` (null: the box was emptied). */
+export function picked(pct: number, amount: bigint | null): SliderMemory {
+  return { amount, pct, settled: true };
+}
+
 /** Whether snap point `pct` is usable: its amount is not below the order's minimum fill (0 % always is: it empties the amount). */
 export function pointEnabled(pct: number, max: bigint | null, minFill: bigint | null): boolean {
   if (max === null || max <= 0n) return false;

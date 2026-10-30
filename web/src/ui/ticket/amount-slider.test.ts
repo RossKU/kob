@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { planOrder, type Intent } from '../../kob/plan';
 import { errors, type PlanEnv } from '../../kob/plan-types';
-import { PAGE_STEP, SLIDER_POINTS, SNAP_RANGE, amountPercent, percentAmount, pickAmount, pointEnabled, snapPct } from './amount-slider';
+import { PAGE_STEP, SLIDER_POINTS, SNAP_RANGE, amountPercent, percentAmount, pickAmount, picked, pointEnabled, snapPct, trackPercent } from './amount-slider';
 import { CTX, ticketEnv } from './ticket-fixtures';
 import { formatAmount } from './form-state';
 import { MAX_KAS_RESERVE, maxBuyAmount } from './max-amount';
@@ -99,5 +99,53 @@ describe('the magnetic snap of a dragged thumb', () => {
     for (const p of SLIDER_POINTS) expect(snapPct(p)).toBe(p);
     expect(SNAP_RANGE).toBe(3);
     expect(PAGE_STEP).toBe(25);
+  });
+});
+
+
+describe('the thumb keeps its position through ticks (founder, 2026-10-30: it jumped between 3 % and 50 % with the amount unchanged)', () => {
+  const AMOUNT = 395_800_000n; // 3.958 tokens at 8 decimals
+  const settle = (max: bigint | null) => trackPercent(null, AMOUNT, max);
+
+  it('Max moving, going unknown while the book reloads and coming back does not move it', () => {
+    let mem = settle(1_000_000_000n); // 3.958 of 10 -> 40 %
+    expect(mem).toEqual({ amount: AMOUNT, pct: 40, settled: true });
+    // ticks: Max a little different each time, a transient empty book (no Max), Max wildly different for a moment, then back
+    for (const max of [1_000_000_000n, 980_000_000n, null, 0n, null, 8_000_000n, 1200_000_000n, null, 1_000_000_000n, 970_000_000n]) {
+      mem = trackPercent(mem, AMOUNT, max);
+      expect(mem.pct, `Max ${max}`).toBe(40);
+    }
+  });
+
+  it('a new amount is converted once, against the Max known then, and keeps that position', () => {
+    let mem = settle(1_000_000_000n);
+    const typed = 500_000_000n; // 5 of 10 -> 50 %
+    mem = trackPercent(mem, typed, 1_000_000_000n);
+    expect(mem.pct).toBe(50);
+    for (const max of [null, 200_000_000n, 600_000_000n, null]) expect(trackPercent(mem, typed, max).pct).toBe(50);
+    // emptied: 0 %, whatever Max is
+    expect(trackPercent(mem, null, 1_000_000_000n).pct).toBe(0);
+    expect(trackPercent(mem, 0n, null).pct).toBe(0);
+  });
+
+  it('an amount typed while Max is unknown leaves the thumb where it was, and converts once Max is known', () => {
+    const mem = trackPercent(settle(1_000_000_000n), 200_000_000n, null);
+    expect(mem).toEqual({ amount: 200_000_000n, pct: 40, settled: false });
+    // still unknown: unchanged; known: converted once (2 of 10 -> 20 %) and fixed from then on
+    expect(trackPercent(mem, 200_000_000n, null)).toEqual(mem);
+    const known = trackPercent(mem, 200_000_000n, 1_000_000_000n);
+    expect(known).toEqual({ amount: 200_000_000n, pct: 20, settled: true });
+    expect(trackPercent(known, 200_000_000n, 400_000_000n).pct).toBe(20);
+  });
+
+  it('a drag sets the position directly, and the amount it produced keeps it', () => {
+    const mem = picked(30, 300_000_000n);
+    for (const max of [1_000_000_000n, null, 5_000_000_000n]) expect(trackPercent(mem, 300_000_000n, max).pct).toBe(30);
+    expect(picked(0, null)).toEqual({ amount: null, pct: 0, settled: true });
+    expect(trackPercent(picked(0, null), null, null).pct).toBe(0);
+  });
+
+  it('with nothing in the box it reads 0 % before there is a Max', () => {
+    expect(trackPercent(null, null, null)).toEqual({ amount: null, pct: 0, settled: true });
   });
 });
