@@ -703,6 +703,11 @@ impl Processor {
             kob_protocol::state::TokenState::Kcc20(k) => k.owner_scheme,
             kob_protocol::state::TokenState::Kron(k) => k.id_type,
         };
+        // the first holding under a program proves it: the orders already listed under another program for the covenant id were
+        // placed before the proof existed (audit 2026-10-30 V4)
+        let proven_before = conn
+            .prepare_cached("SELECT 1 FROM token_holdings WHERE token_cov_id = ?1 AND program = ?2 LIMIT 1")?
+            .exists(params![&token.0[..], program.name()])?;
         conn.prepare_cached(
             "INSERT OR IGNORE INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
@@ -722,6 +727,39 @@ impl Processor {
             seq,
             daa as i64
         ])?;
+        if !proven_before {
+            self.unlist_conflicting(conn, token, seq)?;
+        }
+        Ok(())
+    }
+
+    /// Takes out of the books the listed orders of `token` that pin a program its holdings do not prove (they were listed while nothing
+    /// proved a program; a new one is refused as `token_program_conflict`, [`Processor::listing`]). The rows they had are kept in
+    /// `order_amends` stamped with the block, so a reorg gives them back exactly ([`revert_block`]).
+    fn unlist_conflicting(&self, conn: &Connection, token: &Hash32, seq: i64) -> DbResult<()> {
+        let proven = proven_hashes(conn, Some(*token))?;
+        if proven.is_empty() {
+            return Ok(());
+        }
+        // the distinct programs the token's listed orders pin: one index seek each (`orders_listed_tokens`)
+        let mut next = conn.prepare_cached(
+            "SELECT MIN(token_tpl_hash) FROM orders INDEXED BY orders_listed_tokens              WHERE listed = 1 AND token_cov_id = ?1 AND token_tpl_hash IS NOT NULL AND token_tpl_hash > ?2",
+        )?;
+        let mut after: Vec<u8> = Vec::new();
+        while let Some(tpl) = next.query_row(params![&token.0[..], &after], |r| r.get::<_, Option<Vec<u8>>>(0))? {
+            after.clone_from(&tpl);
+            if proven.iter().any(|p| p.0[..] == tpl[..]) {
+                continue;
+            }
+            conn.prepare_cached(
+                "INSERT INTO order_amends (covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill)                  SELECT covenant_id, ?3, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill                  FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash = ?2 AND listed = 1",
+            )?
+            .execute(params![&token.0[..], &tpl, seq])?;
+            conn.prepare_cached(
+                "UPDATE orders SET listed = 0, unlisted_reason = 'token_program_conflict'                  WHERE token_cov_id = ?1 AND token_tpl_hash = ?2 AND listed = 1",
+            )?
+            .execute(params![&token.0[..], &tpl])?;
+        }
         Ok(())
     }
 

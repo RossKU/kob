@@ -208,3 +208,33 @@ async fn a_genesis_binds_at_most_a_few_preparations() {
     push(&hs, vec![&g], false).await;
     assert_eq!(count(&hs, "kcc23_declarations"), MAX_BOUND_PREPARATIONS as i64);
 }
+
+/// I11: a legacy row that does not convert (a hand-edited one) neither counts as converted nor holds the rest of the scan back.
+#[tokio::test]
+async fn a_legacy_row_that_does_not_convert_does_not_stall_the_compaction() {
+    let hs = harness();
+    let (prep, gen, ids) = wide_launch(5, 90);
+    push(&hs, vec![&prep], false).await;
+    push(&hs, vec![&gen], false).await;
+    let g = hs.ingest.lock().unwrap();
+    let conn = g.conn();
+    let served: Vec<String> = ids.iter().map(|id| proof_json(conn, id).unwrap().unwrap()).collect();
+    for (id, json) in ids.iter().zip(&served) {
+        conn.execute("UPDATE kcc23_declarations SET proof = ?1 WHERE covenant_id = ?2", rusqlite::params![json, &id.0[..]]).unwrap();
+    }
+    conn.execute("DELETE FROM kcc23_txs", []).unwrap();
+    // the first two rows (by rowid) are junk that never converts: the scan must pass them
+    conn.execute("UPDATE kcc23_declarations SET proof = '{\"junk\":1}' WHERE rowid IN (SELECT rowid FROM kcc23_declarations ORDER BY rowid LIMIT 2)", []).unwrap();
+    let mut total = 0;
+    loop {
+        let n = compact_legacy(conn, 1).unwrap();
+        if n == 0 {
+            break;
+        }
+        total += n;
+        assert!(total <= 3, "rows that did not change were counted");
+    }
+    assert_eq!(total, 3);
+    let left: i64 = conn.query_row("SELECT COUNT(*) FROM kcc23_declarations WHERE proof != ''", [], |r| r.get(0)).unwrap();
+    assert_eq!(left, 2, "only the junk rows are left, as they were");
+}

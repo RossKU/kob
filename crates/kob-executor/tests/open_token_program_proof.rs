@@ -184,3 +184,31 @@ async fn several_programs_of_one_kron_token_are_all_proven_by_its_holdings() {
         assert!(proven.contains(&kob_protocol::artifacts::token_template(p).hash.to_vec()), "{} is proven", p.name());
     }
 }
+
+// ---------------------------------------------------------------------------------------------- audit 2026-10-30 V4
+
+#[tokio::test]
+async fn a_conflicting_bid_listed_before_the_proof_is_taken_out_of_the_book_and_comes_back_with_a_reorg() {
+    let (c, _tokens) = ctx();
+    let evil = evil_bid(&c).await;
+    assert!(view(&c, &evil).listed, "nothing proves a program yet: the placement is listed");
+    let honest = bid_on(T3, SCALE, 240_000_000);
+    let escrow = honest.escrow(WHOLE, 2).unwrap() as u64;
+    let honest_tx = c.w.create_tx(AnyState::KobBid(honest), escrow, MAKER_A, 0);
+    c.push(&[&honest_tx]).await;
+    let honest_cov = c.w.cov(&honest_tx, 0);
+    assert!(view(&c, &honest_cov).listed);
+    // the honest ask creates the token's holdings: the chain proves T3
+    let ask_cov = honest_ask(&c).await;
+    let ev = view(&c, &evil);
+    assert!(!ev.listed, "the placement of another program is no longer listed");
+    assert_eq!(ev.unlisted_reason.as_deref(), Some("token_program_conflict"));
+    assert!(view(&c, &ask_cov).listed && view(&c, &honest_cov).listed, "the orders of the proven program stay listed");
+    let bids: i64 = c.hs.query("SELECT COUNT(*) FROM orders WHERE token_cov_id = ?1 AND side = 2 AND listed = 1", [&TOKEN_COV[..]]);
+    assert_eq!(bids, 1);
+    // the ask's block is reorged out: the proof goes and the placement is listed again, exactly as it was
+    c.hs.node.reorg(1, vec![vec![]]);
+    c.hs.sync().await;
+    let ev = view(&c, &evil);
+    assert!(ev.listed && ev.unlisted_reason.is_none(), "{ev:?}");
+}

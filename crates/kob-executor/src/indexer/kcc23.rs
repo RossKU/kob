@@ -486,27 +486,45 @@ pub fn proof_json(conn: &Connection, covenant_id: &Hash32) -> DbResult<Option<St
 /// database; the file shrinks only on a `VACUUM`. Returns the rows converted.
 pub fn compact_legacy(conn: &Connection, limit: usize) -> DbResult<usize> {
     let tx = conn.unchecked_transaction()?;
-    let rows: Vec<(Vec<u8>, String)> = {
-        let mut st = tx.prepare_cached("SELECT covenant_id, proof FROM kcc23_declarations WHERE proof != '' LIMIT ?1")?;
-        let v = st.query_map([limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        v
-    };
     let mut done = 0;
-    for (cov, json) in rows {
-        let Ok(p) = serde_json::from_str::<LaunchProof>(&json) else { continue };
-        let (Some(pid), Some(gid)) = (proof_txid(&p.preparation), proof_txid(&p.genesis)) else { continue };
-        // only a proof that assembles back to the very document that was stored is replaced (nothing is lost)
-        if serde_json::to_string(&p).ok().as_deref() != Some(json.as_str()) {
-            continue;
+    // in rowid order, so a row that does not convert (a hand-edited one) is passed over, never read again and again at the head of
+    // the scan, and only rows that changed count (audit 2026-10-30 I11)
+    let mut after = 0i64;
+    'pages: loop {
+        let rows: Vec<(i64, Vec<u8>, String)> = {
+            let mut st = tx.prepare_cached(
+                "SELECT rowid, covenant_id, proof FROM kcc23_declarations WHERE proof != '' AND rowid > ?1 ORDER BY rowid LIMIT ?2",
+            )?;
+            let v = st
+                .query_map(params![after, limit.max(1) as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            v
+        };
+        let Some(last) = rows.last().map(|r| r.0) else { break };
+        after = last;
+        for (_, cov, json) in rows {
+            let Ok(p) = serde_json::from_str::<LaunchProof>(&json) else { continue };
+            let (Some(pid), Some(gid)) = (proof_txid(&p.preparation), proof_txid(&p.genesis)) else { continue };
+            // only a proof that assembles back to the very document that was stored is replaced (nothing is lost)
+            if serde_json::to_string(&p).ok().as_deref() != Some(json.as_str()) {
+                continue;
+            }
+            let changed = tx
+                .prepare_cached(
+                    "UPDATE kcc23_declarations SET proof = '' WHERE covenant_id = ?1 AND preparation_txid = ?2 AND genesis_txid = ?3",
+                )?
+                .execute(params![cov, &pid.0[..], &gid.0[..]])?;
+            if changed == 0 {
+                continue;
+            }
+            let mut put = tx.prepare_cached("INSERT OR IGNORE INTO kcc23_txs (txid, tx) VALUES (?1, ?2)")?;
+            put.execute(params![&pid.0[..], encode_tx(&p.preparation)])?;
+            put.execute(params![&gid.0[..], encode_tx(&p.genesis)])?;
+            done += 1;
+            if done >= limit {
+                break 'pages;
+            }
         }
-        let mut put = tx.prepare_cached("INSERT OR IGNORE INTO kcc23_txs (txid, tx) VALUES (?1, ?2)")?;
-        put.execute(params![&pid.0[..], encode_tx(&p.preparation)])?;
-        put.execute(params![&gid.0[..], encode_tx(&p.genesis)])?;
-        tx.prepare_cached(
-            "UPDATE kcc23_declarations SET proof = '' WHERE covenant_id = ?1 AND preparation_txid = ?2 AND genesis_txid = ?3",
-        )?
-        .execute(params![cov, &pid.0[..], &gid.0[..]])?;
-        done += 1;
     }
     tx.commit()?;
     Ok(done)
