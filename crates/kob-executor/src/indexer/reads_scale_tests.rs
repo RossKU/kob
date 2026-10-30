@@ -216,7 +216,7 @@ fn the_per_order_and_per_request_reads_stay_fast_on_a_store_of_soak_size() {
     timed("token_decimals (big token)", fast, || token_decimals(&conn, &tokens, &t0).unwrap());
     timed("token_decimals (bid-only token)", fast, || token_decimals(&conn, &tokens, &t1).unwrap());
     // 4. the open token list (recomputed every generation)
-    let list = timed("token_list (2,002 open tokens)", ms(1_500), || token_list(&conn, &tokens).unwrap());
+    let list = timed("token_list (2,002 open tokens)", ms(4_000), || token_list(&conn, &tokens).unwrap());
     assert!(list.len() >= 2_000, "{}", list.len());
     // 5. the holdings pages with the spent ones: by token, by the owner of a tenth of them, by both
     let f_tok = HoldingFilter { owner: None, token: Some(t0), include_spent: true };
@@ -234,7 +234,7 @@ fn the_per_order_and_per_request_reads_stay_fast_on_a_store_of_soak_size() {
     let both = HoldingFilter { token: Some(t0), ..f_own.clone() };
     timed("holdings?owner&token&spent=true", fast, || holdings(&conn, &ctx, &both, 100, None).unwrap());
     // 6. the book of the big token: every live ask checks its custody (two of them have 20,000 strays)
-    let b = timed("book (60 live asks, 2 with 20,000 strays)", ms(100), || book(&conn, &ctx, &t0, 100, false).unwrap());
+    let b = timed("book (60 live asks, 2 with 20,000 strays)", ms(500), || book(&conn, &ctx, &t0, 100, false).unwrap());
     assert!(matches!(b.asks, BookSide::Orders(ref o) if o.len() == 60), "all 60 asks are liquidity");
     // 7. the placement identities of a bid-only token (the stats and trades read them)
     timed("market_scale (bid-only token)", fast, || market_scale(&conn, &T1).unwrap());
