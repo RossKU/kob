@@ -6,13 +6,14 @@ import { pickType } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
-test('the amount help does not promise a cost line, and the day-order text gives the reader\'s own time instead of a fixed zone', async ({ appPage: page, mock }) => {
+test('the amount box has no help line to promise a cost line, and the day-order text gives the reader\'s own time instead of a fixed zone', async ({ appPage: page, mock }) => {
   await fund(mock);
   await openMarket(page, mock);
   await pickType(page, 'limit', 'buy');
   const form = page.getByTestId('order-ticket');
   await expect(form).not.toContainText('cost is shown below');
-  await expect(form).toContainText('Amount of EXKCC to buy or sell.');
+  // (no help line under the amount box at all: the label and the unit say what it is; the lines under it are Available and the cost)
+  await expect(form).not.toContainText('Amount of EXKCC to buy or sell.');
   await expect(form).not.toContainText('JST');
   await expect(form.getByText(/A day order ends by 00:00 UTC \(\d\d:\d\d \S+ for you\)\./)).toBeVisible();
 });
