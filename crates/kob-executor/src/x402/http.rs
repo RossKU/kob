@@ -59,10 +59,14 @@ pub struct AppState {
     pub max_body: usize,
     pub body_deadline: Duration,
     ip_limiter: Limiter<IpAddr>,
+    /// The quiet allowance of a client: a quarter of its rate (see [`QUIET_FRACTION`]); a client that exhausts it is busy.
+    quiet_limiter: Limiter<IpAddr>,
     /// IPv6 sites (`ipv6_site_bits` prefix): the /64s of one allocation share one budget.
     site_limiter: Limiter<IpAddr>,
-    /// One bucket shared by every request without a merchant key.
+    /// One bucket shared by every request without a merchant key (but `POST /invoices/{id}/pay`).
     anonymous_limiter: Limiter<()>,
+    /// The bucket of the expensive `POST /invoices/{id}/pay` alone.
+    pay_limiter: Limiter<()>,
     ipv6_bits: u8,
     ipv6_site_bits: u8,
     merchant_limiter: Limiter<String>,
@@ -91,8 +95,13 @@ impl AppState {
             max_body: c.max_body_bytes,
             body_deadline: c.body_deadline(),
             ip_limiter: Limiter::new(c.rate_limit.per_ip.rate(), 100_000),
+            quiet_limiter: Limiter::new(
+                Rate::new((c.rate_limit.per_ip.burst / 2).max(1), c.rate_limit.per_ip.per_second * QUIET_FRACTION),
+                100_000,
+            ),
             site_limiter: Limiter::new(c.rate_limit.per_site.rate(), 100_000),
             anonymous_limiter: Limiter::new(c.rate_limit.anonymous.rate(), 1),
+            pay_limiter: Limiter::new(c.rate_limit.invoice_pay.rate(), 1),
             ipv6_bits: c.ipv6_prefix_bits,
             ipv6_site_bits: c.ipv6_site_prefix_bits,
             merchant_limiter: Limiter::new(c.rate_limit.per_merchant.rate(), 10_000),
@@ -296,17 +305,44 @@ fn rate_limited(st: &AppState, retry: u64) -> Response {
     error_response(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "too many requests", Diag::RateLimited, Some(retry))
 }
 
+/// A client is quiet while it stays within a quarter of its per-client rate (and half its burst): a payer, a monitor, a browser tab.
+/// Above that it is busy (see [`FAIR_RESERVE`]).
+const QUIET_FRACTION: f64 = 0.25;
+/// The share of a shared bucket only quiet clients may draw on (audit 2026-10-30 X6): busy clients stop when the bucket is half full,
+/// so a few dozen addresses at their per-client rate cannot empty it for everyone else.
+const FAIR_RESERVE: f64 = 0.5;
+
+/// Which shared bucket a request without a merchant key draws on.
+#[derive(Clone, Copy)]
+enum Shared {
+    /// Every route but the payment.
+    Anonymous,
+    /// `POST /invoices/{id}/pay`: a bucket of its own.
+    InvoicePay,
+}
+
 /// The limits of a request without a merchant key: its client, its IPv6 site, then the bucket all of them share (each only
-/// charged once the narrower ones passed, so a client that is already limited cannot drain the shared ones).
+/// charged once the narrower ones passed, so a client that is already limited cannot drain the shared ones). A busy client (above
+/// a quarter of its per-client rate) takes from the shared bucket only while it is more than half full.
 fn ip_check(st: &AppState, req: &Request) -> Result<(), Response> {
+    ip_check_for(st, req, Shared::Anonymous)
+}
+
+fn ip_check_for(st: &AppState, req: &Request, shared: Shared) -> Result<(), Response> {
     let addr = client_addr(st, req);
     let now = st.fac.clock.now_ms();
     let limited = |retry| rate_limited(st, retry);
-    st.ip_limiter.check(&rate_key(addr, st.ipv6_bits), now).map_err(limited)?;
+    let key = rate_key(addr, st.ipv6_bits);
+    st.ip_limiter.check(&key, now).map_err(limited)?;
     if st.ipv6_site_bits > 0 && addr.is_ipv6() {
         st.site_limiter.check(&rate_key(addr, st.ipv6_site_bits), now).map_err(limited)?;
     }
-    st.anonymous_limiter.check(&(), now).map_err(limited)
+    let reserve = if st.quiet_limiter.check(&key, now).is_ok() { 0.0 } else { FAIR_RESERVE };
+    let bucket = match shared {
+        Shared::Anonymous => &st.anonymous_limiter,
+        Shared::InvoicePay => &st.pay_limiter,
+    };
+    bucket.check_reserving(&(), now, reserve).map(|_| ()).map_err(limited)
 }
 
 fn killed_response(st: &AppState) -> Response {
@@ -365,7 +401,8 @@ async fn admit_raw(st: &Arc<AppState>, req: Request, keyed_route: bool) -> Resul
     // bucket instead, so junk from a shared address (a proxy that is not declared, a NAT) cannot starve the merchants.
     let keyed = keyed_route && st.auth == AuthMode::Required && authenticate(st, req.headers()).is_some();
     if !keyed {
-        ip_check(st, &req)?;
+        // the unkeyed POST route is the invoice payment: it draws on its own bucket
+        ip_check_for(st, &req, if keyed_route { Shared::Anonymous } else { Shared::InvoicePay })?;
     }
     if !is_json_content_type(req.headers()) {
         Metrics::inc(&st.metrics().http_bad_requests);

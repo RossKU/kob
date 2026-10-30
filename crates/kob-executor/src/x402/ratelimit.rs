@@ -47,6 +47,17 @@ impl<K: Hash + Eq + Clone> Limiter<K> {
     /// Takes one token for `key` using `rate` (a per-key override, for example one merchant's limit).
     /// `Err(retry_after_seconds)` when the bucket is empty (at least 1).
     pub fn check_with(&self, key: &K, rate: Rate, now_ms: u64) -> Result<(), u64> {
+        self.take(key, rate, now_ms, 0.0).map(|_| ())
+    }
+
+    /// Takes one token for `key` using the limiter's default rate and answers the share of the burst left, unless that would leave
+    /// less than `reserve` (a share of the burst, 0..1) in the bucket: the last `reserve` of a shared bucket is for callers that ask
+    /// for it with a smaller reserve.
+    pub fn check_reserving(&self, key: &K, now_ms: u64, reserve: f64) -> Result<f64, u64> {
+        self.take(key, self.default, now_ms, reserve)
+    }
+
+    fn take(&self, key: &K, rate: Rate, now_ms: u64, reserve: f64) -> Result<f64, u64> {
         let mut map = self.buckets.lock().unwrap_or_else(|p| p.into_inner());
         if !map.contains_key(key) && map.len() >= self.max_keys {
             map.retain(|_, (b, r)| refilled(b, r, now_ms) < r.burst as f64);
@@ -58,13 +69,14 @@ impl<K: Hash + Eq + Clone> Limiter<K> {
         *r = rate;
         b.tokens = refilled(b, r, now_ms).min(r.burst as f64);
         b.last_ms = now_ms.max(b.last_ms);
-        if b.tokens >= 1.0 {
+        let need = 1.0 + reserve.clamp(0.0, 1.0) * r.burst as f64;
+        if b.tokens >= need.min(r.burst as f64).max(1.0) {
             b.tokens -= 1.0;
-            Ok(())
+            Ok(b.tokens / (r.burst as f64).max(1.0))
         } else if r.per_second <= 0.0 {
             Err(3600)
         } else {
-            Err((((1.0 - b.tokens) / r.per_second).ceil() as u64).max(1))
+            Err((((need.min(r.burst as f64).max(1.0) - b.tokens) / r.per_second).ceil() as u64).max(1))
         }
     }
 
@@ -117,6 +129,21 @@ mod tests {
         let tight = Rate::new(1, 0.1);
         assert!(l.check_with(&"m", tight, 0).is_ok());
         assert_eq!(l.check_with(&"m", tight, 0), Err(10));
+    }
+
+    #[test]
+    fn a_reserve_is_kept_for_callers_that_do_not_ask_for_it() {
+        let l = Limiter::new(Rate::new(10, 1.0), 10);
+        // a caller that reserves half the burst can take 5 of the 10 tokens, then is refused
+        for _ in 0..5 {
+            assert!(l.check_reserving(&(), 0, 0.5).is_ok());
+        }
+        assert!(l.check_reserving(&(), 0, 0.5).is_err());
+        // a caller with no reserve still gets the other half
+        for _ in 0..5 {
+            assert!(l.check_reserving(&(), 0, 0.0).is_ok());
+        }
+        assert!(l.check_reserving(&(), 0, 0.0).is_err());
     }
 
     #[test]

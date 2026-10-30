@@ -1740,6 +1740,15 @@ stall or drain any executor:
   limits); a connection over a cap is answered `503` and closed. A request without a merchant key takes a token of its client
   (`rateLimit.perIp`, burst 30, 10/s), of its IPv6 site (`rateLimit.perSite`, burst 150, 50/s) and of one bucket all such
   requests share (`rateLimit.anonymous`, burst 1 000, 300/s), each only once the narrower ones passed (429 + `Retry-After`).
+  The expensive `POST /invoices/{id}/pay` draws on a bucket of its own (`rateLimit.invoicePay`, burst 200, 50/s) instead of the
+  anonymous one, so a flood of payments cannot starve `/supported` or the invoice reads, nor the reverse. Half of each shared bucket
+  is kept for quiet clients: a client above a quarter of its `perIp` rate (and half its burst) takes from a shared bucket only while
+  it is more than half full, so a few dozen busy addresses cannot empty it for the quiet ones (a flood from thousands of addresses
+  can; that is a job for the network edge). **The client address is the TCP peer.** A forwarded header (`clientIpHeader`:
+  `x-forwarded-for` by default, `cf-connecting-ip` behind Cloudflare) is believed only when the peer is in `trustedProxies`, which is
+  empty by default: from any other peer every forwarding header is ignored, so a client cannot pick its own bucket. Behind a reverse
+  proxy or CDN on the same host or network, list its addresses in `trustedProxies`, otherwise every request counts as the proxy
+  (one client, one bucket).
   Before any chain lookup, a payment's embedded utxos are bounded: a P2SH input must carry the redeem script its script
   hashes, at most 8 distinct other scripts are resolved (each is an address-wide lookup on the node), and a
   `standard-native` payment's authorization is verified against the key of the input it names first, so a payload its

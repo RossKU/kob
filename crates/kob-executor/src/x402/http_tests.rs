@@ -55,8 +55,12 @@ fn app() -> App {
 }
 
 fn app_invoices() -> App {
+    app_invoices_with("")
+}
+
+fn app_invoices_with(extra: &str) -> App {
     let fx = Fixture::with_invoices();
-    let built = X402Config::from_json(&cfg_json("")).unwrap().build().unwrap();
+    let built = X402Config::from_json(&cfg_json(extra)).unwrap().build().unwrap();
     let state = Arc::new(AppState::new(fx.fac.clone(), &built));
     App { app: router(state.clone()), fx, state }
 }
@@ -251,6 +255,7 @@ async fn authenticated_verify_and_settle_roundtrip() {
     let mut again = json_of(&b2);
     assert_eq!(again["extensions"]["kob"]["replayed"], true, "a repeat answer is marked");
     again["extensions"]["kob"].as_object_mut().unwrap().remove("replayed");
+    again["extensions"]["kob"].as_object_mut().unwrap().remove("answeredAgoMs");
     assert_eq!(again, s);
     assert_eq!(a.fx.chain.submit_count(), 1);
 }
@@ -814,4 +819,106 @@ async fn invoices_are_off_unless_configured() {
     let (st, _, _) = send(&a.app, get(&format!("/invoices/{}", "00".repeat(32))), "10.0.0.1").await;
     assert_eq!(st, StatusCode::NOT_FOUND);
     assert!(a.state.fac.supported()["kinds"][0]["extra"].get("invoices").is_none());
+}
+
+// ------------------------------------------------------------------------------- audit 2026-10-30 X6: shared buckets
+
+fn pay_path() -> String {
+    format!("/invoices/{}/pay", "00".repeat(32))
+}
+
+/// A payment request that is admitted answers 400 (the body is junk); a limited one 429.
+async fn pay_status(a: &App, ip: &str) -> StatusCode {
+    send(&a.app, post(&pay_path(), None, b"{}".to_vec()), ip).await.0
+}
+
+#[tokio::test]
+async fn the_invoice_payment_has_a_bucket_of_its_own() {
+    // a tiny shared anonymous bucket and a tiny payment bucket, per-client limits out of the way
+    let a = app_invoices_with(
+        r#","rateLimit":{"perIp":{"burst":1000,"perSecond":1000},"perSite":{"burst":1000,"perSecond":1000},
+            "anonymous":{"burst":3,"perSecond":0.001},"invoicePay":{"burst":2,"perSecond":0.001}}"#,
+    );
+    // payments drain their own bucket only
+    assert_eq!(pay_status(&a, "10.1.0.1").await, StatusCode::BAD_REQUEST);
+    assert_eq!(pay_status(&a, "10.1.0.2").await, StatusCode::BAD_REQUEST);
+    assert_eq!(pay_status(&a, "10.1.0.3").await, StatusCode::TOO_MANY_REQUESTS);
+    for i in 0..3 {
+        assert_eq!(
+            send(&a.app, get("/supported"), &format!("10.1.1.{i}")).await.0,
+            StatusCode::OK,
+            "the payment bucket starved /supported"
+        );
+    }
+    // ... and the other way: an empty anonymous bucket does not stop the payments' own (a fresh instance)
+    let b = app_invoices_with(
+        r#","rateLimit":{"perIp":{"burst":1000,"perSecond":1000},"perSite":{"burst":1000,"perSecond":1000},
+            "anonymous":{"burst":1,"perSecond":0.001},"invoicePay":{"burst":5,"perSecond":0.001}}"#,
+    );
+    assert_eq!(send(&b.app, get("/supported"), "10.1.2.1").await.0, StatusCode::OK);
+    assert_eq!(send(&b.app, get("/supported"), "10.1.2.2").await.0, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(pay_status(&b, "10.1.2.3").await, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn busy_clients_cannot_drain_the_shared_bucket_for_quiet_ones() {
+    // the defaults: 30 / 10 per second per client, 1 000 / 300 per second shared. 40 busy addresses ask 10 times a second each
+    // (400 a second), one quiet address once a second.
+    let a = app();
+    let mut quiet_refused = 0;
+    let mut busy_ok = 0;
+    for second in 0..30u64 {
+        a.fx.clock.set(START_MS + second * 1_000);
+        for round in 0..10 {
+            for h in 0..40 {
+                if send(&a.app, get("/supported"), &format!("10.2.{}.{}", h / 200, h % 200 + 1)).await.0 == StatusCode::OK {
+                    busy_ok += 1;
+                }
+                let _ = round;
+            }
+        }
+        let st = send(&a.app, get("/supported"), "10.9.9.9").await.0;
+        if st != StatusCode::OK {
+            quiet_refused += 1;
+        }
+    }
+    assert_eq!(quiet_refused, 0, "a quiet client was refused while busy clients drained the shared bucket");
+    // the busy ones are held to the shared rate: not all of their 12 000 requests passed (sanity of the scenario)
+    assert!(busy_ok < 40 * 10 * 30, "the busy clients were not limited at all: {busy_ok}");
+}
+
+#[tokio::test]
+async fn a_forwarded_header_from_an_untrusted_peer_does_not_change_the_client() {
+    // no trusted proxy (the default): the socket peer is the client, whatever the headers say
+    let a = app_with(r#","rateLimit":{"perIp":{"burst":3,"perSecond":0.001}}"#);
+    for (i, h) in ["x-forwarded-for", "cf-connecting-ip", "x-real-ip", "forwarded", "true-client-ip"].iter().enumerate() {
+        let mut r = get("/supported");
+        r.headers_mut().insert(*h, format!("203.0.113.{}", i + 1).parse().unwrap());
+        let (st, _, _) = send(&a.app, r, "198.51.100.7").await;
+        if i < 3 {
+            assert_eq!(st, StatusCode::OK, "{h}");
+        } else {
+            assert_eq!(st, StatusCode::TOO_MANY_REQUESTS, "a spoofed {h} escaped the peer's limit");
+        }
+    }
+    // the same with a trusted proxy configured, from a peer that is NOT that proxy
+    let b = app_with(
+        r#","trustedProxies":["10.0.0.1"],"clientIpHeader":"cf-connecting-ip","rateLimit":{"perIp":{"burst":2,"perSecond":0.001}}"#,
+    );
+    for i in 0..4 {
+        let mut r = get("/supported");
+        r.headers_mut().insert("cf-connecting-ip", format!("203.0.113.{}", i + 1).parse().unwrap());
+        let (st, _, _) = send(&b.app, r, "198.51.100.7").await;
+        assert_eq!(st == StatusCode::OK, i < 2, "request {i}: {st}");
+    }
+    // from the trusted proxy the header IS believed: each forwarded client has its own bucket
+    for i in 0..4 {
+        let mut r = get("/supported");
+        r.headers_mut().insert("cf-connecting-ip", format!("203.0.113.{}", i + 1).parse().unwrap());
+        assert_eq!(send(&b.app, r, "10.0.0.1").await.0, StatusCode::OK);
+    }
+    let mut r = get("/supported");
+    r.headers_mut().insert("cf-connecting-ip", "203.0.113.1".parse().unwrap());
+    let (st, _, _) = send(&b.app, r.map(|_| Body::empty()), "10.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "a second request of a forwarded client");
 }

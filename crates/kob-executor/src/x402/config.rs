@@ -20,7 +20,8 @@
 //!                    "rateLimit": { "burst": 20, "perSecond": 5 } } ],
 //!   "adminKeySha256": "<64 hex>",
 //!   "rateLimit": { "perIp": { "burst": 30, "perSecond": 10 }, "perSite": { "burst": 150, "perSecond": 50 },
-//!                  "anonymous": { "burst": 1000, "perSecond": 300 }, "perMerchant": { "burst": 60, "perSecond": 20 } },
+//!                  "anonymous": { "burst": 1000, "perSecond": 300 }, "invoicePay": { "burst": 200, "perSecond": 50 },
+//!                  "perMerchant": { "burst": 60, "perSecond": 20 } },
 //!   "maxBodyBytes": 1048576,
 //!   "bodyDeadlineMs": 10000,
 //!   "headerTimeoutMs": 10000,
@@ -103,15 +104,20 @@ impl RateCfg {
 }
 
 /// Request limits. A request without a merchant key takes a token of its client (`perIp`; IPv6 per `ipv6PrefixBits`), of its
-/// IPv6 site (`perSite`; all /64s of one `ipv6SitePrefixBits` prefix together) and of the one bucket all such requests share
-/// (`anonymous`), in this order (a client that is already limited takes nothing from the shared buckets); a request with a
-/// merchant key takes a token of its merchant (`perMerchant` or the merchant's own `rateLimit`).
+/// IPv6 site (`perSite`; all /64s of one `ipv6SitePrefixBits` prefix together) and of the bucket all such requests share
+/// (`anonymous`; the expensive `POST /invoices/{id}/pay` has the bucket `invoicePay` of its own instead, so it cannot starve the
+/// other routes), in this order (a client that is already limited takes nothing from the shared buckets); a request with a
+/// merchant key takes a token of its merchant (`perMerchant` or the merchant's own `rateLimit`). Half of each shared bucket is kept
+/// for quiet clients: a client above a quarter of its `perIp` rate (and half its burst) can take from a shared bucket only while that
+/// is more than half full, so many busy addresses cannot drain it for the quiet ones.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub struct RateLimits {
     pub per_ip: RateCfg,
     pub per_site: RateCfg,
     pub anonymous: RateCfg,
+    /// The shared bucket of `POST /invoices/{id}/pay` (a full verification against the node per call).
+    pub invoice_pay: RateCfg,
     pub per_merchant: RateCfg,
 }
 
@@ -121,6 +127,7 @@ impl Default for RateLimits {
             per_ip: RateCfg { burst: 30, per_second: 10.0 },
             per_site: RateCfg { burst: 150, per_second: 50.0 },
             anonymous: RateCfg { burst: 1_000, per_second: 300.0 },
+            invoice_pay: RateCfg { burst: 200, per_second: 50.0 },
             per_merchant: RateCfg { burst: 60, per_second: 20.0 },
         }
     }
@@ -601,6 +608,7 @@ impl X402Config {
         check_rate("rateLimit.perIp", self.rate_limit.per_ip)?;
         check_rate("rateLimit.perSite", self.rate_limit.per_site)?;
         check_rate("rateLimit.anonymous", self.rate_limit.anonymous)?;
+        check_rate("rateLimit.invoicePay", self.rate_limit.invoice_pay)?;
         if !(32..=128).contains(&self.ipv6_prefix_bits) {
             return err("ipv6PrefixBits must be within 32..=128");
         }
