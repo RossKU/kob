@@ -801,12 +801,16 @@ impl Facilitator {
             .and_then(Value::as_str)
             .map(str::to_string)
             .unwrap_or_else(|| r.transaction.clone());
-        if self.ledger.mark_answered(&key, self.clock.now_ms())? {
+        let now = self.clock.now_ms();
+        if let Some(first_ms) = self.ledger.mark_answered(&key, now)? {
             let ext = r.extensions.get_or_insert_with(|| json!({}));
             if let Some(o) = ext.as_object_mut() {
                 let kob = o.entry("kob").or_insert_with(|| json!({}));
                 if let Some(k) = kob.as_object_mut() {
                     k.insert("replayed".into(), json!(true));
+                    // how long ago the first answer was given (ms, a decimal string): the resource server applies its retry window to it
+                    // (audit 2026-10-30 X10: a restarted or second paywall has no memory of when the payment settled)
+                    k.insert("answeredAgoMs".into(), json!(now.saturating_sub(first_ms).to_string()));
                 }
             }
         }

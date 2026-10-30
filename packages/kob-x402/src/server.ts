@@ -414,6 +414,20 @@ export function createPaywall(config: PaywallConfig): Paywall {
       settling.delete(id);
       return otherIdConflict();
     }
+    // the facilitator answered this payment before (to this paywall before a restart, or to a retry it forgot)
+    const kobExt = isRecord(settlement.extensions?.kob) ? (settlement.extensions?.kob as { replayed?: unknown; answeredAgoMs?: unknown }) : {};
+    const replayed = kobExt.replayed === true;
+    // ... and a repeat the facilitator answered longer ago than the retry window is not served (this paywall may have forgotten the
+    // payment: a restart, an eviction, a second instance; audit 2026-10-30 X10)
+    const ago = typeof kobExt.answeredAgoMs === 'string' && /^[0-9]{1,15}$/.test(kobExt.answeredAgoMs) ? Number(kobExt.answeredAgoMs) : 0;
+    if (replayed && ago > offer.maxTimeoutSeconds * 1000) {
+      settling.delete(id);
+      return challenge(url, accepts, {
+        reason: 'invalid_payload',
+        diagnostic: 'payment_retry_window_passed',
+        message: 'this payment was settled and its retry window has passed; pay again for a new call',
+      });
+    }
     const entry: LedgerEntry = { requestHash, requirementsHash: reqsHash, transactionId: txid, transactionDigest: txDigest, state: 'settled', settlement, at: now() };
     settling.delete(id);
     remember(id, entry);
@@ -423,8 +437,6 @@ export function createPaywall(config: PaywallConfig): Paywall {
       if (oldest === undefined) break;
       served.delete(oldest);
     }
-    // the facilitator answered this payment before (to this paywall before a restart, or to a retry it forgot)
-    const replayed = isRecord(settlement.extensions?.kob) && (settlement.extensions?.kob as { replayed?: unknown }).replayed === true;
     return serve(request, paidContext(id, requestHash, settlement, offer, url, method, body, replayed));
   }
 

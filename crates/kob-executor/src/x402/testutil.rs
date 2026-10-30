@@ -43,7 +43,11 @@ pub fn is_repeat_of(again: &kob_x402::wire::SettlementResponse, first: &kob_x402
         .as_mut()
         .and_then(|x| x.get_mut("kob"))
         .and_then(|k| k.as_object_mut())
-        .and_then(|k| k.remove("replayed"))
+        .and_then(|k| {
+            // the age of the first answer is a clock reading: not part of the comparison
+            k.remove("answeredAgoMs");
+            k.remove("replayed")
+        })
         .is_some_and(|v| v == json!(true));
     let unmarked_first = first.extensions.as_ref().and_then(|x| x.pointer("/kob/replayed")).is_none();
     marked && unmarked_first && &stripped == first

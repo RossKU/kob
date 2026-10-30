@@ -821,17 +821,17 @@ impl Ledger {
         v
     }
 
-    /// Records that `/settle` answers the entry's success now. Returns `true` when it was answered before (the answer is a
-    /// repeat), `false` for the first answer (recorded durably before it is returned).
-    pub fn mark_answered(&self, txid: &str, now_ms: u64) -> Result<bool, LedgerError> {
+    /// Records that `/settle` answers the entry's success now. Returns the time of the first answer when it was answered before
+    /// (the answer is a repeat), `None` for the first answer (recorded durably before it is returned).
+    pub fn mark_answered(&self, txid: &str, now_ms: u64) -> Result<Option<u64>, LedgerError> {
         let mut g = self.lock();
         let mut e = g.entries.get(txid).ok_or_else(|| LedgerError::Unknown(txid.to_string()))?.clone();
-        if e.answered_ms.is_some() {
-            return Ok(true);
+        if let Some(first) = e.answered_ms {
+            return Ok(Some(first));
         }
         e.answered_ms = Some(now_ms);
         g.persist_and_index(e)?;
-        Ok(false)
+        Ok(None)
     }
 
     /// Records the observed acceptance and the cached response (`-> accepted`).
@@ -960,8 +960,8 @@ mod tests {
         let l = Ledger::in_memory();
         l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0)])).unwrap();
         let t = hex(&[1; 32]);
-        assert!(!l.mark_answered(&t, 2_000).unwrap());
-        assert!(l.mark_answered(&t, 3_000).unwrap());
+        assert_eq!(l.mark_answered(&t, 2_000).unwrap(), None);
+        assert_eq!(l.mark_answered(&t, 3_000).unwrap(), Some(2_000));
         assert_eq!(l.get(&t).unwrap().answered_ms, Some(2_000));
     }
 

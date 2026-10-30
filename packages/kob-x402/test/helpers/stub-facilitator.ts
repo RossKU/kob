@@ -51,8 +51,12 @@ export function failure(diagnostic: string, retryable: boolean, message: string,
  * under (another id, or none, is `kaspa_payment_identifier_conflict`), and every later success answer for it carries
  * `extensions.kob.replayed = true`.
  */
+/** Added to the age a repeated answer reports (`extensions.kob.answeredAgoMs`): a test sets it to make time pass at the facilitator. */
+export const stubFacilitatorClock = { skewMs: 0 };
+
 export function bindingSettler(): (req: FacilitatorRequest) => SettlementResponse {
   const bound = new Map<string, string | undefined>();
+  const firstAt = new Map<string, number>();
   return (req) => {
     let txid: string | undefined;
     try {
@@ -65,12 +69,14 @@ export function bindingSettler(): (req: FacilitatorRequest) => SettlementRespons
     const id = (req.paymentPayload.extensions?.['payment-identifier'] as { info?: { id?: string } } | undefined)?.info?.id;
     if (!bound.has(txid)) {
       bound.set(txid, id);
+      firstAt.set(txid, Date.now());
       return s;
     }
     if (bound.get(txid) !== id || id === undefined) {
       return failure('kaspa_payment_identifier_conflict', false, 'this transaction is bound to another payment identifier');
     }
-    return { ...s, extensions: { ...s.extensions, kob: { replayed: true } } };
+    const ago = Date.now() - (firstAt.get(txid) ?? Date.now()) + stubFacilitatorClock.skewMs;
+    return { ...s, extensions: { ...s.extensions, kob: { replayed: true, answeredAgoMs: String(ago) } } };
   };
 }
 

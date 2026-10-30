@@ -304,6 +304,10 @@ fn a_payment_whose_answer_was_lost_is_found_never_paid_again() {
     let r = pay_with_retry(&policy(), 60, &mut p).unwrap();
     assert_eq!((r.attempts, r.resends, p.builds), (1, 1, 1), "re-sent, never rebuilt");
     assert_eq!(r.settlement.extensions.as_ref().unwrap()["kob"]["replayed"], true, "the facilitator's cached settlement");
+    assert!(
+        r.settlement.extensions.as_ref().unwrap()["kob"]["answeredAgoMs"].as_str().is_some_and(|a| a.parse::<u64>().is_ok()),
+        "a repeat says how long ago the first answer was given (audit 2026-10-30 X10)"
+    );
     assert!(f.chain.utxo(&coin).is_none());
     assert_eq!(merchant_outputs(&f), 1);
     assert_eq!(paid_attempts(&f, &p.attempts()), vec![r.attempt.transaction_id]);
