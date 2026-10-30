@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kaspa_consensus_core::tx::ScriptPublicKey;
-use kob_x402::chain::{ChainError, Outpoint, OutputStatus, SpentBy, SubmitError, Tracked, Txid};
+use kob_x402::chain::{ChainError, Outpoint, OutputStatus, SpentBy, SpentOutput, SubmitError, Tracked, Txid};
 use kob_x402::error::{Diag, Reason, Result, X402Error};
 use kob_x402::intent::{build_execution, build_expiry, BookView, IntentFacts, KeeperParams};
 use kob_x402::safe_tx::{spk_from_hex, spk_to_hex};
@@ -94,6 +94,17 @@ pub const EXPIRY_RETRY_MS: u64 = 600_000;
 /// How long an expiry may wait in the mempool before it is replaced at the high rate (C5 X-8): the normal bucket aims at
 /// inclusion within the minute.
 pub const EXPIRY_BUMP_MS: u64 = 60_000;
+
+/// The index of the output of a foreign spend of an intent that pays the merchant what the intent promises, if any.
+///
+/// The script binds the merchant (a token merchant's script is the token program's P2SH over the merchant's state, hence over the token
+/// amount) and the value is at least the promised one (the router lets a keeper overpay). A token merchant is paid only by an output
+/// bound to the token's covenant id: the payer's own cancel can carry a plain copy of that script and carrier, which is no token
+/// (audit 2026-10-30 X8). A KAS merchant's output carries no covenant.
+pub(crate) fn merchant_output_in(facts: &IntentFacts, merchant_spk: &ScriptPublicKey, outputs: &[SpentOutput]) -> Option<usize> {
+    let want = facts.state.merchant_token();
+    outputs.iter().position(|o| o.script_public_key == *merchant_spk && o.value >= facts.merchant_value && o.covenant_id == want)
+}
 
 fn intent_unsupported() -> X402Error {
     X402Error::new(Reason::UnsupportedScheme, Diag::RouteUnsupported, "intent-based swap-and-pay is not enabled on this facilitator")
@@ -303,6 +314,7 @@ impl Facilitator {
         }
 
         // (3) consume and broadcast the creation
+        let intent_op = facts.outpoint();
         let claim = self.ledger.claim(NewEntry {
             txid: v.txid,
             request_hash: v.request_hash,
@@ -360,6 +372,13 @@ impl Facilitator {
                 )
                 .retryable());
             }
+            // follow who spends the intent output BEFORE the creation can reach the chain: a spend in the first blocks, a creation whose
+            // submit answer is lost, or a restart before the first drive must not go unseen (audit 2026-10-30 X9). A full watch table
+            // refuses the payment while nothing was broadcast.
+            if !self.chain.watch_spend(&intent_op) {
+                self.fail(&entry.txid, "too many intents in flight to follow their spenders; nothing was broadcast");
+                return Err(unavailable("too many intents are in flight; retry later (nothing was broadcast)"));
+            }
             self.chain.track(&v.txid);
             match self.submit_retrying(&v.tx, wait, || self.creation_seen(&entry)) {
                 Ok(_) | Err(SubmitError::AlreadyKnown) => {
@@ -408,6 +427,7 @@ impl Facilitator {
         }
         let op = rec.facts.outpoint();
         self.chain.track(&op.txid);
+        self.chain.watch_spend(&op);
         if matches!(self.chain.tracked(&op.txid), Tracked::Accepted { .. }) || self.chain.in_mempool(&op.txid)? {
             return Ok(true);
         }
@@ -524,7 +544,6 @@ impl Facilitator {
     }
 
     fn finish(&self, e: &Entry, rec: &IntentRecord, k: usize, accepted_daa: u64) -> Result<Drive> {
-        self.chain.unwatch_spend(&rec.facts.outpoint());
         let x = &rec.executions[k];
         let resp = self.intent_success(e, rec, x, accepted_daa);
         let value =
@@ -541,6 +560,8 @@ impl Facilitator {
             en.watched.amount = rec.facts.merchant_value;
         })?;
         self.ledger.set_accepted(&e.txid, accepted_daa, value, self.clock.now_ms())?;
+        // only now: a failed ledger write above leaves the watch in place for the next drive (audit 2026-10-30 X11)
+        self.chain.unwatch_spend(&rec.facts.outpoint());
         Ok(Drive::Final(Box::new(resp)))
     }
 
@@ -770,7 +791,7 @@ impl Facilitator {
                 SpentBy::Spent { txid: spender, block_daa_score, outputs } => {
                     let merchant_spk = spk_from_hex(&facts.merchant_spk)
                         .map_err(|_| X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "bad merchant script"))?;
-                    if let Some(at) = outputs.iter().position(|(spk, v)| *spk == merchant_spk && *v == facts.merchant_value) {
+                    if let Some(at) = merchant_output_in(facts, &merchant_spk, &outputs) {
                         if !self.deep_enough(block_daa_score, required).map_err(node)? {
                             return Ok(Drive::Waiting("confirmations"));
                         }

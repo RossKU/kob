@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction};
 
-use crate::chain::{ChainError, ChainUtxo, ChainView, Outpoint, OutputStatus, SpentBy, SubmitError, Txid};
+use crate::chain::{ChainError, ChainUtxo, ChainView, Outpoint, OutputStatus, SpentBy, SpentOutput, SubmitError, Txid};
 
 /// Fixture secret key `[n; 32]` (n in 1..=255).
 pub fn secret(n: u8) -> [u8; 32] {
@@ -109,7 +109,7 @@ pub mod hashtype {
 }
 
 /// An accepted spend: the transaction, the DAA score of its block and its outputs (script, value).
-type Spend = (Txid, u64, Vec<(ScriptPublicKey, u64)>);
+type Spend = (Txid, u64, Vec<SpentOutput>);
 
 #[derive(Default)]
 struct State {
@@ -213,7 +213,15 @@ impl MockChain {
         s.daa += 1;
         let daa = s.daa;
         for (txid, tx) in txs {
-            let outputs: Vec<(ScriptPublicKey, u64)> = tx.outputs.iter().map(|o| (o.script_public_key.clone(), o.value)).collect();
+            let outputs: Vec<SpentOutput> = tx
+                .outputs
+                .iter()
+                .map(|o| SpentOutput {
+                    script_public_key: o.script_public_key.clone(),
+                    value: o.value,
+                    covenant_id: o.covenant.map(|c| c.covenant_id.as_bytes()),
+                })
+                .collect();
             for i in &tx.inputs {
                 let op = Outpoint::new(i.previous_outpoint.transaction_id.as_bytes(), i.previous_outpoint.index);
                 s.spenders.insert(op, (txid, daa, outputs.clone()));

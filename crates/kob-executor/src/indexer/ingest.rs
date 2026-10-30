@@ -129,8 +129,17 @@ pub struct Spender {
     /// The chain block that accepted it, and its DAA score.
     pub block: Hash32,
     pub daa: u64,
-    /// Its outputs: (script public key version, script, KAS value).
-    pub outputs: Vec<(u16, Vec<u8>, u64)>,
+    /// Its outputs.
+    pub outputs: Vec<SpenderOutput>,
+}
+
+/// An output of a [`Spender`]: script public key version, script, KAS value and the covenant id the output is bound to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpenderOutput {
+    pub version: u16,
+    pub script: Vec<u8>,
+    pub value: u64,
+    pub covenant_id: Option<Hash32>,
 }
 
 /// Most outpoints whose spend is followed at once.
@@ -276,10 +285,16 @@ impl Ingest {
     }
 
     /// Follow which transaction of the selected chain spends `out` from now on (a spend accepted before the call is not seen).
-    pub fn watch_spend(&mut self, out: (Hash32, u32)) {
-        if self.spend_watch.len() < MAX_SPEND_WATCHES {
-            self.spend_watch.entry(out).or_insert(None);
+    /// `false` when the table is full and `out` is not followed.
+    pub fn watch_spend(&mut self, out: (Hash32, u32)) -> bool {
+        if self.spend_watch.contains_key(&out) {
+            return true;
         }
+        if self.spend_watch.len() < MAX_SPEND_WATCHES {
+            self.spend_watch.insert(out, None);
+            return true;
+        }
+        false
     }
 
     /// Stop following the spend of `out`.
@@ -357,7 +372,12 @@ impl Ingest {
                                 .iter()
                                 .filter_map(|o| {
                                     let spk = &o.script_public_key.0;
-                                    Some((u16::from_be_bytes([*spk.first()?, *spk.get(1)?]), spk[2..].to_vec(), o.value))
+                                    Some(SpenderOutput {
+                                        version: u16::from_be_bytes([*spk.first()?, *spk.get(1)?]),
+                                        script: spk[2..].to_vec(),
+                                        value: o.value,
+                                        covenant_id: o.covenant.as_ref().map(|c| c.covenant_id),
+                                    })
                                 })
                                 .collect();
                             *slot = Some(Spender {

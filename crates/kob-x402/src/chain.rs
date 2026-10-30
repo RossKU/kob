@@ -103,8 +103,17 @@ pub enum SpentBy {
     Untracked,
     /// Watched, and no transaction of the current selected chain has spent it yet.
     Unspent,
-    /// A transaction of the current selected chain spent it (accepted at this DAA score): its outputs (script, KAS value).
-    Spent { txid: Txid, block_daa_score: u64, outputs: Vec<(ScriptPublicKey, u64)> },
+    /// A transaction of the current selected chain spent it (accepted at this DAA score), and its outputs.
+    Spent { txid: Txid, block_daa_score: u64, outputs: Vec<SpentOutput> },
+}
+
+/// An output of a transaction that spent a watched outpoint: the script, the KAS value and the covenant id the output is bound to
+/// (a token output carries its token's id; a plain output none).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpentOutput {
+    pub script_public_key: ScriptPublicKey,
+    pub value: u64,
+    pub covenant_id: Option<[u8; 32]>,
 }
 
 /// Trusted chain facts and transaction submission.
@@ -139,8 +148,11 @@ pub trait ChainView: Send + Sync {
         Tracked::Untracked
     }
     /// Starts following which transaction of the selected chain spends `out` (an intent UTXO: another keeper may execute it).
-    /// Views without a tracker ignore it.
-    fn watch_spend(&self, _out: &Outpoint) {}
+    /// Views without a tracker ignore it. `false` = the view's watch table is full and `out` is NOT followed (the caller must not start
+    /// a payment whose settlement depends on the watch).
+    fn watch_spend(&self, _out: &Outpoint) -> bool {
+        true
+    }
     /// Stops following the spend of `out`.
     fn unwatch_spend(&self, _out: &Outpoint) {}
     /// What the tracker saw of the spend of `out` (see [`SpentBy`]); [`SpentBy::Untracked`] without one.
@@ -180,7 +192,7 @@ impl<T: ChainView + ?Sized> ChainView for std::sync::Arc<T> {
     fn tracked(&self, txid: &Txid) -> Tracked {
         (**self).tracked(txid)
     }
-    fn watch_spend(&self, out: &Outpoint) {
+    fn watch_spend(&self, out: &Outpoint) -> bool {
         (**self).watch_spend(out)
     }
     fn unwatch_spend(&self, out: &Outpoint) {

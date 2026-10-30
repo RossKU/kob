@@ -11,7 +11,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction};
-use kob_x402::chain::{ChainError, ChainUtxo, ChainView, Outpoint, OutputStatus, SpentBy, SubmitError, Tracked, Txid};
+use kob_x402::chain::{ChainError, ChainUtxo, ChainView, Outpoint, OutputStatus, SpentBy, SpentOutput, SubmitError, Tracked, Txid};
 
 use crate::hex::Hash32;
 use crate::indexer::ingest::{Ingest, Watcher};
@@ -88,8 +88,8 @@ impl<C: ChainView> ChainView for IndexedChain<C> {
         }
     }
 
-    fn watch_spend(&self, out: &Outpoint) {
-        self.lock().watch_spend((Hash32(out.txid), out.index));
+    fn watch_spend(&self, out: &Outpoint) -> bool {
+        self.lock().watch_spend((Hash32(out.txid), out.index))
     }
 
     fn unwatch_spend(&self, out: &Outpoint) {
@@ -103,7 +103,15 @@ impl<C: ChainView> ChainView for IndexedChain<C> {
             Some(Some(s)) => SpentBy::Spent {
                 txid: s.txid.0,
                 block_daa_score: s.daa,
-                outputs: s.outputs.into_iter().map(|(v, script, value)| (ScriptPublicKey::from_vec(v, script), value)).collect(),
+                outputs: s
+                    .outputs
+                    .into_iter()
+                    .map(|o| SpentOutput {
+                        script_public_key: ScriptPublicKey::from_vec(o.version, o.script),
+                        value: o.value,
+                        covenant_id: o.covenant_id.map(|c| c.0),
+                    })
+                    .collect(),
             },
         }
     }

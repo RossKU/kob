@@ -210,7 +210,7 @@ impl ChainView for HookChain {
     fn replace(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
         self.inner.replace(tx)
     }
-    fn watch_spend(&self, o: &Outpoint) {
+    fn watch_spend(&self, o: &Outpoint) -> bool {
         self.inner.watch_spend(o)
     }
     fn unwatch_spend(&self, o: &Outpoint) {
