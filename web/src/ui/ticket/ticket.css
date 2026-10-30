@@ -54,6 +54,8 @@
 @media (max-width: 560px) { .tk-row { grid-template-columns: 1fr; } }
 
 /* the cost preview under the amount box: one muted line of a fixed height, whatever it says (or "—"), tabular numbers, never wrapped */
+.tk-avail-line { height: 1.5rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.5rem; }
+.tk-avail-line + .tk-cost { margin-top: 0; }
 .tk-cost { height: 1.5rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 0.85rem; line-height: 1.5rem; font-variant-numeric: tabular-nums; }
 
 /* amount slider: 0..100 % of Max under the amount box, the width of the ticket. The track is filled up to the thumb in the colour of the side, the ticks
