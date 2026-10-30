@@ -126,14 +126,47 @@ pub struct TokenView {
 /// then takes it from the token's orders and shows where it came from. The all-zero commitment (the standard fixed-supply
 /// class) is one like any other: a placement that does not know a token's commitment records none (NULL), not zero.
 fn sole_extension(conn: &Connection, cov: &[u8], tpl: &[u8]) -> DbResult<Option<String>> {
-    let mut st = conn.prepare_cached(
-        "SELECT DISTINCT ext_commit FROM token_events WHERE token_cov_id = ?1 AND tpl_hash = ?2 AND ext_commit IS NOT NULL LIMIT 2",
-    )?;
-    let found = st.query_map(rusqlite::params![cov, tpl], |r| r.get::<_, Vec<u8>>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(match found.as_slice() {
-        [one] => Some(hex::encode(one)),
+    // two seeks of `token_events_token_tpl` (the smallest commitment, then the smallest above it), however many events the token has
+    let mut st =
+        conn.prepare_cached("SELECT MIN(ext_commit) FROM token_events WHERE token_cov_id = ?1 AND tpl_hash = ?2 AND ext_commit > ?3")?;
+    let mut next = |after: &[u8]| st.query_row(rusqlite::params![cov, tpl, after], |r| r.get::<_, Option<Vec<u8>>>(0));
+    Ok(match next(&[])? {
+        Some(first) if next(&first)?.is_none() => Some(hex::encode(&first)),
         _ => None,
     })
+}
+
+/// The distinct programs the placements of a token name (its order placements and its registry events), at most `limit`, ascending:
+/// skip-scans of `orders_token_tpl` and `token_events_token_tpl`, one seek per program however many orders and events the token has.
+fn claimed_programs(conn: &Connection, token: &[u8], limit: usize) -> DbResult<Vec<Vec<u8>>> {
+    let mut ev = conn.prepare_cached("SELECT MIN(tpl_hash) FROM token_events WHERE token_cov_id = ?1 AND tpl_hash > ?2")?;
+    let mut or = conn.prepare_cached("SELECT MIN(token_tpl_hash) FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash > ?2")?;
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    let mut prev: Vec<u8> = Vec::new();
+    while out.len() < limit {
+        let a = ev.query_row(rusqlite::params![token, prev], |r| r.get::<_, Option<Vec<u8>>>(0))?;
+        let b = or.query_row(rusqlite::params![token, prev], |r| r.get::<_, Option<Vec<u8>>>(0))?;
+        let Some(next) = [a, b].into_iter().flatten().min() else { break };
+        prev.clone_from(&next);
+        out.push(next);
+    }
+    Ok(out)
+}
+
+/// True when the placements of a token (orders and registry events) name a program other than `tpl`: four seeks, however many orders
+/// and events the token has (this runs for every order the indexer lists at the open-list standard scale).
+fn claims_another_program(conn: &Connection, token: &[u8], tpl: &[u8]) -> DbResult<bool> {
+    for sql in [
+        "SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash > ?2 LIMIT 1",
+        "SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash < ?2 LIMIT 1",
+        "SELECT 1 FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash > ?2 LIMIT 1",
+        "SELECT 1 FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash < ?2 LIMIT 1",
+    ] {
+        if conn.prepare_cached(sql)?.exists(rusqlite::params![token, tpl])? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Most of a token's orders (oldest first) [`market_scale`] reads.
@@ -156,16 +189,26 @@ pub fn market_scale(conn: &Connection, cov: &[u8]) -> DbResult<Option<i64>> {
 
 /// The programs the chain proves a token has: the template hashes of the programs of its holdings (`token_holdings`: an output with
 /// the covenant id whose script is the P2SH of that program and a state, so the covenant itself created it under that program).
-/// KCC-20 holdings only (a KRON token has token programs of several slot counts under one covenant id). Empty: nothing proves it
-/// (no holding of the token was seen). Order placements prove nothing: anyone can pin any program for any
-/// covenant id (audit 2026-10-30 V1).
+/// Every family: a KCC-20 token has one program, a KRON token programs of several slot counts under one covenant id (audit
+/// 2026-10-30 V2). Empty: nothing proves it (no holding of the token was seen). Order placements prove nothing: anyone can pin any
+/// program for any covenant id (audit 2026-10-30 V1).
+///
+/// A skip-scan over `token_holdings_token_program` (`MIN(program)`, then the next above it): one index seek per distinct program,
+/// however many holdings the token has (the `SELECT DISTINCT` it replaced read all of them: 18 s on the soak; audit I9). At most one
+/// seek per program this build knows.
 pub fn proven_programs(conn: &Connection, token: &[u8]) -> DbResult<Vec<Vec<u8>>> {
-    let mut st = conn.prepare_cached("SELECT DISTINCT program FROM token_holdings WHERE token_cov_id = ?1 AND family = 1 LIMIT 8")?;
-    let names = st.query_map([token], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut st = conn.prepare_cached("SELECT MIN(program) FROM token_holdings WHERE token_cov_id = ?1 AND program > ?2")?;
+    let mut names: Vec<String> = Vec::new();
+    let mut prev = String::new();
+    while names.len() <= TemplateId::ALL.len() {
+        let Some(next) = st.query_row(rusqlite::params![token, prev], |r| r.get::<_, Option<String>>(0))? else { break };
+        prev.clone_from(&next);
+        names.push(next);
+    }
     Ok(names
         .iter()
         .filter_map(|n| kob_protocol::artifacts::TemplateId::from_name(n))
-        .filter_map(kob_protocol::artifacts::try_template)
+        .filter_map(kob_protocol::artifacts::try_token_template)
         .map(|t| t.hash.to_vec())
         .collect())
 }
@@ -352,14 +395,8 @@ pub fn open_standard_scale(conn: &Connection, token: &Hash32, order_tpl: Option<
                 if !proven.contains(&tpl.0.to_vec()) {
                     return Ok(None);
                 }
-            } else {
-                let mut st = conn.prepare_cached(
-                    "SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS NOT NULL AND tpl_hash <> ?2 \
-                     UNION ALL SELECT 1 FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash IS NOT NULL AND token_tpl_hash <> ?2 LIMIT 1",
-                )?;
-                if st.exists(rusqlite::params![&token.0[..], &tpl.0[..]])? {
-                    return Ok(None);
-                }
+            } else if claims_another_program(conn, &token.0, &tpl.0)? {
+                return Ok(None);
             }
             let Some(d) = program_default_of(Some(tpl), None) else { return Ok(None) };
             d
@@ -397,15 +434,9 @@ pub fn token_decimals(conn: &Connection, tokens: &TokenAllowlist, token: &Hash32
     let program = match from_entry {
         Some(d) => Some(d),
         None => {
-            let mut st = conn.prepare_cached(
-                "SELECT tpl_hash FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS NOT NULL                  UNION SELECT token_tpl_hash FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash IS NOT NULL LIMIT 2",
-            )?;
-            let mut hashes = st.query_map([&token.0[..]], |r| r.get::<_, Vec<u8>>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            // the programs the chain proves outrank the claims of placements
+            // the programs the chain proves outrank the claims of placements (and cost two seeks, however many holdings there are)
             let proven = proven_programs(conn, &token.0)?;
-            if !proven.is_empty() {
-                hashes = proven;
-            }
+            let hashes = if proven.is_empty() { claimed_programs(conn, &token.0, 2)? } else { proven };
             match hashes.as_slice() {
                 [one] => <[u8; 32]>::try_from(one.as_slice()).ok().and_then(|h| program_default_of(Some(&Hash32(h)), None)),
                 _ => None,
@@ -431,17 +462,44 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
     use std::collections::BTreeSet;
     // in the list's order: (token, family descending, program); a set, so a row named twice is one row
     let mut rows: BTreeSet<(Vec<u8>, Reverse<i64>, Vec<u8>)> = BTreeSet::new();
-    let mut st = conn.prepare_cached("SELECT DISTINCT token_cov_id, tpl_hash FROM token_events WHERE tpl_hash IS NOT NULL")?;
-    for r in st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?)))? {
-        let (t, p) = r?;
+    // The distinct (token, program) pairs of the events and (token, program, family) of the listed orders, in index order, by loose index
+    // scans: from a row, the next distinct one is found by up to three range seeks (the next family of the same program, the next
+    // program of the same token, the next token), never by stepping over the duplicates: a token has as many events as fresh
+    // commitments and as many orders as the market placed (a row-value `>` seek steps over all of them: 0.7 s on 700,000 orders).
+    let mut ev_first = conn.prepare_cached(
+        "SELECT token_cov_id, tpl_hash FROM token_events WHERE tpl_hash IS NOT NULL ORDER BY token_cov_id, tpl_hash LIMIT 1",
+    )?;
+    let mut ev_prog =
+        conn.prepare_cached("SELECT tpl_hash FROM token_events WHERE token_cov_id = ?1 AND tpl_hash > ?2 ORDER BY tpl_hash LIMIT 1")?;
+    let mut ev_tok = conn.prepare_cached(
+        "SELECT token_cov_id, tpl_hash FROM token_events WHERE token_cov_id > ?1 AND tpl_hash IS NOT NULL ORDER BY token_cov_id, tpl_hash LIMIT 1",
+    )?;
+    let ev_row = |r: &Row<'_>| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?));
+    let mut ev_cur = ev_first.query_row([], ev_row).optional()?;
+    while let Some((t, p)) = ev_cur {
+        ev_cur = match ev_prog.query_row(rusqlite::params![&t, &p], |r| r.get::<_, Vec<u8>>(0)).optional()? {
+            Some(next) => Some((t.clone(), next)),
+            None => ev_tok.query_row(rusqlite::params![&t], ev_row).optional()?,
+        };
         rows.insert((t, Reverse(0), p));
+        if rows.len() >= max {
+            break;
+        }
     }
-    const LISTED: &str = "SELECT token_cov_id, token_tpl_hash, family FROM orders \
-        WHERE listed = 1 AND token_cov_id IS NOT NULL AND token_tpl_hash IS NOT NULL";
+    const LISTED: &str =
+        "FROM orders INDEXED BY orders_listed_tokens WHERE listed = 1 AND token_cov_id IS NOT NULL AND token_tpl_hash IS NOT NULL";
     let row = |r: &Row<'_>| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?));
-    let mut first = conn.prepare_cached(&format!("{LISTED} ORDER BY token_cov_id, token_tpl_hash, family LIMIT 1"))?;
-    let mut next = conn.prepare_cached(&format!(
-        "{LISTED} AND (token_cov_id, token_tpl_hash, family) > (?1, ?2, ?3) ORDER BY token_cov_id, token_tpl_hash, family LIMIT 1"
+    let mut first = conn.prepare_cached(&format!(
+        "SELECT token_cov_id, token_tpl_hash, family {LISTED} ORDER BY token_cov_id, token_tpl_hash, family LIMIT 1"
+    ))?;
+    let mut fam = conn.prepare_cached(&format!(
+        "SELECT family {LISTED} AND token_cov_id = ?1 AND token_tpl_hash = ?2 AND family > ?3 ORDER BY family LIMIT 1"
+    ))?;
+    let mut prog = conn.prepare_cached(&format!(
+        "SELECT token_tpl_hash, family {LISTED} AND token_cov_id = ?1 AND token_tpl_hash > ?2 ORDER BY token_tpl_hash, family LIMIT 1"
+    ))?;
+    let mut tok = conn.prepare_cached(&format!(
+        "SELECT token_cov_id, token_tpl_hash, family {LISTED} AND token_cov_id > ?1 ORDER BY token_cov_id, token_tpl_hash, family LIMIT 1"
     ))?;
     let mut cur: Option<OpenTokenRow> = first.query_row([], row).optional()?;
     let mut last_token: Option<Vec<u8>> = None;
@@ -454,7 +512,15 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
             last_token = Some(t.clone());
         }
         rows.insert((t.clone(), Reverse(f), p.clone()));
-        cur = next.query_row(rusqlite::params![t, p, f], row).optional()?;
+        cur = if let Some(nf) = fam.query_row(rusqlite::params![&t, &p, f], |r| r.get::<_, i64>(0)).optional()? {
+            Some((t.clone(), p.clone(), nf))
+        } else if let Some((np, nf)) =
+            prog.query_row(rusqlite::params![&t, &p], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?))).optional()?
+        {
+            Some((t.clone(), np, nf))
+        } else {
+            tok.query_row(rusqlite::params![&t], row).optional()?
+        };
     }
     Ok(rows.into_iter().take(max).map(|(t, f, p)| (t, p, f.0)).collect())
 }
@@ -1967,3 +2033,7 @@ pub fn holdings(
 #[cfg(test)]
 #[path = "reads_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "reads_scale_tests.rs"]
+mod scale_tests;

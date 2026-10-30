@@ -170,8 +170,9 @@ pub async fn book(State(app): State<Arc<App>>, Path(token): Path<String>, Query(
 pub async fn pairs(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let token = opt_hash(&q, "token")?;
     let ctx = app.ctx();
-    let v = app.state.pool.with(move |c| crate::indexer::pairs::pairs(c, &ctx, token.as_ref())).await?;
-    json_ok(v)
+    // through the response cache like the books: a pair read checks the custody of every live pair order (audit 2026-10-30 I5, I9)
+    let key = format!("pairs {token:?} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached(&app, key, move |c| crate::indexer::pairs::pairs(c, &ctx, token.as_ref())).await
 }
 
 /// `GET /v1/pairs/{base}/{quote}/book?depth=`: the pair orders' levels (`direct` KobPair, `entry` KobIfdPair) and the implied
@@ -180,8 +181,8 @@ pub async fn pair_book(State(app): State<Arc<App>>, Path((base, quote)): Path<(S
     let (base, quote) = pair_path(&base, &quote)?;
     let depth = limit(&q, "depth", 20, app.state.cfg.max_page_size)?;
     let ctx = app.ctx();
-    let v = app.state.pool.with(move |c| crate::indexer::pairs::pair_book(c, &ctx, &base, &quote, depth)).await?;
-    json_ok(v)
+    let key = format!("pair-book {base} {quote} {depth} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached(&app, key, move |c| crate::indexer::pairs::pair_book(c, &ctx, &base, &quote, depth)).await
 }
 
 fn pair_path(base: &str, quote: &str) -> Result<(Hash32, Hash32), ApiError> {

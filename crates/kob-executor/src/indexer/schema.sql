@@ -170,6 +170,9 @@ CREATE TABLE IF NOT EXISTS token_utxos (
     PRIMARY KEY (txid, idx)
 );
 CREATE INDEX IF NOT EXISTS token_utxos_owner ON token_utxos (owner);
+-- The live custody of an order (`reads::CUSTODY_OK`, once per live ask in every book, count and stats read): strays sent to an order id
+-- are not in it, so they cost those reads nothing.
+CREATE INDEX IF NOT EXISTS token_utxos_custody_live ON token_utxos (owner, amount) WHERE role = 'custody' AND spent_block IS NULL;
 CREATE INDEX IF NOT EXISTS token_utxos_created ON token_utxos (created_block);
 CREATE INDEX IF NOT EXISTS token_utxos_spent ON token_utxos (spent_block);
 
@@ -186,6 +189,9 @@ CREATE TABLE IF NOT EXISTS token_events (
     daa          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS token_events_token ON token_events (token_cov_id);
+-- The distinct programs (and commitments) a token's placements named, by skip-scan (`reads::claimed_programs`, `sole_extension`, the open
+-- token list): an attacker adds a row per fresh commitment, so these reads must not grow with the rows.
+CREATE INDEX IF NOT EXISTS token_events_token_tpl ON token_events (token_cov_id, tpl_hash, ext_commit) WHERE tpl_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS token_events_block ON token_events (block_seq);
 
 -- KOB1 payloads that did not produce an order (bounded by chain content, revert-safe).
@@ -221,7 +227,13 @@ CREATE TABLE IF NOT EXISTS token_holdings (
     PRIMARY KEY (txid, idx)
 );
 CREATE INDEX IF NOT EXISTS token_holdings_owner ON token_holdings (owner, token_cov_id);
-CREATE INDEX IF NOT EXISTS token_holdings_token ON token_holdings (token_cov_id, owner);
+-- The programs of one token's holdings, read by a skip-scan (MIN(program), then the next above it) for every evaluated order and every
+-- open-list token (`reads::proven_programs`: 0.1 ms; the DISTINCT it replaced read all of a token's holdings, 18 s on the soak).
+CREATE INDEX IF NOT EXISTS token_holdings_token_program ON token_holdings (token_cov_id, program);
+-- The holdings of a token or of an owner in page order, spent ones included (`GET /v1/token-utxos?spent=true`): no sort of the lot.
+-- (The token's page index replaces the `(token_cov_id, owner)` one, which no read used: `token_holdings_owner` serves the pair.)
+CREATE INDEX IF NOT EXISTS token_holdings_token_page ON token_holdings (token_cov_id, created_block, txid, idx);
+CREATE INDEX IF NOT EXISTS token_holdings_owner_page ON token_holdings (owner, created_block, txid, idx);
 CREATE INDEX IF NOT EXISTS token_holdings_created ON token_holdings (created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_spent ON token_holdings (spent_block);
 -- The unspent holdings of an owner or of a token, oldest first (`GET /v1/token-utxos`, the operator's own tokens): the live
@@ -245,6 +257,9 @@ CREATE TABLE IF NOT EXISTS order_flags (
 CREATE INDEX IF NOT EXISTS order_events_fill_ts ON order_events (kind, token_cov_id, ts);
 CREATE INDEX IF NOT EXISTS order_events_ts ON order_events (ts);
 CREATE INDEX IF NOT EXISTS orders_token_genesis ON orders (token_cov_id, genesis_block, covenant_id);
+-- The distinct programs the orders of a token pin, by skip-scan (`reads::claimed_programs`, `reads::open_standard_scale`): evaluated for
+-- every order the indexer lists, so it must not read the token's orders (a bid-only token has hundreds of thousands).
+CREATE INDEX IF NOT EXISTS orders_token_tpl ON orders (token_cov_id, token_tpl_hash) WHERE token_tpl_hash IS NOT NULL;
 -- The distinct (token, program, family) of the listed orders (the open token list): read one index seek per distinct row.
 CREATE INDEX IF NOT EXISTS orders_listed_tokens ON orders (token_cov_id, token_tpl_hash, family)
     WHERE listed = 1 AND token_cov_id IS NOT NULL AND token_tpl_hash IS NOT NULL;

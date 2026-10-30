@@ -130,6 +130,8 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     // the whole orders list newest first: `orders_genesis_page` (schema.sql) replaces the plain `(genesis_block)` index, which
     // left the order among the orders of one genesis block to a sort of all of them
     conn.execute_batch("DROP INDEX IF EXISTS orders_genesis_block;")?;
+    // the holdings of a token by (token, owner) served no read; `token_holdings_token_page` (schema.sql) replaces it
+    conn.execute_batch("DROP INDEX IF EXISTS token_holdings_token;")?;
     if backfill_counters(conn)? {
         tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
     }

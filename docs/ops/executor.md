@@ -1674,6 +1674,15 @@ indexes and triggers cost the write path nothing measurable: the KOB-only capaci
 chain) ran at 2,778 tx/s at the tip and 3,460 catching up, against 2,773 and 3,135 for the earlier build on the same PC
 under the same load.
 
+**Upgrade (audit 2026-10-30 I9).** This build adds the indexes the per-order and per-request scans of a large store needed
+(`token_holdings_token_program`, `token_holdings_token_page`, `token_holdings_owner_page`, `token_utxos_custody_live`, `orders_token_tpl`,
+`token_events_token_tpl`) and drops `token_holdings_token`, which no read used. They are built at the first start, before the API
+answers: **10 s on a synthetic store of 1.1 million holdings of one token with 750,000 orders (1.2 GB; the file grew by 0.25 GB)**;
+count on a minute or two on a 6 GB store on a slow disk, and do not kill the process meanwhile (a killed build starts the index over; no
+data is at risk). `proven_programs`, which took 18 s per call on the soak, is a skip-scan of the first (0.1 ms). An earlier build opens
+the upgraded database and re-creates `token_holdings_token` (a few seconds); nothing else changes under it. The test
+`reads_scale_tests` builds such a store and times every read (`KOB_SCALE_ROWS=1100000 cargo test -p kob-executor --lib reads_scale -- --nocapture`).
+
 #### Hostile input: what one order, payload or request can and cannot do
 
 Every operator runs this code and anybody may run an executor, so a single hostile order, payload or request must not crash,
