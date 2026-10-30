@@ -74,7 +74,7 @@ const SHOWN_AS_LINES = new Set<string>(['payment-out', 'transfer-out']);
  * A token's label in the frame: the app's ticker hint (a label only: the app chooses it) next to 8 + 8 hex of the covenant id the transaction
  * itself carries (a 4 + 4 fragment is 32 bits, which a token made to match it can copy).
  */
-const tokenName = (covenantId: Hex, hint: TokenHint | undefined): string => {
+const tokenName = (covenantId: Hex, hint: TokenHint | undefined, frame = false): string => {
   // no label from the app: named by its covenant id, its amounts on the assumed 8 decimals (never "base units")
   if (!hint) return t('signer.net.tokenAssumed', { id: longId(covenantId), decimals: ASSUMED_TOKEN_DECIMALS });
   // a token the registry does not list (app/token-display.ts): its issued ticker, else its covenant id; marked
@@ -82,16 +82,18 @@ const tokenName = (covenantId: Hex, hint: TokenHint | undefined): string => {
   if (hint.source === 'program') return t('signer.net.tokenProgram', { id: longId(covenantId), decimals: hint.decimals, source: hint.convention ?? '' });
   if (hint.source === 'issued') return t('signer.net.tokenIssued', { ticker: hint.ticker, id: longId(covenantId) });
   if (hint.source === 'declared') return t('signer.net.tokenDeclared', { ticker: hint.ticker, id: longId(covenantId) });
-  // a registry token: the ticker and decimals are the app's word (the covenant id is the transaction's)
+  // a registry token: in the signer frame (`frame`) the ticker and decimals are the app's word, which the frame says; the app's own confirmation
+  // is the app
+  if (!frame) return `${hint.ticker} (${longId(covenantId)})`;
   return t('signer.net.tokenListed', { ticker: hint.ticker, id: longId(covenantId), decimals: hint.decimals });
 };
 
 /** A TokenRef from the app's hint (ticker and decimals are labels; without a hint amounts stay in base units). */
-function refOfHint(covenantId: Hex, hints: TokenHint[]): TokenRef {
+function refOfHint(covenantId: Hex, hints: TokenHint[], frame = false): TokenRef {
   const h = hints.find((x) => x.covenantId === covenantId);
   // an assumed token's amounts carry its covenant id as their unit
   const ticker = h ? (h.ticker || longId(covenantId)) : null;
-  return { covenantId, ticker, decimals: h?.decimals ?? null, display: tokenName(covenantId, h), inRegistry: false, tradable: false };
+  return { covenantId, ticker, decimals: h?.decimals ?? null, display: tokenName(covenantId, h, frame), inRegistry: false, tradable: false };
 }
 
 /** The hints as the confirmation model's registry lookup (a pair order's quote token B): ticker and decimals only. */
@@ -108,7 +110,7 @@ function hintRegistry(hints: TokenHint[]): TokenRegistry {
 const SIGNED_TERM_DETAIL = new Set(['auction', 'entryStop', 'pairTrigger']);
 
 function orderSummary(d: OrderDescription, extra: Parameters<typeof orderRows>[1], hints: TokenHint[], registry: TokenRegistry, terms = false): SummaryOrder {
-  const f: Fmt = { tr: t, ref: refOfHint(d.tokenCovId, hints), clock: null, time: (unix) => formatDateTime(unix), registry };
+  const f: Fmt = { tr: t, ref: refOfHint(d.tokenCovId, hints, terms), clock: null, time: (unix) => formatDateTime(unix), registry };
   const exit = d.entry?.exit ? orderSummary(d.entry.exit, { value: null, locked: null, deadline: null }, hints, registry, terms) : null;
   return {
     title: orderTitle(d, extra.deadline, f),
@@ -344,7 +346,7 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
   lines.push({ label: t('signer.net.kas'), value: signed(k.walletDelta, kas), dir: k.walletDelta < 0n ? 'out' : k.walletDelta > 0n ? 'in' : null });
   for (const tok of s.net.tokens) {
     const hint = hints.find((h) => h.covenantId === tok.ref.covenantId);
-    const label = tokenName(tok.ref.covenantId, hint);
+    const label = tokenName(tok.ref.covenantId, hint, terms);
     const amount = (v: bigint) => formatTokenAmount(v, hint ? hint.decimals : ASSUMED_TOKEN_DECIMALS);
     if (tok.walletDelta !== 0n) lines.push({ label, value: signed(tok.walletDelta, amount), dir: tok.walletDelta < 0n ? 'out' : 'in' });
     if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: amount(tok.toOthers), dir: 'out' });
@@ -353,7 +355,7 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
   for (const m of merged ?? []) {
     const hint = hints.find((h) => h.covenantId === m.ref.covenantId);
     const amount = formatTokenAmount(m.amount, hint ? hint.decimals : ASSUMED_TOKEN_DECIMALS);
-    lines.push({ label: t('signer.net.merged', { token: tokenName(m.ref.covenantId, hint) }), value: t('signer.net.mergedValue', { inCount: m.inCount, outCount: m.outCount, amount }), dir: null });
+    lines.push({ label: t('signer.net.merged', { token: tokenName(m.ref.covenantId, hint, terms) }), value: t('signer.net.mergedValue', { inCount: m.inCount, outCount: m.outCount, amount }), dir: null });
   }
   if (k.locked.total > 0n) lines.push({ label: t('signer.net.locked'), value: kas(k.locked.total), dir: null });
   if (k.released > 0n) lines.push({ label: t('signer.net.released'), value: kas(k.released), dir: null });
@@ -369,7 +371,7 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry, terms);
     return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain;
   });
-  const found = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...scaleMismatches(s, hints)];
+  const found = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...(terms ? scaleMismatches(s, hints) : [])];
   return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...(s.inputs.length > s.signatures ? { unsignedKas: true } : {}), ...problemsOf(found), decoded: s };
 }
 
