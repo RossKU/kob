@@ -7,6 +7,7 @@
 //! (queries) -> `api` (REST + WebSocket). Raw node responses are never stored.
 
 pub mod book;
+pub mod candles;
 pub mod db;
 pub mod flags;
 pub mod follower;
@@ -165,6 +166,17 @@ impl Indexer {
         };
         let proc = processor(&cfg, tokens.clone());
         let ingest = Ingest::new(conn, proc, log).with_config(ingest_config(&cfg));
+        // the candle aggregates of the fills an earlier build stored (one transaction per token; a store that has them is not touched)
+        let started = std::time::Instant::now();
+        let backfilled = ingest.backfill_candles()?;
+        if backfilled.tokens > 0 {
+            tracing::info!(
+                tokens = backfilled.tokens,
+                rows = backfilled.rows,
+                seconds = started.elapsed().as_secs_f64(),
+                "built the candle aggregates of the stored fills"
+            );
+        }
         let health = Arc::new(HealthState::new(&cfg.network));
         health.update(|h| {
             h.lag_tolerance_daa = cfg.lag_tolerance_daa();

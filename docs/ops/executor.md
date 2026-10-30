@@ -1390,7 +1390,8 @@ base unit are two rows; a client that wants one row per price merges equal `pric
 
 #### 5.3 Market data: trades, candles, 24 h statistics, depth
 
-Derived at request time from the fill events and the listed book (`indexer::market`); nothing extra is stored. All prices are **sompi
+Derived from the fill events and the listed book (`indexer::market`); trades, statistics and depth at request time, candles from aggregates
+kept with the fills (`indexer::candles`, below). All prices are **sompi
 per `price_basis` token base units** (every response carries `price_basis`: the token's standard scale `10^decimals`, i.e. sompi per
 whole token, when the registry knows its decimals, else the scale of the token's first order; and `decimals`, `null` without a
 registry entry, so a client can show whole tokens), amounts are token base units, `quote` values sompi, all decimal strings;
@@ -1404,7 +1405,18 @@ timestamps are the chain block's unix milliseconds.
   `before`). Integer arithmetic, rounded down.
 * **Candles**: bucket = `floor(ts / interval) * interval` (UTC), `o h l c volume quote_volume trades`; buckets without trades are omitted
   (clients carry the close forward). Without `from` the window is the `limit` intervals (default 500, at most 1500) ending with the
-  newest trade's bucket.
+  newest trade's bucket. The candles of the four intervals are **maintained**: the table `candles` holds one row per bucket, written in the
+  transaction that writes (or reverts) the fills it holds, so a chart of 500 candles is 500 rows however long the history is (soak-sized
+  history of 1,000,000 fills of one token: 0.1 to 0.8 ms for every interval, against 80 ms to 1.1 s from the fills). A reorg, a replay and an
+  import recompute the affected 1-minute bucket from the fills and roll it up into the 5 m, 1 h and 1 d buckets, so the rows are exactly what
+  the fills say; a window that starts or ends inside a bucket reads that partial bucket from the fills. The price basis changes a trade's
+  rounding, so a token's rows are tagged with the basis they were built at: while the basis differs (its decimals became known) the chart is
+  read from the fills as before, and the token's next fill rebuilds its rows. A lean store keeps no aggregates (it prunes the fills).
+  **Upgrade:** the first start of this build builds the rows of every token that has fills, one transaction per token (1,000,000 fills of one
+  token: 1.1 s on the test machine; count on a few seconds per million on a live disk), logged as `built the candle aggregates`; an interrupted
+  start resumes, and until a token's rows exist its charts are read from the fills. An earlier build opens the upgraded database and ignores the
+  three tables (it does not maintain them): the next start of this build sees that the newest fill event is not the one the aggregates
+  were last maintained at (`meta.candles_event`) and rebuilds all of them, so a rollback and a second upgrade never serve a stale chart.
 * **Stats**: the 24 h window ends at the newest chain block time the indexer recorded (not the wall clock), so a stalled follower
   shows stale numbers instead of an empty day; `change_24h_bps` = (last - first trade of the window) / first. `best_bid` / `best_ask` /
   `spread_bps` come from the listed book; any value that does not exist yet is `null`.
@@ -1603,7 +1615,7 @@ history:
 | `/v1/token-utxos` (`spent=false`) | `token_holdings_live_owner` / `token_holdings_live_token` (indexes of the unspent rows only) | the page |
 | `/v1/health` counters | `counters`, kept by triggers in the transaction of every write (batch, revert, replay, import) | nothing |
 
-Still more than a page: `/v1/candles` reads every fill of its window (500 hourly candles: three weeks of fills); the 24 h
+Still more than a page: the 24 h
 statistics read the fills of the last day (at most 20,000); `/v1/token-utxos?spent=true` and `/v1/orders?maker=&token=`
 read every row of that owner or maker that the filter does not take (a page is found among them, in order); a status with
 many orders filtered to a maker or token that has none of them reads that maker's or token's orders.
@@ -1630,13 +1642,10 @@ release build, warm cache, best of three; every answer compared byte for byte wi
 | the operator's own tokens (maintenance, every tick) | 350 ms | 0.4 ms |
 | `/v1/candles/{token}` (500 hourly or daily candles: 65,000 fills) | 0.55 to 0.8 s | the same |
 
-**Candles** stay a read of the window's fills, deliberately. The web app loads a chart's whole window once and then
-asks only for the bars since its newest one (`from=`, one or two buckets), so the full read is paid once per chart opened,
-and concurrent identical loads share one read (the response cache, below). The read is the fills (index
-`order_events_fill_ts`) and, per fill, its order's scale and age: a covering index of the fills (measured: 1.5 s to build,
-about 35 MB) saved 10 %, the order lookups being most of the time. Keeping the candles themselves (a table per interval
-maintained on write, or the buckets older than the reorg window kept in memory) would cut a full load of 500 hourly
-candles to the fills of about the last 13 hours, at the price of state that every revert has to keep exact; not done.
+**Candles** were a read of the window's fills (0.55 to 0.8 s for 500 hourly candles at 65,000 fills, 1 to 3 s at the soak's 980,000
+fills, a 504 on a slow executor). They are now rows of the maintained table `candles` (5.3): the cost of a chart does not grow with the
+history, and the aggregates are checked against the fills by `indexer::candles` tests (random histories, reverts, unaligned windows, a
+million fills: `KOB_CANDLE_FILLS=1000000 cargo test -p kob-executor --lib candles::tests::a_large -- --nocapture`).
 
 **Response cache.** `/v1/stats`, `/v1/books`, `/v1/depth`, `/v1/tokens` and `/v1/candles` answers are kept per **data
 generation** of the store (`api::cache`): the generation moves after every committed batch, revert, operator import and

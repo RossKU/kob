@@ -156,7 +156,7 @@ pub fn candles_of(trades: &[Trade], interval: i64) -> Vec<Candle> {
 
 /// Adds one trade (newer than every trade before it) to the candles: into the last candle when it is the trade's bucket, else
 /// as a new candle.
-fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
+pub(crate) fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
     let b = t.ts.div_euclid(interval) * interval;
     match out.back_mut() {
         Some(c) if c.t == b => {
@@ -182,12 +182,12 @@ fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
 
 // ------------------------------------------------------------------------------------------------ SQL
 
-const FILL_SELECT: &str =
+pub(crate) const FILL_SELECT: &str =
     "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, COALESCE(o.scale, 1), o.genesis_daa \
      FROM order_events e JOIN orders o ON o.covenant_id = e.covenant_id \
      WHERE e.kind = 'fill' AND e.token_cov_id = ?1 AND e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2)";
 
-fn fill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FillRow> {
+pub(crate) fn fill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FillRow> {
     Ok(FillRow {
         id: r.get(0)?,
         txid: r.get(1)?,
@@ -234,39 +234,74 @@ fn fills_before(conn: &Connection, token: &Hash32, before: Option<i64>, limit: u
 /// silently lost its oldest days as fills accumulated (the TN10 soak, 2026-10-14: about 3.5 days left of 8).
 pub const MAX_FILL_ROWS: usize = 20_000;
 
-/// The candles of `token` over `[from, to)`: every fill of the window is streamed in time order `(ts, id)` (served by the
-/// `(kind, token, ts)` index), folded into its transaction's trade and that trade into its bucket, and only the newest `keep`
-/// candles are held. Memory is bounded by `keep`, not by the fills read; the time spent grows with the fills of the window
-/// (the pooled read's 20 s interrupt and the heavy-route rate limit bound a client). No fill is left out, so the oldest
-/// candle of a window that reaches back to the first trade is the first trade's bucket.
-fn window_candles(conn: &Connection, token: &Hash32, basis: i128, iv: i64, from: i64, to: i64, keep: usize) -> DbResult<Vec<Candle>> {
-    let mut out: VecDeque<Candle> = VecDeque::new();
-    if to <= from || iv <= 0 || keep == 0 {
-        return Ok(vec![]);
-    }
+/// The trades of `token` over `[from, to)` in the order the fills stream: every fill of the window in time order `(ts, id)` (served by
+/// the `(kind, token, ts)` index), folded into its transaction's trade. Nothing is held but one transaction's fills.
+pub(crate) fn for_each_trade(
+    conn: &Connection,
+    token: &Hash32,
+    basis: i128,
+    from: i64,
+    to: i64,
+    mut f: impl FnMut(Trade) -> DbResult<()>,
+) -> DbResult<()> {
     let sql = format!("{FILL_SELECT} AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts, e.id");
     let mut st = conn.prepare(&sql)?;
     let mut rows = st.query(params![token.0.to_vec(), from, to])?;
     // the fills of one transaction share its block time and are stored together: they arrive as one run
     let mut group: Vec<FillRow> = Vec::new();
-    let flush = |group: &mut Vec<FillRow>, out: &mut VecDeque<Candle>| {
-        if let Some(t) = trade_of(group, basis) {
-            add_trade(out, &t, iv);
-            if out.len() > keep {
-                out.pop_front();
-            }
-        }
-        group.clear();
-    };
     while let Some(r) = rows.next()? {
-        let f = fill_row(r)?;
-        if group.first().is_some_and(|g| g.txid != f.txid) {
-            flush(&mut group, &mut out);
+        let fill = fill_row(r)?;
+        if group.first().is_some_and(|g| g.txid != fill.txid) {
+            if let Some(t) = trade_of(&group, basis) {
+                f(t)?;
+            }
+            group.clear();
         }
-        group.push(f);
+        group.push(fill);
     }
-    flush(&mut group, &mut out);
+    if let Some(t) = trade_of(&group, basis) {
+        f(t)?;
+    }
+    Ok(())
+}
+
+/// The candles of `token` over `[from, to)` read from the fills: every fill of the window is streamed ([`for_each_trade`]) and that
+/// trade folded into its bucket, and only the newest `keep` candles are held. Memory is bounded by `keep`, not by the fills read; the
+/// time spent grows with the fills of the window (the pooled read's 20 s interrupt and the heavy-route rate limit bound a client). No fill
+/// is left out, so the oldest candle of a window that reaches back to the first trade is the first trade's bucket.
+///
+/// This is the reference: the maintained aggregates ([`super::candles`]) answer the same, and every window they cannot (a token not
+/// backfilled yet, a changed price basis, a lean store, an interval the API does not serve, a window inside one bucket) is read here.
+pub fn scan_candles(
+    conn: &Connection,
+    token: &Hash32,
+    basis: i128,
+    iv: i64,
+    from: i64,
+    to: i64,
+    keep: usize,
+) -> DbResult<Vec<Candle>> {
+    let mut out: VecDeque<Candle> = VecDeque::new();
+    if to <= from || iv <= 0 || keep == 0 {
+        return Ok(vec![]);
+    }
+    for_each_trade(conn, token, basis, from, to, |t| {
+        add_trade(&mut out, &t, iv);
+        if out.len() > keep {
+            out.pop_front();
+        }
+        Ok(())
+    })?;
     Ok(out.into())
+}
+
+/// The candles of `token` over `[from, to)`: from the maintained aggregates when they hold the token at this basis, else from the
+/// fills ([`scan_candles`]); the same candles either way.
+fn window_candles(conn: &Connection, token: &Hash32, basis: i128, iv: i64, from: i64, to: i64, keep: usize) -> DbResult<Vec<Candle>> {
+    match super::candles::read(conn, token, basis, iv, from, to, keep)? {
+        Some(v) => Ok(v),
+        None => scan_candles(conn, token, basis, iv, from, to, keep),
+    }
 }
 
 /// Fills of `token` with `from <= ts < to`: at most `cap` rows, the NEWEST ones, returned oldest first, and whether older rows

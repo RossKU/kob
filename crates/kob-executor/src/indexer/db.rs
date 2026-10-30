@@ -93,6 +93,7 @@ pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Conn
     conn.execute_batch(SCHEMA_SQL)?;
     migrate(&conn)?;
     init_meta(&conn, network)?;
+    super::candles::configure(&conn, lean)?;
     Ok(conn)
 }
 
@@ -347,6 +348,7 @@ pub fn open_memory(network: &str) -> DbResult<Connection> {
     conn.execute_batch(SCHEMA_SQL)?;
     migrate(&conn)?;
     init_meta(&conn, network)?;
+    super::candles::configure(&conn, false)?;
     Ok(conn)
 }
 

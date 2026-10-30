@@ -1572,6 +1572,12 @@ impl Processor {
                 *closing as i64,
                 d
             ])?;
+            // a fill moves its token's candle bucket (recomputed before the transaction commits: `candles::refresh`)
+            if *kind == "fill" {
+                if let Some(t) = s.order.token {
+                    super::candles::mark(conn, &t.0, ts)?;
+                }
+            }
         }
         if let Some(p) = &pair_fill {
             p.insert(conn, seq, daa, ts, &txid, rec.pos as i64, &s.cov, s.order.template)?;
@@ -2049,6 +2055,8 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
         }
         changed += conn.execute("DELETE FROM order_amends WHERE block_seq = ?1", [seq])?;
     }
+    // the candle buckets of the fills about to go (recomputed by `candles::refresh` before the transaction commits)
+    super::candles::mark_block(conn, seq)?;
     changed += conn.execute("DELETE FROM order_events WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM pair_fills WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM order_utxos WHERE created_block = ?1", [seq])?;

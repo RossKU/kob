@@ -235,6 +235,11 @@ impl Ingest {
         }
     }
 
+    /// Builds the candle aggregates of every token that has fills and none ([`super::candles::backfill`]).
+    pub fn backfill_candles(&self) -> DbResult<super::candles::Backfill> {
+        super::candles::backfill(&self.conn, &self.proc.tokens)
+    }
+
     pub fn with_config(mut self, cfg: IngestConfig) -> Self {
         self.cfg = cfg;
         self
@@ -556,6 +561,8 @@ impl Ingest {
         for op in ops {
             self.proc.apply_op(&tx, op, cursor.daa, &mut delta, &mut op_report)?;
         }
+        // the candle aggregates follow the fills this transaction wrote or reverted
+        super::candles::refresh(&tx, &self.proc.tokens)?;
         set_cursor(&tx, &cursor)?;
         // the reorg window: chain blocks older than it are final and no longer kept
         tx.execute("DELETE FROM blocks WHERE daa < ?1", [cursor.daa.saturating_sub(self.cfg.reorg_window_daa) as i64])?;

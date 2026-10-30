@@ -241,6 +241,32 @@ CREATE INDEX IF NOT EXISTS token_holdings_spent ON token_holdings (spent_block);
 CREATE INDEX IF NOT EXISTS token_holdings_live_owner ON token_holdings (owner, created_block, txid, idx) WHERE spent_block IS NULL;
 CREATE INDEX IF NOT EXISTS token_holdings_live_token ON token_holdings (token_cov_id, created_block, txid, idx) WHERE spent_block IS NULL;
 
+-- Maintained candle aggregates (`indexer::candles`): one row per bucket of the four intervals the API serves, written with the fills it
+-- holds. Values are decimal text (i128). A token's rows are complete once it has a `candle_meta` row (the price basis they were built
+-- at); `candle_dirty` holds the 1-minute buckets whose fills changed in the open transaction and is empty between transactions.
+CREATE TABLE IF NOT EXISTS candles (
+    token_cov_id  BLOB NOT NULL,
+    iv            INTEGER NOT NULL,       -- 60000 | 300000 | 3600000 | 86400000 (ms)
+    t             INTEGER NOT NULL,       -- bucket start (ms)
+    o             TEXT NOT NULL,
+    h             TEXT NOT NULL,
+    l             TEXT NOT NULL,
+    c             TEXT NOT NULL,
+    volume        TEXT NOT NULL,
+    quote_volume  TEXT NOT NULL,
+    trades        INTEGER NOT NULL,
+    PRIMARY KEY (token_cov_id, iv, t)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS candle_meta (
+    token_cov_id  BLOB PRIMARY KEY,
+    basis         INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS candle_dirty (
+    token_cov_id  BLOB NOT NULL,
+    t             INTEGER NOT NULL,
+    PRIMARY KEY (token_cov_id, t)
+) WITHOUT ROWID;
+
 -- "Possibly frozen" annotations (an operational flag, not chain data: the co-located matcher writes it when the engine
 -- pre-simulation of the order's next fill is rejected by the token program, e.g. a frozen or blacklisted balance). A flag names the
 -- order UTXO it was raised for and lapses the moment the order moves (fill, cancel, refund): only a flag on the CURRENT outpoint
