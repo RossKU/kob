@@ -44,7 +44,7 @@ fn add_tx(conn: &Connection, txid: u64, seq: i64, ts: i64, tok: u8, fills: &[(u8
             params![vec![*cov; 32], seq, ts / 100, ts, txid.to_be_bytes().repeat(4), vec![tok; 32], side, amount, price],
         )
         .unwrap();
-        mark(conn, &vec![tok; 32], ts).unwrap();
+        mark(conn, &[tok; 32], ts).unwrap();
     }
 }
 
