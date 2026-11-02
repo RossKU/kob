@@ -13,6 +13,7 @@
 // check the sender: the signer accepts only `event.source === window.parent` from the app's own origin, the app only its signer frame
 // (origin "null").
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
+import type { RegistryRow } from './table';
 
 export const SIGNER_PROTOCOL = 'kob-signer/1';
 
@@ -55,9 +56,9 @@ export type SignerToApp =
 
 export type AppToSigner =
   /** `retimeOf`: the request the user just confirmed, planned again with a later clock: signed without asking again when nothing they approved got worse (retime.ts) */
-  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; retimeOf?: string; prep?: BuiltTx; genesis?: GenesisClaim }
+  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[]; retimeOf?: string; prep?: BuiltTx; genesis?: GenesisClaim }
   /** the same request planned again while the user reads it (a later clock, the market now): shown in its place (core.ts `receive`) */
-  | { p: typeof SIGNER_PROTOCOL; type: 'update'; id: string; built: BuiltTx; tokens: TokenHint[] }
+  | { p: typeof SIGNER_PROTOCOL; type: 'update'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[] }
   /** the node's DAA score now (display only: the times of the table are said from it; nothing is signed from it) */
   | { p: typeof SIGNER_PROTOCOL; type: 'clock'; daa: string }
   | { p: typeof SIGNER_PROTOCOL; type: 'cancel'; id: string }
@@ -73,6 +74,8 @@ const REASONS: readonly RejectReason[] = ['user', 'invalid', 'no-key', 'busy', '
 /** generous bounds: a KOB transaction has a handful of inputs and outputs; anything far larger is not a request of the app */
 const MAX_IO = 512;
 const MAX_JSON = 2_000_000;
+/** the most tokens of a registry table */
+const MAX_TABLE = 4096;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isIndex = (v: unknown, below: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < below;
@@ -126,6 +129,12 @@ const isClaim = (v: unknown): v is GenesisClaim =>
       isIndex(o.borrowScheme, 256) && HEX32.test(String(o.borrowGuard)),
   );
 
+/** The app's registry table (table.ts): rows of a covenant id, a printable ticker and decimals, no covenant id twice. */
+const isTable = (v: unknown): v is RegistryRow[] =>
+  Array.isArray(v) && v.length <= MAX_TABLE &&
+  v.every((r) => isObj(r) && hasKeys(r, ['covenantId', 'ticker', 'decimals']) && HEX32.test(String(r.covenantId)) && typeof r.ticker === 'string' && TICKER.test(r.ticker) && isIndex(r.decimals, 19)) &&
+  new Set(v.map((r: RegistryRow) => r.covenantId)).size === v.length;
+
 const sized = (v: unknown): boolean => {
   try {
     return JSON.stringify(v).length <= MAX_JSON;
@@ -139,24 +148,27 @@ export function parseAppMessage(data: unknown): AppToSigner | null {
   if (!isObj(data) || data.p !== SIGNER_PROTOCOL || typeof data.type !== 'string') return null;
   switch (data.type) {
     case 'sign':
-      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'retimeOf', 'prep', 'genesis']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'registry', 'retimeOf', 'prep', 'genesis']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
       if (data.retimeOf !== undefined && (typeof data.retimeOf !== 'string' || !ID.test(data.retimeOf))) return null;
       if (!Array.isArray(data.tokens) || data.tokens.length > 32 || !data.tokens.every(isTokenHint)) return null;
       if (!sized(data.built) || !isBuiltTx(data.built)) return null;
+      if (data.registry !== undefined && !isTable(data.registry)) return null;
       // a creation is never a re-timed request
       if (data.prep !== undefined && (data.retimeOf !== undefined || !sized(data.prep) || !isBuiltTx(data.prep))) return null;
       // a genesis claim only with its creation
       if (data.genesis !== undefined && (data.prep === undefined || !isClaim(data.genesis))) return null;
       return {
         p: SIGNER_PROTOCOL, type: 'sign', id: data.id, built: data.built, tokens: data.tokens,
+        ...(data.registry !== undefined ? { registry: data.registry as RegistryRow[] } : {}),
         ...(data.retimeOf !== undefined ? { retimeOf: data.retimeOf as string } : {}), ...(data.prep !== undefined ? { prep: data.prep as BuiltTx } : {}),
         ...(data.genesis !== undefined ? { genesis: data.genesis as GenesisClaim } : {}),
       };
     case 'update':
-      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'registry']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
       if (!Array.isArray(data.tokens) || data.tokens.length > 32 || !data.tokens.every(isTokenHint)) return null;
       if (!sized(data.built) || !isBuiltTx(data.built)) return null;
-      return { p: SIGNER_PROTOCOL, type: 'update', id: data.id, built: data.built, tokens: data.tokens };
+      if (data.registry !== undefined && !isTable(data.registry)) return null;
+      return { p: SIGNER_PROTOCOL, type: 'update', id: data.id, built: data.built, tokens: data.tokens, ...(data.registry !== undefined ? { registry: data.registry as RegistryRow[] } : {}) };
     case 'clock':
       return hasKeys(data, ['p', 'type', 'daa']) && typeof data.daa === 'string' && /^[0-9]{1,20}$/.test(data.daa) ? { p: SIGNER_PROTOCOL, type: 'clock', daa: data.daa } : null;
     case 'cancel':

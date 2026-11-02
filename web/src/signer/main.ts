@@ -385,7 +385,7 @@ async function boot(): Promise<void> {
   }
   show(el('p', { class: 'muted' }, t('signer.loading')));
   const [sdk, kob] = await Promise.all([loadKaspaSdk(), loadKob()]);
-  const core = createSignerCore({ sdk, kob, post });
+  const core = createSignerCore({ sdk, kob, post, registryHash: __KOB_REGISTRY_TABLE_HASH__ });
   window.addEventListener('message', (e) => {
     if (!fromParent(e, window.parent, APP_ORIGIN)) return;
     const m = parseAppMessage(e.data);

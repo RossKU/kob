@@ -7,7 +7,7 @@ import { MAKER_PK, TOKEN_COV_ID } from '../testing/token-fixtures';
 import { kob } from '../testing/wallet-fixtures';
 import { summarize } from '../signer/summary';
 import { noteTokenProgram, resetDeclarationsForTests } from '../data/token-declarations';
-import { signerTokenHints } from './token-hints';
+import { signerRegistryTable, signerTokenHints } from './token-hints';
 
 const registry: TokenRegistry = {
   network: '', templates: [], templateChecks: [], tokens: [],
@@ -65,5 +65,14 @@ describe('signerTokenHints: a token the registry does not list (founder 2026-10-
     expect(hints).toEqual([{ covenantId: TOKEN_COV_ID, ticker: '', decimals: 3, source: 'program', convention: 'KaspaRocket convention' }]);
     expect(summarize(kob, ask, MAKER_PK, hints).orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(3 decimals, KaspaRocket convention\)$/);
     resetDeclarationsForTests();
+  });
+});
+
+describe('signerRegistryTable: the table the signer frame checks against its pinned hash', () => {
+  it('is the registry file\'s tokens (covenant id, ticker, decimals), not the open-list tokens the app adds at run time', () => {
+    const file = { covenantId: 'a'.repeat(64), ticker: 'FILE', decimals: 4 } as unknown as TokenInfo;
+    const open = { covenantId: 'b'.repeat(64), ticker: 'OPEN', decimals: 8, openList: true } as unknown as TokenInfo;
+    const reg: TokenRegistry = { network: '', templates: [], templateChecks: [], tokens: [file, open], byCovenantId: new Map() };
+    expect(signerRegistryTable(reg)).toEqual([{ covenantId: 'a'.repeat(64), ticker: 'FILE', decimals: 4 }]);
   });
 });

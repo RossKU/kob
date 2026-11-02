@@ -3,6 +3,7 @@ import { createSignerCore, SignerKeyError } from './core';
 import { RETIME_MAX_COUNT } from './retime';
 import { SIGNER_PROTOCOL, parseAppMessage, parseSignerMessage, type SignerToApp } from './protocol';
 import { summarize, summaryLines } from './summary';
+import { tableHash, type RegistryRow } from './table';
 import { loadKaspaSdkNode } from '../data/kaspa-sdk.node';
 import { MAKER_PK, MAKER_SK, OTHER_SK, TOKEN_COV_ID } from '../testing/token-fixtures';
 import { assertConsensusValid, buildCancel, buildSend, kob } from '../testing/wallet-fixtures';
@@ -15,17 +16,20 @@ import { CTX, TOKEN, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 
 const sdk = loadKaspaSdkNode();
 const P = SIGNER_PROTOCOL;
+// the registry table the bundle pins (table.ts) and the app sends: the listed token of these requests
+const TABLE: RegistryRow[] = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 8 }];
+const PINNED = tableHash(TABLE);
 
 function setup() {
   const sent: SignerToApp[] = [];
-  const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)) });
+  const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), registryHash: PINNED });
   // every message crosses a structured clone and the app's parser, as through postMessage
   const app = () => sent.map((m) => parseSignerMessage(m));
   const send = (m: Record<string, unknown>) => core.receive(parseAppMessage(structuredClone({ p: P, ...m }))!);
   return { core, sent, app, send };
 }
 
-const signReq = (built: BuiltTx, id = 'r1') => ({ type: 'sign' as const, id, built, tokens: [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 8 }] });
+const signReq = (built: BuiltTx, id = 'r1') => ({ type: 'sign' as const, id, built, tokens: [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 8 }], registry: TABLE });
 
 describe('signer core: the key', () => {
   it('derives the x-only public key and announces only that', () => {
@@ -277,5 +281,42 @@ describe('signer core: the request on screen follows the market and the clock (u
     expect(send(update(buildSend()))).toBeNull(); // another key's inputs
     expect(core.pending()!.built.tx.id).toBe(first.tx.id);
     expect(send({ type: 'clock', daa: '123' })).toBeNull();
+  });
+});
+
+describe('G7 (b): a listed token is shown as listed only when the app sent the pinned table', () => {
+  const token = (r: { pending(): { summary: { lines: { label: string }[] } } | null }) => r.pending()?.summary.lines.map((l) => l.label).join(' | ') ?? '';
+
+  function shown(over: { registry?: RegistryRow[] | null; hash?: string | undefined; tokens?: unknown[] }): string {
+    const sent: SignerToApp[] = [];
+    const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), registryHash: 'hash' in over ? over.hash : PINNED });
+    core.importKey(MAKER_SK);
+    const msg: Record<string, unknown> = { p: P, ...signReq(buildSend()), ...(over.tokens ? { tokens: over.tokens } : {}) };
+    if (over.registry === null) delete msg.registry;
+    else if (over.registry) msg.registry = over.registry;
+    core.receive(parseAppMessage(structuredClone(msg))!);
+    return token(core);
+  }
+
+  it('the pinned table: the ticker and its decimals are shown as the app lists them', () => {
+    expect(shown({})).toContain('EXKCC (70707070…70707070, 8 decimals as the app lists them)');
+  });
+
+  it('a tampered table, no table, no pin, another pin: the token is shown as assumed, without the ticker', () => {
+    const tampered: RegistryRow[] = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 2 }];
+    for (const over of [{ registry: tampered, tokens: [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 2 }] }, { registry: null }, { hash: undefined }, { hash: tableHash(tampered) }]) {
+      const t = shown(over);
+      expect(t, JSON.stringify(over)).toContain('70707070…70707070 (decimals assumed 8)');
+      expect(t, JSON.stringify(over)).not.toContain('as the app lists them');
+      expect(t, JSON.stringify(over)).not.toContain('EXKCC');
+    }
+  });
+
+  it('a hint that contradicts the pinned table is shown as the table says (the app\'s ticker and decimals are not used)', () => {
+    for (const hint of [{ covenantId: TOKEN_COV_ID, ticker: 'RUG', decimals: 8 }, { covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 6 }]) {
+      const t = shown({ tokens: [hint] });
+      expect(t).toContain('EXKCC (70707070…70707070, 8 decimals as the app lists them)');
+      expect(t).not.toContain('RUG');
+    }
   });
 });

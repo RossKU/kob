@@ -3,6 +3,7 @@
 // signatures, through the validated messages of signer/protocol.ts. Reloading the page or removing the frame forgets the key.
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import { normalizeNetwork, pubkeyToAddress, type KaspaSdk } from '../data/kaspa-sdk';
+import type { RegistryRow } from '../signer/table';
 import { toSigner, parseSignerMessage, type AppToSigner, type GenesisClaim, type RejectReason, type TokenHint } from '../signer/protocol';
 import { SIGN_TIMEOUT_MS } from './sigs';
 import { WalletError, type SignOptions, type WalletAdapter, type WalletInfo } from './types';
@@ -57,6 +58,8 @@ export class SignerHost {
   private lastSigned: string | null = null;
   /** the transaction the frame signed last (the request, or the update of it it showed last) */
   private lastSignedTx: BuiltTx | null = null;
+  /** the registry table the app sends with each request (signer/table.ts): the frame trusts a listed token's ticker and decimals only if it is the pinned one */
+  registryTable: RegistryRow[] | undefined;
 
   constructor(private readonly post: (m: AppToSigner) => void, private readonly events: SignerHostEvents = {}) {}
 
@@ -138,7 +141,7 @@ export class SignerHost {
         resolve: (sigs, prepSigs) => (prepSigs ? resolve({ prep: prepSigs, built: sigs }) : reject(new WalletError('no-signature', 'The private key signer did not sign the preparation.'))),
       };
       this.events.onRequest?.(true);
-      this.post(toSigner({ type: 'sign', id, built, tokens, prep, ...(genesis ? { genesis } : {}) }));
+      this.post(toSigner({ type: 'sign', id, built, tokens, ...this.table(), prep, ...(genesis ? { genesis } : {}) }));
     });
   }
 
@@ -157,8 +160,12 @@ export class SignerHost {
       // a re-timed request is signed without a prompt when nothing got worse: the frame shows only if it is still waiting by then
       if (retimeOf) this.waiting.show = setTimeout(() => this.waiting?.id === id && this.events.onRequest?.(true), RETIME_SHOW_MS);
       else this.events.onRequest?.(true);
-      this.post(toSigner({ type: 'sign', id, built, tokens, ...(retimeOf ? { retimeOf } : {}) }));
+      this.post(toSigner({ type: 'sign', id, built, tokens, ...this.table(), ...(retimeOf ? { retimeOf } : {}) }));
     });
+  }
+
+  private table(): { registry?: RegistryRow[] } {
+    return this.registryTable ? { registry: this.registryTable } : {};
   }
 
   /** The transaction the frame signed last (null: none, or one signed before the frame named it). */
@@ -171,7 +178,7 @@ export class SignerHost {
     const w = this.waiting;
     if (!w) return;
     w.shown.set(built.tx.id, built);
-    this.post(toSigner({ type: 'update', id: w.id, built, tokens }));
+    this.post(toSigner({ type: 'update', id: w.id, built, tokens, ...this.table() }));
   }
 
   /** The node's DAA score now, for the times the frame says (display only). */
@@ -200,6 +207,8 @@ export interface LocalKeyDeps {
   sdk: KaspaSdk;
   /** registry labels of the transaction's tokens, shown by the frame next to the amounts it decodes itself */
   tokenHints?: (built: BuiltTx) => TokenHint[];
+  /** the registry table the frame checks against the hash pinned in its bundle (signer/table.ts); none: every registry label is shown as unverified */
+  registryTable?: () => RegistryRow[];
 }
 
 /** The `WalletAdapter` over the signer frame (id `local-key`). */
@@ -232,6 +241,7 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
       const pubkey = pub();
       if (!host) throw new WalletError('other', 'No private key is loaded.');
       if ([...prep.sign, ...built.sign].some((s) => s.pubkey !== pubkey)) throw new WalletError('other', 'This transaction asks for a signature of another key.');
+      host.registryTable = deps.registryTable?.();
       const sigs = await host.signChain(prep, built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.genesisClaim);
       // one signature per request, in each request's order: anything else is not an answer to this request
       for (const [b, got] of [[prep, sigs.prep], [built, sigs.built]] as const) {
@@ -248,6 +258,7 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
       if (built.sign.some((s) => s.pubkey !== pubkey)) throw new WalletError('other', 'This transaction asks for a signature of another key.');
       // the clock first: the frame's first view of the request already says its times from it
       if (opts.clockDaa !== undefined) host.clock(opts.clockDaa);
+      host.registryTable = deps.registryTable?.();
       const pending = host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.retime === true);
       opts.live?.attach({ replace: (b) => host.update(b, deps.tokenHints?.(b) ?? []), clock: (daa) => host.clock(daa) });
       const sigs = await pending;

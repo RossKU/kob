@@ -268,3 +268,31 @@ describe('private-key adapter: a token creation (KCC-23) on one confirmation', (
     expect(parseAppMessage({ p: 'kob-signer/1', type: 'sign', id: 'x1', built: plan.built, tokens: [], prep: plan.prep, retimeOf: 'r0' })).toBeNull();
   });
 });
+
+describe('private-key adapter: the registry table (audit 2026-10-30 G7)', () => {
+  it('goes with every request and every update to the frame, and only when the app has one', async () => {
+    const table = [{ covenantId: 'a'.repeat(64), ticker: 'AAA', decimals: 8 }];
+    const posted: Record<string, unknown>[] = [];
+    let host!: SignerHost;
+    const core = createSignerCore({ sdk, kob, post: (m) => queueMicrotask(() => host.receive(structuredClone(m))) });
+    host = new SignerHost(
+      (m) =>
+        queueMicrotask(() => {
+          posted.push(structuredClone(m) as unknown as Record<string, unknown>);
+          const parsed = parseAppMessage(structuredClone(m));
+          const req = parsed ? core.receive(parsed) : null;
+          if (req) core.approve(req.id);
+        }),
+      { onConnected: () => undefined, onRequest: () => undefined, onForgotten: () => undefined },
+    );
+    core.importKey(MAKER_SK);
+    await new Promise((r) => setTimeout(r, 0));
+    const withTable = createLocalKeyAdapter({ host: () => host, sdk, registryTable: () => table });
+    await withTable.signTx(buildSend(), {});
+    expect(posted.find((m) => m.type === 'sign')!.registry).toEqual(table);
+    posted.length = 0;
+    host.registryTable = undefined;
+    await createLocalKeyAdapter({ host: () => host, sdk }).signTx(buildSend(), {});
+    expect('registry' in posted.find((m) => m.type === 'sign')!).toBe(false);
+  });
+});

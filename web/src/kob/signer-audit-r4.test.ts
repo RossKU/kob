@@ -8,6 +8,7 @@ import { createSignerCore } from '../signer/core';
 import { RETIME_MAX_DELAY_DAA, sameOrBetter } from '../signer/retime';
 import { SIGNER_PROTOCOL, parseAppMessage, type SignerToApp, type TokenHint } from '../signer/protocol';
 import { summarize, type SummaryOrder } from '../signer/summary';
+import { tableHash } from '../signer/table';
 import { loadKaspaSdkNode } from '../data/kaspa-sdk.node';
 import { decodeSigning } from './decode';
 import { planOrder } from './plan';
@@ -20,9 +21,9 @@ import { CASES, CTX, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 const sdk = loadKaspaSdkNode();
 const P = SIGNER_PROTOCOL;
 
-function frame(sk: string, now?: () => number) {
+function frame(sk: string, now?: () => number, registryHash?: string) {
   const sent: SignerToApp[] = [];
-  const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), ...(now ? { now } : {}) });
+  const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), ...(now ? { now } : {}), ...(registryHash ? { registryHash } : {}) });
   const send = (m: Record<string, unknown>) => core.receive(parseAppMessage(structuredClone({ p: P, ...m }))!);
   core.importKey(sk);
   return { core, sent, send };
@@ -112,9 +113,24 @@ describe('G7: the decimals the app gives are labelled, and an order that does no
       const s = summarize(kob, b, MAKER_PK, [{ covenantId: cov, ticker: 'GOLD', decimals }]);
       expect(s.problems, `decimals ${decimals}`).toBeGreaterThan(0);
       expect(s.problemCodes).toContain('token-scale');
-      const f = frame(MAKER_SK);
-      f.send({ type: 'sign', id: 'g7', built: b, tokens: [{ covenantId: cov, ticker: 'GOLD', decimals }] });
-      expect(f.core.approve('g7'), `Approve stays disabled with decimals ${decimals}`).toBe(false);
+    }
+  });
+
+  // G7 (b): through the frame the hint is not the app's word. With the table the bundle pins the frame reads the token from the table; without it
+  // the token is shown on the assumed 8 decimals. Either way a lying decimals hint does not reach the screen.
+  it('through the frame a lying decimals hint is replaced by the pinned table\'s entry, or by the assumed decimals', () => {
+    const b = limitSell();
+    const cov = tokenOf(b);
+    const table = [{ covenantId: cov, ticker: 'GOLD', decimals: 8 }];
+    for (const decimals of [0, 2, 6, 9, 18]) {
+      const lie = [{ covenantId: cov, ticker: 'GOLD', decimals }];
+      const pinned = frame(MAKER_SK, undefined, tableHash(table));
+      const req = pinned.send({ type: 'sign', id: 'g7', built: b, tokens: lie, registry: table })!;
+      expect(req.summary.orders[0]!.token, `decimals ${decimals}`).toMatch(/^GOLD \([0-9a-f]{8}…[0-9a-f]{8}, 8 decimals as the app lists them\)$/);
+      expect(req.summary.problems).toBe(0);
+      const bare = frame(MAKER_SK);
+      const shown = bare.send({ type: 'sign', id: 'g7', built: b, tokens: lie, registry: table })!;
+      expect(shown.summary.orders[0]!.token, `decimals ${decimals}, no pin`).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(decimals assumed 8\)$/);
     }
   });
 

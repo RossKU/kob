@@ -9,6 +9,8 @@ import type { KobWasm } from '../kob/wasm';
 import { toApp, type AppToSigner, type RejectReason, type SignerToApp, type TokenHint } from './protocol';
 import { creationSummary, summarize, type SignerSummary } from './summary';
 import { RETIME_MAX_COUNT, RETIME_WINDOW_MS, sameOrBetter } from './retime';
+import type { RegistryRow } from './table';
+import { trustedHints } from './trusted-hints';
 
 export class SignerKeyError extends Error {
   constructor() {
@@ -45,6 +47,8 @@ export interface SignerCoreDeps {
   post(m: SignerToApp): void;
   /** ms clock (tests) */
   now?: () => number;
+  /** the hash of the registry table pinned into this bundle (table.ts); without it every registry hint is shown as unverified */
+  registryHash?: string;
 }
 
 export interface SignerCore {
@@ -71,6 +75,8 @@ const KEY_TEXT = /^(?:0x)?([0-9a-fA-F]{64})$/;
 
 export function createSignerCore(deps: SignerCoreDeps): SignerCore {
   const { sdk, kob, post } = deps;
+  // the hints of a request as the frame may show them: a registry label only when the app's table is the pinned one (table.ts)
+  const hintsOf = (m: { tokens: TokenHint[]; registry?: RegistryRow[] }): TokenHint[] => trustedHints(m.tokens, m.registry, deps.registryHash);
   let key: FullPrivateKey | null = null;
   let pub: Hex | null = null;
   let pending: PendingRequest | null = null;
@@ -162,7 +168,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         if (!pending || pending.id !== m.id || !pub || pending.prep || m.built.sign.some((s) => s.pubkey !== pub)) return null;
         let next: SignerSummary;
         try {
-          next = summarize(kob, m.built, pub, m.tokens as TokenHint[]);
+          next = summarize(kob, m.built, pub, hintsOf(m));
         } catch {
           return null;
         }
@@ -187,7 +193,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         // a token creation: the preparation and the genesis checked and shown together (summary.ts `creationSummary`), one approval
         let summary: SignerSummary;
         try {
-          summary = creationSummary(kob, m.prep, m.built, pub, m.tokens as TokenHint[], m.genesis);
+          summary = creationSummary(kob, m.prep, m.built, pub, hintsOf(m), m.genesis);
         } catch {
           post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
           return null;
@@ -197,7 +203,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       }
       let summary: SignerSummary;
       try {
-        summary = summarize(kob, m.built, pub, m.tokens as TokenHint[]);
+        summary = summarize(kob, m.built, pub, hintsOf(m));
       } catch {
         post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
         return null;

@@ -7,7 +7,7 @@ import { dispatchTagFrom } from '../wallet/kaspire';
 import { createLocalKeyAdapter, type SignerHost } from '../wallet/local-key';
 import type { WalletAdapter, WalletId, WalletInfo } from '../wallet/types';
 import type { BuiltTx } from '../kob/types';
-import { signerTokenHints } from './token-hints';
+import { signerRegistryTable, signerTokenHints } from './token-hints';
 import { SignerFrame, type SignerMode } from '../ui/shell/SignerFrame';
 import type { Services } from './services';
 import { watchWallet, type WalletNotice } from './wallet-events';
@@ -108,6 +108,7 @@ export function WalletProvider(props: { services: Services; children: ComponentC
         host: () => hostRef.current,
         sdk,
         tokenHints: (built: BuiltTx) => signerTokenHints(kob, built, infoRef.current?.pubkey ?? null, registry, config.network),
+        registryTable: () => signerRegistryTable(registry),
       }),
     [sdk, registry, kob],
   );

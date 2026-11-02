@@ -8,6 +8,7 @@ import type { TokenRegistry } from '../kob/registry';
 import type { BuiltTx, Hex } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import type { TokenHint } from '../signer/protocol';
+import type { RegistryRow } from '../signer/table';
 import { tokensOf } from '../ui/confirm/confirm-model';
 import { marketKey, readInverted } from '../ui/market/orientation';
 
@@ -48,4 +49,12 @@ export function signerTokenHints(kob: KobWasm, built: BuiltTx, maker: Hex | null
       ? [{ covenantId: id, ticker: shown.ticker, decimals: shown.decimals, source, ...inverted }]
       : [{ covenantId: id, ticker: '', decimals: shown.decimals, source: 'assumed', ...inverted }];
   });
+}
+
+/**
+ * The registry table the signer frame checks against the hash pinned in its bundle (signer/table.ts): the tokens of the registry file, not the
+ * open-list tokens the app adds at run time (those are not in the pinned table and show as unverified in the frame).
+ */
+export function signerRegistryTable(registry: TokenRegistry): RegistryRow[] {
+  return registry.tokens.filter((t) => !t.openList).map((t) => ({ covenantId: t.covenantId, ticker: t.ticker, decimals: t.decimals }));
 }

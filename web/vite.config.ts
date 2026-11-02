@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig, type Plugin } from 'vite';
+import { DEFAULT_REGISTRY_PATH } from './registry-pin.mjs';
+import { rowsOfRegistryJson, tableHash } from './src/signer/table';
 import preact from '@preact/preset-vite';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -60,9 +63,15 @@ const kobStableMapRefs = (): Plugin => ({
   },
 });
 
+// The registry table the signer frame pins (src/signer/table.ts, audit 2026-10-30 G7): the covenant id, ticker and decimals of the tokens of
+// registry/tokens.json, or of the file `KOB_SIGNER_REGISTRY` names (a deployment that serves its own registry builds with that path: a signer
+// whose table differs from the served one shows every token as unverified).
+const registryTableHash = tableHash(rowsOfRegistryJson(JSON.parse(readFileSync(process.env.KOB_SIGNER_REGISTRY || DEFAULT_REGISTRY_PATH, 'utf8'))));
+
 // Static, client-side build: `vite build` -> dist/ (serve from any static host; relative asset URLs).
 export default defineConfig({
   base: './',
+  define: { __KOB_REGISTRY_TABLE_HASH__: JSON.stringify(registryTableHash) },
   plugins: [preact(), kobCsp(), kobStableMapRefs(), kobSignerHeaders()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   // keepNames: the official kaspa-wasm SDK identifies its JS classes (Transaction, TransactionOutput, Hash ...) by their `name` when it converts

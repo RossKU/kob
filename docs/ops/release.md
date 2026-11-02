@@ -108,6 +108,10 @@ operator may set `config.json` next to the app (`indexerUrl`, `nodeUrl`, ...). T
 `.github/workflows/deploy-pages.yml`, config from repository variables, post-deploy header and hash check, rollback) is
 `docs/ops/web-hosting.md`; its public read server (`kob-executor index` behind Cloudflare Tunnel) is `docs/ops/chart-server.md`.
 
+The private-key signer frame pins the SHA-256 of the token table (covenant id, ticker, decimals) of `registry/tokens.json` at build time
+(`web/src/signer/table.ts`, audit 2026-10-30 G7). A deployment that serves another registry builds with `KOB_SIGNER_REGISTRY=<path to that file>`;
+otherwise the frame shows every token as unverified ("decimals assumed 8"). `npm run build:release` pins the release registry.
+
 ## 5. Tests before tagging
 
 ```
