@@ -729,6 +729,48 @@ impl Processor {
         ])?;
         if !proven_before {
             self.unlist_conflicting(conn, token, seq)?;
+            self.relist_proven(conn, token, program, seq)?;
+        }
+        Ok(())
+    }
+
+    /// Most orders one proof re-lists (oldest first); the rest stay out of the books until they are amended.
+    const RELIST_MAX: i64 = 2_000;
+
+    /// A program the chain proves for the token for the first time: the orders that pin it and were refused as `token_program_conflict`
+    /// while another program was the only one proved (the token has two programs, a KRON token upgraded from one to the other, say) get
+    /// the listing rules again, as of their placement. Without it an honest order of the second program stayed out of the books for good,
+    /// even though its own custody is the proof (audit 2026-10-30 V7: V2 / V4 regression). The rows they had are kept in `order_amends`
+    /// stamped with the block, so a reorg gives them back exactly ([`revert_block`]).
+    fn relist_proven(&self, conn: &Connection, token: &Hash32, program: TemplateId, seq: i64) -> DbResult<()> {
+        let Some(tpl) = kob_protocol::artifacts::try_token_template(program).map(|t| t.hash.to_vec()) else { return Ok(()) };
+        type Row = (Vec<u8>, String, Vec<u8>, i64, i64);
+        let rows: Vec<Row> = conn
+            .prepare_cached(
+                "SELECT o.covenant_id, o.contract, o.genesis_state, o.genesis_daa, u.value FROM orders o INDEXED BY orders_token_tpl                  JOIN order_utxos u ON u.txid = o.genesis_txid AND u.idx = o.genesis_out                  WHERE o.token_cov_id = ?1 AND o.token_tpl_hash = ?2 AND o.listed = 0 AND o.unlisted_reason = 'token_program_conflict'                  AND o.quote_cov_id IS NULL ORDER BY o.genesis_block, o.covenant_id LIMIT ?3",
+            )?
+            .query_map(params![&token.0[..], &tpl, Self::RELIST_MAX], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (cov, contract, span, daa, value) in rows {
+            let Some(id) = TemplateId::from_name(&contract) else { continue };
+            let Ok(state) = AnyState::decode(id, &span) else { continue };
+            let Ok(cov) = Hash32::from_slice(&cov).ok_or(()) else { continue };
+            let (listed, reason) = match crate::sanity::check(&state) {
+                Err(why) => (false, Some(why)),
+                Ok(()) => self.listing(conn, &state, order_ext_commit(conn, &cov)?, daa.max(0) as u64, value.max(0) as u64)?,
+            };
+            if !listed && reason.as_deref() == Some("token_program_conflict") {
+                continue;
+            }
+            conn.prepare_cached(
+                "INSERT INTO order_amends (covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill)                  SELECT covenant_id, ?2, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill FROM orders WHERE covenant_id = ?1",
+            )?
+            .execute(params![&cov.0[..], seq])?;
+            conn.prepare_cached("UPDATE orders SET listed = ?2, unlisted_reason = ?3 WHERE covenant_id = ?1")?.execute(params![
+                &cov.0[..],
+                listed as i64,
+                reason
+            ])?;
         }
         Ok(())
     }
@@ -2044,55 +2086,19 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
             tokens.extend(o.quote);
         }
     }
-    // in-place amends of the block: the orders take back the terms they replaced (newest first)
-    {
-        let mut st = conn.prepare_cached(
-            "SELECT id, covenant_id, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill \
-             FROM order_amends WHERE block_seq = ?1 ORDER BY id DESC",
-        )?;
-        type AmendRow = (
-            i64,
-            Vec<u8>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            i64,
-            Option<String>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-        );
-        let rows: Vec<AmendRow> = st
-            .query_map([seq], |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                    r.get(6)?,
-                    r.get(7)?,
-                    r.get(8)?,
-                    r.get(9)?,
-                    r.get(10)?,
-                    r.get(11)?,
-                    r.get(12)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        for (_, cov, price, tip, tif, expiry, active, deadline, listed, reason, budget_rate, reserve, min_fill) in rows {
-            changed += conn.execute(
-                "UPDATE orders SET price = ?2, tip = ?3, tif = ?4, expiry_daa = ?5, active_from = ?6, deadline = ?7, listed = ?8, \
-                 unlisted_reason = ?9, budget_rate = ?10, reserve = ?11, min_fill = COALESCE(?12, min_fill) WHERE covenant_id = ?1",
-                params![cov, price, tip, tif, expiry, active, deadline, listed, reason, budget_rate, reserve, min_fill],
-            )?;
-        }
-        changed += conn.execute("DELETE FROM order_amends WHERE block_seq = ?1", [seq])?;
-    }
+    // in-place amends of the block: the orders take back the terms they replaced. One statement for all of them (a block can hold
+    // hundreds of thousands: the unlisting of a token's orders when a program is first proved, [`Processor::unlist_conflicting`]; a row at a
+    // time cost 19 s on a soak-sized store, audit 2026-10-30 I16). An order amended twice in the block takes the terms of its OLDEST
+    // row (what it applied newest first), its min_fill the oldest one that was recorded.
+    changed += conn.execute(
+        "WITH first AS (SELECT MIN(id) AS id FROM order_amends WHERE block_seq = ?1 GROUP BY covenant_id)          UPDATE orders SET price = a.price, tip = a.tip, tif = a.tif, expiry_daa = a.expiry_daa, active_from = a.active_from,                 deadline = a.deadline, listed = a.listed, unlisted_reason = a.unlisted_reason, budget_rate = a.budget_rate,                 reserve = a.reserve          FROM order_amends a WHERE a.id IN (SELECT id FROM first) AND orders.covenant_id = a.covenant_id",
+        [seq],
+    )?;
+    changed += conn.execute(
+        "WITH first AS (SELECT MIN(id) AS id FROM order_amends WHERE block_seq = ?1 AND min_fill IS NOT NULL GROUP BY covenant_id)          UPDATE orders SET min_fill = a.min_fill FROM order_amends a WHERE a.id IN (SELECT id FROM first) AND orders.covenant_id = a.covenant_id",
+        [seq],
+    )?;
+    changed += conn.execute("DELETE FROM order_amends WHERE block_seq = ?1", [seq])?;
     // the candle buckets of the fills about to go (recomputed by `candles::refresh` before the transaction commits)
     super::candles::mark_block(conn, seq)?;
     changed += conn.execute("DELETE FROM order_events WHERE block_seq = ?1", [seq])?;

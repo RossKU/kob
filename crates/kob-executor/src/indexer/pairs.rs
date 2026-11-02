@@ -378,6 +378,17 @@ fn resting_level(p: &LivePair, now: i64) -> Option<(bool, &'static str, i64, i64
     .filter(|l| l.2 > 0 && l.3 > 0 && l.4 > 0)
 }
 
+/// True when the token has any listed order (one seek of `orders_listed_tokens`). The live-set scans below walk every open order of the
+/// store whatever the token (300,000 bids of one token cost 0.7 s a scan, four scans a route), so a leg without a listed order must not
+/// start one (audit 2026-10-30 I15).
+fn has_listed(conn: &Connection, token: &Hash32) -> DbResult<bool> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT 1 FROM orders INDEXED BY orders_listed_tokens WHERE listed = 1 AND token_cov_id = ?1 AND token_tpl_hash IS NOT NULL LIMIT 1",
+        )?
+        .exists([&token.0[..]])?)
+}
+
 /// The pair book of `base / quote` (token covenant ids), at most `depth` levels per side.
 pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32, depth: usize) -> DbResult<PairBook> {
     let daa = eval_daa(conn, ctx)?;
@@ -385,7 +396,10 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
     let depth = depth.max(1);
     let mut asks: Vec<Lvl> = vec![];
     let mut bids: Vec<Lvl> = vec![];
-    if base != quote {
+    // pair orders are listed under their base token; a route needs a listed order on both legs
+    let base_live = base != quote && has_listed(conn, base)?;
+    let routes = base_live && has_listed(conn, quote)?;
+    if base_live {
         // direct and entry levels: the pair orders of the pair, grouped by source and exact price (B per A base unit)
         let mut grouped: BTreeMap<(bool, &'static str, (u128, u128)), Lvl> = BTreeMap::new();
         for (k, p) in pair_orders(conn, base, quote, now, ctx)?.iter().enumerate() {
@@ -409,13 +423,15 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
             }
         }
         // route levels: the two KAS books in one transaction
-        let n = (4 * depth + 16).min(400);
-        let base_bids = kas_orders(conn, base, 2, n, now, ctx)?;
-        let quote_asks = kas_orders(conn, quote, 1, n, now, ctx)?;
-        bids.extend(route_levels(&base_bids, &quote_asks, true, depth));
-        let base_asks = kas_orders(conn, base, 1, n, now, ctx)?;
-        let quote_bids = kas_orders(conn, quote, 2, n, now, ctx)?;
-        asks.extend(route_levels(&base_asks, &quote_bids, false, depth));
+        if routes {
+            let n = (4 * depth + 16).min(400);
+            let base_bids = kas_orders(conn, base, 2, n, now, ctx)?;
+            let quote_asks = kas_orders(conn, quote, 1, n, now, ctx)?;
+            bids.extend(route_levels(&base_bids, &quote_asks, true, depth));
+            let base_asks = kas_orders(conn, base, 1, n, now, ctx)?;
+            let quote_bids = kas_orders(conn, quote, 2, n, now, ctx)?;
+            asks.extend(route_levels(&base_asks, &quote_bids, false, depth));
+        }
     }
     Ok(PairBook {
         base: base.to_hex(),

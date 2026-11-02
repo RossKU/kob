@@ -460,6 +460,10 @@ type OpenTokenRow = (Vec<u8>, Vec<u8>, i64);
 fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>> {
     use std::cmp::Reverse;
     use std::collections::BTreeSet;
+    // The scan reads up to four times the rows the list shows; past `max` the tokens the chain proves (a holding of the token exists) are
+    // kept in preference to the rest, so placements naming covenant ids that sort low cannot push such a token out of the list
+    // (audit 2026-10-30 I17).
+    let scan_max = max.saturating_mul(4);
     // in the list's order: (token, family descending, program); a set, so a row named twice is one row
     let mut rows: BTreeSet<(Vec<u8>, Reverse<i64>, Vec<u8>)> = BTreeSet::new();
     // The distinct (token, program) pairs of the events and (token, program, family) of the listed orders, in index order, by loose index
@@ -482,7 +486,7 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
             None => ev_tok.query_row(rusqlite::params![&t], ev_row).optional()?,
         };
         rows.insert((t, Reverse(0), p));
-        if rows.len() >= max {
+        if rows.len() >= scan_max {
             break;
         }
     }
@@ -505,8 +509,8 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
     let mut last_token: Option<Vec<u8>> = None;
     while let Some((t, p, f)) = cur {
         if last_token.as_ref() != Some(&t) {
-            // every row still to come sorts after the `max` rows of the tokens before this one: the list is complete
-            if rows.len() >= max && rows.range(..(t.clone(), Reverse(i64::MAX), Vec::new())).count() >= max {
+            // the scan budget is spent
+            if rows.len() >= scan_max {
                 break;
             }
             last_token = Some(t.clone());
@@ -522,7 +526,33 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
             tok.query_row(rusqlite::params![&t], row).optional()?
         };
     }
-    Ok(rows.into_iter().take(max).map(|(t, f, p)| (t, p, f.0)).collect())
+    if rows.len() > max {
+        // over the cap: the rows of tokens with a holding first, then the others in the list's order
+        let mut held = conn.prepare_cached("SELECT 1 FROM token_holdings WHERE token_cov_id = ?1 LIMIT 1")?;
+        let mut proven: std::collections::HashMap<Vec<u8>, bool> = std::collections::HashMap::new();
+        let mut keep: Vec<(Vec<u8>, Reverse<i64>, Vec<u8>)> = Vec::with_capacity(max);
+        let mut rest: Vec<(Vec<u8>, Reverse<i64>, Vec<u8>)> = Vec::new();
+        for r in std::mem::take(&mut rows) {
+            let p = match proven.get(&r.0) {
+                Some(p) => *p,
+                None => {
+                    let p = held.exists([&r.0])?;
+                    proven.insert(r.0.clone(), p);
+                    p
+                }
+            };
+            if p && keep.len() < max {
+                keep.push(r);
+            } else {
+                rest.push(r);
+            }
+        }
+        let room = max - keep.len();
+        keep.extend(rest.into_iter().take(room));
+        keep.sort();
+        return Ok(keep.into_iter().map(|(t, f, p)| (t, p, f.0)).collect());
+    }
+    Ok(rows.into_iter().map(|(t, f, p)| (t, p, f.0)).collect())
 }
 
 // ---------------------------------------------------------------------------------------------

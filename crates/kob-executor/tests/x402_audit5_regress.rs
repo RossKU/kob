@@ -18,7 +18,9 @@ use kob_executor::x402::ledger::{Ledger, State};
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::{AskState, BidState, OrderState, SCHEME_COVID, SCHEME_P2PK};
-use kob_protocol::tx::{finalize, sighash, sign_locally, spk_to_string, BuiltTx, FinalizeOptions, OrderUtxo, TokenUtxo, TxOutputJson, Utxo};
+use kob_protocol::tx::{
+    finalize, sighash, sign_locally, spk_to_string, BuiltTx, FinalizeOptions, OrderUtxo, TokenUtxo, TxOutputJson, Utxo,
+};
 use kob_x402::chain::{ChainError, ChainUtxo, ChainView, FixedClock, Outpoint, OutputStatus, SpentBy, SubmitError, Tracked, Txid};
 use kob_x402::client::intent::{cancel_intent, intent_requirements, pay_intent, IntentOptions, IntentPayment};
 use kob_x402::client::swap::{MerchantGain, PayAssetSpec, PayerFunds, SwapOfferParams};
@@ -129,7 +131,13 @@ impl ChainView for Spy {
 fn put(chain: &MockChain, u: &Utxo, spk: ScriptPublicKey) {
     chain.insert_utxo(
         Outpoint::new(u.transaction_id, u.index),
-        ChainUtxo { amount: u.amount, script_public_key: spk, block_daa_score: u.block_daa_score, is_coinbase: false, covenant_id: u.covenant_id },
+        ChainUtxo {
+            amount: u.amount,
+            script_public_key: spk,
+            block_daa_score: u.block_daa_score,
+            is_coinbase: false,
+            covenant_id: u.covenant_id,
+        },
     );
 }
 
@@ -429,7 +437,11 @@ fn x14_one_merchant_output_settles_one_intent_only() {
     for first_second in [true, false] {
         let (ok1, ok2, held) = x14(5 * KAS, &[5 * KAS], first_second);
         assert_eq!(held, vec![5 * KAS]);
-        assert_eq!(u8::from(ok1) + u8::from(ok2), 1, "exactly one intent is paid by one output (asked first: {first_second}): {ok1} {ok2}");
+        assert_eq!(
+            u8::from(ok1) + u8::from(ok2),
+            1,
+            "exactly one intent is paid by one output (asked first: {first_second}): {ok1} {ok2}"
+        );
     }
 }
 

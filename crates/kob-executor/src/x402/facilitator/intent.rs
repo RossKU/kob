@@ -121,7 +121,11 @@ pub(crate) fn merchant_outputs_in<'a>(
 ) -> impl Iterator<Item = usize> + 'a {
     let want = facts.state.merchant_token();
     let floor = if want.is_some() { facts.merchant_value.min(min_carrier) } else { facts.merchant_value };
-    outputs.iter().enumerate().filter(move |(_, o)| o.script_public_key == *merchant_spk && o.value >= floor && o.covenant_id == want).map(|(i, _)| i)
+    outputs
+        .iter()
+        .enumerate()
+        .filter(move |(_, o)| o.script_public_key == *merchant_spk && o.value >= floor && o.covenant_id == want)
+        .map(|(i, _)| i)
 }
 
 fn intent_unsupported() -> X402Error {
