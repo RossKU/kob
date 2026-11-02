@@ -96,6 +96,10 @@ impl<C: ChainView> ChainView for IndexedChain<C> {
         self.lock().unwatch_spend(&(Hash32(out.txid), out.index));
     }
 
+    fn follower_daa(&self) -> Option<u64> {
+        self.lock().cursor().ok().flatten().map(|c| c.daa)
+    }
+
     fn spent_by(&self, out: &Outpoint) -> SpentBy {
         match self.lock().spender_of(&(Hash32(out.txid), out.index)) {
             None => SpentBy::Untracked,

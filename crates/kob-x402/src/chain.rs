@@ -159,6 +159,11 @@ pub trait ChainView: Send + Sync {
     fn spent_by(&self, _out: &Outpoint) -> SpentBy {
         SpentBy::Untracked
     }
+    /// DAA score the tracker has followed the chain up to; `None` without one (or when it does not know). Compared with
+    /// [`ChainView::virtual_daa_score`] it says whether a spend it has not reported yet may still be coming.
+    fn follower_daa(&self) -> Option<u64> {
+        None
+    }
 }
 
 impl<T: ChainView + ?Sized> ChainView for std::sync::Arc<T> {
@@ -200,6 +205,9 @@ impl<T: ChainView + ?Sized> ChainView for std::sync::Arc<T> {
     }
     fn spent_by(&self, out: &Outpoint) -> SpentBy {
         (**self).spent_by(out)
+    }
+    fn follower_daa(&self) -> Option<u64> {
+        (**self).follower_daa()
     }
 }
 

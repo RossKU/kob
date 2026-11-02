@@ -52,6 +52,8 @@ struct Spy {
     tracked_over: Mutex<BTreeMap<Txid, Tracked>>,
     hide: Mutex<BTreeSet<Outpoint>>,
     lag: AtomicBool,
+    /// The follower reports a cursor far behind the node tip.
+    behind: AtomicBool,
     log: Mutex<Vec<String>>,
 }
 
@@ -111,6 +113,10 @@ impl ChainView for Spy {
     fn unwatch_spend(&self, o: &Outpoint) {
         self.watched.lock().unwrap().remove(o);
         self.log.lock().unwrap().push("unwatch".into());
+    }
+    fn follower_daa(&self) -> Option<u64> {
+        let v = self.inner.virtual_daa_score().ok()?;
+        Some(if self.behind.load(Ordering::SeqCst) { v.saturating_sub(100_000) } else { v })
     }
     fn spent_by(&self, o: &Outpoint) -> SpentBy {
         if self.lag.load(Ordering::SeqCst) {
@@ -195,6 +201,7 @@ fn world_with_min_carrier(min_carrier: u64) -> World {
         tracked_over: Mutex::new(BTreeMap::new()),
         hide: Mutex::new(BTreeSet::new()),
         lag: AtomicBool::new(false),
+        behind: AtomicBool::new(false),
         log: Mutex::new(vec![]),
     });
     let ledger = Arc::new(Ledger::in_memory());
@@ -527,4 +534,49 @@ fn x18_a_carrier_below_the_policy_minimum_is_no_payment() {
     let (paid, held) = x18(KAS, KAS + KAS / 10);
     assert_eq!(held, 1);
     assert!(!paid);
+}
+
+// ====================================================================================================================
+// X17: a follower that lags the node is waited for, not failed after a fixed minute
+// ====================================================================================================================
+
+/// A rival keeper executes the intent, the follower reports no spender. `behind`: its cursor is far behind the node tip. The payer asks
+/// again after `later_ms`; the follower has caught up (and reports the spender) after that when `recovers`. Returns the second answer.
+fn x17(behind: bool, later_ms: u64, recovers: bool) -> (bool, State) {
+    let w = world();
+    let offer = w.offer_buy();
+    let p = w.pay_buy(&offer, 31);
+    w.rival(p.txid, None);
+    w.spy.lag.store(true, Ordering::SeqCst);
+    w.spy.behind.store(behind, Ordering::SeqCst);
+    let (stop, miner) = w.miner();
+    let _ = w.fac.settle("shop", &w.request(&offer, &p));
+    w.clock.set(NOW_MS + later_ms);
+    if recovers {
+        w.spy.lag.store(false, Ordering::SeqCst);
+        w.spy.behind.store(false, Ordering::SeqCst);
+    }
+    let r = w.fac.settle("shop", &w.request(&offer, &p));
+    stop.store(true, Ordering::SeqCst);
+    miner.join().unwrap();
+    (r.success, w.ledger.get(&hex(&p.txid)).unwrap().state)
+}
+
+#[test]
+fn x17_a_lagging_follower_is_waited_for() {
+    // 61 s on, still behind: the payment is still open (not failed), and it settles when the follower reports the rival
+    let (ok, state) = x17(true, 61_000, false);
+    assert!(!ok);
+    assert_ne!(state, State::Failed, "a follower far behind the node does not fail the payment after the fixed minute");
+    let (ok, state) = x17(true, 61_000, true);
+    assert!(ok && state == State::Accepted, "the follower caught up and reported the rival: paid");
+}
+
+/// X17 bypasses: a follower that is not behind gets the fixed minute only, and a follower stuck for more than the cap is given up on.
+#[test]
+fn x17_the_wait_is_bounded() {
+    let (ok, state) = x17(false, 61_000, false);
+    assert!(!ok && state == State::Failed, "an up-to-date follower that reports nothing: failed after the minute");
+    let (ok, state) = x17(true, 3_600_000 + 61_000, false);
+    assert!(!ok && state == State::Failed, "a follower stuck for over an hour is not waited for");
 }

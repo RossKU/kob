@@ -87,6 +87,13 @@ pub const EXPIRY_WINDOW_MS: u64 = 3_600_000;
 /// How long the chain follower may take to report who spent a watched intent UTXO (the node UTXO set can be ahead of it).
 const SPENDER_GRACE_MS: u64 = 60_000;
 
+/// A follower this many DAA behind the node tip is still catching up: the spender of an intent the node no longer holds may yet be
+/// reported (audit 2026-10-30 X17: a restart or a lag beyond the fixed grace failed a payment a rival keeper had executed).
+const FOLLOWER_LAG_DAA: u64 = 100;
+
+/// The longest the facilitator waits for a lagging follower to report a spender (a follower stuck for longer is not waited for).
+const SPENDER_LAG_WAIT_MS: u64 = 3_600_000;
+
 /// Past [`EXPIRY_WINDOW_MS`] the expiry is still retried while the intent stands (it holds the payer's funds and stays
 /// executable by anyone), at most once per this interval.
 pub const EXPIRY_RETRY_MS: u64 = 600_000;
@@ -835,7 +842,13 @@ impl Facilitator {
                             }
                         })?;
                     }
-                    if now < since.saturating_add(SPENDER_GRACE_MS) {
+                    // the fixed grace, or longer while the follower is still behind the node (bounded)
+                    let behind = match (self.chain.follower_daa(), self.chain.virtual_daa_score()) {
+                        (Some(f), Ok(v)) => f.saturating_add(FOLLOWER_LAG_DAA) < v,
+                        _ => false,
+                    };
+                    let wait = if behind { SPENDER_LAG_WAIT_MS } else { SPENDER_GRACE_MS };
+                    if now < since.saturating_add(wait) {
                         return Ok(Drive::Waiting("the intent was spent; waiting for the chain follower"));
                     }
                 }
