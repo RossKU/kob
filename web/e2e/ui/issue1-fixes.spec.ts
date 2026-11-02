@@ -84,6 +84,10 @@ test('the template verification is one line while folded, beside the facts, and 
   expect(folded.height).toBeLessThan(70);
   expect((await facts.boundingBox())!.height).toBeGreaterThan(folded.height);
   await expect(page.getByTestId('tpl-summary')).toBeVisible();
+  // a phone too: still one line
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.getByTestId('template-verification').scrollIntoViewIfNeeded();
+  expect((await verification.boundingBox())!.height).toBeLessThan(70);
 });
 
 test('Settings: network, wallet and fee options in view; servers, registry, tracker and indexer check folded under "Advanced / self-hosting"', async ({ appPage: page }) => {

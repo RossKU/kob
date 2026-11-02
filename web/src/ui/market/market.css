@@ -10,8 +10,9 @@ body:has(.market-page) .container { max-width: 1520px; }
 
 /* the token facts and the (folded) template verification sit side by side: the folded one is one line, not as tall as its neighbour */
 .mkt-details { align-items: start; }
-.market-page .section-collapsed .section-head { margin-bottom: 0; }
-.section-summary { flex: 1 1 auto; min-width: 0; }
+/* a folded section is one line: its title and a short summary, never wrapped */
+.market-page .section-collapsed .section-head { margin-bottom: 0; flex-wrap: nowrap; justify-content: flex-start; gap: 12px; }
+.section-summary { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .mkt-top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
 .mkt-top .field { min-width: 0; width: min(260px, 100%); }

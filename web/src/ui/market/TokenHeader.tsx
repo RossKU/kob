@@ -36,7 +36,7 @@ function TemplateVerification(props: { row: TokenRow; services: Pick<Services, '
   if (!info || props.row.source !== 'registry') return null;
   const d = templateDetail(info, props.services.registry, props.services.kob.templates());
   return (
-    <Section title={t('market.tpl.title')} collapsible defaultOpen={false} data-testid="template-verification" summary={<Badge tone={d.matches ? 'ok' : 'bad'} data-testid="tpl-summary">{d.matches ? t('market.tpl.matches') : t('market.tpl.differs')}</Badge>}>
+    <Section title={t('market.tpl.title')} collapsible defaultOpen={false} data-testid="template-verification" summary={<Badge tone={d.matches ? 'ok' : 'bad'} data-testid="tpl-summary">{d.matches ? t('market.tpl.summary.matches') : t('market.tpl.summary.differs')}</Badge>}>
       <KeyValueList
         compact
         items={[

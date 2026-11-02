@@ -129,6 +129,8 @@ export default {
   'market.tpl.notPinned': 'not in this build',
   'market.tpl.verdict': 'Verdict',
   'market.tpl.matches': 'matches the pinned token program',
+  'market.tpl.summary.matches': 'matches',
+  'market.tpl.summary.differs': 'differs',
   'market.tpl.differs': 'differs from the pinned token program',
   'market.tpl.review': 'Review',
   'market.tpl.reviewed': 'reviewed',
