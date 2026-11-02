@@ -53,6 +53,8 @@ export interface SendStatus {
   /** confirming: the wallet the transaction goes to next (the popup's header) */
   walletLabel?: string;
   updated?: boolean;
+  /** confirming: the job's non-blocking notes (SendJob.notes), as they were when the confirmation opened */
+  notes?: string[];
   /** confirming: the cells (`cellTexts` keys) the last plan changed (they flash), and its count */
   changed?: string[];
   rev?: number;
@@ -198,7 +200,7 @@ export function useSend(): Sender {
       let plannedAt = Date.now();
       let open = true;
       let baseline = shown;
-      let view: SendStatus = { phase: 'confirming', table: tableOf(current, shown), walletLabel: session.current.info?.label ?? '', updated, changed: [], rev: 0, holdUntil: 0, daa: null };
+      let view: SendStatus = { phase: 'confirming', table: tableOf(current, shown), walletLabel: session.current.info?.label ?? '', updated, changed: [], rev: 0, holdUntil: 0, daa: null, notes: [...(job.notes ?? [])] };
       const draw = () => open && set(id, view);
       follow(current, () => open, (j, d) => {
         const worse = !sameOrBetter(baseline, d);
@@ -482,6 +484,13 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
             </div>
           ) : null}
         </dl>
+        {st.notes?.length ? (
+          <ul class="send-notes" data-testid="confirm-order-notes">
+            {st.notes.map((n, i) => (
+              <li key={i} data-testid="confirm-order-note">{n}</li>
+            ))}
+          </ul>
+        ) : null}
         {s.orders.map((o, i) => (
           <OrderTable order={o} testid={`confirm-order-order-${i}`} cell={`o:${i}`} live={live} key={i} />
         ))}

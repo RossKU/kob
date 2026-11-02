@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PlanIssue } from '../../kob/plan-types';
 import type { OrderState } from '../../kob/types';
-import { DEFAULT_MIN_ORDER_VALUE_SOMPI, isTicketNote, listingValueOf, minOrderValueOf, minValueNote, ticketNotes } from './ticket-notes';
+import { DEFAULT_MIN_ORDER_VALUE_SOMPI, confirmNotes, isTicketNote, listingValueOf, minOrderValueOf, minValueNote, ticketNotes } from './ticket-notes';
 
 const w = (code: string, message = code): PlanIssue => ({ code, severity: 'warning', message });
 const e = (code: string): PlanIssue => ({ code, severity: 'error', message: code });
@@ -126,5 +126,32 @@ describe('minimum order value: where the minimum comes from', () => {
   it('reads the optional field a future executor may report (string or safe integer, sompi)', () => {
     expect(minOrderValueOf({ min_order_value_sompi: '250000000' })).toEqual({ sompi: 250_000_000n, source: 'indexer' });
     expect(minOrderValueOf({ min_order_value_sompi: 0 })).toEqual({ sompi: 0n, source: 'indexer' });
+  });
+});
+
+describe('the notes of the final confirmation', () => {
+  const min: { sompi: bigint; source: 'indexer' | 'default' } = { sompi: 100_000_000n, source: 'default' };
+  const o = (plain = true, m = min) => ({ plain, min: m, issue: (i: PlanIssue) => `issue:${i.code}`, low: (n: { value: bigint; min: bigint }, src: 'indexer' | 'default') => `low:${n.value}/${n.min}/${src}` });
+  const withIssues = (issues: PlanIssue[], below = false) => ({ ...(plan(below ? ask('38000000', '260000', '100000000') : ask('1000000000', '250000000', '100000000')) as object), issues }) as never;
+
+  it('says nothing for an order that is worth the minimum with a price near the market', () => {
+    expect(confirmNotes(withIssues([]), o())).toEqual([]);
+    expect(confirmNotes(null, o())).toEqual([]);
+  });
+
+  it('one line for an order below the minimum order value, with where the minimum comes from', () => {
+    expect(confirmNotes(withIssues([], true), o())).toEqual(['low:98800/100000000/default']);
+    expect(confirmNotes(withIssues([], true), o(true, { sompi: 100_000_000n, source: 'indexer' }))).toEqual(['low:98800/100000000/indexer']);
+  });
+
+  it('one line for a price far through the market, a pair too; other warnings are not notes of the confirmation', () => {
+    expect(confirmNotes(withIssues([w('PRICE_AGGRESSIVE_VS_MARKET')]), o())).toEqual(['issue:PRICE_AGGRESSIVE_VS_MARKET']);
+    expect(confirmNotes(withIssues([w('PAIR_PRICE_AGGRESSIVE_VS_MARKET')]), o(false))).toEqual(['issue:PAIR_PRICE_AGGRESSIVE_VS_MARKET']);
+    expect(confirmNotes(withIssues([w('SLIPPAGE_HIGH'), w('MARKET_REFERENCE_DIVERGES'), e('PRICE_AGGRESSIVE_VS_MARKET')]), o())).toEqual([]);
+  });
+
+  it('both apply: the low value first, then the price; a ladder level or a pair has no low-value line', () => {
+    expect(confirmNotes(withIssues([w('PRICE_AGGRESSIVE_VS_MARKET')], true), o())).toEqual(['low:98800/100000000/default', 'issue:PRICE_AGGRESSIVE_VS_MARKET']);
+    expect(confirmNotes(withIssues([w('PRICE_AGGRESSIVE_VS_MARKET')], true), o(false))).toEqual(['issue:PRICE_AGGRESSIVE_VS_MARKET']);
   });
 });

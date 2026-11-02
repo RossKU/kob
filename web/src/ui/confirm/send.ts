@@ -51,6 +51,11 @@ export interface SendJob {
    * what the open final confirmation follows while the user reads it (SendStatus.tsx); the job, or why there is none now
    */
   replan?: (() => Promise<SendJob | { stop: Blocked }>) | undefined;
+  /**
+   * non-blocking lines the final confirmation shows under the summary (an order below the minimum order value, a price far through the market): worked
+   * out once from the plan of the click, never updated while the confirmation is open, never a reason to stop
+   */
+  notes?: readonly string[] | undefined;
   /** this job re-times the one the user confirmed just before (the private-key signer then signs it without asking again when nothing got worse) */
   retimed?: boolean | undefined;
 }

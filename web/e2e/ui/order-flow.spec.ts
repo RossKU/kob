@@ -7,7 +7,7 @@
 import type { Page } from '@playwright/test';
 import { expect, test, type MockWalletHandle } from '../fixtures';
 import { fund, mockClock, openMarket } from '../helpers/env';
-import { clickPlace, expectStopped, expectWalletSigned, fillFields, pickType, placedBy, readSendStatus, settlePlan, waitSubmitted } from '../helpers/ticket';
+import { clickPlace, clickPlaceOnly, confirmReceipt, expectStopped, expectWalletSigned, fillFields, pickType, placedBy, readSendStatus, settlePlan, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -291,7 +291,12 @@ test.describe('the planner\'s warnings are not on the ticket (founder, 2026-11-0
     await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
     await expect(page.getByTestId('order-place')).toBeEnabled();
     expect(await page.getByTestId('order-place').boundingBox()).toEqual(before);
-    await clickPlace(page);
+    // the final confirmation says it, once, under its summary: a note, never a stop
+    await clickPlaceOnly(page);
+    await expect(page.getByTestId('confirm-order-note')).toHaveCount(1);
+    await expect(page.getByTestId('confirm-order-notes')).toContainText('through the market');
+    await expect(page.getByTestId('confirm-order-notes')).toContainText('Check for a typing error');
+    await confirmReceipt(page);
     await wallet!.waitForCalls(1);
     const txid = await waitSubmitted(page);
     expect((await placedBy(mock, txid)).views).toHaveLength(1);

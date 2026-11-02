@@ -96,3 +96,26 @@ export function minValueNote(plan: Pick<OrderPlan, 'states' | 'request'> | null,
   const value = listingValueOf(plan.states[0]!, carrier);
   return value !== null && value < min ? { value, min } : null;
 }
+
+// ------------------------------------------------------------------------------------------------ the final confirmation's notes
+
+/** The planner's codes of a price far through the market (a typing error): a token's KAS market and a pair. */
+const PRICE_FAR_CODES: ReadonlySet<string> = new Set(['PRICE_AGGRESSIVE_VS_MARKET', 'PAIR_PRICE_AGGRESSIVE_VS_MARKET']);
+
+/**
+ * The notes the final confirmation shows (SendStatus.tsx), one short line each and only when they apply, computed once from the plan of the click:
+ * an order worth less than the minimum order value (the indexer never lists it, so it never fills; a plain order only) and a price far through the
+ * market. They never stop the order. The ticket itself shows neither (7510c498: nothing there appears or changes on a tick).
+ */
+export function confirmNotes(
+  plan: Pick<OrderPlan, 'states' | 'request' | 'issues'> | null,
+  o: { plain: boolean; min: { sompi: bigint; source: 'indexer' | 'default' }; issue(i: PlanIssue): string; low(n: MinValueNote, source: 'indexer' | 'default'): string },
+): string[] {
+  if (!plan) return [];
+  const out: string[] = [];
+  const low = o.plain ? minValueNote(plan, o.min.sompi) : null;
+  if (low) out.push(o.low(low, o.min.source));
+  const far = (plan.issues ?? []).find((i) => i.severity === 'warning' && PRICE_FAR_CODES.has(i.code));
+  if (far) out.push(o.issue(far));
+  return out;
+}

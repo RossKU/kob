@@ -12,6 +12,7 @@ import { has, t } from '../../i18n';
 
 import { issueText, keyedText } from '../../i18n/issue-text';
 import { buildErrorText, rawOf } from '../../i18n/build-error';
+import { useSystemStatus } from '../shell/StatusProvider';
 import { planOrder, type Intent } from '../../kob/plan';
 import { errors, isPairEnv, type Clock, type OrderPlan } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
@@ -36,6 +37,7 @@ import {
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 import { expectedFromPlan } from './plan-expected';
+import { confirmNotes, minOrderValueOf } from './ticket-notes';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
@@ -114,6 +116,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const quoteTicker = quote ? quote.ticker : 'KAS';
   const services = useServices();
   const wallet = useWallet();
+  const { indexer: indexerStatus } = useSystemStatus();
   const tradable = token.tradable && token.program !== null && (!quote || (quote.tradable && quote.program !== null));
   // the order scale of this token (10^decimals, at most 10^9; kob-wasm defaultScale): every price is per that many base units
   const scale = 10n ** BigInt(Math.min(token.decimals, 9));
@@ -530,8 +533,13 @@ export function OrderTicket(props: OrderTicketProps) {
       const settled = toRead.length === 0;
       const label = orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name);
       const openToken = token.openList ? token : undefined;
+      // the lines the final confirmation adds (an order below the minimum value, a price far through the market): worked out here, once, from this plan
+      const notes = confirmNotes(planned, {
+        plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health), issue: (i) => issueText(i, issueCtx),
+        low: (n, source) => t(`ticket.minValue.${source}`, { value: formatKas(n.value, { group: ',' }), min: formatKas(n.min, { group: ',' }) }),
+      });
       return {
-        built: planned.built!, expected: expectedFromPlan(planned), label, openToken,
+        built: planned.built!, expected: expectedFromPlan(planned), label, openToken, notes,
         gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openToken, shift) : undefined,
         submitByDaa: auctionSubmitBy(planned.states, clock.daa),
         retime: retimer(env0, refsNow, intent, null, label, openToken, shift + RETIME_LEAD_DAA),

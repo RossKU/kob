@@ -30,3 +30,7 @@
 .send-changed-1 dd { animation-name: send-flash-1; }
 @keyframes send-flash-0 { from { background: var(--warn-bg); } to { background: transparent; } }
 @keyframes send-flash-1 { from { background: var(--warn-bg); } to { background: transparent; } }
+
+/* the non-blocking notes of the final confirmation (below the summary): one short line each, shown only when they apply */
+.send-notes { margin: 8px 0 0; padding: 0 0 0 18px; font-size: 0.85rem; color: var(--muted); }
+.send-notes li + li { margin-top: 4px; }

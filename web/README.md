@@ -79,10 +79,9 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
   update worse for the user than what was shown says so and holds Approve for half a second), changed figures flash, and the start and
   expiry read "in 28 s" over their DAA score. The signer frame is as tall as its content (it reports its height), up to the viewport.
   One status line under the button follows it all (checking, confirm, approve in your wallet, sending, the
-  txid with its explorer link, accepted). No checkboxes. The planner's warnings that matter to a trader (a price far through the market,
-  a book that disagrees with the last fill, a high slippage, a day order about to end, a limit that crosses the market, the conditional orders'
-  market checks, a stop on a token whose genesis is not verified) are one-line notes next to the button (`src/ui/ticket/ticket-notes.ts`): they
-  never stop the order and need no click; only errors disable the button. An auction (market, marketable limit) starts from the clock of its plan: confirmed in
+  txid with its explorer link, accepted). No checkboxes. The ticket shows only what stops an order (one fixed slot above the button); the two warnings that never stop one are lines of the app's popup, worked out once when it opens
+  (`SendJob.notes`, `confirmNotes` in `src/ui/ticket/ticket-notes.ts`): an order worth less than the minimum order value (it is never listed, so it never fills) and a price far through the
+  market. The private-key signer frame shows neither. An auction (market, marketable limit) starts from the clock of its plan: confirmed in
   the app's popup more than 1 s after it opened, it is planned again with the current clock before the wallet gets it; a signature that comes
   back more than `AUCTION_START_MARGIN_DAA` (20 DAA, 2 s) after the start is not sent, the order is planned again and the wallet asked once
   more (`src/wallet/sign.ts`). Neither asks the user again when nothing they confirmed got worse (`src/signer/retime.ts`: the private-key
