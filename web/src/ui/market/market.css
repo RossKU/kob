@@ -257,7 +257,7 @@ a.tape-row:hover .tape-time { color: var(--text); }
 
 /* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, the icon is --idb tall, the fingerprint 60 % of it */
 .idb { --idb: 40px; flex: none; display: inline-flex; align-items: center; gap: 6px; }
-.idb-lg { --idb: 64px; gap: 8px; }
+.idb-lg, .idb-pair { --idb: 64px; gap: 8px; }
 .idb .tk-icon { --tk-size: var(--idb); }
 /* the fingerprint is 60 % of the icon and centred on it (the block aligns its items in the middle) */
 .idb .fp { flex: none; display: block; height: calc(var(--idb) * 0.6); width: calc(var(--idb) * 0.6 * 100 / 132); border-radius: calc(var(--idb) * 0.08); }
@@ -276,6 +276,8 @@ a.tape-row:hover .tape-time { color: var(--text); }
 }
 @media (max-width: 759px) {
   .idb-lg { --idb: 52px; gap: 6px; }
+  /* the pair header must stay one line (icons, selector, swap) at 360 px: smaller blocks than the token header's */
+  .idb-pair { --idb: 34px; gap: 3px; }
 }
 
 /* ---- a list row, always three lines (so every row is as tall and the icons keep one pitch): line 1 = ticker (bold) and name on one line, the name cut with an
@@ -328,10 +330,20 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .mkt-meta .mkt-meta-ticker { font-size: 0.95rem; }
 .mkt-meta .tf-inline, .mkt-meta [data-testid^='token-badges-'] { flex-wrap: wrap; }
 .mkt-meta .badge { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
-/* the pair page header: line 1 the two pictures with the flip, line 2 the tickers, then one compact line per token */
+/* the pair page header: line 1 (never wrapped between the pictures, the selector and the swap) the two pictures, the tickers, the swap, then Live; then one compact line per token */
 .mkt-pairhd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; }
+.mkt-pairhd-main { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px 12px; min-width: 0; }
 .mkt-pairhd-sep { font-size: 1.5rem; font-weight: 800; color: var(--muted); }
-.mkt-pairhd-tickers { margin-top: -2px; }
+.mkt-pairhd-tickers { flex: none; white-space: nowrap; }
+.mkt-pairhd-tickers .pair-name { font-size: 1.5rem; font-weight: 800; letter-spacing: 0.01em; }
+@media (max-width: 759px) {
+  .mkt-pairhd { gap: 4px 6px; }
+  .mkt-pairhd-main { gap: 4px 4px; }
+  .mkt-pairhd-sep { font-size: 1.1rem; }
+  .mkt-pairhd-tickers .pair-name { font-size: 0.95rem; gap: 3px; }
+  .mkt-pairhd-tickers .asset-select-face { gap: 2px; padding: 0 2px; }
+  .mkt-pairhd-main .flip-btn { padding: 4px 5px; min-width: 28px; }
+}
 .mkt-pairhd-tokens { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 
 /* a phone: the token table is a list of cards, not columns (a name, a covenant id and badges beside five figures would not fit 375 px): the identity and the

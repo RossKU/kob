@@ -39,11 +39,11 @@ export function Fingerprint(props: { covenantId: string; height?: number; 'data-
   );
 }
 
-/** Icon and fingerprint side by side, both about 40 px tall (`md`: list rows) or 64 px (`lg`: token and pair headers); the sizes are in market.css, which also narrows them on a phone. */
-export function IdentityBlock(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: 'md' | 'lg'; 'data-testid'?: string }) {
-  const large = props.size === 'lg';
+/** Icon and fingerprint side by side, both about 40 px tall (`md`: list rows) or 64 px (`lg`: token header; `pair`: pair header, 64 px too, 36 px on a phone so the whole line fits); the sizes are in market.css, which also narrows them on a phone. */
+export function IdentityBlock(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: 'md' | 'lg' | 'pair'; 'data-testid'?: string }) {
+  const large = props.size === 'lg' || props.size === 'pair';
   return (
-    <span class={`idb idb-${large ? 'lg' : 'md'}`} data-testid={props['data-testid'] ?? `identity-${props.row.covenantId}`}>
+    <span class={`idb idb-${props.size ?? 'md'}`} data-testid={props['data-testid'] ?? `identity-${props.row.covenantId}`}>
       <TokenIcon row={props.row} />
       <Fingerprint covenantId={props.row.covenantId} height={large ? 64 : 40} />
     </span>

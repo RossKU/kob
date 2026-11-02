@@ -58,13 +58,14 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await page.goto(`/#/market/${base}/${QUOTE}`);
   await expect(page.getByTestId('pair-page')).toHaveAttribute('data-base', base);
 
-  // the header: line 1 = icon and fingerprint of A, icon and fingerprint of B, the swap button; line 2 = the pair text (full layout: pair-header.spec.ts)
+  // the header: line 1 = icon and fingerprint of A, icon and fingerprint of B, the pair text, the swap button, all one line (full layout: pair-header.spec.ts)
   const at = (id: string) => page.getByTestId('pair-page').getByTestId(id).first().boundingBox();
   const [icon, fp, iconB, sel, flipBtn] = await Promise.all([`token-icon-${base}`, `fingerprint-${base}`, `token-icon-${QUOTE}`, 'market-pair', 'market-flip'].map(at));
   expect(icon!.x).toBeLessThan(fp!.x);
   expect(fp!.x + fp!.width).toBeLessThanOrEqual(iconB!.x + 1);
-  expect(iconB!.x + iconB!.width).toBeLessThanOrEqual(flipBtn!.x + 1);
-  expect(sel!.y).toBeGreaterThanOrEqual(icon!.y + icon!.height - 1);
+  expect(iconB!.x + iconB!.width).toBeLessThanOrEqual(sel!.x + 1);
+  expect(sel!.x + sel!.width).toBeLessThanOrEqual(flipBtn!.x + 1);
+  expect(Math.min(sel!.y + sel!.height, icon!.y + icon!.height) - Math.max(sel!.y, icon!.y)).toBeGreaterThan(0);
   expect(fp!.height).toBeLessThan(icon!.height - 4);
   expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
 

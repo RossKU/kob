@@ -182,29 +182,31 @@ export function PairPage(props: { base: string; quote: string }) {
       attrs={{ 'data-base': props.base, 'data-quote': props.quote }}
       header={
         <div class="stack-sm" data-testid="pair-header">
-          {/* line 1: the two tokens' pictures (icon and fingerprint of each) with the swap button; line 2: the tickers (the pair selector); then one compact
-              line per token (short id with copy, name, chips). The base token's block is where the token page has it, so the selector does not move. */}
+          {/* line 1, always one line: the two tokens' pictures (icon and fingerprint of each), the pair selector and the swap button, then Live (which alone may wrap
+              on a very narrow phone); then one compact line per token (short id with copy, name, chips). The base token's block is where the token page has it. */}
           <div class="mkt-pairhd">
-            <IdentityBlock row={baseRow ?? { covenantId: props.base, ticker: baseInfo.ticker, kascov: null }} size="lg" data-testid="pair-base-identity" />
-            <span class="pair-sep mkt-pairhd-sep" aria-hidden="true">{'/'}</span>
-            <span data-testid="pair-identities">
-              <IdentityBlock row={quoteRow ?? { covenantId: props.quote, ticker: quoteInfo.ticker, kascov: null }} size="lg" data-testid="pair-quote-identity" />
-            </span>
-            <FlipButton
-              pair={`${quoteInfo.ticker}/${baseInfo.ticker}`}
-              onClick={() => {
-                // the ticket of the other pair takes the order across: the side turns over, amounts and prices are converted (pair-flip.ts)
-                requestPairFlip(props.base, props.quote);
-                navigate(pairRoute(props.quote, props.base));
-              }}
-            />
+            <div class="mkt-pairhd-main">
+              <IdentityBlock row={baseRow ?? { covenantId: props.base, ticker: baseInfo.ticker, kascov: null }} size="pair" data-testid="pair-base-identity" />
+              <span class="pair-sep mkt-pairhd-sep" aria-hidden="true">{'/'}</span>
+              <span data-testid="pair-identities">
+                <IdentityBlock row={quoteRow ?? { covenantId: props.quote, ticker: quoteInfo.ticker, kascov: null }} size="pair" data-testid="pair-quote-identity" />
+              </span>
+              <span class="mkt-pairhd-tickers">
+                <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={choiceRows} onChange={openPair} />
+                <span class="sr-only" data-testid="pair-subtitle">{t('pair.subtitle', { base: baseRow ? tokenTitle(baseRow) : baseInfo.ticker, quote: quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker })}</span>
+              </span>
+              <FlipButton
+                pair={`${quoteInfo.ticker}/${baseInfo.ticker}`}
+                onClick={() => {
+                  // the ticket of the other pair takes the order across: the side turns over, amounts and prices are converted (pair-flip.ts)
+                  requestPairFlip(props.base, props.quote);
+                  navigate(pairRoute(props.quote, props.base));
+                }}
+              />
+            </div>
             <Badge tone={mode === 'live' ? 'ok' : mode === 'polling' ? 'info' : 'neutral'} data-testid="pair-live" title={t(`market.live.${mode}Hint`)}>
               {t(`market.live.${mode}`)}
             </Badge>
-          </div>
-          <div class="mkt-title mkt-pairhd-tickers">
-            <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={choiceRows} onChange={openPair} />
-            <span class="sr-only" data-testid="pair-subtitle">{t('pair.subtitle', { base: baseRow ? tokenTitle(baseRow) : baseInfo.ticker, quote: quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker })}</span>
           </div>
           <div class="mkt-pairhd-tokens" data-testid="pair-token-lines">
             {[baseRow, quoteRow].map((r) => (r ? <TokenLine key={r.covenantId} row={r} ticker data-testid="pair-token-meta" /> : null))}
