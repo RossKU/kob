@@ -128,8 +128,8 @@ export function MarketShell(props: {
           </div>
         ) : null}
         {props.ticket}
+        {props.details ? <div class="mkt-area-details">{props.details}</div> : null}
       </div>
-      {props.details}
       {/* phone only (market.css): jumps to the ticket */}
       {ticketAway ? (
         <button type="button" class="mkt-trade-fab" onClick={jumpToTicket} aria-label={t('market.ticket.jump')} data-testid="market-trade-jump">

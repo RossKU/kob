@@ -48,43 +48,59 @@ function ConnectionSettings() {
   };
 
   return (
-    <Section title={t('settings.connection.title')} data-testid="settings-connection">
-      <Banner tone="warn" title={t('settings.servers.warnTitle')} data-testid="settings-server-warning">
-        {t('settings.servers.warn')}
-      </Banner>
-      <div class="stack-sm" style="margin-top:12px">
-        <Field
-          as="select"
-          label={t('settings.network')}
-          value={form.network}
-          options={[{ value: 'mainnet', label: 'mainnet' }, { value: 'testnet-10', label: 'testnet-10' }]}
-          onValue={(x) => set('network', x as NetworkName)}
-          error={err(v.errors.network)}
-          hint={t('settings.network.hint')}
-          data-testid="settings-network"
-        />
-        <Field label={t('settings.indexerUrl')} value={form.indexerUrl} onValue={(x) => set('indexerUrl', x)} error={err(v.errors.indexerUrl)} hint={t('settings.indexerUrl.hint')} placeholder="https://" data-testid="settings-indexer-url" />
-        <Field label={t('settings.nodeUrl')} value={form.nodeUrl} onValue={(x) => set('nodeUrl', x)} error={err(v.errors.nodeUrl)} hint={t('settings.nodeUrl.hint')} placeholder="wss://" data-testid="settings-node-url" />
-        <Field label={t('settings.registryUrl')} value={form.registryUrl} onValue={(x) => set('registryUrl', x)} error={err(v.errors.registryUrl)} hint={t('settings.registryUrl.hint')} data-testid="settings-registry-url" />
-        <Checkbox checked={form.kastle} onChange={(c) => set('kastle', c)} label={t('settings.kastle')} hint={t('settings.kastle.hint')} data-testid="settings-kastle" />
-        <Checkbox checked={form.priorityFee} onChange={(c) => set('priorityFee', c)} label={t('settings.priorityFee')} hint={t('settings.priorityFee.hint')} data-testid="settings-priority-fee" />
-        <Checkbox checked={form.dynamicFee} onChange={(c) => set('dynamicFee', c)} label={t('settings.dynamicFee')} hint={t('settings.dynamicFee.hint')} data-testid="settings-dynamic-fee" />
-        {servers ? <Checkbox checked={ack} onChange={setAck} label={t('settings.servers.ack')} data-testid="settings-servers-ack" /> : null}
-        <div class="row">
-          <Button variant="primary" disabled={!v.ok || changes.length === 0 || (servers && !ack)} onClick={save} data-testid="settings-save">
-            {t('common.save')}
-          </Button>
-          {storedServers.length ? (
-            <Button onClick={resetServers} title={t('settings.resetServers.hint')} data-testid="settings-reset-servers">
-              {t('settings.resetServers')}
+    <>
+      <Section title={t('settings.connection.title')} data-testid="settings-connection">
+        <div class="stack-sm">
+          <Field
+            as="select"
+            label={t('settings.network')}
+            value={form.network}
+            options={[{ value: 'mainnet', label: 'mainnet' }, { value: 'testnet-10', label: 'testnet-10' }]}
+            onValue={(x) => set('network', x as NetworkName)}
+            error={err(v.errors.network)}
+            hint={t('settings.network.hint')}
+            data-testid="settings-network"
+          />
+          <Checkbox checked={form.kastle} onChange={(c) => set('kastle', c)} label={t('settings.kastle')} hint={t('settings.kastle.hint')} data-testid="settings-kastle" />
+          <Checkbox checked={form.priorityFee} onChange={(c) => set('priorityFee', c)} label={t('settings.priorityFee')} hint={t('settings.priorityFee.hint')} data-testid="settings-priority-fee" />
+          <Checkbox checked={form.dynamicFee} onChange={(c) => set('dynamicFee', c)} label={t('settings.dynamicFee')} hint={t('settings.dynamicFee.hint')} data-testid="settings-dynamic-fee" />
+          {servers ? <Checkbox checked={ack} onChange={setAck} label={t('settings.servers.ack')} data-testid="settings-servers-ack" /> : null}
+          <div class="row">
+            <Button variant="primary" disabled={!v.ok || changes.length === 0 || (servers && !ack)} onClick={save} data-testid="settings-save">
+              {t('common.save')}
             </Button>
-          ) : null}
-          {saved === 'ok' ? <Button onClick={reload} data-testid="settings-reload">{t('settings.reload')}</Button> : null}
+            {saved === 'ok' ? <Button onClick={reload} data-testid="settings-reload">{t('settings.reload')}</Button> : null}
+          </div>
+          {saved === 'ok' ? <Banner tone="ok" data-testid="settings-saved">{t('settings.saved')}</Banner> : null}
+          {saved === 'failed' ? <Banner tone="error" data-testid="settings-save-failed">{t('settings.saveFailed')}</Banner> : null}
         </div>
-        {saved === 'ok' ? <Banner tone="ok" data-testid="settings-saved">{t('settings.saved')}</Banner> : null}
-        {saved === 'failed' ? <Banner tone="error" data-testid="settings-save-failed">{t('settings.saveFailed')}</Banner> : null}
-      </div>
-    </Section>
+      </Section>
+      {/* everything for an operator or a power user, folded: the servers (saved with the Save button above), the registry and its template hashes, the token tracker, the indexer cross-check */}
+      <Section title={t('settings.advanced.title')} collapsible defaultOpen={false} class="settings-advanced" data-testid="settings-advanced">
+        <div class="stack">
+          <p class="small muted">{t('settings.advanced.explain')}</p>
+          <div class="stack-sm" data-testid="settings-servers">
+            <Banner tone="warn" title={t('settings.servers.warnTitle')} data-testid="settings-server-warning">
+              {t('settings.servers.warn')}
+            </Banner>
+            <Field label={t('settings.indexerUrl')} value={form.indexerUrl} onValue={(x) => set('indexerUrl', x)} error={err(v.errors.indexerUrl)} hint={t('settings.indexerUrl.hint')} placeholder="https://" data-testid="settings-indexer-url" />
+            <Field label={t('settings.nodeUrl')} value={form.nodeUrl} onValue={(x) => set('nodeUrl', x)} error={err(v.errors.nodeUrl)} hint={t('settings.nodeUrl.hint')} placeholder="wss://" data-testid="settings-node-url" />
+            <Field label={t('settings.registryUrl')} value={form.registryUrl} onValue={(x) => set('registryUrl', x)} error={err(v.errors.registryUrl)} hint={t('settings.registryUrl.hint')} data-testid="settings-registry-url" />
+            <p class="small muted">{t('settings.advanced.saveAbove')}</p>
+            {storedServers.length ? (
+              <div class="row">
+                <Button onClick={resetServers} title={t('settings.resetServers.hint')} data-testid="settings-reset-servers">
+                  {t('settings.resetServers')}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+          <RegistrySummary />
+          <TrackerSettings />
+          <TrustSection />
+        </div>
+      </Section>
+    </>
   );
 }
 
@@ -405,12 +421,9 @@ export function SettingsView(props: { warnings?: ConfigWarning[] }) {
           <TokenIconsSettings />
           <PrivateKeySettings />
           <NotifySettingsSection />
-          <Versions />
         </div>
         <div class="stack">
-          <TrustSection />
-          <RegistrySummary />
-          <TrackerSettings />
+          <Versions />
           <LocalData />
         </div>
       </div>

@@ -2,6 +2,7 @@
 // preparation declaring the token details, then the genesis spending it) with the mock KasWare wallet and with the private key (one approval in
 // the signer frame), and the blocking cases.
 import { test, expect, TEST_KEYS } from '../fixtures';
+import { openSettingsAdvanced } from '../helpers/env';
 import { readReceipt, confirmReceipt, fillFields, pickType, placeOrder, waitReviewable } from '../helpers/ticket';
 
 const KAS = 100_000_000n;
@@ -198,6 +199,7 @@ test.describe('token issuance', () => {
     await page.goto('/#/settings');
     await page.getByTestId('wallet-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toBeVisible();
+    await openSettingsAdvanced(page);
     await expect(page.getByTestId('tracker-empty')).toBeVisible();
     // the backup is named where it is made
     await expect(page.getByTestId('settings-tracker')).toContainText('Keep this list');

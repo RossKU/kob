@@ -200,7 +200,14 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('token-header')).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review/i);
     await expect(appPage.getByTestId('ticket-unavailable')).toHaveCount(0);
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
+    // an unknown tick is no row (not "Tick: -"); the folded verification is one line with its verdict, never a panel as tall as the facts beside it
+    await expect(appPage.getByTestId('token-tick')).toHaveCount(0);
+    await expect(appPage.getByTestId('token-details')).not.toContainText('Tick');
+    await expect(appPage.getByTestId('tpl-summary')).toContainText('matches');
+    const folded = (await appPage.getByTestId('template-verification').boundingBox())!;
+    expect(folded.height, 'folded verification').toBeLessThan(70);
     await appPage.getByTestId('template-verification').getByRole('button').first().click();
+    await expect(appPage.getByTestId('tpl-summary')).toHaveCount(0);
     await expect(appPage.getByTestId('tpl-registry-hash')).toHaveText(/^[0-9a-f]{64}$/);
     await expect(appPage.getByTestId('tpl-pinned-hash')).toHaveText(await appPage.getByTestId('tpl-registry-hash').innerText());
     await expect(appPage.getByTestId('tpl-verdict')).toContainText('matches');

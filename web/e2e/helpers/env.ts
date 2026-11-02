@@ -142,3 +142,11 @@ export async function mockClock(mock: MockClient): Promise<{ daa: number; unix: 
   const s = await mock.state();
   return { daa: Number(s.daa), unix: Number(s.unix) };
 }
+
+/** Settings: unfolds "Advanced / self-hosting" (the servers, the registry and its template hashes, the token tracker, the indexer cross-check), folded by default. */
+export async function openSettingsAdvanced(page: Page): Promise<void> {
+  const box = page.getByTestId('settings-advanced');
+  await expect(box).toBeVisible();
+  if (await page.getByTestId('settings-servers').isHidden()) await box.getByRole('button').first().click();
+  await expect(page.getByTestId('settings-servers')).toBeVisible();
+}

@@ -10,6 +10,8 @@ export interface SectionProps {
   collapsible?: boolean;
   /** initial state of a collapsible section (default open) */
   defaultOpen?: boolean;
+  /** shown after the title while a collapsible section is folded (one line, so a folded section stays small) */
+  summary?: ComponentChildren;
   'data-testid'?: string;
   class?: string;
 }
@@ -29,6 +31,7 @@ export function Section(props: SectionProps) {
           ) : (
             <h2>{props.title}</h2>
           )}
+          {folded && props.summary ? <span class="section-summary">{props.summary}</span> : null}
           {props.actions ? <div class="row">{props.actions}</div> : null}
         </div>
       ) : null}

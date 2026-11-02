@@ -85,6 +85,9 @@ export function BalancesPanel(props: {
               { label: t('common.total'), value: <Amount kind="kas" value={combined.kas.total} group />, show: free.data.kasFree !== null },
             ]}
           />
+          {combined.kas.onTokens > 0n && (
+            <p class="muted small" style="margin:6px 0 12px" data-testid="kas-on-tokens-note">{t('orders.balances.kasOnTokensNote')}</p>
+          )}
           <Table dense class="balances-cards" data-testid="token-balances-table" caption={t('orders.balances.tokens')}>
             <thead>
               <tr>

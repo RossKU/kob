@@ -36,7 +36,7 @@ function TemplateVerification(props: { row: TokenRow; services: Pick<Services, '
   if (!info || props.row.source !== 'registry') return null;
   const d = templateDetail(info, props.services.registry, props.services.kob.templates());
   return (
-    <Section title={t('market.tpl.title')} collapsible defaultOpen={false} data-testid="template-verification">
+    <Section title={t('market.tpl.title')} collapsible defaultOpen={false} data-testid="template-verification" summary={<Badge tone={d.matches ? 'ok' : 'bad'} data-testid="tpl-summary">{d.matches ? t('market.tpl.matches') : t('market.tpl.differs')}</Badge>}>
       <KeyValueList
         compact
         items={[
@@ -148,7 +148,7 @@ export function TokenLine(props: { row: TokenRow; note?: Pick<TokenInfo, 'decima
 export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'> }) {
   const r = props.row;
   return (
-    <div class="grid-2" data-testid="token-details">
+    <div class="grid-2 mkt-details" data-testid="token-details">
       <Section title={t('market.token.info')} class="mkt-card">
         <KeyValueList
           compact
@@ -170,6 +170,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
               label: t('market.token.tick'),
               value: r.tick !== null ? <Amount kind="kas" value={r.tick} unit={t('market.token.perToken', { ticker: r.ticker })} /> : '-',
               'data-testid': 'token-tick',
+              show: r.tick !== null, // an unknown tick is no row, not a dash
             },
             { label: t('market.token.powers'), value: <span data-testid="token-powers">{r.powers.map(powerName).join(', ')}</span>, show: r.powers.length > 0 },
             { label: t('market.token.openOrders'), value: r.openAsks !== null ? t('market.token.openOrdersValue', { asks: r.openAsks, bids: r.openBids ?? 0 }) : t('market.token.openOrdersUnknown'), show: r.index !== null },

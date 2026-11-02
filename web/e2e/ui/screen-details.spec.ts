@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { connectWallet, fund, listExkcc, openMarket, gotoNav } from '../helpers/env';
+import { connectWallet, fund, listExkcc, openMarket, gotoNav, openSettingsAdvanced } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { fillFields, peekReceipt, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
 
@@ -109,6 +109,7 @@ test.describe('the pair ticket', () => {
 
 test('the registry template verdicts fit the settings column', async ({ appPage: page }) => {
   await page.goto('/#/settings');
+  await openSettingsAdvanced(page);
   const wrap = page.getByTestId('settings-registry').locator('.registry-templates');
   await expect(wrap.locator('tbody tr').first()).toBeVisible();
   expect(await wrap.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
@@ -124,19 +125,22 @@ test.describe('settings', () => {
     expect(JSON.parse((await page.evaluate(() => localStorage.getItem('kob.settings')))!)).toEqual({ features: { priorityFee: true } });
     await expect(page.getByTestId('settings-reset-servers')).toHaveCount(0);
 
-    // another indexer (the same mock under another host name), saved: every page says so
+    // another indexer (the same mock under another host name), saved: every page says so (the servers are in the folded Advanced section)
+    await openSettingsAdvanced(page);
     await page.getByTestId('settings-indexer-url').fill(mock.url.replace('127.0.0.1', 'localhost'));
     await page.getByTestId('settings-servers-ack').check();
     await page.getByTestId('settings-save').click();
     await page.reload();
     await expect(page.getByTestId('banner-stored-indexer')).toBeVisible();
     // the banner says "reset it": Settings has the button
+    await openSettingsAdvanced(page);
     await page.getByTestId('settings-reset-servers').click();
     await expect(page.getByTestId('settings-saved')).toBeVisible();
     expect(JSON.parse((await page.evaluate(() => localStorage.getItem('kob.settings')))!)).toEqual({ features: { priorityFee: true } });
     await page.reload();
     await expect(page.getByTestId('settings-view')).toBeVisible();
     await expect(page.getByTestId('banner-stored-indexer')).toHaveCount(0);
+    await openSettingsAdvanced(page);
     await expect(page.getByTestId('settings-indexer-url')).toHaveValue(mock.url);
   });
 });

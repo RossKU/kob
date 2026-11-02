@@ -40,7 +40,7 @@ export default {
   'issue.field.carrier.hint': 'Default {default} KAS. Locked in each token output and returned when the tokens are spent or consolidated.',
   'issue.field.description': 'Description',
   'issue.field.icon': 'Logo',
-  'issue.field.icon.hint': 'An image address: https:// or ipfs://',
+  'issue.field.icon.hint': 'An image address: https:// or ipfs://. KOB never loads it from your host: the logo is shown only from the copy kascov.io saves, once it has one.',
   'issue.field.website': 'Website',
   'issue.field.website.hint': 'https:// only',
   'issue.field.x': 'X (Twitter)',

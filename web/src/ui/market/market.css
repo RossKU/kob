@@ -8,27 +8,35 @@ body:has(.market-page) .container { max-width: 1520px; }
 .market-page .section-head { margin-bottom: 8px; }
 .market-page .section-head h2 { font-size: 0.95rem; letter-spacing: 0.01em; }
 
+/* the token facts and the (folded) template verification sit side by side: the folded one is one line, not as tall as its neighbour */
+.mkt-details { align-items: start; }
+.market-page .section-collapsed .section-head { margin-bottom: 0; }
+.section-summary { flex: 1 1 auto; min-width: 0; }
+
 .mkt-top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
 .mkt-top .field { min-width: 0; width: min(260px, 100%); }
 .mkt-top .field > label { font-size: 0.78rem; color: var(--muted); font-weight: 600; }
 
+/* The ticket is a column of its own (never a cell of a row it shares with the book or the depth chart): it spans the rows of the other panels, so unfolding
+   "Advanced options" makes the ticket taller by itself, with no gap under the depth chart or the trades and nothing below pushed down. A phone is one column. */
 .mkt-grid {
   display: grid; gap: 12px; align-items: start;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: 'chart' 'book' 'ticket' 'depth' 'tape';
+  grid-template-areas: 'chart' 'book' 'ticket' 'depth' 'tape' 'details';
 }
 .mkt-lower { display: contents; }
 .mkt-area-book { grid-area: book; }
 .mkt-area-chart { grid-area: chart; }
-.mkt-area-ticket { grid-area: ticket; }
+.mkt-area-ticket { grid-area: ticket; align-self: start; min-width: 0; }
 .mkt-area-depth { grid-area: depth; }
 .mkt-area-tape { grid-area: tape; }
+.mkt-area-details { grid-area: details; min-width: 0; }
 @media (min-width: 760px) {
-  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book ticket' 'depth tape'; }
+  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book ticket' 'depth ticket' 'tape ticket' 'details ticket' '. ticket'; grid-template-rows: auto auto auto auto auto 1fr; margin-bottom: -12px; /* the empty last row's gap */ }
 }
 @media (min-width: 1200px) {
-  /* the tall side columns give their extra height to the lower row, never to the chart row */
-  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) 360px; grid-template-rows: auto 1fr; grid-template-areas: 'book chart ticket' 'book lower ticket'; }
+  /* the ticket column runs beside the details too; the last row is an empty one that takes whatever height the ticket still has over the other panels */
+  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) 360px; grid-template-rows: auto auto auto 1fr; grid-template-areas: 'book chart ticket' 'book lower ticket' 'details details ticket' '. . ticket'; margin-bottom: -12px; }
   .mkt-lower { display: grid; grid-area: lower; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
   .mkt-lower > * { grid-area: auto; }
 }
