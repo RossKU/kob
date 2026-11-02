@@ -1203,6 +1203,10 @@ impl Facilitator {
         if let Some(id) = parse_hash32(txid) {
             self.chain.untrack(&id);
         }
+        // a failed intent follows nobody: its watch slot goes back (refused creations must not fill the table, audit 2026-10-30 X15)
+        if let Some(r) = self.ledger.get(txid).and_then(|e| e.intent) {
+            self.chain.unwatch_spend(&r.facts.outpoint());
+        }
         if let Err(e) = self.ledger.transition(txid, State::Failed, Some(reason.to_string()), self.clock.now_ms()) {
             eprintln!("x402: cannot mark {txid} failed: {e}");
         }

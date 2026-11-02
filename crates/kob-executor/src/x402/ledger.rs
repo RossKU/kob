@@ -812,6 +812,27 @@ impl Ledger {
         g.persist_and_index(e)
     }
 
+    /// Records an execution of another keeper on the intent entry `txid` as the one that paid its merchant, unless another entry
+    /// that is not failed already holds the same output (the same spender and merchant output index): one output pays one intent
+    /// (audit 2026-10-30 X14: a cancel of two intents in one transaction carries one merchant output). Check and record are one
+    /// step under the ledger lock. `None`: the output belongs to another intent. An entry that already holds it is left as it is.
+    pub fn claim_execution(&self, txid: &str, now_ms: u64, exec: ExecRecord) -> Result<Option<Entry>, LedgerError> {
+        let mut g = self.lock();
+        let mut e = g.entries.get(txid).ok_or_else(|| LedgerError::Unknown(txid.to_string()))?.clone();
+        let same = |x: &ExecRecord| x.txid == exec.txid && x.merchant_index == exec.merchant_index;
+        let held = |o: &Entry| o.state != State::Failed && o.intent.as_ref().is_some_and(|r| r.executions.iter().any(same));
+        if g.entries.values().any(|o| o.txid != txid && held(o)) {
+            return Ok(None);
+        }
+        if held(&e) {
+            return Ok(Some(e));
+        }
+        let Some(r) = e.intent.as_mut() else { return Ok(None) };
+        r.executions.push(exec);
+        e.updated_ms = now_ms;
+        Ok(Some(g.persist_and_index(e)?))
+    }
+
     /// Entries of an invoice, oldest first (from the invoice index: no scan of the ledger).
     pub fn entries_of_invoice(&self, invoice: &str) -> Vec<Entry> {
         let g = self.lock();

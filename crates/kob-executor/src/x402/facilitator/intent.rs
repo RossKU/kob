@@ -95,15 +95,26 @@ pub const EXPIRY_RETRY_MS: u64 = 600_000;
 /// inclusion within the minute.
 pub const EXPIRY_BUMP_MS: u64 = 60_000;
 
-/// The index of the output of a foreign spend of an intent that pays the merchant what the intent promises, if any.
+/// The indexes of the outputs of a foreign spend of an intent that pay the merchant what the intent promises, in output order.
 ///
 /// The script binds the merchant (a token merchant's script is the token program's P2SH over the merchant's state, hence over the token
 /// amount) and the value is at least the promised one (the router lets a keeper overpay). A token merchant is paid only by an output
 /// bound to the token's covenant id: the payer's own cancel can carry a plain copy of that script and carrier, which is no token
-/// (audit 2026-10-30 X8). A KAS merchant's output carries no covenant.
-pub(crate) fn merchant_output_in(facts: &IntentFacts, merchant_spk: &ScriptPublicKey, outputs: &[SpentOutput]) -> Option<usize> {
+/// (audit 2026-10-30 X8). A token merchant's output may carry less KAS than the facilitator's own carrier, down to the policy's
+/// minimum carrier: the router pins only the token state, and a rival keeper rationally pays the smallest carrier (audit 2026-10-30
+/// X18). A KAS merchant's output carries no covenant and at least the amount.
+///
+/// An output pays ONE intent: the caller claims the (spender, index) pair it takes ([`Ledger::claim_execution`]) and moves on to the
+/// next index when another intent holds it (audit 2026-10-30 X14).
+pub(crate) fn merchant_outputs_in<'a>(
+    facts: &'a IntentFacts,
+    merchant_spk: &'a ScriptPublicKey,
+    outputs: &'a [SpentOutput],
+    min_carrier: u64,
+) -> impl Iterator<Item = usize> + 'a {
     let want = facts.state.merchant_token();
-    outputs.iter().position(|o| o.script_public_key == *merchant_spk && o.value >= facts.merchant_value && o.covenant_id == want)
+    let floor = if want.is_some() { facts.merchant_value.min(min_carrier) } else { facts.merchant_value };
+    outputs.iter().enumerate().filter(move |(_, o)| o.script_public_key == *merchant_spk && o.value >= floor && o.covenant_id == want).map(|(i, _)| i)
 }
 
 fn intent_unsupported() -> X402Error {
@@ -791,25 +802,26 @@ impl Facilitator {
                 SpentBy::Spent { txid: spender, block_daa_score, outputs } => {
                     let merchant_spk = spk_from_hex(&facts.merchant_spk)
                         .map_err(|_| X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "bad merchant script"))?;
-                    if let Some(at) = merchant_output_in(facts, &merchant_spk, &outputs) {
-                        if !self.deep_enough(block_daa_score, required).map_err(node)? {
-                            return Ok(Drive::Waiting("confirmations"));
+                    let min_carrier = self.policy.limits.min_carrier_sompi;
+                    let candidates: Vec<usize> = merchant_outputs_in(facts, &merchant_spk, &outputs, min_carrier).collect();
+                    if !candidates.is_empty() && !self.deep_enough(block_daa_score, required).map_err(node)? {
+                        return Ok(Drive::Waiting("confirmations"));
+                    }
+                    // one output pays one intent: take the first matching output no other intent holds (X14)
+                    for at in candidates {
+                        let exec = ExecRecord {
+                            txid: hex(&spender),
+                            merchant_index: at as u32,
+                            orders: vec![],
+                            state: ExecState::Dead,
+                            reason: Some("executed by another keeper".into()),
+                            at_ms: now,
+                        };
+                        if self.ledger.claim_execution(txid, now, exec)?.is_some() {
+                            let k = rec.executions.len();
+                            let (e2, rec2) = self.intent_entry(txid)?;
+                            return self.finish(&e2, &rec2, k, block_daa_score);
                         }
-                        let k = rec.executions.len();
-                        self.edit_intent(txid, |en| {
-                            if let Some(r) = en.intent.as_mut() {
-                                r.executions.push(ExecRecord {
-                                    txid: hex(&spender),
-                                    merchant_index: at as u32,
-                                    orders: vec![],
-                                    state: ExecState::Dead,
-                                    reason: Some("executed by another keeper".into()),
-                                    at_ms: now,
-                                });
-                            }
-                        })?;
-                        let (e2, rec2) = self.intent_entry(txid)?;
-                        return self.finish(&e2, &rec2, k, block_daa_score);
                     }
                 }
                 // watched and nobody reported a spender yet: the node's UTXO set can be ahead of the chain follower, so give it a minute
