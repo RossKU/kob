@@ -46,20 +46,16 @@ test('a market buy against many small asks: one transaction takes 3, with Fills 
   await settlePlan(page);
 
   // fills 1: one transaction takes 3 of the 9 asks, the rest returns
-  await expect(page.getByTestId('order-fills-short')).toHaveText(
-    'One transaction takes at most 3 asks: only about 3 EXSTD of 9 EXSTD fills now, the rest returns. Raise Fills (Advanced) to trade more.',
-  );
-  await expect(page.getByTestId('field-maxFills-note')).toHaveText(/^The visible book needs about 3 fill\(s\) for this amount \(3 asks per transaction\)\. 1 fill\(s\) deposit 2 KAS in carriers; unused ones come back\.$/);
+  // (the ticket shows no fills estimate or shortfall note any more: only what blocks an order; the final confirmation names the fills)
+  await expect(page.getByTestId('order-fills-short')).toHaveCount(0);
+  await expect(page.getByTestId('field-maxFills-note')).toHaveCount(0);
 
   // Fills 3: enough for the 9 asks, three carriers deposited
   await fillFields(page, { maxFills: '3' });
   await settlePlan(page);
-  await expect(page.getByTestId('field-maxFills-note')).toHaveText('The visible book needs about 3 fill(s) for this amount (3 asks per transaction). 3 fill(s) deposit 6 KAS in carriers; unused ones come back.');
+  await expect(page.getByTestId('field-maxFills-note')).toHaveCount(0);
   await expect(page.getByTestId('order-fills-short')).toHaveCount(0);
-  // a bid is a KAS budget: the carriers of fills that need not happen buy more tokens, so the ticket says the most it may deliver (the 9 asked + 2 carriers
-  // of 2 KAS at the worst price), and the Fills value is not cut here (3 fills of at least 1 token for 9)
-  await expect(page.getByTestId('order-fills-receive')).toContainText(/^You may receive up to 1\d\d[.]\d+ EXSTD, not only 9 EXSTD: a buy is a KAS budget/);
-  await expect(page.getByTestId('order-fills-receive')).not.toContainText('Fills limited');
+  await expect(page.getByTestId('order-fills-receive')).toHaveCount(0);
 
   await clickPlaceOnly(page);
   const receipt = await readReceipt(page);
@@ -102,9 +98,9 @@ test('a market sell with Fills: no carrier per fill; FOK hides the box', async (
   await pickType(page, 'market', 'sell');
   await fillFields(page, { amount: '2', maxFills: '2' });
   await settlePlan(page);
-  await expect(page.getByTestId('field-maxFills-note')).toHaveText(/A sell deposits no carrier per fill\.$/);
+  await expect(page.getByTestId('field-maxFills-note')).toHaveCount(0);
   // the minimum fill (the smallest bid, 2 tokens) leaves one fill for 2 tokens: the typed 2 fills are cut to 1, and the ticket says so
-  await expect(page.getByTestId('order-fills-receive')).toHaveText('Fills limited to 1 (you asked for 2): with a minimum fill of 2 EXKCC, 2 EXKCC cannot be split into more.');
+  await expect(page.getByTestId('order-fills-receive')).toHaveCount(0);
   await clickPlaceOnly(page);
   const receipt = await readReceipt(page);
   expect(receipt.orders[0]!.title).toBe('Sell market order (auction, several fills)');

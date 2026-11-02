@@ -102,29 +102,44 @@ export function TokenHeader(props: {
   const r = props.row;
   return (
     <div class="stack-sm" data-testid="token-header">
-      <div class="mkt-top">
-        <div class="mkt-head">
-          <IdentityBlock row={r} size="lg" data-testid="token-identity" />
-          <div class="mkt-title mkt-title-fit">{props.pair}</div>
+      {/* compact: the identity block at the left, two lines to its right: the pair (ticker / KAS and the flip) and the token's line (short id with copy, name,
+          where its facts come from, the live state and the chips). No row of its own that is mostly empty. */}
+      <div class="mkt-hd">
+        <IdentityBlock row={r} size="lg" data-testid="token-identity" />
+        <div class="mkt-hd-text">
+          <div class="mkt-hd-line1">
+            <div class="mkt-title mkt-title-fit">{props.pair}</div>
+            {props.tools}
+          </div>
+          <h1 class="sr-only" data-testid="token-title" data-covenant-id={r.covenantId}>
+            {tokenTitle(r)}
+          </h1>
+          <TokenLine row={r} note={props.note} badges={props.badges} />
         </div>
-        {props.tools}
-      </div>
-      <h1 class="sr-only" data-testid="token-title" data-covenant-id={r.covenantId}>
-        {tokenTitle(r)}
-      </h1>
-      <div class="mkt-meta small" data-testid="token-meta">
-        <IdCopy value={r.covenantId} data-testid="token-short-id" />
-        {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
-        <TokenNote token={props.note} />
-        <KascovNote row={r} />
-        <KascovLink row={r} />
-        {props.badges}
-      </div>
-      <div class="mkt-badges">
-        <StatusBadges row={r} familyNote={programTitle(r)} />
-        <TokenFacts rows={[r]} inline data-testid="token-facts" />
       </div>
       <TokenWarnings row={r} sharedTicker={props.sharedTicker} />
+    </div>
+  );
+}
+
+/**
+ * One token's compact info line: the short covenant id with its copy button, the name (and where its facts come from), the link to kascov.io, whatever
+ * `badges` the page adds (the live state) and the chips (the token family, whose tooltip names the program and the decimals, and the facts: KCC-20, the
+ * genesis status ...). They flow on one wrapping line; `ticker` names the token first when two of these lines are read together (a pair).
+ */
+export function TokenLine(props: { row: TokenRow; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null | undefined; badges?: ComponentChildren; ticker?: boolean; 'data-testid'?: string }) {
+  const r = props.row;
+  return (
+    <div class="mkt-meta small" data-testid={props['data-testid'] ?? 'token-meta'} data-token={r.covenantId}>
+      {props.ticker ? <strong class="mkt-meta-ticker" data-testid="token-line-ticker">{r.ticker || longId(r.covenantId)}</strong> : null}
+      <IdCopy value={r.covenantId} data-testid={props.ticker ? 'pair-token-short-id' : 'token-short-id'} />
+      {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
+      <TokenNote token={props.note} />
+      <KascovNote row={r} />
+      <KascovLink row={r} />
+      {props.badges}
+      <StatusBadges row={r} familyNote={programTitle(r)} />
+      <TokenFacts rows={[r]} inline data-testid="token-facts" />
     </div>
   );
 }

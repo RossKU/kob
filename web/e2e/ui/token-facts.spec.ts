@@ -54,9 +54,9 @@ test.describe('token facts', () => {
     await expect(ticket.getByTestId('token-fact-text-genesis_unverified')).toBeHidden();
     await ticket.locator('summary').click();
     await expect(ticket.getByTestId('token-fact-text-genesis_unverified')).toBeVisible();
-    // it sits above the order button, in the ticket
+    // it sits below the order button, in the ticket (a late answer of the genesis check never moves the button)
     const box = async (tid: string) => (await page.getByTestId(tid).boundingBox())!;
-    expect((await box('ticket-token-facts')).y).toBeLessThan((await box('order-place')).y);
+    expect((await box('ticket-token-facts')).y).toBeGreaterThan((await box('order-place')).y);
     // no other fact for this token
     await expect(header.getByTestId('token-fact-live_mint_authority')).toHaveCount(0);
   });

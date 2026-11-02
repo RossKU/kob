@@ -105,10 +105,7 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
   (unused ones return with the refund or a cancel, used ones ride on the delivered token UTXOs until merged or sold), a sell none; its
   minimum fill is the smaller of the wallet default and the smallest crossing counterparty, so no fill of a few small ones is blocked; what is
   left at the expiry is refunded by anyone (refund tip) or cancelled. A buy that crosses the book (a limit buy, a rising bid) gets as many
-  fills by default as the asks it crosses need (at most 10). Next to the Fills box the ticket shows the visible book's estimate (fills needed,
-  3 per transaction, the carriers deposited; `src/ui/ticket/fills-note.ts`, `src/kob/guards.ts` `estimateFills`), and under the amount a
-  warning when the fills (an IOC's, a one-fill market order's, or a budget the user set) cannot take what the book holds within the bound;
-  the confirmation of a multi-fill market order says it fills in up to N transactions, when the rest returns, and the carriers deposited.
+  fills by default as the asks it crosses need (at most 10). The ticket itself shows no estimate or warning for it (it shows only what blocks an order, in one fixed-height slot above the button: founder, 2026-11-02); the confirmation of a multi-fill market order says it fills in up to N transactions, when the rest returns, and the carriers deposited.
 * **Theme.** Dark / light toggle in the header, remembered in localStorage (`kob.theme`), default = the OS preference (dark when unknown).
 * **Try it.** `npm run mock -- --history --fund` (mock indexer + node on :8790 with a seeded 48 h price history), `npm run dev`, then Settings:
   indexer and node URL `http://127.0.0.1:8790`. `KOB_SHOTS=1 npx playwright test e2e/ui/market-data.spec.ts` saves screenshots to `test-results/shots/`.

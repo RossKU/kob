@@ -6,8 +6,10 @@ import { fillFields, pickType } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
+const EMPTY = 'Estimate shows here once filled in';
+
 for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
-  test(`${name} ${width} px: the line under the amount shows the cost or proceeds, "—" when empty, the thin-book wording, in a box that never changes`, async ({ appPage: page, mock }) => {
+  test(`${name} ${width} px: the line under the amount shows the cost or proceeds, a muted placeholder when empty, the thin-book wording, in a box that never changes`, async ({ appPage: page, mock }) => {
     await page.setViewportSize({ width, height: 900 });
     await fund(mock);
     await openMarket(page, mock);
@@ -15,9 +17,9 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     const box = async () => (await line.boundingBox())!;
     const ticketBox = async () => (await page.getByTestId('order-ticket').boundingBox())!;
 
-    // empty: a dash
+    // empty: a muted placeholder (never a blank gap)
     await pickType(page, 'limit', 'buy');
-    await expect(line).toHaveText('—');
+    await expect(line).toHaveText(EMPTY);
     const first = await box();
     const ticket0 = await ticketBox();
     // the line keeps its size always, and its place while the form keeps its fields (another order type has other fields above the amount)
@@ -53,9 +55,9 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     await expect(line).toHaveText(/^book covers only [\d,.]+ EXKCC$/);
     expect(await box()).toEqual(here);
 
-    // cleared: a dash again, in the same box; the ticket is as wide and as far left as it was (the line has a reserved height)
+    // cleared: the placeholder again, in the same box; the ticket is as wide and as far left as it was (the line has a reserved height)
     await fillFields(page, { amount: '' });
-    await expect(line).toHaveText('—');
+    await expect(line).toHaveText(EMPTY);
     expect(await box()).toEqual(here);
     await sameSize();
     const ticket1 = await ticketBox();

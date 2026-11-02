@@ -1,5 +1,5 @@
-// An order worth less than the executor's minimum order value (default 1 KAS) is indexed but never listed, so it never fills. The ticket says so before
-// signing (a note, never a stop: no checkbox, the button stays enabled) and My orders says "Not listed by the indexer" with the reason and what to do.
+// An order worth less than the executor's minimum order value (default 1 KAS) is indexed but never listed, so it never fills. The ticket says nothing of it before
+// signing in no note at all (founder, 2026-11-02: the ticket shows only what blocks an order, so nothing on it appears or moves; the button stays enabled) and My orders says "Not listed by the indexer" with the reason and what to do.
 // The mock indexer applies the rule like the real executor once `mock.minOrderValue(1 KAS)` is set (it is off by default). Desktop and a 375 px phone.
 import { expect, test, TEST_KEYS } from '../fixtures';
 import { KAS, fund, openMarket } from '../helpers/env';
@@ -23,43 +23,35 @@ for (const vp of VIEWPORTS) {
       await mock.minOrderValue(KAS);
     });
 
-    test('the ticket notes a sell below the minimum before signing, updates live, and never stops the order', async ({ appPage: page, mock }) => {
+    test('the ticket shows no note for a sell below the minimum (nothing appears or moves), and the order is never stopped', async ({ appPage: page, mock }) => {
       await openMarket(page, mock);
       await pickType(page, 'limit', 'sell');
       const note = page.getByTestId('order-note-min-value');
       const place = page.getByTestId('order-place');
+      const slot = page.getByTestId('order-issues');
 
-      // 38 EXKCC at 0.026 KAS = 0.988 KAS: below 1 KAS
-      await fillFields(page, { amount: '38', price: '0.026' });
+      // 38 EXKCC at 0.026 KAS = 0.988 KAS: below 1 KAS. No note, no reason (the order can be placed), the button is where it was
+      await fillFields(page, { amount: '39', price: '0.026' });
       await settlePlan(page);
-      await expect(note).toBeVisible();
-      await expect(note).toContainText('worth 0.988 KAS');
-      await expect(note).toContainText('minimum order value of 1 KAS');
-      await expect(note).toContainText('will not fill');
-      await expect(note).toContainText('cancel it from My orders');
-      // a note, never a stop: no acknowledgement, the button is enabled and nothing in the notes asks for a click first
       await expect(place).toBeEnabled();
-      await expect(page.getByTestId('order-notes').locator('input, button')).toHaveCount(0);
-      await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
-      expect(await horizontalOverflow(page), 'ticket with the note').toBe(0);
-
-      // live: a larger amount (39 x 0.026 = 1.014 KAS) takes the note away, a smaller one brings it back
-      await fillFields(page, { amount: '39' });
+      const before = (await place.boundingBox())!;
+      await fillFields(page, { amount: '38' });
       await settlePlan(page);
       await expect(note).toHaveCount(0);
+      await expect(page.getByTestId('order-notes')).toHaveCount(0);
       await expect(place).toBeEnabled();
-      await fillFields(page, { amount: '5' });
-      await settlePlan(page);
-      await expect(note).toContainText('worth 0.13 KAS');
-      // the price counts too: 40 EXKCC at 0.025 KAS is exactly 1 KAS (listed), one base unit less is not
+      await expect(slot).not.toContainText(/S/);
+      expect(await place.boundingBox()).toEqual(before);
+      expect(await horizontalOverflow(page), 'ticket').toBe(0);
+      // the price counts too: still no note either side of the limit
       await fillFields(page, { amount: '40', price: '0.025' });
       await settlePlan(page);
       await expect(note).toHaveCount(0);
       await fillFields(page, { amount: '39.99999999' });
       await settlePlan(page);
-      await expect(note).toContainText('worth 0.99999999 KAS');
+      await expect(note).toHaveCount(0);
       await expect(place).toBeEnabled();
-      expect(await horizontalOverflow(page), 'ticket with the note, after edits').toBe(0);
+      expect(await place.boundingBox()).toEqual(before);
     });
 
     test('an order well above the minimum has no note', async ({ appPage: page, mock }) => {
@@ -74,10 +66,10 @@ for (const vp of VIEWPORTS) {
     test('an order placed below the minimum is shown in My orders as not listed, with the reason and the hint; a listed order is not', async ({ appPage: page, mock }) => {
       await openMarket(page, mock);
       await pickType(page, 'limit', 'sell');
-      // below: 38 x 0.026 = 0.988 KAS. The note is there and the order goes out anyway.
+      // below: 38 x 0.026 = 0.988 KAS. The ticket says nothing and the order goes out anyway.
       await fillFields(page, { amount: '38', price: '0.026' });
       await settlePlan(page);
-      await expect(page.getByTestId('order-note-min-value')).toBeVisible();
+      await expect(page.getByTestId('order-note-min-value')).toHaveCount(0);
       const low = await placeOrder(page, mock);
       const lowId = low.submission.created[0]!.covenantId;
       // above: 40 x 0.0255 = 1.02 KAS

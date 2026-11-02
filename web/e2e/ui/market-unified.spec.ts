@@ -87,8 +87,8 @@ test.describe('one market page, a pair selector', () => {
     expect(Math.abs(book1.width - book0.width)).toBeLessThan(2);
     expect(Math.abs(ticket1.x - ticket0.x)).toBeLessThan(2);
     expect(Math.abs(ticket1.width - ticket0.width)).toBeLessThan(2);
-    expect(Math.abs(title1.x - title0.x)).toBeLessThan(2);
-    expect(Math.abs(title1.y - title0.y)).toBeLessThan(2);
+    // (the pair page's header has its own layout since 2026-11-02: the pictures with the swap, the tickers below them: e2e/ui/pair-header.spec.ts)
+    expect(title1.y).toBeGreaterThan(title0.y);
     await expect(page.getByText('Trade against')).toHaveCount(0);
 
     // the flip control next to the pair swaps base and quote

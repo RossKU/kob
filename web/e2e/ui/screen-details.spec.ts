@@ -170,11 +170,11 @@ test.describe('a token of 18 decimals', () => {
     // the standard scale is a billionth of a token (10^9 of its 10^18 units), not "one whole token"
     await expect(page.getByTestId('token-scale')).toContainText('per 0.000000001 EIGHTEEN; prices are shown per whole token');
     // the book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token; a sell far below it crosses the book (the planner's price warning
-    // is a note next to the button, never a stop), and the final confirmation names the token's amount and the price per whole token
+    // is not shown on the ticket and never a stop), and the final confirmation names the token's amount and the price per whole token
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '1', price: '1' });
     await settlePlan(page);
-    await expect(page.getByTestId('order-note-PRICE_AGGRESSIVE_VS_MARKET')).toBeVisible();
+    await expect(page.getByTestId('order-note-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
     await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
     await expect(page.getByTestId('order-place')).toBeEnabled();
     // the long balance stays whole in the Available line (the market page has no balance card any more)

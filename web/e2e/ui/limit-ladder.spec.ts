@@ -106,7 +106,7 @@ test.describe('Max', () => {
     await page.getByTestId('order-available').click();
     const amount = await page.getByTestId('order-amount').inputValue();
     expect(Number(amount)).toBeGreaterThan(100);
-    await expect(page.getByTestId('order-max-note')).toContainText('after carriers, network fees and a small reserve');
+    await expect(page.getByTestId('order-max-note')).toHaveCount(0);
     await waitReviewable(page);
     // twenty more tokens (0.49 KAS) do not fit
     await page.getByTestId('order-amount').fill(String(Number(amount) + 20));
@@ -155,7 +155,7 @@ test.describe('Max', () => {
     await page.getByTestId('order-side-buy').click();
     await fillFields(page, { price: '0.0245' });
     await page.getByTestId('order-available').click();
-    await expect(page.getByTestId('order-max-note')).toContainText('cannot cover any amount');
+    await expect(page.getByTestId('order-need-max')).toContainText('cannot cover any amount');
     await expect(page.getByTestId('order-amount')).toHaveValue('');
   });
 });

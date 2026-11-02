@@ -310,6 +310,20 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .mkt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-width: 0; }
 .mkt-head > .mkt-title { flex: 1 1 16rem; min-width: 0; }
 .mkt-head > .mkt-title.mkt-title-fit { flex: 0 1 auto; }
+/* the token page header: the identity block at the left, two lines to its right (ticker / KAS with the flip; then the id, the name and the chips), vertically centred
+   on the block, so no row is left half empty */
+.mkt-hd { display: flex; align-items: center; gap: 4px 14px; min-width: 0; }
+.mkt-hd-text { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mkt-hd-line1 { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; min-width: 0; }
+.mkt-hd-line1 .mkt-title { gap: 6px 10px; flex-wrap: nowrap; }
+.mkt-meta .mkt-meta-ticker { font-size: 0.95rem; }
+.mkt-meta .tf-inline, .mkt-meta [data-testid^='token-badges-'] { flex-wrap: wrap; }
+.mkt-meta .badge { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
+/* the pair page header: line 1 the two pictures with the flip, line 2 the tickers, then one compact line per token */
+.mkt-pairhd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; }
+.mkt-pairhd-sep { font-size: 1.5rem; font-weight: 800; color: var(--muted); }
+.mkt-pairhd-tickers { margin-top: -2px; }
+.mkt-pairhd-tokens { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 
 /* a phone: the token table is a list of cards, not columns (a name, a covenant id and badges beside five figures would not fit 375 px): the identity and the
    text take the left, the price over the change sit on the right; the header row becomes the sort bar */

@@ -37,8 +37,6 @@ export interface TicketFieldsProps {
   flip?: FlipCtx;
   /** a token/token pair: the ticker of the quote token B the prices are typed in (B per whole `ticker`); absent = KAS. Tips stay KAS. */
   quoteTicker?: string;
-  /** a line the ticket says next to a field, by field id (the Fills box: the visible book's estimate, fills-note.ts) */
-  notes?: Record<string, string>;
 }
 
 /** What the fields need to speak the shown (inverted) market: the token's name, its scale and a KAS price per whole token to turn amounts into KAS. */
@@ -183,7 +181,7 @@ export function TicketFields(props: TicketFieldsProps) {
                     options={TOUCH_PRESETS.map((o) => ({ value: o, label: o === TOUCH_MIN ? t('ticket.touch.preset.min') : o, 'data-testid': `${spec.testid}-preset-${o.replace('%', '')}` }))}
                     onChange={(v) => props.onChange(id, v)}
                   />
-                  <span class="tk-suffix">
+                  <span class="tk-touch-custom">
                     <input
                       id={cid}
                       class="input"
@@ -196,7 +194,7 @@ export function TicketFields(props: TicketFieldsProps) {
                       disabled={props.disabled}
                       onInput={(ev) => props.onChange(id, (ev.currentTarget as HTMLInputElement).value)}
                     />
-                    <span class="tk-unit">{amountUnit}</span>
+                    <span class="tk-suffix"><span class="tk-unit">{amountUnit}</span></span>
                   </span>
                 </div>
               )}
@@ -285,15 +283,6 @@ export function TicketFields(props: TicketFieldsProps) {
             <span key={props.available}>{props.available}</span>
           </button>
         ) : undefined;
-        const note = props.notes?.[id];
-        if (note) {
-          hint = (
-            <>
-              <span class="tk-fills" data-testid={`${spec.testid}-note`} title={note}><span key={note}>{note}</span></span>
-              {hint}
-            </>
-          );
-        }
         const field = (
           <Field
             key={id}

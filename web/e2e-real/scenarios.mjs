@@ -334,8 +334,7 @@ async function fillTicket(rc, spec) {
   }
   if (!(await review.isEnabled())) {
     const issues = await tid(h, 'order-issues').innerText().catch(() => '');
-    const needs = await tid(h, 'order-needs').innerText().catch(() => '');
-    throw new Error(`the order button stays disabled. issues: ${collapse(issues)} needs: ${collapse(needs)}`);
+    throw new Error(`the order button stays disabled. reasons: ${collapse(issues)}`);
   }
   const issues = await h.page.evaluate(() => [...document.querySelectorAll('[data-testid="order-issues"] li')].map((li) => ({ code: li.dataset.code, severity: li.dataset.severity })));
   // the ticket itself names only the side and the type (its order button); the figures are on the final confirmation (`confirm-order`)

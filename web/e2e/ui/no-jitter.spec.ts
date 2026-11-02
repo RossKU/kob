@@ -7,11 +7,12 @@ import { fillFields, pickType } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
-/** What is watched: the whole ticket, its title row and submit button, and the book's header, its two sides (their slot blocks), the spread row and the tools. */
+/** What is watched: the whole ticket, its title row, its submit button and the reason slot directly above it (founder, 2026-11-02: the button NEVER moves), and the book's header, its two sides (their slot blocks), the spread row and the tools. */
 /** (the trades tape and the stats strip too) */
 const WATCHED = [
   'order-ticket',
   'order-place',
+  'order-issues',
   'order-cost-preview',
   'order-amount-slider',
   'book-asks',
@@ -66,6 +67,15 @@ test('the ticket, its button and the order book keep their boxes through ticks, 
     await mock.seed({ book: { levels: 1 + i, mid: 2_500_000 + 200_000 * (i + 1), tick: 7_000 + i * 1_000 } });
     await page.waitForTimeout(700);
     await fillFields(page, { amount: String(3 + i), price: '0.0201' });
+    // typing in between: a price far through the market (a warning once, now nothing at all), no amount (a reason in the slot), an amount no wallet holds
+    // (another reason, longer), then the order again: the slot changes its sentence, never its box, and the button stays put
+    await fillFields(page, { price: '0.9' });
+    await page.waitForTimeout(400);
+    await fillFields(page, { amount: '' });
+    await page.waitForTimeout(400);
+    await fillFields(page, { amount: '9999999', price: '0.0201' });
+    await page.waitForTimeout(500);
+    await fillFields(page, { amount: String(3 + i), price: '0.0201' });
     await page.getByTestId('book-refresh').click();
     await page.waitForTimeout(900);
   }
@@ -81,6 +91,8 @@ test('the ticket, its button and the order book keep their boxes through ticks, 
   // the run really changed things: the number of levels moved, and the "Calculating..." state was up for a while
   expect(seen.levels.length, `levels per side seen: ${seen.levels.join(' ')}`).toBeGreaterThan(1);
   expect(seen.pending, 'the "Calculating..." indicator was never shown').toBeGreaterThan(0);
+  // the warnings that never stop an order are not on the ticket at all
+  await expect(page.getByTestId('order-notes')).toHaveCount(0);
   // and nothing moved or changed size
   for (const id of WATCHED) expect(seen.boxes[id], `${id} boxes seen: ${seen.boxes[id]!.join(' | ')}`).toHaveLength(1);
   expect(seen.head, 'the book header changed height').toHaveLength(1);

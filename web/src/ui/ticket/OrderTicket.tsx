@@ -24,24 +24,21 @@ import { readPairReferences, readReferences, type References } from '../../data/
 import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { useFailoverState } from '../shell/failover';
-import { useSystemStatus } from '../shell/StatusProvider';
 import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
 import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, retimeLead } from '../confirm/signing-time';
 import { oppositeSide } from '../market/orientation';
 import { useCovenantSignGate } from './CovenantSignGate';
-import { TicketFields } from './TicketFields';
+import { TicketFields, labelKey } from './TicketFields';
 import {
   BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, buildIntent, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, layoutOf, parsePrice, reorientAmounts, setAmountBase,
-  setSide, setValue, sidesOf, switchType, visibleErrors,
+  isIncomplete, setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 import { expectedFromPlan } from './plan-expected';
-import { fillsNote } from './fills-note';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
-import { minOrderValueOf, minValueNote, ticketNotes } from './ticket-notes';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan, type EnvWait } from './use-ticket';
 import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, reviewClock, sameTransaction, slippageWithin, withinTerms } from './review-check';
 import { rememberPairForm, takePairFlip } from './pair-flip';
@@ -76,6 +73,16 @@ interface PlanStop {
   code?: string;
 }
 
+/** One reason the order cannot be placed now (the slot above the button): `kind` is how the tests and the styles tell them apart, `testid` overrides the default one. */
+interface Reason {
+  code: string;
+  text: string;
+  kind: 'need' | 'field' | 'issue' | 'ladder';
+  action?: 'retry';
+  raw?: string;
+  testid?: string;
+}
+
 /** Token-holding shortfalls: while the holdings are still being read they mean "not read yet", not "not enough". */
 const TOKEN_SHORT = new Set(['INSUFFICIENT_TOKENS', 'TOKEN_UTXOS_FRAGMENTED']);
 
@@ -106,7 +113,6 @@ export function OrderTicket(props: OrderTicketProps) {
   /** the ticker the prices are in: KAS, or the pair's quote token B */
   const quoteTicker = quote ? quote.ticker : 'KAS';
   const services = useServices();
-  const { indexer: indexerStatus } = useSystemStatus();
   const wallet = useWallet();
   const tradable = token.tradable && token.program !== null && (!quote || (quote.tradable && quote.program !== null));
   // the order scale of this token (10^decimals, at most 10^9; kob-wasm defaultScale): every price is per that many base units
@@ -306,7 +312,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const onMax = () => {
     const n = computeMax();
     setForm((f) => (n > 0n ? setAmountBase(f, 'amount', n, ctx) : setValue(f, 'amount', '')));
-    setMaxNote(form.side === 'buy' ? t(n > 0n ? 'ticket.max.done' : 'ticket.max.none') : null);
+    setMaxNote(form.side === 'buy' && n <= 0n ? t('ticket.max.none') : null);
   };
   // the amount slider: 0..100 % of Max, recomputed when anything but the amount changes (type, side, price, tip, balances, the book); a buy's
   // search runs the planner, so it waits for typing to pause
@@ -636,30 +642,41 @@ export function OrderTicket(props: OrderTicketProps) {
     void refresh().catch(() => null);
   };
 
-  // ---- status lines: what is needed and what is missing
-  const needs: { code: string; text: string; tone: 'info' | 'warn' | 'error'; action?: 'retry'; raw?: string }[] = [];
-  if (!wallet.info) needs.push({ code: 'wallet', text: t('ticket.need.wallet'), tone: 'info' });
-  else if (wallet.networkMismatch) needs.push({ code: 'network', text: t('ticket.need.network', { wallet: wallet.info.network, app: services.config.network }), tone: 'error' });
-  if (enabled && envError) needs.push({ code: 'env', text: t(`ticket.need.env.${envSource ?? 'other'}`), tone: 'error', action: 'retry', raw: envError });
-  if (crash) needs.push({ code: 'crash', text: t('ticket.need.crash'), tone: 'error', raw: crash });
-  // what the ticket is still reading, named (Review cannot be enabled before; it is the moment the answers are in)
+  const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
+  // ---- the reasons the order cannot be placed (and nothing else): one fixed-height slot above the button. Warnings that never stop the order (a price
+  // far through the market, a low order value, the fills of a market order ...) are not shown on the ticket at all, so nothing appears, changes or
+  // disappears there on a tick and the button never moves; the final confirmation shows the order's terms.
+  const reasons: Reason[] = [];
+  if (!wallet.info) reasons.push({ code: 'wallet', text: t('ticket.need.wallet'), kind: 'need' });
+  else if (wallet.networkMismatch) reasons.push({ code: 'network', text: t('ticket.need.network', { wallet: wallet.info.network, app: services.config.network }), kind: 'need' });
+  if (enabled && envError) reasons.push({ code: 'env', text: t(`ticket.need.env.${envSource ?? 'other'}`), kind: 'need', action: 'retry', raw: envError });
+  if (crash) reasons.push({ code: 'crash', text: t('ticket.need.crash'), kind: 'need', raw: crash });
+  // what the ticket is still reading, named (the order cannot be placed before; it is the moment the answers are in)
   const holdingsShort = waiting.includes('holdings') && planErrors.some((i) => TOKEN_SHORT.has(i.code));
   const stillReading: EnvWait[] = enabled && !envError ? (rawEnv ? (holdingsShort ? ['holdings'] : []) : waiting) : [];
-  if (stillReading.length) needs.push({ code: 'loading', text: t('ticket.need.loading', { what: stillReading.map((w) => t(`ticket.wait.${w}`)).join(', ') }), tone: 'info' });
-
+  if (stillReading.length) reasons.push({ code: 'loading', text: t('ticket.need.loading', { what: stillReading.map((w) => t(`ticket.wait.${w}`)).join(', ') }), kind: 'need' });
+  if (enabled && !gate.ready) reasons.push({ code: 'covenant', text: t('ticket.need.covenant'), kind: 'need' });
+  if (enabled && maxNote) reasons.push({ code: 'max', text: maxNote, kind: 'need' });
   const issues = (shownPlan?.issues ?? []).filter((i) => !(holdingsShort && TOKEN_SHORT.has(i.code)));
-  const planIssues = issues.filter((i) => i.severity === 'error');
-  // warnings the ticket notes (ticket-notes.ts): one line each next to the button, never a reason to stop or to click
-  const planNotes = ticketNotes(issues);
-  // an order worth less than the executor's minimum order value is indexed but never listed, so it never fills: said before signing, never a stop.
-  // Plain orders only (a ladder is several orders planned one by one; a pair has no KAS value)
-  const minValue = minOrderValueOf(indexerStatus.health);
-  const lowValue = shownPlan && !quote && !ladder ? minValueNote(shownPlan, minValue.sompi) : null;
-  // an order that takes liquidity now: its fills against the visible book, next to the Fills box, and a warning when they cannot take the amount
-  const fillsBox = layout.main.includes('maxFills') || layout.advanced.includes('maxFills');
-  const amountBase = baseOf('amount');
-  const fills = shownPlan?.fills && amountBase !== null ? fillsNote(shownPlan.fills, { decimals: token.decimals, ticker, box: fillsBox, amount: amountBase, inverted }) : null;
-  const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
+  // what is wrong in the form: a typed value that does not parse first, then what is still empty (the typed errors are also under their boxes)
+  const typedErrors = visibleErrors(built.errors).filter((e) => (form.values[e.field] ?? '') !== '');
+  for (const e of typedErrors) reasons.push({ code: `field-${e.field}`, text: `${t(labelKey(form.type, e.field))}: ${t(`ticket.err.${e.code}`, (e.params ?? {}) as Record<string, string | number>)}`, kind: 'field' });
+  if (isIncomplete(built.errors)) {
+    const missing = [...new Set(built.errors.filter((e) => e.code === 'required').map((e) => t(labelKey(form.type, e.field))))];
+    reasons.push({ code: 'fill', text: t('ticket.need.fill', { fields: missing.join(', ') }), kind: 'field' });
+  }
+  for (const i of issues.filter((x) => x.severity === 'error')) reasons.push({ code: i.code, text: issueText(i, issueCtx), kind: 'issue', ...(rawOf(i) ? { raw: rawOf(i)! } : {}) });
+  if (ladder && !ladder.ok) reasons.push({ code: 'ladder', text: ladder.errors.map((e) => t(`ticket.ladder.err.${e.code}`, { level: e.level ?? 1, field: e.field ?? '', max: 20 })).join(' '), kind: 'ladder', testid: 'order-ladder-errors' });
+  for (const f of ladderFunds) reasons.push({ code: f.code, text: f.text, kind: 'ladder', testid: 'order-ladder-funds' });
+  if (lastOrderErrors.length > 0) reasons.push({ code: 'ladder-last', text: lastOrderErrors.map((i) => t('ticket.ladder.lastLevel', { text: issueText(i, issueCtx) })).join(' '), kind: 'ladder', testid: 'order-ladder-last-errors' });
+  // the button is off for a reason nothing above names (the plan is still being made, a click is running): said too, so a disabled button always has its sentence
+  const busy = placing || sendBusy(sender.status);
+  if (!canPlace && !busy && reasons.length === 0) reasons.push({ code: 'checking', text: t(pendingShown || pending ? 'ticket.pending' : 'ticket.need.checking'), kind: 'need' });
+  // a re-plan on a tick keeps the sentence of the plan it replaces for the moment it takes (no sentence flickers in and out of the slot)
+  const lastReasons = useRef<Reason[]>([]);
+  const backgroundPlan = pending && !editPending;
+  const shownReasons = canPlace || busy ? [] : backgroundPlan && lastReasons.current.length > 0 ? lastReasons.current : reasons;
+  if (!backgroundPlan) lastReasons.current = canPlace || busy ? [] : reasons;
 
   // the balance this order spends, shown at the right end of the amount label row (it is the Max button): a buy pays in the quote (KAS, or a
   // pair's token B), a sell gives the token. The form's side is the native one, so an inverted view needs no case of its own.
@@ -730,58 +747,12 @@ export function OrderTicket(props: OrderTicketProps) {
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})}
         />
 
-        {fills?.short ? (
-          <p class="tk-fills-short" data-testid="order-fills-short">
-            <span key={fills.short}>{fills.short}</span>
-          </p>
-        ) : null}
-
-        {fills?.receive ? (
-          <p class="tk-fills-short" data-testid="order-fills-receive">
-            <span key={fills.receive}>{fills.receive}</span>
-          </p>
-        ) : null}
-
-        {maxNote ? (
-          <p class="muted" data-testid="order-max-note">
-            {maxNote}
-          </p>
-        ) : null}
-
         <details class="tk-advanced" data-testid="order-advanced">
           <summary>{t('ticket.advanced')}</summary>
           <div class="tk-advanced-body">
-            <TicketFields form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})} {...(fills?.hint ? { notes: { maxFills: fills.hint } } : {})} />
+            <TicketFields form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})} />
           </div>
         </details>
-      </div>
-
-      <div class="tk-needs" data-testid="order-needs">
-        {needs.map((n) => (
-          <Banner
-            key={n.code}
-            tone={n.tone}
-            data-testid={`order-need-${n.code}`}
-            actions={n.action === 'retry' ? <Button small onClick={() => void refresh().catch(() => null)} data-testid="order-retry">{t('common.retry')}</Button> : undefined}
-          >
-            <span key={n.text}>{n.text}</span>
-            <RawDetails text={n.raw} />
-          </Banner>
-        ))}
-      </div>
-
-      {/* only what stops the order: the red lines (the warnings are the one-line notes next to the button) */}
-      <div class="tk-issues" data-testid="order-issues" aria-live="polite">
-        {planIssues.length > 0 ? (
-          <ul>
-            {planIssues.map((i, n) => (
-              <li key={`${i.code}-${n}`} class="tk-issue tk-issue-error" data-code={i.code} data-severity={i.severity} data-testid={`order-issue-${i.code}`}>
-                <span key={issueText(i, issueCtx)}>{issueText(i, issueCtx)}</span>
-                <RawDetails text={rawOf(i)} />
-              </li>
-            ))}
-          </ul>
-        ) : null}
       </div>
 
       {ladder ? (
@@ -796,67 +767,51 @@ export function OrderTicket(props: OrderTicketProps) {
                   </li>
                 ))}
               </ol>
-              {limitSet ? (
-                <p data-testid="order-ladder-total">
-                  {t('ticket.ladder.totalLimit', {
-                    amount: `${formatUnits(ladder.totalAmount, token.decimals, { group: ',' })} ${ticker}`, levels: ladder.levels.length,
-                    value: quoteText(limitLadderValues(ladder, form.side, scale).total),
-                  })}
-                </p>
-              ) : ladderTot ? (
-                <p data-testid="order-ladder-total">
-                  {t('ticket.ladder.total', { amount: `${formatUnits(ladderTot.amount, token.decimals, { group: ',' })} ${ticker}`, levels: ladder.levels.length, kas: `${formatKas(ladderTot.kasLocked, { group: ',' })} KAS` })}
-                </p>
-              ) : null}
-              {ladderFunds.map((f) => (
-                <p key={f.code} class="tk-issue tk-issue-error" data-testid="order-ladder-funds" data-code={f.code}>
-                  {f.text}
-                </p>
-              ))}
-              {lastOrderErrors.length > 0 ? (
-                <ul data-testid="order-ladder-last-errors">
-                  {lastOrderErrors.map((i, n) => (
-                    <li key={n} class="tk-issue tk-issue-error">
-                      {t('ticket.ladder.lastLevel', { text: issueText(i, issueCtx) })}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
+              {/* the total is a line of its own height whether or not a plan is on hand: a re-plan never moves the lines below */}
+              <p class="tk-ladder-total" data-testid="order-ladder-total">
+                {limitSet
+                  ? t('ticket.ladder.totalLimit', {
+                      amount: `${formatUnits(ladder.totalAmount, token.decimals, { group: ',' })} ${ticker}`, levels: ladder.levels.length,
+                      value: quoteText(limitLadderValues(ladder, form.side, scale).total),
+                    })
+                  : ladderTot
+                    ? t('ticket.ladder.total', { amount: `${formatUnits(ladderTot.amount, token.decimals, { group: ',' })} ${ticker}`, levels: ladder.levels.length, kas: `${formatKas(ladderTot.kasLocked, { group: ',' })} KAS` })
+                    : ' '}
+              </p>
               <p class="muted">{t('ticket.ladder.separate', { levels: ladder.levels.length })}</p>
             </>
-          ) : (
-            <ul data-testid="order-ladder-errors">
-              {ladder.errors.map((e, n) => (
-                <li key={n} class="tk-issue tk-issue-error">
-                  {t(`ticket.ladder.err.${e.code}`, { level: e.level ?? 1, field: e.field ?? '', max: 20 })}
-                </li>
-              ))}
-            </ul>
-          )}
+          ) : null}
         </div>
       ) : null}
 
-      {props.facts}
-      {planNotes.length > 0 || lowValue ? (
-        <ul class="tk-cautions" data-testid="order-notes" aria-live="polite">
-          {planNotes.map((i, n) => (
-            <li key={`${i.code}-${n}`} class="tk-caution" data-code={i.code} data-testid={`order-note-${i.code}`}>
-              <span key={issueText(i, issueCtx)}>{issueText(i, issueCtx)}</span>
-            </li>
-          ))}
-          {lowValue ? (
-            <li class="tk-caution" data-code="ORDER_VALUE_BELOW_MINIMUM" data-testid="order-note-min-value">
-              {t(`ticket.minValue.${minValue.source}`, { value: formatKas(lowValue.value, { group: ',' }), min: formatKas(lowValue.min, { group: ',' }) })}
-            </li>
-          ) : null}
-        </ul>
-      ) : null}
-
       {enabled ? gate.element : null}
+      {/* the one place that says why the order cannot be placed: a slot of a fixed height directly above the button, empty when the order can be placed, so
+          neither a sentence coming and going nor its length ever moves the button */}
+      <div class="tk-reason" data-testid="order-issues" data-count={shownReasons.length} aria-live="polite">
+        {shownReasons.length > 0 ? (
+          <ul>
+            {shownReasons.map((r, n) => (
+              <li
+                key={`${r.code}-${n}`}
+                class={`tk-reason-item tk-reason-${r.kind}`}
+                data-code={r.code}
+                data-severity={r.kind === 'issue' ? 'error' : undefined}
+                data-testid={r.testid ?? (r.kind === 'issue' ? `order-issue-${r.code}` : r.kind === 'need' ? `order-need-${r.code}` : `order-reason-${r.code}`)}
+              >
+                <span key={r.text}>{r.text}</span>
+                {r.action === 'retry' ? <Button small onClick={() => void refresh().catch(() => null)} data-testid="order-retry">{t('common.retry')}</Button> : null}
+                <RawDetails text={r.raw} />
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
       <Button variant="primary" block onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
         <span key={`${sideName}|${typeName}`}>{t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
       <SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" />
+      {/* what the token's records say (facts, the genesis check): below the button, so a late answer of the check never moves it */}
+      {props.facts}
       {ladderNote ? (
         <p class="muted" data-testid={ladderNote.done ? 'order-result-ladder' : 'order-ladder-stopped'}>
           <span key={ladderNote.text}>{ladderNote.text}</span>

@@ -9,17 +9,19 @@
 .tk h4 { margin: 12px 0 4px; font-size: 0.95rem; }
 .tk-form { display: flex; flex-direction: column; gap: 12px; }
 .tk-form select.select { width: 100%; }
-.tk-suffix { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
-.tk-touch .input { width: 7rem; }
+/* the unit of every input row is one fixed-width column at the right end of the row, right-aligned: the eye reads the boxes down one edge and the units down another */
+.tk-suffix { display: inline-flex; align-items: center; justify-content: flex-end; flex: 0 0 var(--tk-unit-w); width: var(--tk-unit-w); min-width: 0; gap: 8px; text-align: right; white-space: normal; overflow-wrap: anywhere; }
+.tk { --tk-unit-w: 7.25rem; }
+.tk-unit { line-height: 1.15; }
+.tk-touch .input { flex: 1 1 auto; width: auto; min-width: 0; }
+/* the custom threshold: the box takes what the presets leave, its unit is the same fixed column as every other row's */
+.tk-touch-custom { display: flex; align-items: center; gap: 8px; flex: 1 1 12rem; min-width: 0; }
 .tk-touch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .tk-unit { color: var(--muted); font-size: 0.9rem; }
 .tk-sub, .tk-rounded, .tk-help { display: block; }
 /* a field hint wraps (a few lines at most) so the whole text can be read on a phone, where there is no hover tooltip; it is also the tooltip (title) */
 .tk-sub, .tk-help { white-space: normal; overflow-wrap: anywhere; }
 .tk-rounded { white-space: normal; }
-/* the fills of an order that takes liquidity (fills-note.ts): a sentence or two, wrapped; the shortfall line under the main fields warns */
-.tk-fills { display: block; white-space: normal; color: var(--muted); font-size: 0.85rem; }
-.tk-fills-short { color: var(--warn); font-size: 0.9rem; margin: 4px 0 0; }
 /* the balance this order spends, at the right end of the amount label row: it is the Max button */
 .tk-available { padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.85rem; font-variant-numeric: tabular-nums; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 .tk-available:hover:not(:disabled) { color: var(--text); }
@@ -28,14 +30,18 @@
 .tk-advanced { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; background: var(--surface-2); }
 .tk-advanced summary { cursor: pointer; font-weight: 600; }
 .tk-advanced-body { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
-.tk-needs { display: flex; flex-direction: column; gap: 8px; }
-.tk-needs:empty, .tk-issues:empty { display: none; }
+/* the replace dialog's red lines */
 .tk-issues ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .tk-issue { padding: 6px 10px; border-radius: var(--radius-sm); border-left: 4px solid var(--info); background: var(--info-bg); }
 .tk-issue-error { border-left-color: var(--bad); background: var(--bad-bg); font-weight: 600; }
-/* the planner's warnings, one line each next to the button: they never stop the order */
-.tk-cautions { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-.tk-caution { padding: 4px 10px; border-radius: var(--radius-sm); border-left: 4px solid var(--warn); background: var(--surface-2); font-size: 0.9rem; overflow-wrap: anywhere; }
+/* why the order cannot be placed: a slot of a FIXED height directly above the button (three lines; more scroll inside it), empty when the order can be placed.
+   Nothing else on the ticket says anything that comes and goes, so the button never moves. */
+.tk-reason { height: 3.4rem; margin-top: -4px; overflow-y: auto; overflow-x: hidden; font-size: 0.85rem; line-height: 1.12rem; }
+.tk-reason ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.tk-reason-item { display: block; overflow-wrap: anywhere; color: var(--bad); font-weight: 600; }
+.tk-reason-need { color: var(--muted); font-weight: 500; }
+.tk-reason-item .btn { margin-left: 6px; vertical-align: baseline; }
+.tk-ladder-total { margin: 0; min-height: 1.4em; }
 
 .tk-disclosure { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--surface-2); }
 .tk-summary { font-weight: 700; margin: 0 0 6px; }
@@ -54,9 +60,9 @@
 @media (max-width: 560px) { .tk-row { grid-template-columns: 1fr; } }
 
 /* the cost preview under the amount box: one muted line of a fixed height, whatever it says (or "—"), tabular numbers, never wrapped */
-.tk-avail-line { height: 1.5rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.5rem; }
+.tk-avail-line { height: 1.4rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.5rem; }
 .tk-avail-line + .tk-cost { margin-top: 0; }
-.tk-cost { height: 1.5rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 0.85rem; line-height: 1.5rem; font-variant-numeric: tabular-nums; }
+.tk-cost { height: 1.2rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 0.8rem; line-height: 1.2rem; font-variant-numeric: tabular-nums; }
 
 /* amount slider: 0..100 % of Max under the amount box, the width of the ticket. The track is filled up to the thumb in the colour of the side, the ticks
    (0 / 25 / 50 / 75 / 100 %) are marks under the track with their labels (the buttons that set them) in one row, aligned to the thumb's travel; the thumb has a
