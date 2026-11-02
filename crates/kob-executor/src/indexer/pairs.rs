@@ -378,15 +378,11 @@ fn resting_level(p: &LivePair, now: i64) -> Option<(bool, &'static str, i64, i64
     .filter(|l| l.2 > 0 && l.3 > 0 && l.4 > 0)
 }
 
-/// True when the token has any listed order (one seek of `orders_listed_tokens`). The live-set scans below walk every open order of the
+/// True when the token has any listed order (an index seek on the token, then the first listed row). The live-set scans below walk every open order of the
 /// store whatever the token (300,000 bids of one token cost 0.7 s a scan, four scans a route), so a leg without a listed order must not
 /// start one (audit 2026-10-30 I15).
 fn has_listed(conn: &Connection, token: &Hash32) -> DbResult<bool> {
-    Ok(conn
-        .prepare_cached(
-            "SELECT 1 FROM orders INDEXED BY orders_listed_tokens WHERE listed = 1 AND token_cov_id = ?1 AND token_tpl_hash IS NOT NULL LIMIT 1",
-        )?
-        .exists([&token.0[..]])?)
+    Ok(conn.prepare_cached("SELECT 1 FROM orders WHERE token_cov_id = ?1 AND listed = 1 LIMIT 1")?.exists([&token.0[..]])?)
 }
 
 /// The pair book of `base / quote` (token covenant ids), at most `depth` levels per side.

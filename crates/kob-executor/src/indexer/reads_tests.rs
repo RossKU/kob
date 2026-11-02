@@ -399,6 +399,8 @@ fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
 fn the_open_token_list_reads_the_rows_the_union_did() {
     for seed in [7u64, 8] {
         let conn = store(seed, 300);
+        // the union has no preference for tokens with a holding (the cap keeps those first, audit 2026-10-30 I17)
+        conn.execute("DELETE FROM token_holdings", []).unwrap();
         // more distinct (token, program, family) rows of listed orders
         for t in 10u8..40 {
             conn.execute(

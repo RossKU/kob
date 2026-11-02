@@ -507,14 +507,16 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
     ))?;
     let mut cur: Option<OpenTokenRow> = first.query_row([], row).optional()?;
     let mut last_token: Option<Vec<u8>> = None;
+    // the budget of the listed orders is its own: rows of the events must not spend it
+    let mut listed_rows = 0usize;
     while let Some((t, p, f)) = cur {
         if last_token.as_ref() != Some(&t) {
-            // the scan budget is spent
-            if rows.len() >= scan_max {
+            if listed_rows >= scan_max {
                 break;
             }
             last_token = Some(t.clone());
         }
+        listed_rows += 1;
         rows.insert((t.clone(), Reverse(f), p.clone()));
         cur = if let Some(nf) = fam.query_row(rusqlite::params![&t, &p, f], |r| r.get::<_, i64>(0)).optional()? {
             Some((t.clone(), p.clone(), nf))
