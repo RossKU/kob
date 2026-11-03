@@ -7,6 +7,10 @@
 //! lost or edited record can hide nothing and add nothing. Entries are per network and owner key, kept for a day, at most
 //! [`MAX_ENTRIES`]. Writing it never fails a command: a transaction that was submitted stays submitted.
 //!
+//! `kob token issue` also keeps what the creation declared (decimals, symbol, name) in `recent-issued-tokens.json`, so that
+//! `kob send` can name a token issued on this machine within the day, and prove its program from the recorded outputs on the
+//! node, without an indexer.
+//!
 //! The file is `recent-token-outputs.json` in `$KOB_STATE_DIR`, else the platform's per-user state directory
 //! (`%LOCALAPPDATA%\kob`, `$XDG_STATE_HOME/kob`, `~/.local/state/kob`).
 //!
@@ -31,6 +35,7 @@ pub const MAX_ENTRIES: usize = 256;
 pub const KEEP_SECS: u64 = 24 * 3600;
 const FILE: &str = "recent-token-outputs.json";
 const DECIMALS_FILE: &str = "recent-first-order-decimals.json";
+const ISSUED_FILE: &str = "recent-issued-tokens.json";
 
 /// One token output a transaction of the key created.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +238,73 @@ pub fn first_order_decimals(network: &str, token: &[u8; 32]) -> Option<u32> {
         .find_map(|e| e.get("decimals").and_then(Value::as_u64).and_then(|d| u32::try_from(d).ok()))
 }
 
+/// What `kob token issue` declared for a token this machine issued (decimals, symbol, name), kept for a day so that `kob send`
+/// can name the token without an indexer. The token's program is not kept: the node proves it from the key's own recorded
+/// outputs ([`candidates`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssuedFacts {
+    /// Decimals the creation declared.
+    pub decimals: u32,
+    /// Symbol (ticker) the creation declared.
+    pub symbol: String,
+    /// Name the creation declared.
+    pub name: String,
+}
+
+/// Record the facts of a token this machine issued on `network` (a submitted creation). Never fails: a problem is a warning.
+pub fn record_issued(network: &str, token: &[u8; 32], facts: &IssuedFacts) {
+    let Some(dir) = state_dir() else { return };
+    let path = dir.join(ISSUED_FILE);
+    let t = now();
+    let token = to_hex(token);
+    let read: Value = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let mut all: Vec<Value> = read
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.get("at").and_then(Value::as_u64).is_some_and(|at| at + KEEP_SECS > t && at <= t + 3600))
+        .filter(|e| {
+            !(e.get("network").and_then(Value::as_str) == Some(network) && e.get("token").and_then(Value::as_str) == Some(&token))
+        })
+        .collect();
+    all.push(
+        json!({"network": network, "token": token, "decimals": facts.decimals, "symbol": facts.symbol, "name": facts.name, "at": t}),
+    );
+    let skip = all.len().saturating_sub(MAX_ENTRIES);
+    let doc = Value::Array(all.split_off(skip));
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(&dir)?;
+        let tmp = dir.join(format!("{ISSUED_FILE}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, serde_json::to_string_pretty(&doc).unwrap_or_default())?;
+        std::fs::rename(&tmp, &path)
+    };
+    if let Err(e) = write() {
+        eprintln!("warning: cannot keep the facts of the token just issued in {}: {e}", path.display());
+    }
+}
+
+/// The facts recorded for a token this machine issued on `network` within the last day, if any.
+pub fn issued(network: &str, token: &[u8; 32]) -> Option<IssuedFacts> {
+    let path = state_dir()?.join(ISSUED_FILE);
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let (t, token) = (now(), to_hex(token));
+    v.as_array()?
+        .iter()
+        .rev()
+        .filter(|e| {
+            e.get("network").and_then(Value::as_str) == Some(network) && e.get("token").and_then(Value::as_str) == Some(&token)
+        })
+        .filter(|e| e.get("at").and_then(Value::as_u64).is_some_and(|at| at + KEEP_SECS > t && at <= t + 3600))
+        .find_map(|e| {
+            Some(IssuedFacts {
+                decimals: u32::try_from(e.get("decimals")?.as_u64()?).ok()?,
+                symbol: e.get("symbol")?.as_str()?.to_string(),
+                name: e.get("name")?.as_str()?.to_string(),
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +358,20 @@ mod tests {
         assert_eq!(first_order_decimals("testnet-10", &TOKEN), Some(6));
         let kept: Value = serde_json::from_str(&std::fs::read_to_string(decimals_path().unwrap()).unwrap()).unwrap();
         assert_eq!(kept.as_array().unwrap().len(), 1, "{kept}");
+    }
+
+    /// The facts of an issued token are kept per network and token; a later creation of the token replaces them.
+    #[test]
+    fn issued_token_facts_are_kept_per_network_and_token() {
+        const TOKEN: [u8; 32] = [0x9c; 32];
+        let facts = |d: u32| IssuedFacts { decimals: d, symbol: "PMKC".into(), name: "Test".into() };
+        assert_eq!(issued("testnet-10", &TOKEN), None);
+        record_issued("testnet-10", &TOKEN, &facts(8));
+        assert_eq!(issued("testnet-10", &TOKEN), Some(facts(8)));
+        assert_eq!(issued("mainnet", &TOKEN), None);
+        assert_eq!(issued("testnet-10", &[0x9d; 32]), None);
+        record_issued("testnet-10", &TOKEN, &facts(2));
+        assert_eq!(issued("testnet-10", &TOKEN), Some(facts(2)));
     }
 
     /// A genesis's own holders (recorded by `kob token issue`, which has no leader whose next states reveal them) are

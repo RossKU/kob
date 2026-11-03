@@ -40,6 +40,12 @@ terminal is asked (`yes` to continue), anything else is refused and nothing is s
 cannot be combined with `--yes`. That includes `kob token issue`, `kob recover --cancel` and `kob order sweep|cancel`
 (below, "Token commands" and "JSON output"), which keep their own option parsers but follow the same rule.
 
+**`kob send` of a token without `--indexer`.** The indexer is optional for `kob send <TOKEN> ...` when the local record covers the
+token: the registry, or the record this machine keeps in `%LOCALAPPDATA%\kob` (`$XDG_STATE_HOME/kob` or `~/.local/state/kob`) for a
+day: what `kob token issue` declared (decimals, symbol, name) and the key's own recent token outputs, each confirmed on the node,
+which also proves the token's program. Anything the record does not cover (an older token, an output received from someone
+else) needs `--indexer`, and the error says so.
+
 **Same transactions as the web wallet.** `kob place` is a port of the web app's planner (`web/src/kob/plan.ts` and
 `orders/`): the same order states, the same `createOrder` requests and therefore the same transactions and `KOB1`
 placement records for the same inputs. Its defaults are the wallet's (`docs/spec/matcher.md` §10): a minimum fill worth
@@ -175,6 +181,7 @@ kob take <covenant id> --amount 4TUSD $N
 # send
 kob send KAS kaspatest:qq... 2.5KAS $N
 kob send TUSD kaspatest:qq... 12.5TUSD $N
+# a token this machine issued or moved within the day needs no --indexer (see below)
 # merge the key's UTXOs of a token (TOKEN_UTXOS_FRAGMENTED), one confirmation for the chain
 kob merge TUSD $N
 # views (no signature; --maker KEY|ADDRESS instead of the key)

@@ -484,6 +484,40 @@ fn send_kas_and_tokens() {
     let _ = Path::new(".");
 }
 
+/// `kob send` of a token needs no `--indexer` when this machine's record names the token: the facts `kob token issue` kept
+/// (decimals, symbol) and the key's own recorded outputs, whose program the node proves. Without the record it refuses and
+/// says what is missing.
+#[test]
+fn send_a_token_without_an_indexer_from_the_local_record() {
+    let w = world("sendnoindexer", &[]);
+    let (maker, taker) = (pk(0x11), pk(0x22));
+    let send = crate::trade::actions::run_send;
+    let no_indexer = |mut a: Vec<String>| {
+        let i = a.iter().position(|x| x == "--indexer").unwrap();
+        a.drain(i..i + 2);
+        a
+    };
+    let cmd = format!("{} {} 12.5TST --yes", to_hex(&TOKEN), to_hex(&taker));
+    // nothing recorded: refused, and the message names the missing indexer
+    assert_eq!(run(send, no_indexer(w.args(0x11, &cmd))), 1);
+    assert_eq!(w.submitted(), 0);
+    // the creation's facts alone are not enough: the node must also prove a token output of the key
+    crate::recent::record_issued(NET, &TOKEN, &crate::recent::IssuedFacts { decimals: 3, symbol: "TST".into(), name: "Test".into() });
+    assert_eq!(run(send, no_indexer(w.args(0x11, &cmd))), 1);
+    assert_eq!(w.submitted(), 0);
+    // with the key's recorded genesis output (the node holds it): the transfer is built and sent
+    crate::recent::record_outputs(NET, &maker, vec![(TOKEN, 0, user_token(maker, 100 * SCALE))], &to_hex(&[0x03; 32]));
+    assert_eq!(run(send, no_indexer(w.args(0x11, &cmd))), 0);
+    assert_eq!(w.submitted(), 1);
+    let s = w.signed(".json");
+    let spk = spk_to_string(&token_spk(&user_token(taker, 12_500)));
+    assert!(s.tx.outputs.iter().any(|o| o.script_public_key == spk && o.value == 2 * KAS), "the recipient's token output");
+    // a token the record does not name is refused without an indexer
+    let other = format!("{} {} 1TST --yes", to_hex(&[0x72; 32]), to_hex(&taker));
+    assert_eq!(run(send, no_indexer(w.args(0x11, &other))), 1);
+    assert_eq!(w.submitted(), 1);
+}
+
 /// A node of another network than `--network` is refused before anything is signed: a signature commits to no network,
 /// so a testnet-10 command against a mainnet node (a mainnet `$KOB_NODE_WRPC` left set) would spend mainnet coins of the
 /// same key.

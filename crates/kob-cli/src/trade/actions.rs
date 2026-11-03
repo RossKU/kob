@@ -1132,7 +1132,14 @@ USAGE
   A token transfer stays within its program's slots (the 3/3 programs KOB issues: at most 3 token inputs and 3 token
   outputs: the recipient and your change), taking the fewest of your token UTXOs; KAS for the carrier and the fee
   come from your KAS UTXOs, largest first.
+
+  --indexer is optional for a token: without one, the token is named by the registry or by this machine's record of
+  tokens it issued (`kob token issue`) and of your recent token outputs (kept a day, each confirmed on the node, in
+  %LOCALAPPDATA%\\kob or ~/.local/state/kob). A token or holding that record does not cover needs --indexer.
 ";
+
+/// What a refusal of `kob send` adds when no `--indexer` was given.
+const NO_INDEXER_NOTE: &str = "no --indexer given, so only the registry and this machine's record of the tokens it issued or moved in the last day were consulted: pass --indexer or set $KOB_INDEXER_URL";
 
 /// A recipient: its script and, for a P2PK one, its x-only key.
 pub fn recipient(to: &str, network: &str) -> Result<(kaspa_consensus_core::tx::ScriptPublicKey, Option<[u8; 32]>), String> {
@@ -1195,19 +1202,35 @@ pub fn run_send(args: &[String]) -> i32 {
                 Units::new(),
             ));
         }
-        let indexer = c.need_indexer()?;
-        let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
-        let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
+        // The indexer is optional here: without one, the registry, this machine's record of the tokens it issued and of the key's
+        // own recent token outputs (`crate::recent`, each confirmed on the node) name the token, its program and its holdings.
+        let indexer = c.indexer.as_deref();
+        let without_indexer = |e: String| match indexer {
+            Some(_) => e,
+            None => format!("{e} ({})", NO_INDEXER_NOTE),
+        };
+        let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, indexer)?;
+        let order_scale = |cov: &[u8; 32]| match indexer {
+            Some(u) => data::order_scale(u, cov),
+            None => Ok(None),
+        };
         let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
-        let declaration = |cov: &[u8; 32]| data::declaration(indexer, cov);
-        let held_program = |cov: &[u8; 32]| data::held_program(indexer, node, &c.network, cov, &signer.pubkey);
+        let declaration = |cov: &[u8; 32]| match indexer {
+            Some(u) => data::declaration(u, cov),
+            None => Ok(crate::recent::issued(&c.network, cov).map(|f| market::Declared {
+                decimals: Some(f.decimals),
+                symbol: Some(f.symbol),
+                name: Some(f.name),
+            })),
+        };
+        let held_program = |cov: &[u8; 32]| data::held_program_from(indexer, node, &c.network, cov, &signer.pubkey);
         let open = market::OpenToken {
             remembered: Some(&remembered),
             declaration: Some(&declaration),
             held_program: Some(&held_program),
             ..market::OpenToken::new(&c.network, &order_scale)
         };
-        let m = market::resolve_with(what, &reg, &idx, Some(&open))?;
+        let mut m = market::resolve_with(what, &reg, &idx, Some(&open)).map_err(&without_indexer)?;
         let key = key.ok_or("a token goes to a P2PK address or an x-only key (the token state names its owner key)")?;
         let base = parse_token_amount(amount, &m.unit(), "the amount").map_err(usage)?;
         let carrier = match p.get("--carrier") {
@@ -1218,9 +1241,13 @@ pub fn run_send(args: &[String]) -> i32 {
         if carrier < floor {
             return Err(usage(format!("--carrier must be at least {} for a token output of {}", units::kas(floor as i128), m.name())));
         }
-        let mine = data::token_utxos(indexer, node, &c.network, &m, &signer.pubkey)?;
+        let mine = data::token_utxos_from(indexer, node, &c.network, &m, &signer.pubkey)?;
+        // a commitment no source names: the one the wallet's own holdings of the token have (checked on the node), never assumed
+        let found =
+            m.take_ext_from_holdings(&mine.iter().map(|u| u.state.extension()).collect::<Vec<_>>()).map_err(&without_indexer)?;
         let usable = usable_token_utxos(&m, &signer.pubkey, &mine);
-        let tokens = select_tokens(&usable, base, m.slots.0.min(MAX_TOKEN_INPUTS), &m.name()).map_err(|e| e.message)?;
+        let tokens =
+            select_tokens(&usable, base, m.slots.0.min(MAX_TOKEN_INPUTS), &m.name()).map_err(|e| without_indexer(e.message))?;
         let change: i64 = tokens.iter().map(|t| t.state.amount()).sum::<i64>() - base;
         let outputs = 1 + usize::from(change > 0);
         if outputs > m.slots.1 {
@@ -1262,7 +1289,7 @@ pub fn run_send(args: &[String]) -> i32 {
                     format!("amount: {}", units::tokens(base as i128, &m.unit())),
                     format!("recipient's token output carries {}", units::kas(carrier as i128)),
                 ],
-                issues: m.listing_issue(false).into_iter().collect(),
+                issues: m.listing_issue(false).into_iter().chain(found).collect(),
                 file: format!("send-{}.json", to_hex(&built.tx.id)),
                 json: json!({"to": to, "token": to_hex(&m.cov), "amount": base.to_string(), "carrier": carrier.to_string()}),
                 built,

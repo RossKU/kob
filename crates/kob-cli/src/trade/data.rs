@@ -89,10 +89,26 @@ pub fn declaration(indexer: &str, cov: &[u8; 32]) -> Result<Option<market::Decla
 /// the node (the state's script under the program, at that outpoint, carrying the covenant id). `None` when none is confirmed;
 /// refused when the confirmed UTXOs name more than one program.
 pub fn held_program(indexer: &str, node: &str, network: &str, cov: &[u8; 32], owner: &[u8; 32]) -> Result<Option<TemplateId>, String> {
-    let path = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(cov));
-    let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
+    held_program_from(Some(indexer), node, network, cov, owner)
+}
+
+/// [`held_program`] with the indexer optional: without one, only this machine's record of the key's own outputs names the candidates.
+pub fn held_program_from(
+    indexer: Option<&str>,
+    node: &str,
+    network: &str,
+    cov: &[u8; 32],
+    owner: &[u8; 32],
+) -> Result<Option<TemplateId>, String> {
+    let items = match indexer {
+        Some(indexer) => {
+            let path = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(cov));
+            http::get_ok(indexer, &path, INDEXER_TIMEOUT)?.get("items").and_then(Value::as_array).cloned().unwrap_or_default()
+        }
+        None => vec![],
+    };
     let mut cands: Vec<(TemplateId, TokenState, [u8; 32], u32)> = vec![];
-    for it in v.get("items").and_then(Value::as_array).cloned().unwrap_or_default() {
+    for it in items {
         if it.get("spent").and_then(Value::as_bool).unwrap_or(false) {
             continue;
         }
@@ -146,9 +162,25 @@ fn i64_of(v: Option<&Value>) -> Option<i64> {
 /// The maker's token UTXOs of `m`: listed by the indexer (`GET /v1/token-utxos`) or by the record of the key's own recent
 /// transactions ([`crate::recent`]: outputs the indexer may not have seen yet), each confirmed on the node.
 pub fn token_utxos(indexer: &str, node: &str, network: &str, m: &TokenMarket, owner: &[u8; 32]) -> Result<Vec<TokenUtxo>, String> {
-    let path = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(&m.cov));
-    let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
-    let items = v.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+    token_utxos_from(Some(indexer), node, network, m, owner)
+}
+
+/// [`token_utxos`] with the indexer optional: without one, only the record of the key's own recent transactions names the
+/// candidates (each still confirmed on the node).
+pub fn token_utxos_from(
+    indexer: Option<&str>,
+    node: &str,
+    network: &str,
+    m: &TokenMarket,
+    owner: &[u8; 32],
+) -> Result<Vec<TokenUtxo>, String> {
+    let items = match indexer {
+        Some(indexer) => {
+            let path = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(&m.cov));
+            http::get_ok(indexer, &path, INDEXER_TIMEOUT)?.get("items").and_then(Value::as_array).cloned().unwrap_or_default()
+        }
+        None => vec![],
+    };
     let tt = token_template(m.program);
     let mut cands: Vec<(TokenState, [u8; 32], u32)> = vec![];
     for it in items {

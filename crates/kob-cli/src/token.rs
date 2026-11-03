@@ -639,6 +639,12 @@ fn issue(args: &[String]) -> Result<(), String> {
         })
         .collect();
     crate::recent::record_outputs(&a.network, &funder, own, &g.txid().to_string());
+    // what the creation declared (decimals, symbol, name), so that `kob send` names the token without an indexer
+    crate::recent::record_issued(
+        &a.network,
+        &token,
+        &crate::recent::IssuedFacts { decimals: u32::from(g.spec.decimals), symbol: g.spec.ticker.clone(), name: g.spec.name.clone() },
+    );
     Ok(())
 }
 
