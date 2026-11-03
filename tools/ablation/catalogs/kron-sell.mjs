@@ -7,6 +7,13 @@
 // n < MERGE_K on booking and on a re-arming take-profit, the merge exit at the entry's scale).
 // Audit completion (2026-10-13): every require of the four templates has an entry (the AU-KA / AU-KB / AU-KCA / AU-KIB
 // blocks at the end; new witnesses in the v3_audit_*_kron test fns, ids NAU-K* / PAU-K*), or is listed here.
+// Bid refund (2026-11): the terminal fill of KobBidKron sends the KAS beyond deliveryCarrier back to the maker once it is
+// REFUND_MIN (1 KAS) or more: BR-1 .. BR-9 (BR-6 is AU-*-25, its rem < REFUND_MIN scenario NBR08 added) (witnesses NBR* of v3_bid_refund_kron, PBR* are its positive controls; the
+// remaining v3_audit_bid_kron / v2_* terminal attacks run on the refund layout). The bound rem >= REFUND_MIN has three
+// entries: if (false) (BR-7), > (BR-8: rem = REFUND_MIN may not stay on the delivery), >= REFUND_MIN - 1 (BR-9).
+// Checks without a flip: the bound `if (r < tx.inputs.length)` of refundTo (a slot beyond the input count is legal; without
+// the bound the out-of-range OpInputCovenantId fails the script, so only the positive control PBR09 sees it, as a rejected
+// positive, never as an accepted attack).
 // Checks without a witness attack (not in the catalog):
 //  - cancel `require(sb.length == 65)` (KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron): `sb[64]` of a shorter
 //    signature fails on its own, a longer one is no Schnorr signature for checkSig.
@@ -63,6 +70,8 @@ const T_AU_KA = 'v3_audit_ask_kron';
 const T_AU_KB = 'v3_audit_bid_kron';
 const T_AU_KCA = 'v3_audit_cond_ask_kron';
 const T_AU_KIB = 'v3_audit_ifd_bid_kron';
+// bid refund (2026-11): the terminal fill of KobBidKron returns the KAS beyond deliveryCarrier once it is REFUND_MIN or more
+const T_BR = 'v3_bid_refund_kron';
 
 export const mutations = [
   // ---- KobAskKron
@@ -1272,8 +1281,8 @@ export const mutations = [
   { id: "AU-KB-21", file: "KobBidKron", run: { [T_NLT]: ["NF5","NF6"] }, note: "GTC continuation: exactly the unused escrow", edits: [del("            require(tx.outputs[selfOut].value == left - deliveryCarrier);\n")] },
   { id: "AU-KB-22", file: "KobBidKron", run: { [T_NLT]: ["NF4"], [T_RND]: ["V3B05"] }, note: "GTC: the delivery carries the carrier plus the budget not spent", edits: [del("            require(tx.outputs[self].value >= deliveryCarrier + used - allIn);\n")] },
   { id: "AU-KB-23", file: "KobBidKron", run: { [T_TCE]: ["NT-FOK2"] }, note: "FOK: a fill that leaves buying power is refused", edits: [del("            require(tif != TIF_FOK || !canContinue);\n")] },
-  { id: "AU-KB-24", file: "KobBidKron", run: { [T_AU_KB]: ["NAU-KB18"] }, note: "termination: no output bound to the bid's id", edits: [del("            require(OpCovOutputCount(selfId) == 0);\n")] },
-  { id: "AU-KB-25", file: "KobBidKron", run: { [T_AUC]: ["NM4"], [T_NLT]: ["NF3"], [T_NTV]: ["NV8"] }, note: "termination: everything not spent rides on the delivery", edits: [del("            require(tx.outputs[self].value >= inValue - allIn);\n")] },
+  { id: "AU-KB-24", file: "KobBidKron", run: { [T_AU_KB]: ["NAU-KB18"], [T_BR]: ["NBR15"] }, note: "termination: no output bound to the bid's id", edits: [del("            require(OpCovOutputCount(selfId) == 0);\n")] },
+  { id: "AU-KB-25", file: "KobBidKron", run: { [T_NLT]: ["NF3"], [T_NTV]: ["NV8"], [T_BR]: ["NBR08"] }, note: "termination without a refund (rem < REFUND_MIN): everything not spent rides on the delivery", edits: [del("            require(tx.outputs[self].value >= inValue - allIn);\n")] },
   { id: "AU-KB-26", file: "KobBidKron", run: { [T_AU_KB]: ["NAU-KB24"] }, note: "cancel: SIGHASH_ALL only", edits: [del("        require(sb[64] == SIGHASH_ALL);\n")] },
   { id: "AU-KB-27", file: "KobBidKron", run: { [T_AU_KB]: ["NAU-KB25"] }, note: "cancel: the maker's signature", edits: [del("        require(checkSig(s, maker));\n")] },
   { id: "AU-KB-28", file: "KobBidKron", run: { [T_AUC]: ["NC10","NC10b"], [T_TCE]: ["NC3b","NC5"] }, note: "refund only once due: min(expiryDaa, 90 days idle, IOC / FOK kill)", edits: [del("        require(tx.daa >= idleEnd);\n")] },
@@ -1373,5 +1382,15 @@ export const mutations = [
   { id: "AU-KIB-38", file: "KobIfdBidKron", run: { [T_AU_KIB]: ["NAU-KIB27"] }, note: "refund: no output bound to the entry's id", edits: [rep("        require(OpCovInputCount(tokenCovId) == 0);\n        require(OpCovOutputCount(selfId) == 0);\n", "        require(OpCovInputCount(tokenCovId) == 0);\n")] },
   { id: "AU-KIB-39", file: "KobIfdBidKron", run: { [T_AU_KIB]: ["NAU-KIB28"] }, note: "refund: output i pays P2PK(maker)", edits: [del("        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
   { id: "AU-KIB-40", file: "KobIfdBidKron", run: { [T_AU_KIB]: ["NAU-KIB29"] }, note: "refund: the maker gets the escrow minus at most refundTip", edits: [del("        require(tx.outputs[self].value + refundTip >= tx.inputs[self].value);\n")] },
+  // ---- KobBidKron: the refund of a terminal fill (BR-*; witnesses NBR* in v3_bid_refund_kron)
+  { id: "BR-1", file: "KobBidKron", run: { [T_BR]: ["NBR14"] }, note: "refundTo aliasing guard: the input at the refund slot is a token input or a plain key input, not another order (a KobAskKron of the same maker whose payout doubles as the refund)", edits: [rep("            require(ci == tokenCovId || ci == ZERO32);\n", "            require(true);\n")] },
+  { id: "BR-2", file: "KobBidKron", run: { [T_BR]: ["NBR01", "NBR02", "NBR04", "NBR09", "NBR10", "NBR11", "NBR12"] }, note: "refundTo: the output at M - 1 - self pays P2PK(maker) (another key, a non-P2PK script, no refund output, one output for two bids, swapped refunds, a slot off by one)", edits: [del("        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
+  { id: "BR-3", file: "KobBidKron", run: { [T_BR]: ["NBR03"], [T_AUC]: ["NM4"] }, hold: { [T_BR]: ["NBR13"] }, note: "refundTo: the refund carries at least rem (1 sompi short is refused; a spare output after the refund is also refused by the P2PK check)", edits: [del("        require(tx.outputs[r].value >= rem);\n")] },
+  { id: "BR-3x", file: "KobBidKron", run: { [T_BR]: ["NBR03", "NBR13"] }, note: "refundTo: P2PK(maker) and value >= rem removed together: a slot one past the refund (a spare output) is accepted", edits: [del("        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n"), del("        require(tx.outputs[r].value >= rem);\n")] },
+  { id: "BR-4", file: "KobBidKron", run: { [T_BR]: ["NBR01", "NBR02", "NBR03", "NBR04", "NBR09", "NBR10", "NBR11", "NBR12", "NBR13", "NBR14"] }, note: "terminal fill: refundTo is called at all (every refund-layout attack that keeps the delivery at deliveryCarrier or more is accepted)", edits: [del("                refundTo(self, rem);\n")] },
+  { id: "BR-5", file: "KobBidKron", run: { [T_BR]: ["NBR05"] }, note: "terminal fill with a refund: the delivery keeps deliveryCarrier (1 sompi below it, refund 1 sompi above rem)", edits: [del("                require(tx.outputs[self].value >= deliveryCarrier);\n")] },
+  { id: "BR-7", file: "KobBidKron", run: { [T_BR]: ["NBR04"] }, note: "the refund branch is entered only by the condition: if (false) always takes the delivery-only branch, so a missing refund at rem 6 KAS is accepted", edits: [rep("            if (rem >= REFUND_MIN) {", "            if (false) {")] },
+  { id: "BR-8", file: "KobBidKron", run: { [T_BR]: ["NBR06"] }, note: "threshold boundary: rem >= REFUND_MIN becomes rem > REFUND_MIN, so rem exactly REFUND_MIN may stay on the delivery", edits: [rep("            if (rem >= REFUND_MIN) {", "            if (rem > REFUND_MIN) {")] },
+  { id: "BR-9", file: "KobBidKron", run: { [T_BR]: ["NBR07"] }, note: "threshold boundary: rem >= REFUND_MIN - 1, so rem = REFUND_MIN - 1 may be split off a delivery that keeps only deliveryCarrier", edits: [rep("            if (rem >= REFUND_MIN) {", "            if (rem >= REFUND_MIN - 1) {")] },
   // CI-END
 ];

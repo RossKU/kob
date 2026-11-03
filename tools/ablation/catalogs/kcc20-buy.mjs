@@ -24,6 +24,11 @@
 //    receive (the keeper takes less); no transaction becomes acceptable when the check is removed.
 //  - KobCondBid update `require(side == SIDE_ASK)`: touch() returns SIDE_ASK or SIDE_BID only (SIDE_ASK when tk >= 0), so
 //    the else branch of `side == SIDE_BID` always has side == SIDE_ASK.
+//  - KobCondBid refundTo aliasing guard (the BRC-CB-* entries below flip its `require(ci == tokenCovId || ci == ZERO32)` as
+//    a whole, scenarios BRC37 / BRC38). Its two halves and the `if (r < tx.inputs.length)` condition have no attack of
+//    their own: dropping either half of the disjunction (or reading OpInputCovenantId(r) at r >= N, where the script fails)
+//    only makes honest fills fail, which the positive controls BRC09+ (slot at a token input), BRC10+ (plain funding
+//    input) and BRC11+ (the ask's custody token input) pin; no transaction becomes acceptable.
 import { del, rep, rx, rxDel } from '../lib/edits.mjs';
 import { touchMutations } from '../lib/touch.mjs';
 import { withPublicMint } from '../lib/pm.mjs';
@@ -58,6 +63,8 @@ const T_MP = 'v3_buy_merge_push';
 // audit completion (2026-10-13): every require of KobCondBid / KobIfdAsk
 const T_AU_CB = 'v3_buy_audit_cond_bid';
 const T_AU_IA = 'v3_buy_audit_ifd_ask';
+// conditional-buy refund re-version: a terminal non-re-arm fill returns the KAS beyond deliveryCarrier (BRC scenarios)
+const T_BRC = 'v3_buy_cond_refund';
 
 // The touch batteries run on the 8/8 variant (T_BS ... T_AA) and on the 3/3 reference program KCC20Ref, the tradable
 // KCC-20 program (their `_3x3` twins): every run of a touch test fn below is expected on both programs. NTK16 (the
@@ -733,9 +740,9 @@ export const mutations = withPublicMint([
   { id: "AU-CB-23", file: "KobCondBid", run: { [T_AU_CB]: ["NAU-CB16"] }, note: "partial fill: exactly one output bound to the order's id", edits: [del("            require(OpCovOutputCount(selfId) == 1);\n")] },
   { id: "AU-CB-24", file: "KobCondBid", run: { [T_NEG]: ["NB15","NB16"] }, note: "partial fill: the continuation is this script with amountLeft - n and the new armed state", edits: [del("            require(tx.outputs[selfOut].scriptPubKey == contSpk(stopPrice, amountLeft - n, newArmed));\n")] },
   { id: "AU-CB-25", file: "KobCondBid", run: { [T_NEG]: ["NB1","NB4"] }, note: "partial fill: the continuation keeps the escrow minus the spend and the delivery carrier", edits: [del("            require(tx.outputs[selfOut].value >= keep);\n")] },
-  { id: "AU-CB-26", file: "KobCondBid", run: { [T_NEG]: ["NB2"] }, note: "partial fill: the delivery carries deliveryCarrier", edits: [del("                require(tx.outputs[self].value >= deliveryCarrier);\n")] },
+  { id: "AU-CB-26", file: "KobCondBid", run: { [T_NEG]: ["NB2"] }, note: "partial fill: the delivery carries deliveryCarrier", edits: [rep("            if (!rearm) {\n                require(tx.outputs[self].value >= deliveryCarrier);\n            }\n        } else {", "            if (!rearm) {\n            }\n        } else {")] },
   { id: "AU-CB-27", file: "KobCondBid", run: { [T_AU_CB]: ["NAU-CB17"] }, note: "termination: no output bound to the order's id", edits: [del("            require(OpCovOutputCount(selfId) == 0);\n")] },
-  { id: "AU-CB-28", file: "KobCondBid", run: { [T_RND]: ["NV3CB10"] }, note: "termination: everything not spent rides on the delivery", edits: [del("                require(tx.outputs[self].value >= left);\n")] },
+  { id: "AU-CB-28", file: "KobCondBid", run: { [T_RND]: ["NV3CB10"] }, note: "termination below REFUND_MIN: everything not spent rides on the delivery", edits: [del("                require(tx.outputs[self].value >= left);\n")] },
   { id: "AU-CB-29", file: "KobCondBid", run: { [T_AU_CB]: ["NAU-CB18"] }, note: "update: the order is the only input of its covenant id", edits: [rep("    entry update(int ev, int tk) {\n        int self = this.activeInputIndex;\n        byte[32] selfId = OpInputCovenantId(self);\n        require(OpCovInputCount(selfId) == 1);\n", "    entry update(int ev, int tk) {\n        int self = this.activeInputIndex;\n        byte[32] selfId = OpInputCovenantId(self);\n")] },
   { id: "AU-CB-30", file: "KobCondBid", run: { [T_AU_CB]: ["NAU-CB19"] }, note: "update: stopPrice > 0 (a limit-only order armed: the keeper is paid for nothing)", edits: [rep("        require(armed == 0);\n        require(stopPrice > 0);\n", "        require(armed == 0);\n")] },
   { id: "AU-CB-31", file: "KobCondBid", run: { [T_AU_CB]: ["NAU-CB20"] }, note: "update: not before activeFrom", edits: [rep("        require(keeperTip >= 0);\n        require(tx.daa >= activeFrom);\n", "        require(keeperTip >= 0);\n")] },
@@ -818,4 +825,13 @@ export const mutations = withPublicMint([
   { id: "AU-IA-51", file: "KobIfdAsk", run: { [T_AU_IA]: ["NAU-IA35"] }, note: "cancel: the maker's signature", edits: [del("        require(checkSig(s, maker));\n")] },
   { id: "AU-CB-44", file: "KobCondBid", run: { [T_AU_CB]: ["NAU-CB31"] }, note: "update: keeperTip >= 0 (hostile field: a negative keeperTip, its floor clamped to the escrow, would arm as keeperTip 0; as M4 / NK2 for KobCondAsk)", edits: [del("        require(keeperTip >= 0);\n")] },
   { id: "AU-IA-52", file: "KobIfdAsk", run: { [T_AU_IA]: ["NAU-IA39"] }, note: "update: keeperTip >= 0 (hostile field: the keeper tops the entry up; as M4 / NK2 for KobCondAsk)", edits: [del("        require(keeperTip >= 0);\n")] },
+  // ---- KobCondBid terminal non-re-arm fill: the maker's refund output (refundTo and the REFUND_MIN branch; the BRC* scenarios of v3_buy_cond_refund)
+  { id: "BRC-CB-spk", file: "KobCondBid", run: { [T_BRC]: ["BRC21","BRC22","BRC23","BRC25","BRC27","BRC29","BRC32"] }, note: "refundTo: the slot pays P2PK(maker), the destination of refund() (a redirected, P2SH or omitted refund; there the slot holds the taker's change)", edits: [del("        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
+  { id: "BRC-CB-value", file: "KobCondBid", run: { [T_BRC]: ["BRC24","BRC33","BRC34"] }, note: "refundTo: the slot holds at least the remainder (one sompi short, an empty or smaller refund at the slot)", edits: [del("        require(tx.outputs[r].value >= rem);\n")] },
+  { id: "BRC-CB-alias", file: "KobCondBid", run: { [T_BRC]: ["BRC37","BRC38"] }, note: "refundTo aliasing guard: the slot is not the positional output of another order / router input (an ask of the same maker paying its proceeds there, any other covenant input)", edits: [del("            require(ci == tokenCovId || ci == ZERO32);\n")] },
+  { id: "BRC-CB-slot", file: "KobCondBid", run: { [T_BRC]: ["BRC32","BRC33"] }, note: "refundTo: one slot per order input (M - 1 - self): without the - self two orders of one maker share the last output", edits: [rep("int r = tx.outputs.length - 1 - self;", "int r = tx.outputs.length - 1;")] },
+  { id: "BRC-CB-carrier", file: "KobCondBid", run: { [T_BRC]: ["BRC26"] }, note: "terminal fill with a refund: the delivery still carries deliveryCarrier", edits: [del("                    require(tx.outputs[self].value >= deliveryCarrier);\n")] },
+  { id: "BRC-CB-branch", file: "KobCondBid", run: { [T_BRC]: ["BRC25","BRC27","BRC28"] }, note: "the branch condition flipped (rem < REFUND_MIN): a remainder of REFUND_MIN or more rides on the delivery again, one below it needs the refund layout", edits: [rep("if (rem >= REFUND_MIN) {", "if (rem < REFUND_MIN) {")] },
+  { id: "BRC-CB-above", file: "KobCondBid", run: { [T_BRC]: ["BRC27"] }, note: "the boundary moved up (rem > REFUND_MIN): a remainder of exactly REFUND_MIN rides on the delivery", edits: [rep("if (rem >= REFUND_MIN) {", "if (rem > REFUND_MIN) {")] },
+  { id: "BRC-CB-below", file: "KobCondBid", run: { [T_BRC]: ["BRC28"] }, note: "the boundary moved down (rem >= REFUND_MIN - 1): a remainder of REFUND_MIN - 1 sompi is split off to the maker and the delivery keeps only the carrier", edits: [rep("if (rem >= REFUND_MIN) {", "if (rem >= REFUND_MIN - 1) {")] },
 ], { batteries: new Set(Object.keys(ON3)), skip: NOT_ON3 });

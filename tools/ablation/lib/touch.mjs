@@ -60,7 +60,7 @@ const CHECKS = {
   cltv: { note: 'exposure: tx.daa >= exposed + minRestDaa (CLTV)', edits: f => [rxDel(f, /^\s*require\(tx\.daa >= exposed \+ minRestDaa\);$/m)] },
   interval: {
     note: 'exposure counts the TWAP / DCA interval (UTXO DAA + interval)',
-    edits: f => [rx(f, /int exposed = OpTxInputDaaScore\(ev\) \+ int\(byte\[8\]\([or]\.slice\([^)]*\)\)\);/, 'int exposed = OpTxInputDaaScore(ev);')],
+    edits: f => [rx(f, /int exposed = OpTxInputDaaScore\(ev\) \+ (?:int\(byte\[8\]\([or]\.slice\([^)]*\)\)\)|iv);/, 'int exposed = OpTxInputDaaScore(ev);')],
   },
   active: { note: 'exposure counts the evidence activeFrom', edits: f => [rxDel(f, /^\s*if \(act > exposed\) \{ exposed = act; \}$/m)] },
   tokdaa: { note: 'exposure counts the evidence ask custody DAA', edits: f => [rxDel(f, /^\s*if \(td > exposed\) \{ exposed = td; \}$/m)] },

@@ -82,6 +82,8 @@ const FEE: i64 = 5 * KAS / 100;
 const ASK_PRICE: i64 = 250_000_000; // 2.50 KAS per whole token
 const BID_PRICE: i64 = 240_000_000; // 2.40 KAS per whole token
 const RESERVE: i64 = KAS;
+/// `REFUND_MIN` of KobBid: the smallest KAS beyond the delivery carrier a terminating bid returns as its own output.
+const REFUND_MIN: i64 = 100_000_000;
 /// Every intent's deadline (unix ms, a CLTV time lock: >= 500_000_000_000).
 const DEADLINE: i64 = 1_800_000_000_000;
 /// `EXPIRE_MAX_FEE` of tools/router-gen/router_head.ag.
@@ -1856,11 +1858,20 @@ impl BidLeg {
     fn rests(&self) -> bool {
         self.p.tif == 0 && self.value - self.used() - DC - RESERVE >= quote_up(MIN_FILL, self.rate_max())
     }
+    /// The KAS a terminating bid returns to its maker as its own output: everything not spent beyond the delivery
+    /// carrier, when that is REFUND_MIN or more (`refundTo`); None when the bid rests or the remainder is smaller.
+    fn refund(&self) -> Option<i64> {
+        let rem = self.value - self.all_in() - DC;
+        (!self.rests() && rem >= REFUND_MIN).then_some(rem)
+    }
     /// Value of the delivery output: the carrier plus what the maker did not spend of the consumed budget (a rising
-    /// bid's headroom and the rounding), or, when the bid ends, everything it did not spend.
+    /// bid's headroom and the rounding); when the bid ends, the carrier alone if the rest is refunded, else
+    /// everything it did not spend.
     fn delivery_value(&self) -> i64 {
         if self.rests() {
             DC + self.used() - self.all_in()
+        } else if self.refund().is_some() {
+            DC
         } else {
             self.value - self.all_in()
         }
@@ -1868,6 +1879,20 @@ impl BidLeg {
     fn cont_value(&self) -> i64 {
         self.value - self.used() - DC
     }
+}
+/// The refund outputs of a sweep's terminating bids (input i -> output M - 1 - i, M the number of outputs), as the
+/// LAST outputs of the transaction in output order: the bid with the highest refunding input index first, input 0
+/// last. A bid below the highest refunding index that returns nothing leaves its slot to a filler (the builders put the
+/// refunding bids first, so there is none in the honest layouts).
+fn refund_tail(f: &Fx, legs: &[BidLeg]) -> Vec<TransactionOutput> {
+    let Some(top) = legs.iter().rposition(|l| l.refund().is_some()) else { return vec![] };
+    (0..=top)
+        .rev()
+        .map(|i| match legs[i].refund() {
+            Some(rem) => out(rem, p2pk_spk(&legs[i].p.maker), None),
+            None => out(FILLER, p2pk_spk(&pk(&f.keeper)), None),
+        })
+        .collect()
 }
 fn ask_leg_art(f: &Fx, l: &AskLeg) -> SilAbiArtifact {
     ask_art(&f.t, TOKEN_B, &l.p, Prog::Shipped)
@@ -2042,6 +2067,7 @@ fn t2km(f: &Fx, legs: Vec<BidLeg>) -> T2Km {
 ///   in  [0..k) bids  [k] payer's token A (leader, owned by the intent)  [k+1] intent
 ///   out [0..k) bid deliveries  [k] bid continuation (if the last bid rests) or a filler
 ///       [k+1] merchant KAS  [k+2] payer token change  [k+3] keeper KAS
+///       then the refunds of the terminating bids that return KAS (see `refund_tail`: bid i -> output M - 1 - i)
 fn t2k_multi(f: &Fx, p: &T2Km, name: &str) -> Scn {
     let t = &f.t;
     let k = p.legs.len();
@@ -2075,9 +2101,11 @@ fn t2k_multi(f: &Fx, p: &T2Km, name: &str) -> Scn {
     }
     outs.push(out(p.merchant_kas, p2pk_spk(&merchant), None));
     outs.push(out(CARRIER, t.spk(p.keep, &p.payer, SCHEME_P2PK), Some((k as u16, TOKEN_A))));
+    let tail = refund_tail(f, &p.legs);
     let total_in: i64 = inputs.iter().map(|i| i.entry.amount as i64).sum();
-    let others: i64 = outs.iter().map(|o| o.value as i64).sum();
+    let others: i64 = outs.iter().chain(tail.iter()).map(|o| o.value as i64).sum();
     outs.push(out(total_in - others - FEE, p2pk_spk(&pk(&f.keeper)), None));
+    outs.extend(tail);
     Scn { lock: p.legs.iter().map(|l| l.t as u64).max().unwrap_or(0), name: name.into(), inputs, outputs: outs }
 }
 
@@ -2115,7 +2143,8 @@ fn swm(f: &Fx, bids: Vec<BidLeg>, asks: Vec<AskLeg>) -> Swm {
 ///   out [0..kb) A deliveries to the bid makers  [kb..a0) ask maker payouts
 ///       [a0..me) the first `ka + 1` of: escrow B change, bid continuation, ask continuation
 ///       (fillers when fewer)  [me] merchant delivery (B)  [me+1] payer token A change
-///       then the remaining continuations, then the keeper's KAS
+///       then the remaining continuations, then the keeper's KAS, then the refunds of the terminating bids that return
+///       KAS (see `refund_tail`: bid i -> output M - 1 - i)
 fn swap_multi(f: &Fx, p: &Swm, name: &str) -> Scn {
     let t = &f.t;
     let (kb, ka) = (p.bids.len(), p.asks.len());
@@ -2198,9 +2227,11 @@ fn swap_multi(f: &Fx, p: &Swm, name: &str) -> Scn {
     outs.push(out(CARRIER, t.spk(amount_b, &merchant, SCHEME_P2PK), Some(((a0 + 1) as u16, TOKEN_B))));
     outs.push(out(CARRIER, t.spk(p.keep, &p.payer, SCHEME_P2PK), Some((a0 as u16, TOKEN_A))));
     outs.extend(queue);
+    let tail = refund_tail(f, &p.bids);
     let total_in: i64 = inputs.iter().map(|i| i.entry.amount as i64).sum();
-    let others: i64 = outs.iter().map(|o| o.value as i64).sum();
+    let others: i64 = outs.iter().chain(tail.iter()).map(|o| o.value as i64).sum();
     outs.push(out(total_in - others - FEE, p2pk_spk(&pk(&f.keeper)), None));
+    outs.extend(tail);
     let lock = p.bids.iter().map(|l| l.t).chain(p.asks.iter().map(|l| l.t)).max().unwrap_or(0) as u64;
     Scn { lock, name: name.into(), inputs, outputs: outs }
 }
@@ -2571,6 +2602,235 @@ fn router_ablation_sweeps() {
     };
     run_attack_passes(t, &mk(Router::SwapPerLegBound));
     run_bad(t, &mk(Router::Shipped), 7);
+}
+
+// ================================================================ bid refunds in router executions
+
+/// Value of a bid UTXO whose fill of `n` base units (at BID_PRICE, a multiple of the scale here) leaves `rem` KAS beyond the
+/// delivery carrier: the bid terminates (less than one minimum fill of buying power remains) and `rem` is the remainder
+/// the terminal rule of KobBid splits: REFUND_MIN or more returns to the maker as its own output, less stays on the delivery.
+fn bid_value_for(n: i64, rem: i64) -> i64 {
+    quote_down(n, BID_PRICE) + DC + rem
+}
+/// Terminating bids `(n in whole tokens, remainder beyond the carrier)`, optionally followed by a resting bid of 4 whole tokens.
+fn refund_legs(spec: &[(i64, i64)], resting: bool) -> Vec<BidLeg> {
+    let mut legs: Vec<BidLeg> = spec
+        .iter()
+        .enumerate()
+        .map(|(i, &(n, rem))| BidLeg::new(BidP::new(fresh_maker()), i, bid_value_for(n * WHOLE, rem), n * WHOLE))
+        .collect();
+    if resting {
+        legs.push(BidLeg::new(BidP::new(fresh_maker()), legs.len(), BID_VALUE, 4 * WHOLE));
+    }
+    for (i, l) in legs.iter().enumerate() {
+        assert_eq!(l.rests(), resting && i + 1 == legs.len(), "leg {i}: terminating / resting as specified");
+    }
+    legs
+}
+/// Every rejecting input of the transaction is exactly `expect` (the terminal rule of the bids is the only thing wrong).
+fn run_bad_only(t: &Token, s: &Scn, expect: &[usize]) {
+    let (tx, entries) = build(t, s, &[]);
+    let res = execute(&tx, &entries).unwrap_or_else(|e| panic!("{}: tx-level failure {e}", s.name));
+    let failing: Vec<usize> = res.iter().enumerate().filter(|(_, r)| r.is_err()).map(|(i, _)| i).collect();
+    assert_eq!(failing, expect, "{}: rejecting inputs {failing:?}, expected {expect:?}: {res:?}", s.name);
+    println!(
+        "NEGATIVE {}  [REJECTED at {}]",
+        s.name,
+        expect.iter().map(|&i| format!("in[{i}] {}", role_name(&s.inputs[i].role))).collect::<Vec<_>>().join(", ")
+    );
+}
+/// The refund of bid `i` is the output `M - 1 - i`: a plain P2PK output of the maker holding the remainder, and the bid's
+/// delivery holds the carrier alone; a terminating bid below REFUND_MIN keeps everything unspent on its delivery.
+fn assert_refund_layout(s: &Scn, legs: &[BidLeg]) {
+    let m = s.outputs.len();
+    for (i, l) in legs.iter().enumerate() {
+        if let Some(rem) = l.refund() {
+            let o = &s.outputs[m - 1 - i];
+            assert_eq!(o.script_public_key, p2pk_spk(&l.p.maker), "{}: refund of bid {i} pays its maker", s.name);
+            assert_eq!(o.value as i64, rem, "{}: refund of bid {i}", s.name);
+            assert!(o.covenant.is_none());
+            assert_eq!(s.outputs[i].value as i64, DC, "{}: delivery of bid {i} holds the carrier alone", s.name);
+        } else if !l.rests() {
+            assert_eq!(
+                s.outputs[i].value as i64,
+                l.value - l.all_in(),
+                "{}: bid {i} below REFUND_MIN keeps the rest on its delivery",
+                s.name
+            );
+        }
+    }
+}
+
+/// 3.3 KAS beyond the carrier: a bid that ends, funded like `BID_OUT_VALUE`.
+const REM_BIG: i64 = 330_000_000;
+
+/// TokenToKas / TokenSwap executions in which terminating bids return KAS: the refund outputs are the last outputs (bid i at
+/// M - 1 - i), bids are inputs 0 and 1 in the order given, a bid below REFUND_MIN keeps the rest on its delivery, and the
+/// last bid may rest.
+#[test]
+fn router_positive_bid_refunds() {
+    let f = fx();
+    let t = &f.t;
+    let below = REFUND_MIN - 1;
+
+    // two bids that both return KAS: bid 0's refund is the LAST output, bid 1's the one before it
+    let legs = refund_legs(&[(3, REM_BIG), (3, 2 * REFUND_MIN)], false);
+    let s = t2k_multi(&f, &t2km(&f, legs.clone()), "R8i A->KAS via sell2_out: both bids return KAS (refunds M-1, M-2)");
+    assert_eq!(s.outputs.len(), 8, "2 deliveries, filler, merchant KAS, payer change, keeper, 2 refunds");
+    assert_refund_layout(&s, &legs);
+    assert!(
+        matches!(&s.inputs[0].role, Role::Call { name: "bid", .. }) && matches!(&s.inputs[1].role, Role::Call { name: "bid", .. })
+    );
+    assert_eq!(s.outputs[7].script_public_key, p2pk_spk(&legs[0].p.maker));
+    assert_eq!(s.outputs[6].script_public_key, p2pk_spk(&legs[1].p.maker));
+    run_ok(t, &s);
+
+    // the router bounds hold over the refunding bids: the sum (6000) exceeds a max_sell of 5000
+    let mut p = t2km(&f, legs.clone());
+    p.max_sell = Some(5 * WHOLE);
+    run_bad(t, &t2k_multi(&f, &p, "N-R1 sell2_out with refunds: 6000 base units sold, max_sell 5000"), 3);
+
+    // a bid below REFUND_MIN stays on its delivery; the first bid returns KAS; the last bid rests
+    let legs = refund_legs(&[(3, REM_BIG), (3, below)], true);
+    let s = t2k_multi(
+        &f,
+        &t2km(&f, legs.clone()),
+        "R8j A->KAS via sell3: bid 0 refund, bid 1 REFUND_MIN - 1 stays on its delivery, bid 2 rests",
+    );
+    assert_eq!(s.outputs.len(), 8, "3 deliveries/continuation, merchant KAS, payer change, keeper, 1 refund");
+    assert_eq!(s.outputs[1].value as i64, DC + below, "bid 1: carrier + REFUND_MIN - 1 on the delivery");
+    assert!(legs[0].refund().is_some() && legs[1].refund().is_none());
+    assert_refund_layout(&s, &legs);
+    run_ok(t, &s);
+
+    // exactly REFUND_MIN returns; REFUND_MIN - 1 does not
+    let legs = refund_legs(&[(3, REFUND_MIN), (3, below)], true);
+    assert_eq!(legs[0].refund(), Some(REFUND_MIN));
+    let s = t2k_multi(&f, &t2km(&f, legs.clone()), "R8k A->KAS via sell3: remainder exactly REFUND_MIN returns, REFUND_MIN - 1 stays");
+    assert_refund_layout(&s, &legs);
+    run_ok(t, &s);
+
+    // two refunding bids and a resting last bid (sell3), three refunding bids (sell3_out), a lone one (sell_out)
+    let legs = refund_legs(&[(3, REM_BIG), (3, REFUND_MIN)], true);
+    let s = t2k_multi(&f, &t2km(&f, legs.clone()), "R8l A->KAS via sell3: bids 0 and 1 return KAS, bid 2 rests");
+    assert_refund_layout(&s, &legs);
+    run_ok(t, &s);
+    let legs = refund_legs(&[(2, REM_BIG), (3, REFUND_MIN), (3, 2 * REFUND_MIN)], false);
+    let s = t2k_multi(&f, &t2km(&f, legs.clone()), "R8m A->KAS via sell3_out: three bids return KAS");
+    assert_eq!(s.outputs.len(), 7 + 3);
+    assert_refund_layout(&s, &legs);
+    run_ok(t, &s);
+    let legs = refund_legs(&[(3, REM_BIG)], false);
+    let s = t2k_multi(&f, &t2km(&f, legs.clone()), "R8n A->KAS via sell_out: one bid returns KAS");
+    assert_refund_layout(&s, &legs);
+    run_ok(t, &s);
+
+    // the covenant does not require the refunding bids to come first: bid 1 refunds at M-2 and M-1 is a plain output
+    let legs = refund_legs(&[(3, below), (3, REM_BIG)], true);
+    let s = t2k_multi(&f, &t2km(&f, legs.clone()), "R8o A->KAS via sell3: bid 0 stays, bid 1 refunds (slot M-2, a filler at M-1)");
+    assert_refund_layout(&s, &legs);
+    run_ok(t, &s);
+
+    // TokenSwap: two terminating bids (refund, stay) against two sold-out asks, and two refunding bids
+    let legs = refund_legs(&[(3, REM_BIG), (3, below)], false);
+    let s =
+        swap_multi(&f, &swm(&f, legs.clone(), ask_legs(&[(2, 2), (3, 3)])), "R9f A->KAS->B via swap2_out: bid 0 refund, bid 1 stays");
+    assert_refund_layout(&s, &legs);
+    run_ok(t, &s);
+    let legs = refund_legs(&[(3, REM_BIG), (3, 2 * REFUND_MIN)], false);
+    let s = swap_multi(&f, &swm(&f, legs.clone(), ask_legs(&[(2, 2), (3, 3)])), "R9g A->KAS->B via swap2_out: both bids return KAS");
+    assert_refund_layout(&s, &legs);
+    run_ok(t, &s);
+
+    // a bid whose maker is the merchant: the refund is an output of its own at M-1-i, apart from the merchant KAS output j
+    let mut legs = refund_legs(&[(3, below), (3, below), (3, REM_BIG)], false);
+    legs[2].p.maker = pk(&f.merchant);
+    let s =
+        t2k_multi(&f, &t2km(&f, legs.clone()), "R8p A->KAS via sell3_out: the merchant is bid 2's maker (refund at M-3, not at j)");
+    assert_refund_layout(&s, &legs);
+    run_ok(t, &s);
+}
+
+/// The terminal rule of the bids is enforced inside router executions, and the attack that folds a bid's refund onto the
+/// intent's merchant output is refused by the bid's aliasing guard.
+#[test]
+fn router_negative_bid_refunds() {
+    let f = fx();
+    let t = &f.t;
+    let thief = pk(&f.thief);
+    let two = || refund_legs(&[(3, REM_BIG), (3, 2 * REFUND_MIN)], false);
+    let base = |name: &str| t2k_multi(&f, &t2km(&f, two()), name);
+    // sell2_out: out 0, 1 deliveries; 2 filler; 3 merchant KAS (j); 4 payer change; 5 keeper; 6 refund of bid 1; 7 refund of bid 0
+    let m = base("layout").outputs.len();
+    assert_eq!(m, 8);
+
+    // N-R2: both refunds are missing: the slots M-1 and M-2 hold the keeper's change and the payer's token change
+    let mut s = base("N-R2 sell2_out: both refunds dropped (the slots hold the keeper's and the payer's outputs)");
+    s.outputs.truncate(m - 2);
+    run_bad_only(t, &s, &[0, 1]);
+    // N-R3: bid 1's refund is missing: bid 0's is still the last output, bid 1's slot holds the keeper's change
+    let mut s = base("N-R3 sell2_out: bid 1's refund dropped");
+    s.outputs.remove(m - 2);
+    run_bad_only(t, &s, &[1]);
+    // N-R4: bid 0's refund is redirected to a thief
+    let mut s = base("N-R4 sell2_out: bid 0's refund redirected");
+    s.outputs[m - 1] = out(s.outputs[m - 1].value as i64, p2pk_spk(&thief), None);
+    run_bad_only(t, &s, &[0]);
+    // N-R5: a refund one sompi short
+    let mut s = base("N-R5 sell2_out: bid 1's refund one sompi short");
+    s.outputs[m - 2].value -= 1;
+    run_bad_only(t, &s, &[1]);
+    // N-R6: the refunds sit in the wrong slots (bid 0's at M-2, bid 1's at M-1)
+    let mut s = base("N-R6 sell2_out: the two refunds swapped");
+    s.outputs.swap(m - 1, m - 2);
+    run_bad_only(t, &s, &[0, 1]);
+    // N-R7: bid 0's refund is one slot early (swapped with the keeper's change in front of the tail)
+    let mut s = base("N-R7 sell2_out: bid 0's refund in the wrong slot (swapped with the keeper's change)");
+    s.outputs.swap(m - 1, m - 3);
+    run_bad_only(t, &s, &[0]);
+    // N-R8: the remainder rides on the delivery instead of a refund output: not allowed from REFUND_MIN on (and the
+    // dropped output shifts bid 1's slot too)
+    let mut s = base("N-R8 sell2_out: bid 0's remainder left on its delivery, refund output dropped");
+    s.outputs[0].value += s.outputs[m - 1].value;
+    s.outputs.remove(m - 1);
+    run_bad_only(t, &s, &[0, 1]);
+
+    // N-R9: the router bounds still stand next to the refunds: the merchant KAS not at output j
+    let mut s = base("N-R9 sell2_out with refunds: merchant KAS not at output j");
+    move_output(&mut s, 3, 5);
+    run_bad(t, &s, 3);
+    // N-R10: TokenSwap: bid 1's refund redirected
+    let mut s = swap_multi(&f, &swm(&f, two(), ask_legs(&[(2, 2), (3, 3)])), "N-R10 swap2_out: bid 1's refund redirected");
+    let m = s.outputs.len();
+    s.outputs[m - 2] = out(s.outputs[m - 2].value as i64, p2pk_spk(&thief), None);
+    run_bad_only(t, &s, &[1]);
+
+    // N-R11: aliasing. The merchant is bid 2's maker. The honest layout puts bid 2's refund at M-3, apart from the merchant
+    // KAS at j = 4. The attack drops the refund (and the fillers of the unused slots) so that M = 7: bid 2's slot
+    // M-1-2 is the intent's own output j, and ONE output of max(merchant_kas, rem) satisfies both the intent (merchant_kas)
+    // and the bid (rem), the keeper pockets the other. The bid's guard refuses: input j (the intent) is a router covenant
+    // input, not a token or a plain input, so it cannot have its output used as a refund.
+    let mut legs = refund_legs(&[(3, REFUND_MIN - 1), (3, REFUND_MIN - 1), (3, REM_BIG)], false);
+    legs[2].p.maker = pk(&f.merchant);
+    let rem = legs[2].refund().expect("bid 2 returns KAS");
+    let honest = t2k_multi(&f, &t2km(&f, legs), "R8q sell3_out: merchant = bid 2's maker, honest layout");
+    run_ok(t, &honest);
+    let mut s = honest.clone();
+    s.name = "N-R11 sell3_out: bid 2's refund slot aliased onto the intent's merchant output (one output pays both)".into();
+    let m = s.outputs.len();
+    assert_eq!(m, 10, "7 outputs + refund of bid 2 + fillers of the slots of bids 1 and 0");
+    s.outputs.truncate(m - 3);
+    let j = 4; // me = k + 1: the intent's merchant KAS output
+    assert_eq!(s.outputs[j].script_public_key, p2pk_spk(&pk(&f.merchant)));
+    s.outputs[j].value = (s.outputs[j].value as i64).max(rem) as u64;
+    // the keeper's change (the last output) takes what the dropped refund and fillers no longer need
+    let last = s.outputs.len() - 1;
+    let total_in: i64 = s.inputs.iter().map(|i| i.entry.amount as i64).sum();
+    let others: i64 = s.outputs[..last].iter().map(|o| o.value as i64).sum();
+    s.outputs[last].value = (total_in - others - FEE) as u64;
+    check_value_balance(&s);
+    assert_eq!(s.outputs.len() - 1 - 2, j, "bid 2's refund slot is the intent's output j");
+    run_bad_only(t, &s, &[2]);
 }
 
 // ================================================================ regressions

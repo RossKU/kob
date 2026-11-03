@@ -9,6 +9,15 @@
 // exit's n > 0 / the entry's m > 0 (AU-KCB-5, AU-KIA-13, combined AU-KCB-5x) and the entry's merge scale > 0 / the exit's
 // scale > 0 (AU-KIA-12, combined AU-KIA-12x), and the update's scale > 0 / the evidence KobAskKron's scale > 0 (AU-KCB-39,
 // combined AU-KCB-39x; judged at the evidence input, which refuses its own negative scale).
+// Bid refund (2026-11): the terminal non-re-arm fill of KobCondBidKron sends the KAS beyond deliveryCarrier back to the
+// maker once it is REFUND_MIN (1 KAS) or more: BR-1 .. BR-9 (BR-6 is AU-*-25, its rem < REFUND_MIN scenario NBR08 added) (witnesses NBR* of kron_v2_buy_bid_refund, PBR* are its
+// positive controls). The bound rem >= REFUND_MIN has three entries: if (false) (BR-7), > (BR-8: rem = REFUND_MIN may not
+// stay on the delivery), >= REFUND_MIN - 1 (BR-9). Checks without a flip: the bound `if (r < tx.inputs.length)` of
+// refundTo (a slot beyond the input count is legal; without the bound the out-of-range OpInputCovenantId fails the
+// script, so only the positive control PBR08 sees it, as a rejected positive, never as an accepted attack). The re-arm
+// path (rearm) sends the remainder back to the entry, which checks it: no refund there.
+// Not in this catalog: the two `require(iv >= 0)` lines of KobCondBidKron.touchBid / touch (audit 2026-10-29 F1, a negative
+// evidence interval); their reproducers are in audit_rest_interval_tests, which is not an ablation suite.
 // Checks without a witness attack (not in the catalog):
 //  - KobCondBidKron.update `require(side == SIDE_ASK)`: touch() returns SIDE_ASK (tk >= 0) or SIDE_BID (tk < 0) and
 //    nothing else; the branch is entered only with side != SIDE_BID, so the check cannot fail.
@@ -47,6 +56,8 @@ const T_AF = 'kron_v2_buy_touch_ifd_fill';
 const T_AA = 'kron_v2_buy_touch_ifd_arm';
 // audit completion (2026-10-13): witnesses of the checks no scenario reached before
 const T_AU_CB = 'kron_v2_buy_audit_cond_bid';
+// bid refund (2026-11): the terminal non-re-arm fill of KobCondBidKron returns the KAS beyond deliveryCarrier once it is REFUND_MIN or more
+const T_BR = 'kron_v2_buy_bid_refund';
 const T_AU_IA = 'kron_v2_buy_audit_ifd_ask';
 
 export const mutations = [
@@ -732,9 +743,9 @@ export const mutations = [
   { id: "AU-KCB-20", file: "KobCondBidKron", run: { [T_NEG]: ["NB18","KB-A1","KB-A3","KB-A4"] }, note: "(KB-A2 / KB-A5 / KB-A6 flip at this input only: the KRON program refuses their delivery state itself) positional delivery: output i is the holder of exactly n base units owned by the maker (id_type 3, not a minter)", edits: [del("            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(\n                tpre + byte[](0x20) + byte[](byte[32](maker)) + byte[](0x01) + byte[](deliveryType) + byte[](0x08)\n                    + byte[](nb) + byte[](0x0100) + tsuf\n            )));\n")] },
   { id: "AU-KCB-21", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCB14"] }, note: "the delivery is bound to the token covenant (an unbound copy of the holder script delivers nothing)", edits: [del("            require(OpOutputCovenantId(self) == tokenCovId);\n")] },
   { id: "AU-KCB-22", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCB15"] }, note: "continuation: exactly one output bound to the order's id", edits: [del("            require(OpCovOutputCount(selfId) == 1);\n")] },
-  { id: "AU-KCB-23", file: "KobCondBidKron", run: { [T_NEG]: ["NB2"] }, note: "continuation: the delivery keeps the delivery carrier", edits: [del("                require(tx.outputs[self].value >= deliveryCarrier);\n")] },
-  { id: "AU-KCB-24", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCB16"] }, note: "termination: no output bound to the order's id", edits: [del("            require(OpCovOutputCount(selfId) == 0);\n")] },
-  { id: "AU-KCB-25", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCB17"] }, note: "termination: everything not spent rides on the delivery", edits: [del("                require(tx.outputs[self].value >= left);\n")] },
+  { id: "AU-KCB-23", file: "KobCondBidKron", run: { [T_NEG]: ["NB2"] }, note: "continuation: the delivery keeps the delivery carrier", edits: [rep("            require(tx.outputs[selfOut].value >= keep);\n            if (!rearm) {\n                require(tx.outputs[self].value >= deliveryCarrier);\n            }\n", "            require(tx.outputs[selfOut].value >= keep);\n")] },
+  { id: "AU-KCB-24", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCB16"], [T_BR]: ["NBR15"] }, note: "termination: no output bound to the order's id", edits: [del("            require(OpCovOutputCount(selfId) == 0);\n")] },
+  { id: "AU-KCB-25", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCB17"], [T_BR]: ["NBR08"] }, note: "termination without a refund (rem < REFUND_MIN): everything not spent rides on the delivery", edits: [del("                require(tx.outputs[self].value >= left);\n")] },
   { id: "AU-KCB-26", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCB18"] }, note: "update: the order is the only input of its covenant id", edits: [rep("    entry update(int ev, int tk) {\n        int self = this.activeInputIndex;\n        byte[32] selfId = OpInputCovenantId(self);\n        require(OpCovInputCount(selfId) == 1);\n", "    entry update(int ev, int tk) {\n        int self = this.activeInputIndex;\n        byte[32] selfId = OpInputCovenantId(self);\n")] },
   { id: "AU-KCB-27", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCB19"] }, note: "update: only an order with a stop leg arms (a limit-only order would pay keeperTip for nothing)", edits: [rep("        require(armed == 0);\n        require(stopPrice > 0);\n", "        require(armed == 0);\n")] },
   { id: "AU-KCB-28", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCB20"] }, note: "update: keeperTip >= 0 (hostile field)", edits: [del("        require(keeperTip >= 0);\n")] },
@@ -800,4 +811,14 @@ export const mutations = [
   { id: "AU-KIA-43", file: "KobIfdAskKron", run: { [T_NEG]: ["KI-C1"] }, note: "cancel: SIGHASH_ALL only", edits: [del("        require(sb[64] == SIGHASH_ALL);\n")] },
   { id: "AU-KIA-44", file: "KobIfdAskKron", run: { [T_NEG]: ["KI-C2"] }, note: "cancel: the maker's signature", edits: [del("        require(checkSig(s, maker));\n")] },
   { id: "AU-KIA-45", file: "KobIfdAskKron", run: { [T_AU_IA]: ["NAU-KIA35"] }, inputOnly: ["NAU-KIA35"], note: "booking: n < MERGE_K (2^53), so the merge argument -(k * 2^53 + n) does not overflow into k; the KRON program refuses a custody above its amount cap on its own input, so only the entry flips (as V3-C-mergek in kron-sell)", edits: [del("                    require(n < MERGE_K);\n")] },
+  // ---- KobCondBidKron: the refund of a terminal non-re-arm fill (BR-*; witnesses NBR* in kron_v2_buy_bid_refund)
+  { id: "BR-1", file: "KobCondBidKron", run: { [T_BR]: ["NBR14"] }, note: "refundTo aliasing guard: the input at the refund slot is a token input or a plain key input, not another order (a KobAskKron of the same maker whose payout doubles as the refund)", edits: [rep("            require(ci == tokenCovId || ci == ZERO32);\n", "            require(true);\n")] },
+  { id: "BR-2", file: "KobCondBidKron", run: { [T_BR]: ["NBR01", "NBR02", "NBR04", "NBR09", "NBR10", "NBR11", "NBR12"] }, note: "refundTo: the output at M - 1 - self pays P2PK(maker) (another key, a non-P2PK script, no refund output, one output for two orders, swapped refunds, a slot off by one)", edits: [del("        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
+  { id: "BR-3", file: "KobCondBidKron", run: { [T_BR]: ["NBR03"] }, hold: { [T_BR]: ["NBR13"] }, note: "refundTo: the refund carries at least rem (1 sompi short is refused; a spare output after the refund is also refused by the P2PK check)", edits: [del("        require(tx.outputs[r].value >= rem);\n")] },
+  { id: "BR-3x", file: "KobCondBidKron", run: { [T_BR]: ["NBR03", "NBR13"] }, note: "refundTo: P2PK(maker) and value >= rem removed together: a slot one past the refund (a spare output) is accepted", edits: [del("        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n"), del("        require(tx.outputs[r].value >= rem);\n")] },
+  { id: "BR-4", file: "KobCondBidKron", run: { [T_BR]: ["NBR01", "NBR02", "NBR03", "NBR04", "NBR09", "NBR10", "NBR11", "NBR12", "NBR13", "NBR14"] }, note: "terminal fill: refundTo is called at all (every refund-layout attack that keeps the delivery at deliveryCarrier or more is accepted)", edits: [del("                    refundTo(self, rem);\n")] },
+  { id: "BR-5", file: "KobCondBidKron", run: { [T_BR]: ["NBR05"] }, note: "terminal fill with a refund: the delivery keeps deliveryCarrier (1 sompi below it, refund 1 sompi above rem)", edits: [del("                    require(tx.outputs[self].value >= deliveryCarrier);\n")] },
+  { id: "BR-7", file: "KobCondBidKron", run: { [T_BR]: ["NBR04"] }, note: "the refund branch is entered only by the condition: if (false) always takes the delivery-only branch, so a missing refund at rem 6 KAS is accepted", edits: [rep("                if (rem >= REFUND_MIN) {", "                if (false) {")] },
+  { id: "BR-8", file: "KobCondBidKron", run: { [T_BR]: ["NBR06"] }, note: "threshold boundary: rem >= REFUND_MIN becomes rem > REFUND_MIN, so rem exactly REFUND_MIN may stay on the delivery", edits: [rep("                if (rem >= REFUND_MIN) {", "                if (rem > REFUND_MIN) {")] },
+  { id: "BR-9", file: "KobCondBidKron", run: { [T_BR]: ["NBR07"] }, note: "threshold boundary: rem >= REFUND_MIN - 1, so rem = REFUND_MIN - 1 may be split off a delivery that keeps only deliveryCarrier", edits: [rep("                if (rem >= REFUND_MIN) {", "                if (rem >= REFUND_MIN - 1) {")] },
 ];

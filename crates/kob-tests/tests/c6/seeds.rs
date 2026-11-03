@@ -7,7 +7,7 @@ use kob_protocol::artifacts::TemplateId;
 use kob_protocol::build::{build_with, Action};
 
 use super::{accept, materialize, Keys, MTx};
-use crate::common::{self, pair, pk, MAKER_A};
+use crate::common::{self, pair, pk, MAKER_A, MAKER_B};
 
 pub struct Seed {
     pub name: String,
@@ -44,6 +44,85 @@ pub fn one_maker(a: &Action) -> Option<Action> {
     (changed > 0).then(|| serde_json::from_value(v).ok()).flatten()
 }
 
+/// Terminal bid fills around `REFUND_MIN` (KobBid, KobBidKron, KobCondBid, KobCondBidKron): the order holds the spend, the
+/// delivery carrier and a remainder of REFUND_MIN - 1 (stays on the delivery), REFUND_MIN, REFUND_MIN + 1 and 7 KAS (returns to
+/// the maker in an output of its own at output M - 1 - i), plus a batch of two such bids (both refunds; one refund and one
+/// remainder that stays). The fuzzer mutates these layouts: refund missing, redirected, short, in the wrong slot.
+pub fn refund_actions() -> Vec<(String, Action)> {
+    use crate::common::{bid, cond_bid, cov, dc, order, taker_carrier, tok, MAKER_C, NOW, P250, SCALE, TAKER, WHOLE};
+    use kob_protocol::build::{Batch, Leg};
+    use kob_protocol::state::{quote_of, BidState, Round, TIF_IOC};
+    const MIN: i64 = 100_000_000;
+    let batch = |legs: Vec<Leg>| Batch {
+        lock_time: NOW,
+        legs,
+        updates: vec![],
+        taker_tokens: vec![],
+        taker: None,
+        taker_token_carrier: taker_carrier(),
+        keep_surplus: vec![],
+        keep_carrier: None,
+        receivers: vec![],
+        payments: vec![],
+        funding: vec![],
+        change: None,
+        records: vec![],
+        fee: crate::common::fee(),
+    };
+    let rems = [("below", MIN - 1), ("min", MIN), ("above", MIN + 1), ("big", 700_000_000)];
+    let mut v = vec![];
+    for p in [TemplateId::Kcc20Ref8x8, TemplateId::KronToken2433] {
+        let conv = |a: Action| if p.family() == kob_protocol::Family::Kron { crate::common::kron_action_on(p, a) } else { a };
+        let n = 3 * WHOLE;
+        for (tag, rem) in rems {
+            // KobBid / KobBidKron: an IOC bid fills and ends
+            let b0 = BidState { tif: TIF_IOC, ..bid(MAKER_B, P250, p) };
+            let spend = b0.spend(n, NOW as i64, 1_000).unwrap();
+            let mut b =
+                batch(vec![Leg::Bid { order: order(20, (spend + dc() + rem) as u64, cov(0xb1), 1_000, b0), amount: n, t: None }]);
+            b.taker_tokens = vec![tok(21, n, pk(TAKER), kob_protocol::state::SCHEME_P2PK, 1_000)];
+            b.change = Some(pk(TAKER));
+            v.push((format!("refund.bid.{tag}@{}", p.name()), conv(Action::Batch(b))));
+            // KobCondBid / KobCondBidKron: the stop leg takes everything left
+            let mut c0 = cond_bid(MAKER_B, p);
+            c0.armed = 1;
+            let leg_price = c0.leg_price(1, false, NOW as i64, 2_000).unwrap();
+            let spend = c0.spend(c0.amount_left, leg_price).unwrap();
+            let amount = c0.amount_left;
+            let mut b = batch(vec![Leg::CondBid {
+                order: order(40, (spend + dc() + rem) as u64, cov(0xe1), 2_000, c0),
+                amount,
+                leg: 1,
+                evidence: None,
+                t: Some(NOW as i64),
+                merge: None,
+            }]);
+            b.taker_tokens = vec![tok(41, amount, pk(TAKER), kob_protocol::state::SCHEME_P2PK, 1_000)];
+            b.change = Some(pk(TAKER));
+            v.push((format!("refund.condbid.{tag}@{}", p.name()), conv(Action::Batch(b))));
+        }
+        // two bids of one batch: both refund (MIN, big), or one refunds and one stays (big, below)
+        for (tag, r0, r1) in [("both", MIN, 700_000_000), ("refund+stay", 700_000_000, MIN - 1), ("stay+refund", MIN - 1, 700_000_000)]
+        {
+            let mut legs = vec![];
+            for (k, (mk, rem)) in [(MAKER_B, r0), (MAKER_C, r1)].into_iter().enumerate() {
+                let b0 = BidState { tif: TIF_IOC, ..bid(mk, P250, p) };
+                let spend = quote_of(n, b0.price + b0.tip, SCALE, Round::Down).unwrap();
+                legs.push(Leg::Bid {
+                    order: order(20 + k as u8, (spend + dc() + rem) as u64, cov(0xb1 + k as u8), 1_000, b0),
+                    amount: n,
+                    t: None,
+                });
+            }
+            let mut b = batch(legs);
+            b.taker_tokens = vec![tok(31, 2 * n, pk(TAKER), kob_protocol::state::SCHEME_P2PK, 1_000)];
+            b.change = Some(pk(TAKER));
+            v.push((format!("refund.bid2.{tag}@{}", p.name()), conv(Action::Batch(b))));
+        }
+    }
+    v
+}
+
 /// Every seed action (name, action).
 pub fn actions(wide: bool) -> Vec<(String, Action)> {
     let mut v = vec![];
@@ -64,6 +143,7 @@ pub fn actions(wide: bool) -> Vec<(String, Action)> {
             v.push((format!("{n}@{}>{}", pa.name(), pb.name()), a));
         }
     }
+    v.extend(refund_actions());
     if wide {
         for p in [TemplateId::Kcc20Ref8x8, TemplateId::KronToken2433] {
             let base: Vec<(String, Action)> = common::scenarios_on(p)

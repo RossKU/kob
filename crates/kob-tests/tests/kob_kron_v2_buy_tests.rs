@@ -77,6 +77,9 @@ const NET_FEE: i64 = KAS / 10;
 const TK: i64 = KAS;
 /// Repeat merge argument -(k * MERGE_K + m): k = input index of the exit, m < MERGE_K the amount it bought back.
 const MERGE_K: i64 = 1 << 53;
+/// Smallest KAS beyond the delivery carrier a terminal conditional-bid fill sends back to the maker as its own output
+/// (REFUND_MIN).
+const REFUND_MIN: i64 = KAS;
 
 /// KRON id_types under the names the KCC-20 suites use (owner schemes).
 const SCHEME_P2PK: u8 = T_ADDR;
@@ -1173,7 +1176,7 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
             expiry,
             interval: e.interval,
             slope: e.slope,
-            price_end: if decay { e.price + e.price / 10 } else { 0 },
+            price_end: if decay { e.price + e.price / 100 } else { 0 },
             decay_step: if decay { 1 } else { 0 },
             token: e.token,
             scale: e.scale,
@@ -1229,20 +1232,25 @@ fn condb_fill(f: &Fx, cp: &CondBP, n: i64, leg: i64, next_cp: &CondBP, ev: Optio
 /// As condb_fill, with the auction time argument `t_arg` and the leg quote the fill pays.
 #[allow(clippy::too_many_arguments)]
 fn condb_fill_at(f: &Fx, cp: &CondBP, n: i64, leg: i64, next_cp: &CondBP, ev: Option<&Ev>, t_arg: i64, leg_price: i64) -> Scn {
+    condb_fill_v(f, cp, n, leg, next_cp, ev, t_arg, leg_price, condb_value(cp))
+}
+/// As condb_fill_at, with the order's escrow value `v`.
+#[allow(clippy::too_many_arguments)]
+fn condb_fill_v(f: &Fx, cp: &CondBP, n: i64, leg: i64, next_cp: &CondBP, ev: Option<&Ev>, t_arg: i64, leg_price: i64, v: i64) -> Scn {
     let k = &f.net.k;
     let c = cov(0xe1);
     let order = condb(&f.net, cp);
     let taker = pk(&f.taker);
-    let v = condb_value(cp);
     let spend = bid_all_in(n, leg_price, cp.tip);
     let cont = n < cp.amount;
+    let (dv, refund) = bid_terminal(&cp.maker, v - spend, DC);
     let mut s = Scn {
         name: "condb fill".into(),
         inputs: vec![
             call(&order, "settle", vec![nb(n), iv(1), iv(leg), iv(0), iv(t_arg)], "condb.settle", v, c, 2_000),
             tok_in(k, CARRIER, n, &taker, T_ADDR, TOKEN_COV, Wit::Auto, 1_000),
         ],
-        outputs: vec![out(if cont { DC } else { v - spend }, tspk(k, n, &cp.maker, T_ADDR), Some((1, TOKEN_COV)))],
+        outputs: vec![out(if cont { DC } else { dv }, tspk(k, n, &cp.maker, T_ADDR), Some((1, TOKEN_COV)))],
         lock_time: NOW,
         payload: vec![],
         next: vec![tok_state(n, &cp.maker, T_ADDR)],
@@ -1255,6 +1263,9 @@ fn condb_fill_at(f: &Fx, cp: &CondBP, n: i64, leg: i64, next_cp: &CondBP, ev: Op
     if let Some(e) = ev {
         let (ei, _) = add_ev(f, &mut s, e);
         set_arg(&mut s, 0, 3, iv(ei));
+    }
+    if !cont {
+        put_refund(&mut s, 0, refund);
     }
     s
 }
@@ -3114,6 +3125,32 @@ fn nb_merge(k: i64, m: i64) -> Arg {
     b[7] |= 0x80;
     Arg::V(bytes(&b))
 }
+/// Honest terminal (non-re-arm, no continuation) fill of a conditional bid that holds `left` sompi after the spend and
+/// puts `dc` on its delivery: (the value of the delivery, the maker's refund output when rem = left - dc >= REFUND_MIN).
+/// Below REFUND_MIN the whole remainder rides on the delivery.
+fn bid_terminal(maker: &[u8; 32], left: i64, dc: i64) -> (i64, Option<TransactionOutput>) {
+    let rem = left - dc;
+    if rem >= REFUND_MIN {
+        (dc, Some(out(rem, p2pk_spk(maker), None)))
+    } else {
+        (left, None)
+    }
+}
+/// Appends the refund of the bid at input `bid` as the LAST output (slot M - 1 - bid). While that slot would sit on the
+/// positional output of an input that is neither a token input nor a plain key input (the aliasing guard), spare
+/// zero-value outputs are inserted before it. Call after every other output (evidence, taker change) is in place.
+fn put_refund(s: &mut Scn, bid: usize, refund: Option<TransactionOutput>) {
+    let Some(r) = refund else { return };
+    loop {
+        let slot = s.outputs.len() - bid; // M - 1 - bid with M = outputs.len() + 1
+        let foreign = s.inputs.get(slot).is_some_and(|i| i.entry.covenant_id.is_some_and(|c| c != TOKEN_COV));
+        if !foreign {
+            break;
+        }
+        s.outputs.push(out(KAS, p2pk_spk(&[0x5a; 32]), None));
+    }
+    s.outputs.push(r);
+}
 /// Sets output `idx` to whatever balances the transaction after NET_FEE.
 fn balance(s: &mut Scn, idx: usize) {
     let ins: i64 = s.inputs.iter().map(|i| i.entry.amount as i64).sum();
@@ -3311,11 +3348,19 @@ fn rpta_merge(f: &Fx, k: &MergeBKnobs) -> Scn {
         payload: vec![],
         next,
     };
+    let mut refund = None;
     if rearm {
         // the maker keeps the profit: the exit's proceeds of n (its rptPrice, rounded up) minus the buy-back spend
         s.outputs.push(out(quote(k.n, xp.rpt_price, UP) - spend + k.maker_delta, p2pk_spk(&m), None));
     } else {
-        let v = if rest > 0 { DC } else { x_value - spend };
+        // a terminal plain fill returns the KAS beyond the delivery carrier as the maker's refund (last output)
+        let v = if rest > 0 {
+            DC
+        } else {
+            let (dv, r) = bid_terminal(&m, x_value - spend, xp.dc);
+            refund = r;
+            dv
+        };
         s.outputs.push(out(v + k.maker_delta, tspk(tk, k.n, &m, T_ADDR), Some((1, TOKEN_COV))));
     }
     if rest > 0 {
@@ -3376,6 +3421,7 @@ fn rpta_merge(f: &Fx, k: &MergeBKnobs) -> Scn {
     s.inputs.push(p2pk_in(&f.taker, TK));
     s.outputs.push(out(0, p2pk_spk(&taker), None));
     let last = s.outputs.len() - 1;
+    s.outputs.extend(refund);
     balance(&mut s, last);
     s
 }
@@ -3515,7 +3561,10 @@ fn buy_repeat_positive(f: &Fx) {
             mk.with_entry = false;
             let s = rpta_merge(f, &mk);
             run_ok(&with_name(s.clone(), &format!("RPB9 ledger cycle {cycle}: plain take-profit, tokens back to the maker")));
-            maker_total += s.outputs[0].value as i64;
+            // the delivery plus the refund output of the terminal fill (the KAS beyond the delivery carrier)
+            let to_maker = p2pk_spk(&pk(&f.maker_a));
+            maker_total += s.outputs[0].value as i64
+                + s.outputs.iter().filter(|o| o.script_public_key == to_maker).map(|o| o.value as i64).sum::<i64>();
         }
     }
     assert_eq!(
@@ -3942,13 +3991,14 @@ fn condb_raw_fill(f: &Fx, amount: i64, n: i64, rate: i64, spend: i64) -> Scn {
     let taker = pk(&f.taker);
     let v = spend + 2 * DC;
     let cont = n < amount;
+    let (dv, refund) = bid_terminal(&m, v - spend, DC);
     let mut s = Scn {
         name: "condb overflow".into(),
         inputs: vec![
             call(&order, "settle", vec![nb(n), iv(1), iv(0), iv(0), iv(0)], "condb.settle", v, c, 2_000),
             tok_in(k, CARRIER, n, &taker, T_ADDR, TOKEN_COV, Wit::Auto, 1_000),
         ],
-        outputs: vec![out(if cont { DC } else { v - spend }, tspk(k, n, &m, T_ADDR), Some((1, TOKEN_COV)))],
+        outputs: vec![out(if cont { DC } else { dv }, tspk(k, n, &m, T_ADDR), Some((1, TOKEN_COV)))],
         lock_time: NOW,
         payload: vec![],
         next: vec![tok_state(n, &m, T_ADDR)],
@@ -3958,6 +4008,9 @@ fn condb_raw_fill(f: &Fx, amount: i64, n: i64, rate: i64, spend: i64) -> Scn {
     }
     s.inputs.push(p2pk_in(&f.taker, TK));
     s.outputs.push(out(spend + CARRIER + TK, p2pk_spk(&taker), None));
+    if !cont {
+        put_refund(&mut s, 0, refund);
+    }
     s
 }
 
@@ -4377,9 +4430,11 @@ fn set_cov(s: &mut Scn, k: usize, c: Option<Hash>) {
 }
 /// Appends an output of `v` sompi to `to` bound to covenant id c (authorising input `auth`), funded from the last output.
 fn bind_extra(s: &mut Scn, c: Hash, auth: u16, to: &[u8; 32], v: i64) {
-    let l = s.outputs.len() - 1;
+    // (the KAS comes from the last plain output to `to` (else the last output) and the new output goes right behind it: a
+    // terminal bid fill's refund stays the last output)
+    let l = s.outputs.iter().rposition(|o| o.script_public_key == p2pk_spk(to) && o.covenant.is_none()).unwrap_or(s.outputs.len() - 1);
     s.outputs[l].value -= v as u64;
-    s.outputs.push(out(v, p2pk_spk(to), Some((auth, c))));
+    s.outputs.insert(l + 1, out(v, p2pk_spk(to), Some((auth, c))));
 }
 /// Spends a P2PK UTXO of `kp` (value v) that carries covenant id c (a sibling UTXO of an order's id); its value goes to
 /// the last output.
@@ -4631,10 +4686,21 @@ fn audit_cond_bid(f: &Fx) {
     let mut s = with_name(last4(), "NAU-KCB16 terminating fill leaving an output bound to the order's id (to the taker)");
     bind_extra(&mut s, e, 0, &taker, KAS);
     run_bad(&s, 0);
-    let mut s = with_name(last4(), "NAU-KCB17 terminating fill: the delivery 1 sompi short of the escrow's rest (to the taker)");
+    // (an escrow with REFUND_MIN - 1 sompi beyond the delivery carrier: no refund, the rest rides on the delivery)
+    let tight = condb_fill_v(
+        f,
+        &small,
+        4 * TOK,
+        0,
+        &small,
+        None,
+        0,
+        small.leg_price(0),
+        bid_all_in(4 * TOK, small.tp, small.tip) + DC + REFUND_MIN - 1,
+    );
+    let mut s = with_name(tight, "NAU-KCB17 terminating fill: the delivery 1 sompi short of the escrow's rest (to the taker)");
     s.outputs[0].value -= 1;
-    let l = s.outputs.len() - 1;
-    s.outputs[l].value += 1;
+    s.outputs[1].value += 1;
     run_bad(&s, 0);
 
     // update
@@ -5172,4 +5238,257 @@ fn audit_ifd_ask(f: &Fx) {
             0,
         );
     }
+}
+
+// ---------------------------------------------------------------- BR: the refund of a terminal conditional-bid fill
+
+/// One KobCondBidKron of a terminal-fill transaction: its parameters (the OCO template, amount = n) and its escrow.
+#[derive(Clone)]
+struct BrCond {
+    cp: CondBP,
+    n: i64,
+    v: i64,
+}
+impl BrCond {
+    /// An OCO buy of `n` base units, filled in full on its limit leg, that ends with exactly `rem` sompi beyond the
+    /// delivery carrier (rem = escrow - spend - deliveryCarrier).
+    fn new(maker: &Keypair, n: i64, rem: i64) -> Self {
+        let cp = CondBP::oco(pk(maker)).with_amount(n);
+        let v = bid_all_in(n, cp.tp, cp.tip) + DC + rem;
+        BrCond { cp, n, v }
+    }
+    fn spend(&self) -> i64 {
+        bid_all_in(self.n, self.cp.tp, self.cp.tip)
+    }
+}
+
+/// The honest terminal fill of k conditional bids (limit leg, no continuation), all sold into by one seller: inputs
+/// [order 0 .. order k-1, `toks` token inputs of the seller, the seller's key input]; outputs [delivery 0 .. delivery
+/// k-1, the seller's KAS, the refunds in reverse input order] (order 0's refund last). Orders with a refund come first.
+fn br_conds(f: &Fx, orders: &[BrCond], toks: usize) -> Scn {
+    let kr = &f.net.k;
+    let taker = pk(&f.taker);
+    let k = orders.len();
+    let total: i64 = orders.iter().map(|o| o.n).sum();
+    let mut inputs = vec![];
+    let mut outputs = vec![];
+    let mut refunds = vec![];
+    let mut next = vec![];
+    let mut spent = 0;
+    for (i, o) in orders.iter().enumerate() {
+        let c = cov(0xe1 + i as u8);
+        inputs.push(call(
+            &condb(&f.net, &o.cp),
+            "settle",
+            vec![nb(o.n), iv(k as i64), iv(0), iv(0), iv(0)],
+            "condb.settle",
+            o.v,
+            c,
+            2_000,
+        ));
+        let (dv, r) = bid_terminal(&o.cp.maker, o.v - o.spend(), o.cp.dc);
+        outputs.push(out(dv, tspk(kr, o.n, &o.cp.maker, T_ADDR), Some((k as u16, TOKEN_COV))));
+        next.push(tok_state(o.n, &o.cp.maker, T_ADDR));
+        refunds.push(r);
+        spent += o.spend();
+    }
+    for j in 0..toks {
+        let amount = if toks == 1 {
+            total
+        } else if j == 0 {
+            total - TOK
+        } else {
+            TOK
+        };
+        inputs.push(tok_in(kr, CARRIER, amount, &taker, T_ADDR, TOKEN_COV, Wit::Auto, 1_000));
+    }
+    inputs.push(p2pk_in(&f.taker, TK));
+    outputs.push(out(spent + toks as i64 * CARRIER + TK - NET_FEE, p2pk_spk(&taker), None));
+    for i in 1..k {
+        assert!(refunds[i].is_none() || refunds[i - 1].is_some(), "orders with a refund come first");
+    }
+    outputs.extend(refunds.into_iter().rev().flatten());
+    Scn { name: "BR terminal conditional fill".into(), inputs, outputs, lock_time: NOW, payload: vec![], next }
+}
+
+/// A KobAskKron of the order's maker sold out beside a terminal conditional-bid fill: [order, ask custody, matcher key,
+/// ask]; the ask pays its maker at output 3 (its own index). With `alias` there is no output after it, so the order's
+/// refund slot M - 1 = 3 is the ask's payout; else the refund follows as output 4 (beyond the 4 inputs).
+fn br_cond_alias(f: &Fx, maker: &Keypair, alias: bool) -> Scn {
+    let kr = &f.net.k;
+    let a = cov(0x9a);
+    let o = BrCond::new(maker, 4 * TOK, 3 * KAS);
+    let ap = AskP { amount: 4 * TOK, ..AskP::new(pk(maker), 190_000_000) };
+    let pay = ask_all_in(ap.amount, ap.price, TIP);
+    let (dv, refund) = bid_terminal(&o.cp.maker, o.v - o.spend(), o.cp.dc);
+    let refund = refund.expect("a refund");
+    let rem = refund.value as i64;
+    let mut s = Scn {
+        name: "BR cond alias".into(),
+        inputs: vec![
+            call(&condb(&f.net, &o.cp), "settle", vec![nb(o.n), iv(1), iv(0), iv(0), iv(0)], "condb.settle", o.v, cov(0xe1), 2_000),
+            tok_in(kr, CARRIER, ap.amount, &a.as_bytes(), SCHEME_COVID, TOKEN_COV, Wit::CovId, 1_000),
+            p2pk_in(&f.matcher, pay + CARRIER),
+            call(&f.net.ask(&ap), "settle", vec![nb(ap.amount), iv(1), iv(0), iv(0)], "ask.settle", CARRIER, a, 1_000),
+        ],
+        outputs: vec![
+            out(dv, tspk(kr, o.n, &o.cp.maker, T_ADDR), Some((1, TOKEN_COV))),
+            out(KAS, p2pk_spk(&pk(&f.matcher)), None),
+            out(KAS, p2pk_spk(&pk(&f.matcher)), None),
+            out(pay + 2 * CARRIER + if alias { rem } else { 0 }, p2pk_spk(&ap.maker), None),
+        ],
+        lock_time: NOW,
+        payload: vec![],
+        next: vec![tok_state(o.n, &o.cp.maker, T_ADDR)],
+    };
+    if !alias {
+        s.outputs.push(refund);
+    }
+    balance(&mut s, 1);
+    s
+}
+
+#[test]
+fn kron_v2_buy_bid_refund() {
+    for tpl in TPLS {
+        println!("=== KRON template {tpl}");
+        bid_refund(&fx(tpl));
+    }
+}
+fn bid_refund(f: &Fx) {
+    let (mb, mc) = (&f.maker_b, &f.maker_c);
+    let taker = pk(&f.taker);
+    let big = 6 * KAS;
+    let last = |s: &Scn| s.outputs.len() - 1;
+
+    // ---- controls
+    run_ok(&with_name(
+        br_conds(f, &[BrCond::new(mb, 4 * TOK, big)], 1),
+        "PBR01 terminal limit-leg fill of a conditional bid, rem 6 KAS: refund",
+    ));
+    let s = br_conds(f, &[BrCond::new(mb, 4 * TOK, REFUND_MIN)], 1);
+    assert_eq!(s.outputs.len(), 3, "rem = REFUND_MIN is refunded");
+    run_ok(&with_name(s, "PBR02 rem exactly REFUND_MIN (1 KAS): accepted with the refund"));
+    let s = br_conds(f, &[BrCond::new(mb, 4 * TOK, REFUND_MIN - 1)], 1);
+    assert_eq!(s.outputs.len(), 2, "rem = REFUND_MIN - 1 stays on the delivery");
+    run_ok(&with_name(s, "PBR03 rem = REFUND_MIN - 1 sompi with everything on the delivery: accepted"));
+    // the order as built by the shared fill helper (OCO, 10 tokens, worst-case escrow)
+    let cp = CondBP::oco(pk(mb));
+    run_ok(&with_name(
+        condb_fill(f, &cp, 10 * TOK, 0, &cp, None),
+        "PBR04 terminal fill of the full OCO escrow (rem 10.9 KAS): refund",
+    ));
+    run_ok(&with_name(
+        br_conds(f, &[BrCond::new(mb, 4 * TOK, big), BrCond::new(mb, 2 * TOK, 3 * KAS)], 1),
+        "PBR05 two conditional bids of one maker terminal in one tx, each with its own refund",
+    ));
+    run_ok(&with_name(
+        br_conds(f, &[BrCond::new(mb, 4 * TOK, big), BrCond::new(mc, 2 * TOK, 3 * KAS)], 1),
+        "PBR06 two conditional bids of two makers terminal in one tx, each with its own refund",
+    ));
+    run_ok(&with_name(
+        br_conds(f, &[BrCond::new(mb, 4 * TOK, big), BrCond::new(mc, 2 * TOK, REFUND_MIN - 1)], 1),
+        "PBR07 order 0 refunds, order 1 (rem below REFUND_MIN) keeps everything on its delivery",
+    ));
+    let mut s = br_conds(f, &[BrCond::new(mb, 4 * TOK, big)], 1);
+    let r = s.outputs.pop().unwrap();
+    s.outputs.push(out(KAS, p2pk_spk(&taker), None));
+    s.outputs.push(r);
+    assert!(last(&s) >= s.inputs.len());
+    run_ok(&with_name(s, "PBR08 refund slot beyond the input count (M - 1 = 3, 3 inputs)"));
+    let s = br_conds(f, &[BrCond::new(mb, 4 * TOK, big)], 2);
+    assert_eq!(s.inputs[last(&s)].entry.covenant_id, Some(TOKEN_COV));
+    run_ok(&with_name(s, "PBR09 refund slot at a token input (the seller's second token input)"));
+    let s = br_conds(f, &[BrCond::new(mb, 4 * TOK, big)], 1);
+    assert_eq!(s.inputs[last(&s)].entry.covenant_id, None);
+    run_ok(&with_name(s, "PBR10 refund slot at the seller's key input (no covenant)"));
+    run_ok(&with_name(
+        br_cond_alias(f, mb, false),
+        "PBR11 a KobAskKron of the same maker beside the order: its payout is not the refund slot",
+    ));
+
+    // ---- attacks, all refused by the conditional bid (input 0)
+    let one = || br_conds(f, &[BrCond::new(mb, 4 * TOK, big)], 1);
+    let mut s = with_name(one(), "NBR01 refund redirected to another P2PK key");
+    let l = last(&s);
+    s.outputs[l].script_public_key = p2pk_spk(&pk(mc));
+    run_bad(&s, 0);
+    let mut s = with_name(one(), "NBR02 refund redirected to a non-P2PK script (a P2SH)");
+    let l = last(&s);
+    s.outputs[l].script_public_key = pay_to_script_hash_script(&[0x51]);
+    run_bad(&s, 0);
+    let mut s = with_name(one(), "NBR03 refund short by 1 sompi (the seller's KAS takes it)");
+    let l = last(&s);
+    s.outputs[l].value -= 1;
+    s.outputs[1].value += 1;
+    run_bad(&s, 0);
+    let mut s = with_name(one(), "NBR04 refund omitted (rem 6 KAS rides on the delivery)");
+    let r = s.outputs.pop().unwrap();
+    s.outputs[0].value += r.value;
+    run_bad(&s, 0);
+    let mut s = with_name(one(), "NBR05 delivery 1 sompi below deliveryCarrier with the refund 1 sompi above rem");
+    let l = last(&s);
+    s.outputs[0].value -= 1;
+    s.outputs[l].value += 1;
+    run_bad(&s, 0);
+    let mut s = with_name(
+        br_conds(f, &[BrCond::new(mb, 4 * TOK, REFUND_MIN)], 1),
+        "NBR06 rem = REFUND_MIN with everything on the delivery (no refund)",
+    );
+    let r = s.outputs.pop().unwrap();
+    s.outputs[0].value += r.value;
+    run_bad(&s, 0);
+    let mut s = with_name(
+        br_conds(f, &[BrCond::new(mb, 4 * TOK, REFUND_MIN - 1)], 1),
+        "NBR07 rem = REFUND_MIN - 1 split off a delivery that keeps only deliveryCarrier",
+    );
+    s.outputs[0].value -= REFUND_MIN as u64 - 1;
+    s.outputs.push(out(REFUND_MIN - 1, p2pk_spk(&pk(mb)), None));
+    run_bad(&s, 0);
+    let mut s = with_name(
+        br_conds(f, &[BrCond::new(mb, 4 * TOK, REFUND_MIN - 1)], 1),
+        "NBR08 rem = REFUND_MIN - 1: the delivery keeps 1 sompi less than the unspent escrow",
+    );
+    s.outputs[0].value -= 1;
+    s.outputs[1].value += 1;
+    run_bad(&s, 0);
+    // two orders of one maker, ONE refund output for both (the X14 pattern)
+    let two = || br_conds(f, &[BrCond::new(mb, 4 * TOK, big), BrCond::new(mb, 2 * TOK, 3 * KAS)], 1);
+    let mut s = with_name(two(), "NBR09 two conditional bids of one maker share ONE refund output (the sum at the last slot)");
+    let r1 = s.outputs.pop().unwrap();
+    let r0 = s.outputs.pop().unwrap();
+    s.outputs.push(out((r0.value + r1.value) as i64, r0.script_public_key.clone(), None));
+    // order 0 finds its refund at M - 1; order 1's slot, M - 2, is now the seller's KAS output
+    run_bad(&s, 1);
+    let mut s = with_name(two(), "NBR10 two conditional bids of one maker share ONE refund output (the sum at the second slot)");
+    let r1 = s.outputs.pop().unwrap();
+    let r0 = s.outputs.pop().unwrap();
+    let pay = s.outputs.pop().unwrap();
+    s.outputs.push(out((r0.value + r1.value) as i64, r0.script_public_key.clone(), None));
+    s.outputs.push(pay);
+    // order 0's slot, M - 1, is now the seller's KAS output
+    run_bad(&s, 0);
+    let mut s = with_name(
+        br_conds(f, &[BrCond::new(mb, 4 * TOK, big), BrCond::new(mc, 2 * TOK, big)], 1),
+        "NBR11 two makers: the two refunds swapped (each order's slot holds the other maker's refund)",
+    );
+    let l = last(&s);
+    s.outputs.swap(l, l - 1);
+    run_bad(&s, 0);
+    let mut s = with_name(one(), "NBR12 refund one slot early (before the seller's KAS; the last output is the seller's)");
+    let l = last(&s);
+    s.outputs.swap(l, l - 1);
+    run_bad(&s, 0);
+    let mut s = with_name(one(), "NBR13 refund one slot late (a spare output after it)");
+    s.outputs.push(out(KAS, p2pk_spk(&taker), None));
+    run_bad(&s, 0);
+    let s = with_name(br_cond_alias(f, mb, true), "NBR14 the refund slot is the payout output of a KobAskKron of the same maker");
+    run_bad(&s, 0);
+    // a continuation next to the refund (the fill sells the whole amountLeft)
+    let mut s = with_name(one(), "NBR15 terminal fill with a continuation of the order next to the full refund");
+    let l = last(&s);
+    s.outputs[1].value -= KAS as u64;
+    let o = BrCond::new(mb, 4 * TOK, big);
+    s.outputs.insert(l, out(KAS, spk_of(&condb(&f.net, &o.cp)), Some((0, cov(0xe1)))));
+    run_bad(&s, 0);
 }

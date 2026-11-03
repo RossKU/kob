@@ -82,6 +82,8 @@ struct D {
     stats: BTreeMap<&'static str, Stat>,
     fails: Vec<String>,
     notes: BTreeMap<String, u64>,
+    /// Rotation of the terminal-fill rules over (program family, remainder size).
+    cycle: u64,
 }
 
 impl D {
@@ -92,6 +94,7 @@ impl D {
             stats: BTreeMap::new(),
             fails: vec![],
             notes: BTreeMap::new(),
+            cycle: 0,
         }
     }
     fn st(&mut self, rule: &'static str) -> &mut Stat {
@@ -411,14 +414,137 @@ fn rule_ask(d: &mut D) {
 
 // ------------------------------------------------------------------------------------------------ bids
 
+/// `REFUND_MIN` of KobBid, KobBidKron, KobCondBid and KobCondBidKron (the Rust model of the terminal-fill rule; the
+/// builders' `kob_protocol::tx::REFUND_MIN` is cross-checked against it): a fill that ends the order (no continuation) leaves
+/// `rem = (what the order holds after the spend) - deliveryCarrier`; from REFUND_MIN on, `rem` returns to the maker as a plain
+/// P2PK output at output `M - 1 - i` (M the number of outputs, i the order's input index) and the delivery carries the
+/// carrier alone; below it, the delivery carries everything unspent.
+const REFUND_MIN: i64 = 100_000_000;
+
+/// The size of the remainder a terminal fill is generated for: around REFUND_MIN, below and far above.
+#[derive(Clone, Copy, Debug)]
+enum Rem {
+    MinMinus1,
+    Min,
+    MinPlus1,
+    Above,
+    Below,
+    Big,
+}
+const REMS: [Rem; 6] = [Rem::MinMinus1, Rem::Min, Rem::MinPlus1, Rem::Above, Rem::Below, Rem::Big];
+
+fn rem_target(r: &mut StdRng, k: Rem) -> i64 {
+    match k {
+        Rem::MinMinus1 => REFUND_MIN - 1,
+        Rem::Min => REFUND_MIN,
+        Rem::MinPlus1 => REFUND_MIN + 1,
+        Rem::Above => r.gen_range(REFUND_MIN..=REFUND_MIN + 10 * KAS as i64),
+        Rem::Below => r.gen_range(0..REFUND_MIN - 1),
+        Rem::Big => r.gen_range(10 * KAS as i64..=1_000 * KAS as i64),
+    }
+}
+
+fn rem_class(rem: i64) -> &'static str {
+    match rem {
+        r if r < REFUND_MIN - 1 => "rem < MIN-1 (stays on the delivery)",
+        r if r == REFUND_MIN - 1 => "rem = MIN-1 (stays on the delivery)",
+        r if r == REFUND_MIN => "rem = MIN (refund)",
+        r if r == REFUND_MIN + 1 => "rem = MIN+1 (refund)",
+        _ => "rem > MIN+1 (refund)",
+    }
+}
+
+impl D {
+    /// The next (program family, remainder) of the terminal-fill rules, rotating through every combination.
+    fn forced(&mut self) -> (bool, Rem) {
+        let c = self.cycle;
+        self.cycle += 1;
+        (c % 2 == 1, REMS[(c as usize / 2) % REMS.len()])
+    }
+    /// A random token program of the family.
+    fn prog_of(&mut self, kron: bool) -> TemplateId {
+        let progs: Vec<TemplateId> = PROGS.iter().copied().filter(|p| (p.family() == Family::Kron) == kron).collect();
+        progs[self.r.gen_range(0..progs.len())]
+    }
+}
+
+/// The terminal-fill rule of a bid kind, probed on the builder's own transaction. `left` is what the order holds after the
+/// spend (`inValue - allIn`; conditional bid: `inValue - spend`), `i` its input (= its delivery output), `maker` its maker.
+///   rem = left - deliveryCarrier >= REFUND_MIN: the builder puts rem at output `M - 1 - i`, a P2PK output of the maker, and
+///     the carrier alone on the delivery. Probed at the boundary (rem accepted, rem - 1 refused; the carrier likewise) and
+///     with the layouts refused: refund redirected, missing, in the neighbouring slot, remainder left on the delivery.
+///   rem < REFUND_MIN: everything unspent rides on the delivery (accepted at `left`, `left - 1` refused), and splitting the
+///     remainder off into an output of its own is refused.
+#[allow(clippy::too_many_arguments)]
+fn terminal_probe(d: &mut D, rule: &'static str, m: &MTx, i: usize, left: i64, dc: i64, maker: [u8; 32], kron: bool, ctx: &str) {
+    assert_eq!(kob_protocol::tx::REFUND_MIN as i64, REFUND_MIN, "the builders' REFUND_MIN is the covenants'");
+    let rem = left - dc;
+    let size = m.outs.len();
+    d.note(format!("{rule}: terminal fill, {} program, {}", if kron { "KRON" } else { "base" }, rem_class(rem)));
+    let attacker = kob_protocol::script::p2pk_spk(&pk(ATTACKER));
+    if rem >= REFUND_MIN {
+        let Some(r) = size.checked_sub(1 + i) else {
+            d.fails.push(format!("{rule}: input {i} has no output M-1-i of {size} ({ctx})"));
+            return;
+        };
+        let ok = p2pk_of(&m.outs[r].script_public_key) == Some(maker) && m.outs[r].value as i64 >= rem && m.outs[r].covenant.is_none();
+        if !ok {
+            d.fails.push(format!("{rule}: the builder does not put the refund {rem} to the maker at output M-1-i = {r} ({ctx})"));
+            return;
+        }
+        d.floor(rule, m, i, dc, &format!("{ctx} (delivery carries the carrier, remainder {rem} refunded)"));
+        d.floor(rule, m, r, rem, &format!("{ctx} (refund at output {r})"));
+        // the layouts the covenant refuses
+        let mut x = m.clone();
+        x.outs[r].script_public_key = attacker;
+        d.expect(rule, &x, false, format!("{ctx}: refund redirected to the attacker"));
+        let mut x = m.clone();
+        x.outs.remove(r);
+        d.expect(rule, &x, false, format!("{ctx}: refund output missing"));
+        let mut x = m.clone();
+        x.outs[i].value += x.outs[r].value;
+        x.outs.remove(r);
+        d.expect(rule, &x, false, format!("{ctx}: remainder {rem} left on the delivery, no refund output"));
+        if r >= 1 && m.outs[r - 1].script_public_key != m.outs[r].script_public_key {
+            let mut x = m.clone();
+            x.outs.swap(r - 1, r);
+            d.expect(rule, &x, false, format!("{ctx}: refund in the wrong slot (swapped with output {})", r - 1));
+        }
+    } else {
+        d.floor(rule, m, i, left, &format!("{ctx} (remainder {rem} below REFUND_MIN rides on the delivery)"));
+        if rem >= 1 {
+            let mut x = m.clone();
+            x.outs[i].value = dc as u64;
+            x.outs.push(TransactionOutput {
+                value: rem as u64,
+                script_public_key: kob_protocol::script::p2pk_spk(&maker),
+                covenant: None,
+            });
+            d.expect(rule, &x, false, format!("{ctx}: remainder {rem} below REFUND_MIN split off the delivery"));
+        }
+    }
+}
+
 fn rule_bid(d: &mut D) {
-    const R: &str = "bid.spend+budget";
-    let (tpl, kron) = d.prog();
+    bid_case(d, "bid.spend+budget", None);
+}
+
+/// Terminal fills of KobBid / KobBidKron around REFUND_MIN (every program family and remainder size in rotation).
+fn rule_bid_terminal(d: &mut D) {
+    let f = d.forced();
+    bid_case(d, "bid.terminal", Some(f));
+}
+
+fn bid_case(d: &mut D, rule: &'static str, force: Option<(bool, Rem)>) {
+    let (tpl, kron) = match force {
+        Some((kron, _)) => (d.prog_of(kron), kron),
+        None => d.prog(),
+    };
     let (scale, amount, price) = geometry(&mut d.r, kron);
     let r = &mut d.r;
     let lock = NOW as i64;
     let mut b0 = BidState { scale, price, tip: 0, ..bid(MAKER_B, price, tpl) };
-    if r.gen_bool(0.5) {
+    if r.gen_bool(if force.is_some() { 0.25 } else { 0.5 }) {
         b0.slope = r.gen_range(1..=(price / 20).max(1));
         b0.price_end = price + r.gen_range(0..=price.min(1_000_000_000_000));
         b0.decay_step = r.gen_range(1..=2_000);
@@ -427,23 +553,28 @@ fn rule_bid(d: &mut D) {
     if r.gen_bool(0.6) {
         b0.tip = r.gen_range(0..=price);
     }
-    b0.delivery_carrier = [1, SMALL, KAS as i64, DC][r.gen_range(0..4)];
-    b0.reserve = if r.gen_bool(0.3) { r.gen_range(0..=10 * KAS as i64) } else { 0 };
-    b0.tif = [0, 0, 0, TIF_IOC, TIF_FOK][r.gen_range(0..5)];
+    b0.delivery_carrier =
+        if force.is_some() { [SMALL, KAS as i64, DC][r.gen_range(0..3)] } else { [1, SMALL, KAS as i64, DC][r.gen_range(0..4)] };
+    b0.reserve = if force.is_none() && r.gen_bool(0.3) { r.gen_range(0..=10 * KAS as i64) } else { 0 };
+    b0.tif = if force.is_some() {
+        [TIF_IOC, TIF_IOC, TIF_IOC, TIF_GTC][r.gen_range(0..4)]
+    } else {
+        [0, 0, 0, TIF_IOC, TIF_FOK][r.gen_range(0..5)]
+    };
     let n = r.gen_range(1..=amount);
     b0.min_fill = if r.gen_bool(0.5) { 1 } else { r.gen_range(1..=n) };
     let (Some(used_n), Some(used_min)) = (b0.used(n), b0.used(b0.min_fill)) else {
-        d.st(R).skipped += 1;
+        d.st(rule).skipped += 1;
         return;
     };
     // the bid continues when it can still afford one minimum fill, else it ends (FOK: always)
-    let continues = b0.tif != TIF_FOK && r.gen_bool(0.6);
+    let continues = force.is_none() && b0.tif != TIF_FOK && r.gen_bool(0.6);
     let value = if continues {
         let funded = n + r.gen_range(b0.min_fill..=amount.max(b0.min_fill) + 3 * scale);
         match b0.used(funded) {
             Some(u) => u + 2 * b0.delivery_carrier + b0.reserve + r.gen_range(0..=used_min),
             None => {
-                d.st(R).skipped += 1;
+                d.st(rule).skipped += 1;
                 return;
             }
         }
@@ -452,59 +583,141 @@ fn rule_bid(d: &mut D) {
     };
     let daa = r.gen_range(1_000..lock - 1) as u64;
     let Some(origin) = b0.origin(daa as i64).filter(|o| *o <= lock) else {
-        d.st(R).skipped += 1;
+        d.st(rule).skipped += 1;
         return;
     };
     if origin > lock {
-        d.st(R).skipped += 1;
+        d.st(rule).skipped += 1;
         return;
     }
     let t = (b0.slope > 0).then(|| r.gen_range(origin..=lock));
     if !decay_fits(b0.price, b0.slope, b0.decay_step, origin, t.unwrap_or(lock), true) {
-        d.st(R).skipped += 1;
-        d.note(format!("{R}: price + slope * steps does not fit an i64 (the covenant fails the script), not probed"));
+        d.st(rule).skipped += 1;
+        d.note(format!("{rule}: price + slope * steps does not fit an i64 (the covenant fails the script), not probed"));
         return;
     }
+    // the budget a fill consumes (ceil at pMax + tip) and the spend (floor at p(t) + tip), as the covenant rounds
+    let Some(p) = b0.price_at(t.unwrap_or(lock), daa as i64) else {
+        d.st(rule).skipped += 1;
+        return;
+    };
+    let (Some(used), Some(all_in)) = (quote(n, b0.price_max() + b0.tip, scale, true), quote(n, p + b0.tip, scale, false)) else {
+        d.st(rule).skipped += 1;
+        return;
+    };
+    // a terminal fill around REFUND_MIN: the UTXO holds the spend, the carrier and the chosen remainder
+    let value = match force {
+        Some((_, k)) => {
+            let target = rem_target(&mut d.r, k);
+            let v = all_in + b0.delivery_carrier + target;
+            if v - used < b0.reserve {
+                d.st(rule).skipped += 1;
+                return;
+            }
+            v
+        }
+        None => value,
+    };
     let c = cov(0xb1);
     let mut b = batch(lock as u64, vec![Leg::Bid { order: order(20, value as u64, c, daa, b0.clone()), amount: n, t }]);
     b.taker_tokens = vec![tok(21, n, pk(TAKER), SCHEME_P2PK, 1_000)];
     b.change = Some(pk(TAKER));
     let ctx = format!("{b0:?} value {value} n {n} t {t:?}");
-    // the budget a fill consumes (ceil at pMax + tip) and the spend (floor at p(t) + tip), as the covenant rounds
-    let Some(p) = b0.price_at(t.unwrap_or(lock), daa as i64) else {
-        d.st(R).skipped += 1;
-        return;
-    };
-    let (Some(used), Some(all_in)) = (quote(n, b0.price_max() + b0.tip, scale, true), quote(n, p + b0.tip, scale, false)) else {
-        d.st(R).skipped += 1;
-        return;
-    };
     if b0.used(n) != Some(used) || b0.spend(n, t.unwrap_or(lock), daa as i64) != Some(all_in) {
-        d.fails.push(format!("{R}: BidState::used / spend disagree with the covenant rounding ({ctx})"));
+        d.fails.push(format!("{rule}: BidState::used / spend disagree with the covenant rounding ({ctx})"));
     }
-    let Some(m) = d.build(R, Action::Batch(b), kron, &ctx) else { return };
-    off_scale(d, R, n, scale);
+    let Some(m) = d.build(rule, Action::Batch(b), kron, &ctx) else { return };
+    off_scale(d, rule, n, scale);
     let i = input_of(&m, c).unwrap();
     let left = value - used;
     let can_continue = left - b0.delivery_carrier - b0.reserve >= used_min;
     if can_continue != b0.can_continue(left) {
-        d.fails.push(format!("{R}: BidState::can_continue disagrees ({ctx})"));
+        d.fails.push(format!("{rule}: BidState::can_continue disagrees ({ctx})"));
     }
     if b0.tif == TIF_GTC && can_continue {
-        d.floor(R, &m, i, b0.delivery_carrier + used - all_in, &ctx);
+        d.floor(rule, &m, i, b0.delivery_carrier + used - all_in, &ctx);
         // the continuation keeps exactly left - deliveryCarrier
         let k = cont_of(&m, c).expect("continuation");
         let exact = left - b0.delivery_carrier;
         if m.outs[k].value as i64 != exact {
-            d.fails.push(format!("{R}: continuation {} != Rust {exact} ({ctx})", m.outs[k].value));
+            d.fails.push(format!("{rule}: continuation {} != Rust {exact} ({ctx})", m.outs[k].value));
         }
         for (v, ok) in [(exact, true), (exact - 1, false), (exact + 1, false)] {
             let mut x = m.clone();
             x.outs[k].value = v as u64;
-            d.expect(R, &x, ok, format!("{ctx}: continuation {v} (Rust {exact})"));
+            d.expect(rule, &x, ok, format!("{ctx}: continuation {v} (Rust {exact})"));
         }
     } else {
-        d.floor(R, &m, i, value - all_in, &ctx);
+        // the order ends (exhausted, IOC, FOK): what it holds after the spend is `value - all_in`
+        terminal_probe(d, rule, &m, i, value - all_in, b0.delivery_carrier, b0.maker, kron, &ctx);
+    }
+}
+
+/// Two bids of one batch that both end: the refunds sit at the last outputs in the reverse order of the inputs (the builder
+/// puts the bids with a refund first). Every pair of remainders around REFUND_MIN; swapping the two refunds, dropping one or
+/// redirecting one is refused.
+fn rule_bid_terminal_pair(d: &mut D) {
+    const R: &str = "bid.terminal2";
+    let (tpl, kron) = d.prog();
+    let (scale, price) = (1_000i64, 250_000_000i64);
+    let r = &mut d.r;
+    let lock = NOW as i64;
+    let ks = [REMS[r.gen_range(0..REMS.len())], REMS[r.gen_range(0..REMS.len())]];
+    let rems = [rem_target(r, ks[0]), rem_target(r, ks[1])];
+    let makers = [MAKER_B, MAKER_C];
+    let mut legs = vec![];
+    let mut ctx = String::new();
+    let mut taker_n = 0;
+    let mut lefts = vec![];
+    for (k, (&rem, &mk)) in rems.iter().zip(makers.iter()).enumerate() {
+        let b0 = BidState { scale, price, tip: 0, tif: TIF_IOC, delivery_carrier: DC, ..bid(mk, price, tpl) };
+        let n = r.gen_range(1..=5) * scale;
+        let Some(all_in) = quote(n, price, scale, false) else { return };
+        let value = all_in + DC + rem;
+        lefts.push(DC + rem);
+        taker_n += n;
+        ctx += &format!(" bid {k}: n {n} rem {rem}");
+        legs.push(Leg::Bid {
+            order: order(20 + k as u8, value as u64, cov(0xb1 + k as u8), 1_000 + k as u64, b0),
+            amount: n,
+            t: None,
+        });
+    }
+    let mut b = batch(lock as u64, legs);
+    b.taker_tokens = vec![tok(31, taker_n, pk(TAKER), SCHEME_P2PK, 1_000)];
+    b.change = Some(pk(TAKER));
+    let Some(m) = d.build(R, Action::Batch(b), kron, &ctx) else { return };
+    let size = m.outs.len();
+    let idx = [input_of(&m, cov(0xb1)).unwrap(), input_of(&m, cov(0xb2)).unwrap()];
+    let mut refunds = vec![];
+    for k in 0..2 {
+        let rem = lefts[k] - DC;
+        d.note(format!("{R}: bid {k}, {}", rem_class(rem)));
+        if rem >= REFUND_MIN {
+            let slot = size - 1 - idx[k];
+            if p2pk_of(&m.outs[slot].script_public_key) != Some(pk(makers[k])) || (m.outs[slot].value as i64) < rem {
+                d.fails.push(format!("{R}: the builder does not put bid {k}'s refund {rem} at output M-1-i = {slot} ({ctx})"));
+                return;
+            }
+            d.floor(R, &m, slot, rem, &format!("{ctx} (bid {k}'s refund at output {slot})"));
+            refunds.push((k, slot, rem));
+        } else {
+            d.floor(R, &m, idx[k], lefts[k], &format!("{ctx} (bid {k}: remainder {rem} rides on the delivery)"));
+        }
+    }
+    if let [(_, s0, _), (_, s1, _)] = refunds[..] {
+        // both bids return KAS: the refunds swapped, one dropped, one redirected
+        let mut x = m.clone();
+        x.outs.swap(s0, s1);
+        d.expect(R, &x, false, format!("{ctx}: the two refunds swapped"));
+        let mut x = m.clone();
+        x.outs.remove(s0.min(s1));
+        d.expect(R, &x, false, format!("{ctx}: one refund dropped"));
+        for &(k, slot, _) in &refunds {
+            let mut x = m.clone();
+            x.outs[slot].script_public_key = kob_protocol::script::p2pk_spk(&pk(ATTACKER));
+            d.expect(R, &x, false, format!("{ctx}: bid {k}'s refund redirected"));
+        }
     }
 }
 
@@ -573,8 +786,20 @@ fn rule_cond_ask(d: &mut D) {
 }
 
 fn rule_cond_bid(d: &mut D) {
-    const R: &str = "condBid.leg";
-    let (tpl, kron) = d.prog();
+    cond_bid_case(d, "condBid.leg", None);
+}
+
+/// Terminal fills of KobCondBid / KobCondBidKron around REFUND_MIN (every program family and remainder size in rotation).
+fn rule_cond_bid_terminal(d: &mut D) {
+    let f = d.forced();
+    cond_bid_case(d, "condBid.terminal", Some(f));
+}
+
+fn cond_bid_case(d: &mut D, rule: &'static str, force: Option<(bool, Rem)>) {
+    let (tpl, kron) = match force {
+        Some((kron, _)) => (d.prog_of(kron), kron),
+        None => d.prog(),
+    };
     let (scale, amount, _) = geometry(&mut d.r, kron);
     let r = &mut d.r;
     let lock = NOW as i64;
@@ -588,30 +813,37 @@ fn rule_cond_bid(d: &mut D) {
     if r.gen_bool(0.5) {
         s.tip = r.gen_range(0..=stop);
     }
-    s.delivery_carrier = [1, SMALL, KAS as i64, DC][r.gen_range(0..4)];
+    s.delivery_carrier =
+        if force.is_some() { [SMALL, KAS as i64, DC][r.gen_range(0..3)] } else { [1, SMALL, KAS as i64, DC][r.gen_range(0..4)] };
     let daa = r.gen_range(1_000..lock - 1) as u64;
     s.armed = if r.gen_bool(0.5) { 1 } else { r.gen_range(daa as i64..=lock) };
     let leg: u8 = if s.tp_price > 0 && r.gen_bool(0.3) { 0 } else { 1 };
-    let n = fill_of(r, amount, min_fill);
+    // a terminal fill takes everything left
+    let n = if force.is_some() { amount } else { fill_of(r, amount, min_fill) };
     let origin = armed_origin(s.armed, daa as i64).unwrap();
     let t = r.gen_range(origin.min(lock)..=lock);
     let c = cov(0xe1);
     let Some(escrow) = s.escrow(s.max_fills()) else {
-        d.st(R).skipped += 1;
+        d.st(rule).skipped += 1;
         return;
     };
     let value = escrow + r.gen_range(0..KAS as i64);
     let Some(leg_price) = s.leg_price(leg as i64, false, t, daa as i64) else {
-        d.st(R).skipped += 1;
+        d.st(rule).skipped += 1;
         return;
     };
     let Some(spend) = quote(n, leg_price + s.tip, scale, false) else {
-        d.st(R).skipped += 1;
+        d.st(rule).skipped += 1;
         return;
     };
     if s.spend(n, leg_price) != Some(spend) {
-        d.fails.push(format!("{R}: CondBidState::spend disagrees with floor(n * (legPrice + tip) / scale) = {spend}"));
+        d.fails.push(format!("{rule}: CondBidState::spend disagrees with floor(n * (legPrice + tip) / scale) = {spend}"));
     }
+    // a terminal fill around REFUND_MIN: the order holds the spend, the carrier and the chosen remainder
+    let value = match force {
+        Some((_, k)) => spend + s.delivery_carrier + rem_target(&mut d.r, k),
+        None => value,
+    };
     let mut b = batch(
         lock as u64,
         vec![Leg::CondBid {
@@ -626,16 +858,16 @@ fn rule_cond_bid(d: &mut D) {
     b.taker_tokens = vec![tok(41, n, pk(TAKER), SCHEME_P2PK, 1_000)];
     b.change = Some(pk(TAKER));
     let ctx = format!("{s:?} value {value} n {n} leg {leg} t {t}");
-    let Some(m) = d.build(R, Action::Batch(b), kron, &ctx) else { return };
-    off_scale(d, R, n, scale);
+    let Some(m) = d.build(rule, Action::Batch(b), kron, &ctx) else { return };
+    off_scale(d, rule, n, scale);
     let i = input_of(&m, c).unwrap();
     let left = value - spend;
     if n < amount {
         let k = cont_of(&m, c).expect("continuation");
-        d.floor(R, &m, k, left - s.delivery_carrier, &format!("{ctx} (continuation keeps the rest)"));
-        d.floor(R, &m, i, s.delivery_carrier, &format!("{ctx} (delivery carrier)"));
+        d.floor(rule, &m, k, left - s.delivery_carrier, &format!("{ctx} (continuation keeps the rest)"));
+        d.floor(rule, &m, i, s.delivery_carrier, &format!("{ctx} (delivery carrier)"));
     } else {
-        d.floor(R, &m, i, left, &ctx);
+        terminal_probe(d, rule, &m, i, left, s.delivery_carrier, s.maker, kron, &ctx);
     }
 }
 
@@ -1282,11 +1514,14 @@ fn c6_differential_rust_vs_covenant() {
     let cases = env_u64("KOB_C6_DIFF_CASES", 25);
     let mut d = D::new();
     type Rule = (&'static str, fn(&mut D));
-    let rules: [Rule; 11] = [
+    let rules: [Rule; 14] = [
         ("ask.proceeds", rule_ask),
         ("bid.spend+budget", rule_bid),
+        ("bid.terminal", rule_bid_terminal),
+        ("bid.terminal2", rule_bid_terminal_pair),
         ("condAsk.leg", rule_cond_ask),
         ("condBid.leg", rule_cond_bid),
+        ("condBid.terminal", rule_cond_bid_terminal),
         ("trail.steps+keeperTip", rule_trail),
         ("arm.restTime+keeperTip", rule_arm),
         ("refund.tip+due", rule_refund),
@@ -1327,6 +1562,20 @@ fn c6_differential_rust_vs_covenant() {
     {
         let s = d.stats.get(rule).map(|s| s.off_scale).unwrap_or(0);
         assert!(cases < 10 || s > 0, "{rule}: no case with a fill that is not a multiple of the scale");
+    }
+    // the terminal-fill rule (REFUND_MIN, refund slot M - 1 - i) is probed on KobBid, KobBidKron, KobCondBid and KobCondBidKron,
+    // with a remainder below MIN - 1, at MIN - 1, at MIN, at MIN + 1 and above
+    if cases >= 24 {
+        for rule in ["bid.terminal", "condBid.terminal"] {
+            for prog in ["base", "KRON"] {
+                for rem in [0, REFUND_MIN - 1, REFUND_MIN, REFUND_MIN + 1, 10 * REFUND_MIN] {
+                    let key = format!("{rule}: terminal fill, {prog} program, {}", rem_class(rem));
+                    assert!(d.notes.contains_key(&key), "terminal fill not probed: {key}");
+                }
+            }
+        }
+        let pair = d.stats.get("bid.terminal2").map(|s| (s.cases, s.probes)).unwrap_or((0, 0));
+        assert!(pair.0 > 0 && pair.1 > 0, "no two-bid terminal batch was probed");
     }
 }
 
