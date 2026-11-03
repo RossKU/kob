@@ -67,7 +67,7 @@ export function WalletButton() {
  * The separate "Private key" button of the header is gone; on a desktop the private key mode is reachable from Settings too. The key is typed into the
  * signer frame, never into this page.
  */
-function ConnectBar() {
+export function ConnectBar(props: { gate?: boolean } = {}) {
   const { config } = useServices();
   const w = useWallet();
   const narrow = useNarrow();
@@ -97,12 +97,15 @@ function ConnectBar() {
     decide();
   }, [waiting, w.discovered, w.detected]);
   // no extension: the button opens the private key entry, and is named for it (the tests and the page's own scripts find it by that name)
-  const testid = narrow ? 'wallet-connect' : only ? `wallet-connect-${only.id}` : w.detected.length > 1 ? 'wallet-connect' : 'wallet-connect-local-key';
+  // the Create token page's gate (`gate`) is the same button and action, full size, with its own test ids (the header's are on the same page)
+  const testid = props.gate
+    ? only ? `issue-connect-${only.id}` : w.detected.length > 1 ? 'issue-connect-choose' : 'issue-connect-local-key'
+    : narrow ? 'wallet-connect' : only ? `wallet-connect-${only.id}` : w.detected.length > 1 ? 'wallet-connect' : 'wallet-connect-local-key';
 
   return (
     <div class="wallet-actions" data-testid="wallet-connect-list" data-network={config.network}>
       <Button
-        small
+        small={!props.gate}
         variant="primary"
         data-testid={testid}
         loading={w.connecting || waiting}

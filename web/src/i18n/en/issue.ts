@@ -66,7 +66,7 @@ export default {
   'issue.connect.title': 'Connect a wallet',
   'issue.connect.body': "The creation is paid and signed by your wallet, and the whole supply goes to it unless you choose other holders.",
   'issue.connect.button': 'Connect {label}',
-  'issue.connect.none': 'No supported wallet was detected in this browser. Install KasWare or Kaspire and reload the page.',
+  'issue.connect.none': "No browser wallet was detected here, so Connect asks for your private key. It is typed into a sandboxed frame this page cannot read and is forgotten when you close the tab; a wallet extension (KasWare, Kaspire) is the safer choice where you have one.",
   'issue.connect.busy': 'Connecting...',
   'issue.network.title': 'Wrong network',
   'issue.network.body': "Your wallet is on {wallet} but this app uses {app}. Switch the network in your wallet, then reconnect. Nothing can be created until they match.",

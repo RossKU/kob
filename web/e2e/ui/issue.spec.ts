@@ -334,6 +334,21 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-pending')).toHaveCount(0);
   });
 
+  for (const [name, width] of [['phone 390 px', 390], ['desktop 1280 px', 1280]] as const) {
+    test(`${name}: with an extension detected the gate's Connect connects it (a phone: the one Connect, a desktop: a button for the wallet)`, async ({ appPage: page, mock }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await mock.giveKas('alice', 500n * KAS);
+      await page.goto('/#/create');
+      const button = page.getByTestId('issue-connect').getByRole('button');
+      await expect(button).toHaveCount(1);
+      await expect(page.getByTestId('issue-connect-kasware')).toBeVisible();
+      await expect(page.getByTestId('issue-connect-kasware')).toHaveText(width < 760 ? 'Connect' : /Connect KasWare/);
+      await page.getByTestId('issue-connect-kasware').click();
+      await expect(page.getByTestId('wallet-address')).toBeVisible();
+      await expect(page.getByTestId('issue-connect')).toHaveCount(0);
+    });
+  }
+
   test('without a wallet the view asks for a connection and does not plan', async ({ appPage: page }) => {
     await page.goto('/#/create');
     await expect(page.getByTestId('issue-connect')).toBeVisible();
@@ -346,6 +361,46 @@ test.describe('token issuance', () => {
 
 test.describe('token creation with the private key', () => {
   test.use({ walletId: null });
+
+  // the gate's one Connect (the header's action: no extension, so the private key entry): a phone (390 px) has no other way to start, and a desktop with no
+  // extension gets the same button instead of an "install" dead end
+  for (const [name, width, height] of [['phone 390 px', 390, 844], ['desktop 1280 px', 1280, 800]] as const) {
+    test(`${name}: the Create token gate has one Connect that opens the private key entry, and a token is created end to end`, async ({ appPage: page, mock }) => {
+      await page.setViewportSize({ width, height });
+      await mock.giveKas('alice', 500n * KAS);
+      await page.goto('/#/create');
+      const gate = page.getByTestId('issue-connect');
+      await expect(gate).toBeVisible();
+      await expect(gate.getByRole('button')).toHaveCount(1);
+      await expect(gate).not.toContainText('Install');
+      await expect(page.getByTestId('issue-connect-none')).toBeVisible();
+      await page.getByTestId('issue-connect-local-key').click();
+      const f = page.frameLocator('[data-testid="signer-frame"]');
+      await expect(page.getByTestId('signer-overlay')).toBeVisible();
+      await f.getByTestId('signer-key').fill(TEST_KEYS.alice.secretKey);
+      await f.getByTestId('signer-connect').click();
+      await expect(page.getByTestId('wallet-address')).toBeVisible();
+      await expect(gate).toHaveCount(0);
+      await page.getByTestId('issue-name').fill('Gate Coin');
+      await page.getByTestId('issue-ticker').fill('GATE');
+      await page.getByTestId('issue-decimals').fill('2');
+      await page.getByTestId('issue-supply').fill('500');
+      await page.getByTestId('issue-review').click();
+      await expect(page.getByTestId('confirm-screen')).toBeVisible();
+      await page.getByTestId('confirm-ack').check();
+      await page.getByTestId('confirm-sign').click();
+      const receipt = await readReceipt(page);
+      expect(receipt.title).toBe('Create token');
+      expect(receipt.lines['Ticker (recorded on chain)']).toBe('GATE');
+      await confirmReceipt(page);
+      await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId('signer-overlay')).toBeHidden();
+      const submitted = await mock.submitted();
+      expect(submitted[submitted.length - 1]!.tx.inputs[0].transactionId).toBe(submitted[submitted.length - 2]!.txid);
+      expect(Buffer.from(submitted[submitted.length - 2]!.tx.payload.slice(2), 'hex').toString()).toBe('{"name":"Gate Coin","symbol":"GATE","decimals":2}');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    });
+  }
 
   test('one approval in the signer frame signs both transactions; the frame names what is recorded on chain', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);

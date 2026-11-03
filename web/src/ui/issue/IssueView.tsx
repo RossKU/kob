@@ -4,6 +4,22 @@
 // tracker + result panel with the registry entry. A creation whose genesis did not go out (data/creations.ts) is offered again at the top.
 // All protocol logic is in kob/issue.ts (kob-wasm); this view only collects strings and renders findings.
 import { useEffect, useMemo, useState } from 'preact/hooks';
+
+/** The app's phone breakpoint (market.css: max-width 759px), where the gate shows the one Connect of the header. */
+const PHONE_QUERY = '(max-width: 759px)';
+function usePhoneWidth(): boolean {
+  const q = () => typeof matchMedia === 'function' && matchMedia(PHONE_QUERY).matches;
+  const [phone, setPhone] = useState(q);
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const m = matchMedia(PHONE_QUERY);
+    const on = () => setPhone(m.matches);
+    m.addEventListener('change', on);
+    on();
+    return () => m.removeEventListener('change', on);
+  }, []);
+  return phone;
+}
 import { readFees } from '../../app/env';
 import { rememberIssuedToken } from '../../data/issued-decimals';
 import { adoptDeclaration } from '../../data/token-declarations';
@@ -18,6 +34,8 @@ import type { BuiltTx } from '../../kob/types';
 import type { PlanIssue } from '../../kob/plan-types';
 import { isKeyOwned } from '../../kob/token-state';
 import type { Services } from '../../app/services';
+import { ConnectBar } from '../shell/WalletButton';
+import { visibilityCheckSupported } from '../../signer/seen';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { Banner, Button, ErrorBanner, Field, KeyValueList, Section, Segmented, Spinner, kasText, shortId, useAsync } from '../kit';
 import {
@@ -58,6 +76,7 @@ function trackIssued(services: Services, plan: Pick<IssuePlan, 'built' | 'token'
 export function IssueView() {
   const services = useServices();
   const wallet = useWallet();
+  const phoneWidth = usePhoneWidth();
   const { kob, config } = services;
 
   const [state, setState] = useState<IssueUiState>(emptyUiState);
@@ -560,17 +579,23 @@ export function IssueView() {
           title={t('issue.connect.title')}
           data-testid="issue-connect"
           actions={
-            <div class="row">
-              {wallet.detected.map((a) => (
-                <Button key={a.id} variant="primary" small loading={wallet.connecting} onClick={() => void wallet.connect(a.id)} data-testid={`issue-connect-${a.id}`}>
-                  {t('issue.connect.button', { label: a.label })}
-                </Button>
-              ))}
-            </div>
+            // a phone, or a desktop with no extension detected: the one Connect of the header (the extension if there is one, else the private key entry);
+            // a desktop with extensions: a button for each
+            phoneWidth || wallet.detected.length === 0 ? (
+              <ConnectBar gate />
+            ) : (
+              <div class="row">
+                {wallet.detected.map((a) => (
+                  <Button key={a.id} variant="primary" small loading={wallet.connecting} onClick={() => void wallet.connect(a.id)} data-testid={`issue-connect-${a.id}`}>
+                    {t('issue.connect.button', { label: a.label })}
+                  </Button>
+                ))}
+              </div>
+            )
           }
         >
           <p>{t('issue.connect.body')}</p>
-          {wallet.detected.length === 0 ? <p class="muted">{t('issue.connect.none')}</p> : null}
+          {wallet.detected.length === 0 && visibilityCheckSupported() ? <p class="muted" data-testid="issue-connect-none">{t('issue.connect.none')}</p> : null}
           {wallet.error ? <p class="field-error wrap-anywhere">{wallet.error}</p> : null}
         </Banner>
       );
