@@ -212,24 +212,27 @@ export function checkFill(order: { covenant_id: string; contract: string }, s: R
   }
   // bid side: the indexer reports the escrow before and after the fill (detail.escrow_before / escrow_after, absent when the bid sold
   // out) and the delivery output at the input's position (delivery_value: the maker's token output, whose KAS is the delivery carrier
-  // plus, for a rising bid, the used(n) - allIn(t) that KobBid consumes at the budget rate but returns on the delivery). The
-  // buy's cost is what left the maker: escrow_before - escrow_after - delivery_value <= floor(n * (q + tip) / scale).
+  // plus, for a rising bid, the used(n) - allIn(t) that KobBid consumes at the budget rate but returns on the delivery). A terminal
+  // fill whose spare KAS is at least 1 KAS sends it to the maker as a plain output of its own (detail.refund_value, absent below
+  // 1 KAS and on every other fill: the spare then stays on the delivery). The buy's cost is what left the maker:
+  // escrow_before - escrow_after - delivery_value - refund_value <= floor(n * (q + tip) / scale).
   const eb = big(d.escrow_before);
   const ea = big(d.escrow_after) ?? 0n;
   const dv = big(d.delivery_value);
+  const rv = big(d.refund_value) ?? 0n;
   if (n !== null && n > 0n && ev.side === 2 && kind === 'KobBid' && eb !== null && dv !== null && !partial) {
     const verified = d.verified === true && d.t !== undefined && d.t !== null;
     const qt = verified && q !== null ? q : wb.bound;
     const cap = qt === null ? null : quote(n, qt + tip, 'down');
     if (qt !== null && cap !== null) {
       out.payoutChecked = true;
-      const drawn = eb - ea - dv;
+      const drawn = eb - ea - dv - rv;
       if (drawn > cap) {
         out.violations.push({
           invariant: INV.allIn,
           severity: 'error',
           subject,
-          detail: { ...base, problem: 'buy cost more than its all-in limit', cost: str(drawn), cap: str(cap), escrowBefore: str(eb), escrowAfter: str(ea), deliveryValue: str(dv), quote: str(qt) },
+          detail: { ...base, problem: 'buy cost more than its all-in limit', cost: str(drawn), cap: str(cap), escrowBefore: str(eb), escrowAfter: str(ea), deliveryValue: str(dv), refundValue: str(rv), quote: str(qt) },
         });
       }
     }

@@ -757,6 +757,33 @@ test('a buyer pays at most the rounded-DOWN value: one sompi above is a violatio
   assert.equal(over.violations[0].detail.cap, '7');
 });
 
+test('a terminal bid fill: the plain refund output (detail.refund_value) is not part of the buy cost', () => {
+  // scale 1000, price 2500, tip 100: 3 base units cost at most 7 sompi. The bid sold out (no escrow_after) with 5 KAS above the delivery
+  // carrier: that spare KAS leaves the escrow as a refund output, so counting only the delivery would read it as a 5 KAS overspend.
+  const bid = { scale: '1000', minFill: '1', price: '2500', tip: '100', slope: '0', priceEnd: '0', tif: '0' };
+  const KAS = 100_000_000n;
+  const refund_ = (r: bigint | null) => r ?? 0n;
+  const ev = (cost: bigint, refund: bigint | null) => fill({
+    side: 2, amount: '3', price: '2500', payout: null,
+    detail: { verified: true, t: 1, escrow_before: String(10n * KAS), delivery_value: String(10n * KAS - cost - refund_(refund)), ...(refund === null ? {} : { refund_value: String(refund) }) },
+  });
+  const c = (e: ReturnType<typeof ev>) => checkFill({ covenant_id: ID, contract: 'KobBid' }, bid, e);
+  // refund of 5 KAS: escrow 10 KAS = cost 7 + delivery + refund
+  assert.deepEqual(c(ev(7n, 5n * KAS)).violations, []);
+  // the old reading (refund_value missing) would flag the same fill: the field is what clears it
+  const without = ev(7n, 5n * KAS); delete (without.detail as Record<string, unknown>).refund_value;
+  assert.equal(c(without).violations.length, 1);
+  // one sompi too much cost is still a violation next to a refund
+  const over = c(ev(8n, 5n * KAS));
+  assert.equal(over.violations.length, 1);
+  assert.equal(over.violations[0].detail.cap, '7');
+  assert.equal(over.violations[0].detail.cost, '8');
+  assert.equal(over.violations[0].detail.refundValue, String(5n * KAS));
+  // a remainder below 1 KAS stays on the delivery (no refund_value): unchanged
+  assert.deepEqual(c(ev(7n, null)).violations, []);
+  assert.equal(c(ev(8n, null)).violations.length, 1);
+});
+
 test('a merged take-profit pays the maker the rounded-up proceeds minus the rounded-up merge return', () => {
   // scale 1000, 3 base units: proceeds ceil(3 * 2100 / 1000) = 7, merge return ceil(3 * 2000 / 1000) = 6: the maker keeps at least 1
   const exit = { scale: '1000', minFill: '1', tip: '0', tpPrice: '2100', stopPrice: '0', slipBps: '0', trailStep: '0', rptPrice: '2000', amountLeft: '3', tif: '0' };
