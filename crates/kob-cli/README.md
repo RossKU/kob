@@ -444,7 +444,7 @@ preparation. Required: `--name`, `--ticker` (2 to 12 of A-Z 0-9), `--decimals` (
 TXID:INDEX:AMOUNT:OWNER` (sompi; all of one key; OWNER is a 64-hex x-only key or a P2PK address) and `--supply` and/or at least one
 `--holder OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]` (without `--holder` the whole supply goes to the funding key). Optional:
 `--program 3x3|public-mint|8x8-prototype|kasparocket-testnet` (default `3x3`), `--carrier`, `--fee`, `--fee-rate`, `--change-to`,
-`--extension-commitment`, `--allow-borrow`, `--description`, `--logo` (or `--icon`), `--website`, `--x`, `--telegram`, `--out-dir`,
+`--extension-commitment`, `--allow-borrow`, `--description`, `--image` (or the deprecated `--logo` / `--icon`) with `--image-file` or `--image-hash` (the SHA-256 of the picture, declared as `image_hash`), `--website`, `--x`, `--telegram`, `--out-dir`,
 `--network`, `--node`, `--yes` (or `-y`), `--dry-run` and `--key HEX|env:VAR|file:PATH`. `kob token issue --help` lists them all.
 
 * **Dry run.** `--dry-run` builds and verifies everything offline and never submits. With `--key` it signs and executes every

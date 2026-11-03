@@ -16,7 +16,9 @@
 //!
 //! **Token convention** ([`TokenMetadata`], [`TokenDeclaration`]; `docs/spec/token-metadata.md`). KCC-23 leaves field names to
 //! ecosystem conventions. KOB writes, in this order and only when set: `name`, `symbol`, `decimals` (the three of the KCC-23
-//! example), then `description`, `logo`, `website`, `x`, `telegram`. A reader takes each field independently: a field of the wrong
+//! example), then `description`, `image`, `image_hash`, `website`, `x`, `telegram` (`image` and `image_hash` are the spelling of
+//! KCC-0021, KaspaRocket and kascov). A reader also takes the older `logo` as `image` when there is no `image`, and an `image` of
+//! the form `sha256:<hex>` as a hash alone. A reader takes each field independently: a field of the wrong
 //! type or out of range is dropped and named in [`TokenDeclaration::issues`], unknown fields are ignored, and a declaration
 //! without a usable `decimals` leaves the token's decimals undeclared.
 
@@ -46,6 +48,26 @@ pub const MAX_NAME_CHARS: usize = 64;
 pub const MAX_SYMBOL_CHARS: usize = 32;
 /// Longest `description` and link a reader takes, in characters (the registry's display limit).
 pub const MAX_TEXT_CHARS: usize = 512;
+/// Largest picture file KOB's tools hash for `image_hash` (the web app loads no larger logo).
+pub const MAX_IMAGE_BYTES: usize = 1_500_000;
+
+/// The `image_hash` of a picture file: the lowercase hex SHA-256 of its exact bytes. Refuses a file that is empty, larger than
+/// [`MAX_IMAGE_BYTES`], or not a PNG, JPEG, WebP or GIF by its magic bytes (an SVG is refused: it can carry script).
+pub fn image_file_hash(bytes: &[u8]) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!("the image file must be 1..={MAX_IMAGE_BYTES} bytes, this one has {}", bytes.len()));
+    }
+    let raster = bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a])
+        || bytes.starts_with(&[0xff, 0xd8, 0xff])
+        || (bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a");
+    if !raster {
+        return Err("the image file must be a PNG, JPEG, WebP or GIF picture (no SVG)".into());
+    }
+    Ok(Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect())
+}
 
 /// Why a payload is not a KCC-23 declaration.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -357,7 +379,7 @@ pub fn telegram_url(input: &str) -> Option<String> {
     handle_of(input, &["t.me/", "telegram.me/"], 5..=32).map(|h| format!("https://t.me/{h}"))
 }
 
-/// A link a reader takes: `https://` (or, for `logo`, also `ipfs://`), at most [`MAX_TEXT_CHARS`], no space or bad character.
+/// A link a reader takes: `https://` (or, for `image`, also `ipfs://`), at most [`MAX_TEXT_CHARS`], no space or bad character.
 fn link_ok(s: &str, ipfs: bool) -> bool {
     (s.starts_with("https://") || (ipfs && s.starts_with("ipfs://")))
         && s.len() > "https://".len()
@@ -377,8 +399,10 @@ pub struct TokenMetadata {
     pub decimals: u8,
     /// Free text, at most 512 characters.
     pub description: Option<String>,
-    /// `https://` or `ipfs://` address of the logo.
-    pub logo: Option<String>,
+    /// `https://` or `ipfs://` address of the token's picture.
+    pub image: Option<String>,
+    /// SHA-256 of the picture file's exact bytes: 64 lowercase hex characters. Needs `image`.
+    pub image_hash: Option<String>,
     /// `https://` address of the website.
     pub website: Option<String>,
     /// `https://x.com/<handle>`.
@@ -406,8 +430,16 @@ impl TokenMetadata {
                 ));
             }
         }
-        if self.logo.as_deref().is_some_and(|l| !link_ok(l, true)) {
-            return Err("logo must be an https:// or ipfs:// address".into());
+        if self.image.as_deref().is_some_and(|l| !link_ok(l, true)) {
+            return Err("image must be an https:// or ipfs:// address".into());
+        }
+        if let Some(h) = &self.image_hash {
+            if !is_sha256_lower(h) {
+                return Err("image_hash must be 64 lowercase hex characters (SHA-256 of the image file)".into());
+            }
+            if self.image.is_none() {
+                return Err("image_hash needs an image address".into());
+            }
         }
         if self.website.as_deref().is_some_and(|w| !link_ok(w, false)) {
             return Err("website must be an https:// address".into());
@@ -427,14 +459,15 @@ impl TokenMetadata {
         Ok(())
     }
 
-    /// The compact JSON text, members in the fixed order `name, symbol, decimals, description, logo, website, x, telegram` (unset
+    /// The compact JSON text, members in the fixed order `name, symbol, decimals, description, image, image_hash, website, x, telegram` (unset
     /// optional members are left out).
     pub fn json(&self) -> String {
         let s = |v: &str| serde_json::to_string(v).expect("json string");
         let mut out = format!("{{\"name\":{},\"symbol\":{},\"decimals\":{}", s(&self.name), s(&self.symbol), self.decimals);
         for (k, v) in [
             ("description", &self.description),
-            ("logo", &self.logo),
+            ("image", &self.image),
+            ("image_hash", &self.image_hash),
             ("website", &self.website),
             ("x", &self.x),
             ("telegram", &self.telegram),
@@ -474,8 +507,11 @@ pub struct TokenDeclaration {
     pub decimals: Option<u8>,
     /// `description`: 1..=512 characters without bad characters (line breaks are refused too).
     pub description: Option<String>,
-    /// `logo`: an https:// or ipfs:// link.
-    pub logo: Option<String>,
+    /// `image`: an https:// or ipfs:// link; the older `logo` when there is no `image`.
+    pub image: Option<String>,
+    /// `image_hash`: 64 hex characters (lowercased), the SHA-256 of the image file's bytes; also read from an `image` of the form
+    /// `sha256:<hex>` (a hash-only declaration, no link) when there is no usable `image_hash`.
+    pub image_hash: Option<String>,
     /// `website`: an https:// link.
     pub website: Option<String>,
     /// `x`: `https://x.com/<handle>`.
@@ -507,7 +543,36 @@ impl TokenDeclaration {
         d.name = text("name", MAX_NAME_CHARS, &|_| true, &mut issues);
         d.symbol = text("symbol", MAX_SYMBOL_CHARS, &|s| !s.chars().any(char::is_whitespace), &mut issues);
         d.description = text("description", MAX_TEXT_CHARS, &|_| true, &mut issues);
-        d.logo = text("logo", MAX_TEXT_CHARS, &|s| link_ok(s, true), &mut issues);
+        // `image` is a link, or `sha256:<hex>` (a hash alone); with no `image` member the older `logo` is read in its place
+        let mut from_sha = None;
+        d.image = match obj.get("image") {
+            Some(Value::String(s)) if text_ok(s, MAX_TEXT_CHARS) && link_ok(s, true) => Some(s.clone()),
+            Some(Value::String(s)) if sha256_ref(s).is_some() => {
+                from_sha = sha256_ref(s);
+                text("logo", MAX_TEXT_CHARS, &|s| link_ok(s, true), &mut issues)
+            }
+            Some(Value::String(_)) => {
+                issues.push(issue("image", "not an acceptable value"));
+                None
+            }
+            Some(_) => {
+                issues.push(issue("image", "not a string"));
+                None
+            }
+            None => text("logo", MAX_TEXT_CHARS, &|s| link_ok(s, true), &mut issues),
+        };
+        d.image_hash = match obj.get("image_hash") {
+            Some(Value::String(s)) if is_sha256_hex(s) => Some(s.to_ascii_lowercase()),
+            Some(Value::String(_)) => {
+                issues.push(issue("image_hash", "not 64 hexadecimal characters"));
+                from_sha
+            }
+            Some(_) => {
+                issues.push(issue("image_hash", "not a string"));
+                from_sha
+            }
+            None => from_sha,
+        };
         d.website = text("website", MAX_TEXT_CHARS, &|s| link_ok(s, false), &mut issues);
         d.x = text("x", MAX_TEXT_CHARS, &is_x_url, &mut issues);
         d.telegram = text("telegram", MAX_TEXT_CHARS, &is_telegram_url, &mut issues);
@@ -534,6 +599,19 @@ impl TokenDeclaration {
         let (_, obj) = decode_limited(payload, MAX_READ_PAYLOAD)?;
         Ok(Self::from_object(&obj))
     }
+}
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn is_sha256_lower(s: &str) -> bool {
+    is_sha256_hex(s) && !s.bytes().any(|b| b.is_ascii_uppercase())
+}
+
+/// The lowercased hash of an `image` of the form `sha256:<64 hex>`.
+fn sha256_ref(s: &str) -> Option<String> {
+    s.strip_prefix("sha256:").filter(|h| is_sha256_hex(h)).map(str::to_ascii_lowercase)
 }
 
 fn issue(k: &str, why: &str) -> String {
@@ -826,7 +904,8 @@ mod tests {
         assert_eq!(m.json(), r#"{"name":"Example Token","symbol":"EXT","decimals":8}"#, "the KCC-23 example, byte for byte");
         let full = TokenMetadata {
             description: Some("A \"quoted\" token ✓".into()),
-            logo: Some("ipfs://bafy".into()),
+            image: Some("ipfs://bafy".into()),
+            image_hash: Some("ab".repeat(32)),
             website: Some("https://example.org".into()),
             x: Some("https://x.com/example".into()),
             telegram: Some("https://t.me/example_chat".into()),
@@ -842,8 +921,28 @@ mod tests {
             (d.name.as_deref(), d.symbol.as_deref(), d.decimals, d.description.as_deref()),
             (Some("Example Token"), Some("EXT"), Some(8), Some("A \"quoted\" token ✓"))
         );
-        assert_eq!((d.logo, d.website, d.x, d.telegram), (full.logo, full.website, full.x, full.telegram));
+        assert_eq!(
+            (d.image, d.image_hash, d.website, d.x, d.telegram),
+            (full.image, full.image_hash, full.website, full.x, full.telegram)
+        );
+        assert!(
+            p.windows(33).any(|w| w == br#","image":"ipfs://bafy","image_hash":"abab"#.as_slice()[..33].to_vec().as_slice()),
+            "image_hash right after image"
+        );
         assert!(d.issues.is_empty());
+    }
+
+    #[test]
+    fn image_files_are_hashed_as_raw_bytes_and_only_when_raster() {
+        let png = [&[0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a][..], b"rest"].concat();
+        let h = image_file_hash(&png).unwrap();
+        assert_eq!((h.len(), h.to_lowercase()), (64, h.clone()));
+        assert_eq!(image_file_hash(&png).unwrap(), h);
+        assert!(image_file_hash(b"<svg xmlns='http://www.w3.org/2000/svg'/>").is_err());
+        assert!(image_file_hash(b"").is_err());
+        assert!(image_file_hash(&vec![0xff; MAX_IMAGE_BYTES + 1]).is_err());
+        assert!(image_file_hash(&[b"RIFF    WEBPVP8 ".as_slice()].concat()).is_ok());
+        assert!(image_file_hash(b"GIF89a....").is_ok() && image_file_hash(&[0xff, 0xd8, 0xff, 0xe0]).is_ok());
     }
 
     #[test]
@@ -857,7 +956,14 @@ mod tests {
         bad(&|m| m.name = "a\u{202e}b".into());
         bad(&|m| m.symbol = "ext".into());
         bad(&|m| m.decimals = 19);
-        bad(&|m| m.logo = Some("http://x".into()));
+        bad(&|m| m.image = Some("http://x".into()));
+        bad(&|m| m.image_hash = Some("ab".repeat(32))); // a hash without an image address
+        for h in ["AB".repeat(32), "ab".repeat(31), "zz".repeat(32), format!("sha256:{}", "ab".repeat(32))] {
+            bad(&|m| {
+                m.image = Some("https://example.org/a.png".into());
+                m.image_hash = Some(h.clone());
+            });
+        }
         bad(&|m| m.website = Some("ipfs://x".into()));
         bad(&|m| m.x = Some("@name".into()));
         bad(&|m| m.telegram = Some("https://t.me/abc".into()));
@@ -892,7 +998,7 @@ mod tests {
         let p = br#"{"name":"N","symbol":"S Y","decimals":8.5,"logo":"javascript:alert(1)","x":"https://x.com/ok","extra":[1]}"#;
         let d = TokenDeclaration::from_payload(&[&[0u8][..], p].concat()).unwrap();
         assert_eq!(
-            (d.name.as_deref(), d.symbol, d.decimals, d.logo, d.x.as_deref()),
+            (d.name.as_deref(), d.symbol, d.decimals, d.image, d.x.as_deref()),
             (Some("N"), None, None, None, Some("https://x.com/ok"))
         );
         assert_eq!(d.issues.len(), 3, "{:?}", d.issues);
@@ -909,6 +1015,41 @@ mod tests {
         }
         let d = TokenDeclaration::from_payload(&encode(r#"{"name":"line\nbreak","description":"tab\there"}"#).unwrap()).unwrap();
         assert_eq!((d.name, d.description, d.issues.len()), (None, None, 2));
+    }
+
+    /// KOB's convention vectors for the picture (not the pinned upstream conformance vectors): `image` + `image_hash`, the older
+    /// `logo`, and the hash-only `image` of `sha256:<hex>` that other launchers write.
+    #[test]
+    fn the_picture_fields_and_their_older_spellings() {
+        let h = "0123456789abcdef".repeat(4);
+        let read = |json: &str| TokenDeclaration::from_payload(&encode(json).unwrap()).unwrap();
+        // KCC-0021 / KaspaRocket / kascov: image + image_hash; an upper-case hash is lowercased
+        let d = read(&format!(r#"{{"name":"N","image":"https://e.org/a.png","image_hash":"{}"}}"#, h.to_uppercase()));
+        assert_eq!((d.image.as_deref(), d.image_hash.as_deref()), (Some("https://e.org/a.png"), Some(h.as_str())));
+        assert!(d.issues.is_empty(), "{:?}", d.issues);
+        // the older KOB spelling, read when there is no image (KASPERO)
+        let d = read(r#"{"name":"N","logo":"ipfs://bafy"}"#);
+        assert_eq!((d.image.as_deref(), d.image_hash), (Some("ipfs://bafy"), None));
+        // image wins over logo; a bad image is dropped and logo is NOT used in its place
+        let d = read(r#"{"image":"https://e.org/a.png","logo":"https://e.org/b.png"}"#);
+        assert_eq!(d.image.as_deref(), Some("https://e.org/a.png"));
+        let d = read(r#"{"image":"http://e.org/a.png","logo":"https://e.org/b.png"}"#);
+        assert_eq!((d.image, d.issues), (None, vec!["image: not an acceptable value".to_string()]));
+        // a hash alone: `image` as sha256:<hex> (KasSeal), no link
+        let d = read(&format!(r#"{{"image":"sha256:{h}"}}"#));
+        assert_eq!((d.image, d.image_hash.as_deref(), d.issues.len()), (None, Some(h.as_str()), 0));
+        // ... and an explicit image_hash wins over it; a launchpad that writes image + logo + hash is read whole
+        let other = "ff".repeat(32);
+        let d = read(&format!(r#"{{"image":"sha256:{h}","image_hash":"{other}"}}"#));
+        assert_eq!(d.image_hash.as_deref(), Some(other.as_str()));
+        let d = read(&format!(r#"{{"image":"https://e.org/a.png","logo":"https://e.org/a.png","image_hash":"{h}"}}"#));
+        assert_eq!((d.image.as_deref(), d.image_hash.as_deref()), (Some("https://e.org/a.png"), Some(h.as_str())));
+        // bad hashes are dropped with a reason
+        for bad in [r#""ab""#, r#""sha256:abcd""#, "7"] {
+            let d = read(&format!(r#"{{"image":"https://e.org/a.png","image_hash":{bad}}}"#));
+            assert_eq!(d.image_hash, None, "{bad}");
+            assert_eq!(d.issues.len(), 1, "{bad}");
+        }
     }
 
     fn spk() -> ScriptPublicKey {

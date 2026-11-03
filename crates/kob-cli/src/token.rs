@@ -25,7 +25,7 @@ inputs / 3 outputs per transfer, or the published public-mint build of the refer
 
 A creation is two transactions (KCC-23): the PREPARATION spends the funding into one output of the funding key (the
 genesis's carriers and fee) and the change, its payload declaring the token metadata (0x00 + JSON: name, symbol,
-decimals, then description, logo, website, x, telegram when given); the GENESIS spends that output, so the token's
+decimals, then description, image, image_hash, website, x, telegram when given); the GENESIS spends that output, so the token's
 covenant id commits to the declaration. Both are signed at once; the genesis is sent right after the preparation. If it
 does not go out, the preparation output stays an ordinary UTXO of the funding key, and `kob token resume <DIR>` sends
 the saved genesis.
@@ -73,9 +73,16 @@ OUTPUT
   --out-dir             write preparation_tx.json, genesis_tx.json, submit_preparation.json, submit_request.json (the
                         genesis), supply.json, metadata.json, metadata.payload.hex, launch_proof.json,
                         registry_entry.json here. A submitting run without it writes them to ./kob-create-<ID16>.
-  --description --logo (or --icon) --website --x --telegram
+  --description --image --website --x --telegram
                         declared on chain in the preparation payload (at most 1024 bytes with name, symbol and
                         decimals) and copied to the registry entry; --x and --telegram take a handle or the address
+  --image <URL>         the token's picture: an https:// or ipfs:// address, declared as `image`. (--logo and --icon
+                        are deprecated spellings of --image.)
+  --image-file <PATH>   the picture file (PNG, JPEG, WebP or GIF, at most 1500000 bytes, no SVG) whose SHA-256 is
+                        declared as `image_hash`, right after `image`: viewers and explorers can then check that the
+                        picture at the address is the one you meant. The hash cannot be changed later. Needs --image.
+  --image-hash <HEX>    the same hash given directly (64 hex characters, SHA-256 of the file); with --image-file the
+                        two must agree. Needs --image.
   --network             mainnet or testnet-10, recorded in metadata/supply; required unless the build is a deployment
                         build (deploy-mainnet, deploy-tn10), which implies its own
   --yes, -y             submit without asking. Without it a terminal is shown the plan and asked (type yes); without a
@@ -161,8 +168,10 @@ pub struct IssueArgs {
     pub change_to: Option<[u8; 32]>,
     /// Description.
     pub description: Option<String>,
-    /// Icon.
+    /// Image address (declared as `image`; `--image`, deprecated aliases `--logo` and `--icon`).
     pub icon: Option<String>,
+    /// SHA-256 of the picture file's bytes (64 lowercase hex; declared as `image_hash`).
+    pub image_hash: Option<String>,
     /// Website.
     pub website: Option<String>,
     /// Network label.
@@ -296,6 +305,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
         change_to: None,
         description: None,
         icon: None,
+        image_hash: None,
         website: None,
         x: None,
         telegram: None,
@@ -306,6 +316,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
         program: IssueProgram::default(),
     };
     let (mut have_name, mut have_ticker, mut have_decimals) = (false, false, false);
+    let mut image_hash: Option<String> = None;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut val = |what: &str| -> Result<String, String> { it.next().cloned().ok_or_else(|| format!("{what} needs a value")) };
@@ -337,7 +348,27 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
             "--allow-borrow" => a.allow_borrow = true,
             "--change-to" => a.change_to = Some(parse_pubkey(&val("--change-to")?)?),
             "--description" => a.description = Some(val("--description")?),
-            "--icon" | "--logo" => a.icon = Some(val("--logo")?),
+            "--image" | "--icon" | "--logo" => a.icon = Some(val("--image")?),
+            "--image-file" => {
+                let p = val("--image-file")?;
+                let bytes = std::fs::read(&p).map_err(|e| format!("--image-file {p}: {e}"))?;
+                let h = kcc23::image_file_hash(&bytes).map_err(|e| format!("--image-file {p}: {e}"))?;
+                if image_hash.as_ref().is_some_and(|x| *x != h) {
+                    return Err("--image-file and --image-hash disagree".into());
+                }
+                image_hash = Some(h);
+            }
+            "--image-hash" => {
+                let v = val("--image-hash")?;
+                if v.len() != 64 || !v.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(format!("--image-hash: `{v}` is not 64 hexadecimal characters"));
+                }
+                let h = v.to_ascii_lowercase();
+                if image_hash.as_ref().is_some_and(|x| *x != h) {
+                    return Err("--image-file and --image-hash disagree".into());
+                }
+                image_hash = Some(h);
+            }
             "--x" => {
                 let v = val("--x")?;
                 a.x = Some(kcc23::x_url(&v).ok_or_else(|| format!("--x: `{v}` is not an X handle or https://x.com/ address"))?);
@@ -361,6 +392,10 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
     if !have_name || !have_ticker || !have_decimals {
         return Err("--name, --ticker and --decimals are required".into());
     }
+    if image_hash.is_some() && a.icon.is_none() {
+        return Err("--image-file / --image-hash need --image (the picture's address)".into());
+    }
+    a.image_hash = image_hash;
     if a.fund.is_empty() {
         return Err("at least one --fund-utxo is required".into());
     }
@@ -422,6 +457,7 @@ pub fn to_spec(a: &IssueArgs) -> Result<IssueSpec, String> {
     spec.change_spk = a.change_to.map(|pk| p2pk_script(&pk));
     spec.description = a.description.clone();
     spec.icon = a.icon.clone();
+    spec.image_hash = a.image_hash.clone();
     spec.website = a.website.clone();
     spec.x = a.x.clone();
     spec.telegram = a.telegram.clone();
@@ -894,7 +930,7 @@ mod tests {
     #[test]
     fn x_and_telegram_take_handles() {
         let a = parse_issue_args(&v(&format!(
-            "{} --supply 1 --x @kaspa --telegram https://telegram.me/kaspa_chat --logo ipfs://cid",
+            "{} --supply 1 --x @kaspa --telegram https://telegram.me/kaspa_chat --image ipfs://cid",
             base()
         )))
         .unwrap();
@@ -907,7 +943,40 @@ mod tests {
         assert!(s
             .token_metadata()
             .json()
-            .ends_with(r#""logo":"ipfs://cid","x":"https://x.com/kaspa","telegram":"https://t.me/kaspa_chat"}"#));
+            .ends_with(r#""image":"ipfs://cid","x":"https://x.com/kaspa","telegram":"https://t.me/kaspa_chat"}"#));
+        // --logo and --icon are deprecated spellings of --image
+        for old in ["--logo", "--icon"] {
+            let a = parse_issue_args(&v(&format!("{} --supply 1 {old} https://e.org/a.png", base()))).unwrap();
+            assert_eq!(a.icon.as_deref(), Some("https://e.org/a.png"));
+            assert!(to_spec(&a).unwrap().token_metadata().json().contains(r#""image":"https://e.org/a.png""#));
+        }
+    }
+
+    #[test]
+    fn image_file_and_hash_are_declared_right_after_the_image() {
+        let dir = std::env::temp_dir().join(format!("kob-image-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("a.png");
+        std::fs::write(&png, [&[0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a][..], b"pixels"].concat()).unwrap();
+        let svg = dir.join("a.svg");
+        std::fs::write(&svg, "<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+        let want = kcc23::image_file_hash(&std::fs::read(&png).unwrap()).unwrap();
+        let args = |extra: &str| parse_issue_args(&v(&format!("{} --supply 1 --image https://e.org/a.png {extra}", base())));
+        let a = args(&format!("--image-file {}", png.display())).unwrap();
+        assert_eq!(a.image_hash.as_deref(), Some(want.as_str()));
+        let json = to_spec(&a).unwrap().token_metadata().json();
+        assert!(json.contains(&format!(r#""image":"https://e.org/a.png","image_hash":"{want}""#)), "{json}");
+        // the hash given directly (any case, lowercased), alone or agreeing with the file
+        let a = args(&format!("--image-hash {}", want.to_uppercase())).unwrap();
+        assert_eq!(a.image_hash.as_deref(), Some(want.as_str()));
+        assert!(args(&format!("--image-file {} --image-hash {want}", png.display())).is_ok());
+        // refused: a disagreeing pair, a malformed hash, an SVG, a missing file, a hash without an address
+        assert!(args(&format!("--image-file {} --image-hash {}", png.display(), "ab".repeat(32))).is_err());
+        assert!(args("--image-hash abcd").is_err());
+        assert!(args(&format!("--image-file {}", svg.display())).is_err());
+        assert!(args(&format!("--image-file {}", dir.join("none.png").display())).is_err());
+        assert!(parse_issue_args(&v(&format!("{} --supply 1 --image-hash {want}", base()))).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// `--yes` and `--dry-run` exclude each other, as in every submitting command.

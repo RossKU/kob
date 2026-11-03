@@ -341,6 +341,15 @@ fn name_decimals_and_display_rules() {
     req["icon"] = json!("data:image/png;base64,AAAA");
     assert!(err(&req).contains("icon"));
     let mut req = request();
+    req["imageHash"] = json!("cd".repeat(32));
+    assert!(err(&req).contains("imageHash needs an icon"));
+    req["icon"] = json!("https://example.org/a.png");
+    issue(&req).unwrap();
+    for bad in ["cd".repeat(31), "zz".repeat(32), format!("sha256:{}", "cd".repeat(32))] {
+        req["imageHash"] = json!(bad);
+        assert!(err(&req).contains("imageHash"), "{bad}");
+    }
+    let mut req = request();
     req["description"] = json!("d".repeat(513));
     assert!(err(&req).contains("description"));
 }
@@ -545,13 +554,14 @@ fn the_declaration_carries_the_optional_fields_in_canonical_form() {
     let mut req = request();
     req["description"] = json!("A test token");
     req["icon"] = json!("ipfs://bafytest");
+    req["imageHash"] = json!("CD".repeat(32)); // any case in, lowercase on chain
     req["website"] = json!("https://example.org");
     req["x"] = json!("@example");
     req["telegram"] = json!("https://telegram.me/example_chat");
     let res = issue(&req).unwrap();
     assert_eq!(
         res["declaration"]["json"],
-        r#"{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","logo":"ipfs://bafytest","website":"https://example.org","x":"https://x.com/example","telegram":"https://t.me/example_chat"}"#
+        r#"{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","image":"ipfs://bafytest","image_hash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","website":"https://example.org","x":"https://x.com/example","telegram":"https://t.me/example_chat"}"#
     );
     let d = &res["docs"]["registryEntry"]["display"];
     assert_eq!(

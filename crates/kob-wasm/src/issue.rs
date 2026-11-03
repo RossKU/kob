@@ -75,9 +75,12 @@ struct IssueRequest {
     allow_borrow: bool,
     #[serde(default)]
     description: Option<String>,
-    /// The logo (declared as `logo`; registry `display.icon`).
+    /// The picture's address (declared as `image`; registry `display.icon`).
     #[serde(default)]
     icon: Option<String>,
+    /// SHA-256 of the picture file's bytes, 64 hex characters (declared lowercase as `image_hash`; needs `icon`).
+    #[serde(default)]
+    image_hash: Option<String>,
     #[serde(default)]
     website: Option<String>,
     /// X account: a handle or its address (declared as `https://x.com/<handle>`).
@@ -195,6 +198,14 @@ fn check_display(r: &IssueRequest) -> R<()> {
     if r.icon.as_deref().is_some_and(|i| !(i.starts_with("https://") || i.starts_with("ipfs://"))) {
         return Err("invalid parameter: icon must be an https:// or ipfs:// URL".into());
     }
+    if let Some(h) = r.image_hash.as_deref() {
+        if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("invalid parameter: imageHash must be 64 hexadecimal characters (SHA-256 of the image file)".into());
+        }
+        if r.icon.is_none() {
+            return Err("invalid parameter: imageHash needs an icon (the picture's address)".into());
+        }
+    }
     Ok(())
 }
 
@@ -244,6 +255,7 @@ fn to_spec(r: &IssueRequest, fee_rate: u64) -> R<IssueSpec> {
     spec.change_spk = r.change_to.map(|pk| p2pk_script(&pk));
     spec.description = r.description.clone();
     spec.icon = r.icon.clone();
+    spec.image_hash = r.image_hash.as_ref().map(|h| h.to_ascii_lowercase());
     spec.website = r.website.clone();
     spec.x = social(&r.x, "x", kcc23::x_url)?;
     spec.telegram = social(&r.telegram, "telegram", kcc23::telegram_url)?;
@@ -411,7 +423,7 @@ pub fn issue_limits() -> R<String> {
 }
 
 /// Verifies a KCC-23 launch proof (`kob-kcc23-proof/1`, JSON) and returns the declaration bound to its covenant id:
-/// `{covenantId, preparationTxid, genesisTxid, json, token: {name, symbol, decimals, description, logo, website, x, telegram,
+/// `{covenantId, preparationTxid, genesisTxid, json, token: {name, symbol, decimals, description, image, image_hash, website, x, telegram,
 /// issues}}`. Whoever supplied the proof, the ids are recomputed here: an error means it does not bind a declaration to that id.
 pub fn kcc23_verify(proof_json: &str) -> R<String> {
     let proof: kcc23::LaunchProof = serde_json::from_str(proof_json).map_err(|e| format!("proof: {e}"))?;

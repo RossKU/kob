@@ -502,8 +502,10 @@ pub struct IssueSpec {
     pub change_spk: Option<ScriptPublicKey>,
     /// Free-form metadata.
     pub description: Option<String>,
-    /// Optional logo URL (https:// or ipfs://; KOB's KCC-23 field `logo`, registry `display.icon`).
+    /// Optional picture URL (https:// or ipfs://; KOB's KCC-23 field `image`, registry `display.icon`).
     pub icon: Option<String>,
+    /// Optional SHA-256 of the picture file's bytes (64 lowercase hex; KCC-23 field `image_hash`, written right after `image`).
+    pub image_hash: Option<String>,
     /// Optional website URL (https://).
     pub website: Option<String>,
     /// Optional X account, canonical `https://x.com/<handle>`.
@@ -534,6 +536,7 @@ impl IssueSpec {
             change_spk: None,
             description: None,
             icon: None,
+            image_hash: None,
             website: None,
             x: None,
             telegram: None,
@@ -549,7 +552,8 @@ impl IssueSpec {
             symbol: self.ticker.clone(),
             decimals: self.decimals,
             description: self.description.clone(),
-            logo: self.icon.clone(),
+            image: self.icon.clone(),
+            image_hash: self.image_hash.clone(),
             website: self.website.clone(),
             x: self.x.clone(),
             telegram: self.telegram.clone(),
@@ -1427,7 +1431,7 @@ impl GenesisPlan {
     }
 
     /// The token metadata as a JSON object: KOB's KCC-23 fields (`name`, `symbol`, `decimals`, then the optional `description`,
-    /// `logo`, `website`, `x`, `telegram`; field names are KOB's convention, KCC-23 leaves them open). A creation
+    /// `image`, `image_hash`, `website`, `x`, `telegram`; field names are KOB's convention, KCC-23 leaves them open). A creation
     /// ([`build_creation`]) declares exactly [`GenesisPlan::metadata_payload`] on chain; a genesis built alone declares nothing.
     pub fn metadata_json(&self) -> Value {
         serde_json::from_str(&self.spec.token_metadata().json()).expect("metadata json")
@@ -1933,6 +1937,7 @@ mod tests {
         let mut s = spec(vec![Holder::new(pk, 0, 600), Holder::new([0xc4; 32], 4, 400)], 1000);
         s.description = Some("A test token".into());
         s.icon = Some("ipfs://bafytest".into());
+        s.image_hash = Some("ab".repeat(32));
         s.website = Some("https://example.org".into());
         s.x = Some("https://x.com/example".into());
         s.telegram = Some("https://t.me/example_chat".into());
@@ -1985,7 +1990,7 @@ mod tests {
         let json = std::str::from_utf8(&p.tx.payload[1..]).unwrap().to_string();
         assert!(
             json.starts_with(
-                r#"{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","logo":"ipfs://bafytest""#
+                r#"{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","image":"ipfs://bafytest","image_hash":"abababababababababababababababababababababababababababababababab","website""#
             ),
             "{json}"
         );
@@ -2020,7 +2025,9 @@ mod tests {
         assert_eq!(sup["genesis_txid"], gen_id.to_string());
         let r = c.genesis.registry_entry();
         assert_eq!((r["display"]["x"].as_str(), r["display"]["telegram"].as_str()), (s.x.as_deref(), s.telegram.as_deref()));
-        assert_eq!(r["display"]["kcc23"]["logo"], "ipfs://bafytest");
+        assert_eq!(r["display"]["kcc23"]["image"], "ipfs://bafytest");
+        assert_eq!(r["display"]["kcc23"]["image_hash"], "ab".repeat(32));
+        assert!(r["display"]["kcc23"].get("logo").is_none());
         assert!(r["display"]["kcc23"].get("totalSupply").is_none(), "facts the chain states are not declared again");
     }
 
