@@ -706,7 +706,7 @@ impl Processor {
         // the first holding under a program proves it: the orders already listed under another program for the covenant id were
         // placed before the proof existed (audit 2026-10-30 V4)
         let proven_before = conn
-            .prepare_cached("SELECT 1 FROM token_holdings WHERE token_cov_id = ?1 AND program = ?2 LIMIT 1")?
+            .prepare_cached("SELECT 1 FROM holding_programs WHERE token_cov_id = ?1 AND program = ?2")?
             .exists(params![&token.0[..], program.name()])?;
         conn.prepare_cached(
             "INSERT OR IGNORE INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa) \

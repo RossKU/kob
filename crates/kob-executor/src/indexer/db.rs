@@ -142,6 +142,10 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if backfill_counters(conn)? {
         tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
     }
+    let (programs, holdings) = backfill_holding_programs(conn)?;
+    if holdings > 0 {
+        tracing::info!(programs, holdings, "counted the programs of the token holdings once (kept by triggers from now on)");
+    }
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('order_amends') WHERE name = 'min_fill'")?.exists([])?;
     if !has {
         // the minimum fill an in-place amend replaced (restored on revert); an earlier build kept none
@@ -193,6 +197,25 @@ pub fn backfill_counters(conn: &Connection) -> DbResult<bool> {
     meta_set(&tx, "counters", "1")?;
     tx.commit()?;
     Ok(true)
+}
+
+/// The (token, program) counts of `holding_programs` (schema.sql) of a database that has not had them: counted from the holdings once, in
+/// one transaction, after which the triggers keep them. A no-op (`(0, 0)`) once done (`meta.holding_programs`); a fresh database counts
+/// its empty table. Returns (rows of the table, holdings counted).
+pub fn backfill_holding_programs(conn: &Connection) -> DbResult<(usize, usize)> {
+    if meta_get(conn, "holding_programs")?.is_some() {
+        return Ok((0, 0));
+    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch("DELETE FROM holding_programs;")?;
+    let programs = tx.execute(
+        "INSERT INTO holding_programs (token_cov_id, program, n) SELECT token_cov_id, program, COUNT(*) FROM token_holdings GROUP BY token_cov_id, program",
+        [],
+    )?;
+    let holdings: i64 = tx.query_row("SELECT COALESCE(SUM(n), 0) FROM holding_programs", [], |r| r.get(0))?;
+    meta_set(&tx, "holding_programs", "1")?;
+    tx.commit()?;
+    Ok((programs, holdings as usize))
 }
 
 /// The token identities the order `(contract, token, program, commitment, genesis state)` placed, as the processor records
@@ -538,6 +561,50 @@ impl ReadPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn programs(c: &Connection) -> Vec<(u8, String, i64)> {
+        let mut st = c.prepare("SELECT token_cov_id, program, n FROM holding_programs ORDER BY token_cov_id, program").unwrap();
+        st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?[0], r.get(1)?, r.get(2)?))).unwrap().map(|r| r.unwrap()).collect()
+    }
+
+    fn holding(c: &Connection, txid: u8, token: u8, program: &str) {
+        c.execute(
+            "INSERT OR IGNORE INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa)              VALUES (?1, 0, ?2, ?3, 1, ?4, 0, 5, 1, x'08', 'owned', 1, 1)",
+            rusqlite::params![vec![txid; 32], vec![token; 32], program, vec![9u8; 32]],
+        )
+        .unwrap();
+    }
+
+    /// `holding_programs` is the (token, program) set of the holdings with a count: the triggers keep it through inserts (an ignored one
+    /// counts nothing), deletes, a change of the key columns, and a database without it gets it counted once.
+    #[test]
+    fn the_programs_of_the_holdings_are_counted_by_triggers_and_backfilled_once() {
+        let c = open_memory("testnet-10").unwrap();
+        holding(&c, 1, 1, "KCC20Ref_8x8");
+        holding(&c, 2, 1, "KCC20Ref_8x8");
+        holding(&c, 2, 1, "KCC20Ref_8x8"); // ignored: the same outpoint
+        holding(&c, 3, 1, "KronToken2433");
+        holding(&c, 4, 2, "KCC20Ref_8x8");
+        assert_eq!(programs(&c), [(1, "KCC20Ref_8x8".into(), 2), (1, "KronToken2433".into(), 1), (2, "KCC20Ref_8x8".into(), 1)]);
+        c.execute("DELETE FROM token_holdings WHERE txid = ?1", [vec![3u8; 32]]).unwrap();
+        c.execute("UPDATE token_holdings SET spent_block = 2 WHERE txid = ?1", [vec![1u8; 32]]).unwrap();
+        assert_eq!(
+            programs(&c),
+            [(1, "KCC20Ref_8x8".into(), 2), (2, "KCC20Ref_8x8".into(), 1)],
+            "a spend changes nothing, the last of a program takes its row"
+        );
+        c.execute("UPDATE token_holdings SET token_cov_id = ?1 WHERE txid = ?2", rusqlite::params![vec![2u8; 32], vec![1u8; 32]])
+            .unwrap();
+        assert_eq!(programs(&c), [(1, "KCC20Ref_8x8".into(), 1), (2, "KCC20Ref_8x8".into(), 2)]);
+        // a database that never had the table: counted at the next open, once
+        let before = programs(&c);
+        c.execute_batch("DELETE FROM holding_programs; DELETE FROM meta WHERE k = 'holding_programs';").unwrap();
+        assert_eq!(backfill_holding_programs(&c).unwrap(), (2, 3));
+        assert_eq!(programs(&c), before);
+        assert_eq!(backfill_holding_programs(&c).unwrap(), (0, 0));
+        // the reads: the skip-scan of a token's programs
+        assert_eq!(crate::indexer::reads::proven_programs(&c, &[1u8; 32]).unwrap().len(), 1);
+    }
 
     #[test]
     fn meta_roundtrip_and_network_guard() {

@@ -162,6 +162,9 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
              CREATE INDEX order_events_fills ON order_events (kind, token_cov_id, id); \
              CREATE INDEX order_events_fill_ts ON order_events (kind, token_cov_id, ts); \
              CREATE INDEX token_holdings_owner ON token_holdings (owner, token_cov_id); \
+             CREATE INDEX token_holdings_token_program ON token_holdings (token_cov_id, program); \
+             DROP TRIGGER holding_programs_insert; DROP TRIGGER holding_programs_delete; DROP TRIGGER holding_programs_update; \
+             DROP TABLE holding_programs; DELETE FROM meta WHERE k = 'holding_programs'; \
              UPDATE meta SET v = '5' WHERE k = 'schema_version';",
         )
         .unwrap();
@@ -177,7 +180,7 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
     let mut lines = vec![];
     let rep = storage::migrate(&cfg, storage::Options::default(), |l| lines.push(l.to_string())).unwrap();
     assert!(rep.utxos_packed > 0 && rep.holdings_packed > 0, "{rep:?}");
-    assert_eq!(rep.indexes_dropped, ["token_holdings_owner"]);
+    assert_eq!(rep.indexes_dropped, ["token_holdings_owner", "token_holdings_token_program"]);
     assert_eq!(rep.indexes_swapped, ["order_events_fills", "order_events_fill_ts"]);
     let old = rep.kept_old.clone().expect("compacted");
     assert!(old.exists() && old.to_string_lossy().ends_with("index.sqlite3.before-migrate"));
@@ -190,7 +193,18 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
     for name in ["order_events_fills", "order_events_fill_ts"] {
         assert!(index_sql(&after, name).unwrap().contains("WHERE kind = 'fill'"), "{name}");
     }
-    assert!(index_sql(&after, "token_holdings_owner").is_none());
+    assert!(index_sql(&after, "token_holdings_owner").is_none() && index_sql(&after, "token_holdings_token_program").is_none());
+    // the programs of the holdings, counted at the start of the migration, are what a count of the holdings says
+    let counted: Vec<(Vec<u8>, String, i64)> = {
+        let mut st = after.prepare("SELECT token_cov_id, program, n FROM holding_programs ORDER BY 1, 2").unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(|r| r.unwrap()).collect()
+    };
+    let real: Vec<(Vec<u8>, String, i64)> = {
+        let mut st = after.prepare("SELECT token_cov_id, program, COUNT(*) FROM token_holdings GROUP BY 1, 2 ORDER BY 1, 2").unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(|r| r.unwrap()).collect()
+    };
+    assert!(!real.is_empty());
+    assert_eq!(counted, real);
     assert_eq!(db::meta_get(&after, "schema_version").unwrap().as_deref(), Some("6"));
     assert_eq!(after.query_row::<String, _, _>("PRAGMA integrity_check", [], |r| r.get(0)).unwrap(), "ok");
 

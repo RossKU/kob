@@ -5,7 +5,8 @@
 //! The steps, each reported with its time:
 //!
 //! 1. **Indexes.** The fills-only indexes `order_events_fills` and `order_events_fill_ts` replace the ones over every event, and
-//!    `token_holdings_owner`, which the owner's page index serves, is dropped (`schema.sql`).
+//!    `token_holdings_owner` (which the owner's page index serves) and `token_holdings_token_program` (which the `holding_programs`
+//!    table serves) are dropped (`schema.sql`).
 //! 2. **State spans.** The state of every `order_utxos` and `token_holdings` row is rewritten in the packed form
 //!    ([`super::packed`]), in batches of one short transaction each (`PACK_BATCH` rows). Each batch is read back through the SQL
 //!    functions the queries use and compared with the span it replaced before it commits; a mismatch aborts the migration and
@@ -87,7 +88,9 @@ fn index_sql(conn: &Connection, name: &str) -> rusqlite::Result<Option<String>> 
 
 /// Step 1.
 fn swap_indexes(conn: &Connection, rep: &mut Report) -> DbResult<()> {
-    for name in ["token_holdings_owner"] {
+    // the owner's page index serves what `token_holdings_owner` did; `holding_programs` (kept by triggers, counted at start-up) serves what
+    // `token_holdings_token_program` did
+    for name in ["token_holdings_owner", "token_holdings_token_program"] {
         if index_sql(conn, name)?.is_some() {
             conn.execute_batch(&format!("DROP INDEX {name}"))?;
             rep.indexes_dropped.push(name.to_string());

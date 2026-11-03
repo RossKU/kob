@@ -193,11 +193,11 @@ pub fn market_scale(conn: &Connection, cov: &[u8]) -> DbResult<Option<i64>> {
 /// 2026-10-30 V2). Empty: nothing proves it (no holding of the token was seen). Order placements prove nothing: anyone can pin any
 /// program for any covenant id (audit 2026-10-30 V1).
 ///
-/// A skip-scan over `token_holdings_token_program` (`MIN(program)`, then the next above it): one index seek per distinct program,
-/// however many holdings the token has (the `SELECT DISTINCT` it replaced read all of them: 18 s on the soak; audit I9). At most one
-/// seek per program this build knows.
+/// A skip-scan over `holding_programs` (`MIN(program)`, then the next above it; the table the triggers keep from the holdings, schema.sql):
+/// one seek per distinct program, however many holdings the token has (the `SELECT DISTINCT` it replaced read all of them: 18 s on the
+/// soak; audit I9). At most one seek per program this build knows.
 pub fn proven_programs(conn: &Connection, token: &[u8]) -> DbResult<Vec<Vec<u8>>> {
-    let mut st = conn.prepare_cached("SELECT MIN(program) FROM token_holdings WHERE token_cov_id = ?1 AND program > ?2")?;
+    let mut st = conn.prepare_cached("SELECT MIN(program) FROM holding_programs WHERE token_cov_id = ?1 AND program > ?2")?;
     let mut names: Vec<String> = Vec::new();
     let mut prev = String::new();
     while names.len() <= TemplateId::ALL.len() {

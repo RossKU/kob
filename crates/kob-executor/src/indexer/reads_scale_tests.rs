@@ -32,8 +32,7 @@ fn open_list() -> TokenAllowlist {
 }
 
 /// The indexes this fix adds: dropped after the load so that opening the store again is the upgrade of a store that lacks them.
-const NEW_INDEXES: [&str; 6] = [
-    "token_holdings_token_program",
+const NEW_INDEXES: [&str; 5] = [
     "token_holdings_token_page",
     "token_holdings_owner_page",
     "token_utxos_custody_live",

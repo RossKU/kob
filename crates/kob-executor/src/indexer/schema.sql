@@ -229,8 +229,32 @@ CREATE TABLE IF NOT EXISTS token_holdings (
     PRIMARY KEY (txid, idx)
 );
 -- The programs of one token's holdings, read by a skip-scan (MIN(program), then the next above it) for every evaluated order and every
--- open-list token (`reads::proven_programs`: 0.1 ms; the DISTINCT it replaced read all of a token's holdings, 18 s on the soak).
-CREATE INDEX IF NOT EXISTS token_holdings_token_program ON token_holdings (token_cov_id, program);
+-- open-list token (`reads::proven_programs`: 0.1 ms; the DISTINCT it replaced read all of a token's holdings, 18 s on the soak), and
+-- asked once per inserted holding (`processor::insert_holding`: has the token a holding under this program yet). `holding_programs` is that
+-- set with a count, kept by the triggers below in the transaction of every insert and delete of a holding (a batch, a revert, a replay,
+-- the lean pruning): a few rows per token instead of the 190 MB `(token_cov_id, program)` index over every holding that served the same
+-- two reads. A database without it gets it at start-up, counted once (`db::backfill_holding_programs`); `index migrate` drops that index.
+CREATE TABLE IF NOT EXISTS holding_programs (
+    token_cov_id BLOB NOT NULL,
+    program      TEXT NOT NULL,
+    n            INTEGER NOT NULL,        -- holdings of the token under the program, spent ones included
+    PRIMARY KEY (token_cov_id, program)
+) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS holding_programs_insert AFTER INSERT ON token_holdings BEGIN
+    INSERT INTO holding_programs (token_cov_id, program, n) VALUES (NEW.token_cov_id, NEW.program, 1)
+        ON CONFLICT (token_cov_id, program) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS holding_programs_delete AFTER DELETE ON token_holdings BEGIN
+    UPDATE holding_programs SET n = n - 1 WHERE token_cov_id = OLD.token_cov_id AND program = OLD.program;
+    DELETE FROM holding_programs WHERE token_cov_id = OLD.token_cov_id AND program = OLD.program AND n <= 0;
+END;
+CREATE TRIGGER IF NOT EXISTS holding_programs_update AFTER UPDATE OF token_cov_id, program ON token_holdings
+    WHEN OLD.token_cov_id IS NOT NEW.token_cov_id OR OLD.program IS NOT NEW.program BEGIN
+    UPDATE holding_programs SET n = n - 1 WHERE token_cov_id = OLD.token_cov_id AND program = OLD.program;
+    DELETE FROM holding_programs WHERE token_cov_id = OLD.token_cov_id AND program = OLD.program AND n <= 0;
+    INSERT INTO holding_programs (token_cov_id, program, n) VALUES (NEW.token_cov_id, NEW.program, 1)
+        ON CONFLICT (token_cov_id, program) DO UPDATE SET n = n + 1;
+END;
 -- The holdings of a token or of an owner in page order, spent ones included (`GET /v1/token-utxos?spent=true`): no sort of the lot.
 -- (The token's page index replaces the `(token_cov_id, owner)` one, which no read used. An earlier store also had `(owner, token_cov_id)`:
 -- the owner's page index serves the pair, in page order and without the sort; `index migrate` drops it.)
