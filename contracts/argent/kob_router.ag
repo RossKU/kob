@@ -140,8 +140,8 @@
 
 
 import "./kcc20_8x8.ag";
-import "./KOBOrders/artifact.json" id "631c69fe0ec1854ae0af714475c56d5777ad56348f87e8195010e61b4e531f5d";
-import "./KOBOrdersKron/artifact.json" id "867d24a6c06fb8a38a30941a7f5a79d8dda05c4bee4b01f3dab2ba68c394442f";
+import "./KOBOrders/artifact.json" id "aaaf060e2c4d998289c292778625e2e11f25a44b2ec27a2b33a2b93d305cd907";
+import "./KOBOrdersKron/artifact.json" id "7681275caba68f02eb4bb3521838755d1f6ecade5837e8a5fdfd78a1dfd7a10b";
 
 const int MAX_SOMPI = 2900000000000000000;
 const byte SIGHASH_ALL = 0x01;

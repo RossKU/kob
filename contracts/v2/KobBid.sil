@@ -30,7 +30,8 @@ pragma silverscript ^0.1.0;
 //    bid its cap priceEnd): a fill of n base units consumes exactly used(n) = ceil(n * (pMax + tip) / scale) of
 //    budget (rounded up, so split fills never buy more than the escrow funds) and the continuation must hold
 //    exactly the rest, so the bid never buys more than it was funded for. The difference used(n) - spend(n)
-//    (a rising bid's headroom and the rounding) rides on the delivery: the maker's.
+//    (a rising bid's headroom and the rounding) stays with the maker: on the delivery, or, once the fill
+//    terminates the bid and it is REFUND_MIN or more, in the maker's own refund output (below).
 //  - Minimum fill: n >= minFill unless the fill leaves less buying power than one minimum fill (the bid
 //    terminates). Every fill puts deliveryCarrier of the escrow on its delivery, so the minimum bounds the
 //    number of deliveries (and carriers) a filler can force on the maker.
@@ -46,8 +47,12 @@ pragma silverscript ^0.1.0;
 //    continues.
 //  - Positional rule: the tokens bought by the order spent at input i are delivered in output i, as
 //    a genuine KCC-20 UTXO owned by the maker (owner_scheme 0x00 p2pk-schnorr/v1, borrow disabled,
-//    pinned extensionCommitment). Without a continuation, everything not spent rides on that
-//    delivery's KAS value.
+//    pinned extensionCommitment). Without a continuation, the delivery carries deliveryCarrier and the KAS
+//    not spent beyond it returns to the maker as a plain P2PK output (the destination of refund()) at
+//    output M - 1 - i (M the number of outputs): one slot per bid input, counted from the end, so two
+//    bids cannot share one output; the slot may not be the positional output of another order input
+//    (refundTo). A remainder below REFUND_MIN (1 KAS) stays on the delivery (a plain output of v sompi
+//    has KIP-9 storage mass 10^12 / v).
 //  - Strays: a bid owns no tokens. A token UTXO sent to this covenant id would be authorised by any
 //    spend of this input, so fill refuses every transaction carrying a token input owned by this id
 //    (noStrays, bounded scan, at most MAX_TOK_IN token inputs) and refund refuses any token input at
@@ -109,6 +114,10 @@ contract KobBid(
     byte constant SIGHASH_ALL = 0x01;
     int constant TIF_GTC = 0;
     int constant TIF_FOK = 2;
+    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+    // Smallest KAS beyond the delivery carrier a terminal fill sends back to the maker as its own output (1 KAS): a plain
+    // output of v sompi has KIP-9 storage mass 10^12 / v, so a smaller remainder stays on the delivery.
+    int constant REFUND_MIN = 100000000;
     int constant MAX_IDLE = 77760000;
     int constant IOC_LIFE = 600;
     // Most token inputs a fill may carry (the KCC-20 limit, 8 in / 8 out). The scan over these
@@ -137,6 +146,22 @@ contract KobBid(
         if (cnt > 5) { int x5 = OpCovInputIdx(tokenCovId, 5); int e5 = OpTxInputScriptSigLen(x5) + off; require(byte[32](OpTxInputScriptSigSubstr(x5, e5, e5 + 32)) != me); }
         if (cnt > 6) { int x6 = OpCovInputIdx(tokenCovId, 6); int e6 = OpTxInputScriptSigLen(x6) + off; require(byte[32](OpTxInputScriptSigSubstr(x6, e6, e6 + 32)) != me); }
         if (cnt > 7) { int x7 = OpCovInputIdx(tokenCovId, 7); int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); }
+    }
+
+    // Terminal fill with a refund: the KAS the bid does not spend and the delivery does not need goes to the maker as a
+    // plain P2PK output (the destination of refund()), at output M - 1 - self (M = the number of outputs): one slot per
+    // bid input (distinct inputs, distinct outputs), counted from the end, so no two bids can share an output. The output
+    // must not be one another input claims by position: an input of the transaction at that index must be a token input
+    // (the token programs pin no plain output by index) or a plain key input; any other covenant input (an order pays,
+    // delivers or refunds at its own index, a router intent at j and j + 1) refuses the fill.
+    function refundTo(int self, int rem) {
+        int r = tx.outputs.length - 1 - self;
+        if (r < tx.inputs.length) {
+            byte[32] ci = OpInputCovenantId(r);
+            require(ci == tokenCovId || ci == ZERO32);
+        }
+        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+        require(tx.outputs[r].value >= rem);
     }
 
     entry fill(byte[8] nb, int tokenTplIn, int t) {
@@ -210,10 +235,17 @@ contract KobBid(
             require(tx.outputs[selfOut].value == left - deliveryCarrier);
             require(tx.outputs[self].value >= deliveryCarrier + used - allIn);
         } else {
-            // Exhausted, IOC or FOK: terminate; everything not spent rides on the delivery.
+            // Exhausted, IOC or FOK: terminate. The KAS not spent returns to the maker as a plain output (refundTo) once it is
+            // REFUND_MIN or more beyond the delivery carrier; below that it rides on the delivery.
             require(tif != TIF_FOK || !canContinue);
             require(OpCovOutputCount(selfId) == 0);
-            require(tx.outputs[self].value >= inValue - allIn);
+            int rem = inValue - allIn - deliveryCarrier;
+            if (rem >= REFUND_MIN) {
+                refundTo(self, rem);
+                require(tx.outputs[self].value >= deliveryCarrier);
+            } else {
+                require(tx.outputs[self].value >= inValue - allIn);
+            }
         }
     }
 

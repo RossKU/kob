@@ -97,6 +97,9 @@ contract KobCondBidKron(
     byte constant SIGHASH_ALL = 0x01;
     int constant SIDE_ASK = 1;
     int constant SIDE_BID = 2;
+    // Smallest KAS beyond the delivery carrier a terminal fill sends back to the maker as its own output (1 KAS): a plain
+    // output of v sompi has KIP-9 storage mass 10^12 / v, so a smaller remainder stays on the delivery.
+    int constant REFUND_MIN = 100000000;
     int constant MAX_IDLE = 77760000;
     // Largest stopPrice whose band product stopPrice * slipBps (slipBps <= 10000) fits in an int.
     int constant MAX_STOP = 922337203685477;
@@ -120,6 +123,22 @@ contract KobCondBidKron(
     // P2SH of this script with stopPrice, amountLeft and armed replaced (the only mutable fields).
     // State span starts at bytecode offset 1; payload windows: stopPrice [191..199),
     // amountLeft [254..262), armed [263..271). Every other byte is copied.
+    // Terminal fill with a refund: the KAS the bid does not spend and the delivery does not need goes to the maker as a
+    // plain P2PK output (the destination of refund()), at output M - 1 - self (M = the number of outputs): one slot per
+    // bid input (distinct inputs, distinct outputs), counted from the end, so no two bids can share an output. The output
+    // must not be one another input claims by position: an input of the transaction at that index must be a token input
+    // (the token programs pin no plain output by index) or a plain key input; any other covenant input (an order pays,
+    // delivers or refunds at its own index, a router intent at j and j + 1) refuses the fill.
+    function refundTo(int self, int rem) {
+        int r = tx.outputs.length - 1 - self;
+        if (r < tx.inputs.length) {
+            byte[32] ci = OpInputCovenantId(r);
+            require(ci == tokenCovId || ci == ZERO32);
+        }
+        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+        require(tx.outputs[r].value >= rem);
+    }
+
     function contSpk(int newStop, int newLeft, int newArmed) : byte[] {
         int self = this.activeInputIndex;
         int len = OpTxInputScriptSigLen(self);
@@ -325,11 +344,18 @@ contract KobCondBidKron(
                 require(tx.outputs[self].value >= deliveryCarrier);
             }
         } else {
-            // the rest: terminate; everything not spent rides on the delivery (or, when
-            // re-arming, goes back to the entry, which checks it)
+            // the rest: terminate. The KAS not spent returns to the maker as a plain output (refundTo) once it is REFUND_MIN
+            // or more beyond the delivery carrier, else it rides on the delivery; when re-arming it goes back to the entry,
+            // which checks it
             require(OpCovOutputCount(selfId) == 0);
             if (!rearm) {
-                require(tx.outputs[self].value >= left);
+                int rem = left - deliveryCarrier;
+                if (rem >= REFUND_MIN) {
+                    refundTo(self, rem);
+                    require(tx.outputs[self].value >= deliveryCarrier);
+                } else {
+                    require(tx.outputs[self].value >= left);
+                }
             }
         }
     }

@@ -21,10 +21,10 @@ artifact id you reviewed; do not pin a file name or a branch.
 
 | App | Artifact id (`id` field of `artifact.json`) |
 |---|---|
-| `KOBOrders` | `631c69fe0ec1854ae0af714475c56d5777ad56348f87e8195010e61b4e531f5d` |
-| `KOBOrdersKron` | `867d24a6c06fb8a38a30941a7f5a79d8dda05c4bee4b01f3dab2ba68c394442f` |
+| `KOBOrders` | `aaaf060e2c4d998289c292778625e2e11f25a44b2ec27a2b33a2b93d305cd907` |
+| `KOBOrdersKron` | `7681275caba68f02eb4bb3521838755d1f6ecade5837e8a5fdfd78a1dfd7a10b` |
 | `KOBToken` | `364f6518d3ae5a31d0fcf768c9a1cc5d6e187cb2d03787dee8d8e9088ffec39f` |
-| `KobRouter` | `7e2bed5bd5bf0bd697f657b056ca686ab85f79b8b9d07f2f76611b61f7b842ad` |
+| `KobRouter` | `08e7edd76c4f057f65060cfa1589d239a8aebf922eea90cc2a5606de764f2d24` |
 
 Actor-type handles (the template hash of the hand-written program: blake3 over prefix and suffix
 around the state span, the same value silverc reports as `template_hash`):
@@ -32,16 +32,16 @@ around the state span, the same value silverc reports as `template_hash`):
 | Actor | Handle | State span | Program |
 |---|---|---|---|
 | `KOBOrders::KobAsk` | `070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c` | 1+276 | 1,684 B |
-| `KOBOrders::KobBid` | `b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3` | 1+285 | 1,516 B |
-| `KOBOrders::KobCondAsk` | `770314aa3391b20333c98037343f538f1903002362f31bd599abfca16aa67247` | 1+363 | 3,855 B |
-| `KOBOrders::KobCondBid` | `26042aff0dc58c2cbaa0efd166c38944942d75524cc55033dde80502c4558166` | 1+381 | 3,614 B |
-| `KOBOrders::KobIfdAsk` | `afb74446c24e7e8e3d0587bffd659afdc2e9c516d633d02a0a6308589b4d9934` | 1+594 | 5,197 B |
-| `KOBOrders::KobIfdBid` | `5740a65dfdcb27685a10f951de281f556c4d2de86a7d3d101412c9c2244fd026` | 1+585 | 3,841 B |
+| `KOBOrders::KobBid` | `dfcd78f15cdadccb7db6f8094cb42421a409642a8b28041518a6bd2ec54bd5ef` | 1+285 | 1,629 B |
+| `KOBOrders::KobCondAsk` | `23431719bdf1d5ffee8e4cd5aa50afa2c3513f60acca13cc3226c83f1eb9113a` | 1+363 | 3,855 B |
+| `KOBOrders::KobCondBid` | `079522237b973923ed05be828d6f62036ac642c3ee9fe493d921a7062b75e135` | 1+381 | 3,725 B |
+| `KOBOrders::KobIfdAsk` | `2328ea8fd57ee9b4a09602df23dcb12e8bda7664da670ab9d41a2aa8f058f30e` | 1+594 | 5,197 B |
+| `KOBOrders::KobIfdBid` | `956f81e8c0f1dc9192da65307a1f29c58c4c2f56a6ebf2703346538736459c06` | 1+585 | 3,841 B |
 | `KOBOrders::KobPair` | `c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6` | 1+447 | 2,960 B |
-| `KOBOrders::KobCondPair` | `699c30cc6355c82fee1bacd6fd5f7239a80d98fb222699ef8407dd671ddc923f` | 1+543 | 6,862 B |
-| `KOBOrders::KobIfdPair` | `bb9937a199d1d7e1b1f62c2eb55418840670901a6042110129ad4368aaf6b8a4` | 1+909 | 9,263 B |
+| `KOBOrders::KobCondPair` | `0d9918cc8f99bf46baf9f4544a413129aae5881b1e97326f69208057e441b98a` | 1+543 | 6,862 B |
+| `KOBOrders::KobIfdPair` | `43c721c5190432b1788ca4f79ab56c180f6ee2f9d958bb1cdd8ebeb64831a087` | 1+909 | 9,263 B |
 | `KOBOrdersKron::KobAskKron` | `f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d` | 1+243 | 1,487 B |
-| `KOBOrdersKron::KobBidKron` | `6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc` | 1+252 | 1,343 B |
+| `KOBOrdersKron::KobBidKron` | `7cb4f6abe8ab4282469fd3e70d3372122f9dbe6b0e03a5b192fc5c1393062582` | 1+252 | 1,456 B |
 | `KOBToken::KCC20` (8 in / 8 out) | `666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032` | 1+112 | 6,350 B |
 
 The test `tools/sil2argent/tests/published.rs` fails if the ids and handles above, or the router
@@ -91,7 +91,7 @@ Two ways to name a KOB order kind in `observes`. Both compile-checked examples l
 ### Closed ICC (recommended)
 
 ```
-import "./KOBOrders/artifact.json" id "631c69fe0ec1854ae0af714475c56d5777ad56348f87e8195010e61b4e531f5d";
+import "./KOBOrders/artifact.json" id "aaaf060e2c4d998289c292778625e2e11f25a44b2ec27a2b33a2b93d305cd907";
 
 actor PriceGate owns PriceGateState {
     entry spend(cov_id ask_covid, int n, sig s)
