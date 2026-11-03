@@ -728,6 +728,20 @@ The database is a *derived view* of the record log: `kob-executor index replay` 
 records and the follower re-syncs the tail from the node (section 7.6). Measured numbers are in
 section 3; they come from `cargo test -p kob-executor --test storage -- --nocapture`.
 
+**Compact layout (schema 6, 2026-11).** After two weeks of heavy bot trading one executor held an 8.5 GB `index.sqlite3` and a
+2.9 GB record log. Most of the database was the same bytes stored again: the state span of an order covenant's every UTXO
+(341 bytes, `order_utxos.state`) differs from the order's `genesis_state` in a few bytes (a fill changes `amountLeft`), and a
+token holding's 112-byte state (`token_holdings.state`) is its `amount`, `owner` and `owner_kind` columns plus zero fields. Both are
+now stored as the difference from that base (`indexer::packed`: the span itself when it starts with a non-zero byte, as an older
+build wrote it; otherwise a tag, the lengths of the common prefix and suffix, and the bytes between), and the queries decode
+them with four SQL functions every connection registers (`kob_ustate`, `kob_hstate`, `kob_pack`, `kob_hpack`). Nothing is
+lost: the decoded span is exactly the one stored, and `index migrate` (7.6a) checks that for every row it rewrites. Two
+indexes also went: `order_events_fills` and `order_events_fill_ts` hold the fills only (a third of the events) and
+`token_holdings_owner` is dropped (the owner's page index served every read it served; the query plans are unchanged). The
+sealed segments of the record log are kept gzip-compressed. **The `sqlite3` shell no longer shows the state columns of
+`order_utxos` and `token_holdings` as spans** (it lacks the functions): use the API (`/v1/orders`, `/v1/token-utxos`),
+`index export-orders`, or this build's `kob_ustate` / `kob_hstate` from a client that registers them.
+
 **Token registry events.** The first sighting of a `(token covenant id, token program, extension
 commitment)` identity is recorded as a `seen` event (`GET /v1/token-events`). It is derived from
 placement records, so it is rebuilt from the log like everything else.
@@ -2046,13 +2060,41 @@ binds: `indexer::kcc23::DeclSection`, flagged by bit 30 of a record's `pos`) is 
 "newer format" warning (KOB records in such a frame are skipped by it too). Declarations made before this build were never
 logged and are not recovered by a replay.
 
-**Schema.** The database is schema 5 (quantities in base units, prices per whole token). A database written before it
-(its `orders` table has the old `lot_units` column) is refused untouched by every writer and reader: move it aside and
-replay (above). A schema-5 database of an earlier build is brought up to date in place at start-up (idempotent backfills,
-no replay; the read-path indexes and row counters of section 5.5 are built once, seconds on a large database); a newer
-schema is refused. An old configuration's `[receipts]` table is ignored. Roll indexers out before
+**Schema.** The database is schema 6 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans,
+7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
+writer and reader: move it aside and replay (above). A schema-5 database of an earlier build is brought up to date in place at
+start-up (idempotent backfills, no replay; the read-path indexes and row counters of section 5.5 are built once, seconds on a
+large database) and its schema number moves to 6: **from then on a build of schema 5 refuses it** (it would misread the packed
+states), so the way back to the older build is a backup taken before; a newer schema is refused. An old configuration's `[receipts]` table is ignored. Roll indexers out before
 wallets whenever the KOB1 payload version changes: an indexer refuses a payload version it does not know, so it would list
 none of the orders the new wallets place (`docs/ops/release.md`, section 7).
+
+#### 7.6a Compact storage: `index migrate`
+
+```
+systemctl stop kob-index                                           # the writer lock: nothing else may write the directory
+kob-executor index migrate --data-dir /var/lib/kob-index           # 11 minutes on the 8.5 GB soak store (below)
+systemctl start kob-index
+rm /var/lib/kob-index/index.sqlite3.before-migrate                 # once the executor has run on the new store
+```
+
+A store written by an earlier build runs on this build as it is (the new rows are written packed, the old ones are read whole);
+`index migrate` gives the space back. It is repeatable and can be interrupted. In order: (1) swaps the two fill indexes for the
+fills-only ones and drops `token_holdings_owner`; (2) rewrites the state of every `order_utxos` and `token_holdings` row packed,
+20,000 rows per transaction, reading each batch back through the SQL functions the queries use and comparing it with the span it
+replaced before it commits (a mismatch aborts, leaving every row as it was or packed and verified); (3) compacts the store into a
+new file (`VACUUM INTO`, then `PRAGMA quick_check`), which replaces `index.sqlite3`; the old file stays beside it as
+`index.sqlite3.before-migrate`, the rollback, and needs the disk room of the old store plus the new one while both exist;
+(4) gzip-compresses the sealed record-log segments (the newest stays whole; a rotation compresses the segment it just sealed from
+now on, which holds the writer for about 5 seconds per 256 MiB segment). `--no-compact` and `--no-compress-log` leave steps 3 and 4 out. Measured on a copy of the TN10 soak executor (8.48 GB
+database, 2.3 million order UTXOs, 3.7 million holdings, 1.1 million orders, 3.5 million events, 3.09 GB log): indexes 56 s,
+`order_utxos` 117 s, `token_holdings` 81 s, compaction and check 372 s, log 48 s, **673 s in all**; the store 8.48 -> **5.98 GB**
+(`order_utxos` 1,474 -> 479 MB, `token_holdings` 1,315 -> 730 MB, the fill indexes 409 -> 112 MB, `token_holdings_owner` 308 MB -> 0, the
+unused space inside pages 0.8 GB -> 0.2 GB), the sealed log segments 2.95 -> **0.92 GB** (3.2x). Every one of 1,010 read-API calls (books, orders, events,
+fills, holdings, candles, trades, stats, depth, pairs, snapshots, exports) and the logical content of every table returned the same
+JSON / digest before and after (`cargo run --release -p kob-executor --example read_digest -- <index.sqlite3> <tokens.json>`, run with the
+build before and the build after). Reading the compressed log (the chain check at every start, `replay`) costs a little CPU
+(under a second per 256 MiB segment).
 
 #### 7.7 Wrong network / DB
 
@@ -2069,7 +2111,8 @@ instance.
 
 ### 8. Backups
 
-* Record log: `records/seg-*.kobrec` is append-only; all but the newest segment are immutable, so
+* Record log: `records/seg-*.kobrec` is append-only; all but the newest segment are immutable (and since schema 6 kept as
+  `seg-*.kobrec.gz`, the same bytes compressed: a rotation replaces the sealed segment by its `.gz`), so
   incremental off-site sync (rsync, restic) is safe. Encrypt off-site copies. Verify a copy by
   running `replay` on a scratch machine and comparing `export-orders` output. **This is the asset
   that cannot be recovered from the node after pruning.**
@@ -2123,7 +2166,11 @@ its retention.
 u32 LE body length | body | 32-byte chain hash = blake3(previous chain hash || body)
 ```
 
-The chain detects truncation in the middle and edits; segments rotate at `records.segment_bytes`.
+The chain detects truncation in the middle and edits; segments rotate at `records.segment_bytes`. A sealed segment is kept as
+`seg-<first frame>.kobrec.gz`: the gzip of the segment file, frame for frame (the chain hashes cover the frame bodies, so a
+compressed log verifies and replays the same). The writer compresses a segment when it rotates to the next one, after it has read
+the compressed copy back and compared it with the segment; the newest segment is never compressed. A `.kobrec` and `.kobrec.gz`
+of one segment together (a stop between the two steps) read as the `.kobrec`.
 The body is one committed batch: the wall-clock time, the `start` hash of the request, the removed
 chain hashes (tip-first), the new cursor, the chain blocks that carried relevant transactions (hash,
 DAA score, blue score, timestamp), and the operator operations (`import`, `close_gap`, `adopt`). Each operation is
