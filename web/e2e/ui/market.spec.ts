@@ -28,7 +28,7 @@ test.describe('shell and token list', () => {
       expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
     }
     await expect(row.getByTestId(`fingerprint-${id}`)).toHaveAttribute('aria-label', /^Covenant id fingerprint: [a-z]+ [a-z]+ [a-z]+$/);
-    // token issuance is permissionless and KOB makes no per-token judgement: the row never says verified / official / pending review (the neutral fact "Genesis not verified" is not a verdict)
+    // token issuance is permissionless and KOB makes no per-token judgement: the row never says verified / official / pending review (a token whose genesis check could not run shows no status at all)
     await expect(row).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review|registry/i);
     await expect(row.getByTestId('badge-family')).toBeVisible();
     for (const badge of ['verified', 'unverified', 'official', 'pending-review', 'custom-registry', 'not-in-registry']) await expect(row.getByTestId(`badge-${badge}`)).toHaveCount(0);

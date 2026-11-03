@@ -40,8 +40,8 @@ export function ListLegend(props: { names?: 'ok' | 'loading' | 'unavailable' | '
                   <strong>{t(`market.fact.${id}.label`)}</strong>: {t(`market.fact.${id}.text`)}
                 </li>
               ))}
-              <li data-testid="legend-issuer-control">
-                <strong>{t('market.badge.issuerControl')}</strong>: {t('market.powers.warning')}
+              <li data-testid="legend-high-risk">
+                <strong>{t('market.badge.highRisk')}</strong>: {t('market.risk.legend')}
               </li>
             </ul>
           </details>

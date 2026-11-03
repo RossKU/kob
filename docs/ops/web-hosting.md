@@ -139,7 +139,7 @@ What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web
 
 * **Taken:** the creator's claimed ticker, name and image hash/URL (`claimed_*`), the declared decimals (only to flag a disagreement) and
   the program hash (`standard.view_template_hash`), and `status`, only as a labelled third-party remark: `status: "verified"` shows the chip "Verified by
-  kascov" in place of "Genesis not verified" (its tooltip says kascov checked the token's history and KOB has not yet; it changes no warning and no rule).
+  kascov" (a token that is not verified shows no genesis chip at all; the chip's tooltip says kascov checked the token's history and KOB has not yet; it changes no warning and no rule).
   **Never read:** `review`, `alive`, `invalid_reason`, `listed_*`, and `lineage_complete` (kascov's "provably genesis": it only says kascov's index began
   before the token did).
   Supply, decimals used for trading, prices and orders stay the chain's and the KOB indexer's.
@@ -171,10 +171,10 @@ https://api.kaspa.org/addresses/<script address>/full-transactions?limit=50&offs
 
 * **Trust.** None: the covenant id commits to the authorising outpoint and to the index, value and script public key of every genesis output, and each redeem script
   is hashed against its output, so a source can make the check fail or come back empty but cannot make a wrong group pass. Kascov's file is needed only for the
-  genesis transaction id (no source maps a covenant id to its genesis); `KOB_PAGES_TOKEN_NAMES_URL` = `off` therefore turns the check off ("Genesis not verified:
+  genesis transaction id (no source maps a covenant id to its genesis); `KOB_PAGES_TOKEN_NAMES_URL` = `off` therefore turns the check off (no genesis chip; the details say "Genesis not verified:
   history not available").
-* **Result.** `verified` (the badge "Genesis verified", KOB's own fact), `failed` (a warning "Genesis check failed", also when kascov says verified) or
-  `unavailable` (the badge stays "Genesis not verified" with a reason; asked again after 5 minutes when the page is opened later). Nothing is gated by it.
+* **Result.** `verified` (the badge "Genesis verified", KOB's own fact), `failed` (the "High risk" chip, whose reason is "Genesis check failed", also when kascov says verified) or
+  `unavailable` (no chip; the token's details say "Genesis not verified" with a reason; asked again after 5 minutes when the page is opened later). Nothing is gated by it.
 * **Saved evidence.** The evidence of a token that verified (its genesis group, at most 24 tokens, at most 150 KB each) is kept in the visitor's `localStorage`
   (`kob.genesis-evidence.v1`) so the sources are not asked again; it is verified again on every use, so it is a convenience and never authority. Without storage
   the check simply runs again.

@@ -203,11 +203,11 @@ After connect the adapters listen for account and network changes (`WalletAdapte
 * **No curation of tokens.** Token issuance is permissionless, so the UI shows no verified / official / pending-review labels, no "genesis verified" badge and
   no registry notes about who listed what. What it does show is technical: the token program family, the freeze / seize warnings (template
   `capabilities` from the registry, plus the indexer's `powers`, which can only add), the full covenant id with a copy button, and an `untradable` reason.
-  It also shows facts (matcher.md 1.2a, "wallets MUST show the warnings wherever the token is shown"), as neutral badges with a plain sentence in the
-  token header, next to the order button and on the list rows: the indexer's `genesis_unverified` and `live_mint_authority` (the same rule applied to
-  the registry entry, so they show without an indexer too) and the program powers mint-authority, public-mint and blacklist
+  It also shows facts (matcher.md 1.2a, "wallets MUST show the warnings wherever the token is shown"), as plain sentences: a normal token shows NO status (`genesis_unverified` and "declared, bound by ancestry" are no chips; their sentences are in the "Status and checks" section of the token / pair details, `TokenStatusDetails`), and what lets someone dilute the supply or freeze / seize balances is ONE "High risk" chip with its reason on a tap (`token-model.ts` `tokenRiskCodes`: failed genesis check, `live_mint_authority`, `mint-authority`, an unbounded verified mint, `freeze` / `seize`; `TokenBadges.tsx` `RiskChip`). The other facts stay neutral badges in the
+  token header and on the list rows: public-mint and blacklist (and the indexer's `live_mint_authority` is the same rule applied to
+  the registry entry, so it shows without an indexer too)
   (`src/ui/market/TokenBadges.tsx` `TokenFacts`; on the token page the badges are one line under the pair selector with the sentence as the tooltip (the family chip's tooltip names the program and where the decimals come from, `programTitle`), on the ticket it opens on a tap, in a list row it is the badge's tooltip and the legend above the list prints every sentence). A name the registry does not
-  list is marked "declared by its creator": the creator's own claim, not checked.
+  list shows no marker for its declaration (the normal case); the details say it is the creator's own claim, not checked.
   A token this build cannot trade (its program is not one this build supports and embeds) is not listed, not offered in selectors and has no market
   page; no token is ever refused for what it is (KOB makes no listing decision, the registry is a pinned snapshot of facts and curation belongs to
   the community token lists a user chooses). When two or more tokens the app shows share a ticker (look-alike letters and homoglyphs count as the same), the token page header and the pair

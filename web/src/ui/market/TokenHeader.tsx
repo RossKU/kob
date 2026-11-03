@@ -10,8 +10,9 @@ import { IdCopy } from './IdCopy';
 import { KascovLink, programTitle } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
 import { TokenNote } from './TokenNote';
-import { GenesisFailedBanner, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
-import { templateDetail, type TokenRow } from './token-model';
+import { decimalsNote } from '../../app/token-display';
+import { GenesisFailedBanner, PowersWarning, SharedTickerNote, FactLabel, FactSentence, StatusBadges, TokenFacts, powerName, riskReasonText, tokenTitle } from './TokenBadges';
+import { templateDetail, tokenRiskCodes, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
 export function IndexerProblems(props: { codes: string[] }) {
@@ -144,8 +145,51 @@ export function TokenLine(props: { row: TokenRow; note?: Pick<TokenInfo, 'decima
   );
 }
 
+/**
+ * Everything a token's chips leave out by default, one tap away (token page and pair page, under the token's facts): why it is marked "High risk", every fact
+ * with its sentence (`Genesis not verified` and its reason included: a normal token shows no status chip for it), and where its name and decimals come
+ * from when that is its on-chain declaration. Not a rating: nothing here says a token is safe. Renders nothing for a token with none of these.
+ */
+function TokenStatusDetails(props: { row: TokenRow; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null | undefined }) {
+  const r = props.row;
+  const risks = tokenRiskCodes(r);
+  const declared = r.declared === true ? { decimals: r.decimals } : props.note?.decimalsSource === 'declared' && !props.note.declarationConflicts?.length ? { decimals: props.note.decimals } : null;
+  const other = props.note && !declared ? decimalsNote(props.note) : null;
+  if (risks.length === 0 && r.facts.length === 0 && !declared && !other) return null;
+  return (
+    <Section title={t('market.status.title')} collapsible defaultOpen={false} data-testid="token-status-details" summary={risks.length > 0 ? <Badge tone="warn" data-testid="status-summary">{t('market.badge.highRisk')}</Badge> : undefined}>
+      <ul class="tf-list" data-testid="token-status-list">
+        {risks.map((c) => (
+          <li key={c} data-reason={c} data-testid={`status-risk-${c}`}>
+            <strong>{t('market.badge.highRisk')}: </strong>
+            {riskReasonText(r, c)}
+          </li>
+        ))}
+        {r.facts.map((id) => (
+          <li key={id} data-fact={id} data-testid={`status-fact-${id}`}>
+            <strong><FactLabel row={r} id={id} />: </strong>
+            <FactSentence row={r} id={id} />
+          </li>
+        ))}
+        {declared ? (
+          <li data-testid="status-declared">
+            <strong>{t('token.note.declared')}: </strong>
+            {t('token.note.declaredTitle', { decimals: declared.decimals ?? '' })}
+          </li>
+        ) : null}
+        {other ? (
+          <li data-testid="status-decimals-note">
+            <strong>{other.text}: </strong>
+            {other.title}
+          </li>
+        ) : null}
+      </ul>
+    </Section>
+  );
+}
+
 /** Token facts (bottom of the page): covenant id, decimals, price scale, tick, open orders, and the template verification. */
-export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'> }) {
+export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'>; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null; /** the row with KOB's own genesis check applied (a token page): what the status section is printed from */ checked?: TokenRow }) {
   const r = props.row;
   return (
     <div class="grid-2 mkt-details" data-testid="token-details">
@@ -177,6 +221,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
           ]}
         />
       </Section>
+      <TokenStatusDetails row={props.checked ?? r} note={props.note} />
       <TemplateVerification row={r} services={props.services} />
     </div>
   );

@@ -178,7 +178,7 @@ Whether the issued tokens can be found again depends on whether the genesis name
   the creator's own (at once) are verified in kob-wasm
   against the covenant id asked for, kept in memory and, as proofs, in localStorage (re-verified when read back). The facts a token
   is shown with, in order (`app/token-display.ts`):
-  1. its verified declaration (marked "declared, bound by ancestry" for a token the registry does not list: a declaration in a transaction whose output the
+  1. its verified declaration (no mark in the lists or the header, and "declared, bound by ancestry" in the token details, for a token the registry does not list: a declaration in a transaction whose output the
      genesis spent, so whoever funded that coin chose it, which is not always the creator; not reviewed);
   2. without a declaration (a token created before KCC-23: its id cannot commit to one), as before: the registry entry, the default of
      the token's program (a launchpad's convention, e.g. KaspaRocket 3), this browser's issuance record, the decimals of its market's

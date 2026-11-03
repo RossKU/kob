@@ -1,7 +1,7 @@
-// Facts about a token (matcher.md 1.2a: "Wallets MUST show the warnings wherever the token is shown"): the indexer's `genesis_unverified` and
-// `live_mint_authority`, and the program powers that let someone create more of the token or block addresses, as neutral badges with a plain
-// sentence in the token header, next to the order button, in the market list and on a pair. The sentence is printed or opens on a tap (a touch
-// screen has no tooltip). Facts, not a rating: a token whose genesis the registry verified has none of its own.
+// Facts about a token (matcher.md 1.2a: "Wallets MUST show the warnings wherever the token is shown"). A normal token shows NO status: "Genesis not verified" (the
+// check could not run) is no chip, its sentence is in the token's details. What lets someone create more of the token or freeze / seize balances (a live mint
+// authority, a mint authority, freeze, seize, a failed genesis check) is ONE "High risk" chip with its reason opened on a tap (a touch screen has no tooltip);
+// the other facts (public mint, blacklist) stay neutral chips with their sentence as the tooltip. Facts, not a rating.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -36,48 +36,58 @@ async function indexerFacts(page: Page): Promise<void> {
 test.use({ autoOpen: false });
 
 test.describe('token facts', () => {
-  test('a token whose genesis is not verified: a neutral badge and its sentence in the header, a badge next to the order button that opens on a tap', async ({ appPage: page, mock }) => {
+  test('a token whose genesis is not verified is a normal token: no chip in the header, none at the ticket, its sentence in the details', async ({ appPage: page, mock }) => {
     await fund(mock);
     await listExkcc(page);
     const id = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${id}`);
     await connectWallet(page);
     const header = page.getByTestId('token-header');
-    await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveText(/^Genesis not verified(: history not available)?$/);
-    // the badge is on the header's one line of badges; its sentence is its tooltip (the ticket's badge opens it on a tap)
-    await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveAttribute('title', /not checked against its token program/);
-    await expect(header.getByTestId('token-fact-text-genesis_unverified')).toHaveCount(0);
-    await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveClass(/badge-neutral/);
-    // the ticket: the badge is in the text, the sentence opens on a tap
-    const ticket = page.getByTestId('ticket-token-facts');
-    await expect(ticket.getByTestId('token-fact-genesis_unverified')).toBeVisible();
-    await expect(ticket.getByTestId('token-fact-text-genesis_unverified')).toBeHidden();
-    await ticket.locator('summary').click();
-    await expect(ticket.getByTestId('token-fact-text-genesis_unverified')).toBeVisible();
-    // it sits below the order button, in the ticket (a late answer of the genesis check never moves the button)
-    const box = async (tid: string) => (await page.getByTestId(tid).boundingBox())!;
-    expect((await box('ticket-token-facts')).y).toBeGreaterThan((await box('order-place')).y);
-    // no other fact for this token
-    await expect(header.getByTestId('token-fact-live_mint_authority')).toHaveCount(0);
+    await expect(page.getByTestId('token-page')).toBeVisible();
+    await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveCount(0);
+    await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
+    await expect(header).not.toContainText('Genesis not verified');
+    // the ticket's facts panel has nothing to say either
+    await expect(page.getByTestId('ticket-token-facts')).toHaveCount(0);
+    // the sentence is reachable: the token's details open on a tap
+    const details = page.getByTestId('token-status-details');
+    await details.getByRole('button').first().click();
+    await expect(details.getByTestId('status-fact-genesis_unverified')).toContainText(/Genesis not verified.*not checked against its token program/);
+    await expect(details.getByTestId('status-risk-live_mint_authority')).toHaveCount(0);
   });
 
-  test('the warnings and powers the indexer reports are all shown: live mint authority, public mint, blacklist', async ({ appPage: page, mock }) => {
+  test('the warnings and powers the indexer reports: a live mint authority is High risk (its reason on a tap), public mint and blacklist stay neutral chips', async ({ appPage: page, mock }) => {
     await listExkcc(page);
     await indexerFacts(page);
     const id = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${id}`);
     const header = page.getByTestId('token-header');
-    for (const f of ['genesis_unverified', 'live_mint_authority', 'public-mint', 'blacklist']) await expect(header.getByTestId(`token-fact-${f}`)).toBeVisible();
-    // the sentences are the badges' tooltips
-    await expect(header.getByTestId('token-fact-live_mint_authority')).toHaveAttribute('title', /more of this token can be created/);
+    for (const f of ['public-mint', 'blacklist']) await expect(header.getByTestId(`token-fact-${f}`)).toBeVisible();
+    // not a chip each: "Genesis not verified" is no status, a live mint authority is the one High risk chip
+    for (const f of ['genesis_unverified', 'live_mint_authority']) await expect(header.getByTestId(`token-fact-${f}`)).toHaveCount(0);
+    await expect(header.getByTestId('badge-high-risk')).toHaveAttribute('data-reasons', 'live_mint_authority');
+    await expect(header.getByTestId('high-risk-toggle')).toHaveClass(/badge-warn/);
+    await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
+    await header.getByTestId('high-risk-toggle').click();
+    await expect(page.getByTestId('high-risk-reasons')).toContainText('more of this token can be created');
+    await header.getByTestId('high-risk-toggle').click();
+    await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
+    // the other sentences are the chips' tooltips
     await expect(header.getByTestId('token-fact-public-mint')).toHaveAttribute('title', /anyone create more/);
     await expect(header.getByTestId('token-fact-blacklist')).toHaveAttribute('title', /block addresses/);
     // the market list: the same badges on the row, small and on one line with the covenant id; the sentence is the badge's tooltip and every sentence is
     // in the legend above the list, behind one tap (no "what is this?" on a row)
     await page.goto('/#/market');
     const row = page.getByTestId(`token-row-${id}`);
-    await expect(row.getByTestId('token-fact-live_mint_authority')).toBeVisible();
-    await expect(row.getByTestId('token-fact-live_mint_authority')).toHaveAttribute('title', /more of this token can be created/);
+    await expect(row.getByTestId('badge-high-risk')).toBeVisible();
+    await expect(row.getByTestId('token-fact-live_mint_authority')).toHaveCount(0);
+    await expect(row.getByTestId('token-fact-public-mint')).toHaveAttribute('title', /anyone create more/);
+    // a tap on the chip opens the reason (not cut by the row), a second tap closes it
+    await row.getByTestId('high-risk-toggle').click();
+    await expect(page.getByTestId('high-risk-reasons')).toBeVisible();
+    await expect(page.getByTestId('high-risk-reasons')).toContainText('more of this token can be created');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
     await expect(row.locator('summary, [data-testid^="token-fact-text-"]')).toHaveCount(0);
     // the legend is collapsed behind one info control; the attribution stays as a short label
     await expect(page.getByTestId('legend-attribution')).toHaveText('names via kascov');
@@ -88,10 +98,10 @@ test.describe('token facts', () => {
     await expect(page.getByTestId('legend-fact-public-mint')).toContainText('anyone create more');
     // the id is the second line of the row's text and the badges the third, on their own line (never wrapped)
     await expect(row.locator('.ml-line2').filter({ has: page.getByTestId(`token-hash-${id}`) })).toHaveCount(1);
-    await expect(row.locator('.ml-line3').filter({ has: page.getByTestId('token-fact-live_mint_authority') })).toHaveCount(1);
+    await expect(row.locator('.ml-line3').filter({ has: page.getByTestId('badge-high-risk') })).toHaveCount(1);
   });
 
-  test('a token whose registry entry verified its genesis (no live mint authority) has no fact of its own', async ({ appPage: page, mock }) => {
+  test('a token whose registry entry verified its genesis (no live mint authority) has no fact of its own and no status', async ({ appPage: page, mock }) => {
     await listWith(page, true);
     const id = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${id}`);
@@ -108,6 +118,7 @@ test.describe('token facts', () => {
     const id = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${id}`);
     await expect(page.getByTestId('token-header').getByTestId('token-fact-blacklist')).toBeVisible();
+    await expect(page.getByTestId('token-header').getByTestId('badge-high-risk')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
@@ -124,7 +135,14 @@ test.describe('token facts', () => {
     await page.goto('/#/market');
     await page.getByTestId('token-list-nameless').click();
     await expect(page.getByTestId('token-table')).toBeVisible();
-    await expect(page.getByTestId('token-table').getByTestId('token-fact-live_mint_authority').first()).toBeVisible();
+    const risk = page.getByTestId('token-table').getByTestId('badge-high-risk').first();
+    await expect(risk).toBeVisible();
+    await risk.getByTestId('high-risk-toggle').click();
+    const panel = (await page.getByTestId('high-risk-reasons').boundingBox())!;
+    expect(panel.x).toBeGreaterThanOrEqual(0);
+    expect(panel.x + panel.width).toBeLessThanOrEqual(375);
+    await expect(page.getByTestId('high-risk-reasons')).toContainText('more of this token can be created');
+    await page.keyboard.press('Escape');
     const overflow = await page.evaluate(() => ({
       page: document.documentElement.scrollWidth - window.innerWidth,
       tables: Math.max(...[...document.querySelectorAll('.ml-table')].map((w) => w.scrollWidth - w.clientWidth)),

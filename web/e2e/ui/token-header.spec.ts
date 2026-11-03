@@ -49,16 +49,14 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       await expect(header.getByTestId('token-short-id')).toHaveText(SHORT);
       await expect(header.getByTestId('token-short-id-copy')).toBeVisible();
       await expect(header.getByTestId('token-meta').getByText(SHORT)).toHaveCount(1);
-      // the facts are badges on one line; the sentence of each is its tooltip
-      const genesis = header.getByTestId('token-fact-genesis_unverified');
+      // a normal token shows no status: no "Genesis not verified" chip; the other facts are badges on one line, the sentence of each is its tooltip
       const mint = header.getByTestId('token-fact-public-mint');
-      await expect(genesis).toHaveText(/^Genesis not verified(: history not available)?$/);
+      await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveCount(0);
+      await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
       await expect(mint).toHaveText('Public mint');
-      await expect(genesis).toHaveAttribute('title', /not checked against its token program/);
       await expect(mint).toHaveAttribute('title', /anyone create more/);
-      const [g, m] = [await genesis.boundingBox(), await mint.boundingBox()];
-      // one line on a desktop; on a phone "Genesis not verified" may carry its reason (KOB's own check could not be done) and the badges wrap
-      if (size.width >= 600) expect(Math.abs(g!.y - m!.y)).toBeLessThan(4);
+      const [f, m] = [await header.getByTestId('badge-family').boundingBox(), await mint.boundingBox()];
+      if (size.width >= 600) expect(Math.abs(f!.y - m!.y)).toBeLessThan(4);
       // the program (with its review) and the decimals are the tooltip of the family chip
       const chip = header.getByTestId('badge-family');
       await expect(chip).toHaveAttribute('title', /Token program: KCC20PublicMint \(reviewed\), as pinned in this build\./);
@@ -71,7 +69,7 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       await expect(page.getByTestId('order-book')).toBeVisible();
       const header = (await page.getByTestId('token-header').boundingBox())!;
       const stats = (await page.getByTestId('market-stats').boundingBox())!;
-      // the header is the identity block, the pair selector and two short lines (the preamble was about 440 px on a phone, 270 on a desktop; on a phone the genesis badge may carry its reason on a second line)
+      // the header is the identity block, the pair selector and two short lines (the preamble was about 440 px on a phone, 270 on a desktop)
       expect(header.height).toBeLessThan(size.width < 600 ? 330 : 170);
       expect(stats.y - (header.y + header.height)).toBeLessThan(40);
     });
@@ -80,6 +78,10 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       await seedOpenToken(page, mock, { powers: ['freeze'] });
       await page.goto(`/#/market/${ID}`);
       await expect(page.getByTestId('token-header').getByTestId('powers-warning')).toBeVisible();
+      // and the one High risk chip, its reason on a tap
+      await expect(page.getByTestId('token-header').getByTestId('badge-high-risk')).toHaveAttribute('data-reasons', 'issuer_control');
+      await page.getByTestId('token-header').getByTestId('high-risk-toggle').click();
+      await expect(page.getByTestId('high-risk-reasons')).toContainText('freeze or seize balances');
     });
   });
 }

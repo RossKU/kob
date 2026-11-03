@@ -129,8 +129,11 @@ test.describe('token issuance', () => {
     const header = page.getByTestId('token-header');
     await expect(header.getByTestId('token-name')).toHaveText('New Example Coin');
     await expect(header.getByTestId('token-title')).toContainText('NEWKCC');
-    await expect(header.getByTestId('token-decimals-note')).toHaveAttribute('data-source', 'declared');
-    await expect(header.getByTestId('token-decimals-note')).toContainText('declared, bound by ancestry');
+    // a token on its declaration is a normal token: no marker next to the name; where its facts come from is in the token's details
+    await expect(header.getByTestId('token-decimals-note')).toHaveCount(0);
+    await expect(header).not.toContainText('declared, bound by ancestry');
+    await page.getByTestId('token-status-details').getByRole('button').first().click();
+    await expect(page.getByTestId('status-declared')).toContainText('declared, bound by ancestry');
     await expect(header.getByTestId('badge-family')).toHaveAttribute('title', /whole tokens of 2 decimals, as its creator declared at creation/);
     await expect(header).not.toContainText('carries no decimals');
   });

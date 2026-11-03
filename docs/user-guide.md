@@ -61,7 +61,7 @@ identified by its **covenant id**, a 64-character hex string; the ticker is only
   A search or a pasted covenant id finds it anyway. A token the list does not know can be added with "Add an unknown token" (paste
   its covenant id, "Look up"); the indexer lists a token only after its first order was placed.
 * **Declared by its creator.** A name that is not in the page's registry comes from the token's own on-chain record (KCC-23). The
-  page marks it "declared, bound by ancestry": a declaration recorded on chain with the token (whoever funded the coin its creation spent chose it), which nobody has checked. KOB keeps no list of good tokens and
+  page shows it like any other token (no mark: this is the normal case of a token the registry does not list); the token page's "Status and checks" section says it is "declared, bound by ancestry": a declaration recorded on chain with the token (whoever funded the coin its creation spent chose it), which nobody has checked. KOB keeps no list of good tokens and
   decides nothing about any token.
 * **Names and icons from kascov.io.** KOB keeps no list of tokens of its own. The Market list is completed from the public
   explorer kascov.io: it adds the tokens of a program this build trades on this network that no order has named yet (they read
@@ -83,33 +83,33 @@ identified by its **covenant id**, a 64-character hex string; the ticker is only
   build does not support. You can still see balances and orders.
 
 **Token fact badges.** Wherever a token is shown (list rows, the token page header, next to the order button, each token of a pair)
-the page prints badges. They are facts the indexer derives from the chain or the token program, or the result of KOB's own genesis check, not a verdict on whether to trade (only a pass is green and only a failed check a warning; the rest are neutral):
+the page prints badges. A normal token shows **no status at all**: "Genesis not verified" (the check could not run, or has not run) and "declared, bound by ancestry" are not shown as chips; their sentences, with the reason, are in the token page's "Status and checks" section (tap it open; the pair page has one for each token). Badges are facts the indexer derives from the chain or the token program, or the result of KOB's own genesis check, not a rating (a pass is green; the rest are neutral), except the one **High risk** chip:
 
 | Badge | What it says |
 |---|---|
 | Genesis verified | KOB checked the token's creation itself, in this app, when you opened its page: every output created with the token is an instance of its token program, so nothing was minted outside the program at creation. KOB's own fact (it says nothing about mint powers the program itself gives; see the other badges). |
-| Genesis check failed | KOB's own check of the creation failed: the creation data does not match the token's covenant id or its scripts, or an output created with the token is not an instance of its program (units minted outside the program may exist). A warning, shown even if a third party says the token is verified. |
+| High risk (warn) | One chip, shown only when the token's own facts let someone create more of it, or freeze or seize balances: KOB's own genesis check failed, a mint authority still exists (live), the program has a mint authority, a verified genesis holds a minter with no cap, or the program can freeze or seize. Tap it for the reason (the sentences of the rows below). It is derived from facts only, never from a per-token text, and is not a rating: a token without it is not vouched for. Public mint with a cap, "Can blacklist", a program pending review and a creation that could not be checked are not High risk. |
+| Genesis check failed | KOB's own check of the creation failed (it is a reason of High risk, no chip of its own): the creation data does not match the token's covenant id or its scripts, or an output created with the token is not an instance of its program (units minted outside the program may exist). A warning, shown even if a third party says the token is verified. |
 | Verified by kascov | A third-party remark in the market list, not KOB's own fact: the explorer kascov.io says it checked the token's history, and KOB has not checked it itself yet. Opening the token page runs KOB's own check, whose result replaces this chip. |
-| Genesis not verified | The token's creation was not checked against its token program, so units minted outside the program may exist. On a token page, after KOB tried and could not, a short reason follows ("history not available", "program not supported", "sources unreachable"). |
+| Genesis not verified | (Not shown as a chip, only in "Status and checks".) The token's creation was not checked against its token program, so units minted outside the program may exist. On a token page, after KOB tried and could not, a short reason follows ("history not available", "program not supported", "sources unreachable"). |
 | Mint left | A token page only, next to "Genesis verified" for a token whose creation set up a public mint: how much anyone can still create, so that "verified" is not read as a fixed supply. "Mint left: N" when the creation's public minter has not been used yet (according to kascov.io); "Mint left: up to N" when it has been spent since (some may be minted already; KOB does not trace how much is left). |
-| Live mint authority | A mint authority still exists: more of this token can be created. |
-| Mint authority | The token's program has a mint authority: whoever holds it can create more. |
+| Live mint authority | (A reason of High risk.) A mint authority still exists: more of this token can be created. |
+| Mint authority | (A reason of High risk.) The token's program has a mint authority: whoever holds it can create more. |
 | Public mint | The token's program lets anyone create more. |
 | Can blacklist | The program lets the issuer block addresses from moving the token. |
-| issuer can freeze or seize | The program can freeze or seize balances; escrowed orders can fail or be lost at the issuer's discretion. |
+| Freeze or seize | (A reason of High risk, with its own line in the page.) The program can freeze or seize balances; escrowed orders can fail or be lost at the issuer's discretion. |
 
 **How KOB's genesis check works.** When a token page opens, KOB asks the public history for the token's creation (once per token and session, in
 your browser; the market list asks for nothing extra): the token's file on kascov.io first, the Kaspa REST explorer (api.kaspa.org, api-tn10.kaspa.org) only
 when that is not enough. The data source only supplies bytes. KOB recomputes the token's covenant id from them and checks every output created with the token
 against its token program, with the same rules as `kob registry verify-genesis` (an unspent TokenSeed of the public-mint app is rebuilt from the creator's key and
 class and then checked against its hash), so a wrong, incomplete or tampered answer can make the check fail but never pass. If the history cannot be had (an
-output of the creation that nobody has spent hides its program until it is spent, typically a launchpad curve cell, or no source still has the history), the badge stays "Genesis not verified" with the
+output of the creation that nobody has spent hides its program until it is spent, typically a launchpad curve cell, or no source still has the history), the token shows no status chip, and "Status and checks" says "Genesis not verified" with the
 reason. A copy of the evidence of a token that verified is kept in this browser to avoid asking again; it is verified again each time and never trusted.
 
 On a token page the badges sit on one line under the pair selector and each badge's sentence is its tooltip (the order ticket's badge opens the
 same sentence on a tap). The token-family chip ("KCC-20") has the token program with its review status and, for a token the registry does not list,
-where its decimals come from as its tooltip. The header itself is one short covenant id with a copy button, the name, "declared, bound by ancestry" where
-that applies, the link to kascov.io and "Live"; the full id and the decimals are in the token facts at the bottom of the page. A real warning (issuer
+where its decimals come from as its tooltip. The header itself is one short covenant id with a copy button, the name, the link to kascov.io and "Live"; the full id and the decimals are in the token facts at the bottom of the page. A real warning (issuer
 powers, a cross-check problem, a decimals conflict) is a line in the page. In the market list a badge shows its sentence as a tooltip, and the
 legend above the list ("What do the badges mean?") opens every sentence, which a touch screen without tooltips needs. A token
 without badges is not thereby safe: the badges only report what could be checked.

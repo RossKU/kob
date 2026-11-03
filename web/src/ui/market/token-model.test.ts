@@ -6,7 +6,7 @@ import { loadKobNode } from '../../kob/wasm.node';
 import { TOKEN_PROGRAMS } from '../../kob/programs.generated';
 import { tokenTitle } from './TokenBadges';
 import type { GenesisCheck } from '../../data/genesis-check';
-import { applyGenesisCheck, buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
+import { shownFactIds, tokenRiskCodes, applyGenesisCheck, buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
 
 const kob = await loadKobNode();
 const tpl = kob.templates().find((t) => t.name === 'KCC20Ref_8x8')!;
@@ -389,5 +389,38 @@ describe('the genesis line of a row: kascov\'s remark and KOB\'s own check', () 
 
   it('the facts an indexer may state exclude the derived ones', () => {
     expect(tokenFactIds(['genesis_verified', 'genesis_failed', 'genesis_kascov', 'mint_allowance'], ['mint_allowance'])).toEqual([]);
+  });
+});
+
+describe('status display: what shows by default and what is High risk', () => {
+  const verifiedCheck = (o: Partial<Extract<GenesisCheck, { status: 'verified' }>> = {}): GenesisCheck => ({ status: 'verified', source: 'kascov', txid: 'aa', program: 'KCC20Ref', supply: 1n, mintAllowance: null, mintersUnspent: null, ...o }) as GenesisCheck;
+  const r = (facts: TokenRow['facts'], powers: string[] = [], genesis?: GenesisCheck) => ({ facts, powers, ...(genesis ? { genesis } : {}) });
+
+  it('a normal token (genesis not verified, no authority) has no risk and shows no chip', () => {
+    expect(tokenRiskCodes(r(['genesis_unverified']))).toEqual([]);
+    expect(shownFactIds(r(['genesis_unverified']))).toEqual([]);
+    expect(shownFactIds(r(['genesis_unverified'], [], { status: 'unavailable', reason: 'history' }))).toEqual([]);
+  });
+
+  it('High risk is only what lets someone dilute the supply or freeze / seize balances', () => {
+    expect(tokenRiskCodes(r(['genesis_failed'], [], { status: 'failed', code: 'contaminated', message: '' }))).toEqual(['genesis_failed']);
+    expect(tokenRiskCodes(r(['genesis_unverified', 'live_mint_authority']))).toEqual(['live_mint_authority']);
+    expect(tokenRiskCodes(r(['mint-authority'], ['mint-authority']))).toEqual(['mint_authority']);
+    expect(tokenRiskCodes(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintUnbounded: true })))).toEqual(['mint_unbounded']);
+    expect(tokenRiskCodes(r([], ['freeze']))).toEqual(['issuer_control']);
+    expect(tokenRiskCodes(r([], ['seize', 'freeze']))).toEqual(['issuer_control']);
+  });
+
+  it('capped public mint, blacklist, burn, kascov, a pass and a pending-review pass are not High risk', () => {
+    expect(tokenRiskCodes(r(['public-mint', 'blacklist', 'genesis_kascov'], ['public-mint', 'blacklist', 'burn']))).toEqual([]);
+    expect(tokenRiskCodes(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintAllowance: 500n, mintersUnspent: true })))).toEqual([]);
+    expect(tokenRiskCodes(r(['genesis_verified_unreviewed'], [], verifiedCheck({ program: 'KCC20Ref_8x8' })))).toEqual([]);
+  });
+
+  it('the chips keep the other facts and drop "Genesis not verified" and what High risk already says', () => {
+    expect(shownFactIds(r(['genesis_unverified', 'live_mint_authority', 'public-mint', 'blacklist']))).toEqual(['public-mint', 'blacklist']);
+    expect(shownFactIds(r(['genesis_kascov', 'blacklist']))).toEqual(['genesis_kascov', 'blacklist']);
+    expect(shownFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintUnbounded: true })))).toEqual(['genesis_verified']);
+    expect(shownFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintAllowance: 5n })))).toEqual(['genesis_verified', 'mint_allowance']);
   });
 });

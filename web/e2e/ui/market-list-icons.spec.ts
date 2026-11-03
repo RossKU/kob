@@ -40,7 +40,7 @@ for (const [width, iconMin, iconMax] of [[1280, 46, 48], [880, 40, 48], [390, 38
 const GENESIS = { txid: 'ab'.repeat(32), daa_score: 10, outputs: [1, 2], supply: 1000, minter_outputs: [], checked_at_daa: 20, source: 'test' };
 const LONG = 'Kasanova KOB Cancellation Acceptance (declared by its creator) W'; // 64 characters: the longest name a registry entry may have
 
-/** The example registry with three more listed tokens that differ in their badges (the family badge alone; one fact beside it; two) and carry a long name. */
+/** The example registry with three more listed tokens that differ in their badges (the family badge alone; an unverified genesis, which is no chip; the High risk chip of a live mint authority beside it) and carry a long name. */
 async function listWithBadges(page: import('@playwright/test').Page): Promise<string[]> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
@@ -84,8 +84,8 @@ for (const width of [1280, 880, 390]) {
         };
       });
     }, ids);
-    // the three rows really differ in their badges: the family badge alone, and one and two facts beside it
-    expect(rows.map((r) => r.badges)).toEqual([1, 2, 3]);
+    // the rows really differ in their badges: the family badge alone (a token with no fact, or only an unverified genesis, which shows no chip), and the High risk chip beside it
+    expect(rows.map((r) => r.badges)).toEqual([1, 1, 2]);
     for (const r of rows) {
       expect(r.row).toBeCloseTo(rows[0]!.row, 0);
       expect(r.line1).toBeCloseTo(rows[0]!.line1, 0);

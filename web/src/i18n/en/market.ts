@@ -239,7 +239,12 @@ export default {
   'market.token.info': 'Token details',
   'market.sharedTicker': 'Another token uses this ticker — check the covenant id',
 
-  'market.badge.issuerControl': 'issuer can freeze or seize',
+  'market.badge.highRisk': 'High risk',
+  'market.risk.open': 'show why',
+  'market.risk.title': 'Why this token is marked High risk',
+  'market.risk.note': "Worked out from the token's own facts: someone can create more of it, or freeze or seize balances. It is not a rating, and a token without this mark is not vouched for.",
+  'market.risk.legend': "The token's own facts let someone create more of it, or freeze or seize balances (a failed genesis check, a live or unbounded mint authority, a freeze or seize power). Tap the chip for the reason.",
+  'market.status.title': 'Status and checks',
   'market.fact.more': 'what is this?',
   'market.fact.genesis_unverified.label': 'Genesis not verified',
   'market.fact.genesis_unverified.text': 'Its creation was not checked against its token program, so units minted outside the program may exist.',

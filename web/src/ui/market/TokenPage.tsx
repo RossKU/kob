@@ -436,7 +436,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           )}
         </div>
       }
-      details={<TokenDetails row={row} services={services} />}
+      details={<TokenDetails row={row} services={services} note={onChain ? shown : null} {...(checkedRow ? { checked: checkedRow } : {})} />}
     />
   );
 }

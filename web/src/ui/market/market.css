@@ -360,3 +360,12 @@ a.tape-row:hover .tape-time { color: var(--text); }
   .ml-tokens tbody td.ml-change { grid-column: 2; grid-row: 2; align-self: start; font-size: 0.85rem; }
   .ml-tokens tbody td[colspan] { grid-column: 1 / -1; grid-row: auto; }
 }
+
+/* ---- the "High risk" chip (TokenBadges.tsx RiskChip): a button that looks like a warn chip; its reason opens in a panel fixed to the viewport, so a list row (which
+   cuts what overflows it) does not cut it */
+.risk-chip { display: inline-flex; flex: none; }
+.risk-btn { appearance: none; border: 0; font: inherit; line-height: inherit; cursor: pointer; }
+.risk-btn:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+.risk-panel { position: fixed; z-index: 60; width: min(22rem, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; font-size: 0.85rem; white-space: normal; text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.risk-panel ul { margin: 6px 0; padding-left: 18px; }
+.risk-panel p { margin: 4px 0 0; }

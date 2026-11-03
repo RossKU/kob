@@ -77,8 +77,9 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('badge-family')).toHaveCount(0);
       await expect(page.getByTestId('kascov-link')).toHaveAttribute('href', `https://kascov.io/#/testnet-10/token/${REF_ID}`);
       await expect(page.getByTestId('kascov-link')).toHaveAttribute('rel', 'noopener noreferrer');
-      // unverified facts are badges, never a refusal (non-blocking)
-      await expect(page.getByTestId('token-fact-genesis_unverified')).toBeVisible();
+      // an unverified genesis is no status chip (a normal token), never a refusal (non-blocking); its sentence is in the token's details
+      await expect(page.getByTestId('token-fact-genesis_unverified')).toHaveCount(0);
+      await expect(page.getByTestId('token-status-details')).toBeVisible();
 
       // the units and the tab use the creator's ticker where KOB has no name of its own
       await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KASC/KAS');

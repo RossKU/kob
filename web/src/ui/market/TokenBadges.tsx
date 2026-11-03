@@ -1,7 +1,8 @@
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { t, tokenAmountText } from '../../i18n';
 import { Badge, Banner } from '../kit';
 import { type TokenInfo } from '../../kob/registry';
-import { hasIssuerControl, KNOWN_POWERS, tokenLabel, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
+import { hasIssuerControl, KNOWN_POWERS, shownFactIds, tokenLabel, tokenRiskCodes, type RiskCode, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
 
 /** What a row's facts are printed from: the facts, and (a token page) KOB's own genesis check, which adds a reason and the public mint to some of them. */
 type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis'>>;
@@ -33,14 +34,14 @@ export function factText(r: FactRow, id: TokenFactId): string {
  * The badge text of a fact as elements: the reason that "Genesis not verified" gets once KOB's check could not be done is a NEW element after the text that was
  * already there, never an edit of that text node (a page translator that replaced the node would show the translation of the old text: e2e/ui/translated.spec.ts).
  */
-function FactLabel(props: { row: FactRow; id: TokenFactId }) {
+export function FactLabel(props: { row: FactRow; id: TokenFactId }) {
   const g = props.row.genesis;
   if (props.id === 'genesis_unverified' && g?.status === 'unavailable') return <>{t('market.fact.genesis_unverified.label')}<span>{`: ${t(`market.genesis.reason.${g.reason}`)}`}</span></>;
   return <>{factLabel(props.row, props.id)}</>;
 }
 
 /** The sentence of a fact as elements (the reason a check could not be done follows the sentence in an element of its own, as in `FactLabel`). */
-function FactSentence(props: { row: FactRow; id: TokenFactId }) {
+export function FactSentence(props: { row: FactRow; id: TokenFactId }) {
   const g = props.row.genesis;
   if ((props.id === 'genesis_unverified' || props.id === 'genesis_kascov') && g?.status === 'unavailable') return <>{t(`market.fact.${props.id}.text`)}<span>{` ${t(`market.genesis.reasonSentence.${g.reason}`)}`}</span></>;
   return <>{factText(props.row, props.id)}</>;
@@ -61,15 +62,86 @@ export function StatusBadge(props: { badge: TokenBadge; 'data-testid'?: string }
   );
 }
 
-export function StatusBadges(props: { row: Pick<TokenRow, 'badges' | 'covenantId'> & { info?: { family: 'kcc20' | 'kron' } | null; powers?: readonly string[] }; /** more lines for the family chip's tooltip (the program, the decimals) */ familyNote?: string | null }) {
+/** The plain sentence for each reason a token is "High risk" (the facts' own sentences; the check's own words for a failed genesis). */
+export function riskReasonText(r: FactRow, code: RiskCode): string {
+  switch (code) {
+    case 'genesis_failed': return factText(r, 'genesis_failed');
+    case 'live_mint_authority': return factText(r, 'live_mint_authority');
+    case 'mint_authority': return factText(r, 'mint-authority');
+    case 'mint_unbounded': return factText(r, 'mint_allowance');
+    case 'issuer_control': return t('market.powers.warning');
+  }
+}
+
+/**
+ * The one "High risk" chip (warn tone) of a token whose own facts let someone dilute its supply or freeze / seize balances (token-model.ts `tokenRiskCodes`),
+ * and its reason: a tap on the chip opens a small panel that lists them (a tooltip does not exist on a touch screen; the panel is fixed to the viewport so
+ * a list row, which cuts what overflows it, does not cut it). A tap closes it again, as do Escape, a tap elsewhere and a scroll. Nothing for other tokens.
+ */
+export function RiskChip(props: { row: Pick<TokenRow, 'covenantId' | 'facts' | 'powers'> & Partial<Pick<TokenRow, 'genesis'>> }) {
+  const r = props.row;
+  const codes = tokenRiskCodes(r);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!pos) return;
+    const close = () => setPos(null);
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    const onDown = (e: Event) => {
+      const el = e.target as Node | null;
+      if (el && (button.current?.contains(el) || (el as HTMLElement).closest?.('[data-risk-panel]'))) return;
+      close();
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onDown);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [pos]);
+  if (codes.length === 0) return null;
+  const toggle = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (pos) return setPos(null);
+    const b = button.current!.getBoundingClientRect();
+    const width = Math.min(352, window.innerWidth - 24);
+    setPos({ left: Math.max(12, Math.min(b.left, window.innerWidth - width - 12)), top: b.bottom + 6 });
+  };
+  return (
+    <span class="risk-chip" data-testid="badge-high-risk" data-reasons={codes.join(' ')}>
+      <button type="button" class="badge badge-warn risk-btn" ref={button} onClick={toggle} aria-expanded={pos ? 'true' : 'false'} aria-label={`${t('market.badge.highRisk')}: ${t('market.risk.open')}`} data-testid="high-risk-toggle">
+        {t('market.badge.highRisk')}
+      </button>
+      {pos ? (
+        <div class="risk-panel" data-risk-panel role="note" style={{ left: `${pos.left}px`, top: `${pos.top}px` }} data-testid="high-risk-reasons">
+          <strong>{t('market.risk.title')}</strong>
+          <ul>
+            {codes.map((c) => (
+              <li key={c} data-reason={c}>{riskReasonText({ ...r, ticker: '' }, c)}</li>
+            ))}
+          </ul>
+          <p class="muted small">{t('market.risk.note')}</p>
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
+export function StatusBadges(props: { row: Pick<TokenRow, 'badges' | 'covenantId' | 'facts'> & { info?: { family: 'kcc20' | 'kron' } | null; powers: readonly string[]; genesis?: TokenRow['genesis'] }; /** more lines for the family chip's tooltip (the program, the decimals) */ familyNote?: string | null }) {
   const r = props.row;
   return (
     <span class="row" data-testid={`token-badges-${r.covenantId}`} style="gap:4px">
-      {r.info ? <Badge tone="neutral" title={props.familyNote ? `${t('market.badge.familyHint')}\n${props.familyNote}` : t('market.badge.familyHint')} data-testid="badge-family">{t(`market.badge.family.${r.info.family}`)}</Badge> : null}
+      {r.info ? <Badge tone="neutral" title={props.familyNote ? `${t('market.badge.familyHint')}
+${props.familyNote}` : t('market.badge.familyHint')} data-testid="badge-family">{t(`market.badge.family.${r.info.family}`)}</Badge> : null}
       {r.badges.map((b) => (
         <StatusBadge key={b.kind} badge={b} />
       ))}
-      {hasIssuerControl(r.powers) ? <Badge tone="bad" title={t('market.powers.warning')} data-testid="badge-issuer-control">{t('market.badge.issuerControl')}</Badge> : null}
+      <RiskChip row={{ covenantId: r.covenantId, facts: r.facts, powers: [...r.powers], ...(r.genesis ? { genesis: r.genesis } : {}) }} />
     </span>
   );
 }
@@ -104,7 +176,11 @@ export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'dat
  * not exist on a touch screen. Several tokens (a pair) name each token before its facts. Renders nothing without facts.
  */
 export function TokenFacts(props: { rows: readonly FactRow[]; compact?: boolean; inline?: boolean; 'data-testid'?: string }) {
-  const rows = props.rows.filter((r) => r.facts.length > 0);
+  // the facts shown as chips: never "Genesis not verified" (its sentence is in the token's details). Where the "High risk" chip sits beside them (the inline chips of
+  // a list row and a token line: StatusBadges), what that chip states is not repeated; the ticket's panel (compact) and the printed facts keep every other fact.
+  const rows = props.rows
+    .map((r) => ({ ...r, facts: props.inline ? shownFactIds({ facts: r.facts, powers: [], ...(r.genesis ? { genesis: r.genesis } : {}) }) : r.facts.filter((f) => f !== 'genesis_unverified') }))
+    .filter((r) => r.facts.length > 0);
   if (rows.length === 0) return null;
   const named = props.rows.length > 1;
   const sentences = (
