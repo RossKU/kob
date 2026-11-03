@@ -69,12 +69,16 @@ describe('parseKascovToken', () => {
     expect(t.imageHash).toBe(sha(PNG));
   });
 
-  it('missing, empty or wrongly typed fields are null; an image URL without a hash is dropped (nothing could be checked); bad decimals are null', () => {
+  it('missing, empty or wrongly typed fields are null; the claimed image address is kept with or without a hash (it is only ever shown unchecked, data/logos.ts); bad decimals are null', () => {
     const t = parseKascovToken({ covenant_id: ID('a'), claimed_ticker: 7, claimed_name: '   ', claimed_decimals: 2.5, claimed_image: 'https://x.example/a.png', standard: 'weird' })!;
-    expect(t).toEqual({ covenantId: ID('a'), ticker: null, name: null, decimals: null, templateHash: null, imageHash: null, imageUrl: null, verified: false });
+    expect(t).toEqual({ covenantId: ID('a'), ticker: null, name: null, decimals: null, templateHash: null, imageHash: null, imageUrl: 'https://x.example/a.png', verified: false });
     expect(parseKascovToken(entry({ claimed_decimals: 19 }))!.decimals).toBeNull();
     expect(parseKascovToken(entry({ claimed_decimals: 0 }))!.decimals).toBe(0);
-    expect(parseKascovToken(entry({ claimed_image: 'http://x.example/a.png' }))!.imageUrl).toBeNull();
+    expect(parseKascovToken(entry({ claimed_image: 7 }))!.imageUrl).toBeNull();
+    expect(parseKascovToken(entry({ claimed_image: '   ' }))!.imageUrl).toBeNull();
+    expect(parseKascovToken(entry({ claimed_image: 'a'.repeat(2049) }))!.imageUrl).toBeNull();
+    // not validated here: data/logo-url.ts decides what may be loaded
+    expect(parseKascovToken(entry({ claimed_image: 'ipfs://x' }))!.imageUrl).toBe('ipfs://x');
     expect(parseKascovToken(entry({ claimed_image_hash: 'zz' }))!.imageHash).toBeNull();
     expect(parseKascovToken(entry({ standard: { view_template_hash: 'abc' } }))!.templateHash).toBeNull();
   });

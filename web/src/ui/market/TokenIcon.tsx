@@ -1,11 +1,11 @@
-// A token's round icon in the market list: its picture when the bytes of the picture hash to what its creator committed (data/kascov.ts), else a
-// letter on a colour taken from its covenant id. The picture is fetched only while the row is on screen, only when the viewer allows third-party icons
-// (Settings), and shown from a blob: URL made from the checked bytes, never from the host's URL.
+// A token's round icon: its picture, else a letter on a colour taken from its covenant id. Where the picture comes from is decided in use-token-logo.ts
+// (kascov.io's checked copy; else, if the viewer allows creator sites, the creator's own address, labelled unchecked; nothing for a token whose logo a report
+// hid). It is fetched only while the row is on screen and only when the viewer allows icons (Settings). A checked or IPFS picture is shown from a blob: URL;
+// the creator's own https image is a plain <img> (CSP img-src https:), no referrer, lazy, in the icon's fixed box.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { useServices } from '../../app/context';
-import { useIconPref } from '../../app/icon-pref';
-import { iconLoader, kascovNetwork } from '../../data/kascov';
+import { t } from '../../i18n';
 import type { TokenRow } from './token-model';
+import { useTokenLogo } from './use-token-logo';
 
 /** The letter of a letter avatar: the first letter or digit of the ticker, else of the covenant id. */
 export function avatarLetter(ticker: string, covenantId: string): string {
@@ -18,17 +18,12 @@ export const avatarHue = (covenantId: string): number => (parseInt(covenantId.sl
 
 /** `size` (px) is the diameter when the icon is not sized by its container (`.idb`, `.ml-name`); the default is 24 px; the letter follows it. */
 export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: number }) {
-  const { config } = useServices();
-  const [iconsOn] = useIconPref();
   const root = useRef<HTMLSpanElement>(null);
   const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined');
-  const [src, setSrc] = useState<string | null>(null);
-  const { covenantId, ticker, kascov } = props.row;
+  const [loaded, setLoaded] = useState<string | null>(null);
+  const { covenantId, ticker } = props.row;
   const size = props.size;
-  const net = kascovNetwork(config.network);
-  const base = config.tokenNamesUrl;
-  const hash = kascov?.imageHash ?? null;
-  const url = kascov?.imageUrl ?? null;
+  const { logo, failed } = useTokenLogo(props.row, seen);
 
   useEffect(() => {
     const el = root.current;
@@ -43,19 +38,38 @@ export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' |
     return () => io.disconnect();
   }, [seen]);
 
-  useEffect(() => {
-    setSrc(null);
-    if (!iconsOn || !seen || !net || !hash || base === '') return;
-    const ctl = new AbortController();
-    void iconLoader.load(net, { covenantId, imageHash: hash, imageUrl: url }, { signal: ctl.signal, base }).then((u) => {
-      if (!ctl.signal.aborted) setSrc(u);
-    });
-    return () => ctl.abort();
-  }, [iconsOn, seen, net, hash, url, covenantId, base]);
-
+  const src = logo.state === 'checked' || logo.state === 'ipfs' || logo.state === 'creator' ? logo.src : null;
+  const px = size ?? 24;
   return (
-    <span ref={root} class="tk-icon" style={`--tk-h:${avatarHue(covenantId)}${size ? `;--tk-size:${size}px` : ''}`} aria-hidden="true" data-testid={`token-icon-${covenantId}`} data-icon={src ? 'image' : 'letter'}>
-      {src ? <img src={src} alt="" decoding="async" referrerpolicy="no-referrer" /> : avatarLetter(ticker, covenantId)}
+    <span
+      ref={root}
+      class="tk-icon"
+      style={`--tk-h:${avatarHue(covenantId)}${size ? `;--tk-size:${size}px` : ''}`}
+      aria-hidden="true"
+      data-testid={`token-icon-${covenantId}`}
+      data-icon={logo.state === 'checked' || logo.state === 'ipfs' ? 'image' : logo.state === 'creator' ? 'creator-image' : 'letter'}
+      {...(logo.state === 'creator' ? { title: t('market.logo.unchecked') } : {})}
+    >
+      {/* the letter stays under the picture until it has loaded: no empty circle, no jump */}
+      {src === null || logo.state === 'creator' ? avatarLetter(ticker, covenantId) : null}
+      {src ? (
+        logo.state === 'creator' ? (
+          <img
+            src={src}
+            class={loaded === src ? 'tk-creator tk-loaded' : 'tk-creator'}
+            alt=""
+            width={px}
+            height={px}
+            decoding="async"
+            loading="lazy"
+            referrerpolicy="no-referrer"
+            onLoad={() => setLoaded(src)}
+            onError={failed}
+          />
+        ) : (
+          <img src={src} alt="" width={px} height={px} decoding="async" referrerpolicy="no-referrer" />
+        )
+      ) : null}
     </span>
   );
 }

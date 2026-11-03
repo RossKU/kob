@@ -43,7 +43,7 @@ the optional ones that are not set:
 | `symbol` | string | 2..=12 of `A-Z 0-9` (KOB's ticker rule) | 1..=32 characters, no bad character, no white space |
 | `decimals` | integer | 0..=18 | a JSON integer 0..=18 (`8.0`, `"8"`, `19`, `-1` are not taken) |
 | `description` | string, optional | 1..=512 characters, no bad character (line breaks are refused) | the same rule |
-| `logo` | string, optional | an `https://` or `ipfs://` address, at most 512 characters | the same rule |
+| `logo` | string, optional | an `https://` or `ipfs://` address, at most 512 characters | the same rule; shown from that address (below) |
 | `website` | string, optional | an `https://` address, at most 512 characters | the same rule |
 | `x` | string, optional | `https://x.com/<handle>`, handle 1..=15 of `A-Z a-z 0-9 _` (the CLI and the app turn `@handle` into this) | the same rule |
 | `telegram` | string, optional | `https://t.me/<handle>`, handle 5..=32 of `A-Z a-z 0-9 _` | the same rule |
@@ -52,6 +52,11 @@ the optional ones that are not set:
   `issues`), unknown fields are ignored, and a declaration without a usable `decimals` leaves the token's decimals undeclared.
 * Facts the chain states by itself are not declared again: the supply is the sum of the genesis outputs, the program its template
   hash. (`totalSupply`, `fixedSupply` and `standard` of KOB's older off-chain `metadata.json` are gone; its `icon` is now `logo`.)
+* **The logo is an address, not a picture.** KOB stores and serves no image. Each viewer's browser loads the `logo` address of a declaration (when kascov.io has no
+  checked copy and the viewer allows it): `ipfs://` through a public gateway as bytes (shown from a `blob:` URL; the bytes are compared with the CID where that is
+  possible), `https://` as a plain image labelled "Image from the creator's site, not checked" (the creator's host sees the viewer's IP address and may change the
+  picture later). SVG, `data:` URLs and IP-literal or `localhost` hosts are refused. A logo that is reported is hidden for everyone until the operator of the
+  indexer restores it (`docs/api.md` 3.19, `docs/ops/web-hosting.md`, *Token logos from the creator's address*). Use `ipfs://` if the picture must not be changeable.
 * The token's facts in the registry format that issuance writes (`registry_entry.json`, for tools and community lists that read that
   format; not a listing request) keep `display.icon` / `display.x` / `display.telegram` and carry the
   declared object verbatim as `display.kcc23`.

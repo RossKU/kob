@@ -9,6 +9,7 @@ import { KascovNote } from './KascovNote';
 import { IdCopy } from './IdCopy';
 import { KascovLink, programTitle } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
+import { LogoSection } from './LogoReport';
 import { TokenNote } from './TokenNote';
 import { decimalsNote } from '../../app/token-display';
 import { GenesisFailedBanner, PowersWarning, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
@@ -223,6 +224,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
         />
       </Section>
       <TokenStatusDetails row={props.checked ?? r} note={props.note} />
+      <LogoSection row={r} />
       <TemplateVerification row={r} services={props.services} />
     </div>
   );

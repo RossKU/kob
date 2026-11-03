@@ -1,0 +1,33 @@
+name: Report a token logo
+description: Report the logo of a token that should not be shown (illegal content, impersonation, something else).
+title: "Logo report"
+labels: ["logo-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        KOB stores no pictures: every browser loads a token's logo from the address its creator gave. A report hides that logo for everyone
+        until the operator of the indexer has reviewed it.
+
+        This issue is **public**. Fill in only the two fields below: nothing else in this issue is read, and nothing you type elsewhere is used.
+        You can also report from the token's page in the app ("Report logo"), which sends the same two facts without a GitHub account.
+  - type: input
+    id: covenant_id
+    attributes:
+      label: Covenant id of the token
+      description: 64 hexadecimal characters, from the token's page ("Token info", "Covenant id").
+      placeholder: "64 hex characters"
+    validations:
+      required: true
+  - type: dropdown
+    id: reason
+    attributes:
+      label: Reason
+      description: "illegal = content that is illegal where you live or where it is served; impersonation = it copies another project or person; other = anything else."
+      options:
+        - illegal
+        - impersonation
+        - other
+      default: 2
+    validations:
+      required: true

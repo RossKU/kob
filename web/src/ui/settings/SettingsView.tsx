@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
-import { useIconPref } from '../../app/icon-pref';
+import { useCreatorImagePref, useIconPref } from '../../app/icon-pref';
 import { displayToken } from '../../app/token-display';
 import type { TrackedToken } from '../../data/token-tracker';
 import { TokenNote } from '../market/TokenNote';
@@ -104,10 +104,14 @@ function ConnectionSettings() {
   );
 }
 
-/** Token names and icons of the market list: where they come from and the viewer's choice to load icons from third-party hosts (on by default, per browser). */
+/**
+ * Token names and icons of the market list: where they come from and the viewer's two choices (on by default, per browser): load icons at all, and load
+ * logos from the address a token's creator gave (the creator's site then sees the viewer's IP address; data/logos.ts).
+ */
 function TokenIconsSettings() {
   const { config } = useServices();
   const [on, setOn] = useIconPref();
+  const [creatorOn, setCreatorOn] = useCreatorImagePref();
   return (
     <Section title={t('settings.icons.title')} data-testid="settings-icons">
       <p class="small muted">{t('settings.icons.explain')}</p>
@@ -116,7 +120,8 @@ function TokenIconsSettings() {
       ) : (
         <Banner tone="info" data-testid="settings-icons-off">{t('settings.icons.off')}</Banner>
       )}
-      <Checkbox checked={on} onChange={setOn} label={t('settings.icons.label')} hint={t('settings.icons.hint')} disabled={!config.tokenNamesUrl} data-testid="settings-icons-toggle" />
+      <Checkbox checked={on} onChange={setOn} label={t('settings.icons.label')} hint={t('settings.icons.hint')} data-testid="settings-icons-toggle" />
+      <Checkbox checked={creatorOn} onChange={setCreatorOn} label={t('settings.icons.creator.label')} hint={t('settings.icons.creator.hint')} disabled={!on} data-testid="settings-icons-creator-toggle" />
     </Section>
   );
 }

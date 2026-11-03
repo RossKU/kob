@@ -23,12 +23,13 @@
 // mainnet and testnet-10: 37 of 37 and 27 of 27 saved copies hash to it). An image is shown only when the bytes the browser fetched hash to it:
 //
 //   * the creators' own hosts (`claimed_image`, mostly storage.googleapis.com) send NO `Access-Control-Allow-Origin`, so the browser may display such an
-//     image in an <img> but cannot read its bytes, hence cannot hash it. The app therefore never uses an <img> hotlink;
+//     image in an <img> but cannot read its bytes, hence cannot hash it. This checked path therefore never asks them. (Since 2026-11-03 the app may show
+//     such an image, UNCHECKED and labelled so, when this path gave nothing and the viewer allows it: data/logos.ts, Settings "creator sites");
 //   * kascov.io keeps a copy of each hash-committed image (`https://kascov.io/img/{network}/{covenant_id}`, CORS `*`, immutable): those bytes are fetched, and
-//     ONLY those, so a viewer's IP goes to kascov.io and never to the creator's host (audit 2026-10-29 F10). If kascov has no copy (404) there is no icon (a
-//     letter avatar); a redirect is refused, so a copy cannot send the viewer on to another host;
+//     ONLY those, so a viewer's IP goes to kascov.io and never to the creator's host (audit 2026-10-29 F10). If kascov has no copy (404) there is no CHECKED
+//     icon; a redirect is refused, so a copy cannot send the viewer on to another host;
 //   * the verified bytes are shown from a `blob:` URL the app makes itself (CSP `img-src 'self' data: blob:`, web/csp.mjs), so a hash mismatch, a host that
-//     swapped the file, or a refused fetch all end the same way: no icon (a letter avatar).
+//     swapped the file, or a refused fetch all end the same way: no checked icon.
 // Only https URLs are used. Raster formats only (PNG, JPEG, WebP, GIF, by their magic bytes, never by the server's Content-Type): no SVG, no HTML.
 import { DEFAULT_TOKEN_NAMES_URL, defaultStorage, type StorageLike } from '../config';
 import { sanitizeUntrusted } from '../kob/registry';
@@ -73,7 +74,11 @@ export interface KascovToken {
   templateHash: string | null;
   /** SHA-256 of the image's raw bytes, as the creator committed it (`claimed_image_hash`) */
   imageHash: string | null;
-  /** the creator's own https URL of the image; only kept with a hash (without one nothing could be checked) */
+  /**
+   * the address of the image as the creator claimed it (`claimed_image`; kept with or without a hash), not validated here: data/logo-url.ts `parseLogoRef` decides
+   * whether the app may load it at all (https or ipfs, no SVG, no IP literal). It is NEVER fetched from by the checked path (the hash is checked against kascov's
+   * saved copy only); it is the address shown unchecked when kascov holds no copy (ui/market/use-token-logo.ts).
+   */
   imageUrl: string | null;
   /** kascov marks the token `verified` (`status`): its own, third-party remark; KOB has not checked the token by it */
   verified: boolean;
@@ -131,7 +136,7 @@ export function parseKascovToken(raw: unknown): KascovToken | null {
     decimals: typeof dec === 'number' && Number.isInteger(dec) && dec >= 0 && dec <= 18 ? dec : null,
     templateHash: hex64(asObject(o.standard)?.view_template_hash),
     imageHash,
-    imageUrl: imageHash ? safeImageUrl(o.claimed_image) : null,
+    imageUrl: typeof o.claimed_image === 'string' && o.claimed_image.trim().length > 0 && o.claimed_image.length <= 2048 ? o.claimed_image.trim() : null,
     verified: o.status === 'verified',
   };
 }
@@ -412,7 +417,7 @@ export interface IconLoader {
 /**
  * Saved copies kascov.io answered 404 for (it keeps one for most tokens that commit to an image, not all). A browser prints every 404 in its console and
  * nothing can stop that but not asking again, so a token whose copy is missing is not asked for it for a day: the icon falls back to its letter quietly
- * (the creator's own host is never asked: F10). Kept per network and covenant id.
+ * (the creator's own host is never asked on this checked path: F10). Kept per network and covenant id.
  */
 export interface MissingCopies {
   has(network: string, covenantId: string): boolean;

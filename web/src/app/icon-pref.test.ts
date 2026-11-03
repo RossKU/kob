@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ICON_PREF_KEY, readIconPref, resetIconPrefMemory, writeIconPref } from './icon-pref';
+import { CREATOR_IMAGE_PREF_KEY, ICON_PREF_KEY, readCreatorImagePref, readIconPref, resetIconPrefMemory, writeCreatorImagePref, writeIconPref } from './icon-pref';
 
 const store = (initial: Record<string, string> = {}, throws = false) => {
   const m = new Map(Object.entries(initial));
@@ -35,5 +35,29 @@ describe('the icon preference', () => {
     expect(s.m.has(ICON_PREF_KEY)).toBe(false);
     expect(writeIconPref(false, store({}, true))).toBe(false);
     expect(writeIconPref(false, null)).toBe(false);
+  });
+});
+
+describe('the creator-site preference', () => {
+  beforeEach(() => resetIconPrefMemory());
+
+  it('is on by default, its own key, and independent of the icon switch', () => {
+    expect(CREATOR_IMAGE_PREF_KEY).toBe('kob.icons.creator');
+    expect(readCreatorImagePref(store())).toBe(true);
+    const s = store();
+    expect(writeCreatorImagePref(false, s)).toBe(true);
+    expect(s.m.get(CREATOR_IMAGE_PREF_KEY)).toBe('0');
+    expect(readCreatorImagePref(s)).toBe(false);
+    expect(readIconPref(s)).toBe(true);
+    expect(writeIconPref(false, s)).toBe(true);
+    expect(readCreatorImagePref(s)).toBe(false);
+    expect(writeCreatorImagePref(true, s)).toBe(true);
+    expect(s.m.has(CREATOR_IMAGE_PREF_KEY)).toBe(false);
+  });
+
+  it('a missing or refusing store reads as on, and a refused write says so', () => {
+    expect(readCreatorImagePref(null)).toBe(true);
+    expect(readCreatorImagePref(store({}, true))).toBe(true);
+    expect(writeCreatorImagePref(false, store({}, true))).toBe(false);
   });
 });

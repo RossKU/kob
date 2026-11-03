@@ -41,6 +41,7 @@ describe('mergeConfig', () => {
       network: 'mainnet', indexerUrl: '', extraIndexerUrls: [], nodeUrl: '', registryUrl: './registry/tokens.json',
       features: { kastle: false, test: false, priorityFee: false }, fees: { dynamic: true, maxRate: 1000, maxFeeKas: 1 }, allowQueryOverrides: false,
       quoteTokens: {}, home: 'auto', explorerUrl: '', tokenNamesUrl: 'https://kascov.io/data', marketStartToleranceBps: 1000,
+      logoBlocklistUrl: '', ipfsGatewayUrl: 'https://dweb.link/ipfs',
     });
     expect(DEFAULT_CONFIG.features.kastle).toBe(false);
   });
@@ -319,6 +320,33 @@ describe('tokenNamesUrl: where the market list reads token names and icons from'
     const r = resolveConfig({ settings: { tokenNamesUrl: 'https://evil.example/data' } });
     expect(r.config.tokenNamesUrl).toBe('https://kascov.io/data');
     expect(r.warnings.some((w) => w.field === 'tokenNamesUrl')).toBe(true);
+  });
+});
+
+describe('logoBlocklistUrl and ipfsGatewayUrl: where the token-logo blocklist and the IPFS gateway are', () => {
+  it('default to the indexer blocklist (empty = beside the indexer) and dweb.link', () => {
+    const c = resolveConfig({}).config;
+    expect([c.logoBlocklistUrl, c.ipfsGatewayUrl]).toEqual(['', 'https://dweb.link/ipfs']);
+  });
+  it('config.json / __KOB_CONFIG__ set them (a trailing slash dropped); an empty gateway turns ipfs:// logos off', () => {
+    const r = resolveConfig({ file: { logoBlocklistUrl: 'https://lists.example.org/v1/logo-blocklist/', ipfsGatewayUrl: 'https://gw.example.org/ipfs/' } });
+    expect([r.config.logoBlocklistUrl, r.config.ipfsGatewayUrl, r.warnings]).toEqual(['https://lists.example.org/v1/logo-blocklist', 'https://gw.example.org/ipfs', []]);
+    expect(resolveConfig({ injected: { ipfsGatewayUrl: '' } }).config.ipfsGatewayUrl).toBe('');
+  });
+  it('junk, credentials and (for the gateway) http are refused with a warning', () => {
+    for (const bad of ['ftp://x', 'https://u:p@x.example', 'lists.example.org', 42]) {
+      const r = resolveConfig({ file: { logoBlocklistUrl: bad } });
+      expect(r.config.logoBlocklistUrl, String(bad)).toBe('');
+      expect(r.warnings.some((w) => w.field === 'logoBlocklistUrl'), String(bad)).toBe(true);
+    }
+    const r = resolveConfig({ file: { ipfsGatewayUrl: 'http://gw.example.org/ipfs' } });
+    expect(r.config.ipfsGatewayUrl).toBe('https://dweb.link/ipfs');
+    expect(r.warnings.some((w) => w.field === 'ipfsGatewayUrl')).toBe(true);
+  });
+  it('a stored setting or a link must not repoint either', () => {
+    const r = resolveConfig({ settings: { logoBlocklistUrl: 'https://evil.example/v1/logo-blocklist', ipfsGatewayUrl: 'https://evil.example/ipfs' } });
+    expect([r.config.logoBlocklistUrl, r.config.ipfsGatewayUrl]).toEqual(['', 'https://dweb.link/ipfs']);
+    expect(r.warnings.map((w) => w.field).sort()).toEqual(['ipfsGatewayUrl', 'logoBlocklistUrl']);
   });
 });
 

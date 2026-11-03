@@ -71,13 +71,17 @@ identified by its **covenant id**, a 64-character hex string; the ticker is only
   something else you see a small note ("kascov.io says FAKE", "kascov.io says 2 decimals, KOB uses 8"). Supply, decimals,
   prices and orders still come from the chain and the KOB indexer, never from kascov.io. If kascov.io cannot be reached the list is
   what the registry and the indexer give, with a short "unavailable" line.
-* **Icons.** A picture is shown only if its bytes match the fingerprint (SHA-256) the creator committed to in the token's creation
-  record. Otherwise, or if the picture cannot be fetched, you see a coloured circle with a letter. The app fetches the picture
-  itself, checks it and shows its own copy, and loads pictures only for rows you scroll to. Settings > "Token names and icons" >
-  **"Load token icons from third-party hosts"** (on by default) turns all of this off: letters only, and the app contacts no image
-  host.
-* **Who sees what.** Icons: the image host and kascov.io see your IP address (kascov.io also answers the list itself, and it is
-  the image host unless it has no copy); transactions: the public Kaspa node you submit through sees them; browsing: the host's
+* **Icons and logos.** A picture from kascov.io is shown only if its bytes match the fingerprint (SHA-256) the creator committed to in the token's creation
+  record; the app fetches it itself, checks it and shows its own copy. A token with no such picture (one made on KOB's Create page, for example) shows
+  the **logo address its creator gave**, loaded by your browser straight from there: an `ipfs://` address through a public gateway (its bytes are compared with the address
+  where that is possible), an `https://` address as a plain image titled "Image from the creator's site, not checked" (that site sees your IP address and when you looked,
+  and its owner can change the picture later). KOB stores no pictures. Otherwise, or if the picture cannot be fetched, you see a coloured circle with a letter.
+  Pictures load only for rows you scroll to. Settings > "Token names and icons": **"Load token icons"** (on by default) turns all of this off (letters only, no image
+  host is contacted); **"Load token logos from creator sites"** (on by default) turns off only the creators' addresses.
+* **Report a logo.** In a token's details, **"Report logo"** asks for a reason (illegal content, impersonation, something else; no text) and hides the logo for everyone
+  until the operator of the indexer has reviewed it ("Logo hidden after a report"); the dialog also links to a GitHub form that does the same. If the indexer cannot be
+  reached, logos show.
+* **Who sees what.** Icons: kascov.io sees your IP address (it also answers the list itself, and holds the checked copies); for a token without one, the creator's site or the IPFS gateway sees it; transactions: the public Kaspa node you submit through sees them; browsing: the host's
   indexer serves what you view.
 * **Not tradable.** "{ticker} cannot be traded in this app" / "Not tradable in this build" means the token's program is one this
   build does not support. You can still see balances and orders.
@@ -364,7 +368,7 @@ KOB backup or a maker recovery file; every record is re-checked and only orders 
 reads them again. If the browser cannot store the records the page warns "Your order records are not saved" and keeps them in the
 tab only: export a backup now.
 
-**Settings** also holds the node, indexer and registry URLs, the switch for token icons (kept in this browser as `kob.icons`), "Local data" (what this browser stores) and "Clear local data". Export a
+**Settings** also holds the node, indexer and registry URLs, the switches for token icons and for logos from creator sites (kept in this browser as `kob.icons` and `kob.icons.creator`), "Local data" (what this browser stores) and "Clear local data". Export a
 backup first: orders on chain stay, but without their records the app can only find them through the indexer.
 
 ## 14. Words you will meet

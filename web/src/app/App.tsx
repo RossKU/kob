@@ -19,6 +19,7 @@ import { AutoRefundRunner } from '../ui/orders/AutoRefund';
 import { useServices } from './context';
 import { useDeclarationsVersion } from './use-declaration';
 import { loadDeclaration, noteTokenProgram, restoreDeclarations } from '../data/token-declarations';
+import { logoBlocklist, logoBlocklistUrlOf } from '../data/logo-blocklist';
 import { routeToHash, useRoute, usdMarketHash, type Route } from './router';
 import { appTitle, Titled, useDocumentTitle } from './page-title';
 
@@ -133,6 +134,11 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
       alive = false;
     };
   }, [services]);
+
+  // the token-logo blocklist (a logo that was reported is not loaded): read now and every 2 minutes. It fails OPEN: an indexer that cannot be reached, or has
+  // no such route, leaves the last known list (empty on a first visit) and logos show (data/logo-blocklist.ts)
+  const blocklistUrl = logoBlocklistUrlOf(services.config);
+  useEffect(() => logoBlocklist.start(blocklistUrl), [blocklistUrl]);
 
   // one socket for the whole app: the shell subscribes to the global channels, views add their own (book:<token>, fills:<token>)
   useEffect(() => {

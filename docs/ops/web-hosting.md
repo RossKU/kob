@@ -150,11 +150,43 @@ What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web
 * **Icons:** shown only when the fetched bytes hash (SHA-256 of the raw bytes, checked on real tokens of both networks) to the
   `claimed_image_hash`; otherwise a letter. The creators' own hosts (mostly `storage.googleapis.com`) send no CORS header, so the browser
   cannot read their bytes: the app fetches kascov's saved copy first (its `/img/` route is part of the kascov web app, not of its documented
-  data API, so it is best effort; a 404 means a letter avatar: the creator's own host is never contacted, redirects are refused). The
-  verified bytes are shown from a `blob:` URL; `img-src` is therefore `'self' data: blob:` and never names a host.
+  data API, so it is best effort; a 404 means no CHECKED picture: this checked path never contacts the creator's host, and redirects are refused). The
+  verified bytes are shown from a `blob:` URL. A token with no checked picture may still show its logo from the address its creator gave, labelled as
+  not checked: see *Token logos from the creator's address* below. `img-src` is `'self' data: blob: https:` for that one case.
 * **Failure:** unreachable, slow (8 s), not JSON, a changed shape, a file for another network, larger than 12 MB: the list is exactly what
   the registry and the indexer give, plus a one-line "unavailable" hint. Nothing is thrown into the UI and nothing is stored as authority
-  (the only persistent item is the visitor's icon switch, `kob.icons`).
+  (the persistent items are the visitor's two icon switches, `kob.icons` and `kob.icons.creator`, and the last blocklist read, `kob.logo-blocklist.v1`, a cache).
+
+### Token logos from the creator's address (no image is stored by KOB)
+
+A token created on KOB's own Create page is not indexed by kascov.io, and a creator's declaration (KCC-23, `logo`) carries an address, not a hash. So,
+beside kascov's checked copy, the app loads a logo **straight from the address its creator gave, in the visitor's browser**
+(`web/src/data/logos.ts`). KOB never stores, caches or serves a third-party image: a cache would make the operator the publisher.
+
+* **Order.** 1. kascov's saved copy, when its bytes hash to the creator's committed hash (above). 2. `ipfs://<cid>[/path]`: the bytes are fetched from a public
+  gateway (`ipfsGatewayUrl`, default `https://dweb.link/ipfs`; `https://` only; empty turns `ipfs://` logos off) and shown from a `blob:` URL. Where it can be
+  done without a library the bytes are compared with the CID (a CIDv1 raw leaf, or a one-block file of at most 256 KiB); a larger file or one inside a
+  directory cannot be checked without the whole DAG, and there the gateway's content addressing is accepted. 3. `https://`: a plain `<img src>` with
+  `referrerpolicy="no-referrer"`, no `crossorigin`, lazy, in the icon's fixed box, titled "Image from the creator's site, not checked" (the page cannot read the
+  bytes of a host that sends no CORS header, so nothing is checked). 4. The letter.
+* **Refused for every source:** SVG, `data:` URLs, and hosts that are IP literals, `localhost` or names without a dot.
+* **Settings.** "Load token icons" (`kob.icons`) is the master switch: off, no image request of any kind. "Load token logos from creator sites"
+  (`kob.icons.creator`, on by default) turns steps 2 and 3 off: "Loads token logos from the address their creator gave; that site sees your IP address and
+  when you looked."
+* **CSP.** `img-src` is `'self' data: blob: https:`: the browser may load an `<img>` from any https host. This is the one widening for creator sites; it does not
+  touch `script-src`, `connect-src` or Trusted Types (an image cannot run code, and SVG is refused). The creators' hosts are not known in advance, so `img-src`
+  cannot be pinned to a host list; a deployment that wants no creator image requests keeps the shipped policy and tells its visitors to switch the setting off, or
+  sets `img-src 'self' data: blob:` itself, in which case such logos simply do not show.
+* **Reports and the blocklist.** The app reads `GET <indexer>/v1/logo-blocklist` at start and every 2 minutes (`logoBlocklistUrl` in config.json overrides the
+  address; the last list is cached in localStorage; it **fails open**: an indexer that cannot be reached or has no such route leaves logos visible). A token on
+  the list shows its letter and, in its details, "Logo hidden after a report". "Report logo" in the token's details posts `{covenant_id, reason}` to
+  `POST <indexer>/v1/logo-reports` (reasons: illegal, impersonation, other; no free text). The first report hides the logo for everyone at once; the operator
+  reviews it with `kob-executor index logo-reports` (`docs/ops/executor.md`) and may restore it; reports of a restored token are only recorded for `cooldown_secs`
+  (default 6 hours). The same list is fed by the GitHub Issue form `.github/ISSUE_TEMPLATE/logo-report.yml` through the workflow `.github/workflows/logo-report.yml`,
+  which posts to the repository variable `KOB_LOGO_REPORT_URL` (the public indexer's `/v1/logo-reports` address; unset: the workflow only comments that the report
+  waits for manual review). The indexer needs `[logo_reports] enabled = true` (`docs/ops/chart-server.md`, `docs/api.md` 3.19 and 3.20).
+* **Privacy.** The creator's host (and an IPFS gateway) sees the visitor's IP address, the time, and that this token's logo was looked at, and the host
+  decides what it sends. KOB's own host sees nothing of this.
 
 ### KOB's own genesis check: more external sources (a token page only)
 
@@ -206,13 +238,15 @@ hash, but names are the creators' claims as the source gives them).
 
 **CSP.** The shipped `connect-src` allows `https:`, so the default works as built. A deployment that **pins `connect-src` to exact origins**
 (`web/README.md`, "Deployment headers") must add the origin of the token-names source (`https://kascov.io` by default, your proxy's
-origin otherwise); without it the list silently shows no names or icons. The pictures of creators' own hosts are the fallback only and need
-`https:` in `connect-src`; a pinned policy turns them into letters, which is safe. `img-src 'self' data: blob:` stays as shipped.
+origin otherwise); without it the list silently shows no names or icons. The `ipfs://` logos are fetched as bytes and need the gateway's origin (default
+`https://dweb.link`, and the per-CID subdomains `https://*.ipfs.dweb.link` it redirects to) in `connect-src`; a pinned policy without it turns them into letters, which is safe.
+The creators' own `https://` images are plain `<img>` loads governed by `img-src`, which ships as `'self' data: blob: https:` (see *Token logos from the creator's
+address* above); the blocklist and the report use the indexer's origin, already in `connect-src`.
 
 **Privacy.** The visitor's browser asks the source for the list (it sees the visitor's IP and that the market list was opened) and for the
-pictures of the rows in view (kascov.io only; never the creator's host). The founder accepted this for a DEX; there is no
-proxy through the host. The visitor can switch pictures off in Settings ("Load token icons from third-party hosts", on by default): letters
-only, and no image host is contacted. The host sees nothing of this.
+pictures of the rows in view (kascov.io for the checked copies; for a token without one, the creator's own host or an IPFS gateway, see above). The founder accepted this
+for a DEX; there is no proxy through the host. The visitor can switch pictures off in Settings ("Load token icons", on by default): letters only, and no image host
+is contacted; "Load token logos from creator sites" switches off only the creators' addresses. The host sees nothing of this.
 
 **Neutrality.** The names are the creators' own claims, labelled "declared by its creator"; the list is not curated or ranked, and KOB marks nothing
 "verified" on a third party's word: kascov's `status` appears only as the chip "Verified by kascov" (a third-party remark that says KOB has not checked the token itself),

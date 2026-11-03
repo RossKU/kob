@@ -254,6 +254,10 @@ a.tape-row:hover .tape-time { color: var(--text); }
   box-shadow: 0 0 0 1px var(--tk-outline);
 }
 .tk-icon img { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--surface, #fff); }
+/* a picture straight from the creator's site (not checked): the letter shows under it until it has loaded, then the picture covers it */
+.tk-icon { position: relative; }
+.tk-icon img.tk-creator { position: absolute; inset: 0; background: transparent; }
+.tk-icon img.tk-creator.tk-loaded { background: var(--surface, #fff); }
 
 /* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, the icon is --idb tall, the fingerprint 60 % of it */
 .idb { --idb: 40px; flex: none; display: inline-flex; align-items: center; gap: 6px; }

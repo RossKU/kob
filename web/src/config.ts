@@ -68,6 +68,17 @@ export interface AppConfig {
    * a stored setting must not loosen it); 10 to 5000, default 1000 (10 %).
    */
   marketStartToleranceBps: number;
+  /**
+   * The token-logo blocklist the app reads (data/logo-blocklist.ts): `GET <logoBlocklistUrl>` returns `{hidden: [covenant ids]}`, and a report is posted to the
+   * `logo-reports` route beside it. '' (default) = `<indexerUrl>/v1/logo-blocklist`. http(s) only. config.json / `__KOB_CONFIG__` only: a link or a stored
+   * setting must not repoint it. An indexer without the route is simply read as an empty list (logos show).
+   */
+  logoBlocklistUrl: string;
+  /**
+   * The IPFS gateway an `ipfs://` token logo is fetched through, as bytes (data/logos.ts): `<ipfsGatewayUrl>/<cid>`. https only; '' turns `ipfs://` logos off.
+   * Default `https://dweb.link/ipfs`. config.json / `__KOB_CONFIG__` only.
+   */
+  ipfsGatewayUrl: string;
 }
 
 export const MARKET_START_TOLERANCE_MIN = 10;
@@ -83,6 +94,8 @@ export const CONFIG_JSON_PATH = './config.json';
 
 /** The token-names source of a deployment that sets none (`AppConfig.tokenNamesUrl`). */
 export const DEFAULT_TOKEN_NAMES_URL = 'https://kascov.io/data';
+/** The IPFS gateway of a deployment that sets none (`AppConfig.ipfsGatewayUrl`; no trailing slash). */
+export const DEFAULT_IPFS_GATEWAY_URL = 'https://dweb.link/ipfs';
 
 export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   network: 'mainnet' as NetworkName,
@@ -98,6 +111,8 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   explorerUrl: '',
   tokenNamesUrl: DEFAULT_TOKEN_NAMES_URL,
   marketStartToleranceBps: 1_000,
+  logoBlocklistUrl: '',
+  ipfsGatewayUrl: DEFAULT_IPFS_GATEWAY_URL,
 });
 
 /** Default block explorer of each network (kaspa.stream: `<base>/transactions/<txid>`). */
@@ -198,6 +213,8 @@ export interface ConfigPatch {
   explorerUrl?: string;
   tokenNamesUrl?: string;
   marketStartToleranceBps?: number;
+  logoBlocklistUrl?: string;
+  ipfsGatewayUrl?: string;
 }
 
 export interface ConfigWarning { layer: string; field: string; message: string }
@@ -289,6 +306,22 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
       else bad('tokenNamesUrl', 'URL (use https; empty turns the token names off)');
     }
   }
+  if ('logoBlocklistUrl' in raw) {
+    if (!deployment) warnings.push({ layer, field: 'logoBlocklistUrl', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
+    else {
+      const u = validateUrl(raw.logoBlocklistUrl, HTTP_SCHEMES);
+      if (u !== null) out.logoBlocklistUrl = u;
+      else bad('logoBlocklistUrl', 'URL (use http or https; empty = the indexer base)');
+    }
+  }
+  if ('ipfsGatewayUrl' in raw) {
+    if (!deployment) warnings.push({ layer, field: 'ipfsGatewayUrl', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
+    else {
+      const u = validateUrl(raw.ipfsGatewayUrl, ['https:']);
+      if (u !== null) out.ipfsGatewayUrl = u;
+      else bad('ipfsGatewayUrl', 'URL (use https; empty turns ipfs:// logos off)');
+    }
+  }
   if ('marketStartToleranceBps' in raw) {
     const v = raw.marketStartToleranceBps;
     if (!deployment) warnings.push({ layer, field: 'marketStartToleranceBps', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
@@ -377,6 +410,8 @@ function apply(base: AppConfig, p: ConfigPatch): AppConfig {
     explorerUrl: p.explorerUrl ?? base.explorerUrl,
     tokenNamesUrl: p.tokenNamesUrl ?? base.tokenNamesUrl,
     marketStartToleranceBps: p.marketStartToleranceBps ?? base.marketStartToleranceBps,
+    logoBlocklistUrl: p.logoBlocklistUrl ?? base.logoBlocklistUrl,
+    ipfsGatewayUrl: p.ipfsGatewayUrl ?? base.ipfsGatewayUrl,
   };
 }
 

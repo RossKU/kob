@@ -13,11 +13,13 @@
 //     config.json; the testnet node of the project is a plain ws:// address), so hosts cannot be pinned in the shipped build. The directive
 //     therefore only names the schemes. A PRODUCTION DEPLOYMENT SHOULD REPLACE IT with the exact node and indexer origins (README, "Deployment
 //     headers"): that is what closes the exfiltration channel, the other directives already stop script injection and framing.
-//   * img-src 'self' data: blob:: token icons. The app never lets the browser load an image from a third-party host: it fetches the bytes
-//     (connect-src above already allows https:), accepts them only when their SHA-256 equals the hash the token's creator committed to
-//     (data/kascov.ts), and shows them from a blob: URL it made itself. So img-src is NOT widened to https:, and a page script cannot be made
-//     to leak through an <img> request to an arbitrary host. A production deployment that pins connect-src (README, "Deployment headers") adds
-//     `https://kascov.io` to it for the token names and icons (docs/ops/web-hosting.md); without it the list simply shows no names or icons.
+//   * img-src 'self' data: blob: https:: token icons and logos (data/kascov.ts, data/logos.ts). Checked pictures (kascov.io's saved copy, hash-verified) and IPFS
+//     pictures (fetched as bytes through a gateway) are shown from a blob: URL the app made itself. A token whose creator gave an https:// logo address shows it as a
+//     plain <img> from that host, labelled "not checked" (founder decision 2026-11-03: KOB stores no third-party image, each viewer's browser loads it from its
+//     source), so img-src allows https: and no host list is possible (the creators' hosts are not known in advance). An image cannot run script, SVG is never
+//     shown, and connect-src, script-src and Trusted Types are unchanged. The viewer can turn creator sites off in Settings; a deployment that never wants
+//     them may set img-src to 'self' data: blob: itself (docs/ops/web-hosting.md). A production deployment that pins connect-src (README, "Deployment headers")
+//     adds `https://kascov.io` to it for the token names and icons, and the IPFS gateway for ipfs:// logos; without them those simply show no picture.
 //   * frame-src 'self': the only frame is the app's own private-key signer (signer.html, sandboxed without allow-same-origin).
 //   * everything else is denied: no plugins, no base-uri, no form posts, no workers.
 //
@@ -31,7 +33,7 @@ export const META_DIRECTIVES = {
   'default-src': ["'none'"],
   'script-src': ["'self'", "'wasm-unsafe-eval'"],
   'style-src': ["'self'", "'unsafe-inline'"],
-  'img-src': ["'self'", 'data:', 'blob:'],
+  'img-src': ["'self'", 'data:', 'blob:', 'https:'],
   'font-src': ["'self'"],
   'connect-src': CONNECT_SRC,
   'object-src': ["'none'"],

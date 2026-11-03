@@ -3,6 +3,7 @@
 // bytes that hash to the committed hash; the notes where kascov disagrees with KOB; the Settings toggle; kascov down, slow-shaped or turned off by the
 // deployment. Desktop and a 375 px phone (no horizontal overflow). The app under test is the built one, so its Content-Security-Policy is in force:
 // the pictures are shown from blob: URLs, never from a third-party URL.
+import { createHash } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { mockKascov, OTHER_PNG, PNG, programHash, sha256, type MockKascovToken } from '../helpers/kascov';
@@ -12,7 +13,7 @@ test.use({ autoOpen: false });
 const ID = (n: number) => n.toString(16).padStart(2, '0').repeat(32);
 const SAVED = ID(0xa1); // a saved copy that hashes to the committed hash
 const MISMATCH = ID(0xa2); // the saved copy is another picture than the one committed (its hash is of other bytes than OTHER_PNG)
-const NO_CORS = ID(0xa3); // no saved copy; the creator's own host is not asked
+const NO_CORS = ID(0xa3); // no saved copy; the creator's own host is shown unchecked (an <img>, since 2026-11-03), after kascov's copy was asked for
 const NO_IMAGE = ID(0xa4); // no image at all
 const UNPINNED = ID(0xa5); // a program this build does not pin
 const PUBLIC_MINT = ID(0xa6); // KCC20PublicMint
@@ -87,21 +88,29 @@ test.describe('with kascov.io', () => {
     const img = icon.locator('img');
     expect(await img.getAttribute('src')).toMatch(/^blob:/);
     await expect.poll(() => img.evaluate((e: HTMLImageElement) => e.naturalWidth)).toBe(1);
-    for (const id of [MISMATCH, NO_CORS, NO_IMAGE]) {
+    for (const id of [MISMATCH, NO_IMAGE]) {
       const letter = page.getByTestId(`token-icon-${id}`);
       await letter.scrollIntoViewIfNeeded();
       await expect(letter).toHaveAttribute('data-icon', 'letter');
       await expect(letter.locator('img')).toHaveCount(0);
     }
     await expect(page.getByTestId(`token-icon-${MISMATCH}`)).toHaveText('M');
-    await expect(page.getByTestId(`token-icon-${NO_CORS}`)).toHaveText('N');
-    // the mismatching copy was fetched and refused; the creator's host is never contacted, not even after kascov had no copy (audit F10: the viewer's IP stays with kascov.io)
+    // kascov holds no copy for NO_CORS: its creator's own address is shown as a plain <img>, labelled unchecked (the page cannot read its bytes: no CORS)
+    const creator = page.getByTestId(`token-icon-${NO_CORS}`);
+    await creator.scrollIntoViewIfNeeded();
+    await expect(creator).toHaveAttribute('data-icon', 'creator-image');
+    await expect(creator).toHaveAttribute('title', "Image from the creator's site, not checked");
+    const creatorImg = creator.locator('img');
+    expect(await creatorImg.getAttribute('src')).toBe(CREATOR_URL);
+    expect(await creatorImg.getAttribute('referrerpolicy')).toBe('no-referrer');
+    expect(await creatorImg.getAttribute('crossorigin')).toBeNull();
+    await expect.poll(() => creatorImg.evaluate((e: HTMLImageElement) => e.naturalWidth)).toBe(1);
+    // the mismatching copy was fetched and refused (a letter); the checked path never asks the creator's host: it is asked only after kascov had no copy
     await expect.poll(() => log.requests.includes(`https://kascov.io/img/testnet-10/${MISMATCH}`)).toBe(true);
     await expect.poll(() => log.requests.includes(`https://kascov.io/img/testnet-10/${NO_CORS}`)).toBe(true);
-    await page.waitForTimeout(500);
-    expect(log.requests.includes(CREATOR_URL)).toBe(false);
-    // no <img> ever points at a third-party URL, and the policy was never violated
-    expect(await page.locator('img[src^="http"]').count()).toBe(0);
+    await expect.poll(() => log.requests.includes(CREATOR_URL)).toBe(true);
+    // the only <img> that points at a third-party URL is that creator image, and the policy was never violated
+    expect(await page.locator('img[src^="http"]').evaluateAll((els) => els.map((e) => e.getAttribute('src')))).toEqual([CREATOR_URL]);
     expect(pageErrors.filter((e) => /Content.Security.Policy/i.test(e))).toEqual([]);
     expect(await overflow(page)).toBe(0);
 
@@ -184,7 +193,7 @@ test.describe('refresh policy', () => {
   });
 });
 
-test.describe('the Settings toggle "Load token icons from third-party hosts"', () => {
+test.describe('the Settings toggle "Load token icons"', () => {
   test('on by default; off: letters, no request to any image host, names stay; the choice survives a reload', async ({ appPage: page, mock }) => {
     const exkcc = (await mock.token()).covenant_id;
     const log = await mockKascov(page, opts(exkcc));
@@ -239,7 +248,7 @@ for (const mode of ['down', 'shape', 'http'] as const) {
 
 test.describe('the deployment turns the token names off (tokenNamesUrl: "")', () => {
   test.use({ appConfig: { tokenNamesUrl: '' } });
-  test('no request to kascov, no hint, the toggle is disabled and says so', async ({ appPage: page, mock }) => {
+  test('no request to kascov, no hint, the page says so', async ({ appPage: page, mock }) => {
     const exkcc = (await mock.token()).covenant_id;
     const log = await mockKascov(page, opts(exkcc));
     await page.goto('/#/market');
@@ -248,7 +257,8 @@ test.describe('the deployment turns the token names off (tokenNamesUrl: "")', ()
     await expect(page.getByTestId('kascov-unavailable')).toHaveCount(0);
     await page.goto('/#/settings');
     await expect(page.getByTestId('settings-icons-off')).toBeVisible();
-    await expect(page.getByTestId('settings-icons-toggle')).toBeDisabled();
+    // logos from the address a creator gave (a KCC-23 declaration) need no token list: the switches stay
+    await expect(page.getByTestId('settings-icons-toggle')).toBeEnabled();
     expect(log.requests).toEqual([]);
   });
 });
@@ -267,5 +277,167 @@ test.describe('the deployment points the token names at another host (tokenNames
     expect(log.requests).toContain('https://names.example.org/kascov/data/testnet-10/tokens.json');
     expect(log.requests).toContain(`https://names.example.org/kascov/img/testnet-10/${SAVED}`);
     expect(seen.filter((u) => u.startsWith('https://kascov.io/'))).toEqual([]);
+  });
+});
+
+const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-expose-headers': 'retry-after' };
+
+test.describe('token logos from the creator\'s address: the Settings switch, the blocklist and the report', () => {
+  test('the creator-sites switch is on by default and off means a letter and no request to the creator\'s host; the master switch off disables it', async ({ appPage: page, mock }) => {
+    const exkcc = (await mock.token()).covenant_id;
+    const log = await mockKascov(page, opts(exkcc));
+    await page.goto('/#/settings');
+    const creator = page.getByTestId('settings-icons-creator-toggle');
+    await expect(creator).toBeChecked();
+    await expect(page.getByTestId('settings-icons')).toContainText('that site sees your IP address and when you looked');
+    await creator.uncheck();
+    expect(await page.evaluate(() => localStorage.getItem('kob.icons.creator'))).toBe('0');
+    await page.goto('/#/market');
+    await page.getByTestId(`token-icon-${NO_CORS}`).scrollIntoViewIfNeeded();
+    await expect(page.getByTestId(`token-icon-${NO_CORS}`)).toHaveAttribute('data-icon', 'letter');
+    // the checked copies still show: only the creators' addresses are off
+    await page.getByTestId(`token-icon-${SAVED}`).scrollIntoViewIfNeeded();
+    await expect(page.getByTestId(`token-icon-${SAVED}`)).toHaveAttribute('data-icon', 'image');
+    await page.waitForTimeout(500);
+    expect(log.requests.includes(CREATOR_URL)).toBe(false);
+    await page.goto('/#/settings');
+    await page.getByTestId('settings-icons-creator-toggle').check();
+    await page.getByTestId('settings-icons-toggle').uncheck();
+    await expect(page.getByTestId('settings-icons-creator-toggle')).toBeDisabled();
+  });
+
+  test('a token on the blocklist shows its letter and no request is made; the list is read again and a restored token shows its logo', async ({ appPage: page, mock }) => {
+    const exkcc = (await mock.token()).covenant_id;
+    const log = await mockKascov(page, opts(exkcc));
+    let hidden: string[] = [NO_CORS, SAVED];
+    let reads = 0;
+    await page.route('**/v1/logo-blocklist', (route) => {
+      reads++;
+      return route.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify({ hidden, updated_ms: reads }) });
+    });
+    await page.goto('/#/market');
+    await expect.poll(() => reads).toBeGreaterThan(0);
+    for (const id of [NO_CORS, SAVED]) {
+      await page.getByTestId(`token-icon-${id}`).scrollIntoViewIfNeeded();
+      await expect(page.getByTestId(`token-icon-${id}`)).toHaveAttribute('data-icon', 'letter');
+    }
+    await page.waitForTimeout(500);
+    expect(log.requests.includes(CREATOR_URL)).toBe(false);
+    expect(log.requests.includes(`https://kascov.io/img/testnet-10/${SAVED}`)).toBe(false);
+    // the token page says so
+    await page.goto(`/#/market/${NO_CORS}`);
+    await expect(page.getByTestId('token-logo-note')).toContainText('Logo hidden after a report');
+    await expect(page.getByTestId('logo-report-open')).toHaveCount(0);
+    // the cache of the last list serves the next visit at once, even when the indexer is unreachable (it fails open only for tokens not on the list)
+    expect(await page.evaluate(() => localStorage.getItem('kob.logo-blocklist.v1'))).toContain(NO_CORS);
+  });
+
+  test('an indexer without the route (404) or an unreachable one leaves every logo visible', async ({ appPage: page, mock }) => {
+    const exkcc = (await mock.token()).covenant_id;
+    await mockKascov(page, opts(exkcc));
+    await page.route('**/v1/logo-blocklist', (route) => route.fulfill({ status: 404, headers: CORS, contentType: 'application/json', body: '{"error":{"code":"not_found"}}' }));
+    await page.goto('/#/market');
+    await page.getByTestId(`token-icon-${NO_CORS}`).scrollIntoViewIfNeeded();
+    await expect(page.getByTestId(`token-icon-${NO_CORS}`)).toHaveAttribute('data-icon', 'creator-image');
+  });
+
+  test('"Report logo" in the token details: three reasons, the result, the letter at once, and the link to the GitHub form', async ({ appPage: page, mock }) => {
+    const exkcc = (await mock.token()).covenant_id;
+    await mockKascov(page, opts(exkcc));
+    await page.route('**/v1/logo-blocklist', (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: '{"hidden":[],"updated_ms":0}' }));
+    const posted: unknown[] = [];
+    await page.route('**/v1/logo-reports', (route) => {
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS });
+      posted.push(route.request().postDataJSON());
+      return route.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify({ result: 'hidden', covenant_id: NO_CORS }) });
+    });
+    await page.goto(`/#/market/${NO_CORS}`);
+    await expect(page.getByTestId('token-logo-note')).toContainText("Image from the creator's site, not checked");
+    await page.getByTestId('logo-report-open').click();
+    const dialog = page.getByTestId('logo-report-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(page.getByTestId('logo-report-github')).toHaveAttribute('href', new RegExp(`^https://github.com/RossKU/kob/issues/new\\?template=logo-report.yml&covenant_id=${NO_CORS}$`));
+    await expect(page.getByTestId('logo-report-reason').locator('option')).toHaveText(['Illegal content', 'Impersonates another project or person', 'Something else']);
+    await page.getByTestId('logo-report-reason').selectOption('illegal');
+    await page.getByTestId('logo-report-send').click();
+    await expect(page.getByTestId('logo-report-result')).toContainText('now hidden for everyone');
+    expect(posted).toEqual([{ covenant_id: NO_CORS, reason: 'illegal' }]);
+    // the logo is a letter at once, and the details say why
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId(`token-icon-${NO_CORS}`).first()).toHaveAttribute('data-icon', 'letter');
+    await expect(page.getByTestId('token-logo-note')).toContainText('Logo hidden after a report');
+  });
+
+  test('a report the indexer cannot take says so and offers the GitHub form', async ({ appPage: page, mock }) => {
+    const exkcc = (await mock.token()).covenant_id;
+    await mockKascov(page, opts(exkcc));
+    await page.route('**/v1/logo-reports', (route) => {
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS });
+      return route.fulfill({ status: 429, headers: { ...CORS, 'retry-after': '120' }, contentType: 'application/json', body: '{"error":{"code":"rate_limited"}}' });
+    });
+    await page.goto(`/#/market/${NO_CORS}`);
+    await page.getByTestId('logo-report-open').click();
+    await page.getByTestId('logo-report-send').click();
+    await expect(page.getByTestId('logo-report-result')).toContainText('Try again in 120 s');
+    await expect(page.getByTestId('logo-report-github')).toBeVisible();
+    // not hidden by a failed report
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('token-logo-note')).toContainText("not checked");
+  });
+});
+
+/** The CIDv1 (raw leaf, SHA-256) of some bytes: what `ipfs add --cid-version 1 --raw-leaves` prints for a file of one block. */
+function rawCid(bytes: Buffer): string {
+  const A = 'abcdefghijklmnopqrstuvwxyz234567';
+  const input = Buffer.concat([Buffer.from([0x01, 0x55, 0x12, 0x20]), createHash('sha256').update(bytes).digest()]);
+  let bits = 0;
+  let acc = 0;
+  let out = 'b';
+  for (const b of input) {
+    acc = (acc << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += A[(acc >> (bits - 5)) & 31];
+      bits -= 5;
+    }
+    acc &= (1 << bits) - 1;
+  }
+  if (bits > 0) out += A[(acc << (5 - bits)) & 31];
+  return out;
+}
+
+test.describe('an ipfs:// logo', () => {
+  test('is fetched as bytes through the gateway, compared with its CID and shown from a blob: URL; bytes that are not the CID\'s are a letter', async ({ appPage: page, mock }) => {
+    const exkcc = (await mock.token()).covenant_id;
+    const IPFS_OK = ID(0xa9);
+    const IPFS_FORGED = ID(0xaa);
+    const okCid = rawCid(PNG);
+    const forgedCid = rawCid(OTHER_PNG);
+    const log = await mockKascov(page, {
+      ...opts(exkcc),
+      tokens: [
+        ...tokens(exkcc),
+        { covenant_id: IPFS_OK, claimed_ticker: 'IPFSOK', claimed_image: `ipfs://${okCid}`, program: MINT },
+        // the gateway answers this address with a PNG that is not the one the CID names
+        { covenant_id: IPFS_FORGED, claimed_ticker: 'IPFSBAD', claimed_image: `ipfs://${forgedCid}`, program: MINT },
+      ],
+    });
+    const asked: string[] = [];
+    await page.route('https://dweb.link/ipfs/**', (route) => {
+      asked.push(route.request().url());
+      return route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: PNG });
+    });
+    await page.goto('/#/market');
+    const ok = page.getByTestId(`token-icon-${IPFS_OK}`);
+    await ok.scrollIntoViewIfNeeded();
+    await expect(ok).toHaveAttribute('data-icon', 'image');
+    expect(await ok.locator('img').getAttribute('src')).toMatch(/^blob:/);
+    const bad = page.getByTestId(`token-icon-${IPFS_FORGED}`);
+    await bad.scrollIntoViewIfNeeded();
+    await expect.poll(() => asked.includes(`https://dweb.link/ipfs/${forgedCid}`)).toBe(true);
+    await expect(bad).toHaveAttribute('data-icon', 'letter');
+    expect(asked).toContain(`https://dweb.link/ipfs/${okCid}`);
+    // the gateway is the only host asked for these: not kascov's creator route
+    expect(log.requests.some((u) => u.includes('dweb.link'))).toBe(false);
   });
 });

@@ -221,6 +221,8 @@ export async function startMockServer(opts = {}) {
     if (get && path === '/v1/health') return ok(V.healthView(chain));
     if (get && path === '/v1/health/ready') return V.readyView(chain);
     if (get && path === '/v1/tokens') return ok(V.tokensView(chain));
+    // the token-logo blocklist of an executor with [logo_reports] enabled (docs/api.md 3.20): nothing is hidden
+    if (get && path === '/v1/logo-blocklist') return ok({ hidden: [], updated_ms: 0 });
     if (get && (m = /^\/v1\/tokens\/([^/]+)\/declaration$/.exec(path))) {
       const id = V.parseHash('covenant_id', m[1]);
       const proof = chain.declarations.get(id);
