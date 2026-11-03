@@ -22,6 +22,11 @@
 //! before 2026-10-01 without a marker, or a newer format) is kept and skipped by [`read_all`] with a counted warning
 //! (`open` checks the chain only and never decodes a body).
 //!
+//! A sealed segment (every one but the newest) is kept as `seg-<n>.kobrec.gz`, the gzip of the segment file: the writer compresses
+//! the segment it has just rotated away from ([`compress_sealed`]; `kob-executor index migrate` does the ones an older run left
+//! whole), after reading the copy back and comparing it with the segment. The frames, their chain hashes and everything that reads
+//! the log are the same; only the bytes on disk are a third of the size.
+//!
 //! The chain detects truncation in the middle and edits. Ordering guarantee with the database: a frame
 //! is appended and fsynced BEFORE the database transaction commits, and the database stores
 //! `records_next_n`. After a crash the log can hold one frame the database never committed; a database restored from a
@@ -39,7 +44,7 @@ use crate::hex::Hash32;
 use crate::wire::{Reader, WireError, Writer};
 use kob_protocol::artifacts::TemplateId;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -467,22 +472,59 @@ fn segment_name(first_n: u64) -> String {
     format!("seg-{first_n:012}.kobrec")
 }
 
+/// Extension of a sealed segment kept gzip-compressed: `seg-<n>.kobrec.gz` holds the bytes of `seg-<n>.kobrec`, frame for frame
+/// (the chain hashes cover the frame bodies, so the log reads and verifies the same). Only a sealed segment is ever compressed,
+/// never the newest one, which the writer appends to.
+const GZ: &str = ".gz";
+
+fn is_compressed(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e == "gz")
+}
+
 fn list_segments(dir: &Path) -> std::io::Result<Vec<(u64, PathBuf)>> {
-    let mut v = Vec::new();
+    let mut v: Vec<(u64, PathBuf)> = Vec::new();
     if !dir.exists() {
         return Ok(v);
     }
     for e in std::fs::read_dir(dir)? {
         let p = e?.path();
         let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
-        if let Some(rest) = name.strip_prefix("seg-").and_then(|r| r.strip_suffix(".kobrec")) {
-            if let Ok(n) = rest.parse::<u64>() {
-                v.push((n, p));
+        let Some(rest) = name.strip_prefix("seg-") else { continue };
+        let (digits, gz) = match rest.strip_suffix(&format!(".kobrec{GZ}")) {
+            Some(d) => (d, true),
+            None => match rest.strip_suffix(".kobrec") {
+                Some(d) => (d, false),
+                None => continue,
+            },
+        };
+        if let Ok(n) = digits.parse::<u64>() {
+            // both forms of one segment (a compression that stopped before it removed the original): the original is the one
+            // that is trusted, as it was before this existed
+            match v.iter().position(|(m, _)| *m == n) {
+                Some(i) => {
+                    if !gz {
+                        v[i] = (n, p);
+                    }
+                }
+                None => v.push((n, p)),
             }
         }
     }
     v.sort();
     Ok(v)
+}
+
+fn open_gz(path: &Path) -> std::io::Result<Box<dyn Read>> {
+    Ok(Box::new(flate2::read::GzDecoder::new(BufReader::with_capacity(1 << 20, File::open(path)?))))
+}
+
+/// A segment file for reading: plain, or gunzipped on the fly.
+fn open_segment(path: &Path) -> std::io::Result<Box<dyn Read>> {
+    if is_compressed(path) {
+        open_gz(path)
+    } else {
+        Ok(Box::new(File::open(path)?))
+    }
 }
 
 fn read_fully(r: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -508,7 +550,7 @@ enum FrameRead {
     },
 }
 
-fn read_frame(r: &mut BufReader<File>) -> std::io::Result<FrameRead> {
+fn read_frame(r: &mut impl Read) -> std::io::Result<FrameRead> {
     let mut len4 = [0u8; 4];
     let got = read_fully(r, &mut len4)?;
     if got == 0 {
@@ -576,9 +618,9 @@ fn scan(
     let mut n = 0u64;
     let mut prev = ZERO;
     for (si, (_, path)) in segs.iter().enumerate() {
-        let file = File::open(path)?;
-        let file_len = file.metadata()?.len();
-        let mut rdr = BufReader::new(file);
+        let file_len = std::fs::metadata(path)?.len();
+        // the newest segment is never compressed (the writer appends to it), so the torn-tail checks below see plain bytes
+        let mut rdr = BufReader::with_capacity(1 << 20, open_segment(path)?);
         let mut offset = 0u64;
         loop {
             match read_frame(&mut rdr)? {
@@ -658,6 +700,7 @@ impl RecordLog {
                 let all = scan(&segs, |_, _| Ok(false))?;
                 return Err(RecordLogError::AheadOfDatabase { log_next: all.frames, db_next: db_next_n });
             }
+            segs[si].1 = make_cuttable(&segs[si].1)?;
             let f = OpenOptions::new().write(true).open(&segs[si].1)?;
             f.set_len(offset)?;
             f.sync_all()?;
@@ -670,9 +713,10 @@ impl RecordLog {
             return Err(RecordLogError::BehindDatabase { log_next: total_frames, db_next: db_next_n });
         }
         // A torn tail can sit after uncommitted frames: after the cut above the log ends at frame `end.frames`.
+        // the segment appended to is a whole one (compression leaves the newest alone; should it be a gzip anyway, a new one starts)
         let (path, seg_len) = match segs.last() {
-            Some((_, p)) => (p.clone(), std::fs::metadata(p)?.len()),
-            None => (dir.join(segment_name(total_frames)), 0),
+            Some((_, p)) if !is_compressed(p) => (p.clone(), std::fs::metadata(p)?.len()),
+            _ => (dir.join(segment_name(total_frames)), 0),
         };
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         Ok((
@@ -716,6 +760,14 @@ impl RecordLog {
             self.file = OpenOptions::new().create(true).append(true).open(&path)?;
             self.seg_path = path;
             self.seg_len = 0;
+            // the segment just sealed (and any sealed one an earlier run left whole) is kept compressed; a failure only costs space
+            match compress_sealed(&self.dir) {
+                Ok(r) if r.segments > 0 => {
+                    tracing::info!(segments = r.segments, before = r.before, after = r.after, "record log: sealed segments compressed")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("record log: compressing the sealed segments failed (they stay as they are): {e}"),
+            }
         }
         let n = self.next_n;
         let chain = chain_hash(&self.last_chain, body);
@@ -779,20 +831,113 @@ impl RecordLog {
         let segs = list_segments(&self.dir)?;
         let end = scan(&segs, |k, _| Ok(k >= n))?;
         if let Some((si, offset)) = end.cut {
-            let f = OpenOptions::new().write(true).open(&segs[si].1)?;
+            let cut = make_cuttable(&segs[si].1)?;
+            let f = OpenOptions::new().write(true).open(&cut)?;
             f.set_len(offset)?;
             f.sync_all()?;
             for (_, p) in segs.iter().skip(si + 1) {
                 std::fs::remove_file(p)?;
             }
-            self.file = OpenOptions::new().append(true).open(&segs[si].1)?;
-            self.seg_path = segs[si].1.clone();
+            self.file = OpenOptions::new().append(true).open(&cut)?;
+            self.seg_path = cut;
             self.seg_len = offset;
         }
         self.next_n = end.frames;
         self.last_chain = end.last_chain;
         Ok(())
     }
+}
+
+/// The segment to cut a log at: a compressed one is expanded back to a whole segment first (the cut of the newest frames of a
+/// log whose last rotation was just compressed, `truncate_to`), and the whole file's path is returned.
+fn make_cuttable(p: &Path) -> std::io::Result<PathBuf> {
+    if !is_compressed(p) {
+        return Ok(p.to_path_buf());
+    }
+    let plain = PathBuf::from(p.to_string_lossy().trim_end_matches(GZ).to_string());
+    let mut tmp = plain.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    {
+        let mut out = BufWriter::with_capacity(1 << 20, File::create(&tmp)?);
+        std::io::copy(&mut open_gz(p)?, &mut out)?;
+        out.flush()?;
+        out.get_ref().sync_all()?;
+    }
+    std::fs::rename(&tmp, &plain)?;
+    std::fs::remove_file(p)?;
+    Ok(plain)
+}
+
+/// gzip level of a sealed segment: about 3.4x on the TN10 soak log, at a speed that holds the writer for a few seconds per
+/// 256 MiB segment, once per rotation.
+const GZ_LEVEL: u32 = 3;
+
+/// What [`compress_sealed`] did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CompressReport {
+    pub segments: usize,
+    /// Bytes of the segments before and after.
+    pub before: u64,
+    pub after: u64,
+}
+
+fn digest_of(mut r: impl Read) -> std::io::Result<[u8; 32]> {
+    let mut h = blake3::Hasher::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = r.read(&mut buf)?;
+        if n == 0 {
+            return Ok(*h.finalize().as_bytes());
+        }
+        h.update(&buf[..n]);
+    }
+}
+
+/// Compress one sealed segment: the gzip is written beside it, read back and compared with the segment (blake3 of both), and only
+/// then does it replace the segment (rename, then the segment is removed), so no step loses a frame and a crash leaves the
+/// segment in one form or both. Returns the compressed size.
+fn compress_one(plain: &Path) -> std::io::Result<u64> {
+    let mut gz = plain.as_os_str().to_owned();
+    gz.push(GZ);
+    let gz = PathBuf::from(gz);
+    let mut tmp = gz.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    {
+        let mut enc =
+            flate2::write::GzEncoder::new(BufWriter::with_capacity(1 << 20, File::create(&tmp)?), flate2::Compression::new(GZ_LEVEL));
+        std::io::copy(&mut BufReader::with_capacity(1 << 20, File::open(plain)?), &mut enc)?;
+        let mut out = enc.finish()?;
+        out.flush()?;
+        out.get_ref().sync_all()?;
+    }
+    if digest_of(File::open(plain)?)? != digest_of(open_gz(&tmp)?)? {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(std::io::Error::other(format!("the compressed copy of {} does not read back the same", plain.display())));
+    }
+    std::fs::rename(&tmp, &gz)?;
+    let size = std::fs::metadata(&gz)?.len();
+    std::fs::remove_file(plain)?;
+    Ok(size)
+}
+
+/// Compress every sealed segment of the log directory that is still whole: all but the newest, which the writer appends to.
+/// Idempotent. The caller holds the writer lock (`run`, `index migrate`).
+pub fn compress_sealed(dir: &Path) -> Result<CompressReport, RecordLogError> {
+    let segs = list_segments(dir)?;
+    let mut rep = CompressReport::default();
+    for (_, p) in segs.iter().take(segs.len().saturating_sub(1)) {
+        if is_compressed(p) {
+            continue;
+        }
+        let before = std::fs::metadata(p)?.len();
+        let after = compress_one(p)?;
+        rep.segments += 1;
+        rep.before += before;
+        rep.after += after;
+    }
+    Ok(rep)
 }
 
 /// Number of complete frames in a log directory, without decoding them. Used at startup to refuse
@@ -1141,6 +1286,87 @@ mod tests {
         drop(log);
         let (log, _) = RecordLog::open(d.path(), 200, 5).unwrap();
         assert_eq!(log.next_n(), 5);
+    }
+
+    fn gunzip_to_plain(gz: &Path) {
+        let plain = PathBuf::from(gz.to_string_lossy().trim_end_matches(".gz").to_string());
+        let mut out = File::create(&plain).unwrap();
+        std::io::copy(&mut open_gz(gz).unwrap(), &mut out).unwrap();
+        std::fs::remove_file(gz).unwrap();
+    }
+
+    #[test]
+    fn sealed_segments_are_compressed_and_the_log_reads_and_extends_as_before() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut log, _) = RecordLog::open(d.path(), 300, 0).unwrap();
+        for i in 0..40 {
+            log.append(&batch(i), 0).unwrap();
+        }
+        let paths = segment_paths(d.path()).unwrap();
+        let gz = paths.iter().filter(|p| is_compressed(p)).count();
+        assert!(gz >= 3, "{paths:?}");
+        assert!(!is_compressed(paths.last().unwrap()), "the newest segment stays whole");
+        assert_eq!(read_all(d.path()).unwrap().records.len(), 40);
+        assert_eq!(record_count(d.path()).unwrap(), 40);
+        drop(log);
+        // reopened and extended: the chain continues over the compressed segments
+        let (mut log, _) = RecordLog::open(d.path(), 300, 40).unwrap();
+        log.append(&batch(41), 0).unwrap();
+        assert_eq!(log.next_n(), 41);
+        let r = read_all(d.path()).unwrap();
+        assert_eq!(r.records.len(), 41);
+        assert_eq!(r.records[40].1, batch(41));
+        assert_eq!(compress_sealed(d.path()).unwrap().segments, 0, "idempotent");
+        // the newest frame can still be cut after a rotation
+        log.truncate_to(40).unwrap();
+        assert_eq!(read_all(d.path()).unwrap().records.len(), 40);
+    }
+
+    #[test]
+    fn a_log_whole_before_compression_and_one_that_stopped_part_way_both_read_and_compress() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut log, _) = RecordLog::open(d.path(), 300, 0).unwrap();
+        for i in 0..30 {
+            log.append(&batch(i), 0).unwrap();
+        }
+        drop(log);
+        let want = read_all(d.path()).unwrap().records;
+        let gz: Vec<PathBuf> = segment_paths(d.path()).unwrap().into_iter().filter(|p| is_compressed(p)).collect();
+        assert!(gz.len() >= 2);
+        // an old log: every sealed segment whole
+        for p in &gz {
+            gunzip_to_plain(p);
+        }
+        assert_eq!(read_all(d.path()).unwrap().records, want);
+        // a compression that wrote the gzip and stopped before it removed the segment: both files exist
+        let plain = segment_paths(d.path()).unwrap()[0].clone();
+        let mut both = plain.as_os_str().to_owned();
+        both.push(".gz");
+        std::fs::write(&both, b"left over").unwrap();
+        assert_eq!(read_all(d.path()).unwrap().records, want, "the whole segment is the one read");
+        let r = compress_sealed(d.path()).unwrap();
+        assert_eq!(r.segments, gz.len());
+        assert!(r.after < r.before);
+        assert!(!plain.exists());
+        assert_eq!(read_all(d.path()).unwrap().records, want);
+        assert_eq!(compress_sealed(d.path()).unwrap().segments, 0);
+    }
+
+    #[test]
+    fn a_damaged_compressed_segment_is_an_error_not_a_shorter_log() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut log, _) = RecordLog::open(d.path(), 300, 0).unwrap();
+        for i in 0..30 {
+            log.append(&batch(i), 0).unwrap();
+        }
+        drop(log);
+        let gz = segment_paths(d.path()).unwrap().into_iter().find(|p| is_compressed(p)).unwrap();
+        let mut bytes = std::fs::read(&gz).unwrap();
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xff;
+        std::fs::write(&gz, bytes).unwrap();
+        assert!(read_all(d.path()).is_err());
+        assert!(record_count(d.path()).is_err());
     }
 
     // ---- template evolution ----

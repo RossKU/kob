@@ -2606,6 +2606,7 @@ dependencies = [
  "borsh",
  "clap",
  "faster-hex 0.10.1",
+ "flate2",
  "futures-util",
  "http-body-util",
  "hyper",

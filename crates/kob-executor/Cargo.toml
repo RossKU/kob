@@ -28,6 +28,8 @@ kaspa-rpc-core.workspace = true
 workflow-serializer = "0.18.0"
 borsh = "1"
 blake3.workspace = true
+# sealed record-log segments are kept gzip-compressed (`indexer::recordlog`): the pure-Rust backend, no C build
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 faster-hex.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
@@ -38,7 +40,7 @@ anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled", "functions"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs", "io-util"] }
 # `wss:` endpoints (public nodes, `rpc::multi`): rustls with the ring provider and the webpki roots (no system OpenSSL)
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
