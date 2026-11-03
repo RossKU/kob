@@ -190,8 +190,12 @@ export async function confirmReceipt(page: Page): Promise<void> {
 /** Cancels the open final confirmation: the app popup's Cancel, or Cancel in the signer frame. Nothing is sent. */
 export async function cancelReceipt(page: Page): Promise<void> {
   if (await isPrivateKey(page)) {
-    await signerFrameOf(page).getByTestId('signer-reject').click();
-    await expect(page.getByTestId('signer-overlay')).toBeHidden();
+    // a click in the signer's cross-origin frame right after it was shown or redrawn can be dropped by the browser (its input protection for a frame whose
+    // visibility is tracked, about the first second): a person taps again, so the helper does (measured at 390 and 1280 px: the first click at once is lost, one 0.8 s later works)
+    await expect(async () => {
+      await signerFrameOf(page).getByTestId('signer-reject').click({ timeout: 2_000 });
+      await expect(page.getByTestId('signer-overlay')).toBeHidden({ timeout: 1_500 });
+    }).toPass({ timeout: 20_000 });
   } else {
     await page.getByTestId('confirm-order-cancel').click();
     await expect(page.getByTestId('confirm-order')).toHaveCount(0);
