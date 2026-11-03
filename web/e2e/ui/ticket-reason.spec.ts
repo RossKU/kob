@@ -1,9 +1,10 @@
-// The ticket says why the order button is off, always (founder, 2026-11-02): for every order type and side, a disabled button has a visible reason in the
-// one fixed-height slot directly above it (`order-issues`); an enabled one has an empty slot. The unit of every input row sits in one fixed-width column at
+// The ticket says why the order button is off, always (founder, 2026-11-02): for every order type and side, a disabled button says why. A REAL blocking error
+// (a value that does not parse, too little balance ...) is red text in the one fixed-height slot directly above it (`order-issues`); a required field that is
+// simply EMPTY (untouched, or reset after an order) is no error: the slot stays empty and the disabled button itself says what to enter ("Enter an amount"). The unit of every input row sits in one fixed-width column at
 // the right end of the row, and the cost line under the amount is never an empty gap.
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
-import { fillFields, pickType, settlePlan } from '../helpers/ticket';
+import { fillFields, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -29,17 +30,20 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
         await fillFields(page, { amount: '' });
         if (await page.getByTestId('order-price').count()) await fillFields(page, { price: '' });
         await settlePlan(page);
-        // an empty form: the button is off and says what to fill in
+        // an empty form: the button is off and says what to enter; the slot has no red text (an empty field is not an error)
         // (a close order has no amount to give: it sells everything, and its slot is empty)
         if (await button.isDisabled()) {
-          await expect(slot, `${type} ${side}: the reason of an empty form`).toContainText(/\S/);
+          await expect(button, `${type} ${side}: the button of an empty form`).toHaveText(/^Enter /);
+          await expect(slot, `${type} ${side}: no error text for an empty form`).not.toContainText(/\S/);
           seenDisabled++;
         } else await expect(slot, `${type} ${side}: nothing to say`).not.toContainText(/\S/);
-        // only an amount: whatever is still missing is named, the button stays off with a sentence
+        // only an amount: the first missing field is named by the button, or a real reason is in the slot
         await fillFields(page, { amount: '1' });
         await settlePlan(page);
-        if (await button.isDisabled()) await expect(slot, `${type} ${side}: amount only`).toContainText(/\S/);
-        else await expect(slot).not.toContainText(/\S/);
+        if (await button.isDisabled()) {
+          if (/^Enter /.test((await button.textContent()) ?? '')) await expect(slot, `${type} ${side}: amount only, an empty field`).not.toContainText(/\S/);
+          else await expect(slot, `${type} ${side}: amount only`).toContainText(/\S/);
+        } else await expect(slot).not.toContainText(/\S/);
         // the slot, and the button under it, are where they were for every type that has the same fields above (the slot's own box never changes)
         const box = (await slot.boundingBox())!;
         slotBox ??= { x: box.x, y: 0, width: box.width, height: box.height };
@@ -47,6 +51,56 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
       }
     }
     expect(seenDisabled).toBeGreaterThan(20);
+  });
+
+  test(`${name} ${width} px: an empty field is no error: the button says what to enter first, the slot is empty and keeps its box; after a successful order the reset form is calm; a real error is red in the slot`, async ({ appPage: page, mock }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width, height: 900 });
+    await fund(mock);
+    await openMarket(page, mock);
+    const slot = page.getByTestId('order-issues');
+    const button = page.getByTestId('order-place');
+    await pickType(page, 'limit', 'sell');
+    await fillFields(page, { amount: '', price: '' });
+    await settlePlan(page);
+    const box0 = (await slot.boundingBox())!;
+    // the untouched form: "Enter an amount" on the disabled button, nothing in the slot, no red
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveText('Enter an amount');
+    await expect(slot).not.toContainText(/\S/);
+    await expect(slot.locator('[data-severity="error"], .tk-reason-field')).toHaveCount(0);
+    // the first missing field, in order: the price next
+    await fillFields(page, { amount: '2' });
+    await settlePlan(page);
+    await fillFields(page, { price: '' });
+    await settlePlan(page);
+    await expect(button).toHaveText('Enter a price');
+    await expect(slot).not.toContainText(/\S/);
+    // a stop order names its stop price
+    await pickType(page, 'stopLimit', 'sell');
+    await fillFields(page, { amount: '2' });
+    await settlePlan(page);
+    await expect(button).toHaveText(/^Enter a (stop )?price$|^Enter stop/i);
+    // a real error is red text in the slot (the value does not parse), and the button keeps its normal label
+    await pickType(page, 'limit', 'sell');
+    await fillFields(page, { amount: 'abc', price: '0.027' });
+    await settlePlan(page);
+    await expect(button).toBeDisabled();
+    await expect(slot).toContainText(/\S/);
+    await expect(slot.locator('.tk-reason-field')).toHaveCount(1);
+    await expect(button).not.toHaveText(/^Enter /);
+    // a placed order resets the amount: calm, not an error right after a success
+    await fillFields(page, { amount: '2', price: '0.027' });
+    await waitReviewable(page);
+    await placeOrder(page, mock);
+    await expect(page.getByTestId('order-amount')).toHaveValue('');
+    await settlePlan(page);
+    await expect(button).toHaveText('Enter an amount');
+    await expect(slot).not.toContainText(/\S/);
+    await expect(slot.locator('[data-severity="error"], .tk-reason-field')).toHaveCount(0);
+    // the slot kept its size through all of it
+    const box1 = (await slot.boundingBox())!;
+    expect([box1.x, box1.width, box1.height]).toEqual([box0.x, box0.width, box0.height]);
   });
 
   test(`${name} ${width} px: every input row has its unit in one right-aligned column of one width; the cost line is a muted placeholder, not a gap`, async ({ appPage: page, mock }) => {

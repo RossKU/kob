@@ -107,6 +107,13 @@ function useDelayedFlag(on: boolean, ms: number): boolean {
   return on && shown;
 }
 
+/** "Enter an amount" / "Enter a price" / "Enter a stop price": the instruction a disabled submit button carries for the first empty required field. */
+function enterTextOf(field: string, type: string, inverted: boolean): string {
+  if (has(`ticket.enter.${field}`)) return t(`ticket.enter.${field}`);
+  const label = t(inverted && has(`ticket.label.${field}.inv`) ? `ticket.label.${field}.inv` : labelKey(type, field));
+  return t('ticket.enter.other', { field: /^[A-Z][a-z]/.test(label) ? label.charAt(0).toLowerCase() + label.slice(1) : label });
+}
+
 export function OrderTicket(props: OrderTicketProps) {
   const { token, quote } = props;
   // a pair is never shown inverted here: the pair page flips by swapping base and quote (another pair, another route)
@@ -671,17 +678,18 @@ export function OrderTicket(props: OrderTicketProps) {
   // what is wrong in the form: a typed value that does not parse first, then what is still empty (the typed errors are also under their boxes)
   const typedErrors = visibleErrors(built.errors).filter((e) => (form.values[e.field] ?? '') !== '');
   for (const e of typedErrors) reasons.push({ code: `field-${e.field}`, text: `${t(labelKey(form.type, e.field))}: ${t(`ticket.err.${e.code}`, (e.params ?? {}) as Record<string, string | number>)}`, kind: 'field' });
-  if (isIncomplete(built.errors)) {
-    const missing = [...new Set(built.errors.filter((e) => e.code === 'required').map((e) => t(labelKey(form.type, e.field))))];
-    reasons.push({ code: 'fill', text: t('ticket.need.fill', { fields: missing.join(', ') }), kind: 'field' });
-  }
+  // a required field that is simply EMPTY (untouched, or just reset after an order) is not an error: no text in the slot (the instruction is on the disabled button,
+  // `enterText` below); the slot's red text is for blocking errors only
   for (const i of issues.filter((x) => x.severity === 'error')) reasons.push({ code: i.code, text: issueText(i, issueCtx), kind: 'issue', ...(rawOf(i) ? { raw: rawOf(i)! } : {}) });
   if (ladder && !ladder.ok) reasons.push({ code: 'ladder', text: ladder.errors.map((e) => t(`ticket.ladder.err.${e.code}`, { level: e.level ?? 1, field: e.field ?? '', max: 20 })).join(' '), kind: 'ladder', testid: 'order-ladder-errors' });
   for (const f of ladderFunds) reasons.push({ code: f.code, text: f.text, kind: 'ladder', testid: 'order-ladder-funds' });
   if (lastOrderErrors.length > 0) reasons.push({ code: 'ladder-last', text: lastOrderErrors.map((i) => t('ticket.ladder.lastLevel', { text: issueText(i, issueCtx) })).join(' '), kind: 'ladder', testid: 'order-ladder-last-errors' });
   // the button is off for a reason nothing above names (the plan is still being made, a click is running): said too, so a disabled button always has its sentence
   const busy = placing || sendBusy(sender.status);
-  if (!canPlace && !busy && reasons.length === 0) reasons.push({ code: 'checking', text: t(pendingShown || pending ? 'ticket.pending' : 'ticket.need.checking'), kind: 'need' });
+  // nothing but empty required fields is in the way: the disabled button itself says what to enter first ("Enter an amount": the first missing field)
+  const firstEmpty = isIncomplete(built.errors) ? built.errors.find((e) => e.code === 'required') : undefined;
+  const enterText = !canPlace && !busy && reasons.length === 0 && firstEmpty ? enterTextOf(firstEmpty.field, form.type, inverted) : null;
+  if (!canPlace && !busy && reasons.length === 0 && !enterText) reasons.push({ code: 'checking', text: t(pendingShown || pending ? 'ticket.pending' : 'ticket.need.checking'), kind: 'need' });
   // a re-plan on a tick keeps the sentence of the plan it replaces for the moment it takes (no sentence flickers in and out of the slot)
   const lastReasons = useRef<Reason[]>([]);
   const backgroundPlan = pending && !editPending;
@@ -817,7 +825,7 @@ export function OrderTicket(props: OrderTicketProps) {
         ) : null}
       </div>
       <Button variant="primary" block onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
-        <span key={`${sideName}|${typeName}`}>{t('ticket.place', { side: sideName, type: typeName })}</span>
+        <span key={enterText ?? `${sideName}|${typeName}`} data-state={enterText ? 'enter' : undefined}>{enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
       <SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" />
       {/* what the token's records say (facts, the genesis check): below the button, so a late answer of the check never moves it */}
