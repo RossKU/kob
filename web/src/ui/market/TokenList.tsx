@@ -6,7 +6,7 @@ import type { IndexerTokenView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
 import { Banner, Button, ErrorBanner, Field, Loading, Section, Table, TableMessage, toError, useAsync } from '../kit';
-import { StatusBadges, TokenFacts } from './TokenBadges';
+import { StatusBadges } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { IdCopy } from './IdCopy';
 import { ListLegend } from './ListLegend';
@@ -166,7 +166,6 @@ function TokenTableRow({ row, entry }: { row: TokenRow; entry: ListEntry }) {
             <div class="ml-line3" data-testid={`token-badges-${row.covenantId}`}>
               <span class="ml-badges">
                 <StatusBadges row={row} />
-                <TokenFacts rows={[row]} inline data-testid={`token-facts-${row.covenantId}`} />
               </span>
             </div>
           </div>

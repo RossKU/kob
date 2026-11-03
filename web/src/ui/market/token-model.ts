@@ -116,15 +116,19 @@ export function tokenRiskCodes(r: RiskRow): RiskCode[] {
   return out;
 }
 
-/** The facts a token shows as chips by default: not the genesis line that only says the check could not run, and not the facts "High risk" already states. */
-export function shownFactIds(r: RiskRow): TokenFactId[] {
+/**
+ * The facts "High risk" states (a failed check, a live or program mint authority, an unbounded mint): the only facts that show next to a token by default, as
+ * that one chip's reasons (and in the order ticket's panel). Every other fact (a pass, kascov's remark, a capped public mint, blacklist, an unverified genesis) is a
+ * status a normal token does not show: it is in the collapsed "Status and checks" section of the details (founder 2026-11-03: "the genesis itself has no value").
+ */
+export function riskFactIds(r: RiskRow): TokenFactId[] {
   const risks = tokenRiskCodes(r);
-  const folded = new Set<TokenFactId>();
-  if (risks.includes('genesis_failed')) folded.add('genesis_failed');
-  if (risks.includes('live_mint_authority')) folded.add('live_mint_authority');
-  if (risks.includes('mint_authority')) folded.add('mint-authority');
-  if (risks.includes('mint_unbounded')) folded.add('mint_allowance');
-  return r.facts.filter((f) => f !== 'genesis_unverified' && !folded.has(f));
+  const states = new Set<TokenFactId>();
+  if (risks.includes('genesis_failed')) states.add('genesis_failed');
+  if (risks.includes('live_mint_authority')) states.add('live_mint_authority');
+  if (risks.includes('mint_authority')) states.add('mint-authority');
+  if (risks.includes('mint_unbounded')) states.add('mint_allowance');
+  return r.facts.filter((f) => states.has(f));
 }
 
 /** Whether the profile table marks the program (a name of `programs.generated.ts`) `reviewed`. */

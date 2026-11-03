@@ -56,15 +56,14 @@ test.describe('token facts', () => {
     await expect(details.getByTestId('status-risk-live_mint_authority')).toHaveCount(0);
   });
 
-  test('the warnings and powers the indexer reports: a live mint authority is High risk (its reason on a tap), public mint and blacklist stay neutral chips', async ({ appPage: page, mock }) => {
+  test('the warnings and powers the indexer reports: a live mint authority is the one High risk chip (its reason on a tap); public mint and blacklist are no chip, they are in the details', async ({ appPage: page, mock }) => {
     await listExkcc(page);
     await indexerFacts(page);
     const id = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${id}`);
     const header = page.getByTestId('token-header');
-    for (const f of ['public-mint', 'blacklist']) await expect(header.getByTestId(`token-fact-${f}`)).toBeVisible();
-    // not a chip each: "Genesis not verified" is no status, a live mint authority is the one High risk chip
-    for (const f of ['genesis_unverified', 'live_mint_authority']) await expect(header.getByTestId(`token-fact-${f}`)).toHaveCount(0);
+    // by default nothing but the High risk chip: no fact chip at all ("Genesis not verified", public mint, blacklist are statuses)
+    await expect(header.locator('[data-testid^="token-fact-"]')).toHaveCount(0);
     await expect(header.getByTestId('badge-high-risk')).toHaveAttribute('data-reasons', 'live_mint_authority');
     await expect(header.getByTestId('high-risk-toggle')).toHaveClass(/badge-warn/);
     await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
@@ -72,16 +71,18 @@ test.describe('token facts', () => {
     await expect(page.getByTestId('high-risk-reasons')).toContainText('more of this token can be created');
     await header.getByTestId('high-risk-toggle').click();
     await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
-    // the other sentences are the chips' tooltips
-    await expect(header.getByTestId('token-fact-public-mint')).toHaveAttribute('title', /anyone create more/);
-    await expect(header.getByTestId('token-fact-blacklist')).toHaveAttribute('title', /block addresses/);
-    // the market list: the same badges on the row, small and on one line with the covenant id; the sentence is the badge's tooltip and every sentence is
-    // in the legend above the list, behind one tap (no "what is this?" on a row)
+    // the other sentences are in the details, behind one tap
+    const details = page.getByTestId('token-status-details');
+    await details.getByRole('button').first().click();
+    await expect(details.getByTestId('status-fact-public-mint')).toContainText(/anyone create more/);
+    await expect(details.getByTestId('status-fact-blacklist')).toContainText(/block addresses/);
+    await expect(details.getByTestId('status-risk-live_mint_authority')).toContainText(/more of this token can be created/);
+    // the market list: the High risk chip on the row, small and on one line with the covenant id; every fact sentence is in the legend above the list, behind one tap
     await page.goto('/#/market');
     const row = page.getByTestId(`token-row-${id}`);
     await expect(row.getByTestId('badge-high-risk')).toBeVisible();
     await expect(row.getByTestId('token-fact-live_mint_authority')).toHaveCount(0);
-    await expect(row.getByTestId('token-fact-public-mint')).toHaveAttribute('title', /anyone create more/);
+    await expect(row.locator('[data-testid^="token-fact-"]')).toHaveCount(0);
     // a tap on the chip opens the reason (not cut by the row), a second tap closes it
     await row.getByTestId('high-risk-toggle').click();
     await expect(page.getByTestId('high-risk-reasons')).toBeVisible();
@@ -111,13 +112,12 @@ test.describe('token facts', () => {
     await expect(page.getByTestId('token-fact-genesis_unverified')).toHaveCount(0);
   });
 
-  test('on a phone the badges wrap inside the screen', async ({ appPage: page, mock }) => {
+  test('on a phone the header chips stay inside the screen', async ({ appPage: page, mock }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await listExkcc(page);
     await indexerFacts(page);
     const id = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${id}`);
-    await expect(page.getByTestId('token-header').getByTestId('token-fact-blacklist')).toBeVisible();
     await expect(page.getByTestId('token-header').getByTestId('badge-high-risk')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });

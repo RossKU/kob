@@ -6,7 +6,7 @@ import { loadKobNode } from '../../kob/wasm.node';
 import { TOKEN_PROGRAMS } from '../../kob/programs.generated';
 import { tokenTitle } from './TokenBadges';
 import type { GenesisCheck } from '../../data/genesis-check';
-import { shownFactIds, tokenRiskCodes, applyGenesisCheck, buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
+import { riskFactIds, tokenRiskCodes, applyGenesisCheck, buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
 
 const kob = await loadKobNode();
 const tpl = kob.templates().find((t) => t.name === 'KCC20Ref_8x8')!;
@@ -398,8 +398,7 @@ describe('status display: what shows by default and what is High risk', () => {
 
   it('a normal token (genesis not verified, no authority) has no risk and shows no chip', () => {
     expect(tokenRiskCodes(r(['genesis_unverified']))).toEqual([]);
-    expect(shownFactIds(r(['genesis_unverified']))).toEqual([]);
-    expect(shownFactIds(r(['genesis_unverified'], [], { status: 'unavailable', reason: 'history' }))).toEqual([]);
+    expect(riskFactIds(r(['genesis_unverified'], [], { status: 'unavailable', reason: 'history' }))).toEqual([]);
   });
 
   it('High risk is only what lets someone dilute the supply or freeze / seize balances', () => {
@@ -417,10 +416,11 @@ describe('status display: what shows by default and what is High risk', () => {
     expect(tokenRiskCodes(r(['genesis_verified_unreviewed'], [], verifiedCheck({ program: 'KCC20Ref_8x8' })))).toEqual([]);
   });
 
-  it('the chips keep the other facts and drop "Genesis not verified" and what High risk already says', () => {
-    expect(shownFactIds(r(['genesis_unverified', 'live_mint_authority', 'public-mint', 'blacklist']))).toEqual(['public-mint', 'blacklist']);
-    expect(shownFactIds(r(['genesis_kascov', 'blacklist']))).toEqual(['genesis_kascov', 'blacklist']);
-    expect(shownFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintUnbounded: true })))).toEqual(['genesis_verified']);
-    expect(shownFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintAllowance: 5n })))).toEqual(['genesis_verified', 'mint_allowance']);
+  it('only the facts High risk states show by default; every other fact is a status for the details', () => {
+    expect(riskFactIds(r(['genesis_unverified', 'live_mint_authority', 'public-mint', 'blacklist']))).toEqual(['live_mint_authority']);
+    expect(riskFactIds(r(['genesis_kascov', 'blacklist', 'public-mint']))).toEqual([]);
+    expect(riskFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintUnbounded: true })))).toEqual(['mint_allowance']);
+    expect(riskFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintAllowance: 5n })))).toEqual([]);
+    expect(riskFactIds(r(['genesis_unverified']))).toEqual([]);
   });
 });

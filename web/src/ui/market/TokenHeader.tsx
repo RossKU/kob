@@ -11,7 +11,7 @@ import { KascovLink, programTitle } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
 import { TokenNote } from './TokenNote';
 import { decimalsNote } from '../../app/token-display';
-import { GenesisFailedBanner, PowersWarning, SharedTickerNote, FactLabel, FactSentence, StatusBadges, TokenFacts, powerName, riskReasonText, tokenTitle } from './TokenBadges';
+import { GenesisFailedBanner, PowersWarning, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasonText, tokenTitle } from './TokenBadges';
 import { templateDetail, tokenRiskCodes, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
@@ -140,7 +140,6 @@ export function TokenLine(props: { row: TokenRow; note?: Pick<TokenInfo, 'decima
       <KascovLink row={r} />
       {props.badges}
       <StatusBadges row={r} familyNote={programTitle(r)} />
-      <TokenFacts rows={[r]} inline data-testid="token-facts" />
     </div>
   );
 }
@@ -243,7 +242,6 @@ export function PairDetails(props: { rows: readonly TokenRow[]; shared?: Readonl
           </div>
           <div class="mkt-badges">
             <StatusBadges row={r} familyNote={programTitle(r)} />
-            <TokenFacts rows={[r]} inline data-testid="token-facts" />
           </div>
           <TokenWarnings row={r} sharedTicker={props.shared?.has(r.covenantId) ?? false} />
           <TokenDetails row={r} services={props.services} />

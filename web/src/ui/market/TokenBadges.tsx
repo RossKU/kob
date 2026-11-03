@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { t, tokenAmountText } from '../../i18n';
 import { Badge, Banner } from '../kit';
 import { type TokenInfo } from '../../kob/registry';
-import { hasIssuerControl, KNOWN_POWERS, shownFactIds, tokenLabel, tokenRiskCodes, type RiskCode, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
+import { hasIssuerControl, KNOWN_POWERS, riskFactIds, tokenLabel, tokenRiskCodes, type RiskCode, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
 
 /** What a row's facts are printed from: the facts, and (a token page) KOB's own genesis check, which adds a reason and the public mint to some of them. */
 type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis'>>;
@@ -170,17 +170,14 @@ export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'dat
 }
 
 /**
- * The facts about a token (token-model.ts `tokenFactIds`): neutral badges that say what the token's creation record and program allow (genesis not
- * verified, a live mint authority, who can mint, who can blacklist), each with a plain sentence. No tone: it is not a rating (the one exception is KOB's own genesis check on a token page: a pass is green, a failure a warning). `block` prints the
- * sentences (pair facts); `inline` the badges alone on one line, the sentence being each badge's tooltip (list rows, the token header); `compact` shows the badges and opens the sentences on a tap (list rows, the ticket), because a tooltip does
- * not exist on a touch screen. Several tokens (a pair) name each token before its facts. Renders nothing without facts.
+ * The facts of a token that "High risk" states (token-model.ts `riskFactIds`), each with its plain sentence: in the order ticket's panel (`compact`: the badges, the
+ * sentences open on a tap, because a tooltip does not exist on a touch screen), or printed (`block`). No other fact is shown by default: the rest of a token's facts
+ * (a pass, kascov's remark, a capped public mint, blacklist, an unverified genesis) are in the "Status and checks" section of its details. Several tokens (a pair)
+ * name each token before its facts. Renders nothing without facts.
  */
-export function TokenFacts(props: { rows: readonly FactRow[]; compact?: boolean; inline?: boolean; 'data-testid'?: string }) {
-  // the facts shown as chips: never "Genesis not verified" (its sentence is in the token's details). Where the "High risk" chip sits beside them (the inline chips of
-  // a list row and a token line: StatusBadges), what that chip states is not repeated; the ticket's panel (compact) and the printed facts keep every other fact.
-  const rows = props.rows
-    .map((r) => ({ ...r, facts: props.inline ? shownFactIds({ facts: r.facts, powers: [], ...(r.genesis ? { genesis: r.genesis } : {}) }) : r.facts.filter((f) => f !== 'genesis_unverified') }))
-    .filter((r) => r.facts.length > 0);
+export function TokenFacts(props: { rows: readonly FactRow[]; compact?: boolean; 'data-testid'?: string }) {
+  // by default a token shows no status: only what "High risk" states is printed here (the order ticket's panel); every other fact is in the token's details
+  const rows = props.rows.map((r) => ({ ...r, facts: riskFactIds({ facts: r.facts, powers: [], ...(r.genesis ? { genesis: r.genesis } : {}) }) })).filter((r) => r.facts.length > 0);
   if (rows.length === 0) return null;
   const named = props.rows.length > 1;
   const sentences = (
@@ -204,19 +201,6 @@ export function TokenFacts(props: { rows: readonly FactRow[]; compact?: boolean;
     )),
   );
   const testid = props['data-testid'] ?? 'token-facts';
-  // list rows: the badges only, small and on one line; the legend above the list (FactsLegend) says what each one means once
-  if (props.inline)
-    return (
-      <span class="tf-inline" data-testid={testid}>
-        {rows.map((r) =>
-          r.facts.map((id: TokenFactId) => (
-            <Badge key={`${r.covenantId}-${id}`} tone={factTone(id)} title={factText(r, id)} data-testid={`token-fact-${id}`}>
-              <FactLabel row={r} id={id} />
-            </Badge>
-          )),
-        )}
-      </span>
-    );
   return props.compact ? (
     <details class="tf tf-compact" data-testid={testid}>
       <summary title={rows.map((r) => r.facts.map((id: TokenFactId) => factText(r, id)).join(' ')).join(' ')}>
