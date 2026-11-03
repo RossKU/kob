@@ -9,6 +9,46 @@ import { t } from '../../i18n';
 import { TOKEN_PROGRAMS, programDefaultDecimals } from '../../kob/programs.generated';
 import type { TokenRow } from './token-model';
 
+/**
+ * The "Program" row of a token's details, for EVERY token: which token program it runs and how that was established, as one neutral fact line (no colour, no
+ * badge; the risk policy lives in token-model.ts `tokenRiskCodes` and is untouched). `name` is the program as this build knows it (`KCC-20 (KOB reference, 3x3)`,
+ * `KCC-20 (KaspaCom 0.2.5)`) or "unknown program"; `basis` says how it was established:
+ *   genesis       KOB's own genesis check passed (the program is the one the check decoded from the token's creation)
+ *   genesisFailed the genesis check found a problem (the program is still read from the template hash, when there is one)
+ *   matched       a registry token whose template matches the program pinned in this build
+ *   differs       a registry token whose template does not match the pinned program (or names none this build has)
+ *   hash          the template hash an indexer or kascov.io names is the one of a program in this build's table; the genesis was not checked
+ * `basis` is null when nothing is known.
+ */
+export interface ProgramFact {
+  name: string;
+  basis: 'genesis' | 'genesisFailed' | 'matched' | 'differs' | 'hash' | null;
+}
+
+type ProgramRow = Pick<TokenRow, 'info' | 'index' | 'genesis' | 'source'>;
+
+export function programFact(row: ProgramRow): ProgramFact {
+  const g = row.genesis;
+  const program = (g?.status === 'verified' ? (TOKEN_PROGRAMS.find((p) => p.name === g.program) ?? null) : null) ?? programOfRow(row);
+  if (!program) {
+    // a registry template this build has no program for: the family and the registry's id for it are all that is known
+    const info = row.info;
+    if (info && info.openList !== true) return { name: t('market.program.nameOfTemplate', { family: t(`market.badge.family.${info.family}`), template: info.templateId }), basis: 'differs' };
+    return { name: t('market.program.unknown'), basis: null };
+  }
+  const name = t(`market.program.name.${program.name}`);
+  if (g?.status === 'verified') return { name, basis: 'genesis' };
+  if (g?.status === 'failed') return { name, basis: 'genesisFailed' };
+  if (row.source === 'registry' && row.info) return { name, basis: row.info.templateMatchesPinned ? 'matched' : 'differs' };
+  return { name, basis: 'hash' };
+}
+
+/** `KCC-20 (KOB reference, 3x3) · checked from its genesis`: the text of the Program row. */
+export function programFactText(row: ProgramRow): string {
+  const f = programFact(row);
+  return f.basis ? `${f.name} · ${t(`market.program.basis.${f.basis}`)}` : f.name;
+}
+
 /** The pinned program a row names: its verified program (`info`), else the one its template hash names in this build's table; null when none. */
 export function programOfRow(row: Pick<TokenRow, 'info' | 'index'>): (typeof TOKEN_PROGRAMS)[number] | null {
   const name = row.info?.program ?? null;

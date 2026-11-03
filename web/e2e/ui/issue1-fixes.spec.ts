@@ -74,19 +74,19 @@ for (const width of [1280, 880, 390]) {
   });
 }
 
-test('the template verification is one line while folded, beside the facts, and the facts keep their own height', async ({ appPage: page, mock }) => {
+test('the template checks sit in "Status and checks": one line while folded, beside the facts, and the facts keep their own height', async ({ appPage: page, mock }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await openMarket(page, mock, { connect: false });
-  const verification = page.getByTestId('template-verification');
+  const verification = page.getByTestId('token-status-details');
   const facts = page.getByTestId('token-details').locator('section').first();
   await expect(verification).toBeVisible();
   const folded = (await verification.boundingBox())!;
   expect(folded.height).toBeLessThan(70);
   expect((await facts.boundingBox())!.height).toBeGreaterThan(folded.height);
-  await expect(page.getByTestId('tpl-summary')).toBeVisible();
+  await expect(page.getByTestId('template-verification')).toBeHidden();
   // a phone too: still one line
   await page.setViewportSize({ width: 390, height: 900 });
-  await page.getByTestId('template-verification').scrollIntoViewIfNeeded();
+  await verification.scrollIntoViewIfNeeded();
   expect((await verification.boundingBox())!.height).toBeLessThan(70);
 });
 

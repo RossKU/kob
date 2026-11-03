@@ -80,6 +80,8 @@ for (const vp of VIEWPORTS) {
       // an unverified genesis is no status chip (a normal token), never a refusal (non-blocking); its sentence is in the token's details
       await expect(page.getByTestId('token-fact-genesis_unverified')).toHaveCount(0);
       await expect(page.getByTestId('token-status-details')).toBeVisible();
+      // the Program row says which program it runs and how that was established, for a token with no registry entry too
+      await expect(page.getByTestId('token-program')).toContainText(/^KCC-20 (.+) · (checked from its genesis|template matched)/);
 
       // the units and the tab use the creator's ticker where KOB has no name of its own
       await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KASC/KAS');

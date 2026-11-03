@@ -200,14 +200,17 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('token-header')).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review/i);
     await expect(appPage.getByTestId('ticket-unavailable')).toHaveCount(0);
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
-    // an unknown tick is no row (not "Tick: -"); the folded verification is one line with its verdict, never a panel as tall as the facts beside it
+    // an unknown tick is no row (not "Tick: -"); the Program row is one plain line (what it runs, how that was established), and the template checks are
+    // folded in "Status and checks" (one line while folded, never a panel as tall as the facts beside it), the verdict inside
     await expect(appPage.getByTestId('token-tick')).toHaveCount(0);
     await expect(appPage.getByTestId('token-details')).not.toContainText('Tick');
-    await expect(appPage.getByTestId('tpl-summary')).toContainText('matches');
-    const folded = (await appPage.getByTestId('template-verification').boundingBox())!;
-    expect(folded.height, 'folded verification').toBeLessThan(70);
-    await appPage.getByTestId('template-verification').getByRole('button').first().click();
+    await expect(appPage.getByTestId('token-program')).toHaveText('KCC-20 (KOB reference, 8x8) · template matched');
+    await expect(appPage.getByTestId('template-verification')).toBeHidden();
     await expect(appPage.getByTestId('tpl-summary')).toHaveCount(0);
+    const folded = (await appPage.getByTestId('token-status-details').boundingBox())!;
+    expect(folded.height, 'folded status').toBeLessThan(70);
+    await appPage.getByTestId('token-status-details').getByRole('button').first().click();
+    await expect(appPage.getByTestId('template-verification')).toBeVisible();
     await expect(appPage.getByTestId('tpl-registry-hash')).toHaveText(/^[0-9a-f]{64}$/);
     await expect(appPage.getByTestId('tpl-pinned-hash')).toHaveText(await appPage.getByTestId('tpl-registry-hash').innerText());
     await expect(appPage.getByTestId('tpl-verdict')).toContainText('matches');

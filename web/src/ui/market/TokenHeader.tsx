@@ -7,13 +7,13 @@ import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
 import { KascovNote } from './KascovNote';
 import { IdCopy } from './IdCopy';
-import { KascovLink, programTitle } from './ProgramNote';
+import { KascovLink, programFactText, programTitle } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
 import { LogoSection } from './LogoReport';
 import { TokenNote } from './TokenNote';
 import { decimalsNote } from '../../app/token-display';
 import { GenesisFailedBanner, PowersWarning, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
-import { riskFactIds, templateDetail, type TokenRow } from './token-model';
+import { riskFactIds, templateDetail, type TemplateDetail, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
 export function IndexerProblems(props: { codes: string[] }) {
@@ -32,33 +32,25 @@ export function IndexerProblems(props: { codes: string[] }) {
   );
 }
 
-function TemplateVerification(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'> }) {
-  const info = props.row.info;
-  // a token synthesised from the indexer has no registry template to compare with
-  if (!info || props.row.source !== 'registry') return null;
-  const d = templateDetail(info, props.services.registry, props.services.kob.templates());
+/** The registry's template check of a registry token, behind "Status and checks": its template hash against the one pinned in this build, the verdict, the review and the slots. */
+function TemplateChecks(props: { detail: TemplateDetail }) {
+  const d = props.detail;
   return (
-    <Section title={t('market.tpl.title')} collapsible defaultOpen={false} data-testid="template-verification" summary={<Badge tone={d.matches ? 'ok' : 'bad'} data-testid="tpl-summary">{d.matches ? t('market.tpl.summary.matches') : t('market.tpl.summary.differs')}</Badge>}>
+    <div data-testid="template-verification">
+      <p class="small" style="margin:8px 0 4px"><strong>{t('market.tpl.title')}</strong></p>
       <KeyValueList
         compact
         items={[
           { label: t('market.tpl.id'), value: <code>{d.templateId}</code> },
           { label: t('market.tpl.registryHash'), value: <code class="wrap-anywhere" data-testid="tpl-registry-hash">{d.registryHash}</code> },
           { label: t('market.tpl.pinnedHash'), value: <code class="wrap-anywhere" data-testid="tpl-pinned-hash">{d.pinnedHash ?? t('market.tpl.notPinned')}</code> },
-          {
-            label: t('market.tpl.verdict'),
-            value: (
-              <Badge tone={d.matches ? 'ok' : 'bad'} data-testid="tpl-verdict">
-                {d.matches ? t('market.tpl.matches') : t('market.tpl.differs')}
-              </Badge>
-            ),
-          },
+          { label: t('market.tpl.verdict'), value: <span data-testid="tpl-verdict">{d.matches ? t('market.tpl.matches') : t('market.tpl.differs')}</span> },
           { label: t('market.tpl.review'), value: d.reviewed === null ? '-' : d.reviewed ? t('market.tpl.reviewed') : t('market.tpl.pendingReview') },
           { label: t('market.tpl.slots'), value: `${d.slots.inputs} / ${d.slots.outputs}` },
           { label: t('market.tpl.problems'), value: d.problems.map((p) => t(`market.tpl.problem.${p}`)).join(', '), show: d.problems.length > 0 },
         ]}
       />
-    </Section>
+    </div>
   );
 }
 
@@ -150,16 +142,25 @@ export function TokenLine(props: { row: TokenRow; note?: Pick<TokenInfo, 'decima
  * with its sentence (`Genesis not verified` and its reason included: a normal token shows no status chip for it), and where its name and decimals come
  * from when that is its on-chain declaration. Not a rating: nothing here says a token is safe. Renders nothing for a token with none of these.
  */
-function TokenStatusDetails(props: { row: TokenRow; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null | undefined }) {
+function TokenStatusDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'>; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null | undefined }) {
   const r = props.row;
+  // a token synthesised from the indexer has no registry template to compare with
+  const tpl = r.info && r.source === 'registry' ? templateDetail(r.info, props.services.registry, props.services.kob.templates()) : null;
   const risks = riskReasons(r);
   const stated = new Set(riskFactIds(r));
   const facts = r.facts.filter((f) => !stated.has(f));
   const declared = r.declared === true ? { decimals: r.decimals } : props.note?.decimalsSource === 'declared' && !props.note.declarationConflicts?.length ? { decimals: props.note.decimals } : null;
   const other = props.note && !declared ? decimalsNote(props.note) : null;
-  if (risks.length === 0 && facts.length === 0 && !declared && !other) return null;
+  if (risks.length === 0 && facts.length === 0 && !declared && !other && !tpl) return null;
   return (
-    <Section title={t('market.status.title')} collapsible defaultOpen={false} data-testid="token-status-details" summary={risks.length > 0 ? <Badge tone="warn" data-testid="status-summary">{t('market.badge.highRisk')}</Badge> : undefined}>
+    <Section title={t('market.status.title')} collapsible defaultOpen={false} data-testid="token-status-details" summary={
+      risks.length > 0 || tpl?.matches === false ? (
+        <>
+          {risks.length > 0 ? <Badge tone="warn" data-testid="status-summary">{t('market.badge.highRisk')}</Badge> : null}
+          {tpl?.matches === false ? <Badge tone="bad" data-testid="tpl-summary">{t('market.tpl.summary.differs')}</Badge> : null}
+        </>
+      ) : undefined
+    }>
       <ul class="tf-list" data-testid="token-status-list">
         {risks.map((x) => (
           <li key={x.key} data-reason={x.key} data-testid={`status-risk-${x.key}`}>
@@ -186,11 +187,12 @@ function TokenStatusDetails(props: { row: TokenRow; note?: Pick<TokenInfo, 'deci
           </li>
         ) : null}
       </ul>
+      {tpl ? <TemplateChecks detail={tpl} /> : null}
     </Section>
   );
 }
 
-/** Token facts (bottom of the page): covenant id, decimals, price scale, tick, open orders, and the template verification. */
+/** Token facts (bottom of the page): covenant id, program (what it runs and how that was established), decimals, price scale, tick, open orders; a registry token's template checks are in "Status and checks". */
 export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'>; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null; /** the row with KOB's own genesis check applied (a token page): what the status section is printed from */ checked?: TokenRow }) {
   const r = props.row;
   return (
@@ -200,6 +202,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
           compact
           items={[
             { label: t('market.token.covenantId'), value: <CopyText value={r.covenantId} short={false} data-testid="token-covenant-id" /> },
+            { label: t('market.program.label'), value: <span data-testid="token-program">{programFactText(props.checked ?? r)}</span> },
             { label: t('market.token.decimals'), value: r.decimals ?? '-' },
             {
               label: t('market.token.scale'),
@@ -223,16 +226,15 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
           ]}
         />
       </Section>
-      <TokenStatusDetails row={props.checked ?? r} note={props.note} />
+      <TokenStatusDetails row={props.checked ?? r} services={props.services} note={props.note} />
       <LogoSection row={r} />
-      <TemplateVerification row={r} services={props.services} />
     </div>
   );
 }
 
 /**
  * The facts of both tokens of a pair (bottom of the pair page, the same panel as a token market's): per token its title with the badges
- * and warnings, then the covenant id, decimals, price scale, tick, open orders and the template verification.
+ * and warnings, then the covenant id, decimals, price scale, tick, open orders and the program.
  */
 export function PairDetails(props: { rows: readonly TokenRow[]; shared?: ReadonlySet<string>; services: Pick<Services, 'registry' | 'kob'> }) {
   return (
