@@ -259,6 +259,8 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
             h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, v);
             h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, OPTIONS"));
             h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("content-type"));
+            // a browser may read the wait of a 429 (the logo report form tells the viewer when to try again)
+            h.insert(header::ACCESS_CONTROL_EXPOSE_HEADERS, HeaderValue::from_static("retry-after"));
         }
     }
     resp

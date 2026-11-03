@@ -505,6 +505,35 @@ mod tests {
     }
 
     #[test]
+    fn the_configuration_defaults_are_off_6_hours_5_an_hour_200_a_day_and_unknown_keys_are_refused() {
+        let c = LogoReportsConfig::default();
+        assert_eq!((c.enabled, c.cooldown_secs, c.per_client_per_hour, c.max_per_day), (false, 21_600, 5, 200));
+        let cfg: crate::config::IndexerConfig = toml::from_str(
+            "[logo_reports]
+enabled = true
+cooldown_secs = 60
+max_per_day = 10",
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                cfg.logo_reports.enabled,
+                cfg.logo_reports.cooldown_secs,
+                cfg.logo_reports.per_client_per_hour,
+                cfg.logo_reports.max_per_day
+            ),
+            (true, 60, 5, 10)
+        );
+        assert!(!crate::config::IndexerConfig::default().logo_reports.enabled);
+        // a misspelt key (or an admin token this build does not have) is an error, never ignored
+        assert!(toml::from_str::<crate::config::IndexerConfig>(
+            "[logo_reports]
+admin_token_file = \"x\""
+        )
+        .is_err());
+    }
+
+    #[test]
     fn the_first_report_hides_and_the_set_is_sorted() {
         let mut c = open_memory("testnet-10").unwrap();
         assert_eq!(blocklist(&c).unwrap(), (vec![], 0));

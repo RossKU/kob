@@ -32,7 +32,7 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 * **No authentication, no keys, no cookies.** Every route is public to whoever can reach the listener.
 * **CORS.** No CORS header is sent unless `[api] cors_allow_origin` is set. When it is, every response (including errors and the
   `204` preflight) carries `Access-Control-Allow-Origin: <that value>`, `Access-Control-Allow-Methods: GET, POST, OPTIONS` and
-  `Access-Control-Allow-Headers: content-type`. The value is sent as configured (use `*` for a public server). The WebSocket
+  `Access-Control-Allow-Headers: content-type` and `Access-Control-Expose-Headers: retry-after`. The value is sent as configured (use `*` for a public server). The WebSocket
   upgrade checks no `Origin`.
 * **No `Cache-Control`** except on `GET /v1/logo-blocklist` (`public, max-age=5`). The API sets none on any other route (it keeps its own server-side response cache for a few
   hot reads, section 5.6). The headers it adds itself are `Content-Type`, `Retry-After` on some errors, and the CORS headers

@@ -1696,4 +1696,5 @@ async fn cors_allows_the_post_of_a_report() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert_eq!(resp.headers().get("access-control-allow-methods").unwrap(), "GET, POST, OPTIONS");
+    assert_eq!(resp.headers().get("access-control-expose-headers").unwrap(), "retry-after");
 }
