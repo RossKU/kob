@@ -1,7 +1,7 @@
 // Token logos from the creator's address (data/logos.ts, data/logo-url.ts): which addresses are loaded at all, the IPFS check against the CID, the gateway fetch.
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { createIpfsLoader, fetchIpfsImage, ipfsGatewayUrl, parseCid, parseLogoRef, refusedHost, safeHttpsLogo, verifyIpfsBytes } from './logos';
+import { asImageHash, checkHttpsImage, createHttpsChecker, createIpfsLoader, fetchIpfsImage, ipfsGatewayUrl, parseCid, parseLogoRef, refusedHost, safeHttpsLogo, verifyIpfsBytes } from './logos';
 
 const sha = (b: Uint8Array) => Promise.resolve(createHash('sha256').update(b).digest('hex'));
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8]);
@@ -185,5 +185,74 @@ describe('createIpfsLoader', () => {
     t = 1500;
     expect(await l2.load('https://dweb.link/ipfs', ref)).toBeNull();
     expect(bad).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('the creator\'s image_hash', () => {
+  const ref = { kind: 'ipfs' as const, cid: cidV1Raw(PNG), path: '' };
+  const PNG_HASH = createHash('sha256').update(PNG).digest('hex');
+  const WRONG_HASH = createHash('sha256').update('another file').digest('hex');
+  const ok = (bytes: Uint8Array, status = 200) => vi.fn(() => Promise.resolve(new Response(bytes as Uint8Array<ArrayBuffer>, { status })));
+
+  it('asImageHash takes 64 lowercase hex only', () => {
+    expect(asImageHash(PNG_HASH)).toBe(PNG_HASH);
+    for (const bad of [PNG_HASH.toUpperCase(), PNG_HASH.slice(1), `sha256:${PNG_HASH}`, '', null, 7]) expect(asImageHash(bad)).toBeNull();
+  });
+
+  it('an ipfs:// image is compared with the hash too: equal is hash-checked, different is refused and reported', async () => {
+    const onMismatch = vi.fn();
+    const img = await fetchIpfsImage('https://dweb.link/ipfs', ref, { fetch: ok(PNG) as unknown as typeof fetch, sha256: sha, imageHash: PNG_HASH, onMismatch });
+    expect(img).toMatchObject({ checked: true, hashChecked: true });
+    expect(onMismatch).not.toHaveBeenCalled();
+    expect(await fetchIpfsImage('https://dweb.link/ipfs', ref, { fetch: ok(PNG) as unknown as typeof fetch, sha256: sha, imageHash: WRONG_HASH, onMismatch })).toBeNull();
+    expect(onMismatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('the loader keeps a hash mismatch apart from a failed fetch', async () => {
+    const l = createIpfsLoader({ fetch: ok(PNG) as unknown as typeof fetch, sha256: sha, makeUrl: () => 'blob:ok' });
+    expect(await l.load('https://dweb.link/ipfs', ref, PNG_HASH)).toBe('blob:ok');
+    expect(l.mismatched('https://dweb.link/ipfs', ref, PNG_HASH)).toBe(false);
+    expect(await l.load('https://dweb.link/ipfs', ref, WRONG_HASH)).toBeNull();
+    expect(l.mismatched('https://dweb.link/ipfs', ref, WRONG_HASH)).toBe(true);
+    const down = createIpfsLoader({ fetch: ok(PNG, 500) as unknown as typeof fetch, sha256: sha });
+    expect(await down.load('https://dweb.link/ipfs', ref, PNG_HASH)).toBeNull();
+    expect(down.mismatched('https://dweb.link/ipfs', ref, PNG_HASH)).toBe(false);
+  });
+
+  it('an https:// image is read in CORS mode with no credentials and no referrer: equal bytes match, other bytes mismatch', async () => {
+    const f = ok(PNG);
+    const r = await checkHttpsImage('https://e.example/a.png', PNG_HASH, { fetch: f as unknown as typeof fetch, sha256: sha });
+    expect(r).toMatchObject({ kind: 'match', mime: 'image/png' });
+    expect(f).toHaveBeenCalledWith('https://e.example/a.png', expect.objectContaining({ mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' }));
+    expect(await checkHttpsImage('https://e.example/a.png', WRONG_HASH, { fetch: ok(PNG) as unknown as typeof fetch, sha256: sha })).toEqual({ kind: 'mismatch' });
+  });
+
+  it('an https:// image that cannot be read (no CORS header, an error status, too large, offline) is unreadable; a matching non-raster file is refused', async () => {
+    const blocked = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')));
+    expect(await checkHttpsImage('https://e.example/a.png', PNG_HASH, { fetch: blocked as unknown as typeof fetch, sha256: sha })).toEqual({ kind: 'unreadable' });
+    expect(await checkHttpsImage('https://e.example/a.png', PNG_HASH, { fetch: ok(PNG, 404) as unknown as typeof fetch, sha256: sha })).toEqual({ kind: 'unreadable' });
+    expect(await checkHttpsImage('https://e.example/a.png', PNG_HASH, { fetch: ok(PNG) as unknown as typeof fetch, sha256: sha, maxBytes: 8 })).toEqual({ kind: 'unreadable' });
+    expect(await checkHttpsImage('https://e.example/a.png', PNG_HASH, { fetch: ok(PNG) as unknown as typeof fetch, sha256: () => Promise.resolve(null) })).toEqual({ kind: 'unreadable' });
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>');
+    const svgHash = createHash('sha256').update(svg).digest('hex');
+    expect(await checkHttpsImage('https://e.example/a.svg', svgHash, { fetch: ok(svg) as unknown as typeof fetch, sha256: sha })).toEqual({ kind: 'refused' });
+  });
+
+  it('the checker asks once per address and hash, hands out one blob URL, and asks an unreadable one again after the failure window', async () => {
+    let t = 0;
+    const f = ok(PNG);
+    const makeUrl = vi.fn(() => 'blob:png');
+    const c = createHttpsChecker({ fetch: f as unknown as typeof fetch, sha256: sha, makeUrl, now: () => t, failTtlMs: 1000 });
+    const [a, b] = await Promise.all([c.check('https://e.example/a.png', PNG_HASH), c.check('https://e.example/a.png', PNG_HASH)]);
+    expect([a, b]).toEqual([{ kind: 'match', src: 'blob:png' }, { kind: 'match', src: 'blob:png' }]);
+    expect([f.mock.calls.length, makeUrl.mock.calls.length]).toEqual([1, 1]);
+    const down = vi.fn(() => Promise.reject(new TypeError('blocked')));
+    const c2 = createHttpsChecker({ fetch: down as unknown as typeof fetch, sha256: sha, now: () => t, failTtlMs: 1000 });
+    expect(await c2.check('https://e.example/a.png', PNG_HASH)).toEqual({ kind: 'unreadable' });
+    await c2.check('https://e.example/a.png', PNG_HASH);
+    expect(down).toHaveBeenCalledTimes(1);
+    t = 2000;
+    await c2.check('https://e.example/a.png', PNG_HASH);
+    expect(down).toHaveBeenCalledTimes(2);
   });
 });

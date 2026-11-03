@@ -2,7 +2,7 @@
 //
 // A creation is TWO transactions under KCC-23 (docs/spec/token-metadata.md): `prep`, the preparation (the wallet's P2PK funding -> output 0,
 // the wallet's own P2PK of exactly the genesis's carriers and fee, + change; its payload declares the token metadata: 0x00 + JSON with name,
-// symbol, decimals and the optional description, logo, website, x, telegram), and `built`, the genesis spending that output 0 (input 0
+// symbol, decimals and the optional description, image, image_hash, website, x, telegram), and `built`, the genesis spending that output 0 (input 0
 // authorises the KIP-20 genesis group, so the covenant id commits to the declaration) -> 1..N token outputs of the fixed-supply KCC-20
 // reference program in its standard 3 / 3 configuration, `KCC20Ref` (or, chosen in the form, the published public-mint build
 // `KCC20PublicMint`), no change. All protocol logic lives in Rust (`kob-protocol::issue`); this module only turns a human form into the wasm
@@ -70,8 +70,10 @@ export interface IssueSpec {
   changeTo?: Hex;
   allowBorrow?: boolean;
   description?: string;
-  /** the logo (declared as `logo`, registry `display.icon`) */
+  /** the picture's address (declared as `image`, registry `display.icon`) */
   icon?: string;
+  /** SHA-256 of the picture file's bytes, 64 hex characters (declared lowercase as `image_hash`, right after `image`; needs `icon`) */
+  imageHash?: string;
   website?: string;
   /** the token's X account: a handle or its address (declared as `https://x.com/<handle>`) */
   x?: string;
@@ -273,6 +275,8 @@ export interface IssueForm {
   carrier: string;
   description: string;
   icon: string;
+  /** SHA-256 of the picture file (64 hex; empty = none); needs `icon` */
+  imageHash?: string;
   website: string;
   /** the token's X (Twitter) account: a handle (`@name`) or its https:// address; optional (registry entry and metadata only) */
   x?: string;
@@ -468,6 +472,12 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   disp(form.description, 'description');
   disp(form.website, 'website');
   disp(form.icon, 'icon');
+  // the picture's hash (KCC-0021's `image_hash`): the SHA-256 of the file, 64 hex characters, only next to an address
+  const imageHash = (form.imageHash ?? '').trim();
+  if (imageHash !== '') {
+    if (!/^[0-9a-fA-F]{64}$/.test(imageHash)) err('imagehash.invalid', 'The picture hash must be 64 hexadecimal characters (the SHA-256 of the image file).', 'imageHash');
+    else if (form.icon.trim() === '') err('imagehash.needs_icon', 'A picture hash needs the picture address.', 'imageHash');
+  }
   // the token's social accounts: a handle or the account's https:// address (the registry keeps the address)
   for (const kind of ['x', 'telegram'] as const) {
     const v = (form[kind] ?? '').trim();
@@ -480,13 +490,13 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
 }
 
 /** Bytes of the declaration a form makes (codec byte included): KOB's fields in KOB's order, as kob-protocol `TokenMetadata::json` writes them. */
-export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimals' | 'description' | 'icon' | 'website' | 'x' | 'telegram'>): number {
+export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimals' | 'description' | 'icon' | 'imageHash' | 'website' | 'x' | 'telegram'>): number {
   const opt = (k: string, v: string | null | undefined) => (v && v.trim() ? `,"${k}":${JSON.stringify(v.trim())}` : '');
   const x = form.x ? socialUrl('x', form.x) : null;
   const telegram = form.telegram ? socialUrl('telegram', form.telegram) : null;
   const json =
     `{"name":${JSON.stringify(form.name.trim())},"symbol":${JSON.stringify(form.ticker)},"decimals":${Number.isInteger(form.decimals) ? form.decimals : 0}` +
-    `${opt('description', form.description)}${opt('logo', form.icon)}${opt('website', form.website)}${opt('x', x)}${opt('telegram', telegram)}}`;
+    `${opt('description', form.description)}${opt('image', form.icon)}${opt('image_hash', form.imageHash?.toLowerCase())}${opt('website', form.website)}${opt('x', x)}${opt('telegram', telegram)}}`;
   return 1 + new TextEncoder().encode(json).length;
 }
 
@@ -616,6 +626,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     ...(form.allowBorrow ? { allowBorrow: true } : {}),
     ...(form.description.trim() ? { description: form.description.trim() } : {}),
     ...(form.icon.trim() ? { icon: form.icon.trim() } : {}),
+    ...(form.icon.trim() && (form.imageHash ?? '').trim() ? { imageHash: form.imageHash!.trim().toLowerCase() } : {}),
     ...(form.website.trim() ? { website: form.website.trim() } : {}),
     ...(form.x && socialUrl('x', form.x) ? { x: socialUrl('x', form.x)! } : {}),
     ...(form.telegram && socialUrl('telegram', form.telegram) ? { telegram: socialUrl('telegram', form.telegram)! } : {}),

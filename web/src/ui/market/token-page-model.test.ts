@@ -46,7 +46,7 @@ describe('decimalsLine: where the decimals of a token not yet opened for trading
   });
   it('a token with a verified declaration says it declared them', () => {
     const view = { ticker: '', covenant_id: ID('1'), template_hash: hashOf('KCC20PublicMint'), extension_commitment: null, decimals: null, scale: null, open_asks: 0, open_bids: 0 };
-    const decl = { covenantId: ID('1'), decimals: 6, symbol: 'DEC', name: 'Declared', description: null, logo: null, website: null, x: null, telegram: null, preparationTxid: ID('2'), json: '{}' };
+    const decl = { covenantId: ID('1'), decimals: 6, symbol: 'DEC', name: 'Declared', description: null, image: null, imageHash: null, website: null, x: null, telegram: null, preparationTxid: ID('2'), json: '{}' };
     const row = unknownRow(registry, view as never, 'kascov', decl);
     expect(row.decimals).toBe(6);
     expect(decimalsLine(row)).toBe(t('market.open.decimals.declared', { decimals: 6 }));

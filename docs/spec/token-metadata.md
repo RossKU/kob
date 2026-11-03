@@ -35,7 +35,7 @@ What KCC-23 itself specifies (section 3 of the spec; KOB follows it as written):
 
 The fields below are **KOB's convention**, not part of KCC-23. The first three are the ones the KCC-23 example uses; the rest are
 KOB's choice (kept short: the payload is paid for in mass). KOB writes them in this order, compact (no whitespace), leaving out
-the optional ones that are not set:
+the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `description`, `image`, `image_hash`, `website`, `x`, `telegram`):
 
 | Field | Type | KOB writes | A KOB reader takes |
 |---|---|---|---|
@@ -43,7 +43,8 @@ the optional ones that are not set:
 | `symbol` | string | 2..=12 of `A-Z 0-9` (KOB's ticker rule) | 1..=32 characters, no bad character, no white space |
 | `decimals` | integer | 0..=18 | a JSON integer 0..=18 (`8.0`, `"8"`, `19`, `-1` are not taken) |
 | `description` | string, optional | 1..=512 characters, no bad character (line breaks are refused) | the same rule |
-| `logo` | string, optional | an `https://` or `ipfs://` address, at most 512 characters | the same rule; shown from that address (below) |
+| `image` | string, optional | an `https://` or `ipfs://` address, at most 512 characters | the same rule; shown from that address (below). Also taken: the older `logo` when there is no `image` member, and `sha256:<64 hex>` as a hash alone (no address) |
+| `image_hash` | string, optional (needs `image`) | exactly 64 lowercase hex characters: the SHA-256 of the exact bytes of the picture file, no prefix | 64 hex characters in any case, lowercased; anything else is dropped. Also taken from an `image` of the form `sha256:<hex>` when there is no usable `image_hash` |
 | `website` | string, optional | an `https://` address, at most 512 characters | the same rule |
 | `x` | string, optional | `https://x.com/<handle>`, handle 1..=15 of `A-Z a-z 0-9 _` (the CLI and the app turn `@handle` into this) | the same rule |
 | `telegram` | string, optional | `https://t.me/<handle>`, handle 5..=32 of `A-Z a-z 0-9 _` | the same rule |
@@ -51,12 +52,25 @@ the optional ones that are not set:
 * A reader takes each field on its own: a field of the wrong type or out of range is dropped (and named in the reader's
   `issues`), unknown fields are ignored, and a declaration without a usable `decimals` leaves the token's decimals undeclared.
 * Facts the chain states by itself are not declared again: the supply is the sum of the genesis outputs, the program its template
-  hash. (`totalSupply`, `fixedSupply` and `standard` of KOB's older off-chain `metadata.json` are gone; its `icon` is now `logo`.)
-* **The logo is an address, not a picture.** KOB stores and serves no image. Each viewer's browser loads the `logo` address of a declaration (when kascov.io has no
+  hash. (`totalSupply`, `fixedSupply` and `standard` of KOB's older off-chain `metadata.json` are gone; its `icon` is now `image`.)
+* **Why `image` and `image_hash`.** They are the names the ecosystem already uses: KCC-0021 (the token metadata draft of kascov's author, kaspanet/kccs PR 6, closed in favour of
+  KCC-23 without a replacement for the token fields), KaspaRocket's genesis payloads (`name`, `ticker`, `image`, `image_hash`), the many TN10 declarations that
+  carry `image` and `image_hash`, and kascov.io's decoder, which reads `name`, `ticker`/`symbol`, `decimals`, `image` and `image_hash` from a KCC-23 declaration and not
+  `logo`. Writing the same names lets explorers and wallets that follow that practice show and check a KOB token's picture. KOB's earlier writer used `logo`; tokens
+  created that way (KASPERO for one) are still read, because a reader takes `logo` when `image` is absent. The writer no longer writes `logo`.
+* **`image_hash` commits to the file, not to the address.** It is the SHA-256 of the exact bytes of the picture (after any HTTP content encoding is removed), a
+  PNG, JPEG, WebP or GIF of at most 1.5 MB; it is written right after `image` and costs about 78 bytes of the 1024. The creation record cannot be changed, so the hash fixes
+  which picture the creator meant: a viewer that can read the bytes compares them with it, and a different file at the address is shown as a mismatch, not as the logo. For
+  an `ipfs://` address the hash is still of the file's bytes (a dag-pb CID is not the file's SHA-256). The Create page computes it in the browser from a file the creator picks
+  (nothing is uploaded; SVG is refused), and `kob token issue --image-file <path>` does the same (`--image-hash <hex>` gives it directly).
+* **The logo is an address, not a picture.** KOB stores and serves no image. Each viewer's browser loads the `image` address of a declaration (when kascov.io has no
   checked copy and the viewer allows it): `ipfs://` through a public gateway as bytes (shown from a `blob:` URL; the bytes are compared with the CID where that is
-  possible), `https://` as a plain image labelled "Image from the creator's site, not checked" (the creator's host sees the viewer's IP address and may change the
-  picture later). SVG, `data:` URLs and IP-literal or `localhost` hosts are refused. A logo that is reported is hidden for everyone until the operator of the
-  indexer restores it (`docs/api.md` 3.19, `docs/ops/web-hosting.md`, *Token logos from the creator's address*). Use `ipfs://` if the picture must not be changeable.
+  possible, and with `image_hash` when the declaration has one), `https://` as a plain image labelled "Image from the creator's site, not checked" (the creator's host
+  sees the viewer's IP address and may change the picture later). With an `image_hash` the browser first tries to read an `https://` picture in CORS mode (no
+  credentials, no referrer): if it can and the bytes hash to `image_hash`, the picture is shown from a `blob:` URL as checked; if they do not, the letter is shown with
+  the note "The picture at this address does not match the hash in the token's creation record"; if the host sends no CORS header (the usual case) nothing can be
+  checked and the plain, unchecked image is shown as before. SVG, `data:` URLs and IP-literal or `localhost` hosts are refused. A logo that is reported is hidden for everyone until the operator of the
+  indexer restores it (`docs/api.md` 3.19, `docs/ops/web-hosting.md`, *Token logos from the creator's address*). Use `ipfs://`, or an `image_hash`, if a change of the picture must not go unnoticed.
 * The token's facts in the registry format that issuance writes (`registry_entry.json`, for tools and community lists that read that
   format; not a listing request) keep `display.icon` / `display.x` / `display.telegram` and carry the
   declared object verbatim as `display.kcc23`.
@@ -218,5 +232,5 @@ Whether the issued tokens can be found again depends on whether the genesis name
 * The executor lists a token in `GET /v1/tokens` once an order names it (a genesis output is a P2SH whose program it cannot see), so
   a declared token without any order is not marked there yet and other browsers show it as before until its first order. The proof
   is still served by `GET /v1/tokens/{id}/declaration`.
-* Field names are a convention: other ecosystem tools may pick other names for the optional fields (`logo` vs `icon`). A reader
+* Field names are a convention: other ecosystem tools may pick other names for the optional fields (`image` vs `logo` vs `icon`). A reader
   ignores fields it does not know; KOB names only what it writes.

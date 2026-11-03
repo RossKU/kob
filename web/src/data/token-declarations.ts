@@ -21,7 +21,10 @@ export interface DeclaredToken {
   symbol: string | null;
   decimals: number | null;
   description: string | null;
-  logo: string | null;
+  /** the picture's address (`image`, or the older `logo`) */
+  image: string | null;
+  /** the SHA-256 the creator committed to for the picture file (`image_hash`), 64 lowercase hex */
+  imageHash: string | null;
   website: string | null;
   x: string | null;
   telegram: string | null;
@@ -55,8 +58,8 @@ const notify = () => {
 function factsOf(v: VerifiedDeclaration): DeclaredToken {
   const d = v.token;
   return {
-    covenantId: v.covenantId, name: d.name, symbol: d.symbol, decimals: d.decimals, description: d.description, logo: d.logo, website: d.website, x: d.x,
-    telegram: d.telegram, preparationTxid: v.preparationTxid, json: v.json,
+    covenantId: v.covenantId, name: d.name, symbol: d.symbol, decimals: d.decimals, description: d.description, image: d.image, imageHash: d.imageHash, website: d.website,
+    x: d.x, telegram: d.telegram, preparationTxid: v.preparationTxid, json: v.json,
   };
 }
 

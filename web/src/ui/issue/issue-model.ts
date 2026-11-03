@@ -32,6 +32,10 @@ export interface IssueUiState {
   carrier: string;
   description: string;
   icon: string;
+  /** SHA-256 of the picture file, 64 hex (from a picked file, or typed in the advanced field); empty = none */
+  imageHash: string;
+  /** the name of the picture file the hash was computed from, '' when the hash was typed or there is none (display only) */
+  imageFile: string;
   website: string;
   /** X (Twitter) and Telegram accounts: a handle or an address */
   x: string;
@@ -39,7 +43,7 @@ export interface IssueUiState {
 }
 
 export function emptyUiState(): IssueUiState {
-  return { program: 'standard', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', website: '', x: '', telegram: '' };
+  return { program: 'standard', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', imageHash: '', imageFile: '', website: '', x: '', telegram: '' };
 }
 
 // ------------------------------------------------------------------------------------------------ small filters
@@ -133,6 +137,7 @@ export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): Iss
     carrier: state.carrier.trim(),
     description: state.description,
     icon: state.icon,
+    imageHash: state.imageHash,
     website: state.website,
     ...(state.x.trim() ? { x: state.x.trim() } : {}),
     ...(state.telegram.trim() ? { telegram: state.telegram.trim() } : {}),

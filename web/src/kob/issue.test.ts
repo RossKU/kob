@@ -196,6 +196,13 @@ describe('validateIssueForm', () => {
     expect(codes(form({ icon: 'data:image/png;base64,AA' }))).toEqual(['icon.scheme']);
     expect(codes(form({ icon: 'ipfs://bafy' }))).toEqual([]);
     expect(codes(form({ icon: 'https://example.org/i.png' }))).toEqual([]);
+    // the picture's hash: 64 hex characters, only next to an address
+    const hash = 'ab'.repeat(32);
+    expect(codes(form({ icon: 'https://example.org/i.png', imageHash: hash }))).toEqual([]);
+    expect(codes(form({ icon: 'https://example.org/i.png', imageHash: hash.toUpperCase() }))).toEqual([]);
+    expect(codes(form({ icon: 'https://example.org/i.png', imageHash: 'ab' }))).toEqual(['imagehash.invalid']);
+    expect(codes(form({ icon: 'https://example.org/i.png', imageHash: `sha256:${hash}` }))).toEqual(['imagehash.invalid']);
+    expect(codes(form({ imageHash: hash }))).toEqual(['imagehash.needs_icon']);
     expect(codes(form({ description: 'd'.repeat(513) }))).toEqual(['description.invalid']);
     expect(codes(form({ description: 'd'.repeat(512) }))).toEqual([]);
     expect(codes(form({ description: 'a\nb' }))).toEqual(['description.invalid']);
@@ -209,6 +216,16 @@ describe('validateIssueForm', () => {
 });
 
 describe('planIssue', () => {
+  it('declares the picture as image, then image_hash (lowercase), and the declaration reads back', () => {
+    const f = form({ icon: 'https://raw.githubusercontent.com/RossKU/kob/master/a.png', imageHash: 'AB'.repeat(32) });
+    const plan = planIssue(kob, f, opts());
+    expect(plan.declaration.json).toBe(
+      `{"name":"Test Token","symbol":"TEST","decimals":8,"image":"https://raw.githubusercontent.com/RossKU/kob/master/a.png","image_hash":"${'ab'.repeat(32)}"}`,
+    );
+    expect(metadataBytes(f)).toBe(plan.prep.tx.payload.length / 2);
+    expect(decodeDeclaration(kob, plan.prep.tx.payload).token).toMatchObject({ image: 'https://raw.githubusercontent.com/RossKU/kob/master/a.png', imageHash: 'ab'.repeat(32) });
+  });
+
   it('plans, signs, finalizes and validates a default issuance (everything to the maker)', () => {
     const plan = planIssue(kob, form({ description: 'A test token', website: 'https://example.org' }), opts());
     const { built, token, prep } = plan;
@@ -466,7 +483,7 @@ describe('registry entry', () => {
     expect(entry).not.toHaveProperty('status');
     expect(entry.display).toMatchObject({ description: 'A test token', website: 'https://example.org', icon: 'ipfs://bafy' });
     // the declaration as made on chain (KOB's fields; facts the chain states itself, like the supply, are not declared again)
-    expect(entry.display!.kcc23).toEqual({ name: 'Test Token', symbol: 'TEST', decimals: 8, description: 'A test token', logo: 'ipfs://bafy', website: 'https://example.org' });
+    expect(entry.display!.kcc23).toEqual({ name: 'Test Token', symbol: 'TEST', decimals: 8, description: 'A test token', image: 'ipfs://bafy', website: 'https://example.org' });
     check(entry, schema.$defs.token, 'entry');
     // the template hash is the one the shipped registry pins for kcc20-ref-3x3
     const registry = JSON.parse(readFileSync(fileURLToPath(new URL('../../../registry/tokens.json', import.meta.url)), 'utf8'));

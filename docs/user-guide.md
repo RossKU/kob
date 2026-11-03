@@ -75,7 +75,10 @@ identified by its **covenant id**, a 64-character hex string; the ticker is only
   record; the app fetches it itself, checks it and shows its own copy. A token with no such picture (one made on KOB's Create page, for example) shows
   the **logo address its creator gave**, loaded by your browser straight from there: an `ipfs://` address through a public gateway (its bytes are compared with the address
   where that is possible), an `https://` address as a plain image titled "Image from the creator's site, not checked" (that site sees your IP address and when you looked,
-  and its owner can change the picture later). KOB stores no pictures. Otherwise, or if the picture cannot be fetched, you see a coloured circle with a letter.
+  and its owner can change the picture later). If the creator also recorded the picture's fingerprint (SHA-256, `image_hash`), the app compares the picture with it when the
+  site lets it read the file: a match is shown as checked, a different picture is not shown (a letter and the note "The picture at this address does not match the hash in the
+  token's creation record" instead). On the **Create token** page you can pick the logo file: your browser computes the fingerprint (the file is not uploaded; no SVG) and it is
+  written into the creation record, where it cannot be changed later. KOB stores no pictures. Otherwise, or if the picture cannot be fetched, you see a coloured circle with a letter.
   Pictures load only for rows you scroll to. Settings > "Token names and icons": **"Load token icons"** (on by default) turns all of this off (letters only, no image
   host is contacted); **"Load token logos from creator sites"** (on by default) turns off only the creators' addresses.
 * **Report a logo.** In a token's details, **"Report logo"** asks for a reason (illegal content, impersonation, something else; no text) and hides the logo for everyone

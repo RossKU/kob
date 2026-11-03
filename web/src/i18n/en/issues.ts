@@ -243,6 +243,8 @@ export default {
   'issues.icon.invalid': 'The icon address is too long or contains control characters (at most {max} characters).',
   'issues.website.https': 'The website must be an https:// address.',
   'issues.icon.scheme': 'The icon must be an https:// or ipfs:// address.',
+  'issues.imagehash.invalid': 'The picture hash must be 64 hexadecimal characters (the SHA-256 of the image file).',
+  'issues.imagehash.needs_icon': 'A picture hash needs the picture address.',
   'issues.x.invalid': 'Enter the X account as @name or https://x.com/name.',
   'issues.telegram.invalid': 'Enter the Telegram as @name or https://t.me/name.',
   'issues.maker.invalid': 'The wallet key is not a valid 32-byte public key. Reconnect your wallet.',

@@ -159,16 +159,19 @@ What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web
 
 ### Token logos from the creator's address (no image is stored by KOB)
 
-A token created on KOB's own Create page is not indexed by kascov.io, and a creator's declaration (KCC-23, `logo`) carries an address, not a hash. So,
-beside kascov's checked copy, the app loads a logo **straight from the address its creator gave, in the visitor's browser**
+A token created on KOB's own Create page is not indexed by kascov.io, and a creator's declaration (KCC-23, `image`; the older `logo` is read too) carries an address and, optionally, a hash (`image_hash`, the SHA-256 of the picture file; the Create
+page fills it from a file the creator picks, `docs/spec/token-metadata.md` 2). So, beside kascov's checked copy, the app loads a logo **straight from the address its creator gave, in the visitor's browser**
 (`web/src/data/logos.ts`). KOB never stores, caches or serves a third-party image: a cache would make the operator the publisher.
 
 * **Order.** 1. kascov's saved copy, when its bytes hash to the creator's committed hash (above). 2. `ipfs://<cid>[/path]`: the bytes are fetched from a public
   gateway (`ipfsGatewayUrl`, default `https://dweb.link/ipfs`; `https://` only; empty turns `ipfs://` logos off) and shown from a `blob:` URL. Where it can be
   done without a library the bytes are compared with the CID (a CIDv1 raw leaf, or a one-block file of at most 256 KiB); a larger file or one inside a
-  directory cannot be checked without the whole DAG, and there the gateway's content addressing is accepted. 3. `https://`: a plain `<img src>` with
-  `referrerpolicy="no-referrer"`, no `crossorigin`, lazy, in the icon's fixed box, titled "Image from the creator's site, not checked" (the page cannot read the
-  bytes of a host that sends no CORS header, so nothing is checked). 4. The letter.
+  directory cannot be checked without the whole DAG, and there the gateway's content addressing is accepted; with an `image_hash` the bytes are compared with it too (a
+  different file: the letter and the note "The picture at this address does not match the hash in the token's creation record"). 3. `https://`: with an `image_hash`, the page
+  first tries `fetch(url, {mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer'})` (this is `connect-src`, which already allows `https:`; a host that sends
+  no CORS header makes it fail silently): readable bytes that hash to `image_hash` are shown from a `blob:` URL as checked, readable bytes that do not give the letter and
+  the note above; if the bytes cannot be read, or there is no hash, a plain `<img src>` with `referrerpolicy="no-referrer"`, no `crossorigin`, lazy, in the icon's fixed
+  box, titled "Image from the creator's site, not checked" (the page cannot read the bytes of a host that sends no CORS header, so nothing is checked). 4. The letter.
 * **Refused for every source:** SVG, `data:` URLs, and hosts that are IP literals, `localhost` or names without a dot.
 * **Settings.** "Load token icons" (`kob.icons`) is the master switch: off, no image request of any kind. "Load token logos from creator sites"
   (`kob.icons.creator`, on by default) turns steps 2 and 3 off: "Loads token logos from the address their creator gave; that site sees your IP address and

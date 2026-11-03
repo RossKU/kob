@@ -37,11 +37,12 @@ import type { Services } from '../../app/services';
 import { ConnectBar } from '../shell/WalletButton';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
-import { Banner, Button, ErrorBanner, Field, KeyValueList, Section, Segmented, Spinner, kasText, shortId, useAsync } from '../kit';
+import { Banner, Button, ErrorBanner, Field, FieldShell, KeyValueList, Section, Segmented, Spinner, kasText, shortId, useAsync } from '../kit';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
   reviewSummary, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState,
 } from './issue-model';
+import { hashImageFile } from './image-file';
 import { ResultPanel } from './ResultPanel';
 import { useIssuePlan } from './use-issue-plan';
 import './issue.css';
@@ -84,9 +85,24 @@ export function IssueView() {
   const [phase, setPhase] = useState<Phase>({ kind: 'form' });
   const [notice, setNotice] = useState<Notice>(null);
   const [retry, setRetry] = useState(0);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   const set = (patch: Partial<IssueUiState>) => setState((s) => ({ ...s, ...patch }));
   const touch = (f: string) => setTouched((s) => (s.has(f) ? s : new Set(s).add(f)));
+
+  // the picture file the creator picked: the browser hashes its bytes (nothing is uploaded); an unusable file leaves the hash as it was
+  const pickImage = async (input: HTMLInputElement) => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const r = await hashImageFile(file);
+    input.value = '';
+    if (r.ok) {
+      setFileError(null);
+      set({ imageHash: r.hash, imageFile: file.name });
+    } else {
+      setFileError(t(`issue.imageFile.err.${r.reason}`));
+    }
+  };
 
   // ---- limits (older wasm bindings do not export issue: say so instead of crashing)
   const limitsResult = useMemo<{ limits: IssueLimits | null; error: string | null }>(() => {
@@ -344,6 +360,58 @@ export function IssueView() {
               inputMode="url"
               data-testid="issue-icon"
             />
+            <FieldShell
+              label={t('issue.field.imageFile')}
+              hint={t('issue.field.imageHash.hint')}
+              error={fileError ?? errorOf('imageHash', state.imageHash)}
+            >
+              {({ id, describedBy, invalid }) => (
+                <>
+                  <input
+                    id={id}
+                    class="input"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid ? 'true' : undefined}
+                    data-testid="issue-image-file"
+                    onChange={(e) => void pickImage(e.currentTarget as HTMLInputElement)}
+                  />
+                  {state.imageHash !== '' ? (
+                    <div class="small muted" data-testid="issue-image-hash-note">
+                      {t('issue.imageHash.set', { hash: state.imageHash.slice(0, 16), file: state.imageFile })}{' '}
+                      <Button
+                        small
+                        variant="ghost"
+                        onClick={() => {
+                          setFileError(null);
+                          set({ imageHash: '', imageFile: '' });
+                        }}
+                        data-testid="issue-image-hash-clear"
+                      >
+                        {t('issue.imageHash.clear')}
+                      </Button>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </FieldShell>
+            <details class="small" data-testid="issue-image-hash-advanced">
+              <summary>{t('issue.imageHash.advanced')}</summary>
+              <Field
+                label={t('issue.field.imageHash')}
+                hint={t('issue.field.imageHash.advancedHint')}
+                value={state.imageHash}
+                onValue={(v) => {
+                  setFileError(null);
+                  set({ imageHash: v.replace(/\s+/g, '').toLowerCase().slice(0, 64), imageFile: '' });
+                }}
+                onBlur={() => touch('imageHash')}
+                autoComplete="off"
+                class="issue-mono"
+                data-testid="issue-image-hash"
+              />
+            </details>
             <Field
               as="textarea"
               label={t('issue.field.description')}

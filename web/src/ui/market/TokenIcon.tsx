@@ -1,5 +1,6 @@
 // A token's round icon: its picture, else a letter on a colour taken from its covenant id. Where the picture comes from is decided in use-token-logo.ts
-// (kascov.io's checked copy; else, if the viewer allows creator sites, the creator's own address, labelled unchecked; nothing for a token whose logo a report
+// (kascov.io's checked copy; else, if the viewer allows creator sites, the creator's own address: compared with the `image_hash` of the creation record when it
+// has one, else labelled unchecked; the letter and a note when the picture at that address is not the committed file; nothing for a token whose logo a report
 // hid). It is fetched only while the row is on screen and only when the viewer allows icons (Settings). A checked or IPFS picture is shown from a blob: URL;
 // the creator's own https image is a plain <img> (CSP img-src https:), no referrer, lazy, in the icon's fixed box.
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -38,7 +39,7 @@ export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' |
     return () => io.disconnect();
   }, [seen]);
 
-  const src = logo.state === 'checked' || logo.state === 'ipfs' || logo.state === 'creator' ? logo.src : null;
+  const src = logo.state === 'checked' || logo.state === 'ipfs' || logo.state === 'verified' || logo.state === 'creator' ? logo.src : null;
   const px = size ?? 24;
   return (
     <span
@@ -47,8 +48,10 @@ export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' |
       style={`--tk-h:${avatarHue(covenantId)}${size ? `;--tk-size:${size}px` : ''}`}
       aria-hidden="true"
       data-testid={`token-icon-${covenantId}`}
-      data-icon={logo.state === 'checked' || logo.state === 'ipfs' ? 'image' : logo.state === 'creator' ? 'creator-image' : 'letter'}
+      data-icon={logo.state === 'checked' || logo.state === 'ipfs' || logo.state === 'verified' ? 'image' : logo.state === 'creator' ? 'creator-image' : 'letter'}
       {...(logo.state === 'creator' ? { title: t('market.logo.unchecked') } : {})}
+      {...(logo.state === 'verified' ? { title: t('market.logo.verified.short') } : {})}
+      {...(logo.state === 'mismatch' ? { title: t('market.logo.mismatch'), 'data-logo-note': 'mismatch' } : {})}
     >
       {/* the letter stays under the picture until it has loaded: no empty circle, no jump */}
       {src === null || logo.state === 'creator' ? avatarLetter(ticker, covenantId) : null}

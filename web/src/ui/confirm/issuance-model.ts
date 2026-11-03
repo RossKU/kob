@@ -202,7 +202,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
         row('declare-name', tr('confirm.issue.name'), d.name ?? ''),
         row('declare-symbol', tr('confirm.issue.ticker'), d.symbol ?? ''),
         row('declare-decimals', tr('confirm.issue.decimals'), String(d.decimals ?? '')),
-        ...opt('description', d.description), ...opt('logo', d.logo), ...opt('website', d.website), ...opt('x', d.x), ...opt('telegram', d.telegram),
+        ...opt('description', d.description), ...opt('image', d.image), ...opt('imageHash', d.imageHash), ...opt('website', d.website), ...opt('x', d.x), ...opt('telegram', d.telegram),
       ],
     });
   }

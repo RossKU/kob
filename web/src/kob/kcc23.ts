@@ -12,7 +12,10 @@ export interface TokenDeclaration {
   /** 0..=18; null = undeclared */
   decimals: number | null;
   description: string | null;
-  logo: string | null;
+  /** `image` (or the older `logo`): an https:// or ipfs:// address */
+  image: string | null;
+  /** `image_hash`: 64 lowercase hex, the SHA-256 of the picture file's bytes (also read from an `image` of the form `sha256:<hex>`) */
+  imageHash: string | null;
   website: string | null;
   x: string | null;
   telegram: string | null;
@@ -54,7 +57,8 @@ function tokenOf(v: unknown): TokenDeclaration {
     symbol: text(o.symbol, 128),
     decimals: typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= 18 ? d : null,
     description: text(o.description, 2048),
-    logo: text(o.logo, 2048),
+    image: text(o.image, 2048),
+    imageHash: typeof o.image_hash === 'string' && /^[0-9a-f]{64}$/.test(o.image_hash) ? o.image_hash : null,
     website: text(o.website, 2048),
     x: text(o.x, 256),
     telegram: text(o.telegram, 256),

@@ -88,13 +88,17 @@ export function LogoSection(props: { row: Pick<TokenRow, 'covenantId' | 'kascov'
           </>
         ) : logo.state === 'creator' ? (
           t('market.logo.creator', { host: logo.host })
+        ) : logo.state === 'mismatch' ? (
+          t('market.logo.mismatch')
+        ) : logo.state === 'verified' ? (
+          t('market.logo.verified')
         ) : logo.state === 'ipfs' ? (
           t('market.logo.ipfs')
         ) : (
           t('market.logo.checked')
         )}
       </p>
-      {hidden ? null : (
+      {hidden || logo.state === 'mismatch' ? null : (
         <Button small onClick={() => setOpen(true)} data-testid="logo-report-open">
           {t('market.logo.report')}
         </Button>
