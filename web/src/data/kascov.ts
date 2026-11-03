@@ -412,7 +412,7 @@ export interface IconLoader {
 /**
  * Saved copies kascov.io answered 404 for (it keeps one for most tokens that commit to an image, not all). A browser prints every 404 in its console and
  * nothing can stop that but not asking again, so a token whose copy is missing is not asked for it for a day: the icon falls back to its letter quietly
- * (or to the creator's own host, where that allows it). Kept per network and covenant id.
+ * (the creator's own host is never asked: F10). Kept per network and covenant id.
  */
 export interface MissingCopies {
   has(network: string, covenantId: string): boolean;

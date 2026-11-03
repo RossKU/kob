@@ -8,7 +8,7 @@ export default {
   'settings.icons.source': 'Source of token names and icons: {url}',
   'settings.icons.off': 'This deployment has the token list service turned off: the list shows only what the registry and the indexer give.',
   'settings.icons.label': 'Load token icons from third-party hosts',
-  'settings.icons.hint': "On by default. An icon is fetched from the service's saved copy of it, or from the creator's own host, and shown only if its bytes match the hash the creator committed to; those hosts then see your IP address. Off: letters instead of pictures and no request to any image host.",
+  'settings.icons.hint': "On by default. An icon is fetched only from kascov.io's saved copy of it, never from the creator's own host, and shown only if its bytes match the hash the creator committed to; kascov.io then sees your IP address. Off: letters instead of pictures and no request to any image host.",
   'settings.connection.title': 'Network, wallet and fees',
   'settings.advanced.title': 'Advanced / self-hosting',
   'settings.advanced.explain': 'For operators and power users: your own servers, the token registry and its template hashes, the token tracker (import and export) and the indexer cross-check. You do not need any of this to trade.',
