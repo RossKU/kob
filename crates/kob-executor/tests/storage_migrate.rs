@@ -36,6 +36,12 @@ fn cancel(c: &Ctx, order: OrderUtxo<AnyState>, custody: Option<TokenUtxo>, stray
 /// A store with orders that were placed and left, partly filled, swept and cancelled, and the token holdings they moved.
 async fn flows() -> Ctx {
     let c = Ctx::new();
+    scenario(&c, || {}).await;
+    c
+}
+
+/// [`flows`] on a given context; `mid` runs once the first ask and a stray to it are indexed and before anything spends them.
+async fn scenario(c: &Ctx, mid: impl FnOnce()) {
     // an ask that is partly filled twice and then cancelled with a stray swept
     let a = ask(MAKER_A, P250);
     let create = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
@@ -43,6 +49,7 @@ async fn flows() -> Ctx {
     let cov = c.w.cov(&create, 0);
     let stray = c.w.stray(cov, 10 * WHOLE, TAKER);
     c.push(&[&stray]).await;
+    mid();
     let custody = c.w.token_at(&create, 1, Kcc20State::custody(10 * WHOLE, cov.0, EXT));
     let leg = Leg::Ask { order: c.w.order(&create, 0, a.clone()), custody, amount: 4 * WHOLE, t: None };
     let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), vec![leg])));
@@ -52,7 +59,7 @@ async fn flows() -> Ctx {
     let custody = c.w.token_at(&fill, find_custody(&fill, &cov, 6 * WHOLE).unwrap(), Kcc20State::custody(6 * WHOLE, cov.0, EXT));
     let stray_utxo =
         c.w.token_at(&stray, find_custody(&stray, &cov, 10 * WHOLE).unwrap(), Kcc20State::custody(10 * WHOLE, cov.0, EXT));
-    let sweep = cancel(&c, c.w.order(&fill, oi, AnyState::KobAsk(a6)), Some(custody), vec![stray_utxo]);
+    let sweep = cancel(c, c.w.order(&fill, oi, AnyState::KobAsk(a6)), Some(custody), vec![stray_utxo]);
     c.push(&[&sweep]).await;
     // a bid placed and cancelled, an ask left open
     let b0 = bid(MAKER_B, P245);
@@ -61,7 +68,6 @@ async fn flows() -> Ctx {
     let a2 = ask(MAKER_A, P250);
     let open = c.w.create_tx(AnyState::KobAsk(a2), CARRIER, MAKER_A, 10 * WHOLE);
     c.push(&[&open]).await;
-    c
 }
 
 /// Every row of the tables the migration touches or reads, states decoded, hashed per table.
@@ -289,4 +295,43 @@ async fn a_store_written_by_this_build_is_packed_already_and_the_migration_chang
     assert!(rep.columns.iter().all(|c| c.changed == 0), "{rep:?}");
     assert!(rep.indexes_swapped.is_empty() && rep.indexes_dropped.is_empty());
     assert_eq!(table_digests(&open_ro(&path)), before);
+}
+
+/// A store of whole values (what an earlier build wrote) goes on being indexed by this build: the rows the flow adds are packed, the ones
+/// it spends are whole, and every read is what the same flow gives on a store that was packed throughout.
+#[tokio::test]
+async fn a_whole_store_mixes_with_the_packed_rows_this_build_adds_and_reads_the_same() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    let c = Ctx::with(Harness::new(db::open_writer(&path, "testnet-10").unwrap(), None));
+    scenario(&c, || {
+        // everything indexed so far is made whole, as an earlier build left it
+        let w = Connection::open(&path).unwrap();
+        packed::register(&w).unwrap();
+        w.execute_batch(
+            "UPDATE order_utxos SET state = kob_ustate(state, (SELECT kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id) FROM orders g WHERE g.covenant_id = order_utxos.covenant_id));              UPDATE orders SET genesis_state = kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id);              UPDATE order_events SET detail = kob_dtext(detail);              UPDATE token_holdings SET state = kob_hstate(state, family, owner, owner_kind, amount);",
+        )
+        .unwrap();
+    })
+    .await;
+    let control = flows().await;
+    let mixed = {
+        let g = c.hs.ingest.lock().unwrap();
+        reads_json(g.conn())
+    };
+    let packed_throughout = {
+        let g = control.hs.ingest.lock().unwrap();
+        reads_json(g.conn())
+    };
+    assert_eq!(mixed, packed_throughout);
+    // both kinds are in the store
+    let g = c.hs.ingest.lock().unwrap();
+    let (whole, short): (i64, i64) = g
+        .conn()
+        .query_row("SELECT SUM(LENGTH(genesis_state) > 100), SUM(LENGTH(genesis_state) <= 100) FROM orders", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert!(whole >= 1 && short >= 1, "{whole} whole and {short} packed genesis states");
+    assert_eq!(table_digests(g.conn()), table_digests(control.hs.ingest.lock().unwrap().conn()));
 }
