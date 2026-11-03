@@ -51,6 +51,7 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
         daa_per_second: 10,
         lag_alarm_hours: vec![1],
         min_order_value_sompi: 100_000_000,
+        logo: None,
     };
     Env { _dir: dir, state }
 }

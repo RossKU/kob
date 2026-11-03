@@ -70,6 +70,7 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
         daa_per_second: 10,
         lag_alarm_hours: vec![1, 6, 12, 24],
         min_order_value_sompi: 100_000_000,
+        logo: None,
     };
     Env { _dir: dir, w, state }
 }
@@ -1534,4 +1535,165 @@ async fn the_metrics_route_follows_the_config() {
     assert_eq!(s, StatusCode::NOT_FOUND, "{v}");
     // everything else is still served
     assert_eq!(get(&app, "/v1/health").await.0, StatusCode::OK);
+}
+
+// ------------------------------------------------------------------------------------------------ logo reports
+
+async fn post_with(app: &Router, body: &str, from: &str, headers: &[(&str, &str)]) -> (StatusCode, HeaderMap, Value) {
+    let mut req = Request::builder().method("POST").uri("/v1/logo-reports").header("content-type", "application/json");
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let mut req = req.body(Body::from(body.to_string())).unwrap();
+    req.extensions_mut().insert(peer(from));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let (parts, body) = resp.into_parts();
+    let bytes = body.collect().await.unwrap().to_bytes();
+    (parts.status, parts.headers, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+async fn post_from(app: &Router, body: &str, from: &str) -> (StatusCode, HeaderMap, Value) {
+    post_with(app, body, from, &[]).await
+}
+
+fn report_body(id: u8, reason: &str) -> String {
+    format!("{{\"covenant_id\":\"{}\",\"reason\":\"{reason}\"}}", h(id))
+}
+
+struct LogoEnv {
+    _env: Env,
+    state: ApiState,
+    logo: Arc<crate::logo_reports::LogoReports>,
+    now: Arc<std::sync::atomic::AtomicI64>,
+}
+
+fn logo_env(cfg: crate::config::LogoReportsConfig, tweak: impl FnOnce(&mut ApiConfig)) -> LogoEnv {
+    let e = env(tweak);
+    let now = Arc::new(std::sync::atomic::AtomicI64::new(1_000_000));
+    let clock = now.clone();
+    let logo = Arc::new(crate::logo_reports::LogoReports::with_connection(
+        crate::indexer::db::open_memory("testnet-10").unwrap(),
+        cfg,
+        64,
+        Box::new(move || clock.load(std::sync::atomic::Ordering::SeqCst)),
+    ));
+    let mut state = e.state.clone();
+    state.logo = Some(logo.clone());
+    LogoEnv { _env: e, state, logo, now }
+}
+
+fn enabled() -> crate::config::LogoReportsConfig {
+    crate::config::LogoReportsConfig { enabled: true, ..Default::default() }
+}
+
+#[tokio::test]
+async fn logo_routes_are_absent_while_the_feature_is_off() {
+    let e = env(|_| {});
+    let app = router(e.state.clone());
+    let (s, _) = get(&app, "/v1/logo-blocklist").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, _, _) = post_from(&app, &report_body(1, "other"), "127.0.0.1").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_report_hides_the_logo_at_once_and_the_blocklist_serves_it() {
+    let e = logo_env(enabled(), |_| {});
+    let app = router(e.state.clone());
+    let (s, _, v) = get_from(&app, "/v1/logo-blocklist", "127.0.0.1", &[]).await;
+    assert_eq!((s, v), (StatusCode::OK, serde_json::json!({"hidden": [], "updated_ms": 0})));
+    let (s, _, v) = post_from(&app, &report_body(7, "impersonation"), "10.1.1.1").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v, serde_json::json!({"result": "hidden", "covenant_id": h(7)}));
+    let (s, hd, v) = get_from(&app, "/v1/logo-blocklist", "127.0.0.1", &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v, serde_json::json!({"hidden": [h(7)], "updated_ms": 1_000_000}));
+    assert_eq!(hd.get("cache-control").unwrap(), "public, max-age=5");
+    // a GitHub report of the same token (upper-case hex), from another client: still hidden
+    let gh = format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"source\":\"github\",\"ref\":12}}", h(7).to_uppercase());
+    let (s, _, v) = post_from(&app, &gh, "10.1.1.2").await;
+    assert_eq!((s, v["result"].as_str()), (StatusCode::OK, Some("hidden")));
+}
+
+#[tokio::test]
+async fn a_report_in_the_cooldown_after_a_restore_is_only_recorded() {
+    let e = logo_env(enabled(), |_| {});
+    let app = router(e.state.clone());
+    let body = report_body(3, "illegal");
+    assert_eq!(post_from(&app, &body, "10.1.1.1").await.2["result"], "hidden");
+    // the operator restores it (the subcommand writes through a connection of its own; here the service's)
+    crate::logo_reports::restore(&mut e.logo.test_connection(), &Hash32([3; 32]), 1_000_000, false).unwrap();
+    e.now.fetch_add(60_000, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(post_from(&app, &body, "10.1.1.2").await.2["result"], "recorded");
+    // the list is cached for 5 s, then shows the restored token as shown
+    e.now.fetch_add(5_000, std::sync::atomic::Ordering::SeqCst);
+    let (_, _, v) = get_from(&app, "/v1/logo-blocklist", "127.0.0.1", &[]).await;
+    assert_eq!(v["hidden"], serde_json::json!([]));
+    // after the cooldown (6 h) it hides again
+    e.now.fetch_add(6 * 3_600_000, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(post_from(&app, &body, "10.1.1.3").await.2["result"], "hidden");
+    let (_, _, v) = get_from(&app, "/v1/logo-blocklist", "127.0.0.1", &[]).await;
+    assert_eq!(v["hidden"], serde_json::json!([h(3)]));
+}
+
+#[tokio::test]
+async fn bad_reports_are_refused_and_cost_no_budget() {
+    let e = logo_env(crate::config::LogoReportsConfig { per_client_per_hour: 2, ..enabled() }, |_| {});
+    let app = router(e.state.clone());
+    for bad in [
+        "not json".to_string(),
+        "{}".to_string(),
+        report_body(1, "spam"),
+        format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"note\":\"free text\"}}", h(1)),
+        "{\"covenant_id\":\"zz\",\"reason\":\"other\"}".to_string(),
+        format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"source\":\"twitter\"}}", h(1)),
+        format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"ref\":5}}", h(1)),
+        format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"source\":\"github\",\"ref\":0}}", h(1)),
+    ] {
+        let (s, _, v) = post_from(&app, &bad, "10.1.1.1").await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {v}");
+    }
+    // an oversize body is refused before it is read
+    let big = format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"x\":\"{}\"}}", h(1), "a".repeat(2000));
+    assert_eq!(post_from(&app, &big, "10.1.1.1").await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    // none of that used the client's two reports per hour
+    for n in 1..=2u8 {
+        assert_eq!(post_from(&app, &report_body(n, "other"), "10.1.1.1").await.0, StatusCode::OK);
+    }
+    let (s, hd, v) = post_from(&app, &report_body(9, "other"), "10.1.1.1").await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")));
+    assert!(hd.get("retry-after").is_some());
+    // another client is not affected
+    assert_eq!(post_from(&app, &report_body(9, "other"), "10.1.1.2").await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_daily_total_and_the_trusted_proxy_rule_bound_reports() {
+    let e = logo_env(crate::config::LogoReportsConfig { max_per_day: 4, per_client_per_hour: 1, ..enabled() }, |c| {
+        c.trusted_proxies = vec!["10.9.9.9".into()];
+    });
+    let app = router(e.state.clone());
+    // behind the trusted proxy the forwarded address is the client: three clients, one report each
+    for n in 1..=3u8 {
+        let xff = format!("203.0.113.{n}");
+        assert_eq!(post_with(&app, &report_body(n, "other"), "10.9.9.9", &[("x-forwarded-for", &xff)]).await.0, StatusCode::OK);
+    }
+    // the same forwarded client again: its hourly budget is spent (the proxy itself is not the client)
+    let (s, _, _) = post_with(&app, &report_body(5, "other"), "10.9.9.9", &[("x-forwarded-for", "203.0.113.1")]).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    // a fourth client is admitted (the refused request above was not counted); a fifth finds the day's total spent
+    assert_eq!(post_with(&app, &report_body(4, "other"), "10.9.9.9", &[("x-forwarded-for", "203.0.113.4")]).await.0, StatusCode::OK);
+    let (s, _, _) = post_with(&app, &report_body(6, "other"), "10.9.9.9", &[("x-forwarded-for", "203.0.113.5")]).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn cors_allows_the_post_of_a_report() {
+    let e = logo_env(enabled(), |c| c.cors_allow_origin = Some("https://kob.example".into()));
+    let app = router(e.state.clone());
+    let mut req = Request::builder().method("OPTIONS").uri("/v1/logo-reports").body(Body::empty()).unwrap();
+    req.extensions_mut().insert(peer("127.0.0.1"));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(resp.headers().get("access-control-allow-methods").unwrap(), "GET, POST, OPTIONS");
 }

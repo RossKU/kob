@@ -422,3 +422,81 @@ pub async fn depth(State(app): State<Arc<App>>, Path(token): Path<String>, Query
     })
     .await
 }
+
+// ------------------------------------------------------------------------------------------------ token-logo reports
+
+/// A report body is a covenant id, a reason and perhaps an issue number: nothing larger is read.
+pub const LOGO_REPORT_MAX_BYTES: usize = 1024;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ClaimedSource {
+    Github,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogoReportBody {
+    covenant_id: String,
+    reason: crate::logo_reports::Reason,
+    source: Option<ClaimedSource>,
+    #[serde(rename = "ref")]
+    reference: Option<u32>,
+}
+
+/// `POST /v1/logo-reports`: `{covenant_id, reason: "illegal"|"impersonation"|"other", source?: "github", ref?: <issue number>}`.
+/// `200 {"result":"hidden"|"recorded","covenant_id":..}` (the first report of a token hides its logo at once; one for a token the
+/// operator restored, inside the cooldown, is only recorded). No free text is accepted. Rate limited per client and per day
+/// (`[logo_reports]`); 429 with `Retry-After` beyond.
+pub async fn logo_report(
+    State(app): State<Arc<App>>,
+    axum::Extension(client): axum::Extension<super::ClientIp>,
+    body: axum::body::Bytes,
+) -> ApiResult {
+    let logo = app.state.logo.clone().ok_or_else(|| ApiError::not_found("no such route"))?;
+    let b: LogoReportBody = serde_json::from_slice(&body).map_err(|_| {
+        ApiError::bad_request("the body must be JSON {\"covenant_id\": 64 hex, \"reason\": \"illegal\"|\"impersonation\"|\"other\", \"source\"?: \"github\", \"ref\"?: issue number}")
+    })?;
+    let covenant_id = parse_hash("covenant_id", &b.covenant_id)?;
+    if b.reference.is_some() && b.source.is_none() {
+        return Err(ApiError::bad_request("ref belongs to source \"github\""));
+    }
+    if b.reference == Some(0) {
+        return Err(ApiError::bad_request("ref must be an issue number"));
+    }
+    let report = crate::logo_reports::Report {
+        covenant_id,
+        reason: b.reason,
+        source: if b.source.is_some() { crate::logo_reports::Source::Github } else { crate::logo_reports::Source::Web },
+        reference: b.reference,
+    };
+    let ip = client.0;
+    let filed = tokio::task::spawn_blocking(move || logo.report(ip, &report))
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error"))?;
+    match filed {
+        Ok(f) => json_ok(json!({"result": f.as_str(), "covenant_id": covenant_id.to_hex()})),
+        Err(crate::logo_reports::ReportError::Limited(secs)) => {
+            let mut e = ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "too many logo reports; try again later");
+            e.retry_after = Some(secs);
+            Err(e)
+        }
+        Err(crate::logo_reports::ReportError::Db(e)) => Err(e.into()),
+    }
+}
+
+/// `GET /v1/logo-blocklist`: `{"hidden":[covenant ids],"updated_ms":..}`, the tokens whose logo the web app does not load. Cached for 5 seconds.
+pub async fn logo_blocklist(State(app): State<Arc<App>>) -> ApiResult {
+    let logo = app.state.logo.clone().ok_or_else(|| ApiError::not_found("no such route"))?;
+    let body = tokio::task::spawn_blocking(move || logo.blocklist_body())
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error"))??;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json")),
+            (axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("public, max-age=5")),
+        ],
+        body,
+    )
+        .into_response())
+}

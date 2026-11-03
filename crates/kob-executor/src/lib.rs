@@ -12,6 +12,7 @@ pub mod index_cli;
 pub mod indexer;
 pub mod keepers;
 pub mod logging;
+pub mod logo_reports;
 pub mod maintenance;
 pub mod matcher;
 pub mod model;

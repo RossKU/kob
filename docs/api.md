@@ -19,8 +19,8 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 
 ## 1. Overview
 
-* **Base path** `/v1`. **GET only.** Any other method on a known path gets `405` from the router (the framework's default
-  answer, with an empty body). `OPTIONS` is answered `204` on every path when `cors_allow_origin` is set (it is handled before
+* **Base path** `/v1`. **GET only**, except the one write route `POST /v1/logo-reports` (section 3.19, off unless `[logo_reports] enabled`).
+  Any other method on a known path gets `405` from the router (the framework's default answer, with an empty body). `OPTIONS` is answered `204` on every path when `cors_allow_origin` is set (it is handled before
   routing), otherwise it is a `405` like any other method. An unknown path is `404` with the error envelope
   (`not_found`, "no such route").
 * **JSON** (`application/json`) for every route except `GET /v1/metrics` (Prometheus text, `text/plain; version=0.0.4`) and the
@@ -31,10 +31,10 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
   `[api] enabled = false`) turns the API off.
 * **No authentication, no keys, no cookies.** Every route is public to whoever can reach the listener.
 * **CORS.** No CORS header is sent unless `[api] cors_allow_origin` is set. When it is, every response (including errors and the
-  `204` preflight) carries `Access-Control-Allow-Origin: <that value>`, `Access-Control-Allow-Methods: GET, OPTIONS` and
+  `204` preflight) carries `Access-Control-Allow-Origin: <that value>`, `Access-Control-Allow-Methods: GET, POST, OPTIONS` and
   `Access-Control-Allow-Headers: content-type`. The value is sent as configured (use `*` for a public server). The WebSocket
   upgrade checks no `Origin`.
-* **No `Cache-Control`.** The API sets no `Cache-Control` header on any route (it keeps its own server-side response cache for a few
+* **No `Cache-Control`** except on `GET /v1/logo-blocklist` (`public, max-age=5`). The API sets none on any other route (it keeps its own server-side response cache for a few
   hot reads, section 5.6). The headers it adds itself are `Content-Type`, `Retry-After` on some errors, and the CORS headers
   when configured.
 * **Staleness.** Answers reflect the indexer's store, which follows the chain a few blocks behind the node (`GET /v1/health`
@@ -44,7 +44,7 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 ### Routes
 
 The list below is the router (`api/mod.rs`, `build()`), in registration order: 21 routes, plus `GET /v1/metrics` as the 22nd
-only when `[api] metrics = true` (the default). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
+only when `[api] metrics = true` (the default), and the two logo routes (23, 24) only when `[logo_reports] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
 (`heavy_route_cost`, default 5). "Cached" marks the reads kept in the response cache (section 5.6).
 
 | # | Route | Section | Cost | Cached |
@@ -71,6 +71,8 @@ only when `[api] metrics = true` (the default). "Cost" is the rate-limit weight 
 | 20 | `GET /v1/depth/{token}` | [3.18](#318-get-v1depthtoken) | H | yes |
 | 21 | `GET /v1/ws` | [4](#4-websocket) | 1 (upgrade) | no |
 | 22 | `GET /v1/metrics` (only with `metrics = true`) | [3.3](#33-get-v1metrics) | 1 | no |
+| 23 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
+| 24 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
 
 ## 2. Conventions
 
@@ -815,6 +817,67 @@ Cumulative depth of the listed book, levels merged by price per `price_basis`, b
 at their level prices, rounded down per level). `ts` (number or null) is the newest event time; `daa` (number or null) is the
 node's DAA score.
 
+### 3.19 `POST /v1/logo-reports`
+
+Reports the logo of a token. KOB keeps and serves no third-party image: the web app loads a token's logo, in the viewer's browser,
+from the address its creator gave. A report is how that image is taken down: **the first report of a token hides its logo at once**
+(the web app shows the letter avatar instead), the operator reviews it, and the token can be restored. Present only with
+`[logo_reports] enabled = true` (section 6; otherwise `404`, "no such route"). The only write route of the API; there is no
+administrative route on the network (the operator restores and hides with `kob-executor index logo-reports`,
+[ops/executor.md](ops/executor.md)).
+
+Body (JSON, at most 1024 bytes; `content-type` is not checked; unknown fields are refused, so no free text is taken or stored):
+
+| Field | Meaning |
+|---|---|
+| `covenant_id` | the token, 32 bytes of hex (either case) |
+| `reason` | `"illegal"`, `"impersonation"` or `"other"` |
+| `source` | optional, only `"github"`: the report came from the Issue form (default: the web app) |
+| `ref` | optional, with `source`: the GitHub issue number (1 or more) |
+
+Rules, in order:
+
+* the token is not in the blocklist: it is added hidden; answer `hidden`;
+* it is hidden already: the report is counted; answer `hidden`;
+* the operator restored it and `cooldown_secs` (default 21600, 6 hours) have not passed since: the report is recorded for the
+  operator and changes nothing; answer `recorded`;
+* it is restored and the cooldown has passed: it is hidden again; answer `hidden`.
+
+A token the operator hid for good (`hide`) stays hidden whatever is reported. Reports are limited per client
+(`per_client_per_hour`, default 5; the client address of section 5.4) and in all (`max_per_day`, default 200 per 24 hours);
+only accepted reports count. The generic rate limit of section 5.2 applies first (cost 1).
+
+| Status | When |
+|---|---|
+| `200` | filed: `{"result": "hidden" | "recorded", "covenant_id": "<hex32>"}` |
+| `400` | not JSON, an unknown field or value, `covenant_id` not 32 bytes of hex, `ref` without `source` or 0 |
+| `413` | body over 1024 bytes |
+| `429` | `rate_limited` (section 5.1), `Retry-After` in seconds |
+
+```
+curl -s -X POST $API/v1/logo-reports -H 'content-type: application/json'   -d '{"covenant_id":"<hex32>","reason":"impersonation"}'
+```
+
+```json
+{ "result": "hidden", "covenant_id": "<hex32>" }
+```
+
+### 3.20 `GET /v1/logo-blocklist`
+
+The tokens whose logo the web app does not load, one source of truth for every viewer (the web app reads it at start and every two
+minutes; if it cannot be read, logos show: the list fails open). Present only with `[logo_reports] enabled = true`. Served from a
+body rendered at most every 5 seconds (a report drops it at once) with `Cache-Control: public, max-age=5`.
+
+```
+curl -s $API/v1/logo-blocklist
+```
+
+```json
+{ "hidden": ["<hex32>", "<hex32>"], "updated_ms": 1767225600000 }
+```
+
+`hidden` is sorted; `updated_ms` is when the set last changed (0 while it never has).
+
 ## 4. WebSocket
 
 **URL** `ws://<host>/v1/ws` (`wss://` behind a TLS-terminating proxy). The route is an ordinary `GET` with the upgrade headers;
@@ -925,7 +988,7 @@ Every error the handlers and the guard produce is JSON:
 |---|---|---|---|
 | 400 | `bad_request` | A malformed parameter: not 32 bytes of hex, not an integer, bad `status` / `side` / `interval` / `aggregate` / `spent`, `limit` not a positive integer, invalid `cursor`, `to` not after `from`, `base == quote`, missing `owner` and `token`, an address where hex is required. The `message` says which. | no |
 | 404 | `not_found` | Unknown path ("no such route", also `/v1/metrics` when `metrics = false`); unknown order ("unknown covenant id"); no declaration. | no |
-| 429 | `rate_limited` | The rate limit (section 5.2). | seconds, at least 1 |
+| 429 | `rate_limited` | The rate limit (section 5.2), or the report limits of `POST /v1/logo-reports` (section 3.19). | seconds, at least 1 |
 | 429 | `ws_per_ip_limit` | WebSocket upgrade over the per-client cap. | 5 |
 | 429 | `ws_per_site_limit` | WebSocket upgrade over the per-IPv6-site cap. | 5 |
 | 500 | `internal` | A database or serialisation error ("internal error"); logged server side. | no |
@@ -933,7 +996,8 @@ Every error the handlers and the guard produce is JSON:
 | 503 | `db_busy` | SQLite reported the database busy or locked ("database busy, retry shortly"). | 1 |
 | 503 | `ws_capacity` | WebSocket upgrade over `max_ws_connections`. | 5 |
 | 504 | `timeout` | The request ran longer than `request_timeout_ms` ("request timed out"). | no |
-| 405 | (none) | A method other than GET on a known path; the framework's own empty answer, not the envelope. | no |
+| 413 | (none) | A `POST /v1/logo-reports` body over 1024 bytes; the framework's own answer, not the envelope. | no |
+| 405 | (none) | A method other than GET (or POST on the report route) on a known path; the framework's own empty answer, not the envelope. | no |
 | 503 | (none) | A connection over a transport cap (section 5.5): a bare `HTTP/1.1 503` with `retry-after: 1`, an empty body, and the connection closed. | 1 |
 
 Clients should branch on the HTTP status and `code`, not on `message` text. WebSocket protocol errors are `error` frames
@@ -953,7 +1017,7 @@ too; WebSocket messages after the upgrade do not, they have their own cap).
 * A request takes **1 token** from each bucket, or `heavy_route_cost` (default **5**; capped at the bucket's burst) when its path
   starts with `/v1/candles/`, `/v1/stats/`, `/v1/depth/`, `/v1/trades/`, `/v1/books/`, `/v1/token-utxos`, `/v1/strays` or
   `/v1/pairs` (which includes all four pair routes). Everything else, including `/v1/orders*`, `/v1/fills`, `/v1/tokens*`,
-  `/v1/token-events`, `/v1/health*`, `/v1/metrics` and `/v1/ws`, costs 1. With the defaults a client can burst 12 heavy requests
+  `/v1/token-events`, `/v1/health*`, `/v1/metrics`, `/v1/logo-*` and `/v1/ws`, costs 1. With the defaults a client can burst 12 heavy requests
   and sustain 4 per second.
 * Order of charging: the client bucket, then the site bucket, then the global bucket; a request refused by an earlier bucket does
   not charge the global one, so a limited client cannot drain everybody else's share.
@@ -1051,6 +1115,20 @@ override `listen` and `enabled`. Defaults are those of `config.rs`.
 | `rate_limit.per_site_rps` | `100.0` | Sustained requests per second of one IPv6 site. |
 | `rate_limit.per_site_burst` | `300` | Burst of one IPv6 site. |
 | `rate_limit.heavy_route_cost` | `5` | Tokens a heavy read costs (section 5.2); a light request costs 1. |
+
+### The `[logo_reports]` table
+
+Top-level table of the same file (section 3.19). Unknown keys are refused.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Serve `POST /v1/logo-reports` and `GET /v1/logo-blocklist`; off, both are `404`. |
+| `cooldown_secs` | `21600` | After the operator restored a token, reports for it are only recorded for this long. |
+| `per_client_per_hour` | `5` | Reports one client may file per hour; 0 = none. |
+| `max_per_day` | `200` | Reports accepted from all clients together per 24 hours; 0 = none. |
+
+The state lives in the indexer's database (`logo_blocklist`, `logo_reports`), is not derived from the chain, and is not rebuilt by
+`index replay` (use `kob-executor index logo-reports export` before and `import` after).
 
 Related top-level keys that shape what the API reports: `settle_depth_daa` (100), `daa_per_second` (10), `lag_alarm_hours`
 (`[1, 6, 12, 24]`), `max_lag_secs` (30).

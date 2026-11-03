@@ -221,6 +221,16 @@ impl Indexer {
             daa_per_second: self.cfg.daa_per_second,
             lag_alarm_hours: self.cfg.lag_alarm_hours.clone(),
             min_order_value_sompi: self.cfg.rules.min_order_value_sompi,
+            logo: if self.cfg.logo_reports.enabled {
+                Some(crate::logo_reports::LogoReports::open(
+                    &self.cfg.db_path(),
+                    &self.cfg.network,
+                    self.cfg.logo_reports.clone(),
+                    self.cfg.api.rate_limit.ipv6_prefix_bits,
+                )?)
+            } else {
+                None
+            },
         };
         st.validate().map_err(IndexerError::Config)?;
         if let Some(w) = self.cfg.api.proxy_warning() {

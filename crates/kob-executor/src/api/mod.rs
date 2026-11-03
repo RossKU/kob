@@ -7,7 +7,7 @@
 //! [`conn`] (header-read and write-stall deadlines, total and per-address connection caps) keep
 //! connections that never complete a request from holding sockets.
 //!
-//! Routes (all GET):
+//! Routes (GET, and the one POST `/v1/logo-reports`):
 //! - `/v1/health`, `/v1/health/ready`
 //! - `/v1/tokens` (a row carries `declaration: true` when the indexer holds a KCC-23 declaration for the token),
 //!   `/v1/tokens/{covenant_id}/declaration` (its KCC-23 launch proof, `kob-kcc23-proof/1`)
@@ -18,6 +18,7 @@
 //! - `/v1/orders?maker=&token=&status=&limit=&cursor=`, `/v1/orders/{covenant_id}`, `/v1/orders/{covenant_id}/events`
 //! - `/v1/fills?token=&side=&limit=&before=`
 //! - `/v1/ws` (WebSocket, see [`ws`])
+//! - with `[logo_reports] enabled`: `POST /v1/logo-reports` and `GET /v1/logo-blocklist` ([`crate::logo_reports`])
 
 pub mod cache;
 pub mod client_ip;
@@ -31,11 +32,11 @@ use crate::indexer::db::{DbError, ReadPool};
 use crate::indexer::reads::ReadCtx;
 use crate::indexer::status::{HealthState, IndexEvent};
 use crate::tokens::TokenAllowlist;
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use client_ip::{ClientIpResolver, TrustedProxies};
 use ratelimit::{retry_after_secs, RateLimiter};
@@ -62,6 +63,8 @@ pub struct ApiState {
     /// The executor's effective minimum order value in sompi (`ListingRules::min_order_value_sompi`): an order worth less is
     /// indexed but never listed. Reported by `/v1/health` so a client can warn before an order is placed.
     pub min_order_value_sompi: i64,
+    /// The token-logo blocklist (`[logo_reports]`, [`crate::logo_reports`]); `None` when it is off: its two routes answer 404.
+    pub logo: Option<Arc<crate::logo_reports::LogoReports>>,
 }
 
 impl ApiState {
@@ -195,6 +198,12 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
     if app.state.cfg.metrics {
         router = router.route("/v1/metrics", get(rest::metrics));
     }
+    if app.state.logo.is_some() {
+        // the one write route of the API: a report is a few dozen bytes of JSON
+        router = router
+            .route("/v1/logo-reports", post(rest::logo_report).layer(DefaultBodyLimit::max(rest::LOGO_REPORT_MAX_BYTES)))
+            .route("/v1/logo-blocklist", get(rest::logo_blocklist));
+    }
     let router = router
         .fallback(|| async { ApiError::not_found("no such route") })
         .layer(middleware::from_fn_with_state(app.clone(), guard))
@@ -248,7 +257,7 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
         if let Ok(v) = HeaderValue::from_str(&origin) {
             let h = resp.headers_mut();
             h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, v);
-            h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, OPTIONS"));
+            h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, OPTIONS"));
             h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("content-type"));
         }
     }

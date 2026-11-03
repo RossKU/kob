@@ -91,6 +91,7 @@ pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Conn
         }
     }
     conn.execute_batch(SCHEMA_SQL)?;
+    conn.execute_batch(crate::logo_reports::SCHEMA)?;
     migrate(&conn)?;
     init_meta(&conn, network)?;
     super::candles::configure(&conn, lean)?;
@@ -346,6 +347,7 @@ pub fn open_reader(path: &Path, network: &str) -> DbResult<Connection> {
 pub fn open_memory(network: &str) -> DbResult<Connection> {
     let conn = Connection::open_in_memory()?;
     conn.execute_batch(SCHEMA_SQL)?;
+    conn.execute_batch(crate::logo_reports::SCHEMA)?;
     migrate(&conn)?;
     init_meta(&conn, network)?;
     super::candles::configure(&conn, false)?;

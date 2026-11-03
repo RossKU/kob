@@ -172,13 +172,13 @@ WebSockets, ...). The API believes a forwarding header only from a peer in `api.
 
 **CORS.** The app is served from the Pages origin (`https://kob-web.pages.dev`, a custom domain), the API from
 `https://chart.example.org`: the browser reads the API's answers only when they carry `Access-Control-Allow-Origin`. The API
-sends no CORS header unless `api.cors_allow_origin` is set; then every answer carries it (with `GET, OPTIONS` and the
+sends no CORS header unless `api.cors_allow_origin` is set; then every answer carries it (with `GET, POST, OPTIONS` and the
 `content-type` header) and a preflight `OPTIONS` is answered 204. Use `"*"`: the data is public, the API uses no cookies or
 credentials, and one value cannot name both the `pages.dev` address and a custom domain; `"*"` also lets other deployments of
 the app, a user's own build and third-party tools read it, which is what a neutral indexer should allow. The WebSocket is not
 subject to CORS (the API checks no `Origin`).
 
-**Caching.** The API sends no `Cache-Control` header and its paths have no file extension, so Cloudflare caches nothing by
+**Caching.** The API sends no `Cache-Control` header (except `public, max-age=5` on `/v1/logo-blocklist`) and its paths have no file extension, so Cloudflare caches nothing by
 default (`cf-cache-status: DYNAMIC`): every answer is live. That is required for the books, orders, depth, stats, trades,
 fills, health, tokens and holdings, and for the WebSocket, which must never be cached. The API already keeps the hot reads
 (candles, stats, books) in a response cache per data generation of its store, so repeated chart loads cost the database little.
@@ -187,6 +187,22 @@ recommended on the free plan**: a Cache Rule that overrides the TTL cannot go be
 a shorter TTL would need the API to send `Cache-Control` on those answers, which it does not. If a paid plan or a later API
 change makes a short TTL possible: cache only those two paths, keep the query string in the cache key (`interval`, `from`,
 `limit`), and a TTL of a few seconds.
+
+**Token-logo reports.** The web app shows each token's logo from the address its creator gave, in the visitor's browser; KOB stores
+no image. To let visitors report a logo (the first report hides it for everyone until you restore it) add to `kob-executor.toml`:
+
+```toml
+[logo_reports]
+enabled = true
+# cooldown_secs = 21600        # after a restore, reports are only recorded for 6 hours
+# per_client_per_hour = 5
+# max_per_day = 200
+```
+
+The two routes (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`) then sit behind the same tunnel; the per-client limit uses the
+visitor address of this section, so keep `trusted_proxies` and `client_ip_header` right. You review with
+`kob-executor index logo-reports list | restore | hide` on this machine (`executor.md`, Part B). Set the GitHub repository variable
+`KOB_LOGO_REPORT_URL` to `https://chart.example.org/v1/logo-reports` so the Issue form feeds the same list.
 
 **Abuse, in the API and at Cloudflare.** The API limits each client on its own: 20 requests per second with a burst of 60 per
 client address (an IPv6 visitor by its /64, and all the /64s of one /48 together at 100 per second), a heavy read (candles, stats,
@@ -280,7 +296,9 @@ database is brought up to date in place or rebuilt. Then:
    here, offline, no API), or you want to see the new version work before the public does:
    1. Make a second folder `B` (for example `C:\kob-b`) from the new archive. Copy the running folder's `kob-executor.toml` into it and
       change only the port: `listen = "127.0.0.1:8091"`. `data_dir = "kob-data"` is relative to the file, so `B` has its own data.
-   2. Copy the record log: the whole `kob-data/records/` folder of the running indexer into `B/kob-data/records/` (a half-written last
+   2. Logo reports (only with `[logo_reports]` on): they are not in the record log. Run `kob-executor index --config kob-executor.toml
+      logo-reports export > logo-reports.json` in the running folder, and `logo-reports import logo-reports.json` in `B` after the
+      replay (`--onto-database` keeps them). Copy the record log: the whole `kob-data/records/` folder of the running indexer into `B/kob-data/records/` (a half-written last
       frame in the copy is dropped when the log is opened). Then run `kob-executor index replay --config kob-executor.toml` in `B`: it
       builds a new database from the log under the new program's rules and prints a summary at the end (rejected placements by
       reason). Faster, when the release does not change how the database is derived: put a `VACUUM INTO` copy of the running

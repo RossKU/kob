@@ -192,6 +192,30 @@ impl Default for ApiConfig {
     }
 }
 
+/// The token-logo blocklist (`[logo_reports]`; docs/api.md, *Logo reports*). KOB shows a token logo straight from its creator's address in the
+/// viewer's browser and keeps no image. A report (the web app's button, or a GitHub Issue form) hides the logo at once, the operator reviews
+/// it (`kob-executor index logo-reports`), and the web app reads the list of hidden tokens from `GET /v1/logo-blocklist`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LogoReportsConfig {
+    /// Serve `POST /v1/logo-reports` and `GET /v1/logo-blocklist` (default false: both answer 404).
+    pub enabled: bool,
+    /// After the operator restored a logo, new reports for the token do not hide it again for this long (they are still recorded).
+    /// Default 21600 (6 hours).
+    pub cooldown_secs: u64,
+    /// Reports one client may file per hour (the client address of the guard: behind `api.trusted_proxies`, IPv6 per
+    /// `api.rate_limit.ipv6_prefix_bits`). Default 5; 0: none.
+    pub per_client_per_hour: u32,
+    /// Reports accepted from all clients together per 24 hours. Default 200; 0: none.
+    pub max_per_day: u32,
+}
+
+impl Default for LogoReportsConfig {
+    fn default() -> Self {
+        LogoReportsConfig { enabled: false, cooldown_secs: 21_600, per_client_per_hour: 5, max_per_day: 200 }
+    }
+}
+
 /// What a node of `nodes` is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -330,6 +354,8 @@ pub struct IndexerConfig {
     #[serde(alias = "rawlog")]
     pub records: RecordsConfig,
     pub api: ApiConfig,
+    /// The token-logo blocklist the web app reads and reports to (`[logo_reports]`, [`crate::logo_reports`]).
+    pub logo_reports: LogoReportsConfig,
     /// What the binary started without arguments runs with this file (`crate::setup`; `kob-executor setup` writes it into
     /// `kob-executor.toml` next to the executable). Every command given the file as `--config` ignores the table.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -378,6 +404,7 @@ impl Default for IndexerConfig {
             rules: ListingRules::default(),
             records: RecordsConfig::default(),
             api: ApiConfig::default(),
+            logo_reports: LogoReportsConfig::default(),
             launch: None,
             receipts: None,
         }

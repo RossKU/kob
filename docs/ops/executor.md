@@ -1258,9 +1258,27 @@ own programs connect and one shared set of limits is right; with a proxy in fron
 Flags of note: `--reorg-window-hours` (default 12, consensus finality), `--no-record-log` (disables
 the permanent record log: then a lost or outdated database can only be rebuilt from what the node
 still retains; not recommended). Subcommands: `run` (default; the indexer alone), `replay`, `export-orders`,
-`export-book` (the matcher's `--book-file` snapshot), `import-orders`, `rebase`.
+`export-book` (the matcher's `--book-file` snapshot), `import-orders`, `rebase`, `logo-reports`.
 `kob-executor run` (Part A) embeds this indexer together with the matcher and the keepers and takes
 the same options.
+
+**Token-logo reports (`[logo_reports]`, `logo-reports`).** KOB shows a token's logo straight from the address its creator gave, in
+the viewer's browser, and keeps no image. With `[logo_reports] enabled = true` this server also takes reports of such logos and
+serves the list of hidden ones (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`; the keys are in docs/api.md, section 6, the routes
+in 3.19 and 3.20). The first report of a token hides its logo at once; you review it:
+
+```
+kob-executor index --config kob-executor.toml logo-reports list        # hidden ones not yet reviewed first (add --json)
+kob-executor index --config kob-executor.toml logo-reports restore <covenant id>   # shown again; new reports only recorded for cooldown_secs
+kob-executor index --config kob-executor.toml logo-reports hide <covenant id>      # hidden for good (restore --force undoes it)
+kob-executor index --config kob-executor.toml logo-reports export > logo-reports.json   # before an `index replay` ...
+kob-executor index --config kob-executor.toml logo-reports import logo-reports.json     # ... and after it (an empty store only)
+```
+
+These open the database next to a running executor (a short write, like the API's own; no lock, and there is no administrative route
+on the network). The reports and the list live in the indexer's database but are not derived from the chain: `index replay` builds a
+new database without them. GitHub Issue reports reach the same list when the repository variable `KOB_LOGO_REPORT_URL` is the
+address of `POST /v1/logo-reports` of the public server.
 
 Fresh database: it starts at `start` (default: the node's pruning point, i.e. everything the node
 still retains). `--start sink` skips history (only new orders, plus imports): this is the **fast route** of an index-only host, which

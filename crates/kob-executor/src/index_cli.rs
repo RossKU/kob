@@ -138,6 +138,12 @@ pub enum IndexSub {
     },
     /// Recovery hook: import orders from a maker export or archive dump, verified against the node's UTXO set.
     ImportOrders { file: PathBuf },
+    /// Token-logo reports (`[logo_reports]`): review what was reported, restore a logo, hide one for good. Works next to a running
+    /// executor of the same data directory (a short write to its database); there is no administrative route on the network.
+    LogoReports {
+        #[command(subcommand)]
+        cmd: LogoCmd,
+    },
     /// After a gap: move the cursor to a fresh start point and reconcile the tracked orders with the node.
     Rebase {
         /// `sink` or a chain block hash.
@@ -147,6 +153,34 @@ pub enum IndexSub {
         #[arg(long)]
         no_reconcile: bool,
     },
+}
+
+/// `kob-executor index logo-reports`.
+#[derive(Subcommand)]
+pub enum LogoCmd {
+    /// The listed tokens, the hidden and not yet reviewed ones first, with the reports about each.
+    List {
+        /// One JSON array instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the logo again. New reports for the token are then only recorded for `cooldown_secs` (default 6 hours), after that they hide it again.
+    Restore {
+        /// Covenant id (64 hex characters).
+        covenant_id: String,
+        /// Also restore a token that was hidden for good (`hide`).
+        #[arg(long)]
+        force: bool,
+    },
+    /// Hide the logo for good: reports never restore it; `restore --force` does. The token need not have been reported.
+    Hide {
+        /// Covenant id (64 hex characters).
+        covenant_id: String,
+    },
+    /// Print the whole report state as JSON (reports are not derived from the chain: export before `index replay` rebuilds the database).
+    Export,
+    /// Load an export into an empty report store (after `index replay`).
+    Import { file: PathBuf },
 }
 
 pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
@@ -445,6 +479,7 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
             let report = recover::import_orders(&idx.ingest, client.as_ref(), &cfg.network, &export).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        IndexSub::LogoReports { cmd } => logo_reports_cmd(&cfg, cmd)?,
         IndexSub::Rebase { to, no_reconcile } => {
             let idx = Indexer::open(cfg.clone())?;
             let client = node_client(&cfg);
@@ -457,6 +492,70 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
                     r.closed, r.adopted
                 ),
             }
+        }
+    }
+    Ok(())
+}
+
+fn ms_text(ms: i64) -> String {
+    // seconds since the epoch are enough for an operator who pipes it to `date -d @`; keep the table dependency-free
+    format!("{}", ms / 1000)
+}
+
+/// The `logo-reports` subcommands: the administrator's side of the blocklist (`crate::logo_reports`).
+fn logo_reports_cmd(cfg: &IndexerConfig, cmd: LogoCmd) -> Result<()> {
+    use crate::hex::Hash32;
+    use crate::logo_reports as lr;
+    let mut conn = lr::open(&cfg.db_path(), &cfg.network)?;
+    let now = lr::system_now_ms();
+    let id = |s: &str| Hash32::parse(s.trim()).map_err(|e| anyhow!("covenant id: {e}"));
+    match cmd {
+        LogoCmd::List { json } => {
+            let rows = lr::list(&conn)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if rows.is_empty() {
+                println!("no token has been reported");
+            } else {
+                println!(
+                    "{:<64}  {:<9} {:>7}  {:<14} {:>11} {:>11}  issues",
+                    "covenant id", "state", "reports", "ill/imp/oth", "hidden at", "restored at"
+                );
+                for r in rows {
+                    let by = format!("{}/{}/{}", r.by_reason[0], r.by_reason[1], r.by_reason[2]);
+                    let issues = r.issues.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(",");
+                    println!(
+                        "{:<64}  {:<9} {:>7}  {:<14} {:>11} {:>11}  {}",
+                        r.covenant_id,
+                        r.state,
+                        r.reports,
+                        by,
+                        ms_text(r.hidden_ms),
+                        r.restored_ms.map_or("-".into(), ms_text),
+                        issues
+                    );
+                }
+                println!("times are Unix seconds. hidden = hidden by a report, not yet reviewed; restore it, or hide it for good.");
+            }
+        }
+        LogoCmd::Restore { covenant_id, force } => {
+            lr::restore(&mut conn, &id(&covenant_id)?, now, force)?;
+            println!(
+                "restored {}: its logo shows again; reports in the next {} s are only recorded",
+                covenant_id.trim(),
+                cfg.logo_reports.cooldown_secs
+            );
+        }
+        LogoCmd::Hide { covenant_id } => {
+            lr::hide_for_good(&mut conn, &id(&covenant_id)?, now)?;
+            println!("hidden for good: {}", covenant_id.trim());
+        }
+        LogoCmd::Export => println!("{}", serde_json::to_string_pretty(&lr::export(&conn)?)?),
+        LogoCmd::Import { file } => {
+            let doc: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&file).with_context(|| file.display().to_string())?)?;
+            let (tokens, rows) = lr::import(&mut conn, &doc).map_err(|e| anyhow!(e))?;
+            println!("imported {tokens} listed token(s) and {rows} report(s)");
         }
     }
     Ok(())
