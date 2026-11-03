@@ -1249,7 +1249,7 @@ pub fn snapshot(conn: &Connection) -> String {
         &[23],
     );
     dump(
-        "SELECT txid, idx, covenant_id, value, spk, state, created_block, created_daa, spent_block, spent_txid, spent_entry, spent_amount FROM order_utxos ORDER BY txid, idx",
+        "SELECT txid, idx, covenant_id, value, spk, kob_ustate(state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)), created_block, created_daa, spent_block, spent_txid, spent_entry, spent_amount FROM order_utxos ORDER BY txid, idx",
         12,
         &mut out,
         "utxo",
@@ -1277,7 +1277,7 @@ pub fn snapshot(conn: &Connection) -> String {
         &[7, 9],
     );
     dump(
-        "SELECT txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa, spent_block, spent_txid FROM token_holdings ORDER BY txid, idx",
+        "SELECT txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, kob_hstate(state, family, owner, owner_kind, amount), role, created_block, created_daa, spent_block, spent_txid FROM token_holdings ORDER BY txid, idx",
         15,
         &mut out,
         "holding",
@@ -1514,7 +1514,7 @@ impl Harness {
         let (contract, state): (String, Option<Vec<u8>>) = g
             .conn()
             .query_row(
-                "SELECT o.contract, u.state FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+                "SELECT o.contract, kob_ustate(u.state, o.genesis_state) FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
                  LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx WHERE o.covenant_id = ?1",
                 [&cov.0[..]],
                 |r| Ok((r.get(0)?, r.get(1)?)),

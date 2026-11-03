@@ -119,6 +119,19 @@ pub enum IndexSub {
         #[arg(long)]
         onto_database: bool,
     },
+    /// Bring the data directory to the compact storage layout (schema 6): fills-only indexes, packed state spans, a compacted
+    /// store and gzip-compressed sealed record-log segments. Stop the executor first (it takes the writer lock). A store
+    /// written by an earlier build also works as it is; this gives the space back. Safe to repeat or to stop; the previous store
+    /// file is kept beside the new one (`index.sqlite3.before-migrate`) until you delete it. Needs free disk for the
+    /// compacted copy.
+    Migrate {
+        /// Do not compact the store into a new file (the packed rows are rewritten in place; the file keeps its size).
+        #[arg(long)]
+        no_compact: bool,
+        /// Do not compress the sealed record-log segments.
+        #[arg(long)]
+        no_compress_log: bool,
+    },
     /// Print a maker order export (JSON) from the database.
     ExportOrders {
         /// Maker public key (hex); default: all makers.
@@ -435,6 +448,25 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
                 for (reason, n) in rows {
                     println!("  {n:>9}  {reason}");
                 }
+            }
+        }
+        IndexSub::Migrate { no_compact, no_compress_log } => {
+            let opts = indexer::storage::Options { compact: !no_compact, compress_log: !no_compress_log };
+            let r = indexer::storage::migrate(&cfg, opts, |line| println!("{line}"))?;
+            println!(
+                "store {} -> {} bytes; record log {} -> {} bytes ({} segment(s) compressed); order_utxos {}/{} and token_holdings {}/{} state(s) packed",
+                r.db_bytes_before,
+                r.db_bytes_after,
+                r.log_bytes_before,
+                r.log_bytes_after,
+                r.log_segments_compressed,
+                r.utxos_packed,
+                r.utxos_total,
+                r.holdings_packed,
+                r.holdings_total
+            );
+            if let Some(old) = r.kept_old {
+                println!("the previous store file is kept as {}: delete it once the executor has run on the new one", old.display());
             }
         }
         IndexSub::ExportOrders { maker, live_only } => {

@@ -111,7 +111,9 @@ CREATE TABLE IF NOT EXISTS order_events (
 );
 CREATE INDEX IF NOT EXISTS order_events_cov ON order_events (covenant_id, id);
 CREATE INDEX IF NOT EXISTS order_events_block ON order_events (block_seq);
-CREATE INDEX IF NOT EXISTS order_events_fills ON order_events (kind, token_cov_id, id);
+-- The fills only (about a third of the events): `kind = 'fill'` is in every read that wants them, so the planner takes this index for exactly those
+-- (a store built before 2026-11 had them as `(kind, token_cov_id, id)` over every event; `index migrate` swaps it).
+CREATE INDEX IF NOT EXISTS order_events_fills ON order_events (token_cov_id, id) WHERE kind = 'fill';
 
 -- In-place amends (AMEND record): the order row's terms BEFORE the amend of block `block_seq` (restored on revert).
 CREATE TABLE IF NOT EXISTS order_amends (
@@ -226,12 +228,12 @@ CREATE TABLE IF NOT EXISTS token_holdings (
     spent_txid    BLOB,
     PRIMARY KEY (txid, idx)
 );
-CREATE INDEX IF NOT EXISTS token_holdings_owner ON token_holdings (owner, token_cov_id);
 -- The programs of one token's holdings, read by a skip-scan (MIN(program), then the next above it) for every evaluated order and every
 -- open-list token (`reads::proven_programs`: 0.1 ms; the DISTINCT it replaced read all of a token's holdings, 18 s on the soak).
 CREATE INDEX IF NOT EXISTS token_holdings_token_program ON token_holdings (token_cov_id, program);
 -- The holdings of a token or of an owner in page order, spent ones included (`GET /v1/token-utxos?spent=true`): no sort of the lot.
--- (The token's page index replaces the `(token_cov_id, owner)` one, which no read used: `token_holdings_owner` serves the pair.)
+-- (The token's page index replaces the `(token_cov_id, owner)` one, which no read used. An earlier store also had `(owner, token_cov_id)`:
+-- the owner's page index serves the pair, in page order and without the sort; `index migrate` drops it.)
 CREATE INDEX IF NOT EXISTS token_holdings_token_page ON token_holdings (token_cov_id, created_block, txid, idx);
 CREATE INDEX IF NOT EXISTS token_holdings_owner_page ON token_holdings (owner, created_block, txid, idx);
 CREATE INDEX IF NOT EXISTS token_holdings_created ON token_holdings (created_block);
@@ -280,7 +282,8 @@ CREATE TABLE IF NOT EXISTS order_flags (
 );
 
 -- Market reads: candles and 24 h stats select fills by time window, and the API asks for the newest event time.
-CREATE INDEX IF NOT EXISTS order_events_fill_ts ON order_events (kind, token_cov_id, ts);
+-- The fills only, as `order_events_fills` (earlier stores: `(kind, token_cov_id, ts)` over every event).
+CREATE INDEX IF NOT EXISTS order_events_fill_ts ON order_events (token_cov_id, ts) WHERE kind = 'fill';
 CREATE INDEX IF NOT EXISTS order_events_ts ON order_events (ts);
 CREATE INDEX IF NOT EXISTS orders_token_genesis ON orders (token_cov_id, genesis_block, covenant_id);
 -- The distinct programs the orders of a token pin, by skip-scan (`reads::claimed_programs`, `reads::open_standard_scale`): evaluated for

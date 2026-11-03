@@ -98,7 +98,7 @@ pub struct ImportReport {
 pub fn export_orders(conn: &Connection, maker: Option<&[u8]>, live_only: bool) -> DbResult<MakerExport> {
     let network = crate::indexer::db::meta_get(conn, "network")?.unwrap_or_default();
     let mut st = conn.prepare(
-        "SELECT o.template_hash, CASE WHEN u.txid IS NULL THEN o.genesis_state ELSE u.state END, o.ext_commit, o.covenant_id, o.genesis_txid, s.status, o.parent
+        "SELECT o.template_hash, CASE WHEN u.txid IS NULL THEN o.genesis_state ELSE kob_ustate(u.state, o.genesis_state) END, o.ext_commit, o.covenant_id, o.genesis_txid, s.status, o.parent
          FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx
          WHERE (?1 IS NULL OR o.maker = ?1) AND (?2 = 0 OR s.status IN ('open', 'partial'))
@@ -143,8 +143,8 @@ fn prefund_ext(conn: &Connection, o: &ExportedOrder) -> DbResult<Option<Hash32>>
     let Some((token, _)) = state.custodies().get(1).copied() else { return Ok(None) };
     let row: Option<(String, Vec<u8>)> = conn
         .query_row(
-            "SELECT program, state FROM token_holdings WHERE owner = ?1 AND token_cov_id = ?2 AND role = 'custody' \
-             ORDER BY created_block DESC, idx DESC LIMIT 1",
+            "SELECT program, kob_hstate(state, family, owner, owner_kind, amount) FROM token_holdings \
+             WHERE owner = ?1 AND token_cov_id = ?2 AND role = 'custody' ORDER BY created_block DESC, idx DESC LIMIT 1",
             rusqlite::params![&cov.0[..], &token[..]],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -328,7 +328,8 @@ fn owned_token_scripts(conn: &Connection, covs: &[Hash32]) -> Result<Vec<OwnedTo
     use kob_protocol::artifacts::{token_template, TemplateId};
     let mut out = Vec::new();
     let mut st = conn.prepare(
-        "SELECT t.txid, t.idx, t.role, t.amount, h.program, h.state, o.ext_commit, o.token_tpl_hash, o.family \
+        "SELECT t.txid, t.idx, t.role, t.amount, h.program, kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount), o.ext_commit, \
+         o.token_tpl_hash, o.family \
          FROM token_utxos t LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN orders o ON o.covenant_id = t.owner \
          WHERE t.owner = ?1 AND t.spent_block IS NULL",
     )?;
@@ -377,7 +378,8 @@ fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result
     let Some(tid) = TemplateId::from_name(&contract) else { return Ok(None) };
     let state: Option<Vec<u8>> = conn
         .query_row(
-            "SELECT state FROM order_utxos WHERE covenant_id = ?1 AND spk = ?2 AND state IS NOT NULL ORDER BY created_block DESC LIMIT 1",
+            "SELECT kob_ustate(u.state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = u.covenant_id)) FROM order_utxos u \
+             WHERE u.covenant_id = ?1 AND u.spk = ?2 AND u.state IS NOT NULL ORDER BY u.created_block DESC LIMIT 1",
             rusqlite::params![&cov.0[..], spk],
             |r| r.get(0),
         )

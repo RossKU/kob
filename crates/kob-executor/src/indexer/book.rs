@@ -83,7 +83,7 @@ pub fn snapshot(conn: &Connection, _operator: Option<[u8; 32]>) -> DbResult<Memo
 /// a taker's own inventory) land here; the maintenance jobs (`crate::maintenance`) merge or sell them.
 pub fn operator_tokens(conn: &Connection, operator: &[u8; 32]) -> DbResult<Vec<crate::maintenance::OwnToken>> {
     let mut st = conn.prepare_cached(
-        "SELECT txid, idx, token_cov_id, program, value, state, created_daa FROM token_holdings \
+        "SELECT txid, idx, token_cov_id, program, value, kob_hstate(state, family, owner, owner_kind, amount), created_daa FROM token_holdings \
          WHERE owner = ?1 AND spent_block IS NULL ORDER BY created_block, txid, idx",
     )?;
     let rows = st.query_map([&operator[..]], |r| {
@@ -136,7 +136,8 @@ struct OwnedToken {
 
 fn owned_tokens(conn: &Connection) -> DbResult<HashMap<[u8; 32], Vec<OwnedToken>>> {
     let mut st = conn.prepare_cached(
-        "SELECT t.owner, t.txid, t.idx, t.amount, t.value, t.role, t.created_daa, t.token_cov_id, h.program, h.state \
+        "SELECT t.owner, t.txid, t.idx, t.amount, t.value, t.role, t.created_daa, t.token_cov_id, h.program, \
+                kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount) \
          FROM token_utxos t LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx \
          WHERE t.spent_block IS NULL ORDER BY t.created_block, t.txid, t.idx",
     )?;
@@ -196,7 +197,7 @@ pub(crate) fn live_orders_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         format!(
-            "SELECT o.covenant_id, o.contract, o.family, o.deadline, o.ext_commit, u.txid, u.idx, u.value, u.state, u.created_daa, \
+            "SELECT o.covenant_id, o.contract, o.family, o.deadline, o.ext_commit, u.txid, u.idx, u.value, kob_ustate(u.state, o.genesis_state), u.created_daa, \
              o.template_hash \
              FROM order_state s \
              CROSS JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \

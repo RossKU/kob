@@ -714,7 +714,7 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
     let pinned = pinned_template();
     let sql = format!(
         "SELECT o.covenant_id, o.contract, o.maker, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
-                s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, u.state, u.created_daa \
+                s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, kob_ustate(u.state, o.genesis_state), u.created_daa \
          {LIVE_FROM} \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} \
@@ -1203,7 +1203,7 @@ const ORDER_SELECT: &str = "SELECT o.covenant_id, o.contract, o.template_hash, o
     o.token_tpl_hash, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, \
     o.reserve, o.initial_amount, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, \
     o.unlisted_reason, o.origin, s.status, s.filled_amount, s.remaining_amount, s.cur_txid, s.cur_idx, s.cur_value, \
-    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, u.state, u.created_daa, fl.reason, \
+    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, kob_ustate(u.state, o.genesis_state), u.created_daa, fl.reason, \
     o.genesis_state \
     FROM orders o LEFT JOIN order_state s ON s.covenant_id = o.covenant_id \
     LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
@@ -1405,7 +1405,7 @@ pub struct TokenUtxoView {
 
 /// The columns [`token_utxo_from_row`] reads (`t` = `token_utxos`, `h` = the output's proven `token_holdings` row).
 const TOKEN_UTXO_COLUMNS: &str =
-    "t.txid, t.idx, t.token_cov_id, t.owner, t.amount, t.value, t.role, t.created_daa, t.spent_block, t.spent_txid, h.program, h.state, \
+    "t.txid, t.idx, t.token_cov_id, t.owner, t.amount, t.value, t.role, t.created_daa, t.spent_block, t.spent_txid, h.program, kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount), \
      (fo.token_cov_id IS NOT NULL AND t.token_cov_id != fo.token_cov_id AND (fo.quote_cov_id IS NULL OR t.token_cov_id != fo.quote_cov_id))";
 const TOKEN_UTXO_FROM: &str =
     "FROM token_utxos t LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN orders fo ON fo.covenant_id = t.owner";
@@ -1618,7 +1618,7 @@ const ORDER_SELECT_BY_STATUS: &str = "SELECT o.covenant_id, o.contract, o.templa
     o.token_tpl_hash, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, \
     o.reserve, o.initial_amount, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, \
     o.unlisted_reason, o.origin, s.status, s.filled_amount, s.remaining_amount, s.cur_txid, s.cur_idx, s.cur_value, \
-    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, u.state, u.created_daa, fl.reason, \
+    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, kob_ustate(u.state, o.genesis_state), u.created_daa, fl.reason, \
     o.genesis_state \
     FROM order_state s CROSS JOIN orders o ON o.covenant_id = s.covenant_id \
     LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
@@ -2015,7 +2015,8 @@ pub fn holdings(
     }
     args.push(SqlValue::Integer(limit as i64 + 1));
     let sql = format!(
-        "SELECT txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa, spent_block, spent_txid \
+        "SELECT txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, \
+         kob_hstate(state, family, owner, owner_kind, amount), role, created_block, created_daa, spent_block, spent_txid \
          FROM token_holdings {} ORDER BY created_block, txid, idx LIMIT ?{}",
         if conds.is_empty() { String::new() } else { format!("WHERE {}", conds.join(" AND ")) },
         args.len()

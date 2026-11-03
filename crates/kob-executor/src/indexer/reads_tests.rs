@@ -151,7 +151,7 @@ fn store(seed: u64, n: usize) -> Connection {
     for _ in 0..n {
         conn.execute(
             "INSERT INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, \
-             created_block, created_daa, spent_block) VALUES (?1,?2,?3,'KCC20Ref_8x8',1,?4,0,5,1,x'00','owned',?5,1,?6)",
+             created_block, created_daa, spent_block) VALUES (?1,?2,?3,'KCC20Ref_8x8',1,?4,0,5,1,x'08','owned',?5,1,?6)",
             params![
                 r.bytes(),
                 r.below(2) as i64,

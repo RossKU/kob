@@ -16,6 +16,7 @@ pub mod kcc23;
 pub mod lean;
 pub mod lock;
 pub mod market;
+pub mod packed;
 pub mod pairs;
 pub mod prefetch;
 pub mod processor;
@@ -24,6 +25,7 @@ pub mod record;
 pub mod recordlog;
 pub mod recovery;
 pub mod status;
+pub mod storage;
 pub mod trust;
 
 use crate::api::{self, ApiState};

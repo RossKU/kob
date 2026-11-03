@@ -15,7 +15,10 @@ use tokio::sync::Semaphore;
 /// 3 (protocol v2.6): the `receipts` table is gone (the trade receipt is retired; `migrate` drops it). 5 (protocol v3): quantities
 /// in token base units and prices per whole token (`orders.scale`, `min_fill`, `tip`, `budget_rate`, `initial_amount`, ...). A
 /// database of schema 4 or older cannot be migrated ([`refuse_pre_v3`]): `index replay` rebuilds it from the record log.
-pub const SCHEMA_VERSION: i64 = 5;
+/// 6 (2026-11): the state spans of `order_utxos` and `token_holdings` are stored packed ([`super::packed`]): a build of schema 5
+/// misreads them, so it refuses a schema 6 store (the first start of this build on a store of schema 5 moves it to 6; `index migrate`
+/// packs what an earlier build wrote whole and gives the space back).
+pub const SCHEMA_VERSION: i64 = 6;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]
@@ -55,6 +58,8 @@ fn pragmas(conn: &Connection, writer: bool) -> rusqlite::Result<()> {
     }
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "foreign_keys", "OFF")?;
+    // `kob_pack`, `kob_ustate`, `kob_hpack`, `kob_hstate`: how queries read and write the packed state spans
+    super::packed::register(conn)?;
     // the row counters' triggers count an INSERT OR REPLACE of `order_state` once (schema.sql, `counters`): a REPLACE must
     // not fire the delete trigger as well
     conn.pragma_update(None, "recursive_triggers", "OFF")?;
@@ -346,6 +351,7 @@ pub fn open_reader(path: &Path, network: &str) -> DbResult<Connection> {
 
 pub fn open_memory(network: &str) -> DbResult<Connection> {
     let conn = Connection::open_in_memory()?;
+    super::packed::register(&conn)?;
     conn.execute_batch(SCHEMA_SQL)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
     migrate(&conn)?;

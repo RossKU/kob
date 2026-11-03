@@ -174,8 +174,8 @@ fn has_live_custody_of(conn: &Connection, cov: &Hash32, token: &Hash32) -> DbRes
 fn pair_custody_exts(conn: &Connection, cov: &Hash32, token: &Hash32, state: &AnyState) -> DbResult<Vec<[u8; 32]>> {
     let mut v = vec![];
     let mut st = conn.prepare_cached(
-        "SELECT program, state FROM token_holdings WHERE owner = ?1 AND token_cov_id = ?2 AND role = 'custody' \
-         ORDER BY created_block DESC, idx DESC LIMIT 4",
+        "SELECT program, kob_hstate(state, family, owner, owner_kind, amount) FROM token_holdings \
+         WHERE owner = ?1 AND token_cov_id = ?2 AND role = 'custody' ORDER BY created_block DESC, idx DESC LIMIT 4",
     )?;
     let rows = st.query_map(params![&cov.0[..], &token.0[..]], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
     for r in rows {
@@ -241,7 +241,7 @@ fn is_exact_custody(
 ) -> DbResult<bool> {
     let row = conn
         .prepare_cached(
-            "SELECT o.contract, o.token_cov_id, o.ext_commit, u.state FROM orders o \
+            "SELECT o.contract, o.token_cov_id, o.ext_commit, kob_ustate(u.state, o.genesis_state) FROM orders o \
              JOIN order_utxos u ON u.covenant_id = o.covenant_id AND u.spent_block IS NULL \
              WHERE o.covenant_id = ?1 ORDER BY u.created_block DESC, u.idx DESC LIMIT 1",
         )?
@@ -710,7 +710,7 @@ impl Processor {
             .exists(params![&token.0[..], program.name()])?;
         conn.prepare_cached(
             "INSERT OR IGNORE INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,kob_hpack(?10,?5,?6,?7,?8),?11,?12,?13)",
         )?
         .execute(params![
             &txid.0[..],
@@ -1278,7 +1278,10 @@ impl Processor {
         daa: u64,
     ) -> DbResult<()> {
         conn.prepare_cached(
-            "INSERT OR REPLACE INTO order_utxos (txid, idx, covenant_id, value, spk, state, created_block, created_daa) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            // the state is stored as its difference from the order's genesis state ([`super::packed`]); the order row is written
+            // before its first UTXO
+            "INSERT OR REPLACE INTO order_utxos (txid, idx, covenant_id, value, spk, state, created_block, created_daa) \
+             VALUES (?1,?2,?3,?4,?5,kob_pack(?6, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = ?3)),?7,?8)",
         )?
         .execute(params![&txid.0[..], idx, &cov.0[..], value as i64, spk, state, seq, daa as i64])?;
         Ok(())
@@ -1943,6 +1946,11 @@ pub fn tx_json(rec: &TxRecord, payload: Vec<u8>) -> TxJson {
 /// (txid, idx, value, state) of an order's current UTXO.
 type TipRow = (Vec<u8>, i64, i64, Option<Vec<u8>>);
 
+/// The unspent UTXO of an order covenant (`?1`) that is its tip, with its state decoded against the order's genesis state
+/// ([`super::packed`]).
+const TIP_UTXO_SQL: &str = "SELECT txid, idx, value, kob_ustate(state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)) \
+     FROM order_utxos WHERE covenant_id = ?1 AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1";
+
 /// The fill amounts of one order (see [`refresh_order_state`] for the `+kind`). Summed in Rust, saturating: base-unit
 /// amounts of hostile orders can sum past an `i64`, where SQLite's `SUM` fails (a failed refresh would stall the follower).
 pub(crate) const FILLED_AMOUNT_SQL: &str = "SELECT amount FROM order_events WHERE covenant_id = ?1 AND +kind = 'fill'";
@@ -1966,15 +1974,11 @@ pub fn refresh_order_state(conn: &Connection, cov: &Hash32) -> DbResult<()> {
         return Ok(());
     };
     // `+kind`: through the order's own events (`order_events_cov`). On `kind = 'fill'` alone the planner picks the
-    // market index (`order_events_fill_ts`, kind first) and reads every fill of every token, on every fill and placement
+    // market index (`order_events_fill_ts`, over the fills) and reads every fill of every token, on every fill and placement
     // (refresh cost grew with the chain's fill count: 1.5 ms per KOB transaction after 60 s of a busy chain).
     let filled = filled_amount(conn, cov)?;
-    let tip: Option<TipRow> = conn
-        .prepare_cached(
-            "SELECT txid, idx, value, state FROM order_utxos WHERE covenant_id = ?1 AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1",
-        )?
-        .query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-        .optional()?;
+    let tip: Option<TipRow> =
+        conn.prepare_cached(TIP_UTXO_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional()?;
     let last: Option<(i64, i64)> = conn
         .prepare_cached("SELECT block_seq, daa FROM order_events WHERE covenant_id = ?1 ORDER BY id DESC LIMIT 1")?
         .query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -2255,7 +2259,10 @@ impl Processor {
             }
             LogOp::Adopt { covenant_id, old_txid, old_index, txid, index, value, spk, daa, custody, keep } => {
                 let state: Option<Vec<u8>> = conn
-                    .prepare_cached("SELECT state FROM order_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
+                    .prepare_cached(
+                        "SELECT kob_ustate(u.state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = u.covenant_id)) \
+                         FROM order_utxos u WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL",
+                    )?
                     .query_row(params![&old_txid.0[..], old_index], |r| r.get(0))
                     .optional()?
                     .flatten();
@@ -2653,7 +2660,7 @@ mod tests {
         let p = plan(FILLED_AMOUNT_SQL);
         assert!(p.contains("order_events_cov"), "{p}");
         for sql in [
-            "SELECT txid, idx, value, state FROM order_utxos WHERE covenant_id = ?1 AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1",
+            TIP_UTXO_SQL,
             "SELECT block_seq, daa FROM order_events WHERE covenant_id = ?1 ORDER BY id DESC LIMIT 1",
             "SELECT kind, amount FROM order_events WHERE covenant_id = ?1 AND closes = 1 ORDER BY id DESC LIMIT 1",
         ] {

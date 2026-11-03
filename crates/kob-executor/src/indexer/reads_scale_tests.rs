@@ -52,7 +52,7 @@ fn load(path: &std::path::Path, n: usize) {
          INSERT INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, \
                                      created_block, created_daa, spent_block, spent_txid) \
          SELECT randomblob(32), 0, ?2, ?3, 1, CASE WHEN i % 10 = 0 THEN x'aa00000000000000000000000000000000000000000000000000000000000000' \
-                ELSE randomblob(32) END, 0, 5, 100000000, randomblob(112), 'owned', i / 100 + 1, i, \
+                ELSE randomblob(32) END, 0, 5, 100000000, x'08' || randomblob(111), 'owned', i / 100 + 1, i, \
                 CASE WHEN i % 20 = 0 THEN NULL ELSE i / 100 + 2 END, NULL FROM n",
         rusqlite::params![n as i64, &T0[..], P8.name()],
     )
