@@ -84,6 +84,23 @@ fn table_digest(conn: &Connection, label: &str, sql: &str) {
     println!("table:{label}\t{:.1}\t{n} rows {d}", t.elapsed().as_secs_f64() * 1000.0);
 }
 
+/// The columns of `table` in order, the packed ones decoded when this build has the functions (`orders.genesis_state`, `order_events.detail`).
+fn columns_with(conn: &Connection, table: &str) -> String {
+    let mut st = conn.prepare(&format!("SELECT name FROM pragma_table_info('{table}')")).expect("table info");
+    let names: Vec<String> = st.query_map([], |r| r.get(0)).expect("columns").map(|r| r.expect("column")).collect();
+    names
+        .iter()
+        .map(|n| match (table, n.as_str()) {
+            ("orders", "genesis_state") if has_fn(conn, "kob_gstate") => {
+                "kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id)".to_string()
+            }
+            ("order_events", "detail") if has_fn(conn, "kob_dtext") => "kob_dtext(detail)".to_string(),
+            _ => n.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let path = std::path::PathBuf::from(args.get(1).expect("index.sqlite3"));
@@ -277,7 +294,7 @@ fn main() {
     // ---- logical digests of every table (stored states decoded)
     if !skip_tables {
         let ustate = if has_fn(&conn, "kob_ustate") {
-            "kob_ustate(u.state, (SELECT o.genesis_state FROM orders o WHERE o.covenant_id = u.covenant_id))"
+            "kob_ustate(u.state, (SELECT kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id) FROM orders o WHERE o.covenant_id = u.covenant_id))"
         } else {
             "u.state"
         };
@@ -327,9 +344,15 @@ fn main() {
                     "token_utxos" => "txid, idx",
                     _ => "rowid",
                 };
-                table_digest(&conn, t, &format!("SELECT * FROM {t} ORDER BY {order}"));
+                // the packed columns decoded when this build has the functions that decode them
+                let list = columns_with(&conn, t);
+                table_digest(&conn, t, &format!("SELECT {list} FROM {t} ORDER BY {order}"));
             }
         }
-        table_digest(&conn, "meta", "SELECT k, v FROM meta WHERE k NOT IN ('schema_version') AND k NOT LIKE 'storage%' ORDER BY k");
+        table_digest(
+            &conn,
+            "meta",
+            "SELECT k, v FROM meta WHERE k NOT IN ('schema_version', 'holding_programs') AND k NOT LIKE 'storage%' ORDER BY k",
+        );
     }
 }
