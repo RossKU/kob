@@ -8,7 +8,7 @@ are in [argent-feedback.md](argent-feedback.md). Compiler pin and patches: [../a
 | Layer | What | Where |
 |---|---|---|
 | Contracts | Hand-written SilverScript: the order covenants (KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdAsk, KobIfdBid, and the pair orders KobPair, KobCondPair, KobIfdPair). Per-order values live in the state span, so each kind has one template. | `contracts/v2/*.sil`, `contracts/artifacts/*.json` |
-| Argent shell | The same contracts published as the Argent app `KOBOrders` (actor handles, state layouts, entries), the KRON limit orders as `KOBOrdersKron`, plus the 8/8 token prototype as `KOBToken` (KOB issues the standard 3/3 reference, `KCC20Ref`). | `contracts/argent/KOBOrders/`, `contracts/argent/KOBOrdersKron/`, `contracts/argent/KOBToken/` |
+| Argent shell | The same contracts published as the Argent app `KOBOrders` (actor handles, state layouts, entries), the KRON limit orders as `KOBOrdersKron`, plus the 8/8 token prototype as `KOBToken` (`KCC20Ref`, the standalone 3/3 reference, which `kob token issue --program 3x3` issues; the default issuance is the published public-mint app). | `contracts/argent/KOBOrders/`, `contracts/argent/KOBOrdersKron/`, `contracts/argent/KOBToken/` |
 | Composition | KOB's own Argent app: payment intents and swap-and-pay. | `contracts/argent/kob_router.ag`, `contracts/argent/router/` |
 
 Matching, batches and wallet flows stay in Rust (`kob-protocol`); Argent is used where other
@@ -65,7 +65,7 @@ Two things about the reference build:
   and the artifact id. What is reviewed and shipped is the `.sil` and its silverc artifact; the
   Argent artifact is derived from them and checked by CI.
 
-`KOBToken` (the 8/8 token, a provisional prototype: KOB issues the standard 3/3 reference `KCC20Ref`, built from
+`KOBToken` (the 8/8 token, a provisional prototype: the standalone 3/3 reference `KCC20Ref`, which KOB issues only when it is named, built from
 `kcc20.ag` as a single-actor app by `scripts/build-argent.sh`) is a separate app on purpose: an actor inside a multi-actor Argent app gets
 compiler-owned template fields in its state, which would change the token program. As its own
 single-actor app, argentc output is byte-identical (modulo comments) to
@@ -197,7 +197,7 @@ has a `deadline` (see "Deadline" below): from it on anyone may `expire` the inte
 intent's state names every token twice, by covenant id and by program handle (`actor_type<KCC20State> token_type`;
 the swaps `token_a_type`, `token_b_type`; the KRON intents `actor_type<KronTokenState>` for token A). The router
 reads every observed token input and pins every token output under the handle in the state, so one actor serves every
-KCC-20 program of the 112-byte state (the 3/3 reference program KOB issues, the reference's published public-mint build and
+KCC-20 program of the 112-byte state (the standalone 3/3 reference program, the reference's published public-mint build, which KOB issues by default, and
 the prototype variants) and both KRON programs (2,433 B and 2,732 B: raw bytecode, not Argent apps, so open ICC is the only way to
 observe them; `KronTokenState` is declared in the router, `owner id_type amount is_minter`). The payer chooses the handle
 at creation and nothing can change it afterwards; a verifier recomputes it from its allowlist like every other term

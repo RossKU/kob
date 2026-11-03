@@ -2,7 +2,8 @@
 
 Status: checked on 2026-10-02 against the Last Call texts; KCC-20 and its reference program re-checked on 2026-10-09,
 after both were merged upstream (sections 2 and 4); KOB's issuance moved to the standard 3 / 3 program and the genesis check of
-public-mint tokens was added on 2026-10-10 (sections 4.3 to 4.5). KOB handles any token through adapters, but its own KCC-20
+public-mint tokens was added on 2026-10-10 (sections 4.3 to 4.5); on 2026-11-04 the default issuance became the published
+public-mint build (section 4.4). KOB handles any token through adapters, but its own KCC-20
 programs, its issuance and every encoding it labels KCC must conform to the KCC base specifications. This file records
 what was checked, against which upstream bytes, what did not conform and what changed, and what still depends on
 upstream.
@@ -149,7 +150,7 @@ The order templates do not change (they take the token template as a value).
 Tokens issued under the old `KCC20Ref_8x8` keep their program on chain; this build pins only the new template, so it no
 longer lists, builds for or matches them (as for any template it does not pin: [template-retirement.md](template-retirement.md)),
 and orders whose `tokenTplHash` names the old template are unknown to it. On testnet the tokens are issued again, under
-the standard 3 / 3 program (section 4.4).
+the standalone 3 / 3 program (section 4.4; the default issuance has been the published public-mint build since 2026-11-04).
 
 ### 4.3 Genesis check of public-mint tokens
 
@@ -223,10 +224,38 @@ covenant context and `verify_genesis`; the genesis minter mints a holder of the 
 zero-amount holder, and the two then transfer as `KCC20` holders; the refusals above; the registry record and its live-mint-authority fact
 over chain evidence, `genesis_evidence::verify_token`).
 
-### 4.4 Issuance: the standard 3 / 3 program (2026-10-10)
+### 4.4 Issuance: the published public-mint build by default (2026-11-04), the standalone 3 / 3 on request
 
-KOB issues the reference in its standard configuration, `KCC20Ref` (3 token inputs / 3 token outputs per transaction,
-registry `kcc20-ref-3x3`): `kob token issue` and the web app by default; the published public-mint build is the second
+**Default since 2026-11-04.** `kob token issue` and the web app's Create page issue the `KCC20` actor of upstream's
+published `KCC20PublicMint` app (3 token inputs / 3 token outputs per transaction, registry `kcc20-ref-public-mint`,
+template `734850b0...`; section 4.3). The genesis holds only `KCC20` holders: no `PublicMint`, no `TokenSeed`, so no
+minter exists or can appear later (a minter is created only by a minter) and the supply is fixed forever, exactly as with the
+standalone program (`kob_protocol::issue` test `the_default_issuance_leaves_no_public_minter`: KOB's own genesis check reports
+no minter output, no seed and no mint allowance; the testnet-10 token PMKC, covenant
+`5c75037a...2902d493`, was issued this way with nothing minted). The standalone
+`KCC20Ref` (registry `kcc20-ref-3x3`, the standard configuration of the reference as a single-actor app) is still issued, but
+only when it is named: `kob token issue --program 3x3`, and the "Standalone 3 / 3" choice under Advanced on the Create page.
+Existing 3 / 3 tokens stay fully tradable; the strict template list and the registry semantics are unchanged.
+
+Why: the published app is the de-facto standard. kascov.io lists a token of it as a "KCC-20 token" (verified, conformant) and
+picks up its declared name, ticker and image (the PMKC token was indexed with them); NACHO on mainnet uses it byte for byte;
+the standalone 3 / 3 is used only by KOB, and kascov does not index it. Other indexers and wallets that follow the
+published app therefore recognise what KOB issues.
+
+What it costs (measured on testnet-10, 2026-11-04):
+
+| | issuance (preparation + genesis) | 1 -> 1 transfer | signature script of a 1 -> 1 transfer |
+|---|---|---|---|
+| Published public-mint build (default) | 0.00415 KAS | 0.00901 KAS | 4,218 B |
+| Standalone 3 / 3 (`--program 3x3`) | 0.00415 KAS | 0.00678 KAS | 3,102 B |
+
+Issuance costs the same; a transfer of the default program costs 33 % more, because every token input pushes the whole
+program (the published app's holder program is larger). KOB takes the interoperability over the lower transfer fee; the 3 / 3
+stays available for a token whose creator values the lower fee more than recognition by other indexers (the CLI says so in its
+plan, and the Create page in the choice's hint).
+
+KOB's earlier choice (2026-10-10), kept for the record: it issued the reference in its standard configuration, `KCC20Ref`
+(3 token inputs / 3 token outputs per transaction, registry `kcc20-ref-3x3`), the published public-mint build being the second
 choice. The slot variants (`KCC20Ref_4x5`, `KCC20Ref_8x8`, `KCC20Ref_16x16`), `KCC20P2` / `KCC20Batch` and `KCC20Opt` are
 prototypes: kept, built and tested, not KOB's issuance (the CLI issues the 8/8 only when it is named `--program 8x8-prototype`,
 with a warning; the app does not offer it). `KCC20Ref_8x8` stays a pinned template (`pending-review`: not tradable on
@@ -244,8 +273,8 @@ transactions of the same tick (`crates/kob-executor/tests/matcher_scenarios.rs`,
 
 ### 4.5 On testnet-10
 
-* New tokens are issued as `KCC20Ref` (3 / 3); the soak tokens (TUSD, TETH, TBTC) are issued again that way
-  (`tools/soak/README.md`).
+* New tokens are issued as `KCC20PublicMint` (3 / 3) since 2026-11-04 (`KCC20Ref` when `--program 3x3` names it); the soak tokens
+  (TUSD, TETH, TBTC) are issued as `KCC20Ref` (3 / 3) by name, as before (`tools/soak/README.md`).
 * Tokens issued before the merged reference (`KCC20Ref_8x8` template `40fef59a...`) are not pinned by this build: it does
   not list, build for or match them, and their orders are unknown to it. Their makers end such orders with the cancel built
   by the release they were placed with, and their permissionless refunds still validate after expiry

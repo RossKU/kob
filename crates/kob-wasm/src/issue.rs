@@ -3,9 +3,10 @@
 //! A creation is two transactions under KCC-23 (`kob_protocol::issue::build_creation`): `prep`, the preparation (the wallet's
 //! P2PK funding -> output 0, the wallet's own P2PK of exactly the genesis's carriers and fee, + change; payload = `0x00` + the
 //! token metadata JSON), and `built`, the genesis spending `prep`'s output 0 alone (input 0 authorises the KIP-20 genesis group,
-//! so the covenant id commits to the declaration) -> 1..N token outputs of the reference KCC-20 program in its standard 3 / 3
-//! configuration (`KCC20Ref`, KOB's standard; or with `"program": "public-mint"` the `KCC20` actor of upstream's published
-//! `KCC20PublicMint` app, `KCC20PublicMint`; the 8 / 8 prototype is not offered here), no change. Both are signed by the
+//! so the covenant id commits to the declaration) -> 1..N token outputs of the `KCC20` actor of upstream's published
+//! `KCC20PublicMint` app (`KCC20PublicMint`, 3 / 3 slots, the default since 2026-11-04; no minter is created); or with
+//! `"program": "3x3"` the standalone reference program in its 3 / 3 configuration (`KCC20Ref`); the 8 / 8 prototype is not
+//! offered here), no change. Both are signed by the
 //! wallet's key; the genesis is built and signed before the preparation is on chain (a transaction id does not depend on
 //! signature scripts). `build_creation` does the planning and `CreationPlan::verify` the consensus-level checks (the KCC-23
 //! binding included); this module only maps JSON in and the plans out as normal [`BuiltTx`], so the existing `finalize` /
@@ -91,7 +92,7 @@ struct IssueRequest {
     telegram: Option<String>,
     #[serde(default)]
     network: Option<String>,
-    /// `3x3` (default) or `public-mint` (`kob_protocol::issue::IssueProgram::parse`); the `8x8-prototype` the CLI knows is
+    /// `public-mint` (default) or `3x3` (`kob_protocol::issue::IssueProgram::parse`); the `8x8-prototype` the CLI knows is
     /// refused here.
     #[serde(default)]
     program: Option<String>,
@@ -268,7 +269,7 @@ fn to_spec(r: &IssueRequest, fee_rate: u64) -> R<IssueSpec> {
             return Err("KaspaRocket's testnet-10 program is issued from the CLI only (`--program kasparocket-testnet`)".into());
         }
         if spec.program.is_prototype() {
-            return Err("the 8 / 8 program is a prototype and is not issued from the app: use 3x3 (the default) or public-mint".into());
+            return Err("the 8 / 8 program is a prototype and is not issued from the app: use public-mint (the default) or 3x3".into());
         }
     }
     Ok(spec)
@@ -412,9 +413,10 @@ pub fn issue_limits() -> R<String> {
         "maxMetadataBytes": kcc23::MAX_TOKEN_PAYLOAD,
         "ownerSchemes": OWNER_SCHEMES_ENABLED,
         "covenantOwnerScheme": issue::SCHEME_COVENANT_ID,
+        // the standalone 3 / 3 reference program (`"program": "3x3"` in the request): issued only when named
         "program": "KCC20Ref",
         "registryTemplateId": REGISTRY_TEMPLATE_ID,
-        // the published public-mint build of the reference (`"program": "public-mint"` in the request)
+        // the published public-mint build of the reference (the default issuance; `"program": "public-mint"` in the request)
         "publicMint": { "program": "KCC20PublicMint", "registryTemplateId": REGISTRY_TEMPLATE_ID_PUBLIC_MINT, "maxTokenInputs": 3, "maxTokenOutputs": 3 },
         "extensionClass": EXTENSION_CLASS,
         "extensionCommitment": hex(&EXTENSION_FIXED_SUPPLY),

@@ -186,7 +186,7 @@ async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUr
         // learns them from its registry. A real node needs nothing of the kind.
         for (const t of [rc.token, rc.tokenB].filter(Boolean)) {
           const e = t.registryEntry;
-          await mock.registerToken({ ticker: e.ticker, covenant_id: e.covenant_id, program: 'KCC20Ref', extension_commitment: e.extension_commitment, decimals: e.decimals, template_id: e.template_id, standing: 'official' });
+          await mock.registerToken({ ticker: e.ticker, covenant_id: e.covenant_id, program: e.template_id === 'kcc20-ref-3x3' ? 'KCC20Ref' : 'KCC20PublicMint', extension_commitment: e.extension_commitment, decimals: e.decimals, template_id: e.template_id, standing: 'official' });
         }
       }
       await reconnect();

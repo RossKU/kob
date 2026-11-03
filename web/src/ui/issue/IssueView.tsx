@@ -1,5 +1,5 @@
-// Token issuance (`kob token issue` in the browser): a fixed-supply KCC-20 token on the KCC-20 reference program, KOB's standard 3 / 3
-// build `KCC20Ref` by default or the reference's published public-mint build `KCC20PublicMint`. Form -> live validation ->
+// Token issuance (`kob token issue` in the browser): a fixed-supply KCC-20 token on the KCC-20 reference program, by default the published
+// public-mint build `KCC20PublicMint` (3 / 3, no minter) or, chosen under Advanced, the standalone 3 / 3 build `KCC20Ref`. Form -> live validation ->
 // debounced `planIssue` -> summary -> the issuance pre-sign screen (ConfirmSign: the KCC-23 preparation and the genesis, one confirmation) ->
 // tracker + result panel with the registry entry. A creation whose genesis did not go out (data/creations.ts) is offered again at the top.
 // All protocol logic is in kob/issue.ts (kob-wasm); this view only collects strings and renders findings.
@@ -118,7 +118,7 @@ export function IssueView() {
   // mint power has no holder); nothing when the registry does not describe the program
   const fixedLine = useMemo(() => {
     if (!limits) return null;
-    const id = state.program === 'public-mint' ? limits.publicMint.registryTemplateId : limits.registryTemplateId;
+    const id = state.program === '3x3' ? limits.registryTemplateId : limits.publicMint.registryTemplateId;
     const tpl = services.registry.templates.find((x) => x.id === id);
     if (!tpl) return null;
     const powers = (tpl.capabilities ?? []).filter((c) => c !== 'public-mint');
@@ -481,15 +481,15 @@ export function IssueView() {
                 value={state.program}
                 onChange={(v) => set({ program: v })}
                 options={[
-                  { value: 'standard', label: t('issue.program.standard'), 'data-testid': 'issue-program-standard' },
                   { value: 'public-mint', label: t('issue.program.publicMint'), 'data-testid': 'issue-program-public-mint' },
+                  { value: '3x3', label: t('issue.program.threeByThree'), 'data-testid': 'issue-program-3x3' },
                 ]}
                 data-testid="issue-program"
               />
               <p class="muted" data-testid="issue-program-hint">
-                {t(state.program === 'public-mint' ? 'issue.program.publicMint.hint' : 'issue.program.standard.hint')}
+                {t(state.program === '3x3' ? 'issue.program.threeByThree.hint' : 'issue.program.publicMint.hint')}
               </p>
-              <p class="muted small" data-testid="issue-fixed-program">{t(state.program === 'public-mint' ? 'issue.fixed.programPublicMint' : 'issue.fixed.program')}</p>
+              <p class="muted small" data-testid="issue-fixed-program">{t(state.program === '3x3' ? 'issue.fixed.program' : 'issue.fixed.programPublicMint')}</p>
             </div>
           </div>
         </Section>

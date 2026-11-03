@@ -347,6 +347,13 @@ registry (on a testnet-10 page the registry holds no tokens, so there is no warn
 does not list). The covenant id tells tokens apart. Decimals may be 0 to 18, but the market uses at most 9: a token with more
 trades with 9 decimals, so choose 9 or fewer.
 
+The token runs on the **published KCC-20 reference app** by default (the program other tools, such as kascov.io, list as a KCC-20 token);
+it creates only token holders, no minter, so nobody can mint more. Under **Advanced > Token program** you can choose **Standalone 3 / 3**
+instead: a transfer of that token costs less, but other indexers (kascov.io) do not recognise it as a KCC-20 token. Measured on testnet-10
+on 2026-11-04: creating a token costs 0.00415 KAS either way; sending it (one holder to one) costs about 0.0090 KAS with the default and
+0.0068 KAS with the standalone program. Tokens created earlier on the standalone program stay fully tradable. The program is fixed when the
+token is created.
+
 After creation the page shows the token id and "Open its market". The token appears in the Market list once a first sell order exists;
 until then only a wallet that holds it can open it. KOB keeps no listing. The "registry entry" the page offers is optional: apps read
 the on-chain record.

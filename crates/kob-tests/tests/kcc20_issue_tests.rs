@@ -54,10 +54,10 @@ fn pk(kp: &Keypair) -> [u8; 32] {
     kp.x_only_public_key().0.serialize()
 }
 
-/// Issue `holders` (one output each) from a fresh funding UTXO and return the signed, verified plan (KOB's standard
-/// program).
+/// Issue `holders` (one output each) from a fresh funding UTXO and return the signed, verified plan (the standalone
+/// 3 / 3 build; the tests of the published public-mint build use `issue_with`).
 fn issue(holders: Vec<Holder>, funder: &SecretKey) -> GenesisPlan {
-    issue_with(IssueProgram::default(), holders, funder)
+    issue_with(IssueProgram::Ref3x3, holders, funder)
 }
 
 /// [`issue`] with the program `which`.

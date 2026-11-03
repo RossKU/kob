@@ -80,7 +80,12 @@ fn the_scan_bound_covers_every_token_input_of_a_standard_transaction() {
     assert_eq!(kob_protocol::state::MAX_TOK_IN, 8);
     assert_eq!(SA.token_slots(), Some((3, 3)));
     assert_eq!(TemplateId::Kcc20PublicMint.token_slots(), Some((3, 3)));
-    assert_eq!(kob_protocol::issue::IssueProgram::default().template_id(), SA, "KOB issues the standard program");
+    assert_eq!(
+        kob_protocol::issue::IssueProgram::default().template_id(),
+        TemplateId::Kcc20PublicMint,
+        "KOB issues the published public-mint build by default"
+    );
+    assert_eq!(kob_protocol::issue::IssueProgram::Ref3x3.template_id(), SA, "the standalone 3 / 3 is issued only when named");
     for kind in ["KobAsk", "KobBid", "KobCondAsk", "KobCondBid", "KobIfdBid", "KobIfdAsk", "KobPair", "KobCondPair", "KobIfdPair"] {
         let src = common::contract_source(kind);
         assert!(src.contains("int constant MAX_TOK_IN = 8;"), "{kind}: the scan bound");

@@ -194,12 +194,12 @@ async function issueOne(rc, r, which) {
   await goto(h, '#/create');
   if (await tid(h, 'issue-another').count()) await tid(h, 'issue-another').click();
   await tid(h, 'issue-form').waitFor({ timeout: 60_000 });
-  // the program: KOB's standard 3 / 3 reference (KCC20Ref) is the default choice
+  // the program: the published public-mint build (KCC20PublicMint, no minter) is the default choice
   // the program is under Advanced (folded)
   await tid(h, 'issue-advanced').getByRole('button').first().click();
-  if ((await tid(h, 'issue-program-standard').getAttribute('aria-checked')) !== 'true') await tid(h, 'issue-program-standard').click();
+  if ((await tid(h, 'issue-program-public-mint').getAttribute('aria-checked')) !== 'true') await tid(h, 'issue-program-public-mint').click();
   const program = collapse(await tid(h, 'issue-fixed-program').innerText().catch(() => ''));
-  if (!/KCC20Ref\b/.test(program) || /PublicMint/.test(program)) throw new Error(`the issuance screen does not plan the standard 3 / 3 program: "${program}"`);
+  if (!/KCC20PublicMint\b/.test(program)) throw new Error(`the issuance screen does not plan the default public-mint program: "${program}"`);
   await tid(h, 'issue-name').fill(`KOB real ${rc.name} ${which}`);
   await tid(h, 'issue-ticker').fill(ticker);
   await tid(h, 'issue-decimals').fill('8');
@@ -231,14 +231,14 @@ async function issueOne(rc, r, which) {
   if (shownTxid !== s.txid) throw new Error(`the result panel shows txid ${shownTxid}, the confirmation screen ${s.txid}`);
   const registryEntry = JSON.parse(await tid(h, 'issue-registry-entry').innerText());
   if (registryEntry.covenant_id !== tokenId) throw new Error('registry entry covenant id differs from the shown token id');
-  if (registryEntry.template_id !== 'kcc20-ref-3x3' || registryEntry.max_token_inputs !== 3) throw new Error(`the registry entry is not the standard 3 / 3 program: ${JSON.stringify(registryEntry).slice(0, 300)}`);
+  if (registryEntry.template_id !== 'kcc20-ref-public-mint' || registryEntry.max_token_inputs !== 3) throw new Error(`the registry entry is not the default public-mint program: ${JSON.stringify(registryEntry).slice(0, 300)}`);
   step.screenshots.push(await shot(h.page, rc.name, `issue-${which}-result`));
   // the app tracks the wallet's token UTXO from the genesis (independent of the node check above)
   const tracked = await trackedTokens(h);
   const mine = tracked.filter((x) => x.txid === s.txid && x.token === tokenId);
-  if (!mine.length || mine[0].program !== 'KCC20Ref' || BigInt(mine[0].amount) !== SUPPLY * TOKEN) throw new Error(`the app did not track the issued token UTXO (tracked: ${JSON.stringify(tracked).slice(0, 400)})`);
+  if (!mine.length || mine[0].program !== 'KCC20PublicMint' || BigInt(mine[0].amount) !== SUPPLY * TOKEN) throw new Error(`the app did not track the issued token UTXO (tracked: ${JSON.stringify(tracked).slice(0, 400)})`);
   step.tracked = mine;
-  log(`[${rc.name}] issued ${ticker} (3/3) token ${short(tokenId)} in ${Date.now() - t0} ms, tx ${short(s.txid)}`);
+  log(`[${rc.name}] issued ${ticker} (public-mint, 3/3) token ${short(tokenId)} in ${Date.now() - t0} ms, tx ${short(s.txid)}`);
   return { ticker, tokenId, registryEntry, issueTxid: s.txid, supply: String(SUPPLY) };
 }
 

@@ -1,5 +1,6 @@
-//! `kob token issue`: fixed-supply KCC-20 issuance (the reference program in its standard 3/3 configuration, KOB's
-//! standard, or the published public-mint build, also 3/3; owner scheme 0x04 enabled, borrow disabled), created under KCC-23:
+//! `kob token issue`: fixed-supply KCC-20 issuance (by default the published public-mint build of the reference, the
+//! de-facto standard KCC-20 program, 3/3; or, named with `--program 3x3`, the standalone 3/3 reference program; owner
+//! scheme 0x04 enabled, borrow disabled), created under KCC-23:
 //! a preparation transaction declares the metadata, the genesis spends its output (`kob_protocol::issue::build_creation`).
 //! `kob token resume` sends a creation whose genesis did not go out; `kob token verify-declaration` checks a launch proof.
 
@@ -20,8 +21,9 @@ use crate::wrpc;
 
 /// Usage text of `kob token issue`.
 pub const ISSUE_USAGE: &str = "\
-kob token issue: issue a fixed-supply KCC-20 token (the reference program in its standard configuration, 3 token
-inputs / 3 outputs per transfer, or the published public-mint build of the reference, also 3 / 3)
+kob token issue: issue a fixed-supply KCC-20 token (by default the published public-mint build of the KCC-20
+reference, 3 token inputs / 3 outputs per transfer, the program other indexers such as kascov.io list as a KCC-20
+token; `--program 3x3` names the standalone 3 / 3 reference program instead)
 
 A creation is two transactions (KCC-23): the PREPARATION spends the funding into one output of the funding key (the
 genesis's carriers and fee) and the change, its payload declaring the token metadata (0x00 + JSON: name, symbol,
@@ -54,11 +56,14 @@ SUPPLY
                         whole supply goes to `self` (scheme 0).
   --extension-commitment 64-hex (default: 32 zero bytes)
   --allow-borrow        allow BORROW_SCHEME 1..3 on non-0x04 holders (default: borrow disabled everywhere)
-  --program             3x3 (default): KOB's standard, the reference program with its 3 / 3 slots (registry
-                        kcc20-ref-3x3); public-mint: the KCC20 actor of upstream's published KCC20PublicMint app, 3 / 3
-                        slots (registry kcc20-ref-public-mint). Its holders carry the app's context field; the genesis
-                        holds only KCC20 holders (no PublicMint, no TokenSeed): a fixed supply. 8x8-prototype: the
-                        8 / 8 slot variant, a prototype that is not KOB's issuance (the plan warns).
+  --program             public-mint (default): the KCC20 actor of upstream's published KCC20PublicMint app, 3 / 3
+                        slots (registry kcc20-ref-public-mint), the de-facto standard that kascov.io lists as a
+                        KCC-20 token. Its holders carry the app's context field; the genesis holds only KCC20 holders
+                        (no PublicMint, no TokenSeed): a fixed supply, nobody can mint more.
+                        3x3: the standalone reference program with its 3 / 3 slots (registry kcc20-ref-3x3): a
+                        transfer costs less (testnet-10, 2026-11-04: 1 -> 1 0.00678 KAS against 0.00901 KAS) but
+                        other indexers (kascov.io) do not recognise it.
+                        8x8-prototype: the 8 / 8 slot variant, a prototype that is not KOB's issuance (the plan warns).
                         kasparocket-testnet: KaspaRocket's program (the public-mint actor at 10 / 10 slots,
                         KaspaRocketToken11458), issued on testnet-10 only, to test KOB against that launchpad.
 
@@ -578,6 +583,9 @@ fn issue(args: &[String]) -> Result<(), String> {
     for w in plan.warnings() {
         println!("warning      {w}");
     }
+    if g.spec.program == IssueProgram::Ref3x3 {
+        println!("note         --program 3x3: a transfer of this token costs less than the default public-mint build, but other indexers (e.g. kascov.io) do not recognise it as a KCC-20 token");
+    }
     // a submitting run asks first (the same rule as every other submitting command: `--yes`, or a terminal; else nothing is
     // written or sent), then always keeps the signed transactions: they are what `kob token resume` sends
     if !a.dry_run {
@@ -871,7 +879,7 @@ mod tests {
         assert_eq!(run_issue(&v(&cmd)), 0);
         let reg: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("registry_entry.json")).unwrap()).unwrap();
         assert_eq!(reg["ticker"], "TEST");
-        assert_eq!(reg["template_id"], "kcc20-ref-3x3");
+        assert_eq!(reg["template_id"], "kcc20-ref-public-mint", "the default issuance is the published public-mint build");
         // the emitted entry is a valid registry token against the shipped templates
         let mut registry = kob_protocol::registry::Registry::default_registry();
         registry.tokens.push(serde_json::from_value(reg.clone()).expect("registry entry parses as a registry token"));
@@ -918,6 +926,12 @@ mod tests {
             hex(&pk)
         );
         assert_eq!(run_issue(&v(&cmd2)), 0);
+        // the standalone 3 / 3 program is issued only when it is named
+        let dir3 = std::env::temp_dir().join(format!("kob-issue-test-3x3-{}", std::process::id()));
+        assert_eq!(run_issue(&v(&format!("{cmd2} --program 3x3 --out-dir {}", dir3.display()))), 0);
+        let reg3: Value = serde_json::from_str(&std::fs::read_to_string(dir3.join("registry_entry.json")).unwrap()).unwrap();
+        assert_eq!(reg3["template_id"], "kcc20-ref-3x3");
+        let _ = std::fs::remove_dir_all(dir3);
         // wrong key refused
         let cmd3 = format!("{cmd2} --key 5555555555555555555555555555555555555555555555555555555555555555");
         assert_eq!(run_issue(&v(&cmd3)), 1);

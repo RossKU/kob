@@ -287,6 +287,14 @@ on a desktop, Chrome on Android), and a phone browser is not told to install an 
 * **Token families.** KCC-20 and KRON tokens trade through the same planners: the family follows the registry template (`kcc20-*` / `kron-*`), order states are tagged
   `KobAsk` / `KobAskKron` etc. (`src/kob/order-facts.ts`: `baseKind`, `kindFor`), token states are `Kcc20State | KronState` (`src/kob/token-state.ts`; a wallet's KRON tokens are
   address-presence UTXOs, `id_type` 3, authorised by a P2PK funding input, never by a signature of their own). Issuance is KCC-20 only.
+* **Issuance program.** The Create page issues, by default (since 2026-11-04), the `KCC20` actor of the published `KCC20PublicMint` app (registry
+  `kcc20-ref-public-mint`, 3 / 3 slots): the de-facto standard that kascov.io lists as a KCC-20 token. The creation holds only token holders, no
+  `PublicMint` and no `TokenSeed`, so the supply is fixed like any other. Under Advanced the choice "Standalone 3 / 3" (`KCC20Ref`,
+  `kcc20-ref-3x3`, request `program: '3x3'`) is offered, with the note that a transfer costs less but other indexers (kascov.io) do not
+  recognise it. Measured on testnet-10, 2026-11-04: issuance 0.00415 KAS for both; a 1 -> 1 transfer 0.00901 KAS (default) against
+  0.00678 KAS (standalone 3 / 3), +33 %. The request always names the program (`src/kob/issue.ts`); tokens already issued as 3 / 3 stay
+  fully tradable, and the Program row of a token page names the program from its template hash (`KCC-20 (published reference app, 3x3)`
+  for the default).
 * **Fees.** A transaction pays `rate x max(compute, normalized transient)` (storage mass is not charged). The RATE is the dynamic fee policy (`src/kob/fee-policy.ts`, the same
   policy as the Rust executor): the node's `getFeeEstimate` bucket of the action's urgency, clamped to [100 sompi per gram (the relay floor), `fees.maxRate` (default 1000)], with a once-only
   rebuild at a lower rate when the fee would exceed `fees.maxFeeKas` (default 1 KAS per transaction; 0 = no cap). Urgency: HIGH = IOC / FOK / market / streaming / close, a limit that

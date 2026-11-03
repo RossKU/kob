@@ -90,9 +90,10 @@ app's minter and seed live in the token's covenant family); `kcc20.ag` itself co
 
 ## Both builds on KOB
 
-KOB issues with the standalone 3 / 3 build by default (`kob token issue`, the web app's default program; KOB's standard
-token program) and offers the published build as the second choice (`kob token issue --program public-mint`, the web
-app's second option); it trades tokens of both builds. The context field is constant: in
+Since 2026-11-04 KOB issues the published build by default (`kob token issue`, the web app's default program: the de-facto
+standard that kascov.io lists as a KCC-20 token) and offers the standalone 3 / 3 build as the explicit second choice
+(`kob token issue --program 3x3`, the web app's "Standalone 3 / 3" option: a 1 -> 1 transfer costs 0.00678 KAS against 0.00901
+KAS, measured on testnet-10 on 2026-11-04, but other indexers do not recognise it); it trades tokens of both builds. The context field is constant: in
 every UTXO of the published build it is the program's own Sil template hash (`9703112e...`), and the 112 bytes after
 it are the standalone state byte for byte. So KOB pins the published build as its KCC-1 actor-type handle, the view
 upstream's `public-mint.artifact.json` exports for `actor_type<KCC20State>` (`template/kcc20`): prefix = the 1-byte

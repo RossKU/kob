@@ -172,12 +172,14 @@ describe('validateIssueForm', () => {
   it('warns about many holders and refuses more than the genesis maximum', () => {
     const many = (n: number) =>
       form({ supply: String(n), holders: Array.from({ length: n }, (_, i) => ({ owner: (i + 1).toString(16).padStart(2, '0').repeat(32), ownerScheme: 1, amount: '1' })) });
-    // the standard program and the public-mint build both move at most 3 token outputs together
+    // the public-mint build and the standalone 3 / 3 program both move at most 3 token outputs together
     expect(validateIssueForm(many(3), limits)).toEqual([]);
     expect(validateIssueForm({ ...many(3), program: 'public-mint' }, limits)).toEqual([]);
+    expect(validateIssueForm({ ...many(3), program: '3x3' }, limits)).toEqual([]);
     const four = validateIssueForm(many(4), limits);
     expect(four.map((i) => [i.code, i.severity, i.params?.maxInputs])).toEqual([['holders.consolidation', 'warning', 3]]);
     expect(validateIssueForm({ ...many(4), program: 'public-mint' }, limits).map((i) => i.code)).toEqual(['holders.consolidation']);
+    expect(validateIssueForm({ ...many(4), program: '3x3' }, limits).map((i) => i.code)).toEqual(['holders.consolidation']);
     const nine = validateIssueForm(many(9), limits);
     expect(nine.map((i) => [i.code, i.severity])).toEqual([['holders.consolidation', 'warning']]);
     expect(codes(many(64))).toEqual(['holders.consolidation']);
@@ -229,7 +231,7 @@ describe('planIssue', () => {
   it('plans, signs, finalizes and validates a default issuance (everything to the maker)', () => {
     const plan = planIssue(kob, form({ description: 'A test token', website: 'https://example.org' }), opts());
     const { built, token, prep } = plan;
-    expect(token).toMatchObject({ program: 'KCC20Ref', ticker: 'TEST', name: 'Test Token', decimals: 8, supply: '100000000000' });
+    expect(token).toMatchObject({ program: 'KCC20PublicMint', ticker: 'TEST', name: 'Test Token', decimals: 8, supply: '100000000000' });
     expect(token.carrier).toBe((10n * KAS).toString());
     expect(token.outputs).toHaveLength(1);
     expect(token.outputs[0]).toMatchObject({ index: 0, amount: '100000000000', owner: maker, ownerScheme: 0, borrowScheme: 0 });
@@ -305,13 +307,13 @@ describe('planIssue', () => {
       expect(u.amount).toBe(out.value);
       const hex = kob.encodeTokenState(u.state);
       expect(kob.decodeTokenState(hex)).toEqual(u.state);
-      expect(kob.tokenScriptPublicKey('KCC20Ref', u.state)).toBe(out.scriptPublicKey);
+      expect(kob.tokenScriptPublicKey('KCC20PublicMint', u.state)).toBe(out.scriptPublicKey);
     }
     // the template hash of the token info is the one the program is pinned to
-    expect(kob.templates().find((t) => t.name === 'KCC20Ref')!.hash).toBe(plan.token.templateHash);
+    expect(kob.templates().find((t) => t.name === 'KCC20PublicMint')!.hash).toBe(plan.token.templateHash);
   });
 
-  it('issues the published public-mint build when the form chooses it', () => {
+  it('issues the published public-mint build by default and when the form chooses it, the standalone 3 / 3 only when chosen', () => {
     const plan = planIssue(kob, form({ program: 'public-mint' }), opts());
     expect(plan.spec.program).toBe('public-mint');
     expect(plan.token.program).toBe('KCC20PublicMint');
@@ -321,9 +323,16 @@ describe('planIssue', () => {
     }
     expect(registryEntryFromIssue(plan.token, plan.docs)).toMatchObject({ template_id: 'kcc20-ref-public-mint', max_token_inputs: 3, max_token_outputs: 3 });
     signAndValidate(plan);
-    // the default form issues the standard program, without a program field in the request
-    const std = planIssue(kob, form(), opts());
-    expect([std.spec.program, std.token.program]).toEqual([undefined, 'KCC20Ref']);
+    // the default form issues the same program, named in the request
+    const dflt = planIssue(kob, form(), opts());
+    expect([dflt.spec.program, dflt.token.program]).toEqual(['public-mint', 'KCC20PublicMint']);
+    // the standalone 3 / 3 build is issued only when the form chooses it
+    const std = planIssue(kob, form({ program: '3x3' }), opts());
+    expect([std.spec.program, std.token.program]).toEqual(['3x3', 'KCC20Ref']);
+    expect(registryEntryFromIssue(std.token, std.docs)).toMatchObject({ template_id: 'kcc20-ref-3x3', max_token_inputs: 3, max_token_outputs: 3 });
+    expect(kob.templates().find((t) => t.name === 'KCC20Ref')!.hash).toBe(std.token.templateHash);
+    for (const u of issuedTokenUtxos(std)) expect(kob.tokenScriptPublicKey('KCC20Ref', u.state)).toBe(std.built.tx.outputs[u.index].scriptPublicKey);
+    signAndValidate(std);
   });
 
   it('issues to several holders, including a covenant-held one with borrowing disabled', () => {
@@ -344,7 +353,7 @@ describe('planIssue', () => {
     expect(plan.token.outputs[1]).toMatchObject({ owner: covOwner, ownerScheme: 4, borrowScheme: 0, borrowGuard: '00'.repeat(32) });
     expect(plan.built.covenants[0].outputs).toEqual([0, 1, 2]);
     for (const u of issuedTokenUtxos(plan)) {
-      expect(kob.tokenScriptPublicKey('KCC20Ref', u.state)).toBe(plan.built.tx.outputs[u.index].scriptPublicKey);
+      expect(kob.tokenScriptPublicKey('KCC20PublicMint', u.state)).toBe(plan.built.tx.outputs[u.index].scriptPublicKey);
       expect(plan.built.tx.outputs[u.index].covenant!.covenantId).toBe(plan.token.covenantId);
     }
     signAndValidate(plan);
@@ -476,7 +485,7 @@ describe('registry entry', () => {
     const plan = planIssue(kob, form({ description: 'A test token', website: 'https://example.org', icon: 'ipfs://bafy' }), opts());
     const entry = registryEntryFromIssue(plan.token, plan.docs);
     expect(entry).toMatchObject({
-      ticker: 'TEST', name: 'Test Token', family: 'kcc20', covenant_id: plan.token.covenantId, template_id: 'kcc20-ref-3x3',
+      ticker: 'TEST', name: 'Test Token', family: 'kcc20', covenant_id: plan.token.covenantId, template_id: 'kcc20-ref-public-mint',
       extension_commitment: '00'.repeat(32), extension_class: 'fixed-supply-standard', decimals: 8,
       max_token_inputs: 3, max_token_outputs: 3, verified: false,
     });
@@ -485,7 +494,7 @@ describe('registry entry', () => {
     // the declaration as made on chain (KOB's fields; facts the chain states itself, like the supply, are not declared again)
     expect(entry.display!.kcc23).toEqual({ name: 'Test Token', symbol: 'TEST', decimals: 8, description: 'A test token', image: 'ipfs://bafy', website: 'https://example.org' });
     check(entry, schema.$defs.token, 'entry');
-    // the template hash is the one the shipped registry pins for kcc20-ref-3x3
+    // the template hash is the one the shipped registry pins for kcc20-ref-public-mint
     const registry = JSON.parse(readFileSync(fileURLToPath(new URL('../../../registry/tokens.json', import.meta.url)), 'utf8'));
     const tpl = registry.templates.find((t: { id: string }) => t.id === entry.template_id);
     expect(tpl.template_hash).toBe(plan.token.templateHash);

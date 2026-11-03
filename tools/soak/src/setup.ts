@@ -113,7 +113,8 @@ export async function recoverIssue(env: Env, stats: Stats, slot: TokenSlot, txid
   log.info('issuance recovered', { slot, ticker: t.ticker, covenantId, txid, holders: Object.keys(genesis).length });
 }
 
-/** Issues the soak token of `slot` (config `token` = TUSD, `token2`, `token3`) with KOB's own issuance (kob-wasm `issue`: KOB's standard program KCC20Ref, 3 / 3, fixed supply). */
+/** Issues the soak token of `slot` (config `token` = TUSD, `token2`, `token3`) with KOB's own issuance (kob-wasm `issue`, fixed supply). The soak stays on the standalone 3 / 3 program KCC20Ref (`SOAK_PROGRAM`), asked for by name since the
+ * default issuance is the published public-mint build (2026-11-04): every soak check and registry template below is that program's. */
 export async function issueToken(env: Env, stats: Stats, slot: TokenSlot = 'token'): Promise<void> {
   const have = issuedOf(env.state, slot);
   if (have) {
@@ -142,6 +143,7 @@ export async function issueToken(env: Env, stats: Stats, slot: TokenSlot = 'toke
     funding,
     network: 'testnet-10',
     description,
+    program: '3x3',
   };
   // an issuance is a NORMAL-urgency transaction of the fee policy (one-off, so no cap rebuild: its fee is a few hundredths of a KAS)
   const fee: FeeEnvFields = withUrgency({ fees: await feeContext(env) } as FeeEnvFields, 'normal');

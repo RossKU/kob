@@ -255,7 +255,7 @@ the fee. The merchant receives exactly `amount` tokens on exactly `carrier` KAS.
 ### 5.2 Token program limits
 
 The reference KCC-20 program bounds the number of token inputs and outputs per transfer at compile
-time (3/3 for the upstream reference, which is also what KOB issues; the 8/8 variant is a prototype; other programs
+time (3/3 for the upstream reference and its published public-mint build, which are also what KOB issues; the 8/8 variant is a prototype; other programs
 exist). A token payment needs
 one input and up to two outputs (merchant and change); a client SHOULD consolidate before paying
 when the payment needs more inputs than the program allows. Each token input carries the whole

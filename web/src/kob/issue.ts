@@ -4,8 +4,8 @@
 // the wallet's own P2PK of exactly the genesis's carriers and fee, + change; its payload declares the token metadata: 0x00 + JSON with name,
 // symbol, decimals and the optional description, image, image_hash, website, x, telegram), and `built`, the genesis spending that output 0 (input 0
 // authorises the KIP-20 genesis group, so the covenant id commits to the declaration) -> 1..N token outputs of the fixed-supply KCC-20
-// reference program in its standard 3 / 3 configuration, `KCC20Ref` (or, chosen in the form, the published public-mint build
-// `KCC20PublicMint`), no change. All protocol logic lives in Rust (`kob-protocol::issue`); this module only turns a human form into the wasm
+// reference, by default the published public-mint build `KCC20PublicMint` (the de-facto standard KCC-20 program, 3 / 3; no minter is created)
+// or, chosen in the form, the standalone 3 / 3 build `KCC20Ref`, no change. All protocol logic lives in Rust (`kob-protocol::issue`); this module only turns a human form into the wasm
 // spec, selects funding and types the result. Both are ordinary `BuiltTx`, so `kob.finalize` and `kob.validate` handle each unchanged;
 // wallet/create.ts signs both under one confirmation and sends the preparation first.
 import { schnorr } from '@noble/curves/secp256k1.js';
@@ -35,10 +35,10 @@ export interface IssueLimits {
   maxMetadataBytes?: number;
   ownerSchemes: number[];
   covenantOwnerScheme: number;
-  /** KOB's standard program (the default): the KCC-20 reference with its 3 / 3 slots */
+  /** the standalone 3 / 3 reference program (request `program: '3x3'`): issued only when chosen */
   program: 'KCC20Ref';
   registryTemplateId: string;
-  /** the published public-mint build of the reference (request `program: 'public-mint'`): 3 / 3 slots */
+  /** the published public-mint build of the reference, the default issuance (request `program: 'public-mint'`): 3 / 3 slots */
   publicMint: { program: 'KCC20PublicMint'; registryTemplateId: string; maxTokenInputs: number; maxTokenOutputs: number };
   extensionClass: string;
   extensionCommitment: Hex;
@@ -80,7 +80,7 @@ export interface IssueSpec {
   /** the token's Telegram: a handle or its address (declared as `https://t.me/<handle>`) */
   telegram?: string;
   network?: string;
-  /** `3x3` (default, `KCC20Ref`) or `public-mint` (`KCC20PublicMint`, the published build of the reference) */
+  /** `public-mint` (default, `KCC20PublicMint`, the published build of the reference) or `3x3` (`KCC20Ref`, the standalone 3 / 3) */
   program?: '3x3' | 'public-mint';
 }
 
@@ -257,11 +257,11 @@ export interface IssueHolderForm {
   borrowGuard?: Hex;
 }
 
-/** The program a form issues: KOB's standard (the KCC-20 reference, 3 / 3) or the reference's published public-mint build (also 3 / 3). */
-export type IssueProgramChoice = 'standard' | 'public-mint';
+/** The program a form issues: the reference's published public-mint build (the default, 3 / 3) or the standalone 3 / 3 build (`KCC20Ref`; cheaper transfers, but other indexers do not recognise it). */
+export type IssueProgramChoice = 'public-mint' | '3x3';
 
 export interface IssueForm {
-  /** absent = `standard` */
+  /** absent = `public-mint` */
   program?: IssueProgramChoice;
   name: string;
   /** exactly as it will be issued: 2..12 characters A-Z 0-9 */
@@ -502,7 +502,7 @@ export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimal
 
 /** Token inputs / outputs per transfer of the program the form issues. */
 export function slotsOf(form: Pick<IssueForm, 'program'>, limits: IssueLimits): { maxTokenInputs: number; maxTokenOutputs: number } {
-  return form.program === 'public-mint' ? limits.publicMint : limits;
+  return form.program === '3x3' ? limits : limits.publicMint;
 }
 
 /** Validates an issuance form: `error` issues block the plan, `warning` issues are shown. `registryTickers` = tickers already in the registry. */
@@ -622,7 +622,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     carrier: parsed.carrier.toString(),
     feeRate: feeRate.toString(),
     changeTo: (opts.changeTo ?? maker).toLowerCase(),
-    ...(form.program === 'public-mint' ? { program: 'public-mint' as const } : {}),
+    program: form.program === '3x3' ? ('3x3' as const) : ('public-mint' as const),
     ...(form.allowBorrow ? { allowBorrow: true } : {}),
     ...(form.description.trim() ? { description: form.description.trim() } : {}),
     ...(form.icon.trim() ? { icon: form.icon.trim() } : {}),
@@ -686,7 +686,7 @@ export function socialUrl(kind: 'x' | 'telegram', input: string): string | null 
 
 /**
  * The issued token's facts in the registry format (`RegistryTokenEntry`): `verified: false`, program = the pinned template of the issued program
- * (`kcc20-ref-3x3`, or `kcc20-ref-public-mint`). Checks that the docs describe this token before handing them out.
+ * (`kcc20-ref-public-mint`, or `kcc20-ref-3x3`). Checks that the docs describe this token before handing them out.
  */
 export function registryEntryFromIssue(token: IssueToken, docs: IssueDocs): RegistryTokenEntry {
   const e = docs.registryEntry;

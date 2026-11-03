@@ -26,6 +26,12 @@ describe('the Program row', () => {
     expect(programFactText(row({ index: index(ref.templateHash), genesis: { status: 'unavailable', reason: 'unreachable' } }))).toBe('KCC-20 (KOB reference, 3x3) · template matched, genesis not checked');
   });
 
+  it('a token on the default issuance program (the published public-mint app) is named as that app, not as a public mint', () => {
+    const pm = TOKEN_PROGRAMS.find((p) => p.name === 'KCC20PublicMint')!;
+    const genesis = { status: 'verified', source: 'kascov', txid: 'a', program: 'KCC20PublicMint', supply: 1n, mintAllowance: null, mintersUnspent: null } as const;
+    expect(programFactText(row({ index: index(pm.templateHash, 'kcc20-ref-public-mint'), genesis }))).toBe('KCC-20 (published reference app, 3x3) · checked from its genesis');
+  });
+
   it('a failed genesis check is stated as a fact, no more', () => {
     expect(programFact(row({ index: index(ref.templateHash), genesis: { status: 'failed', code: 'mismatch', message: 'x' } })).basis).toBe('genesisFailed');
   });

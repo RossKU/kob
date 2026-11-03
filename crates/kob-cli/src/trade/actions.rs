@@ -1129,7 +1129,7 @@ USAGE
                                                 address or a 64-hex x-only key; the recipient's token output carries
                                                 --carrier (default 2KAS, at least 0.08KAS and the program's floor)
 
-  A token transfer stays within its program's slots (the standard 3/3 program: at most 3 token inputs and 3 token
+  A token transfer stays within its program's slots (the 3/3 programs KOB issues: at most 3 token inputs and 3 token
   outputs: the recipient and your change), taking the fewest of your token UTXOs; KAS for the carrier and the fee
   come from your KAS UTXOs, largest first.
 ";

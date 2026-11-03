@@ -11,7 +11,7 @@ export default {
   'issue.fixed.title': 'What you are creating',
   'issue.fixed.supply': 'The supply is fixed forever: there is no mint function, so nobody (including you) can create more tokens later.',
   'issue.fixed.noBurn': 'There is no burn function either: the program cannot destroy tokens.',
-  'issue.fixed.program': "Program KCC20Ref: the KCC-20 reference in its standard configuration (up to 3 token inputs and 3 outputs per transfer), the program KOB creates tokens with. Moving more than 3 token outputs together takes several transfers. Tokens created now stay on this program.",
+  'issue.fixed.program': "Program KCC20Ref: the standalone KCC-20 reference (up to 3 token inputs and 3 outputs per transfer). A transfer costs less than with the default program, but other indexers (kascov.io) do not recognise the token as a KCC-20 token. Moving more than 3 token outputs together takes several transfers. Tokens created now stay on this program.",
   'issue.fixed.programPublicMint': "Program KCC20PublicMint: the KCC20 actor of the reference's published public-mint app (up to 3 token inputs and 3 outputs per transfer). Only token holders are created: no public minter and no seed, so the supply stays fixed. Reviewed by an internal KOB review only (no independent audit). Tokens created now stay on this program.",
   'issue.fixed.unaudited': "UNAUDITED: this program has not been audited. Create only what you can afford to lose and do not present it as safe.",
   'issue.fixed.carrier': 'Every token output locks some KAS (the carrier). It stays in that token UTXO and returns to the holder when the tokens are spent or consolidated.',
@@ -19,10 +19,10 @@ export default {
 
   // form
   'issue.section.program': 'Token program',
-  'issue.program.standard': 'KCC-20 reference (standard)',
-  'issue.program.standard.hint': 'KCC20Ref, the reference program in its standard configuration: 3 token inputs and 3 outputs per transfer. Recommended.',
-  'issue.program.publicMint': 'Published public-mint build',
-  'issue.program.publicMint.hint': 'KCC20PublicMint: the holders of the reference\'s published public-mint app, also 3 / 3. A fixed supply all the same (no minter is created). Reviewed by an internal KOB review only, like the standard program.',
+  'issue.program.publicMint': 'KCC-20 (default)',
+  'issue.program.publicMint.hint': "KCC20PublicMint: the holders of the published KCC-20 reference app, the program other tools such as kascov.io list as a KCC-20 token; 3 token inputs and 3 outputs per transfer. A fixed supply all the same (no minter is created). A 1-to-1 transfer cost about 0.0090 KAS on testnet-10 (2026-11-04). Recommended.",
+  'issue.program.threeByThree': 'Standalone 3 / 3',
+  'issue.program.threeByThree.hint': "KCC20Ref, the standalone reference program: 3 token inputs and 3 outputs per transfer. A transfer costs less (about 0.0068 KAS against 0.0090 KAS on testnet-10, 2026-11-04), but other indexers such as kascov.io do not recognise it as a KCC-20 token.",
   'issue.section.token': 'Token',
   'issue.section.holders': 'Holders',
   'issue.section.carrier': 'Carrier',

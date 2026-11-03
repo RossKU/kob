@@ -54,7 +54,7 @@ export default {
   'market.program.name.KCC20Ref_16x16': 'KCC-20 (KOB reference, 16x16)',
   'market.program.name.KCC20P2': 'KCC-20 (KOB reference, P2)',
   'market.program.name.KCC20KaspaCom_0_2_5': 'KCC-20 (KaspaCom 0.2.5)',
-  'market.program.name.KCC20PublicMint': 'KCC-20 (KOB reference, public mint)',
+  'market.program.name.KCC20PublicMint': 'KCC-20 (published reference app, 3x3)',
   'market.program.name.KronToken2433': 'KRON (2433)',
   'market.program.name.KronToken2732': 'KRON (2732)',
   'market.program.name.KForgeToken1785': 'KRON (KForge 1785)',

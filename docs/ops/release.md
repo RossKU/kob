@@ -34,9 +34,10 @@ for testnet-10 and mainnet.
 1. Wallet signing gate passed for the wallets the release supports (covenant inputs signed by the wallet).
 2. KCC-20 template bytes pinned against the upstream specification (Last Call) and its conformance vectors
    (`crates/kob-tests/vectors`, `docs/spec/kcc-conformance.md`); the KCC-20 programs other than the two below stay
-   `pending-review` (not supported for trading). The reference 3/3 (`kcc20-ref-3x3`, KOB's standard program) is `reviewed` by internal
+   `pending-review` (not supported for trading). The reference 3/3 (`kcc20-ref-3x3`, issued only when named since 2026-11-04) is `reviewed` by internal
    review only (maintainer decision 2026-10-12, canary launch), and so is the reference's published public-mint build
-   (`kcc20-ref-public-mint`, maintainer decision 2026-10-13, the same permissionless KCC-20 policy).
+   (`kcc20-ref-public-mint`, maintainer decision 2026-10-13, the same permissionless KCC-20 policy), which `kob token issue`
+   and the web app issue by default since 2026-11-04.
 3. Internal review: no open high or critical finding.
 4. The TN10 soak completed by the operator, including the incident, `recover` and backup / restore drills
    (`docs/ops/executor.md` 7.8).
@@ -50,11 +51,15 @@ logos, warnings written by people) belongs to external community token lists (`r
 KOB's"). At launch:
 
 * **Supported programs (the program allowlist):** the two KRON programs (`kron-2433`, `kron-2732`), reviewed with
-  conditions, and the reference KCC-20 3/3 (`kcc20-ref-3x3`, the program `kob token issue` and the web app issue),
+  conditions, and the reference KCC-20 3/3 (`kcc20-ref-3x3`, issued by `kob token issue --program 3x3` only),
   reviewed internally (maintainer decision 2026-10-12): every token of these programs is tradable, with a registry entry
   or without one (issuance is permissionless; there is no listing step for any token). The reference's published
-  public-mint build (`kcc20-ref-public-mint`, KOB's second issuance option and the program of third-party launchpads such
-  as Kasseal) is reviewed internally too (maintainer decision 2026-10-13) and supported: its tokens are tradable the same
+  public-mint build (`kcc20-ref-public-mint`, the program `kob token issue` and the web app issue by default since
+  2026-11-04, and the program of third-party launchpads such as Kasseal) is reviewed internally too (maintainer decision
+  2026-10-13) and supported (why it is the default: it is the de-facto standard that kascov.io lists as a KCC-20 token, and
+  the standalone 3/3 is used only by KOB; a 1 -> 1 transfer costs 0.00901 KAS against 0.00678 KAS for the 3/3, measured on
+  testnet-10 on 2026-11-04, issuance 0.00415 KAS for both; `docs/spec/kcc-conformance.md` 4.4); a token KOB issues holds no
+  `PublicMint`, so its supply is fixed: its tokens are tradable the same
   way; a token whose genesis carries a `PublicMint` can grow up to `supply + mint_allowance` (recorded by verify-genesis,
   and reported as the warning `live_mint_authority` while a minter with allowance lives). The 8/8 prototype and KaspaCom's
   KCC20 0.2.5 (finding K-1) stay `pending-review`: this build does not trade their tokens on mainnet.

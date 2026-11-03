@@ -27,10 +27,11 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-holder-add')).toBeHidden();
     await expect(page.getByTestId('issue-carrier')).toBeHidden();
     await page.getByTestId('issue-advanced').getByRole('button').first().click();
-    // the program: KOB's standard 3 / 3 reference by default, the published public-mint build as the one alternative
-    await expect(page.getByTestId('issue-program-standard')).toHaveAttribute('aria-checked', 'true');
+    // the program: the published public-mint build (KCC20PublicMint, no minter) by default, the standalone 3 / 3 as the one alternative
+    await expect(page.getByTestId('issue-program-public-mint')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('issue-program').getByRole('radio')).toHaveCount(2);
-    await expect(page.getByTestId('issue-fixed-program')).toContainText('KCC20Ref');
+    await expect(page.getByTestId('issue-fixed-program')).toContainText('KCC20PublicMint');
+    await expect(page.getByTestId('issue-program-hint')).toContainText('kascov.io');
     await page.getByTestId('issue-name').fill('New Example Coin');
     // the ticker is uppercased as typed
     await page.getByTestId('issue-ticker').fill('newkcc');
@@ -45,14 +46,15 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-holder-0-amount')).toHaveValue('1000000');
     await expect(page.getByTestId('issue-summary')).toBeVisible();
     await expect(page.getByTestId('issue-summary-supply')).toContainText('1,000,000');
-    await expect(page.getByTestId('issue-summary')).toContainText('KCC20Ref');
-    // switching to the public-mint build plans that program; back to the standard one for the issuance below
-    await page.getByTestId('issue-program-public-mint').click();
-    await expect(page.getByTestId('issue-program-public-mint')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('issue-summary')).toContainText('KCC20PublicMint');
-    await expect(page.getByTestId('issue-fixed-program')).toContainText('KCC20PublicMint');
-    await page.getByTestId('issue-program-standard').click();
-    await expect(page.getByTestId('issue-summary')).not.toContainText('KCC20PublicMint');
+    // choosing the standalone 3 / 3 plans that program and says it is not recognised by other indexers; back to the default for the issuance below
+    await page.getByTestId('issue-program-3x3').click();
+    await expect(page.getByTestId('issue-program-3x3')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByTestId('issue-summary')).toContainText('KCC20Ref');
+    await expect(page.getByTestId('issue-fixed-program')).toContainText('KCC20Ref');
+    await expect(page.getByTestId('issue-program-hint')).toContainText('do not recognise');
+    await page.getByTestId('issue-program-public-mint').click();
+    await expect(page.getByTestId('issue-summary')).not.toContainText('KCC20Ref');
 
     await page.getByTestId('issue-review').click();
     await expect(page.getByTestId('confirm-screen')).toBeVisible();
@@ -101,12 +103,12 @@ test.describe('token issuance', () => {
     // the wallet's token output is remembered by the token tracker (test hook window.__kob, present with features.test)
     const tracked = await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk), TEST_KEYS.alice.pubkey);
     expect(tracked).toHaveLength(1);
-    expect(tracked[0]).toMatchObject({ transactionId: genesis.txid, index: 0, tokenCovId: tokenId, program: 'KCC20Ref' });
+    expect(tracked[0]).toMatchObject({ transactionId: genesis.txid, index: 0, tokenCovId: tokenId, program: 'KCC20PublicMint' });
     expect(tracked[0].state.amount).toBe('100000000');
 
     // the token's facts in the registry format (for tools and community lists: no listing request; the page itself shows no verification state)
     const entry = JSON.parse((await page.getByTestId('issue-registry-entry').textContent()) ?? '');
-    expect(entry).toMatchObject({ ticker: 'NEWKCC', name: 'New Example Coin', decimals: 2, covenant_id: tokenId, template_id: 'kcc20-ref-3x3', max_token_inputs: 3, verified: false });
+    expect(entry).toMatchObject({ ticker: 'NEWKCC', name: 'New Example Coin', decimals: 2, covenant_id: tokenId, template_id: 'kcc20-ref-public-mint', max_token_inputs: 3, verified: false });
     expect(entry).not.toHaveProperty('status');
     expect(entry.display).toMatchObject({ x: 'https://x.com/newkcc', telegram: 'https://t.me/newkcc_chat' });
     for (const gone of ['issue-result-unverified', 'issue-result-pending', 'issue-result-nottradable']) await expect(page.getByTestId(gone)).toHaveCount(0);
@@ -161,7 +163,7 @@ test.describe('token issuance', () => {
     expect(await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk).length, alice)).toBe(1);
     const held = await mock.get(`/v1/token-utxos?owner=${alice}&token=${tokenId}`);
     expect(held.items).toHaveLength(1);
-    expect(held.items[0]).toMatchObject({ txid: genesisTxid, index: 0, token: tokenId, owner: alice, amount: '100000000000', role: 'owned', program: 'KCC20Ref', spent: false });
+    expect(held.items[0]).toMatchObject({ txid: genesisTxid, index: 0, token: tokenId, owner: alice, amount: '100000000000', role: 'owned', program: 'KCC20PublicMint', spent: false });
     // a key that did not receive it is listed nothing
     expect((await mock.get(`/v1/token-utxos?owner=${TEST_KEYS.bob.pubkey}&token=${tokenId}`)).items).toEqual([]);
 

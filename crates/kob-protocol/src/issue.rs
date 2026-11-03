@@ -1,14 +1,16 @@
 //! Fixed-supply KCC-20 issuance: program pinning, genesis transaction builder, verification and the
 //! off-chain documents (supply, metadata, registry entry) that describe the issued token.
 //!
-//! What is issued ([`IssueProgram`]): by default the reference KCC-20 program (argent kcc20-reference c8a0871) in its
-//! standard configuration, 3 token inputs / 3 token outputs per transfer, built as a single-actor app
-//! (`contracts/kcc20/KCC20Ref.sil`, registry `kcc20-ref-3x3`): KOB's standard token program. Second option: the `KCC20`
-//! actor of upstream's published `KCC20PublicMint` app (`contracts/third-party/kcc20-reference`, also 3 / 3), whose
-//! holders carry the compiler-owned context `gen__kcc20_template` (the program's own Sil template hash) before the
-//! 112-byte state: the genesis then holds only `KCC20` holders of that app (no `PublicMint`, no `TokenSeed`), which every
-//! wallet of the app reads as its own token. Neither program has a mint, burn or public-mint entry, so the supply is
-//! exactly the sum of the genesis outputs, fixed forever. The 8 / 8 slot variant (`KCC20Ref_8x8`) is a prototype: the CLI
+//! What is issued ([`IssueProgram`]): by default (since 2026-11-04) the `KCC20` actor of upstream's published
+//! `KCC20PublicMint` app (`contracts/third-party/kcc20-reference`, registry `kcc20-ref-public-mint`, 3 token inputs / 3
+//! token outputs per transfer), the de-facto standard KCC-20 program that indexers such as kascov.io list as a KCC-20 token.
+//! Its holders carry the compiler-owned context `gen__kcc20_template` (the program's own Sil template hash) before the
+//! 112-byte state: the genesis holds only `KCC20` holders of that app (no `PublicMint`, no `TokenSeed`), which every
+//! wallet of the app reads as its own token. Explicit second choice: the standalone single-actor 3 / 3 build of the reference
+//! (argent kcc20-reference c8a0871, `contracts/kcc20/KCC20Ref.sil`, registry `kcc20-ref-3x3`), which costs less per
+//! transfer (1 -> 1 on testnet-10, 2026-11-04: 0.00678 KAS against 0.00901 KAS) but that other indexers do not recognise.
+//! Neither program has a mint, burn or public-mint entry usable without a minter actor, and a creation makes none, so the
+//! supply is exactly the sum of the genesis outputs, fixed forever. The 8 / 8 slot variant (`KCC20Ref_8x8`) is a prototype: the CLI
 //! issues it only when it is named `8x8-prototype`, the wasm surface and the web app never. Proposal P2 and `KCC20Opt`
 //! are not used.
 //!
@@ -93,9 +95,9 @@ pub const MAX_GENESIS_OUTPUTS: usize = 64;
 pub const MAX_STANDARD_MASS: u64 = 100_000;
 /// Registry class of the extension commitment used by the tool.
 pub const EXTENSION_CLASS: &str = "fixed-supply-standard";
-/// Id of the pinned program in `registry/tokens.json` that KOB-issued tokens run by default (reference KCC-20, 3/3 slots).
+/// Id of the standalone 3 / 3 build in `registry/tokens.json` ([`IssueProgram::Ref3x3`], issued only when named).
 pub const REGISTRY_TEMPLATE_ID: &str = "kcc20-ref-3x3";
-/// Id of the published public-mint build in `registry/tokens.json` ([`IssueProgram::PublicMint`]).
+/// Id of the published public-mint build in `registry/tokens.json` ([`IssueProgram::PublicMint`], the default issuance).
 pub const REGISTRY_TEMPLATE_ID_PUBLIC_MINT: &str = "kcc20-ref-public-mint";
 /// Id of the 8 / 8 prototype in `registry/tokens.json` ([`IssueProgram::Ref8x8Prototype`]).
 pub const REGISTRY_TEMPLATE_ID_8X8_PROTOTYPE: &str = "kcc20-ref-8x8";
@@ -118,12 +120,13 @@ const KASPAROCKET_NAME: &str = "KaspaRocketToken11458";
 /// The token program an issuance runs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IssueProgram {
-    /// KOB's standard: the reference KCC-20 program in its default configuration, 3 / 3 slots (`KCC20Ref`, registry
-    /// `kcc20-ref-3x3`).
-    #[default]
+    /// The standalone reference KCC-20 program in its default configuration, 3 / 3 slots (`KCC20Ref`, registry
+    /// `kcc20-ref-3x3`): cheaper per transfer than the default, but other indexers (kascov.io) do not recognise it. Issued
+    /// only when named (`--program 3x3`).
     Ref3x3,
-    /// The `KCC20` actor of upstream's published `KCC20PublicMint` app, 3 / 3 slots (`KCC20PublicMint`, registry
-    /// `kcc20-ref-public-mint`): a fixed-supply genesis of holders of that app.
+    /// The default issuance: the `KCC20` actor of upstream's published `KCC20PublicMint` app, 3 / 3 slots
+    /// (`KCC20PublicMint`, registry `kcc20-ref-public-mint`): a fixed-supply genesis of holders of that app, with no minter.
+    #[default]
     PublicMint,
     /// Prototype, not KOB's issuance: the reference program with 8 / 8 slot limits (`KCC20Ref_8x8`, registry
     /// `kcc20-ref-8x8`). Only the CLI issues it, when it is named `8x8-prototype`, and every plan carries a warning.
@@ -135,7 +138,7 @@ pub enum IssueProgram {
 }
 
 impl IssueProgram {
-    /// Parses the CLI spelling (`3x3`, the default; `public-mint`; `8x8-prototype`).
+    /// Parses the CLI spelling (`public-mint`, the default; `3x3`; `8x8-prototype`).
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "3x3" | "ref" | "kcc20-ref-3x3" => Ok(IssueProgram::Ref3x3),
@@ -143,10 +146,10 @@ impl IssueProgram {
             "8x8-prototype" => Ok(IssueProgram::Ref8x8Prototype),
             "kasparocket-testnet" => Ok(IssueProgram::KaspaRocketTestnet),
             "8x8" | "ref-8x8" | "kcc20-ref-8x8" => invalid(
-                "the 8 / 8 program is a prototype, not KOB's issuance: issue 3x3 (the default) or public-mint, or name the \
+                "the 8 / 8 program is a prototype, not KOB's issuance: issue public-mint (the default) or 3x3, or name the \
                  prototype 8x8-prototype",
             ),
-            other => invalid(format!("unknown program `{other}` (3x3 or public-mint)")),
+            other => invalid(format!("unknown program `{other}` (public-mint or 3x3)")),
         }
     }
     /// Id of the program in `registry/tokens.json`.
@@ -514,7 +517,7 @@ pub struct IssueSpec {
     pub telegram: Option<String>,
     /// Network label recorded in supply.json (informational).
     pub network: String,
-    /// The token program issued (default: the reference program with its standard 3 / 3 slots).
+    /// The token program issued (default: the published public-mint build, 3 / 3 slots, no minter).
     pub program: IssueProgram,
 }
 
@@ -598,7 +601,8 @@ impl IssueSpec {
         }
         if self.program.is_prototype() {
             warnings.push(
-                "KCC20Ref_8x8 is a prototype, not KOB's issuance: KOB issues the standard 3 / 3 reference program; every \
+                "KCC20Ref_8x8 is a prototype, not KOB's issuance: KOB issues the published public-mint build (or the \
+                 standalone 3 / 3 reference program, when named); every \
                  transfer of a prototype token pushes the 8 / 8 program, and KCC-20 wallets expect the standard one"
                     .into(),
             );
@@ -1615,7 +1619,7 @@ mod tests {
         assert_eq!((p.name, p.max_token_inputs, p.max_token_outputs), ("KCC20Ref", 3, 3));
         assert_eq!(p.template_hash, crate::artifacts::pinned_hash(crate::artifacts::TemplateId::Kcc20Ref));
         assert_eq!(p.registry_template_id, "kcc20-ref-3x3");
-        assert_eq!(IssueProgram::default(), IssueProgram::Ref3x3);
+        assert_eq!(IssueProgram::default(), IssueProgram::PublicMint, "the published public-mint build is the default issuance");
         let proto = Program::kcc20_8x8_prototype().unwrap();
         assert_eq!((proto.name, proto.max_token_inputs, proto.max_token_outputs), ("KCC20Ref_8x8", 8, 8));
         assert_eq!(proto.template_hash, crate::artifacts::pinned_hash(crate::artifacts::TemplateId::Kcc20Ref8x8));
@@ -1645,10 +1649,11 @@ mod tests {
         }
     }
 
-    /// KOB issues the standard 3 / 3 program; the 8 / 8 variant is a prototype the CLI issues only by its explicit name,
-    /// and every plan of it says so.
+    /// KOB issues the published public-mint build by default (the standalone 3 / 3 only when named); the 8 / 8 variant is a
+    /// prototype the CLI issues only by its explicit name, and every plan of it says so.
     #[test]
-    fn the_standard_program_is_the_default_and_8x8_is_a_prototype() {
+    fn public_mint_is_the_default_and_8x8_is_a_prototype() {
+        assert_eq!(IssueSpec::new("N", "T", 0, 1, vec![], vec![]).program, IssueProgram::PublicMint);
         assert_eq!(IssueProgram::parse("3x3").unwrap(), IssueProgram::Ref3x3);
         assert_eq!(IssueProgram::parse("kcc20-ref-3x3").unwrap(), IssueProgram::Ref3x3);
         for old in ["8x8", "ref-8x8", "kcc20-ref-8x8"] {
@@ -1658,7 +1663,13 @@ mod tests {
         let (_, pk) = key();
         let standard = build_genesis(&spec(vec![Holder::new(pk, 0, 10)], 10)).unwrap();
         assert!(standard.warnings.is_empty(), "{:?}", standard.warnings);
-        assert_eq!(standard.program.template_hash, crate::artifacts::pinned_hash(crate::artifacts::TemplateId::Kcc20Ref));
+        assert_eq!(standard.program.template_hash, crate::artifacts::pinned_hash(crate::artifacts::TemplateId::Kcc20PublicMint));
+        let mut three = spec(vec![Holder::new(pk, 0, 10)], 10);
+        three.program = IssueProgram::Ref3x3;
+        let three = build_genesis(&three).unwrap();
+        assert!(three.warnings.is_empty(), "{:?}", three.warnings);
+        assert_eq!(three.program.template_hash, crate::artifacts::pinned_hash(crate::artifacts::TemplateId::Kcc20Ref));
+        assert_eq!(three.registry_entry()["template_id"], "kcc20-ref-3x3");
         let mut s = spec(vec![Holder::new(pk, 0, 10)], 10);
         s.program = IssueProgram::Ref8x8Prototype;
         let proto = build_genesis(&s).unwrap();
@@ -1749,6 +1760,43 @@ mod tests {
         assert!(!build_genesis(&four).unwrap().warnings.iter().any(|w| w.contains("transfer limit")));
         assert_eq!(IssueProgram::parse("public-mint").unwrap(), IssueProgram::PublicMint);
         assert!(IssueProgram::parse("public").is_err());
+    }
+
+    /// The default issuance (the published public-mint build) leaves no public minter and no seed: KOB's own genesis check
+    /// accepts the group as holders only, with no mint allowance, no minter output and a proven-empty set of live minters (a
+    /// minter can only be created by a minter, so none can appear later). Fixed supply, as the 3 / 3 issuance.
+    #[test]
+    fn the_default_issuance_leaves_no_public_minter() {
+        use crate::registry::{verify_genesis_of, GenesisOutput, Registry};
+        let (_, pk) = key();
+        let s = spec(vec![Holder::new(pk, 0, 600), Holder::new([0xc4; 32], 4, 400)], 1000);
+        assert_eq!(s.program, IssueProgram::PublicMint);
+        let plan = build_genesis(&s).unwrap();
+        let outputs: Vec<GenesisOutput> = plan
+            .states
+            .iter()
+            .enumerate()
+            .map(|(i, st)| GenesisOutput {
+                index: i as u32,
+                value: plan.tx.outputs[i].value,
+                script_public_key: plan.tx.outputs[i].script_public_key.clone(),
+                redeem_script: Some(plan.program.redeem(st)),
+            })
+            .collect();
+        let reg = Registry::default_registry();
+        let tpl = reg.template(plan.program.registry_template_id).unwrap();
+        let funding = &s.funding[0].outpoint;
+        let rep = verify_genesis_of(
+            tpl,
+            &hex(plan.covenant_id.as_bytes().as_slice()),
+            &plan.txid().to_string(),
+            (funding.transaction_id.as_bytes(), funding.index),
+            &outputs,
+            Some(s.extension_commitment),
+        )
+        .expect("the issued genesis passes KOB's own genesis check");
+        assert_eq!((rep.outputs, rep.supply, rep.mint_allowance), (2, 1000, 0));
+        assert!(rep.minter_outputs.is_empty() && rep.seed_outputs.is_empty(), "{rep:?}");
     }
 
     #[test]
@@ -1917,7 +1965,7 @@ mod tests {
         // facts only: no listing state (KOB lists no token), and the entry parses as a registry token
         assert!(r.get("status").is_none() && r.get("official").is_none());
         serde_json::from_value::<crate::registry::Token>(r.clone()).expect("a registry token");
-        assert_eq!((r["template_id"].as_str(), r["max_token_inputs"].as_u64()), (Some("kcc20-ref-3x3"), Some(3)));
+        assert_eq!((r["template_id"].as_str(), r["max_token_inputs"].as_u64()), (Some("kcc20-ref-public-mint"), Some(3)));
         let sup = plan.supply_json();
         assert_eq!(sup["total_supply"], "10");
         assert_eq!(sup["genesis_outpoints"].as_array().unwrap().len(), 1);

@@ -184,7 +184,8 @@ differs from the single-actor build.
   `gen__kcc20_template`, prefix 34 B, suffix 9,248 B, template `680b901a...`), which is not the 8/8
   program the single-actor build gives (`KOBToken`, a provisional prototype: KOB does not issue it). On argentc `9a9f4b1` (#68: the current actor's template lengths are fixed-width constants,
   no hidden witnesses) the same build is 9,336 B with the same 1 + 145 state.
-* KOB's token program is fixed outside Argent: since 2026-10-10 KOB issues the standard 3/3 reference,
+* KOB's token program is fixed outside Argent: from 2026-10-10 to 2026-11-03 KOB issued the standard 3/3 reference (since 2026-11-04 it issues
+  the reference's published public-mint app by default and this one only on request),
   `kcc20.ag` built as a single-actor app (`KCC20Ref`, template `173ca6a7...`), which the token UTXOs on
   chain carry and which every KOB order pins as `tokenTplHash` (the 8/8 `KCC20Ref_8x8`, template
   `666da060...`, and its app `KOBToken` are a provisional prototype, kept and pinned but not issued). A

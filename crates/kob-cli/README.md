@@ -443,9 +443,17 @@ output, so the covenant id commits to the declaration. Both are signed at once a
 preparation. Required: `--name`, `--ticker` (2 to 12 of A-Z 0-9), `--decimals` (0 to 18), at least one `--fund-utxo
 TXID:INDEX:AMOUNT:OWNER` (sompi; all of one key; OWNER is a 64-hex x-only key or a P2PK address) and `--supply` and/or at least one
 `--holder OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]` (without `--holder` the whole supply goes to the funding key). Optional:
-`--program 3x3|public-mint|8x8-prototype|kasparocket-testnet` (default `3x3`), `--carrier`, `--fee`, `--fee-rate`, `--change-to`,
+`--program public-mint|3x3|8x8-prototype|kasparocket-testnet` (default `public-mint`), `--carrier`, `--fee`, `--fee-rate`, `--change-to`,
 `--extension-commitment`, `--allow-borrow`, `--description`, `--image` (or the deprecated `--logo` / `--icon`) with `--image-file` or `--image-hash` (the SHA-256 of the picture, declared as `image_hash`), `--website`, `--x`, `--telegram`, `--out-dir`,
 `--network`, `--node`, `--yes` (or `-y`), `--dry-run` and `--key HEX|env:VAR|file:PATH`. `kob token issue --help` lists them all.
+
+* **Program.** The default (`--program public-mint`, since 2026-11-04) issues the `KCC20` actor of upstream's published
+  `KCC20PublicMint` app (registry `kcc20-ref-public-mint`, 3 / 3 slots), the de-facto standard that indexers such as kascov.io
+  list as a KCC-20 token. The genesis holds only token holders (no `PublicMint`, no `TokenSeed`): nobody can mint more, the supply
+  is fixed like any `kob token issue` supply. `--program 3x3` issues the standalone reference program (`kcc20-ref-3x3`)
+  instead: a transfer costs less, but other indexers (kascov.io) do not recognise the token, and the plan says so. Measured on
+  testnet-10 on 2026-11-04: issuance 0.00415 KAS for both, a 1 -> 1 transfer 0.00901 KAS (public-mint, signature script
+  4,218 B) against 0.00678 KAS (3x3, 3,102 B), +33 %. Tokens already issued as 3/3 stay fully tradable.
 
 * **Dry run.** `--dry-run` builds and verifies everything offline and never submits. With `--key` it signs and executes every
   input in the script engine; without it the transactions stay unsigned and script execution is skipped (the output says so).

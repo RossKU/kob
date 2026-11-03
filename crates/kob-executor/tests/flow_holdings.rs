@@ -348,7 +348,7 @@ async fn the_outputs_of_a_token_genesis_are_the_owners_holdings_from_the_first_b
     let mine = list(&c, &by_owner(a, false));
     assert_eq!(mine.len(), 1, "{mine:?}");
     let v = &mine[0];
-    assert_eq!((v.amount.as_str(), v.role.as_str(), v.program.as_str(), v.family), ("700", "owned", "KCC20Ref", "kcc20"));
+    assert_eq!((v.amount.as_str(), v.role.as_str(), v.program.as_str(), v.family), ("700", "owned", "KCC20PublicMint", "kcc20"));
     assert_eq!((v.token.as_str(), v.txid.as_str(), v.index), (hex_of(&cov.0).as_str(), hex_of(&genesis_id).as_str(), 0));
     assert_eq!(v.value, spec.carrier.to_string());
     assert_eq!(list(&c, &by_owner(b, false))[0].amount, "300");

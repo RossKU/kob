@@ -119,7 +119,7 @@ fn normal_issuance_signs_finalizes_and_validates() {
 
     // token facts
     let token = &res["token"];
-    assert_eq!(token["program"], "KCC20Ref");
+    assert_eq!(token["program"], "KCC20PublicMint");
     assert_eq!(token["ticker"], "TEST");
     assert_eq!(token["supply"], "1000");
     assert_eq!(token["carrier"], (10 * KAS).to_string());
@@ -157,7 +157,7 @@ fn normal_issuance_signs_finalizes_and_validates() {
         "amount": "1000", "owner": pk(), "owner_scheme": 0, "borrow_scheme": 0,
         "borrow_guard": "00".repeat(32), "extension_commitment": "00".repeat(32),
     });
-    let spk = api::token_script_public_key("KCC20Ref", &state.to_string()).unwrap();
+    let spk = api::token_script_public_key("KCC20PublicMint", &state.to_string()).unwrap();
     assert_eq!(built.tx.outputs[0].script_public_key, spk);
     assert_eq!(api::encode_token_state(&state.to_string()).unwrap().len(), 224);
 
@@ -203,7 +203,10 @@ fn multiple_holders_including_a_covenant_held_one() {
             "amount": o["amount"], "owner": o["owner"], "owner_scheme": o["ownerScheme"], "borrow_scheme": o["borrowScheme"],
             "borrow_guard": o["borrowGuard"], "extension_commitment": res["token"]["extensionCommitment"],
         });
-        assert_eq!(built.tx.outputs[i].script_public_key, api::token_script_public_key("KCC20Ref", &state.to_string()).unwrap());
+        assert_eq!(
+            built.tx.outputs[i].script_public_key,
+            api::token_script_public_key("KCC20PublicMint", &state.to_string()).unwrap()
+        );
     }
     sign_finalize_validate(&res);
 }
@@ -527,14 +530,16 @@ fn wallets_with_little_more_than_the_carrier_still_get_a_valid_genesis() {
     }
 }
 
-/// The app issues KOB's standard 3 / 3 program by default and the published public-mint build on request; the 8 / 8
-/// prototype is not offered (the CLI alone issues it, by its explicit name).
+/// The app issues the published public-mint build by default and the standalone 3 / 3 program on request (`3x3`); the
+/// 8 / 8 prototype is not offered (the CLI alone issues it, by its explicit name).
 #[test]
 fn programs_the_app_issues() {
     let mut req = request();
-    for (program, name, tpl) in
-        [(None, "KCC20Ref", "kcc20-ref-3x3"), (Some("public-mint"), "KCC20PublicMint", "kcc20-ref-public-mint")]
-    {
+    for (program, name, tpl) in [
+        (None, "KCC20PublicMint", "kcc20-ref-public-mint"),
+        (Some("3x3"), "KCC20Ref", "kcc20-ref-3x3"),
+        (Some("public-mint"), "KCC20PublicMint", "kcc20-ref-public-mint"),
+    ] {
         if let Some(p) = program {
             req["program"] = json!(p);
         }

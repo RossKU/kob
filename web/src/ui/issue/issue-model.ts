@@ -19,7 +19,7 @@ export interface HolderRow {
 
 /** Everything the form holds, as the user typed it. */
 export interface IssueUiState {
-  /** the token program: KOB's standard (default) or the reference's published public-mint build */
+  /** the token program: the reference's published public-mint build (default) or the standalone 3 / 3 build */
   program: IssueProgramChoice;
   name: string;
   ticker: string;
@@ -43,7 +43,7 @@ export interface IssueUiState {
 }
 
 export function emptyUiState(): IssueUiState {
-  return { program: 'standard', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', imageHash: '', imageFile: '', website: '', x: '', telegram: '' };
+  return { program: 'public-mint', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', imageHash: '', imageFile: '', website: '', x: '', telegram: '' };
 }
 
 // ------------------------------------------------------------------------------------------------ small filters
@@ -128,7 +128,7 @@ export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): Iss
     for (const h of state.extras) holders.push({ owner: h.owner.trim().toLowerCase(), ownerScheme: 0, amount: h.amount.trim() });
   }
   return {
-    ...(state.program === 'public-mint' ? { program: 'public-mint' as const } : {}),
+    program: state.program,
     name: state.name,
     ticker: state.ticker,
     decimals: parseDecimalsText(state.decimals),
