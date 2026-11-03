@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PlanIssue } from '../../kob/plan-types';
 import type { OrderState } from '../../kob/types';
-import { DEFAULT_MIN_ORDER_VALUE_SOMPI, confirmNotes, isTicketNote, listingValueOf, minOrderValueOf, minValueNote, ticketNotes } from './ticket-notes';
+import { DEFAULT_MIN_ORDER_VALUE_SOMPI, confirmNotes, confirmSignerNotes, isTicketNote, listingValueOf, minOrderValueOf, minValueNote, ticketNotes } from './ticket-notes';
 
 const w = (code: string, message = code): PlanIssue => ({ code, severity: 'warning', message });
 const e = (code: string): PlanIssue => ({ code, severity: 'error', message: code });
@@ -153,5 +153,25 @@ describe('the notes of the final confirmation', () => {
   it('both apply: the low value first, then the price; a ladder level or a pair has no low-value line', () => {
     expect(confirmNotes(withIssues([w('PRICE_AGGRESSIVE_VS_MARKET')], true), o())).toEqual(['low:98800/100000000/default', 'issue:PRICE_AGGRESSIVE_VS_MARKET']);
     expect(confirmNotes(withIssues([w('PRICE_AGGRESSIVE_VS_MARKET')], true), o(false))).toEqual(['issue:PRICE_AGGRESSIVE_VS_MARKET']);
+  });
+});
+
+describe('the notes of the final confirmation as codes for the signer frame', () => {
+  const min: { sompi: bigint; source: 'indexer' | 'default' } = { sompi: 100_000_000n, source: 'default' };
+  const withIssues = (issues: PlanIssue[], below = false) => ({ ...(plan(below ? ask('38000000', '260000', '100000000') : ask('1000000000', '250000000', '100000000')) as object), issues }) as never;
+  const far = (code: string, percent: string): PlanIssue => ({ code, severity: 'warning', message: code, params: { percent, reference: 1n } });
+
+  it('codes and numbers only: the value and the minimum in sompi (strings), the percentage in basis points', () => {
+    expect(confirmSignerNotes(withIssues([], true), { plain: true, min })).toEqual([{ kind: 'belowMin', value: '98800', min: '100000000', source: 'default' }]);
+    expect(confirmSignerNotes(withIssues([far('PRICE_AGGRESSIVE_VS_MARKET', '12.3')]), { plain: true, min })).toEqual([{ kind: 'farThrough', bps: 1230 }]);
+    expect(confirmSignerNotes(withIssues([far('PAIR_PRICE_AGGRESSIVE_VS_MARKET', '1,000.5')], true), { plain: false, min: { sompi: 1n, source: 'indexer' } })).toEqual([{ kind: 'farThrough', bps: 100050 }]);
+  });
+
+  it('the same rules as the lines of the popup: nothing for a listed order, no plan, a warning of another kind or an error', () => {
+    expect(confirmSignerNotes(withIssues([]), { plain: true, min })).toEqual([]);
+    expect(confirmSignerNotes(null, { plain: true, min })).toEqual([]);
+    expect(confirmSignerNotes(withIssues([{ code: 'PRICE_AGGRESSIVE_VS_MARKET', severity: 'error', message: '', params: { percent: '12' } }]), { plain: true, min })).toEqual([]);
+    expect(confirmSignerNotes(withIssues([far('SLIPPAGE_HIGH', '5')]), { plain: true, min })).toEqual([]);
+    expect(confirmSignerNotes(withIssues([], true), { plain: false, min })).toEqual([]);
   });
 });

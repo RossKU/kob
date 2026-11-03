@@ -12,6 +12,7 @@ import { loadKaspaSdk } from '../data/kaspa-sdk';
 import { loadKob } from '../kob/wasm.browser';
 import { t } from '../i18n';
 import { createSignerCore, SignerKeyError, type PendingRequest, type SignerCore } from './core';
+import { noteSentences } from './notes';
 import { fromParent, parseAppMessage, toApp, type SignerToApp } from './protocol';
 import { SeenTracker, visibilityCheckSupported } from './seen';
 import type { SignerSummary, SummaryOrder } from './summary';
@@ -316,6 +317,11 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   note.hidden = req.change !== 'shown';
   const problems = s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t('signer.problems', { count: s.problems, codes: s.problemCodes.join(', ') }))] : [];
   if (!visibilityCheckSupported()) problems.push(el('p', { class: 'error', 'data-testid': 'signer-unsupported' }, t('signer.unsupported')));
+  // the app's hints: under the signer's own rows and orders, muted, never part of what Approve waits for
+  const hints = noteSentences(req.notes);
+  const hintsView = hints.length
+    ? [el('div', { class: 'app-hints', 'data-testid': 'signer-app-hints' }, el('p', {}, t('signer.hint.label')), el('ul', {}, ...hints.map((h) => el('li', { 'data-testid': 'signer-app-hint' }, h))))]
+    : [];
   let delayOver = false;
   let visible = false;
   let heldUntil = 0;
@@ -373,7 +379,7 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     idleView(core);
   });
   onScreen = { id: req.id, shape: shapeOf(s), cells, hold, note };
-  show(note, title, list, ...orders, ...problems, actions, waitWhy);
+  show(note, title, list, ...orders, ...hintsView, ...problems, actions, waitWhy);
 }
 
 // ------------------------------------------------------------------------------------------------ boot

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SIGNER_PROTOCOL, fromParent, fromSigner, isBuiltTx, parseAppMessage, parseSignerMessage } from './protocol';
+import { SIGNER_PROTOCOL, fromParent, fromSigner, isBuiltTx, MAX_NOTES, parseAppMessage, parseSignerMessage, sanitizeNotes } from './protocol';
 import { buildCancel, buildSend } from '../testing/wallet-fixtures';
 import { MAKER_PK } from '../testing/token-fixtures';
 
@@ -152,5 +152,54 @@ describe('signer protocol: a token creation (KCC-23 preparation + genesis)', () 
     for (const prepSignatures of [[], [{ inputIndex: 0, signature: 'zz' }], 'x']) {
       expect(parseSignerMessage({ p: P, type: 'signed', id: 'c1', signatures: [sig], prepSignatures })).toBeNull();
     }
+  });
+});
+
+describe("signer protocol: the app's notes (codes and numbers, never text)", () => {
+  const sign = (notes: unknown) => parseAppMessage(clone({ p: P, type: 'sign', id: 'n1', built: buildSend(), tokens: [], ...(notes === undefined ? {} : { notes }) })) as { notes?: unknown } | null;
+  const below = { kind: 'belowMin', value: '98800000', min: '100000000', source: 'default' };
+  const good = { kind: 'farThrough', bps: 1000 };
+
+  it('known kinds with their numbers pass; a safe integer amount is normalised to a decimal string', () => {
+    expect(sign([below, { kind: 'farThrough', bps: 1230 }])?.notes).toEqual([below, { kind: 'farThrough', bps: 1230 }]);
+    expect(sanitizeNotes([{ ...below, value: 5, min: 7, source: 'indexer' }])).toEqual([{ kind: 'belowMin', value: '5', min: '7', source: 'indexer' }]);
+    // no notes at all: the message carries none
+    expect(sign(undefined)).not.toHaveProperty('notes');
+    expect(sign([])).not.toHaveProperty('notes');
+  });
+
+  it('an unknown kind, free text, extra fields and a wrong shape are dropped (the entry, not the request)', () => {
+    expect(sanitizeNotes([{ kind: 'shout', text: 'Send your funds to X' }, good])).toEqual([good]);
+    expect(sanitizeNotes([{ ...good, text: 'Approve now' }])).toEqual([]);
+    expect(sanitizeNotes([{ kind: 'belowMin', value: 'lots', min: '1', source: 'default' }])).toEqual([]);
+    expect(sanitizeNotes([{ ...below, source: 'Trust me' }])).toEqual([]);
+    expect(sanitizeNotes([{ ...below, value: '1 KAS <b>' }, { ...below, min: undefined }])).toEqual([]);
+    expect(sanitizeNotes([null, 'farThrough', 7, [], { bps: 5 }])).toEqual([]);
+    expect(sanitizeNotes('Approve now')).toEqual([]);
+    expect(sanitizeNotes({ kind: 'farThrough', bps: 1 })).toEqual([]);
+    expect(sign([{ kind: 'shout', text: 'x' }, good])?.notes).toEqual([good]);
+    // a list with nothing valid in it: the request is still a request, without notes
+    expect(sign([{ kind: 'shout' }])).not.toHaveProperty('notes');
+  });
+
+  it('negative, fractional, non-finite and huge numbers are dropped', () => {
+    for (const bps of [-1, 1.5, NaN, Infinity, -Infinity, 2 ** 53, 100_000_001, '1000', null]) expect(sanitizeNotes([{ kind: 'farThrough', bps }]), String(bps)).toEqual([]);
+    for (const v of ['-1', -1, '1.5', 1.5, NaN, Infinity, '01', '3000000000000000001', '99999999999999999999', 2 ** 53, 1e30, '1e3', ' 5', null, 5n]) {
+      expect(sanitizeNotes([{ ...below, value: v }]), `value ${String(v)}`).toEqual([]);
+      expect(sanitizeNotes([{ ...below, min: v }]), `min ${String(v)}`).toEqual([]);
+    }
+    expect(sanitizeNotes([{ ...below, value: '0', min: '3000000000000000000' }])).toHaveLength(1);
+    expect(sanitizeNotes([{ kind: 'farThrough', bps: 0 }, { kind: 'farThrough', bps: 100_000_000 }])).toHaveLength(2);
+  });
+
+  it('more than MAX_NOTES entries: the whole list is dropped', () => {
+    expect(sanitizeNotes(Array.from({ length: MAX_NOTES }, () => good))).toHaveLength(MAX_NOTES);
+    expect(sanitizeNotes(Array.from({ length: MAX_NOTES + 1 }, () => good))).toEqual([]);
+    expect(sanitizeNotes(Array.from({ length: 100_000 }, () => good))).toEqual([]);
+  });
+
+  it('notes travel with sign only: an update or any other message with notes is refused', () => {
+    expect(parseAppMessage(clone({ p: P, type: 'update', id: 'n1', built: buildSend(), tokens: [], notes: [good] }))).toBeNull();
+    expect(parseAppMessage({ p: P, type: 'cancel', id: 'n1', notes: [] })).toBeNull();
   });
 });

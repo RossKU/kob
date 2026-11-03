@@ -6,7 +6,7 @@
 import type { KaspaSdk, SdkPrivateKey } from '../data/kaspa-sdk';
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
-import { toApp, type AppToSigner, type RejectReason, type SignerToApp, type TokenHint } from './protocol';
+import { toApp, type AppToSigner, type RejectReason, type SignerNote, type SignerToApp, type TokenHint } from './protocol';
 import { creationSummary, summarize, type SignerSummary } from './summary';
 import { RETIME_MAX_COUNT, RETIME_WINDOW_MS, sameOrBetter } from './retime';
 import type { RegistryRow } from './table';
@@ -37,6 +37,8 @@ export interface PendingRequest {
   change: 'new' | 'silent' | 'shown';
   /** what an update is compared with: the request as first shown, or the last update shown as such */
   baseline: SignerSummary;
+  /** the app's hints (protocol.ts `SignerNote`, validated): worded by the frame, never blocking; fixed with the request, an update keeps them */
+  notes: SignerNote[];
   /** a token creation: the KCC-23 preparation `built` spends output 0 of, signed with it on the one approval */
   prep?: BuiltTx;
 }
@@ -198,7 +200,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
           post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
           return null;
         }
-        pending = { id: m.id, built: m.built, summary, change: 'new', baseline: summary, prep: m.prep };
+        pending = { id: m.id, built: m.built, summary, change: 'new', baseline: summary, notes: m.notes ?? [], prep: m.prep };
         return pending;
       }
       let summary: SignerSummary;
@@ -222,7 +224,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         post(toApp({ type: 'signed', id: m.id, txid: m.built.tx.id, signatures: sigs }));
         return null;
       }
-      pending = { id: m.id, built: m.built, summary, change: 'new', baseline: summary };
+      pending = { id: m.id, built: m.built, summary, change: 'new', baseline: summary, notes: m.notes ?? [] };
       return pending;
     },
     pending: () => pending,

@@ -4,6 +4,7 @@ import { isKind } from '../../kob/order-facts';
 import type { OrderPlan, PlanIssue } from '../../kob/plan-types';
 import type { OrderState } from '../../kob/types';
 import { quoteOf } from '../../kob/units';
+import type { SignerNote } from '../../signer/protocol';
 
 /**
  * What the ticket notes: a price far through the market (a typing error), a market reference that disagrees with the last fill, book orders
@@ -117,5 +118,24 @@ export function confirmNotes(
   if (low) out.push(o.low(low, o.min.source));
   const far = (plan.issues ?? []).find((i) => i.severity === 'warning' && PRICE_FAR_CODES.has(i.code));
   if (far) out.push(o.issue(far));
+  return out;
+}
+
+/**
+ * The same notes as codes and numbers for the private-key signer's confirmation (signer/protocol.ts `SignerNote`): the frame words them itself,
+ * so nothing here is text. The price note carries the percentage only (the pair market's reference is in another unit; the frame states none).
+ * Computed once with {@link confirmNotes}, from the same plan, under the same rules.
+ */
+export function confirmSignerNotes(
+  plan: Pick<OrderPlan, 'states' | 'request' | 'issues'> | null,
+  o: { plain: boolean; min: { sompi: bigint; source: 'indexer' | 'default' } },
+): SignerNote[] {
+  if (!plan) return [];
+  const out: SignerNote[] = [];
+  const low = o.plain ? minValueNote(plan, o.min.sompi) : null;
+  if (low) out.push({ kind: 'belowMin', value: low.value.toString(), min: low.min.toString(), source: o.min.source });
+  const far = (plan.issues ?? []).find((i) => i.severity === 'warning' && PRICE_FAR_CODES.has(i.code));
+  const pct = far ? Number(String(far.params?.percent ?? '').replace(/,/g, '')) : NaN;
+  if (far && Number.isFinite(pct) && pct >= 0) out.push({ kind: 'farThrough', bps: Math.round(pct * 100) });
   return out;
 }

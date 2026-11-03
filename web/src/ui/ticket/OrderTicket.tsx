@@ -37,7 +37,7 @@ import {
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 import { expectedFromPlan } from './plan-expected';
-import { confirmNotes, minOrderValueOf } from './ticket-notes';
+import { confirmNotes, confirmSignerNotes, minOrderValueOf } from './ticket-notes';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
@@ -538,8 +538,10 @@ export function OrderTicket(props: OrderTicketProps) {
         plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health), issue: (i) => issueText(i, issueCtx),
         low: (n, source) => t(`ticket.minValue.${source}`, { value: formatKas(n.value, { group: ',' }), min: formatKas(n.min, { group: ',' }) }),
       });
+      // the same notes as codes and numbers for the private-key signer's confirmation, which words them itself
+      const signerNotes = confirmSignerNotes(planned, { plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health) });
       return {
-        built: planned.built!, expected: expectedFromPlan(planned), label, openToken, notes,
+        built: planned.built!, expected: expectedFromPlan(planned), label, openToken, notes, signerNotes,
         gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openToken, shift) : undefined,
         submitByDaa: auctionSubmitBy(planned.states, clock.daa),
         retime: retimer(env0, refsNow, intent, null, label, openToken, shift + RETIME_LEAD_DAA),

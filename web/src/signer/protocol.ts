@@ -2,7 +2,13 @@
 // WITHOUT allow-same-origin: an opaque origin, so the app's scripts can read neither its DOM nor its memory).
 //
 //   signer -> app   ready | connected {pubkey} | signed {id, txid, signatures, prepSignatures?} | rejected {id, reason} | forgotten | height {px}
-//   app -> signer   sign {id, built, tokens, prep?} | update {id, built, tokens} | clock {daa} | cancel {id} | forget
+//   app -> signer   sign {id, built, tokens, notes?, prep?} | update {id, built, tokens} | clock {daa} | cancel {id} | forget
+//
+// `notes`: the app's non-blocking hints about the order (an order below the minimum value, a price far through the market) as STRUCTURED codes
+// with numbers only (`SignerNote`). The frame renders its own fixed sentences from them, under the app's label, never blocking and never in
+// place of a row it computed itself; the app cannot put free text into the frame. The parser drops every entry it does not know or whose
+// numbers are out of bounds, and the whole list when it is longer than MAX_NOTES. Sent with `sign` only: the notes are worked out once, when the
+// confirmation opens, and an `update` of the request keeps them.
 //
 // `prep`: a token creation (KCC-23): the preparation `built` (the genesis) spends output 0 of, shown and signed with it under ONE approval
 // (`prepSignatures` are its signatures); `genesis`: the states its token outputs are claimed to hold, which the frame checks against each
@@ -42,6 +48,23 @@ export interface GenesisClaim {
   outputs: { index: number; amount: string; owner: Hex; ownerScheme: number; borrowScheme: number; borrowGuard: Hex }[];
 }
 
+/**
+ * A hint of the app about the order, as a code and numbers (never text): the frame words it itself (notes.ts) and says it is the app's, not
+ * verified by the signer. Sompi amounts are decimal strings (they can pass 2^53); `bps` are basis points.
+ */
+export type SignerNote =
+  /** the order is worth `value` sompi, under the executor's minimum `min` (`source`: its own, or the assumed default): it will not be listed */
+  | { kind: 'belowMin'; value: string; min: string; source: 'indexer' | 'default' }
+  /** the price is `bps` basis points through the market (probably a typing error) */
+  | { kind: 'farThrough'; bps: number };
+
+/** the most notes of a request (more is not a request of the app) */
+export const MAX_NOTES = 4;
+/** the largest amount a note may carry, in sompi (above the whole KAS supply) */
+const MAX_NOTE_SOMPI = 3_000_000_000_000_000_000n;
+/** the largest percentage a note may carry, in basis points (1 000 000 %) */
+const MAX_NOTE_BPS = 100_000_000;
+
 export type RejectReason = 'user' | 'invalid' | 'no-key' | 'busy' | 'cancelled';
 
 export type SignerToApp =
@@ -56,7 +79,7 @@ export type SignerToApp =
 
 export type AppToSigner =
   /** `retimeOf`: the request the user just confirmed, planned again with a later clock: signed without asking again when nothing they approved got worse (retime.ts) */
-  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[]; retimeOf?: string; prep?: BuiltTx; genesis?: GenesisClaim }
+  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[]; notes?: SignerNote[]; retimeOf?: string; prep?: BuiltTx; genesis?: GenesisClaim }
   /** the same request planned again while the user reads it (a later clock, the market now): shown in its place (core.ts `receive`) */
   | { p: typeof SIGNER_PROTOCOL; type: 'update'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[] }
   /** the node's DAA score now (display only: the times of the table are said from it; nothing is signed from it) */
@@ -135,6 +158,31 @@ const isTable = (v: unknown): v is RegistryRow[] =>
   v.every((r) => isObj(r) && hasKeys(r, ['covenantId', 'ticker', 'decimals']) && HEX32.test(String(r.covenantId)) && typeof r.ticker === 'string' && TICKER.test(r.ticker) && isIndex(r.decimals, 19)) &&
   new Set(v.map((r: RegistryRow) => r.covenantId)).size === v.length;
 
+const sompiNote = (v: unknown): string | null => {
+  const s = typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? String(v) : v;
+  return typeof s === 'string' && /^(0|[1-9][0-9]{0,18})$/.test(s) && BigInt(s) <= MAX_NOTE_SOMPI ? s : null;
+};
+
+/**
+ * The notes of a request as the frame may word them: known kinds with exactly their fields and numbers within bounds, nothing else. An entry
+ * that is not one is dropped; a list that is not an array, or longer than MAX_NOTES, is dropped whole. Never throws.
+ */
+export function sanitizeNotes(v: unknown): SignerNote[] {
+  if (!Array.isArray(v) || v.length > MAX_NOTES) return [];
+  const out: SignerNote[] = [];
+  for (const n of v as unknown[]) {
+    if (!isObj(n)) continue;
+    if (n.kind === 'belowMin' && hasKeys(n, ['kind', 'value', 'min', 'source']) && (n.source === 'indexer' || n.source === 'default')) {
+      const value = sompiNote(n.value);
+      const min = sompiNote(n.min);
+      if (value !== null && min !== null) out.push({ kind: 'belowMin', value, min, source: n.source });
+    } else if (n.kind === 'farThrough' && hasKeys(n, ['kind', 'bps']) && typeof n.bps === 'number' && Number.isSafeInteger(n.bps) && n.bps >= 0 && n.bps <= MAX_NOTE_BPS) {
+      out.push({ kind: 'farThrough', bps: n.bps });
+    }
+  }
+  return out;
+}
+
 const sized = (v: unknown): boolean => {
   try {
     return JSON.stringify(v).length <= MAX_JSON;
@@ -148,7 +196,7 @@ export function parseAppMessage(data: unknown): AppToSigner | null {
   if (!isObj(data) || data.p !== SIGNER_PROTOCOL || typeof data.type !== 'string') return null;
   switch (data.type) {
     case 'sign':
-      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'registry', 'retimeOf', 'prep', 'genesis']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'registry', 'notes', 'retimeOf', 'prep', 'genesis']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
       if (data.retimeOf !== undefined && (typeof data.retimeOf !== 'string' || !ID.test(data.retimeOf))) return null;
       if (!Array.isArray(data.tokens) || data.tokens.length > 32 || !data.tokens.every(isTokenHint)) return null;
       if (!sized(data.built) || !isBuiltTx(data.built)) return null;
@@ -157,9 +205,11 @@ export function parseAppMessage(data: unknown): AppToSigner | null {
       if (data.prep !== undefined && (data.retimeOf !== undefined || !sized(data.prep) || !isBuiltTx(data.prep))) return null;
       // a genesis claim only with its creation
       if (data.genesis !== undefined && (data.prep === undefined || !isClaim(data.genesis))) return null;
+      const notes = sanitizeNotes(data.notes);
       return {
         p: SIGNER_PROTOCOL, type: 'sign', id: data.id, built: data.built, tokens: data.tokens,
         ...(data.registry !== undefined ? { registry: data.registry as RegistryRow[] } : {}),
+        ...(notes.length > 0 ? { notes } : {}),
         ...(data.retimeOf !== undefined ? { retimeOf: data.retimeOf as string } : {}), ...(data.prep !== undefined ? { prep: data.prep as BuiltTx } : {}),
         ...(data.genesis !== undefined ? { genesis: data.genesis as GenesisClaim } : {}),
       };

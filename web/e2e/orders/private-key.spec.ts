@@ -3,7 +3,7 @@
 // token; the app shows no popup of its own for this wallet) and signs only after a click on its own Confirm button.
 import type { Frame, Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { fund, mockClock, openMarket, gotoNav } from '../helpers/env';
+import { KAS, fund, mockClock, openConnect, openMarket, gotoNav } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted, type ReceiptRead } from '../helpers/ticket';
 import { formatKas } from '../../src/kob/units';
@@ -396,4 +396,46 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
   expect(Number(state.activeFrom)).toBeGreaterThanOrEqual(shownStart);
   expect(Number(state.activeFrom) - shownStart).toBeLessThanOrEqual(40);
   expect(Number(state.expiryDaa)).toBeGreaterThan(Number(state.activeFrom));
+});
+
+test.describe('the app\'s hints in the signer frame (a phone, 390 px)', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('an order below the minimum order value: the frame words the hint itself, muted and labelled as the app\'s, and Approve still signs; a listed order has none', async ({ appPage: page, mock }) => {
+    await fund(mock);
+    await mock.minOrderValue(KAS);
+    await openMarket(page, mock, { connect: false });
+    await openConnect(page, 'wallet-connect-local-key'); // the phone's menu
+    await expect(page.getByTestId('signer-overlay')).toBeVisible();
+    await signer(page).getByTestId('signer-key').fill(SECRET);
+    await signer(page).getByTestId('signer-connect').click();
+    await expect(page.getByTestId('wallet-address')).toBeVisible();
+    await pickType(page, 'limit', 'sell');
+    const f = signer(page);
+    // 40 x 0.0255 = 1.02 KAS: listed, so the frame has no hints
+    await fillFields(page, { amount: '40', price: '0.0255' });
+    await waitReviewable(page);
+    await page.getByTestId('order-place').click();
+    await expect(f.getByTestId('signer-title')).toBeVisible({ timeout: 30_000 });
+    await expect(f.getByTestId('signer-app-hints')).toHaveCount(0);
+    await confirmReceipt(page);
+    await waitSubmitted(page);
+    // 38 x 0.026 = 0.988 KAS: below 1 KAS. The sentence is the frame's own, the signer's rows are all still there, Approve is not held by it
+    await fillFields(page, { amount: '38', price: '0.026' });
+    await waitReviewable(page);
+    await page.getByTestId('order-place').click();
+    await expect(f.getByTestId('signer-title')).toBeVisible({ timeout: 30_000 });
+    const hints = f.getByTestId('signer-app-hints');
+    await expect(hints).toBeVisible();
+    await expect(hints).toContainText('The app adds (not verified by this signer):');
+    await expect(f.getByTestId('signer-app-hint')).toHaveCount(1);
+    await expect(f.getByTestId('signer-app-hint')).toHaveText('Worth 0.988 KAS, under the usual 1 KAS minimum order value: it will not be listed, so it will not fill. Cancel it in My orders.');
+    await expect(f.getByTestId('signer-fee')).toBeVisible();
+    await expect(f.getByTestId('signer-summary')).toBeVisible();
+    expect(await f.locator('body').evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    const dir = process.env.KOB_SHOT_DIR;
+    if (dir) await page.screenshot({ path: `${dir}/signer-below-minimum-390.png` });
+    await confirmReceipt(page);
+    await waitSubmitted(page);
+  });
 });

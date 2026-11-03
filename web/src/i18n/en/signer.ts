@@ -57,6 +57,11 @@ export default {
   'signer.net.tokenDeclared': '{ticker} ({id}, declared on chain, unverified)',
   // a token the app lists: its ticker and decimals are the app's word, which this frame cannot check (audit 2026-10-30 G7)
   'signer.net.tokenListed': '{ticker} ({id}, {decimals} decimals as the app lists them)',
+  // the app's hints (notes.ts): fixed sentences of this frame from codes and numbers of the app; the signer has not verified them
+  'signer.hint.label': 'The app adds (not verified by this signer):',
+  'signer.hint.minValue.default': 'Worth {value} KAS, under the usual {min} KAS minimum order value: it will not be listed, so it will not fill. Cancel it in My orders.',
+  'signer.hint.minValue.indexer': 'Worth {value} KAS, under the indexer minimum of {min} KAS: it will not be listed, so it will not fill. Cancel it in My orders.',
+  'signer.hint.farThrough': 'Your price is {percent}% through the market. Check for a typing error.',
   'signer.updated': 'Updated: some figures changed since this request was first shown.',
   'signer.rel.now': 'now',
   'signer.rel.s': 'in {n} s',

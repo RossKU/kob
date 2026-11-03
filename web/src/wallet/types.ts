@@ -1,7 +1,7 @@
 // Wallet adapter contract. Adapters only sign: they never build, never broadcast, and never see anything but the tx the app already
 // showed on the pre-sign confirmation screen. Proven on TN10 in tools/wallet-gate (RESULTS.md).
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
-import type { GenesisClaim } from '../signer/protocol';
+import type { GenesisClaim, SignerNote } from '../signer/protocol';
 
 /** Browser extension wallets (discovered on `window`). */
 export type ExtensionWalletId = 'kasware' | 'kaspire' | 'kastle';
@@ -102,6 +102,11 @@ export interface SignOptions {
    * script against them, and names the supply and the holders only then)
    */
   genesisClaim?: GenesisClaim;
+  /**
+   * the app's non-blocking hints about the order as codes and numbers (an order below the minimum value, a price far through the market): the
+   * private-key signer words them itself under its table and says they are the app's; other wallets show nothing of them
+   */
+  signerNotes?: SignerNote[];
 }
 
 export class WalletError extends Error {

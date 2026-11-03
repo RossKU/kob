@@ -311,6 +311,7 @@ export function useSend(): Sender {
           ...(first ? { clockDaa: first.daa + (BigInt(Date.now() - first.at) * DAA_PER_SECOND) / 1000n } : {}),
           ...(final.submitByDaa != null ? { submitByDaa: final.submitByDaa } : {}),
           ...(final.retimed ? { retime: true } : {}),
+          ...(final.signerNotes?.length ? { signerNotes: [...final.signerNotes] } : {}),
           ...(live ? { live: { signing: live, submitByOf: (b) => jobs.get(b.tx.id)?.submitByDaa ?? undefined } } : {}),
           onStage: (s) => {
             if (s === 'signing') timer.handed(attempt0.built.tx.id);

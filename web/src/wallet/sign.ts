@@ -13,6 +13,7 @@ import type { NodeApi, NodeUtxo } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
 import { confirmInputsOnNode } from '../kob/node-verify';
 import { normalizeNetwork, spkStringToAddress, type KaspaSdk } from '../data/kaspa-sdk';
+import type { SignerNote } from '../signer/protocol';
 import { WalletError, type WalletAdapter, type LiveSigning } from './types';
 
 export type SignStage = 'signing' | 'finalizing' | 'validating' | 'submitting' | 'submitted';
@@ -72,6 +73,8 @@ export interface SignAndSubmitArgs {
   retime?: boolean;
   /** the node's DAA score now, for the times the private-key signer says (`SignOptions.clockDaa`) */
   clockDaa?: bigint;
+  /** the app's hints for the private-key signer's confirmation (`SignOptions.signerNotes`) */
+  signerNotes?: SignerNote[];
   /**
    * the transaction may be replaced while the user reads it (`SignOptions.live`): `submitByOf` gives the `submitByDaa` of a replacement the
    * wallet signed, which is then the one finalized, checked and sent
@@ -184,7 +187,7 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   if (a.inputAddress) await assertInputsOnNode(node, built, a.inputAddress);
   let sigs;
   try {
-    sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.live ? { live: a.live.signing } : {}) });
+    sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.signerNotes?.length ? { signerNotes: a.signerNotes } : {}), ...(a.live ? { live: a.live.signing } : {}) });
   } catch (e) {
     const code = e instanceof WalletError ? e.code : 'other';
     throw new SignFlowError('signing', e, msg(e), code);

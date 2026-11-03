@@ -19,6 +19,7 @@ import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
 import { withExtraToken, type TokenInfo } from '../../kob/registry';
 import type { BuiltTx } from '../../kob/types';
+import type { SignerNote } from '../../signer/protocol';
 import { shortId } from '../kit/format';
 import { openTokenIdentity, type Finding } from './confirm-model';
 
@@ -56,6 +57,8 @@ export interface SendJob {
    * out once from the plan of the click, never updated while the confirmation is open, never a reason to stop
    */
   notes?: readonly string[] | undefined;
+  /** the same notes as codes and numbers for the private-key signer's confirmation, which words them itself (signer/protocol.ts `SignerNote`) */
+  signerNotes?: readonly SignerNote[] | undefined;
   /** this job re-times the one the user confirmed just before (the private-key signer then signs it without asking again when nothing got worse) */
   retimed?: boolean | undefined;
 }
