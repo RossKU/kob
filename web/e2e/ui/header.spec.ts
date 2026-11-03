@@ -115,6 +115,11 @@ test('desktop: the status popover is keyboard accessible and closes on Escape an
   await expect(page.getByTestId('status-popover')).toHaveCount(0);
 });
 
+test('the brand leads to the landing screen (the empty hash), not to the market list', async ({ appPage: page }) => {
+  await page.goto('/#/orders');
+  await expect(page.getByTestId('brand')).toHaveAttribute('href', '#/');
+});
+
 test('desktop: Connect wallet connects the one extension at once; the connected chip shows the address and the buttons are gone', async ({ appPage: page }) => {
   await page.goto('/#/market');
   await page.getByTestId('wallet-connect-kasware').click();

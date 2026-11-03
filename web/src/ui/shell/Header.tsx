@@ -1,5 +1,5 @@
 import { useServices } from '../../app/context';
-import { navOf, type Route } from '../../app/router';
+import { navOf, routeToHash, type Route } from '../../app/router';
 import { t } from '../../i18n';
 import { Badge, Button } from '../kit';
 import { useTheme } from './theme';
@@ -135,7 +135,7 @@ export function Header(props: { route: Route }) {
   return (
     <header class="header" data-layout={narrow ? 'narrow' : 'wide'}>
       <div class="container header-inner" ref={inner}>
-        <a class="brand" href="#/market" data-testid="brand">
+        <a class="brand" href={routeToHash({ name: 'home' })} data-testid="brand">
           <Logo />
           <span>{t('common.appName')}</span>
         </a>
