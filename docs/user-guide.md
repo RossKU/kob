@@ -242,8 +242,10 @@ Status words: open, partly filled, filled, cancelled, refunded, expired (IOC/FOK
   a cancel returns them too. Once an order closes, its strays are lost for good.
 
 **Balances the wallet does not show** (top of My orders) lists free tokens, tokens "In your orders", strays, "Free KAS", "KAS
-locked in orders" and "KAS on your token UTXOs": every token UTXO carries KAS (its carrier and, after a buy, the price
-improvement over your worst price). That KAS is yours; a merge, a sale or a transfer frees it.
+locked in orders" and "KAS on your token UTXOs": every token UTXO carries KAS (its carrier and, after a buy, a price
+improvement or unspent budget of less than 1 KAS). That KAS is yours; a merge, a sale or a transfer frees it. When a buy ends,
+the KAS it did not spend beyond the delivery carrier comes back to you as a plain KAS output of its own (from 1 KAS up): a
+market buy's unused slippage headroom and the unfilled rest of an IOC buy arrive as free KAS in the same transaction.
 
 Notifications (the bell in the header) are off until you turn them on in "Notification settings": fills, partial fills, stops
 armed or triggered, expiry soon, refunds. They are worked out in this browser while the page is open. Nothing is sent to a server.

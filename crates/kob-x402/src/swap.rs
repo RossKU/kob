@@ -342,6 +342,10 @@ struct Leg {
     amount_left: i64,
     tif: i64,
     maker: [u8; 32],
+    /// A bid: the most KAS its terminal fill can send back to the maker as a refund output of its own (the escrow less the
+    /// delivery carrier and the least the fill can spend, `BidState::spend_at` at the order price); 0 for an ask. The bid
+    /// covenant puts that refund at output `M - 1 - input` (M the number of outputs), a plain P2PK output of the maker.
+    refund_cap: i64,
 }
 
 enum InKind {
@@ -662,6 +666,7 @@ pub fn verify_swap_facts(
                         amount_left: s.amount_left,
                         tif: s.tif,
                         maker: s.maker,
+                        refund_cap: 0,
                     }
                 }
                 AnyState::KobBid(s) | AnyState::KobBidKron(s) => {
@@ -685,6 +690,11 @@ pub fn verify_swap_facts(
                         amount_left: 0,
                         tif: s.tif,
                         maker: s.maker,
+                        refund_cap: s
+                            .spend_at(amount, s.price)
+                            .and_then(|spend| i64::try_from(entry.amount).ok()?.checked_sub(spend)?.checked_sub(s.delivery_carrier))
+                            .unwrap_or(0)
+                            .max(0),
                     }
                 }
                 other => {
@@ -875,6 +885,10 @@ pub fn verify_swap_facts(
     let mut strays: Vec<usize> = Vec::new();
     let mut token_change_spent: BTreeSet<[u8; 32]> = BTreeSet::new();
     let mut claimed_spks: Vec<(usize, ScriptPublicKey)> = Vec::new();
+    // a bid that ends in this transaction (no continuation) returns the KAS beyond its delivery carrier to its maker from
+    // 1 KAS up, as a plain output at `M - 1 - input`: claimed by that bid (one output per bid input)
+    let continued: BTreeSet<[u8; 32]> = outs.iter().filter_map(|o| o.covenant.map(|b| b.covenant_id.as_bytes())).collect();
+    let mut refund_used: BTreeSet<usize> = BTreeSet::new();
     for (j, o) in outs.iter().enumerate() {
         if j < k {
             claimed_spks.push((j, o.script_public_key.clone()));
@@ -933,6 +947,20 @@ pub fn verify_swap_facts(
                 strays.push(j);
             }
             None => {
+                let refund_of = legs.iter().position(|l| {
+                    l.kind == LegKind::Bid
+                        && !continued.contains(&l.cov)
+                        && !refund_used.contains(&l.input)
+                        && outs.len().checked_sub(1 + l.input) == Some(j)
+                        && l.refund_cap >= kob_protocol::tx::REFUND_MIN as i64
+                        && o.value <= l.refund_cap as u64
+                        && p2pk_key(&o.script_public_key) == Some(l.maker)
+                });
+                if let Some(li) = refund_of {
+                    refund_used.insert(legs[li].input);
+                    claimed_spks.push((j, o.script_public_key.clone()));
+                    continue;
+                }
                 if merchant.is_none() && &o.script_public_key == pay_spk {
                     if merchant_at.is_some() {
                         merchant_dup = true;

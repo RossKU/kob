@@ -1551,7 +1551,8 @@ impl Processor {
                 // input's position (the maker's token output: its KAS is the delivery carrier plus used(n) - allIn(t), the difference
                 // between the budget the fill consumed at pMax + tip, rounded up, and what it paid at its quote, rounded down), so a
                 // reader can check that a buy never cost more than its all-in limit (escrow_after = 0 when the bid sold out):
-                // escrow_before - escrow_after - delivery_value <= floor(n * (q + tip) / scale)
+                // escrow_before - escrow_after - delivery_value - refund_value <= floor(n * (q + tip) / scale)
+                // (`refund_value`: the maker's plain refund output of a terminal fill, present from 1 KAS up)
                 if s.order.side == 2 && !is_pair {
                     if let Some(o) = rec.outputs.get(s.input_idx) {
                         detail["delivery_value"] = json!(o.value.to_string());
@@ -1563,6 +1564,24 @@ impl Processor {
                             .optional()?;
                         if let Some(v) = before {
                             detail["escrow_before"] = json!(v.to_string());
+                            // A terminal fill (no continuation) of a plain bid sends the KAS beyond the delivery carrier back to the
+                            // maker as an output of its own once it is REFUND_MIN or more (the covenant's `refundTo`: output
+                            // M - 1 - i for the bid at input i); a smaller remainder stays on the delivery. The covenant fixes
+                            // which case applies from the state alone, so the refund output is identified without reading scripts.
+                            let continues = rec.outputs.iter().any(|o| o.cov.is_some_and(|(_, c)| c == s.cov));
+                            if let (false, Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)), Some(q)) =
+                                (continues, s.before.as_ref(), quote)
+                            {
+                                let rem = b.spend_at(n, q).and_then(|all_in| v.checked_sub(all_in)?.checked_sub(b.delivery_carrier));
+                                let slot = rec.outputs.len().checked_sub(1 + s.input_idx);
+                                if let (Some(rem), Some(slot)) = (rem, slot) {
+                                    if rem >= kob_protocol::tx::REFUND_MIN as i64 {
+                                        if let Some(o) = rec.outputs.get(slot).filter(|o| o.cov.is_none()) {
+                                            detail["refund_value"] = json!(o.value.to_string());
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     if let Some(next) = rec.outputs.iter().find(|o| o.cov.is_some_and(|(_, c)| c == s.cov)) {

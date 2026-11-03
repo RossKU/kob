@@ -471,6 +471,9 @@ fn plan_ask(a: &IntentAsk, token: Token, lock: i64) -> Result<AskPlan> {
 
 struct BidPlan {
     delivery: u64,
+    /// The KAS a bid that ends returns to its maker as an output of its own (at the end of the transaction, see
+    /// [`Draft::add_refund`]) instead of leaving it on the delivery.
+    refund: Option<u64>,
     cont: Option<(u64, kaspa_consensus_core::tx::ScriptPublicKey)>,
     sold: i64,
     all_in: i64,
@@ -511,13 +514,21 @@ fn plan_bid(b: &IntentBid, token: Token, lock: i64) -> Result<BidPlan> {
     if s.tif == TIF_FOK && can_continue {
         return invalid("a FOK bid must be filled completely");
     }
+    let mut refund = None;
     let (delivery, cont) = if rests {
         (s.delivery_carrier + used - all_in, Some((pos(left - s.delivery_carrier, "bid continuation")?, s.spk_for(fam))))
     } else {
-        (v - all_in, None)
+        let rem = v - all_in - s.delivery_carrier;
+        if rem >= crate::tx::REFUND_MIN as i64 {
+            refund = Some(rem as u64);
+            (s.delivery_carrier, None)
+        } else {
+            (v - all_in, None)
+        }
     };
     Ok(BidPlan {
         delivery: pos(delivery, "bid delivery")?,
+        refund,
         cont,
         sold: n,
         all_in,
@@ -579,6 +590,24 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     let asks: Vec<AskPlan> = r.asks.iter().map(|a| plan_ask(a, tok_b.ok_or_else(no_token)?, lock)).collect::<Result<_>>()?;
     let bids: Vec<BidPlan> = r.bids.iter().map(|b| plan_bid(b, tok_a.ok_or_else(no_token)?, lock)).collect::<Result<_>>()?;
     check_shape(actor, &asks, &bids)?;
+    // The covenants pin a bid's refund at output M - 1 - i: the bids that return KAS come first, then the other bids that
+    // end, the bid that rests last (the router's shape).
+    let rank = |b: &BidPlan| {
+        if b.refund.is_some() {
+            0
+        } else if b.rests {
+            2
+        } else {
+            1
+        }
+    };
+    if bids.windows(2).any(|w| rank(&w[0]) > rank(&w[1])) {
+        let mut order: Vec<usize> = (0..bids.len()).collect();
+        order.sort_by_key(|i| rank(&bids[*i]));
+        let mut sorted = r.clone();
+        sorted.bids = order.iter().map(|i| r.bids[*i].clone()).collect();
+        return build_execute_intent(&sorted, budgets);
+    }
     if r.asks.iter().any(|a| a.custody.state.extension() != r.asks[0].custody.state.extension()) {
         return invalid("the asks' custodies mix extension commitments");
     }
@@ -853,6 +882,11 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     if let Some((input, out)) = tok_out_patch {
         if let crate::tx::DPlan::Plain(SigPlan::Entry { args, .. }) = &mut d.inputs[input].plan {
             args[2] = Arg::Int(out as i64);
+        }
+    }
+    for (i, b) in bids.iter().enumerate() {
+        if let Some(v) = b.refund {
+            d.add_refund(i, v, r.bids[i].order.state.maker, tok_a.expect("bids sell token A").0);
         }
     }
     if !r.records.is_empty() {

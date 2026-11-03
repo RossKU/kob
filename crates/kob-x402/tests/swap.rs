@@ -430,6 +430,58 @@ fn sw1_token_a_sold_into_a_bid_pays_kas() {
     assert_eq!(paid.len(), 1);
 }
 
+/// A terminal bid fill returns the KAS beyond its delivery carrier to the maker as an output of its own (the last output,
+/// after the payer's change) from 1 KAS up: the verifier claims it for the bid instead of calling it a stray, and the engine
+/// accepts the transaction; folding the change into the fee keeps the refund at the end.
+#[test]
+fn a_terminal_bid_fill_refunds_its_maker_at_the_last_output() {
+    let f = fx();
+    // an IOC bid funded for 3 whole tokens plus 3 KAS of slack: the 3-token fill ends it and 3 KAS go back to the maker
+    let bs = BidState { tif: 1, ..common::bid(common::MAKER_B, P245, T) };
+    let value = (bs.used(3 * WHOLE).expect("budget") + DC) as u64 + 3 * KAS;
+    let bid = common::order(30, value, common::cov(0xb5), 1_000, bs);
+    put_bid(&f.chain, &bid);
+    let quote = f.sw1_quote(&bid);
+    let offer = f.kas_offer(KAS);
+    let prep = f.prepare(&offer, &quote, &f.funds(false));
+    let outs = &prep.built.tx.outputs;
+    let last = outs.last().expect("outputs");
+    assert_eq!(
+        last.script_public_key,
+        kob_protocol::tx::spk_to_string(&p2pk_spk(&pk(common::MAKER_B))),
+        "the refund closes the transaction"
+    );
+    assert!(last.value >= 3 * KAS, "the refund carries the slack: {}", last.value);
+    assert_eq!(prep.built.fee.change_output, Some(outs.len() as u32 - 2), "the change sits before the refund");
+    let sigs = prep.sign_with(&keys()).unwrap();
+    let p = prep.complete(&sigs).unwrap();
+    let v = f.verify(&offer, &p.payload).unwrap_or_else(|e| panic!("verification failed: {e}"));
+    kob_protocol::verify::validate(&v.tx, &v.entries).expect("engine validation");
+    assert_eq!(v.kind, PaymentKind::SwapToKas);
+    assert_eq!(v.merchant_output.amount, KAS);
+
+    // a tiny change is folded away without moving the refund off the end
+    let base_change = prep.built.tx.outputs[prep.built.fee.change_output.unwrap() as usize].value;
+    let offer2 = f.kas_offer(KAS + base_change - 50_000_000);
+    let wide = SwapOptions { min_change_sompi: KAS, max_fee_sompi: Some(KAS), ..bounded(&quote) };
+    let folded = prepare_swap(&f.policy, &offer2, &quote, RH, &f.funds(false), NOW_MS, &wide).unwrap();
+    assert!(folded.built.fee.change_output.is_none());
+    assert_eq!(
+        folded.built.tx.outputs.last().unwrap().script_public_key,
+        kob_protocol::tx::spk_to_string(&p2pk_spk(&pk(common::MAKER_B)))
+    );
+    let sigs = folded.sign_with(&keys()).unwrap();
+    let p = folded.complete(&sigs).unwrap();
+    let mut policy = f.policy.clone();
+    policy.limits.max_fee_sompi = KAS;
+    let ctx = VerifyCtx { chain: &f.chain, clock: &f.clock, policy: &policy };
+    let v2 = verify_payment(&ctx, &offer2, &p.payload, RH).expect("folded swap with a refund verifies");
+    kob_protocol::verify::validate(&v2.tx, &v2.entries).expect("engine validation of the folded swap");
+    f.chain.submit(&v.tx).expect("submit");
+    f.chain.mine(1);
+    assert!(f.chain.is_accepted(&v.txid));
+}
+
 #[test]
 fn sw1b_merchant_takes_the_whole_proceeds_without_change() {
     let f = fx();

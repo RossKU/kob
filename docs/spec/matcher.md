@@ -332,7 +332,12 @@ updates − network fee` of the transaction subject to:
   3/3 transaction never carries more than 3 token inputs of its token, so the orders' stray scan covers all of them
   (`crates/kob-tests/tests/kcc20_standard_slots_tests.rs`);
 - positional outputs (order input i ↔ output i; if-done fills add one exit output; a custody's rest or return at its
-  custody input's index);
+  custody input's index); the KAS a terminal bid fill (`KobBid`, `KobCondBid`, KRON twins) does not spend beyond its
+  delivery carrier returns to the maker as a plain P2PK output when it is at least `REFUND_MIN` (1 KAS), at output
+  `M − 1 − i` (M the number of outputs, i the bid's input index): the bids with a refund are the inputs `0..k`, their
+  refunds the last `k` outputs in the reverse order of their inputs, and the slot may not be the positional output of
+  another order input (`refundTo`); `kob_protocol` puts those legs first and places the refunds, so a planner may hand it
+  the legs in any order;
 - per token, conservation: what the transaction's inputs of a token carry equals what its outputs of that token carry
   (the token programs enforce it); a pair order's exact amounts (§3.5) are the builders' to balance;
 - trigger evidence (§4): a stop armed or trailed in the transaction reads a qualifying fill of the same transaction (a

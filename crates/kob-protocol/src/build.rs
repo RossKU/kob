@@ -2187,7 +2187,92 @@ pub fn build_batch_unchecked(b: &Batch, budgets: BudgetFn) -> Result<BuiltTx> {
     build_batch_mode(b, budgets, false)
 }
 
+/// What one pass of the batch builder yields: the transaction, or the order of legs it needs.
+enum Pass {
+    Built(Box<BuiltTx>),
+    /// New position `j` holds the original leg `perm[j]`.
+    Reorder(Vec<usize>),
+}
+
+/// The order of legs the refund slots need, `None` when the legs are in it. A terminal bid fill with a refund sends its unspent
+/// KAS to the maker at output `M - 1 - i` (i its input index, M the number of outputs): the fills with a refund are inputs
+/// 0..k, so their refunds are the last k outputs, in the reverse order of their inputs. The other legs keep their order.
+fn refund_order(refunds: &[Option<(u64, [u8; 32])>]) -> Option<Vec<usize>> {
+    let k = refunds.iter().filter(|r| r.is_some()).count();
+    if refunds[..k].iter().all(|r| r.is_some()) {
+        return None;
+    }
+    Some((0..refunds.len()).filter(|i| refunds[*i].is_some()).chain((0..refunds.len()).filter(|i| refunds[*i].is_none())).collect())
+}
+
+/// The batch with its legs in the order `perm` (new position `j` holds the original leg `perm[j]`): the legs' and updates'
+/// evidence indices follow their legs.
+fn permute_batch(b: &Batch, perm: &[usize]) -> Batch {
+    let mut inv = vec![0usize; perm.len()];
+    for (j, o) in perm.iter().enumerate() {
+        inv[*o] = j;
+    }
+    let map = |x: &mut Option<usize>| {
+        if let Some(k) = x {
+            *k = inv.get(*k).copied().unwrap_or(*k);
+        }
+    };
+    let mut out = b.clone();
+    out.legs = perm.iter().map(|o| b.legs[*o].clone()).collect();
+    for l in out.legs.iter_mut() {
+        match l {
+            Leg::CondAsk { evidence, .. }
+            | Leg::CondBid { evidence, .. }
+            | Leg::IfdBid { evidence, .. }
+            | Leg::IfdAsk { evidence, .. } => map(evidence),
+            Leg::CondPair { evidence, evidence_b, .. } | Leg::IfdPair { evidence, evidence_b, .. } => {
+                map(evidence);
+                map(evidence_b);
+            }
+            Leg::Ask { .. } | Leg::Bid { .. } | Leg::Pair { .. } => {}
+        }
+    }
+    for u in out.updates.iter_mut() {
+        u.evidence = inv.get(u.evidence).copied().unwrap_or(u.evidence);
+        map(&mut u.evidence_b);
+    }
+    out
+}
+
+/// A refusal of the reordered batch names the legs by their new positions: the original ones instead (`leg <j>` -> `leg <perm[j]>`).
+fn unpermute_error(e: Error, perm: &[usize]) -> Error {
+    let Error::Invalid(m) = e else { return e };
+    let mut out = String::new();
+    let mut rest = m.as_str();
+    while let Some(at) = rest.find("leg ") {
+        let (head, tail) = rest.split_at(at + 4);
+        out.push_str(head);
+        let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+        match digits.parse::<usize>().ok().and_then(|j| perm.get(j)) {
+            Some(o) if !digits.is_empty() => {
+                out.push_str(&o.to_string());
+                rest = &tail[digits.len()..];
+            }
+            _ => rest = tail,
+        }
+    }
+    out.push_str(rest);
+    Error::Invalid(out)
+}
+
 fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltTx> {
+    match build_batch_pass(b, budgets, strict)? {
+        Pass::Built(t) => Ok(*t),
+        Pass::Reorder(perm) => {
+            match build_batch_pass(&permute_batch(b, &perm), budgets, strict).map_err(|e| unpermute_error(e, &perm))? {
+                Pass::Built(t) => Ok(*t),
+                Pass::Reorder(_) => invalid("the legs with a refund output could not be put first"),
+            }
+        }
+    }
+}
+
+fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> {
     if b.legs.is_empty() {
         return invalid("empty batch");
     }
@@ -2300,6 +2385,8 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
     };
 
     let mut plans: Vec<LegPlan> = Vec::with_capacity(n_legs);
+    // terminal bid fills whose unspent KAS returns to the maker as an output of its own: (value, maker) per leg
+    let mut refunds: Vec<Option<(u64, [u8; 32])>> = vec![None; n_legs];
     for (i, l) in b.legs.iter().enumerate() {
         let tok = leg_tokens[i];
         let fam = tok.1.family();
@@ -2417,7 +2504,15 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     if s.tif == TIF_FOK && can_continue {
                         return invalid("FOK bid must be filled completely");
                     }
-                    (v - spend, "close")
+                    // the KAS the bid does not spend beyond the delivery carrier returns to the maker at the end of the
+                    // transaction once it is REFUND_MIN or more; below that it rides on the delivery
+                    let rem = sub(v - spend, s.delivery_carrier, "bid refund")?;
+                    if rem >= crate::tx::REFUND_MIN as i64 {
+                        refunds[i] = Some((rem as u64, s.maker));
+                        (s.delivery_carrier, "close")
+                    } else {
+                        (v - spend, "close")
+                    }
                 };
                 let mut role = format!("{}.fill.{branch}", TemplateId::KobBid.for_program(tok.1).name());
                 if s.interval > 0 {
@@ -2638,7 +2733,12 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                         if rest > 0 {
                             extras.push(Extra::Cont(pos(left - s.delivery_carrier, "continuation")?, next.spk_for(fam)));
                         }
-                        let delivery = if rest > 0 { s.delivery_carrier } else { left };
+                        let rem = sub(left, s.delivery_carrier, "conditional bid refund")?;
+                        let refund = rest == 0 && rem >= crate::tx::REFUND_MIN as i64;
+                        if refund {
+                            refunds[i] = Some((rem as u64, s.maker));
+                        }
+                        let delivery = if rest > 0 || refund { s.delivery_carrier } else { left };
                         (
                             PosOut::Deliver(
                                 pos(delivery, "delivery")?,
@@ -2961,6 +3061,10 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
         plans.push(p);
     }
     deliver_pair_surplus(b, &mut plans)?;
+    // The covenants pin a refund at output M - 1 - i for the bid at input i: the fills with a refund are the first legs.
+    if let Some(perm) = refund_order(&refunds) {
+        return Ok(Pass::Reorder(perm));
+    }
 
     // Inputs: legs, merged entries, token inputs (positional custodies first, see `layout`), updates, funding.
     for (i, l) in b.legs.iter().enumerate() {
@@ -3113,6 +3217,11 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
             }
         }
     }
+    for (i, r) in refunds.iter().enumerate() {
+        if let Some((value, maker)) = r {
+            d.add_refund(i, *value, *maker, leg_tokens[i].0);
+        }
+    }
     // Patch index arguments (tokOut / exitOut / a merged pair entry's new custodies).
     for (input, arg, out) in patches {
         if let crate::tx::DPlan::Plain(SigPlan::Entry { args, .. }) = &mut d.inputs[input].plan {
@@ -3122,7 +3231,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
     if !b.records.is_empty() {
         d.payload = payload::encode(&b.records)?;
     }
-    d.seal(budgets).map_err(|e| dust_leg(e, &owner))
+    d.seal(budgets).map(|t| Pass::Built(Box::new(t))).map_err(|e| dust_leg(e, &owner))
 }
 
 /// A refusal of `seal` for KIP-9 dust (`dust payout: output k (...)`) names outputs, not legs: the first named output a leg

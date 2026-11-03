@@ -692,7 +692,7 @@ net it against opposite pair orders of the same pair, or fill it from inventory 
 | order terms (price, scale, minimum fill, expiry, maker, token, deadline) | placement record, verified against the P2SH | exact |
 | fill amount `n` (base units), refund / cancel / update / merge | the entry and arguments of the input's signature script | exact (verified spend) |
 | maker payout of a sell-side fill | value of the output at the input's index (positional rule) | exact |
-| cost of a buy-side fill | `detail.escrow_before` (the spent order output), `detail.escrow_after` (its continuation; absent when the bid sold out) and `detail.delivery_value` (the maker's delivery output at the input's position: carrier plus a rising bid's surplus); cost = before - after - delivery | exact |
+| cost of a buy-side fill | `detail.escrow_before` (the spent order output), `detail.escrow_after` (its continuation; absent when the bid sold out) and `detail.delivery_value` (the maker's delivery output at the input's position: carrier plus, below 1 KAS, a rising bid's surplus) and `detail.refund_value` (a terminal fill's plain output to the maker at output `M - 1 - input`, present from 1 KAS of spare budget on; absent otherwise); cost = before - after - delivery - refund | exact |
 | current state (`amountLeft`, `armed`, trailing `stopPrice`, `rptAmount`) | proven splice of the mutable windows | exact when proven, else `state_known = false` |
 | `placed_state` (only when there is no current `state`: a closed or unproven order) | the placement record's state | exact at placement; shows the order's type and terms, never the basis of a spend |
 | remaining amount of asks, conditional orders and entries | `amountLeft` of the proven state | exact (`amount_estimated: false`) |

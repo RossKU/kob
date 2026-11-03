@@ -115,6 +115,36 @@ async fn ask_refund_after_expiry_by_a_keeper() {
     assert_eq!(c.hs.event_kinds(&cov), ["create", "refund"]);
 }
 
+/// A terminal bid fill sends the KAS beyond its delivery carrier back to the maker as an output of its own (the last output) from
+/// 1 KAS up; the fill event reports it as `refund_value` next to `delivery_value`, so before - after - delivery - refund is the cost.
+#[tokio::test]
+async fn a_terminal_bid_fill_reports_the_makers_refund_output() {
+    let c = Ctx::new();
+    let b0 = BidState { tif: 1, expiry_daa: c.daa() as i64 + 300, ..bid(MAKER_B, P245) };
+    let slack = 3 * KAS;
+    let escrow = b0.escrow(4 * WHOLE, 1).unwrap() as u64 + slack;
+    let create = c.w.create_tx(AnyState::KobBid(b0.clone()), escrow, MAKER_B, 0);
+    c.push(&[&create]).await;
+    let cov = c.w.cov(&create, 0);
+    let mut b = batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None }]);
+    b.taker_tokens = vec![c.w.token(TAKER, 4 * WHOLE)];
+    let fill = c.w.sign(&Action::Batch(b));
+    assert!(find_cov(&fill, &cov).is_none(), "an IOC bid never continues");
+    let refund = fill.tx.outputs.last().unwrap();
+    assert!(refund.value >= slack, "the slack goes back to the maker: {}", refund.value);
+    c.push(&[&fill]).await;
+    let detail: String = c.hs.query("SELECT detail FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let d: serde_json::Value = serde_json::from_str(&detail).unwrap();
+    assert_eq!(d["refund_value"].as_str().unwrap().parse::<u64>().unwrap(), refund.value);
+    assert_eq!(d["delivery_value"].as_str().unwrap().parse::<u64>().unwrap(), fill.tx.outputs[0].value);
+    let (before, delivery, back): (i64, i64, i64) = (
+        d["escrow_before"].as_str().unwrap().parse().unwrap(),
+        d["delivery_value"].as_str().unwrap().parse().unwrap(),
+        d["refund_value"].as_str().unwrap().parse().unwrap(),
+    );
+    assert!(before - delivery - back <= 4 * (b0.price + b0.tip), "the cost never exceeds the all-in budget");
+}
+
 #[tokio::test]
 async fn bid_escrow_fills_and_reports_estimated_amount() {
     let c = Ctx::new();

@@ -500,15 +500,29 @@ fn check_payer_token(t: &TokenUtxo, allowed: &AllowedToken) -> Result<()> {
     Ok(())
 }
 
-/// Drops the last output (the payer's KAS change) and re-derives the sign requests: the change goes to
-/// the fee. Only the sighash of each request changes.
-fn fold_change_into_fee(built: &BuiltTx) -> Result<BuiltTx> {
+/// Drops the payer's KAS change output and re-derives the sign requests: the change goes to the fee. Only the sighash
+/// of each request changes. A terminal bid fill's refund outputs (the maker's KAS, counted from the end: the refund of
+/// input i is output M - 1 - i) come after the change; dropping the change moves them one slot down, which the bid covenant
+/// accepts only while the slot is not the positional output of another order input (the first `order_inputs` inputs), so the
+/// fold is refused otherwise.
+fn fold_change_into_fee(built: &BuiltTx, order_inputs: usize) -> Result<BuiltTx> {
     let (mut tx, entries) = built.tx.to_tx()?;
-    let last = tx.outputs.len().checked_sub(1).ok_or_else(|| err(Diag::Internal, "no output to fold"))?;
-    if built.fee.change_output != Some(last as u32) {
-        return Err(err(Diag::Internal, "the change output is not the last output"));
+    let ci = built.fee.change_output.map(|c| c as usize).filter(|c| *c < tx.outputs.len());
+    let Some(ci) = ci else {
+        return Err(err(Diag::Internal, "the built transaction names no change output to fold"));
+    };
+    let refunds = tx.outputs.len() - 1 - ci;
+    let m_after = tx.outputs.len() - 1;
+    for i in 0..refunds {
+        let slot = m_after - 1 - i;
+        if slot < order_inputs {
+            return Err(err(
+                Diag::InvalidKaspaExactTransaction,
+                "folding the KAS change into the fee would move a bid refund output onto another order's positional output",
+            ));
+        }
     }
-    tx.outputs.pop();
+    tx.outputs.remove(ci);
     tx.set_storage_mass(masses(&tx, &entries).storage);
     let sign: Vec<SignRequest> =
         built.sign.iter().map(|r| SignRequest { sighash: sighash(&tx, &entries, r.input_index), ..r.clone() }).collect();
@@ -787,7 +801,7 @@ pub fn prepare_swap(
             }
             warnings
                 .push(format!("folded a KAS change of {value} sompi into the fee (below the {} sompi floor)", opts.min_change_sompi));
-            built = fold_change_into_fee(&built)?;
+            built = fold_change_into_fee(&built, k)?;
         }
     }
     let max_fee = opts.max_fee_sompi.unwrap_or(policy.limits.max_fee_sompi);

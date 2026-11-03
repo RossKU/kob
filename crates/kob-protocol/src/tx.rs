@@ -62,6 +62,11 @@ pub const DUST_OUTPUT_MIN: u64 = 2_000_000;
 /// its storage mass is `4 × storage_mass_parameter / value`: four times that of a plain output of the same value
 /// ([`DUST_OUTPUT_MIN`]). A fill that would leave such an output smaller is refused by consensus.
 pub const COVENANT_OUTPUT_MIN: u64 = 4 * STORAGE_MASS_PARAMETER / BLOCK_STORAGE_LIMIT;
+/// Smallest KAS beyond its delivery carrier that a terminal bid fill (KobBid, KobCondBid and their KRON twins) sends back to the
+/// bid's maker as an output of its own (1 KAS, the contracts' `REFUND_MIN`): a plain output of v sompi has KIP-9 storage mass
+/// `storage_mass_parameter / v`, so a smaller remainder stays on the delivery. The refund sits at output `M - 1 - i` (M the
+/// number of outputs, i the bid's input index), see [`Draft::add_refund`].
+pub const REFUND_MIN: u64 = 100_000_000;
 
 /// The KIP-9 storage mass an output alone commits (`storage_mass_parameter × plurality² / value`; rusty-kaspa v2.1.0
 /// `calc_storage_mass`, before the inputs are credited), `u64::MAX` for a zero value.
@@ -944,6 +949,11 @@ pub(crate) struct Draft {
     pub pinned: BTreeSet<usize>,
     /// The order output that takes the change instead of a change output ([`Absorber`]).
     pub absorber: Option<Absorber>,
+    /// Refund outputs of terminal bid fills: (bid input index, value, maker key). Each is a plain P2PK output of the maker at
+    /// output `M - 1 - i` (M the number of outputs of the sealed transaction), so the refunds close the transaction in the
+    /// reverse order of their inputs, which must be inputs 0..k (`seal` refuses anything else): the covenants pin exactly this
+    /// slot (contracts/v2/KobBid.sil `refundTo`).
+    pub refunds: Vec<(usize, u64, [u8; 32], [u8; 32])>,
 }
 
 /// An order output of the transaction that takes what would otherwise be a change output (the change rule of
@@ -991,6 +1001,7 @@ impl Draft {
             tokens: vec![],
             pinned: BTreeSet::new(),
             absorber: None,
+            refunds: vec![],
         })
     }
 
@@ -1059,6 +1070,12 @@ impl Draft {
         self.skip_pinned();
         self.outputs.push(DOutput { value, spk, cov, token: None });
         self.outputs.len() - 1
+    }
+
+    /// A terminal bid fill's refund of `value` sompi to `maker` (P2PK), for the bid at input `input`: placed by `seal` at the
+    /// end of the outputs (see [`Draft::refunds`]).
+    pub fn add_refund(&mut self, input: usize, value: u64, maker: [u8; 32], token: [u8; 32]) {
+        self.refunds.push((input, value, maker, token));
     }
 
     /// Reserves an output slot (positional outputs are filled after the extras are laid out).
@@ -1382,7 +1399,41 @@ impl Draft {
             .filter(|o| !empty(o))
             .map(|o| TransactionOutput { value: o.value, script_public_key: o.spk.clone(), covenant: token_binding(o) })
             .collect();
-        // the change output: in the empty slot if there is one, else last
+        // Refund outputs close the transaction (output M - 1 - i for the bid at input i): the bids are inputs 0..k, so the
+        // refund of input 0 is the last output. The covenants also refuse a slot that is the positional output of another
+        // order input (a covenant input that is not a token input): spare outputs to the change key move the slots up
+        // until none is.
+        let mut sorted_refunds = self.refunds.clone();
+        sorted_refunds.sort_by_key(|r| std::cmp::Reverse(r.0));
+        let tail_n = sorted_refunds.len();
+        if sorted_refunds.iter().enumerate().any(|(k, r)| r.0 != tail_n - 1 - k) {
+            return invalid("terminal bid fills with a refund must be the first inputs of the transaction");
+        }
+        // (the covenants let a refund slot sit on a plain key input or an input of the bid's own token only)
+        let claimed = |at: usize, token: &[u8; 32]| -> bool {
+            self.inputs.get(at).is_some_and(|i| i.utxo.covenant_id.is_some_and(|c| c != *token))
+        };
+        let refund_slot_taken = |m: usize| sorted_refunds.iter().any(|(i, _, _, token)| claimed(m - 1 - i, token));
+        if tail_n > 0 {
+            let spare = self.change.ok_or_else(|| Error::Invalid("refunds need a change key".into()))?;
+            let mut m_est = outputs.len() + tail_n + usize::from(self.change.is_some());
+            let mut spares = 0;
+            while refund_slot_taken(m_est) {
+                if spares == 8 {
+                    return invalid("no layout puts the bids' refund outputs clear of the other orders' positional outputs");
+                }
+                outputs.insert(
+                    outputs.len(),
+                    TransactionOutput { value: REFUND_MIN, script_public_key: p2pk_spk(&spare), covenant: None },
+                );
+                spares += 1;
+                m_est += 1;
+            }
+            for (_, value, maker, _) in &sorted_refunds {
+                outputs.push(TransactionOutput { value: *value, script_public_key: p2pk_spk(maker), covenant: None });
+            }
+        }
+        // the change output: in the empty slot if there is one, else before the refunds
         let with_change = |outs: &mut Vec<TransactionOutput>, o: TransactionOutput| -> usize {
             match gap {
                 Some(k) => {
@@ -1390,8 +1441,9 @@ impl Draft {
                     k
                 }
                 None => {
-                    outs.push(o);
-                    outs.len() - 1
+                    let at = outs.len() - tail_n;
+                    outs.insert(at, o);
+                    at
                 }
             }
         };
@@ -1508,6 +1560,9 @@ impl Draft {
         let paid_by_absorber = absorber.is_some_and(|(a, _)| a.pays.is_some());
         if change_output.is_none() && !paid_by_absorber && slack < fee_without {
             return Err(Error::InsufficientFunds { need: fixed_out + fee_without, have: total_in });
+        }
+        if tail_n > 0 && refund_slot_taken(outputs.len()) {
+            return invalid("a refund output of a bid fill would sit at the positional output of another order input");
         }
         let tx = mk(outputs);
         let report = masses(&tx, &entries);

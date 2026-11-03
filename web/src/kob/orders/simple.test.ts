@@ -287,7 +287,7 @@ describe.each(markets)('IOC / FOK on %s', (_name, market) => {
       expect(p.disclosure!.expiry).toMatchObject({ kind: 'ioc', daa: CLOCK.daa + 300n });
       expect(p.disclosure!.notes).toContain('iocRemainderReturned');
     }
-    // an IOC bid keeps one delivery carrier (the remainder rides back on the delivery)
+    // an IOC bid keeps one delivery carrier (the remainder comes back as a refund output from 1 KAS up, else on the delivery)
     expect(BigInt(planValid(env(), { type: 'ioc', side: 'buy', price: P, amount: 4n * TOK }).request!.value)).toBe(escrow(4n * TOK, P, 1n));
   });
 
