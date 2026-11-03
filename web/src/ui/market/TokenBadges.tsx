@@ -63,7 +63,8 @@ export function StatusBadge(props: { badge: TokenBadge; 'data-testid'?: string }
 }
 
 /** The plain sentence for each reason a token is "High risk" (the facts' own sentences; the check's own words for a failed genesis). */
-export function riskReasonText(r: FactRow, code: RiskCode): string {
+export function riskReasonText(r: FactRow, code: RiskCode | 'mint_authority_both'): string {
+  if (code === 'mint_authority_both') return t('market.risk.mintAuthorityBoth');
   switch (code) {
     case 'genesis_failed': return factText(r, 'genesis_failed');
     case 'live_mint_authority': return factText(r, 'live_mint_authority');
@@ -71,6 +72,22 @@ export function riskReasonText(r: FactRow, code: RiskCode): string {
     case 'mint_unbounded': return factText(r, 'mint_allowance');
     case 'issuer_control': return t('market.powers.warning');
   }
+}
+
+/**
+ * The reasons shown for a token's risk codes, one line each: a live mint authority and the program's mint authority say nearly the same, so when both apply they are
+ * one line (`mint_authority_both`). The chip's panel and the details section both print these, so they never differ.
+ */
+export function riskReasons(r: FactRow & { powers?: readonly string[] }): { key: RiskCode | 'mint_authority_both'; text: string }[] {
+  const codes = tokenRiskCodes({ facts: r.facts, powers: [...(r.powers ?? [])], ...(r.genesis ? { genesis: r.genesis } : {}) });
+  const both = codes.includes('live_mint_authority') && codes.includes('mint_authority');
+  const out: { key: RiskCode | 'mint_authority_both'; text: string }[] = [];
+  for (const c of codes) {
+    if (both && c === 'mint_authority') continue;
+    const key = both && c === 'live_mint_authority' ? 'mint_authority_both' : c;
+    out.push({ key, text: riskReasonText(r, key) });
+  }
+  return out;
 }
 
 /**
@@ -121,8 +138,8 @@ export function RiskChip(props: { row: Pick<TokenRow, 'covenantId' | 'facts' | '
         <div class="risk-panel" data-risk-panel role="note" style={{ left: `${pos.left}px`, top: `${pos.top}px` }} data-testid="high-risk-reasons">
           <strong>{t('market.risk.title')}</strong>
           <ul>
-            {codes.map((c) => (
-              <li key={c} data-reason={c}>{riskReasonText({ ...r, ticker: '' }, c)}</li>
+            {riskReasons({ ...r, ticker: '' }).map((x) => (
+              <li key={x.key} data-reason={x.key}>{x.text}</li>
             ))}
           </ul>
           <p class="muted small">{t('market.risk.note')}</p>

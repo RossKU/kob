@@ -11,8 +11,8 @@ import { KascovLink, programTitle } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
 import { TokenNote } from './TokenNote';
 import { decimalsNote } from '../../app/token-display';
-import { GenesisFailedBanner, PowersWarning, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasonText, tokenTitle } from './TokenBadges';
-import { templateDetail, tokenRiskCodes, type TokenRow } from './token-model';
+import { GenesisFailedBanner, PowersWarning, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
+import { riskFactIds, templateDetail, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
 export function IndexerProblems(props: { codes: string[] }) {
@@ -151,20 +151,22 @@ export function TokenLine(props: { row: TokenRow; note?: Pick<TokenInfo, 'decima
  */
 function TokenStatusDetails(props: { row: TokenRow; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null | undefined }) {
   const r = props.row;
-  const risks = tokenRiskCodes(r);
+  const risks = riskReasons(r);
+  const stated = new Set(riskFactIds(r));
+  const facts = r.facts.filter((f) => !stated.has(f));
   const declared = r.declared === true ? { decimals: r.decimals } : props.note?.decimalsSource === 'declared' && !props.note.declarationConflicts?.length ? { decimals: props.note.decimals } : null;
   const other = props.note && !declared ? decimalsNote(props.note) : null;
-  if (risks.length === 0 && r.facts.length === 0 && !declared && !other) return null;
+  if (risks.length === 0 && facts.length === 0 && !declared && !other) return null;
   return (
     <Section title={t('market.status.title')} collapsible defaultOpen={false} data-testid="token-status-details" summary={risks.length > 0 ? <Badge tone="warn" data-testid="status-summary">{t('market.badge.highRisk')}</Badge> : undefined}>
       <ul class="tf-list" data-testid="token-status-list">
-        {risks.map((c) => (
-          <li key={c} data-reason={c} data-testid={`status-risk-${c}`}>
+        {risks.map((x) => (
+          <li key={x.key} data-reason={x.key} data-testid={`status-risk-${x.key}`}>
             <strong>{t('market.badge.highRisk')}: </strong>
-            {riskReasonText(r, c)}
+            {x.text}
           </li>
         ))}
-        {r.facts.map((id) => (
+        {facts.map((id) => (
           <li key={id} data-fact={id} data-testid={`status-fact-${id}`}>
             <strong><FactLabel row={r} id={id} />: </strong>
             <FactSentence row={r} id={id} />

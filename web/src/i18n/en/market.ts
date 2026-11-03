@@ -240,6 +240,7 @@ export default {
   'market.sharedTicker': 'Another token uses this ticker — check the covenant id',
 
   'market.badge.highRisk': 'High risk',
+  'market.risk.mintAuthorityBoth': 'A mint authority exists: whoever holds it can create more of this token.',
   'market.risk.open': 'show why',
   'market.risk.title': 'Why this token is marked High risk',
   'market.risk.note': "Worked out from the token's own facts: someone can create more of it, or freeze or seize balances. It is not a rating, and a token without this mark is not vouched for.",
