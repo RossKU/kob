@@ -133,7 +133,8 @@ async fn a_terminal_bid_fill_reports_the_makers_refund_output() {
     let refund = fill.tx.outputs.last().unwrap();
     assert!(refund.value >= slack, "the slack goes back to the maker: {}", refund.value);
     c.push(&[&fill]).await;
-    let detail: String = c.hs.query("SELECT detail FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let detail: String =
+        c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
     let d: serde_json::Value = serde_json::from_str(&detail).unwrap();
     assert_eq!(d["refund_value"].as_str().unwrap().parse::<u64>().unwrap(), refund.value);
     assert_eq!(d["delivery_value"].as_str().unwrap().parse::<u64>().unwrap(), fill.tx.outputs[0].value);
@@ -178,7 +179,8 @@ async fn bid_escrow_fills_and_reports_estimated_amount() {
     let n: i64 = c.hs.query("SELECT COUNT(*) FROM token_utxos", []);
     assert_eq!(n, 0);
     // the fill event reports the escrow before and after: what the buy drew never exceeds its all-in limit plus the delivery carrier
-    let detail: String = c.hs.query("SELECT detail FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let detail: String =
+        c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
     let d: serde_json::Value = serde_json::from_str(&detail).unwrap();
     let before: i64 = d["escrow_before"].as_str().unwrap().parse().unwrap();
     let after: i64 = d["escrow_after"].as_str().unwrap().parse().unwrap();
@@ -383,6 +385,6 @@ async fn day_order_deadline_is_recorded_and_flagged() {
     let v = view_at(&c, &cov, d.deadline);
     assert!(v.deadline_passed, "conforming matchers stop at the deadline (UTC clock)");
     assert_eq!(v.status, "open", "on chain the order lives until its expiry");
-    let ev: String = c.hs.query("SELECT detail FROM order_events WHERE covenant_id = ?1 AND kind = 'create'", [&cov.0[..]]);
+    let ev: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'create'", [&cov.0[..]]);
     assert!(ev.contains(&d.deadline.to_string()));
 }

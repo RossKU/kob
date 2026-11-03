@@ -27,6 +27,7 @@
 //!   reorg is an exact revert.
 
 use super::db::{DbError, DbResult};
+use super::packed::{sql_genesis, sql_ustate};
 use super::record::{Extractor, Reveal, TxRecord};
 use super::recordlog::LogOp;
 use super::status::FillNotice;
@@ -240,11 +241,12 @@ fn is_exact_custody(
     held: Option<&kob_protocol::state::TokenState>,
 ) -> DbResult<bool> {
     let row = conn
-        .prepare_cached(
-            "SELECT o.contract, o.token_cov_id, o.ext_commit, kob_ustate(u.state, o.genesis_state) FROM orders o \
-             JOIN order_utxos u ON u.covenant_id = o.covenant_id AND u.spent_block IS NULL \
-             WHERE o.covenant_id = ?1 ORDER BY u.created_block DESC, u.idx DESC LIMIT 1",
-        )?
+        .prepare_cached(concat!(
+            "SELECT o.contract, o.token_cov_id, o.ext_commit, ",
+            sql_ustate!("u", "o"),
+            " FROM orders o JOIN order_utxos u ON u.covenant_id = o.covenant_id AND u.spent_block IS NULL \
+                 WHERE o.covenant_id = ?1 ORDER BY u.created_block DESC, u.idx DESC LIMIT 1"
+        ))?
         .query_row([&cov.0[..]], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -747,7 +749,7 @@ impl Processor {
         type Row = (Vec<u8>, String, Vec<u8>, i64, i64);
         let rows: Vec<Row> = conn
             .prepare_cached(
-                "SELECT o.covenant_id, o.contract, o.genesis_state, o.genesis_daa, u.value FROM orders o INDEXED BY orders_token_tpl                  JOIN order_utxos u ON u.txid = o.genesis_txid AND u.idx = o.genesis_out                  WHERE o.token_cov_id = ?1 AND o.token_tpl_hash = ?2 AND o.listed = 0 AND o.unlisted_reason = 'token_program_conflict'                  AND o.quote_cov_id IS NULL ORDER BY o.genesis_block, o.covenant_id LIMIT ?3",
+                concat!("SELECT o.covenant_id, o.contract, ", sql_genesis!("o"), ", o.genesis_daa, u.value FROM orders o INDEXED BY orders_token_tpl                  JOIN order_utxos u ON u.txid = o.genesis_txid AND u.idx = o.genesis_out                  WHERE o.token_cov_id = ?1 AND o.token_tpl_hash = ?2 AND o.listed = 0 AND o.unlisted_reason = 'token_program_conflict'                  AND o.quote_cov_id IS NULL ORDER BY o.genesis_block, o.covenant_id LIMIT ?3"),
             )?
             .query_map(params![&token.0[..], &tpl, Self::RELIST_MAX], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
             .collect::<rusqlite::Result<_>>()?;
@@ -972,7 +974,7 @@ impl Processor {
         };
         conn.prepare_cached(
             "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,kob_gpack(?22,?2,?6,?7,?8,?31),?23,?24,?25,?26,?27,?28,?29,?30,?31)",
         )?
         .execute(params![
             &n.covenant_id.0[..],
@@ -1021,7 +1023,7 @@ impl Processor {
             }
         }
         conn.prepare_cached(
-            "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, closes, detail) VALUES (?1,?2,?3,?4,?5,?6,'create',?7,?8,?9,?10,0,?11)",
+            "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, closes, detail) VALUES (?1,?2,?3,?4,?5,?6,'create',?7,?8,?9,?10,0,kob_dpack(?11,'create'))",
         )?
         .execute(params![
             &n.covenant_id.0[..],
@@ -1280,8 +1282,12 @@ impl Processor {
         conn.prepare_cached(
             // the state is stored as its difference from the order's genesis state ([`super::packed`]); the order row is written
             // before its first UTXO
-            "INSERT OR REPLACE INTO order_utxos (txid, idx, covenant_id, value, spk, state, created_block, created_daa) \
-             VALUES (?1,?2,?3,?4,?5,kob_pack(?6, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = ?3)),?7,?8)",
+            concat!(
+                "INSERT OR REPLACE INTO order_utxos (txid, idx, covenant_id, value, spk, state, created_block, created_daa) \
+                 VALUES (?1,?2,?3,?4,?5,kob_pack(?6, (SELECT ",
+                sql_genesis!("g"),
+                " FROM orders g WHERE g.covenant_id = ?3)),?7,?8)"
+            ),
         )?
         .execute(params![&txid.0[..], idx, &cov.0[..], value as i64, spk, state, seq, daa as i64])?;
         Ok(())
@@ -1656,7 +1662,7 @@ impl Processor {
                 json!({"input": s.input_idx, "entry": s.entry, "remainder": true}).to_string()
             };
             conn.prepare_cached(
-                "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,kob_dpack(?14,?7))",
             )?
             .execute(params![
                 &s.cov.0[..],
@@ -1948,8 +1954,12 @@ type TipRow = (Vec<u8>, i64, i64, Option<Vec<u8>>);
 
 /// The unspent UTXO of an order covenant (`?1`) that is its tip, with its state decoded against the order's genesis state
 /// ([`super::packed`]).
-const TIP_UTXO_SQL: &str = "SELECT txid, idx, value, kob_ustate(state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)) \
-     FROM order_utxos WHERE covenant_id = ?1 AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1";
+const TIP_UTXO_SQL: &str = concat!(
+    "SELECT txid, idx, value, kob_ustate(state, (SELECT ",
+    sql_genesis!("g"),
+    " FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)) \
+     FROM order_utxos WHERE covenant_id = ?1 AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1"
+);
 
 /// The fill amounts of one order (see [`refresh_order_state`] for the `+kind`). Summed in Rust, saturating: base-unit
 /// amounts of hostile orders can sum past an `i64`, where SQLite's `SUM` fails (a failed refresh would stall the follower).
@@ -2259,10 +2269,12 @@ impl Processor {
             }
             LogOp::Adopt { covenant_id, old_txid, old_index, txid, index, value, spk, daa, custody, keep } => {
                 let state: Option<Vec<u8>> = conn
-                    .prepare_cached(
-                        "SELECT kob_ustate(u.state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = u.covenant_id)) \
-                         FROM order_utxos u WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL",
-                    )?
+                    .prepare_cached(concat!(
+                        "SELECT kob_ustate(u.state, (SELECT ",
+                        sql_genesis!("g"),
+                        " FROM orders g WHERE g.covenant_id = u.covenant_id)) \
+                             FROM order_utxos u WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL"
+                    ))?
                     .query_row(params![&old_txid.0[..], old_index], |r| r.get(0))
                     .optional()?
                     .flatten();
@@ -2389,7 +2401,7 @@ impl Processor {
     ) -> DbResult<()> {
         let (token, side) = load_order(conn, cov)?.map(|o| (o.token, o.side)).unwrap_or((None, 0));
         conn.prepare_cached(
-            "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, closes, detail) VALUES (?1, 0, ?2, 0, ?3, 0, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, closes, detail) VALUES (?1, 0, ?2, 0, ?3, 0, ?4, ?5, ?6, ?7, kob_dpack(?8, ?4))",
         )?
         .execute(params![&cov.0[..], daa as i64, &txid.0[..], kind, token.map(|t| t.0.to_vec()), side as i64, closes as i64, detail.to_string()])?;
         Ok(())

@@ -17,6 +17,7 @@ pub mod lean;
 pub mod lock;
 pub mod market;
 pub mod packed;
+pub mod packed_dicts;
 pub mod pairs;
 pub mod prefetch;
 pub mod processor;

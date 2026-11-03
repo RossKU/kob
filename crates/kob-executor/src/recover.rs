@@ -18,6 +18,7 @@
 use crate::hex::{Hash32, HexBytes};
 use crate::indexer::db::DbResult;
 use crate::indexer::ingest::{Cursor, Ingest, IngestError};
+use crate::indexer::packed::{sql_genesis, GENESIS_O};
 use crate::indexer::processor::OpReport;
 use crate::indexer::recordlog::{ImportCustody, LogOp};
 use crate::rpc::types::AddressUtxo;
@@ -97,13 +98,13 @@ pub struct ImportReport {
 /// an import could only report `not_found`.
 pub fn export_orders(conn: &Connection, maker: Option<&[u8]>, live_only: bool) -> DbResult<MakerExport> {
     let network = crate::indexer::db::meta_get(conn, "network")?.unwrap_or_default();
-    let mut st = conn.prepare(
-        "SELECT o.template_hash, CASE WHEN u.txid IS NULL THEN o.genesis_state ELSE kob_ustate(u.state, o.genesis_state) END, o.ext_commit, o.covenant_id, o.genesis_txid, s.status, o.parent
+    let mut st = conn.prepare(&format!(
+        "SELECT o.template_hash, CASE WHEN u.txid IS NULL THEN {GENESIS_O} ELSE kob_ustate(u.state, {GENESIS_O}) END, o.ext_commit, o.covenant_id, o.genesis_txid, s.status, o.parent
          FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx
          WHERE (?1 IS NULL OR o.maker = ?1) AND (?2 = 0 OR s.status IN ('open', 'partial'))
-         ORDER BY o.genesis_block, o.covenant_id",
-    )?;
+         ORDER BY o.genesis_block, o.covenant_id"
+    ))?;
     let rows = st.query_map(rusqlite::params![maker, live_only as i64], |r| {
         let th: Vec<u8> = r.get(0)?;
         let state: Option<Vec<u8>> = r.get(1)?;
@@ -378,8 +379,12 @@ fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result
     let Some(tid) = TemplateId::from_name(&contract) else { return Ok(None) };
     let state: Option<Vec<u8>> = conn
         .query_row(
-            "SELECT kob_ustate(u.state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = u.covenant_id)) FROM order_utxos u \
-             WHERE u.covenant_id = ?1 AND u.spk = ?2 AND u.state IS NOT NULL ORDER BY u.created_block DESC LIMIT 1",
+            concat!(
+                "SELECT kob_ustate(u.state, (SELECT ",
+                sql_genesis!("g"),
+                " FROM orders g WHERE g.covenant_id = u.covenant_id)) FROM order_utxos u \
+                 WHERE u.covenant_id = ?1 AND u.spk = ?2 AND u.state IS NOT NULL ORDER BY u.created_block DESC LIMIT 1"
+            ),
             rusqlite::params![&cov.0[..], spk],
             |r| r.get(0),
         )

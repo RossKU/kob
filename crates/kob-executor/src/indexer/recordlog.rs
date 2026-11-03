@@ -869,9 +869,9 @@ fn make_cuttable(p: &Path) -> std::io::Result<PathBuf> {
     Ok(plain)
 }
 
-/// gzip level of a sealed segment: about 3.4x on the TN10 soak log, at a speed that holds the writer for a few seconds per
+/// gzip level of a sealed segment: 3.5x on the TN10 soak log, at a speed that holds the writer for about 2 seconds per
 /// 256 MiB segment, once per rotation.
-const GZ_LEVEL: u32 = 3;
+const GZ_LEVEL: u32 = 6;
 
 /// What [`compress_sealed`] did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

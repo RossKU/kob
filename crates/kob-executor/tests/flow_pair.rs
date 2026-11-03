@@ -45,7 +45,10 @@ fn input_of(t: &SignedTx, op: (&[u8; 32], u32)) -> usize {
 
 fn events(c: &Ctx, cov: &Hash32) -> Vec<(String, Option<i64>, Option<i64>, serde_json::Value)> {
     let g = c.hs.ingest.lock().unwrap();
-    let mut st = g.conn().prepare("SELECT kind, amount, price, detail FROM order_events WHERE covenant_id = ?1 ORDER BY id").unwrap();
+    let mut st = g
+        .conn()
+        .prepare("SELECT kind, amount, price, kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 ORDER BY id")
+        .unwrap();
     st.query_map([&cov.0[..]], |r| {
         let d: Option<String> = r.get(3)?;
         Ok((r.get(0)?, r.get(1)?, r.get(2)?, d.map(|d| serde_json::from_str(&d).unwrap()).unwrap_or_default()))

@@ -1242,21 +1242,21 @@ pub fn snapshot(conn: &Connection) -> String {
         }
     };
     dump(
-        "SELECT covenant_id, contract, template_hash, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id FROM orders ORDER BY covenant_id",
+        "SELECT covenant_id, contract, template_hash, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id), genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id FROM orders ORDER BY covenant_id",
         30,
         &mut out,
         "order",
         &[23],
     );
     dump(
-        "SELECT txid, idx, covenant_id, value, spk, kob_ustate(state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)), created_block, created_daa, spent_block, spent_txid, spent_entry, spent_amount FROM order_utxos ORDER BY txid, idx",
+        "SELECT txid, idx, covenant_id, value, spk, kob_ustate(state, (SELECT kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id) FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)), created_block, created_daa, spent_block, spent_txid, spent_entry, spent_amount FROM order_utxos ORDER BY txid, idx",
         12,
         &mut out,
         "utxo",
         &[6, 8],
     );
     dump(
-        "SELECT covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail FROM order_events ORDER BY id",
+        "SELECT covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, kob_dtext(detail) FROM order_events ORDER BY id",
         14,
         &mut out,
         "event",
@@ -1514,7 +1514,7 @@ impl Harness {
         let (contract, state): (String, Option<Vec<u8>>) = g
             .conn()
             .query_row(
-                "SELECT o.contract, kob_ustate(u.state, o.genesis_state) FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+                "SELECT o.contract, kob_ustate(u.state, kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id)) FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
                  LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx WHERE o.covenant_id = ?1",
                 [&cov.0[..]],
                 |r| Ok((r.get(0)?, r.get(1)?)),
@@ -1533,7 +1533,7 @@ impl Harness {
     /// The `detail` JSON of an order's latest event of `kind` (e.g. `detail["evidence"]` of an arm).
     pub fn event_detail(&self, cov: &Hash32, kind: &str) -> serde_json::Value {
         let d: String = self.query(
-            "SELECT detail FROM order_events WHERE covenant_id = ?1 AND kind = ?2 ORDER BY id DESC LIMIT 1",
+            "SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = ?2 ORDER BY id DESC LIMIT 1",
             rusqlite::params![&cov.0[..], kind],
         );
         serde_json::from_str(&d).unwrap()

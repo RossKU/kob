@@ -58,7 +58,7 @@ async fn ifd_buy_first_entry_creates_exits_that_take_profit() {
     let cv = view(&c, &exit).custody.expect("ask-side exit has a custody check");
     assert!(cv.ok, "{cv:?}");
     let entry_fill_detail: String =
-        c.hs.query("SELECT detail FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+        c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
     assert!(entry_fill_detail.contains(&exit.to_hex()), "the fill event names its exit");
 
     // the exit takes profit on all 4 whole tokens (leg 0): it closes; the entry is untouched
@@ -170,9 +170,9 @@ async fn repeat_buy_first_cycle_merges_take_profits_into_the_entry() {
     assert_eq!(c.hs.tip_state(&exit), Some(AnyState::KobCondAsk(exit1.clone())));
     assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "rearm"]);
     assert_eq!(c.hs.event_kinds(&exit), ["create", "fill"]);
-    let d: String = c.hs.query("SELECT detail FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&exit.0[..]]);
+    let d: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&exit.0[..]]);
     assert!(d.contains("merged_into") && d.contains(&cov.to_hex()), "{d}");
-    let d: String = c.hs.query("SELECT detail FROM order_events WHERE covenant_id = ?1 AND kind = 'rearm'", [&cov.0[..]]);
+    let d: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'rearm'", [&cov.0[..]]);
     assert!(d.contains(&exit.to_hex()), "the re-arm names the exit that took profit: {d}");
     let (amount, filled): (i64, i64) = {
         let g = c.hs.ingest.lock().unwrap();
@@ -387,7 +387,7 @@ async fn empty_repeating_entry_waits_without_custody_gets_a_new_one_on_merge_and
     }));
     c.push(&[&close]).await;
     assert_eq!(c.hs.status(&cov), "refunded");
-    let d: String = c.hs.query("SELECT detail FROM order_events WHERE covenant_id = ?1 AND kind = 'refund'", [&cov.0[..]]);
+    let d: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'refund'", [&cov.0[..]]);
     assert!(d.contains("\"close\""), "the empty entry was closed with `close()`: {d}");
 }
 

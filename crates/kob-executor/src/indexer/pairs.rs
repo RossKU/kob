@@ -39,6 +39,7 @@
 
 use super::db::DbResult;
 use super::market::{self, Candle};
+use super::packed::GENESIS_O;
 use super::reads::{pinned_template, reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN};
 use crate::hex::Hash32;
 use kob_protocol::state::{AnyState, TIF_GTC};
@@ -194,7 +195,7 @@ struct LivePair {
 /// Listed live pair orders of `base / quote` (that orientation only), eligible now, with an exact custody.
 fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: &ReadCtx) -> DbResult<Vec<LivePair>> {
     let sql = format!(
-        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, o.genesis_state), u.created_daa, o.deadline FROM order_state s \
+        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline FROM order_state s \
          CROSS JOIN orders o ON o.covenant_id = s.covenant_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE o.listed = 1 AND o.token_cov_id = ?1 AND o.quote_cov_id = ?2 AND s.status IN ('open','partial') AND s.state_known = 1 \
          AND u.spent_block IS NULL AND {NOT_FROZEN} AND {pinned} ORDER BY o.genesis_block, o.covenant_id LIMIT 2000",
@@ -226,7 +227,7 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
 fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i64, ctx: &ReadCtx) -> DbResult<Vec<KasOrder>> {
     let (kinds, dir) = if side == 1 { ("'KobAsk','KobAskKron'", "ASC") } else { ("'KobBid','KobBidKron'", "DESC") };
     let sql = format!(
-        "SELECT o.contract, kob_ustate(u.state, o.genesis_state), u.created_daa, s.remaining_amount, o.deadline FROM order_state s \
+        "SELECT o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, s.remaining_amount, o.deadline FROM order_state s \
          CROSS JOIN orders o ON o.covenant_id = s.covenant_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE o.token_cov_id = ?1 AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 AND o.contract IN ({kinds}) \
          AND s.status IN ('open','partial') AND s.state_known = 1 AND u.spent_block IS NULL AND {NOT_FROZEN} AND {CUSTODY_OK} \
@@ -443,7 +444,7 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
 pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResult<Vec<PairSummary>> {
     let now = eval_daa(conn, ctx)?.min(i64::MAX as u64) as i64;
     let sql = format!(
-        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, o.genesis_state), u.created_daa, o.deadline, o.token_cov_id, o.quote_cov_id FROM order_state s \
+        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, o.token_cov_id, o.quote_cov_id FROM order_state s \
          CROSS JOIN orders o ON o.covenant_id = s.covenant_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE o.listed = 1 AND o.quote_cov_id IS NOT NULL AND s.status IN ('open','partial') AND s.state_known = 1 \
          AND u.spent_block IS NULL AND (?1 IS NULL OR o.token_cov_id = ?1 OR o.quote_cov_id = ?1) AND {NOT_FROZEN} \

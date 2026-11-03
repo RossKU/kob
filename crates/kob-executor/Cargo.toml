@@ -28,8 +28,9 @@ kaspa-rpc-core.workspace = true
 workflow-serializer = "0.18.0"
 borsh = "1"
 blake3.workspace = true
-# sealed record-log segments are kept gzip-compressed (`indexer::recordlog`): the pure-Rust backend, no C build
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# sealed record-log segments are kept gzip-compressed (`indexer::recordlog`) and genesis states and event details deflated against frozen
+# dictionaries (`indexer::packed`; a preset dictionary needs this backend): pure Rust, no C build
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 faster-hex.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }

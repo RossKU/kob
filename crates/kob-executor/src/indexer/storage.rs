@@ -1,16 +1,17 @@
-//! `kob-executor index migrate`: brings an existing data directory to the compact storage layout of schema 6 and gives the space
-//! back. A store written by an earlier build is read by this build as it is (every change below is one a reader tolerates), so
-//! the migration can run at a time of the operator's choosing; it is idempotent and can be stopped and run again.
+//! `kob-executor index migrate`: brings an existing data directory to the compact storage layout and gives the space back. A store
+//! written by an earlier build is read by this build as it is (every change below is one a reader tolerates), so the migration can
+//! run at a time of the operator's choosing; it is idempotent and can be stopped and run again.
 //!
 //! The steps, each reported with its time:
 //!
 //! 1. **Indexes.** The fills-only indexes `order_events_fills` and `order_events_fill_ts` replace the ones over every event, and
 //!    `token_holdings_owner` (which the owner's page index serves) and `token_holdings_token_program` (which the `holding_programs`
 //!    table serves) are dropped (`schema.sql`).
-//! 2. **State spans.** The state of every `order_utxos` and `token_holdings` row is rewritten in the packed form
-//!    ([`super::packed`]), in batches of one short transaction each (`PACK_BATCH` rows). Each batch is read back through the SQL
-//!    functions the queries use and compared with the span it replaced before it commits; a mismatch aborts the migration and
-//!    leaves every row either as it was or packed and verified.
+//! 2. **Packed columns.** `order_utxos.state` and `token_holdings.state` (differences from a base), `orders.genesis_state` and
+//!    `order_events.detail` (deflated against a frozen dictionary) are rewritten in the form [`super::packed`] stores, in batches of
+//!    one short transaction each (`PACK_BATCH` rows). Each batch is read back through the SQL functions the queries use and its
+//!    values hashed before and after: a value that does not come back the same aborts the migration and leaves every row either as
+//!    it was or packed and verified.
 //! 3. **Compaction.** The pages freed (and the free space inside the pages the updates left) are returned by `VACUUM INTO` a new
 //!    file, which replaces `index.sqlite3`; the old file stays beside it as `index.sqlite3.before-migrate`, the rollback. The
 //!    new file needs room for the compacted store (about the packed size), and the old file stays until the operator deletes it.
@@ -19,7 +20,7 @@
 //! The data directory's writer lock ([`super::lock`]) is held throughout: no `run` or `index` can write it meanwhile.
 
 use super::db::{self, DbError, DbResult};
-use super::packed;
+use super::packed::GENESIS_G;
 use super::recordlog;
 use super::IndexerError;
 use crate::config::IndexerConfig;
@@ -27,8 +28,8 @@ use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// Rows packed per transaction.
-const PACK_BATCH: usize = 20_000;
+/// Rows rewritten per transaction.
+const PACK_BATCH: i64 = 20_000;
 /// The suffix of the file the compacted store replaced.
 pub const BEFORE_MIGRATE: &str = "before-migrate";
 
@@ -46,14 +47,19 @@ impl Default for Options {
     }
 }
 
+/// One packed column: rows rewritten out of rows seen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnReport {
+    pub column: &'static str,
+    pub changed: u64,
+    pub total: u64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Report {
     pub indexes_swapped: Vec<String>,
     pub indexes_dropped: Vec<String>,
-    pub utxos_packed: u64,
-    pub utxos_total: u64,
-    pub holdings_packed: u64,
-    pub holdings_total: u64,
+    pub columns: Vec<ColumnReport>,
     pub db_bytes_before: u64,
     pub db_bytes_after: u64,
     pub log_bytes_before: u64,
@@ -62,6 +68,13 @@ pub struct Report {
     /// Where the store was before the compaction (the rollback), when it was compacted.
     pub kept_old: Option<PathBuf>,
     pub steps: Vec<(&'static str, Duration)>,
+}
+
+impl Report {
+    /// Rows rewritten in `column` (`table.column`).
+    pub fn changed(&self, column: &str) -> u64 {
+        self.columns.iter().find(|c| c.column == column).map_or(0, |c| c.changed)
+    }
 }
 
 fn file_bytes(p: &Path) -> u64 {
@@ -114,91 +127,116 @@ fn checkpoint(conn: &Connection) {
     let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
 }
 
-/// One table's state column: `select` yields `(rowid, stored state, base)` for rows after a rowid (`?1`, at most `?2`), `set`
-/// writes a state by rowid, `read_back` yields the state the queries see for a rowid.
+/// A packed column: what a query reads (`decoded`) and what is stored (`packed`), as SQL over the row of `table`.
 struct Column {
+    /// `table.column`
+    name: &'static str,
     table: &'static str,
-    select: &'static str,
-    set: &'static str,
-    read_back: &'static str,
+    column: &'static str,
+    decoded: String,
+    packed: String,
 }
 
-const UTXO_STATE: Column = Column {
-    table: "order_utxos",
-    select: "SELECT u.rowid, u.state, o.genesis_state FROM order_utxos u LEFT JOIN orders o ON o.covenant_id = u.covenant_id \
-             WHERE u.rowid > ?1 AND u.state IS NOT NULL ORDER BY u.rowid LIMIT ?2",
-    set: "UPDATE order_utxos SET state = ?1 WHERE rowid = ?2",
-    read_back: "SELECT kob_ustate(u.state, (SELECT o.genesis_state FROM orders o WHERE o.covenant_id = u.covenant_id)) \
-                FROM order_utxos u WHERE u.rowid = ?1",
-};
+fn columns() -> Vec<Column> {
+    // an order UTXO's state against the genesis state of its order; both forms of the genesis state give the same base
+    let genesis = format!("(SELECT {GENESIS_G} FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)");
+    let utxo = format!("kob_ustate(state, {genesis})");
+    let holding = "kob_hstate(state, family, owner, owner_kind, amount)".to_string();
+    let gstate = "kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id)".to_string();
+    vec![
+        Column {
+            name: "order_utxos.state",
+            table: "order_utxos",
+            column: "state",
+            packed: format!("kob_pack({utxo}, {genesis})"),
+            decoded: utxo,
+        },
+        Column {
+            name: "token_holdings.state",
+            table: "token_holdings",
+            column: "state",
+            packed: format!("kob_hpack({holding}, family, owner, owner_kind, amount)"),
+            decoded: holding,
+        },
+        Column {
+            name: "orders.genesis_state",
+            table: "orders",
+            column: "genesis_state",
+            packed: format!("kob_gpack({gstate}, contract, maker, token_cov_id, token_tpl_hash, quote_cov_id)"),
+            decoded: gstate,
+        },
+        Column {
+            name: "order_events.detail",
+            table: "order_events",
+            column: "detail",
+            packed: "kob_dpack(kob_dtext(detail), kind)".to_string(),
+            decoded: "kob_dtext(detail)".to_string(),
+        },
+    ]
+}
 
-/// A holding's base is its columns': the select returns it as the third value, built from them.
-const HOLDING_STATE: Column = Column {
-    table: "token_holdings",
-    select: "SELECT rowid, state, family, owner, owner_kind, amount FROM token_holdings WHERE rowid > ?1 AND state IS NOT NULL \
-             ORDER BY rowid LIMIT ?2",
-    set: "UPDATE token_holdings SET state = ?1 WHERE rowid = ?2",
-    read_back: "SELECT kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount) FROM token_holdings h WHERE h.rowid = ?1",
-};
-
-/// Step 2 for one table: returns (rows packed, rows seen).
-fn pack_column(conn: &Connection, col: &Column, holdings: bool, mut progress: impl FnMut(u64)) -> DbResult<(u64, u64)> {
-    let (mut packed_rows, mut seen, mut last) = (0u64, 0u64, 0i64);
-    loop {
-        let tx = conn.unchecked_transaction()?;
-        // (rowid, stored span, its base)
-        let rows: Vec<(i64, Vec<u8>, Option<Vec<u8>>)> = {
-            let mut st = tx.prepare_cached(col.select)?;
-            let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, Vec<u8>, Option<Vec<u8>>)> {
-                let base = if holdings {
-                    packed::holding_base(r.get(2)?, &r.get::<_, Vec<u8>>(3)?, r.get(4)?, r.get(5)?)
-                } else {
-                    r.get::<_, Option<Vec<u8>>>(2)?
-                };
-                Ok((r.get(0)?, r.get(1)?, base))
-            };
-            let rows = st.query_map(params![last, PACK_BATCH as i64], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
-            rows
-        };
-        let Some(&(next, _, _)) = rows.last() else { break };
-        let mut changed: Vec<(i64, Vec<u8>)> = Vec::new();
-        {
-            let mut set = tx.prepare_cached(col.set)?;
-            for (rowid, stored, base) in &rows {
-                let span = packed::unpack(stored, base.as_deref())
-                    .map_err(|e| DbError::Invalid(format!("{} row {rowid}: {e}", col.table)))?
-                    .into_owned();
-                let want = packed::pack(&span, base.as_deref());
-                if want != *stored {
-                    set.execute(params![&want, rowid])?;
-                    changed.push((*rowid, span));
-                }
+/// A hash of what the queries read in the rows `(lo, hi]` of the column, in rowid order.
+fn digest(conn: &Connection, col: &Column, lo: i64, hi: i64) -> DbResult<([u8; 32], u64)> {
+    let mut st = conn.prepare_cached(&format!(
+        "SELECT rowid, {} FROM {} WHERE rowid > ?1 AND rowid <= ?2 AND {} IS NOT NULL ORDER BY rowid",
+        col.decoded, col.table, col.column
+    ))?;
+    let mut rows = st.query(params![lo, hi])?;
+    let mut h = blake3::Hasher::new();
+    let mut n = 0;
+    while let Some(r) = rows.next()? {
+        h.update(&r.get::<_, i64>(0)?.to_le_bytes());
+        match r.get_ref(1)? {
+            rusqlite::types::ValueRef::Blob(b) | rusqlite::types::ValueRef::Text(b) => {
+                h.update(&(b.len() as u64).to_le_bytes());
+                h.update(b);
+            }
+            _ => {
+                h.update(&[0xff]);
             }
         }
-        // what the queries now read for each rewritten row is the span it held
-        {
-            let mut read = tx.prepare_cached(col.read_back)?;
-            for (rowid, span) in &changed {
-                let got: Vec<u8> = read.query_row([rowid], |r| r.get(0))?;
-                if got != *span {
-                    return Err(DbError::Invalid(format!(
-                        "{} row {rowid}: the packed state does not read back as the span it replaced; nothing from this batch was kept",
-                        col.table
-                    )));
-                }
+        n += 1;
+    }
+    Ok((*h.finalize().as_bytes(), n))
+}
+
+/// Step 2 for one column: returns (rows rewritten, rows seen).
+fn pack_column(conn: &Connection, col: &Column, mut progress: impl FnMut(u64)) -> DbResult<(u64, u64)> {
+    // only the rows whose stored form is not the one this build writes
+    let update = format!(
+        "UPDATE {t} SET {c} = {packed} WHERE rowid > ?1 AND rowid <= ?2 AND {c} IS NOT NULL AND {c} IS NOT {packed}",
+        t = col.table,
+        c = col.column,
+        packed = col.packed
+    );
+    let next_batch = format!("SELECT MAX(rowid) FROM (SELECT rowid FROM {} WHERE rowid > ?1 ORDER BY rowid LIMIT ?2)", col.table);
+    let (mut changed, mut seen, mut last) = (0u64, 0u64, 0i64);
+    loop {
+        let Some(hi) = conn.query_row(&next_batch, params![last, PACK_BATCH], |r| r.get::<_, Option<i64>>(0))? else { break };
+        let tx = conn.unchecked_transaction()?;
+        let (before, n) = digest(&tx, col, last, hi)?;
+        let rewritten = tx.execute(&update, params![last, hi])?;
+        if rewritten > 0 {
+            let (after, _) = digest(&tx, col, last, hi)?;
+            if after != before {
+                // the transaction is dropped, not committed: this batch stays as it was
+                return Err(DbError::Invalid(format!(
+                    "{}: rows {last}..{hi} do not read back as they did before they were rewritten; nothing from this batch was kept",
+                    col.name
+                )));
             }
         }
         tx.commit()?;
-        packed_rows += changed.len() as u64;
-        seen += rows.len() as u64;
-        last = next;
+        changed += rewritten as u64;
+        seen += n;
+        last = hi;
         progress(seen);
-        if seen % (PACK_BATCH as u64 * 25) == 0 {
+        if (seen / PACK_BATCH as u64).is_multiple_of(25) {
             checkpoint(conn);
         }
     }
     checkpoint(conn);
-    Ok((packed_rows, seen))
+    Ok((changed, seen))
 }
 
 /// Step 3: the store, compacted into a new file that replaces the old one (kept beside it).
@@ -267,23 +305,17 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
     swap_indexes(&conn, &mut rep)?;
     note(&mut rep.steps, &mut say, "indexes", t, format!("rebuilt {:?}, dropped {:?}", rep.indexes_swapped, rep.indexes_dropped));
 
-    let t = Instant::now();
-    let (p, n) = pack_column(&conn, &UTXO_STATE, false, |seen| {
-        if seen % 500_000 == 0 {
-            say(&format!("order_utxos: {seen} rows seen"));
-        }
-    })?;
-    (rep.utxos_packed, rep.utxos_total) = (p, n);
-    note(&mut rep.steps, &mut say, "order_utxos", t, format!("{p} of {n} states packed"));
-
-    let t = Instant::now();
-    let (p, n) = pack_column(&conn, &HOLDING_STATE, true, |seen| {
-        if seen % 500_000 == 0 {
-            say(&format!("token_holdings: {seen} rows seen"));
-        }
-    })?;
-    (rep.holdings_packed, rep.holdings_total) = (p, n);
-    note(&mut rep.steps, &mut say, "token_holdings", t, format!("{p} of {n} states packed"));
+    for col in columns() {
+        let t = Instant::now();
+        let name = col.name;
+        let (changed, total) = pack_column(&conn, &col, |seen| {
+            if seen % 500_000 < PACK_BATCH as u64 {
+                say(&format!("{name}: {seen} rows seen"));
+            }
+        })?;
+        rep.columns.push(ColumnReport { column: name, changed, total });
+        note(&mut rep.steps, &mut say, name, t, format!("{changed} of {total} rewritten"));
+    }
 
     if opts.compact {
         let t = Instant::now();

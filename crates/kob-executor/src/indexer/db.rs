@@ -16,9 +16,11 @@ use tokio::sync::Semaphore;
 /// in token base units and prices per whole token (`orders.scale`, `min_fill`, `tip`, `budget_rate`, `initial_amount`, ...). A
 /// database of schema 4 or older cannot be migrated ([`refuse_pre_v3`]): `index replay` rebuilds it from the record log.
 /// 6 (2026-11): the state spans of `order_utxos` and `token_holdings` are stored packed ([`super::packed`]): a build of schema 5
-/// misreads them, so it refuses a schema 6 store (the first start of this build on a store of schema 5 moves it to 6; `index migrate`
-/// packs what an earlier build wrote whole and gives the space back).
-pub const SCHEMA_VERSION: i64 = 6;
+/// misreads them, so it refuses a schema 6 store. 7: `orders.genesis_state` and `order_events.detail` are stored deflated against frozen
+/// dictionaries, and `holding_programs` replaces the `(token, program)` index of the holdings: a build of schema 6 misreads the former.
+/// The first start of a newer build on an older store moves its number up; `index migrate` packs what an earlier build wrote whole
+/// and gives the space back.
+pub const SCHEMA_VERSION: i64 = 7;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]
@@ -262,7 +264,8 @@ pub fn backfill_unknown_pair_extensions(conn: &Connection) -> DbResult<usize> {
     // `txid`)
     let names = |tok: &[u8], tpl: &Option<Vec<u8>>, txid: Option<&[u8]>| -> DbResult<Vec<Naming>> {
         let mut st = conn.prepare_cached(
-            "SELECT contract, token_cov_id, token_tpl_hash, ext_commit, genesis_state, genesis_txid, genesis_block, genesis_daa \
+            "SELECT contract, token_cov_id, token_tpl_hash, ext_commit, kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id), \
+             genesis_txid, genesis_block, genesis_daa \
              FROM orders WHERE (token_cov_id = ?1 OR quote_cov_id = ?1) AND (?2 IS NULL OR genesis_txid = ?2) \
              ORDER BY genesis_block, genesis_daa, rowid",
         )?;

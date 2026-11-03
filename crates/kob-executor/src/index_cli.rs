@@ -454,16 +454,13 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
             let opts = indexer::storage::Options { compact: !no_compact, compress_log: !no_compress_log };
             let r = indexer::storage::migrate(&cfg, opts, |line| println!("{line}"))?;
             println!(
-                "store {} -> {} bytes; record log {} -> {} bytes ({} segment(s) compressed); order_utxos {}/{} and token_holdings {}/{} state(s) packed",
+                "store {} -> {} bytes; record log {} -> {} bytes ({} segment(s) compressed); rewritten: {}",
                 r.db_bytes_before,
                 r.db_bytes_after,
                 r.log_bytes_before,
                 r.log_bytes_after,
                 r.log_segments_compressed,
-                r.utxos_packed,
-                r.utxos_total,
-                r.holdings_packed,
-                r.holdings_total
+                r.columns.iter().map(|c| format!("{} {}/{}", c.column, c.changed, c.total)).collect::<Vec<_>>().join(", ")
             );
             if let Some(old) = r.kept_old {
                 println!("the previous store file is kept as {}: delete it once the executor has run on the new one", old.display());

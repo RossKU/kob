@@ -18,6 +18,7 @@
 //! [`crate::executor::IndexerSource`].
 
 use super::db::DbResult;
+use super::packed::GENESIS_O;
 use super::reads::tip_state;
 use crate::hex::Hash32;
 use crate::matcher::book::{ListedOrder, MemoryBook, OrderBookView};
@@ -197,7 +198,7 @@ pub(crate) fn live_orders_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         format!(
-            "SELECT o.covenant_id, o.contract, o.family, o.deadline, o.ext_commit, u.txid, u.idx, u.value, kob_ustate(u.state, o.genesis_state), u.created_daa, \
+            "SELECT o.covenant_id, o.contract, o.family, o.deadline, o.ext_commit, u.txid, u.idx, u.value, kob_ustate(u.state, {GENESIS_O}), u.created_daa, \
              o.template_hash \
              FROM order_state s \
              CROSS JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \

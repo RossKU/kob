@@ -552,7 +552,7 @@ fn run_with(blocks: u64, per_commit: u64, mix: Mix, seed: u64, cfg: IngestConfig
     for sql in [
         "SELECT hex(covenant_id), contract, listed, unlisted_reason, hex(genesis_state) FROM orders ORDER BY covenant_id",
         "SELECT hex(txid), idx, hex(covenant_id), value, hex(state), created_block, spent_block, spent_entry FROM order_utxos ORDER BY txid, idx",
-        "SELECT hex(covenant_id), kind, amount, price, payout, closes, detail FROM order_events ORDER BY id",
+        "SELECT hex(covenant_id), kind, amount, price, payout, closes, kob_dtext(detail) FROM order_events ORDER BY id",
         "SELECT hex(covenant_id), status, filled_amount, remaining_amount, state_known FROM order_state ORDER BY covenant_id",
         "SELECT hex(txid), idx, hex(owner), amount, role, spent_block FROM token_utxos ORDER BY txid, idx",
         "SELECT hex(txid), idx, hex(owner), amount, role, hex(state), spent_block FROM token_holdings ORDER BY txid, idx",

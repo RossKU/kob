@@ -14,6 +14,7 @@
 
 use crate::hex::{self, Hash32};
 use crate::indexer::db::{DbError, DbResult};
+use crate::indexer::packed::{sql_genesis, sql_ustate, GENESIS_O};
 use crate::tokens::TokenAllowlist;
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::state::{armed_origin, AnyState};
@@ -714,7 +715,7 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
     let pinned = pinned_template();
     let sql = format!(
         "SELECT o.covenant_id, o.contract, o.maker, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
-                s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, kob_ustate(u.state, o.genesis_state), u.created_daa \
+                s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, kob_ustate(u.state, {GENESIS_O}), u.created_daa \
          {LIVE_FROM} \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} \
@@ -1199,15 +1200,20 @@ pub fn reduce(num: i128, den: i128) -> Option<(u128, u128)> {
     Some((n / g, d / g))
 }
 
-const ORDER_SELECT: &str = "SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.maker, o.token_cov_id, \
+const ORDER_SELECT: &str = concat!(
+    "SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.maker, o.token_cov_id, \
     o.token_tpl_hash, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, \
     o.reserve, o.initial_amount, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, \
     o.unlisted_reason, o.origin, s.status, s.filled_amount, s.remaining_amount, s.cur_txid, s.cur_idx, s.cur_value, \
-    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, kob_ustate(u.state, o.genesis_state), u.created_daa, fl.reason, \
-    o.genesis_state \
+    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, ",
+    sql_ustate!("u", "o"),
+    ", u.created_daa, fl.reason, ",
+    sql_genesis!("o"),
+    " \
     FROM orders o LEFT JOIN order_state s ON s.covenant_id = o.covenant_id \
     LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-    LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx";
+    LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx"
+);
 
 fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
     let genesis_daa: i64 = r.get(22)?;
@@ -1614,15 +1620,20 @@ pub fn parse_order_cursor(s: &str) -> Option<(i64, Vec<u8>)> {
 /// [`ORDER_SELECT`] driven from `order_state` (a status filter whose orders are few): the rows of the statuses are read
 /// through `order_state_status` and joined to their orders (`CROSS JOIN` keeps that order), instead of every order of the
 /// token or maker being read for the few of that status.
-const ORDER_SELECT_BY_STATUS: &str = "SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.maker, o.token_cov_id, \
+const ORDER_SELECT_BY_STATUS: &str = concat!(
+    "SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.maker, o.token_cov_id, \
     o.token_tpl_hash, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, \
     o.reserve, o.initial_amount, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, \
     o.unlisted_reason, o.origin, s.status, s.filled_amount, s.remaining_amount, s.cur_txid, s.cur_idx, s.cur_value, \
-    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, kob_ustate(u.state, o.genesis_state), u.created_daa, fl.reason, \
-    o.genesis_state \
+    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, ",
+    sql_ustate!("u", "o"),
+    ", u.created_daa, fl.reason, ",
+    sql_genesis!("o"),
+    " \
     FROM order_state s CROSS JOIN orders o ON o.covenant_id = s.covenant_id \
     LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-    LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx";
+    LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx"
+);
 
 /// The orders of `statuses` (the row counters the write path keeps; `None` without them).
 fn status_count(conn: &Connection, statuses: &[&str]) -> DbResult<Option<i64>> {
@@ -1759,7 +1770,7 @@ pub struct EventView {
 }
 
 const EVENT_SELECT: &str =
-    "SELECT id, covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail FROM order_events";
+    "SELECT id, covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, kob_dtext(detail) FROM order_events";
 
 fn event_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<EventView> {
     let daa: i64 = r.get(3)?;

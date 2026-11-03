@@ -69,7 +69,7 @@ fn table_digests(conn: &Connection) -> Vec<(String, u64, String)> {
     let queries = [
         (
             "order_utxos",
-            "SELECT txid, idx, covenant_id, value, spk, kob_ustate(state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)), created_block, created_daa, spent_block, spent_txid, spent_entry, spent_amount FROM order_utxos ORDER BY txid, idx",
+            "SELECT txid, idx, covenant_id, value, spk, kob_ustate(state, (SELECT kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id) FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)), created_block, created_daa, spent_block, spent_txid, spent_entry, spent_amount FROM order_utxos ORDER BY txid, idx",
         ),
         (
             "token_holdings",
@@ -86,6 +86,25 @@ fn table_digests(conn: &Connection) -> Vec<(String, u64, String)> {
         .map(|(name, sql)| {
             let mut h = Sha256::new();
             let mut n = 0u64;
+            // the packed columns of `SELECT *`, decoded
+            let sql = &match *name {
+                "orders" => sql.replace(
+                    "SELECT *",
+                    &format!(
+                        "SELECT {}",
+                        columns_with(
+                            conn,
+                            "orders",
+                            "genesis_state",
+                            "kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id)"
+                        )
+                    ),
+                ),
+                "order_events" => {
+                    sql.replace("SELECT *", &format!("SELECT {}", columns_with(conn, "order_events", "detail", "kob_dtext(detail)")))
+                }
+                _ => sql.to_string(),
+            };
             let mut st = conn.prepare(sql).unwrap();
             let cols = st.column_count();
             let mut rows = st.query([]).unwrap();
@@ -98,6 +117,13 @@ fn table_digests(conn: &Connection) -> Vec<(String, u64, String)> {
             (name.to_string(), n, format!("{:x}", h.finalize()))
         })
         .collect()
+}
+
+/// The columns of a table in order, `column` replaced by `expr`.
+fn columns_with(conn: &Connection, table: &str, column: &str, expr: &str) -> String {
+    let mut st = conn.prepare(&format!("SELECT name FROM pragma_table_info('{table}')")).unwrap();
+    let names: Vec<String> = st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+    names.iter().map(|n| if n == column { expr.to_string() } else { n.clone() }).collect::<Vec<_>>().join(", ")
 }
 
 /// The API reads that carry the packed columns, as JSON.
@@ -131,10 +157,13 @@ fn open_ro(path: &std::path::Path) -> Connection {
     c
 }
 
-fn state_bytes(conn: &Connection) -> (i64, i64) {
-    conn.query_row("SELECT (SELECT SUM(LENGTH(state)) FROM order_utxos), (SELECT SUM(LENGTH(state)) FROM token_holdings)", [], |r| {
-        Ok((r.get(0)?, r.get(1)?))
-    })
+/// Bytes of the packed columns: order UTXO states, holding states, genesis states, event details.
+fn state_bytes(conn: &Connection) -> (i64, i64, i64, i64) {
+    conn.query_row(
+        "SELECT (SELECT SUM(LENGTH(state)) FROM order_utxos), (SELECT SUM(LENGTH(state)) FROM token_holdings),                 (SELECT SUM(LENGTH(genesis_state)) FROM orders), (SELECT SUM(LENGTH(detail)) FROM order_events)",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )
     .unwrap()
 }
 
@@ -156,7 +185,9 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
         let w = Connection::open(&path).unwrap();
         packed::register(&w).unwrap();
         w.execute_batch(
-            "UPDATE order_utxos SET state = kob_ustate(state, (SELECT g.genesis_state FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)); \
+            "UPDATE order_utxos SET state = kob_ustate(state, (SELECT kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id) FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)); \
+             UPDATE orders SET genesis_state = kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id); \
+             UPDATE order_events SET detail = kob_dtext(detail); \
              UPDATE token_holdings SET state = kob_hstate(state, family, owner, owner_kind, amount); \
              DROP INDEX order_events_fills; DROP INDEX order_events_fill_ts; \
              CREATE INDEX order_events_fills ON order_events (kind, token_cov_id, id); \
@@ -170,7 +201,7 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
         .unwrap();
     }
     let whole = open_ro(&path);
-    let (utxo_whole, holding_whole) = state_bytes(&whole);
+    let (utxo_whole, holding_whole, genesis_whole, detail_whole) = state_bytes(&whole);
     let digests_before = table_digests(&whole);
     assert!(digests_before.iter().find(|d| d.0 == "order_utxos").unwrap().1 >= 4);
     drop(whole);
@@ -179,16 +210,19 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
     cfg.records.enabled = false;
     let mut lines = vec![];
     let rep = storage::migrate(&cfg, storage::Options::default(), |l| lines.push(l.to_string())).unwrap();
-    assert!(rep.utxos_packed > 0 && rep.holdings_packed > 0, "{rep:?}");
+    assert!(rep.changed("order_utxos.state") > 0 && rep.changed("token_holdings.state") > 0, "{rep:?}");
+    assert!(rep.changed("orders.genesis_state") > 0 && rep.changed("order_events.detail") > 0, "{rep:?}");
     assert_eq!(rep.indexes_dropped, ["token_holdings_owner", "token_holdings_token_program"]);
     assert_eq!(rep.indexes_swapped, ["order_events_fills", "order_events_fill_ts"]);
     let old = rep.kept_old.clone().expect("compacted");
     assert!(old.exists() && old.to_string_lossy().ends_with("index.sqlite3.before-migrate"));
 
     let after = open_ro(&path);
-    let (utxo_after, holding_after) = state_bytes(&after);
+    let (utxo_after, holding_after, genesis_after, detail_after) = state_bytes(&after);
     assert!(utxo_after < utxo_whole / 2, "{utxo_after} vs {utxo_whole}");
     assert!(holding_after < holding_whole / 2, "{holding_after} vs {holding_whole}");
+    assert!(genesis_after < genesis_whole / 2, "{genesis_after} vs {genesis_whole}");
+    assert!(detail_after < detail_whole, "{detail_after} vs {detail_whole}");
     assert_eq!(table_digests(&after), digests_before, "every table reads the same, its states decoded");
     for name in ["order_events_fills", "order_events_fill_ts"] {
         assert!(index_sql(&after, name).unwrap().contains("WHERE kind = 'fill'"), "{name}");
@@ -205,7 +239,7 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
     };
     assert!(!real.is_empty());
     assert_eq!(counted, real);
-    assert_eq!(db::meta_get(&after, "schema_version").unwrap().as_deref(), Some("6"));
+    assert_eq!(db::meta_get(&after, "schema_version").unwrap().as_deref(), Some("7"));
     assert_eq!(after.query_row::<String, _, _>("PRAGMA integrity_check", [], |r| r.get(0)).unwrap(), "ok");
 
     // the API reads: the migrated store answers what the in-memory store the flows ran on answers
@@ -220,7 +254,7 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
     // a second run changes nothing (and keeps the first run's rollback file out of the way)
     std::fs::remove_file(&old).unwrap();
     let again = storage::migrate(&cfg, storage::Options::default(), |_| {}).unwrap();
-    assert_eq!((again.utxos_packed, again.holdings_packed), (0, 0));
+    assert!(again.columns.iter().all(|c| c.changed == 0), "{again:?}");
     assert!(again.indexes_swapped.is_empty() && again.indexes_dropped.is_empty());
     assert_eq!(table_digests(&open_ro(&path)), digests_before);
 }
@@ -236,7 +270,7 @@ async fn a_store_written_by_this_build_is_packed_already_and_the_migration_chang
         // the writer packs: an order that was only placed has the few bytes of its genesis state's delta, never the 300
         let (n, short): (i64, i64) = conn
             .query_row(
-                "SELECT COUNT(*), SUM(LENGTH(u.state) < LENGTH((SELECT o.genesis_state FROM orders o WHERE o.covenant_id = u.covenant_id)) / 2) FROM order_utxos u",
+                "SELECT COUNT(*), SUM(LENGTH(u.state) < LENGTH((SELECT kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id) FROM orders o WHERE o.covenant_id = u.covenant_id)) / 2) FROM order_utxos u",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -252,7 +286,7 @@ async fn a_store_written_by_this_build_is_packed_already_and_the_migration_chang
     let mut cfg = IndexerConfig { data_dir: dir.path().to_path_buf(), network: "testnet-10".into(), ..Default::default() };
     cfg.records.enabled = false;
     let rep = storage::migrate(&cfg, storage::Options { compact: false, compress_log: false }, |_| {}).unwrap();
-    assert_eq!((rep.utxos_packed, rep.holdings_packed), (0, 0), "{rep:?}");
+    assert!(rep.columns.iter().all(|c| c.changed == 0), "{rep:?}");
     assert!(rep.indexes_swapped.is_empty() && rep.indexes_dropped.is_empty());
     assert_eq!(table_digests(&open_ro(&path)), before);
 }
