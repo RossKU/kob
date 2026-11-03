@@ -5,7 +5,7 @@ import { type TokenInfo } from '../../kob/registry';
 import { hasIssuerControl, KNOWN_POWERS, riskFactIds, tokenLabel, tokenRiskCodes, type RiskCode, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
 
 /** What a row's facts are printed from: the facts, and (a token page) KOB's own genesis check, which adds a reason and the public mint to some of them. */
-type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis'>>;
+type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis' | 'info'>>;
 
 /** The badge text of a fact. "Genesis not verified" says why when KOB's check could not be done; the mint allowance names its amount. */
 export function factLabel(r: FactRow, id: TokenFactId): string {
@@ -21,6 +21,12 @@ export function factLabel(r: FactRow, id: TokenFactId): string {
 /** The sentence of a fact (a tooltip, or printed behind "what is this?"). */
 export function factText(r: FactRow, id: TokenFactId): string {
   const g = r.genesis;
+  if (id === 'mint-authority') {
+    // a power of the program, not a fact about this token: whether a mint authority is still live is the registry's `live_minters` (or the indexer's warning)
+    const live = r.facts.includes('live_mint_authority');
+    const minters = r.info?.json?.genesis?.live_minters;
+    return t(live ? 'market.fact.mint-authority.textLive' : minters && minters.length === 0 ? 'market.fact.mint-authority.textNone' : 'market.fact.mint-authority.text');
+  }
   if (id === 'genesis_failed' && g?.status === 'failed') return t(`market.genesis.failed.${g.code}`);
   if ((id === 'genesis_unverified' || id === 'genesis_kascov') && g?.status === 'unavailable') return `${t(`market.fact.${id}.text`)} ${t(`market.genesis.reasonSentence.${g.reason}`)}`;
   if (id === 'mint_allowance' && g?.status === 'verified' && g.mintUnbounded === true) return t('market.fact.mint_allowance.textUnbounded');
@@ -63,31 +69,18 @@ export function StatusBadge(props: { badge: TokenBadge; 'data-testid'?: string }
 }
 
 /** The plain sentence for each reason a token is "High risk" (the facts' own sentences; the check's own words for a failed genesis). */
-export function riskReasonText(r: FactRow, code: RiskCode | 'mint_authority_both'): string {
-  if (code === 'mint_authority_both') return t('market.risk.mintAuthorityBoth');
+export function riskReasonText(r: FactRow, code: RiskCode): string {
   switch (code) {
     case 'genesis_failed': return factText(r, 'genesis_failed');
-    case 'live_mint_authority': return factText(r, 'live_mint_authority');
-    case 'mint_authority': return factText(r, 'mint-authority');
+    case 'live_mint_authority': return t('market.risk.mintAuthorityLive');
     case 'mint_unbounded': return factText(r, 'mint_allowance');
     case 'issuer_control': return t('market.powers.warning');
   }
 }
 
-/**
- * The reasons shown for a token's risk codes, one line each: a live mint authority and the program's mint authority say nearly the same, so when both apply they are
- * one line (`mint_authority_both`). The chip's panel and the details section both print these, so they never differ.
- */
-export function riskReasons(r: FactRow & { powers?: readonly string[] }): { key: RiskCode | 'mint_authority_both'; text: string }[] {
-  const codes = tokenRiskCodes({ facts: r.facts, powers: [...(r.powers ?? [])], ...(r.genesis ? { genesis: r.genesis } : {}) });
-  const both = codes.includes('live_mint_authority') && codes.includes('mint_authority');
-  const out: { key: RiskCode | 'mint_authority_both'; text: string }[] = [];
-  for (const c of codes) {
-    if (both && c === 'mint_authority') continue;
-    const key = both && c === 'live_mint_authority' ? 'mint_authority_both' : c;
-    out.push({ key, text: riskReasonText(r, key) });
-  }
-  return out;
+/** The reasons shown for a token's risk codes, one line each. The chip's panel and the details section both print these, so they never differ. */
+export function riskReasons(r: FactRow & { powers?: readonly string[] }): { key: RiskCode; text: string }[] {
+  return tokenRiskCodes({ facts: r.facts, powers: [...(r.powers ?? [])], ...(r.genesis ? { genesis: r.genesis } : {}) }).map((key) => ({ key, text: riskReasonText(r, key) }));
 }
 
 /**

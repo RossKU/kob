@@ -301,6 +301,26 @@ describe('token facts (genesis warnings and program powers)', () => {
     expect(buildTokenRows(live, null)[0]!.facts).toEqual(['live_mint_authority']);
   });
 
+  it('High risk needs a CONFIRMED live mint authority: a program with the mint-authority capability is none by itself (every KRON token has it)', () => {
+    const withMintAuthority = (reg2: TokenRegistry): TokenRegistry => {
+      const info = { ...reg2.tokens[0], capabilities: ['mint-authority'] } as unknown as TokenInfo;
+      return { ...reg2, tokens: [info], byCovenantId: new Map([[info.covenantId, info]]) } as TokenRegistry;
+    };
+    // the creation record says no live minter: the program power is a fact, not a risk
+    const none = buildTokenRows(withMintAuthority(withJson({ genesis_verified: true, genesis: { ...GENESIS, live_minters: [] } })), null)[0]!;
+    expect(none.facts).toEqual(['mint-authority']);
+    expect(tokenRiskCodes(none)).toEqual([]);
+    // liveness not determined (no genesis record, an unverified genesis): still nothing
+    const unknown = buildTokenRows(withMintAuthority(reg), null)[0]!;
+    expect(unknown.facts).toEqual(['genesis_unverified', 'mint-authority']);
+    expect(tokenRiskCodes(unknown)).toEqual([]);
+    // confirmed live (the registry's live_minters, or the indexer's warning): High risk
+    const live = buildTokenRows(withMintAuthority(withJson({ genesis_verified: true, genesis: { ...GENESIS, live_minters: [`${'cd'.repeat(32)}:3`] } })), null)[0]!;
+    expect(tokenRiskCodes(live)).toEqual(['live_mint_authority']);
+    const byIndexer = buildTokenRows(withMintAuthority(reg), [normalizeTokenView(view('GOOD', ID('a'), 0, 0, { warnings: ['live_mint_authority'] }))])[0]!;
+    expect(tokenRiskCodes(byIndexer)).toEqual(['live_mint_authority']);
+  });
+
   it('a token outside the registry is unverified; its indexer warnings and powers join, unknown words are not facts', () => {
     const row = buildTokenRows(reg, [normalizeTokenView(view('NEW', ID('7'), 0, 0, { warnings: ['genesis_unverified', 'live_mint_authority', 'official'], powers: ['mint-authority', 'burn'] }))])[1]!;
     expect(row.facts).toEqual(['genesis_unverified', 'live_mint_authority', 'mint-authority']);
@@ -404,7 +424,8 @@ describe('status display: what shows by default and what is High risk', () => {
   it('High risk is only what lets someone dilute the supply or freeze / seize balances', () => {
     expect(tokenRiskCodes(r(['genesis_failed'], [], { status: 'failed', code: 'contaminated', message: '' }))).toEqual(['genesis_failed']);
     expect(tokenRiskCodes(r(['genesis_unverified', 'live_mint_authority']))).toEqual(['live_mint_authority']);
-    expect(tokenRiskCodes(r(['mint-authority'], ['mint-authority']))).toEqual(['mint_authority']);
+    expect(tokenRiskCodes(r(['mint-authority'], ['mint-authority']))).toEqual([]); // a program power, not a confirmed fact
+    expect(tokenRiskCodes(r(['live_mint_authority', 'mint-authority'], ['mint-authority']))).toEqual(['live_mint_authority']);
     expect(tokenRiskCodes(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintUnbounded: true })))).toEqual(['mint_unbounded']);
     expect(tokenRiskCodes(r([], ['freeze']))).toEqual(['issuer_control']);
     expect(tokenRiskCodes(r([], ['seize', 'freeze']))).toEqual(['issuer_control']);
@@ -417,7 +438,7 @@ describe('status display: what shows by default and what is High risk', () => {
   });
 
   it('only the facts High risk states show by default; every other fact is a status for the details', () => {
-    expect(riskFactIds(r(['genesis_unverified', 'live_mint_authority', 'public-mint', 'blacklist']))).toEqual(['live_mint_authority']);
+    expect(riskFactIds(r(['genesis_unverified', 'live_mint_authority', 'mint-authority', 'public-mint', 'blacklist']))).toEqual(['live_mint_authority']);
     expect(riskFactIds(r(['genesis_kascov', 'blacklist', 'public-mint']))).toEqual([]);
     expect(riskFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintUnbounded: true })))).toEqual(['mint_allowance']);
     expect(riskFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintAllowance: 5n })))).toEqual([]);

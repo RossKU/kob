@@ -68,7 +68,7 @@ test.describe('token facts', () => {
     await expect(header.getByTestId('high-risk-toggle')).toHaveClass(/badge-warn/);
     await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
     await header.getByTestId('high-risk-toggle').click();
-    await expect(page.getByTestId('high-risk-reasons')).toContainText('more of this token can be created');
+    await expect(page.getByTestId('high-risk-reasons')).toContainText('whoever holds it can create more of this token');
     await header.getByTestId('high-risk-toggle').click();
     await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
     // the other sentences are in the details, behind one tap
@@ -77,7 +77,7 @@ test.describe('token facts', () => {
     await expect(details.getByTestId('status-fact-public-mint')).toContainText(/anyone create more/);
     await expect(details.getByTestId('status-fact-blacklist')).toContainText(/block addresses/);
     // the High risk reason is stated once: not again as a fact line
-    await expect(details.getByTestId('status-risk-live_mint_authority')).toContainText(/more of this token can be created/);
+    await expect(details.getByTestId('status-risk-live_mint_authority')).toContainText(/whoever holds it can create more of this token/);
     await expect(details.getByTestId('status-fact-live_mint_authority')).toHaveCount(0);
     // the market list: the High risk chip on the row, small and on one line with the covenant id; every fact sentence is in the legend above the list, behind one tap
     await page.goto('/#/market');
@@ -88,7 +88,7 @@ test.describe('token facts', () => {
     // a tap on the chip opens the reason (not cut by the row), a second tap closes it
     await row.getByTestId('high-risk-toggle').click();
     await expect(page.getByTestId('high-risk-reasons')).toBeVisible();
-    await expect(page.getByTestId('high-risk-reasons')).toContainText('more of this token can be created');
+    await expect(page.getByTestId('high-risk-reasons')).toContainText('whoever holds it can create more of this token');
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
     await expect(row.locator('summary, [data-testid^="token-fact-text-"]')).toHaveCount(0);
@@ -102,6 +102,27 @@ test.describe('token facts', () => {
     // the id is the second line of the row's text and the badges the third, on their own line (never wrapped)
     await expect(row.locator('.ml-line2').filter({ has: page.getByTestId(`token-hash-${id}`) })).toHaveCount(1);
     await expect(row.locator('.ml-line3').filter({ has: page.getByTestId('badge-high-risk') })).toHaveCount(1);
+  });
+
+  test('a program with a mint authority power is no High risk by itself: liveness not checked is a neutral line in the details', async ({ appPage: page, mock }) => {
+    await listExkcc(page);
+    await page.route(/\/v1\/tokens(\?.*)?$/, async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      for (const t of body.tokens) Object.assign(t, { powers: ['mint-authority'], warnings: ['genesis_unverified'] });
+      await route.fulfill({ response: res, json: body });
+    });
+    const id = (await mock.token()).covenant_id;
+    await page.goto(`/#/market/${id}`);
+    await expect(page.getByTestId('token-page')).toBeVisible();
+    await expect(page.getByTestId('token-header').getByTestId('badge-high-risk')).toHaveCount(0);
+    await page.goto('/#/market');
+    await expect(page.getByTestId(`token-row-${id}`).getByTestId('badge-high-risk')).toHaveCount(0);
+    await page.goto(`/#/market/${id}`);
+    const details = page.getByTestId('token-status-details');
+    await details.getByRole('button').first().click();
+    await expect(details.getByTestId('status-fact-mint-authority')).toContainText('whether one is still live was not checked');
+    await expect(details.locator('[data-testid^="status-risk-"]')).toHaveCount(0);
   });
 
   test('a token whose registry entry verified its genesis (no live mint authority) has no fact of its own and no status', async ({ appPage: page, mock }) => {
@@ -143,9 +164,9 @@ test.describe('token facts', () => {
     const panel = (await page.getByTestId('high-risk-reasons').boundingBox())!;
     expect(panel.x).toBeGreaterThanOrEqual(0);
     expect(panel.x + panel.width).toBeLessThanOrEqual(375);
-    // a live mint authority and the program's mint authority are one line, not two
+    // a live mint authority (confirmed) together with the program's mint authority power is ONE reason
     await expect(page.getByTestId('high-risk-reasons').locator('li')).toHaveCount(1);
-    await expect(page.getByTestId('high-risk-reasons')).toContainText('A mint authority exists: whoever holds it can create more of this token.');
+    await expect(page.getByTestId('high-risk-reasons')).toContainText('A mint authority still exists: whoever holds it can create more of this token.');
     await page.keyboard.press('Escape');
     const overflow = await page.evaluate(() => ({
       page: document.documentElement.scrollWidth - window.innerWidth,
@@ -157,9 +178,11 @@ test.describe('token facts', () => {
     await page.goto(`/#/market/${(await mock.token()).covenant_id}`);
     const details = page.getByTestId('token-status-details');
     await details.getByRole('button').first().click();
-    await expect(details.getByTestId('status-risk-mint_authority_both')).toContainText('A mint authority exists');
+    await expect(details.getByTestId('status-risk-live_mint_authority')).toContainText('A mint authority still exists');
     await expect(details.locator('[data-testid^="status-risk-"]')).toHaveCount(1);
-    for (const f of ['live_mint_authority', 'mint-authority']) await expect(details.getByTestId(`status-fact-${f}`)).toHaveCount(0);
+    await expect(details.getByTestId('status-fact-live_mint_authority')).toHaveCount(0);
+    // the program's power is said neutrally, pointing at the confirmed one
+    await expect(details.getByTestId('status-fact-mint-authority')).toContainText('one is still live (see High risk)');
     await expect(details.getByTestId('status-fact-public-mint')).toBeVisible();
   });
 });

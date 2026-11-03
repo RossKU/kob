@@ -90,18 +90,18 @@ export const tokenFactIds = (warnings: readonly string[], powers: readonly strin
 // ------------------------------------------------------------------------------------------------ status display: what is shown by default, and "High risk"
 
 /**
- * The facts that make a token "High risk" (founder 2026-11-03): only what lets someone DILUTE the supply or SEIZE / FREEZE balances, derived from the
- * token's own facts and never from a per-token text. One chip, "High risk", with a tap-to-open reason that lists these.
+ * The facts that make a token "High risk" (founder 2026-11-03): only what lets someone DILUTE the supply or SEIZE / FREEZE balances, and only what is CONFIRMED
+ * ("unverified means only a possibility"), derived from the token's own facts and never from a per-token text. One chip, "High risk", with a tap-to-open reason that lists these.
  *   genesis_failed       KOB's own genesis check FOUND a problem (a genesis output that is not the program's: contaminated or mismatching)
  *   live_mint_authority  the genesis record lists a mint authority that still exists (the supply can grow)
- *   mint_authority       the token program has a mint authority (the `mint-authority` capability)
  *   mint_unbounded       a verified genesis holds a minter that mints any amount (no cap)
  *   issuer_control       the program can freeze or seize balances (`freeze` / `seize`)
- * Not High risk, whatever else is shown for them: `genesis_unverified` (the check could not run), `genesis_kascov`, `genesis_verified*`, `public-mint` (a
+ * The program capability `mint-authority` alone is NOT High risk: it is a power of the program (every KRON token has it), not a fact about this token; whether
+ * a mint authority is still live is `live_mint_authority` (confirmed by the registry's `live_minters` or the indexer's warning). Not High risk either: `genesis_unverified` (the check could not run), `genesis_kascov`, `genesis_verified*`, `public-mint` (a
  * minter with a cap, `mint_allowance`), `blacklist`, `burn`, a program pending review (the profile table has no machine-readable finding), the registry's
  * `risks` texts (declared properties of a program, informational), the indexer cross-check findings (their own banner) and a decimals disagreement.
  */
-export const RISK_CODES = ['genesis_failed', 'live_mint_authority', 'mint_authority', 'mint_unbounded', 'issuer_control'] as const;
+export const RISK_CODES = ['genesis_failed', 'live_mint_authority', 'mint_unbounded', 'issuer_control'] as const;
 export type RiskCode = (typeof RISK_CODES)[number];
 
 type RiskRow = Pick<TokenRow, 'facts' | 'powers'> & Partial<Pick<TokenRow, 'genesis'>>;
@@ -110,7 +110,6 @@ export function tokenRiskCodes(r: RiskRow): RiskCode[] {
   const out: RiskCode[] = [];
   if (r.facts.includes('genesis_failed') || r.genesis?.status === 'failed') out.push('genesis_failed');
   if (r.facts.includes('live_mint_authority')) out.push('live_mint_authority');
-  if (r.facts.includes('mint-authority') || r.powers.includes('mint-authority')) out.push('mint_authority');
   if (r.genesis?.status === 'verified' && r.genesis.mintUnbounded === true) out.push('mint_unbounded');
   if (hasIssuerControl(r.powers)) out.push('issuer_control');
   return out;
@@ -126,7 +125,6 @@ export function riskFactIds(r: RiskRow): TokenFactId[] {
   const states = new Set<TokenFactId>();
   if (risks.includes('genesis_failed')) states.add('genesis_failed');
   if (risks.includes('live_mint_authority')) states.add('live_mint_authority');
-  if (risks.includes('mint_authority')) states.add('mint-authority');
   if (risks.includes('mint_unbounded')) states.add('mint_allowance');
   return r.facts.filter((f) => states.has(f));
 }
