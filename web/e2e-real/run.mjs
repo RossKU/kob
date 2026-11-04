@@ -168,7 +168,7 @@ async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUr
     result.balanceKas = Number(bal) / 1e8;
 
     rc = {
-      ctx, drv, node, server, result, name, env, address: conn.address, indexer: !!indexerUrl,
+      ctx, drv, node, server, result, name, env, address: conn.address, indexer: !!indexerUrl, indexerUrl,
       openCounterparty: counterpartyFactory({ env, mock, server, appConfig, mockBrowser }),
       get h() { return h; }, set h(v) { h = v; },
     };

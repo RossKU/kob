@@ -5,9 +5,11 @@
 //
 // Prices are typed as the ticket shows them: KAS per whole token on a token's KAS market, B per whole A on the pair A/B. Amounts are whole tokens
 // (the issued tokens have 8 decimals: 1 token = 1e8 base units).
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { REPO_ROOT, collapse, log, shot, sleep } from './common.mjs';
+import { OUT_DIR, REPO_ROOT, collapse, log, shot, sleep } from './common.mjs';
+import { TN10_NODE, loadRealEnv } from './fund.mjs';
 import { goto, outputsOf, runFlow, signFromTicket, signOnConfirmScreen } from './driver.mjs';
 
 const tid = (h, id) => h.page.getByTestId(id);
@@ -640,7 +642,8 @@ export async function runAmend(rc) {
 export async function runIoc(rc) {
   return scenario(rc, 'ioc', async (r) => {
     try {
-      await placeAndCancel(rc, r, 'ioc-buy', { type: 'ioc', side: 'buy', fields: { amount: 2, price: 0.4, life: 60 }, expectSummary: /Buy IOC limit order/ });
+      // life is in seconds; an IOC may live at most IOC_KILL_DAA = 600 DAA (60 s): 60 s sits on that limit and is refused (LIFE_OUT_OF_RANGE) once the ticket's clock moves while the wallet approves, 50 s = 500 DAA is valid
+      await placeAndCancel(rc, r, 'ioc-buy', { type: 'ioc', side: 'buy', fields: { amount: 2, price: 0.4, life: 50 }, expectSummary: /Buy IOC limit order/ });
     } catch (e) {
       if (!(e instanceof OrderEnded) || !e.views.every((v) => v.status === 'killed' || v.status === 'refunded')) throw e;
       const placed = r.steps.at(-1);
@@ -693,9 +696,9 @@ export async function runMarket(rc) {
     if (!rc.indexer) throw new Skip('a market order needs an indexer with a book (set INDEXER_URL in e2e-real/.env or pass --indexer <url>; --mock --indexer uses the mock indexer)');
     if (!rc.openCounterparty) throw new Skip('no counterparty key (DEV_PRIVATE_KEY) for the resting bid');
     const cp = await rc.openCounterparty();
+    const cpRc = { ...rc, ...cp, name: `${rc.name}-counterparty` };
     try {
       // the counterparty's resting bid
-      const cpRc = { ...rc, ...cp, name: `${rc.name}-counterparty` };
       const bid = await place(cpRc, r, 'counterparty-bid', { type: 'limit', side: 'buy', fields: { amount: 1, price: 0.6 }, expectSummary: /Buy limit order.*\b0\.6 KAS per\b/ });
       // the wallet's market sell, once the indexer's book shows the bid (NO_LIQUIDITY until then)
       const t0 = Date.now();
@@ -713,7 +716,8 @@ export async function runMarket(rc) {
       let p = null;
       for (let attempt = 1; !p; attempt++) {
         try {
-          p = await place(rc, r, 'market-sell', { type: 'market', side: 'sell', fields: { amount: 1, life: 60 }, expectSummary: /Sell market order \(auction\).*\b0\.6\b/ });
+          // life 50 s = 500 DAA, inside the 1..600 DAA range (60 s sits on the limit and fails when the clock moves)
+          p = await place(rc, r, 'market-sell', { type: 'market', side: 'sell', fields: { amount: 1, life: 50 }, expectSummary: /Sell market order \(auction\).*\b0\.6\b/ });
         } catch (e) {
           if (!/\(clock-moved\)/.test(String(e?.message)) || attempt >= 3) throw e;
           r.steps.push({ name: `market sell attempt ${attempt}: clock-moved, nothing sent`, error: String(e.message).slice(0, 300) });
@@ -736,6 +740,9 @@ export async function runMarket(rc) {
       const bidLive = await waitLive(cpRc, bid.covenantIds, 30_000).then(() => true, () => false);
       if (bidLive) await cancelStep(cpRc, r, 'counterparty-bid', { placed: new Map([[bid.txid, bid.tx]]), covenantIds: bid.covenantIds });
     } finally {
+      // a failed run must not leave the DEV key's own bid live (its KAS stays locked): cancel whatever of the counterparty is still live
+      const swept = await sweepOpenOrders(cpRc);
+      if (swept.length) r.steps.push({ name: 'counterparty sweep', swept });
       await cp.close().catch(() => {});
     }
   });
@@ -777,7 +784,7 @@ export async function runMerge(rc) {
       n = after;
       if (n >= 2) {
         await openOrders(rc);
-        await waitBalance(rc, token, (b) => b.mergeButton === `Merge (${n})`, `"Merge (${n})" after ${click + 1} click(s)`, 60_000);
+        await waitBalance(rc, token, (b) => (b.mergeButton ?? '').startsWith(`Merge (${n})`), `"Merge (${n})" after ${click + 1} click(s)`, 60_000);
       }
     }
     // node: the last merge's single token output is unspent
@@ -820,6 +827,73 @@ export const SCENARIOS = [
   ['ifd', runIfd],
   ['pair', runPair],
   ['market', runMarket],
+  ['fill', runFill],
+  ['cells', runCells],
   ['merge', runMerge],
   ['balances', runBalances],
 ];
+
+// ------------------------------------------------------------------------------------------------ fill, cells
+
+/** The `kob` CLI binary: `KOB_BIN`, else a cargo build under the repo's `target/`; null when there is none. */
+function kobBinary() {
+  if (process.env.KOB_BIN) return process.env.KOB_BIN;
+  const exe = process.platform === 'win32' ? 'kob.exe' : 'kob';
+  return ['release', 'debug'].map((d) => join(REPO_ROOT, 'target', d, exe)).find((f) => existsSync(f)) ?? null;
+}
+
+/** `kob take <id> --amount n` with the DEV key (env only, never printed) against the node and indexer of the run; returns the parsed outcome. */
+function kobTake(rc, covenantId, amount, label, bin) {
+  const env = loadRealEnv();
+  const stateDir = join(OUT_DIR, 'kob-state');
+  mkdirSync(stateDir, { recursive: true });
+  const args = ['take', covenantId, '--amount', `${BigInt(amount) * TOKEN}base`, '--network', 'testnet-10', '--node', env.NODE_WS || TN10_NODE, '--indexer', rc.indexerUrl,
+    '--registry', join(OUT_DIR, `registry-tn10.test.${rc.name}.json`), '--yes', '--json'];
+  const res = spawnSync(bin, args, { encoding: 'utf8', env: { ...process.env, KOB_KEY: env.DEV_PRIVATE_KEY, KOB_STATE_DIR: stateDir }, timeout: 180_000 });
+  const scrub = (s) => String(s ?? '').split(env.DEV_PRIVATE_KEY).join('<key>');
+  const out = scrub(res.stdout), err = scrub(res.stderr);
+  writeFileSync(join(OUT_DIR, `kob-take-${rc.name}-${label}.json`), JSON.stringify({ args, status: res.status, stdout: out.slice(0, 60000), stderr: err.slice(0, 8000) }, null, 1));
+  let json = null;
+  try { json = JSON.parse(out); } catch { /* not json */ }
+  const txid = json?.result?.txid ?? json?.result?.txids?.[0] ?? /"txid"\s*:\s*"([0-9a-f]{64})"/.exec(out)?.[1] ?? null;
+  return { status: res.status, txid, json, stderr: err.slice(0, 1500), stdoutHead: out.slice(0, 1500) };
+}
+
+/** Wallet ask filled by the DEV taker (pays the ask, receives tokens); wallet bid filled by the DEV taker delivering tokens to the wallet. TN10 only (`kob take` with the DEV key). */
+export async function runFill(rc) {
+  return scenario(rc, 'fill', async (r) => {
+    if (!rc.indexer || !rc.indexerUrl) throw new Skip('the taker needs an indexer (INDEXER_URL or --indexer <url>)');
+    if (rc.result.mode === 'mock' || !loadRealEnv().DEV_PRIVATE_KEY) throw new Skip('the taker is the DEV key on TN10 (DEV_PRIVATE_KEY); not available with --mock');
+    const bin = kobBinary();
+    if (!bin) throw new Skip('the taker needs the kob CLI: set KOB_BIN or build it (cargo build -p kob-cli)');
+    for (const side of ['sell', 'buy']) {
+      const label = `fill-${side}`;
+      const spec = side === 'sell'
+        ? { type: 'limit', side: 'sell', fields: { amount: 2, price: 0.5 }, expectSummary: /Sell limit order.*\b0\.5 KAS per\b/ }
+        : { type: 'limit', side: 'buy', fields: { amount: 2, price: 0.5 }, expectSummary: /Buy limit order.*\b0\.5 KAS per\b/ };
+      const p = await place(rc, r, label, spec);
+      await openOrders(rc, p.covenantIds);
+      await waitLive(rc, p.covenantIds, 90_000);
+      // the taker reads the order from the indexer: wait until it lists it
+      for (let i = 0; i < 60; i++) { const rr = await fetch(`${rc.indexerUrl}/v1/orders/${p.covenantIds[0]}`).catch(() => null); if (rr?.ok) break; await sleep(3000); }
+      let t = kobTake(rc, p.covenantIds[0], 2, label, bin);
+      for (let i = 0; i < 3 && !t.txid; i++) { await sleep(10_000); t = kobTake(rc, p.covenantIds[0], 2, label, bin); }
+      r.steps.push({ name: `taker fills the wallet ${side} (kob take, DEV key)`, txid: t.txid, status: t.status, stderr: t.stderr, stdoutHead: t.txid ? undefined : t.stdoutHead, plan: t.json?.plan ? JSON.stringify(t.json.plan).slice(0, 3000) : undefined });
+      if (!t.txid) throw new Error(`kob take did not fill the wallet ${side}: status ${t.status} ${t.stderr}`);
+      log(`[${rc.name}] ${label}: wallet order ${short(p.txid)}, taker tx ${short(t.txid)}`);
+      await openOrders(rc, p.covenantIds);
+      const views = await waitNotLive(rc, p.covenantIds, 120_000);
+      r.steps.push({ name: `${label} order after the fill`, rows: views });
+    }
+  });
+}
+
+/** Three 1-token sells placed, then cancelled one by one: the wallet is left with three separate token UTXOs (cells), which the merge scenario then takes 3 -> 1. */
+export async function runCells(rc) {
+  return scenario(rc, 'cells', async (r) => {
+    const ps = [];
+    for (let i = 0; i < 3; i++) ps.push(await place(rc, r, `cells-sell-${i}`, { type: 'limit', side: 'sell', fields: { amount: 1, price: 50 + i }, expectSummary: /Sell limit order/ }));
+    for (let i = 0; i < 3; i++) await cancelStep(rc, r, `cells-sell-${i}`, { placed: new Map([[ps[i].txid, ps[i].tx]]), covenantIds: ps[i].covenantIds, tokensBack: A(rc, 1) });
+    log(`[${rc.name}] cells: 3 sells placed and cancelled`);
+  });
+}
