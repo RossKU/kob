@@ -5,12 +5,13 @@
 //        --bin-dir target/x86_64-pc-windows-msvc/release [--out dist]
 //   node scripts/package-release.mjs --sums dist          write dist/SHA256SUMS over every archive and APK in dist
 //   node scripts/package-release.mjs --check-tag v1.2.3   fail unless the tag is `v` + the workspace version that kob-executor and
-//                                                         kob-cli carry (Cargo.toml [workspace.package] and Cargo.lock): the
+//                                                         kob-cli (the `kob` binary) carry (Cargo.toml [workspace.package] and Cargo.lock): the
 //                                                         binaries' --version is the tag (docs/ops/release.md 6)
 //
-// The archive `kob-executor-<version>-<network>-<target>.zip` (Windows targets) or `.tar.gz` (every other target) holds one
-// directory of that name with kob-executor and kob-cli, QUICKSTART.md (docs/ops/executor-quickstart.md), LICENSE, NOTICE and a
-// SHA256SUMS of those files. The archive is written here, not by zip / tar: the bytes depend only on the inputs and on
+// Two archives per network and target, `.zip` (Windows targets) or `.tar.gz` (every other target), each holding one directory of
+// its name: `kob-executor-<version>-<network>-<target>` with kob-executor and kob (the command line), QUICKSTART.md
+// (docs/ops/executor-quickstart.md), LICENSE, NOTICE and a SHA256SUMS of those files; and `kob-<version>-<network>-<target>` with
+// kob alone, README.md (crates/kob-cli/README.md), LICENSE, NOTICE and a SHA256SUMS of those files. The archive is written here, not by zip / tar: the bytes depend only on the inputs and on
 // SOURCE_DATE_EPOCH (default: the commit time of HEAD) as every entry's time, fixed modes and no owner names, so two builds of
 // identical binaries give identical archives on any runner (docs/ops/release.md 6). Needs Node >= 22 (zlib.crc32).
 import fs from 'node:fs';
@@ -149,28 +150,34 @@ function packageOne(o) {
   if (!/^[0-9A-Za-z.+_-]+$/.test(o.version)) throw new Error(`--version ${o.version}: letters, digits and . + _ - only`);
   const windows = o.target.includes('windows');
   const exe = windows ? '.exe' : '';
-  const base = `kob-executor-${o.version}-${o.network}-${o.target}`;
   const read = (p) => {
     if (!fs.existsSync(p)) throw new Error(`missing ${p}`);
     return fs.readFileSync(p);
   };
   // text files with LF line endings whatever the checkout did, so the archive does not depend on core.autocrlf
   const text = (p) => Buffer.from(read(p).toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
-  const files = [
-    [`kob-executor${exe}`, read(path.join(o['bin-dir'], `kob-executor${exe}`)), 0o755],
-    [`kob-cli${exe}`, read(path.join(o['bin-dir'], `kob-cli${exe}`)), 0o755],
-    ['QUICKSTART.md', text(path.join(root, 'docs/ops/executor-quickstart.md')), 0o644],
+  const kob = [`kob${exe}`, read(path.join(o['bin-dir'], `kob${exe}`)), 0o755];
+  const out = path.resolve(o.out ?? 'dist');
+  const when = epoch();
+  fs.mkdirSync(out, { recursive: true });
+  const write = (base, files) => {
+    files.push(['SHA256SUMS', Buffer.from(sumsText(files)), 0o644]);
+    const entries = [{ name: `${base}/`, data: null, mode: 0o755 }, ...files.map(([n, d, m]) => ({ name: `${base}/${n}`, data: d, mode: m }))];
+    const file = path.join(out, base + (windows ? '.zip' : '.tar.gz'));
+    fs.writeFileSync(file, windows ? zip(entries, when) : targz(entries, when));
+    console.log(`${sha256(fs.readFileSync(file))}  ${path.basename(file)}`);
+  };
+  const legal = [
     ['LICENSE', text(path.join(root, 'LICENSE')), 0o644],
     ['NOTICE', text(path.join(root, 'NOTICE')), 0o644],
   ];
-  files.push(['SHA256SUMS', Buffer.from(sumsText(files)), 0o644]);
-  const entries = [{ name: `${base}/`, data: null, mode: 0o755 }, ...files.map(([n, d, m]) => ({ name: `${base}/${n}`, data: d, mode: m }))];
-  const when = epoch();
-  const out = path.resolve(o.out ?? 'dist');
-  fs.mkdirSync(out, { recursive: true });
-  const file = path.join(out, base + (windows ? '.zip' : '.tar.gz'));
-  fs.writeFileSync(file, windows ? zip(entries, when) : targz(entries, when));
-  console.log(`${sha256(fs.readFileSync(file))}  ${path.basename(file)}`);
+  write(`kob-executor-${o.version}-${o.network}-${o.target}`, [
+    [`kob-executor${exe}`, read(path.join(o['bin-dir'], `kob-executor${exe}`)), 0o755],
+    kob,
+    ['QUICKSTART.md', text(path.join(root, 'docs/ops/executor-quickstart.md')), 0o644],
+    ...legal,
+  ]);
+  write(`kob-${o.version}-${o.network}-${o.target}`, [kob, ['README.md', text(path.join(root, 'crates/kob-cli/README.md')), 0o644], ...legal]);
 }
 
 /** The tag is `v` + the version the binaries report: [workspace.package] version, inherited by kob-executor and kob-cli, and
@@ -199,7 +206,7 @@ function checkTag(tag) {
 function writeSums(dir) {
   const names = fs
     .readdirSync(dir)
-    .filter((n) => n.startsWith('kob-executor-') && (n.endsWith('.zip') || n.endsWith('.tar.gz') || n.endsWith('.apk')))
+    .filter((n) => n.startsWith('kob-') && (n.endsWith('.zip') || n.endsWith('.tar.gz') || n.endsWith('.apk')))
     .sort();
   if (!names.length) throw new Error(`no release archives in ${dir}`);
   const text = sumsText(names.map((n) => [n, fs.readFileSync(path.join(dir, n))]));

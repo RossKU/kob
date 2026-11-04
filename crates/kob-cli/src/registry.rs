@@ -5,7 +5,7 @@
 use kob_protocol::genesis_evidence::{registry_mismatches, verify_evidence, Evidence};
 use kob_protocol::registry::{Registry, RegistryError};
 
-const USAGE: &str = "usage: kob registry validate <tokens.json> [--network mainnet|testnet-10|devnet]";
+const USAGE: &str = "usage: kob registry validate <tokens.json> [--network mainnet|testnet-10|devnet] (a deployment build defaults to its own network)";
 
 /// Returns the process exit code: 0 valid, 1 invalid, 2 usage or I/O error.
 pub fn run_validate(args: &[&str]) -> i32 {
@@ -46,6 +46,8 @@ pub fn run_validate(args: &[&str]) -> i32 {
             return 1;
         }
     };
+    // a deployment build checks the file for its own network unless another is named
+    let network = network.or_else(|| kob_protocol::artifacts::deployment_network().map(str::to_string));
     let res = match &network {
         Some(n) => reg.validate_for_network(n),
         None => reg.validate(),
@@ -63,13 +65,13 @@ pub fn run_validate(args: &[&str]) -> i32 {
 }
 
 const VERIFY_USAGE: &str = "\
-usage: kob registry verify-genesis --network mainnet|testnet-10|devnet [--evidence FILE] [--registry FILE] [--json]
+usage: kob registry verify-genesis [--network mainnet|testnet-10|devnet] [--evidence FILE] [--registry FILE] [--json]
 
 Re-checks every token of the evidence file offline: the genesis txid is recomputed from the recorded transaction, the
 covenant id from the authorising outpoint and the genesis group, every redeem script against its P2SH hash and the token's
 pinned program (C1); a KRON genesis without a minter output proves no live minter can exist (C2). Then compares the result
 with the registry's genesis_verified / genesis records. Exit 0: the registry says exactly what the evidence proves.
-Defaults: --evidence registry/evidence/<network>-genesis.json, --registry registry/tokens.json. --json prints the
+Defaults: --network the deployment build's own (a reference build needs it), --evidence registry/evidence/<network>-genesis.json, --registry registry/tokens.json. --json prints the
 genesis records. Collect fresh evidence (read-only node + explorer):
   node web/scripts/registry-genesis-evidence.mjs";
 
@@ -103,7 +105,7 @@ pub fn run_verify_genesis(args: &[&str]) -> i32 {
             }
         }
     }
-    let Some(network) = network else {
+    let Some(network) = network.or_else(|| kob_protocol::artifacts::deployment_network().map(str::to_string)) else {
         eprintln!("{VERIFY_USAGE}");
         return 2;
     };

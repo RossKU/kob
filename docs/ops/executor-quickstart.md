@@ -31,7 +31,7 @@ platform:
 A binary serves exactly one network (the deployment build, `docs/ops/release.md`): the mainnet binary refuses a testnet
 node and the other way round. Start on testnet-10 if you have never run one.
 
-Each archive holds `kob-executor` (the executor), `kob-cli` (the command-line client), this page, `LICENSE` and a
+Each `kob-executor-...` archive holds `kob-executor` (the executor), `kob` (the command-line client), this page, `LICENSE` and a
 `SHA256SUMS` of its files; the release also lists a `SHA256SUMS` of every archive and of the APK. Check the archive you downloaded against
 it before you run anything:
 
@@ -208,8 +208,8 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   overlap. A transaction the executor sent just before it stopped may still be on its way: if the node says a coin is
   already spent, nothing was lost, wait a minute and run it again. Only plain KAS moves; tokens the key holds stay where
   they are. Afterwards `kob-executor address-balance` shows what is left, and the next start warns "funds low" until you fund
-  the key again. (`kob-cli send` also works, but only against your own node on `ws://`: it has no resolver or `wss`
-  support, and its amount needs a unit such as `2.5KAS`; see `crates/kob-cli/README.md`.)
+  the key again. (`kob send` also works, with the same public nodes by default (two hosts that must agree on the outputs it spends) or your
+  own node; its amount needs a unit such as `2.5KAS`; see `crates/kob-cli/README.md`.)
 * If the start fails, the window stays open with the error until you press Enter.
 
 **Back up, and move to another computer.** The only thing you cannot rebuild is the key: back up `kob-operator.key` (a plain
@@ -319,7 +319,7 @@ program changes. The program is not replaced while it runs, and it does not upda
      survives (below). The executor stops within seconds, flushes the database and exits; a second Ctrl+C exits at
      once, and a stop that has not finished in ten seconds exits by itself (exit code 2, logged). The database survives either
      way (SQLite WAL, one transaction per batch), so a forced kill costs a short recovery, not data.
-   * keep the old program (`kob-executor.old`) and put the new `kob-executor` (and `kob-cli`) in its place; on Windows the old file
+   * keep the old program (`kob-executor.old`) and put the new `kob-executor` (and `kob`) in its place; on Windows the old file
      is locked until the process has ended.
    * if you may want to roll back across a database change, copy `kob-data` aside now while the executor is stopped (a newer
      database schema is refused by an older program).
@@ -367,7 +367,7 @@ library, so name resolution and TLS to the public nodes work as in any Termux pr
    sha256sum -c --ignore-missing SHA256SUMS      # must print "...: OK"
    tar xzf kob-executor-<version>-mainnet-aarch64-linux-android.tar.gz
    cd kob-executor-<version>-mainnet-aarch64-linux-android
-   chmod +x kob-executor kob-cli
+   chmod +x kob-executor kob
    ./kob-executor
    ```
 

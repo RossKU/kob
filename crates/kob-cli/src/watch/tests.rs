@@ -291,6 +291,7 @@ fn fills_frames_reconnect_and_server_notices() {
     );
     assert!(r.out.contains(&want), "{}", r.out);
     assert!(r.out.contains("fill  ask  0.001 WATCHT @"), "{}", r.out);
+    assert!(r.out.contains("03:08:44  watching fills on network testnet-10 (indexer http://127.0.0.1:"), "{}", r.out);
     assert!(r.out.contains("future-frame [fills]  {\"a\":1}"), "{}", r.out);
     // notes and errors go to stderr
     assert!(!r.out.contains("note:") && !r.out.contains("error:"), "{}", r.out);
@@ -319,8 +320,10 @@ fn fills_of_one_token_by_ticker_and_json_lines() {
     assert_eq!(server.subs.lock().unwrap()[0], json!(["reorg", format!("fills:{}", to_hex(&TOKEN))]));
     // NDJSON: the frame as the server sent it, one per line
     let lines: Vec<Value> = r.out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    assert_eq!(lines.len(), 1, "{}", r.out);
-    assert_eq!(lines[0], fill("2500"));
+    assert_eq!(lines.len(), 2, "{}", r.out);
+    assert_eq!(lines[0]["type"], "start");
+    assert_eq!(lines[0]["data"]["network"], "testnet-10");
+    assert_eq!(lines[1], fill("2500"));
     assert_eq!(r.err, "");
 }
 
@@ -433,7 +436,7 @@ fn a_subscription_the_server_refuses_ends_the_watch_with_the_reason() {
 }
 
 #[test]
-fn an_endpoint_without_the_route_and_a_tls_indexer_are_refused_clearly() {
+fn an_endpoint_without_the_route_is_refused_clearly() {
     // the HTTP side answers /v1/ws with 404: fatal, with the hint
     let (url, _state) = crate::trade::http::mock::start(routes());
     let mut a: Vec<String> = ["health", "--network", "testnet-10", "--indexer"].iter().map(|s| s.to_string()).collect();
@@ -444,12 +447,6 @@ fn an_endpoint_without_the_route_and_a_tls_indexer_are_refused_clearly() {
     let mut o = Out::with(false, Box::new(out), Box::new(err.clone()), fixed_now);
     assert_eq!(w.run(&AtomicBool::new(false), &mut o), 1);
     assert!(err.text().contains("HTTP 404") && err.text().contains("no /v1/ws route"), "{}", err.text());
-    // wss:// needs TLS
-    w.target = super::url::ws_target("https://example.org").unwrap();
-    let err2 = Cap::default();
-    let mut o = Out::with(false, Box::new(Cap::default()), Box::new(err2.clone()), fixed_now);
-    assert_eq!(w.run(&AtomicBool::new(false), &mut o), 1);
-    assert!(err2.text().contains("wss:// needs TLS") && !err2.text().contains("pw"), "{}", err2.text());
 }
 
 #[test]

@@ -58,7 +58,7 @@ pub fn check_network_first(c: &Common) -> Result<(), String> {
 
 /// Show, confirm, sign, submit. Returns the process exit code.
 pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &str) -> i32 {
-    // the plan was read from this node: it must run the network the command names (mainnet only when named), before
+    // the plan was read from this node: it must run the network the command names before
     // anything is shown as a plan of that network or signed
     if let Err(e) = c.need_node().and_then(|n| crate::wrpc::check_node_network(n, &c.network, crate::common::NODE_TIMEOUT)) {
         eprintln!("error: {e}");
@@ -81,7 +81,7 @@ pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &
     // transaction was submitted); a person at a terminal who is going to be asked reads the plan as text on stderr meanwhile
     let print_json = |doc: &Value| println!("{}", serde_json::to_string_pretty(doc).unwrap_or_default());
     let text_plan = |to_stderr: bool| {
-        let mut out = vec![r.title.clone()];
+        let mut out = vec![r.title.clone(), format!("  network: {}", c.network)];
         out.extend(r.lines.iter().map(|l| format!("  {l}")));
         out.extend(show::lines(&decoded, units, &r.built.tx.id));
         for l in out {

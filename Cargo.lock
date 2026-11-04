@@ -2586,15 +2586,23 @@ dependencies = [
 name = "kob-cli"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "ctrlc",
  "kaspa-addresses",
  "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-rpc-core",
  "kaspa-txscript",
  "kob-protocol",
+ "rand 0.8.8",
+ "rustls",
  "secp256k1",
+ "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tungstenite 0.24.0",
+ "webpki-roots 1.0.10",
+ "workflow-serializer",
 ]
 
 [[package]]

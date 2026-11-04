@@ -94,9 +94,12 @@ OUTPUT
                         terminal nothing is written or submitted. Not needed with --dry-run.
   --dry-run             build and verify everything offline (signs and executes the funding inputs when --key is
                         given, else the transaction stays unsigned); never submits (excludes --yes)
-  --node ws://HOST:PORT submit the signed transactions via wRPC JSON (`submitTransaction`; JSON port 18110 mainnet,
-                        18210 testnet-10). Required unless --dry-run; default $KOB_NODE_WRPC (a URL with a password or
-                        an API key belongs there: arguments are visible in `ps`).
+  --node URL            where to submit the signed transactions (`submitTransaction`): a JSON wRPC endpoint (port 18110
+                        mainnet, 18210 testnet-10), a Borsh one (ws://HOST:17110, wss://.../borsh) or `resolver`. Default
+                        $KOB_NODE_WRPC (a URL with a password or an API key belongs there: arguments are visible in `ps`),
+                        else the public nodes the Kaspa resolvers name (two hosts that must agree on the outputs spent).
+                        The node must run the network named: checked before anything is submitted.
+  --network NET         mainnet (default) or testnet-10; --testnet and --netsuffix=10 are --network testnet-10
 ";
 
 /// Where the signing key comes from.
@@ -410,14 +413,11 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
     if a.yes && a.dry_run {
         return Err("--yes and --dry-run exclude each other".into());
     }
-    a.node = crate::wrpc::node_arg(a.node.take());
-    if !a.dry_run && a.node.is_none() {
-        return Err(format!("--node (or ${}) is required unless --dry-run", crate::wrpc::NODE_ENV));
-    }
     if !a.dry_run && a.key.is_none() {
         return Err("--key is required unless --dry-run (an unsigned transaction cannot be submitted)".into());
     }
     a.network = crate::common::resolve_network(&a.network)?;
+    a.node = Some(crate::wrpc::node_for(a.node.take(), &a.network));
     Ok(a)
 }
 
@@ -696,7 +696,7 @@ pub const RESUME_USAGE: &str = "\
 kob token resume: send a creation whose genesis did not go out
 
 USAGE
-  kob token resume <DIR> [--node ws://HOST:PORT]
+  kob token resume <DIR> [--node URL] [--network NET]
 
 DIR is the directory `kob token create` wrote (creation.json, and preparation_tx.json and genesis_tx.json, both signed). The preparation is sent
 again (a node that already has it refuses it: that is fine) and then the genesis. Nothing is signed: the saved transactions
@@ -713,16 +713,19 @@ pub fn run_resume(args: &[String]) -> i32 {
     let run = || -> Result<(), String> {
         let mut dir = None;
         let mut node = None;
+        let mut network = String::new();
         let mut it = args.iter();
         while let Some(a) = it.next() {
             match a.as_str() {
                 "--node" => node = Some(it.next().cloned().ok_or("--node needs a value")?),
+                "--network" => network = it.next().cloned().ok_or("--network needs a value")?,
                 other if dir.is_none() && !other.starts_with("--") => dir = Some(PathBuf::from(other)),
                 other => return Err(format!("unknown argument `{other}` (see `kob token resume --help`)")),
             }
         }
         let dir = dir.ok_or("give the directory `kob token create` wrote")?;
-        let node = wrpc::node_arg(node).ok_or_else(|| format!("--node (or ${}) is required", wrpc::NODE_ENV))?;
+        let network = crate::common::resolve_network(&network)?;
+        let node = wrpc::node_for(node, &network);
         let read = |name: &str| -> Result<Value, String> {
             let text = std::fs::read_to_string(dir.join(name)).map_err(|e| format!("read {name}: {e}"))?;
             serde_json::from_str(&text).map_err(|e| format!("{name}: {e}"))
@@ -741,6 +744,8 @@ pub fn run_resume(args: &[String]) -> i32 {
         if genesis["inputs"].as_array().map(Vec::len) != Some(1) || g["transactionId"].as_str() != Some(prep_id) || g["index"] != 0 {
             return Err("genesis_tx.json does not spend output 0 of preparation_tx.json".into());
         }
+        // a signature commits to no network: the node must run the one named
+        wrpc::check_node_network(&node, &network, Duration::from_secs(30))?;
         submit_creation(&node, (&prep, prep_id), (&genesis, genesis_id), &dir, true)
     };
     match run() {
@@ -847,7 +852,7 @@ mod tests {
         assert!(parse_issue_args(&v("--name X --ticker X --decimals 1")).is_err());
         assert!(
             parse_issue_args(&v(&format!("--name X --ticker X --decimals 1 --fund-utxo {TX}:0:1:{PK} --supply 1"))).is_err(),
-            "needs --node or --dry-run"
+            "needs --key"
         );
         assert!(
             parse_issue_args(&v(&format!("--name X --ticker X --decimals 1 --fund-utxo {TX}:0:1:{PK} --supply 1 --node ws://x:1")))
@@ -1039,7 +1044,7 @@ mod tests {
         assert_eq!(sent[1]["inputs"][0]["previousOutpoint"]["transactionId"], ids["preparation_txid"]);
         // the genesis names the state of its one token output (KOBG | 1 | 1 | 112 | the state span)
         assert!(sent[1]["payload"].as_str().unwrap().starts_with("4b4f4247010170"), "{}", sent[1]["payload"]);
-        assert_eq!(run_resume(&v(&format!("{} --node {url}", dir.display()))), 0);
+        assert_eq!(run_resume(&v(&format!("{} --node {url} --network testnet-10", dir.display()))), 0);
         let sent = state.lock().unwrap().submitted.clone();
         assert_eq!(sent.len(), 4);
         assert_eq!((&sent[2], &sent[3]), (&sent[0], &sent[1]), "resume sends the saved, signed pair unchanged");
@@ -1051,7 +1056,7 @@ mod tests {
             dry.display()
         );
         assert_eq!(run_issue(&v(&cmd)), 0);
-        assert_eq!(run_resume(&v(&format!("{} --node {url}", dry.display()))), 1);
+        assert_eq!(run_resume(&v(&format!("{} --node {url} --network testnet-10", dry.display()))), 1);
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(dry);
     }

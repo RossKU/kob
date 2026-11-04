@@ -42,10 +42,11 @@ INPUT
                 ({\"version\":1|2,\"orders\":[..]}, `kob-executor index export-orders`, the web's indexer export), or an
                 indexer order view (GET /v1/orders/{id}) or page of views ({\"items\":[..]}). Orders are deduplicated by
                 covenant id; every state a file names is a search candidate, nothing in a file is trusted.
-  --node        node wRPC JSON endpoint (18110 mainnet, 18210 testnet-10); `getUtxosByAddresses` needs --utxoindex;
-                default $KOB_NODE_WRPC (a URL with a password or an API key belongs there: arguments are visible in `ps`)
-  --network     network of the files and the addresses (mainnet, testnet-10); required unless the build is a
-                deployment build (deploy-mainnet, deploy-tn10), which implies its own
+  --node        the node: a JSON wRPC endpoint (18110 mainnet, 18210 testnet-10), a Borsh one (ws://HOST:17110, wss://.../borsh) or `resolver`; default $KOB_NODE_WRPC, else the public nodes the Kaspa resolvers name (a pair on two hosts that must agree on what a transaction is planned from)
+                (`getUtxosByAddresses` needs --utxoindex; a URL with a password or an API key belongs in $KOB_NODE_WRPC:
+                arguments are visible in `ps`)
+  --network     network of the files and the addresses: mainnet (default, or the network of a deployment build) or
+                testnet-10 (--testnet, --netsuffix=10)
   --maker       only this maker's orders (64-hex x-only pubkey or kaspa address); others are reported `other_maker`
   --amount-left the amount the order has left after partial fills, as an indexer view shows it (`amount_left`):
                 base units, or a decimal amount of whole tokens with at most the token's decimals (`1.5` with 8
@@ -176,11 +177,8 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
     if a.from.is_empty() {
         return Err("at least one --from file is required".into());
     }
-    a.node = crate::wrpc::node_arg(Some(a.node)).unwrap_or_default();
-    if a.node.is_empty() {
-        return Err(format!("--node (or ${}) is required (every order is verified on the node)", crate::wrpc::NODE_ENV));
-    }
     a.network = crate::common::resolve_network(&a.network)?;
+    a.node = crate::wrpc::node_for(Some(std::mem::take(&mut a.node)), &a.network);
     if a.cancel && a.key.is_none() {
         return Err("--cancel needs --key".into());
     }

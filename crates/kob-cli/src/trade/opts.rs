@@ -1,5 +1,5 @@
 //! Options every trading command shares, the signing key (from a file or the environment, never from the command line),
-//! the network rule (mainnet only when named), and the confirmation step before anything is signed.
+//! the network rule (named, or a deployment build's own), and the confirmation step before anything is signed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, IsTerminal, Write};
@@ -21,10 +21,13 @@ pub const COMMON_BOOL_FLAGS: &[&str] = &["--yes", "-y", "--dry-run", "--json"];
 /// Help text of the shared options.
 pub const COMMON_HELP: &str = "\
 COMMON OPTIONS
-  --network NET     mainnet or testnet-10 (required unless the build is a deployment build; mainnet is refused
-                    unless named here explicitly, even by a mainnet build)
-  --node URL        node wRPC JSON endpoint (default $KOB_NODE_WRPC; a URL with credentials belongs there)
-  --indexer URL     indexer API, http:// (default $KOB_INDEXER_URL)
+  --network NET     mainnet or testnet-10 (default: mainnet, or the network of a deployment build, which refuses
+                    another; --testnet or --netsuffix=10 is --network testnet-10; every plan and confirmation names it)
+  --node URL        the node: a JSON wRPC endpoint, a Borsh one (ws://HOST:17110, wss://.../borsh) or `resolver` (default
+                    $KOB_NODE_WRPC, else the public nodes the Kaspa resolvers name: a pair on two hosts that must agree on
+                    the outputs a plan spends; a URL with credentials belongs in the variable)
+  --indexer URL     indexer API, http:// or https:// (default $KOB_INDEXER_URL, else the default indexer of a
+                    deployment build, when its record names one)
   --key-file PATH   the signing key: a file holding the 64-hex secret
   --key-env NAME    ... or the environment variable holding it (default KOB_KEY)
                     a key on the command line (--key) is refused: arguments are visible to other users (ps)
@@ -124,14 +127,10 @@ pub struct Common {
     key_env: String,
 }
 
-/// The network rule of the trading commands: [`crate::common::resolve_network`], and mainnet only when named.
+/// The network rule of the trading commands: [`crate::common::resolve_network`] (`--network`, else the deployment build's own
+/// network, else an error). The plan and the confirmation name the network, and the node must run it (`flow::check_network_first`).
 pub fn network_of(given: Option<&str>) -> Result<String, String> {
-    let g = given.unwrap_or("").trim();
-    let n = crate::common::resolve_network(g)?;
-    if n.starts_with("mainnet") && g != "mainnet" {
-        return Err("this would trade on mainnet: name it explicitly with --network mainnet".into());
-    }
-    Ok(n)
+    crate::common::resolve_network(given.unwrap_or("").trim())
 }
 
 impl Common {
@@ -148,10 +147,12 @@ impl Common {
                 Some(r)
             }
         };
+        let node = crate::wrpc::node_for(p.get("--node").map(str::to_owned), &network);
+        let indexer = super::http::indexer_arg(p.get("--indexer").map(str::to_owned), &network);
         Ok(Common {
             network,
-            node: crate::wrpc::node_arg(p.get("--node").map(str::to_owned)).unwrap_or_default(),
-            indexer: super::http::indexer_arg(p.get("--indexer").map(str::to_owned)),
+            node,
+            indexer,
             fee_rate,
             dry_run: p.has("--dry-run"),
             yes: p.has("--yes"),
@@ -173,7 +174,13 @@ impl Common {
 
     /// The indexer, required.
     pub fn need_indexer(&self) -> Result<&str, String> {
-        self.indexer.as_deref().ok_or_else(|| format!("--indexer (or ${}) is required", super::http::INDEXER_ENV))
+        self.indexer.as_deref().ok_or_else(|| {
+            format!(
+                "--indexer (or ${}) is required: no default indexer is published for {} yet (a deployment record names one in `indexer_url`)",
+                super::http::INDEXER_ENV,
+                self.network
+            )
+        })
     }
 
     /// The signing key: `--key-file`, else the environment variable. Refused when its hex appears among `argv`.
@@ -214,7 +221,7 @@ pub fn confirm_with(yes: bool, network: &str, what: &str) -> Result<(), String> 
     if !stdin.is_terminal() {
         return Err(format!("not signed: pass --yes to sign and submit {what} (or --dry-run to only see the plan)"));
     }
-    eprint!("Sign and submit {what} on {network}? Type yes to continue: ");
+    eprint!("Sign and submit {what} on network: {network}? Type yes to continue: ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     stdin.lock().read_line(&mut line).map_err(|e| e.to_string())?;
@@ -260,15 +267,22 @@ mod tests {
     }
 
     #[test]
-    fn mainnet_must_be_named() {
+    fn the_network_is_named_or_the_deployment_builds() {
         assert_eq!(network_of(Some("testnet-10")).unwrap(), "testnet-10");
         assert_eq!(network_of(Some("mainnet")).unwrap(), "mainnet");
-        // only a deployment build implies a network; a mainnet build still needs the name
-        if kob_protocol::artifacts::deployment_network() == Some("mainnet") {
-            assert!(network_of(None).unwrap_err().contains("--network mainnet"));
-        } else if kob_protocol::artifacts::deployment_network().is_none() {
-            assert!(network_of(None).is_err());
+        // only a deployment build implies a network (any command, a signing one included); it refuses another one
+        match kob_protocol::artifacts::deployment_network() {
+            Some(n) => {
+                assert_eq!(network_of(None).unwrap(), n);
+                assert_eq!(network_of(Some("")).unwrap(), n);
+            }
+            None => assert_eq!(network_of(None).unwrap(), "mainnet"),
         }
+        use crate::common::resolve_network_for as r;
+        assert_eq!(r("", Some("mainnet")).unwrap(), "mainnet");
+        assert_eq!(r("mainnet", Some("mainnet")).unwrap(), "mainnet");
+        assert!(r("testnet-10", Some("mainnet")).unwrap_err().contains("mainnet deployment build"));
+        assert_eq!(r("", None).unwrap(), "mainnet");
     }
 
     #[test]

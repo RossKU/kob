@@ -321,7 +321,7 @@ cargo build --release --locked -p kob-executor --features deploy-tn10
 scripts/build-wasm.sh --tn10 [--web]     # web/bot bindings: crates/kob-wasm/pkg-node-tn10, pkg-tn10
 ```
 
-The templates are the same in both builds, so clients (web app, bots, `kob-cli`) place orders the indexer lists with
+The templates are the same in both builds, so clients (web app, bots, `kob`) place orders the indexer lists with
 either variant; the variant is a guard against running a testnet binary on another network.
 
 **Mainnet release build** (`docs/ops/release.md`): `cargo build --release --locked -p kob-executor --features
@@ -1208,10 +1208,11 @@ kob-executor index \
   --listen 127.0.0.1:8090
 ```
 
-The network is never implied by the reference build: `--network` (or `network` in the file, or `$KOB_NETWORK`) is required
-there, for every command that talks to a node (`index`, `run`, `match`, `keep`, the facilitator's `network`, and `kob order`,
-`kob recover`, `kob token create`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge` and the views `kob book`, `orders`, `balances` and `kob watch`, which
-also refuse mainnet unless `--network mainnet` is given explicitly). A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
+The network is never implied by the reference build of the executor: `--network` (or `network` in the file, or `$KOB_NETWORK`) is required
+there, for every executor command that talks to a node (`index`, `run`, `match`, `keep`, the facilitator's `network`). The command line `kob`
+(`kob order`, `kob recover`, `kob token create`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, the
+views `kob book`, `orders`, `balances` and `kob watch`) defaults to mainnet like kaspad and takes `--testnet` / `--netsuffix=10` / `--network testnet-10`; its
+plans and confirmations name the network and the node must run it. A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
 and refuses another. `--rpc-url` (`rpc_url`; the facilitator's `node`) defaults to the local node's JSON wRPC port of that
 network, `ws://127.0.0.1:18110` on mainnet and `ws://127.0.0.1:18210` on testnet-10 (rusty-kaspa's defaults), never a
 testnet endpoint on mainnet.

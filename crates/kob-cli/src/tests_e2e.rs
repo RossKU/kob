@@ -869,25 +869,32 @@ fn input_formats_and_bad_input() {
     assert_eq!(merged.iter().find(|e| e.covenant_id == A1).unwrap().spans.len(), 1);
     // arguments
     assert!(recover::parse_args(&v("--node ws://x:1")).is_err(), "needs --from");
-    assert!(recover::parse_args(&v("--from a.json")).is_err(), "needs --node");
+    // no --node and no $KOB_NODE_WRPC: the public nodes of the network (named by the Kaspa resolvers when a node is first asked)
+    if std::env::var(crate::wrpc::NODE_ENV).is_err() {
+        let a = recover::parse_args(&v("--from a.json --network testnet-10")).unwrap();
+        assert_eq!(a.node, "resolver:testnet-10");
+        let a = recover::parse_args(&v("--from a.json --network testnet-10 --node resolver")).unwrap();
+        assert_eq!(a.node, "resolver:testnet-10");
+    }
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel")).is_err(), "--cancel needs --key");
     assert!(
         recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --dry-run")).is_err(),
         "--dry-run belongs to --cancel"
     );
-    // the reference build implies no network (never testnet-10 by default)
-    if kob_protocol::artifacts::deployment_network().is_none() {
-        let e = recover::parse_args(&v("--from a.json --node ws://x:1")).unwrap_err();
-        assert!(e.contains("--network is required"), "{e}");
-        let e = order::parse_args(order::Op::Cancel, &v("--view a.json --key 00 --node ws://x:1")).unwrap_err();
-        assert!(e.contains("--network is required"), "{e}");
-    }
+    // no --network: the build's own network, else mainnet (never testnet-10 by default)
+    let want = kob_protocol::artifacts::deployment_network().unwrap_or("mainnet");
+    assert_eq!(recover::parse_args(&v("--from a.json --node ws://x:1")).unwrap().network, want);
+    assert_eq!(order::parse_args(order::Op::Cancel, &v("--view a.json --key 00 --node ws://x:1")).unwrap().network, want);
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --network moon")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --fee-rate 5 --cancel --key 00")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --bogus")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --lots 3")).is_err(), "no lot flags remain");
     assert!(order::parse_args(order::Op::Sweep, &v("--view a.json --node ws://x:1")).is_err(), "needs --key");
-    assert!(order::parse_args(order::Op::Sweep, &v("--view a.json --key 00")).is_err(), "needs --node");
+    // no --node: the public nodes (unless $KOB_NODE_WRPC names one)
+    if std::env::var(crate::wrpc::NODE_ENV).is_err() {
+        let a = order::parse_args(order::Op::Sweep, &v("--view a.json --key 00 --network testnet-10")).unwrap();
+        assert_eq!(a.node, "resolver:testnet-10");
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 

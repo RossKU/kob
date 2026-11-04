@@ -992,6 +992,46 @@ pub fn deployment_network() -> Option<&'static str> {
     None
 }
 
+/// The deployment records of both networks (`contracts/deploy/<network>/deployment.json`), embedded in every build.
+const MAINNET_RECORD: &str = include_str!("../../../contracts/deploy/mainnet/deployment.json");
+const TESTNET_RECORD: &str = include_str!("../../../contracts/deploy/testnet-10/deployment.json");
+
+/// The default indexer of `network`: the `indexer_url` of its `deployment.json` (the official index-only server whose API a
+/// client reads books, orders and the live feed from), `None` for another network and while the record leaves it `null` (not
+/// decided yet). Every build carries both records, so a reference build reads the one of the network it is run for. A client uses
+/// it only when neither `--indexer` nor `$KOB_INDEXER_URL` names one. Both records are checked by [`check_indexer_url`] in the
+/// tests.
+pub fn deployment_indexer_url(network: &str) -> Option<String> {
+    let record = match network {
+        "mainnet" => MAINNET_RECORD,
+        "testnet-10" => TESTNET_RECORD,
+        _ => return None,
+    };
+    serde_json::from_str::<serde_json::Value>(record).ok()?.get("indexer_url")?.as_str().map(str::to_owned)
+}
+
+/// The rule for the `indexer_url` of a deployment record on `network`: an `https://` URL on mainnet (`http://` or `https://`
+/// elsewhere), with a host, without credentials, query or fragment (a base path is allowed). `scripts/lib/deploy.mjs` applies the
+/// same rule when it writes the record.
+pub fn check_indexer_url(network: &str, url: &str) -> Result<(), String> {
+    let rest = match url.strip_prefix("https://") {
+        Some(r) => r,
+        None if network != "mainnet" => url.strip_prefix("http://").ok_or("indexer_url must be an http:// or https:// URL")?,
+        None => return Err("indexer_url must be an https:// URL on mainnet".into()),
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    if authority.is_empty() || authority.starts_with(':') {
+        return Err("indexer_url has no host".into());
+    }
+    if authority.contains('@') {
+        return Err("indexer_url must not carry credentials".into());
+    }
+    if url.contains(['?', '#']) || url.chars().any(char::is_whitespace) {
+        return Err("indexer_url must not carry a query, a fragment or whitespace".into());
+    }
+    Ok(())
+}
+
 /// The registry the deployment build pins (`registry` of its `deployment.json`): its lowercase hex sha256 over the
 /// LF-normalised bytes. `Some` only in a build whose record pins one (`deploy-mainnet`); the embedded default registry
 /// ([`crate::registry::DEFAULT_REGISTRY_JSON`]) hashes to it (checked by this module's tests).
@@ -1135,6 +1175,42 @@ mod tests {
     /// The mainnet record (checked in every build, whatever the features): it lists exactly the order templates deployed on
     /// mainnet (every embedded one but the testnet-only `*KronD0` builds) and pins the registry this crate embeds, so a template
     /// or registry change without `scripts/build-deploy.sh mainnet` fails here.
+    #[test]
+    fn the_indexer_url_rule_and_the_records() {
+        assert!(check_indexer_url("mainnet", "https://index.example.org").is_ok());
+        assert!(check_indexer_url("mainnet", "https://index.example.org:8443/api").is_ok());
+        assert!(check_indexer_url("testnet-10", "http://127.0.0.1:8091").is_ok());
+        for (net, bad) in [
+            ("mainnet", "http://index.example.org"),
+            ("mainnet", "index.example.org"),
+            ("mainnet", "https://"),
+            ("mainnet", "https://:443"),
+            ("mainnet", "https://bob:pw@index.example.org"),
+            ("mainnet", "https://index.example.org/?key=1"),
+            ("mainnet", "https://index.example.org/#x"),
+            ("mainnet", "https://index .example.org"),
+            ("testnet-10", "ws://x"),
+        ] {
+            assert!(check_indexer_url(net, bad).is_err(), "{net} {bad}");
+        }
+        // both records carry the field (null until the address is decided) and a value obeys the rule
+        for (net, text) in [("mainnet", MAINNET_RECORD), ("testnet-10", TESTNET_RECORD)] {
+            let m: serde_json::Value = serde_json::from_str(text).unwrap();
+            let v = m.get("indexer_url").unwrap_or_else(|| panic!("{net}: no indexer_url in the record"));
+            if let Some(u) = v.as_str() {
+                check_indexer_url(net, u).unwrap_or_else(|e| panic!("{net}: {e}"));
+            } else {
+                assert!(v.is_null(), "{net}: indexer_url is a string or null");
+            }
+        }
+        // the reader returns what the record says, and nothing for a network without one
+        for (net, text) in [("mainnet", MAINNET_RECORD), ("testnet-10", TESTNET_RECORD)] {
+            let want = serde_json::from_str::<serde_json::Value>(text).unwrap()["indexer_url"].as_str().map(str::to_owned);
+            assert_eq!(deployment_indexer_url(net), want);
+        }
+        assert_eq!(deployment_indexer_url("devnet"), None);
+    }
+
     #[test]
     fn mainnet_deployment_record_matches_the_embedded_templates_and_registry() {
         self_check().unwrap();

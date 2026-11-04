@@ -38,10 +38,10 @@ INPUT
                 script with its covenant id at that outpoint, else the view is refused as stale. The custody and every
                 stray are looked up on the node the same way (a stray the node does not hold is left out).
   --key         the maker's signing secret (64 hex; env:NAME and file:PATH keep it out of shell history)
-  --node        node wRPC JSON endpoint (18110 mainnet, 18210 testnet-10; --utxoindex); default $KOB_NODE_WRPC
-                (a URL with a password or an API key belongs there: arguments are visible in `ps`)
-  --network     network of the addresses (mainnet, testnet-10); required unless the build is a deployment build
-                (deploy-mainnet, deploy-tn10), which implies its own
+  --node        the node: a JSON wRPC endpoint (18110 mainnet, 18210 testnet-10), a Borsh one (ws://HOST:17110, wss://.../borsh) or `resolver`; default $KOB_NODE_WRPC, else the public nodes the Kaspa resolvers name (a pair on two hosts that must agree on what a transaction is planned from)
+                (a URL with a password or an API key belongs in $KOB_NODE_WRPC: arguments are visible in `ps`)
+  --network     network of the addresses: mainnet (default, or the network of a deployment build) or testnet-10
+                (--testnet, --netsuffix=10)
 
 SWEEP (every live order of the key's maker that has strays)
   The maker's `cancel` entry continues the order IN PLACE: same covenant id, same script, custody untouched; strays of
@@ -146,11 +146,8 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
     if a.key.is_empty() {
         return Err("--key is required".into());
     }
-    a.node = crate::wrpc::node_arg(Some(a.node)).unwrap_or_default();
-    if a.node.is_empty() {
-        return Err(format!("--node (or ${}) is required (the view is verified on the node)", crate::wrpc::NODE_ENV));
-    }
     a.network = crate::common::resolve_network(&a.network)?;
+    a.node = crate::wrpc::node_for(Some(std::mem::take(&mut a.node)), &a.network);
     if a.fee_rate < MIN_FEE_RATE {
         return Err(format!("--fee-rate must be at least {MIN_FEE_RATE}"));
     }

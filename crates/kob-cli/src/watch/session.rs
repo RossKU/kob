@@ -4,7 +4,6 @@
 //! is polled with a short read timeout so a pending refetch, a ping and Ctrl-C are served between frames.
 
 use std::collections::BTreeMap;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -18,6 +17,7 @@ use super::frames;
 use super::names::Names;
 use super::out::Out;
 use super::url::WsTarget;
+use crate::tls::Stream;
 use crate::trade::data;
 use crate::trade::http;
 use crate::trade::opts::{Common, Parsed};
@@ -60,6 +60,18 @@ impl Kind {
             Kind::Health => v.push("health".into()),
         }
         v
+    }
+
+    /// What the watch is called in its first line.
+    pub fn name(&self) -> String {
+        match self {
+            Kind::Fills(None) => "fills".into(),
+            Kind::Fills(Some(t)) => format!("fills of {}", frames::short(&to_hex(t))),
+            Kind::Book(a, None) => format!("the book of {}", frames::short(&to_hex(a))),
+            Kind::Book(a, Some(b)) => format!("the book of {} / {}", frames::short(&to_hex(a)), frames::short(&to_hex(b))),
+            Kind::Orders(ids) => format!("{} order(s)", ids.len()),
+            Kind::Health => "health".into(),
+        }
     }
 
     fn tracked(&self) -> Vec<Key> {
@@ -185,7 +197,7 @@ fn is_timeout(e: &std::io::Error) -> bool {
 }
 
 /// Read one frame; `None` when nothing arrived within the read timeout (or a control frame was handled).
-fn poll(ws: &mut WebSocket<TcpStream>) -> Result<Option<Value>, String> {
+fn poll(ws: &mut WebSocket<Stream>) -> Result<Option<Value>, String> {
     match ws.read() {
         Ok(Message::Text(t)) => {
             Ok(Some(serde_json::from_str(t.as_str()).unwrap_or_else(|_| json!({"type": "unparsed", "data": {"text": t.as_str()}}))))
@@ -215,6 +227,12 @@ impl Watch {
     pub fn run(&mut self, stop: &AtomicBool, out: &mut Out) -> i32 {
         let mut backoff = self.timing.backoff_start;
         let mut was_subscribed = false;
+        // the first line names the network and the indexer it watches
+        let channels = self.kind.channels();
+        out.event(
+            &format!("watching {} on network {} (indexer {})", self.kind.name(), self.common.network, self.target.shown()),
+            &json!({"type": "start", "data": {"network": self.common.network, "indexer": self.target.shown(), "channels": channels}}),
+        );
         loop {
             if stop.load(Ordering::Relaxed) || out.broken {
                 return 0;
@@ -250,30 +268,11 @@ impl Watch {
         }
     }
 
-    fn connect(&self) -> Result<WebSocket<TcpStream>, ConnectError> {
+    fn connect(&self) -> Result<WebSocket<Stream>, ConnectError> {
         let t = &self.target;
         let fail = |msg: String| ConnectError { msg, fatal: false, retry_after: None };
-        if t.secure {
-            return Err(ConnectError {
-                msg: format!(
-                    "{}: wss:// needs TLS, which kob-cli does not speak (like the indexer's https://): reach the indexer over http:// or put a TLS-terminating proxy on this machine in front of it",
-                    t.shown()
-                ),
-                fatal: true,
-                retry_after: None,
-            });
-        }
-        let addr = (t.host.as_str(), t.port)
-            .to_socket_addrs()
-            .map_err(|e| fail(format!("{}: {e}", t.shown())))?
-            .next()
-            .ok_or_else(|| fail(format!("{}: no address", t.shown())))?;
-        let stream = TcpStream::connect_timeout(&addr, self.timing.connect).map_err(|e| fail(format!("{}: {e}", t.shown())))?;
-        stream
-            .set_read_timeout(Some(self.timing.connect))
-            .and_then(|_| stream.set_write_timeout(Some(self.timing.connect)))
-            .and_then(|_| stream.set_nodelay(true))
-            .map_err(|e| fail(e.to_string()))?;
+        let stream =
+            crate::tls::connect(t.secure, &t.host, t.port, self.timing.connect).map_err(|e| fail(format!("{}: {e}", t.shown())))?;
         let mut req = t.url().into_client_request().map_err(|e| fail(e.to_string()))?;
         if let Some(a) = &t.auth {
             req.headers_mut().insert("Authorization", HeaderValue::from_str(&format!("Basic {a}")).map_err(|e| fail(e.to_string()))?);
@@ -286,7 +285,7 @@ impl Watch {
         };
         match tungstenite::client::client_with_config(req, stream, Some(config)) {
             Ok((ws, _)) => {
-                ws.get_ref().set_read_timeout(Some(self.timing.poll)).map_err(|e| fail(e.to_string()))?;
+                ws.get_ref().tcp().set_read_timeout(Some(self.timing.poll)).map_err(|e| fail(e.to_string()))?;
                 Ok(ws)
             }
             Err(tungstenite::HandshakeError::Failure(tungstenite::Error::Http(resp))) => {
@@ -317,7 +316,7 @@ impl Watch {
     }
 
     /// One connection: subscribe, then serve frames, pings and refetches until it ends.
-    fn session(&mut self, mut ws: WebSocket<TcpStream>, stop: &AtomicBool, out: &mut Out, reconnect: bool) -> End {
+    fn session(&mut self, mut ws: WebSocket<Stream>, stop: &AtomicBool, out: &mut Out, reconnect: bool) -> End {
         let timing = self.timing.clone();
         let mut pending = Pending::default();
         // 1. subscribe (before any refetch, so a change in between is not lost)

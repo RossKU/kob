@@ -14,9 +14,9 @@
 //! ```
 //!
 //! The node RPC is used rather than the public REST API because the REST API drops the per-input
-//! `computeBudget`, which a v1 transaction needs. Only plain `ws://` is supported (no TLS
-//! features are compiled in); put a TLS-terminating proxy in front of a remote node if needed.
-//! `getUtxosByAddresses` needs a node started with `--utxoindex`.
+//! `computeBudget`, which a v1 transaction needs. A node is a JSON wRPC endpoint (`ws://host:18110`), a Borsh one (`ws://host:17110`,
+//! `wss://host/.../borsh`: [`crate::nodelink`] carries the same calls over Borsh), or the default: the Kaspa resolvers name two
+//! public nodes (`--node resolver`, [`crate::nodelink::pair`]). `getUtxosByAddresses` needs a node started with `--utxoindex`.
 
 use std::net::TcpStream;
 use std::time::Duration;
@@ -37,22 +37,39 @@ pub fn node_or_env(flag: Option<String>, env: Option<String>) -> Option<String> 
     flag.filter(|v| !v.trim().is_empty()).or_else(|| env.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
 }
 
-/// [`node_or_env`] with the process environment.
-pub fn node_arg(flag: Option<String>) -> Option<String> {
-    node_or_env(flag, std::env::var(NODE_ENV).ok())
+/// The node of a command on `network`: `--node`, else `$KOB_NODE_WRPC`, else the public nodes the Kaspa resolvers name
+/// (`resolver`, which `--node resolver` names too).
+pub fn node_for(flag: Option<String>, network: &str) -> String {
+    node_for_env(flag, std::env::var(NODE_ENV).ok(), network)
 }
 
-/// A node URL as messages and reports show it: scheme, host and port only ([`kob_protocol::redact::redact_url`]).
+/// [`node_for`] with the environment variable given.
+pub fn node_for_env(flag: Option<String>, env: Option<String>, network: &str) -> String {
+    match node_or_env(flag, env) {
+        Some(n) if n == crate::nodelink::resolver::RESOLVER => crate::nodelink::resolver::pseudo(network),
+        Some(n) => n,
+        None => crate::nodelink::resolver::pseudo(network),
+    }
+}
+
+/// A node URL as messages and reports show it: scheme, host and port only ([`kob_protocol::redact::redact_url`]); the public
+/// nodes as `the public nodes (Kaspa resolvers)`.
 pub fn shown(url: &str) -> String {
+    if crate::nodelink::resolver::network_of(url).is_some() {
+        return "resolver (public nodes)".into();
+    }
     kob_protocol::redact::redact_url(url)
 }
 
 /// Errors of the wRPC client.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum WrpcError {
     /// Connection or websocket failure.
     #[error("websocket: {0}")]
     Socket(String),
+    /// No public node could be named (the Kaspa resolvers answered none).
+    #[error("{0}")]
+    Resolve(String),
     /// The node answered with an error object.
     #[error("node rejected the request: {0}")]
     Node(String),
@@ -107,13 +124,23 @@ pub fn transaction_id(params: &Value) -> Result<String, WrpcError> {
 
 /// One open wRPC connection; requests are sent one at a time.
 pub struct Conn {
-    ws: WebSocket<MaybeTlsStream<TcpStream>>,
+    link: Link,
     next_id: u64,
+}
+
+enum Link {
+    /// JSON wRPC over a plain socket.
+    Json(WebSocket<MaybeTlsStream<TcpStream>>),
+    /// Borsh wRPC (an own node's Borsh port, `wss://.../borsh`).
+    Borsh(crate::nodelink::client::BorshConn),
 }
 
 impl Conn {
     /// Connect to `url` (`ws://host:port`, JSON wRPC port: 18110 mainnet, 18210 testnet-10).
     pub fn connect(url: &str, timeout: Duration) -> Result<Conn, WrpcError> {
+        if crate::nodelink::bridge::is_borsh_url(url) {
+            return Ok(Conn { link: Link::Borsh(crate::nodelink::client::BorshConn::connect(url, timeout)?), next_id: 1 });
+        }
         // tungstenite echoes the URL it could not reach: the message names the node by its redacted URL
         let (mut ws, _) = tungstenite::connect(url).map_err(|e| {
             WrpcError::Socket(match e {
@@ -126,16 +153,20 @@ impl Conn {
         if let MaybeTlsStream::Plain(s) = ws.get_mut() {
             set_timeouts(s, timeout)?;
         }
-        Ok(Conn { ws, next_id: 1 })
+        Ok(Conn { link: Link::Json(ws), next_id: 1 })
     }
 
     /// Send `method` with `params` and return the `params` of the response.
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, WrpcError> {
+        let ws = match &mut self.link {
+            Link::Json(ws) => ws,
+            Link::Borsh(b) => return b.call(method, params),
+        };
         let id = self.next_id;
         self.next_id += 1;
-        self.ws.send(Message::text(request(id, method, params).to_string())).map_err(|e| WrpcError::Socket(e.to_string()))?;
+        ws.send(Message::text(request(id, method, params).to_string())).map_err(|e| WrpcError::Socket(e.to_string()))?;
         loop {
-            match self.ws.read().map_err(|e| WrpcError::Socket(e.to_string()))? {
+            match ws.read().map_err(|e| WrpcError::Socket(e.to_string()))? {
                 Message::Text(t) => match parse_reply(t.as_str(), id)? {
                     Reply::Other => continue,
                     Reply::Ok(p) => return Ok(p),
@@ -157,13 +188,21 @@ impl Conn {
     }
 
     /// Close the connection (best effort).
-    pub fn close(mut self) {
-        let _ = self.ws.close(None);
+    pub fn close(self) {
+        match self.link {
+            Link::Json(mut ws) => {
+                let _ = ws.close(None);
+            }
+            Link::Borsh(b) => b.close(),
+        }
     }
 }
 
 /// One-shot call: connect, send one request, return the response `params`.
 pub fn call(url: &str, method: &str, params: Value, timeout: Duration) -> Result<Value, WrpcError> {
+    if let Some(net) = crate::nodelink::resolver::network_of(url) {
+        return crate::nodelink::pair::with_real(net, |io| crate::nodelink::pair::call_any(io, method, params, timeout));
+    }
     let mut c = Conn::connect(url, timeout)?;
     let r = c.call(method, params);
     c.close();
@@ -190,6 +229,10 @@ pub fn normalize_network(raw: &str) -> String {
 /// The network the node at `url` runs: `getBlockDagInfo`'s `network` (rusty-kaspa `NetworkId`, `mainnet` / `testnet-10`),
 /// normalized ([`normalize_network`]).
 pub fn node_network(url: &str, timeout: Duration) -> Result<String, WrpcError> {
+    // the public nodes: both of the pair must report the same network
+    if let Some(net) = crate::nodelink::resolver::network_of(url) {
+        return crate::nodelink::pair::with_real(net, |io| crate::nodelink::pair::network(io, timeout));
+    }
     let p = call(url, "getBlockDagInfo", json!({}), timeout)?;
     p.get("network")
         .and_then(Value::as_str)
@@ -214,6 +257,9 @@ pub fn check_node_network(url: &str, network: &str, timeout: Duration) -> Result
 
 /// Submit a transaction (RPC JSON shape) to the node at `url` and return the accepted transaction id.
 pub fn submit_transaction(url: &str, transaction: &Value, allow_orphan: bool, timeout: Duration) -> Result<String, WrpcError> {
+    if let Some(net) = crate::nodelink::resolver::network_of(url) {
+        return crate::nodelink::pair::with_real(net, |io| crate::nodelink::pair::submit(io, transaction, allow_orphan, timeout));
+    }
     let p = call(url, "submitTransaction", json!({ "transaction": transaction, "allowOrphan": allow_orphan }), timeout)?;
     transaction_id(&p)
 }
@@ -222,6 +268,10 @@ pub fn submit_transaction(url: &str, transaction: &Value, allow_orphan: bool, ti
 pub fn utxos_by_addresses(url: &str, addresses: &[String], timeout: Duration) -> Result<Vec<NodeUtxo>, WrpcError> {
     if addresses.is_empty() {
         return Ok(vec![]);
+    }
+    // the public nodes: both of the pair must list the same outputs
+    if let Some(net) = crate::nodelink::resolver::network_of(url) {
+        return crate::nodelink::pair::with_real(net, |io| crate::nodelink::pair::utxos(io, addresses, timeout));
     }
     let mut c = Conn::connect(url, timeout)?;
     let r = c.utxos_by_addresses(addresses);

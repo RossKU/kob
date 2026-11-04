@@ -8,11 +8,13 @@
 
 mod common;
 mod inputs;
+mod nodelink;
 mod order;
 mod programs;
 mod recent;
 mod recover;
 mod registry;
+mod tls;
 mod token;
 mod trade;
 mod watch;
@@ -73,7 +75,14 @@ USAGE
 ";
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--testnet` / `--netsuffix=10` (like kaspad) name testnet-10 for every command; mainnet is the default
+    let args = match common::network_switches(&std::env::args().skip(1).collect::<Vec<_>>()) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(2);
+        }
+    };
     let code = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["token", "create", rest @ ..] => token::run_issue(&args[2..2 + rest.len()]),
         // the former name of `kob token create`: still works, says so on stderr (never in --json output on stdout)

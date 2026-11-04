@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 
 use secp256k1::{Keypair, Secp256k1, SecretKey};
 
-const BIN: &str = env!("CARGO_BIN_EXE_kob-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_kob");
 const SK: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 const TX: &str = "0707070707070707070707070707070707070707070707070707070707070707";
 /// Nothing listens on port 1: the submit fails after the transaction is built and signed.
@@ -39,7 +39,9 @@ fn token_run(sub: &str, env: Option<&str>, extra: &[&str]) -> (std::path::PathBu
         .args(["--fund-utxo", &fund, "--key", SK])
         .args(extra)
         .stdin(Stdio::null())
-        .env_remove("KOB_NODE_WRPC");
+        .env_remove("KOB_NODE_WRPC")
+        // no test reaches the public Kaspa resolvers: the only one nothing answers
+        .env("KOB_RESOLVERS", "http://127.0.0.1:1");
     if let Some(v) = env {
         cmd.env("KOB_NODE_WRPC", v);
     }
@@ -49,9 +51,9 @@ fn token_run(sub: &str, env: Option<&str>, extra: &[&str]) -> (std::path::PathBu
 
 #[test]
 fn the_node_comes_from_the_environment_and_is_shown_redacted() {
-    // neither --node nor the variable: refused before anything is built
-    let (ok, out) = issue(None, &[]);
-    assert!(!ok && out.contains("KOB_NODE_WRPC"), "{out}");
+    // neither --node nor the variable: the public nodes the Kaspa resolvers name (here a resolver nothing answers)
+    let (ok, out) = issue(None, &["--yes"]);
+    assert!(!ok && out.contains("no Kaspa resolver named a testnet-10 node"), "{out}");
     // the variable alone: the transaction is built, signed and submitted to that node (unreachable here)
     let (ok, out) = issue(Some(SECRET_URL), &["--yes"]);
     assert!(!ok, "{out}");

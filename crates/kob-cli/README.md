@@ -1,16 +1,39 @@
 # kob (kob-cli)
 
-The KOB command line. `kob --help` lists every command, `kob <command> --help` its options (`kob token create --help`,
-`kob token resume --help`, `kob token verify-declaration --help`; `kob token --help` and `kob registry --help` are not commands, see
-"Token commands").
+The KOB command line: trade, read the order books, create tokens, follow the live feed. `kob --help` lists every command, `kob <command>
+--help` its options (`kob token create --help`, `kob token resume --help`, `kob token verify-declaration --help`; `kob token --help` and
+`kob registry --help` are not commands, see "Token commands").
 
-**Names.** The binary is built from the package `kob-cli`, which declares no `[[bin]]` name, so the file is called
-`kob-cli` (`kob-cli.exe` on Windows): the release archive `kob-executor-<version>-<network>-<target>` holds `kob-executor` and
-`kob-cli` (`scripts/package-release.mjs`), and `docs/ops/executor-quickstart.md` runs it as `kob-cli`. The text inside the
-program calls it `kob`: `kob --help`, every usage text and `--version` (which prints `kob <version>`) say `kob`, and so does this
-file. Run `kob-cli place ...` where this file says `kob place ...`, or rename or alias the file to `kob`. The argument parser is
-hand-written (there is no clap), so help is per command; `kob registry validate` and `kob registry programs` take no `--help` (a
-wrong argument prints their usage line and exits 2).
+## Install and first command
+
+The program is called `kob`. Download `kob-<version>-<network>-<target>` (`.zip` on Windows, `.tar.gz` elsewhere; the release page lists
+a `SHA256SUMS` of every archive: check it) and unpack it, or build it from the source with one command:
+
+```sh
+cargo build --release --bin kob      # target/release/kob (kob.exe on Windows)
+kob book TUSD                        # the order book of a token: nothing else is needed to read
+kob book TUSD --testnet              # the same on testnet-10 (--netsuffix=10 and --network testnet-10 say the same)
+```
+
+* **Network.** Mainnet unless another is named, like kaspad: `--testnet` (or `--netsuffix=10`, or `--network testnet-10`) chooses
+  testnet-10 at run time. A deployment build (`--features deploy-mainnet` or `deploy-tn10`, the release archives) is bound to its
+  network and refuses the other one. Every plan and every confirmation names the network, and the node must run it
+  (`getBlockDagInfo`) before anything is planned from it or signed.
+* **Node.** `--node URL`, else `$KOB_NODE_WRPC`, else the public nodes: the Kaspa resolvers name two nodes on two hosts (as
+  `kob-executor --node resolver`; they serve the Borsh wRPC over TLS, which the CLI speaks). Whatever a transaction is planned from is
+  read from both and must agree (the unspent outputs of the key, the network); a node that cannot be reached is replaced by another.
+  Your own node works too: JSON `ws://host:18110` (mainnet) or `:18210` (testnet-10), Borsh `ws://host:17110` / `:17210`.
+  `$KOB_RESOLVERS` (comma-separated resolver URLs) replaces the resolver list for a private one.
+* **Indexer.** `--indexer URL`, else `$KOB_INDEXER_URL`, else the default indexer of the network's deployment record
+  (`contracts/deploy/<network>/deployment.json`, field `indexer_url`: the official index-only server; `null` until its address is
+  decided, so until then name one with `--indexer`). It is read-only data; `http://` and `https://` are spoken.
+* **Signing.** Only for `place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `token create`, `recover --cancel` and
+  `order sweep|cancel`: the key comes from `--key-file PATH` (or `$KOB_KEY`), the plan is shown, and nothing is signed without `--yes`
+  or a terminal's confirmation. Everything else (`book`, `orders`, `balances`, `watch`, `registry`) needs no key.
+
+**Names.** The package is `kob-cli`; its binary is `kob` (`[[bin]] name = "kob"`). `kob --help` lists every command, `kob <command>
+--help` its options. The argument parser is hand-written (there is no clap), so help is per command; `kob registry validate` and `kob
+registry programs` take no `--help` (a wrong argument prints their usage line and exits 2).
 
 | Command | What it does |
 |---|---|
@@ -34,8 +57,8 @@ wrong argument prints their usage line and exits 2).
 
 ## The trading commands
 
-`place`, `replace`, `cancel`, `refund`, `take`, `send` and `merge` read the node (wRPC JSON, `--node` or `$KOB_NODE_WRPC`) and the
-indexer (`--indexer` or `$KOB_INDEXER_URL`, `http://`; `docs/ops/executor.md` Part B), plan the transaction, print it and
+`place`, `replace`, `cancel`, `refund`, `take`, `send` and `merge` read the node (wRPC; `--node`, `$KOB_NODE_WRPC`, else the public nodes) and the
+indexer (`--indexer`, `$KOB_INDEXER_URL`, else the network's default; `docs/ops/executor.md` Part B), plan the transaction, print it and
 sign only after confirmation. Every command that submits a transaction asks the same way: `--yes` (or `-y`) goes ahead, a
 terminal is asked (`yes` to continue), anything else is refused and nothing is signed; `--dry-run` stops before signing and
 cannot be combined with `--yes`. That includes `kob token create`, `kob recover --cancel` and `kob order sweep|cancel`
@@ -118,9 +141,10 @@ a P2PK address or a 64-hex key; KAS to any address of the network or a 64-hex ke
   output with its owner, the net effect on the wallet in KAS and each token, the fee, the signatures asked for) before
   anything is signed. `--dry-run` stops there. Without `--yes` a terminal is asked (`yes` to continue); without a
   terminal the command refuses. A transaction that needs another key's signature is never signed.
-* Mainnet is refused unless named: `--network mainnet`, even by a mainnet deployment build. The node must run the
-  network named (`getBlockDagInfo`): a signature commits to no network, so a node of another one is refused before
-  anything is planned from it, and again before anything is signed.
+* The network is mainnet unless `--testnet` / `--netsuffix=10` / `--network testnet-10` names the other (a deployment build is bound to
+  its own). The plan starts with `network: <name>` and the confirmation asks "Sign and submit ... on network: <name>?". The node must
+  run the network named (`getBlockDagInfo`; with the public nodes, both of the pair): a signature commits to no network, so a node
+  of another one is refused before anything is planned from it, and again before anything is signed.
 * Tokens are read from the registry (`--registry FILE`, validated for the network, else the embedded one of the same
   network) and the indexer. A registry token on a program pending review (one this build does not support) is not traded; a token only
   the indexer knows is flagged `TOKEN_UNLISTED` (its ticker and decimals are the indexer's: check its covenant id).
@@ -225,9 +249,9 @@ taking pair orders and stop legs (the matchers fill them).
 ## Watching the live feed
 
 `kob watch` listens on the executor's WebSocket (`docs/api.md` section 4) and prints one line per event. It reads no key and signs nothing.
-The address is derived from `--indexer` / `$KOB_INDEXER_URL`: `http://host:port` becomes `ws://host:port/v1/ws` (an indexer under a
-base path keeps it). Only plain `http` / `ws` is spoken, like the REST commands (`https://` / `wss://` needs a TLS-terminating proxy
-in front; `kob watch` says so). `--network` is required as for `kob book`.
+The address is derived from the indexer (`--indexer`, `$KOB_INDEXER_URL`, else the network's default): `http://host:port` becomes
+`ws://host:port/v1/ws`, `https://` becomes `wss://` (an indexer under a base path keeps it). The first line names the network and the
+indexer.
 
 ```
 kob watch fills [--token TOKEN]            # every fill, or one token's
@@ -262,7 +286,7 @@ also reports chain reorganisations (a note, and a new read of what is shown).
 `--json` is a flag of the ten trading commands (`place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `book`,
 `orders`, `balances`). `kob token create|resume|verify-declaration` have no `--json` (text output; the files `--out-dir`
 writes are JSON), and `kob order sweep|cancel` and `kob recover` always print a JSON report. In `kob registry`, `programs`,
-`add-program` and `verify-genesis` take `--json`.
+`add-program` and `verify-genesis` take `--json`; `kob watch` prints one JSON line per event (its section).
 
 Conventions of the JSON the CLI prints itself: every amount of KAS or of a token is a **decimal string** in base units
 (sompi for KAS, the token's base units for a token; `"2500000"`, negative where it is an outflow, as in `net`), so no 64-bit

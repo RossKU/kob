@@ -1,9 +1,8 @@
-//! A minimal blocking HTTP/1.1 GET client for the indexer API (`docs/ops/executor.md` Part B): plain `http://` only (put a
-//! TLS-terminating proxy in front of a remote indexer), JSON bodies, `Content-Length` or chunked responses. URLs are shown
-//! redacted (no credentials, no API keys) in every message.
+//! A minimal blocking HTTP/1.1 GET client for the indexer API (`docs/ops/executor.md` Part B): `http://` and `https://` (rustls,
+//! [`crate::tls`]), JSON bodies, `Content-Length` or chunked responses. URLs are shown redacted (no credentials, no API keys) in
+//! every message.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -14,10 +13,17 @@ pub const MAX_RESPONSE_BYTES: u64 = 64 << 20;
 /// The indexer endpoint when `--indexer` is not given.
 pub const INDEXER_ENV: &str = "KOB_INDEXER_URL";
 
-/// `--indexer` if given, else [`INDEXER_ENV`].
-pub fn indexer_arg(flag: Option<String>) -> Option<String> {
-    flag.filter(|v| !v.trim().is_empty())
-        .or_else(|| std::env::var(INDEXER_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+/// `--indexer` if given, else [`INDEXER_ENV`], else the indexer the deployment record of `network` names
+/// ([`kob_protocol::artifacts::deployment_indexer_url`], in every build; none while the record leaves it unset).
+pub fn indexer_arg(flag: Option<String>, network: &str) -> Option<String> {
+    indexer_from(flag, std::env::var(INDEXER_ENV).ok(), kob_protocol::artifacts::deployment_indexer_url(network))
+}
+
+/// [`indexer_arg`] with the environment variable and the deployment default given: the flag wins over the variable, the variable
+/// over the default; blank counts as unset.
+pub fn indexer_from(flag: Option<String>, env: Option<String>, deployment: Option<String>) -> Option<String> {
+    let clean = |v: Option<String>| v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    clean(flag).or_else(|| clean(env)).or_else(|| clean(deployment))
 }
 
 /// The indexer as messages show it.
@@ -26,6 +32,7 @@ pub fn shown(url: &str) -> String {
 }
 
 struct Target {
+    secure: bool,
     host: String,
     port: u16,
     base: String,
@@ -49,9 +56,13 @@ pub(crate) fn b64(s: &[u8]) -> String {
 }
 
 fn parse(url: &str) -> Result<Target, String> {
-    let rest = url.strip_prefix("http://").ok_or_else(|| {
-        format!("indexer {}: only http:// is supported (put a TLS-terminating proxy in front of a remote indexer)", shown(url))
-    })?;
+    let (secure, rest) = if let Some(r) = url.strip_prefix("http://") {
+        (false, r)
+    } else if let Some(r) = url.strip_prefix("https://") {
+        (true, r)
+    } else {
+        return Err(format!("indexer {}: the indexer URL must be http:// or https://", shown(url)));
+    };
     let (authority, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, ""),
@@ -62,12 +73,12 @@ fn parse(url: &str) -> Result<Target, String> {
     };
     let (host, port) = match hostport.rsplit_once(':') {
         Some((h, p)) if !h.is_empty() => (h.to_string(), p.parse().map_err(|_| format!("indexer {}: bad port", shown(url)))?),
-        _ => (hostport.to_string(), 80),
+        _ => (hostport.to_string(), if secure { 443 } else { 80 }),
     };
     if host.is_empty() {
         return Err(format!("indexer {}: no host", shown(url)));
     }
-    Ok(Target { host, port, base: path.trim_end_matches('/').to_string(), auth })
+    Ok(Target { secure, host, port, base: path.trim_end_matches('/').to_string(), auth })
 }
 
 fn dechunk(mut body: &[u8]) -> Result<Vec<u8>, String> {
@@ -92,13 +103,7 @@ fn dechunk(mut body: &[u8]) -> Result<Vec<u8>, String> {
 pub fn get(indexer: &str, path: &str, timeout: Duration) -> Result<(u16, Value), String> {
     let t = parse(indexer)?;
     let who = shown(indexer);
-    let addr = (t.host.as_str(), t.port)
-        .to_socket_addrs()
-        .map_err(|e| format!("indexer {who}: {e}"))?
-        .next()
-        .ok_or_else(|| format!("indexer {who}: no address"))?;
-    let mut s = TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("indexer {who}: {e}"))?;
-    s.set_read_timeout(Some(timeout)).and_then(|_| s.set_write_timeout(Some(timeout))).map_err(|e| e.to_string())?;
+    let mut s = crate::tls::connect(t.secure, &t.host, t.port, timeout).map_err(|e| format!("indexer {who}: {e}"))?;
     let mut req = format!(
         "GET {}{} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\nUser-Agent: kob-cli\r\n",
         t.base, path, t.host
@@ -110,7 +115,12 @@ pub fn get(indexer: &str, path: &str, timeout: Duration) -> Result<(u16, Value),
     s.write_all(req.as_bytes()).map_err(|e| format!("indexer {who}: {e}"))?;
     let mut raw = vec![];
     // a response is bounded: an endless one is an error, not memory exhaustion
-    (&mut s).take(MAX_RESPONSE_BYTES + 1).read_to_end(&mut raw).map_err(|e| format!("indexer {who}: {e}"))?;
+    match (&mut s).take(MAX_RESPONSE_BYTES + 1).read_to_end(&mut raw) {
+        Ok(_) => {}
+        // a TLS peer that closes without close_notify: what was read is the answer (Connection: close)
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && !raw.is_empty() => {}
+        Err(e) => return Err(format!("indexer {who}: {e}")),
+    }
     if raw.len() as u64 > MAX_RESPONSE_BYTES {
         return Err(format!("indexer {who}: response larger than {MAX_RESPONSE_BYTES} bytes"));
     }
@@ -226,8 +236,27 @@ mod tests {
         // a base path and credentials: the request carries them, messages never show them
         let e = get_ok("http://bob:pw@127.0.0.1:1/api", "/v1/tokens", Duration::from_millis(300)).unwrap_err();
         assert!(!e.contains("pw") && !e.contains("bob"), "{e}");
-        assert!(get_ok("https://x", "/", Duration::from_millis(300)).unwrap_err().contains("only http://"));
+        assert!(get_ok("ftp://x", "/", Duration::from_millis(300)).unwrap_err().contains("must be http:// or https://"));
+        // https:// is spoken too (TLS to a port nothing listens on: refused, the host named, no credentials)
+        let e = get_ok("https://bob:pw@127.0.0.1:1", "/", Duration::from_millis(300)).unwrap_err();
+        assert!(e.contains("127.0.0.1") && !e.contains("pw"), "{e}");
+        assert_eq!(parse("https://h").unwrap().port, 443);
+        assert_eq!(parse("http://h").unwrap().port, 80);
         assert_eq!(b64(b"bob:pw"), "Ym9iOnB3");
+    }
+
+    #[test]
+    fn the_indexer_comes_from_the_flag_then_the_variable_then_the_deployment_default() {
+        let s = |x: &str| Some(x.to_string());
+        let (f, e, d) = (s("http://flag"), s("http://env"), s("https://deployment"));
+        assert_eq!(indexer_from(f.clone(), e.clone(), d.clone()), f);
+        assert_eq!(indexer_from(None, e.clone(), d.clone()), e);
+        assert_eq!(indexer_from(None, None, d.clone()), d);
+        // blank is unset, at every level
+        assert_eq!(indexer_from(s("  "), s(""), d.clone()), d);
+        assert_eq!(indexer_from(s(" http://flag "), e, d), f);
+        // a build whose record names none (and no flag or variable) has none: the commands say what to pass
+        assert_eq!(indexer_from(None, None, None), None);
     }
 
     #[test]

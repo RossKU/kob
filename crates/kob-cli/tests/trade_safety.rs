@@ -1,15 +1,17 @@
 //! The trading commands as a user runs them (the `kob` binary): a key on the command line is refused and never echoed,
-//! mainnet must be named, an unreachable node or indexer is reported with its URL redacted, and nothing is signed
+//! the network defaults to mainnet and a test network is chosen at run time, an unreachable node or indexer is reported with its URL redacted, and nothing is signed
 //! without `--yes` or a terminal.
 
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_kob-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_kob");
 const SK: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 
 fn kob(args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
     let mut cmd = Command::new(BIN);
     cmd.args(args).env_remove("KOB_NODE_WRPC").env_remove("KOB_INDEXER_URL").env_remove("KOB_KEY");
+    // no test reaches the public Kaspa resolvers: the only one nothing answers
+    cmd.env("KOB_RESOLVERS", "http://127.0.0.1:1");
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -36,12 +38,25 @@ fn a_key_on_the_command_line_is_refused_and_never_echoed() {
 }
 
 #[test]
-fn mainnet_must_be_named_and_urls_are_redacted() {
-    // the reference build implies no network: --network is required
+fn the_network_defaults_to_mainnet_and_urls_are_redacted() {
+    // no network named: mainnet, like kaspad; no node is named either: the public nodes (the plan of a command that gets
+    // further names the network)
     let (code, out) =
         kob(&["place", "limit", "--token", "TST", "--side", "sell", "--amount", "1TST", "--price", "1KAS"], &[("KOB_KEY", SK)]);
+    // the network is checked on the node first: the public nodes the (here unreachable) resolver names
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("no Kaspa resolver named a mainnet node") && !out.contains("--network is required"), "{out}");
+    // the kaspad-style switches: --testnet and --netsuffix=10 are --network testnet-10 (here a view that needs a maker)
+    for sw in [&["--testnet"][..], &["--netsuffix=10"], &["--testnet", "--netsuffix", "10"]] {
+        let mut a = vec!["orders", "--indexer", "http://127.0.0.1:1"];
+        a.extend(sw);
+        let (code, out) = kob(&a, &[]);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("--maker"), "{out}");
+    }
+    let (code, out) = kob(&["orders", "--testnet", "--network", "mainnet"], &[]);
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("--network"), "{out}");
+    assert!(out.contains("different networks"), "{out}");
     // an unreachable node / indexer with credentials: refused, redacted
     let (code, out) = kob(
         PLACE,

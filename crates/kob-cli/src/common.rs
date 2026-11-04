@@ -25,10 +25,14 @@ pub const NODE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Most funding UTXOs tried (smallest first) before giving up.
 const FUNDING_TRIES: usize = 16;
 
+/// The network a build uses when none is named: mainnet, like kaspad. A test network is chosen at run time (`--testnet`,
+/// `--netsuffix=10`, `--network testnet-10`); never an implicit testnet-10.
+pub const DEFAULT_NETWORK: &str = "mainnet";
+
 /// The network of a command: `--network` when given (empty: not given), else the build's deployment network
 /// (`kob_protocol::artifacts::deployment_network`: `testnet-10` with the feature `deploy-tn10`, `mainnet` with
-/// `deploy-mainnet`). The reference build implies none, so `--network` is then required; a deployment build refuses another
-/// network. Never an implicit testnet-10.
+/// `deploy-mainnet`), else [`DEFAULT_NETWORK`]. A deployment build refuses another network. Every plan and confirmation names
+/// the network, and a node of another network is refused before anything is planned or signed.
 pub fn resolve_network(given: &str) -> Result<String, String> {
     resolve_network_for(given, kob_protocol::artifacts::deployment_network())
 }
@@ -42,14 +46,51 @@ pub fn resolve_network_for(given: &str, build: Option<&str>) -> Result<String, S
         }
         (false, _) => given.to_string(),
         (true, Some(b)) => b.to_string(),
-        (true, None) => {
-            return Err("--network is required (mainnet or testnet-10): only a deployment build (--features deploy-mainnet \
-                        or deploy-tn10) implies its network"
-                .into())
-        }
+        (true, None) => DEFAULT_NETWORK.to_string(),
     };
     prefix_for_network(&n)?;
     Ok(n)
+}
+
+/// The arguments with the kaspad-style network switches turned into `--network`: `--testnet` and `--netsuffix=10` (or
+/// `--netsuffix 10`) name `testnet-10`, the only test network KOB runs on. They may stand anywhere; naming another network too
+/// (`--network mainnet`) is a contradiction.
+pub fn network_switches(args: &[String]) -> Result<Vec<String>, String> {
+    const TESTNET: &str = "testnet-10";
+    let (mut out, mut testnet, mut named) = (Vec::with_capacity(args.len()), false, None::<String>);
+    let mut it = args.iter().peekable();
+    while let Some(a) = it.next() {
+        let suffix = match a.as_str() {
+            "--testnet" => {
+                testnet = true;
+                continue;
+            }
+            "--netsuffix" => Some(it.next().cloned().ok_or("--netsuffix needs a value (10)")?),
+            s => s.strip_prefix("--netsuffix=").map(str::to_string),
+        };
+        if let Some(n) = suffix {
+            if n != "10" {
+                return Err(format!("--netsuffix {n}: KOB runs on testnet-10 only (--netsuffix=10)"));
+            }
+            testnet = true;
+            continue;
+        }
+        if a == "--network" {
+            named = it.peek().map(|v| v.to_string());
+        } else if let Some(v) = a.strip_prefix("--network=") {
+            named = Some(v.to_string());
+        }
+        out.push(a.clone());
+    }
+    match (testnet, named) {
+        (true, Some(n)) if n != TESTNET => Err(format!("--testnet (or --netsuffix=10) and --network {n} name different networks")),
+        (true, Some(_)) => Ok(out),
+        (true, None) => {
+            out.extend(["--network".to_string(), TESTNET.to_string()]);
+            Ok(out)
+        }
+        (false, _) => Ok(out),
+    }
 }
 
 /// Address prefix of a network name (`mainnet`, `testnet-10`, `simnet`, `devnet`).
@@ -404,10 +445,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_network_is_explicit_or_the_deployment_builds() {
-        // the reference build: --network is required (never an implicit testnet-10)
-        let e = resolve_network_for("", None).unwrap_err();
-        assert!(e.contains("--network is required"), "{e}");
+    fn the_network_is_named_or_the_builds_or_mainnet() {
+        // no deployment: mainnet like kaspad (never an implicit testnet-10); a test network is named
+        assert_eq!(resolve_network_for("", None).unwrap(), "mainnet");
+        assert_eq!(resolve_network_for("  ", None).unwrap(), "mainnet");
         assert_eq!(resolve_network_for("mainnet", None).unwrap(), "mainnet");
         assert_eq!(resolve_network_for("testnet-10", None).unwrap(), "testnet-10");
         assert!(resolve_network_for("nonsense", None).is_err());
@@ -416,7 +457,29 @@ mod tests {
         assert_eq!(resolve_network_for("", Some("testnet-10")).unwrap(), "testnet-10");
         let e = resolve_network_for("testnet-10", Some("mainnet")).unwrap_err();
         assert!(e.contains("mainnet deployment build"), "{e}");
-        assert_eq!(resolve_network("").ok().as_deref(), kob_protocol::artifacts::deployment_network());
+        assert_eq!(resolve_network("").ok().as_deref(), Some(kob_protocol::artifacts::deployment_network().unwrap_or("mainnet")));
+    }
+
+    #[test]
+    fn the_kaspad_style_network_switches() {
+        let v = |s: &str| s.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        let sw = |s: &str| network_switches(&v(s));
+        assert_eq!(sw("book TUSD").unwrap(), v("book TUSD"));
+        assert_eq!(sw("book TUSD --testnet").unwrap(), v("book TUSD --network testnet-10"));
+        assert_eq!(sw("--testnet book TUSD").unwrap(), v("book TUSD --network testnet-10"));
+        assert_eq!(sw("book TUSD --netsuffix=10").unwrap(), v("book TUSD --network testnet-10"));
+        assert_eq!(sw("book TUSD --netsuffix 10").unwrap(), v("book TUSD --network testnet-10"));
+        assert_eq!(sw("book --testnet --netsuffix=10 TUSD").unwrap(), v("book TUSD --network testnet-10"));
+        // the long form stays, alone or together
+        assert_eq!(sw("book TUSD --network testnet-10").unwrap(), v("book TUSD --network testnet-10"));
+        assert_eq!(sw("book TUSD --testnet --network testnet-10").unwrap(), v("book TUSD --network testnet-10"));
+        assert_eq!(sw("book TUSD --testnet --network=testnet-10").unwrap(), v("book TUSD --network=testnet-10"));
+        assert_eq!(sw("book TUSD --network mainnet").unwrap(), v("book TUSD --network mainnet"));
+        // contradictions and unknown suffixes
+        assert!(sw("book TUSD --testnet --network mainnet").unwrap_err().contains("different networks"));
+        assert!(sw("book TUSD --network=mainnet --testnet").unwrap_err().contains("different networks"));
+        assert!(sw("book TUSD --netsuffix=11").unwrap_err().contains("testnet-10 only"));
+        assert!(sw("book TUSD --netsuffix").unwrap_err().contains("needs a value"));
     }
 
     #[test]

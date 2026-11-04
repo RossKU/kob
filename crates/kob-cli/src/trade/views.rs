@@ -220,6 +220,7 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
             format!("{} {}", units::fmt_decimal(x as i128, a.decimals), if a.ticker.is_empty() { "tokens" } else { &a.ticker })
         };
         let out = json!({
+            "network": c.network,
             "token": to_hex(&a.cov),
             "quote": b.as_ref().map(|x| to_hex(&x.cov)),
             "scale": (a.decimals_from != market::DecimalsFrom::Unknown).then_some(a.scale),
@@ -229,7 +230,12 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
             "best_bid": book.bids.first().map(|l| l.price.to_string()),
             "last_fill": last.map(|l| l.to_string()),
         });
-        let mut lines = vec![format!("book {} in {quote_name} per whole token (indexer {})", a.name(), http::shown(indexer))];
+        let mut lines = vec![format!(
+            "book {} in {quote_name} per whole token (network {}, indexer {})",
+            a.name(),
+            c.network,
+            http::shown(indexer)
+        )];
         lines.extend(book_lines(&book, &price, &amount, last));
         for m in unknown {
             lines.push(format!(
@@ -433,9 +439,10 @@ pub fn orders_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, Ve
         let items = fetch_orders(indexer, &maker, token.as_ref(), p.has("--all"))?;
         let rows: Vec<Value> = items.iter().map(|o| order_row(o, &reg, &idx)).collect();
         let mut lines = vec![format!(
-            "orders of {} ({}, indexer {})",
+            "orders of {} ({}, network {}, indexer {})",
             to_hex(&maker),
             if p.has("--all") { "every status" } else { "live" },
+            c.network,
             http::shown(indexer)
         )];
         if rows.is_empty() {
@@ -444,7 +451,7 @@ pub fn orders_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, Ve
         for r in &rows {
             lines.push(format!("  {}", order_row_line(r)));
         }
-        Ok((json!({"maker": to_hex(&maker), "orders": rows}), lines))
+        Ok((json!({"network": c.network, "maker": to_hex(&maker), "orders": rows}), lines))
     }
 }
 
@@ -658,7 +665,7 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
             "skipped": skipped.iter().map(|(c, r)| json!({"covenant_id": c, "reason": r})).collect::<Vec<_>>(),
         });
         let mut lines = vec![
-            format!("balances of {}", to_hex(&maker)),
+            format!("balances of {} (network {})", to_hex(&maker), c.network),
             format!(
                 "  KAS: free {}, locked in orders {}, total {}",
                 units::kas(free_kas),

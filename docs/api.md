@@ -102,7 +102,7 @@ whole A). `scale` is `10^decimals` of the token, at most `10^9`. Market views (t
 `price_basis` base units, which is the token's standard scale when its decimals are known, else the scale of its first order; they
 also carry `decimals` (`null` when unknown). The decimals of a token are, in this order: its verified KCC-23 declaration, its
 registry entry, the default of its token program (a launchpad's convention: KaspaRocket 3; `default_decimals` of the program
-profile), the same order the web app and `kob-cli` use. `GET /v1/tokens` names the source (`decimals_source`).
+profile), the same order the web app and `kob` (the command line) use. `GET /v1/tokens` names the source (`decimals_source`).
 
 Fields marked "may be null" are present with value `null`; fields marked "omitted" are absent when they do not apply (section 7
 lists the omitted ones).

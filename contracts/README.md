@@ -88,7 +88,13 @@ hash, prefix / suffix lengths) in `deployment.json` and `DEPLOYMENT.md`, and its
 so a change of any order template shows up as a stale deployment record. When `registry/tokens.json` is the
 registry of the network (its `network` field: mainnet), the record also pins it (`registry`: path, sha256 of
 the LF bytes, supported and pending templates, the token entries with their genesis-check fact) and its `SHA256SUMS` lists it, so a registry change makes the
-record stale too. Needs node.
+record stale too. The record also carries `indexer_url`: the default indexer of the network, the official index-only server whose API
+`kob` (the command line) reads when neither `--indexer` nor `$KOB_INDEXER_URL` names one. It is `null` until the address is decided; a value
+is an `https://` URL on mainnet (`http://` or `https://` elsewhere) with a host and no credentials, query or fragment (checked by
+`scripts/lib/deploy.mjs` and by `kob_protocol::artifacts::check_indexer_url`). Edit it in `deployment.json` and run
+`scripts/build-deploy.sh <network>` (the script carries the value over and regenerates `DEPLOYMENT.md` and `SHA256SUMS`). Both records
+are embedded in every build (`artifacts::deployment_indexer_url(network)`), so a reference build reads the one of the network it runs for.
+Needs node.
 
 Binaries that embed the record (cargo features `deploy-tn10` / `deploy-mainnet`, exclusive, off by default):
 

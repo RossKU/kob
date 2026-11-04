@@ -24,6 +24,19 @@ of `contracts/artifacts`, the same on every network. A mainnet deployment is the
 | Binaries | `cargo build --release --locked --features deploy-mainnet` | from the commit; publish the hash of what you built (section 6) |
 | Web app | `web/` (`npm ci`, `npm run fetch-sdk` with its pinned SDK zip hash, `npm run build:wasm`, `npm run build:release`) | from the commit; publish the hash of every file of `web/dist` |
 
+**Plain build and deployment build of the command line.** `cargo build --release --bin kob` builds `kob` with the same order
+and token templates and the same embedded registry as a deployment build (nothing in the templates depends on a network); it
+defaults to mainnet and takes `--testnet` (`--netsuffix=10`, `--network testnet-10`) at run time, like kaspad. What the features
+`deploy-mainnet` / `deploy-tn10` add is the binding: the build records its network (`artifacts::deployment_network()`), refuses the other
+one, and the mainnet build checks the registry pin (`deployment_registry_sha256()`). The release archives are deployment builds,
+so their hashes are the ones this checklist publishes; a plain build is for development and for users who build from source.
+Both deployment records are embedded in every build, which is how a plain build finds the default indexer of the network it runs
+for.
+
+The record's `indexer_url` (the default indexer of `kob`, `null` until the official index-only server's address is decided; https on
+mainnet, no credentials) is edited in `deployment.json` and carried over by `scripts/build-deploy.sh mainnet`, which regenerates
+`DEPLOYMENT.md` and `SHA256SUMS`; set it in the commit that is released.
+
 The record and the registry pin are checked in every build: `kob-protocol`'s
 `mainnet_deployment_record_matches_the_embedded_templates_and_registry` test fails when a template or
 `registry/tokens.json` changed without `scripts/build-deploy.sh mainnet`. CI runs `build-deploy.sh --check`
@@ -140,7 +153,7 @@ CI runs all of these on every push (`.github/workflows/ci.yml`: the `deploy-main
 ## 6. Hashes to publish
 
 ```
-scripts/release-hashes.sh target/release/kob-executor target/release/kob-cli
+scripts/release-hashes.sh target/release/kob-executor target/release/kob
 ```
 
 prints the commit, every order template hash of the record, the registry sha256 and the sha256 of
@@ -163,17 +176,17 @@ everywhere.
 
 **Prebuilt binaries for operators** (`.github/workflows/release.yml`; the operators' page is
 `docs/ops/executor-quickstart.md`). The tag is `v` + the workspace version (`Cargo.toml` `[workspace.package] version`, which
-`kob-executor` and `kob-cli` inherit, so their `--version` is the tag): bump it, with `Cargo.lock`, in the very commit that is
+`kob-executor` and `kob-cli` inherit, so their `--version` is the tag; the CLI binary is `kob`): bump it, with `Cargo.lock`, in the very commit that is
 tagged; the workflow refuses any other tag before it builds (`node scripts/package-release.mjs --check-tag v<version>` checks it
-locally). Pushing the tag `v<version>` builds `kob-executor` and `kob-cli` with `--release --locked`
+locally). Pushing the tag `v<version>` builds `kob-executor` and `kob` (the `kob-cli` crate's binary) with `--release --locked`
 for Windows x86_64 (`x86_64-pc-windows-msvc`, static C runtime), Linux x86_64 (`x86_64-unknown-linux-gnu`, on the
 oldest supported Ubuntu runner for the widest glibc range) and Android arm64 (`aarch64-linux-android`, bionic, for Termux;
 built with the runner image's NDK clang for API 24), each as the `deploy-tn10` and the `deploy-mainnet` build, and
 checks that each binary refuses the other network (not the Android one, which cannot run on the x86_64 runner: it is only
-checked to be an arm64 ELF). `scripts/package-release.mjs` packs each into
-`kob-executor-<version>-<network>-<target>.zip` (Windows) or `.tar.gz` with `QUICKSTART.md`, `LICENSE`, `NOTICE` and a
-`SHA256SUMS` of those files; the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
-release job attaches the six archives, the Android app and a `SHA256SUMS` of them all to a **draft** release of the tag: add the output of
+checked to be an arm64 ELF). `scripts/package-release.mjs` packs each into two archives,
+`kob-executor-<version>-<network>-<target>.zip` (Windows) or `.tar.gz` with `kob-executor`, `kob`, `QUICKSTART.md`, `LICENSE`, `NOTICE`
+and a `SHA256SUMS` of those files, and `kob-<version>-<network>-<target>` (the command line alone, with its `README.md`); the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
+release job attaches the twelve archives, the Android app and a `SHA256SUMS` of them all to a **draft** release of the tag: add the output of
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
 runs the same builds as a dry run that only uploads workflow artifacts. The binaries and archives are not code-signed (the
 Windows binary shows SmartScreen); the Android app is signed with the **release key** (below). No container image is
@@ -200,7 +213,7 @@ would list none of the orders the new wallets place.
 
 1. Operators upgrade their **executors / indexers** first. A database schema change says in the release notes whether
    the database is brought up to date in place or rebuilt with `kob-executor index replay` (`docs/ops/executor.md` 7.6).
-   Check `GET /v1/health` and that a placement made with `kob-cli` is listed.
+   Check `GET /v1/health` and that a placement made with `kob` is listed.
    `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git
    commit of the build, `null` when the build did not say) and `payload_version` (the `KOB1` payload version it reads and
    writes). Compare them with the release: `curl -s https://<indexer>/v1/health | jq '{version, commit, payload_version}'`.
@@ -218,7 +231,7 @@ would list none of the orders the new wallets place.
    `master` keeps the last release's version, so `version` equals the release only for the build of the tagged commit; `commit`
    and `payload_version` are what a later build adds. `kob --version` reports the same workspace version (the web app shows its
    own package version, `web/package.json`, kept at the release version).
-2. Then the **web app** and other wallets (`kob-cli`, bots) are published with the new builders.
+2. Then the **web app** and other wallets (`kob`, bots) are published with the new builders.
 3. Announce the order in the release notes; a host serving the web app should point it only at indexers
    whose `/v1/health` reports the release `version` (after the bump; before it, the release `commit`) (and, for a payload version
    change, a `payload_version` at least the new one).
