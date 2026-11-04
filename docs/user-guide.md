@@ -306,7 +306,7 @@ to your orders (`docs/ops/web-hosting.md`, neutrality rules). What you pay:
 | Item | What it is | Where it goes | Returned? |
 |---|---|---|---|
 | **Network fee** | The Kaspa transaction fee of the transaction you sign (placing, cancelling, merging ...), shown in the confirmation. | The network (miners). | No. |
-| **Carrier KAS** | KAS held in each contract output (default 2 KAS per UTXO; "Carrier KAS is not a fee"). | Locked in the order or token UTXO. | Yes, when the order ends or the tokens are spent or merged. |
+| **Carrier KAS** | KAS held in each contract output (default 1 KAS per UTXO; "Carrier KAS is not a fee"). | Locked in the order or token UTXO. | Yes, when the order ends or the tokens are spent or merged. |
 | **Delivery carrier** | A buy deposits one per possible fill; it rides on the tokens delivered to you. | Unused ones return with a cancel or refund, or buy more tokens (section 6). A used one stays on your token UTXO until you merge or sell. | Yes (see "KAS on your token UTXOs"). |
 | **Priority tip** (optional, default 0) | Your tip per token to make matchers prefer your order (the chain has no time priority). A sell receives price minus tip, a buy pays price plus tip. It is part of the all-in price shown. | The matcher that fills the order. | No. |
 | **Refund tip** | Kept in the order. | Paid only to whoever refunds the expired order; otherwise returned to you. | Yes, unless someone refunds it. |

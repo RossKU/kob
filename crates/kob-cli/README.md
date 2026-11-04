@@ -49,7 +49,7 @@ else) needs `--indexer`, and the error says so.
 **Same transactions as the web wallet.** `kob place` is a port of the web app's planner (`web/src/kob/plan.ts` and
 `orders/`): the same order states, the same `createOrder` requests and therefore the same transactions and `KOB1`
 placement records for the same inputs. Its defaults are the wallet's (`docs/spec/matcher.md` §10): a minimum fill worth
-10 KAS at the limit (1 base unit for IOC / FOK / market, `ceil(amount / 4)` for an if-done entry), 2 KAS on every covenant
+10 KAS at the limit (1 base unit for IOC / FOK / market, `ceil(amount / 4)` for an if-done entry), 1 KAS on every covenant
 UTXO (`--carrier`, at least 0.08 KAS and the token program's floor), tip 0, GTC = 90 days idle, IOC / FOK life 300 DAA,
 market orders as IOC auctions from the best price over 200 DAA to a 3 % bound, stop bands of 3 % over 300 DAA, the
 program's refund and keeper tips. The guards are the wallet's too: tick, value and 90-day bounds, self-trade, the FOK

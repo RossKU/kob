@@ -64,7 +64,7 @@ AMOUNTS (always with a unit; never rounded)
   --exit-tip T   the if-done exit's tip
   --min-fill A   smallest fill (default: worth 10 KAS at the limit; IOC / FOK / market 1 base unit; if-done ceil(amount/4))
   --min-touch A  stop trigger threshold (default: max(min fill, 25% of the amount))
-  --carrier KAS  KAS on every covenant UTXO of the order (default 2KAS; at least 0.08KAS and the token program's floor)
+  --carrier KAS  KAS on every covenant UTXO of the order (default 1KAS; at least 0.08KAS and the token program's floor)
   --decimals N   the first order of a token without a registry entry and without orders: its decimals (0..=9; the scale
                  is 10^N). The chain records no decimals: give the ones the issuer chose. Once the token had an order,
                  the scale its first order set decides, also after every order of it ended (a --decimals that disagrees

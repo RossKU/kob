@@ -4,7 +4,7 @@
 //! requests and therefore the same transactions and `KOB1` placement records as the wallet for the same inputs:
 //!
 //! * the wallet defaults (`docs/spec/matcher.md` §10): minimum fill worth 10 KAS at the limit (1 for IOC / FOK / market,
-//!   `ceil(amount / 4)` for if-done entries), 2 KAS on every covenant UTXO, tip 0, GTC = 90 days, IOC / FOK life 300 DAA,
+//!   `ceil(amount / 4)` for if-done entries), 1 KAS on every covenant UTXO, tip 0, GTC = 90 days, IOC / FOK life 300 DAA,
 //!   market auctions from the touch over 200 DAA to a 3 % bound starting 30 DAA after placement, stop bands 3 % over
 //!   300 DAA, trigger threshold max(minimum fill, 25 % of the amount), rest time 50 DAA, the program's refund / keeper tips;
 //! * the guards: tick, amount and value bounds, 90-day horizon, self-trade, FOK depth, crossing limits (auction / limit /
@@ -256,7 +256,7 @@ pub struct Env {
     pub token_utxos: Vec<TokenUtxo>,
     /// Explicit fee rate (sompi per gram); `None`: the relay floor.
     pub fee_rate: Option<u64>,
-    /// KAS on every covenant UTXO (default 2 KAS).
+    /// KAS on every covenant UTXO (default 1 KAS).
     pub carrier: Option<u64>,
     /// A pair order's quote token B.
     pub pair: Option<PairPart>,

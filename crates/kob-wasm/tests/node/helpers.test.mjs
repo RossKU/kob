@@ -72,7 +72,7 @@ test('wallet defaults', () => {
   assert.equal(kob.defaultMinTouch('4000', '10000'), '4000');
   const c = JSON.parse(kob.defaultConstants());
   assert.equal(c.defaultMinFillSompi, kob.defaultMinFillSompi());
-  assert.equal(c.defaultOrderCarrier, '200000000', 'the default order carrier: 2 KAS');
+  assert.equal(c.defaultOrderCarrier, '100000000', 'the default order carrier: 1 KAS');
   assert.equal(c.defaultMinFillImmediate, '1');
   assert.equal(c.maxScale, '1000000000');
   assert.equal(c.quoteLimit, String(1n << 62n));

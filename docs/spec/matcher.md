@@ -528,9 +528,10 @@ id.
   its UTXOs).
   *Carrier of the kept output* (`keepCarrier`, `Batch::keepCarrier`; owner decision 2026-10-06: small enough to cost
   nothing): the operator's inventory output carries 2 KAS by default, not the 10 KAS of its other token outputs; the
-  carriers of every order output (deliveries, custodies, exits) are the orders' own terms and do not change. A token
-  output carries a covenant id, so its KIP-9 storage plurality is 2 (rusty-kaspa `utxo_plurality`, 100-byte units) and
-  its storage mass is `4 × 10^12 / carrier` grams. The relay fee (`rate × max(compute, 2 × bytes)`) does not price
+  carriers of every order output (deliveries, custodies, exits) are the orders' own terms (the wallet default for a new
+  order is 1 KAS, `DEFAULT_ORDER_CARRIER`; the paragraph below), and the kept output's 2 KAS is its own knob, unchanged by
+  it. A token output carries a covenant id, so its KIP-9 storage plurality is 2 (rusty-kaspa `utxo_plurality`, 100-byte
+  units) and its storage mass is `4 × 10^12 / carrier` grams. The relay fee (`rate × max(compute, 2 × bytes)`) does not price
   storage mass, so the fee is the same at every carrier the block storage limit allows (above 0.08 KAS); the
   storage-inclusive priority mass is unchanged while the storage mass stays below the batch's fee mass. Measured
   (`crates/kob-executor/tests/matcher_crossmatch.rs`, `the_kept_output_carrier_adds_no_fee`), 10 KAS against 2 KAS: the
@@ -540,6 +541,17 @@ id.
   that adds no fee in either mode for every program pair. The policy refuses less than 0.5 KAS (KaspaCom KCC20 0.2.5
   refuses a token output below it); the operator's later sale of the output only spends it (a small input never adds
   storage mass).
+  *Carrier of the orders* (`DEFAULT_ORDER_CARRIER`, 1 KAS; founder decision 2026-11-04, formerly 2 KAS): the carrier is order
+  state (`deliveryCarrier`, `exitCarrier`, the order UTXO's value), written at placement, so an order keeps the carrier it was
+  placed with and no template or program changes; a user may choose another per order (`--carrier`, at least 0.08 KAS and the
+  token program's floor). It does not change the relay fee (the same at every carrier, `tests/carrier_fees.rs`) and does not
+  change the fills per transaction (the token program's slots bound those). What a lower carrier changes is storage mass:
+  every token or order output has plurality 2, `4 × 10^12 / carrier` grams. That lowers a transaction's block-template
+  priority when blocks are full (miners rank by fee over the largest of compute, transient and storage mass; nothing the
+  matcher pays prices storage mass in the default relay fee mode), and on the large programs (8 / 8, 10 / 10) it can put a
+  full batch over the 500,000 per-transaction storage limit: the builder refuses such a transaction and the engine plans
+  fewer fills (`tests/matcher_default_carrier.rs`). 1 KAS is the market norm (KaspaCom and KRON 0.5, KaspaRocket buyer cell
+  1.0, KForge 0.8-0.9) and halves the KAS a maker locks per fill against 2 KAS.
 - **standalone bound.** Before the walks, each routed pair order is capped at the largest fill its route could pay on its
   own and is left out of the batch when none can: the token it buys taken along the plain asks of that token (best first;
   an ask's minimum fill counted in full, its surplus going to the maker), the token it sells along the plain bids of that
@@ -1114,8 +1126,8 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
 
 ## 9. Measured costs (protocol v3; 10-KAS carriers, reference 3/3 token unless noted)
 
-The fixtures carry 10 KAS on every covenant UTXO; the wallet default is 2 KAS (`DEFAULT_ORDER_CARRIER`). The relay fees
-below do not depend on it (storage mass is not part of the relay fee): at 2 KAS no shape pays more, a few placements and
+The fixtures carry 10 KAS on every covenant UTXO; the wallet default is 1 KAS (`DEFAULT_ORDER_CARRIER`). The relay fees
+below do not depend on it (storage mass is not part of the relay fee): at 1 KAS no shape pays more, a few placements and
 amends up to 200 sompi less (`crates/kob-protocol/tests/carrier_fees.rs`).
 
 Rows are the golden vectors named in the row (`crates/kob-protocol/vectors/golden.json`: bytes = `built.fee.mass.size`,

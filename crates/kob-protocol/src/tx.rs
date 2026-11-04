@@ -1579,9 +1579,16 @@ impl Draft {
                 .filter(|(_, o)| output_storage_mass(o) > BLOCK_STORAGE_LIMIT)
                 .map(|(k, o)| format!("output {k} ({} sompi)", o.value))
                 .collect();
+            if dust.is_empty() {
+                // no output is dust on its own: the many small covenant outputs (each `4 × 10^12 / value`) add up
+                return invalid(format!(
+                    "the transaction's storage mass {} exceeds the block limit {BLOCK_STORAGE_LIMIT} (KIP-9): its covenant outputs are too small in total, so it could never be mined; fill fewer orders in one transaction or use a larger carrier",
+                    report.storage
+                ));
+            }
             return invalid(format!(
                 "dust payout: {} below {DUST_OUTPUT_MIN} sompi ({COVENANT_OUTPUT_MIN} with a covenant id); the transaction's storage mass {} exceeds the block limit {BLOCK_STORAGE_LIMIT} (KIP-9), so it could never be mined",
-                if dust.is_empty() { "small outputs".to_string() } else { dust.join(", ") },
+                dust.join(", "),
                 report.storage
             ));
         }

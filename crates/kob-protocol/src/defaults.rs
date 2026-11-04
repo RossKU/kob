@@ -41,26 +41,36 @@ pub const STOP_BAND_DAA: i64 = 300;
 /// Trigger rest time R (5 s, founder 2026-09-30): the evidence order must have been exposed at its quote
 /// for at least this long before the transaction that fills it arms a stop (`minRestDaa`).
 pub const MIN_REST_DAA: i64 = 50;
-/// Default order carrier (sompi): 2 KAS, the KAS a wallet puts on every covenant UTXO of a new order (the order UTXO, its
+/// Default order carrier (sompi): 1 KAS, the KAS a wallet puts on every covenant UTXO of a new order (the order UTXO, its
 /// custody, each `deliveryCarrier`, each `exitCarrier`; a pair entry's `exitCarrier` also funds its exit's deliveries,
 /// `IfdPairState::exit_carrier_needed`). Never below a token output's floor (`TemplateId::min_token_output`, KaspaCom
-/// KCC20 0.2.5: 0.5 KAS) nor the KIP-9 bound of a covenant output (0.08 KAS, `tx::COVENANT_OUTPUT_MIN`).
+/// KCC20 0.2.5: 0.5 KAS) nor the KIP-9 bound of a covenant output (0.08 KAS, `tx::COVENANT_OUTPUT_MIN`); a user may choose
+/// another carrier per order (`kob take --carrier`, the ticket's carrier field).
 ///
-/// Measured (`tests/carrier_fees.rs`: every builder shape of the golden set on the 8 token programs and 7 program pairs,
-/// 1,270 transactions): a token or order output carries a covenant id, so its KIP-9 storage plurality is 2 and its storage
-/// mass is `4 × 10^12 / carrier`. The relay fee (`rate × max(compute, normalized transient)`, what builders, the executor
-/// and the wallet pay by default) does not price storage mass: no shape pays more at any carrier from 10 KAS down to
-/// 0.1 KAS. What limits the carrier is the block storage limit (500,000): at 2 KAS the largest shape (an 8/8 pair 2 × 2
-/// netting) commits 177,256 (35%), at 1 KAS 357,188, at 0.5 KAS 61 pair shapes with evidence or netting exceed it and are
-/// refused. The storage-inclusive priority fee ([`crate::tx::FeeMode::Priority`], opt-in) has no clean value below
-/// 10 KAS: a placement's storage mass already exceeds its fee mass at 10 KAS (`create.ask` 11,923 against 8,278), and at
-/// 2 KAS 683 shapes pay more in that mode, at most 0.1305 KAS (a KRON / KRON pair stop armed with evidence).
-pub const DEFAULT_ORDER_CARRIER: u64 = 200_000_000;
+/// The carrier is order state (`deliveryCarrier`, `exitCarrier`, the order UTXO's value), not part of any template: an
+/// order keeps the carrier it was placed with, and changing this default re-versions nothing.
+///
+/// What the carrier does and does not change (`tests/carrier_fees.rs`: every builder shape of the golden set on the 8
+/// token programs and 7 program pairs): a token or order output carries a covenant id, so its KIP-9 storage plurality is 2
+/// and its storage mass is `4 × 10^12 / carrier`. The relay fee (`rate × max(compute, normalized transient)`, what
+/// builders, the executor and the wallet pay by default) does not price storage mass, and a transaction fills the same
+/// number of orders at any carrier: no shape pays more relay fee at any carrier from 10 KAS down to 0.1 KAS. A lower
+/// carrier raises storage mass, which (a) lowers a transaction's block-template priority under congestion (the miner
+/// ranks by fee over the largest of compute, transient and storage mass; the storage-inclusive priority fee,
+/// [`crate::tx::FeeMode::Priority`], is opt-in and has no clean value below 10 KAS), and (b) can exceed the 500,000
+/// per-transaction storage limit on large batches (8/8 and 10/10 programs). Measured at 1 KAS (`tests/carrier_fees.rs`, 1,635
+/// builder shapes): every shape builds, the largest commits 357,188 (71%, an 8/8 pair 2 × 2 netting; 177,256 at 2 KAS), and
+/// the opt-in priority fee rises by at most 0.3077 KAS; the only refused shapes measured on a 10/10 program are KaspaRocket
+/// partial buys from 7-8 asks. At 0.5 KAS 75 of the shapes are refused. The builders refuse a transaction over the limit
+/// (a message that names the storage mass) and the matcher plans fewer fills
+/// (`kob-executor/tests/matcher_default_carrier.rs`). 1 KAS is the market norm (KaspaCom and KRON 0.5, KaspaRocket buyer cell
+/// 1.0, KForge 0.8-0.9) and halves the KAS a maker locks per fill.
+pub const DEFAULT_ORDER_CARRIER: u64 = 100_000_000;
 /// Default minimum fill, in sompi of quote value: 10 KAS of notional, independent of the carrier. The wallet's `minFill`
 /// is the amount worth this much at the order's limit price ([`default_min_fill`]). Every fill of a bid-side order moves a
 /// delivery carrier onto a new token UTXO and every fill restarts TWAP / DCA intervals, so the minimum bounds the fills
 /// (carriers, UTXOs) a filler can force on the maker to `ceil(amount / minFill)`: at the default carrier the carriers a
-/// filler can make the maker lock are at most 20% of the order's notional. The fee of one fill (relay floor, paid by the
+/// filler can make the maker lock are at most 10% of the order's notional. The fee of one fill (relay floor, paid by the
 /// filler) is at most 0.6% of 10 KAS on every token program (KCC-20 reference 0.011 KAS, KRON 0.009 KAS, 16/16 0.031
 /// KAS, KaspaCom 0.056 KAS) and of a pair fill 0.28% (KCC-20 / KRON) to 1.4% (KaspaCom on both sides, its if-done entry):
 /// a smaller minimum would make small fills unprofitable to match before it saved the maker anything.

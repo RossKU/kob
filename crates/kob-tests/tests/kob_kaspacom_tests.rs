@@ -9,7 +9,7 @@
 //! 8-slot limit: the reference's "4 token inputs rejected" negative (N13) is a positive here, the
 //! negative moved to 9 token inputs (and 9 token outputs), the program's real limits.
 //!
-//! Contract sources are read from `contracts/` (env KOB_CARRIER_KAS = 2|10|20 sets the order carrier,
+//! Contract sources are read from `contracts/` (env KOB_CARRIER_KAS = 1|2|10|20 sets the order carrier,
 //! default 10 KAS).
 //! Run: cargo test --release -p kob-tests --test kob_kaspacom_tests -- --nocapture --test-threads=1
 
@@ -467,7 +467,7 @@ fn cov(b: u8) -> Hash {
     Hash::from_bytes([b; 32])
 }
 const LOT: i64 = 1_000; // token units per lot
-/// KAS carried by every covenant UTXO in these fixtures (env KOB_CARRIER_KAS, default 10; 2 is the wallet default).
+/// KAS carried by every covenant UTXO in these fixtures (env KOB_CARRIER_KAS, default 10; 1 is the wallet default).
 fn carrier() -> i64 {
     std::env::var("KOB_CARRIER_KAS").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(10) * KAS
 }
@@ -1106,7 +1106,9 @@ fn kob_kaspacom_sweeps() {
 #[test]
 fn kob_kaspacom_token_slot_limits() {
     let f = fx();
-    let fee = KAS;
+    // the last output keeps its share of the carriers less the fee and must stay at or above the program's 0.5 KAS floor: at the
+    // 1 KAS wallet default carrier an 8 / 8 transfer (8 KAS in) pays at most 0.5 KAS
+    let fee = KAS / 2;
     for (n_in, n_out) in [(1, 8), (8, 1), (8, 8)] {
         let rep = run_ok(&f.t, &token_slots(&f, n_in, n_out, fee));
         assert!(rep.min_fee <= fee as u64);

@@ -5,7 +5,7 @@
 //!   or stray), each confirmed on the node; smallest first, ties by outpoint;
 //! * a CHAIN of transfers to the key: the first takes up to the program's token inputs, every next one the previous
 //!   output plus up to inputs - 1 more, at most 10 transactions; each is a plain transfer (`sendTokens`) valid on its own;
-//! * the merged output keeps the largest input carrier (at most 2 KAS, at least the program's floor); the freed carriers
+//! * the merged output keeps the largest input carrier (at most 1 KAS, at least the program's floor); the freed carriers
 //!   pay the fee, a KAS UTXO of the key is added only when they do not cover it (and always for KRON, whose transfer
 //!   needs a P2PK input of the owner).
 //!
@@ -42,7 +42,7 @@ USAGE
 
   Takes the key's plain UTXOs of TOKEN (smallest first): the first transfer up to the program's token inputs, every next
   one the previous output plus up to inputs - 1 more, at most 10 transactions per run (run again for more). The merged
-  output keeps the largest input carrier (at most 2 KAS); the freed carriers pay the fee. One confirmation signs the
+  output keeps the largest input carrier (at most 1 KAS); the freed carriers pay the fee. One confirmation signs the
   whole chain; each later link waits up to --wait-secs (default 30) for the node to show the previous output, then is
   rebuilt on it (else it spends the submitted, still unconfirmed output).
 ";
@@ -427,7 +427,7 @@ mod tests {
         // the cap: only the prefix whose sum fits (10 + 20 + 30 + 40 = 100)
         assert_eq!(groups(&us, 3, 10, 100).iter().map(Vec::len).collect::<Vec<_>>(), vec![3, 1]);
         assert!(groups(&us[..1], 3, 10, i64::MAX).is_empty());
-        // the largest input carrier, at most 2 KAS, at least the floor
+        // the largest input carrier, at most 1 KAS, at least the floor
         assert_eq!(merged_carrier(&m, &us[..2]), 60_000_000);
         assert_eq!(merged_carrier(&m, &us), DEFAULT_ORDER_CARRIER);
         assert_eq!(merged_carrier(&m, &[tu(&m, 9, 1, 1)]), token_carrier_floor(&m) as u64);

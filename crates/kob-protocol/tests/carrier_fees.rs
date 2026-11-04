@@ -88,10 +88,11 @@ fn measure_all(c: Carriers) -> Vec<(String, Result<Row, String>)> {
 }
 
 /// The gate: at the default order carrier every shape builds and validates, pays no more relay fee than at 10 KAS (the
-/// fee builders, the executor and the wallet pay by default), commits at most 40% of the block storage limit, and pays at
-/// most 0.15 KAS more in the opt-in storage-inclusive priority mode (measured: 0.1305 KAS, a KRON / KRON pair stop armed
-/// with evidence; a placement's storage mass already exceeds its fee mass at 10 KAS, so no carrier below it is free in that
-/// mode, `kob_protocol::defaults::DEFAULT_ORDER_CARRIER`).
+/// fee builders, the executor and the wallet pay by default), commits at most 75% of the block storage limit, and pays at
+/// most 0.35 KAS more in the opt-in storage-inclusive priority mode. Measured at the 1 KAS default over the 1,635 shapes:
+/// the largest storage mass is 357,188 (71%, an 8/8 pair 2 × 2 netting; 177,256 at 2 KAS) and the largest priority premium
+/// 0.3077 KAS (a KRON / KRON pair 2 × 2 netting; 0.1288 KAS at 2 KAS). A placement's storage mass already exceeds its fee
+/// mass at 10 KAS, so no carrier below it is free in that mode (`kob_protocol::defaults::DEFAULT_ORDER_CARRIER`).
 #[test]
 fn the_default_order_carrier_adds_no_relay_fee() {
     let ten = measure_all(Carriers::order_side(10 * KAS));
@@ -103,8 +104,8 @@ fn the_default_order_carrier_adds_no_relay_fee() {
         let a = a.as_ref().unwrap_or_else(|e| panic!("{n} at 10 KAS: {e}"));
         let b = b.as_ref().unwrap_or_else(|e| panic!("{n} at the default carrier: {e}"));
         assert!(b.bytes <= a.bytes && b.fee_mass <= a.fee_mass && b.relay <= a.relay, "{n}: {b:?} against {a:?} at 10 KAS");
-        assert!(b.storage <= BLOCK_STORAGE_LIMIT * 2 / 5, "{n}: storage {}", b.storage);
-        assert!(b.priority <= a.priority + 15 * KAS / 100, "{n}: priority fee {} against {}", b.priority, a.priority);
+        assert!(b.storage <= BLOCK_STORAGE_LIMIT * 3 / 4, "{n}: storage {}", b.storage);
+        assert!(b.priority <= a.priority + 35 * KAS / 100, "{n}: priority fee {} against {}", b.priority, a.priority);
         compared += 1;
         same += usize::from(b.relay == a.relay);
         priority_up += usize::from(b.priority > a.priority);

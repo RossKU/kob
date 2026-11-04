@@ -949,7 +949,7 @@ USAGE
   kob take <COVENANT_ID> --amount AMOUNT [--carrier KAS] [options]
 
   An order that sells (a limit / IOC / FOK / Dutch sell, a take-profit sell, a sell-first entry): you pay its price plus
-  tip in KAS from your KAS UTXOs and receive AMOUNT of the token (on a token output carrying --carrier, default 2KAS).
+  tip in KAS from your KAS UTXOs and receive AMOUNT of the token (on a token output carrying --carrier, default 1KAS).
   An order that buys (a limit buy, a take-profit buy, a buy-first entry): you deliver AMOUNT of your tokens and receive
   its price plus tip in KAS. The fill must respect the order's minimum fill, its slices and its activation; a decaying
   order is filled at its price at the transaction's lock time (now - 10 DAA). Pair orders and stops are not taken here.
@@ -1127,7 +1127,7 @@ USAGE
   kob send <TOKEN> <TO> <AMOUNT> [--carrier KAS] [options]
                                                 TOKEN a ticker or covenant id; AMOUNT e.g. 12.5TUSD or 1250base; TO a P2PK
                                                 address or a 64-hex x-only key; the recipient's token output carries
-                                                --carrier (default 2KAS, at least 0.08KAS and the program's floor)
+                                                --carrier (default 1KAS, at least 0.08KAS and the program's floor)
 
   A token transfer stays within its program's slots (the 3/3 programs KOB issues: at most 3 token inputs and 3 token
   outputs: the recipient and your change), taking the fewest of your token UTXOs; KAS for the carrier and the fee

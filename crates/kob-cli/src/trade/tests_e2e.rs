@@ -291,19 +291,19 @@ fn place_signs_only_with_yes_and_matches_the_planner() {
     let s = w.signed(".place.json");
     let rec = recover_orders(&s.tx).unwrap();
     let AnyState::KobAsk(a) = &rec[0].order else { panic!("{:?}", rec[0].order) };
-    // the wallet's defaults: 2 KAS carriers, minimum fill worth 10 KAS at the limit, 90 days, the program's refund tip
+    // the wallet's defaults: 1 KAS carriers, minimum fill worth 10 KAS at the limit, 90 days, the program's refund tip
     assert_eq!(
         (a.maker, a.price, a.amount_left, a.min_fill, a.tip, a.refund_tip),
         (pk(0x11), 300_000_000, 10 * SCALE, 3334, 0, rtip())
     );
     assert_eq!(a.expiry_daa, 1_000_000 + 77_760_000);
-    assert_eq!((rec[0].value, rec[0].custody.as_ref().unwrap().value), (2 * KAS, 2 * KAS));
+    assert_eq!((rec[0].value, rec[0].custody.as_ref().unwrap().value), (KAS, KAS));
     assert_eq!(rec[0].custody.as_ref().unwrap().state.amount(), 10 * SCALE);
     // a buy, a stop-market sell, an IFD buy-first, a market order against an empty book (refused: no liquidity)
     assert_eq!(run(place, w.args(0x11, "limit --token TST --side buy --amount 5TST --price 2KAS --tip 0.001KAS --yes")), 0);
     let s = w.signed(".place.json");
     let AnyState::KobBid(b) = &recover_orders(&s.tx).unwrap()[0].order else { panic!() };
-    assert_eq!((b.price, b.tip, b.delivery_carrier, b.min_fill), (200_000_000, 100_000, 2 * KAS as i64, 5000));
+    assert_eq!((b.price, b.tip, b.delivery_carrier, b.min_fill), (200_000_000, 100_000, KAS as i64, 5000));
     assert_eq!(run(place, w.args(0x11, "stop-market --token TST --side sell --amount 4TST --stop 2.5KAS --yes")), 0);
     let s = w.signed(".place.json");
     assert!(
@@ -469,7 +469,7 @@ fn send_kas_and_tokens() {
     assert_eq!(run(send, w.args(0x11, &format!("TST {} 12.5TST --yes", to_hex(&taker)))), 0);
     let s = w.signed(".json");
     let spk = spk_to_string(&token_spk(&user_token(taker, 12_500)));
-    assert!(s.tx.outputs.iter().any(|o| o.script_public_key == spk && o.value == 2 * KAS), "the recipient's token output");
+    assert!(s.tx.outputs.iter().any(|o| o.script_public_key == spk && o.value == KAS), "the recipient's token output");
     let change = spk_to_string(&token_spk(&user_token(maker, 87_500)));
     assert!(s.tx.outputs.iter().any(|o| o.script_public_key == change), "the token change");
     // a mainnet address on testnet, a bare amount, more than held
@@ -1023,8 +1023,8 @@ fn merge_chains_transfers_to_the_key() {
     assert!(s2.tx.inputs.iter().any(|i| i.transaction_id == s1.tx.id && i.index == out1 as u32), "the second link spends it");
     let all = spk_to_string(&token_spk(&user_token(maker, 115 * SCALE)));
     assert_eq!(s2.tx.outputs.iter().filter(|o| o.covenant.is_some()).count(), 1);
-    // the largest input carrier (the 100 TST UTXO's 10 KAS), at most 2 KAS
-    assert!(s2.tx.outputs.iter().any(|o| o.script_public_key == all && o.value == 2 * KAS), "one output of the whole amount");
+    // the largest input carrier (the 100 TST UTXO's 10 KAS), at most 1 KAS
+    assert!(s2.tx.outputs.iter().any(|o| o.script_public_key == all && o.value == KAS), "one output of the whole amount");
 }
 
 /// Two sells in a row within the indexer's lag (TN10 2026-10-14 B-9): the indexer still lists the token UTXO the first one

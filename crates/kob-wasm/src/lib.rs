@@ -1843,7 +1843,7 @@ mod tests {
         assert_eq!(api::default_min_touch("4000", "100000").unwrap(), "25000");
         let c: serde_json::Value = serde_json::from_str(&api::default_constants().unwrap()).unwrap();
         assert_eq!(c["defaultMinFillSompi"], "1000000000");
-        assert_eq!(c["defaultOrderCarrier"], "200000000");
+        assert_eq!(c["defaultOrderCarrier"], "100000000");
         assert_eq!(c["maxScale"], "1000000000");
     }
 

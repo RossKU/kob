@@ -4,7 +4,7 @@
 //! tokens; the 2732-byte version is used for the wrong-template negative).
 //!
 //! Sources and pinned templates are read from `contracts/adapters/kron/`. Env: KOB_CARRIER_KAS =
-//! 2|10|20 (default 10), KOB_KRON_TPL = 2433|2732 selects the primary token template (default 2433).
+//! 1|2|10|20 (default 10), KOB_KRON_TPL = 2433|2732 selects the primary token template (default 2433).
 //! Run: cargo test --release -p kob-tests --test kob_kron_adapter_tests -- --nocapture --test-threads=1
 
 // Harness style: explicit `&` on byte-slice arguments, index loops over parallel vectors and

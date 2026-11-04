@@ -2,7 +2,7 @@
 //! c8a0871 compiled to SilverScript) executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20
 //! covenant context and script-unit metering.
 //!
-//! Contract sources are read from `contracts/` (env KOB_CARRIER_KAS = 2|10|20 sets the order carrier,
+//! Contract sources are read from `contracts/` (env KOB_CARRIER_KAS = 1|2|10|20 sets the order carrier,
 //! default 10 KAS).
 //! Run: cargo test --release -p kob-tests --test kob_protocol_tests -- --nocapture --test-threads=1
 
@@ -430,7 +430,7 @@ fn cov(b: u8) -> Hash {
     Hash::from_bytes([b; 32])
 }
 const LOT: i64 = 1_000; // token units per lot
-/// KAS carried by every covenant UTXO in these fixtures (env KOB_CARRIER_KAS, default 10; 2 is the wallet default).
+/// KAS carried by every covenant UTXO in these fixtures (env KOB_CARRIER_KAS, default 10; 1 is the wallet default).
 fn carrier() -> i64 {
     std::env::var("KOB_CARRIER_KAS").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(10) * KAS
 }
