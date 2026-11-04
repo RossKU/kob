@@ -5,7 +5,7 @@
 //! transaction that touched a KOB covenant, token custody / stray outputs) grouped by chain
 //! block, plus the reorg and operator operations that changed the derived state. It never holds
 //! a raw node response. The database (`index.sqlite3`) is a derived view of it: any schema change or
-//! lost database is repaired with `kob-executor index replay`, which re-applies the records and then
+//! lost database is repaired with `kobd index replay`, which re-applies the records and then
 //! re-syncs the tail from the node.
 //!
 //! Frame layout, one per committed batch:
@@ -23,7 +23,7 @@
 //! (`open` checks the chain only and never decodes a body).
 //!
 //! A sealed segment (every one but the newest) is kept as `seg-<n>.kobrec.gz`, the gzip of the segment file: the writer compresses
-//! the segment it has just rotated away from ([`compress_sealed`]; `kob-executor index migrate` does the ones an older run left
+//! the segment it has just rotated away from ([`compress_sealed`]; `kobd index migrate` does the ones an older run left
 //! whole), after reading the copy back and comparing it with the segment. The frames, their chain hashes and everything that reads
 //! the log are the same; only the bytes on disk are a third of the size.
 //!
@@ -438,8 +438,8 @@ pub enum RecordLogError {
     #[error(
         "record log holds frames {db_next}..{log_next} that the database has not committed; an unclean shutdown leaves at \
          most one, which the indexer applies itself when it continues the database's cursor, so the database is older than \
-         the log (restored from a backup?). The log is left as it is: apply the missing frames with `kob-executor index \
-         replay --onto-database`, or move the database aside and rebuild it with `kob-executor index replay` \
+         the log (restored from a backup?). The log is left as it is: apply the missing frames with `kobd index \
+         replay --onto-database`, or move the database aside and rebuild it with `kobd index replay` \
          (docs/ops/executor.md, Part B, 8)"
     )]
     AheadOfDatabase { log_next: u64, db_next: u64 },
@@ -448,7 +448,7 @@ pub enum RecordLogError {
     #[error(
         "record log frame {n} starts at block {frame_start}, but the database's cursor is {db_cursor}: the log and the \
          database do not belong together (another instance's log, or a database of another history). Nothing was changed; \
-         rebuild the database from this log with `kob-executor index replay` into a fresh data directory"
+         rebuild the database from this log with `kobd index replay` into a fresh data directory"
     )]
     Lineage { n: u64, frame_start: Hash32, db_cursor: String },
     /// An append or a truncation failed and the segment could not be put back to its last complete frame: nothing more is

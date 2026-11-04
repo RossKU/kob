@@ -132,7 +132,7 @@ in the registry. The validator accepts both entries of a second "PEPE": each is 
 ## Relation to the launch allowlist
 
 The allowlist row is `(covenant id, token template hash, suffix length, extension_commitment, decimals)` plus the family and slot
-limits: `Registry::allowlist()` returns exactly that for every token entry whose program this build supports. `kob-executor --tokens
+limits: `Registry::allowlist()` returns exactly that for every token entry whose program this build supports. `kobd --tokens
 registry/tokens.json` reads this file directly (validated): its supported programs open the token list, and its entries add their
 facts (decimals, so the standard scale; template hash and extension commitment, which an order of the token must match). Protocol v3
 has no lot and no tick (orders are any amount in base units, prices per whole token). Operators may load another file; the release

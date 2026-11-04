@@ -661,7 +661,7 @@ async fn a_data_directory_has_one_writer_and_readers_work_next_to_it() {
 
     // a second writer (import-orders, rebase, run, index) is refused with a clear message and writes nothing
     let err = Indexer::open(cfg.clone()).err().expect("a second writer must be refused").to_string();
-    assert!(err.contains("in use by another kob-executor writer") && err.contains("export-orders"), "{err}");
+    assert!(err.contains("in use by another kobd writer") && err.contains("export-orders"), "{err}");
     assert!(err.contains(&format!("pid {}", std::process::id())), "the holder is named: {err}");
     // replay builds a new database into the same directory: also a writer
     let mut cfg_replay = cfg.clone();

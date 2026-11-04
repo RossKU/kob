@@ -1,4 +1,4 @@
-//! Pause files (kill switches): `kob-executor run --pause-file`, the matcher's and keeper's `--pause-file` and the x402
+//! Pause files (kill switches): `kobd run --pause-file`, the matcher's and keeper's `--pause-file` and the x402
 //! facilitator's `killSwitchFile`.
 //!
 //! A pause file pauses while it exists. It fails closed: only "no such file" means running; any other answer (permission

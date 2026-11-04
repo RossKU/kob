@@ -5,7 +5,7 @@
 #
 # Prints, in one Markdown block: the commit, the order template hashes and the pinned registry of the
 # deployment record (contracts/deploy/<network>), the sha256 of the record files, of contracts/SHA256SUMS,
-# of every file of the built web app (web/dist) and of each binary given (e.g. target/release/kob-executor).
+# of every file of the built web app (web/dist) and of each binary given (e.g. target/release/kobd).
 # Fails when the deployment record does not reproduce (scripts/build-deploy.sh --check), when web/dist is
 # missing, or when the web bundle does not ship the registry the record pins as dist/registry/tokens.json
 # (`npm run build:release`; the bundle itself embeds no registry hash since 7182e66). Read-only. Needs node.

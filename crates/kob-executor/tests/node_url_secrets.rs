@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use clap::{Args, Command as ClapCommand};
 use serde_json::{json, Value};
 
-const BIN: &str = env!("CARGO_BIN_EXE_kob-executor");
+const BIN: &str = env!("CARGO_BIN_EXE_kobd");
 const SECRETS: [&str; 4] = ["alice", "s3cret", "apikey", "token=T"];
 
 /// `(flag, environment variable)` of every argument of `cmd` whose value is a node or indexer URL.

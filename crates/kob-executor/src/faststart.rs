@@ -1,4 +1,4 @@
-//! Fast start: `kob-executor run` on an EMPTY data directory trades within seconds and fills in the history afterwards.
+//! Fast start: `kobd run` on an EMPTY data directory trades within seconds and fills in the history afterwards.
 //!
 //! A normal first start indexes the chain from the node's pruning point (about 30 hours on testnet-10; on a phone over public
 //! nodes that takes hours) and the matcher plans nothing until the store has caught up. With `fast_start` the process runs
@@ -59,7 +59,7 @@ pub const STALE_TIP_DAA: u64 = 6_000;
 /// How often the backfill progress is measured and published.
 const PROGRESS_EVERY: Duration = Duration::from_secs(2);
 
-/// What a start of `kob-executor run` does about fast start.
+/// What a start of `kobd run` does about fast start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plan {
     /// One store, as before: fast start is off, the data directory has a store already, or the start is not the pruning point.
@@ -380,7 +380,7 @@ fn publish_progress(s: &Stores, pace: &mut BackfillPace, started: std::time::Ins
     });
 }
 
-/// `kob-executor run` with a fast start ([`Plan::Fresh`] or [`Plan::Resume`]): the tip and the full store follow `tip_chain` and
+/// `kobd run` with a fast start ([`Plan::Fresh`] or [`Plan::Resume`]): the tip and the full store follow `tip_chain` and
 /// `full_chain` (two node clients: see the module documentation), the runner works on [`FastSource`] until `shutdown`.
 pub async fn run_with<C, N, S>(
     cfg: IndexerConfig,

@@ -185,7 +185,7 @@ fn ask_to_stop(child: &std::process::Child) -> bool {
     unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) != 0 }
 }
 
-/// `kob-executor run` against a node that accepts the connection and never answers: a stop asked for while the first step
+/// `kobd run` against a node that accepts the connection and never answers: a stop asked for while the first step
 /// waits for it (the signal used to kill the process on the spot there, and later ones were swallowed until the node's
 /// request timeout) ends the process cleanly within a few seconds.
 #[test]
@@ -208,7 +208,7 @@ fn the_binary_stops_within_seconds_when_the_node_is_silent() {
     let key = dir.path().join("operator.key");
     // a throwaway key, never funded (readable by its owner only: the executor refuses a key file others can read)
     kob_executor::matcher::wallet::HotKey::create_file(&key).unwrap();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_kob-executor"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_kobd"));
     cmd.args(["run", "--no-fast-start", "--no-api", "--network", "testnet-10", "--rpc-url"])
         .arg(format!("ws://127.0.0.1:{port}"))
         .arg("--data-dir")

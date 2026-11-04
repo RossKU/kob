@@ -1,6 +1,6 @@
 [package]
 name = "kob-executor"
-description = "KOB executor: indexer, matcher/keeper, refund keeper and x402 facilitator in one binary"
+description = "KOB daemon (kobd): the Executor (matcher, keepers, x402 facilitator) and the Indexer (archive, read API) in one binary"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,8 +13,13 @@ name = "kob_executor"
 path = "src/lib.rs"
 
 [[bin]]
-name = "kob-executor"
+name = "kobd"
 path = "src/main.rs"
+
+# the old name of kobd, until the workflows that build it by that name are moved (src/bin/kob-executor.rs)
+[[bin]]
+name = "kob-executor"
+path = "src/bin/kob-executor.rs"
 
 [dependencies]
 kob-protocol = { path = "../kob-protocol" }

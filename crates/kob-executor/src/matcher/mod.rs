@@ -16,7 +16,7 @@
 //! | [`node`] | node access over JSON wRPC (submission, DAA score, VSPC v2 acceptance) |
 //! | [`wallet`] | the hot key (environment or permission-checked file, never argv) and funding |
 //! | [`submit`] | submission, mempool-conflict handling, acceptance tracking and rollback |
-//! | [`run`] | the `kob-executor match` / `keep` loop, book sources, metrics |
+//! | [`run`] | the `kobd match` / `keep` loop, book sources, metrics |
 //! | [`cli`] | command-line arguments and entry points |
 
 pub mod auction;

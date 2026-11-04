@@ -1,7 +1,7 @@
-//! `kob-executor run`: the indexer, the matcher and the keepers in one process over one store.
+//! `kobd run`: the indexer, the matcher and the keepers in one process over one store.
 //!
 //! * the follower (VSPC v2, `High`) indexes the chain into SQLite and serves the read API, as
-//!   `kob-executor index` does;
+//!   `kobd index` does;
 //! * the runner (`matcher::run`) plans against the same store through [`IndexerSource`]: a single
 //!   consistent read per tick ([`crate::indexer::book::snapshot`]), so the matcher never trades an
 //!   order the API would not list;
@@ -167,7 +167,7 @@ fn read_book(reader: &Mutex<rusqlite::Connection>, operator: Option<[u8; 32]>) -
     Ok(book::snapshot(&conn, operator)?)
 }
 
-/// `kob-executor run`.
+/// `kobd run`.
 #[derive(Args, Debug, Clone)]
 pub struct RunArgs {
     #[command(flatten)]
@@ -410,7 +410,7 @@ where
     res
 }
 
-/// The x402 facilitator of `kob-executor run`: the configuration at `path` with the indexer's node
+/// The x402 facilitator of `kobd run`: the configuration at `path` with the indexer's node
 /// and network, over [`IndexedChain`](crate::x402::indexed::IndexedChain) (node RPC + the indexer's
 /// acceptance tracking). `pause_file` (`--pause-file`) disables it like its own `killSwitchFile`: nothing is verified,
 /// settled or broadcast while it exists. With the indexer's `health`, intents are executed only against a book that is caught
@@ -496,10 +496,10 @@ fn multi_submit(
     MultiSubmit::new(WrpcNode::new(WrpcConfig::new(cfg.primary_url().to_string())), others, Some(chain.board()))
 }
 
-/// `kob-executor run`.
+/// `kobd run`.
 pub async fn run(a: RunArgs) -> Result<()> {
     if a.no_match && a.no_keep {
-        bail!("both roles are off: `kob-executor index` is the indexer alone");
+        bail!("both roles are off: `kobd index` is the indexer alone");
     }
     let fee_policy = a.fees.policy(a.fee_rate).map_err(anyhow::Error::msg)?;
     a.liveness.apply(&mut KeeperConfig::default()).map_err(anyhow::Error::msg)?;

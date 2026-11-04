@@ -22,22 +22,24 @@ platform:
 
 | Archive | For |
 |---|---|
-| `kob-executor-<version>-mainnet-x86_64-pc-windows-msvc.zip` | mainnet, Windows 10 / 11 (64-bit) |
-| `kob-executor-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz` | mainnet, Linux x86-64 (glibc) |
-| `kob-executor-<version>-mainnet-aarch64-linux-android.tar.gz` | mainnet, an Android phone through Termux (arm64; section 8) |
-| `kob-executor-<version>-testnet-10-...` | the same for testnet-10 |
-| `kob-executor-<version>-testnet-10-android.apk` | the testnet-10 Android app, a tap-to-use install on an arm64 phone (section 9) |
+| `kobd-<version>-mainnet-x86_64-pc-windows-msvc.zip` | mainnet, Windows 10 / 11 (64-bit) |
+| `kobd-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz` | mainnet, Linux x86-64 (glibc) |
+| `kobd-<version>-mainnet-aarch64-linux-android.tar.gz` | mainnet, an Android phone through Termux (arm64; section 8) |
+| `kobd-<version>-testnet-10-...` | the same for testnet-10 |
+| `kobd-<version>-testnet-10-android.apk` | the testnet-10 Android app, a tap-to-use install on an arm64 phone (section 9) |
 
 A binary serves exactly one network (the deployment build, `docs/ops/release.md`): the mainnet binary refuses a testnet
 node and the other way round. Start on testnet-10 if you have never run one.
 
-Each `kob-executor-...` archive holds `kob-executor` (the executor), `kob` (the command-line client), this page, `LICENSE` and a
+The program is called `kobd` (the KOB daemon; before it was `kob-executor`). Its files keep their names: `kob-executor.toml`, `kob-executor.log`, `kob-operator.key`.
+
+Each `kobd-...` archive holds `kobd` (the daemon: the Executor and the Indexer roles), `kob` (the command-line client), this page, `LICENSE` and a
 `SHA256SUMS` of its files; the release also lists a `SHA256SUMS` of every archive and of the APK. Check the archive you downloaded against
 it before you run anything:
 
 ```
 # Windows (PowerShell)
-Get-FileHash .\kob-executor-<version>-mainnet-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Get-FileHash .\kobd-<version>-mainnet-x86_64-pc-windows-msvc.zip -Algorithm SHA256
 # Linux
 sha256sum -c --ignore-missing SHA256SUMS
 ```
@@ -86,7 +88,7 @@ waits for it. Sizing and the reasons for each flag: `docs/ops/executor.md`, Part
 
 ## 3. Double-click
 
-Start `kob-executor` (on Windows double-click `kob-executor.exe`; on Linux run `./kob-executor` in a terminal). Without a
+Start `kobd` (on Windows double-click `kobd.exe`; on Linux run `./kobd` in a terminal). Without a
 configuration next to it, it runs the setup, which asks (Enter takes the default):
 
 1. **Network**: fixed by the binary; it says which.
@@ -97,7 +99,7 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
    Indexer** (both in one process: the Executor with a funded key and the Indexer's full history, record log and read API).
    The third choice comes with a warning: **the public API and the signing key then live on the same machine**. For a public
    server prefer separate machines: an Indexer-only host for the API and an Executor elsewhere. The roles can also be named on
-   the command line: `kob-executor setup --executor`, `--indexer` or `--executor --indexer` (the question is then skipped).
+   the command line: `kobd setup --executor`, `--indexer` or `--executor --indexer` (the question is then skipped).
    For your own node it then asks its URL: default `ws://127.0.0.1:18110` (mainnet) or
    `ws://127.0.0.1:18210` (testnet-10), connects at once and reports the node's version, network, sync state and UTXO index;
    on a problem it shows how to start the node and lets you check again, enter another URL, or `skip`.
@@ -113,14 +115,14 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
 6. **Funding**: it prints the key's address. Send at least 100 KAS (200 recommended, as a few transfers of 10 KAS or more,
    so several transactions can go out in one tick). It shows the balance as it arrives; press Enter to go on without
    waiting. The address is not lost if you do: every start prints it (`Funding address ...` under the command line, and
-   `funding_address` in the first log line), the low-funds warning names it, and `kob-executor address-balance` prints it
+   `funding_address` in the first log line), the low-funds warning names it, and `kobd address-balance` prints it
    with the balance (section 5).
 7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6).
 
 It then writes `kob-executor.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
 testnet-10; the mainnet binary carries its pinned registry), prints the command line the file stands for, and asks
 `Start the executor now? [Y/n]`: Enter starts it, `n` leaves the files and ends the setup (`setup --no-start` does not ask).
-From then on, a double-click runs that configuration directly. If another kob-executor already runs from the same folder,
+From then on, a double-click runs that configuration directly. If another kobd already runs from the same folder,
 the start is refused at once with a message naming it, before anything else is printed or logged.
 
 **Which tokens it lists.** Every order of a token program the binary supports, whatever the token. KOB makes no listing
@@ -188,10 +190,10 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   time to exit at once. The database survives either way; the next start continues where it stopped. A start after more
   than the node's retention (7 days with the flags above) continues from the node's pruning point on its own and says so
   (`gaps` in `/v1/health`, the log; `docs/ops/executor.md`, Part B 7.4).
-* **Address and balance**: `kob-executor address-balance` (in the folder of `kob-executor.toml`, or with `--dir <folder>`)
+* **Address and balance**: `kobd address-balance` (in the folder of `kob-executor.toml`, or with `--dir <folder>`)
   prints one JSON object: the key's address, the network and its plain balance read from the configured node
   (`balance_sompi`, `balance_kas`; when the node cannot be read, `balance_sompi` is `null` and `error` says why). It never
-  prints the secret and can run while the executor runs. Its sibling for scripts and the Android app is `kob-executor setup
+  prints the secret and can run while the executor runs. Its sibling for scripts and the Android app is `kobd setup
   --non-interactive --node resolver|<ws-url> --executor|--indexer|--executor --indexer [--new-key] [--network mainnet|testnet-10] [--dir <folder>]`:
   no questions, no start; it writes the same files as the dialogue (replacing the configuration, keeping an existing key
   file), and prints one JSON object with the `address` (`null` for the Indexer alone), the `roles` (`["executor"]`,
@@ -199,14 +201,14 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   are the combined role: it needs a key like the Executor and writes a full store (`lean = false`, record log on). The
   old `--role match|index|index,match` still works as a deprecated alias (it prints a note on stderr). `--network` is only for a
   development build; a deployment build knows its own and refuses another.
-* **Start by role**: `kob-executor --executor`, `--indexer` or `--executor --indexer` starts the configuration in the folder, after
+* **Start by role**: `kobd --executor`, `--indexer` or `--executor --indexer` starts the configuration in the folder, after
   checking that it was set up for exactly these roles (otherwise it says so and starts nothing; with no configuration it opens the
-  setup with the roles chosen, or, without a terminal, refuses). Plain `kob-executor` runs the configuration whatever its roles.
+  setup with the roles chosen, or, without a terminal, refuses). Plain `kobd` runs the configuration whatever its roles.
 * **Withdraw**: stop the executor first, then, from the same folder (or with `--dir <folder>`, or `--config <file>` for a
   configuration elsewhere):
 
   ```
-  kob-executor withdraw --to <address> --amount 25.5        # or --amount all
+  kobd withdraw --to <address> --amount 25.5        # or --amount all
   ```
 
   It uses the executor's own node connection from `kob-executor.toml`, so it works with the default public nodes (wss,
@@ -217,11 +219,11 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   without `--yes` and without a terminal it refuses to send. `--dry-run` shows the payment and sends nothing; `--fee-rate`
   (default 100, the relay floor) pays more per gram of mass. The address must belong to the binary's network (a mainnet
   binary refuses a `kaspatest:` address, and the node must report the same network). **A running executor makes it
-  refuse**: the command takes the data directory's writer lock, the one `run` holds ("in use by another kob-executor
+  refuse**: the command takes the data directory's writer lock, the one `run` holds ("in use by another kobd
   writer: stop it first"), so no matcher transaction is being built from the coins it spends and two withdrawals cannot
   overlap. A transaction the executor sent just before it stopped may still be on its way: if the node says a coin is
   already spent, nothing was lost, wait a minute and run it again. Only plain KAS moves; tokens the key holds stay where
-  they are. Afterwards `kob-executor address-balance` shows what is left, and the next start warns "funds low" until you fund
+  they are. Afterwards `kobd address-balance` shows what is left, and the next start warns "funds low" until you fund
   the key again. (`kob send` also works, with the same public nodes by default (two hosts that must agree on the outputs it spends) or your
   own node; its amount needs a unit such as `2.5KAS`; see `crates/kob-cli/README.md`.)
 * If the start fails, the window stays open with the error until you press Enter.
@@ -238,7 +240,7 @@ from the node within seconds on a start with an empty data directory (fast start
 3. On Linux the key file must be readable by its owner only (`chmod 600 kob-operator.key`): the executor refuses a key file that
    group or others can read. On Windows a copy takes the permissions of the folder it lands in: check that only your account can read the
    key (the setup made it so).
-4. Start the new one and look at `kob-executor address-balance` and the status line before you delete the old folder.
+4. Start the new one and look at `kobd address-balance` and the status line before you delete the old folder.
 
 ## 6. Move to a service
 
@@ -246,15 +248,15 @@ The setup printed the exact command line, for example:
 
 ```
 cd /d C:\kob
-C:\kob\kob-executor.exe run --config kob-executor.toml --key-file kob-operator.key --pause-file kob-data/pause
+C:\kob\kobd.exe run --config kob-executor.toml --key-file kob-operator.key --pause-file kob-data/pause
 ```
 
 Relative paths are relative to the folder of `kob-executor.toml`. To change options, edit `kob-executor.toml` (every key
 of `docs/ops/executor.md`, Part B 4; `[launch] args` takes further options of the role, e.g.
-`args = ["--sweep-own-strays"]`) or run the setup again (`kob-executor setup`).
+`args = ["--sweep-own-strays"]`) or run the setup again (`kobd setup`).
 
 **Windows**: a Task Scheduler task "At startup" (run whether the user is logged on or not, as the account that owns the
-key file) with program `C:\kob\kob-executor.exe`, arguments `run --config kob-executor.toml --key-file kob-operator.key
+key file) with program `C:\kob\kobd.exe`, arguments `run --config kob-executor.toml --key-file kob-operator.key
 --pause-file kob-data/pause` and *Start in* `C:\kob`. Set "If the task fails, restart every 1 minute". A task has no
 console: its log is the file `kob-executor.log` the setup configured (see *Logs* below); read it with
 `Get-Content C:\kob\kob-executor.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
@@ -304,10 +306,10 @@ non-root user, uid 10001). The volume `/data` holds the configuration, the key f
 container once, then the container runs what it wrote:
 
 ```
-docker build --build-arg NETWORK=mainnet -t kob-executor:mainnet .      # or NETWORK=testnet-10
+docker build --build-arg NETWORK=mainnet -t kobd:mainnet .      # or NETWORK=testnet-10
 sudo install -d -o 10001 -g 10001 -m 0700 /srv/kob
-docker run -it --rm --network host -v /srv/kob:/data kob-executor:mainnet setup --no-start
-docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kob-executor:mainnet
+docker run -it --rm --network host -v /srv/kob:/data kobd:mainnet setup --no-start
+docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kobd:mainnet
 docker logs -f kob                                                       # the status lines
 ```
 
@@ -322,7 +324,7 @@ program changes. The program is not replaced while it runs, and it does not upda
 
 1. **Read the release notes.** They say whether the release changes the `KOB1` payload version (indexers must go first,
    `docs/ops/release.md`, 7) or the database (brought up to date in place, or rebuilt: step 6).
-2. **Note what runs now:** `kob-executor --version` (the crate version, the release tag without the `v`) and
+2. **Note what runs now:** `kobd --version` (the crate version, the release tag without the `v`) and
    `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback only unless you
    changed it). A build of a commit before the `0.1.0` release says `0.0.0`; tell builds of the same version apart by `commit`.
 3. **Download and check** the new archive (section 1). Unzip it into a new folder; the archive holds the programs and this page,
@@ -333,19 +335,19 @@ program changes. The program is not replaced while it runs, and it does not upda
      survives (below). The executor stops within seconds, flushes the database and exits; a second Ctrl+C exits at
      once, and a stop that has not finished in ten seconds exits by itself (exit code 2, logged). The database survives either
      way (SQLite WAL, one transaction per batch), so a forced kill costs a short recovery, not data.
-   * keep the old program (`kob-executor.old`) and put the new `kob-executor` (and `kob`) in its place; on Windows the old file
+   * keep the old program (`kobd.old`) and put the new `kobd` (and `kob`) in its place; on Windows the old file
      is locked until the process has ended.
    * if you may want to roll back across a database change, copy `kob-data` aside now while the executor is stopped (a newer
      database schema is refused by an older program).
 5. **Start** it (double-click, `systemctl start kob`, `docker run` with the same volume and the rebuilt image). It continues from
-   the stored cursor. Check `kob-executor --version`, then `/v1/health`: `version`, `commit` and `payload_version` must be the
+   the stored cursor. Check `kobd --version`, then `/v1/health`: `version`, `commit` and `payload_version` must be the
    release's, `state` becomes `following`, and the status line shows no `WARNING:`.
 6. **When the release notes ask for a rebuild** (the database is refused as old): a matcher on lean storage has no record log to
    replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
    the fast start rebuilds the live book within seconds. Make sure the key file is not inside `kob-data` (setup puts it next
-   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive rebuilds with `kob-executor index
+   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive rebuilds with `kobd index
    replay` while offline; the public read server has a way without downtime (`docs/ops/chart-server.md`, section 6).
-7. **Rollback**: stop, put `kob-executor.old` back, restore the `kob-data` copy of step 4 if the database changed. An indexer must
+7. **Rollback**: stop, put `kobd.old` back, restore the `kob-data` copy of step 4 if the database changed. An indexer must
    not go below the payload version in use (`docs/ops/release.md`, 7).
 
 The Android app updates by installing the newer APK over the old one when both have the same signature (section 9, *Updates*); a
@@ -355,8 +357,8 @@ Termux executor follows the steps above in its folder; for Docker rebuild the im
 `payload_version` (also `GET /v1/health` in `docs/api.md`).
 
 **Stop for good, or empty the key.** Stop the executor (above), then withdraw (section 5, *Withdraw*:
-`kob-executor withdraw --to <address> --amount all`). It refuses while an executor runs from the same data directory, and moves
-only plain KAS: tokens the key holds stay where they are. Check with `kob-executor address-balance`.
+`kobd withdraw --to <address> --amount all`). It refuses while an executor runs from the same data directory, and moves
+only plain KAS: tokens the key holds stay where they are. Check with `kobd address-balance`.
 
 **Logs and rotation.** The flags are `--log-file <path>` (or `KOB_LOG_FILE`), `--log-max-mb` (default 10; 0: never rotate) and
 `--log-files` (rotated files kept, default 5; 0: the file starts over when full), or the keys `log_file`, `log_max_mb`,
@@ -376,13 +378,13 @@ library, so name resolution and TLS to the public nodes work as in any Termux pr
 
    ```
    cd ~
-   curl -LO https://github.com/RossKU/kob/releases/download/v<version>/kob-executor-<version>-mainnet-aarch64-linux-android.tar.gz
+   curl -LO https://github.com/RossKU/kob/releases/download/v<version>/kobd-<version>-mainnet-aarch64-linux-android.tar.gz
    curl -LO https://github.com/RossKU/kob/releases/download/v<version>/SHA256SUMS
    sha256sum -c --ignore-missing SHA256SUMS      # must print "...: OK"
-   tar xzf kob-executor-<version>-mainnet-aarch64-linux-android.tar.gz
-   cd kob-executor-<version>-mainnet-aarch64-linux-android
-   chmod +x kob-executor kob
-   ./kob-executor
+   tar xzf kobd-<version>-mainnet-aarch64-linux-android.tar.gz
+   cd kobd-<version>-mainnet-aarch64-linux-android
+   chmod +x kobd kob
+   ./kobd
    ```
 
    The setup of section 3 follows. Choose **public nodes** (the default: a phone should not run a node), keep the default
@@ -394,7 +396,7 @@ library, so name resolution and TLS to the public nodes work as in any Termux pr
    * Settings, Apps, Termux, Battery: set it to **Unrestricted** (disable battery optimisation). Some makers add their own
      "app launch" or "sleeping apps" lists (Samsung, Xiaomi, Huawei, OnePlus): exempt Termux there too.
    * Keep Termux in the recent apps (do not swipe it away) and the screen can be off. After a restart of the phone, start
-     it again by hand: `cd ~/kob-executor-<version>-mainnet-aarch64-linux-android && ./kob-executor`.
+     it again by hand: `cd ~/kobd-<version>-mainnet-aarch64-linux-android && ./kobd`.
 5. **Data and storage.** With public nodes the history download is about 4 GB (use Wi-Fi; the executor trades meanwhile), then the steady flow is far
    smaller. The setup turns on lean storage (`lean = true`): the database keeps the live book and 30 days of closed orders (and never more than
    500 MB), with no record log; the history comes from an archive indexer.
@@ -409,13 +411,13 @@ key and no funds.
 ## 9. Android app (testnet-10, sideloaded)
 
 A tap-to-use app for the same arm64 phones (Android 7.0 or later): the testnet-10 executor in a foreground service, with a
-setup screen, a start / stop switch, a status screen, **Withdraw funds** and **Export the key**. It runs the `kob-executor`
+setup screen, a start / stop switch, a status screen, **Withdraw funds** and **Export the key**. It runs the `kobd`
 binary of section 8 inside the app (`android/`), keeps its configuration, key and database in the app's private storage, and
 talks to nothing but the Kaspa node(s) you choose: no telemetry, no fee, no project server. It is a **testnet-10 build only**
 for now. It is sideloaded (no store).
 
 1. **Download the APK.** On the [GitHub release](https://github.com/RossKU/kob/releases) of the version, download
-   `kob-executor-<version>-testnet-10-android.apk` (on the phone, or on a computer and copy it over) and check its SHA-256
+   `kobd-<version>-testnet-10-android.apk` (on the phone, or on a computer and copy it over) and check its SHA-256
    against the release's `SHA256SUMS`. Builds of the latest `master` are also the artifact of the GitHub Actions workflow
    **android** (a zip holding the APK; needs a GitHub login, kept for a limited time; the run's summary prints the SHA-256).
    A file name ending in `-debug-signed.apk` is signed with a throwaway key: read **Updates** below before you put funds on it.
@@ -440,7 +442,7 @@ for now. It is sideloaded (no store).
 
 **Withdraw funds.** The button under the funding address opens a screen with the address to send to, an amount in KAS or
 `all`, and a confirmation. It **stops the executor first** (the executor uses the funds, and the database allows one writer),
-runs `kob-executor withdraw --to <address> --amount <KAS|all> --yes` (section 5) over the node of your setup, shows the
+runs `kobd withdraw --to <address> --amount <KAS|all> --yes` (section 5) over the node of your setup, shows the
 transaction id or the error, and offers to **start the executor again**. A sent transaction cannot be taken back: check the
 address.
 

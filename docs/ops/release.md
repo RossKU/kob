@@ -114,7 +114,7 @@ scripts/build-wasm.sh --mainnet --web
 ```
 
 `deploy-mainnet` and `deploy-tn10` are exclusive (a compile error names both). The templates are the same in
-every build; the feature only records the network and pins the registry: `kob-executor` refuses a configured
+every build; the feature only records the network and pins the registry: `kobd` refuses a configured
 network other than `mainnet`, and without `--tokens` it reads the embedded, pinned registry (its supported programs and token facts)
 (an operator may still pass `--tokens` with an own list; the executor logs that its hash differs from the pin,
 and `GET /v1/tokens` reports `registry.source` and `registry.sha256` either way).
@@ -124,7 +124,7 @@ payer entry point); its defaults are `network: mainnet` and `./registry/tokens.j
 ships in `dist/registry/` (the pinned file; a plain `npm run build` leaves the registry to the host). A hosting
 operator may set `config.json` next to the app (`indexerUrl`, `nodeUrl`, ...). The project's own hosting (Cloudflare Pages from
 `.github/workflows/deploy-pages.yml`, config from repository variables, post-deploy header and hash check, rollback) is
-`docs/ops/web-hosting.md`; its public read server (`kob-executor index` behind Cloudflare Tunnel) is `docs/ops/chart-server.md`.
+`docs/ops/web-hosting.md`; its public read server (`kobd index` behind Cloudflare Tunnel) is `docs/ops/chart-server.md`.
 
 The private-key signer frame pins the SHA-256 of the token table (covenant id, ticker, decimals) of `registry/tokens.json` at build time
 (`web/src/signer/table.ts`, audit 2026-10-30 G7). A deployment that serves another registry builds with `KOB_SIGNER_REGISTRY=<path to that file>`;
@@ -153,7 +153,7 @@ CI runs all of these on every push (`.github/workflows/ci.yml`: the `deploy-main
 ## 6. Hashes to publish
 
 ```
-scripts/release-hashes.sh target/release/kob-executor target/release/kob
+scripts/release-hashes.sh target/release/kobd target/release/kob
 ```
 
 prints the commit, every order template hash of the record, the registry sha256 and the sha256 of
@@ -171,20 +171,20 @@ anchor when one is made). Users and operators check:
 
 Rust release binaries are reproducible only on an identical toolchain and host; the hashes say what was
 built from the commit. CI (job `reproducible`) builds `web/dist` (with the kob-wasm bindings) and the
-kob-executor release binary twice, from two checkouts at different paths, and fails when any file differs. The source-level artifacts (templates, record, registry) reproduce byte for byte
+kobd release binary twice, from two checkouts at different paths, and fails when any file differs. The source-level artifacts (templates, record, registry) reproduce byte for byte
 everywhere.
 
 **Prebuilt binaries for operators** (`.github/workflows/release.yml`; the operators' page is
 `docs/ops/executor-quickstart.md`). The tag is `v` + the workspace version (`Cargo.toml` `[workspace.package] version`, which
-`kob-executor` and `kob-cli` inherit, so their `--version` is the tag; the CLI binary is `kob`): bump it, with `Cargo.lock`, in the very commit that is
+`kob-executor` (the crate of `kobd`) and `kob-cli` inherit, so their `--version` is the tag; the CLI binary is `kob`): bump it, with `Cargo.lock`, in the very commit that is
 tagged; the workflow refuses any other tag before it builds (`node scripts/package-release.mjs --check-tag v<version>` checks it
-locally). Pushing the tag `v<version>` builds `kob-executor` and `kob` (the `kob-cli` crate's binary) with `--release --locked`
+locally). Pushing the tag `v<version>` builds `kobd` and `kob` (the `kob-cli` crate's binary) with `--release --locked`
 for Windows x86_64 (`x86_64-pc-windows-msvc`, static C runtime), Linux x86_64 (`x86_64-unknown-linux-gnu`, on the
 oldest supported Ubuntu runner for the widest glibc range) and Android arm64 (`aarch64-linux-android`, bionic, for Termux;
 built with the runner image's NDK clang for API 24), each as the `deploy-tn10` and the `deploy-mainnet` build, and
 checks that each binary refuses the other network (not the Android one, which cannot run on the x86_64 runner: it is only
 checked to be an arm64 ELF). `scripts/package-release.mjs` packs each into two archives,
-`kob-executor-<version>-<network>-<target>.zip` (Windows) or `.tar.gz` with `kob-executor`, `kob`, `QUICKSTART.md`, `LICENSE`, `NOTICE`
+`kobd-<version>-<network>-<target>.zip` (Windows) or `.tar.gz` with `kobd`, `kob`, `QUICKSTART.md`, `LICENSE`, `NOTICE`
 and a `SHA256SUMS` of those files, and `kob-<version>-<network>-<target>` (the command line alone, with its `README.md`); the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
 release job attaches the twelve archives, the Android app and a `SHA256SUMS` of them all to a **draft** release of the tag: add the output of
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
@@ -193,7 +193,7 @@ Windows binary shows SmartScreen); the Android app is signed with the **release 
 published (the repository's `Dockerfile` builds one from the source for operators who want a container, quickstart 6).
 
 **The Android app in the release** (`android/`, built by `.github/workflows/android.yml`, which `release.yml` calls as the job
-`android`): `kob-executor-<version>-testnet-10-android.apk`, built with the testnet-10 deployment build of the executor and
+`android`): `kobd-<version>-testnet-10-android.apk`, built with the testnet-10 deployment build of the executor and
 listed in the release's `SHA256SUMS` like the archives. `versionName` is the workspace version (the tag without the `v`);
 `versionCode` is the commit time in minutes, so every later commit, and so every later release, is an update of the earlier
 ones. It is signed with the Android release key when the repository secrets `ANDROID_KEYSTORE_B64`,
@@ -212,7 +212,7 @@ before the wallets: an indexer refuses a payload version it does not know (`payl
 would list none of the orders the new wallets place.
 
 1. Operators upgrade their **executors / indexers** first. A database schema change says in the release notes whether
-   the database is brought up to date in place or rebuilt with `kob-executor index replay` (`docs/ops/executor.md` 7.6).
+   the database is brought up to date in place or rebuilt with `kobd index replay` (`docs/ops/executor.md` 7.6).
    Check `GET /v1/health` and that a placement made with `kob` is listed.
    `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git
    commit of the build, `null` when the build did not say) and `payload_version` (the `KOB1` payload version it reads and

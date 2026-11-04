@@ -127,7 +127,7 @@ impl HotKey {
     }
 
     /// A fresh key from the operating system's CSPRNG, written to a NEW key file at `path` that only the current account may
-    /// read (`kob-executor setup`). The file is created empty, restricted (Unix: mode `0600` at creation; Windows: the
+    /// read (`kobd setup`). The file is created empty, restricted (Unix: mode `0600` at creation; Windows: the
     /// inherited ACL is replaced by one entry for the current account, `icacls /inheritance:r /grant:r`, and the result is
     /// checked with the same SDDL test [`HotKey::from_file`] applies), and only then is the secret written into it: the
     /// secret is never in a file another account could read, not even briefly. An existing file is never replaced (a key

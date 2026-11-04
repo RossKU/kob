@@ -31,9 +31,9 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | Document | What it covers |
 |---|---|
 | [ops/executor-quickstart.md](ops/executor-quickstart.md) | Run an executor from a prebuilt download: setup, funding, what to watch, withdraw, services, upgrade, Docker, Android |
-| [ops/executor.md](ops/executor.md) | Running `kob-executor`: one process (`run`), the indexer (Part B: node, storage, read API, runbook) and the matcher and keepers (Part C: keys, economics, flags) |
+| [ops/executor.md](ops/executor.md) | Running `kobd`: one process (`run`), the indexer (Part B: node, storage, read API, runbook) and the matcher and keepers (Part C: keys, economics, flags) |
 | [ops/web-hosting.md](ops/web-hosting.md) | Hosting the web app on Cloudflare Pages: account, token, repository variables, the deploy gate, the token-names source (kascov.io: refresh policy, CSP, privacy), rollback, neutrality rules |
-| [ops/chart-server.md](ops/chart-server.md) | A public read server (`kob-executor index` behind Cloudflare Tunnel): setup order, tunnel, backups, alerts, upgrading without downtime |
+| [ops/chart-server.md](ops/chart-server.md) | A public read server (`kobd index` behind Cloudflare Tunnel): setup order, tunnel, backups, alerts, upgrading without downtime |
 | [ops/release.md](ops/release.md) | Cutting a mainnet release: gates, registry, reproducible build, hashes to publish, upgrade order, operator requirements |
 
 ## Security (`docs/security/`)

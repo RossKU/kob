@@ -16,7 +16,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * Runs `kob-executor` (the role of kob-executor.toml) as a foreground service: a persistent notification and a wake lock
+ * Runs `kobd` (the roles of kob-executor.toml) as a foreground service: a persistent notification and a wake lock
  * while it runs. If the process exits it is started again after a growing pause; the user stops it with ACTION_STOP.
  */
 class ExecutorService : Service() {
@@ -122,7 +122,7 @@ class ExecutorService : Service() {
             Kob.killStale(this)
             val began = SystemClock.elapsedRealtime()
             try {
-                // no arguments: kob-executor.toml of KOB_EXECUTOR_DIR, the same as `kob-executor run|index --config ...`
+                // no arguments: kob-executor.toml of KOB_EXECUTOR_DIR, the same as `kobd run|index --config ...`
                 val p = Kob.command(this).redirectErrorStream(true).start()
                 process = p
                 p.outputStream.close()

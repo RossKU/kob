@@ -89,7 +89,7 @@ async fn a_report_hides_and_the_administrators_subcommand_restores_next_to_the_r
     assert_eq!(v["hidden"], serde_json::json!([ID]));
 
     // the administrator: a separate process, the same database file, while the indexer holds it
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_kob-executor"))
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_kobd"))
         .args(["index", "--network", network(), "--data-dir"])
         .arg(dir.path().join("data"))
         .args(["logo-reports", "restore", ID])

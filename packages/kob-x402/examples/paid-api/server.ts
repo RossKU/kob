@@ -1,5 +1,5 @@
 // Example resource server: `GET /report` costs 0.5 KAS, or N units of a KCC-20 token, or a swap-and-pay in token A.
-// The facilitator is a real one (the `kob-executor x402` service); this process holds no keys.
+// The facilitator is a real one (the `kobd x402` service); this process holds no keys.
 //
 //   KOB_X402_FACILITATOR=http://127.0.0.1:8402  \
 //   KOB_X402_API_KEY=...                        \

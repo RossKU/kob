@@ -96,7 +96,7 @@ pub struct FacilitatorConfig {
     pub reorg_watch_daa: u64,
     /// While this file exists the facilitator is disabled.
     pub kill_switch_file: Option<PathBuf>,
-    /// The process's pause file (`kob-executor run --pause-file`): disables the facilitator like `kill_switch_file`.
+    /// The process's pause file (`kobd run --pause-file`): disables the facilitator like `kill_switch_file`.
     pub pause_file: Option<PathBuf>,
     /// A `pending` entry the node has never seen (the process died before the broadcast) is failed and its outpoints released
     /// once it is this old. Until then only the identical retry resolves it. Safe: a success is only ever reported
@@ -144,7 +144,7 @@ impl Default for FacilitatorConfig {
     }
 }
 
-/// Whether the book intents are executed against may be planned against now (inside `kob-executor run`: the indexer is
+/// Whether the book intents are executed against may be planned against now (inside `kobd run`: the indexer is
 /// caught up with the node or within its lag tolerance); `Err` names why not.
 pub type BookReadiness = Arc<dyn Fn() -> std::result::Result<(), String> + Send + Sync>;
 
@@ -156,7 +156,7 @@ pub struct SettleHealth {
     /// The node did not answer the last probe: nothing can be verified or settled.
     pub node: std::result::Result<(), String>,
     /// The book of intent executions cannot be planned against (the indexer lags or is not following): intents are not
-    /// offered. `Ok` when no readiness is wired (`kob-executor x402`, tests).
+    /// offered. `Ok` when no readiness is wired (`kobd x402`, tests).
     pub book: std::result::Result<(), String>,
 }
 
@@ -416,7 +416,7 @@ pub struct Facilitator {
     /// One probe at a time: held across the node call by the prober only.
     node_probing: Mutex<()>,
     /// The fee rates of the process (`crate::fee`): intent executions go at the high rate, expiries at the normal rate, both
-    /// held to the total cap. Inside `kob-executor run` the runner publishes them; elsewhere they stay the floor.
+    /// held to the total cap. Inside `kobd run` the runner publishes them; elsewhere they stay the floor.
     pub fees: crate::fee::FeeBoard,
     /// What `/verify` established for each merchant's recent payments ([`VerifiedRecord`]).
     verified: Mutex<VerifiedMemo>,
@@ -494,7 +494,7 @@ impl Facilitator {
         }
     }
 
-    /// Wires the readiness of the book intents are executed against (inside `kob-executor run`: the indexer's health). While
+    /// Wires the readiness of the book intents are executed against (inside `kobd run`: the indexer's health). While
     /// it is not ready the intent mode is not advertised (`/supported`).
     pub fn with_book_readiness(mut self, f: BookReadiness) -> Facilitator {
         self.book_readiness = Some(f);
@@ -974,7 +974,7 @@ impl Facilitator {
             return Err(X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "the facilitator is disabled by its operator")
                 .retryable());
         }
-        // the acceptance tracker (the indexer, in `kob-executor run`) follows it from before the broadcast
+        // the acceptance tracker (the indexer, in `kobd run`) follows it from before the broadcast
         self.chain.track(&v.txid);
         let entry = match self.submit_retrying(&v.tx, wait, || self.chain_seen(&entry, Some(&v.tx))) {
             Ok(_) | Err(SubmitError::AlreadyKnown) => {

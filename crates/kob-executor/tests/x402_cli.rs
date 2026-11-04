@@ -1,4 +1,4 @@
-//! The `kob-executor x402` binary: argument and configuration errors, startup against a mock node,
+//! The `kobd x402` binary: argument and configuration errors, startup against a mock node,
 //! and the public routes over a real socket.
 
 use std::io::{Read, Write};
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-const BIN: &str = env!("CARGO_BIN_EXE_kob-executor");
+const BIN: &str = env!("CARGO_BIN_EXE_kobd");
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()

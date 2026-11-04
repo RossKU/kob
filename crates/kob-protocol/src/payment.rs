@@ -1,4 +1,4 @@
-//! Plain KAS payments from P2PK coins: the transactions `kob send KAS` and `kob-executor withdraw` build.
+//! Plain KAS payments from P2PK coins: the transactions `kob send KAS` and `kobd withdraw` build.
 //!
 //! A version-1 transaction whose inputs are the builders' P2PK inputs (budget role `p2pk`). [`kas_payment`] pays an amount and
 //! sends the change back to the sender; [`kas_sweep`] pays everything the coins hold minus the fee in one output. The fee is

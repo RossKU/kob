@@ -1,5 +1,5 @@
 //! The binary end to end: a book snapshot file (JSON round trip) planned offline by
-//! `kob-executor match --offline` and `kob-executor keep --offline`; no key on the command line.
+//! `kobd match --offline` and `kobd keep --offline`; no key on the command line.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -18,7 +18,7 @@ fn snapshot(dir: &std::path::Path, b: &MemoryBook) -> std::path::PathBuf {
 }
 
 fn exe(args: &[&str]) -> (String, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_kob-executor"))
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_kobd"))
         .args(args)
         .env_remove("KOB_OPERATOR_KEY")
         .env_remove("KOB_OPERATOR_KEY_FILE")
@@ -55,7 +55,7 @@ fn offline_match_and_keep_from_a_snapshot_file() {
 }
 
 fn exe_fails(args: &[&str]) -> String {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_kob-executor"))
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_kobd"))
         .args(args)
         .env_remove("KOB_OPERATOR_KEY")
         .env_remove("KOB_OPERATOR_KEY_FILE")
@@ -74,7 +74,7 @@ fn run_needs_a_role_and_a_key_and_index_keeps_its_subcommands() {
     let data = dir.to_str().unwrap();
     // both roles off is `index`
     let err = exe_fails(&["run", "--no-match", "--no-keep", "--data-dir", data]);
-    assert!(err.contains("kob-executor index"), "{err}");
+    assert!(err.contains("kobd index"), "{err}");
     // the keyed roles never start without a key (and never touch the data directory first)
     let err = exe_fails(&["run", "--data-dir", data, "--network", "testnet-10"]);
     assert!(err.contains("no operator key"), "{err}");

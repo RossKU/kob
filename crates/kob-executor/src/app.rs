@@ -1,6 +1,6 @@
 //! The non-interactive path for a wrapper that cannot answer the setup's questions (the Android app):
-//! `kob-executor setup --non-interactive ...` writes the same files as the interactive setup and prints one JSON object,
-//! and `kob-executor address-balance` prints the operator's address and its plain balance as one JSON object.
+//! `kobd setup --non-interactive ...` writes the same files as the interactive setup and prints one JSON object,
+//! and `kobd address-balance` prints the operator's address and its plain balance as one JSON object.
 //!
 //! Neither prints the secret key. Neither talks to anything but the node the configuration names (no telemetry, no fee, no
 //! project server).
@@ -17,7 +17,7 @@ use crate::setup::{
     ensure_token_list, write_config, SetupFile, SetupNode, SetupOptions, WrpcSetupNode, CONFIG_FILE, DATA_DIR, KEY_FILE,
 };
 
-/// The roles of a `kob-executor` process, as the setup and the role flags name them.
+/// The roles of a `kobd` process, as the setup and the role flags name them.
 ///
 /// * **Executor**: matches crossing orders and refunds expired ones with a funded hot key (`run`); lean storage and fast start.
 /// * **Indexer**: follows the chain, keeps the full history and the record log and serves the read API (`index`; no key).
@@ -34,11 +34,11 @@ pub enum AppRole {
 pub const COMBINED_WARNING: &str =
     "the public API and the signing key then live on the same machine; for a public server prefer separate machines";
 
-/// `--executor` and `--indexer`: kaspad-style role flags of the setup and of a start (`kob-executor --executor --indexer`).
+/// `--executor` and `--indexer`: kaspad-style role flags of the setup and of a start (`kobd --executor --indexer`).
 #[derive(clap::Args, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RoleFlags {
-    /// The Executor role: match crossing orders and refund expired ones (needs a funded hot key). Lean storage and fast start
-    /// unless combined with --indexer.
+    /// The Executor role: match crossing orders and refund expired ones (needs a funded hot key). Lean storage and fast start;
+    /// a full store with --indexer.
     #[arg(long)]
     pub executor: bool,
     /// The Indexer role: follow the chain, keep the full history and the record log and serve the read API (no key). With
@@ -243,7 +243,7 @@ pub fn operator_address(cfg_path: &Path) -> Option<String> {
     Some(HotKey::from_file(&path).ok()?.address(&network).to_string())
 }
 
-/// `kob-executor address-balance`.
+/// `kobd address-balance`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct AddressBalanceArgs {
     /// Directory of `kob-executor.toml` and the key file. Default: `$KOB_EXECUTOR_DIR` or the executable's own directory.
@@ -306,7 +306,7 @@ mod tests {
             build_network: network.map(str::to_string),
             pinned_registry: pinned,
             poll: Duration::ZERO,
-            program: "kob-executor".into(),
+            program: "kobd".into(),
         }
     }
 

@@ -2,7 +2,7 @@
 
 The web app (`web/`) is static files: HTML, JavaScript, CSS and two wasm modules. This page publishes it on Cloudflare Pages
 (free plan) from this repository with `.github/workflows/deploy-pages.yml`, or by hand from a PC. The data it shows comes from an
-indexer (`kob-executor index`; running one for the public: `docs/ops/chart-server.md`) and from Kaspa nodes.
+indexer (`kobd index`; running one for the public: `docs/ops/chart-server.md`) and from Kaspa nodes.
 
 **First setup, in order.** The workflow needs the public address of an indexer, and that address needs a domain: the order of the
 whole first setup (domain, indexer, tunnel, then this page) is in `docs/ops/chart-server.md`, "Start here". Sections 1 to 3 below are
@@ -72,7 +72,7 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 ### Further indexers: cross-check and failover
 
 The URLs in `KOB_PAGES_EXTRA_INDEXER_URLS` (`extraIndexerUrls` in `config.json`) do two jobs. List only indexers you trust to read the same
-network; each is a `kob-executor` read API (`docs/api.md`).
+network; each is a `kobd` read API (`docs/api.md`).
 
 1. **Cross-check** (always): the key facts a decision rests on (a token's powers, an open-list market's price scale, the best ask and bid, the
    start of a market order) are compared with the indexer in use; a disagreement is shown and a market order whose start is too far from another
@@ -184,7 +184,7 @@ page fills it from a file the creator picks, `docs/spec/token-metadata.md` 2). S
   address; the last list is cached in localStorage; it **fails open**: an indexer that cannot be reached or has no such route leaves logos visible). A token on
   the list shows its letter and, in its details, "Logo hidden after a report". "Report logo" in the token's details posts `{covenant_id, reason}` to
   `POST <indexer>/v1/logo-reports` (reasons: illegal, impersonation, other; no free text). The first report hides the logo for everyone at once; the operator
-  reviews it with `kob-executor index logo-reports` (`docs/ops/executor.md`) and may restore it; reports of a restored token are only recorded for `cooldown_secs`
+  reviews it with `kobd index logo-reports` (`docs/ops/executor.md`) and may restore it; reports of a restored token are only recorded for `cooldown_secs`
   (default 6 hours). The same list is fed by the GitHub Issue form `.github/ISSUE_TEMPLATE/logo-report.yml` through the workflow `.github/workflows/logo-report.yml`,
   which posts to the repository variable `KOB_LOGO_REPORT_URL` (the public indexer's `/v1/logo-reports` address; unset: the workflow only comments that the report
   waits for manual review). The indexer needs `[logo_reports] enabled = true` (`docs/ops/chart-server.md`, `docs/api.md` 3.19 and 3.20).
@@ -276,7 +276,7 @@ on *Actions* > *deploy-pages* > *Run workflow*:
 1. builds and tests the app exactly as the `web` job of `ci.yml` (kob-wasm slim bindings, the pinned kaspa-wasm SDK,
    typecheck, unit tests, `npm run build:release`, `scripts/release-hashes.sh`, the mock e2e suite);
 2. writes `web/dist/config.json` from the variables; on `testnet-10` also `web/dist/registry/tokens.json` as the supported
-   token programs with no token entries (the shipped registry names mainnet tokens; it is the same list `kob-executor setup`
+   token programs with no token entries (the shipped registry names mainnet tokens; it is the same list `kobd setup`
    writes as `kob-tokens.json`), on `mainnet` the pinned registry of `build:release` stays. With no token entries the app names no
    token: it opens on the tokens that have a ticker or declared decimals, and lists the others (no ticker, no declaration) only
    behind "Show N token(s) without a name" on the market page (a search or a covenant id finds them anyway); a testnet-10 page can

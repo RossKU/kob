@@ -35,7 +35,7 @@ pub enum DbError {
     NetworkMismatch { found: String, expected: String },
     #[error(
         "database {0} was written by a build before protocol v3 (schema 4 or older: its orders are of templates this build does not \
-         pin and its quantities are not base units) and cannot be migrated: move it aside (or delete it) and run `kob-executor index replay`, \
+         pin and its quantities are not base units) and cannot be migrated: move it aside (or delete it) and run `kobd index replay`, \
          which rebuilds it from the record log"
     )]
     PreV3(String),

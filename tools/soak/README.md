@@ -5,7 +5,7 @@ the reference with 3 token inputs / 3 token outputs per transaction; fixed suppl
 **Binance KAS/USDT** (1 TUSD ≈ 1 USD worth of KAS), **TETH** and **TBTC** (1 ≈ 1 ETH / 1 BTC worth of KAS, Binance ETH/USDT and
 BTC/USDT over KAS/USDT), each with its own KAS book, and the TETH/TUSD and TBTC/TUSD pairs. A market maker quotes every KAS book,
 five traders place every KOB order type in the KAS books and as pair orders, a payer makes x402 payments (KAS, KCC-20,
-swap-and-pay, invoices paid by an intent), two competing `kob-executor run` instances (indexer + matcher + keepers) fill and
+swap-and-pay, invoices paid by an intent), two competing `kobd run` instances (indexer + matcher + keepers) fill and
 maintain the books, an invariant checker reads everything, and the web UI runs on the live data. Everything runs on one Windows PC
 against a testnet-10 node of your own (`ws://127.0.0.1:18210` by default; point `config.json` at it); all KAS comes from
 self-mining.
@@ -49,8 +49,8 @@ A checker state file of another protocol generation (`run/state/checker.json` wi
 ```
 supervisor (scripts/supervisor.mjs)            restarts crashed children (backoff 2 s .. 60 s), rotates logs (20 MB x 5), samples memory / CPU
  ├─ miner      bin/tn10-miner.exe              GPU (OpenCL) or CPU miner, coinbase -> the bank key (maturity 1000 DAA), in bursts below a bank watermark
- ├─ exec-a     kob-executor run                indexer + API :8091, matcher + keepers (hot key execA), x402 facilitator :8401
- ├─ exec-b     kob-executor run                indexer + API :8092, matcher + keepers (hot key execB): competes with exec-a
+ ├─ exec-a     kobd run                indexer + API :8091, matcher + keepers (hot key execA), x402 facilitator :8401
+ ├─ exec-b     kobd run                indexer + API :8092, matcher + keepers (hot key execB): competes with exec-a
  ├─ bots       node dist/soak.mjs bots         bank, market maker, 5 traders, x402 merchant (:8480) + payer
  ├─ checker    node dist/soak.mjs checker      protocol invariants -> run/incidents.jsonl, report -> run/reports/
  └─ ui         node scripts/serve-ui.mjs       the web app on live data, http://127.0.0.1:8490/
@@ -161,7 +161,7 @@ cd tools/soak && npm run build && npm run typecheck && npm test     # typecheck 
 ```
 
 Then copy the binaries and bindings into `run/` (the soak runs from copies, so later rebuilds never touch a running process):
-`run/bin/{kob-executor,tn10-miner}.exe`, `run/wasm-node/` (= `crates/kob-wasm/pkg-node-tn10` plus a `package.json` saying
+`run/bin/{kobd,tn10-miner}.exe`, `run/wasm-node/` (= `crates/kob-wasm/pkg-node-tn10` plus a `package.json` saying
 `{"type":"commonjs"}`), and the UI: `tools/soak/scripts/build-ui.sh` (a `vite build` of `web/` against `crates/kob-wasm/pkg-tn10`, into
 `run/web-dist`, without touching `web/wasm`).
 
@@ -202,7 +202,7 @@ resting ask / bid of the same token (touch trigger, checker invariant 5).
 | cancel an order | `node dist/soak.mjs cancel --config run/config.json <covenant id> ...` (the maker's key, the web app's cancel path) |
 | balances | `node dist/soak.mjs balances --config run/config.json` (JSON: per key the node's KAS total, spendable KAS, and per token the proven holdings: UTXO count, amount, KAS locked in carriers; read-only) |
 | merge every holding | `node dist/soak.mjs consolidate --config run/config.json [<key> ...]` (redeploy helper, bots stopped: each key's plain token UTXOs merged into ONE per token in rounds of up to 8 inputs, fee and change from the freed carriers; the merged output carries 10 KAS, or 1 KAS when the inputs carried less; the outputs are created after the new indexer's start, so it lists them) |
-| carry the history of re-issued tokens | `node dist/soak.mjs carry-history --config run/config.json --db run/<exec>/data/index.sqlite3 --from-registry <old tokens.json> [--to-registry <file>] [--dry-run]` (that executor STOPPED; the new registry defaults to `run/registry/tokens.json`): by ticker, moves the `fill` events (trades, candles, 24 h stats, last price) and the pair fills of each old covenant id to the new id of the same ticker in ONE transaction, so the market pages keep one chart per ticker; orders, token UTXOs and the other events keep the old id. Refuses an old id that still has open / partial orders; records each carry in `meta` (`carried_history:<old id>`), so a re-run is a no-op and a different target is refused. `kob-executor index replay` undoes it (the database is the record log's derived view): run it again after a replay (`src/history-carry.ts`, `test/history-carry.test.ts`) |
+| carry the history of re-issued tokens | `node dist/soak.mjs carry-history --config run/config.json --db run/<exec>/data/index.sqlite3 --from-registry <old tokens.json> [--to-registry <file>] [--dry-run]` (that executor STOPPED; the new registry defaults to `run/registry/tokens.json`): by ticker, moves the `fill` events (trades, candles, 24 h stats, last price) and the pair fills of each old covenant id to the new id of the same ticker in ONE transaction, so the market pages keep one chart per ticker; orders, token UTXOs and the other events keep the old id. Refuses an old id that still has open / partial orders; records each carry in `meta` (`carried_history:<old id>`), so a re-run is a no-op and a different target is refused. `kobd index replay` undoes it (the database is the record log's derived view): run it again after a replay (`src/history-carry.ts`, `test/history-carry.test.ts`) |
 | chart history | `node scripts/chart-history.mjs [--only exec-b] [--json]` (read-only; the executors may run): per executor, every registry token's KAS chart and every pair chart must start, at 1d / 1h / 5m / 1m, at the bucket of the first trade in that executor's database, and no fill may be left under an id carried to a current one (a replay of the record log undoes `carry-history`); exit 1 and one `PROBLEM` line each otherwise. A chart that starts later than its database lost history in the read path, not in the data (2026-10-14: the indexer read only the newest 20 000 fills of a candle window) |
 | import older runs' history | `node scripts/import-history.mjs --db run/<exec>/data/index.sqlite3 --source <label>=<older index.sqlite3> ... [--old-registry <tokens.json> ...] [--dry-run]` (that executor STOPPED: the script refuses a live writer): each run starts its indexers on a fresh database, so the trades of earlier runs live only in their databases. Copies their KAS-book fills (protocol v2 lot layouts converted exactly) by ticker onto the current covenant ids, each source only until the next run started (the run live at the time wins), each (order, transaction) once, in ONE transaction per source, recorded in `meta` (`history_import:<label>`: a re-run is a no-op); the copied orders are unlisted, nobody's (`maker` NULL) and never reverted (block 0). Writes the first trade per ticker to `run/state/chart-floor.json`, which `chart-history.mjs` holds every database to (`--record-floor` rewrites it from one database). A replay or a rebuilt database drops the import: run it again (`src/history-carry.ts`, `test/history-carry.test.ts`) |
 | add a second token | add `token2` to run/config.json (see config.example.json), `scripts/stop.ps1`, `soak.mjs setup` (issues it, rewrites the registry = the executors' allowlist), `scripts/start.ps1`; an interrupted setup whose issuance was broadcast: `setup --recover-issue token2:<txid>` |
@@ -278,7 +278,7 @@ templates stay. Keys, tokens and databases are kept unless the database schema o
    restart exec-b and exec-a one after the other (never both down), resume the matchers, release the bots and the checker, swap
    `run/web-dist` and restart the UI.
 4. After each executor's restart, `scripts/chart-history.mjs --only <exec>` once it has caught up: every chart still starts at its
-   first trade (a `kob-executor index replay` or a rebuilt database needs `carry-history` again before the executor serves).
+   first trade (a `kobd index replay` or a rebuilt database needs `carry-history` again before the executor serves).
    Watch `status.ps1`, `scripts/activity.mjs` and the report for half an hour: rejected transactions, indexer rejects, new incidents.
 
 **New token program.** A token of a program the build does not pin is not tradable, so a program change issues the soak tokens

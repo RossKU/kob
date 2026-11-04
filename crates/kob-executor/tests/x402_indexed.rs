@@ -1,4 +1,4 @@
-//! The x402 facilitator inside `kob-executor run`: finality from the indexer's acceptance tracking
+//! The x402 facilitator inside `kobd run`: finality from the indexer's acceptance tracking
 //! ([`IndexedChain`]) instead of the merchant output staying in the UTXO set, the per-consumer watch
 //! ownership of the ingest (the matcher never drops the facilitator's watches), and swap-and-pay quotes
 //! from an indexer's book.

@@ -6,7 +6,7 @@
 //! * `POST /v1/logo-reports` files a report (a token, one of three reasons, and where it came from: the web app or a GitHub Issue form).
 //!   There is no free text, so nothing a stranger typed is stored.
 //! * The FIRST report of a token hides its logo at once (the web app then shows the letter avatar). The operator reviews the report
-//!   (`kob-executor index logo-reports list`) and may `restore` the token. Reports that arrive for a restored token inside the cooldown
+//!   (`kobd index logo-reports list`) and may `restore` the token. Reports that arrive for a restored token inside the cooldown
 //!   (`cooldown_secs`, default 6 hours) are recorded and change nothing; one after the cooldown hides it again.
 //!   An operator can also hide a token for good (`hide`: state `never`).
 //! * `GET /v1/logo-blocklist` serves `{"hidden":[covenant ids],"updated_ms":..}`; the web app reads it every two minutes.

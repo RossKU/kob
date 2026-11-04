@@ -1,4 +1,4 @@
-//! `kob-executor index migrate`: brings an existing data directory to the compact storage layout and gives the space back. A store
+//! `kobd index migrate`: brings an existing data directory to the compact storage layout and gives the space back. A store
 //! written by an earlier build is read by this build as it is (every change below is one a reader tolerates), so the migration can
 //! run at a time of the operator's choosing; it is idempotent and can be stopped and run again.
 //!

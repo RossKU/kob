@@ -148,7 +148,7 @@ impl ApiConfig {
     /// A warning for a listener other hosts can reach with no trusted proxy: a reverse proxy or CDN in front of it makes every
     /// client arrive from the proxy's address, so all of them share one set of per-client limits (rate, connections,
     /// WebSockets) until `trusted_proxies` names the proxy. `None` for a loopback listener (the default, and what
-    /// `kob-executor setup` writes): only this host's own programs reach it, a person's browser and tools, for whom one shared
+    /// `kobd setup` writes): only this host's own programs reach it, a person's browser and tools, for whom one shared
     /// set of limits is right; an operator who puts a proxy in front of it on the same host lists it as the guide says
     /// (docs/ops/executor.md, Part B, 4). `None` with the API off or a trusted proxy configured.
     pub fn proxy_warning(&self) -> Option<String> {
@@ -194,7 +194,7 @@ impl Default for ApiConfig {
 
 /// The token-logo blocklist (`[logo_reports]`; docs/api.md, *Logo reports*). KOB shows a token logo straight from its creator's address in the
 /// viewer's browser and keeps no image. A report (the web app's button, or a GitHub Issue form) hides the logo at once, the operator reviews
-/// it (`kob-executor index logo-reports`), and the web app reads the list of hidden tokens from `GET /v1/logo-blocklist`.
+/// it (`kobd index logo-reports`), and the web app reads the list of hidden tokens from `GET /v1/logo-blocklist`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogoReportsConfig {
@@ -268,7 +268,7 @@ pub struct IndexerConfig {
     pub primary_fetch: bool,
     pub data_dir: PathBuf,
     pub start: StartMode,
-    /// `kob-executor run` on an empty data directory trades at once and fills in the history afterwards ([`crate::faststart`]):
+    /// `kobd run` on an empty data directory trades at once and fills in the history afterwards ([`crate::faststart`]):
     /// a second store in `<data_dir>/tip` follows the chain from the node's current sink (seconds) and the matcher and
     /// keepers work on it, while the normal store indexes the history from the pruning point; when that has caught up, the
     /// executor switches to it and deletes the tip store. Default false (the setup writes true for a matcher). Without
@@ -314,12 +314,12 @@ pub struct IndexerConfig {
     /// that one connection cannot carry (one step slower than the chain it covers), the lag settles near this value: lower it
     /// (e.g. 30) to keep the windows parallel up to the tip. See docs/ops/executor.md, *Parallel fetch*.
     pub prefetch_min_lag_blue: u64,
-    /// Lag tolerance of the "wait until caught up" gates: the matcher, the keepers and the maintenance jobs of `kob-executor
+    /// Lag tolerance of the "wait until caught up" gates: the matcher, the keepers and the maintenance jobs of `kobd
     /// run` plan while the store is at most this many seconds (`daa_per_second` DAA each) behind the node, whatever the
     /// follower's state (`catching_up` included); beyond it they plan nothing. 0: only while `following` (the strict gate).
     /// `/v1/health` keeps `caught_up` strict and adds `within_lag_tolerance`.
     pub max_lag_secs: u64,
-    /// `kob-executor run` asks the node which listed orders it still holds (and leaves out those it no longer does) only while
+    /// `kobd run` asks the node which listed orders it still holds (and leaves out those it no longer does) only while
     /// the store is at least this many seconds behind the node: the query is a node round trip per tick, which loses races to
     /// other executors when the book is current anyway. 0: ask every tick.
     pub verify_live_orders_min_lag_secs: u64,
@@ -356,7 +356,7 @@ pub struct IndexerConfig {
     pub api: ApiConfig,
     /// The token-logo blocklist the web app reads and reports to (`[logo_reports]`, [`crate::logo_reports`]).
     pub logo_reports: LogoReportsConfig,
-    /// What the binary started without arguments runs with this file (`crate::setup`; `kob-executor setup` writes it into
+    /// What the binary started without arguments runs with this file (`crate::setup`; `kobd setup` writes it into
     /// `kob-executor.toml` next to the executable). Every command given the file as `--config` ignores the table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch: Option<LaunchConfig>,
@@ -415,10 +415,10 @@ impl Default for IndexerConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LaunchRole {
-    /// `kob-executor run`: the indexer, the matcher and the keepers (needs the operator's key).
+    /// `kobd run`: the indexer, the matcher and the keepers (needs the operator's key).
     #[default]
     Run,
-    /// `kob-executor index`: the indexer and its read API alone (no key, no funds).
+    /// `kobd index`: the indexer and its read API alone (no key, no funds).
     Index,
 }
 
@@ -433,7 +433,7 @@ impl LaunchRole {
 }
 
 /// The `[launch]` table: the command-line options of a start without arguments that are not indexer keys. A start without
-/// arguments runs `kob-executor <role> --config <this file> --key-file ... --pause-file ... --x402-config ... <args>` in the
+/// arguments runs `kobd <role> --config <this file> --key-file ... --pause-file ... --x402-config ... <args>` in the
 /// file's directory, so its relative paths (these and `data_dir`, `tokens_path`) are relative to the file
 /// (`crate::setup::launch_args`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

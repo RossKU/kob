@@ -7,7 +7,7 @@
 // of the new token shows one continuous chart. Nothing else is touched: the old orders keep their own `token_cov_id` (their token
 // template is not the new one, and `/v1/tokens` lists tokens from the orders), the old token's UTXO tables stay as they are.
 //
-// The executor must be stopped (the database is its derived view; the lock is not checked here). `kob-executor index replay` rebuilds
+// The executor must be stopped (the database is its derived view; the lock is not checked here). `kobd index replay` rebuilds
 // the tables from the record log and undoes the carry: run it again after a replay (it is idempotent). Each carried id is recorded in
 // `meta` (`carried_history:<old id>`), so a second run reports `already` and an attempt to carry the same id elsewhere is refused.
 
@@ -215,7 +215,7 @@ export function chartProblems(market: string, firstTrade: number | null, firstCa
 // A database of the lot layouts (protocol v2, schema 4 or older: `orders.lot_units`) is converted exactly: a fill's amount is
 // `lots * lot_units * unit` base units and its price stays sompi per `unit` base units, which is the imported order's `scale`.
 // One transaction; the import is recorded in `meta` (`history_import:<label>`), so a re-run is a no-op. The executor must be
-// stopped. `kob-executor index replay` rebuilds the tables from the record log and drops the import: import again after a replay.
+// stopped. `kobd index replay` rebuilds the tables from the record log and drops the import: import again after a replay.
 // Undo: delete the `order_events` / `order_state` / `orders` rows of the orders whose `unlisted_reason` is the label's, and the meta row.
 
 /** The read side of node:sqlite's `DatabaseSync` an import reads a source with. */

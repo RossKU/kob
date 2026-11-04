@@ -4,12 +4,12 @@
 //   node scripts/package-release.mjs --version 1.2.3 --network mainnet --target x86_64-pc-windows-msvc \
 //        --bin-dir target/x86_64-pc-windows-msvc/release [--out dist]
 //   node scripts/package-release.mjs --sums dist          write dist/SHA256SUMS over every archive and APK in dist
-//   node scripts/package-release.mjs --check-tag v1.2.3   fail unless the tag is `v` + the workspace version that kob-executor and
+//   node scripts/package-release.mjs --check-tag v1.2.3   fail unless the tag is `v` + the workspace version that kob-executor (the crate of kobd) and
 //                                                         kob-cli (the `kob` binary) carry (Cargo.toml [workspace.package] and Cargo.lock): the
 //                                                         binaries' --version is the tag (docs/ops/release.md 6)
 //
 // Two archives per network and target, `.zip` (Windows targets) or `.tar.gz` (every other target), each holding one directory of
-// its name: `kob-executor-<version>-<network>-<target>` with kob-executor and kob (the command line), QUICKSTART.md
+// its name: `kobd-<version>-<network>-<target>` with kobd (the daemon) and kob (the command line), QUICKSTART.md
 // (docs/ops/executor-quickstart.md), LICENSE, NOTICE and a SHA256SUMS of those files; and `kob-<version>-<network>-<target>` with
 // kob alone, README.md (crates/kob-cli/README.md), LICENSE, NOTICE and a SHA256SUMS of those files. The archive is written here, not by zip / tar: the bytes depend only on the inputs and on
 // SOURCE_DATE_EPOCH (default: the commit time of HEAD) as every entry's time, fixed modes and no owner names, so two builds of
@@ -171,8 +171,8 @@ function packageOne(o) {
     ['LICENSE', text(path.join(root, 'LICENSE')), 0o644],
     ['NOTICE', text(path.join(root, 'NOTICE')), 0o644],
   ];
-  write(`kob-executor-${o.version}-${o.network}-${o.target}`, [
-    [`kob-executor${exe}`, read(path.join(o['bin-dir'], `kob-executor${exe}`)), 0o755],
+  write(`kobd-${o.version}-${o.network}-${o.target}`, [
+    [`kobd${exe}`, read(path.join(o['bin-dir'], `kobd${exe}`)), 0o755],
     kob,
     ['QUICKSTART.md', text(path.join(root, 'docs/ops/executor-quickstart.md')), 0o644],
     ...legal,
@@ -180,7 +180,7 @@ function packageOne(o) {
   write(`kob-${o.version}-${o.network}-${o.target}`, [kob, ['README.md', text(path.join(root, 'crates/kob-cli/README.md')), 0o644], ...legal]);
 }
 
-/** The tag is `v` + the version the binaries report: [workspace.package] version, inherited by kob-executor and kob-cli, and
+/** The tag is `v` + the version the binaries report: [workspace.package] version, inherited by kob-executor (the crate of kobd) and kob-cli, and
  * the version Cargo.lock records for both (a --locked build refuses a stale lock anyway; this says why in one line). */
 function checkTag(tag) {
   const read = (p) => fs.readFileSync(path.join(root, p), 'utf8').replace(/\r\n/g, '\n');
@@ -206,7 +206,7 @@ function checkTag(tag) {
 function writeSums(dir) {
   const names = fs
     .readdirSync(dir)
-    .filter((n) => n.startsWith('kob-') && (n.endsWith('.zip') || n.endsWith('.tar.gz') || n.endsWith('.apk')))
+    .filter((n) => (n.startsWith('kob-') || n.startsWith('kobd-')) && (n.endsWith('.zip') || n.endsWith('.tar.gz') || n.endsWith('.apk')))
     .sort();
   if (!names.length) throw new Error(`no release archives in ${dir}`);
   const text = sumsText(names.map((n) => [n, fs.readFileSync(path.join(dir, n))]));

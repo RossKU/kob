@@ -1,4 +1,4 @@
-//! The indexer's command line: `kob-executor index` (and the option set `kob-executor run` shares).
+//! The indexer's command line: `kobd index` (and the option set `kobd run` shares).
 
 use crate::config::NodeConfig;
 use crate::config::{IndexerConfig, StartMode};
@@ -11,7 +11,7 @@ use clap::{Args, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// `kob-executor index`.
+/// `kobd index`.
 #[derive(Args)]
 pub struct IndexArgs {
     #[command(flatten)]
@@ -168,7 +168,7 @@ pub enum IndexSub {
     },
 }
 
-/// `kob-executor index logo-reports`.
+/// `kobd index logo-reports`.
 #[derive(Subcommand)]
 pub enum LogoCmd {
     /// The listed tokens, the hidden and not yet reviewed ones first, with the reports about each.
@@ -348,21 +348,21 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
 
 pub use crate::shutdown::shutdown_signal;
 
-/// What `kob-executor index` (follow and serve) refuses instead of ignoring: the options of role `run` that its configuration sets.
+/// What `kobd index` (follow and serve) refuses instead of ignoring: the options of role `run` that its configuration sets.
 /// The launcher refuses the same `[launch]` keys (`setup::launch_args`); `fast_start` needs the matcher the index role does not have.
 /// `file`: the configuration file, for the message.
 pub fn refuse_run_only_options(cfg: &IndexerConfig, file: Option<&std::path::Path>) -> Result<()> {
     let at = file.map(|p| format!("{}: ", p.display())).unwrap_or_default();
     if let Some(k) = cfg.launch.as_ref().and_then(|l| l.run_only_key()) {
         anyhow::bail!(
-            "{at}[launch] {k} is an option of role \"run\", not of `kob-executor index` (the index role has no key, no kill switch and no x402 \
-             facilitator): remove it, or start `kob-executor run`"
+            "{at}[launch] {k} is an option of role \"run\", not of `kobd index` (the index role has no key, no kill switch and no x402 \
+             facilitator): remove it, or start `kobd run`"
         );
     }
     if cfg.fast_start {
         anyhow::bail!(
-            "{at}fast_start is an option of `kob-executor run` (it lets the matcher trade at once on a store that follows the chain from the \
-             node's sink while the history is indexed); `kob-executor index` has no matcher. To follow at once, set `start = \"sink\"` (--start sink): \
+            "{at}fast_start is an option of `kobd run` (it lets the matcher trade at once on a store that follows the chain from the \
+             node's sink while the history is indexed); `kobd index` has no matcher. To follow at once, set `start = \"sink\"` (--start sink): \
              orders older than the start are then not in the store and /v1/health reports book_complete false. Otherwise let it catch up: \
              the status line and /v1/health show the time to go"
         );
@@ -627,7 +627,7 @@ mod tests {
         assert!(c.nodes.is_empty() && c.rpc_url == own, "an own node by default on the command line");
     }
 
-    /// `kob-executor index` (follow and serve) refuses what it would otherwise ignore: the options of role `run` its configuration
+    /// `kobd index` (follow and serve) refuses what it would otherwise ignore: the options of role `run` its configuration
     /// sets (the launcher refuses the same `[launch]` keys), and `fast_start`, which needs the matcher the index role does not have.
     #[test]
     fn index_refuses_the_options_of_role_run_instead_of_ignoring_them() {
@@ -651,9 +651,7 @@ mod tests {
         // fast start: refused with the way out (the sink start) named
         let e = refuse_run_only_options(&parse("fast_start = true"), Some(file)).unwrap_err().to_string();
         assert!(
-            e.contains("fast_start is an option of `kob-executor run`")
-                && e.contains("start = \"sink\"")
-                && e.contains("book_complete"),
+            e.contains("fast_start is an option of `kobd run`") && e.contains("start = \"sink\"") && e.contains("book_complete"),
             "{e}"
         );
         // and the flag does the same: --fast-start switches it on for one start

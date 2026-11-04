@@ -1,6 +1,6 @@
 //! Regression: hostile numeric order state must never crash, stall or blind the matcher.
 //!
-//! * `slope != 0` with `decayStep = 0` used to divide by zero in `matcher::candidate` and end `kob-executor run`.
+//! * `slope != 0` with `decayStep = 0` used to divide by zero in `matcher::candidate` and end `kobd run`.
 //! * A zero quantity divisor (a bid with a tip keeps a positive all-in) used to divide by zero in `planner::walk`; an if-done
 //!   exit inherited its parent's listing without a look at its own numbers. Today a bid's `minFill` must be positive (its
 //!   termination rule reads one minimum fill of buying power) and `scale` a power of ten in `1..=10^9`.

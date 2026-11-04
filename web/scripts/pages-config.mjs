@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The runtime configuration of a public web deployment (.github/workflows/deploy-pages.yml, docs/ops/web-hosting.md): writes
 // <dist>/config.json from the KOB_PAGES_* repository variables and, on testnet-10, <dist>/registry/tokens.json as the supported
-// token programs with no token entries (the shipped registry names mainnet tokens; the same file `kob-executor setup` writes as
+// token programs with no token entries (the shipped registry names mainnet tokens; the same file `kobd setup` writes as
 // kob-tokens.json for a testnet-10 build).
 //
 //   node scripts/pages-config.mjs --check          validate the variables only (nothing is written)

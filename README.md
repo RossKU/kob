@@ -28,7 +28,7 @@ off-chain custody.
   (connect, buy and sell, limit and market orders, partial fills, cancel, merge, the status banners, fees, the private-key option,
   recovering a token you created). Testnet-10 coins have no value; use them first.
 * **Run an executor** (match orders and earn the spread and tips, or serve the order book): download a prebuilt archive from the
-  [GitHub releases](https://github.com/RossKU/kob/releases), check its hash and double-click `kob-executor`; it needs no Rust and no
+  [GitHub releases](https://github.com/RossKU/kob/releases), check its hash and double-click `kobd`; it needs no Rust and no
   node of your own by default: [docs/ops/executor-quickstart.md](docs/ops/executor-quickstart.md) (Windows, Linux, Docker, Android).
 * **Host the web app and a public read server:** [docs/ops/web-hosting.md](docs/ops/web-hosting.md) and
   [docs/ops/chart-server.md](docs/ops/chart-server.md).
@@ -115,7 +115,7 @@ The web app defaults to mainnet, no indexer and the SDK's public resolver. A rea
 your own settings and a browser wallet; see `web/README.md`. On mainnet it is a pre-audit canary:
 use only funds you can afford to lose.
 
-**Run `kob-executor` against testnet-10.** You need a testnet-10 node with the JSON wRPC
+**Run `kobd` against testnet-10.** You need a testnet-10 node with the JSON wRPC
 listener (`kaspad --utxoindex --testnet --netsuffix=10 --rpclisten-json=127.0.0.1:18210`,
 see `docs/ops/executor.md`, Part B). The testnet-10 build (`deploy-tn10`) records the network of
 `contracts/deploy/testnet-10` and refuses any other `--network`; its templates are the reference ones
@@ -123,14 +123,14 @@ see `docs/ops/executor.md`, Part B). The testnet-10 build (`deploy-tn10`) record
 
 ```
 cargo build --release --locked -p kob-executor --features deploy-tn10
-target/release/kob-executor index --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
+target/release/kobd index --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
     --data-dir ./kob-data --tokens registry/tokens.example.json --listen 127.0.0.1:8090
 ```
 
 The mainnet release build is `--features deploy-mainnet` (it pins `registry/tokens.json`); the release checklist, the
 hashes to publish, the upgrade order and the operator requirements are in `docs/ops/release.md`.
 
-`registry/tokens.example.json` lists fictional testnet tokens: replace it with your own allowlist (`registry/README.md`). `index` is the keyless, read-only role. `kob-executor run` adds the matcher and keepers and needs
+`registry/tokens.example.json` lists fictional testnet tokens: replace it with your own allowlist (`registry/README.md`). `index` is the keyless, read-only role. `kobd run` adds the matcher and keepers and needs
 an operator hot key (`KOB_OPERATOR_KEY_FILE`, test funds only); `docs/ops/executor.md` covers
 flags, keys, monitoring and the runbook.
 

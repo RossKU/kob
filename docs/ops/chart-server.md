@@ -1,7 +1,7 @@
-# A public read server for the web app (`kob-executor index` behind Cloudflare Tunnel)
+# A public read server for the web app (`kobd index` behind Cloudflare Tunnel)
 
 The hosted web app (`docs/ops/web-hosting.md`) reads the order books, charts, trades and orders from an indexer: the read API of
-`kob-executor index` (`docs/ops/executor.md`, Part B). This page runs one for the public on a home PC (or a VPS) and publishes
+`kobd index` (`docs/ops/executor.md`, Part B). This page runs one for the public on a home PC (or a VPS) and publishes
 it through Cloudflare Tunnel (free), without opening a port on the router.
 
 **What this server is not.** It runs the `index` role only: it holds **no key**, has **no funds**, does **no matching**, keeps
@@ -42,7 +42,7 @@ Download and check the binary of the network (testnet-10 for now): `docs/ops/exe
 you and the chain; `docs/ops/executor-quickstart.md`, section 2), or the public nodes the Kaspa resolvers name
 (`rpc_url = "resolver"`: always a cross-checked pair on two hosts; `docs/ops/executor.md`, Part C, *Node*).
 
-**Setup.** Run `kob-executor setup` in the folder of the binary and answer: the node (public nodes, or your own), **role:
+**Setup.** Run `kobd setup` in the folder of the binary and answer: the node (public nodes, or your own), **role:
 Indexer**, the data directory (`kob-data`). There is no key question for this role. It writes `kob-executor.toml` (and on
 testnet-10 `kob-tokens.json`, the supported token programs with no token entries: every token of a supported program is indexed
 and listed by the API, and none is named; the web app's market list shows the tokens that have a ticker or declared decimals and keeps the
@@ -78,7 +78,7 @@ cors_allow_origin = "*"
 metrics = false
 ```
 
-Start it with a double-click on `kob-executor` (or `kob-executor index --config kob-executor.toml`). Running the setup again
+Start it with a double-click on `kob-executor` (or `kobd index --config kob-executor.toml`). Running the setup again
 replaces the file: add the `[api]` table again afterwards. Run it as a service as `docs/ops/executor-quickstart.md`,
 section 6 shows (the index role has no key file and no pause file: arguments `index --config kob-executor.toml`).
 
@@ -89,7 +89,7 @@ resolver that took about 2.4 hours for 36 hours of history (about 14.6 s of chai
 "`indexer catching up, ... behind the node (about 35 h), indexing 15x chain speed, caught up in about 2 h 24 min`" (`catch_up` in
 `/v1/health`: `rate_daa_per_sec`, `eta_seconds`).
 
-`fast_start` is for the matcher (`kob-executor run`, which trades on a second store while it indexes the history); the `index` role
+`fast_start` is for the matcher (`kobd run`, which trades on a second store while it indexes the history); the `index` role
 refuses it (`fast_start = true` or `--fast-start` stop the start with a message). The fast route of a read server is
 `start = "sink"` (top level of `kob-executor.toml`, or `--start sink`; on a data directory that is still empty): it follows the chain
 within a second of the start and lists the orders created since. The orders older than the start are **not** in that store, for
@@ -201,7 +201,7 @@ enabled = true
 
 The two routes (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`) then sit behind the same tunnel; the per-client limit uses the
 visitor address of this section, so keep `trusted_proxies` and `client_ip_header` right. You review with
-`kob-executor index logo-reports list | restore | hide` on this machine (`executor.md`, Part B). Set the GitHub repository variable
+`kobd index logo-reports list | restore | hide` on this machine (`executor.md`, Part B). Set the GitHub repository variable
 `KOB_LOGO_REPORT_URL` to `https://chart.example.org/v1/logo-reports` so the Issue form feeds the same list.
 
 **Abuse, in the API and at Cloudflare.** The API limits each client on its own: 20 requests per second with a burst of 60 per
@@ -217,7 +217,7 @@ front of the tunnel instead of raising the limits: a rate-limiting rule for the 
 
 `kob-data` holds the SQLite database (`index.sqlite3`) and the record log (`records/`). The record log is the asset to back
 up: it is append-only, all but the newest segment never change, and it is the only source of the history once the node has
-pruned it. The database can always be rebuilt from it (`kob-executor index replay`). Details, a consistent database copy while
+pruned it. The database can always be rebuilt from it (`kobd index replay`). Details, a consistent database copy while
 the indexer runs, and restoring: `docs/ops/executor.md`, Part B, section 8.
 
 **Size.** The design estimate was 2.6 KB of database and 1 KB of log per order. The testnet-10 soak measured more, because an order
@@ -285,10 +285,10 @@ third-party indexers in the deployment helps them.
 **A new release of the program.** Read the release notes (`docs/ops/release.md`, 7) for the payload version and for whether the
 database is brought up to date in place or rebuilt. Then:
 
-1. `kob-executor --version` and `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`) say what runs now.
+1. `kobd --version` and `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`) say what runs now.
 2. Download the new archive, check its hash (`executor-quickstart.md`, 1) and unzip it into a new folder next to the old one.
 3. **In place, with a short outage.** Stop the indexer gracefully (Ctrl+C, `systemctl stop`, the scheduled task's window; it flushes
-   the database and exits within seconds), put the new `kob-executor` where the old one was (keep the old as `kob-executor.old`) and
+   the database and exits within seconds), put the new `kobd` where the old one was (keep the old as `kobd.old`) and
    start it. The chart is dark for the stop and the start only: in the soak test the API answered 3 seconds after a start and the
    store was following again 35 seconds after a 6-minute outage. A database the release brings up to date in place does it at
    that start (7 seconds on a 1.6 GB copy). Check `/v1/health` again: `version`, `commit`, `payload_version`, `state = following`.
@@ -296,14 +296,14 @@ database is brought up to date in place or rebuilt. Then:
    here, offline, no API), or you want to see the new version work before the public does:
    1. Make a second folder `B` (for example `C:\kob-b`) from the new archive. Copy the running folder's `kob-executor.toml` into it and
       change only the port: `listen = "127.0.0.1:8091"`. `data_dir = "kob-data"` is relative to the file, so `B` has its own data.
-   2. Logo reports (only with `[logo_reports]` on): they are not in the record log. Run `kob-executor index --config kob-executor.toml
+   2. Logo reports (only with `[logo_reports]` on): they are not in the record log. Run `kobd index --config kob-executor.toml
       logo-reports export > logo-reports.json` in the running folder, and `logo-reports import logo-reports.json` in `B` after the
       replay (`--onto-database` keeps them). Copy the record log: the whole `kob-data/records/` folder of the running indexer into `B/kob-data/records/` (a half-written last
-      frame in the copy is dropped when the log is opened). Then run `kob-executor index replay --config kob-executor.toml` in `B`: it
+      frame in the copy is dropped when the log is opened). Then run `kobd index replay --config kob-executor.toml` in `B`: it
       builds a new database from the log under the new program's rules and prints a summary at the end (rejected placements by
       reason). Faster, when the release does not change how the database is derived: put a `VACUUM INTO` copy of the running
       database (section 4) in as `B/kob-data/index.sqlite3` and run `index replay --onto-database` instead (`executor.md`, 8).
-   3. Start `B` (`kob-executor index --config kob-executor.toml`). It catches up the time since the last logged frame from the node.
+   3. Start `B` (`kobd index --config kob-executor.toml`). It catches up the time since the last logged frame from the node.
       Wait until `curl -s http://127.0.0.1:8091/v1/health` shows the new `version` and `commit`, `state = following` and
       `book_complete = true`, and compare a few answers with the running one (`/v1/tokens`, `/v1/orders?...`).
    4. **Switch.** Point the tunnel's service at `http://127.0.0.1:8091`: for a dashboard-managed tunnel edit the public hostname; with

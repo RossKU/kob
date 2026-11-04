@@ -137,7 +137,7 @@ impl SelectConfig {
     }
 }
 
-/// Command-line options of the weighted selection (`kob-executor run`, `match`, `keep`; on by default).
+/// Command-line options of the weighted selection (`kobd run`, `match`, `keep`; on by default).
 #[derive(clap::Args, Debug, Clone)]
 pub struct SelectArgs {
     /// Plan deterministically, as the reference planner and keepers: every executor with the same view builds the same

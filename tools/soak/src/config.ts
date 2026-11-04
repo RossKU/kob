@@ -15,7 +15,7 @@ export interface ExecutorConfig {
   api: string;
   /** x402 facilitator listen address (only one executor runs the facilitator) */
   x402?: string;
-  /** extra `kob-executor run` flags */
+  /** extra `kobd run` flags */
   args?: string[];
 }
 

@@ -144,7 +144,7 @@ impl Indexer {
             let dir = cfg.records_dir();
             if db_next == 0 && recordlog::record_count(&dir)? > 0 {
                 return Err(IndexerError::Config(format!(
-                    "record log {} has frames but the database has none: run `kob-executor index replay` to rebuild the database from it, or move the log away to start fresh",
+                    "record log {} has frames but the database has none: run `kobd index replay` to rebuild the database from it, or move the log away to start fresh",
                     dir.display()
                 )));
             }
@@ -270,7 +270,7 @@ impl Indexer {
     }
 
     /// Start the follower and (when enabled) the API server on the current runtime. The indexer
-    /// stays usable (`ingest`, `health`) while they run: `kob-executor run` reads the book through
+    /// stays usable (`ingest`, `health`) while they run: `kobd run` reads the book through
     /// the same `ingest` handle. The follower moves the store past a gap the node's pruning caused instead of halting at it
     /// ([`recovery`]).
     pub fn spawn<S: ChainSource>(&self, source: Arc<S>) -> Result<Running, IndexerError> {
@@ -374,7 +374,7 @@ pub struct ReplayReport {
     pub dropped: record::DecodeStats,
 }
 
-/// Rebuild an EMPTY database from the record log (`kob-executor index replay`). The log is not
+/// Rebuild an EMPTY database from the record log (`kobd index replay`). The log is not
 /// modified; the follower then resumes from the logged cursor and re-syncs the tail from the node. A frame this build
 /// cannot decode (a newer record-log format, a template layout it has no table for) is skipped with a warning and
 /// counted in the report, not fatal: the log is the permanent store and outlives the templates it recorded.
@@ -421,7 +421,7 @@ pub struct ForwardReport {
 }
 
 /// Bring an EXISTING database that is older than the record log (restored from a backup) forward: apply the frames
-/// from its `records_next_n` to the end of the log (`kob-executor index replay --onto-database`). Neither the log nor the
+/// from its `records_next_n` to the end of the log (`kobd index replay --onto-database`). Neither the log nor the
 /// frames the database already holds are touched; the follower then resumes from the last logged cursor. A database at
 /// position 0 is refused (rebuild it with a plain `replay`), as is one ahead of the log.
 pub fn replay_onto_database(cfg: &IndexerConfig) -> Result<ForwardReport, IndexerError> {
@@ -436,7 +436,7 @@ pub fn replay_onto_database(cfg: &IndexerConfig) -> Result<ForwardReport, Indexe
     let from = ingest::records_next_n(&conn)?;
     if from == 0 {
         return Err(IndexerError::Config(
-            "the database holds no record-log frame: move it aside and rebuild it with `kob-executor index replay`".into(),
+            "the database holds no record-log frame: move it aside and rebuild it with `kobd index replay`".into(),
         ));
     }
     let log = recordlog::read_from(&cfg.records_dir(), from)?;
@@ -469,7 +469,7 @@ fn check_lineage(ing: &Ingest, log: &recordlog::Replay, from: u64) -> Result<(),
     let Some((n, first)) = log.records.first().filter(|(n, _)| *n == from) else {
         return Err(IndexerError::Config(format!(
             "record-log frame {from} cannot be decoded by this build, so it cannot be checked against the database's cursor; \
-             nothing was changed (rebuild the database from the log with `kob-executor index replay` into a fresh data directory)"
+             nothing was changed (rebuild the database from the log with `kobd index replay` into a fresh data directory)"
         )));
     };
     if cursor.as_ref().map(|c| c.hash) != Some(first.start) {

@@ -24,7 +24,7 @@ fn run(dir: &std::path::Path, port: u16, extra: &[&str]) -> Child {
         // a throwaway key, never funded (readable by its owner only: the executor refuses a key file others can read)
         kob_executor::matcher::wallet::HotKey::create_file(&key).unwrap();
     }
-    Command::new(env!("CARGO_BIN_EXE_kob-executor"))
+    Command::new(env!("CARGO_BIN_EXE_kobd"))
         .args(["run", "--no-fast-start", "--no-api", "--network", "testnet-10", "--rpc-url"])
         .arg(format!("ws://127.0.0.1:{port}"))
         .arg("--data-dir")
@@ -125,7 +125,7 @@ fn a_log_file_that_cannot_be_opened_stops_the_start_with_its_name() {
 fn withdraw_without_a_configuration_or_with_a_bad_amount_sends_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let to = kob_executor::matcher::wallet::address_of(&[5; 32], "testnet-10").to_string();
-    let bin = env!("CARGO_BIN_EXE_kob-executor");
+    let bin = env!("CARGO_BIN_EXE_kobd");
     let o = Command::new(bin)
         .args(["withdraw", "--to", &to, "--amount", "all", "--yes", "--dir"])
         .arg(dir.path())

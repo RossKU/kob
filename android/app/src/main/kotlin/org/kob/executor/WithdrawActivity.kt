@@ -19,7 +19,7 @@ import java.util.concurrent.Executors
 /**
  * Sends KAS out of the operator key: an address, an amount in KAS or "all", and a confirmation. The executor holds the
  * database's single-writer lock while it runs, so it is stopped first (the service, then the process); then
- * `kob-executor withdraw --to ... --amount ... --yes` runs over the node of the setup, the result is shown, and the executor
+ * `kobd withdraw --to ... --amount ... --yes` runs over the node of the setup, the result is shown, and the executor
  * can be started again from here.
  */
 class WithdrawActivity : Activity() {

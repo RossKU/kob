@@ -11,7 +11,7 @@ object Kob {
     /** The matcher's low-funds threshold (kob-executor `MIN_FUNDS_KAS`). */
     const val MIN_FUNDS_KAS = 100.0
 
-    /** The operator key file in [dir] (64 hex characters; `kob-executor setup` writes it). Its contents never leave the app except by the user's own export. */
+    /** The operator key file in [dir] (64 hex characters; `kobd setup` writes it). Its contents never leave the app except by the user's own export. */
     const val KEY_FILE = "kob-operator.key"
 
     /** Configuration, key file and database: the app's private storage (no other app can read it). */

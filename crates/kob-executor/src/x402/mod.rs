@@ -1,4 +1,4 @@
-//! The x402 facilitator role of `kob-executor`: alone (`kob-executor x402`) or inside `kob-executor run`
+//! The x402 facilitator role of `kob-executor`: alone (`kobd x402`) or inside `kobd run`
 //! (`--x402-config`), where it follows acceptance through the indexer.
 //!
 //! | Module | Contents |
@@ -9,7 +9,7 @@
 //! | [`facilitator`] | `supported`, `verify`, `settle`, `reconcile` |
 //! | [`http`] | axum service: admission, authentication, routes, server loop |
 //! | [`ratelimit`] | token buckets |
-//! | [`indexed`] | `ChainView` over the node and the indexer's acceptance tracking (`kob-executor run`) |
+//! | [`indexed`] | `ChainView` over the node and the indexer's acceptance tracking (`kobd run`) |
 //! | [`quote`] | swap-and-pay quotes from an indexer's book; the book view of intent executions |
 
 pub mod config;
@@ -40,7 +40,7 @@ use facilitator::{Facilitator, FacilitatorConfig};
 use ledger::Ledger;
 use node::NodeChain;
 
-/// `kob-executor x402`: the facilitator alone (without the indexer's acceptance tracking; finality
+/// `kobd x402`: the facilitator alone (without the indexer's acceptance tracking; finality
 /// from the UTXO observation). Flags override the configuration file.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct X402Args {
@@ -126,7 +126,7 @@ pub fn node_chain(cfg: &X402Config, built: &Built) -> Result<NodeChain, String> 
     Ok(chain)
 }
 
-/// The book intent payments are executed against (inside `kob-executor run`: the indexer's).
+/// The book intent payments are executed against (inside `kobd run`: the indexer's).
 pub type BookFn = Arc<dyn Fn() -> Result<kob_x402::intent::BookView, String> + Send + Sync>;
 
 /// Opens the ledger and builds the facilitator over `chain`, then reconciles the ledger once. Without a book,
@@ -169,8 +169,7 @@ pub fn prepare_with(
         },
     );
     if cfg.intents.enabled {
-        let book =
-            book.ok_or("intents need the indexer's book: enable them in kob-executor run (--x402-config), not in kob-executor x402")?;
+        let book = book.ok_or("intents need the indexer's book: enable them in kobd run (--x402-config), not in kobd x402")?;
         let keeper = kob_protocol::registry::parse_hex32(&cfg.intents.keeper_pubkey).ok_or("intents.keeperPubkey")?;
         fac = fac.with_intents(facilitator::IntentRuntime {
             book,
@@ -259,7 +258,7 @@ pub async fn serve_service(svc: Service, listener: tokio::net::TcpListener, shut
     res
 }
 
-/// `kob-executor x402 ...`: the facilitator alone; returns when the process is asked to stop.
+/// `kobd x402 ...`: the facilitator alone; returns when the process is asked to stop.
 pub async fn run(a: X402Args) -> anyhow::Result<()> {
     let go = async {
         let cfg = a.config()?;

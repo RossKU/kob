@@ -1,10 +1,10 @@
 # Example: a paid API on the Kaspa x402 `exact` binding
 
 `server.ts` sells `GET /report` for 0.5 KAS (or N units of a KCC-20 token, or by swapping token A), `client.ts` pays for it
-with a dev key. The facilitator is the `kob-executor x402` service (same operator as indexer and matcher; it holds no keys).
+with a dev key. The facilitator is the `kobd x402` service (same operator as indexer and matcher; it holds no keys).
 
 ```
-payer client  --GET-->  paywall (server.ts)  --POST /settle-->  facilitator (kob-executor x402)  --> TN10 node
+payer client  --GET-->  paywall (server.ts)  --POST /settle-->  facilitator (kobd x402)  --> TN10 node
               <--402--                       <-- settlement --
               --GET + PAYMENT-SIGNATURE-->   serves /report after the settlement shows YOUR offer
 ```
@@ -46,7 +46,7 @@ Coinbase maturity is 1000 DAA (about 100 s): mined funds are spendable after tha
 
 ## Run against the local facilitator on TN10
 
-1. Start the facilitator against a TN10 node: a testnet-10 node of your own (`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`). See `kob-executor x402 --help` for the current
+1. Start the facilitator against a TN10 node: a testnet-10 node of your own (`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`). See `kobd x402 --help` for the current
    flags; it needs the node wRPC URL, the network, the API key(s) it accepts and the token allowlist.
 2. Start the paid API (merchant address = any TN10 Schnorr address you control, e.g. a second `keygen` key):
 

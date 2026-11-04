@@ -1,10 +1,10 @@
-# kob-executor for Linux operators (docs/ops/executor-quickstart.md, "Docker"). One image serves one network, the
+# kobd (the KOB daemon) for Linux operators (docs/ops/executor-quickstart.md, "Docker"). One image serves one network, the
 # deployment build of NETWORK (mainnet or testnet-10, docs/ops/release.md):
 #
-#   docker build --build-arg NETWORK=mainnet -t kob-executor:mainnet .
+#   docker build --build-arg NETWORK=mainnet -t kobd:mainnet .
 #   install -d -o 10001 -g 10001 -m 0700 /srv/kob
-#   docker run -it --rm --network host -v /srv/kob:/data kob-executor:mainnet setup --no-start
-#   docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kob-executor:mainnet
+#   docker run -it --rm --network host -v /srv/kob:/data kobd:mainnet setup --no-start
+#   docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kobd:mainnet
 #
 # The volume /data holds the configuration, the operator's key file (mode 0600, owned by uid 10001) and the data directory.
 # KOB_EXECUTOR_DIR=/data makes it the directory of `setup` and of the start without arguments (the default command), which
@@ -29,20 +29,20 @@ RUN case "$NETWORK" in \
       *) echo "NETWORK must be mainnet or testnet-10, not $NETWORK" >&2; exit 1 ;; \
     esac \
  && cargo build --release --locked -p kob-executor --features "kob-executor/$f" \
- && install -m 0755 target/release/kob-executor /usr/local/bin/kob-executor \
- && kob-executor --version
+ && install -m 0755 target/release/kobd /usr/local/bin/kobd \
+ && kobd --version
 
 FROM debian:trixie-20261020-slim
 ARG NETWORK
-LABEL org.opencontainers.image.title="kob-executor" \
+LABEL org.opencontainers.image.title="kobd" \
       org.opencontainers.image.description="KOB executor (${NETWORK} deployment build): indexer, matcher, keepers" \
       org.opencontainers.image.licenses="ISC"
 # nothing is installed: wss:// node endpoints use the root certificates compiled into the binary (webpki-roots)
 RUN useradd --system --uid 10001 --user-group --home-dir /data --no-create-home --shell /usr/sbin/nologin kob \
  && install -d -o kob -g kob -m 0700 /data
-COPY --from=build /usr/local/bin/kob-executor /usr/local/bin/kob-executor
+COPY --from=build /usr/local/bin/kobd /usr/local/bin/kobd
 ENV KOB_EXECUTOR_DIR=/data
 USER 10001:10001
 WORKDIR /data
 VOLUME ["/data"]
-ENTRYPOINT ["kob-executor"]
+ENTRYPOINT ["kobd"]

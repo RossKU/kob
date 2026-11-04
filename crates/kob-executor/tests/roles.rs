@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn run(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_kob-executor"))
+    Command::new(env!("CARGO_BIN_EXE_kobd"))
         .args(args)
         .env("KOB_EXECUTOR_DIR", dir)
         .env_remove("KOB_OPERATOR_KEY")
@@ -116,7 +116,7 @@ fn a_start_with_role_flags_needs_a_configuration_of_exactly_those_roles() {
         assert!(!out.status.success(), "{flags:?}");
         let err = text(&out.stderr);
         assert!(err.contains("is set up for the Executor but the command line asks for the"), "{flags:?}: {err}");
-        assert!(err.contains("kob-executor setup"), "{err}");
+        assert!(err.contains("kobd setup"), "{err}");
     }
     setup(d.path(), &["--executor", "--indexer"]);
     let err = text(&run(d.path(), &["--executor"]).stderr);

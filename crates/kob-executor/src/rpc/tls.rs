@@ -132,7 +132,7 @@ pub fn http_get(url: &str, timeout: Duration) -> Result<(u16, String), String> {
     let mut s = connect(&t, timeout)?;
     let host = if (t.tls && t.port == 443) || (!t.tls && t.port == 80) { t.host.clone() } else { format!("{}:{}", t.host, t.port) };
     let req = format!(
-        "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: kob-executor/{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: kobd/{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
         t.path,
         kob_protocol::VERSION
     );

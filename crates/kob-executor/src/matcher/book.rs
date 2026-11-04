@@ -204,7 +204,7 @@ pub trait OrderBookView {
     }
 }
 
-/// In-memory book (tests, dry runs, snapshot files). JSON-serialisable: `kob-executor match
+/// In-memory book (tests, dry runs, snapshot files). JSON-serialisable: `kobd match
 /// --book-file` reads this format.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

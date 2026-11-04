@@ -96,9 +96,9 @@ pub struct HealthSnapshot {
     /// Closed orders and rows deleted by the lean pruning since the start.
     pub lean_orders_pruned_total: u64,
     pub lean_rows_pruned_total: u64,
-    /// What this process does: `executor` (the matcher and the keepers of `kob-executor run` work on this store) and/or
+    /// What this process does: `executor` (the matcher and the keepers of `kobd run` work on this store) and/or
     /// `indexer` (the store keeps the history and this API serves it; a lean store makes the process the Executor alone).
-    /// `kob-executor index` is `["indexer"]`.
+    /// `kobd index` is `["indexer"]`.
     pub roles: Vec<&'static str>,
     /// The fast start's backfill: the full store's progress (absent once the book is complete).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -874,12 +874,12 @@ mod tests {
     #[test]
     fn health_and_metrics_name_the_roles_of_the_process() {
         let roles = |h: &HealthSnapshot| serde_json::to_value(h).unwrap()["roles"].clone();
-        // a bare indexer (`kob-executor index`) is the Indexer alone
+        // a bare indexer (`kobd index`) is the Indexer alone
         let mut h = HealthSnapshot::new("testnet-10");
         assert_eq!(roles(&h), serde_json::json!(["indexer"]));
         let m = h.metrics_text();
         assert!(m.contains("kob_role{role=\"indexer\"} 1") && m.contains("kob_role{role=\"executor\"} 0"), "{m}");
-        // `kob-executor run` over a full store is the Executor and the Indexer; over a lean store the Executor alone
+        // `kobd run` over a full store is the Executor and the Indexer; over a lean store the Executor alone
         let both = crate::matcher::run::Roles { matcher: true, keeper: true };
         h.roles = both.health_roles(false);
         assert_eq!(roles(&h), serde_json::json!(["executor", "indexer"]));

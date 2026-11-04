@@ -4,7 +4,7 @@
   "runDir": ".",
   "kobWasmDir": "wasm-node",
   "kaspaSdkDir": "../../../web/vendor/kaspa-node",
-  "executorBin": "bin/kob-executor.exe",
+  "executorBin": "bin/kobd.exe",
   "minerBin": "bin/tn10-miner.exe",
   "minerThreads": 12,
   "miner": {

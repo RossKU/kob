@@ -1,4 +1,4 @@
-//! `kob-executor withdraw`: sends KAS out of the operator's key, over the node the configuration names.
+//! `kobd withdraw`: sends KAS out of the operator's key, over the node the configuration names.
 //!
 //! The default operator has no node of their own: the configuration says `rpc_url = "resolver"` (two public nodes found
 //! through the Kaspa resolvers, wss), which `kob-cli` cannot reach. The executor already speaks that, so the withdrawal is a
@@ -36,7 +36,7 @@ use crate::setup::{Console, CONFIG_FILE};
 /// Most coins one withdrawal spends (one transaction, the largest first); a key spread over more coins needs a second run.
 pub const MAX_INPUTS: usize = 50;
 
-/// `kob-executor withdraw`.
+/// `kobd withdraw`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct WithdrawArgs {
     /// The address to send to (an address of the executor's network).
@@ -355,7 +355,7 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
     let txid = submit(node, &url, &rpc, signed.tx.id, &shown)?;
     let txid_hex = kob_protocol::json::to_hex(&txid);
     io.say(&format!("Sent: transaction {txid_hex}"));
-    io.say("The node has it; it is final within seconds. `kob-executor address-balance` shows what the key holds then.");
+    io.say("The node has it; it is final within seconds. `kobd address-balance` shows what the key holds then.");
     out["txid"] = json!(txid_hex);
     Ok(out)
 }
@@ -384,7 +384,7 @@ fn submit(node: &mut dyn WithdrawNode, url: &str, rpc: &Value, id: [u8; 32], sho
         }
     }
     bail!(
-        "the transaction may or may not have reached {shown} ({last}). Check `kob-executor address-balance` before running the command \
+        "the transaction may or may not have reached {shown} ({last}). Check `kobd address-balance` before running the command \
          again: a second run would spend the same coins and be refused if the first went through"
     )
 }
@@ -457,7 +457,7 @@ mod tests {
                 build_network: Some(network.clone()),
                 pinned_registry: true,
                 poll: Duration::ZERO,
-                program: "kob-executor".into(),
+                program: "kobd".into(),
             },
             &crate::app::AppSetup { node: "resolver".into(), role: crate::app::AppRole::Executor, new_key: true, network: None },
         )
@@ -666,7 +666,7 @@ mod tests {
         let held = WriterLock::acquire(&cfg).unwrap();
         let mut node = fx.node(vec![fx.coin(1, 5 * KAS)]);
         let e = fx.run(&fx.req(Amount::All), &mut node, &mut Script::default()).unwrap_err();
-        assert!(e.to_string().contains("in use by another kob-executor writer") && e.to_string().contains("stop it"), "{e}");
+        assert!(e.to_string().contains("in use by another kobd writer") && e.to_string().contains("stop it"), "{e}");
         assert!(node.submitted.is_empty());
         drop(held);
         fx.run(&fx.req(Amount::All), &mut node, &mut Script::default()).unwrap();
@@ -706,7 +706,7 @@ mod tests {
                 build_network: Some(fx.network.clone()),
                 pinned_registry: true,
                 poll: Duration::ZERO,
-                program: "kob-executor".into(),
+                program: "kobd".into(),
             },
             &crate::app::AppSetup { node: "resolver".into(), role: crate::app::AppRole::Indexer, new_key: false, network: None },
         )

@@ -1,8 +1,8 @@
-//! First run for an operator who downloaded the binary: `kob-executor setup`, and the binary started without arguments
+//! First run for an operator who downloaded the binary: `kobd setup`, and the binary started without arguments
 //! (what a double click does).
 //!
 //! Started without arguments, the binary looks for [`CONFIG_FILE`] in its own directory ([`no_args_start`]). With one, it
-//! runs what the file's `[launch]` table says ([`launch_args`]): exactly `kob-executor <role> --config kob-executor.toml
+//! runs what the file's `[launch]` table says ([`launch_args`]): exactly `kobd <role> --config kob-executor.toml
 //! ...` in the file's directory, printed before it starts, so the same line moves unchanged to a service. Without one, and
 //! on a terminal, it runs the interactive setup ([`run_setup`]), which writes the file and then starts the same way.
 //!
@@ -42,7 +42,7 @@ pub const MIN_FUNDS_KAS: u64 = 100;
 /// The funding the setup recommends: twice the alert threshold, so a day of trading does not start with a warning.
 pub const RECOMMENDED_FUNDS_KAS: u64 = 200;
 
-/// `kob-executor setup`.
+/// `kobd setup`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct SetupArgs {
     /// Directory of the configuration, the key file and the data directory. Default: the one a start without arguments
@@ -96,8 +96,8 @@ pub fn no_args_start(dir: &Path, interactive: bool) -> NoArgs {
         NoArgs::Setup
     } else {
         NoArgs::Refuse(format!(
-            "no {} in {} and no terminal to ask the setup's questions on: run `kob-executor setup` in a terminal, or give a \
-             subcommand (`kob-executor --help`)",
+            "no {} in {} and no terminal to ask the setup's questions on: run `kobd setup` in a terminal, or give a \
+             subcommand (`kobd --help`)",
             CONFIG_FILE,
             dir.display()
         ))
@@ -126,10 +126,10 @@ pub fn exe_dir() -> Result<PathBuf> {
     exe.parent().map(Path::to_path_buf).ok_or_else(|| anyhow!("the executable {} has no directory", exe.display()))
 }
 
-/// The running executable's full path, for a printed command line that works from any directory (`kob-executor` when it
+/// The running executable's full path, for a printed command line that works from any directory (`kobd` when it
 /// cannot be named).
 pub fn program_path() -> String {
-    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "kob-executor".into())
+    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "kobd".into())
 }
 
 /// A start from a configuration file: run `args` (the subcommand and its options, without the program name) in `dir`.
@@ -148,9 +148,10 @@ pub struct Launch {
 /// directory, which the caller makes the working directory.
 pub fn launch_args(path: &Path) -> Result<Launch> {
     let cfg = IndexerConfig::load(path)?;
-    let launch = cfg.launch.clone().ok_or_else(|| {
-        anyhow!("{} has no [launch] table: run `kob-executor setup`, or start a subcommand with --config", path.display())
-    })?;
+    let launch = cfg
+        .launch
+        .clone()
+        .ok_or_else(|| anyhow!("{} has no [launch] table: run `kobd setup`, or start a subcommand with --config", path.display()))?;
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf();
     let name = path.file_name().ok_or_else(|| anyhow!("{} is not a file", path.display()))?;
     let mut args = vec![launch.role.subcommand().to_string(), "--config".to_string(), name.to_string_lossy().into_owned()];
@@ -245,13 +246,13 @@ impl SetupFile {
     pub fn text(&self) -> Result<String> {
         let body = toml::to_string(self).context("cannot write the configuration")?;
         Ok(format!(
-            "# kob-executor configuration, written by `kob-executor setup`.\n\
+            "# kobd configuration, written by `kobd setup`.\n\
              # Roles: {}.\n\
              #\n\
-             # Started without arguments, kob-executor reads this file from its own directory and runs the [launch] role with\n\
-             # it (`kob-executor {} --config {CONFIG_FILE} ...`, printed at the start). Relative paths are relative to this\n\
+             # Started without arguments, kobd reads this file from its own directory and runs the [launch] role with\n\
+             # it (`kobd {} --config {CONFIG_FILE} ...`, printed at the start). Relative paths are relative to this\n\
              # file's directory. Every key of docs/ops/executor.md (Part B, 4) may be added; [launch] args takes further\n\
-             # options of the role, e.g. args = [\"--sweep-own-strays\"]. `kob-executor setup` again replaces this file.\n\n{body}",
+             # options of the role, e.g. args = [\"--sweep-own-strays\"]. `kobd setup` again replaces this file.\n\n{body}",
             AppRole::from_parts(self.launch.role, self.lean.unwrap_or(false)).display(),
             self.launch.role.subcommand()
         ))
@@ -512,7 +513,7 @@ pub fn run_setup_with(
     if config_path.exists() {
         io.say(&format!("{} already exists.", config_path.display()));
         if !ask_yes(io, "Replace it with a new configuration?", false)? {
-            io.say("Nothing changed. Start kob-executor without arguments to run the existing configuration.");
+            io.say("Nothing changed. Start kobd without arguments to run the existing configuration.");
             return Ok(None);
         }
     }
@@ -538,7 +539,7 @@ pub fn run_setup_with(
         }
         None => match ask_choice(
         io,
-        "Which roles should this kob-executor run?",
+        "Which roles should this kobd run?",
         &[
             "Executor: match crossing orders and refund expired ones, earning the spreads and tips (needs a funded hot key).",
             "Indexer: follow the chain, keep the full history and serve the read API (no key, no funds, no earnings).",
@@ -675,7 +676,7 @@ pub fn run_setup_with(
         io.say(&format!("    {line}"));
     }
     io.say("");
-    io.say("From now on, starting kob-executor without arguments (a double click) runs it.");
+    io.say("From now on, starting kobd without arguments (a double click) runs it.");
     if ask_yes(io, "Start the executor now?", true)? {
         Ok(Some(config_path))
     } else {
@@ -917,7 +918,7 @@ mod tests {
             build_network: Some(network.into()),
             pinned_registry: pinned,
             poll: Duration::ZERO,
-            program: "kob-executor".into(),
+            program: "kobd".into(),
         }
     }
 
@@ -925,7 +926,7 @@ mod tests {
     fn no_arguments_run_the_configuration_or_the_setup() {
         let d = tempfile::tempdir().unwrap();
         assert_eq!(no_args_start(d.path(), true), NoArgs::Setup);
-        assert!(matches!(no_args_start(d.path(), false), NoArgs::Refuse(m) if m.contains("kob-executor setup")));
+        assert!(matches!(no_args_start(d.path(), false), NoArgs::Refuse(m) if m.contains("kobd setup")));
         std::fs::write(d.path().join(CONFIG_FILE), "").unwrap();
         assert_eq!(no_args_start(d.path(), true), NoArgs::Launch(d.path().join(CONFIG_FILE)));
         assert_eq!(no_args_start(d.path(), false), NoArgs::Launch(d.path().join(CONFIG_FILE)));
@@ -987,10 +988,10 @@ mod tests {
             ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause", "--sweep-own-strays"]
         );
         assert_eq!(l.api, Some("127.0.0.1:8090".parse().unwrap()));
-        let cl = command_line(&l, "kob-executor.exe");
+        let cl = command_line(&l, "kobd.exe");
         assert!(
             cl.ends_with(
-                "\nkob-executor.exe run --config kob-executor.toml --key-file kob-operator.key --pause-file kob-data/pause \
+                "\nkobd.exe run --config kob-executor.toml --key-file kob-operator.key --pause-file kob-data/pause \
                  --sweep-own-strays"
             ),
             "{cl}"
@@ -1056,7 +1057,7 @@ mod tests {
         assert_eq!(c.rpc_url, "resolver", "public nodes (index_cli adds the second, resolver:2)");
         assert_eq!(c.tokens_path, Some(PathBuf::from(TOKENS_FILE)));
         assert!(d.path().join(TOKENS_FILE).is_file());
-        assert!(out.contains("kob-executor run --config kob-executor.toml --key-file kob-operator.key"), "{out}");
+        assert!(out.contains("kobd run --config kob-executor.toml --key-file kob-operator.key"), "{out}");
         assert!(!d.path().join(format!("{CONFIG_FILE}.tmp")).exists());
 
         // again: the configuration is kept unless replaced
@@ -1121,11 +1122,11 @@ mod tests {
         // the header names the role's subcommand; the keys follow the first blank line
         let keys = |role: AppRole| {
             let t = written(role, "testnet-10");
-            assert!(t.starts_with("# kob-executor configuration, written by"), "{t}");
+            assert!(t.starts_with("# kobd configuration, written by"), "{t}");
             let (head, body) = t.split_once("\n\n").unwrap();
             let sub = role.launch_role().subcommand();
             assert!(head.contains(&format!("# Roles: {}.", role.display())), "{head}");
-            assert!(head.contains(&format!("(`kob-executor {sub} --config kob-executor.toml")), "{head}");
+            assert!(head.contains(&format!("(`kobd {sub} --config kob-executor.toml")), "{head}");
             body.to_string()
         };
         let head = "network = \"testnet-10\"\nrpc_url = \"resolver\"\ndata_dir = \"kob-data\"\ntokens_path = \"kob-tokens.json\"\n";
@@ -1145,7 +1146,7 @@ mod tests {
         );
     }
 
-    /// The run-time side: the written file, read the way `kob-executor run` reads it, is an archive with a matcher.
+    /// The run-time side: the written file, read the way `kobd run` reads it, is an archive with a matcher.
     #[test]
     fn executor_and_indexer_runs_as_an_archive_with_an_executor() {
         use clap::Parser as _;
@@ -1160,7 +1161,7 @@ mod tests {
             let d = tempfile::tempdir().unwrap();
             let p = d.path().join(CONFIG_FILE);
             std::fs::write(&p, written(role, net)).unwrap();
-            let cli = T::parse_from(["kob-executor", "--config", p.to_str().unwrap()]);
+            let cli = T::parse_from(["kobd", "--config", p.to_str().unwrap()]);
             (launch_args(&p).unwrap(), crate::index_cli::build_config(&cli.opts).unwrap())
         };
         let (l, c) = built(AppRole::ExecutorIndexer);

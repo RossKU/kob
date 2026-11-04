@@ -1,4 +1,4 @@
-//! Command-line arguments and entry points of `kob-executor match` and `kob-executor keep`.
+//! Command-line arguments and entry points of `kobd match` and `kobd keep`.
 //!
 //! The secret key is never an argument: `--key-file PATH`, `$KOB_OPERATOR_KEY_FILE`, a systemd
 //! credential or `$KOB_OPERATOR_KEY` (see [`super::wallet`]).
@@ -29,7 +29,7 @@ pub struct CommonArgs {
     /// with a password or an API key belongs in `KOB_NODE_WRPC`; logs show it redacted.
     #[arg(long, env = "KOB_NODE_WRPC")]
     pub rpc_url: Option<String>,
-    /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by `kob-executor index export-book --out FILE`.
+    /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by `kobd index export-book --out FILE`.
     #[arg(long, env = "KOB_BOOK_FILE")]
     pub book_file: PathBuf,
     /// File holding the operator's secret key (64 hex, mode 0600). Not the key itself.
@@ -69,7 +69,7 @@ pub struct CommonArgs {
     pub select: super::select::SelectArgs,
 }
 
-/// `kob-executor match`.
+/// `kobd match`.
 #[derive(Args, Debug, Clone)]
 pub struct MatchArgs {
     #[command(flatten)]
@@ -106,7 +106,7 @@ pub struct MatchArgs {
     pub keep: bool,
 }
 
-/// `kob-executor keep`.
+/// `kobd keep`.
 #[derive(Args, Debug, Clone)]
 pub struct KeepArgs {
     #[command(flatten)]
@@ -235,7 +235,7 @@ fn offline(book: &MemoryBook, engine: &EngineConfig, signer: &dyn Signer) -> any
     Ok(())
 }
 
-/// `kob-executor match`.
+/// `kobd match`.
 pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     a.common.fees.policy(a.common.fee_rate).map_err(anyhow::Error::msg)?;
     a.common.select.config().map_err(anyhow::Error::msg)?;
@@ -263,7 +263,7 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     r.run(shutdown_signal()).await
 }
 
-/// `kob-executor keep`.
+/// `kobd keep`.
 pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
     a.common.fees.policy(a.common.fee_rate).map_err(anyhow::Error::msg)?;
     a.common.select.config().map_err(anyhow::Error::msg)?;

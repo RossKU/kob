@@ -26,7 +26,7 @@ pub struct WriterLock {
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
     #[error(
-        "{dir} is in use by another kob-executor writer ({owner}): stop it first, or point this command at another data directory. \
+        "{dir} is in use by another kobd writer ({owner}): stop it first, or point this command at another data directory. \
          `run` and `index` hold the lock while they run; read-only commands (`index export-orders`, the read API) work next to it. \
          Lock file: {lock}"
     )]
@@ -159,14 +159,14 @@ mod tests {
         let first = lock_dir(d.path()).unwrap();
         std::fs::write(
             d.path().join(OWNER_FILE),
-            "pid 1 (kob-executor run)
+            "pid 1 (kobd run)
 ",
         )
         .unwrap();
         let e = lock_dir(d.path()).unwrap_err();
         assert!(matches!(e, LockError::Busy { .. }), "{e}");
         let msg = e.to_string();
-        assert!(msg.contains("is in use by another kob-executor writer (pid 1 (kob-executor run))"), "{msg}");
+        assert!(msg.contains("is in use by another kobd writer (pid 1 (kobd run))"), "{msg}");
         assert!(msg.contains(LOCK_FILE), "{msg}");
         drop(first);
         lock_dir(d.path()).expect("the OS lock is released with the file");

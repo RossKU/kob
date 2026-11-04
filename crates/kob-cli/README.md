@@ -20,7 +20,7 @@ kob book TUSD --testnet              # the same on testnet-10 (--netsuffix=10 an
   network and refuses the other one. Every plan and every confirmation names the network, and the node must run it
   (`getBlockDagInfo`) before anything is planned from it or signed.
 * **Node.** `--node URL`, else `$KOB_NODE_WRPC`, else the public nodes: the Kaspa resolvers name two nodes on two hosts (as
-  `kob-executor --node resolver`; they serve the Borsh wRPC over TLS, which the CLI speaks). Whatever a transaction is planned from is
+  `kobd --node resolver`; they serve the Borsh wRPC over TLS, which the CLI speaks). Whatever a transaction is planned from is
   read from both and must agree (the unspent outputs of the key, the network); a node that cannot be reached is replaced by another.
   Your own node works too: JSON `ws://host:18110` (mainnet) or `:18210` (testnet-10), Borsh `ws://host:17110` / `:17210`.
   `$KOB_RESOLVERS` (comma-separated resolver URLs) replaces the resolver list for a private one.

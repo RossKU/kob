@@ -1,6 +1,6 @@
 # KOB executor read API (HTTP and WebSocket)
 
-Reference for bot and integration developers. The read API is served by `kob-executor` (roles `run` and `index`) from the
+Reference for bot and integration developers. The read API is served by `kobd` (roles `run` and `index`) from the
 indexer's database: it answers order books, orders, fills, candles, token holdings and the indexer's own health. The node is
 never contacted by a request, so public load cannot reach it. It cannot place, fill, cancel or refund anything; transactions are
 built and submitted elsewhere (`crates/kob-cli`, the web app, `crates/kob-wasm`).
@@ -299,7 +299,7 @@ Every key the handler returns:
 | `prefetch_windows`, `prefetch_in_flight`, `prefetch_bytes`, `prefetch_bytes_peak`, `prefetch_window_blocks`, `prefetch_discards_total`, `prefetch_oversize_total` | Parallel fetch: windows queued ahead of the cursor and in flight, their bytes now and at most, the current window in chain blocks, plans dropped because the chain moved, windows refused as oversize. |
 | `untrusted_windows_total`, `untrusted_blocks_total`, `confirmed_blocks_total`, `lies_total` | Several nodes: windows and chain blocks fetched from a node other than the primary, how many were compared with the primary's copy before applying, and contradictions found. |
 | `lean`, `lean_orders_pruned_total`, `lean_rows_pruned_total` | Lean storage: whether it is on, and the closed orders / rows it deleted since the start. |
-| `roles` | What the process does, from `executor` (the matcher and the keepers of `kob-executor run` work on this store) and `indexer` (the store keeps the history and this API serves it): `["indexer"]` for `kob-executor index`, `["executor"]` for `run` over a lean store (`lean: true`), `["executor", "indexer"]` for `run` over a full store (`kob-executor setup --executor --indexer`). The metrics carry `kob_role{role="executor"|"indexer"}`. Added field; no existing field changed. |
+| `roles` | What the process does, from `executor` (the matcher and the keepers of `kobd run` work on this store) and `indexer` (the store keeps the history and this API serves it): `["indexer"]` for `kobd index`, `["executor"]` for `run` over a lean store (`lean: true`), `["executor", "indexer"]` for `run` over a full store (`kobd setup --executor --indexer`). The metrics carry `kob_role{role="executor"|"indexer"}`. Added field; no existing field changed. |
 | `counters` | Object or `null` (`null` when the counter read failed; health never turns into an error for it): `orders_total`, `orders_listed`, `orders_by_status` (object status to count, statuses with 0 omitted), `rejects_total` (KOB1 payloads that produced no order), `fills_total`, `last_block_seq`, `last_block_daa`. |
 
 **History and gaps**
@@ -825,7 +825,7 @@ Reports the logo of a token. KOB keeps and serves no third-party image: the web 
 from the address its creator gave. A report is how that image is taken down: **the first report of a token hides its logo at once**
 (the web app shows the letter avatar instead), the operator reviews it, and the token can be restored. Present only with
 `[logo_reports] enabled = true` (section 6; otherwise `404`, "no such route"). The only write route of the API; there is no
-administrative route on the network (the operator restores and hides with `kob-executor index logo-reports`,
+administrative route on the network (the operator restores and hides with `kobd index logo-reports`,
 [ops/executor.md](ops/executor.md)).
 
 Body (JSON, at most 1024 bytes; `content-type` is not checked; unknown fields are refused, so no free text is taken or stored):
@@ -1079,7 +1079,7 @@ held. This is invisible to clients except as lower latency: it adds no header an
 
 ## 6. The `[api]` configuration
 
-The `[api]` table of the executor's configuration file (`kob-executor.toml`; `kob-executor index --config ...`), with the nested
+The `[api]` table of the executor's configuration file (`kob-executor.toml`; `kobd index --config ...`), with the nested
 `[api.rate_limit]` table. All keys are optional; an unknown key in either table is refused at start. `--listen` and `--no-api`
 override `listen` and `enabled`. Defaults are those of `config.rs`.
 
@@ -1130,7 +1130,7 @@ Top-level table of the same file (section 3.19). Unknown keys are refused.
 | `max_per_day` | `200` | Reports accepted from all clients together per 24 hours; 0 = none. |
 
 The state lives in the indexer's database (`logo_blocklist`, `logo_reports`), is not derived from the chain, and is not rebuilt by
-`index replay` (use `kob-executor index logo-reports export` before and `import` after).
+`index replay` (use `kobd index logo-reports export` before and `import` after).
 
 Related top-level keys that shape what the API reports: `settle_depth_daa` (100), `daa_per_second` (10), `lag_alarm_hours`
 (`[1, 6, 12, 24]`), `max_lag_secs` (30).

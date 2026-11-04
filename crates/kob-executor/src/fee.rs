@@ -53,7 +53,7 @@ fn bucket(e: &FeeEstimate, u: Urgency) -> f64 {
     }
 }
 
-/// Fee policy settings (`kob-executor run --fee-*`).
+/// Fee policy settings (`kobd run --fee-*`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FeePolicy {
@@ -111,7 +111,7 @@ impl FeePolicy {
     }
 }
 
-/// Command-line options of the fee policy (`kob-executor run`, `match`, `keep`); the floor is the command's `--fee-rate`.
+/// Command-line options of the fee policy (`kobd run`, `match`, `keep`); the floor is the command's `--fee-rate`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct FeeArgs {
     /// Do not read the node's fee estimate: every transaction pays `--fee-rate`.
@@ -242,7 +242,7 @@ impl FeeRates {
 }
 
 /// The current rates shared by the parts of one process: the runner publishes the rates of each step that plans, the x402
-/// facilitator of `kob-executor run` prices its intent executions and expiries with them. Starts at the floor.
+/// facilitator of `kobd run` prices its intent executions and expiries with them. Starts at the floor.
 pub type FeeBoard = std::sync::Arc<std::sync::Mutex<FeeRates>>;
 
 /// The rates on a board (a poisoned lock still holds the last rates).

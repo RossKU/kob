@@ -118,7 +118,7 @@ transaction move it. It never affects the order itself (custody, payouts and del
 the order's own token). The indexer MUST flag foreign strays and never count them (views: `foreign: true`, with the proven state and
 program); wallets and builders MUST NOT send any token to an order id; a matcher MAY sweep a foreign stray, and nothing
 stops it. The maker's cancel and sweep return them; a keeper MAY return them to the MAKER inside the refund, kill or close
-that ends the order (`kob-executor --return-foreign-strays`: no refund path reads another token, and after the order
+that ends the order (`kobd --return-foreign-strays`: no refund path reads another token, and after the order
 ends they could never move again).
 
 A bid-side order (`KobBid`, `KobCondBid`, `KobIfdBid`) owns no tokens; every token UTXO owned by

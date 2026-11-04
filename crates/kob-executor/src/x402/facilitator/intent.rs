@@ -42,7 +42,7 @@ use crate::x402::ledger::{Claim, Entry, ExecRecord, ExecState, ExpiryRecord, Int
 /// The book a facilitator executes intents against, and the keeper's parameters.
 #[derive(Clone)]
 pub struct IntentRuntime {
-    /// A consistent snapshot of the plain resting orders (inside `kob-executor run`: the indexer's book).
+    /// A consistent snapshot of the plain resting orders (inside `kobd run`: the indexer's book).
     /// `Err` while the book is not usable (the indexer catching up).
     pub book: Arc<dyn Fn() -> std::result::Result<BookView, String> + Send + Sync>,
     pub keeper: KeeperParams,
