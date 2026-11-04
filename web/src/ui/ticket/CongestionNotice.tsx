@@ -6,7 +6,7 @@ import { Banner, useInterval } from '../kit';
 import { CONGESTION_POLL_MS, CongestionProbe, congestionDismissed, dismissCongestion } from './congestion';
 
 /**
- * Small dismissible notice below the order button: blocks are contended, a transaction at the relay minimum may wait, and where the one control is
+ * Small dismissible notice below the order button: blocks are contended, KOB transactions are ranked by their storage mass (which the normal fee does not cover) and may wait, and where the one control is
  * (Settings: "Pay the priority fee"). Reads the node's fee estimate when the ticket is shown and then every 30 s while the page is visible; nothing while
  * the toggle is already on, nothing when the node gives no estimate. No per-transaction choice and no automatic switching.
  */

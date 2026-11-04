@@ -1,5 +1,5 @@
 // The congestion notice of the order ticket: when the node's fee estimate shows contended blocks (the first normal bucket at least 10 percent above the
-// relay floor of 100 sompi per gram) a small dismissible notice under the order button says a transaction at the relay minimum may wait, with a link to
+// relay floor of 100 sompi per gram) a small dismissible notice under the order button says KOB transactions are ranked by their storage mass, which the normal fee does not cover, so they may wait, with a link to
 // the one control (Settings: "Pay the priority fee"). Nothing when the toggle is already on, when the network is quiet, or when the node has no estimate.
 import { test, expect } from '../fixtures';
 import { openMarket } from '../helpers/env';
@@ -12,7 +12,7 @@ test('contended blocks: a notice under the order button with a link to the prior
   const notice = page.getByTestId('order-congestion');
   await expect(notice).toBeVisible();
   await expect(notice).toContainText('Blocks are contended');
-  await expect(notice).toContainText('relay minimum may wait');
+  await expect(notice).toContainText('ranked by their storage mass');
   // below the order button, so it never moves it
   const place = await page.getByTestId('order-place').boundingBox();
   const note = await notice.boundingBox();

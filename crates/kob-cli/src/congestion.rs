@@ -1,6 +1,6 @@
 //! The congestion note of a signing command: when the node's fee estimate shows contended blocks (the rule of
 //! `kob_protocol::fee_estimate::FeeEstimate::contended`, the executor's reading of `getFeeEstimate`) and the person set no
-//! `--fee-rate`, one line on stderr says that a transaction at the relay minimum may wait and names the flag. Nothing else
+//! `--fee-rate`, one line on stderr says that KOB transactions are ranked by their storage mass, which the fee does not cover, so they may wait, and what `--fee-rate` can and cannot do about it. Nothing else
 //! changes: the rate stays the relay minimum unless the person raises it. One estimate is read per command, right before the
 //! plan is shown; a node that does not answer it, or answers nonsense, gives no note.
 
@@ -18,7 +18,7 @@ pub fn note_for(answer: &Value) -> Option<String> {
     let est = FeeEstimate::parse(answer).ok()?;
     est.contended(MIN_FEE_RATE).then(|| {
         format!(
-            "note: blocks are contended (the node estimates {} sompi per gram for the next minute): a transaction at the relay minimum ({MIN_FEE_RATE}) may wait. --fee-rate N pays more.",
+            "note: blocks are contended (the node estimates {} sompi per gram for the next minute). KOB transactions are ranked by their storage mass, which the fee does not cover, so they may wait. The CLI has no storage-inclusive fee: --fee-rate N raises the fee, but it is still charged on the compute and transient mass only.",
             est.normal.ceil()
         )
     })
@@ -49,6 +49,8 @@ mod tests {
         let n = note_for(&answer(140.2)).unwrap();
         assert!(n.starts_with("note: blocks are contended"), "{n}");
         assert!(n.contains("--fee-rate N"), "{n}");
+        assert!(n.contains("ranked by their storage mass"), "{n}");
+        assert!(!n.contains("relay minimum"), "{n}");
         assert!(n.contains("141 sompi per gram"), "{n}");
         assert!(!n.contains('\n'));
     }

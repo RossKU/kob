@@ -72,7 +72,7 @@ export default {
   'ticket.wait.pair': 'the pair book and your coins',
   'ticket.untradable.title': '{ticker} cannot be traded in this app',
   'ticket.untradable.generic': 'This token is not tradable in this version.',
-  'ticket.congestion': 'Blocks are contended: a transaction at the relay minimum may wait.',
+  'ticket.congestion': 'Blocks are contended. KOB transactions are ranked by their storage mass, which the normal fee does not cover, so they may wait.',
   'ticket.congestion.settings': 'Pay the priority fee in Settings',
   'ticket.untradable.hint': 'Balances and orders stay visible. Trading needs a token program this build supports.',
 
