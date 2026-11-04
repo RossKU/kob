@@ -9,7 +9,7 @@
 //     exactly ONE link per click (a merge is manual and every link costs a fee, so the user decides each one: one click = one 3 -> 1 transaction
 //     of the smallest UTXOs, click again to merge more); the full chain stays available for callers that want it (tests; the CLI and the soak
 //     run their own merge code);
-//   * the merged output keeps the largest input carrier (at most the default 2 KAS carrier, at least the program's floor); the other carriers
+//   * the merged output keeps the largest input carrier (at most the default 1 KAS carrier, at least the program's floor); the other carriers
 //     are freed and pay the fee, the rest returns as KAS change. Only when they do not cover it (or a KRON transfer, which needs a P2PK input of
 //     the owner) is a wallet KAS UTXO added;
 //   * fee: the LOW bucket of the fee policy (housekeeping, matcher.md 9; the soak's merges and the executor's maintenance pay the same).
@@ -81,7 +81,7 @@ export interface MergePlan {
   merged: number;
   /**
    * KAS the merge returns to the wallet: the carriers of the merged token UTXOs, less the one the merged output keeps, less the fees. The freed
-   * carriers are the point of a merge (each token UTXO carries a carrier, by default 2 KAS); a wallet KAS input added for the fee comes back as
+   * carriers are the point of a merge (each token UTXO carries a carrier, by default 1 KAS); a wallet KAS input added for the fee comes back as
    * change, so it is not part of it. Negative when the fees exceed the freed carriers (tiny carriers, KRON).
    */
   freed: bigint;

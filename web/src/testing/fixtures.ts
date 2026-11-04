@@ -105,7 +105,7 @@ export interface EnvOptions {
 
 /**
  * The carrier the fixture envs plan with unless told otherwise: 10 KAS, the carrier of the Rust fixtures and the golden vectors, so the
- * planner tests keep their numbers. The wallet default (`DEFAULT_CARRIER`, 2 KAS) is tested with `carrier: null`.
+ * planner tests keep their numbers. The wallet default (`DEFAULT_CARRIER`, 1 KAS) is tested with `carrier: null`.
  */
 export const FIXTURE_CARRIER = 1_000_000_000n;
 

@@ -102,9 +102,9 @@ describe('buildCreate / verifyBuilt', () => {
     expect(verifyBuilt(env, r.built!, spec)).toBeNull();
   });
 
-  it('the wallet default carrier is kob-wasm defaultOrderCarrier (2 KAS): a default ask builds and verifies at it', () => {
+  it('the wallet default carrier is kob-wasm defaultOrderCarrier (1 KAS): a default ask builds and verifies at it', () => {
     const { env, spec } = askSpec(makeEnv({ carrier: null }));
-    expect(DEFAULT_CARRIER).toBe(2n * KAS);
+    expect(DEFAULT_CARRIER).toBe(KAS);
     expect(env.kob.defaultConstants().defaultOrderCarrier).toBe(DEFAULT_CARRIER);
     expect(spec.value).toBe(DEFAULT_CARRIER);
     const r = buildCreate(env, spec);

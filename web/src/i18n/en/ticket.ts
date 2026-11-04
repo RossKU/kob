@@ -238,7 +238,7 @@ export default {
   'ticket.help.keeperTip': 'Paid to the matcher per arm or trail update. Default per token program (about 0.02 KAS; pair orders 0.036 KAS).',
   'ticket.help.minTouch': 'Smallest fill at or beyond the stop that arms it (and moves a trailing stop). Default: the larger of the minimum fill and 25% of the amount.',
   'ticket.help.minRestDaa': 'R: seconds that order must have rested at its price, so a fresh order cannot trigger. Default 5.',
-  'ticket.help.carrier': 'KAS held in each contract UTXO, returned when the order ends. Default 2 KAS.',
+  'ticket.help.carrier': 'KAS held in each contract UTXO, returned when the order ends. Default 1 KAS.',
   'ticket.help.trail.step': 'Size of each stop move.',
   'ticket.help.trail.gap': 'Distance the stop keeps from the market.',
   'ticket.help.trail.wait': 'Minutes between updates. Default 10, min 1.',

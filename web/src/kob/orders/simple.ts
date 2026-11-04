@@ -293,7 +293,7 @@ function planImmediate(env: PlanEnv, i: IocIntent | FokIntent): OrderPlan {
 /**
  * Most fills the wallet budgets BY DEFAULT for a buy that crosses the book (a limit buy placed as an auction, a rising bid): enough for the asks
  * that cross it now (3 per transaction) instead of DEFAULT_BID_FILLS (which leaves the tail of a large crossing buy unfillable: 3 fills x 3 asks),
- * at most this many. Every budgeted fill deposits one delivery carrier (2 KAS by default) in the escrow: a cancel or the refund returns the unused
+ * at most this many. Every budgeted fill deposits one delivery carrier (1 KAS by default) in the escrow: a cancel or the refund returns the unused
  * ones, a used one rides on the delivered token UTXO (merge or sell to free it). The user's own Fills value always wins.
  */
 export const MAX_DEFAULT_CROSSING_FILLS = 10n;

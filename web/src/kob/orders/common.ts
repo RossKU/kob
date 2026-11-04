@@ -19,10 +19,12 @@ export { issue, customIssue, hasError, ISSUE_CATALOG } from './common-issues';
 export type { IssueCode } from './common-issues';
 
 /**
- * Default KAS carrier of every covenant UTXO (order, custody, delivery, exit): 2 KAS (kob-wasm `defaultConstants().defaultOrderCarrier`,
- * kob-protocol `DEFAULT_ORDER_CARRIER`, order-types.md, defaults: the relay fee does not depend on it; KaspaCom's 0.5 KAS floor is below it).
+ * Default KAS carrier of every covenant UTXO (order, custody, delivery, exit): 1 KAS (kob-wasm `defaultConstants().defaultOrderCarrier`,
+ * kob-protocol `DEFAULT_ORDER_CARRIER`, order-types.md, defaults: the relay fee and the fills per transaction do not depend on it; a lower
+ * carrier raises storage mass, so a lower block-template priority under congestion and, on large 8/8 and 10/10 batches, a storage mass over
+ * the 500,000 limit; KaspaCom's 0.5 KAS floor is below it).
  */
-export const DEFAULT_CARRIER = 200_000_000n;
+export const DEFAULT_CARRIER = 100_000_000n;
 /** Fills a plain GTC bid budgets delivery carriers for by default (each fill of a continuing bid pays one carrier out of the escrow). */
 export const DEFAULT_BID_FILLS = 3n;
 
