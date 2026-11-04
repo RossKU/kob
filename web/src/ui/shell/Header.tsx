@@ -20,15 +20,15 @@ const NAV = [
   { name: 'settings', href: '#/settings', key: 'shell.nav.settings', testid: 'nav-settings' },
 ] as const;
 
-/** Logo (order-book bars), a mark that follows the theme through `currentColor`. */
+/** Logo: the favicon's design (public/favicon.svg), fixed brand colours on a dark tile in both themes (not theme variables). */
 function Logo() {
   return (
-    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-      <rect x="1" y="1" width="30" height="30" rx="7" fill="none" stroke="currentColor" stroke-width="2" />
-      <rect x="6" y="7" width="12" height="4" rx="1" fill="var(--sell)" />
-      <rect x="6" y="13" width="18" height="4" rx="1" fill="var(--sell)" opacity="0.65" />
-      <rect x="6" y="19" width="20" height="4" rx="1" fill="var(--buy)" opacity="0.65" />
-      <rect x="6" y="25" width="14" height="3" rx="1" fill="var(--buy)" />
+    <svg class="brand-mark" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
+      <rect width="512" height="512" rx="96" fill="#0f1d1c" />
+      <rect x="44" y="54" width="424" height="80" rx="40" fill="#d9434b" />
+      <rect x="244" y="156" width="224" height="80" rx="40" fill="#ec8a8e" />
+      <rect x="244" y="276" width="224" height="80" rx="40" fill="#77d0ad" />
+      <rect x="44" y="378" width="424" height="80" rx="40" fill="#2c9e77" />
     </svg>
   );
 }

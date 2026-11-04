@@ -54,6 +54,20 @@ describe('index.html head', () => {
   });
 });
 
+describe('the header logo', () => {
+  it("draws the favicon's four bars in its fixed colours (same rects as public/favicon.svg)", () => {
+    const attrs = (s: string) =>
+      [...s.matchAll(/<rect\b([^>]*?)\s*\/>/g)].map((m) => [...m[1]!.matchAll(/(\w+)="([^"]*)"/g)].map((a) => `${a[1]}=${a[2]}`).sort().join(' '));
+    const fav = readFileSync(web('public/favicon.svg'), 'utf8');
+    const src = readFileSync(web('src/ui/shell/Header.tsx'), 'utf8');
+    const start = src.indexOf('function Logo()');
+    const logo = src.slice(start, src.indexOf('</svg>', start));
+    expect(logo).toContain('class="brand-mark" viewBox="0 0 512 512" aria-hidden="true" focusable="false"');
+    expect(attrs(logo)).toEqual(attrs(fav));
+    expect(logo).not.toMatch(/var\(--|currentColor|stroke/);
+  });
+});
+
 describe('build-time head (head-meta.mjs)', () => {
   it('unset: index.html is unchanged', () => {
     expect(applyHead(html, {})).toBe(html);
