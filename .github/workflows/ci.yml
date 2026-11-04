@@ -216,7 +216,7 @@ jobs:
   reproducible:
     # The release outputs are built twice, from two checkouts at different paths (a/ and b/) with their own target and node_modules
     # directories and no cache, and every file must come out identical: the web bundle (web/dist, with the kob-wasm bindings it embeds,
-    # scripts/build-wasm.sh --web --slim) and the kob-executor release binary. A difference means the output depends on the build
+    # scripts/build-wasm.sh --web --slim) and the kobd release binary. A difference means the output depends on the build
     # directory, the time or another input outside the commit (docs/ops/release.md 6).
     runs-on: ubuntu-latest
     steps:
@@ -240,7 +240,7 @@ jobs:
         run: |
           want=$(awk '/^name = "wasm-bindgen"$/ {getline; gsub(/"/, "", $3); print $3; exit}' Cargo.lock)
           cargo install wasm-bindgen-cli --version "$want" --locked --root "$RUNNER_TEMP/bindgen"
-      - name: Build a/ and b/ (kob-wasm web bindings, web/dist, kob-executor release)
+      - name: Build a/ and b/ (kob-wasm web bindings, web/dist, kobd release)
         env:
           WASM_BINDGEN: ${{ runner.temp }}/bindgen/bin/wasm-bindgen
         run: |
@@ -250,10 +250,10 @@ jobs:
             (cd "$side/web" && npm ci && npm run fetch-sdk && npm run build:wasm -- --copy && npm run build)
             (cd "$side" && cargo build --locked --release -p kob-executor)
           done
-      - name: Every file of web/dist and the kob-executor binary are identical
+      - name: Every file of web/dist and the kobd binary are identical
         run: |
           for side in a b; do (cd "$side/web/dist" && find . -type f -print0 | sort -z | xargs -0 sha256sum) > "dist-$side.sha256"; done
           wc -l < dist-a.sha256
           diff dist-a.sha256 dist-b.sha256
-          sha256sum a/target/release/kob-executor b/target/release/kob-executor
-          cmp a/target/release/kob-executor b/target/release/kob-executor
+          sha256sum a/target/release/kobd b/target/release/kobd
+          cmp a/target/release/kobd b/target/release/kobd

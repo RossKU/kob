@@ -1,12 +1,12 @@
 name: release
 
-# Prebuilt kob-executor and kob (the command line, crate kob-cli) for operators (docs/ops/executor-quickstart.md): Windows x86_64 (MSVC, static CRT),
+# Prebuilt kobd and kob (the command line, crate kob-cli) for operators (docs/ops/executor-quickstart.md): Windows x86_64 (MSVC, static CRT),
 # Linux x86_64 (glibc) and Android arm64 (aarch64-linux-android, bionic: for Termux on a phone), each as the testnet-10 and the mainnet
 # deployment build (docs/ops/release.md), packaged by scripts/package-release.mjs into
 # kobd-<version>-<network>-<target>.zip / .tar.gz (kobd, the daemon, and kob, QUICKSTART.md, LICENSE, NOTICE and a SHA256SUMS of
 # their files) and kob-<version>-<network>-<target>.zip / .tar.gz (the command line alone, with its README).
 # The Android app for tap-to-use phones (testnet-10 only; android.yml, called by the job `android` below) goes into the release as
-# kob-executor-<version>-testnet-10-android.apk, with its SHA256 in the release's SHA256SUMS like the archives. It is signed with the
+# kobd-<version>-testnet-10-android.apk, with its SHA256 in the release's SHA256SUMS like the archives. It is signed with the
 # release key when the ANDROID_* repository secrets exist (a new APK then updates the old one in place and keeps the key);
 # without them it is debug-signed, named ...-android-debug-signed.apk, and the release notes say it cannot be updated.
 #
@@ -94,7 +94,7 @@ jobs:
             echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang"
             echo "AR_aarch64_linux_android=$bin/llvm-ar"
           } >> "$GITHUB_ENV"
-      - name: Build kob-executor and kob (${{ matrix.network }} deployment build, --locked)
+      - name: Build kobd and kob (${{ matrix.network }} deployment build, --locked)
         env:
           NETWORK: ${{ matrix.network }}
           TARGET: ${{ matrix.platform.target }}
@@ -112,7 +112,7 @@ jobs:
         env:
           TARGET: ${{ matrix.platform.target }}
         run: |
-          for b in kob-executor kob; do
+          for b in kobd kob; do
             file "target/$TARGET/release/$b" | tee /dev/stderr | grep -q "ELF 64-bit LSB.*ARM aarch64"
           done
       - name: The binary is the build of its network (it refuses the other one before touching a node)
@@ -124,7 +124,7 @@ jobs:
           TARGET: ${{ matrix.platform.target }}
         run: |
           ext=""; case "$TARGET" in *windows*) ext=.exe ;; esac
-          bin="target/$TARGET/release/kob-executor$ext"
+          bin="target/$TARGET/release/kobd$ext"
           "$bin" --version
           "$bin" setup --help > /dev/null
           other=mainnet; [ "$NETWORK" = mainnet ] && other=testnet-10
@@ -144,7 +144,7 @@ jobs:
         run: node scripts/package-release.mjs --version "$VERSION" --network "$NETWORK" --target "$TARGET" --bin-dir "target/$TARGET/release" --out dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: kob-executor-${{ needs.version.outputs.version }}-${{ matrix.network }}-${{ matrix.platform.target }}
+          name: kobd-${{ needs.version.outputs.version }}-${{ matrix.network }}-${{ matrix.platform.target }}
           path: dist/*
           if-no-files-found: error
 
@@ -172,7 +172,7 @@ jobs:
           node-version: 22
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: kob-executor-*
+          pattern: kobd-*
           path: dist
           merge-multiple: true
       - name: SHA256SUMS of every archive and the APK
