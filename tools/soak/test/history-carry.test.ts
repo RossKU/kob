@@ -1,5 +1,6 @@
 // Market history across a re-issue (src/history-carry.ts), on databases made from the indexer's own schemas: the current one
-// (schema 8, ids interned as integers) and the schema-7 fixture of the Rust tests (blob-keyed order_events / order_state).
+// (schema 9: ids interned as integers, in the child tables and in `orders`), and the schema-8 (integer children, blobs in `orders`) and
+// schema-7 (blobs everywhere) fixtures of the Rust tests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -12,18 +13,22 @@ import {
   historyFloors,
   importHistory,
   importPairs,
-  isSchema8,
+  isSchema9,
   pairMarkets,
+  storeSchema,
   type SqlDb,
   type SqlSrc,
 } from '../src/history-carry.ts';
 
-const SCHEMA = readFileSync(new URL('../../../crates/kob-executor/src/indexer/schema.sql', import.meta.url), 'utf8');
-const SCHEMA7 = readFileSync(new URL('../../../crates/kob-executor/tests/fixtures/schema7.sql', import.meta.url), 'utf8');
-type Layout = 'v8' | 'v7';
-const empty = (layout: Layout = 'v8'): DatabaseSync => {
+const SCHEMAS = {
+  v9: readFileSync(new URL('../../../crates/kob-executor/src/indexer/schema.sql', import.meta.url), 'utf8'),
+  v8: readFileSync(new URL('../../../crates/kob-executor/tests/fixtures/schema8.sql', import.meta.url), 'utf8'),
+  v7: readFileSync(new URL('../../../crates/kob-executor/tests/fixtures/schema7.sql', import.meta.url), 'utf8'),
+};
+type Layout = keyof typeof SCHEMAS;
+const empty = (layout: Layout = 'v9'): DatabaseSync => {
   const db = new DatabaseSync(':memory:');
-  db.exec(layout === 'v8' ? SCHEMA : SCHEMA7);
+  db.exec(SCHEMAS[layout]);
   return db;
 };
 const id = (c: string): string => c.repeat(64);
@@ -33,17 +38,30 @@ const NEW = { TUSD: id('a'), TETH: id('b'), TBTC: id('c') };
 const reg = (m: Record<string, string>) => ({ tokens: Object.entries(m).map(([ticker, covenant_id]) => ({ ticker, covenant_id })) });
 
 let seq = 0;
-/** ids.id of a 32-byte id in a schema-8 database (interned on the way: a token id is never deleted) */
+/** ids.id of a 32-byte id in a database with an `ids` table (interned on the way: an id is never deleted) */
 function intern(db: DatabaseSync, h: string): number {
   db.prepare('INSERT OR IGNORE INTO ids (h) VALUES (?)').run(b(h));
   return Number((db.prepare('SELECT id FROM ids WHERE h = ?').get(b(h)) as { id: number }).id);
 }
+// the values every fixture order names besides its token: template, maker, token program, extension commitment
+const TEMPLATE = id('f');
+const MAKER = id('e');
+const TOKEN_TPL = id('0');
+const EXT = id('9');
 function order(db: DatabaseSync, cov: string, token: string, status: string, quote: string | null = null): void {
-  db.prepare(
-    `INSERT INTO orders (covenant_id, contract, template_hash, family, side, token_cov_id, scale, price, in_book, genesis_state, genesis_block, genesis_daa, listed, quote_cov_id)
-     VALUES (?, ?, ?, 1, 1, ?, 100000000, 5000, 1, ?, 1, 1, 1, ?)`,
-  ).run(b(cov), quote ? 'KobPair' : 'KobAsk', b(id('f')), b(token), b('00'), quote ? b(quote) : null);
-  if (isSchema8(db)) {
+  if (isSchema9(db)) {
+    // schema 9: the six 32-byte values are `ids` rows
+    db.prepare(
+      `INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, ext_id, scale, price, in_book, genesis_state, genesis_block,
+         genesis_daa, listed, quote_id) VALUES (?, ?, ?, 1, 1, ?, ?, ?, ?, 100000000, 5000, 1, ?, 1, 1, 1, ?)`,
+    ).run(b(cov), quote ? 'KobPair' : 'KobAsk', intern(db, TEMPLATE), intern(db, MAKER), intern(db, token), intern(db, TOKEN_TPL), intern(db, EXT), b('00'), quote ? intern(db, quote) : null);
+  } else {
+    db.prepare(
+      `INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, price, in_book, genesis_state,
+         genesis_block, genesis_daa, listed, quote_cov_id) VALUES (?, ?, ?, 1, 1, ?, ?, ?, ?, 100000000, 5000, 1, ?, 1, 1, 1, ?)`,
+    ).run(b(cov), quote ? 'KobPair' : 'KobAsk', b(TEMPLATE), b(MAKER), b(token), b(TOKEN_TPL), b(EXT), b('00'), quote ? b(quote) : null);
+  }
+  if (storeSchema(db) >= 8) {
     db.prepare(
       'INSERT INTO order_state (order_id, status, filled_amount, state_known, last_block, last_daa) VALUES ((SELECT id FROM orders WHERE covenant_id = ?), ?, 0, 1, 1, 1)',
     ).run(b(cov), status);
@@ -53,7 +71,7 @@ function order(db: DatabaseSync, cov: string, token: string, status: string, quo
 }
 function event(db: DatabaseSync, cov: string, token: string, kind: string, ts: number): void {
   const txid = b(id(String(++seq % 10)));
-  if (isSchema8(db)) {
+  if (storeSchema(db) >= 8) {
     db.prepare(
       `INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price)
        VALUES ((SELECT id FROM orders WHERE covenant_id = ?), 1, ?, ?, ?, 0, ?, ?, 1, 10, 5000)`,
@@ -71,13 +89,16 @@ function pairFill(db: DatabaseSync, cov: string, base: string, quote: string, ts
   ).run(ts, ts, b(id('9')), b(cov), b(base), b(quote));
 }
 const count = (db: DatabaseSync, sql: string, ...p: unknown[]): number => Number((db.prepare(sql).get(...(p as [])) as { n: number }).n);
-/** events of a token id (default: its fills; `cmp` is the SQL comparison on `kind`), in either layout */
+/** events of a token id (default: its fills; `cmp` is the SQL comparison on `kind`), in every layout */
 const eventsOf = (db: DatabaseSync, token: string, cmp = "= 'fill'"): number =>
-  isSchema8(db)
+  storeSchema(db) >= 8
     ? count(db, `SELECT COUNT(*) n FROM order_events WHERE kind ${cmp} AND token_id = (SELECT id FROM ids WHERE h = ?)`, b(token))
     : count(db, `SELECT COUNT(*) n FROM order_events WHERE kind ${cmp} AND token_cov_id = ?`, b(token));
 
-function fixture(layout: Layout = 'v8'): DatabaseSync {
+/** SQL: the lower-case hex of the 32-byte value an `orders` row (alias o) names in a schema-9 store (`''` for NULL) */
+const idHex = (col: string): string => `lower(hex((SELECT h FROM ids WHERE id = o.${col})))`;
+
+function fixture(layout: Layout = 'v9'): DatabaseSync {
   const db = empty(layout);
   // an ended ask of the old TUSD with a create, two fills and a cancel; an ended pair order TETH/TUSD; a fill of the old TBTC
   order(db, id('d'), OLD.TUSD, 'cancelled');
@@ -94,9 +115,12 @@ function fixture(layout: Layout = 'v8'): DatabaseSync {
 }
 
 test('the fixtures are of the layouts they claim', () => {
-  assert.equal(isSchema8(empty('v8')), true);
-  assert.equal(isSchema8(empty('v7')), false);
-  assert.equal(isSchema8(fixture('v7')), false);
+  for (const l of ['v9', 'v8', 'v7'] as const) {
+    const n = Number(l.slice(1));
+    assert.equal(storeSchema(empty(l)), n);
+    assert.equal(storeSchema(fixture(l)), n);
+    assert.equal(isSchema9(fixture(l)), l === 'v9');
+  }
 });
 
 test('carryPairs: by ticker, only the ids that changed; a ticker without a new market or an id reused across tickers is refused', () => {
@@ -130,7 +154,7 @@ test('carryHistory: the fills and pair fills move to the new id of their ticker;
     [2, 3],
   );
   // untouched: the orders (their token template is the old one) and the non-fill events
-  assert.equal(count(db, 'SELECT COUNT(*) n FROM orders WHERE token_cov_id IN (?, ?, ?)', b(NEW.TUSD), b(NEW.TETH), b(NEW.TBTC)), 0);
+  assert.equal(count(db, 'SELECT COUNT(*) n FROM orders WHERE token_id IN (SELECT id FROM ids WHERE h IN (?, ?, ?))', b(NEW.TUSD), b(NEW.TETH), b(NEW.TBTC)), 0);
   assert.equal(eventsOf(db, OLD.TUSD, "!= 'fill'"), 2);
   const meta = JSON.parse((db.prepare('SELECT v FROM meta WHERE k = ?').get(`carried_history:${OLD.TUSD}`) as { v: string }).v);
   assert.deepEqual(meta, { ticker: 'TUSD', to: NEW.TUSD, at: 7, fills: 2, pairBase: 0, pairQuote: 1 });
@@ -153,10 +177,13 @@ test('carryHistory: an old id with no fills (no ids row) moves nothing and the t
   assert.equal(count(db, 'SELECT COUNT(*) n FROM ids WHERE h = ?', b(id('5'))), 1);
   assert.equal(count(db, 'SELECT COUNT(*) n FROM ids WHERE h = ?', b(id('4'))), 0);
   assert.equal(eventsOf(db, OLD.TUSD), 2);
-  // a store of an older layout is a source of reads, never a destination
-  const old = fixture('v7');
-  assert.throws(() => carryHistory(old as unknown as SqlDb, carryPairs(reg(OLD), reg(NEW))), /older layout/);
-  assert.equal(eventsOf(old, OLD.TUSD), 2);
+  // a store of an older layout (schema 8 included: its orders keep blobs) is a source of reads, never a destination
+  for (const l of ['v8', 'v7'] as const) {
+    const old = fixture(l);
+    assert.throws(() => carryHistory(old as unknown as SqlDb, carryPairs(reg(OLD), reg(NEW))), /older layout/);
+    assert.equal(eventsOf(old, OLD.TUSD), 2);
+    assert.equal(count(old, "SELECT COUNT(*) n FROM meta WHERE k LIKE 'carried_history:%'"), 0);
+  }
 });
 
 test('carryHistory: an open order of an old id refuses the whole carry and nothing moves', () => {
@@ -192,8 +219,8 @@ test('historyFloors: the first KAS trade under the current id; fills left under 
   assert.deepEqual(historyFloors(db as unknown as SqlDb, { tokens: [{ ticker: 'X', covenant_id: id('4') }] }), [{ ticker: 'X', id: id('4'), firstTrade: null, leftover: 0 }]);
 });
 
-test('historyFloors / pairMarkets: the same answers on a store of the older layout (the chart check reads either)', () => {
-  const db = fixture('v7');
+for (const layout of ['v8', 'v7'] as const) test(`historyFloors / pairMarkets: the same answers on a schema-${layout.slice(1)} store (the chart check reads any layout)`, () => {
+  const db = fixture(layout);
   assert.deepEqual(historyFloors(db as unknown as SqlDb, reg(OLD)).map((f) => [f.ticker, f.firstTrade, f.leftover]), [['TUSD', 2, 0], ['TETH', 5, 0], ['TBTC', 6, 0]]);
   assert.deepEqual(pairMarkets(db as unknown as SqlDb, reg(OLD)), [[OLD.TETH, OLD.TUSD]]);
   // a carry record whose old id still has its fills: counted from the old columns
@@ -273,10 +300,10 @@ test('importHistory: the fills of an older run of the lot layouts land, converte
     [NEW.TETH, 60000, 70000, 0, 10000, 41, 2000],
   ]);
   // the orders: never reverted, nobody's, unlisted with the label, the old token id; a final state (the open one closed)
-  const ords = dst.prepare('SELECT o.genesis_block, o.maker, o.listed, o.unlisted_reason, lower(hex(o.token_cov_id)) t, s.status, s.filled_amount FROM orders o JOIN order_state s ON s.order_id = o.id ORDER BY o.side').all() as Array<Record<string, unknown>>;
-  assert.deepEqual(ords.map((o) => [o.genesis_block, o.maker, o.listed, o.unlisted_reason, o.t, o.status, o.filled_amount]), [
-    [0, null, 0, 'history_import:m5', OLD.TUSD, 'filled', 900000000],
-    [0, null, 0, 'history_import:m5', OLD.TETH, 'closed', 60000],
+  const ords = dst.prepare(`SELECT o.genesis_block, o.maker_id, o.listed, o.unlisted_reason, ${idHex('token_id')} t, ${idHex('template_id')} tpl, s.status, s.filled_amount FROM orders o JOIN order_state s ON s.order_id = o.id ORDER BY o.side`).all() as Array<Record<string, unknown>>;
+  assert.deepEqual(ords.map((o) => [o.genesis_block, o.maker_id, o.listed, o.unlisted_reason, o.t, o.tpl, o.status, o.filled_amount]), [
+    [0, null, 0, 'history_import:m5', OLD.TUSD, id('f'), 'filled', 900000000],
+    [0, null, 0, 'history_import:m5', OLD.TETH, id('f'), 'closed', 60000],
   ]);
   // every state row belongs to an order (a NULL order_id would have taken a fresh rowid) and the target ids are interned once
   assert.equal(count(dst, 'SELECT COUNT(*) n FROM order_state'), 2);
@@ -293,9 +320,9 @@ test('importHistory: the fills of an older run of the lot layouts land, converte
   assert.deepEqual(floors.map((f) => [f.ticker, f.firstTrade]), [['TUSD', 1000], ['TETH', 2000], ['TBTC', null]]);
 });
 
-// the same import from a source of the schema-7 fixture layout and from a schema-8 source
-for (const layout of ['v7', 'v8'] as const) {
-  test(`importHistory: a ${layout === 'v8' ? 'schema-8' : 'schema-7 (blob-keyed)'} source, with its pair fills; a bad label or target is refused and nothing moves`, () => {
+// the same import from a source of each layout (schema 7 blob-keyed, schema 8 integer children, schema 9 interned orders)
+for (const layout of ['v7', 'v8', 'v9'] as const) {
+  test(`importHistory: a schema-${layout.slice(1)} source, with its pair fills; a bad label or target is refused and nothing moves`, () => {
     const src = fixture(layout); // the old ids, fills at ts 2, 3, 5, 6 and a pair fill TETH/TUSD at 5
     const dst = empty();
     const pairs = importPairs(src as unknown as SqlSrc, OLD_TICKERS, reg(NEW));
@@ -313,10 +340,28 @@ for (const layout of ['v7', 'v8'] as const) {
       (dst.prepare('SELECT s.status st FROM orders o JOIN order_state s ON s.order_id = o.id ORDER BY o.id').all() as Array<{ st: string }>).map((x) => x.st),
       ['filled', 'filled', 'cancelled'], // in import order: TBTC, TETH, TUSD
     );
+    // the 32-byte values of each imported order are interned in `ids` and named by integer; the maker is not carried (NULL); the old token id stays
+    const rows = dst
+      .prepare(
+        `SELECT ${idHex('template_id')} tpl, ${idHex('token_id')} tok, ${idHex('token_tpl_id')} ttpl, ${idHex('ext_id')} ext, ${idHex('quote_id')} quote, o.maker_id mk, o.quote_id qid
+         FROM orders o ORDER BY o.id`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    assert.deepEqual(rows.map((x) => [x.tpl, x.tok, x.ttpl, x.ext, x.quote, x.mk, x.qid === null]), [
+      [TEMPLATE, OLD.TBTC, TOKEN_TPL, EXT, '', null, true],
+      [TEMPLATE, OLD.TETH, TOKEN_TPL, EXT, OLD.TUSD, null, false],
+      [TEMPLATE, OLD.TUSD, TOKEN_TPL, EXT, '', null, true],
+    ]);
+    assert.equal(count(dst, 'SELECT COUNT(*) n FROM ids WHERE h = ?', b(MAKER)), 0); // nobody's: the maker is not interned
+    assert.equal(count(dst, 'SELECT COUNT(*) n FROM ids WHERE h IN (?, ?, ?, ?)', b(TEMPLATE), b(TOKEN_TPL), b(EXT), b(OLD.TUSD)), 4);
     assert.throws(() => importHistory(dst as unknown as SqlDb, src as unknown as SqlSrc, pairs, { label: 'a b', until: 1 }), /bad label/);
     assert.throws(() => importHistory(lotSource() as unknown as SqlDb, src as unknown as SqlSrc, pairs, { label: 'x', until: 1 }), /not a KOB indexer database|lot layouts/);
-    // an older-layout store is never the target
-    assert.throws(() => importHistory(empty('v7') as unknown as SqlDb, src as unknown as SqlSrc, pairs, { label: 'x', until: 1 }), /older layout/);
+    // an older-layout store (schema 8 included) is never the target
+    for (const l of ['v8', 'v7'] as const) {
+      const old = empty(l);
+      assert.throws(() => importHistory(old as unknown as SqlDb, src as unknown as SqlSrc, pairs, { label: 'x', until: 1 }), /older layout/);
+      assert.equal(count(old, 'SELECT COUNT(*) n FROM orders'), 0);
+    }
     // a failure inside the transaction leaves nothing behind
     const dst2 = empty();
     assert.throws(() => importHistory(dst2 as unknown as SqlDb, src as unknown as SqlSrc, [...pairs, { ticker: 'X', from: 'zz', to: NEW.TUSD }], { label: 'y', until: 100 }), /bad pair/);

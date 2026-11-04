@@ -6,7 +6,7 @@
 //   node scripts/chart-history.mjs [--config run/config.json] [--registry run/registry/tokens.json] [--floor run/state/chart-floor.json]
 //        [--only exec-b] [--json]
 //
-// Each database may be a schema-8 store or an older one (schema 5 to 7): the first trade is read with the matching columns.
+// Each database may be of any layout (schema 9, 8, or 5 to 7): the first trade is read with the matching columns.
 //
 // The floor file (written by scripts/import-history.mjs) holds the earliest first trade per ticker any import reached: a database
 // whose first trade is later lost the imported history (a replay or a rebuilt database: import again).

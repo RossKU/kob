@@ -5,13 +5,16 @@
 // come from the `fill` rows of `order_events` (`token_id`, an `ids.id`), the pair pages from `pair_fills` (`base_cov_id`,
 // `quote_cov_id`) and the KAS candles of the two legs. `carryHistory` moves those rows of the old id to the new id of the same
 // TICKER, so the market page of the new token shows one continuous chart. Nothing else is touched: the old orders keep their own
-// `token_cov_id` (their token template is not the new one, and `/v1/tokens` lists tokens from the orders), the old token's UTXO
+// `token_id` (their token template is not the new one, and `/v1/tokens` lists tokens from the orders), the old token's UTXO
 // tables stay as they are.
 //
-// Layouts: the destination of every write here is a schema-8 store (what this build writes: 32-byte ids interned as integers, an
-// order is `orders.id`, a token is `ids.id`; see crates/kob-executor/src/indexer/schema.sql). A database that is only READ (the
-// chart check, the source of an import) may be either that or an older store (schema 5 to 7: `covenant_id` / `token_cov_id` blobs
-// in `order_events` and `order_state`); `isSchema8` tells them apart by the column `orders.id`.
+// Layouts: the destination of every write here is a schema-9 store (what this build writes: 32-byte ids interned as integers, an
+// order is `orders.id`; a token, a maker, a template and an extension commitment are `ids.id`; see
+// crates/kob-executor/src/indexer/schema.sql). A database that is only READ (the chart check, the source of an import) may be of
+// any layout: schema 9; schema 8 (the child tables hold integers, but `orders` still holds the blobs `template_hash`, `maker`,
+// `token_cov_id`, `token_tpl_hash`, `ext_commit`, `quote_cov_id`); or an older store (schema 5 to 7: blobs everywhere, `covenant_id` /
+// `token_cov_id` in `order_events` and `order_state`). `storeSchema` tells them apart: `orders.maker_id` is schema 9, `orders.id`
+// without it schema 8, neither schema 7 (standing for 5 to 7).
 //
 // The executor must be stopped (the database is its derived view; the lock is not checked here). `kobd index replay` rebuilds
 // the tables from the record log and undoes the carry: run it again after a replay (it is idempotent). Each carried id is recorded in
@@ -79,10 +82,20 @@ export function carryPairs(before: RegistryLike, after: RegistryLike): CarryPair
 const hex = (s: string): Uint8Array => Uint8Array.from(Buffer.from(s, 'hex'));
 const num = (n: number | bigint): number => Number(n);
 
-/** True for a schema-8 store (`orders.id` exists: ids interned as integers), false for the older blob-keyed layouts. */
-export function isSchema8(db: { prepare(sql: string): { get(...params: unknown[]): unknown } }): boolean {
-  return !!db.prepare("SELECT 1 AS x FROM pragma_table_info('orders') WHERE name = 'id'").get();
+type Probe = { prepare(sql: string): { get(...params: unknown[]): unknown } };
+const ordersHas = (db: Probe, col: string): boolean => !!db.prepare("SELECT 1 AS x FROM pragma_table_info('orders') WHERE name = ?").get(col);
+
+/**
+ * The layout of a store: 9 (`orders.maker_id`: the blob columns of `orders` are interned too), 8 (`orders.id` only: the child tables
+ * hold integer order and token ids, `orders` keeps its blobs), 7 for every older blob-keyed layout (schemas 5 to 7).
+ */
+export function storeSchema(db: Probe): 7 | 8 | 9 {
+  if (ordersHas(db, 'maker_id')) return 9;
+  return ordersHas(db, 'id') ? 8 : 7;
 }
+
+/** True for a schema-9 store (what this build writes). */
+export const isSchema9 = (db: Probe): boolean => storeSchema(db) === 9;
 
 /**
  * Moves the market history of every pair (old id -> new id) in ONE transaction. Refuses (and changes nothing) when an order of an old id
@@ -93,7 +106,7 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
   for (const t of ['order_events', 'pair_fills', 'orders', 'order_state', 'meta']) {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t)) throw new Error(`not a KOB indexer database: no table ${t}`);
   }
-  if (!isSchema8(db)) throw new Error('the database is of an older layout (no orders.id): open it with this build first');
+  if (!isSchema9(db)) throw new Error('the database is of an older layout (no orders.maker_id: not schema 9): open it with this build first');
   const out: CarryResult[] = [];
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -102,7 +115,8 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
       const live = db
         .prepare(
           "SELECT COUNT(*) AS n FROM orders o JOIN order_state s ON s.order_id = o.id \
-           WHERE (o.token_cov_id = ?1 OR o.quote_cov_id = ?1) AND s.status IN ('open', 'partial')",
+           WHERE (o.token_id IN (SELECT id FROM ids WHERE h = ?1) OR o.quote_id IN (SELECT id FROM ids WHERE h = ?1)) \
+             AND s.status IN ('open', 'partial')",
         )
         .get(hex(p.from)) as { n: number | bigint };
       if (num(live.n) > 0 && !opts.allowLive) {
@@ -137,7 +151,7 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
 
 // ------------------------------------------------------------------------------------------------ chart check
 //
-// What every chart must show, checked after a redeploy (`scripts/chart-history.mjs`; the database may be of either layout): the first candle of each interval is the
+// What every chart must show, checked after a redeploy (`scripts/chart-history.mjs`; the database may be of any layout): the first candle of each interval is the
 // bucket of the token's first KAS trade in the database, and no fill is left under an id carried to it (a replay of the record
 // log undid the carry). A chart that starts later than the database lost history in the read path, not in the data: the
 // 2026-10-14 case (the indexer read only the newest 20 000 fills of a window, so the TUSD chart began on 10-11 although its
@@ -162,7 +176,7 @@ export interface HistoryFloor {
 
 /** Per token of the registry: its first KAS trade and the fills left under its carried ids (read-only; the executor may run). */
 export function historyFloors(db: SqlDb, reg: RegistryLike): HistoryFloor[] {
-  const v8 = isSchema8(db);
+  const v8 = storeSchema(db) >= 8; // integer order and token ids in the child tables (schemas 8 and 9)
   const keys = (db.prepare("SELECT group_concat(k, ',') AS ks FROM meta WHERE k LIKE 'carried_history:%'").get() as { ks: string | null }).ks;
   const carriedTo = new Map<string, string[]>();
   for (const k of keys ? keys.split(',') : []) {
@@ -234,15 +248,17 @@ export function chartProblems(market: string, firstTrade: number | null, firstCa
 //   next run: where two runs overlap, the one live at the time wins), each once (an event of the same order and transaction is
 //   never copied twice), with `block_seq` 0 (no chain block of this database: a reorg never reverts it);
 // * the orders those fills belong to that the database does not hold (the market reads take the scale and the genesis DAA from
-//   them): `genesis_block` 0, `maker` NULL (they never show in a maker's orders), `listed` 0 with `unlisted_reason`
+//   them): `genesis_block` 0, `maker_id` NULL (they never show in a maker's orders), `listed` 0 with `unlisted_reason`
 //   `history_import:<label>`, their token id unchanged, and a final `order_state` (an order still open in the old run is
 //   `closed`: it is no longer anyone's);
 // * the pair fills of the mapped tokens (a database of protocol v3 or later).
 //
-// The target is a schema-8 store (an imported order gets a fresh `orders.id`, its fills and state point at it, the token id is
-// interned in `ids`). The source may be a schema-8 store or any older one (schema 5 to 7: blob-keyed `order_events` / `order_state`).
-// `genesis_state` and `detail` are copied as they are (packed in schema 7 and 8, so rows from a schema 5 / 6 source are not read by the
-// SQL decoders of this build: docs/ops/executor.md 7.6a).
+// The target is a schema-9 store (an imported order gets a fresh `orders.id`, its fills and state point at it, and its template, token,
+// token program, extension commitment and quote token are interned in `ids` and written as `template_id`, `token_id`, `token_tpl_id`,
+// `ext_id`, `quote_id`; `maker_id` is NULL). The source may be of any layout: schema 9 (the same columns, read back through `ids`),
+// schema 8 (integer children, blob columns in `orders`) or schema 5 to 7 (blob-keyed `order_events` / `order_state`).
+// `genesis_state` and `detail` are copied as they are (packed in schema 7 and later, so rows from a schema 5 / 6 source are not read by
+// the SQL decoders of this build: docs/ops/executor.md 7.6a).
 // A database of the lot layouts (protocol v2, schema 4 or older: `orders.lot_units`) is converted exactly: a fill's amount is
 // `lots * lot_units * unit` base units and its price stays sompi per `unit` base units, which is the imported order's `scale`.
 // One transaction; the import is recorded in `meta` (`history_import:<label>`), so a re-run is a no-op. The executor must be
@@ -297,7 +313,7 @@ export function importPairs(src: SqlSrc, old: Map<string, string>, current: Regi
   const now = new Map((current.tokens ?? []).map((t) => [t.ticker, String(t.covenant_id).toLowerCase()]));
   const ids = src
     .prepare(
-      isSchema8(src)
+      storeSchema(src) >= 8
         ? "SELECT DISTINCT lower(hex(i.h)) AS t FROM order_events e JOIN ids i ON i.id = e.token_id WHERE e.kind = 'fill'"
         : "SELECT DISTINCT lower(hex(token_cov_id)) AS t FROM order_events WHERE kind = 'fill' AND token_cov_id IS NOT NULL",
     )
@@ -323,12 +339,13 @@ export function importHistory(
   if (dst.prepare("SELECT 1 AS x FROM pragma_table_info('orders') WHERE name = 'lot_units'").get()) {
     throw new Error('the target database is of the lot layouts: open it with this build first');
   }
-  if (!isSchema8(dst)) throw new Error('the target database is of an older layout (no orders.id): open it with this build first');
+  if (!isSchema9(dst)) throw new Error('the target database is of an older layout (no orders.maker_id: not schema 9): open it with this build first');
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(opts.label)) throw new Error(`bad label ${opts.label}`);
   const key = `history_import:${opts.label}`;
   if (dst.prepare('SELECT v FROM meta WHERE k = ?').get(key)) return { already: true, results: [] };
-  // the source layout: schema 8 (ids interned) or an older one (blob-keyed); a lot layout is always an older one
-  const srcV8 = isSchema8(src);
+  // the source layout: 9 (orders interned too), 8 (children integer, orders blobs) or 7 (blob-keyed); a lot layout is always a 7
+  const srcSchema = storeSchema(src);
+  const srcV8 = srcSchema >= 8;
   const lots = hasColumn(src, 'orders', 'lot_units');
   const amount = lots ? 'e.lots * o.lot_units * o.unit' : 'e.amount';
   const fillSql = srcV8
@@ -338,14 +355,18 @@ export function importHistory(
     : `SELECT e.covenant_id AS cov, e.daa, e.ts, e.txid, e.tx_pos, e.side, ${amount} AS amount, e.price, e.payout, e.closes, e.detail
        FROM order_events e JOIN orders o ON o.covenant_id = e.covenant_id
        WHERE e.kind = 'fill' AND e.token_cov_id = ? AND e.price IS NOT NULL AND ${amount} > 0 AND e.side IN (1, 2) ORDER BY e.ts, e.id`;
-  const quote = hasColumn(src, 'orders', 'quote_cov_id') ? 'o.quote_cov_id' : 'NULL';
+  // the 32-byte values of the order row, named as the blob layouts name them: a schema-9 source joins `ids` (NULL stays NULL)
+  const idH = (col: string): string => `(SELECT h FROM ids WHERE id = o.${col})`;
+  const v = (blob: string, interned: string): string => (srcSchema === 9 ? `${idH(interned)} AS ${blob}` : `o.${blob}`);
+  const quote = srcSchema === 9 ? idH('quote_id') : hasColumn(src, 'orders', 'quote_cov_id') ? 'o.quote_cov_id' : 'NULL';
   const orderSql = lots
     ? `SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.unit AS scale,
          o.lot_units * o.unit AS min_fill, o.price, NULL AS tip, o.tif, o.expiry_daa, o.active_from, o.in_book, NULL AS budget_rate, o.reserve,
          o.initial_lots * o.lot_units * o.unit AS initial_amount, o.deadline, o.genesis_state, o.genesis_txid, o.genesis_out, o.genesis_daa, o.parent,
          ${quote} AS quote_cov_id, s.status, s.filled_lots * o.lot_units * o.unit AS filled_amount, s.last_daa
        FROM orders o LEFT JOIN order_state s ON s.covenant_id = o.covenant_id WHERE o.covenant_id = ?`
-    : `SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.scale, o.min_fill,
+    : `SELECT o.covenant_id, o.contract, ${v('template_hash', 'template_id')}, o.family, o.side, ${v('token_cov_id', 'token_id')},
+         ${v('token_tpl_hash', 'token_tpl_id')}, ${v('ext_commit', 'ext_id')}, o.scale, o.min_fill,
          o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, o.reserve, o.initial_amount, o.deadline, o.genesis_state,
          o.genesis_txid, o.genesis_out, o.genesis_daa, o.parent, ${quote} AS quote_cov_id, s.status, s.filled_amount, s.last_daa
        FROM orders o LEFT JOIN order_state s ON s.${srcV8 ? 'order_id = o.id' : 'covenant_id = o.covenant_id'} WHERE o.covenant_id = ?`;
@@ -357,11 +378,13 @@ export function importHistory(
   );
   const internToken = dst.prepare('INSERT OR IGNORE INTO ids (h) VALUES (?)');
   const tokenIdOf = dst.prepare('SELECT id FROM ids WHERE h = ?');
+  // the six 32-byte values of an order are `ids` rows (interned before the insert, bound as `(SELECT id FROM ids WHERE h = ?)`: NULL stays NULL)
   const putOrder = dst.prepare(
-    `INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif,
+    `INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, ext_id, scale, min_fill, price, tip, tif,
        expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa,
-       parent, listed, unlisted_reason, origin, quote_cov_id)
-     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?, 'chain', ?)`,
+       parent, listed, unlisted_reason, origin, quote_id)
+     VALUES (?, ?, (SELECT id FROM ids WHERE h = ?), ?, ?, NULL, (SELECT id FROM ids WHERE h = ?), (SELECT id FROM ids WHERE h = ?), (SELECT id FROM ids WHERE h = ?),
+       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?, 'chain', (SELECT id FROM ids WHERE h = ?))`,
   );
   const putState = dst.prepare(
     // the orders row is inserted first: a NULL `order_id` (its INTEGER PRIMARY KEY) would silently take a fresh rowid
@@ -393,6 +416,7 @@ export function importHistory(
         const cov = hexOf(f.cov);
         if (!copied.has(cov) && !haveOrder.get(f.cov)) {
           const o = orderOf.get(f.cov) as Record<string, unknown>;
+          for (const h of [o.template_hash, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.quote_cov_id]) if (h != null) internToken.run(h);
           putOrder.run(
             o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.scale, o.min_fill, o.price,
             o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, o.reserve, o.initial_amount, o.deadline, o.genesis_state,
