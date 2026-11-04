@@ -209,7 +209,7 @@ pub fn price_basis(conn: &Connection, token: &Hash32, decimals: Option<u32>) -> 
     }
     let scale: Option<i64> = conn
         .query_row(
-            "SELECT COALESCE(scale, 1) FROM orders WHERE token_cov_id = ?1 ORDER BY genesis_block, covenant_id LIMIT 1",
+            "SELECT COALESCE(scale, 1) FROM orders WHERE token_id = (SELECT id FROM ids WHERE h = ?1) ORDER BY genesis_block, covenant_id LIMIT 1",
             params![token.0.to_vec()],
             |r| r.get(0),
         )
@@ -610,7 +610,7 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
     // with no amount left (read from the live set, `reads::LIVE_FROM`)
     let mut st = conn.prepare(&format!(
         "SELECT o.side, COUNT(*) {} \
-         WHERE o.token_cov_id = ?1 AND o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND {} \
+         WHERE o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND {} \
          AND {} AND {} AND {} GROUP BY o.side",
         reads::LIVE_FROM,
         reads::NOT_FROZEN,

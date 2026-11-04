@@ -18,7 +18,7 @@
 use crate::hex::{Hash32, HexBytes};
 use crate::indexer::db::DbResult;
 use crate::indexer::ingest::{Cursor, Ingest, IngestError};
-use crate::indexer::packed::{sql_genesis, GENESIS_O};
+use crate::indexer::packed::{sql_genesis, sql_order_ids, sql_order_ids_more, GENESIS_O, ORDER_IDS_O};
 use crate::indexer::processor::OpReport;
 use crate::indexer::recordlog::{ImportCustody, LogOp};
 use crate::rpc::types::AddressUtxo;
@@ -99,11 +99,12 @@ pub struct ImportReport {
 pub fn export_orders(conn: &Connection, maker: Option<&[u8]>, live_only: bool) -> DbResult<MakerExport> {
     let network = crate::indexer::db::meta_get(conn, "network")?.unwrap_or_default();
     let mut st = conn.prepare(&format!(
-        "SELECT o.template_hash, CASE WHEN u.txid IS NULL THEN {GENESIS_O} ELSE kob_ustate(u.state, {GENESIS_O}) END, o.ext_commit, o.covenant_id, o.genesis_txid, s.status, o.parent
+        "SELECT o_tm.h, CASE WHEN u.txid IS NULL THEN {GENESIS_O} ELSE kob_ustate(u.state, {GENESIS_O}) END, o_ex.h, o.covenant_id, o.genesis_txid, s.status, o.parent
          FROM orders o JOIN order_state s ON s.order_id = o.id
-         LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx
-         WHERE (?1 IS NULL OR o.maker = ?1) AND (?2 = 0 OR s.status IN ('open', 'partial'))
-         ORDER BY o.genesis_block, o.covenant_id"
+         LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O}{more}
+         WHERE (?1 IS NULL OR o_mk.h = ?1) AND (?2 = 0 OR s.status IN ('open', 'partial'))
+         ORDER BY o.genesis_block, o.covenant_id",
+        more = sql_order_ids_more!("o")
     ))?;
     let rows = st.query_map(rusqlite::params![maker, live_only as i64], |r| {
         let th: Vec<u8> = r.get(0)?;
@@ -330,10 +331,10 @@ fn owned_token_scripts(conn: &Connection, covs: &[Hash32]) -> Result<Vec<OwnedTo
     use kob_protocol::artifacts::{token_template, TemplateId};
     let mut out = Vec::new();
     let mut st = conn.prepare(
-        "SELECT t.txid, t.idx, t.role, t.amount, h.program, kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount), o.ext_commit, \
-         o.token_tpl_hash, o.family \
+        "SELECT t.txid, t.idx, t.role, t.amount, h.program, kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount), oe.h, \
+         ot.h, o.family \
          FROM token_utxos t LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id \
-         LEFT JOIN orders o ON o.id = t.order_id \
+         LEFT JOIN orders o ON o.id = t.order_id LEFT JOIN ids oe ON oe.id = o.ext_id LEFT JOIN ids ot ON ot.id = o.token_tpl_id \
          WHERE t.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND t.spent_block IS NULL",
     )?;
     for cov in covs {
@@ -375,7 +376,11 @@ type CustodyScript = (Vec<u8>, i64, Hash32, Hash32);
 fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result<Option<CustodyScript>, RecoverError> {
     use kob_protocol::artifacts::TemplateId;
     let row: Option<(String, Option<Vec<u8>>)> = conn
-        .query_row("SELECT contract, ext_commit FROM orders WHERE covenant_id = ?1", [&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row(
+            "SELECT o.contract, e.h FROM orders o LEFT JOIN ids e ON e.id = o.ext_id WHERE o.covenant_id = ?1",
+            [&cov.0[..]],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()?;
     let Some((contract, ext)) = row else { return Ok(None) };
     let Some(tid) = TemplateId::from_name(&contract) else { return Ok(None) };
@@ -384,7 +389,9 @@ fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result
             concat!(
                 "SELECT kob_ustate(u.state, (SELECT ",
                 sql_genesis!("g"),
-                " FROM orders g WHERE g.id = u.order_id)) FROM order_utxos u \
+                " FROM orders g",
+                sql_order_ids!("g"),
+                " WHERE g.id = u.order_id)) FROM order_utxos u \
                  WHERE u.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND u.spk = ?2 AND u.state IS NOT NULL ORDER BY u.created_block DESC LIMIT 1"
             ),
             rusqlite::params![&cov.0[..], spk],

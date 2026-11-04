@@ -286,21 +286,64 @@ pub fn zunpack<'a>(stored: &'a [u8], extras: &[&[u8]]) -> Result<Cow<'a, [u8]>, 
     }
 }
 
-/// The SQL of a genesis state and of an order UTXO's state, for a query that has the `orders` row as alias `$o` (and the UTXO as `$u`).
+/// The SQL of a genesis state and of an order UTXO's state, for a query that has the `orders` row as alias `$o` (and the UTXO as `$u`)
+/// and the joins of [`sql_order_ids`] (the maker, token, token program and quote token come back to their 32 bytes as `$o_mk.h`, `$o_tk.h`,
+/// `$o_tp.h`, `$o_qt.h`: the dictionary the genesis state was packed against).
 macro_rules! sql_genesis {
     ($o:literal) => {
+        concat!("kob_gstate(", $o, ".genesis_state, ", $o, "_mk.h, ", $o, "_tk.h, ", $o, "_tp.h, ", $o, "_qt.h)")
+    };
+}
+/// The `LEFT JOIN`s of the ids the genesis state is packed against (maker `_mk`, token `_tk`, token program `_tp`, quote token `_qt`) for
+/// the `orders` row `$o`: put them after the `orders` row in the `FROM` clause. One point read of `ids` each.
+macro_rules! sql_order_ids {
+    ($o:literal) => {
         concat!(
-            "kob_gstate(",
+            " LEFT JOIN ids ",
             $o,
-            ".genesis_state, ",
+            "_mk ON ",
             $o,
-            ".maker, ",
+            "_mk.id = ",
             $o,
-            ".token_cov_id, ",
+            ".maker_id LEFT JOIN ids ",
             $o,
-            ".token_tpl_hash, ",
+            "_tk ON ",
             $o,
-            ".quote_cov_id)"
+            "_tk.id = ",
+            $o,
+            ".token_id LEFT JOIN ids ",
+            $o,
+            "_tp ON ",
+            $o,
+            "_tp.id = ",
+            $o,
+            ".token_tpl_id LEFT JOIN ids ",
+            $o,
+            "_qt ON ",
+            $o,
+            "_qt.id = ",
+            $o,
+            ".quote_id "
+        )
+    };
+}
+/// The other two ids of an order row that a read returns: its template hash (`$o_tm`) and its extension commitment (`$o_ex`).
+macro_rules! sql_order_ids_more {
+    ($o:literal) => {
+        concat!(
+            " LEFT JOIN ids ",
+            $o,
+            "_tm ON ",
+            $o,
+            "_tm.id = ",
+            $o,
+            ".template_id LEFT JOIN ids ",
+            $o,
+            "_ex ON ",
+            $o,
+            "_ex.id = ",
+            $o,
+            ".ext_id "
         )
     };
 }
@@ -309,11 +352,11 @@ macro_rules! sql_ustate {
         concat!("kob_ustate(", $u, ".state, ", $crate::indexer::packed::sql_genesis!($o), ")")
     };
 }
-pub(crate) use {sql_genesis, sql_ustate};
+pub(crate) use {sql_genesis, sql_order_ids, sql_order_ids_more, sql_ustate};
 
-/// [`sql_genesis`] for the aliases most queries use, as constants for `format!`.
+/// [`sql_genesis`] and [`sql_order_ids`] for the alias most queries use, as constants for `format!`.
 pub const GENESIS_O: &str = sql_genesis!("o");
-pub const GENESIS_G: &str = sql_genesis!("g");
+pub const ORDER_IDS_O: &str = sql_order_ids!("o");
 
 fn text_arg<'a>(ctx: &'a Context<'_>, i: usize) -> rusqlite::Result<Option<&'a str>> {
     match ctx.get_raw(i) {

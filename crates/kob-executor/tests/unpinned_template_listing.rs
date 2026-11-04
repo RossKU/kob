@@ -23,8 +23,12 @@ use kob_protocol::state::*;
 fn record_under_another_template(c: &Ctx, cov: &Hash32) -> [u8; 32] {
     let other = [0x5a; 32];
     let g = c.hs.ingest.lock().unwrap();
+    kob_executor::indexer::ids::intern(g.conn(), &other).unwrap();
     g.conn()
-        .execute("UPDATE orders SET template_hash = ?1 WHERE covenant_id = ?2", rusqlite::params![&other[..], &cov.0[..]])
+        .execute(
+            "UPDATE orders SET template_id = (SELECT id FROM ids WHERE h = ?1) WHERE covenant_id = ?2",
+            rusqlite::params![&other[..], &cov.0[..]],
+        )
         .unwrap();
     other
 }

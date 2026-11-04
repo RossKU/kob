@@ -18,7 +18,7 @@
 //! [`crate::executor::IndexerSource`].
 
 use super::db::DbResult;
-use super::packed::GENESIS_O;
+use super::packed::{sql_order_ids_more, GENESIS_O, ORDER_IDS_O};
 use super::reads::tip_state;
 use crate::hex::Hash32;
 use crate::matcher::book::{ListedOrder, MemoryBook, OrderBookView};
@@ -200,15 +200,16 @@ pub(crate) fn live_orders_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         format!(
-            "SELECT o.covenant_id, o.contract, o.family, o.deadline, o.ext_commit, u.txid, u.idx, u.value, kob_ustate(u.state, {GENESIS_O}), u.created_daa, \
-             o.template_hash \
+            "SELECT o.covenant_id, o.contract, o.family, o.deadline, o_ex.h, u.txid, u.idx, u.value, kob_ustate(u.state, {GENESIS_O}), u.created_daa, \
+             o_tm.h \
              FROM order_state s \
              CROSS JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-             CROSS JOIN orders o ON o.id = s.order_id \
+             CROSS JOIN orders o ON o.id = s.order_id{ORDER_IDS_O}{more} \
              WHERE s.status IN ('open','partial') AND o.listed = ?1 AND s.state_known = 1 AND u.spent_block IS NULL AND u.state IS NOT NULL \
              AND {} \
              ORDER BY o.genesis_block, o.covenant_id",
-            super::reads::pinned_template()
+            super::reads::pinned_template(),
+            more = sql_order_ids_more!("o")
         )
     })
 }

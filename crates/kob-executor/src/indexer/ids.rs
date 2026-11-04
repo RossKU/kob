@@ -1,4 +1,4 @@
-//! Integer surrogate keys (schema 8).
+//! Integer surrogate keys (schemas 8 and 9).
 //!
 //! The big tables of the store repeated the same 32-byte hashes in every row and again in every index entry: the covenant id of
 //! an order in each of its events, UTXOs and amends, the covenant id of a token in each of its fills and holdings, the owner of
@@ -9,7 +9,10 @@
 //!   `token_utxos.order_id` (the order that owns the token UTXO) refer to it. The covenant id stays in `orders`: the order
 //!   lists are ordered by it, and it is what an order is called outside the store;
 //! * a token's covenant id and a holding's owner are rows of `ids` (`id`, `h`), added when first seen and never deleted:
-//!   `order_events.token_id`, `token_utxos.token_id`, `token_holdings.token_id` / `owner_id`, `holding_programs.token_id`.
+//!   `order_events.token_id`, `token_utxos.token_id`, `token_holdings.token_id` / `owner_id`, `holding_programs.token_id`;
+//! * (schema 9) the same for the columns of `orders` itself: `maker_id`, `template_id`, `token_id`, `token_tpl_id`, `ext_id`, `quote_id`.
+//!   The few values the orders name are the first rows of `ids` (`index migrate` assigns them first), and a new order interns its
+//!   values before it is inserted ([`intern`]).
 //!
 //! Rust keeps speaking [`Hash32`]. A statement that filters or inserts by one of them resolves it in the statement
 //! (`order_of!("?1")`, `id_of!("?2")`: an uncorrelated scalar subquery, one index seek, evaluated once); a statement that returns
@@ -30,6 +33,11 @@ pub fn intern(conn: &Connection, h: &[u8]) -> DbResult<i64> {
 /// `ids.id` of `h`, if it has one.
 pub fn lookup(conn: &Connection, h: &[u8]) -> DbResult<Option<i64>> {
     Ok(conn.prepare_cached("SELECT id FROM ids WHERE h = ?1")?.query_row([h], |r| r.get(0)).optional()?)
+}
+
+/// The 32 bytes of `ids.id` `id`.
+pub fn hash_of(conn: &Connection, id: i64) -> DbResult<Vec<u8>> {
+    Ok(conn.prepare_cached("SELECT h FROM ids WHERE id = ?1")?.query_row([id], |r| r.get(0))?)
 }
 
 /// `orders.id` of the order with this covenant id.

@@ -119,13 +119,23 @@ fn main() {
 
     if !only_tables {
         // ---- samples (by ordered ids, so both builds pick the same ones whatever their indexes)
+        // schema 9 names the token and maker of an order by id: the same samples through the join
+        let v9 = has_col(&conn, "orders", "maker_id");
         let tokens_top = blobs(
             &conn,
-            "SELECT token_cov_id FROM (SELECT token_cov_id, COUNT(*) c FROM orders WHERE token_cov_id IS NOT NULL GROUP BY 1 ORDER BY c DESC, token_cov_id LIMIT 12)",
+            if v9 {
+                "SELECT t.h FROM (SELECT token_id, COUNT(*) c FROM orders WHERE token_id IS NOT NULL GROUP BY 1) x JOIN ids t ON t.id = x.token_id ORDER BY x.c DESC, t.h LIMIT 12"
+            } else {
+                "SELECT token_cov_id FROM (SELECT token_cov_id, COUNT(*) c FROM orders WHERE token_cov_id IS NOT NULL GROUP BY 1 ORDER BY c DESC, token_cov_id LIMIT 12)"
+            },
         );
         let makers_top = blobs(
             &conn,
-            "SELECT maker FROM (SELECT maker, COUNT(*) c FROM orders WHERE maker IS NOT NULL GROUP BY 1 ORDER BY c DESC, maker LIMIT 6)",
+            if v9 {
+                "SELECT m.h FROM (SELECT maker_id, COUNT(*) c FROM orders WHERE maker_id IS NOT NULL GROUP BY 1) x JOIN ids m ON m.id = x.maker_id ORDER BY x.c DESC, m.h LIMIT 6"
+            } else {
+                "SELECT maker FROM (SELECT maker, COUNT(*) c FROM orders WHERE maker IS NOT NULL GROUP BY 1 ORDER BY c DESC, maker LIMIT 6)"
+            },
         );
         // schema 8 keeps the owners and the order of a state row as integers: the same samples through the join
         let interned = has_col(&conn, "orders", "id");
@@ -328,11 +338,19 @@ fn main() {
             if has_fn(&conn, "kob_hstate") { "kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount)" } else { "h.state" };
         if interned {
             // schema 8: the same rows, the same columns in the same order, with the ids joined back to their 32 bytes
-            let gen = "kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id)";
+            let v9 = has_col(&conn, "orders", "maker_id");
+            let (gen, joins) = if v9 {
+                (
+                    "kob_gstate(o.genesis_state, o_mk.h, o_tk.h, o_tp.h, o_qt.h)".to_string(),
+                    " LEFT JOIN ids o_mk ON o_mk.id = o.maker_id LEFT JOIN ids o_tk ON o_tk.id = o.token_id LEFT JOIN ids o_tp ON o_tp.id = o.token_tpl_id LEFT JOIN ids o_qt ON o_qt.id = o.quote_id LEFT JOIN ids o_tm ON o_tm.id = o.template_id LEFT JOIN ids o_ex ON o_ex.id = o.ext_id ".to_string(),
+                )
+            } else {
+                ("kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id)".to_string(), " ".to_string())
+            };
             table_digest(
                 &conn,
                 "order_utxos",
-                &format!("SELECT u.txid, u.idx, o.covenant_id, u.value, u.spk, kob_ustate(u.state, {gen}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount FROM order_utxos u JOIN orders o ON o.id = u.order_id ORDER BY u.rowid"),
+                &format!("SELECT u.txid, u.idx, o.covenant_id, u.value, u.spk, kob_ustate(u.state, {gen}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount FROM order_utxos u JOIN orders o ON o.id = u.order_id{joins}ORDER BY u.rowid"),
             );
             table_digest(
                 &conn,
@@ -359,11 +377,12 @@ fn main() {
                 "token_utxos",
                 "SELECT u.txid, u.idx, t.h, o.covenant_id, u.amount, u.value, u.role, u.created_block, u.created_daa, u.spent_block, u.spent_txid FROM token_utxos u JOIN ids t ON t.id = u.token_id JOIN orders o ON o.id = u.order_id ORDER BY u.txid, u.idx",
             );
-            table_digest(
-                &conn,
-                "orders",
-                "SELECT covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id), genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id FROM orders ORDER BY rowid",
-            );
+            let orders_sql = if v9 {
+                format!("SELECT o.covenant_id, o.contract, o_tm.h, o.family, o.side, o_mk.h, o_tk.h, o_tp.h, o_ex.h, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, o.reserve, o.initial_amount, o.deadline, {gen}, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, o.unlisted_reason, o.origin, o_qt.h FROM orders o{joins}ORDER BY o.rowid")
+            } else {
+                "SELECT covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id), genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id FROM orders ORDER BY rowid".to_string()
+            };
+            table_digest(&conn, "orders", &orders_sql);
         } else {
             table_digest(
                 &conn,

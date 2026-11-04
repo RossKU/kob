@@ -158,9 +158,12 @@ fn amend_row(conn: &rusqlite::Connection, cov: &[u8], seq: i64, price: i64, min_
 }
 
 fn insert_order(conn: &rusqlite::Connection, cov: &[u8], token: &[u8], tpl: &[u8], price: i64, listed: i64) {
+    for h in [&[1u8; 32][..], &[1u8][..], token, tpl] {
+        kob_executor::indexer::ids::intern(conn, h).unwrap();
+    }
     conn.execute(
-        "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, scale, price, min_fill, tip, tif, expiry_daa, active_from, in_book, genesis_state, genesis_block, genesis_daa, listed, unlisted_reason, origin) \
-         VALUES (?1, 'KobBid', ?2, 1, 2, x'01', ?3, ?4, 1000, ?5, 9, 0, 0, 1, 1, 1, x'00', 1, 1, ?6, CASE WHEN ?6 = 0 THEN 'x' END, 'chain')",
+        "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, min_fill, tip, tif, expiry_daa, active_from, in_book, genesis_state, genesis_block, genesis_daa, listed, unlisted_reason, origin) \
+         VALUES (?1, 'KobBid', (SELECT id FROM ids WHERE h = ?2), 1, 2, (SELECT id FROM ids WHERE h = x'01'), (SELECT id FROM ids WHERE h = ?3), (SELECT id FROM ids WHERE h = ?4), 1000, ?5, 9, 0, 0, 1, 1, 1, x'00', 1, 1, ?6, CASE WHEN ?6 = 0 THEN 'x' END, 'chain')",
         params![cov, vec![1u8; 32], token, tpl, price, listed],
     )
     .unwrap();
@@ -201,10 +204,11 @@ fn i16_revert_restores_amends_exactly() {
 fn i16_revert_of_a_mass_unlisting_is_bounded() {
     let conn = open_memory("testnet-10").unwrap();
     let n: i64 = std::env::var("I16_ROWS").ok().and_then(|v| v.parse().ok()).unwrap_or(60_000);
+    conn.execute("INSERT OR IGNORE INTO ids (h) VALUES (x'01'), (x'09'), (x'08')", []).unwrap();
     conn.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
-         INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, scale, price, in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
-         SELECT randomblob(32), 'KobBid', x'01', 1, 2, x'01', x'09', x'08', 1000, 1000, 1, x'00', 1, 1, 0, 'chain' FROM n",
+         INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
+         SELECT randomblob(32), 'KobBid', (SELECT id FROM ids WHERE h = x'01'), 1, 2, (SELECT id FROM ids WHERE h = x'01'), (SELECT id FROM ids WHERE h = x'09'), (SELECT id FROM ids WHERE h = x'08'), 1000, 1000, 1, x'00', 1, 1, 0, 'chain' FROM n",
         [n],
     )
     .unwrap();
@@ -237,8 +241,17 @@ fn i17_a_token_with_a_holding_is_not_evicted_by_junk_tokens() {
     let junk = reads::OPEN_TOKEN_ROWS_MAX + 100;
     conn.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
-         INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, scale, price, in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
-         SELECT randomblob(32), 'KobBid', ?2, 1, 2, randomblob(32), CAST(printf('%032d', i) AS BLOB), ?3, 1000, 1000, 1, randomblob(8), i, i, 1, 'chain' FROM n",
+         INSERT INTO ids (h) SELECT CAST(printf('%032d', i) AS BLOB) FROM n",
+        params![junk],
+    )
+    .unwrap();
+    conn.execute("INSERT OR IGNORE INTO ids (h) VALUES (?1), (?2)", params![bid, tpl]).unwrap();
+    // every junk order has its own token and its own maker (the maker is the token's row too: only the distinctness matters)
+    conn.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
+         INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
+         SELECT randomblob(32), 'KobBid', (SELECT id FROM ids WHERE h = ?2), 1, 2, t.id, t.id, (SELECT id FROM ids WHERE h = ?3), 1000, 1000, 1, randomblob(8), i, i, 1, 'chain' \
+         FROM n JOIN ids t ON t.h = CAST(printf('%032d', n.i) AS BLOB)",
         params![junk, bid, tpl],
     )
     .unwrap();
@@ -274,9 +287,14 @@ fn i15_a_pair_route_without_listed_legs_does_not_scan_the_live_set() {
     let tpl = token_template(TemplateId::Kcc20Ref8x8).hash.to_vec();
     let bid = kob_protocol::artifacts::pinned_hash(TemplateId::KobBid).to_vec();
     conn.execute(
+        "INSERT OR IGNORE INTO ids (h) VALUES (?1), (?2), (x'7272727272727272727272727272727272727272727272727272727272727272')",
+        params![bid, tpl],
+    )
+    .unwrap();
+    conn.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
-         INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, scale, price, in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
-         SELECT randomblob(32), 'KobBid', ?2, 1, 2, randomblob(32), x'7272727272727272727272727272727272727272727272727272727272727272', ?3, 1000, 1000, 1, randomblob(8), i, i, 1, 'chain' FROM n",
+         INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
+         SELECT randomblob(32), 'KobBid', (SELECT id FROM ids WHERE h = ?2), 1, 2, NULL, (SELECT id FROM ids WHERE h = x'7272727272727272727272727272727272727272727272727272727272727272'), (SELECT id FROM ids WHERE h = ?3), 1000, 1000, 1, randomblob(8), i, i, 1, 'chain' FROM n",
         params![n, bid, tpl],
     )
     .unwrap();

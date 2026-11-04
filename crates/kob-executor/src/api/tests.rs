@@ -91,22 +91,22 @@ fn seed_order(
     listed: bool,
     maker: u8,
 ) {
+    let template = kob_protocol::artifacts::pinned_hash(if side == 1 {
+        kob_protocol::artifacts::TemplateId::KobAsk
+    } else {
+        kob_protocol::artifacts::TemplateId::KobBid
+    });
     c.execute(
-        "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, scale, min_fill, price, tip, \
+        "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, scale, min_fill, price, tip, \
          expiry_daa, in_book, initial_amount, genesis_state, genesis_block, genesis_daa, listed, unlisted_reason) \
          VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, 1000, 1000, ?7, 0, 100000000, 1, ?8, x'00', ?9, ?10, ?11, ?12)",
         params![
             cid(id),
             if side == 1 { "KobAsk" } else { "KobBid" },
-            kob_protocol::artifacts::pinned_hash(if side == 1 {
-                kob_protocol::artifacts::TemplateId::KobAsk
-            } else {
-                kob_protocol::artifacts::TemplateId::KobBid
-            })
-            .to_vec(),
+            intern(c, &template).unwrap(),
             side,
-            cid(maker),
-            cid(TOKEN),
+            intern(c, &cid(maker)).unwrap(),
+            intern(c, &cid(TOKEN)).unwrap(),
             price,
             initial,
             block,
@@ -1040,16 +1040,16 @@ fn seed_live(c: &Connection, id: u8, state: &kob_protocol::state::AnyState, bloc
     let bytes = state.encode();
     let quote = state.pair_tokens().map(|p| p.b.cov_id.to_vec());
     c.execute(
-        "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, scale, min_fill, price, tip, tif, \
-         expiry_daa, active_from, in_book, initial_amount, genesis_state, genesis_block, genesis_daa, listed, quote_cov_id) \
+        "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, scale, min_fill, price, tip, tif, \
+         expiry_daa, active_from, in_book, initial_amount, genesis_state, genesis_block, genesis_daa, listed, quote_id) \
          VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?14, ?15, ?16, ?17, 1, ?18)",
         params![
             cid(id),
             t.name(),
-            kob_protocol::artifacts::pinned_hash(t).to_vec(),
+            intern(c, &kob_protocol::artifacts::pinned_hash(t)).unwrap(),
             crate::model::side_of(state) as i64,
-            cid(MAKER),
-            state.token_cov_id().to_vec(),
+            intern(c, &cid(MAKER)).unwrap(),
+            intern(c, &state.token_cov_id()).unwrap(),
             terms.scale,
             terms.min_fill,
             if in_book { terms.price } else { None },
@@ -1061,7 +1061,7 @@ fn seed_live(c: &Connection, id: u8, state: &kob_protocol::state::AnyState, bloc
             bytes,
             block,
             block * 100,
-            quote,
+            quote.map(|q| intern(c, &q).unwrap()),
         ],
     )
     .unwrap();

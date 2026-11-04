@@ -1,14 +1,17 @@
-//! `kobd index migrate`: brings a data directory written by an earlier build (schema 5, 6 or 7) to the compact layout of
-//! schema 8 in ONE offline run, and gives the space back.
+//! `kobd index migrate`: brings a data directory written by an earlier build (schema 5, 6, 7 or 8) to the compact layout of
+//! schema 9 in ONE offline run, and gives the space back.
 //!
 //! The store is not altered in place. A new file is built beside it and replaces it only when it has been verified; the old file
 //! stays as `index.sqlite3.before-migrate` (the rollback) until the operator deletes it. The steps, each reported with its time:
 //!
 //! 1. **Copy.** The tables are created from `schema.sql` (without its indexes and triggers), then filled from the old store in bulk
-//!    (`INSERT ... SELECT`, no per-row Rust): `orders` get their integer id, the token ids and holding owners get their `ids` rows
-//!    ([`super::ids`]), every row that named an order, a token or an owner by its 32 bytes names it by the integer, the packed state
-//!    columns are written in the form [`super::packed`] stores (a value an earlier build wrote whole is packed; a packed one is
-//!    packed again from its decoded form), and the event ids, the sequence numbers and every other table are kept as they were.
+//!    (`INSERT ... SELECT`, no per-row Rust). The old store is read through views that give every layout the shape of schema 7 (32-byte
+//!    ids in every row; a schema 8 store has them joined back): `orders` get their integer id and name their maker, templates, extension
+//!    commitment, token and quote token by id, the other ids (tokens, holding owners) get their `ids` rows ([`super::ids`]; the values the
+//!    orders name come first, the most used first, so that they take one byte), every row that named an order, a token or an owner by its
+//!    32 bytes names it by the integer, the packed state columns are written in the form [`super::packed`] stores (a value an earlier build
+//!    wrote whole is packed; a packed one is packed again from its decoded form), and the event ids, the sequence numbers and every other
+//!    table are kept as they were.
 //! 2. **Indexes.** `schema.sql` is applied again: the indexes and triggers are built over the loaded rows (faster than maintaining
 //!    them row by row), then the counters the triggers keep are counted once.
 //! 3. **Verification.** Per table, the rows of the old store (states decoded, ids as their 32 bytes) and the rows of the new one
@@ -141,9 +144,10 @@ fn uri_of(path: &Path) -> String {
 /// (NULL when the old store has none: a column an earlier build did not have).
 type Map<'a> = &'a dyn Fn(&str) -> Option<String>;
 
-/// A table whose rows are loaded with some columns computed: every column of the new table (but `skip`) from `map` or, where it
-/// returns `None`, from the old column of the same name with alias `alias`. Old columns that are neither in the new table nor in
-/// `renamed` (the old names the map consumes) would be lost: an error.
+/// A table whose rows are loaded from the source view `src_<table>` with some columns computed: every column of the new table (but `skip`)
+/// from `map` or, where it returns `None`, from the source column of the same name with alias `alias`. Source columns that are neither in
+/// the new table nor in `renamed` (the source names the map consumes) would be lost: an error. `ord` (the order of the source rows) is the
+/// view's own.
 #[allow(clippy::too_many_arguments)]
 fn copy_mapped(
     conn: &Connection,
@@ -155,13 +159,13 @@ fn copy_mapped(
     order: &str,
     map: Map<'_>,
 ) -> DbResult<u64> {
-    if !table_exists(conn, "old", table)? {
+    if !source_has(conn, table)? {
         return Ok(0);
     }
     let new_cols = columns(conn, "main", table)?;
-    let old_cols = columns(conn, "old", table)?;
+    let old_cols = columns(conn, "temp", &format!("src_{table}"))?;
     for c in &old_cols {
-        if !new_cols.contains(c) && !renamed.contains(&c.as_str()) {
+        if c != "ord" && !new_cols.contains(c) && !renamed.contains(&c.as_str()) {
             return Err(bad(format!("{table}: the old store has a column `{c}` that this build does not know: nothing was migrated")));
         }
     }
@@ -177,6 +181,68 @@ fn copy_mapped(
     );
     conn.execute(&sql, [])?;
     count(conn, "main", table)
+}
+
+/// The tables whose columns hold the ids of schema 9 (the source views exist for these).
+const MAPPED: [&str; 7] = ["orders", "order_utxos", "order_events", "order_state", "order_amends", "token_utxos", "token_holdings"];
+
+/// Whether the old store has the table (and so its source view).
+fn source_has(conn: &Connection, table: &str) -> DbResult<bool> {
+    table_exists(conn, "old", table)
+}
+
+/// The source views `temp.src_<table>`: every table of [`MAPPED`] in the shape of schema 7 (32-byte ids in the rows) plus a leading `ord`
+/// (the order the rows are loaded in: the old rowid). A store of schema 5, 6 or 7 is that shape already; one of schema 8 has its orders,
+/// tokens and owners named by integer, which are joined back (a row that names an order that is not there comes back with a NULL covenant
+/// id and fails the verification).
+fn create_source_views(conn: &Connection, from_schema: i64) -> DbResult<()> {
+    for table in MAPPED {
+        if !table_exists(conn, "old", table)? {
+            continue;
+        }
+        let cols = columns(conn, "old", table)?;
+        let sql = if from_schema >= 8 && table != "orders" {
+            let mut joins = String::new();
+            let mut list = vec!["x.rowid AS ord".to_string()];
+            for c in &cols {
+                list.push(match (table, c.as_str()) {
+                    (_, "order_id") if table == "token_utxos" => {
+                        joins.push_str(" LEFT JOIN old.orders ro ON ro.id = x.order_id");
+                        "ro.covenant_id AS owner".to_string()
+                    }
+                    (_, "order_id") => {
+                        joins.push_str(" LEFT JOIN old.orders ro ON ro.id = x.order_id");
+                        "ro.covenant_id AS covenant_id".to_string()
+                    }
+                    (_, "token_id") => {
+                        joins.push_str(" LEFT JOIN old.ids rt ON rt.id = x.token_id");
+                        "rt.h AS token_cov_id".to_string()
+                    }
+                    (_, "owner_id") => {
+                        joins.push_str(" LEFT JOIN old.ids rw ON rw.id = x.owner_id");
+                        "rw.h AS owner".to_string()
+                    }
+                    (_, c) => format!("x.{c}"),
+                });
+            }
+            format!("CREATE TEMP VIEW src_{table} AS SELECT {} FROM old.{table} x{joins}", list.join(", "))
+        } else if from_schema >= 8 {
+            // the orders of schema 8 keep their blobs: only the integer key is the view's `ord`
+            let list: Vec<String> = cols.iter().filter(|c| *c != "id").map(|c| format!("x.{c}")).collect();
+            format!("CREATE TEMP VIEW src_{table} AS SELECT x.id AS ord, {} FROM old.{table} x", list.join(", "))
+        } else {
+            // columns an earlier build did not have read as NULL
+            let mut extra = String::new();
+            for (t, c) in [("orders", "quote_cov_id"), ("order_amends", "min_fill")] {
+                if table == t && !cols.iter().any(|x| x == c) {
+                    extra.push_str(&format!(", NULL AS {c}"));
+                }
+            }
+            format!("CREATE TEMP VIEW src_{table} AS SELECT rowid AS ord, *{extra} FROM old.{table}")
+        };
+        conn.execute_batch(&sql)?;
+    }
+    Ok(())
 }
 
 /// A table loaded as it is: the old columns by name (`ORDER BY` its natural order).
@@ -231,32 +297,62 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         done("blocks", n, t, say);
     }
 
-    // the orders: ids in the order of the old rows
+    // the ids the orders name come first, the most used first: they are a few dozen values that a row and an index entry then hold in one or two
+    // bytes (the makers, tokens, programs, templates, the extension commitment and the quote tokens)
     let t = Instant::now();
-    let old_orders = columns(conn, "old", "orders")?;
-    let quote = if old_orders.iter().any(|c| c == "quote_cov_id") { "o.quote_cov_id" } else { "NULL" };
-    let n = copy_mapped(conn, "orders", &["id"], &[], "o", "old.orders o", "o.rowid", &|c| {
-        (c == "genesis_state").then(|| {
-            format!(
-                "kob_gpack(kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, {quote}), o.contract, o.maker, o.token_cov_id, o.token_tpl_hash, {quote})"
-            )
-        })
-    })?;
-    done("orders", n, t, say);
-
-    // the ids: every token covenant id and holding owner (the owner of a holding may be a key, a script hash or a covenant id)
-    let t = Instant::now();
+    conn.execute_batch(
+        "CREATE TEMP TABLE dict (h BLOB PRIMARY KEY, c INTEGER NOT NULL) WITHOUT ROWID; \
+         INSERT INTO dict SELECT h, SUM(c) FROM (\
+           SELECT template_hash AS h, COUNT(*) AS c FROM src_orders GROUP BY 1 \
+           UNION ALL SELECT maker, COUNT(*) FROM src_orders WHERE maker IS NOT NULL GROUP BY 1 \
+           UNION ALL SELECT token_cov_id, COUNT(*) FROM src_orders WHERE token_cov_id IS NOT NULL GROUP BY 1 \
+           UNION ALL SELECT token_tpl_hash, COUNT(*) FROM src_orders WHERE token_tpl_hash IS NOT NULL GROUP BY 1 \
+           UNION ALL SELECT ext_commit, COUNT(*) FROM src_orders WHERE ext_commit IS NOT NULL GROUP BY 1 \
+           UNION ALL SELECT quote_cov_id, COUNT(*) FROM src_orders WHERE quote_cov_id IS NOT NULL GROUP BY 1) GROUP BY h; \
+         INSERT INTO main.ids (h) SELECT h FROM dict ORDER BY c DESC, h; \
+         DROP TABLE dict;",
+    )?;
+    // then the other tokens and the holding owners (an owner may be a key, a script hash or a covenant id)
     for sql in [
-        "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM old.token_holdings GROUP BY token_cov_id",
-        "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM old.token_utxos GROUP BY token_cov_id",
-        "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM old.order_events WHERE token_cov_id IS NOT NULL GROUP BY token_cov_id",
-        "INSERT OR IGNORE INTO main.ids (h) SELECT owner FROM old.token_holdings GROUP BY owner",
+        "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM src_token_holdings GROUP BY token_cov_id",
+        "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM src_token_utxos GROUP BY token_cov_id",
+        "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM src_order_events WHERE token_cov_id IS NOT NULL GROUP BY token_cov_id",
+        "INSERT OR IGNORE INTO main.ids (h) SELECT owner FROM src_token_holdings GROUP BY owner",
     ] {
         conn.execute(sql, [])?;
     }
     done("ids", count(conn, "main", "ids")?, t, say);
 
-    let genesis = "kob_gstate(n.genesis_state, n.maker, n.token_cov_id, n.token_tpl_hash, n.quote_cov_id)";
+    // the orders: ids in the order of the old rows
+    let t = Instant::now();
+    let idq = |col: &str| format!("(SELECT id FROM main.ids WHERE h = {col})");
+    let n = copy_mapped(
+        conn,
+        "orders",
+        &["id"],
+        &["template_hash", "maker", "token_cov_id", "token_tpl_hash", "ext_commit", "quote_cov_id"],
+        "o",
+        "src_orders o",
+        "o.ord",
+        &|c| {
+            match c {
+            "template_id" => Some(idq("o.template_hash")),
+            "maker_id" => Some(idq("o.maker")),
+            "token_id" => Some(idq("o.token_cov_id")),
+            "token_tpl_id" => Some(idq("o.token_tpl_hash")),
+            "ext_id" => Some(idq("o.ext_commit")),
+            "quote_id" => Some(idq("o.quote_cov_id")),
+            "genesis_state" => Some(
+                "kob_gpack(kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id), o.contract, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id)"
+                    .to_string(),
+            ),
+            _ => None,
+        }
+        },
+    )?;
+    done("orders", n, t, say);
+
+    let genesis = "kob_gstate(so.genesis_state, so.maker, so.token_cov_id, so.token_tpl_hash, so.quote_cov_id)";
     let t = Instant::now();
     let n = copy_mapped(
         conn,
@@ -264,8 +360,8 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         &[],
         &["covenant_id"],
         "u",
-        "old.order_utxos u JOIN main.orders n ON n.covenant_id = u.covenant_id",
-        "u.rowid",
+        "src_order_utxos u JOIN main.orders n ON n.covenant_id = u.covenant_id JOIN src_orders so ON so.covenant_id = u.covenant_id",
+        "u.ord",
         &|c| match c {
             "order_id" => Some("n.id".to_string()),
             "state" => {
@@ -283,7 +379,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         &[],
         &["covenant_id", "token_cov_id"],
         "e",
-        "old.order_events e JOIN main.orders n ON n.covenant_id = e.covenant_id LEFT JOIN main.ids t ON t.h = e.token_cov_id",
+        "src_order_events e JOIN main.orders n ON n.covenant_id = e.covenant_id LEFT JOIN main.ids t ON t.h = e.token_cov_id",
         "e.id",
         &|c| match c {
             "order_id" => Some("n.id".to_string()),
@@ -301,7 +397,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         &[],
         &["covenant_id"],
         "s",
-        "old.order_state s JOIN main.orders n ON n.covenant_id = s.covenant_id",
+        "src_order_state s JOIN main.orders n ON n.covenant_id = s.covenant_id",
         "n.id",
         &|c| (c == "order_id").then(|| "n.id".to_string()),
     )?;
@@ -314,7 +410,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         &[],
         &["covenant_id"],
         "a",
-        "old.order_amends a JOIN main.orders n ON n.covenant_id = a.covenant_id",
+        "src_order_amends a JOIN main.orders n ON n.covenant_id = a.covenant_id",
         "a.id",
         &|c| (c == "order_id").then(|| "n.id".to_string()),
     )?;
@@ -327,8 +423,8 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         &[],
         &["token_cov_id", "owner"],
         "u",
-        "old.token_utxos u JOIN main.ids t ON t.h = u.token_cov_id JOIN main.orders n ON n.covenant_id = u.owner",
-        "u.rowid",
+        "src_token_utxos u JOIN main.ids t ON t.h = u.token_cov_id JOIN main.orders n ON n.covenant_id = u.owner",
+        "u.ord",
         &|c| match c {
             "token_id" => Some("t.id".to_string()),
             "order_id" => Some("n.id".to_string()),
@@ -344,8 +440,8 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         &[],
         &["token_cov_id", "owner"],
         "h",
-        "old.token_holdings h JOIN main.ids t ON t.h = h.token_cov_id JOIN main.ids w ON w.h = h.owner",
-        "h.rowid",
+        "src_token_holdings h JOIN main.ids t ON t.h = h.token_cov_id JOIN main.ids w ON w.h = h.owner",
+        "h.ord",
         &|c| match c {
             "token_id" => Some("t.id".to_string()),
             "owner_id" => Some("w.id".to_string()),
@@ -369,6 +465,8 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         "kcc23_candidates",
         "kcc23_txs",
         "kcc23_declarations",
+        "logo_blocklist",
+        "logo_reports",
     ] {
         let t = Instant::now();
         let n = copy_plain(conn, table)?;
@@ -376,7 +474,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
     }
 
     // the sequences: an id of an autoincrement table is never reused, so the next one is above every id the old store ever gave
-    for table in ["blocks", "order_events", "order_amends", "rejects", "token_events", "pair_fills"] {
+    for table in ["blocks", "order_events", "order_amends", "rejects", "token_events", "pair_fills", "logo_reports"] {
         let old: Option<i64> = conn
             .query_row("SELECT seq FROM old.sqlite_sequence WHERE name = ?1", [table], |r| r.get(0))
             .map(Some)
@@ -435,40 +533,49 @@ fn digest(conn: &Connection, sql: &str) -> DbResult<([u8; 32], u64)> {
     Ok((*h.finalize().as_bytes(), rows_n))
 }
 
-/// Per table: (name, SQL on the old store, SQL on the new one).
-fn checks(old_has_quote: bool) -> Vec<(&'static str, String, String)> {
-    let q_old = if old_has_quote { "o.quote_cov_id" } else { "NULL" };
-    let go = |o: &str, q: &str| format!("kob_gstate({o}.genesis_state, {o}.maker, {o}.token_cov_id, {o}.token_tpl_hash, {q})");
-    let orders_cols = |o: &str, q: &str| {
+/// Per table: (name, SQL on the old store (the source views, 32-byte ids), SQL on the new one (ids joined back)).
+fn checks() -> Vec<(&'static str, String, String)> {
+    let gs = |o: &str, ids: [&str; 4]| format!("kob_gstate({o}.genesis_state, {}, {}, {}, {})", ids[0], ids[1], ids[2], ids[3]);
+    let old_g = gs("o", ["o.maker", "o.token_cov_id", "o.token_tpl_hash", "o.quote_cov_id"]);
+    let new_g = gs("o", ["o_mk.h", "o_tk.h", "o_tp.h", "o_qt.h"]);
+    let new_joins = format!(
+        "{}{}",
+        super::packed::ORDER_IDS_O,
+        " LEFT JOIN ids o_tm ON o_tm.id = o.template_id LEFT JOIN ids o_ex ON o_ex.id = o.ext_id "
+    );
+    let orders_tail = |g: &str| {
         format!(
-            "{o}.covenant_id, {o}.contract, {o}.template_hash, {o}.family, {o}.side, {o}.maker, {o}.token_cov_id, {o}.token_tpl_hash, {o}.ext_commit, {o}.scale, {o}.min_fill, {o}.price, {o}.tip, {o}.tif, {o}.expiry_daa, {o}.active_from, {o}.in_book, {o}.budget_rate, {o}.reserve, {o}.initial_amount, {o}.deadline, {}, {o}.genesis_txid, {o}.genesis_out, {o}.genesis_block, {o}.genesis_daa, {o}.parent, {o}.listed, {o}.unlisted_reason, {o}.origin, {q}",
-            go(o, q)
+            "o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, o.reserve, o.initial_amount, o.deadline, {g}, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, o.unlisted_reason, o.origin"
         )
     };
-    let gu = |o: &str| go(o, &format!("{o}.quote_cov_id"));
     vec![
         (
             "orders",
-            format!("SELECT {} FROM old.orders o ORDER BY o.covenant_id", orders_cols("o", q_old)),
-            format!("SELECT {} FROM main.orders o ORDER BY o.covenant_id", orders_cols("o", "o.quote_cov_id")),
+            format!(
+                "SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.maker, o.token_cov_id, o.token_tpl_hash, o.ext_commit, {}, o.quote_cov_id FROM src_orders o ORDER BY o.covenant_id",
+                orders_tail(&old_g)
+            ),
+            format!(
+                "SELECT o.covenant_id, o.contract, o_tm.h, o.family, o.side, o_mk.h, o_tk.h, o_tp.h, o_ex.h, {}, o_qt.h FROM main.orders o{new_joins} ORDER BY o.covenant_id",
+                orders_tail(&new_g)
+            ),
         ),
         (
             "order_utxos",
             format!(
-                "SELECT u.txid, u.idx, u.covenant_id, u.value, u.spk, kob_ustate(u.state, {}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount \
-                 FROM old.order_utxos u JOIN old.orders o ON o.covenant_id = u.covenant_id ORDER BY u.txid, u.idx",
-                go("o", q_old)
+                "SELECT u.txid, u.idx, u.covenant_id, u.value, u.spk, kob_ustate(u.state, {old_g}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount \
+                 FROM src_order_utxos u JOIN src_orders o ON o.covenant_id = u.covenant_id ORDER BY u.txid, u.idx"
             ),
             format!(
-                "SELECT u.txid, u.idx, o.covenant_id, u.value, u.spk, kob_ustate(u.state, {}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount \
-                 FROM main.order_utxos u JOIN main.orders o ON o.id = u.order_id ORDER BY u.txid, u.idx",
-                gu("o")
+                "SELECT u.txid, u.idx, o.covenant_id, u.value, u.spk, kob_ustate(u.state, {new_g}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount \
+                 FROM main.order_utxos u JOIN main.orders o ON o.id = u.order_id{} ORDER BY u.txid, u.idx",
+                super::packed::ORDER_IDS_O
             ),
         ),
         (
             "order_events",
             "SELECT e.id, e.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, e.token_cov_id, e.side, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail) \
-             FROM old.order_events e ORDER BY e.id"
+             FROM src_order_events e ORDER BY e.id"
                 .to_string(),
             "SELECT e.id, o.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, t.h, e.side, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail) \
              FROM main.order_events e JOIN main.orders o ON o.id = e.order_id LEFT JOIN main.ids t ON t.id = e.token_id ORDER BY e.id"
@@ -477,7 +584,7 @@ fn checks(old_has_quote: bool) -> Vec<(&'static str, String, String)> {
         (
             "order_state",
             "SELECT s.covenant_id, s.status, s.filled_amount, s.remaining_amount, s.amount_exact, s.cur_txid, s.cur_idx, s.cur_value, s.state_known, s.last_block, s.last_daa \
-             FROM old.order_state s ORDER BY s.covenant_id"
+             FROM src_order_state s ORDER BY s.covenant_id"
                 .to_string(),
             "SELECT o.covenant_id, s.status, s.filled_amount, s.remaining_amount, s.amount_exact, s.cur_txid, s.cur_idx, s.cur_value, s.state_known, s.last_block, s.last_daa \
              FROM main.order_state s JOIN main.orders o ON o.id = s.order_id ORDER BY o.covenant_id"
@@ -486,7 +593,7 @@ fn checks(old_has_quote: bool) -> Vec<(&'static str, String, String)> {
         (
             "order_amends",
             "SELECT a.id, a.covenant_id, a.block_seq, a.price, a.tip, a.tif, a.expiry_daa, a.active_from, a.deadline, a.listed, a.unlisted_reason, a.budget_rate, a.reserve, a.min_fill \
-             FROM old.order_amends a ORDER BY a.id"
+             FROM src_order_amends a ORDER BY a.id"
                 .to_string(),
             "SELECT a.id, o.covenant_id, a.block_seq, a.price, a.tip, a.tif, a.expiry_daa, a.active_from, a.deadline, a.listed, a.unlisted_reason, a.budget_rate, a.reserve, a.min_fill \
              FROM main.order_amends a JOIN main.orders o ON o.id = a.order_id ORDER BY a.id"
@@ -494,7 +601,7 @@ fn checks(old_has_quote: bool) -> Vec<(&'static str, String, String)> {
         ),
         (
             "token_utxos",
-            "SELECT u.txid, u.idx, u.token_cov_id, u.owner, u.amount, u.value, u.role, u.created_block, u.created_daa, u.spent_block, u.spent_txid FROM old.token_utxos u ORDER BY u.txid, u.idx"
+            "SELECT u.txid, u.idx, u.token_cov_id, u.owner, u.amount, u.value, u.role, u.created_block, u.created_daa, u.spent_block, u.spent_txid FROM src_token_utxos u ORDER BY u.txid, u.idx"
                 .to_string(),
             "SELECT u.txid, u.idx, t.h, o.covenant_id, u.amount, u.value, u.role, u.created_block, u.created_daa, u.spent_block, u.spent_txid \
              FROM main.token_utxos u JOIN main.ids t ON t.id = u.token_id JOIN main.orders o ON o.id = u.order_id ORDER BY u.txid, u.idx"
@@ -503,7 +610,7 @@ fn checks(old_has_quote: bool) -> Vec<(&'static str, String, String)> {
         (
             "token_holdings",
             "SELECT h.txid, h.idx, h.token_cov_id, h.program, h.family, h.owner, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid \
-             FROM old.token_holdings h ORDER BY h.txid, h.idx"
+             FROM src_token_holdings h ORDER BY h.txid, h.idx"
                 .to_string(),
             "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid \
              FROM main.token_holdings h JOIN main.ids t ON t.id = h.token_id JOIN main.ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx"
@@ -514,10 +621,12 @@ fn checks(old_has_quote: bool) -> Vec<(&'static str, String, String)> {
 
 /// Step 3 (part): old and new rows, table by table, compared. Tables copied as they were are compared by `SELECT *`.
 fn verify(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<()> {
-    let old_has_quote = columns(conn, "old", "orders")?.iter().any(|c| c == "quote_cov_id");
-    for (table, old_sql, new_sql) in checks(old_has_quote) {
+    for (table, old_sql, new_sql) in checks() {
         let t = Instant::now();
-        let raw = count(conn, "old", table)?;
+        if !source_has(conn, table)? {
+            continue;
+        }
+        let raw = count(conn, "temp", &format!("src_{table}"))?;
         let (a, na) = digest(conn, &old_sql)?;
         let (b, nb) = digest(conn, &new_sql)?;
         if na != raw {
@@ -546,6 +655,8 @@ fn verify(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<()> {
         "kcc23_candidates",
         "kcc23_txs",
         "kcc23_declarations",
+        "logo_blocklist",
+        "logo_reports",
     ] {
         if !table_exists(conn, "old", table)? {
             continue;
@@ -581,7 +692,7 @@ fn verify(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<()> {
 // ------------------------------------------------------------------------------------------------ build and swap
 
 /// Steps 1 to 3: the new store in `new`, loaded, indexed and verified against `old`.
-fn build(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &mut impl FnMut(&str)) -> DbResult<()> {
+fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mut Report, say: &mut impl FnMut(&str)) -> DbResult<()> {
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
     }
@@ -604,6 +715,7 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &mu
 
     // the tables from the schema, then without the indexes and triggers: they are built over the loaded rows
     conn.execute_batch(include_str!("schema.sql"))?;
+    conn.execute_batch(crate::logo_reports::SCHEMA)?;
     let drops: Vec<String> = {
         let mut st = conn.prepare(
             "SELECT 'DROP ' || type || ' ' || name FROM main.sqlite_master WHERE (type = 'trigger') OR (type = 'index' AND sql IS NOT NULL)",
@@ -630,6 +742,8 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &mu
         }
     }
 
+    create_source_views(&conn, from_schema)?;
+
     let t = Instant::now();
     say("copy:");
     conn.execute_batch("BEGIN")?;
@@ -641,6 +755,7 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &mu
 
     let t = Instant::now();
     conn.execute_batch(include_str!("schema.sql"))?;
+    conn.execute_batch(crate::logo_reports::SCHEMA)?;
     // the counts the triggers keep, counted once (as a store without them gets them at start-up)
     db::backfill_counters(&conn)?;
     db::backfill_holding_programs(&conn)?;
@@ -750,7 +865,7 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
         say(&format!("schema {} -> {}: building the new store beside the old one", rep.from_schema, db::SCHEMA_VERSION));
         let new = suffixed(&path, MIGRATING);
         let t = Instant::now();
-        if let Err(e) = build(cfg, &path, &new, &mut rep, &mut say) {
+        if let Err(e) = build(cfg, &path, &new, rep.from_schema, &mut rep, &mut say) {
             // nothing of the half-built file is worth keeping; the old store was not touched
             for suffix in ["", "-wal", "-shm", "-journal"] {
                 let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));

@@ -15,9 +15,10 @@ use kob_executor::indexer::{market, pairs};
 fn seed(n: i64) -> (rusqlite::Connection, [u8; 32]) {
     let conn = open_memory("testnet-10").unwrap();
     let token = [0x70u8; 32];
+    kob_executor::indexer::ids::intern(&conn, &[2u8; 32]).unwrap();
     conn.execute(
-        "INSERT INTO orders (covenant_id, contract, template_hash, family, side, in_book, genesis_state, genesis_block, genesis_daa, listed, min_fill, scale) \
-         VALUES (?1, 'KobAsk', ?2, 1, 1, 1, ?3, 1, 1, 1, 1000, 1000)",
+        "INSERT INTO orders (covenant_id, contract, template_id, family, side, in_book, genesis_state, genesis_block, genesis_daa, listed, min_fill, scale) \
+         VALUES (?1, 'KobAsk', (SELECT id FROM ids WHERE h = ?2), 1, 1, 1, ?3, 1, 1, 1, 1000, 1000)",
         rusqlite::params![vec![1u8; 32], vec![2u8; 32], vec![3u8; 8]],
     )
     .unwrap();
@@ -75,10 +76,12 @@ fn candles_keep_every_fill_beyond_the_row_cap_and_stats_say_when_they_were_cut()
 /// Fills of transactions with one to three fills on both sides (an older ask order, a newer bid order), prices moving, several
 /// transactions per block time.
 fn seed_mixed(conn: &rusqlite::Connection, token: [u8; 32], ask: [u8; 32], bid: [u8; 32], txs: i64, salt: i64) {
+    kob_executor::indexer::ids::intern(conn, &[2u8; 32]).unwrap();
+    kob_executor::indexer::ids::intern(conn, &token).unwrap();
     for (cov, side, gdaa) in [(ask, 1i64, 1i64), (bid, 2, 2)] {
         conn.execute(
-            "INSERT INTO orders (covenant_id, contract, template_hash, family, side, in_book, genesis_state, genesis_block, genesis_daa, listed, min_fill, scale, token_cov_id) \
-             VALUES (?1, 'KobAsk', ?2, 1, ?3, 1, ?4, 1, ?5, 1, 1, 1000, ?6)",
+            "INSERT INTO orders (covenant_id, contract, template_id, family, side, in_book, genesis_state, genesis_block, genesis_daa, listed, min_fill, scale, token_id) \
+             VALUES (?1, 'KobAsk', (SELECT id FROM ids WHERE h = ?2), 1, ?3, 1, ?4, 1, ?5, 1, 1, 1000, (SELECT id FROM ids WHERE h = ?6))",
             rusqlite::params![cov.to_vec(), vec![2u8; 32], side, vec![3u8; 8], gdaa, token.to_vec()],
         )
         .unwrap();

@@ -1242,14 +1242,23 @@ pub fn snapshot(conn: &Connection) -> String {
         }
     };
     dump(
-        "SELECT covenant_id, contract, template_hash, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id), genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id FROM orders ORDER BY covenant_id",
+        &format!(
+            "SELECT o.covenant_id, o.contract, o_tm.h, o.side, o_mk.h, o_tk.h, o_tp.h, o_ex.h, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, o.reserve, o.initial_amount, o.deadline, {}, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, o.unlisted_reason, o.origin, o_qt.h FROM orders o{}{} ORDER BY o.covenant_id",
+            crate::indexer::packed::sql_genesis!("o"),
+            crate::indexer::packed::ORDER_IDS_O,
+            crate::indexer::packed::sql_order_ids_more!("o")
+        ),
         30,
         &mut out,
         "order",
         &[23],
     );
     dump(
-        "SELECT u.txid, u.idx, g.covenant_id, u.value, u.spk, kob_ustate(u.state, kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id)), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount FROM order_utxos u JOIN orders g ON g.id = u.order_id ORDER BY u.txid, u.idx",
+        &format!(
+            "SELECT u.txid, u.idx, o.covenant_id, u.value, u.spk, kob_ustate(u.state, {}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount FROM order_utxos u JOIN orders o ON o.id = u.order_id{} ORDER BY u.txid, u.idx",
+            crate::indexer::packed::sql_genesis!("o"),
+            crate::indexer::packed::ORDER_IDS_O
+        ),
         12,
         &mut out,
         "utxo",
@@ -1514,8 +1523,13 @@ impl Harness {
         let (contract, state): (String, Option<Vec<u8>>) = g
             .conn()
             .query_row(
-                "SELECT o.contract, kob_ustate(u.state, kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id)) FROM orders o JOIN order_state s ON s.order_id = o.id \
-                 LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx WHERE o.covenant_id = ?1",
+                concat!(
+                    "SELECT o.contract, kob_ustate(u.state, ",
+                    crate::indexer::packed::sql_genesis!("o"),
+                    ") FROM orders o JOIN order_state s ON s.order_id = o.id LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx",
+                    crate::indexer::packed::sql_order_ids!("o"),
+                    "WHERE o.covenant_id = ?1"
+                ),
                 [&cov.0[..]],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )

@@ -49,7 +49,7 @@ impl TrustContext {
         }
         let mut tokens = HashSet::new();
         let mut st = conn.prepare_cached(
-            "SELECT token_cov_id FROM orders WHERE token_cov_id IS NOT NULL UNION SELECT quote_cov_id FROM orders WHERE quote_cov_id IS NOT NULL",
+            "SELECT h FROM ids WHERE id IN (SELECT token_id FROM orders WHERE token_id IS NOT NULL UNION SELECT quote_id FROM orders WHERE quote_id IS NOT NULL)",
         )?;
         for r in st.query_map([], |r| hash_at(r, 0))? {
             tokens.insert(r?);

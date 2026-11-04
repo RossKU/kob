@@ -7,21 +7,23 @@
 //! diff two instances). It is one small C dependency, has readers that never block the writer in
 //! WAL mode, and the data volume (KOB orders only, not the chain) is tiny.
 
+use super::packed::{sql_genesis, sql_order_ids, sql_order_ids_more};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
-/// 3 (protocol v2.6): the `receipts` table is gone (the trade receipt is retired; `migrate` drops it). 5 (protocol v3): quantities
+/// 3 (protocol v2.6): the `receipts` table is gone (the trade receipt is retired; `index migrate` does not carry it over). 5 (protocol v3): quantities
 /// in token base units and prices per whole token (`orders.scale`, `min_fill`, `tip`, `budget_rate`, `initial_amount`, ...). A
 /// database of schema 4 or older cannot be migrated ([`refuse_pre_v3`]): `index replay` rebuilds it from the record log.
 /// 6 (2026-11): the state spans of `order_utxos` and `token_holdings` are stored packed ([`super::packed`]): a build of schema 5
 /// misreads them, so it refuses a schema 6 store. 7: `orders.genesis_state` and `order_events.detail` are stored deflated against frozen
 /// dictionaries, and `holding_programs` replaces the `(token, program)` index of the holdings: a build of schema 6 misreads the former.
 /// 8: the 32-byte ids the big tables repeated are integers (`orders.id`, `ids`; [`super::ids`]): the tables have other columns, so no
-/// build reads a store of another schema than its own, and this one refuses a store of schema 7 or older until `index migrate` has rebuilt
-/// it ([`refuse_old_layout`]).
-pub const SCHEMA_VERSION: i64 = 8;
+/// build reads a store of another schema than its own, and this one refuses a store of schema 8 or older until `index migrate` has rebuilt
+/// it ([`refuse_old_layout`]). 9: an order names its maker, template hashes, extension commitment and quote token by id too, the page indexes
+/// of the orders and holdings end at the block ([`super::ids`], schema.sql).
+pub const SCHEMA_VERSION: i64 = 9;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]
@@ -111,7 +113,7 @@ pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Conn
     Ok(conn)
 }
 
-/// A store of schema 7 or older has the tables of the earlier layout (covenant ids and token ids in every row): opening it with this build
+/// A store of schema 8 or older has the tables of the earlier layout (covenant ids and token ids in every row): opening it with this build
 /// would build the new indexes on columns that are not there. Refused untouched, with the way out (`index migrate`); checked before the schema is applied.
 pub fn refuse_old_layout(conn: &Connection, path: &Path) -> DbResult<()> {
     let has_meta: bool = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'")?.exists([])?;
@@ -139,40 +141,17 @@ pub fn refuse_pre_v3(conn: &Connection, path: &Path) -> DbResult<()> {
     Ok(())
 }
 
-/// Migrations of a database created by an earlier build of schema 5: the retired `receipts` table and its indexes dropped
-/// (schema 3, protocol v2.6; a no-op since), the cross limits' token B column, the read-path indexes and row counters
-/// (2026-10; `docs/ops/executor.md`, B 5.5) and the idempotent backfills below. (Schema 4 and older are refused before this
-/// runs: [`refuse_pre_v3`].) The new indexes of `schema.sql` are built when it runs, before this: about 4 s on a 1.6 GB
-/// database, once.
+/// What a store of this build is brought up to date with at every open: the row counters and the program counts (counted once, kept by
+/// triggers), and the idempotent backfills below, which repair rows an earlier build wrote (a no-op on rows this build wrote; `index
+/// migrate` carries such rows over, and they are repaired by the first open of the new store). Schema 8 and older are refused before this
+/// runs ([`refuse_old_layout`]); the layout of the tables is what `schema.sql` says.
 fn migrate(conn: &Connection) -> DbResult<()> {
-    conn.execute_batch("DROP INDEX IF EXISTS receipts_created; DROP INDEX IF EXISTS receipts_spent; DROP TABLE IF EXISTS receipts;")?;
-    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('orders') WHERE name = 'quote_cov_id'")?.exists([])?;
-    if !has {
-        // token B of a cross limit; a database written before cross limits existed has none
-        conn.execute_batch("ALTER TABLE orders ADD COLUMN quote_cov_id BLOB")?;
-    }
-    // the orders of a quote token newest first (`GET /v1/orders?token=` lists a pair order under its token B too); it
-    // replaces the plain `(quote_cov_id)` index, as `orders_maker_genesis` replaces `(maker)`
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS orders_quote_genesis ON orders (quote_cov_id, genesis_block, covenant_id); \
-         DROP INDEX IF EXISTS orders_quote; DROP INDEX IF EXISTS orders_maker;",
-    )?;
-    // the whole orders list newest first: `orders_genesis_page` (schema.sql) replaces the plain `(genesis_block)` index, which
-    // left the order among the orders of one genesis block to a sort of all of them
-    conn.execute_batch("DROP INDEX IF EXISTS orders_genesis_block;")?;
-    // the holdings of a token by (token, owner) served no read; `token_holdings_token_page` (schema.sql) replaces it
-    conn.execute_batch("DROP INDEX IF EXISTS token_holdings_token;")?;
     if backfill_counters(conn)? {
         tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
     }
     let (programs, holdings) = backfill_holding_programs(conn)?;
     if holdings > 0 {
         tracing::info!(programs, holdings, "counted the programs of the token holdings once (kept by triggers from now on)");
-    }
-    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('order_amends') WHERE name = 'min_fill'")?.exists([])?;
-    if !has {
-        // the minimum fill an in-place amend replaced (restored on revert); an earlier build kept none
-        conn.execute_batch("ALTER TABLE order_amends ADD COLUMN min_fill INTEGER")?;
     }
     let (exits, events) = backfill_exit_extensions(conn)?;
     if exits > 0 || events > 0 {
@@ -284,12 +263,15 @@ pub fn backfill_unknown_pair_extensions(conn: &Connection) -> DbResult<usize> {
     // (genesis txid, genesis block, genesis daa, identities) of the orders that name one of these tokens (of one transaction:
     // `txid`)
     let names = |tok: &[u8], tpl: &Option<Vec<u8>>, txid: Option<&[u8]>| -> DbResult<Vec<Naming>> {
-        let mut st = conn.prepare_cached(
-            "SELECT contract, token_cov_id, token_tpl_hash, ext_commit, kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id), \
-             genesis_txid, genesis_block, genesis_daa \
-             FROM orders WHERE (token_cov_id = ?1 OR quote_cov_id = ?1) AND (?2 IS NULL OR genesis_txid = ?2) \
-             ORDER BY genesis_block, genesis_daa, rowid",
-        )?;
+        let mut st = conn.prepare_cached(concat!(
+            "SELECT o.contract, o_tk.h, o_tp.h, o_ex.h, ",
+            sql_genesis!("o"),
+            ", o.genesis_txid, o.genesis_block, o.genesis_daa FROM orders o",
+            sql_order_ids!("o"),
+            sql_order_ids_more!("o"),
+            "WHERE (o.token_id = (SELECT id FROM ids WHERE h = ?1) OR o.quote_id = (SELECT id FROM ids WHERE h = ?1)) \
+                 AND (?2 IS NULL OR o.genesis_txid = ?2) ORDER BY o.genesis_block, o.genesis_daa, o.rowid"
+        ))?;
         let out = st
             .query_map(rusqlite::params![tok, txid], |r| {
                 let ids = identities_of_order(&r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
@@ -355,18 +337,20 @@ pub fn backfill_stop_entry_books(conn: &Connection) -> DbResult<usize> {
 /// first), unless some order of that token still has no commitment. Returns (exits fixed, events dropped).
 pub fn backfill_exit_extensions(conn: &Connection) -> DbResult<(usize, usize)> {
     let exits = conn.execute(
-        "UPDATE orders SET ext_commit = (SELECT p.ext_commit FROM orders p WHERE p.covenant_id = orders.parent) \
-         WHERE ext_commit IS NULL AND parent IS NOT NULL \
-           AND EXISTS (SELECT 1 FROM orders p WHERE p.covenant_id = orders.parent AND p.ext_commit IS NOT NULL)",
+        "UPDATE orders SET ext_id = (SELECT p.ext_id FROM orders p WHERE p.covenant_id = orders.parent) \
+         WHERE ext_id IS NULL AND parent IS NOT NULL \
+           AND EXISTS (SELECT 1 FROM orders p WHERE p.covenant_id = orders.parent AND p.ext_id IS NOT NULL)",
         [],
     )?;
     let events = conn.execute(
         "DELETE FROM token_events WHERE kind = 'seen' AND ext_commit IS NULL \
-           AND EXISTS (SELECT 1 FROM orders x WHERE x.genesis_txid = token_events.txid AND x.parent IS NOT NULL \
-                       AND x.token_cov_id = token_events.token_cov_id AND x.token_tpl_hash IS token_events.tpl_hash \
-                       AND x.ext_commit IS NOT NULL) \
-           AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.token_cov_id = token_events.token_cov_id \
-                           AND o.token_tpl_hash IS token_events.tpl_hash AND o.ext_commit IS NULL)",
+           AND EXISTS (SELECT 1 FROM orders x JOIN ids xt ON xt.id = x.token_id LEFT JOIN ids xp ON xp.id = x.token_tpl_id \
+                       WHERE x.genesis_txid = token_events.txid AND x.parent IS NOT NULL \
+                       AND xt.h = token_events.token_cov_id AND xp.h IS token_events.tpl_hash \
+                       AND x.ext_id IS NOT NULL) \
+           AND NOT EXISTS (SELECT 1 FROM orders o JOIN ids ot ON ot.id = o.token_id LEFT JOIN ids op ON op.id = o.token_tpl_id \
+                           WHERE ot.h = token_events.token_cov_id \
+                           AND op.h IS token_events.tpl_hash AND o.ext_id IS NULL)",
         [],
     )?;
     Ok((exits, events))
@@ -685,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn a_schema_2_database_loses_its_receipts_table() {
+    fn a_schema_2_database_is_refused_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("x.sqlite3");
         {
@@ -697,53 +681,9 @@ mod tests {
         }
         let has_receipts =
             |c: &Connection| c.prepare("SELECT 1 FROM sqlite_master WHERE name LIKE 'receipts%'").unwrap().exists([]).unwrap();
-        // since schema 8 a store of an older schema is refused untouched (`index migrate` rebuilds it): nothing is dropped from it
+        // since schema 9 a store of an older schema is refused untouched (`index migrate` rebuilds it): nothing is dropped from it
         assert!(matches!(open_writer(&p, "testnet-10"), Err(DbError::OldLayout(_, 2))));
         assert!(has_receipts(&Connection::open(&p).unwrap()), "the refused store is left as it was");
-        // a current store that carries the retired table (the migration step is idempotent and still runs) loses it
-        meta_set(&Connection::open(&p).unwrap(), "schema_version", &SCHEMA_VERSION.to_string()).unwrap();
-        let c = open_writer(&p, "testnet-10").unwrap();
-        assert!(!has_receipts(&c), "the receipts table and its indexes are dropped");
-        assert_eq!(meta_get(&c, "schema_version").unwrap(), Some(SCHEMA_VERSION.to_string()));
-    }
-
-    /// A database of an earlier build of schema 5 has the plain `(genesis_block)` index: the writer builds
-    /// `orders_genesis_page (genesis_block, covenant_id)` (the whole orders list in index order) and drops the old one.
-    #[test]
-    fn the_plain_genesis_block_index_is_replaced_by_the_paging_index() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("x.sqlite3");
-        let idx = |c: &Connection, name: &str| {
-            c.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1").unwrap().exists([name]).unwrap()
-        };
-        {
-            let c = open_writer(&p, "testnet-10").unwrap();
-            assert!(idx(&c, "orders_genesis_page") && !idx(&c, "orders_genesis_block"));
-            c.execute_batch("DROP INDEX orders_genesis_page; CREATE INDEX orders_genesis_block ON orders (genesis_block)").unwrap();
-        }
-        let c = open_writer(&p, "testnet-10").unwrap();
-        assert!(idx(&c, "orders_genesis_page") && !idx(&c, "orders_genesis_block"));
-    }
-
-    /// A database of an earlier build of schema 5 kept no minimum fill of an in-place amend: the writer adds the column.
-    #[test]
-    fn an_order_amends_table_without_min_fill_gets_the_column() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("x.sqlite3");
-        let col = |c: &Connection| {
-            c.prepare("SELECT 1 FROM pragma_table_info('order_amends') WHERE name = 'min_fill'").unwrap().exists([]).unwrap()
-        };
-        {
-            let c = open_writer(&p, "testnet-10").unwrap();
-            assert!(col(&c));
-            c.execute_batch("ALTER TABLE order_amends DROP COLUMN min_fill").unwrap();
-            assert!(!col(&c));
-        }
-        let c = open_writer(&p, "testnet-10").unwrap();
-        assert!(col(&c));
-        // idempotent
-        drop(c);
-        assert!(col(&open_writer(&p, "testnet-10").unwrap()));
     }
 
     #[tokio::test]

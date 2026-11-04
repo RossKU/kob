@@ -3,11 +3,15 @@
 -- The database is a DERIVED view: the permanent source is the record log (`recordlog.rs`), and
 -- `kobd index replay` rebuilds every table below from it.
 --
--- Identities (schema 8): the 32-byte ids that the big tables repeat are stored once and referred to by integer. An order is
+-- Identities (schemas 8 and 9): the 32-byte ids that the big tables repeat are stored once and referred to by integer. An order is
 -- `orders.id` (AUTOINCREMENT: never reused, so no reverted order's id can name a later one); its covenant id stays in `orders` (the order of
--- the order lists is the order of the covenant ids). A token's covenant id and a holding's owner are rows of `ids`, never deleted.
+-- the order lists is the order of the covenant ids). A token's covenant id, a holding's owner and (schema 9) the maker, template hashes,
+-- extension commitment and quote token of an order are rows of `ids`, never deleted. The few values the orders name (a few dozen makers,
+-- tokens and templates) have the first ids, so an order row and its index entries hold them in one or two bytes.
 -- Rust still speaks `Hash32`: a statement resolves one with `(SELECT id FROM orders WHERE covenant_id = ?)` or
--- `(SELECT id FROM ids WHERE h = ?)`, and a read that returns one joins back (`indexer::ids`).
+-- `(SELECT id FROM ids WHERE h = ?)`, and a read that returns one joins back (`indexer::ids`). The order lists are in the order of the
+-- covenant ids, which is not the order of the integers: the order-list indexes below keep the covenant id as their last column, so that a page
+-- is read in index order and never sorts (imported history is all genesis block 0: a sort of a block would sort tens of thousands of orders).
 --
 -- Reorg model: every mutable row is stamped with the chain block (`seq`) that created or spent it.
 -- Reverting a chain block deletes what it created, un-spends what it spent, and re-derives
@@ -45,13 +49,13 @@ CREATE TABLE IF NOT EXISTS orders (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     covenant_id   BLOB NOT NULL UNIQUE,
     contract      TEXT NOT NULL,          -- KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdBid, KobIfdAsk (+ the ...Kron kinds), KobPair, KobCondPair, KobIfdPair
-    template_hash BLOB NOT NULL,
+    template_id   INTEGER NOT NULL,       -- ids.id of the order template hash
     family        INTEGER NOT NULL,
     side          INTEGER NOT NULL,       -- 1: sells the token (ask side), 2: buys the token (bid side)
-    maker         BLOB,
-    token_cov_id  BLOB,
-    token_tpl_hash BLOB,
-    ext_commit    BLOB,                   -- KCC-20 extension commitment (bid kinds: state; ask kinds: placement custody)
+    maker_id      INTEGER,                -- ids.id of the maker's key
+    token_id      INTEGER,                -- ids.id of the token covenant id
+    token_tpl_id  INTEGER,                -- ids.id of the token program template hash
+    ext_id        INTEGER,                -- ids.id of the KCC-20 extension commitment (bid kinds: state; ask kinds: placement custody)
     scale         INTEGER,                -- base units per whole token (the price denominator)
     min_fill      INTEGER,                -- smallest fill in base units (unless the fill takes everything left)
     price         INTEGER,                -- quote, sompi per whole token; NULL for conditional kinds and pair orders
@@ -73,15 +77,15 @@ CREATE TABLE IF NOT EXISTS orders (
     listed        INTEGER NOT NULL,
     unlisted_reason TEXT,
     origin        TEXT NOT NULL DEFAULT 'chain', -- chain | import
-    quote_cov_id  BLOB                    -- pair orders: the quote token B; token_cov_id is the base token A. NULL for every other kind
+    quote_id      INTEGER                 -- pair orders: ids.id of the quote token B; token_id is the base token A. NULL for every other kind
 );
-CREATE INDEX IF NOT EXISTS orders_book ON orders (token_cov_id, side, price);
+CREATE INDEX IF NOT EXISTS orders_book ON orders (token_id, side, price);
 -- a maker's orders newest first (`GET /v1/orders?maker=`, keyset paged): read in index order, one page per request
-CREATE INDEX IF NOT EXISTS orders_maker_genesis ON orders (maker, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS orders_maker_genesis ON orders (maker_id, genesis_block, covenant_id);
 -- every order newest first (`GET /v1/orders` with no filter, keyset paged): the index is the whole sort order, so a page is read
--- in order and stops at its end, however many orders share a genesis block (it replaces the plain `(genesis_block)` index)
+-- in order and stops at its end, however many orders share a genesis block
 CREATE INDEX IF NOT EXISTS orders_genesis_page ON orders (genesis_block, covenant_id);
-CREATE INDEX IF NOT EXISTS orders_parent ON orders (parent);
+CREATE INDEX IF NOT EXISTS orders_parent ON orders (parent) WHERE parent IS NOT NULL;
 
 -- Every unspent-or-spent output of an order covenant the indexer has seen.
 CREATE TABLE IF NOT EXISTS order_utxos (
@@ -270,14 +274,14 @@ END;
 -- The holdings of a token or of an owner in page order, spent ones included (`GET /v1/token-utxos?spent=true`): no sort of the lot.
 -- (The token's page index replaces the `(token_cov_id, owner)` one, which no read used. An earlier store also had `(owner, token_cov_id)`:
 -- the owner's page index serves the pair, in page order and without the sort; `index migrate` does not build it.)
-CREATE INDEX IF NOT EXISTS token_holdings_token_page ON token_holdings (token_id, created_block, txid, idx);
-CREATE INDEX IF NOT EXISTS token_holdings_owner_page ON token_holdings (owner_id, created_block, txid, idx);
+CREATE INDEX IF NOT EXISTS token_holdings_token_page ON token_holdings (token_id, created_block);
+CREATE INDEX IF NOT EXISTS token_holdings_owner_page ON token_holdings (owner_id, created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_created ON token_holdings (created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_spent ON token_holdings (spent_block);
 -- The unspent holdings of an owner or of a token, oldest first (`GET /v1/token-utxos`, the operator's own tokens): the live
 -- rows only, in the order a page is read, however many spent rows the owner or the token has.
-CREATE INDEX IF NOT EXISTS token_holdings_live_owner ON token_holdings (owner_id, created_block, txid, idx) WHERE spent_block IS NULL;
-CREATE INDEX IF NOT EXISTS token_holdings_live_token ON token_holdings (token_id, created_block, txid, idx) WHERE spent_block IS NULL;
+CREATE INDEX IF NOT EXISTS token_holdings_live_owner ON token_holdings (owner_id, created_block) WHERE spent_block IS NULL;
+CREATE INDEX IF NOT EXISTS token_holdings_live_token ON token_holdings (token_id, created_block) WHERE spent_block IS NULL;
 
 -- Maintained candle aggregates (`indexer::candles`): one row per bucket of the four intervals the API serves, written with the fills it
 -- holds. Values are decimal text (i128). A token's rows are complete once it has a `candle_meta` row (the price basis they were built
@@ -321,13 +325,15 @@ CREATE TABLE IF NOT EXISTS order_flags (
 -- The fills only, as `order_events_fills` (earlier stores: `(kind, token_cov_id, ts)` over every event).
 CREATE INDEX IF NOT EXISTS order_events_fill_ts ON order_events (token_id, ts) WHERE kind = 'fill';
 CREATE INDEX IF NOT EXISTS order_events_ts ON order_events (ts);
-CREATE INDEX IF NOT EXISTS orders_token_genesis ON orders (token_cov_id, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS orders_token_genesis ON orders (token_id, genesis_block, covenant_id);
+-- the orders of a pair's quote token newest first (`GET /v1/orders?token=` lists a pair order under its token B too)
+CREATE INDEX IF NOT EXISTS orders_quote_genesis ON orders (quote_id, genesis_block, covenant_id) WHERE quote_id IS NOT NULL;
 -- The distinct programs the orders of a token pin, by skip-scan (`reads::claimed_programs`, `reads::open_standard_scale`): evaluated for
 -- every order the indexer lists, so it must not read the token's orders (a bid-only token has hundreds of thousands).
-CREATE INDEX IF NOT EXISTS orders_token_tpl ON orders (token_cov_id, token_tpl_hash) WHERE token_tpl_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS orders_token_tpl ON orders (token_id, token_tpl_id) WHERE token_tpl_id IS NOT NULL;
 -- The distinct (token, program, family) of the listed orders (the open token list): read one index seek per distinct row.
-CREATE INDEX IF NOT EXISTS orders_listed_tokens ON orders (token_cov_id, token_tpl_hash, family)
-    WHERE listed = 1 AND token_cov_id IS NOT NULL AND token_tpl_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS orders_listed_tokens ON orders (token_id, token_tpl_id, family)
+    WHERE listed = 1 AND token_id IS NOT NULL AND token_tpl_id IS NOT NULL;
 
 -- Pair-order fills (KobPair, KobCondPair, KobIfdPair): volume of the pair (A, B), never a KAS price. Prices, trades, candles and
 -- last prices come ONLY from KAS-book order fills (`order_events` fills with a price); a pair fill records its event (price

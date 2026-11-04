@@ -119,7 +119,7 @@ pub enum IndexSub {
         #[arg(long)]
         onto_database: bool,
     },
-    /// Bring a data directory written by an earlier build (schema 5, 6 or 7) to the compact layout (schema 8) in one run: a new
+    /// Bring a data directory written by an earlier build (schema 5, 6, 7 or 8) to the compact layout (schema 9) in one run: a new
     /// store is built beside the old one (integer ids, packed state spans, fills-only indexes), verified row by row against it
     /// and swapped in, and the sealed record-log segments are gzip-compressed. Stop the executor first (it takes the writer
     /// lock); this build refuses an older store until this has run. Safe to repeat or to stop (the old store is not touched

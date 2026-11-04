@@ -206,7 +206,10 @@ async fn a_conflicting_bid_listed_before_the_proof_is_taken_out_of_the_book_and_
     assert!(!ev.listed, "the placement of another program is no longer listed");
     assert_eq!(ev.unlisted_reason.as_deref(), Some("token_program_conflict"));
     assert!(view(&c, &ask_cov).listed && view(&c, &honest_cov).listed, "the orders of the proven program stay listed");
-    let bids: i64 = c.hs.query("SELECT COUNT(*) FROM orders WHERE token_cov_id = ?1 AND side = 2 AND listed = 1", [&TOKEN_COV[..]]);
+    let bids: i64 = c.hs.query(
+        "SELECT COUNT(*) FROM orders WHERE token_id = (SELECT id FROM ids WHERE h = ?1) AND side = 2 AND listed = 1",
+        [&TOKEN_COV[..]],
+    );
     assert_eq!(bids, 1);
     // the ask's block is reorged out: the proof goes and the placement is listed again, exactly as it was
     c.hs.node.reorg(1, vec![vec![]]);

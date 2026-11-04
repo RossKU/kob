@@ -28,7 +28,7 @@
 
 use super::db::{DbError, DbResult};
 use super::ids::{id_of, intern, order_of};
-use super::packed::{sql_genesis, sql_ustate};
+use super::packed::{sql_genesis, sql_order_ids, sql_order_ids_more, sql_ustate};
 use super::record::{Extractor, Reveal, TxRecord};
 use super::recordlog::LogOp;
 use super::status::FillNotice;
@@ -119,7 +119,10 @@ struct OrderRow {
 
 fn load_order(conn: &Connection, cov: &Hash32) -> DbResult<Option<OrderRow>> {
     let r = conn
-        .prepare_cached("SELECT contract, side, price, token_cov_id, tif, listed, quote_cov_id FROM orders WHERE covenant_id = ?1")?
+        .prepare_cached(
+            "SELECT o.contract, o.side, o.price, tk.h, o.tif, o.listed, qt.h FROM orders o LEFT JOIN ids tk ON tk.id = o.token_id \
+             LEFT JOIN ids qt ON qt.id = o.quote_id WHERE o.covenant_id = ?1",
+        )?
         .query_row([&cov.0[..]], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -257,10 +260,12 @@ fn is_exact_custody(
 ) -> DbResult<bool> {
     let row = conn
         .prepare_cached(concat!(
-            "SELECT o.contract, o.token_cov_id, o.ext_commit, ",
+            "SELECT o.contract, o_tk.h, o_ex.h, ",
             sql_ustate!("u", "o"),
-            " FROM orders o JOIN order_utxos u ON u.order_id = o.id AND u.spent_block IS NULL \
-                 WHERE o.covenant_id = ?1 ORDER BY u.created_block DESC, u.idx DESC LIMIT 1"
+            " FROM orders o JOIN order_utxos u ON u.order_id = o.id AND u.spent_block IS NULL",
+            sql_order_ids!("o"),
+            sql_order_ids_more!("o"),
+            " WHERE o.covenant_id = ?1 ORDER BY u.created_block DESC, u.idx DESC LIMIT 1"
         ))?
         .query_row([&cov.0[..]], |r| {
             Ok((
@@ -305,10 +310,9 @@ fn is_exact_custody(
 /// The extension commitment an order stores (`None`: unknown order, or none stored).
 fn order_ext_commit(conn: &Connection, cov: &Hash32) -> DbResult<Option<[u8; 32]>> {
     let e: Option<Vec<u8>> = conn
-        .prepare_cached("SELECT ext_commit FROM orders WHERE covenant_id = ?1")?
+        .prepare_cached("SELECT e.h FROM orders o JOIN ids e ON e.id = o.ext_id WHERE o.covenant_id = ?1")?
         .query_row([&cov.0[..]], |r| r.get(0))
-        .optional()?
-        .flatten();
+        .optional()?;
     Ok(e.and_then(|e| <[u8; 32]>::try_from(e.as_slice()).ok()))
 }
 
@@ -768,7 +772,7 @@ impl Processor {
         type Row = (Vec<u8>, String, Vec<u8>, i64, i64);
         let rows: Vec<Row> = conn
             .prepare_cached(
-                concat!("SELECT o.covenant_id, o.contract, ", sql_genesis!("o"), ", o.genesis_daa, u.value FROM orders o INDEXED BY orders_token_tpl                  JOIN order_utxos u ON u.txid = o.genesis_txid AND u.idx = o.genesis_out                  WHERE o.token_cov_id = ?1 AND o.token_tpl_hash = ?2 AND o.listed = 0 AND o.unlisted_reason = 'token_program_conflict'                  AND o.quote_cov_id IS NULL ORDER BY o.genesis_block, o.covenant_id LIMIT ?3"),
+                concat!("SELECT o.covenant_id, o.contract, ", sql_genesis!("o"), ", o.genesis_daa, u.value FROM orders o INDEXED BY orders_token_tpl                  JOIN order_utxos u ON u.txid = o.genesis_txid AND u.idx = o.genesis_out", sql_order_ids!("o"), " WHERE o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.token_tpl_id = (SELECT id FROM ids WHERE h = ?2) AND o.listed = 0 AND o.unlisted_reason = 'token_program_conflict'                  AND o.quote_id IS NULL ORDER BY o.genesis_block, o.covenant_id LIMIT ?3"),
             )?
             .query_map(params![&token.0[..], &tpl, Self::RELIST_MAX], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
             .collect::<rusqlite::Result<_>>()?;
@@ -806,22 +810,29 @@ impl Processor {
         }
         // the distinct programs the token's listed orders pin: one index seek each (`orders_listed_tokens`)
         let mut next = conn.prepare_cached(
-            "SELECT MIN(token_tpl_hash) FROM orders INDEXED BY orders_listed_tokens              WHERE listed = 1 AND token_cov_id = ?1 AND token_tpl_hash IS NOT NULL AND token_tpl_hash > ?2",
+            "SELECT MIN(token_tpl_id) FROM orders INDEXED BY orders_listed_tokens              WHERE listed = 1 AND token_id = (SELECT id FROM ids WHERE h = ?1) AND token_tpl_id IS NOT NULL AND token_tpl_id > ?2",
         )?;
-        let mut after: Vec<u8> = Vec::new();
-        while let Some(tpl) = next.query_row(params![&token.0[..], &after], |r| r.get::<_, Option<Vec<u8>>>(0))? {
-            after.clone_from(&tpl);
+        // the programs are rows of ids in the order they were first seen: they are handled in the order of their hashes, as they always were
+        // (the amend rows of one block get their ids in that order)
+        let mut tpls: Vec<(Vec<u8>, i64)> = Vec::new();
+        let mut after = 0i64;
+        while let Some(tpl_id) = next.query_row(params![&token.0[..], after], |r| r.get::<_, Option<i64>>(0))? {
+            after = tpl_id;
+            tpls.push((super::ids::hash_of(conn, tpl_id)?, tpl_id));
+        }
+        tpls.sort();
+        for (tpl, tpl_id) in tpls {
             if proven.iter().any(|p| p.0[..] == tpl[..]) {
                 continue;
             }
             conn.prepare_cached(
-                "INSERT INTO order_amends (order_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill)                  SELECT id, ?3, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill                  FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash = ?2 AND listed = 1",
+                "INSERT INTO order_amends (order_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill)                  SELECT id, ?3, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill                  FROM orders WHERE token_id = (SELECT id FROM ids WHERE h = ?1) AND token_tpl_id = ?2 AND listed = 1",
             )?
-            .execute(params![&token.0[..], &tpl, seq])?;
+            .execute(params![&token.0[..], tpl_id, seq])?;
             conn.prepare_cached(
-                "UPDATE orders SET listed = 0, unlisted_reason = 'token_program_conflict'                  WHERE token_cov_id = ?1 AND token_tpl_hash = ?2 AND listed = 1",
+                "UPDATE orders SET listed = 0, unlisted_reason = 'token_program_conflict'                  WHERE token_id = (SELECT id FROM ids WHERE h = ?1) AND token_tpl_id = ?2 AND listed = 1",
             )?
-            .execute(params![&token.0[..], &tpl])?;
+            .execute(params![&token.0[..], tpl_id])?;
         }
         Ok(())
     }
@@ -991,9 +1002,17 @@ impl Processor {
             Some((l, r)) => (l, r),
             None => self.listing(conn, &n.state, ext, n.daa, n.out_value)?,
         };
+        // the maker, token, program, extension, template and quote token are rows of `ids` (the few the orders name come first, migrate assigns
+        // them the first ids; a new one is added here)
+        for h in [&template(id).hash[..], &n.state.maker()[..], &token.0[..]] {
+            intern(conn, h)?;
+        }
+        for h in [tpl_hash.map(|t| t.0.to_vec()), ext.map(|e| e.to_vec()), quote.map(|q| q.0.to_vec())].into_iter().flatten() {
+            intern(conn, &h)?;
+        }
         conn.prepare_cached(
-            "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,kob_gpack(?22,?2,?6,?7,?8,?31),?23,?24,?25,?26,?27,?28,?29,?30,?31)",
+            "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, ext_id, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_id)
+             VALUES (?1,?2,(SELECT id FROM ids WHERE h = ?3),?4,?5,(SELECT id FROM ids WHERE h = ?6),(SELECT id FROM ids WHERE h = ?7),(SELECT id FROM ids WHERE h = ?8),(SELECT id FROM ids WHERE h = ?9),?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,kob_gpack(?22,?2,?6,?7,?8,?31),?23,?24,?25,?26,?27,?28,?29,?30,(SELECT id FROM ids WHERE h = ?31))",
         )?
         .execute(params![
             &n.covenant_id.0[..],
@@ -1309,7 +1328,9 @@ impl Processor {
                 "INSERT OR REPLACE INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa) \
                  SELECT ?1, ?2, g.id, ?4, ?5, kob_pack(?6, ",
                 sql_genesis!("g"),
-                "), ?7, ?8 FROM orders g WHERE g.covenant_id = ?3"
+                "), ?7, ?8 FROM orders g",
+                sql_order_ids!("g"),
+                " WHERE g.covenant_id = ?3"
             ),
         )?
         .execute(params![&txid.0[..], idx, &cov.0[..], value as i64, spk, state, seq, daa as i64])?;
@@ -1982,7 +2003,9 @@ type TipRow = (Vec<u8>, i64, i64, Option<Vec<u8>>);
 const TIP_UTXO_SQL: &str = concat!(
     "SELECT txid, idx, value, kob_ustate(state, (SELECT ",
     sql_genesis!("g"),
-    " FROM orders g WHERE g.id = order_utxos.order_id)) \
+    " FROM orders g",
+    sql_order_ids!("g"),
+    " WHERE g.id = order_utxos.order_id)) \
      FROM order_utxos WHERE order_id = ",
     order_of!("?1"),
     " AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1"
@@ -2324,7 +2347,9 @@ impl Processor {
                     .prepare_cached(concat!(
                         "SELECT kob_ustate(u.state, (SELECT ",
                         sql_genesis!("g"),
-                        " FROM orders g WHERE g.id = u.order_id)) \
+                        " FROM orders g",
+                        sql_order_ids!("g"),
+                        " WHERE g.id = u.order_id)) \
                              FROM order_utxos u WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL"
                     ))?
                     .query_row(params![&old_txid.0[..], old_index], |r| r.get(0))

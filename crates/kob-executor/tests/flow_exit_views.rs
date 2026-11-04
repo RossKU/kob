@@ -248,15 +248,13 @@ async fn a_database_with_exits_stored_without_a_commitment_is_repaired_on_open()
     {
         let g = c.hs.ingest.lock().unwrap();
         let conn = g.conn();
-        conn.execute(
-            "UPDATE orders SET ext_commit = NULL WHERE contract IN ('KobCondAsk', 'KobCondAskKron') AND parent IS NOT NULL",
-            [],
-        )
-        .unwrap();
+        conn.execute("UPDATE orders SET ext_id = NULL WHERE contract IN ('KobCondAsk', 'KobCondAskKron') AND parent IS NOT NULL", [])
+            .unwrap();
         conn.execute(
             "INSERT INTO token_events (token_cov_id, tpl_hash, ext_commit, kind, txid, block_seq, daa) \
-             SELECT token_cov_id, token_tpl_hash, NULL, 'seen', genesis_txid, genesis_block, genesis_daa FROM orders \
-             WHERE covenant_id IN (?1, ?2)",
+             SELECT tk.h, tp.h, NULL, 'seen', o.genesis_txid, o.genesis_block, o.genesis_daa FROM orders o \
+             JOIN ids tk ON tk.id = o.token_id LEFT JOIN ids tp ON tp.id = o.token_tpl_id \
+             WHERE o.covenant_id IN (?1, ?2)",
             [&exit_a.0[..], &exit_c.0[..]],
         )
         .unwrap();

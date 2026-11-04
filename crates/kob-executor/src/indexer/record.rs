@@ -435,8 +435,12 @@ pub fn holding_tracked(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<b
 /// A token some order trades: the token of an order, or token B of a pair order (so strays of B sent to a pair order's id
 /// are recorded as strays of that order).
 pub fn token_known(conn: &Connection, token: &Hash32) -> DbResult<bool> {
-    Ok(conn.prepare_cached("SELECT 1 FROM orders WHERE token_cov_id = ?1 LIMIT 1")?.exists([&token.0[..]])?
-        || conn.prepare_cached("SELECT 1 FROM orders WHERE quote_cov_id = ?1 LIMIT 1")?.exists([&token.0[..]])?)
+    Ok(conn
+        .prepare_cached("SELECT 1 FROM orders WHERE token_id = (SELECT id FROM ids WHERE h = ?1) LIMIT 1")?
+        .exists([&token.0[..]])?
+        || conn
+            .prepare_cached("SELECT 1 FROM orders WHERE quote_id = (SELECT id FROM ids WHERE h = ?1) LIMIT 1")?
+            .exists([&token.0[..]])?)
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -15,7 +15,7 @@
 use crate::hex::{self, Hash32};
 use crate::indexer::db::{DbError, DbResult};
 use crate::indexer::ids::{id_of, order_of};
-use crate::indexer::packed::{sql_genesis, sql_ustate, GENESIS_O};
+use crate::indexer::packed::{sql_genesis, sql_order_ids, sql_order_ids_more, sql_ustate, GENESIS_O, ORDER_IDS_O};
 use crate::tokens::TokenAllowlist;
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::state::{armed_origin, AnyState};
@@ -138,16 +138,32 @@ fn sole_extension(conn: &Connection, cov: &[u8], tpl: &[u8]) -> DbResult<Option<
     })
 }
 
+/// Most distinct programs [`claimed_programs`] reads from a token's orders (the programs of its orders are rows of `ids`, in the order they
+/// were first seen, not in the order of their hashes: they are read in full, up to this many, then sorted).
+const CLAIMED_ORDER_PROGRAMS_MAX: usize = 1_024;
+
 /// The distinct programs the placements of a token name (its order placements and its registry events), at most `limit`, ascending:
-/// skip-scans of `orders_token_tpl` and `token_events_token_tpl`, one seek per program however many orders and events the token has.
+/// skip-scans of `orders_token_tpl` (by program id) and `token_events_token_tpl`, one seek per program however many orders and events the
+/// token has.
 fn claimed_programs(conn: &Connection, token: &[u8], limit: usize) -> DbResult<Vec<Vec<u8>>> {
     let mut ev = conn.prepare_cached("SELECT MIN(tpl_hash) FROM token_events WHERE token_cov_id = ?1 AND tpl_hash > ?2")?;
-    let mut or = conn.prepare_cached("SELECT MIN(token_tpl_hash) FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash > ?2")?;
+    let mut or = conn.prepare_cached(concat!(
+        "SELECT MIN(token_tpl_id) FROM orders WHERE token_id = ",
+        id_of!("?1"),
+        " AND token_tpl_id > ?2"
+    ))?;
+    let mut set: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+    let mut prev = 0i64;
+    while set.len() < CLAIMED_ORDER_PROGRAMS_MAX {
+        let Some(next) = or.query_row(rusqlite::params![token, prev], |r| r.get::<_, Option<i64>>(0))? else { break };
+        prev = next;
+        set.insert(crate::indexer::ids::hash_of(conn, next)?);
+    }
     let mut out: Vec<Vec<u8>> = Vec::new();
     let mut prev: Vec<u8> = Vec::new();
     while out.len() < limit {
         let a = ev.query_row(rusqlite::params![token, prev], |r| r.get::<_, Option<Vec<u8>>>(0))?;
-        let b = or.query_row(rusqlite::params![token, prev], |r| r.get::<_, Option<Vec<u8>>>(0))?;
+        let b = set.range::<Vec<u8>, _>((std::ops::Bound::Excluded(&prev), std::ops::Bound::Unbounded)).next().cloned();
         let Some(next) = [a, b].into_iter().flatten().min() else { break };
         prev.clone_from(&next);
         out.push(next);
@@ -161,14 +177,24 @@ fn claims_another_program(conn: &Connection, token: &[u8], tpl: &[u8]) -> DbResu
     for sql in [
         "SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash > ?2 LIMIT 1",
         "SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash < ?2 LIMIT 1",
-        "SELECT 1 FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash > ?2 LIMIT 1",
-        "SELECT 1 FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash < ?2 LIMIT 1",
     ] {
         if conn.prepare_cached(sql)?.exists(rusqlite::params![token, tpl])? {
             return Ok(true);
         }
     }
-    Ok(false)
+    // the orders name their program by id: another program is another id (a program no order names has no id: every one differs)
+    Ok(match crate::indexer::ids::lookup(conn, tpl)? {
+        Some(id) => {
+            conn.prepare_cached(concat!("SELECT 1 FROM orders WHERE token_id = ", id_of!("?1"), " AND token_tpl_id > ?2 LIMIT 1"))?
+                .exists(rusqlite::params![token, id])?
+                || conn
+                    .prepare_cached(concat!("SELECT 1 FROM orders WHERE token_id = ", id_of!("?1"), " AND token_tpl_id < ?2 LIMIT 1"))?
+                    .exists(rusqlite::params![token, id])?
+        }
+        None => conn
+            .prepare_cached(concat!("SELECT 1 FROM orders WHERE token_id = ", id_of!("?1"), " AND token_tpl_id IS NOT NULL LIMIT 1"))?
+            .exists([token])?,
+    })
 }
 
 /// Most of a token's orders (oldest first) [`market_scale`] reads.
@@ -181,7 +207,7 @@ pub const MARKET_SCALE_SCAN_MAX: i64 = 1_000;
 /// `orders_token_genesis`).
 pub fn market_scale(conn: &Connection, cov: &[u8]) -> DbResult<Option<i64>> {
     let mut st = conn.prepare_cached(
-        "SELECT scale FROM (SELECT scale, listed, genesis_block, covenant_id FROM orders WHERE token_cov_id = ?1 \
+        "SELECT scale FROM (SELECT scale, listed, genesis_block, covenant_id FROM orders WHERE token_id = (SELECT id FROM ids WHERE h = ?1) \
          ORDER BY genesis_block, covenant_id LIMIT ?2) \
          WHERE scale IN (1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000) \
          ORDER BY listed DESC, genesis_block, covenant_id LIMIT 1",
@@ -228,9 +254,9 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
     // no amount left (read from the live set, `order_state` first: [`LIVE_FROM`])
     let pinned = pinned_template();
     let mut st = conn.prepare(&format!(
-        "SELECT o.token_cov_id, o.side, COUNT(*) {LIVE_FROM} \
-         WHERE o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND o.token_cov_id IS NOT NULL AND {NOT_FROZEN} \
-         AND {HAS_AMOUNT} AND {CUSTODY_OK} AND {pinned} GROUP BY o.token_cov_id, o.side",
+        "SELECT tk.h, o.side, COUNT(*) {LIVE_FROM} JOIN ids tk ON tk.id = o.token_id \
+         WHERE o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND {NOT_FROZEN} \
+         AND {HAS_AMOUNT} AND {CUSTODY_OK} AND {pinned} GROUP BY o.token_id, o.side",
     ))?;
     let rows = st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
     for r in rows {
@@ -468,7 +494,9 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
     use std::collections::BTreeSet;
     // The scan reads up to four times the rows the list shows; past `max` the tokens the chain proves (a holding of the token exists) are
     // kept in preference to the rest, so placements naming covenant ids that sort low cannot push such a token out of the list
-    // (audit 2026-10-30 I17).
+    // (audit 2026-10-30 I17). The listed orders name their token and program by id, so their scan is in the order the ids were first seen,
+    // not in the order of the hashes: past the cap the rows kept are the first seen, where the events' scan keeps the lowest hashes (the rows
+    // are put in the order of the hashes below either way).
     let scan_max = max.saturating_mul(4);
     // in the list's order: (token, family descending, program); a set, so a row named twice is one row
     let mut rows: BTreeSet<(Vec<u8>, Reverse<i64>, Vec<u8>)> = BTreeSet::new();
@@ -496,23 +524,24 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
             break;
         }
     }
+    // (the orders name their token and program by id, so the scan is in the order of the ids; the rows are put in the order of the
+    // hashes in the set below)
     const LISTED: &str =
-        "FROM orders INDEXED BY orders_listed_tokens WHERE listed = 1 AND token_cov_id IS NOT NULL AND token_tpl_hash IS NOT NULL";
-    let row = |r: &Row<'_>| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?));
-    let mut first = conn.prepare_cached(&format!(
-        "SELECT token_cov_id, token_tpl_hash, family {LISTED} ORDER BY token_cov_id, token_tpl_hash, family LIMIT 1"
-    ))?;
+        "FROM orders INDEXED BY orders_listed_tokens WHERE listed = 1 AND token_id IS NOT NULL AND token_tpl_id IS NOT NULL";
+    let row = |r: &Row<'_>| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?));
+    let mut first = conn
+        .prepare_cached(&format!("SELECT token_id, token_tpl_id, family {LISTED} ORDER BY token_id, token_tpl_id, family LIMIT 1"))?;
     let mut fam = conn.prepare_cached(&format!(
-        "SELECT family {LISTED} AND token_cov_id = ?1 AND token_tpl_hash = ?2 AND family > ?3 ORDER BY family LIMIT 1"
+        "SELECT family {LISTED} AND token_id = ?1 AND token_tpl_id = ?2 AND family > ?3 ORDER BY family LIMIT 1"
     ))?;
     let mut prog = conn.prepare_cached(&format!(
-        "SELECT token_tpl_hash, family {LISTED} AND token_cov_id = ?1 AND token_tpl_hash > ?2 ORDER BY token_tpl_hash, family LIMIT 1"
+        "SELECT token_tpl_id, family {LISTED} AND token_id = ?1 AND token_tpl_id > ?2 ORDER BY token_tpl_id, family LIMIT 1"
     ))?;
     let mut tok = conn.prepare_cached(&format!(
-        "SELECT token_cov_id, token_tpl_hash, family {LISTED} AND token_cov_id > ?1 ORDER BY token_cov_id, token_tpl_hash, family LIMIT 1"
+        "SELECT token_id, token_tpl_id, family {LISTED} AND token_id > ?1 ORDER BY token_id, token_tpl_id, family LIMIT 1"
     ))?;
-    let mut cur: Option<OpenTokenRow> = first.query_row([], row).optional()?;
-    let mut last_token: Option<Vec<u8>> = None;
+    let mut cur: Option<(i64, i64, i64)> = first.query_row([], row).optional()?;
+    let mut last_token: Option<i64> = None;
     // the budget of the listed orders is its own: rows of the events must not spend it
     let mut listed_rows = 0usize;
     while let Some((t, p, f)) = cur {
@@ -520,18 +549,18 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
             if listed_rows >= scan_max {
                 break;
             }
-            last_token = Some(t.clone());
+            last_token = Some(t);
         }
         listed_rows += 1;
-        rows.insert((t.clone(), Reverse(f), p.clone()));
-        cur = if let Some(nf) = fam.query_row(rusqlite::params![&t, &p, f], |r| r.get::<_, i64>(0)).optional()? {
-            Some((t.clone(), p.clone(), nf))
+        rows.insert((crate::indexer::ids::hash_of(conn, t)?, Reverse(f), crate::indexer::ids::hash_of(conn, p)?));
+        cur = if let Some(nf) = fam.query_row(rusqlite::params![t, p, f], |r| r.get::<_, i64>(0)).optional()? {
+            Some((t, p, nf))
         } else if let Some((np, nf)) =
-            prog.query_row(rusqlite::params![&t, &p], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?))).optional()?
+            prog.query_row(rusqlite::params![t, p], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).optional()?
         {
-            Some((t.clone(), np, nf))
+            Some((t, np, nf))
         } else {
-            tok.query_row(rusqlite::params![&t], row).optional()?
+            tok.query_row(rusqlite::params![t], row).optional()?
         };
     }
     if rows.len() > max {
@@ -667,18 +696,18 @@ pub(crate) const LIVE_FROM: &str = "FROM order_state s CROSS JOIN orders o ON o.
 /// it nor offers it to a matcher or a keeper. Indexing admits only pinned templates, so the rows this leaves out are those a
 /// database carried over a template change holds (an older build indexed them). Every read that lists or counts orders
 /// carries it: the books and their counts, the stats, the pair books and routes, `/v1/orders` and `/v1/orders/{id}`, and
-/// the matcher's and the keepers' live orders (`book::live_orders_sql`). No index covers `template_hash`: it filters the
-/// rows the read selects anyway (21 constants).
+/// the matcher's and the keepers' live orders (`book::live_orders_sql`). No index covers `template_id`: it filters the
+/// rows the read selects anyway (the ids of 21 constants, resolved once per statement).
 pub(crate) fn pinned_template() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         let hashes: Vec<String> = kob_protocol::artifacts::PINNED.iter().map(|(_, h)| format!("x'{h}'")).collect();
-        format!("o.template_hash IN ({})", hashes.join(","))
+        format!("o.template_id IN (SELECT id FROM ids WHERE h IN ({}))", hashes.join(","))
     })
 }
 
 const BOOK_WHERE: &str = concat!(
-    "o.token_cov_id = ?1 AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 \
+    "o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 \
      AND s.status IN ('open','partial') AND s.state_known = 1 AND o.price IS NOT NULL AND COALESCE(s.remaining_amount, 1) > 0 AND ",
     not_frozen!()
 );
@@ -719,10 +748,10 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
     let live = fillable_now(book_daa(conn, ctx)?, ctx.now_unix);
     let pinned = pinned_template();
     let sql = format!(
-        "SELECT o.covenant_id, o.contract, o.maker, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
+        "SELECT o.covenant_id, o.contract, o_mk.h, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
                 s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, kob_ustate(u.state, {GENESIS_O}), u.created_daa \
          {LIVE_FROM} \
-         LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
+         LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
          WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} \
          ORDER BY {PER_BASE_UNIT} {dir}, o.genesis_block ASC, o.covenant_id ASC LIMIT ?3"
     );
@@ -1206,18 +1235,20 @@ pub fn reduce(num: i128, den: i128) -> Option<(u128, u128)> {
 }
 
 const ORDER_SELECT: &str = concat!(
-    "SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.maker, o.token_cov_id, \
-    o.token_tpl_hash, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, \
+    "SELECT o.covenant_id, o.contract, o_tm.h, o.family, o.side, o_mk.h, o_tk.h, \
+    o_tp.h, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, \
     o.reserve, o.initial_amount, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, \
     o.unlisted_reason, o.origin, s.status, s.filled_amount, s.remaining_amount, s.cur_txid, s.cur_idx, s.cur_value, \
-    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, ",
+    s.state_known, s.last_block, s.last_daa, o_ex.h, o.deadline, s.amount_exact, ",
     sql_ustate!("u", "o"),
     ", u.created_daa, fl.reason, ",
     sql_genesis!("o"),
     " \
     FROM orders o LEFT JOIN order_state s ON s.order_id = o.id \
     LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-    LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx"
+    LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx",
+    sql_order_ids!("o"),
+    sql_order_ids_more!("o")
 );
 
 fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
@@ -1417,7 +1448,7 @@ pub struct TokenUtxoView {
 /// The columns [`token_utxo_from_row`] reads (`t` = `token_utxos`, `h` = the output's proven `token_holdings` row).
 const TOKEN_UTXO_COLUMNS: &str =
     "t.txid, t.idx, tk.h, fo.covenant_id, t.amount, t.value, t.role, t.created_daa, t.spent_block, t.spent_txid, h.program, kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount), \
-     (fo.token_cov_id IS NOT NULL AND tk.h != fo.token_cov_id AND (fo.quote_cov_id IS NULL OR tk.h != fo.quote_cov_id))";
+     (fo.token_id IS NOT NULL AND t.token_id != fo.token_id AND (fo.quote_id IS NULL OR t.token_id != fo.quote_id))";
 /// `fo` is the owning order (the order of a token UTXO always exists: it is the row the UTXO was stored under), `tk` the token.
 const TOKEN_UTXO_FROM: &str = "FROM token_utxos t JOIN ids tk ON tk.id = t.token_id JOIN orders fo ON fo.id = t.order_id \
      LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id";
@@ -1568,9 +1599,9 @@ pub struct StrayView {
 /// Stray token UTXOs (sent to an order id outside the protocol), newest first.
 pub fn strays(conn: &Connection, ctx: &ReadCtx, maker: Option<&[u8]>, limit: usize) -> DbResult<Vec<StrayView>> {
     let sql = format!(
-        "SELECT {TOKEN_UTXO_COLUMNS}, s.status, fo.maker \
-         {TOKEN_UTXO_FROM} LEFT JOIN order_state s ON s.order_id = t.order_id \
-         WHERE t.role = 'stray' AND t.spent_block IS NULL AND (?1 IS NULL OR fo.maker = ?1) \
+        "SELECT {TOKEN_UTXO_COLUMNS}, s.status, fo_mk.h \
+         {TOKEN_UTXO_FROM} LEFT JOIN order_state s ON s.order_id = t.order_id LEFT JOIN ids fo_mk ON fo_mk.id = fo.maker_id \
+         WHERE t.role = 'stray' AND t.spent_block IS NULL AND (?1 IS NULL OR fo.maker_id = (SELECT id FROM ids WHERE h = ?1)) \
          ORDER BY t.created_block DESC, t.txid, t.idx LIMIT ?2"
     );
     let mut st = conn.prepare(&sql)?;
@@ -1631,18 +1662,20 @@ pub fn parse_order_cursor(s: &str) -> Option<(i64, Vec<u8>)> {
 /// through `order_state_status` and joined to their orders (`CROSS JOIN` keeps that order), instead of every order of the
 /// token or maker being read for the few of that status.
 const ORDER_SELECT_BY_STATUS: &str = concat!(
-    "SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.maker, o.token_cov_id, \
-    o.token_tpl_hash, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, \
+    "SELECT o.covenant_id, o.contract, o_tm.h, o.family, o.side, o_mk.h, o_tk.h, \
+    o_tp.h, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, \
     o.reserve, o.initial_amount, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, \
     o.unlisted_reason, o.origin, s.status, s.filled_amount, s.remaining_amount, s.cur_txid, s.cur_idx, s.cur_value, \
-    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, ",
+    s.state_known, s.last_block, s.last_daa, o_ex.h, o.deadline, s.amount_exact, ",
     sql_ustate!("u", "o"),
     ", u.created_daa, fl.reason, ",
     sql_genesis!("o"),
     " \
     FROM order_state s CROSS JOIN orders o ON o.id = s.order_id \
     LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-    LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx"
+    LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx",
+    sql_order_ids!("o"),
+    sql_order_ids_more!("o")
 );
 
 /// The orders of `statuses` (the row counters the write path keeps; `None` without them).
@@ -1668,7 +1701,7 @@ pub fn orders(
     let mut args: Vec<SqlValue> = Vec::new();
     if let Some(m) = &f.maker {
         args.push(SqlValue::Blob(m.clone()));
-        conds.push(format!("o.maker = ?{}", args.len()));
+        conds.push(format!("o.maker_id = (SELECT id FROM ids WHERE h = ?{})", args.len()));
     }
     let statuses: Option<Vec<&str>> = f.status.as_deref().map(|s| if s == "active" { vec!["open", "partial"] } else { vec![s] });
     // Read the status rows and sort them when that is the cheaper side: n rows of the statuses against about
@@ -1719,13 +1752,18 @@ pub fn orders(
         // a pair order trades two tokens: it is listed under either (base A, quote B)
         Some(n) if by_status => format!(
             "{ORDER_SELECT_BY_STATUS}{} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT ?{lim}",
-            where_(&[format!("(o.token_cov_id = ?{n} OR o.quote_cov_id = ?{n})")])
+            where_(&[format!(
+                "(o.token_id = (SELECT id FROM ids WHERE h = ?{n}) OR o.quote_id = (SELECT id FROM ids WHERE h = ?{n}))"
+            )])
         ),
         // one index-ordered read per column, merged (a pair order of A / A is read once, from the first)
         Some(n) => format!(
             "{ORDER_SELECT}{} UNION ALL {ORDER_SELECT}{} ORDER BY 22 DESC, 1 DESC LIMIT ?{lim}",
-            where_(&[format!("o.token_cov_id = ?{n}")]),
-            where_(&[format!("o.quote_cov_id = ?{n}"), format!("o.token_cov_id IS NOT ?{n}")])
+            where_(&[format!("o.token_id = (SELECT id FROM ids WHERE h = ?{n})")]),
+            where_(&[
+                format!("o.quote_id = (SELECT id FROM ids WHERE h = ?{n})"),
+                format!("o.token_id IS NOT (SELECT id FROM ids WHERE h = ?{n})")
+            ])
         ),
         None if by_status => {
             format!("{ORDER_SELECT_BY_STATUS}{} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT ?{lim}", where_(&[]))

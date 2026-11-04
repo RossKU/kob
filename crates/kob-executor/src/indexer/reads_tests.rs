@@ -39,6 +39,8 @@ fn store(seed: u64, n: usize) -> Connection {
     let mut r = Rng(seed);
     let contracts = ["KobAsk", "KobBid", "KobAskKron", "KobCondAsk", "KobIfdBid", "KobPair"];
     let makers: Vec<Option<Vec<u8>>> = vec![Some(vec![1; 32]), Some(vec![2; 32]), Some(vec![3; 32]), Some(vec![]), None];
+    // the blob columns of an order are ids of `ids` (schema 9)
+    let id = |v: Option<Vec<u8>>| v.map(|v| intern(&conn, &v).unwrap());
     for _ in 0..n {
         let cov = r.bytes();
         let contract = r.pick(&contracts);
@@ -54,18 +56,18 @@ fn store(seed: u64, n: usize) -> Connection {
         let pinned = TemplateId::from_name(contract).map(kob_protocol::artifacts::pinned_hash).unwrap();
         let template = if r.below(6) == 0 { vec![9u8; 32] } else { pinned.to_vec() };
         conn.execute(
-            "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, scale, price, \
+            "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, \
              tif, expiry_daa, active_from, in_book, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, \
-             listed, origin, quote_cov_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?19,?20,'chain',?21)",
+             listed, origin, quote_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?19,?20,'chain',?21)",
             params![
                 cov,
                 contract,
-                template,
+                intern(&conn, &template).unwrap(),
                 r.pick(&[1i64, 2]),
                 side,
-                r.pick(&makers),
-                token,
-                r.pick(&[Some(vec![7u8; 32]), Some(vec![8u8; 32]), None]),
+                id(r.pick(&makers)),
+                id(token),
+                id(r.pick(&[Some(vec![7u8; 32]), Some(vec![8u8; 32]), None])),
                 r.pick(&[Some(1i64), Some(100), Some(1000), None]),
                 price,
                 r.pick(&[Some(0i64), Some(1), None]),
@@ -78,7 +80,7 @@ fn store(seed: u64, n: usize) -> Connection {
                 genesis_out_block,
                 genesis_daa,
                 listed,
-                quote,
+                id(quote),
             ],
         )
         .unwrap();
@@ -180,11 +182,14 @@ fn old_orders(conn: &Connection, ctx: &ReadCtx, f: &OrderFilter, limit: usize, c
     let mut args: Vec<SqlValue> = Vec::new();
     if let Some(m) = &f.maker {
         args.push(SqlValue::Blob(m.clone()));
-        conds.push(format!("o.maker = ?{}", args.len()));
+        conds.push(format!("o.maker_id = (SELECT id FROM ids WHERE h = ?{})", args.len()));
     }
     if let Some(t) = &f.token {
         args.push(SqlValue::Blob(t.0.to_vec()));
-        conds.push(format!("(o.token_cov_id = ?{n} OR o.quote_cov_id = ?{n})", n = args.len()));
+        conds.push(format!(
+            "(o.token_id = (SELECT id FROM ids WHERE h = ?{n}) OR o.quote_id = (SELECT id FROM ids WHERE h = ?{n}))",
+            n = args.len()
+        ));
     }
     if let Some(s) = &f.status {
         if s == "active" {
@@ -266,7 +271,7 @@ fn an_order_under_a_template_this_build_does_not_pin_is_in_no_read() {
         let conn = store(seed, 400);
         let ctx = ctx();
         let all: Vec<(Vec<u8>, Vec<u8>)> = conn
-            .prepare("SELECT covenant_id, template_hash FROM orders")
+            .prepare("SELECT o.covenant_id, t.h FROM orders o JOIN ids t ON t.id = o.template_id")
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap()
@@ -299,7 +304,7 @@ fn an_order_under_a_template_this_build_does_not_pin_is_in_no_read() {
                     &conn,
                     &format!(
                         "SELECT o.covenant_id {LIVE_FROM} LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-                         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND o.template_hash = x'{}'",
+                         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND o.template_id = (SELECT id FROM ids WHERE h = x'{}')",
                         hex::encode(&[9u8; 32])
                     ),
                     &[SqlValue::Blob(tok(token)), SqlValue::Integer(side)],
@@ -373,9 +378,10 @@ fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
         // the token list's counts
         let counts = |from: &str| {
             format!(
-                "SELECT o.token_cov_id, o.side, COUNT(*) {from} WHERE o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') \
-                 AND s.state_known = 1 AND o.token_cov_id IS NOT NULL AND {NOT_FROZEN} AND {HAS_AMOUNT} AND {CUSTODY_OK} \
-                 GROUP BY o.token_cov_id, o.side"
+                "SELECT tk.h, o.side, COUNT(*) {from} JOIN ids tk ON tk.id = o.token_id WHERE o.listed = 1 AND o.in_book = 1 \
+                 AND s.status IN ('open','partial') \
+                 AND s.state_known = 1 AND {NOT_FROZEN} AND {HAS_AMOUNT} AND {CUSTODY_OK} \
+                 GROUP BY o.token_id, o.side"
             )
         };
         assert_eq!(sorted(rows(&conn, &counts(OLD_FROM), &[])), sorted(rows(&conn, &counts(LIVE_FROM), &[])));
@@ -407,16 +413,23 @@ fn the_open_token_list_reads_the_rows_the_union_did() {
         // more distinct (token, program, family) rows of listed orders
         for t in 10u8..40 {
             conn.execute(
-                "INSERT INTO orders (covenant_id, contract, template_hash, family, side, token_cov_id, token_tpl_hash, in_book, \
+                "INSERT INTO orders (covenant_id, contract, template_id, family, side, token_id, token_tpl_id, in_book, \
                  genesis_state, genesis_block, genesis_daa, listed, origin) VALUES (?1,'KobAsk',?2,?3,1,?4,?5,1,x'00',1,1,1,'chain')",
-                params![vec![t; 32], vec![9u8; 32], 1 + (t % 2) as i64, tok(t % 7), vec![t % 3; 32]],
+                params![
+                    vec![t; 32],
+                    intern(&conn, &[9u8; 32]).unwrap(),
+                    1 + (t % 2) as i64,
+                    intern(&conn, &tok(t % 7)).unwrap(),
+                    intern(&conn, &[t % 3; 32]).unwrap()
+                ],
             )
             .unwrap();
         }
-        let old = "SELECT DISTINCT token_cov_id, token_tpl_hash, family FROM orders WHERE listed = 1 AND token_cov_id IS NOT NULL \
-                   AND token_tpl_hash IS NOT NULL \
-                   UNION SELECT DISTINCT o.quote_cov_id, e.tpl_hash, 0 FROM orders o JOIN token_events e ON e.token_cov_id = o.quote_cov_id \
-                   WHERE o.listed = 1 AND o.quote_cov_id IS NOT NULL AND e.tpl_hash IS NOT NULL \
+        let old = "SELECT DISTINCT tk.h, tp.h, o.family FROM orders o JOIN ids tk ON tk.id = o.token_id JOIN ids tp ON tp.id = o.token_tpl_id \
+                   WHERE o.listed = 1 \
+                   UNION SELECT DISTINCT qt.h, e.tpl_hash, 0 FROM orders o JOIN ids qt ON qt.id = o.quote_id \
+                   JOIN token_events e ON e.token_cov_id = qt.h \
+                   WHERE o.listed = 1 AND e.tpl_hash IS NOT NULL \
                    UNION SELECT DISTINCT token_cov_id, tpl_hash, 0 FROM token_events WHERE tpl_hash IS NOT NULL \
                    ORDER BY 1, 3 DESC LIMIT ?1";
         for max in [1usize, 2, 3, 5, 8, 13, 5_000] {
@@ -427,7 +440,18 @@ fn the_open_token_list_reads_the_rows_the_union_did() {
                 .unwrap()
                 .collect::<rusqlite::Result<_>>()
                 .unwrap();
-            assert_eq!(open_token_rows(&conn, max).unwrap(), want, "seed {seed} max {max}");
+            let got = open_token_rows(&conn, max).unwrap();
+            let all = open_token_rows(&conn, 5_000).unwrap();
+            if max.saturating_mul(4) >= all.len() {
+                // the scan reads every row: exactly the rows the union read
+                assert_eq!(got, want, "seed {seed} max {max}");
+            } else {
+                // The scan stops after four times `max` rows, and the orders name their token and program by id, so it reads them in
+                // the order the ids were first seen, not the order of the hashes: the rows kept under the cap may differ from the
+                // lowest hashes the union kept. Still exactly `max` rows, each one the union has.
+                assert_eq!(got.len(), want.len(), "seed {seed} max {max}");
+                assert!(got.iter().all(|r| all.contains(r)), "seed {seed} max {max}: a row the union does not have");
+            }
         }
         assert!(open_token_rows(&conn, 5_000).unwrap().len() > 13);
     }
@@ -537,10 +561,14 @@ fn the_unfiltered_orders_list_reads_a_page_in_index_order_whatever_one_block_hol
     conn.execute_batch("BEGIN").unwrap();
     let mut st = conn
         .prepare(
-            "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, price, in_book, genesis_state, \
+            "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, price, in_book, genesis_state, \
              genesis_block, genesis_daa, listed, origin) VALUES (?1,'KobAsk',?2,1,1,?3,?4,5,1,x'00',?5,?5,1,'chain')",
         )
         .unwrap();
+    let pinned_id = intern(&conn, &pinned).unwrap();
+    // the 50 makers and 7 tokens of the rows, interned once
+    let makers: Vec<i64> = (0..50u8).map(|m| intern(&conn, &[m; 32]).unwrap()).collect();
+    let tokens: Vec<i64> = (0..7u8).map(|t| intern(&conn, &[t; 32]).unwrap()).collect();
     let mut s2 = conn
         .prepare(
             "INSERT INTO order_state (order_id, status, filled_amount, state_known, last_block, last_daa) \
@@ -553,7 +581,7 @@ fn the_unfiltered_orders_list_reads_a_page_in_index_order_whatever_one_block_hol
         cov[..8].copy_from_slice(&(i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).to_be_bytes());
         // 200,000 orders in the newest block (1,000,000), the rest spread over older ones
         let block = if i < 200_000 { 1_000_000 } else { 1_000 + (i - 200_000) / 3 };
-        st.execute(params![cov, pinned, vec![(i % 50) as u8; 32], vec![(i % 7) as u8; 32], block]).unwrap();
+        st.execute(params![cov, pinned_id, makers[(i % 50) as usize], tokens[(i % 7) as usize], block]).unwrap();
         s2.execute(params![cov]).unwrap();
     }
     drop(st);

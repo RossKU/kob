@@ -45,9 +45,28 @@ fn load(path: &std::path::Path, n: usize) {
     let pinned = kob_protocol::artifacts::pinned_hash(TemplateId::KobBid).to_vec();
     let pinned_ask = kob_protocol::artifacts::pinned_hash(TemplateId::KobAsk).to_vec();
     let tx = conn.unchecked_transaction().unwrap();
+    // the blob columns of an order are rows of `ids` (schema 9): the pinned templates and the token program, the big token and the
+    // bid-only token, 2,000 other tokens and a few dozen makers (the orders of a store name few: every order of the store below takes
+    // one of 40, ids `maker_base ..`)
+    let intern = |h: &[u8]| crate::indexer::ids::intern(&tx, h).unwrap();
+    let (pinned_id, pinned_ask_id, tpl_id) = (intern(&pinned), intern(&pinned_ask), intern(&tpl_hash()));
+    let maker_base = intern(&[0x4d; 32]);
+    for m in 1..40u8 {
+        let mut h = [0x4d; 32];
+        h[0] = m;
+        assert_eq!(intern(&h), maker_base + m as i64);
+    }
+    let maker_one = intern(&[0x01]);
+    let t0_id = intern(&T0);
+    let t1_id = intern(&T1);
+    tx.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000) \
+         INSERT INTO ids (h) SELECT CAST(printf('%032d', i + 999) AS BLOB) FROM n",
+        [],
+    )
+    .unwrap();
     // the big token's holdings: one owner holds a tenth of them, 19 in 20 are spent. The token and the owners are rows of `ids` (the
     // owner `aa..` once, every other holding a fresh owner: ids `owner_base + i`)
-    let t0_id = crate::indexer::ids::intern(&tx, &T0).unwrap();
     let mut aa = [0u8; 32];
     aa[0] = 0xaa;
     let aa_id = crate::indexer::ids::intern(&tx, &aa).unwrap();
@@ -68,32 +87,33 @@ fn load(path: &std::path::Path, n: usize) {
     )
     .unwrap();
     // orders: the big token has n / 3 resting-less filled ones; the bid-only token n / 3; 2,000 tokens have 20 listed ones each
-    let orders = |token: Vec<u8>, count: usize, contract: &str, template: &[u8], side: i64, status: &str| {
+    let orders = |token: i64, count: usize, contract: &str, template: i64, side: i64, status: &str| {
         tx.execute(
             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
-             INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, scale, price, \
+             INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, \
                                  in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
-             SELECT randomblob(32), ?2, ?3, 1, ?4, randomblob(32), ?5, ?6, 1000, 1000, 1, randomblob(8), i / 50 + 1, i, 1, 'chain' FROM n",
-            rusqlite::params![count as i64, contract, template, side, token, tpl_hash()],
+             SELECT randomblob(32), ?2, ?3, 1, ?4, ?7 + i % 40, ?5, ?6, 1000, 1000, 1, randomblob(8), i / 50 + 1, i, 1, 'chain' FROM n",
+            rusqlite::params![count as i64, contract, template, side, token, tpl_id, maker_base],
         )
         .unwrap();
         tx.execute(
             "INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, state_known, last_block, last_daa) \
-             SELECT id, ?1, 0, 0, 1, 1, 1, 1 FROM orders WHERE token_cov_id = ?2 AND id NOT IN (SELECT order_id FROM order_state)",
-            rusqlite::params![status, &token],
+             SELECT id, ?1, 0, 0, 1, 1, 1, 1 FROM orders WHERE token_id = ?2 AND id NOT IN (SELECT order_id FROM order_state)",
+            rusqlite::params![status, token],
         )
         .unwrap();
     };
-    orders(T0.to_vec(), n / 3, "KobBid", &pinned, 2, "filled");
-    orders(T1.to_vec(), n / 3, "KobBid", &pinned, 2, "filled");
+    orders(t0_id, n / 3, "KobBid", pinned_id, 2, "filled");
+    orders(t1_id, n / 3, "KobBid", pinned_id, 2, "filled");
     // 2,000 other tokens, 20 orders each (bids), open
     tx.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 40000) \
-         INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, scale, price, \
+         INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, \
                              in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
-         SELECT randomblob(32), 'KobBid', ?1, 1, 2, randomblob(32), CAST(printf('%032d', i % 2000 + 1000) AS BLOB), ?2, 1000, 1000, 1, \
+         SELECT randomblob(32), 'KobBid', ?1, 1, 2, ?3 + i % 40, \
+                (SELECT id FROM ids WHERE h = CAST(printf('%032d', i % 2000 + 1000) AS BLOB)), ?2, 1000, 1000, 1, \
                 randomblob(8), i, i, 1, 'chain' FROM n",
-        rusqlite::params![pinned, tpl_hash()],
+        rusqlite::params![pinned_id, tpl_id, maker_base],
     )
     .unwrap();
     // placement events of the bid-only token: a fresh commitment each (never pruned)
@@ -141,10 +161,10 @@ fn load(path: &std::path::Path, n: usize) {
             30,
         ];
         tx.execute(
-            "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, scale, price, \
+            "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, \
                                  in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
-             VALUES (?1, 'KobAsk', ?2, 1, 1, x'01', ?3, ?4, 1000, 1000, 1, x'00', 1, 1, 1, 'chain')",
-            rusqlite::params![cov, pinned_ask, &T0[..], tpl_hash()],
+             VALUES (?1, 'KobAsk', ?2, 1, 1, ?5, ?3, ?4, 1000, 1000, 1, x'00', 1, 1, 1, 'chain')",
+            rusqlite::params![cov, pinned_ask_id, t0_id, tpl_id, maker_one],
         )
         .unwrap();
         tx.execute(

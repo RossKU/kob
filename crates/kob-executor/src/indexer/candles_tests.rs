@@ -27,10 +27,20 @@ fn token(n: u8) -> Hash32 {
 
 fn add_order(conn: &Connection, cov: u8, tok: u8, scale: i64, genesis_block: i64, genesis_daa: i64) {
     let pinned = kob_protocol::artifacts::pinned_hash(kob_protocol::artifacts::TemplateId::KobBid).to_vec();
+    use crate::indexer::ids::intern as ids;
     conn.execute(
-        "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, scale, price, in_book, genesis_state, \
-         genesis_block, genesis_daa, listed, origin) VALUES (?1, ?2, ?3, 1, 2, x'01', ?4, ?5, 1000, 1, x'00', ?6, ?7, 1, 'chain')",
-        params![vec![cov; 32], PINNED, pinned, vec![tok; 32], scale, genesis_block, genesis_daa],
+        "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, scale, price, in_book, genesis_state, \
+         genesis_block, genesis_daa, listed, origin) VALUES (?1, ?2, ?3, 1, 2, ?8, ?4, ?5, 1000, 1, x'00', ?6, ?7, 1, 'chain')",
+        params![
+            vec![cov; 32],
+            PINNED,
+            ids(conn, &pinned).unwrap(),
+            ids(conn, &[tok; 32]).unwrap(),
+            scale,
+            genesis_block,
+            genesis_daa,
+            ids(conn, &[0x01]).unwrap()
+        ],
     )
     .unwrap();
 }
@@ -230,13 +240,18 @@ fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
     // the orders the fills name (their covenant ids are the zero-padded numbers below); an event refers to its order by `orders.id`, so
     // the orders come first. Orders 1 and 3 (all-0x01 / all-0x03 ids) are the ones the later `add_tx` fills name.
     let pinned = kob_protocol::artifacts::pinned_hash(kob_protocol::artifacts::TemplateId::KobBid).to_vec();
+    let (pinned_id, maker_id, token_id) = (
+        crate::indexer::ids::intern(&conn, &pinned).unwrap(),
+        crate::indexer::ids::intern(&conn, &[0x01]).unwrap(),
+        crate::indexer::ids::intern(&conn, &[1u8; 32]).unwrap(),
+    );
     conn.execute(
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 299) \
-         INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, scale, price, in_book, genesis_state, \
+         INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, scale, price, in_book, genesis_state, \
                              genesis_block, genesis_daa, listed, origin) \
-         SELECT CAST(printf('%032d', i) AS BLOB), 'KobBid', ?1, 1, 2, x'01', ?2, CASE WHEN i % 2 = 0 THEN 100000000 ELSE 1000 END, 1000, 1, x'00', \
+         SELECT CAST(printf('%032d', i) AS BLOB), 'KobBid', ?1, 1, 2, ?3, ?2, CASE WHEN i % 2 = 0 THEN 100000000 ELSE 1000 END, 1000, 1, x'00', \
                 1, 10 + i, 1, 'chain' FROM n",
-        params![pinned, vec![1u8; 32]],
+        params![pinned_id, token_id, maker_id],
     )
     .unwrap();
     // after the 300 above in the first-order rule (genesis block 2), so the token's price basis is still theirs
