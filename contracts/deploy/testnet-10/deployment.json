@@ -3,7 +3,7 @@
   "protocol": "v3 (no lots: base units, prices per whole base token; pair orders A/B, one template per pair kind for both families)",
   "compiler": "silverc v1.0.0 (contracts/silverc.lock)",
   "note": "every template is the reference artifact under contracts/artifacts; nothing is substituted per network",
-  "indexer_url": null,
+  "indexer_url": "https://kob.kaspa.ag/indexer",
   "templates": [
     {
       "name": "KobAsk",

@@ -25,8 +25,8 @@ kob book TUSD --testnet              # the same on testnet-10 (--netsuffix=10 an
   Your own node works too: JSON `ws://host:18110` (mainnet) or `:18210` (testnet-10), Borsh `ws://host:17110` / `:17210`.
   `$KOB_RESOLVERS` (comma-separated resolver URLs) replaces the resolver list for a private one.
 * **Indexer.** `--indexer URL`, else `$KOB_INDEXER_URL`, else the default indexer of the network's deployment record
-  (`contracts/deploy/<network>/deployment.json`, field `indexer_url`: the official index-only server; `null` until its address is
-  decided, so until then name one with `--indexer`). It is read-only data; `http://` and `https://` are spoken.
+  (`contracts/deploy/<network>/deployment.json`, field `indexer_url`: the official index-only server; testnet-10 names the public canary indexer `https://kob.kaspa.ag/indexer`
+  (a read-only relay: the CLI only reads from the indexer), mainnet is `null` until its address is decided, so there name one with `--indexer`). It is read-only data; `http://` and `https://` are spoken.
 * **Signing.** Only for `place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `token create`, `recover --cancel` and
   `order sweep|cancel`: the key comes from `--key-file PATH` (or `$KOB_KEY`), the plan is shown, and nothing is signed without `--yes`
   or a terminal's confirmation. Everything else (`book`, `orders`, `balances`, `watch`, `registry`) needs no key.

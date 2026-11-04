@@ -16,7 +16,10 @@ pub const INDEXER_ENV: &str = "KOB_INDEXER_URL";
 /// `--indexer` if given, else [`INDEXER_ENV`], else the indexer the deployment record of `network` names
 /// ([`kob_protocol::artifacts::deployment_indexer_url`], in every build; none while the record leaves it unset).
 pub fn indexer_arg(flag: Option<String>, network: &str) -> Option<String> {
-    indexer_from(flag, std::env::var(INDEXER_ENV).ok(), kob_protocol::artifacts::deployment_indexer_url(network))
+    // the unit tests of this crate never reach for the public default (the record of testnet-10 names a live server): the tests that
+    // check what a command does without an indexer rely on there being none
+    let deployment = if cfg!(test) { None } else { kob_protocol::artifacts::deployment_indexer_url(network) };
+    indexer_from(flag, std::env::var(INDEXER_ENV).ok(), deployment)
 }
 
 /// [`indexer_arg`] with the environment variable and the deployment default given: the flag wins over the variable, the variable

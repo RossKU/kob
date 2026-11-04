@@ -34,10 +34,11 @@ address needs a domain, so do it in this order:
    repository variable later, run *Actions* > *deploy-pages* > *Run workflow* on `master`: a changed variable alone deploys nothing.
 5. Section 5: set up an alert before you rely on it.
 
-`chart.example.org` here is a placeholder: the project's stable domain is not live yet. Until it is, a canary indexer may be
-reached through a temporary quick tunnel (a `trycloudflare.com` address, which changes whenever `cloudflared` restarts). Treat
-such an address as a canary tunnel to be replaced by the stable hostname, and do not publish it as a permanent
-`KOB_PAGES_INDEXER_URL` or as the `indexer_url` of a deployment record.
+`chart.example.org` here is a placeholder for your own hostname. The project's testnet-10 canary runs at `https://kob.kaspa.ag`, through a
+named Cloudflare tunnel: the web app, a read-only relay of its indexer at `https://kob.kaspa.ag/indexer/v1/...` (GET only; this is the
+`indexer_url` of the testnet-10 deployment record, which `kob` reads by default) and of its node at `/node` (wss). A temporary quick tunnel
+(a `trycloudflare.com` address) changes whenever `cloudflared` restarts: never publish one as a permanent `KOB_PAGES_INDEXER_URL` or
+`indexer_url`.
 
 ## 1. The indexer
 
