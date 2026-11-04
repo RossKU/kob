@@ -139,6 +139,7 @@ flags, keys, monitoring and the runbook.
 See [docs/README.md](docs/README.md) for the index. The main entries:
 
 * `docs/user-guide.md`: how to trade in the web app (wallets, orders, fees, recovery)
+* `docs/faq.md`: questions people asked: who signs what, front-running, settlement, stablecoin pricing on a KAS book
 * `docs/api.md`: the executor's read API (HTTP and WebSocket) reference
 * `docs/ops/executor-quickstart.md`: run an executor from a download; `docs/ops/web-hosting.md`, `docs/ops/chart-server.md`: host the app and a public read server
 * `docs/spec/matcher.md`: normative matcher, executor and wallet rules
