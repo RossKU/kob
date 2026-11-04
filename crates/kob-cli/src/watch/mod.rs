@@ -41,7 +41,7 @@ USAGE
   over REST (at most every 2 s). When the connection drops it reconnects with a growing pause (1 s up to 30 s), subscribes
   again and reads everything again; fills during the gap are not replayed. Ctrl-C ends it.
 
-  The address is derived from --indexer (default $KOB_INDEXER_URL, else the default indexer of a deployment build): http://host:port
+  The address is derived from --indexer (default $KOB_INDEXER_URL, else the default indexer in the network's deployment record): http://host:port
   becomes ws://host:port/v1/ws, https:// becomes wss://.
 ";
 

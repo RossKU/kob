@@ -943,7 +943,7 @@ pub fn run_refund(args: &[String]) -> i32 {
 
 /// Help of `kob take`.
 pub const TAKE_USAGE: &str = "\
-kob take: fill a resting order as the taker, at its own price (the matchers' transaction with one order)
+kob take: fill a resting order as the taker, at its own price (an Executor's fill transaction with one order)
 
 USAGE
   kob take <COVENANT_ID> --amount AMOUNT [--carrier KAS] [options]
@@ -1017,7 +1017,7 @@ pub fn run_take(args: &[String]) -> i32 {
             ),
             other => {
                 return Err(format!(
-                    "a {} is not taken here (pair orders and stop legs fill through the matchers)",
+                    "a {} is not taken here (pair orders and stop legs are filled by an Executor)",
                     other.template_id().name()
                 )
                 .into())

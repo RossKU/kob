@@ -26,8 +26,8 @@ COMMON OPTIONS
   --node URL        the node: a JSON wRPC endpoint, a Borsh one (ws://HOST:17110, wss://.../borsh) or `resolver` (default
                     $KOB_NODE_WRPC, else the public nodes the Kaspa resolvers name: a pair on two hosts that must agree on
                     the outputs a plan spends; a URL with credentials belongs in the variable)
-  --indexer URL     indexer API, http:// or https:// (default $KOB_INDEXER_URL, else the default indexer of a
-                    deployment build, when its record names one)
+  --indexer URL     indexer API, http:// or https:// (default $KOB_INDEXER_URL, else the default indexer in the
+                    network's deployment record, when it names one)
   --key-file PATH   the signing key: a file holding the 64-hex secret
   --key-env NAME    ... or the environment variable holding it (default KOB_KEY)
                     a key on the command line (--key) is refused: arguments are visible to other users (ps)

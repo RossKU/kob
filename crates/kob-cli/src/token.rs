@@ -88,8 +88,6 @@ OUTPUT
                         picture at the address is the one you meant. The hash cannot be changed later. Needs --image.
   --image-hash <HEX>    the same hash given directly (64 hex characters, SHA-256 of the file); with --image-file the
                         two must agree. Needs --image.
-  --network             mainnet or testnet-10, recorded in metadata/supply; required unless the build is a deployment
-                        build (deploy-mainnet, deploy-tn10), which implies its own
   --yes, -y             submit without asking. Without it a terminal is shown the plan and asked (type yes); without a
                         terminal nothing is written or submitted. Not needed with --dry-run.
   --dry-run             build and verify everything offline (signs and executes the funding inputs when --key is
@@ -99,7 +97,8 @@ OUTPUT
                         $KOB_NODE_WRPC (a URL with a password or an API key belongs there: arguments are visible in `ps`),
                         else the public nodes the Kaspa resolvers name (two hosts that must agree on the outputs spent).
                         The node must run the network named: checked before anything is submitted.
-  --network NET         mainnet (default) or testnet-10; --testnet and --netsuffix=10 are --network testnet-10
+  --network NET         mainnet (default; a deployment build is bound to its own) or testnet-10, recorded in metadata/supply;
+                        --testnet and --netsuffix=10 are --network testnet-10
 ";
 
 /// Where the signing key comes from.

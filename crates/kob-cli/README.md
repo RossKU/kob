@@ -250,7 +250,7 @@ under "JSON output" below, the exit codes under "Exit codes".
 Every stop also takes `--band DURATION`, `--keeper-tip KAS` and `--min-rest DURATION`; an if-done entry `--entry-stop`
 (a stop entry), `--exit-min-fill`, `--exit-min-touch`, `--exit-slippage` and a trailing exit stop (`--trail-step`,
 `--trail-gap`). Every kind takes `--quote TOKEN_B` (a pair order: `KobPair`, `KobCondPair`, `KobIfdPair`). Not here:
-taking pair orders and stop legs (the matchers fill them).
+taking pair orders and stop legs (an Executor fills them).
 
 ## Finding tokens
 
@@ -499,7 +499,7 @@ The code separates three outcomes; the finer causes are told by the message on s
 |---|---|
 | 0 | success: the work was done, or `--dry-run` stopped after the plan, or a view was printed, or `--help` / `--version` |
 | 1 | the command ran and did not do its work: an error from the node, the indexer or the network check (a node of another network, unreachable), a planning error, a plan with an `error` issue, a transaction that needs another key's signature, signing, script-engine validation or submission failed, **and a refusal to sign: no `--yes` without a terminal, or an answer at the prompt other than `yes`** |
-| 2 | usage: an unknown command or option, a missing or malformed argument, no `--network`, no signing key (signing commands), a key on the command line (`--key` of a trading command), `--yes` together with `--dry-run`, `kob place` without a kind; also an order term that does not read (an amount, price, tip or carrier without a unit or out of range, a covenant id that is not 64 hex, a required option of the kind missing) in `place`, `replace`, `take`, `send` and `refund` alike |
+| 2 | usage: an unknown command or option, a missing or malformed argument (`kob registry verify-genesis` without `--network` on a build that has no deployment network), no signing key (signing commands), a key on the command line (`--key` of a trading command), `--yes` together with `--dry-run`, `kob place` without a kind; also an order term that does not read (an amount, price, tip or carrier without a unit or out of range, a covenant id that is not 64 hex, a required option of the kind missing) in `place`, `replace`, `take`, `send` and `refund` alike |
 
 So the code does not distinguish a refusal (no `--yes`), a plan error, a node error and a user who declined: all are 1. Read
 stderr (`error: ...` for failures, `not signed: ...` for a refusal or a declined prompt) or, with `--json`, the `issues` array
