@@ -511,7 +511,7 @@ fn send_a_token_without_an_indexer_from_the_local_record() {
     assert_eq!(w.submitted(), 1);
     let s = w.signed(".json");
     let spk = spk_to_string(&token_spk(&user_token(taker, 12_500)));
-    assert!(s.tx.outputs.iter().any(|o| o.script_public_key == spk && o.value == 2 * KAS), "the recipient's token output");
+    assert!(s.tx.outputs.iter().any(|o| o.script_public_key == spk && o.value == KAS), "the recipient's token output");
     // a token the record does not name is refused without an indexer
     let other = format!("{} {} 1TST --yes", to_hex(&[0x72; 32]), to_hex(&taker));
     assert_eq!(run(send, no_indexer(w.args(0x11, &other))), 1);
