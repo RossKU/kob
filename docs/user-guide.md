@@ -341,7 +341,7 @@ Never type a key anywhere else, never paste it in chats, and do not keep it in a
 
 **Create token** (header) makes a fixed-supply token: name, ticker, decimals, supply, and the holders. It takes two transactions
 and one approval: the first records its details on chain, the second creates the token. The supply is fixed forever; there is no mint
-and no burn. Each token output locks some KAS (the carrier, default 2 KAS), returned when the tokens are spent or merged. The
+and no burn. Each token output of the creation locks some KAS (the carrier, default 10 KAS: a creation puts many token outputs in one transaction, which a smaller carrier would not fit; order carriers are smaller, 1 KAS by default), returned when the tokens are spent or merged. The
 summary shows "KAS locked in token outputs" and the network fees. Anyone may pick any ticker; the form warns when it equals or looks like a ticker in the page's
 registry (on a testnet-10 page the registry holds no tokens, so there is no warning there, and it never sees tokens the registry
 does not list). The covenant id tells tokens apart. Decimals may be 0 to 18, but the market uses at most 9: a token with more
