@@ -1134,7 +1134,7 @@ USAGE
   come from your KAS UTXOs, largest first.
 
   --indexer is optional for a token: without one, the token is named by the registry or by this machine's record of
-  tokens it issued (`kob token issue`) and of your recent token outputs (kept a day, each confirmed on the node, in
+  tokens it issued (`kob token create`) and of your recent token outputs (kept a day, each confirmed on the node, in
   %LOCALAPPDATA%\\kob or ~/.local/state/kob). A token or holding that record does not cover needs --indexer.
 ";
 

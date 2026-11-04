@@ -1067,7 +1067,7 @@ pub fn mutable_windows(kind: &str) -> Result<String, JsError> {
     js(api::mutable_windows(kind))
 }
 
-/// Plans a fixed-supply KCC-20 issuance (the `kob token issue` flow, by default the published public-mint build
+/// Plans a fixed-supply KCC-20 issuance (the `kob token create` flow, by default the published public-mint build
 /// `KCC20PublicMint`, 3 / 3; `program: "3x3"` for the standalone reference program `KCC20Ref`).
 /// Takes `{name, ticker, decimals, supply, holders: [{owner, ownerScheme, amount, borrowScheme?, borrowGuard?}],
 /// extensionCommitment?, carrier?, feeRate?, funding: [{transactionId, index, amount, pubkey}], changeTo?, description?,

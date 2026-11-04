@@ -1,4 +1,4 @@
-//! `kob token issue`: fixed-supply KCC-20 issuance (by default the published public-mint build of the reference, the
+//! `kob token create`: fixed-supply KCC-20 issuance (by default the published public-mint build of the reference, the
 //! de-facto standard KCC-20 program, 3/3; or, named with `--program 3x3`, the standalone 3/3 reference program; owner
 //! scheme 0x04 enabled, borrow disabled), created under KCC-23:
 //! a preparation transaction declares the metadata, the genesis spends its output (`kob_protocol::issue::build_creation`).
@@ -19,9 +19,9 @@ use serde_json::{json, Value};
 
 use crate::wrpc;
 
-/// Usage text of `kob token issue`.
+/// Usage text of `kob token create`.
 pub const ISSUE_USAGE: &str = "\
-kob token issue: issue a fixed-supply KCC-20 token (by default the published public-mint build of the KCC-20
+kob token create: create a fixed-supply KCC-20 token (by default the published public-mint build of the KCC-20
 reference, 3 token inputs / 3 outputs per transfer, the program other indexers such as kascov.io list as a KCC-20
 token; `--program 3x3` names the standalone 3 / 3 reference program instead)
 
@@ -37,7 +37,7 @@ their owners from the genesis on, so the holder's key finds and spends them from
 `kob send`, the web app) without any file of this run.
 
 USAGE
-  kob token issue --name <NAME> --ticker <TICKER> --decimals <N> --fund-utxo <TXID:INDEX:AMOUNT:OWNER>...
+  kob token create --name <NAME> --ticker <TICKER> --decimals <N> --fund-utxo <TXID:INDEX:AMOUNT:OWNER>...
                   [--supply <UNITS>] [--holder <OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]>...]
                   [--key <HEX | env:VAR | file:PATH>] [--out-dir <DIR>] [--yes | --dry-run] [--node ws://HOST:PORT]
 
@@ -136,7 +136,7 @@ pub struct FundArg {
     pub owner: [u8; 32],
 }
 
-/// Parsed arguments of `kob token issue`.
+/// Parsed arguments of `kob token create`.
 #[derive(Debug, Clone)]
 pub struct IssueArgs {
     /// Name.
@@ -291,7 +291,7 @@ pub(crate) fn parse_key_source(s: &str) -> KeySource {
     }
 }
 
-/// Parse the arguments after `kob token issue`.
+/// Parse the arguments after `kob token create`.
 pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
     let mut a = IssueArgs {
         name: String::new(),
@@ -391,7 +391,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
             "--yes" | "-y" => a.yes = true,
             "--node" => a.node = Some(val("--node")?),
             "--program" => a.program = IssueProgram::parse(&val("--program")?).map_err(|e| e.to_string())?,
-            other => return Err(format!("unknown argument `{other}` (see `kob token issue --help`)")),
+            other => return Err(format!("unknown argument `{other}` (see `kob token create --help`)")),
         }
     }
     if !have_name || !have_ticker || !have_decimals {
@@ -508,7 +508,7 @@ pub fn write_outputs(dir: &Path, plan: &CreationPlan) -> Result<Vec<String>, Str
     Ok(docs.iter().map(|(n, _)| n.to_string()).collect())
 }
 
-/// Run `kob token issue`; returns the process exit code.
+/// Run `kob token create`; returns the process exit code.
 pub fn run_issue(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!("{ISSUE_USAGE}");
@@ -698,7 +698,7 @@ kob token resume: send a creation whose genesis did not go out
 USAGE
   kob token resume <DIR> [--node ws://HOST:PORT]
 
-DIR is the directory `kob token issue` wrote (creation.json, and preparation_tx.json and genesis_tx.json, both signed). The preparation is sent
+DIR is the directory `kob token create` wrote (creation.json, and preparation_tx.json and genesis_tx.json, both signed). The preparation is sent
 again (a node that already has it refuses it: that is fine) and then the genesis. Nothing is signed: the saved transactions
 are sent as they are. If the preparation output was spent elsewhere meanwhile, the genesis cannot be sent; that KAS was
 the funding key's own.
@@ -721,7 +721,7 @@ pub fn run_resume(args: &[String]) -> i32 {
                 other => return Err(format!("unknown argument `{other}` (see `kob token resume --help`)")),
             }
         }
-        let dir = dir.ok_or("give the directory `kob token issue` wrote")?;
+        let dir = dir.ok_or("give the directory `kob token create` wrote")?;
         let node = wrpc::node_arg(node).ok_or_else(|| format!("--node (or ${}) is required", wrpc::NODE_ENV))?;
         let read = |name: &str| -> Result<Value, String> {
             let text = std::fs::read_to_string(dir.join(name)).map_err(|e| format!("read {name}: {e}"))?;
@@ -760,7 +760,7 @@ USAGE
   kob token verify-declaration <launch_proof.json>
 
 The proof (kob-kcc23-proof/1: the preparation and the genesis in the fields their ids commit to, and the covenant id) may
-come from anyone: an indexer (GET /v1/tokens/<id>/declaration), a community list, `kob token issue`. Both transaction ids and
+come from anyone: an indexer (GET /v1/tokens/<id>/declaration), a community list, `kob token create`. Both transaction ids and
 the covenant id are recomputed; the declaration is printed only when it is bound to that covenant id.
 ";
 

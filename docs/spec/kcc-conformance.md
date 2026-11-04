@@ -125,7 +125,7 @@ the state at fixed offsets inside the 112 bytes, the stray guard locates the own
 every token output an order pins is the custody's own prefix (context included), state and suffix, which is what the
 published transfer writes. `crates/kob-tests/tests/kcc20_public_mint_tests.rs` runs every order shape on such tokens
 (custodies of three orders under one published leader included) and refuses holders with another context value or of the
-standalone build; `kob token issue --program public-mint` issues one (a genesis of `KCC20` holders only); a genesis with the app's
+standalone build; `kob token create --program public-mint` issues one (a genesis of `KCC20` holders only); a genesis with the app's
 `PublicMint` and `TokenSeed` actors, as upstream recommends, is verified as in section 4.3. The
 published build has the reference's 3 / 3 slots, like the standalone `KCC20Ref`.
 
@@ -226,7 +226,7 @@ over chain evidence, `genesis_evidence::verify_token`).
 
 ### 4.4 Issuance: the published public-mint build by default (2026-11-04), the standalone 3 / 3 on request
 
-**Default since 2026-11-04.** `kob token issue` and the web app's Create page issue the `KCC20` actor of upstream's
+**Default since 2026-11-04.** `kob token create` and the web app's Create page issue the `KCC20` actor of upstream's
 published `KCC20PublicMint` app (3 token inputs / 3 token outputs per transaction, registry `kcc20-ref-public-mint`,
 template `734850b0...`; section 4.3). The genesis holds only `KCC20` holders: no `PublicMint`, no `TokenSeed`, so no
 minter exists or can appear later (a minter is created only by a minter) and the supply is fixed forever, exactly as with the
@@ -234,7 +234,7 @@ standalone program (`kob_protocol::issue` test `the_default_issuance_leaves_no_p
 no minter output, no seed and no mint allowance; the testnet-10 token PMKC, covenant
 `5c75037a...2902d493`, was issued this way with nothing minted). The standalone
 `KCC20Ref` (registry `kcc20-ref-3x3`, the standard configuration of the reference as a single-actor app) is still issued, but
-only when it is named: `kob token issue --program 3x3`, and the "Standalone 3 / 3" choice under Advanced on the Create page.
+only when it is named: `kob token create --program 3x3`, and the "Standalone 3 / 3" choice under Advanced on the Create page.
 Existing 3 / 3 tokens stay fully tradable; the strict template list and the registry semantics are unchanged.
 
 Why: the published app is the de-facto standard. kascov.io lists a token of it as a "KCC-20 token" (verified, conformant) and

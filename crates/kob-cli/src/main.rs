@@ -1,6 +1,6 @@
 //! `kob` command line.
 //!
-//! Implemented: `kob token issue` (fixed-supply KCC-20 issuance), `kob registry validate` / `verify-genesis` / `programs` / `add-program`, `kob recover` (find the maker's
+//! Implemented: `kob token create` (fixed-supply KCC-20 issuance), `kob registry validate` / `verify-genesis` / `programs` / `add-program`, `kob recover` (find the maker's
 //! orders on the node from a backup, a recovery / export file or an indexer view, and cancel them with `--cancel`), and
 //! `kob order sweep|cancel` (the maker's stray sweep in place and the maker's cancel from an indexer order view), the
 //! trading commands `kob place`, `kob replace`, `kob cancel`, `kob refund`, `kob take`, `kob send` and `kob merge`, and the
@@ -25,7 +25,7 @@ const USAGE: &str = "\
 kob: KOB command line
 
 USAGE
-  kob token issue [OPTIONS]    create a fixed-supply KCC-20 token: KCC-23 declaration, then the genesis (`kob token issue --help`);
+  kob token create [OPTIONS]   create a fixed-supply KCC-20 token: KCC-23 declaration, then the genesis (`kob token create --help`);
                                submits only with --yes or a terminal's confirmation; --dry-run stops before submitting
   kob token resume <DIR>       send a creation whose genesis did not go out (`kob token resume --help`)
   kob token verify-declaration <PROOF>
@@ -75,7 +75,12 @@ USAGE
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        ["token", "issue", rest @ ..] => token::run_issue(&args[2..2 + rest.len()]),
+        ["token", "create", rest @ ..] => token::run_issue(&args[2..2 + rest.len()]),
+        // the former name of `kob token create`: still works, says so on stderr (never in --json output on stdout)
+        ["token", "issue", rest @ ..] => {
+            eprintln!("note: `kob token issue` is now `kob token create`; the old name still works but is deprecated");
+            token::run_issue(&args[2..2 + rest.len()])
+        }
         ["token", "resume", rest @ ..] => token::run_resume(&args[2..2 + rest.len()]),
         ["token", "verify-declaration", rest @ ..] => token::run_verify_declaration(&args[2..2 + rest.len()]),
         ["registry", "validate", rest @ ..] => registry::run_validate(rest),

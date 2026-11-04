@@ -240,7 +240,7 @@ fn upstreams_recommended_genesis_verifies_and_reports_its_allowance() {
     assert_eq!((r.minter_outputs.clone(), r.seed_outputs.clone()), (vec![1, 3], vec![2, 4]));
     assert_eq!(r.genesis_supply().max_supply(), Some(1_750));
 
-    // the fixed-supply genesis `kob token issue --program public-mint` writes: holders only
+    // the fixed-supply genesis `kob token create --program public-mint` writes: holders only
     let g = genesis(vec![holder_redeem(&holder(1_000, EXT))]);
     let r = g.check().unwrap();
     assert_eq!((r.supply, r.mint_allowance, r.minter_outputs.len(), r.seed_outputs.len()), (1_000, 0, 0, 0));

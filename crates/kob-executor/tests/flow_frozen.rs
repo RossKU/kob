@@ -207,7 +207,7 @@ async fn the_open_token_list_lists_a_token_known_only_from_an_unlisted_order() {
     assert_eq!((rows.len(), rows[0].extension_commitment.as_deref()), (1, None));
 }
 
-/// The all-zero extension commitment (the standard fixed-supply KCC-20 class: TUSD, every `kob token issue`) is a commitment:
+/// The all-zero extension commitment (the standard fixed-supply KCC-20 class: TUSD, every `kob token create`) is a commitment:
 /// the open token list reports it (it reported none, and the CLI refused every such token: TN10 2026-10-14 B-4), and the
 /// migration of earlier pair rows leaves a real zero commitment alone.
 #[tokio::test]

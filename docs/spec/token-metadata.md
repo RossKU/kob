@@ -62,7 +62,7 @@ the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `
   PNG, JPEG, WebP or GIF of at most 1.5 MB; it is written right after `image` and costs about 78 bytes of the 1024. The creation record cannot be changed, so the hash fixes
   which picture the creator meant: a viewer that can read the bytes compares them with it, and a different file at the address is shown as a mismatch, not as the logo. For
   an `ipfs://` address the hash is still of the file's bytes (a dag-pb CID is not the file's SHA-256). The Create page computes it in the browser from a file the creator picks
-  (nothing is uploaded; SVG is refused), and `kob token issue --image-file <path>` does the same (`--image-hash <hex>` gives it directly).
+  (nothing is uploaded; SVG is refused), and `kob token create --image-file <path>` does the same (`--image-hash <hex>` gives it directly).
 * **The logo is an address, not a picture.** KOB stores and serves no image. Each viewer's browser loads the `image` address of a declaration (when kascov.io has no
   checked copy and the viewer allows it): `ipfs://` through a public gateway as bytes (shown from a `blob:` URL; the bytes are compared with the CID where that is
   possible, and with `image_hash` when the declaration has one), `https://` as a plain image labelled "Image from the creator's site, not checked" (the creator's host
@@ -93,7 +93,7 @@ the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `
 
 ## 3. Creating a token
 
-`kob_protocol::issue::build_creation` (CLI `kob token issue`, the web app's Create token page through kob-wasm `issue`):
+`kob_protocol::issue::build_creation` (CLI `kob token create`, the web app's Create token page through kob-wasm `issue`):
 
 | Transaction | Inputs | Outputs | Payload |
 |---|---|---|---|
@@ -162,7 +162,7 @@ key. The genesis therefore carries, in its payload, the states of its token outp
 
 Whether the issued tokens can be found again depends on whether the genesis named their states (*The genesis payload* above).
 
-* **A creation of this build or later** (the web app's Create token page, `kob token issue`): nothing. The genesis names the states
+* **A creation of this build or later** (the web app's Create token page, `kob token create`): nothing. The genesis names the states
   of its outputs and an upgraded indexer lists them to the owner, so the same key, in any browser or on any machine, sees the
   tokens (the web app's balances and ticket, `kob place`, `kob send`, `kob merge`) from the block of the genesis. An indexer that was
   not running then needs a rebuild from an earlier start (`docs/ops/executor.md`, Part B 5.1). Keep the key; keep `supply.json`

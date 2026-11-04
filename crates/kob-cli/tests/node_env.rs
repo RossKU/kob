@@ -18,6 +18,12 @@ fn issue(env: Option<&str>, extra: &[&str]) -> (bool, String) {
 
 /// The run itself: its working directory (where a submitting run keeps its files) and the outcome.
 fn issue_in(env: Option<&str>, extra: &[&str]) -> (std::path::PathBuf, (bool, String)) {
+    let (cwd, ok, stdout, stderr) = token_run("create", env, extra);
+    (cwd, (ok, format!("{stdout}{stderr}")))
+}
+
+/// `kob token <sub> ...` with the creation arguments: the working directory, success, stdout and stderr.
+fn token_run(sub: &str, env: Option<&str>, extra: &[&str]) -> (std::path::PathBuf, bool, String, String) {
     let sk = SecretKey::from_slice(&[0x33; 32]).unwrap();
     let pk = Keypair::from_secret_key(&Secp256k1::new(), &sk).x_only_public_key().0.serialize();
     let pk: String = pk.iter().map(|b| format!("{b:02x}")).collect();
@@ -29,7 +35,7 @@ fn issue_in(env: Option<&str>, extra: &[&str]) -> (std::path::PathBuf, (bool, St
     std::fs::create_dir_all(&cwd).unwrap();
     let mut cmd = Command::new(BIN);
     cmd.current_dir(&cwd);
-    cmd.args(["token", "issue", "--name", "Test", "--ticker", "TEST", "--decimals", "8", "--supply", "5", "--network", "testnet-10"])
+    cmd.args(["token", sub, "--name", "Test", "--ticker", "TEST", "--decimals", "8", "--supply", "5", "--network", "testnet-10"])
         .args(["--fund-utxo", &fund, "--key", SK])
         .args(extra)
         .stdin(Stdio::null())
@@ -38,7 +44,7 @@ fn issue_in(env: Option<&str>, extra: &[&str]) -> (std::path::PathBuf, (bool, St
         cmd.env("KOB_NODE_WRPC", v);
     }
     let out = cmd.output().unwrap();
-    (cwd, (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))
+    (cwd, out.status.success(), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
 }
 
 #[test]
@@ -59,7 +65,7 @@ fn the_node_comes_from_the_environment_and_is_shown_redacted() {
     assert!(!out.contains("s3cret"), "{out}");
 }
 
-/// Without `--yes` and without a terminal `kob token issue` shows the plan, signs and writes nothing, submits nothing and exits 1;
+/// Without `--yes` and without a terminal `kob token create` shows the plan, signs and writes nothing, submits nothing and exits 1;
 /// `--yes` together with `--dry-run` is refused.
 #[test]
 fn token_issue_refuses_without_yes_when_there_is_no_terminal() {
@@ -75,4 +81,29 @@ fn token_issue_refuses_without_yes_when_there_is_no_terminal() {
     assert!(ok, "{out}");
     let (ok, out) = issue(Some("ws://127.0.0.1:1"), &["--dry-run", "--yes"]);
     assert!(!ok && out.contains("exclude each other"), "{out}");
+}
+
+/// `kob token issue` is the former name of `kob token create`: it still works, says so on stderr, and keeps stdout (the plan, or the
+/// result with --json) the same.
+#[test]
+fn token_issue_is_a_deprecated_alias_of_token_create() {
+    let args = ["--dry-run"];
+    let (_, ok, new_out, new_err) = token_run("create", Some("ws://127.0.0.1:1"), &args);
+    assert!(ok && new_out.contains("genesis tx"), "{new_out}{new_err}");
+    assert!(!new_err.contains("deprecated"), "{new_err}");
+    let (_, ok, old_out, old_err) = token_run("issue", Some("ws://127.0.0.1:1"), &args);
+    assert!(ok, "{old_out}{old_err}");
+    assert!(old_err.contains("`kob token issue` is now `kob token create`") && old_err.contains("deprecated"), "{old_err}");
+    // the note is on stderr only: stdout is what `create` prints (the ids and files differ per run only in the output directory)
+    assert!(!old_out.contains("deprecated") && old_out.contains("genesis tx"), "{old_out}");
+    assert_eq!(old_out.lines().count(), new_out.lines().count());
+    // the help of either name is the create help
+    let help = |sub: &str| {
+        let o = Command::new(BIN).args(["token", sub, "--help"]).stdin(Stdio::null()).output().unwrap();
+        (o.status.success(), String::from_utf8_lossy(&o.stdout).to_string())
+    };
+    let (ok, h) = help("create");
+    assert!(ok && h.starts_with("kob token create: create a fixed-supply KCC-20 token"), "{h}");
+    let (ok, h) = help("issue");
+    assert!(ok && h.starts_with("kob token create:"), "{h}");
 }

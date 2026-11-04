@@ -8,7 +8,7 @@ are in [argent-feedback.md](argent-feedback.md). Compiler pin and patches: [../a
 | Layer | What | Where |
 |---|---|---|
 | Contracts | Hand-written SilverScript: the order covenants (KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdAsk, KobIfdBid, and the pair orders KobPair, KobCondPair, KobIfdPair). Per-order values live in the state span, so each kind has one template. | `contracts/v2/*.sil`, `contracts/artifacts/*.json` |
-| Argent shell | The same contracts published as the Argent app `KOBOrders` (actor handles, state layouts, entries), the KRON limit orders as `KOBOrdersKron`, plus the 8/8 token prototype as `KOBToken` (`KCC20Ref`, the standalone 3/3 reference, which `kob token issue --program 3x3` issues; the default issuance is the published public-mint app). | `contracts/argent/KOBOrders/`, `contracts/argent/KOBOrdersKron/`, `contracts/argent/KOBToken/` |
+| Argent shell | The same contracts published as the Argent app `KOBOrders` (actor handles, state layouts, entries), the KRON limit orders as `KOBOrdersKron`, plus the 8/8 token prototype as `KOBToken` (`KCC20Ref`, the standalone 3/3 reference, which `kob token create --program 3x3` issues; the default issuance is the published public-mint app). | `contracts/argent/KOBOrders/`, `contracts/argent/KOBOrdersKron/`, `contracts/argent/KOBToken/` |
 | Composition | KOB's own Argent app: payment intents and swap-and-pay. | `contracts/argent/kob_router.ag`, `contracts/argent/router/` |
 
 Matching, batches and wallet flows stay in Rust (`kob-protocol`); Argent is used where other

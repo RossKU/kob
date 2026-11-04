@@ -1,6 +1,6 @@
 # kob (kob-cli)
 
-The KOB command line. `kob --help` lists every command, `kob <command> --help` its options (`kob token issue --help`,
+The KOB command line. `kob --help` lists every command, `kob <command> --help` its options (`kob token create --help`,
 `kob token resume --help`, `kob token verify-declaration --help`; `kob token --help` and `kob registry --help` are not commands, see
 "Token commands").
 
@@ -27,8 +27,8 @@ wrong argument prints their usage line and exits 2).
 | `kob watch fills\|book\|order\|health` | follow the executor's live WebSocket feed: fills, a book, orders' states, the indexer's progress (read-only, no key; see "Watching the live feed") |
 | `kob order sweep\|cancel --view FILE` | the maker's stray sweep in place and cancel from saved indexer views (`--yes` or a terminal's confirmation to submit) |
 | `kob recover --from FILE` | find the maker's orders from a backup / export / view on a node alone, and cancel them (`--cancel`, with `--yes` or a terminal's confirmation) |
-| `kob token issue` | issue a fixed-supply KCC-20 token (a KCC-23 declaration, then the genesis; `--yes` or a terminal's confirmation to submit) |
-| `kob token resume <DIR>` | send a creation whose genesis did not go out, from the files `kob token issue` saved |
+| `kob token create` | create a fixed-supply KCC-20 token (a KCC-23 declaration, then the genesis; `--yes` or a terminal's confirmation to submit) |
+| `kob token resume <DIR>` | send a creation whose genesis did not go out, from the files `kob token create` saved |
 | `kob token verify-declaration <PROOF>` | check a KCC-23 launch proof from any source and print the declaration |
 | `kob registry validate\|verify-genesis\|programs\|add-program` | the token registry and token-program profiles |
 
@@ -38,12 +38,12 @@ wrong argument prints their usage line and exits 2).
 indexer (`--indexer` or `$KOB_INDEXER_URL`, `http://`; `docs/ops/executor.md` Part B), plan the transaction, print it and
 sign only after confirmation. Every command that submits a transaction asks the same way: `--yes` (or `-y`) goes ahead, a
 terminal is asked (`yes` to continue), anything else is refused and nothing is signed; `--dry-run` stops before signing and
-cannot be combined with `--yes`. That includes `kob token issue`, `kob recover --cancel` and `kob order sweep|cancel`
+cannot be combined with `--yes`. That includes `kob token create`, `kob recover --cancel` and `kob order sweep|cancel`
 (below, "Token commands" and "JSON output"), which keep their own option parsers but follow the same rule.
 
 **`kob send` of a token without `--indexer`.** The indexer is optional for `kob send <TOKEN> ...` when the local record covers the
 token: the registry, or the record this machine keeps in `%LOCALAPPDATA%\kob` (`$XDG_STATE_HOME/kob` or `~/.local/state/kob`) for a
-day: what `kob token issue` declared (decimals, symbol, name) and the key's own recent token outputs, each confirmed on the node,
+day: what `kob token create` declared (decimals, symbol, name) and the key's own recent token outputs, each confirmed on the node,
 which also proves the token's program. Anything the record does not cover (an older token, an output received from someone
 else) needs `--indexer`, and the error says so.
 
@@ -260,7 +260,7 @@ also reports chain reorganisations (a note, and a new read of what is shown).
 ### JSON output (`--json`)
 
 `--json` is a flag of the ten trading commands (`place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `book`,
-`orders`, `balances`). `kob token issue|resume|verify-declaration` have no `--json` (text output; the files `--out-dir`
+`orders`, `balances`). `kob token create|resume|verify-declaration` have no `--json` (text output; the files `--out-dir`
 writes are JSON), and `kob order sweep|cancel` and `kob recover` always print a JSON report. In `kob registry`, `programs`,
 `add-program` and `verify-genesis` take `--json`.
 
@@ -458,7 +458,7 @@ Per family:
   (a refusal includes "no `--yes` and no terminal"; for `kob order` also when a file was `rejected`), when the report could not be written, or on an error such as an unreadable
   file or an unreachable node; 2 for an argument error (`--yes` with `--dry-run` included). An order that is only `skipped` does not make the code 1. `kob recover`
   without `--cancel` is 0 whatever it found.
-* `kob token issue`: 0 on success (or a dry run) and 1 on any error, a bad option and a refusal (no `--yes`, no terminal) included; `resume`: 0 or 1, and 2 with no
+* `kob token create`: 0 on success (or a dry run) and 1 on any error, a bad option and a refusal (no `--yes`, no terminal) included; `resume`: 0 or 1, and 2 with no
   argument; `verify-declaration`: 0 when the proof verifies, 1 when it does not or cannot be read, 2 for a wrong number of arguments.
 * `kob watch`: 0 after Ctrl-C (or when the output pipe closes), 1 for a fatal error (no WebSocket route, every subscription refused, wss://), 2 for an argument error.
 * `kob registry validate`: 0 valid, 1 invalid, 2 usage or an unreadable file; `verify-genesis`: 0 when the registry says exactly
@@ -479,7 +479,7 @@ shapes above until a release says otherwise.
 
 ### Token commands
 
-`kob token issue` creates a fixed-supply KCC-20 token in two transactions (KCC-23): a **preparation** that spends the funding
+`kob token create` creates a fixed-supply KCC-20 token in two transactions (KCC-23): a **preparation** that spends the funding
 into one output of the funding key and declares the token's metadata in its payload, then the **genesis** that spends that
 output, so the covenant id commits to the declaration. Both are signed at once and the genesis is sent right after the
 preparation. Required: `--name`, `--ticker` (2 to 12 of A-Z 0-9), `--decimals` (0 to 18), at least one `--fund-utxo
@@ -487,12 +487,12 @@ TXID:INDEX:AMOUNT:OWNER` (sompi; all of one key; OWNER is a 64-hex x-only key or
 `--holder OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]` (without `--holder` the whole supply goes to the funding key). Optional:
 `--program public-mint|3x3|8x8-prototype|kasparocket-testnet` (default `public-mint`), `--carrier`, `--fee`, `--fee-rate`, `--change-to`,
 `--extension-commitment`, `--allow-borrow`, `--description`, `--image` (or the deprecated `--logo` / `--icon`) with `--image-file` or `--image-hash` (the SHA-256 of the picture, declared as `image_hash`), `--website`, `--x`, `--telegram`, `--out-dir`,
-`--network`, `--node`, `--yes` (or `-y`), `--dry-run` and `--key HEX|env:VAR|file:PATH`. `kob token issue --help` lists them all.
+`--network`, `--node`, `--yes` (or `-y`), `--dry-run` and `--key HEX|env:VAR|file:PATH`. `kob token create --help` lists them all.
 
 * **Program.** The default (`--program public-mint`, since 2026-11-04) issues the `KCC20` actor of upstream's published
   `KCC20PublicMint` app (registry `kcc20-ref-public-mint`, 3 / 3 slots), the de-facto standard that indexers such as kascov.io
   list as a KCC-20 token. The genesis holds only token holders (no `PublicMint`, no `TokenSeed`): nobody can mint more, the supply
-  is fixed like any `kob token issue` supply. `--program 3x3` issues the standalone reference program (`kcc20-ref-3x3`)
+  is fixed like any `kob token create` supply. `--program 3x3` issues the standalone reference program (`kcc20-ref-3x3`)
   instead: a transfer costs less, but other indexers (kascov.io) do not recognise the token, and the plan says so. Measured on
   testnet-10 on 2026-11-04: issuance 0.00415 KAS for both, a 1 -> 1 transfer 0.00901 KAS (public-mint, signature script
   4,218 B) against 0.00678 KAS (3x3, 3,102 B), +33 %. Tokens already issued as 3/3 stay fully tradable.
@@ -511,7 +511,7 @@ TXID:INDEX:AMOUNT:OWNER` (sompi; all of one key; OWNER is a 64-hex x-only key or
   there (visible in `ps` and the shell history); use `env:NAME` or `file:PATH`.
 
 ```sh
-kob token issue --name "Test USD" --ticker TUSD --decimals 6 --supply 1000000000000 \
+kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 1000000000000 \
   --fund-utxo <64 hex txid>:0:5000000000:kaspatest:qq... \
   --network testnet-10 --key file:$HOME/.kob/maker.key --out-dir ./tusd-creation --dry-run
 ```
@@ -520,16 +520,19 @@ The same command without `--dry-run` and with `--node ws://127.0.0.1:18210 --yes
 supply is in base units (here 1,000,000 TUSD at 6 decimals), all to the funding key.
 
 `kob token resume <DIR> [--node ws://HOST:PORT]` sends a creation whose genesis did not go out. `DIR` is the directory
-`kob token issue` wrote (`creation.json`, `preparation_tx.json`, `genesis_tx.json`). Nothing is signed again: the saved, signed
+`kob token create` wrote (`creation.json`, `preparation_tx.json`, `genesis_tx.json`). Nothing is signed again: the saved, signed
 transactions are sent as they are, the preparation first (a node that already has it refuses it, which is tolerated), then the
 genesis. It refuses transactions that are not signed (a dry run without `--key`) or a genesis that does not spend output 0 of the
-preparation. When the genesis fails, `kob token issue` prints this command as the way on.
+preparation. When the genesis fails, `kob token create` prints this command as the way on.
 
 `kob token verify-declaration <launch_proof.json>` checks a KCC-23 launch proof that may come from anyone (an indexer's
-`GET /v1/tokens/<id>/declaration`, a community list, `kob token issue`): it recomputes both transaction ids and the covenant id
+`GET /v1/tokens/<id>/declaration`, a community list, `kob token create`): it recomputes both transaction ids and the covenant id
 and prints the covenant id, the transaction ids, the declaration and its name, symbol and decimals only when the declaration is
 bound to that covenant id (exit 0); otherwise it prints the error on stderr and exits 1.
 
 `kob token` has no help of its own: `kob token --help` (and `kob token` alone) is an unknown command, prints the top-level usage
-on stderr and exits 2. Use `kob token issue --help`, `kob token resume --help` and `kob token verify-declaration --help`; likewise
+on stderr and exits 2. Use `kob token create --help`, `kob token resume --help` and `kob token verify-declaration --help`; likewise
 `kob registry --help` is not a command (`kob registry verify-genesis --help` and `kob registry add-program --help` are).
+
+`kob token issue` is the former name of `kob token create`. It still works, identically, and prints a one-line deprecation note on stderr
+(stdout is unchanged); use `create`.

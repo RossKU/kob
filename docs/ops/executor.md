@@ -1210,7 +1210,7 @@ kob-executor index \
 
 The network is never implied by the reference build: `--network` (or `network` in the file, or `$KOB_NETWORK`) is required
 there, for every command that talks to a node (`index`, `run`, `match`, `keep`, the facilitator's `network`, and `kob order`,
-`kob recover`, `kob token issue`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge` and the views `kob book`, `orders`, `balances` and `kob watch`, which
+`kob recover`, `kob token create`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge` and the views `kob book`, `orders`, `balances` and `kob watch`, which
 also refuse mainnet unless `--network mainnet` is given explicitly). A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
 and refuses another. `--rpc-url` (`rpc_url`; the facilitator's `node`) defaults to the local node's JSON wRPC port of that
 network, `ws://127.0.0.1:18110` on mainnet and `ws://127.0.0.1:18210` on testnet-10 (rusty-kaspa's defaults), never a
@@ -1221,9 +1221,9 @@ that carries a password (`wss://user:pass@host/...`) or an API key (in its path 
 Every flag that takes one has an alternative: `--rpc-url` of `index`, `run`, `match` and `keep` is also `$KOB_NODE_WRPC`
 (and `rpc_url` in the indexer's `--config` file); the indexer's `--node` is also `$KOB_INDEX_NODES` (comma-separated) or
 `[[nodes]]` in that file; the facilitator's `--node` (`kob-executor x402`) is also `$KOB_NODE_WRPC` or `node` in its
-`--config` file (itself also `$KOB_X402_CONFIG`); `--node` of `kob recover`, `kob order`, `kob token issue` and the trading
+`--config` file (itself also `$KOB_X402_CONFIG`); `--node` of `kob recover`, `kob order`, `kob token create` and the trading
 commands is also `$KOB_NODE_WRPC`, their `--indexer` also `$KOB_INDEXER_URL`, and the trading commands (`kob place`, `cancel`, `take`, ...) take their signing key only from a file
-(`--key-file`) or the environment (`$KOB_KEY`) and refuse `--key`; `kob recover`, `kob order` and `kob token issue` also accept `--key HEX|env:NAME|file:PATH`, so a raw hex key given on their command line is visible in the process list and the shell history: use the file or the variable (`crates/kob-cli/README.md`). A flag wins over its variable, the variable over the file. Keep the file readable by the service user
+(`--key-file`) or the environment (`$KOB_KEY`) and refuse `--key`; `kob recover`, `kob order` and `kob token create` also accept `--key HEX|env:NAME|file:PATH`, so a raw hex key given on their command line is visible in the process list and the shell history: use the file or the variable (`crates/kob-cli/README.md`). A flag wins over its variable, the variable over the file. Keep the file readable by the service user
 only and put the variable in a root-owned `EnvironmentFile=` (mode 0600). Logs, error messages, the
 health and metrics routes and `kob recover`'s report show a node as `scheme://host[:port]` only (`/...` marks a removed
 path or query): user name, password, path, query and fragment are never printed.
@@ -1628,7 +1628,7 @@ other row (created rows deleted, spent rows live again).
 
 * **Genesis outputs of a KOB creation are listed; those of an older one and of other issuers are not.** The outputs of an issuance
   transaction have no leader (no transfer's `next_states`): no transaction reveals their state until they are spent, and the spend
-  is the moment they stop being unspent. A genesis built by KOB (the web app's Create token page, `kob token issue`) therefore names
+  is the moment they stop being unspent. A genesis built by KOB (the web app's Create token page, `kob token create`) therefore names
   the states of its outputs in its own payload (`KOBG` | version 1 | count | length-prefixed state spans, `docs/spec/token-metadata.md`
   section 3, `kob_protocol::genesis_states`): the indexer keeps each state whose P2SH under a pinned program is the output's script
   public key (the same proof as every other holding), so the issuer's wallet in any browser, and the CLI, find the issued outputs from

@@ -1,4 +1,4 @@
-// Token issuance ("kob token issue" in the browser): form model, validation and planning over the kob-wasm `issue` export.
+// Token issuance ("kob token create" in the browser): form model, validation and planning over the kob-wasm `issue` export.
 //
 // A creation is TWO transactions under KCC-23 (docs/spec/token-metadata.md): `prep`, the preparation (the wallet's P2PK funding -> output 0,
 // the wallet's own P2PK of exactly the genesis's carriers and fee, + change; its payload declares the token metadata: 0x00 + JSON with name,

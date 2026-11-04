@@ -7,7 +7,7 @@
 //! lost or edited record can hide nothing and add nothing. Entries are per network and owner key, kept for a day, at most
 //! [`MAX_ENTRIES`]. Writing it never fails a command: a transaction that was submitted stays submitted.
 //!
-//! `kob token issue` also keeps what the creation declared (decimals, symbol, name) in `recent-issued-tokens.json`, so that
+//! `kob token create` also keeps what the creation declared (decimals, symbol, name) in `recent-issued-tokens.json`, so that
 //! `kob send` can name a token issued on this machine within the day, and prove its program from the recorded outputs on the
 //! node, without an indexer.
 //!
@@ -238,7 +238,7 @@ pub fn first_order_decimals(network: &str, token: &[u8; 32]) -> Option<u32> {
         .find_map(|e| e.get("decimals").and_then(Value::as_u64).and_then(|d| u32::try_from(d).ok()))
 }
 
-/// What `kob token issue` declared for a token this machine issued (decimals, symbol, name), kept for a day so that `kob send`
+/// What `kob token create` declared for a token this machine issued (decimals, symbol, name), kept for a day so that `kob send`
 /// can name the token without an indexer. The token's program is not kept: the node proves it from the key's own recorded
 /// outputs ([`candidates`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(issued("testnet-10", &TOKEN), Some(facts(2)));
     }
 
-    /// A genesis's own holders (recorded by `kob token issue`, which has no leader whose next states reveal them) are
+    /// A genesis's own holders (recorded by `kob token create`, which has no leader whose next states reveal them) are
     /// candidates of their owner and token on that network only.
     #[test]
     fn recorded_genesis_outputs_are_candidates() {

@@ -484,7 +484,7 @@ fn send_kas_and_tokens() {
     let _ = Path::new(".");
 }
 
-/// `kob send` of a token needs no `--indexer` when this machine's record names the token: the facts `kob token issue` kept
+/// `kob send` of a token needs no `--indexer` when this machine's record names the token: the facts `kob token create` kept
 /// (decimals, symbol) and the key's own recorded outputs, whose program the node proves. Without the record it refuses and
 /// says what is missing.
 #[test]

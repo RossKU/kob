@@ -252,7 +252,7 @@ at 900 MHz SM clock, power-limited at ~37 W); the CPU miner did 2.4-2.7 MH/s on 
   indexer's token UTXOs plus the genesis / pre-run holdings it never saw (while they are in the node's UTXO set) and must persist 3
   rounds. The report shows one market line per token, the transactions that filled several books and pair orders (counterparty split
   route / netting / inventory, trigger modes) and the supply deltas.
-* **KRON test token: not issued by the soak.** KOB's issuance (`kob-protocol::issue`, `kob token issue`, the web issuance) builds KCC-20 only; a KRON token
+* **KRON test token: not issued by the soak.** KOB's issuance (`kob-protocol::issue`, `kob token create`, the web issuance) builds KCC-20 only; a KRON token
   is minted by KRON's own tooling through its minter program, which has no TN10 deployment. A KRON token minted on TN10 is traded by the bots once it is
   listed as an external token with a `trade` block (see "Scenarios"); until then the KRON family stays covered by the executor's KRON twin tests.
 * **Stops arm on a touch.** A conditional order or stop entry arms (or trails) only in a transaction that fills a plain resting ask (bid) of the

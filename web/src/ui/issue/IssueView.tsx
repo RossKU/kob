@@ -1,4 +1,4 @@
-// Token issuance (`kob token issue` in the browser): a fixed-supply KCC-20 token on the KCC-20 reference program, by default the published
+// Token issuance (`kob token create` in the browser): a fixed-supply KCC-20 token on the KCC-20 reference program, by default the published
 // public-mint build `KCC20PublicMint` (3 / 3, no minter) or, chosen under Advanced, the standalone 3 / 3 build `KCC20Ref`. Form -> live validation ->
 // debounced `planIssue` -> summary -> the issuance pre-sign screen (ConfirmSign: the KCC-23 preparation and the genesis, one confirmation) ->
 // tracker + result panel with the registry entry. A creation whose genesis did not go out (data/creations.ts) is offered again at the top.

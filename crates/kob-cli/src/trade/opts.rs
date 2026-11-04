@@ -204,7 +204,7 @@ pub fn would_ask(yes: bool) -> bool {
     !yes && std::io::stdin().is_terminal()
 }
 
-/// [`confirm`] for the commands that keep their own options (`kob token issue`, `kob recover`, `kob order`): the same
+/// [`confirm`] for the commands that keep their own options (`kob token create`, `kob recover`, `kob order`): the same
 /// rule, the same prompt and the same refusal.
 pub fn confirm_with(yes: bool, network: &str, what: &str) -> Result<(), String> {
     if yes {

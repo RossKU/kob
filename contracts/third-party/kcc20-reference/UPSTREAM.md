@@ -90,9 +90,9 @@ app's minter and seed live in the token's covenant family); `kcc20.ag` itself co
 
 ## Both builds on KOB
 
-Since 2026-11-04 KOB issues the published build by default (`kob token issue`, the web app's default program: the de-facto
+Since 2026-11-04 KOB issues the published build by default (`kob token create`, the web app's default program: the de-facto
 standard that kascov.io lists as a KCC-20 token) and offers the standalone 3 / 3 build as the explicit second choice
-(`kob token issue --program 3x3`, the web app's "Standalone 3 / 3" option: a 1 -> 1 transfer costs 0.00678 KAS against 0.00901
+(`kob token create --program 3x3`, the web app's "Standalone 3 / 3" option: a 1 -> 1 transfer costs 0.00678 KAS against 0.00901
 KAS, measured on testnet-10 on 2026-11-04, but other indexers do not recognise it); it trades tokens of both builds. The context field is constant: in
 every UTXO of the published build it is the program's own Sil template hash (`9703112e...`), and the 112 bytes after
 it are the standalone state byte for byte. So KOB pins the published build as its KCC-1 actor-type handle, the view
@@ -103,7 +103,7 @@ Sil suffix (3,885 B), template hash `734850b0af0aeef49f009167bf9ddd238fd8c5cdbe2
 (`tokenTplHash`, `tplPrefixLen`, `tplSuffixLen`) and read the state at fixed offsets inside the 112 bytes, so they custody,
 fill and rebuild such tokens unchanged; a holder with any other context value is another template to them. Evidence:
 `crates/kob-tests/tests/kcc20_public_mint_tests.rs` and `registry_tests.rs` (the handle cut equals upstream's).
-`kob token issue --program public-mint` issues a fixed-supply token of the published build (a genesis of `KCC20`
+`kob token create --program public-mint` issues a fixed-supply token of the published build (a genesis of `KCC20`
 holders, no `PublicMint`, no `TokenSeed`).
 
 A token issued the way upstream recommends (a genesis of one `PublicMint` and `TokenSeed` seeds, with or without

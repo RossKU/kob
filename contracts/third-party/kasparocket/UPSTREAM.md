@@ -78,7 +78,7 @@ Every transaction was accepted.
 
 | Step | Command | Transaction |
 |---|---|---|
-| Genesis of KOBKR (1,000,000.000, 3 decimals, one holder: the issuing key), covenant `9983ad3b4ebdc6be73ca7c44f52e356d6579a53a29f9cc88d7b1fa0a2e99ff93` | `kob token issue --program kasparocket-testnet --network testnet-10` | `cc72831da9adef2c9e7bb5ba0eee9bd2ca143a6f6581f89e722d210cccc3f65c` |
+| Genesis of KOBKR (1,000,000.000, 3 decimals, one holder: the issuing key), covenant `9983ad3b4ebdc6be73ca7c44f52e356d6579a53a29f9cc88d7b1fa0a2e99ff93` | `kob token create --program kasparocket-testnet --network testnet-10` | `cc72831da9adef2c9e7bb5ba0eee9bd2ca143a6f6581f89e722d210cccc3f65c` |
 | 100 KAS to the second key | `kob send KAS` | `41f32f5854d3e683be3a546d07dc4bf23facccf2cc83f293da086c325e6ab8c9` |
 | Plain transfer: 1,000 KOBKR to the second key (the genesis output, a scheme-0 leader with its signature) | `kob send KOBKR` | `69d25b8c8c58e89b454a8fe87b121ddb325fbaebbbce6d79c1dfa48c390cc8ad` |
 | `KobAsk` placed: 1,000 KOBKR at 0.05 KAS, minimum fill 100 (order `131c2c8c7aa45277e59fd7b5893b25c31a52073058a5a787d828f4f62eb9a874`) | `kob place limit --side sell` | `99ba137823dc22ef6486fa36bc90b4510739e1fcadfca4dc1b80597667b647a0` |

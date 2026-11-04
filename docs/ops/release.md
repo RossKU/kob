@@ -36,7 +36,7 @@ for testnet-10 and mainnet.
    (`crates/kob-tests/vectors`, `docs/spec/kcc-conformance.md`); the KCC-20 programs other than the two below stay
    `pending-review` (not supported for trading). The reference 3/3 (`kcc20-ref-3x3`, issued only when named since 2026-11-04) is `reviewed` by internal
    review only (maintainer decision 2026-10-12, canary launch), and so is the reference's published public-mint build
-   (`kcc20-ref-public-mint`, maintainer decision 2026-10-13, the same permissionless KCC-20 policy), which `kob token issue`
+   (`kcc20-ref-public-mint`, maintainer decision 2026-10-13, the same permissionless KCC-20 policy), which `kob token create`
    and the web app issue by default since 2026-11-04.
 3. Internal review: no open high or critical finding.
 4. The TN10 soak completed by the operator, including the incident, `recover` and backup / restore drills
@@ -51,10 +51,10 @@ logos, warnings written by people) belongs to external community token lists (`r
 KOB's"). At launch:
 
 * **Supported programs (the program allowlist):** the two KRON programs (`kron-2433`, `kron-2732`), reviewed with
-  conditions, and the reference KCC-20 3/3 (`kcc20-ref-3x3`, issued by `kob token issue --program 3x3` only),
+  conditions, and the reference KCC-20 3/3 (`kcc20-ref-3x3`, issued by `kob token create --program 3x3` only),
   reviewed internally (maintainer decision 2026-10-12): every token of these programs is tradable, with a registry entry
   or without one (issuance is permissionless; there is no listing step for any token). The reference's published
-  public-mint build (`kcc20-ref-public-mint`, the program `kob token issue` and the web app issue by default since
+  public-mint build (`kcc20-ref-public-mint`, the program `kob token create` and the web app issue by default since
   2026-11-04, and the program of third-party launchpads such as Kasseal) is reviewed internally too (maintainer decision
   2026-10-13) and supported (why it is the default: it is the de-facto standard that kascov.io lists as a KCC-20 token, and
   the standalone 3/3 is used only by KOB; a 1 -> 1 transfer costs 0.00901 KAS against 0.00678 KAS for the 3/3, measured on

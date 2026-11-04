@@ -1,4 +1,4 @@
-//! Token issuance for the wasm surface: the `kob token issue` flow as two `BuiltTx`, and the KCC-23 readers.
+//! Token issuance for the wasm surface: the `kob token create` flow as two `BuiltTx`, and the KCC-23 readers.
 //!
 //! A creation is two transactions under KCC-23 (`kob_protocol::issue::build_creation`): `prep`, the preparation (the wallet's
 //! P2PK funding -> output 0, the wallet's own P2PK of exactly the genesis's carriers and fee, + change; payload = `0x00` + the

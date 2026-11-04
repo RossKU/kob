@@ -681,7 +681,7 @@ pub fn resolve_with(
             return Err(format!("`{key}`: its token program {} exists on {} only", program.name(), p.networks.join(", ")));
         }
     }
-    // an all-zero commitment is a commitment (the standard fixed-supply class: every token `kob token issue` makes), not a
+    // an all-zero commitment is a commitment (the standard fixed-supply class: every token `kob token create` makes), not a
     // missing one; a KRON token has none, whatever a source says
     let ext = if program.family() == Family::Kron {
         None
