@@ -603,7 +603,7 @@ mod tests {
 
     fn cfg(args: &[&str]) -> IndexerConfig {
         // the build's own network (a deployment build refuses another one)
-        let mut v = vec!["kob-executor", "--network", kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10")];
+        let mut v = vec!["kobd", "--network", kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10")];
         v.extend_from_slice(args);
         build_config(&T::parse_from(v).opts).unwrap()
     }

@@ -82,7 +82,7 @@ enum Cmd {
     Withdraw(WithdrawArgs),
 }
 
-/// The entry point of the `kobd` binary (and of its temporary alias `kob-executor`).
+/// The entry point of the `kobd` binary.
 pub fn main() -> ExitCode {
     let argv: Vec<OsString> = std::env::args_os().collect();
     // a double click: no arguments, a console a person reads

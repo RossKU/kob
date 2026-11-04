@@ -16,11 +16,6 @@ path = "src/lib.rs"
 name = "kobd"
 path = "src/main.rs"
 
-# the old name of kobd, until the workflows that build it by that name are moved (src/bin/kob-executor.rs)
-[[bin]]
-name = "kob-executor"
-path = "src/bin/kob-executor.rs"
-
 [dependencies]
 kob-protocol = { path = "../kob-protocol" }
 kob-x402 = { path = "../kob-x402" }

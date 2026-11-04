@@ -285,7 +285,7 @@ StartLimitIntervalSec=0
 
 [Service]
 WorkingDirectory=/opt/kob
-ExecStart=/opt/kob/kob-executor run --config kob-executor.toml --pause-file kob-data/pause
+ExecStart=/opt/kob/kobd run --config kob-executor.toml --pause-file kob-data/pause
 LoadCredential=kob-operator-key:/opt/kob/kob-operator.key
 User=kob
 Restart=always
