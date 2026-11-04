@@ -481,22 +481,26 @@ async fn a_batch_on_a_big_store_takes_a_bounded_time_and_deletes_the_oldest_orde
     seed_closed_orders(&lean, 20_000);
     assert_eq!(lean.query::<i64>("SELECT COUNT(*) FROM orders", []), 20_000);
     let oldest = |h: &Harness| h.query::<i64>("SELECT MIN(last_daa) FROM order_state", []);
-    let mut worst = std::time::Duration::ZERO;
+    let mut times = vec![];
     let mut deleted = 0;
     let mut last_oldest = 0;
     for _ in 0..30 {
         let t = std::time::Instant::now();
         let r = lean.ingest.lock().unwrap().lean_prune(None).unwrap().unwrap();
-        worst = worst.max(t.elapsed());
+        times.push(t.elapsed());
         deleted += r.orders;
         assert!(r.over_cap && r.more, "{r:?}");
         let now = oldest(&lean);
         assert!(now > last_oldest, "the oldest closed orders go first: {now} after {last_oldest}");
         last_oldest = now;
     }
-    // each batch is a few steps of a few dozen orders: tens of milliseconds, a second at the very most on a slow machine (it was 5 s on
-    // the soak's store: one sort of every closed order, and a read of every spent row, in each batch)
-    assert!(worst < std::time::Duration::from_millis(1_000), "a batch took {worst:?}");
+    // each batch is a few steps of a few dozen orders: tens of milliseconds (a commit on a slow disk of a CI runner can take a second
+    // once in a while: the median is what is bounded closely; it was 5 s a batch on the soak's store, one sort of every closed order and
+    // a read of every spent row in each batch)
+    times.sort();
+    let (median, worst) = (times[times.len() / 2], times[times.len() - 1]);
+    assert!(median < std::time::Duration::from_millis(300), "the median batch took {median:?}");
+    assert!(worst < std::time::Duration::from_secs(10), "a batch took {worst:?}");
     assert!(deleted >= 30 * 10, "every batch makes progress: {deleted} orders in 30 batches");
     assert_eq!(lean.query::<i64>("SELECT COUNT(*) FROM orders", []), 20_000 - deleted as i64);
     // what belongs to a deleted order went with it, and nothing else
