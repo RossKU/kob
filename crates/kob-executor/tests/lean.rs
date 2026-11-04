@@ -33,11 +33,12 @@ fn harness_with(node: &std::sync::Arc<MockNode>, path: &Path, lean: Option<(u64,
         reorg_window_daa: WINDOW,
         checkpoint_daa: u64::MAX / 4,
         lean: lean.map(|(retention_daa, max_db_bytes)| LeanConfig {
-            retention_daa,
-            max_db_bytes,
             orders_per_batch: 7,
             rows_per_batch: 40,
             pages_per_batch: 50,
+            // (the batches of these tests are small: the time budget never ends one)
+            budget: std::time::Duration::from_secs(60),
+            ..LeanConfig::new(retention_daa, max_db_bytes)
         }),
         ..IngestConfig::default()
     };
@@ -433,4 +434,129 @@ async fn a_lean_indexer_prunes_by_itself_and_keeps_no_record_log() {
     assert_eq!(left, cov3.0.to_vec(), "the open order is the one that stays");
     assert!(idx.health.snapshot().metrics_text().contains("kob_indexer_lean_orders_pruned_total 2"));
     running.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// A big store: a batch costs a bounded time, and the follower catches up before it prunes (the lean conversion of the soak's executor
+// B: its store of 1.19 million orders was over the 500 MB cap, every batch took 5 s, and the follower, which ran one batch after each
+// of its steps, fell behind and stayed there).
+
+/// `n` closed orders, each with two events and two spent UTXOs, in the shape of the soak's stores, by set-based SQL. Order `i` was last
+/// touched at DAA `i` in block 0, so the oldest are the lowest.
+fn seed_closed_orders(h: &Harness, n: i64) {
+    let g = h.ingest.lock().unwrap();
+    g.conn()
+        .execute_batch(&format!(
+            "INSERT OR IGNORE INTO ids (h) VALUES (zeroblob(32)); \
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {n}) \
+             INSERT INTO orders (covenant_id, contract, template_id, family, side, in_book, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, listed, origin) \
+                 SELECT CAST(printf('c%031d', i) AS BLOB), 'KobAsk', (SELECT id FROM ids WHERE h = zeroblob(32)), 1, 1, 1, zeroblob(8), CAST(printf('t%031d', i) AS BLOB), 0, 0, 0, 0, 'chain' FROM n; \
+             INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, state_known, last_block, last_daa) \
+                 SELECT id, 'filled', 0, 0, 1, 1, 0, id FROM orders; \
+             INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, closes) \
+                 SELECT id, 1, 0, 0, zeroblob(32), k, CASE k WHEN 0 THEN 'create' ELSE 'fill' END, 0 FROM orders, (SELECT 0 AS k UNION SELECT 1); \
+             INSERT INTO order_utxos (txid, idx, order_id, value, spk, created_block, created_daa, spent_block) \
+                 SELECT CAST(printf('u%031d', id) AS BLOB), k, id, 1, zeroblob(4), 0, 0, 0 FROM orders, (SELECT 0 AS k UNION SELECT 1);"
+        ))
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_batch_on_a_big_store_takes_a_bounded_time_and_deletes_the_oldest_orders_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    node.push_empty(4 * WINDOW as usize);
+    let lean = {
+        let conn = open_writer_with(&dir.path().join("lean.sqlite3"), "testnet-10", true).unwrap();
+        let cfg = IngestConfig {
+            reorg_window_daa: WINDOW,
+            checkpoint_daa: u64::MAX / 4,
+            // the defaults of a real executor: 30 s of retention is nothing here, the size cap is below the store
+            lean: Some(LeanConfig::new(RETENTION, 1)),
+            ..IngestConfig::default()
+        };
+        Harness::with_node(node.clone(), conn, None, cfg)
+    };
+    lean.sync().await;
+    seed_closed_orders(&lean, 20_000);
+    assert_eq!(lean.query::<i64>("SELECT COUNT(*) FROM orders", []), 20_000);
+    let oldest = |h: &Harness| h.query::<i64>("SELECT MIN(last_daa) FROM order_state", []);
+    let mut worst = std::time::Duration::ZERO;
+    let mut deleted = 0;
+    let mut last_oldest = 0;
+    for _ in 0..30 {
+        let t = std::time::Instant::now();
+        let r = lean.ingest.lock().unwrap().lean_prune(None).unwrap().unwrap();
+        worst = worst.max(t.elapsed());
+        deleted += r.orders;
+        assert!(r.over_cap && r.more, "{r:?}");
+        let now = oldest(&lean);
+        assert!(now > last_oldest, "the oldest closed orders go first: {now} after {last_oldest}");
+        last_oldest = now;
+    }
+    // each batch is a few steps of a few dozen orders: tens of milliseconds, a second at the very most on a slow machine (it was 5 s on
+    // the soak's store: one sort of every closed order, and a read of every spent row, in each batch)
+    assert!(worst < std::time::Duration::from_millis(1_000), "a batch took {worst:?}");
+    assert!(deleted >= 30 * 10, "every batch makes progress: {deleted} orders in 30 batches");
+    assert_eq!(lean.query::<i64>("SELECT COUNT(*) FROM orders", []), 20_000 - deleted as i64);
+    // what belongs to a deleted order went with it, and nothing else
+    let orphans: i64 = lean.query(
+        "SELECT (SELECT COUNT(*) FROM order_events WHERE order_id NOT IN (SELECT id FROM orders)) + \
+                (SELECT COUNT(*) FROM order_utxos WHERE order_id NOT IN (SELECT id FROM orders))",
+        [],
+    );
+    assert_eq!(orphans, 0);
+    let events: i64 = lean.query("SELECT COUNT(*) FROM order_events", []);
+    assert_eq!(events, 2 * (20_000 - deleted as i64));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lean_follower_far_behind_the_node_catches_up_before_it_prunes() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    node.push_empty(2 * WINDOW as usize);
+    let conn = open_writer_with(&dir.path().join("lean.sqlite3"), "testnet-10", true).unwrap();
+    let cfg = IngestConfig {
+        reorg_window_daa: WINDOW,
+        checkpoint_daa: u64::MAX / 4,
+        lean: Some(LeanConfig::new(RETENTION, 1)),
+        ..IngestConfig::default()
+    };
+    let hs = Harness::with_node(node.clone(), conn, None, cfg);
+    hs.sync().await;
+    seed_closed_orders(&hs, 4_000);
+    // the node moves far ahead of the store (more than the follower tolerates before it prunes) in one go
+    let behind = 1_500;
+    node.push_empty(behind);
+    let tip = node.tip_daa();
+    let (stop, rx) = tokio::sync::watch::channel(false);
+    let health = hs.health.clone();
+    let observer = tokio::spawn(async move {
+        let (mut pruned_while_behind, mut caught_up_at, mut pruned_after) = (0u64, None, 0u64);
+        for _ in 0..4_000 {
+            let h = health.snapshot();
+            let lag = h.lag_daa().unwrap_or(u64::MAX);
+            // (a margin over the follower's own limit: the numbers are read between its steps)
+            if lag > 700 {
+                pruned_while_behind = pruned_while_behind.max(h.lean_orders_pruned_total);
+            }
+            if lag == 0 && h.cursor_daa >= tip {
+                caught_up_at.get_or_insert(std::time::Instant::now());
+            }
+            pruned_after = h.lean_orders_pruned_total;
+            if caught_up_at.is_some() && pruned_after > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let _ = stop.send(true);
+        (pruned_while_behind, caught_up_at.is_some(), pruned_after)
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(30), hs.follower.run(rx))
+        .await
+        .expect("the follower runs until it is stopped");
+    let (while_behind, caught_up, after) = observer.await.unwrap();
+    assert!(caught_up, "the follower reached the tip");
+    assert_eq!(while_behind, 0, "nothing was pruned while the store was far behind the node");
+    assert!(after > 0, "it prunes once it follows");
 }

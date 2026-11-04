@@ -107,6 +107,10 @@ pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Conn
     }
     conn.execute_batch(SCHEMA_SQL)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    if lean {
+        // the indexes only the pruning reads (a few seconds once, on a store of a million orders)
+        super::lean::ensure_indexes(&conn)?;
+    }
     migrate(&conn)?;
     init_meta(&conn, network)?;
     super::candles::configure(&conn, lean)?;

@@ -224,19 +224,35 @@ indexer. Default off; `kobd setup` and the Android app write it for the Executor
   (tiny), the health counters. The matcher, the keepers and the maintenance jobs read nothing else: the book is the live set
   (`order_state` open / partial, `indexer::book`), the operator's unspent holdings, the possibly-frozen flags; trigger
   evidence is read from the transaction being planned, not from stored fills.
-* **Deleted**, in a batch at most every 30 s (every 0.5 s while a batch hit its limits), each one write transaction of a few
-  tens of milliseconds in the follower's own loop: closed orders (filled, cancelled, refunded, killed) whose last event is older
-  than the retention (at the node's position) and than the reorg window (at the cursor) and final (in a block out of the
-  window), with their events, amends, UTXOs, custody and strays, flags and pair fills (500 orders per batch); spent order,
-  token and holding rows past the same cut-offs (5,000 per table per batch); pair fills and rejects past them. The batch
-  size is the same during a backfill, so a fast start's full store stays small while it indexes the history.
+* **Deleted**, in a batch at most every 30 s (while a batch left work, after a pause of twice its time, at least 0.1 s), in the
+  follower's own loop and **only while the store follows the node** (within `LEAN_MAX_LAG_DAA` = 600 DAA, a minute, of it): a store
+  that is further behind, a big one converted to lean included, catches up first with every step of the follower going to the
+  chain, and shrinks afterwards. A batch is one write transaction of small steps (10 closed orders with all their rows, 50 rows of
+  each table pruned by age) that stops once 12 ms of work have passed, so with its commit it costs 20 to 150 ms whatever the
+  size of the store (the commit writes the pages the deletes touched: about 1 ms an order): closed orders (filled, cancelled,
+  refunded, killed) whose last event is older than the retention (at the node's position) and than the reorg window (at the
+  cursor) and final (in a block out of the window), with their events, amends, UTXOs, custody and strays, flags and pair fills
+  (500 orders per batch at most); spent order, token and holding rows past the same cut-offs (5,000 per table per batch at most);
+  pair fills and rejects past them. Indexes only the pruning reads are built at the first lean start
+  (`order_state_closed_daa`, `*_spent_daa`, `order_amends_order`, `pair_fills_order`, `pair_fills_daa`: seconds on a store of a million
+  orders): without them every batch sorted all the closed orders or read every spent row.
 * **The size cap** (`lean_max_db_mb`) acts only while the pages in use exceed it: then the OLDEST closed orders (with their
   fills and events) go first, retention or not, in the same batches, until the store is under the cap. It never touches the
   live book or the reorg window: a store whose live book alone exceeds the cap stays as it is. Unspent token holdings of key
   owners are live data and stay (the operator's own are read by the maintenance jobs).
 * **The record log is off** (`records.enabled` is forced to false: the log is an archive's rebuild source), and the file
   shrinks: a new store is created with `auto_vacuum = INCREMENTAL` (an older one is rewritten once with `VACUUM` at the first
-  lean start, which needs the free space of its own size), and each batch hands up to 2,000 freed pages back.
+  lean start, which needs the free space of its own size), and each batch hands up to 2,000 freed pages back (in steps of 64, while its
+  time lasts).
+* **Converting a big store.** The soak's executor B after `index migrate` (3.2 GB, 1.19 million orders, a 500 MB cap): the first lean
+  start rewrites the file once (about a minute) and builds the pruning indexes (seconds); the follower then catches up at the
+  speed of a store that is not lean (about 110 DAA/s over the public pair on this store; the same build without `--lean` 108, the
+  build before schema 9 on the schema-5 store 101) and prunes from the moment it is within a minute of the node, 21,840 batches of
+  a median 33 ms (p99 119 ms, longest 153 ms; 1,334 s of work, 75 minutes with the pauses) that delete all 1.17 million
+  closed orders (the retention alone, with no cap, on the same store: 690 batches, median 25 ms, longest 184 ms, 44,000 orders older than 30 days): the file ends at about 1.06 GB, not 500 MB, because the rows the retention keeps (30 days of spent UTXOs and holdings,
+  the live book) are more than the cap: a store whose retained data exceeds the cap stays as it is. Before this, every batch took
+  6 s on that store (a sort of every closed order, and a read of every spent row, in each of them) and the follower, which ran a
+  batch after each step, caught up at 20 to 30 DAA/s and stayed behind the node for hours.
 * **The read API serves the live book and the retention window**: `GET /v1/orders/{id}` of an order closed longer ago (or
   deleted by the cap) is 404,
   candles, statistics and trades cover the window, `GET /v1/health` has `lean: true` (and the metrics

@@ -163,8 +163,11 @@ pub struct Follower<S: ChainSource> {
 }
 
 /// Lean storage: pause between batches while one hit its limits (more to delete), and when the last one found nothing more.
-const LEAN_BUSY_EVERY: Duration = Duration::from_millis(500);
+const LEAN_BUSY_EVERY: Duration = Duration::from_millis(100);
 const LEAN_IDLE_EVERY: Duration = Duration::from_secs(30);
+/// Lean storage prunes only while the store follows the node: behind it by more than this many DAA (a minute at 10 blocks a second) it
+/// catches up first, with every step of the follower going to the chain, and the pruning waits.
+const LEAN_MAX_LAG_DAA: u64 = 600;
 
 /// A step failure that is routine and not worth a warning: the two nodes' tips differing for a moment, until it repeats as
 /// often as it takes to replace a node (`attempt` failures in a row).
@@ -228,7 +231,13 @@ impl<S: ChainSource> Follower<S> {
         if !due {
             return;
         }
-        let node_daa = self.health.snapshot().node_daa;
+        let snap = self.health.snapshot();
+        if snap.lag_daa().is_some_and(|lag| lag > LEAN_MAX_LAG_DAA) {
+            *self.lean_next.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + LEAN_BUSY_EVERY);
+            return;
+        }
+        let node_daa = snap.node_daa;
+        let began = std::time::Instant::now();
         let next = match self.blocking(move |i| i.lean_prune(node_daa)).await {
             Ok(Some(rep)) => {
                 if rep.rows > 0 || rep.pages > 0 {
@@ -239,7 +248,8 @@ impl<S: ChainSource> Follower<S> {
                     });
                 }
                 if rep.more {
-                    LEAN_BUSY_EVERY
+                    // a pause of twice the batch (a third of the thread at most), and at least the base pause
+                    LEAN_BUSY_EVERY.max(began.elapsed() * 2)
                 } else {
                     LEAN_IDLE_EVERY
                 }
