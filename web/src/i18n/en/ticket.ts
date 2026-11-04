@@ -285,7 +285,7 @@ export default {
   'ticket.fills.shortOneTx': 'One transaction takes at most {perTx} {counterparty}: only about {fillable} of {amount} fills now, the rest returns.',
   'ticket.fills.raise': 'Raise Fills (Advanced) to trade more.',
   'ticket.ph.keeperTip': 'default',
-  'ticket.ph.carrier': '2',
+  'ticket.ph.carrier': '1',
   'ticket.ph.minFill': 'default',
   'ticket.ph.prefund': 'automatic',
   'ticket.ph.repeat.count': 'unlimited (90 days)',

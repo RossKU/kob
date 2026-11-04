@@ -35,7 +35,7 @@ registry changes happen only in a release (`docs/ops/release.md`, 3).
 * **`templates` is the program allowlist.** Only token programs marked `review_status: reviewed` are supported for trading by this build:
   the engineering review of the program is done (owner types, no admin path, conservation, limits, the order suites on its holders)
   and the build embeds it. This is a statement about a token PROGRAM, never about a token. In the shipped `tokens.json` five programs
-  have that state: the two KRON programs, after an internal review with conditions, the reference KCC-20 3/3, KOB's standard program,
+  have that state: the two KRON programs, after an internal review with conditions, the reference KCC-20 3/3 (KOB's issuance until 2026-11-03, now issued only when named),
   by internal review (maintainer decision 2026-10-12), the reference's published public-mint build, by internal review (maintainer
   decision 2026-10-13), and KaspaRocket's 10 / 10 build of it, by internal review (maintainer decision 2026-10-27). No independent audit has been done; the other KCC-20 programs (the 8/8 prototype, KaspaCom's KCC20 0.2.5) are
   `pending-review`: they are template entries too, but no token of them trades until this build supports them. Because the token list

@@ -188,7 +188,7 @@ export async function snapshotTracker(rc, tokenFile) {
 
 // ------------------------------------------------------------------------------------------------ issuance
 
-/** Issues a fixed-supply token of KOB's standard 3 / 3 program (the issuance screen's default) to the wallet. Returns its description. */
+/** Issues a fixed-supply token of the issuance screen's default program (the published public-mint build, 3 / 3 slots) to the wallet. Returns its description. */
 async function issueOne(rc, r, which) {
   const { h } = rc;
   const t0 = Date.now();

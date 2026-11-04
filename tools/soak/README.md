@@ -1,7 +1,7 @@
 # KOB TN10 soak
 
-A live testnet-10 market that looks and behaves like a real one. Three test KCC-20 tokens of KOB's standard program (`KCC20Ref`:
-the reference with 3 token inputs / 3 token outputs per transaction; fixed supply, 8 decimals): **TUSD**, whose KAS price follows
+A live testnet-10 market that looks and behaves like a real one. Three test KCC-20 tokens of the standalone 3 / 3 reference program (`KCC20Ref`, issued by name with `program: '3x3'` since the default issuance became the published public-mint build:
+3 token inputs / 3 token outputs per transaction; fixed supply, 8 decimals): **TUSD**, whose KAS price follows
 **Binance KAS/USDT** (1 TUSD ≈ 1 USD worth of KAS), **TETH** and **TBTC** (1 ≈ 1 ETH / 1 BTC worth of KAS, Binance ETH/USDT and
 BTC/USDT over KAS/USDT), each with its own KAS book, and the TETH/TUSD and TBTC/TUSD pairs. A market maker quotes every KAS book,
 five traders place every KOB order type in the KAS books and as pair orders, a payer makes x402 payments (KAS, KCC-20,

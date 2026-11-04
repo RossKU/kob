@@ -95,7 +95,7 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
   signature. Stopping keeps the levels already placed ("Stopped: N of M levels placed"); nothing is batched and a half-placed ladder is not
   remembered across a reload, so the rest has to be placed again by hand (the placed ones are in My orders). With the private-key signer every
   level has its own Approve.
-* **Fills of an order that takes liquidity.** One transaction takes at most the token's input slots of asks (3 on KOB's standard program; a
+* **Fills of an order that takes liquidity.** One transaction takes at most the token's input slots of asks (3 on KOB's default token program; a
   sell at most its output slots of bids, one less while it leaves a rest), so a large market buy against many small asks fills only part in
   one transaction. A market order has a Fills box (Advanced; both sides of a KAS market, not with all-or-nothing, not on a pair: pair market
   orders stay one transaction): 1 (default) is the one IOC transaction as before; N > 1 places the same auction (start, bound, slope,
@@ -177,7 +177,7 @@ in the registry) shows the pair book, the panels of a token market and the order
   kind `sweep`) re-check the record (`src/kob/sweep.ts`, as `verify_sweep`) and blocks another script, a record that does not verify, the swept
   order's custody being spent or any token to another key. A cancel that would abandon strays (more than one transaction can move) offers "Sweep
   first". Cancels return foreign strays too. The placement record stays and points at the continuation.
-* **Merge tokens.** A token whose free UTXOs exceed what one transaction can spend (`TOKEN_UTXOS_FRAGMENTED`; KOB's standard program takes 3)
+* **Merge tokens.** A token whose free UTXOs exceed what one transaction can spend (`TOKEN_UTXOS_FRAGMENTED`; KOB's default token program takes 3)
   gets "Merge (n)" in My orders > Balances (`src/kob/merge.ts`). One click = ONE transfer to the wallet itself of its smallest UTXOs, up to the
   program's token inputs (3 -> 1), for a wallet and the private-key signer alike: a merge is manual and costs a fee, so the user decides each
   transaction and clicks again to merge more; nothing merges automatically (`planMerge` can still build a chain of links, `maxLinks`; the app

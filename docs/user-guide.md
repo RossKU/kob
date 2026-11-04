@@ -199,7 +199,7 @@ hold, for example one that was just filled or one an indexer made up, is left ou
 ticket then notes "... order(s) the indexer lists on the ask side are not on the node as listed ...". You do nothing: there is nothing to
 tick, and when everything matches nothing is shown. If the node cannot be asked, the order is not placed ("Node not answering").
 
-One transaction takes at most as many counterparties as the token program has token input slots (3 on KOB's standard program), so a
+One transaction takes at most as many counterparties as the token program has token input slots (3 on KOB's default token program), so a
 large market order against many small orders can fill only in part. Under Advanced, **Fills (transactions)** lets a market order
 keep trading across several transactions for its short life (default 1). The ticket shows how many fills the visible book needs.
 
@@ -258,7 +258,7 @@ armed or triggered, expiry soon, refunds. They are worked out in this browser wh
 
 ## 8. Merge token UTXOs
 
-Your tokens sit in token UTXOs (outputs). One transaction can spend only a few of them (3 on KOB's standard program). After many
+Your tokens sit in token UTXOs (outputs). One transaction can spend only a few of them (3 on KOB's default token program). After many
 small buys you may hold more, and a sell then fails with "Your tokens are in too many UTXOs (at most 3 per transaction): merge them
 first (My orders, Balances)."
 

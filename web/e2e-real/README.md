@@ -2,7 +2,7 @@
 
 Drives the built KOB web app with the REAL released wallet extensions (KasWare 0.10.0, Kaspire 0.5.1, Kastle 2.61.0, pinned in
 `tools/wallet-gate/lib/extension-pins.mjs`) against a testnet-10 node of your own (`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`; `NODE_WS` in
-`.env` overrides it) and proves, per wallet: issue a token of KOB's standard 3 / 3 program, place and cancel the main order types, amend an order,
+`.env` overrides it) and proves, per wallet: issue a token of the default program (the published public-mint build, 3 / 3 slots), place and cancel the main order types, amend an order,
 merge the token's UTXOs and read My orders / Balances, with every accepted transaction checked on the node independently of the app.
 Test money only. On demand only: CI never runs it (it needs extensions, funded keys and a node; `.github/workflows/ci.yml` says so).
 
@@ -100,8 +100,8 @@ At the end of each wallet, any order still live is cancelled (best effort, recor
 ## What changed against the 2026-09-29 run (port to the current UI and protocol)
 
 The previous scenarios typed lots (`order-lots`, removed: amounts are whole tokens in `order-amount`), relied on the old ticket fields, issued
-a token without choosing the program (the issuance now offers the standard 3 / 3 program and the public-mint build; the run asserts the
-standard one and its registry entry), marked the test registry `verified` for a badge the UI no longer has, stopped at the old confirmation screen
+a token without choosing the program (the issuance now offers the public-mint build by default and the standalone 3 / 3 program under Advanced; the run asserts the
+public-mint one and its registry entry), marked the test registry `verified` for a badge the UI no longer has, stopped at the old confirmation screen
 (no plan / fresh-warning acknowledgements, no decoded kind), cancelled through a single dialog (cancels now run in a My orders transaction flow,
 `tx-flow` / `flow-done`), had no amend, IOC, stop, pair, market, merge or Balances steps, read only KasWare / Kaspire, and the node checker read
 outpoints only in the wRPC form. All of that is replaced; Kastle is a third wallet (the app's optional `features.kastle`, switched on by the run).
