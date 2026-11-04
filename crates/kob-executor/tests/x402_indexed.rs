@@ -57,9 +57,16 @@ async fn settlement_finality_and_reorgs_come_from_the_indexers_acceptance_tracki
     assert_eq!(view.tracked(&txid), Tracked::NotAccepted, "tracked from before the broadcast");
 
     // the node accepts it and the merchant spends the output at once: the UTXO observation alone
-    // never sees the settlement as accepted
+    // never sees the settlement as accepted. The settle thread polls the chain every few milliseconds, and the facilitator reads an
+    // accepted transaction from any of its outputs in the UTXO set: the node is unreachable for it while the test mines the block and
+    // spends every output, so that no poll can see the transaction accepted before the indexer's follower does (the test was racy: a
+    // poll between `mine` and the spends, or in the milliseconds before the follower's block, settled it at the node's score)
+    chain.set_unavailable(true);
     chain.mine(1);
-    chain.spend_externally(&merchant_out);
+    for i in 0..tx.outputs.len() {
+        chain.spend_externally(&Outpoint::new(txid, i as u32));
+    }
+    chain.set_unavailable(false);
     assert_eq!(chain.output_status(&merchant_out, &merchant_spk).unwrap(), OutputStatus::Unknown);
 
     // the indexer's follower sees the accepting chain block
