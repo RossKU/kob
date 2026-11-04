@@ -96,8 +96,9 @@ pub struct HealthSnapshot {
     /// Closed orders and rows deleted by the lean pruning since the start.
     pub lean_orders_pruned_total: u64,
     pub lean_rows_pruned_total: u64,
-    /// What this process does: `index` (the store and its read API; every process has it), and `match` / `keep` when the
-    /// matcher / the keepers of `kob-executor run` work on this store. `lean` says whether the history is kept.
+    /// What this process does: `executor` (the matcher and the keepers of `kob-executor run` work on this store) and/or
+    /// `indexer` (the store keeps the history and this API serves it; a lean store makes the process the Executor alone).
+    /// `kob-executor index` is `["indexer"]`.
     pub roles: Vec<&'static str>,
     /// The fast start's backfill: the full store's progress (absent once the book is complete).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -267,7 +268,7 @@ impl HealthSnapshot {
             lean: false,
             lean_orders_pruned_total: 0,
             lean_rows_pruned_total: 0,
-            roles: vec!["index"],
+            roles: vec!["indexer"],
             backfill: None,
             gaps: vec![],
         }
@@ -443,13 +444,13 @@ impl HealthSnapshot {
             });
         }
         s.push_str(
-            "# HELP kob_executor_role 1 for each role this process runs: index (the store and its read API), match, keep.
-# TYPE kob_executor_role gauge
+            "# HELP kob_role 1 for each role this process runs: executor (matcher and keepers), indexer (the full history and the read API).
+# TYPE kob_role gauge
 ",
         );
-        for role in ["index", "match", "keep"] {
+        for role in ["executor", "indexer"] {
             s.push_str(&format!(
-                "kob_executor_role{{role=\"{role}\"}} {}
+                "kob_role{{role=\"{role}\"}} {}
 ",
                 self.roles.contains(&role) as u64
             ));
@@ -872,19 +873,24 @@ mod tests {
 
     #[test]
     fn health_and_metrics_name_the_roles_of_the_process() {
-        // a bare indexer (`kob-executor index`) is the index role alone
+        let roles = |h: &HealthSnapshot| serde_json::to_value(h).unwrap()["roles"].clone();
+        // a bare indexer (`kob-executor index`) is the Indexer alone
         let mut h = HealthSnapshot::new("testnet-10");
-        assert_eq!(serde_json::to_value(&h).unwrap()["roles"], serde_json::json!(["index"]));
+        assert_eq!(roles(&h), serde_json::json!(["indexer"]));
         let m = h.metrics_text();
-        assert!(m.contains("kob_executor_role{role=\"index\"} 1") && m.contains("kob_executor_role{role=\"match\"} 0"), "{m}");
-        // `kob-executor run` adds the matcher and the keepers it runs
-        h.roles = crate::matcher::run::Roles { matcher: true, keeper: true }.with_indexer();
-        assert_eq!(serde_json::to_value(&h).unwrap()["roles"], serde_json::json!(["index", "match", "keep"]));
+        assert!(m.contains("kob_role{role=\"indexer\"} 1") && m.contains("kob_role{role=\"executor\"} 0"), "{m}");
+        // `kob-executor run` over a full store is the Executor and the Indexer; over a lean store the Executor alone
+        let both = crate::matcher::run::Roles { matcher: true, keeper: true };
+        h.roles = both.health_roles(false);
+        assert_eq!(roles(&h), serde_json::json!(["executor", "indexer"]));
         let m = h.metrics_text();
-        for r in ["index", "match", "keep"] {
-            assert!(m.contains(&format!("kob_executor_role{{role=\"{r}\"}} 1")), "{m}");
-        }
-        h.roles = crate::matcher::run::Roles { matcher: true, keeper: false }.with_indexer();
-        assert!(h.metrics_text().contains("kob_executor_role{role=\"keep\"} 0"));
+        assert!(m.contains("kob_role{role=\"executor\"} 1") && m.contains("kob_role{role=\"indexer\"} 1"), "{m}");
+        h.roles = both.health_roles(true);
+        assert_eq!(roles(&h), serde_json::json!(["executor"]));
+        let m = h.metrics_text();
+        assert!(m.contains("kob_role{role=\"executor\"} 1") && m.contains("kob_role{role=\"indexer\"} 0"), "{m}");
+        // the keepers alone are still the Executor
+        h.roles = crate::matcher::run::Roles { matcher: false, keeper: true }.health_roles(true);
+        assert_eq!(roles(&h), serde_json::json!(["executor"]));
     }
 }

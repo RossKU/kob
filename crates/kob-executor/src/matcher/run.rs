@@ -164,14 +164,16 @@ pub struct Roles {
 }
 
 impl Roles {
-    /// The roles of a process that also indexes (`kob-executor run`), as `/v1/health` names them (`HealthSnapshot::roles`).
-    pub fn with_indexer(self) -> Vec<&'static str> {
-        let mut v = vec!["index"];
-        if self.matcher {
-            v.push("match");
+    /// The roles of `kob-executor run` as `/v1/health` names them (`HealthSnapshot::roles`): `executor` while the matcher or
+    /// the keepers work, and `indexer` when the store keeps the history (`lean = false`): over a lean store the process is the
+    /// Executor alone, over a full one it is the Executor and the Indexer.
+    pub fn health_roles(self, lean: bool) -> Vec<&'static str> {
+        let mut v = vec![];
+        if self.matcher || self.keeper {
+            v.push("executor");
         }
-        if self.keeper {
-            v.push("keep");
+        if !lean {
+            v.push("indexer");
         }
         v
     }

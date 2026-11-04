@@ -17,33 +17,72 @@ use crate::setup::{
     ensure_token_list, write_config, SetupFile, SetupNode, SetupOptions, WrpcSetupNode, CONFIG_FILE, DATA_DIR, KEY_FILE,
 };
 
-/// `--role` of the setup (the non-interactive flag and the interactive choice): `match`, `index` or both, `index,match`.
+/// The roles of a `kob-executor` process, as the setup and the role flags name them.
+///
+/// * **Executor**: matches crossing orders and refunds expired ones with a funded hot key (`run`); lean storage and fast start.
+/// * **Indexer**: follows the chain, keeps the full history and the record log and serves the read API (`index`; no key).
+/// * **Executor and Indexer**: both in one process (`run` over an archive store: `lean = false`). The public API and the
+///   signing key then live on the same machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRole {
-    /// Matcher and keepers (`run`; needs a funded hot key). Lean storage, fast start, no record log.
-    Match,
-    /// Index only (`index`; no key, no funds): full history and the record log.
-    Index,
-    /// One process that is both: the archive indexer (full history, record log, `lean = false`) and the matcher and keepers
-    /// with a key (`run`). The public API and the signing key live on the same machine.
-    IndexMatch,
+    Executor,
+    Indexer,
+    ExecutorIndexer,
+}
+
+/// The warning shown wherever the combined role is offered.
+pub const COMBINED_WARNING: &str =
+    "the public API and the signing key then live on the same machine; for a public server prefer separate machines";
+
+/// `--executor` and `--indexer`: kaspad-style role flags of the setup and of a start (`kob-executor --executor --indexer`).
+#[derive(clap::Args, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RoleFlags {
+    /// The Executor role: match crossing orders and refund expired ones (needs a funded hot key). Lean storage and fast start
+    /// unless combined with --indexer.
+    #[arg(long)]
+    pub executor: bool,
+    /// The Indexer role: follow the chain, keep the full history and the record log and serve the read API (no key). With
+    /// --executor, one process does both (the public API and the signing key then live on the same machine).
+    #[arg(long)]
+    pub indexer: bool,
+}
+
+impl RoleFlags {
+    /// The roles the flags name (`None`: neither flag).
+    pub fn role(self) -> Option<AppRole> {
+        match (self.executor, self.indexer) {
+            (true, true) => Some(AppRole::ExecutorIndexer),
+            (true, false) => Some(AppRole::Executor),
+            (false, true) => Some(AppRole::Indexer),
+            (false, false) => None,
+        }
+    }
 }
 
 impl AppRole {
-    /// The roles in the order of `--role` / `roles` of the output: `index` first.
+    /// The roles as `roles` of the setup's output and `/v1/health` name them: `executor` first.
     pub fn names(self) -> &'static [&'static str] {
         match self {
-            AppRole::Match => &["match"],
-            AppRole::Index => &["index"],
-            AppRole::IndexMatch => &["index", "match"],
+            AppRole::Executor => &["executor"],
+            AppRole::Indexer => &["indexer"],
+            AppRole::ExecutorIndexer => &["executor", "indexer"],
+        }
+    }
+
+    /// The roles in words, for the banners and the configuration's header.
+    pub fn display(self) -> &'static str {
+        match self {
+            AppRole::Executor => "Executor",
+            AppRole::Indexer => "Indexer",
+            AppRole::ExecutorIndexer => "Executor and Indexer",
         }
     }
 
     /// The subcommand the role runs: `run` for every role with a key.
     pub fn launch_role(self) -> LaunchRole {
         match self {
-            AppRole::Match | AppRole::IndexMatch => LaunchRole::Run,
-            AppRole::Index => LaunchRole::Index,
+            AppRole::Executor | AppRole::ExecutorIndexer => LaunchRole::Run,
+            AppRole::Indexer => LaunchRole::Index,
         }
     }
 
@@ -54,25 +93,49 @@ impl AppRole {
 
     /// `true` for the roles that keep the whole history and the record log (an archive).
     pub fn is_archive(self) -> bool {
-        matches!(self, AppRole::Index | AppRole::IndexMatch)
+        matches!(self, AppRole::Indexer | AppRole::ExecutorIndexer)
     }
 
-    /// Parses `match`, `index`, or the pair in either order (`index,match`, `match,index`), case and spaces around the names
-    /// ignored. An unknown name, an empty list or an empty element (`index,`) is an error.
+    /// The roles a launch configuration stands for: `index` is the Indexer; `run` with lean storage is the Executor and `run`
+    /// over a full store (`lean = false`) is both.
+    pub fn from_parts(role: LaunchRole, lean: bool) -> AppRole {
+        match (role, lean) {
+            (LaunchRole::Index, _) => AppRole::Indexer,
+            (LaunchRole::Run, true) => AppRole::Executor,
+            (LaunchRole::Run, false) => AppRole::ExecutorIndexer,
+        }
+    }
+
+    /// The roles of the configuration `cfg` (`None`: a plain `--config` file with no `[launch]` table).
+    pub fn of_config(cfg: &IndexerConfig) -> Option<AppRole> {
+        cfg.launch.as_ref().map(|l| AppRole::from_parts(l.role, cfg.lean))
+    }
+
+    /// Parses the old spelling of `--role` (deprecated): `match` (the Executor), `index` (the Indexer), or the pair in either
+    /// order (`index,match`, `match,index`), case and spaces around the names ignored. An unknown name, an empty list or an
+    /// empty element (`index,`) is an error.
     pub fn parse(s: &str) -> Result<AppRole, String> {
         let (mut index, mut matcher) = (false, false);
         for part in s.split(',') {
             match part.trim().to_ascii_lowercase().as_str() {
                 "index" => index = true,
                 "match" => matcher = true,
-                "" => return Err(format!("empty role in \"{s}\": use match, index or index,match")),
-                other => return Err(format!("unknown role \"{other}\": use match, index or index,match")),
+                "" => {
+                    return Err(format!(
+                        "empty role in \"{s}\": use --executor, --indexer or both (--role match|index|index,match is deprecated)"
+                    ))
+                }
+                other => {
+                    return Err(format!(
+                        "unknown role \"{other}\": use --executor, --indexer or both (--role match|index|index,match is deprecated)"
+                    ))
+                }
             }
         }
         Ok(match (index, matcher) {
-            (true, true) => AppRole::IndexMatch,
-            (false, true) => AppRole::Match,
-            _ => AppRole::Index,
+            (true, true) => AppRole::ExecutorIndexer,
+            (false, true) => AppRole::Executor,
+            _ => AppRole::Indexer,
         })
     }
 }
@@ -111,9 +174,9 @@ pub fn node_entry(node: &str) -> Result<String> {
 }
 
 /// The non-interactive setup into `opts.dir`: writes the configuration (replacing one), the token list when the build pins no
-/// registry (kept when there) and, for the matcher role, the key file when there is none and `new_key` says to make one.
-/// Returns what the wrapper needs as a JSON object: `address` (null for index only), `config`, `key_file`, `network`,
-/// `role` (the subcommand), `roles` (`["index"]`, `["match"]` or `["index", "match"]`), `node`, `data_dir`. The secret is never
+/// registry (kept when there) and, for the roles with a key, the key file when there is none and `new_key` says to make one.
+/// Returns what the wrapper needs as a JSON object: `address` (null for the Indexer alone), `config`, `key_file`, `network`,
+/// `role` (the subcommand), `roles` (`["executor"]`, `["indexer"]` or `["executor", "indexer"]`), `node`, `data_dir`. The secret is never
 /// part of it.
 pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value> {
     let network = match (&opts.build_network, a.network.as_deref()) {
@@ -128,7 +191,7 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
     let role = a.role.launch_role();
     let key_path = opts.dir.join(KEY_FILE);
     if a.role.has_key() && !key_path.exists() && !a.new_key {
-        bail!("the matcher role needs a key and {} has none: pass --new-key", key_path.display());
+        bail!("the Executor role needs a key and {} has none: pass --new-key", key_path.display());
     }
     std::fs::create_dir_all(&opts.dir).with_context(|| opts.dir.display().to_string())?;
 
@@ -169,7 +232,7 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
 }
 
 /// The operator's address of the configuration at `cfg_path` (the key file is relative to the configuration's directory): what the
-/// start banner shows, so the funding address is never lost after the setup. `None`: an index-only configuration, or a key
+/// start banner shows, so the funding address is never lost after the setup. `None`: an Indexer-only configuration, or a key
 /// that cannot be read (the run itself reports that). Never the secret.
 pub fn operator_address(cfg_path: &Path) -> Option<String> {
     let cfg = IndexerConfig::load(cfg_path).ok()?;
@@ -190,7 +253,7 @@ pub struct AddressBalanceArgs {
 
 /// The operator's address of the configuration in `dir` and its plain balance (covenant-free UTXOs) from the configured node:
 /// `{address, network, balance_sompi, balance_kas}`, or, when the node cannot be read, `balance_sompi: null` and
-/// `error`. An index-only configuration has no key: an error. Never prints the secret.
+/// `error`. An Indexer-only configuration has no key: an error. Never prints the secret.
 pub fn address_balance(dir: &Path, node: &mut dyn SetupNode) -> Result<Value> {
     let cfg_path = dir.join(CONFIG_FILE);
     let cfg = IndexerConfig::load(&cfg_path)?;
@@ -198,7 +261,7 @@ pub fn address_balance(dir: &Path, node: &mut dyn SetupNode) -> Result<Value> {
         .launch
         .as_ref()
         .and_then(|l| l.key_file.clone())
-        .ok_or_else(|| anyhow!("{} has no operator key (index-only role): there is no address", cfg_path.display()))?;
+        .ok_or_else(|| anyhow!("{} has no operator key (Indexer-only configuration): there is no address", cfg_path.display()))?;
     let network = crate::config::resolve_network(Some(&cfg.network)).map_err(|e| anyhow!(e))?;
     let address = HotKey::from_file(&dir.join(key_file))?.address(&network).to_string();
     let url = if cfg.rpc_url.is_empty() {
@@ -261,11 +324,11 @@ mod tests {
     }
 
     #[test]
-    fn a_matcher_setup_writes_the_files_and_reports_the_address_but_not_the_secret() {
+    fn an_executor_setup_writes_the_files_and_reports_the_address_but_not_the_secret() {
         let d = tempfile::tempdir().unwrap();
         let dir = d.path().join("files").join("kob");
         let tn = Some("testnet-10");
-        let out = setup_non_interactive(&opts(&dir, tn, false), &ask("resolver", AppRole::Match, true)).unwrap();
+        let out = setup_non_interactive(&opts(&dir, tn, false), &ask("resolver", AppRole::Executor, true)).unwrap();
         let key_path = dir.join(KEY_FILE);
         let key = HotKey::from_file(&key_path).unwrap();
         assert_eq!(out["address"], key.address("testnet-10").to_string());
@@ -288,15 +351,15 @@ mod tests {
         assert!(!dir.join(format!("{CONFIG_FILE}.tmp")).exists());
 
         // again with another node: the configuration is replaced, the key is the same file, untouched
-        let out2 = setup_non_interactive(&opts(&dir, tn, false), &ask("10.0.0.5:18210", AppRole::Match, true)).unwrap();
+        let out2 = setup_non_interactive(&opts(&dir, tn, false), &ask("10.0.0.5:18210", AppRole::Executor, true)).unwrap();
         assert_eq!(out2["address"], out["address"]);
         assert_eq!(std::fs::read_to_string(&key_path).unwrap(), secret);
         assert_eq!(IndexerConfig::load(&dir.join(CONFIG_FILE)).unwrap().rpc_url, "ws://10.0.0.5:18210");
         // without --new-key an existing key is used too
-        let out3 = setup_non_interactive(&opts(&dir, tn, false), &ask("resolver", AppRole::Match, false)).unwrap();
+        let out3 = setup_non_interactive(&opts(&dir, tn, false), &ask("resolver", AppRole::Executor, false)).unwrap();
         assert_eq!(out3["address"], out["address"]);
         // index only: no key options, no address
-        let out4 = setup_non_interactive(&opts(&dir, tn, false), &ask("resolver", AppRole::Index, false)).unwrap();
+        let out4 = setup_non_interactive(&opts(&dir, tn, false), &ask("resolver", AppRole::Indexer, false)).unwrap();
         assert_eq!((out4["address"].is_null(), out4["key_file"].is_null(), out4["role"].as_str()), (true, true, Some("index")));
         assert_eq!(crate::setup::launch_args(&dir.join(CONFIG_FILE)).unwrap().args, ["index", "--config", CONFIG_FILE]);
         let idx_cfg = IndexerConfig::load(&dir.join(CONFIG_FILE)).unwrap();
@@ -305,17 +368,17 @@ mod tests {
     }
 
     #[test]
-    fn an_index_and_match_setup_writes_an_archive_with_a_matcher_and_a_key() {
+    fn an_executor_and_indexer_setup_writes_an_archive_with_an_executor_and_a_key() {
         let d = tempfile::tempdir().unwrap();
         let tn = Some("testnet-10");
         // the key is needed as for the matcher
-        let e = setup_non_interactive(&opts(d.path(), tn, true), &ask("resolver", AppRole::IndexMatch, false)).unwrap_err();
+        let e = setup_non_interactive(&opts(d.path(), tn, true), &ask("resolver", AppRole::ExecutorIndexer, false)).unwrap_err();
         assert!(e.to_string().contains("--new-key"), "{e}");
         assert!(!d.path().join(CONFIG_FILE).exists() && !d.path().join(KEY_FILE).exists());
-        let out = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::IndexMatch, true)).unwrap();
+        let out = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::ExecutorIndexer, true)).unwrap();
         let key = HotKey::from_file(&d.path().join(KEY_FILE)).unwrap();
         assert_eq!(out["address"], key.address("testnet-10").to_string());
-        assert_eq!((out["role"].as_str(), out["roles"].clone()), (Some("run"), serde_json::json!(["index", "match"])));
+        assert_eq!((out["role"].as_str(), out["roles"].clone()), (Some("run"), serde_json::json!(["executor", "indexer"])));
         let l = crate::setup::launch_args(&d.path().join(CONFIG_FILE)).unwrap();
         assert_eq!(l.args, ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
         let c = IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap();
@@ -324,24 +387,24 @@ mod tests {
         let text = std::fs::read_to_string(d.path().join(CONFIG_FILE)).unwrap();
         assert!(text.contains("lean = false\n"), "the archive store is written out, not left to the default: {text}");
         // the other roles say so as well
-        let m = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Match, false)).unwrap();
-        assert_eq!(m["roles"], serde_json::json!(["match"]));
+        let m = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Executor, false)).unwrap();
+        assert_eq!(m["roles"], serde_json::json!(["executor"]));
         assert!(IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap().lean);
-        let i = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Index, false)).unwrap();
-        assert_eq!((i["roles"].clone(), i["address"].is_null()), (serde_json::json!(["index"]), true));
+        let i = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Indexer, false)).unwrap();
+        assert_eq!((i["roles"].clone(), i["address"].is_null()), (serde_json::json!(["indexer"]), true));
         // the balance of the combined role's key is readable like the matcher's
-        setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::IndexMatch, false)).unwrap();
+        setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::ExecutorIndexer, false)).unwrap();
         assert_eq!(operator_address(&d.path().join(CONFIG_FILE)).as_deref(), out["address"].as_str());
     }
 
     #[test]
-    fn a_matcher_without_a_key_or_with_the_wrong_network_is_refused_before_anything_is_written() {
+    fn an_executor_without_a_key_or_with_the_wrong_network_is_refused_before_anything_is_written() {
         let d = tempfile::tempdir().unwrap();
         let tn = Some("testnet-10");
-        let e = setup_non_interactive(&opts(d.path(), tn, true), &ask("resolver", AppRole::Match, false)).unwrap_err();
+        let e = setup_non_interactive(&opts(d.path(), tn, true), &ask("resolver", AppRole::Executor, false)).unwrap_err();
         assert!(e.to_string().contains("--new-key"), "{e}");
         assert!(!d.path().join(CONFIG_FILE).exists() && !d.path().join(KEY_FILE).exists());
-        let mut a = ask("resolver", AppRole::Index, false);
+        let mut a = ask("resolver", AppRole::Indexer, false);
         a.network = Some("mainnet".into());
         let e = setup_non_interactive(&opts(d.path(), tn, true), &a).unwrap_err();
         assert!(e.to_string().contains("cannot set up mainnet"), "{e}");
@@ -353,7 +416,7 @@ mod tests {
         assert_eq!(out["network"], "mainnet");
         // a pinned registry: no token list file
         assert!(!d.path().join(crate::setup::TOKENS_FILE).exists());
-        assert!(setup_non_interactive(&opts(d.path(), tn, true), &ask(" ", AppRole::Index, false)).is_err());
+        assert!(setup_non_interactive(&opts(d.path(), tn, true), &ask(" ", AppRole::Indexer, false)).is_err());
     }
 
     #[test]
@@ -361,7 +424,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         // the balance read resolves the network like every command: a deployment build (CI builds deploy-mainnet) refuses another
         let tn = Some(kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10"));
-        let o = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Match, true)).unwrap();
+        let o = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Executor, true)).unwrap();
         let v = address_balance(d.path(), &mut Fake(Ok(1_234_500_000))).unwrap();
         assert_eq!(v["address"], o["address"]);
         assert_eq!((v["balance_sompi"].as_u64(), v["balance_kas"].as_str()), (Some(1_234_500_000), Some("12.345")));
@@ -373,7 +436,7 @@ mod tests {
         // the start banner's address is the same one
         assert_eq!(operator_address(&d.path().join(CONFIG_FILE)).as_deref(), o["address"].as_str());
         // index only: no address
-        setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Index, false)).unwrap();
+        setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Indexer, false)).unwrap();
         assert_eq!(operator_address(&d.path().join(CONFIG_FILE)), None);
         assert!(address_balance(d.path(), &mut Fake(Ok(0))).unwrap_err().to_string().contains("no operator key"));
         // no configuration: an error, not a panic

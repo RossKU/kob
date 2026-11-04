@@ -92,19 +92,21 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
 1. **Network**: fixed by the binary; it says which.
 2. **Node**: public Kaspa nodes (the default: it finds the two, checks each one's network, sync state and UTXO index and
    shows their host names) or your own node (section 2).
-3. **Role**: *matcher and keepers* (the default, earns, needs a funded key), *index only* (follows the chain and serves
-   the read API; no key, no funds) or *index and match* (both in one process: the archive indexer API with the full history
-   and the record log, and the matcher and keepers with a funded key). The third choice comes with a warning: **the public
-   API and the signing key then live on the same machine**. For a public server prefer separate machines: an index-only host
-   for the API and a matcher elsewhere. For your own node it then asks its URL: default `ws://127.0.0.1:18110` (mainnet) or
+3. **Role**: the **Executor** (the default: matches crossing orders and refunds expired ones, earns, needs a funded key),
+   the **Indexer** (follows the chain, keeps the full history and serves the read API; no key, no funds) or **Executor and
+   Indexer** (both in one process: the Executor with a funded key and the Indexer's full history, record log and read API).
+   The third choice comes with a warning: **the public API and the signing key then live on the same machine**. For a public
+   server prefer separate machines: an Indexer-only host for the API and an Executor elsewhere. The roles can also be named on
+   the command line: `kob-executor setup --executor`, `--indexer` or `--executor --indexer` (the question is then skipped).
+   For your own node it then asks its URL: default `ws://127.0.0.1:18110` (mainnet) or
    `ws://127.0.0.1:18210` (testnet-10), connects at once and reports the node's version, network, sync state and UTXO index;
    on a problem it shows how to start the node and lets you check again, enter another URL, or `skip`.
 4. **Data directory**: default `kob-data` next to the program. The prompt reads "the database and the record log; a few GB",
-   which fits the index-only role. For *matcher and keepers* the setup also turns on the fast start and **lean storage**: no
-   record log and a database capped at 500 MB (section 8, point 5; `docs/ops/executor.md`, A.1.2). For *index and match* it
-   turns on the fast start but **not** lean storage (`lean = false`, the record log stays on): the data directory grows with
-   the orders like an index-only archive's (section 4, the third column), while the matcher trades from the first seconds.
-5. **Operator key** (matcher and keepers, and index and match): it generates a new key into `kob-operator.key` with the operating system's
+   which fits the Indexer. For the **Executor** the setup also turns on the fast start and **lean storage**: no
+   record log and a database capped at 500 MB (section 8, point 5; `docs/ops/executor.md`, A.1.2). For **Executor and
+   Indexer** it turns on the fast start but **not** lean storage (`lean = false`, the record log stays on): the data directory
+   grows with the orders like an Indexer's (section 4, the third column), while the Executor trades from the first seconds.
+5. **Operator key** (the Executor, and Executor and Indexer): it generates a new key into `kob-operator.key` with the operating system's
    random generator and makes the file readable by your account only (Windows: an ACL with your account alone; Linux: mode
    `0600`), or uses a key file you name (64 hex characters). The secret is never printed. An existing
    `kob-operator.key` is offered again, never replaced.
@@ -166,9 +168,9 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
 
 **What it costs to run.** Measured and estimated figures for sizing a machine or a metered line (`docs/ops/executor.md`, Part B 3 and A.1.2):
 
-| | Matcher and keepers (lean, fast start) | Index only (full history, record log) | Index and match (`--role index,match`: one process, full history, record log, matcher and keepers) |
+| | Executor (lean, fast start) | Indexer (full history, record log) | Executor and Indexer (`--executor --indexer`: one process, full history, record log, matching) |
 |---|---|---|---|
-| Disk | database capped at 500 MB (`lean_max_db_mb`), no record log, plus a constant 42 MB window of chain blocks | grows with the orders: plan on about 10 KB per order in all (soak measurements: 1.6 GB of database for 295,000 orders and 2.85 GB for 501,000, i.e. 5.4 to 5.7 KB each, plus a record log of about 3.9 KB per order, 1.2 GB for 306,000); a quiet testnet-10 is a few GB | the same as index only (no cap, record log on) |
+| Disk | database capped at 500 MB (`lean_max_db_mb`), no record log, plus a constant 42 MB window of chain blocks | grows with the orders: plan on about 10 KB per order in all (soak measurements: 1.6 GB of database for 295,000 orders and 2.85 GB for 501,000, i.e. 5.4 to 5.7 KB each, plus a record log of about 3.9 KB per order, 1.2 GB for 306,000); a quiet testnet-10 is a few GB | the same as the Indexer (no cap, record log on) |
 | Memory | 0.3 to 1 GB typical, up to 4 GB while catching up on mainnet-sized batches | the same | the same |
 | CPU | one core at most; 2 to 4 % of a core at 3,000 transactions per second of chain load | the same | the same |
 | Network | about 1.4 KB per chain transaction from the node (1.35 MB/s at 1,000 transactions per second); the first catch-up over public nodes is a few GB (about 4 GB on a phone), then the steady flow; quiet testnet-10 measured 15.7 GB per day on 2026-09-29 | the same | the same |
@@ -190,12 +192,16 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   prints one JSON object: the key's address, the network and its plain balance read from the configured node
   (`balance_sompi`, `balance_kas`; when the node cannot be read, `balance_sompi` is `null` and `error` says why). It never
   prints the secret and can run while the executor runs. Its sibling for scripts and the Android app is `kob-executor setup
-  --non-interactive --node resolver|<ws-url> --role match|index|index,match [--new-key] [--network mainnet|testnet-10] [--dir <folder>]`:
+  --non-interactive --node resolver|<ws-url> --executor|--indexer|--executor --indexer [--new-key] [--network mainnet|testnet-10] [--dir <folder>]`:
   no questions, no start; it writes the same files as the dialogue (replacing the configuration, keeping an existing key
-  file), and prints one JSON object with the `address` (`null` for index only), the `roles` (`["match"]`, `["index"]` or
-  `["index", "match"]`) and the paths. `--role index,match` (also `match,index`) is the combined role: it needs a key like
-  `match`, and writes an archive store (`lean = false`, record log on) next to the matcher; an unknown or empty role is
-  refused. `--network` is only for a development build; a deployment build knows its own and refuses another.
+  file), and prints one JSON object with the `address` (`null` for the Indexer alone), the `roles` (`["executor"]`,
+  `["indexer"]` or `["executor", "indexer"]`) and the paths. Without a role flag it fails with a clear error. Both flags
+  are the combined role: it needs a key like the Executor and writes a full store (`lean = false`, record log on). The
+  old `--role match|index|index,match` still works as a deprecated alias (it prints a note on stderr). `--network` is only for a
+  development build; a deployment build knows its own and refuses another.
+* **Start by role**: `kob-executor --executor`, `--indexer` or `--executor --indexer` starts the configuration in the folder, after
+  checking that it was set up for exactly these roles (otherwise it says so and starts nothing; with no configuration it opens the
+  setup with the roles chosen, or, without a terminal, refuses). Plain `kob-executor` runs the configuration whatever its roles.
 * **Withdraw**: stop the executor first, then, from the same folder (or with `--dir <folder>`, or `--config <file>` for a
   configuration elsewhere):
 
@@ -258,7 +264,7 @@ to reproduce on the executor, so treat it as a precaution (console window Proper
 you keep a window open); a scheduled task has no console to click in.
 
 **Logs.** The log goes to the console. The interactive setup also writes `log_file = "kob-executor.log"` into
-`kob-executor.toml` (a path relative to that file; not for the index-only role, and not for the Android app's
+`kob-executor.toml` (a path relative to that file; not for the Indexer alone, and not for the Android app's
 non-interactive setup), and any start can set one with `--log-file <path>` (or `KOB_LOG_FILE`) or `log_file` in the
 configuration. With a log file the console still shows the log while it is a terminal (a double click) and shows nothing
 when it is not (a task, a service, a redirect): the file is then the log. The file is rotated by size: at `log_max_mb`
@@ -311,7 +317,7 @@ the commit you verified.
 
 ## 7. Upgrade, stop and withdraw
 
-**Upgrade an executor** (matcher and keepers, or index only). The configuration, the key and the data directory stay; only the
+**Upgrade an executor** (Executor, Indexer, or both). The configuration, the key and the data directory stay; only the
 program changes. The program is not replaced while it runs, and it does not update itself.
 
 1. **Read the release notes.** They say whether the release changes the `KOB1` payload version (indexers must go first,
@@ -337,7 +343,7 @@ program changes. The program is not replaced while it runs, and it does not upda
 6. **When the release notes ask for a rebuild** (the database is refused as old): a matcher on lean storage has no record log to
    replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
    the fast start rebuilds the live book within seconds. Make sure the key file is not inside `kob-data` (setup puts it next
-   to the program), and create `kob-data/pause` again if you use it. An index-only archive rebuilds with `kob-executor index
+   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive rebuilds with `kob-executor index
    replay` while offline; the public read server has a way without downtime (`docs/ops/chart-server.md`, section 6).
 7. **Rollback**: stop, put `kob-executor.old` back, restore the `kob-data` copy of step 4 if the database changed. An indexer must
    not go below the payload version in use (`docs/ops/release.md`, 7).
@@ -397,7 +403,7 @@ library, so name resolution and TLS to the public nodes work as in any Termux pr
 update, a restart). The key on it is a hot key: put **only a small working capital** on it (a few days of fees and
 carriers, section 3), never savings, and expect to restart it. A stopped executor loses nothing but the spreads it would
 have earned; its database survives and it continues where it stopped (section 5). If you would rather not risk any funds on
-the phone, choose the **index only** role in the setup: it follows the chain and serves the read API on the phone with no
+the phone, choose the **Indexer** role in the setup: it follows the chain and serves the read API on the phone with no
 key and no funds.
 
 ## 9. Android app (testnet-10, sideloaded)
@@ -417,7 +423,7 @@ for now. It is sideloaded (no store).
    asks (Settings, Apps, Special access, Install unknown apps). Android may warn about an app from an unknown source: it is
    not from a store.
 3. **Set up.** Open *KOB Executor*. Keep **Public nodes** (two nodes found through the Kaspa resolvers; the default of
-   section 8) or enter your own node's URL, choose **Matcher and keepers** or **Index only**, and tap *Save and generate
+   section 8) or enter your own node's URL, choose **Executor** or **Indexer**, and tap *Save and generate
    key*. For the matcher the app shows its **funding address** (always on the main screen, with a *Copy address* button):
    send it at least 100 testnet KAS (200 recommended; they have no value, mine or ask a faucet), and the balance appears
    under it. The key is generated on the phone (`kob-operator.key`, readable by the app only) and never leaves it unless you

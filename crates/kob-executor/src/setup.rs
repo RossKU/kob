@@ -21,7 +21,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 
-use crate::app::AppRole;
+use crate::app::{AppRole, COMBINED_WARNING};
 use crate::config::{default_wrpc_url, IndexerConfig, LaunchConfig, LaunchRole};
 use crate::matcher::node::{NodeApi, ServerInfo, WrpcConfig, WrpcNode};
 use crate::matcher::run::kas_text;
@@ -52,18 +52,21 @@ pub struct SetupArgs {
     /// Write the configuration and exit instead of starting the executor.
     #[arg(long)]
     pub no_start: bool,
-    /// For a wrapper (the Android app) that cannot answer questions: no dialogue, no start. Needs `--node` and `--role`; writes
-    /// the files and prints one JSON object (`address`, `config`, ...; never the secret). Replaces an existing configuration,
-    /// keeps an existing key file.
-    #[arg(long, requires_all = ["node", "role"])]
+    /// For a wrapper (the Android app) that cannot answer questions: no dialogue, no start. Needs `--node` and a role
+    /// (`--executor`, `--indexer` or both); writes the files and prints one JSON object (`address`, `config`, ...; never the
+    /// secret). Replaces an existing configuration, keeps an existing key file.
+    #[arg(long, requires = "node")]
     pub non_interactive: bool,
     /// Non-interactive: `resolver` (two public nodes, the default of the interactive setup) or your node's wRPC URL.
     #[arg(long, requires = "non_interactive")]
     pub node: Option<String>,
-    /// Non-interactive: `match` (matcher and keepers; needs a key), `index` (index only, no key) or `index,match` (also
-    /// `match,index`): one process that serves the archive indexer API (full history, record log) and runs the matcher and
-    /// keepers with a key.
-    #[arg(long, value_parser = crate::app::AppRole::parse, requires = "non_interactive")]
+    /// The roles: `--executor` (matches orders and refunds expired ones; needs a key), `--indexer` (full history and the read
+    /// API; no key) or both in one process. Without a flag the interactive setup asks.
+    #[command(flatten)]
+    pub roles: crate::app::RoleFlags,
+    /// Deprecated spelling of the role flags, non-interactive only: `match` is `--executor`, `index` is `--indexer`,
+    /// `index,match` (also `match,index`) is both.
+    #[arg(long, value_parser = crate::app::AppRole::parse, requires = "non_interactive", hide = true, conflicts_with_all = ["executor", "indexer"])]
     pub role: Option<crate::app::AppRole>,
     /// Non-interactive: make the operator key when the directory has none (an existing key file is never replaced).
     #[arg(long, requires = "non_interactive")]
@@ -197,15 +200,15 @@ pub struct SetupFile {
     pub data_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tokens_path: Option<String>,
-    /// `fast_start = true` for the roles with a matcher: the first start trades within seconds and indexes the history meanwhile
-    /// (`crate::faststart`). Absent for index only, which has no use for it.
+    /// `fast_start = true` for the roles with an Executor: the first start trades within seconds and indexes the history meanwhile
+    /// (`crate::faststart`). Absent for the Indexer alone, which has no use for it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fast_start: Option<bool>,
-    /// `lean = true` for the matcher role: the store keeps the live book, not the history (`crate::indexer::lean`); `false` for
-    /// index + match, which keeps both.
+    /// `lean = true` for the Executor: the store keeps the live book, not the history (`crate::indexer::lean`); `false` for
+    /// Executor and Indexer, which keeps both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lean: Option<bool>,
-    /// `log_file` for the matcher role: the console shows the log while it is a terminal (a double click), and a scheduled task or
+    /// `log_file` for the Executor: the console shows the log while it is a terminal (a double click), and a scheduled task or
     /// service, which has no console, finds it in the file (rotated by size, `crate::logging`). Absent for the index role and
     /// for the wrapper's non-interactive setup (the Android app reads the process's output).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -214,14 +217,14 @@ pub struct SetupFile {
 }
 
 impl SetupFile {
-    /// The `lean` key a setup writes for `role`: `true` for the matcher (the live book, no history), an explicit `false` for
-    /// the combined role (the archive keeps the history and the record log next to the matching), absent for index only (the
+    /// The `lean` key a setup writes for `role`: `true` for the Executor (the live book, no history), an explicit `false` for
+    /// the combined role (the archive keeps the history and the record log next to the Executor), absent for the Indexer (the
     /// default is the archive).
     pub fn lean_for(role: AppRole) -> Option<bool> {
         match role {
-            AppRole::Match => Some(true),
-            AppRole::IndexMatch => Some(false),
-            AppRole::Index => None,
+            AppRole::Executor => Some(true),
+            AppRole::ExecutorIndexer => Some(false),
+            AppRole::Indexer => None,
         }
     }
 
@@ -230,7 +233,7 @@ impl SetupFile {
         role.has_key().then(|| LOG_FILE.to_string())
     }
 
-    /// The `fast_start` key a setup writes for `role`: the roles with a matcher trade within seconds of the first start. With
+    /// The `fast_start` key a setup writes for `role`: the roles with an Executor trade within seconds of the first start. With
     /// the combined role the history is still indexed in full, into the record log, meanwhile (docs/ops/executor.md, A.1.1).
     pub fn fast_start_for(role: AppRole) -> Option<bool> {
         role.has_key().then_some(true)
@@ -243,11 +246,13 @@ impl SetupFile {
         let body = toml::to_string(self).context("cannot write the configuration")?;
         Ok(format!(
             "# kob-executor configuration, written by `kob-executor setup`.\n\
+             # Roles: {}.\n\
              #\n\
              # Started without arguments, kob-executor reads this file from its own directory and runs the [launch] role with\n\
              # it (`kob-executor {} --config {CONFIG_FILE} ...`, printed at the start). Relative paths are relative to this\n\
              # file's directory. Every key of docs/ops/executor.md (Part B, 4) may be added; [launch] args takes further\n\
              # options of the role, e.g. args = [\"--sweep-own-strays\"]. `kob-executor setup` again replaces this file.\n\n{body}",
+            AppRole::from_parts(self.launch.role, self.lean.unwrap_or(false)).display(),
             self.launch.role.subcommand()
         ))
     }
@@ -469,7 +474,7 @@ pub fn judge_node(info: &ServerInfo, network: &str, role: LaunchRole) -> Result<
         return Err(format!("{found}: this is the {network} build, it cannot use a node of another network"));
     }
     if role == LaunchRole::Run && !info.has_utxo_index {
-        return Err(format!("{found}: the matcher and keepers need the UTXO index (restart the node with --utxoindex)"));
+        return Err(format!("{found}: the Executor needs the UTXO index (restart the node with --utxoindex)"));
     }
     Ok(found)
 }
@@ -477,6 +482,16 @@ pub fn judge_node(info: &ServerInfo, network: &str, role: LaunchRole) -> Result<
 /// The interactive setup. Writes the configuration (and the key file, the token list) into `opts.dir` and returns its path
 /// when the executor should start now (`None`: written, or nothing changed, and the operator starts it later).
 pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOptions) -> Result<Option<PathBuf>> {
+    run_setup_with(io, node, opts, None)
+}
+
+/// [`run_setup`] with the roles already chosen on the command line (`--executor`, `--indexer`): the role question is skipped.
+pub fn run_setup_with(
+    io: &mut dyn Console,
+    node: &mut dyn SetupNode,
+    opts: &SetupOptions,
+    preset: Option<AppRole>,
+) -> Result<Option<PathBuf>> {
     let config_path = opts.dir.join(CONFIG_FILE);
     io.say(&format!("KOB executor {} setup", kob_protocol::VERSION));
     io.say("Answer the questions below; Enter takes the default in [brackets]. Nothing is sent anywhere but to the Kaspa node you choose: no telemetry, no fee, no update check.");
@@ -516,22 +531,29 @@ pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOpt
     }
 
     io.say("");
-    let app_role = match ask_choice(
+    let app_role = match preset {
+        Some(r) => {
+            io.say(&format!("Roles: {} (from the command line).", r.display()));
+            r
+        }
+        None => match ask_choice(
         io,
-        "What should this executor do?",
+        "Which roles should this kob-executor run?",
         &[
-            "Matcher and keepers: match crossing orders and refund expired ones, earning the spreads and tips (needs a funded hot key).",
-            "Index only: follow the chain and serve the read API (no key, no funds, no earnings).",
-            "Index and match: both in one process: the archive indexer API (full history, record log) and the matcher and keepers with a funded hot key. Warning: the public API and the signing key then live on the same machine; for a public server prefer separate machines.",
+            "Executor: match crossing orders and refund expired ones, earning the spreads and tips (needs a funded hot key).",
+            "Indexer: follow the chain, keep the full history and serve the read API (no key, no funds, no earnings).",
+            "Executor and Indexer: both in one process: the Executor with a funded hot key, and the Indexer's full history, record log and read API. Warning: the public API and the signing key then live on the same machine; for a public server prefer separate machines.",
         ],
     )? {
-        0 => AppRole::Match,
-        1 => AppRole::Index,
-        _ => AppRole::IndexMatch,
+        0 => AppRole::Executor,
+        1 => AppRole::Indexer,
+        _ => AppRole::ExecutorIndexer,
+    },
     };
     let role = app_role.launch_role();
-    if app_role == AppRole::IndexMatch {
-        io.say("Index and match keeps the whole history and the record log (the data directory grows with the orders: plan on about 10 KB per order, docs/ops/executor-quickstart.md, section 4) and signs with the key on this machine. If this machine serves a public API, a break-in there exposes the key: prefer an index-only host and a separate matcher.");
+    if app_role == AppRole::ExecutorIndexer {
+        io.say(&format!("Warning: {COMBINED_WARNING}."));
+        io.say("Executor and Indexer keeps the whole history and the record log (the data directory grows with the orders: plan on about 10 KB per order, docs/ops/executor-quickstart.md, section 4) and signs with the key on this machine. If this machine serves a public API, a break-in there exposes the key: prefer an Indexer-only host and an Executor on another machine.");
     }
 
     io.say("");
@@ -934,9 +956,9 @@ mod tests {
             rpc_url: "ws://127.0.0.1:18210".into(),
             data_dir: "kob-data".into(),
             tokens_path: Some(TOKENS_FILE.into()),
-            fast_start: SetupFile::fast_start_for(AppRole::Match),
-            lean: SetupFile::lean_for(AppRole::Match),
-            log_file: SetupFile::log_file_for(AppRole::Match),
+            fast_start: SetupFile::fast_start_for(AppRole::Executor),
+            lean: SetupFile::lean_for(AppRole::Executor),
+            log_file: SetupFile::log_file_for(AppRole::Executor),
             launch: LaunchConfig {
                 role: LaunchRole::Run,
                 key_file: Some(KEY_FILE.into()),
@@ -952,11 +974,11 @@ mod tests {
         assert_eq!(c.data_dir, PathBuf::from("kob-data"));
         assert_eq!(c.tokens_path, Some(PathBuf::from(TOKENS_FILE)));
         // a matcher's configuration trades within seconds of the first start; an index-only one has no use for it
-        assert!(c.fast_start && SetupFile::fast_start_for(AppRole::Index).is_none());
-        assert!(c.lean && SetupFile::lean_for(AppRole::Index).is_none());
+        assert!(c.fast_start && SetupFile::fast_start_for(AppRole::Indexer).is_none());
+        assert!(c.lean && SetupFile::lean_for(AppRole::Indexer).is_none());
         // a matcher keeps a rotated log file next to the configuration (a scheduled task has no console); index only does not
         assert_eq!(c.log_file, Some(PathBuf::from(LOG_FILE)));
-        assert!((c.log_max_mb, c.log_files) == (10, 5) && SetupFile::log_file_for(AppRole::Index).is_none());
+        assert!((c.log_max_mb, c.log_files) == (10, 5) && SetupFile::log_file_for(AppRole::Indexer).is_none());
         assert_eq!(c.launch.as_ref(), Some(&f.launch));
         let l = launch_args(&p).unwrap();
         assert_eq!(l.dir, d.path());
@@ -1102,29 +1124,30 @@ mod tests {
             assert!(t.starts_with("# kob-executor configuration, written by"), "{t}");
             let (head, body) = t.split_once("\n\n").unwrap();
             let sub = role.launch_role().subcommand();
+            assert!(head.contains(&format!("# Roles: {}.", role.display())), "{head}");
             assert!(head.contains(&format!("(`kob-executor {sub} --config kob-executor.toml")), "{head}");
             body.to_string()
         };
         let head = "network = \"testnet-10\"\nrpc_url = \"resolver\"\ndata_dir = \"kob-data\"\ntokens_path = \"kob-tokens.json\"\n";
         let run_launch = "\n[launch]\nrole = \"run\"\nkey_file = \"kob-operator.key\"\npause_file = \"kob-data/pause\"\nargs = []\n";
-        // matcher and keepers: lean storage (no record log), fast start
+        // the Executor: lean storage (no record log), fast start
         assert_eq!(
-            keys(AppRole::Match),
+            keys(AppRole::Executor),
             format!("{head}fast_start = true\nlean = true\nlog_file = \"kob-executor.log\"\n{run_launch}")
         );
-        // index only: nothing of the matcher
-        assert_eq!(keys(AppRole::Index), format!("{head}\n[launch]\nrole = \"index\"\nargs = []\n"));
-        // index and match: the matcher's launch (run, key, pause file, fast start, log file) over an archive store (lean = false;
+        // the Indexer: nothing of the Executor
+        assert_eq!(keys(AppRole::Indexer), format!("{head}\n[launch]\nrole = \"index\"\nargs = []\n"));
+        // Executor and Indexer: the Executor's launch (run, key, pause file, fast start, log file) over an archive store (lean = false;
         // the record log is on by default)
         assert_eq!(
-            keys(AppRole::IndexMatch),
+            keys(AppRole::ExecutorIndexer),
             format!("{head}fast_start = true\nlean = false\nlog_file = \"kob-executor.log\"\n{run_launch}")
         );
     }
 
     /// The run-time side: the written file, read the way `kob-executor run` reads it, is an archive with a matcher.
     #[test]
-    fn index_and_match_runs_as_an_archive_with_a_matcher() {
+    fn executor_and_indexer_runs_as_an_archive_with_an_executor() {
         use clap::Parser as _;
         #[derive(clap::Parser)]
         struct T {
@@ -1140,17 +1163,17 @@ mod tests {
             let cli = T::parse_from(["kob-executor", "--config", p.to_str().unwrap()]);
             (launch_args(&p).unwrap(), crate::index_cli::build_config(&cli.opts).unwrap())
         };
-        let (l, c) = built(AppRole::IndexMatch);
+        let (l, c) = built(AppRole::ExecutorIndexer);
         assert_eq!(l.role, LaunchRole::Run);
         assert_eq!(l.args, ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
         assert!(!c.lean, "no lean cap: the store keeps the history");
         assert!(c.records.enabled, "the record log is on");
         assert!(c.fast_start && c.api.enabled, "the matcher trades at once; the read API is served");
         // the matcher's lean storage is the opposite: no history, no record log
-        let (_, m) = built(AppRole::Match);
+        let (_, m) = built(AppRole::Executor);
         assert!(m.lean && !m.records.enabled);
         // index only keeps the history too, and has no matcher to start fast
-        let (l, i) = built(AppRole::Index);
+        let (l, i) = built(AppRole::Indexer);
         assert_eq!(l.args, ["index", "--config", CONFIG_FILE]);
         assert!(!i.lean && i.records.enabled && !i.fast_start);
     }
@@ -1158,13 +1181,13 @@ mod tests {
     #[test]
     fn the_role_list_accepts_either_order_and_refuses_the_rest() {
         for (s, want) in [
-            ("match", AppRole::Match),
-            ("index", AppRole::Index),
-            ("index,match", AppRole::IndexMatch),
-            ("match,index", AppRole::IndexMatch),
-            (" Index , MATCH ", AppRole::IndexMatch),
-            ("index,index", AppRole::Index),
-            ("match,match", AppRole::Match),
+            ("match", AppRole::Executor),
+            ("index", AppRole::Indexer),
+            ("index,match", AppRole::ExecutorIndexer),
+            ("match,index", AppRole::ExecutorIndexer),
+            (" Index , MATCH ", AppRole::ExecutorIndexer),
+            ("index,index", AppRole::Indexer),
+            ("match,match", AppRole::Executor),
         ] {
             assert_eq!(AppRole::parse(s), Ok(want), "{s}");
         }
@@ -1185,16 +1208,16 @@ mod tests {
         let parse = |role: &str| {
             Cli::try_parse_from(["x", "--non-interactive", "--node", "resolver", "--role", role]).map(|c| c.setup.role.unwrap())
         };
-        assert_eq!(parse("index,match").unwrap(), AppRole::IndexMatch);
-        assert_eq!(parse("match,index").unwrap(), AppRole::IndexMatch);
-        assert_eq!(parse("match").unwrap(), AppRole::Match);
+        assert_eq!(parse("index,match").unwrap(), AppRole::ExecutorIndexer);
+        assert_eq!(parse("match,index").unwrap(), AppRole::ExecutorIndexer);
+        assert_eq!(parse("match").unwrap(), AppRole::Executor);
         assert!(parse("index,").is_err() && parse("").is_err() && parse("keep").is_err());
     }
 
     /// The third choice of the dialogue: the warning is shown, the key and the funding come as for the matcher, and the file
     /// is the archive's with a matcher.
     #[test]
-    fn the_interactive_setup_offers_index_and_match_with_a_warning() {
+    fn the_interactive_setup_offers_executor_and_indexer_with_a_warning() {
         let d = tempfile::tempdir().unwrap();
         let mut node = FakeNode::new("testnet-10");
         node.balances = [150 * 100_000_000].into();
@@ -1203,17 +1226,20 @@ mod tests {
         let got = run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap();
         let out = io.text();
         assert_eq!(got, Some(d.path().join(CONFIG_FILE)), "{out}");
-        assert!(out.contains("3) Index and match"), "{out}");
+        assert!(out.contains("3) Executor and Indexer"), "{out}");
         assert!(out.contains("the public API and the signing key then live on the same machine"), "{out}");
-        assert!(out.contains("prefer separate machines") && out.contains("prefer an index-only host and a separate matcher"), "{out}");
+        assert!(
+            out.contains("prefer separate machines") && out.contains("prefer an Indexer-only host and an Executor on another machine"),
+            "{out}"
+        );
         assert!(out.contains("Operator address: kaspatest:") && out.contains("Funded."), "{out}");
         let secret = std::fs::read_to_string(d.path().join(KEY_FILE)).unwrap();
         assert!(!out.contains(secret.trim()), "the setup printed the secret");
-        assert_eq!(std::fs::read_to_string(d.path().join(CONFIG_FILE)).unwrap(), written(AppRole::IndexMatch, "testnet-10"));
+        assert_eq!(std::fs::read_to_string(d.path().join(CONFIG_FILE)).unwrap(), written(AppRole::ExecutorIndexer, "testnet-10"));
         // the node check needs the UTXO index for it, as for the matcher
         let mut no_index = FakeNode::new("testnet-10");
         no_index.info.has_utxo_index = false;
-        assert!(judge_node(&no_index.info, "testnet-10", AppRole::IndexMatch.launch_role()).unwrap_err().contains("--utxoindex"));
+        assert!(judge_node(&no_index.info, "testnet-10", AppRole::ExecutorIndexer.launch_role()).unwrap_err().contains("--utxoindex"));
     }
 
     #[test]

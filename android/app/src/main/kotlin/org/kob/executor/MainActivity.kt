@@ -118,13 +118,13 @@ class MainActivity : Activity() {
         }
         add(nodeGroup)
         urlEdit = EditText(this).apply {
-            hint = "ws://host:18210 (JSON wRPC; needs the UTXO index for the matcher)"
+            hint = "ws://host:18210 (JSON wRPC; needs the UTXO index for the Executor)"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine()
         }
         add(urlEdit)
-        matchRadio = radio("Matcher and keepers (needs a funded hot key)")
-        indexRadio = radio("Index only (no key, no funds)")
+        matchRadio = radio("Executor (needs a funded hot key)")
+        indexRadio = radio("Indexer (no key, no funds)")
         roleGroup = RadioGroup(this).apply {
             orientation = RadioGroup.VERTICAL
             addView(matchRadio)
@@ -220,7 +220,7 @@ class MainActivity : Activity() {
         work.execute {
             val msg = try {
                 val out = Kob.run(
-                    this, 60_000, "setup", "--non-interactive", "--node", if (own) url else "resolver", "--role", role,
+                    this, 60_000, "setup", "--non-interactive", "--node", if (own) url else "resolver", if (role == "index") "--indexer" else "--executor",
                     "--dir", Kob.dir(this).path, "--new-key"
                 )
                 val j = JSONObject(out.trim().lines().last { it.startsWith("{") })
@@ -231,7 +231,7 @@ class MainActivity : Activity() {
                     .putString("address", if (j.isNull("address")) "" else j.getString("address"))
                     .apply()
                 balanceAtMs = 0
-                "Saved: ${if (role == "index") "index only" else "matcher and keepers"}, ${j.optString("node")}."
+                "Saved: ${if (role == "index") "Indexer" else "Executor"}, ${j.optString("node")}."
             } catch (e: Exception) {
                 "Setup failed: ${e.message}"
             }

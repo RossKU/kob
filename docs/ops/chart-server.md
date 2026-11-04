@@ -43,7 +43,7 @@ you and the chain; `docs/ops/executor-quickstart.md`, section 2), or the public 
 (`rpc_url = "resolver"`: always a cross-checked pair on two hosts; `docs/ops/executor.md`, Part C, *Node*).
 
 **Setup.** Run `kob-executor setup` in the folder of the binary and answer: the node (public nodes, or your own), **role:
-index only**, the data directory (`kob-data`). There is no key question for this role. It writes `kob-executor.toml` (and on
+Indexer**, the data directory (`kob-data`). There is no key question for this role. It writes `kob-executor.toml` (and on
 testnet-10 `kob-tokens.json`, the supported token programs with no token entries: every token of a supported program is indexed
 and listed by the API, and none is named; the web app's market list shows the tokens that have a ticker or declared decimals and keeps the
 others behind "Show N token(s) without a name"). **The setup starts the executor when it finishes, with the default `[api]`** (loopback
