@@ -210,7 +210,7 @@ test.describe('the ticket in an inverted market', () => {
     expect(flipped.receipt.orders.map((o) => o.title)).toEqual(['Buy KAS · limit']);
     expect(flipped.receipt.orders[0]!.token).toMatch(/· on chain: Sell limit order$/);
     expect(flipped.receipt.orders[0]!.rows).toMatchObject({ 'You pay': '1 EXKCC', 'You receive': 'at least 0.04 KAS', Price: '25 EXKCC per KAS', Amount: '1 EXKCC' });
-    expect(flipped.receipt.lines['Locked in orders']).toBe('4 KAS');
+    expect(flipped.receipt.lines['Locked in orders']).toBe('2 KAS');
     // the order that was signed is the native one: same contract, same price (a sell of 1 EXKCC at 0.04 KAS per token = 4_000_000 sompi per whole
     // token, exactly), same amount, same funds locked
     expect(flipped.views).toHaveLength(1);

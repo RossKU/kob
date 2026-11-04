@@ -199,7 +199,7 @@ test.describe('input validation', () => {
   });
 
   test('funding errors name the exact shortfall: not enough KAS for a buy', async ({ appPage: page, mock }) => {
-    await mock.giveKas('alice', 100_000_000n); // 1 KAS: less than the 2 KAS delivery carrier a resting buy locks
+    await mock.giveKas('alice', 100_000_000n); // 1 KAS: less than the 1 KAS delivery carrier a resting buy locks plus its escrow and tips
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { amount: '2', price: '0.0245' });

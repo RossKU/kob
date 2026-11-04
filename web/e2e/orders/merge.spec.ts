@@ -84,10 +84,10 @@ test('merge seven UTXOs of a 3 / 3 token: one 3 -> 1 transaction per click, the 
   await expect(page.getByTestId('kas-on-tokens')).toHaveText(/^[0-9.,]+\s*KAS$/);
   await recordShownAs(page);
 
-  // click 1: the three smallest (1 + 2 + 3) into one; two of their three 2 KAS carriers come back, less the fee
+  // click 1: the three smallest (1 + 2 + 3) into one; of their three 2 KAS carriers the merged output keeps one at the 1 KAS default, so 5 KAS come back, less the fee
   const first = await mergeOnce(page, mock, wallet);
   expect(first.shown).toMatch(
-    /^Merge your 3 smallest EXSTD UTXOs into one in one transaction: 7 UTXOs become 5\. About 3\.9\d* KAS of their carriers returns to your wallet \(after the fee of about 0\.\d+ KAS\)\. 5 mergeable UTXOs remain: click Merge again to merge more\.$/,
+    /^Merge your 3 smallest EXSTD UTXOs into one in one transaction: 7 UTXOs become 5\. About 4\.9\d* KAS of their carriers returns to your wallet \(after the fee of about 0\.\d+ KAS\)\. 5 mergeable UTXOs remain: click Merge again to merge more\.$/,
   );
   const tokenIns = (p: typeof first.placed) => (p.submission.spent ?? []).filter((x) => x.kind === 'token');
   expect(tokenIns(first.placed)).toHaveLength(3);

@@ -52,8 +52,8 @@ describe('merge flow step (one transaction per click)', () => {
     const plan = one();
     expect(plan.ok).toBe(true);
     expect(plan.links).toHaveLength(1);
-    // three 2 KAS carriers in, one kept by the merged output: 4 KAS less the fee come back
-    expect(plan.freed).toBe(4n * KAS - plan.fee);
+    // three 2 KAS carriers in, one kept by the merged output at the 1 KAS default: 5 KAS less the fee come back
+    expect(plan.freed).toBe(5n * KAS - plan.fee);
     const summary = mergeSummary(plan, info.ticker);
     const freed = (Number(plan.freed) / 1e8).toString().replace('.', '\\.');
     expect(summary).toMatch(
@@ -74,9 +74,9 @@ describe('merge flow step (one transaction per click)', () => {
     const plan = one();
     const signer = summarize(kob, plan.links[0]!.built, MAKER.pk, []);
     const line = signer.lines.find((l) => l.label === 'KAS freed from your token UTXOs (now spendable)');
-    expect(line?.value).toBe(`${formatKas(4n * KAS)} KAS`);
-    // three 2 KAS carriers, one kept: about 4 KAS before the fee
-    expect([...nextMergeFrees(set, registry.byCovenantId, MAKER.pk, new Set())]).toEqual([[TOKEN.covenantId, 4n * KAS]]);
+    expect(line?.value).toBe(`${formatKas(5n * KAS)} KAS`);
+    // three 2 KAS carriers, one kept at the 1 KAS default: about 5 KAS before the fee
+    expect([...nextMergeFrees(set, registry.byCovenantId, MAKER.pk, new Set())]).toEqual([[TOKEN.covenantId, 5n * KAS]]);
     expect(nextMergeFrees(set.slice(0, 1), registry.byCovenantId, MAKER.pk, new Set()).size).toBe(0);
   });
 

@@ -85,9 +85,9 @@ describe('planMerge on the standard program (real kob-wasm builds)', () => {
       expect(l.output.state.owner).toBe(MAKER.pk);
       const tokenOuts = l.built.tx.outputs.filter((o) => o.covenant?.covenantId === TOKEN.covenantId);
       expect(tokenOuts).toHaveLength(1);
-      // the freed carriers pay the fee: no wallet KAS input, the merged output keeps one carrier (2 KAS), the rest is KAS change
+      // the freed carriers pay the fee: no wallet KAS input, the merged output keeps one carrier (the 2 KAS inputs of older orders are capped at the 1 KAS default), the rest is KAS change
       expect(l.fundingUsed).toEqual([]);
-      expect(l.output.carrier).toBe(2n * KAS);
+      expect(l.output.carrier).toBe(KAS);
       expect(l.built.sign.every((r) => r.pubkey === MAKER.pk)).toBe(true);
       signAndValidate(kob, l.built, [MAKER.sk]);
       const s = decodeSigning({ kob, built: l.built, maker: MAKER.pk, registry, expected: { cancelIds: [] }, nodeInputs: nodeFactsOf(l.built) });
@@ -106,10 +106,10 @@ describe('planMerge on the standard program (real kob-wasm builds)', () => {
     expect(plan.groups.map((g) => g.map((u) => u.state.amount))).toEqual([['10', '20', '30']]);
     expect([plan.before, plan.merged, plan.after]).toEqual([7, 3, 5]);
     expect(plan.amount).toBe(60n);
-    // three 2 KAS carriers in, the merged output keeps one: 4 KAS less the fee returns as KAS change (no wallet coin needed)
+    // three 2 KAS carriers in, the merged output keeps one at the 1 KAS default: 5 KAS less the fee returns as KAS change (no wallet coin needed)
     const l = plan.links[0]!;
     expect(l.fundingUsed).toEqual([]);
-    expect(plan.freed).toBe(4n * KAS - plan.fee);
+    expect(plan.freed).toBe(5n * KAS - plan.fee);
     const kasBack = l.built.tx.outputs.filter((o) => !o.covenant).reduce((s, o) => s + BigInt(o.value), 0n);
     expect(kasBack).toBe(plan.freed);
     signAndValidate(kob, l.built, [MAKER.sk]);
@@ -120,7 +120,7 @@ describe('planMerge on the standard program (real kob-wasm builds)', () => {
 
   it('a later link rebuilt over the node-read output equals the planned one', () => {
     const plan = planMerge(env(), STD, utxos(5));
-    const carry = mergeCarry(plan.links[0]!, plan.links[0]!.built.tx.id, STD, { amount: (2n * KAS).toString(), blockDaaScore: '900' });
+    const carry = mergeCarry(plan.links[0]!, plan.links[0]!.built.tx.id, STD, { amount: plan.links[0]!.output.carrier.toString(), blockDaaScore: '900' });
     const again = buildMergeLink(env(), STD, [carry, ...plan.groups[1]!], plan.groups[1]!);
     expect('error' in again).toBe(false);
     if ('error' in again) return;

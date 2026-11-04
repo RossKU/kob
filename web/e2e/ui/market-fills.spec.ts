@@ -60,13 +60,13 @@ test('a market buy against many small asks: one transaction takes 3, with Fills 
   await clickPlaceOnly(page);
   const receipt = await readReceipt(page);
   const card = receipt.orders[0]!;
-  expect(card.rows['You may receive up to']).toMatch(/^1\d\d[.]\d+ EXSTD$/);
+  expect(card.rows['You may receive up to']).toMatch(/^8[0-9][.][0-9]+ EXSTD$/);
   expect(card.title).toBe('Buy market order (auction, several fills)');
   expect(card.rows['Time in force']).toMatch(/^fills in up to 3 transactions within the worst price; what is not filled returns after .+$/);
-  expect(card.rows['Delivery carriers deposited']).toBe('6 KAS');
+  expect(card.rows['Delivery carriers deposited']).toBe('3 KAS');
   expect(card.rows['Expected price (auction start)']).toBe('0.025 KAS per EXSTD');
-  // the escrow budgets three fills: three delivery carriers of 2 KAS on top of the budget of 9 tokens at the bound (about 0.23 KAS)
-  expect(Number(card.rows['KAS on the order output']!.replace(' KAS', ''))).toBeGreaterThan(6.2);
+  // the escrow budgets three fills: three delivery carriers of 1 KAS on top of the budget of 9 tokens at the bound (about 0.23 KAS)
+  expect(Number(card.rows['KAS on the order output']!.replace(' KAS', ''))).toBeGreaterThan(3.2);
   await confirmReceipt(page);
   const txid = await waitSubmitted(page);
   const placed = await placedBy(mock, txid);

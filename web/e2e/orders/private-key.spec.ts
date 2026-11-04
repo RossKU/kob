@@ -97,7 +97,7 @@ test('connect with a private key in the signer frame, place and cancel an order 
   await clickPlace(page);
   const shown = await approveInFrame(page, {
     title: 'Place order',
-    lines: { 'Locked in orders': '4 KAS' },
+    lines: { 'Locked in orders': '2 KAS' },
     orderTitles: ['Sell limit order'],
   });
   // the mock registry is not the table this bundle pins (registry/tokens.json, signer/table.ts): the frame does not take its ticker or

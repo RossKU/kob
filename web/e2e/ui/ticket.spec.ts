@@ -67,13 +67,13 @@ test.describe('order ticket', () => {
     const placed = await placeOrderAndRead(page, mock);
     const shown = placed.receipt;
     expect(shown.title).toBe('Place order');
-    expect(shown.lines['Locked in orders']).toBe('4 KAS');
+    expect(shown.lines['Locked in orders']).toBe('2 KAS');
     expect(Object.values(shown.lines), 'the 3 EXKCC leave the wallet').toContain('−3');
     expect(shown.fee).toBe(`${formatKas(BigInt(placed.submission.fee))} KAS`);
     expect(shown.orders).toHaveLength(1);
     expect(shown.orders[0]!.title).toBe('Sell limit order');
     // 3 EXKCC at 2.6 KAS with a 0.01 KAS tip: the all-in price is 2.59
-    expect(shown.orders[0]!.rows).toMatchObject({ Amount: '3 EXKCC', 'Limit price': '2.6 KAS per EXKCC', 'You receive at least per token (all-in)': '2.59 KAS per EXKCC', 'KAS on the order output': '2 KAS' });
+    expect(shown.orders[0]!.rows).toMatchObject({ Amount: '3 EXKCC', 'Limit price': '2.6 KAS per EXKCC', 'You receive at least per token (all-in)': '2.59 KAS per EXKCC', 'KAS on the order output': '1 KAS' });
     expect(shown.orders[0]!.rows.Expires, 'the expiry is shown').toMatch(/^DAA score [0-9]+$/);
     await expectWalletSigned(wallet!, placed);
     expect(placed.submission.created).toHaveLength(1);
@@ -113,7 +113,7 @@ test.describe('order ticket', () => {
     expect(shown.title).toBe('Place order');
     expect(shown.orders.map((o) => o.title)).toEqual(['Sell limit order']);
     expect(shown.orders[0]!.rows).toMatchObject({ Amount: '2 EXKCC', 'Limit price': '2.7 KAS per EXKCC' });
-    expect(shown.lines['Locked in orders']).toBe('4 KAS');
+    expect(shown.lines['Locked in orders']).toBe('2 KAS');
     expect(shown.fee).toMatch(/^[0-9.]+ KAS$/);
     await expect(page.getByTestId('order-status')).toHaveAttribute('data-phase', 'confirming');
     expect(await wallet!.calls(), 'no wallet request before Continue').toHaveLength(0);

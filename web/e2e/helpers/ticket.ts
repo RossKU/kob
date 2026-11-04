@@ -74,7 +74,7 @@ export interface ReceiptOrder {
 export interface ReceiptRead {
   /** "Place order", "Cancel order", "Send" ... */
   title: string;
-  /** the summary lines before the fee: label -> value ("KAS in your wallet" -> "-4.014866 KAS", "Locked in orders" -> "4 KAS", a token's net ...) */
+  /** the summary lines before the fee: label -> value ("KAS in your wallet" -> "-4.014866 KAS", "Locked in orders" -> "2 KAS", a token's net ...) */
   lines: Record<string, string>;
   /** the labels of the summary lines in order (the first is the net KAS) */
   labels: string[];
