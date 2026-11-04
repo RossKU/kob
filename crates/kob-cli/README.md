@@ -24,6 +24,7 @@ wrong argument prints their usage line and exits 2).
 | `kob book <TOKEN> [--quote B]` | the order book on KAS or of a pair (the indexer's view) |
 | `kob orders` | the maker's orders, live or (`--all`) every status |
 | `kob balances` | free KAS and tokens, and what the maker's live orders hold (custody, strays, KAS locked) |
+| `kob watch fills\|book\|order\|health` | follow the executor's live WebSocket feed: fills, a book, orders' states, the indexer's progress (read-only, no key; see "Watching the live feed") |
 | `kob order sweep\|cancel --view FILE` | the maker's stray sweep in place and cancel from saved indexer views (`--yes` or a terminal's confirmation to submit) |
 | `kob recover --from FILE` | find the maker's orders from a backup / export / view on a node alone, and cancel them (`--cancel`, with `--yes` or a terminal's confirmation) |
 | `kob token issue` | issue a fixed-supply KCC-20 token (a KCC-23 declaration, then the genesis; `--yes` or a terminal's confirmation to submit) |
@@ -220,6 +221,39 @@ Every stop also takes `--band DURATION`, `--keeper-tip KAS` and `--min-rest DURA
 (a stop entry), `--exit-min-fill`, `--exit-min-touch`, `--exit-slippage` and a trailing exit stop (`--trail-step`,
 `--trail-gap`). Every kind takes `--quote TOKEN_B` (a pair order: `KobPair`, `KobCondPair`, `KobIfdPair`). Not here:
 taking pair orders and stop legs (the matchers fill them).
+
+## Watching the live feed
+
+`kob watch` listens on the executor's WebSocket (`docs/api.md` section 4) and prints one line per event. It reads no key and signs nothing.
+The address is derived from `--indexer` / `$KOB_INDEXER_URL`: `http://host:port` becomes `ws://host:port/v1/ws` (an indexer under a
+base path keeps it). Only plain `http` / `ws` is spoken, like the REST commands (`https://` / `wss://` needs a TLS-terminating proxy
+in front; `kob watch` says so). `--network` is required as for `kob book`.
+
+```
+kob watch fills [--token TOKEN]            # every fill, or one token's
+kob watch book TOKEN [--quote B] [--depth N]   # the book, printed again when it may have changed
+kob watch order COVENANT_ID...             # each order's state, printed again when it changes
+kob watch health                           # a cursor line per published batch, a health line every 15 s
+```
+
+`TOKEN` is a ticker or a covenant id. A fill line is `time (UTC)  fill  ask|bid  amount @ price  [paid KAS]  order <short id>  tx <txid>
+daa N`: the amount and price in the token's decimals (a token whose decimals nothing tells is shown in base units); `ask` means a sell
+order was filled. The feed carries no book or order content: a `book` or `order` notice makes the CLI read `GET /v1/books/{token}` /
+`GET /v1/orders/{id}` again (the same text as `kob book` / `kob orders`), at most every 2 s and once per burst of notices. Every watch
+also reports chain reorganisations (a note, and a new read of what is shown).
+
+* **`--json`** prints one JSON document per line (NDJSON): each frame the server sends exactly as it sent it (`fill`, `book`, `order`,
+  `cursor`, `health`, `reorg`, `resync`, `error`), a `{"channel":"book:<id>"|"order:<id>","type":"snapshot","data":{..}}` line for each
+  re-read (`data` is `kob book --json`'s document, or the row `kob orders --json` prints for the order; `null` for an order the indexer
+  does not know), and `{"type":"note","data":{"message":".."}}` lines for the watch's own events. Without `--json`, notes and errors
+  go to stderr and events to stdout.
+* **Keepalive and reconnects.** The CLI pings every 25 s (the server closes a session that is silent for 60 s). When the connection drops
+  (a restart, an idle or rate close, the network) it prints a note, waits 1 s, 2 s, 4 s .. up to 30 s (a `Retry-After` of a refused
+  upgrade is honoured), connects, subscribes again and reads everything shown again. The server replays nothing: fills during the gap are
+  not shown. A `resync` frame (this client fell behind the server's buffer) prints a note and reads again too.
+* **Errors.** A subscription the server refuses (`unknown channel`, `invalid channel`) is printed with the server's reason; when it
+  refuses every channel asked for, the watch exits 1. An endpoint without `/v1/ws` (404) or one that wants credentials (401 / 403)
+  exits 1. Ctrl-C ends a watch with exit 0.
 
 ## JSON output, exit codes, scripts, token commands
 
@@ -426,6 +460,7 @@ Per family:
   without `--cancel` is 0 whatever it found.
 * `kob token issue`: 0 on success (or a dry run) and 1 on any error, a bad option and a refusal (no `--yes`, no terminal) included; `resume`: 0 or 1, and 2 with no
   argument; `verify-declaration`: 0 when the proof verifies, 1 when it does not or cannot be read, 2 for a wrong number of arguments.
+* `kob watch`: 0 after Ctrl-C (or when the output pipe closes), 1 for a fatal error (no WebSocket route, every subscription refused, wss://), 2 for an argument error.
 * `kob registry validate`: 0 valid, 1 invalid, 2 usage or an unreadable file; `verify-genesis`: 0 when the registry says exactly
   what the evidence proves, 1 on a mismatch or an invalid registry or evidence file, 2 for usage or an unreadable file;
   `programs`: 0, or 2 for usage; `add-program`: 0, 1 when the profile cannot be derived or `--write` is refused, 2 for usage.

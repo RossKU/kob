@@ -2586,6 +2586,7 @@ dependencies = [
 name = "kob-cli"
 version = "0.1.0"
 dependencies = [
+ "ctrlc",
  "kaspa-addresses",
  "kaspa-consensus-core",
  "kaspa-txscript",

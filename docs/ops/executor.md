@@ -1210,7 +1210,7 @@ kob-executor index \
 
 The network is never implied by the reference build: `--network` (or `network` in the file, or `$KOB_NETWORK`) is required
 there, for every command that talks to a node (`index`, `run`, `match`, `keep`, the facilitator's `network`, and `kob order`,
-`kob recover`, `kob token issue`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge` and the views `kob book`, `orders`, `balances`, which
+`kob recover`, `kob token issue`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge` and the views `kob book`, `orders`, `balances` and `kob watch`, which
 also refuse mainnet unless `--network mainnet` is given explicitly). A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
 and refuses another. `--rpc-url` (`rpc_url`; the facilitator's `node`) defaults to the local node's JSON wRPC port of that
 network, `ws://127.0.0.1:18110` on mainnet and `ws://127.0.0.1:18210` on testnet-10 (rusty-kaspa's defaults), never a
@@ -1409,7 +1409,7 @@ should default to settled. The mempool tier is not served by the indexer.
 | `GET /v1/candles/{token}?interval=&from=&to=&limit=` | OHLCV candles (`interval` 1m, 5m, 1h or 1d), ascending, empty buckets omitted (5.3) |
 | `GET /v1/stats/{token}` | 24 h last / open / high / low / change, volume, trade count, best bid / ask, spread, open orders (5.3) |
 | `GET /v1/depth/{token}?levels=` | cumulative depth snapshot of the listed book, levels merged by price (5.3) |
-| `GET /v1/ws` | WebSocket: subscribe to `health`, `reorg`, `fills`, `fills:<token>`, `book:<token>`, `order:<id>` (a pair order's change is a `book` notice for both its tokens) |
+| `GET /v1/ws` | WebSocket: subscribe to `health`, `reorg`, `fills`, `fills:<token>`, `book:<token>`, `order:<id>` (a pair order's change is a `book` notice for both its tokens); `kob watch` (crates/kob-cli/README.md) follows it from a terminal |
 
 #### 5.0 Units and field names
 

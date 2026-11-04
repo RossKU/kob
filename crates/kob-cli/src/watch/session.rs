@@ -1,0 +1,475 @@
+//! The watch loop: connect to the executor's WebSocket, subscribe, print what arrives, refetch the REST resources `book` and
+//! `order` notices point to (debounced), keep the connection alive with pings and, when it drops, reconnect with a growing
+//! pause and start from fresh state (`docs/api.md` section 4.4: the server replays nothing). Blocking, one thread: the socket
+//! is polled with a short read timeout so a pending refetch, a ping and Ctrl-C are served between frames.
+
+use std::collections::BTreeMap;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use kob_protocol::json::to_hex;
+use serde_json::{json, Value};
+use tungstenite::client::IntoClientRequest;
+use tungstenite::http::HeaderValue;
+use tungstenite::{Message, WebSocket};
+
+use super::frames;
+use super::names::Names;
+use super::out::Out;
+use super::url::WsTarget;
+use crate::trade::data;
+use crate::trade::http;
+use crate::trade::opts::{Common, Parsed};
+use crate::trade::views;
+
+/// What a watch listens to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kind {
+    /// Every fill, or the fills of one token.
+    Fills(Option<[u8; 32]>),
+    /// A token's book (a pair's: both tokens), reprinted on a notice.
+    Book([u8; 32], Option<[u8; 32]>),
+    /// Orders by covenant id, their state printed on a notice.
+    Orders(Vec<[u8; 32]>),
+    /// The indexer's progress and health.
+    Health,
+}
+
+/// A REST resource a notice asks to be read again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Key {
+    Book,
+    Order([u8; 32]),
+}
+
+impl Kind {
+    /// The channels to subscribe to: always `reorg`, plus the kind's own.
+    pub fn channels(&self) -> Vec<String> {
+        let mut v = vec!["reorg".to_string()];
+        match self {
+            Kind::Fills(None) => v.push("fills".into()),
+            Kind::Fills(Some(t)) => v.push(format!("fills:{}", to_hex(t))),
+            Kind::Book(a, b) => {
+                v.push(format!("book:{}", to_hex(a)));
+                if let Some(b) = b {
+                    v.push(format!("book:{}", to_hex(b)));
+                }
+            }
+            Kind::Orders(ids) => v.extend(ids.iter().map(|i| format!("order:{}", to_hex(i)))),
+            Kind::Health => v.push("health".into()),
+        }
+        v
+    }
+
+    fn tracked(&self) -> Vec<Key> {
+        match self {
+            Kind::Book(..) => vec![Key::Book],
+            Kind::Orders(ids) => ids.iter().map(|i| Key::Order(*i)).collect(),
+            _ => vec![],
+        }
+    }
+}
+
+/// The timings of a watch (tests shorten them).
+#[derive(Debug, Clone)]
+pub struct Timing {
+    /// A ping every this long (the server closes a session silent for 60 s).
+    pub ping_every: Duration,
+    /// A notice waits this long for more before its resource is read again.
+    pub debounce: Duration,
+    /// A resource is read again no sooner than this after its last read.
+    pub min_gap: Duration,
+    /// The socket's read timeout: how often the loop looks at the clock and at Ctrl-C.
+    pub poll: Duration,
+    /// First pause before a reconnect, doubled up to `backoff_max`.
+    pub backoff_start: Duration,
+    /// Longest pause.
+    pub backoff_max: Duration,
+    /// Connect, handshake and subscribe timeout.
+    pub connect: Duration,
+}
+
+impl Default for Timing {
+    fn default() -> Timing {
+        Timing {
+            ping_every: Duration::from_secs(25),
+            debounce: Duration::from_millis(500),
+            min_gap: Duration::from_secs(2),
+            poll: Duration::from_millis(250),
+            backoff_start: Duration::from_secs(1),
+            backoff_max: Duration::from_secs(30),
+            connect: Duration::from_secs(10),
+        }
+    }
+}
+
+/// Longest `Retry-After` honoured.
+const RETRY_AFTER_MAX: Duration = Duration::from_secs(60);
+/// Channels per subscribe message (a message is at most 4096 bytes; a channel name with an id is about 70).
+const CHANNELS_PER_MESSAGE: usize = 40;
+
+/// A watch.
+pub struct Watch {
+    /// The WebSocket address.
+    pub target: WsTarget,
+    /// The indexer (REST).
+    pub indexer: String,
+    /// What to listen to.
+    pub kind: Kind,
+    /// Shared options (network, registry).
+    pub common: Common,
+    /// The arguments `kob book` reads (for a book watch).
+    pub parsed: Parsed,
+    /// Token lists.
+    pub names: Names,
+    /// Timings.
+    pub timing: Timing,
+}
+
+struct ConnectError {
+    msg: String,
+    fatal: bool,
+    retry_after: Option<Duration>,
+}
+
+enum End {
+    Stop,
+    Dropped { why: String, subscribed: bool },
+    Fatal(String),
+}
+
+#[derive(Default)]
+struct Pending {
+    due: BTreeMap<Key, Instant>,
+    last: BTreeMap<Key, Instant>,
+}
+
+impl Pending {
+    /// A notice: read the resource after the debounce (and no sooner than `min_gap` after its last read).
+    fn schedule(&mut self, key: Key, now: Instant, t: &Timing, debounce: bool) {
+        if self.due.contains_key(&key) {
+            return;
+        }
+        let earliest = if debounce { now + t.debounce } else { now };
+        let due = match self.last.get(&key) {
+            Some(l) => earliest.max(*l + t.min_gap),
+            None => earliest,
+        };
+        self.due.insert(key, due);
+    }
+
+    fn take_due(&mut self, now: Instant) -> Vec<Key> {
+        let keys: Vec<Key> = self.due.iter().filter(|(_, d)| **d <= now).map(|(k, _)| *k).collect();
+        for k in &keys {
+            self.due.remove(k);
+            self.last.insert(*k, now);
+        }
+        keys
+    }
+}
+
+fn sleep_unless_stopped(d: Duration, stop: &AtomicBool) {
+    let end = Instant::now() + d;
+    while !stop.load(Ordering::Relaxed) {
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        std::thread::sleep(left.min(Duration::from_millis(100)));
+    }
+}
+
+fn is_timeout(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)
+}
+
+/// Read one frame; `None` when nothing arrived within the read timeout (or a control frame was handled).
+fn poll(ws: &mut WebSocket<TcpStream>) -> Result<Option<Value>, String> {
+    match ws.read() {
+        Ok(Message::Text(t)) => {
+            Ok(Some(serde_json::from_str(t.as_str()).unwrap_or_else(|_| json!({"type": "unparsed", "data": {"text": t.as_str()}}))))
+        }
+        Ok(Message::Close(f)) => Err(match f {
+            Some(f) if f.reason.is_empty() => format!("the server closed the connection (code {})", u16::from(f.code)),
+            Some(f) => format!("the server closed the connection (code {}: {})", u16::from(f.code), f.reason),
+            None => "the server closed the connection".into(),
+        }),
+        // tungstenite queued the pong; send it now
+        Ok(Message::Ping(_)) => ws.flush().map(|_| None).or_else(|e| {
+            if matches!(&e, tungstenite::Error::Io(i) if is_timeout(i)) {
+                Ok(None)
+            } else {
+                Err(e.to_string())
+            }
+        }),
+        Ok(_) => Ok(None),
+        Err(tungstenite::Error::Io(e)) if is_timeout(&e) => Ok(None),
+        Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => Err("the connection closed".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+impl Watch {
+    /// Run until Ctrl-C (`stop`), a fatal error or a closed output. The exit code: 0 after a stop, 1 after a fatal error.
+    pub fn run(&mut self, stop: &AtomicBool, out: &mut Out) -> i32 {
+        let mut backoff = self.timing.backoff_start;
+        let mut was_subscribed = false;
+        loop {
+            if stop.load(Ordering::Relaxed) || out.broken {
+                return 0;
+            }
+            let pause = match self.connect() {
+                Err(e) if e.fatal => {
+                    out.error(&e.msg);
+                    return 1;
+                }
+                Err(e) => {
+                    let pause = e.retry_after.unwrap_or(backoff);
+                    out.note(&format!("cannot connect: {}; retrying in {}s", e.msg, pause.as_secs().max(1)));
+                    pause
+                }
+                Ok(ws) => match self.session(ws, stop, out, was_subscribed) {
+                    End::Stop => return 0,
+                    End::Fatal(m) => {
+                        out.error(&m);
+                        return 1;
+                    }
+                    End::Dropped { why, subscribed } => {
+                        was_subscribed |= subscribed;
+                        if subscribed {
+                            backoff = self.timing.backoff_start;
+                        }
+                        out.note(&format!("connection lost: {why}; reconnecting in {}s", backoff.as_secs().max(1)));
+                        backoff
+                    }
+                },
+            };
+            sleep_unless_stopped(pause, stop);
+            backoff = (backoff * 2).min(self.timing.backoff_max);
+        }
+    }
+
+    fn connect(&self) -> Result<WebSocket<TcpStream>, ConnectError> {
+        let t = &self.target;
+        let fail = |msg: String| ConnectError { msg, fatal: false, retry_after: None };
+        if t.secure {
+            return Err(ConnectError {
+                msg: format!(
+                    "{}: wss:// needs TLS, which kob-cli does not speak (like the indexer's https://): reach the indexer over http:// or put a TLS-terminating proxy on this machine in front of it",
+                    t.shown()
+                ),
+                fatal: true,
+                retry_after: None,
+            });
+        }
+        let addr = (t.host.as_str(), t.port)
+            .to_socket_addrs()
+            .map_err(|e| fail(format!("{}: {e}", t.shown())))?
+            .next()
+            .ok_or_else(|| fail(format!("{}: no address", t.shown())))?;
+        let stream = TcpStream::connect_timeout(&addr, self.timing.connect).map_err(|e| fail(format!("{}: {e}", t.shown())))?;
+        stream
+            .set_read_timeout(Some(self.timing.connect))
+            .and_then(|_| stream.set_write_timeout(Some(self.timing.connect)))
+            .and_then(|_| stream.set_nodelay(true))
+            .map_err(|e| fail(e.to_string()))?;
+        let mut req = t.url().into_client_request().map_err(|e| fail(e.to_string()))?;
+        if let Some(a) = &t.auth {
+            req.headers_mut().insert("Authorization", HeaderValue::from_str(&format!("Basic {a}")).map_err(|e| fail(e.to_string()))?);
+        }
+        req.headers_mut().insert("User-Agent", HeaderValue::from_static("kob-cli"));
+        let config = tungstenite::protocol::WebSocketConfig {
+            max_message_size: Some(1 << 20),
+            max_frame_size: Some(1 << 20),
+            ..Default::default()
+        };
+        match tungstenite::client::client_with_config(req, stream, Some(config)) {
+            Ok((ws, _)) => {
+                ws.get_ref().set_read_timeout(Some(self.timing.poll)).map_err(|e| fail(e.to_string()))?;
+                Ok(ws)
+            }
+            Err(tungstenite::HandshakeError::Failure(tungstenite::Error::Http(resp))) => {
+                let status = resp.status().as_u16();
+                let retry_after = resp
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .map(|s| Duration::from_secs(s).min(RETRY_AFTER_MAX));
+                let body = resp.body().as_deref().map(String::from_utf8_lossy).unwrap_or_default();
+                let code = serde_json::from_str::<Value>(&body)
+                    .ok()
+                    .and_then(|v| v.pointer("/error/message").and_then(Value::as_str).map(str::to_owned))
+                    .unwrap_or_default();
+                let msg = format!("{}: the upgrade was refused: HTTP {status} {code}", t.shown());
+                let fatal = matches!(status, 400 | 401 | 403 | 404 | 405);
+                let msg = if status == 404 {
+                    format!("{msg} (this endpoint has no /v1/ws route: it is not a KOB executor, or an older one)")
+                } else {
+                    msg
+                };
+                Err(ConnectError { msg: msg.trim().to_string(), fatal, retry_after })
+            }
+            Err(tungstenite::HandshakeError::Failure(e)) => Err(fail(format!("{}: {e}", t.shown()))),
+            Err(tungstenite::HandshakeError::Interrupted(_)) => Err(fail(format!("{}: the handshake timed out", t.shown()))),
+        }
+    }
+
+    /// One connection: subscribe, then serve frames, pings and refetches until it ends.
+    fn session(&mut self, mut ws: WebSocket<TcpStream>, stop: &AtomicBool, out: &mut Out, reconnect: bool) -> End {
+        let timing = self.timing.clone();
+        let mut pending = Pending::default();
+        // 1. subscribe (before any refetch, so a change in between is not lost)
+        let wanted = self.kind.channels();
+        let mut held: Vec<String> = vec![];
+        let mut errors: Vec<String> = vec![];
+        for chunk in wanted.chunks(CHANNELS_PER_MESSAGE) {
+            let msg = json!({"op": "subscribe", "channels": chunk}).to_string();
+            if let Err(e) = ws.send(Message::text(msg)) {
+                return End::Dropped { why: e.to_string(), subscribed: false };
+            }
+            let deadline = Instant::now() + timing.connect;
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    let _ = ws.close(None);
+                    return End::Stop;
+                }
+                if Instant::now() > deadline {
+                    return End::Dropped { why: "no reply to the subscription".into(), subscribed: false };
+                }
+                match poll(&mut ws) {
+                    Err(why) => return End::Dropped { why, subscribed: false },
+                    Ok(None) => {}
+                    Ok(Some(f)) if f["type"] == "subscribed" => {
+                        let (chans, errs) = frames::subscribed(&f);
+                        held = chans;
+                        errors.extend(errs);
+                        break;
+                    }
+                    Ok(Some(f)) => self.on_frame(&f, out, &mut pending),
+                }
+            }
+        }
+        for e in &errors {
+            out.error(&format!("subscription refused by the server: {e}"));
+        }
+        if !held.iter().any(|c| c != "reorg") {
+            return End::Fatal("the server accepted none of the channels asked for".into());
+        }
+        if reconnect {
+            out.note("reconnected; everything shown is read again (events during the gap are not replayed)");
+            if let Err(e) = self.names.reload() {
+                out.error(&format!("token lists: {e}"));
+            }
+        }
+        // 2. what is shown is read once now
+        let now = Instant::now();
+        for k in self.kind.tracked() {
+            pending.schedule(k, now, &timing, false);
+        }
+        // 3. serve
+        let mut next_ping = Instant::now() + timing.ping_every;
+        loop {
+            if stop.load(Ordering::Relaxed) || out.broken {
+                let _ = ws.close(None);
+                let _ = ws.flush();
+                return End::Stop;
+            }
+            let now = Instant::now();
+            if now >= next_ping {
+                next_ping = now + timing.ping_every;
+                if let Err(e) = ws.send(Message::text(r#"{"op":"ping"}"#)) {
+                    return End::Dropped { why: e.to_string(), subscribed: true };
+                }
+            }
+            for key in pending.take_due(now) {
+                self.refetch(key, out);
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+            match poll(&mut ws) {
+                Err(why) => return End::Dropped { why, subscribed: true },
+                Ok(None) => {}
+                Ok(Some(f)) => self.on_frame(&f, out, &mut pending),
+            }
+        }
+    }
+
+    /// One server frame.
+    fn on_frame(&mut self, f: &Value, out: &mut Out, pending: &mut Pending) {
+        let data = f.get("data").cloned().unwrap_or(Value::Null);
+        let now = Instant::now();
+        match f["type"].as_str().unwrap_or("") {
+            "pong" | "subscribed" | "unsubscribed" => {}
+            "fill" => {
+                let info = data["token"].as_str().and_then(kob_protocol::registry::parse_hex32).and_then(|c| self.names.info(&c));
+                out.event(&frames::fill_line(&data, info.as_ref()), f);
+            }
+            "book" => {
+                out.json_only(f);
+                pending.schedule(Key::Book, now, &self.timing, true);
+            }
+            "order" => {
+                out.json_only(f);
+                if let Some(id) = data["covenant_id"].as_str().and_then(kob_protocol::registry::parse_hex32) {
+                    if self.kind.tracked().contains(&Key::Order(id)) {
+                        pending.schedule(Key::Order(id), now, &self.timing, true);
+                    }
+                }
+            }
+            "cursor" => out.event(&frames::cursor_line(&data), f),
+            "health" => out.event(&frames::health_line(&data), f),
+            "reorg" => {
+                out.frame_note(&frames::reorg_line(&data), f);
+                for k in self.kind.tracked() {
+                    pending.schedule(k, now, &self.timing, false);
+                }
+            }
+            "resync" => {
+                out.frame_note(&frames::resync_line(&data), f);
+                for k in self.kind.tracked() {
+                    pending.schedule(k, now, &self.timing, false);
+                }
+            }
+            "error" => {
+                out.json_only(f);
+                out.error(&format!("server: {}", data["message"].as_str().unwrap_or("(no message)")));
+            }
+            _ => out.event(&frames::generic_line(f), f),
+        }
+    }
+
+    /// Read a resource again and print it.
+    fn refetch(&mut self, key: Key, out: &mut Out) {
+        match key {
+            Key::Book => match views::book_view(&self.common, &self.parsed) {
+                Ok((v, lines)) => {
+                    let channel = v["token"].as_str().map(|t| format!("book:{t}"));
+                    out.block(&lines, &json!({"channel": channel, "type": "snapshot", "data": v}));
+                }
+                Err(e) => out.error(&format!("book: {e}")),
+            },
+            Key::Order(id) => {
+                let hex = to_hex(&id);
+                let channel = format!("order:{hex}");
+                match http::get(&self.indexer, &format!("/v1/orders/{hex}"), data::INDEXER_TIMEOUT) {
+                    Ok((200, v)) => {
+                        let row = views::order_row(&v, &self.names.reg, &self.names.idx);
+                        out.event(
+                            &format!("order  {}", views::order_row_line(&row)),
+                            &json!({"channel": channel, "type": "snapshot", "data": row}),
+                        );
+                    }
+                    Ok((404, _)) => out.event(
+                        &format!("order  {} is not known to the indexer (never seen, or reverted)", frames::short(&hex)),
+                        &json!({"channel": channel, "type": "snapshot", "data": null}),
+                    ),
+                    Ok((status, _)) => out.error(&format!("order {}: indexer answered HTTP {status}", frames::short(&hex))),
+                    Err(e) => out.error(&format!("order {}: {e}", frames::short(&hex))),
+                }
+            }
+        }
+    }
+}

@@ -77,7 +77,7 @@ pub fn maker_of(p: &Parsed, c: &Common, argv: &[String]) -> Result<[u8; 32], Str
 }
 
 /// Display facts of a token from the registry and the indexer lists (the short id alone when neither knows it).
-fn unit_of(cov: &[u8; 32], reg: &[TokenFacts], idx: &[TokenFacts]) -> (TokenUnit, bool) {
+pub(crate) fn unit_of(cov: &[u8; 32], reg: &[TokenFacts], idx: &[TokenFacts]) -> (TokenUnit, bool) {
     let f = reg.iter().find(|t| t.cov == *cov).or_else(|| idx.iter().find(|t| t.cov == *cov));
     match f {
         Some(t) => (
@@ -340,6 +340,67 @@ fn ifd_text(p: &dyn Fn(i64) -> String, price: i64, stop: i64, exit: Option<(i64,
     v.join(", ")
 }
 
+/// One order view of the indexer as `kob orders` shows it (also `kob watch order`): its JSON row.
+pub fn order_row(o: &Value, reg: &[TokenFacts], idx: &[TokenFacts]) -> Value {
+    let cov = hex32(o.get("covenant_id")).map(|x| to_hex(&x)).unwrap_or_default();
+    let contract = o.get("contract").and_then(Value::as_str).unwrap_or("?").to_string();
+    let status = o.get("status").and_then(Value::as_str).unwrap_or("?").to_string();
+    let state: Option<AnyState> = o
+        .get("state")
+        .filter(|_| o.get("state_known").and_then(Value::as_bool) == Some(true))
+        .and_then(|s| serde_json::from_value(s.clone()).ok());
+    let (a, b) = match state.as_ref().and_then(AnyState::pair_tokens) {
+        Some(pt) => (pt.a.cov_id, Some(pt.b.cov_id)),
+        None => (state.as_ref().map(AnyState::token_cov_id).or(hex32(o.get("token"))).unwrap_or_default(), None),
+    };
+    let ua = unit_of(&a, reg, idx);
+    let ub = b.map(|b| unit_of(&b, reg, idx));
+    let what = match &state {
+        Some(s) => describe(s, &ua, ub.as_ref().unwrap_or(&ua), b.is_some()),
+        None => format!(
+            "{} (state not proven by the indexer)",
+            if o.get("side").and_then(Value::as_i64) == Some(1) { "sell" } else { "buy" }
+        ),
+    };
+    let market = match &ub {
+        Some(q) => format!("{}/{}", ua.0.ticker, q.0.ticker),
+        None => ua.0.ticker.clone(),
+    };
+    let expiry = state.as_ref().and_then(AnyState::expiry).map(|e| e.0);
+    let mut flags = vec![];
+    if o.get("expired").and_then(Value::as_bool) == Some(true) {
+        flags.push("expired".to_string());
+    }
+    if let Some(d) = i64_of(o.get("refund_due_daa")) {
+        flags.push(format!("refundable from DAA {d}"));
+    }
+    if o.get("possibly_frozen").and_then(Value::as_bool) == Some(true) {
+        flags.push("possibly frozen".into());
+    }
+    json!({
+                "covenant_id": cov, "contract": contract, "market": market, "status": status, "what": what,
+                "expiry_daa": expiry.filter(|e| *e < 1 << 60), "flags": flags,
+                "value": o.get("current").and_then(|c| c.get("value")).cloned().unwrap_or(Value::Null),
+    })
+}
+
+/// The text line of an [`order_row`].
+pub fn order_row_line(r: &Value) -> String {
+    let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
+    let exp = r["expiry_daa"].as_i64().map(|e| format!(", expiry DAA {e}")).unwrap_or_default();
+    let flags = r["flags"].as_array().map(|f| f.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    format!(
+        "{} {} {}: {} [{}{}{}]",
+        s("covenant_id"),
+        s("contract"),
+        s("market"),
+        s("what"),
+        s("status"),
+        exp,
+        if flags.is_empty() { String::new() } else { format!("; {flags}") }
+    )
+}
+
 /// Run `kob orders`.
 pub fn run_orders(args: &[String]) -> i32 {
     let (p, c) = match ctx(args, &["--token", "--maker"], &["--all"], ORDERS_USAGE) {
@@ -370,49 +431,7 @@ pub fn orders_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, Ve
             None => None,
         };
         let items = fetch_orders(indexer, &maker, token.as_ref(), p.has("--all"))?;
-        let mut rows = vec![];
-        for o in &items {
-            let cov = hex32(o.get("covenant_id")).map(|x| to_hex(&x)).unwrap_or_default();
-            let contract = o.get("contract").and_then(Value::as_str).unwrap_or("?").to_string();
-            let status = o.get("status").and_then(Value::as_str).unwrap_or("?").to_string();
-            let state: Option<AnyState> = o
-                .get("state")
-                .filter(|_| o.get("state_known").and_then(Value::as_bool) == Some(true))
-                .and_then(|s| serde_json::from_value(s.clone()).ok());
-            let (a, b) = match state.as_ref().and_then(AnyState::pair_tokens) {
-                Some(pt) => (pt.a.cov_id, Some(pt.b.cov_id)),
-                None => (state.as_ref().map(AnyState::token_cov_id).or(hex32(o.get("token"))).unwrap_or_default(), None),
-            };
-            let ua = unit_of(&a, &reg, &idx);
-            let ub = b.map(|b| unit_of(&b, &reg, &idx));
-            let what = match &state {
-                Some(s) => describe(s, &ua, ub.as_ref().unwrap_or(&ua), b.is_some()),
-                None => format!(
-                    "{} (state not proven by the indexer)",
-                    if o.get("side").and_then(Value::as_i64) == Some(1) { "sell" } else { "buy" }
-                ),
-            };
-            let market = match &ub {
-                Some(q) => format!("{}/{}", ua.0.ticker, q.0.ticker),
-                None => ua.0.ticker.clone(),
-            };
-            let expiry = state.as_ref().and_then(AnyState::expiry).map(|e| e.0);
-            let mut flags = vec![];
-            if o.get("expired").and_then(Value::as_bool) == Some(true) {
-                flags.push("expired".to_string());
-            }
-            if let Some(d) = i64_of(o.get("refund_due_daa")) {
-                flags.push(format!("refundable from DAA {d}"));
-            }
-            if o.get("possibly_frozen").and_then(Value::as_bool) == Some(true) {
-                flags.push("possibly frozen".into());
-            }
-            rows.push(json!({
-                "covenant_id": cov, "contract": contract, "market": market, "status": status, "what": what,
-                "expiry_daa": expiry.filter(|e| *e < 1 << 60), "flags": flags,
-                "value": o.get("current").and_then(|c| c.get("value")).cloned().unwrap_or(Value::Null),
-            }));
-        }
+        let rows: Vec<Value> = items.iter().map(|o| order_row(o, &reg, &idx)).collect();
         let mut lines = vec![format!(
             "orders of {} ({}, indexer {})",
             to_hex(&maker),
@@ -423,20 +442,7 @@ pub fn orders_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, Ve
             lines.push("  (none)".into());
         }
         for r in &rows {
-            let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
-            let exp = r["expiry_daa"].as_i64().map(|e| format!(", expiry DAA {e}")).unwrap_or_default();
-            let flags =
-                r["flags"].as_array().map(|f| f.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
-            lines.push(format!(
-                "  {} {} {}: {} [{}{}{}]",
-                s("covenant_id"),
-                s("contract"),
-                s("market"),
-                s("what"),
-                s("status"),
-                exp,
-                if flags.is_empty() { String::new() } else { format!("; {flags}") }
-            ));
+            lines.push(format!("  {}", order_row_line(r)));
         }
         Ok((json!({"maker": to_hex(&maker), "orders": rows}), lines))
     }

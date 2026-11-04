@@ -15,6 +15,7 @@ mod recover;
 mod registry;
 mod token;
 mod trade;
+mod watch;
 mod wrpc;
 
 #[cfg(test)]
@@ -65,6 +66,9 @@ USAGE
                                the trading commands read the key from --key-file or $KOB_KEY (never --key), show the
                                plan and sign only with --yes or a terminal's confirmation; --dry-run stops before signing;
                                --json prints one JSON document (`crates/kob-cli/README.md`)
+  kob watch fills|book|order|health [...]
+                               follow the executor's live feed: fills, a book, orders' states, indexer progress (read-only;
+                               no key; `kob watch --help`)
   kob --version
 ";
 
@@ -90,6 +94,7 @@ fn main() {
         ["book", ..] => trade::views::run_book(&args[1..]),
         ["orders", ..] => trade::views::run_orders(&args[1..]),
         ["balances", ..] => trade::views::run_balances(&args[1..]),
+        ["watch", ..] => watch::run(&args[1..]),
         ["--version"] | ["-V"] => {
             println!("kob {}", kob_protocol::VERSION);
             0
