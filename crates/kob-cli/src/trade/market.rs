@@ -408,6 +408,36 @@ pub fn find<'a>(list: &'a [TokenFacts], key: &str) -> Vec<&'a TokenFacts> {
     }
 }
 
+/// The one token a ticker or a covenant id names across the registry and the indexer's list: `Ok(None)` when neither lists it,
+/// an error naming every candidate with its full covenant id when a ticker matches more than one token (tickers collide: the
+/// covenant id is the identity, so nothing is picked silently).
+pub fn unique_cov(registry: &[TokenFacts], indexer: &[TokenFacts], key: &str) -> Result<Option<[u8; 32]>, String> {
+    let (r, i) = (find(registry, key), find(indexer, key));
+    ambiguity(key, &r, &i).map_or(Ok(r.first().or(i.first()).map(|t| t.cov)), Err)
+}
+
+/// The refusal of a ticker that names more than one token (`None`: it names at most one), listing each candidate.
+fn ambiguity(key: &str, registry: &[&TokenFacts], indexer: &[&TokenFacts]) -> Option<String> {
+    let mut seen: Vec<([u8; 32], &str, &str)> = vec![];
+    for (t, from) in registry.iter().map(|t| (t, "registry")).chain(indexer.iter().map(|t| (t, "indexer"))) {
+        if !seen.iter().any(|(c, ..)| *c == t.cov) {
+            seen.push((t.cov, &t.ticker, from));
+        }
+    }
+    if seen.len() < 2 {
+        return None;
+    }
+    let mut msg = format!("`{key}` names {} tokens: give the covenant id of the one you mean:", seen.len());
+    for (cov, ticker, from) in seen {
+        msg.push_str(&format!(
+            "
+  {ticker}  {}  ({from})",
+            to_hex(&cov)
+        ));
+    }
+    Some(msg)
+}
+
 /// Most decimals `--decimals` names: the scale of an order is `10^decimals`, at most 10^9 (`MAX_SCALE`).
 pub const MAX_ENTERED_DECIMALS: u32 = 9;
 
@@ -590,8 +620,8 @@ pub fn resolve_with(
 ) -> Result<TokenMarket, String> {
     let r = find(registry, key);
     let i = find(indexer, key);
-    if r.len() > 1 || i.len() > 1 {
-        return Err(format!("`{key}` names more than one token: give its covenant id"));
+    if let Some(msg) = ambiguity(key, &r, &i) {
+        return Err(msg);
     }
     let declaration = open.and_then(|o| o.declaration);
     let unknown = || {

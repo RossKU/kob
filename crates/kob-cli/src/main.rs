@@ -16,6 +16,7 @@ mod recover;
 mod registry;
 mod tls;
 mod token;
+mod tokens;
 mod trade;
 mod watch;
 mod wrpc;
@@ -64,6 +65,7 @@ USAGE
   kob book <TOKEN> [--quote B] the order book (KAS or a pair), from the indexer
   kob orders [--token T] [--all]
                                the maker's orders (--maker KEY|ADDRESS, else the signing key's public key)
+  kob tokens [SEARCH] [--all]  the tokens with a KOB market (the indexer's), with --all every token kascov.io lists too
   kob balances                 free KAS and tokens, and what the maker's live orders hold (custody, strays, KAS)
                                the trading commands read the key from --key-file or $KOB_KEY (never --key), show the
                                plan and sign only with --yes or a terminal's confirmation; --dry-run stops before signing;
@@ -109,6 +111,7 @@ fn main() {
         ["orders", ..] => trade::views::run_orders(&args[1..]),
         ["balances", ..] => trade::views::run_balances(&args[1..]),
         ["watch", ..] => watch::run(&args[1..]),
+        ["tokens", ..] => tokens::run(&args[1..]),
         ["--version"] | ["-V"] => {
             println!("kob {}", kob_protocol::VERSION);
             0

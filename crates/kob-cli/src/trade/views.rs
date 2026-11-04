@@ -428,11 +428,7 @@ pub fn orders_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, Ve
         let token = match p.get("--token") {
             Some(t) => Some(match kob_protocol::registry::parse_hex32(t) {
                 Some(c) => c,
-                None => market::find(&reg, t)
-                    .first()
-                    .or(market::find(&idx, t).first())
-                    .map(|f| f.cov)
-                    .ok_or(format!("unknown token `{t}`"))?,
+                None => market::unique_cov(&reg, &idx, t)?.ok_or(format!("unknown token `{t}`"))?,
             }),
             None => None,
         };

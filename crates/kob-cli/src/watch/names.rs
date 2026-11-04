@@ -61,10 +61,8 @@ impl Names {
         if let Some(c) = parse_hex32(key) {
             return Ok(c);
         }
-        match (market::find(&self.reg, key).as_slice(), market::find(&self.idx, key).as_slice()) {
-            ([a, ..], _) | ([], [a, ..]) => Ok(a.cov),
-            _ => Err(format!("unknown token `{key}` (a ticker the registry or the indexer lists, or a covenant id)")),
-        }
+        market::unique_cov(&self.reg, &self.idx, key)?
+            .ok_or_else(|| format!("unknown token `{key}` (a ticker the registry or the indexer lists, or a covenant id)"))
     }
 
     /// The display facts of a token, `None` when its decimals are not known (its fills are shown in base units).

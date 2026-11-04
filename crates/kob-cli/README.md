@@ -45,6 +45,7 @@ registry programs` take no `--help` (a wrong argument prints their usage line an
 | `kob send <TOKEN\|KAS> <TO> <AMOUNT>` | send a token (within its program's slots) or KAS |
 | `kob merge <TOKEN>` | merge the key's own UTXOs of a token into one (a chain of transfers to itself) |
 | `kob book <TOKEN> [--quote B]` | the order book on KAS or of a pair (the indexer's view) |
+| `kob tokens [SEARCH] [--all]` | the tokens with a KOB market (the indexer's list), with `--all` every token kascov.io lists too (see "Finding tokens") |
 | `kob orders` | the maker's orders, live or (`--all`) every status |
 | `kob balances` | free KAS and tokens, and what the maker's live orders hold (custody, strays, KAS locked) |
 | `kob watch fills\|book\|order\|health` | follow the executor's live WebSocket feed: fills, a book, orders' states, the indexer's progress (read-only, no key; see "Watching the live feed") |
@@ -246,6 +247,33 @@ Every stop also takes `--band DURATION`, `--keeper-tip KAS` and `--min-rest DURA
 `--trail-gap`). Every kind takes `--quote TOKEN_B` (a pair order: `KobPair`, `KobCondPair`, `KobIfdPair`). Not here:
 taking pair orders and stop legs (the matchers fill them).
 
+## Finding tokens
+
+`kob tokens [SEARCH] [--all] [--refresh] [--json]` lists tokens; it reads no key and no node. By default it is the indexer's `GET /v1/tokens`
+(`docs/api.md` 3.4): every token an order was placed for, plus the registry's. Columns: `TICKER` (the registry's, else the symbol of the
+token's verified KCC-23 declaration when the indexer holds one, else blank), `COVENANT ID` (always whole: tickers collide, the id is the
+identity), `DEC`, `PROGRAM` (the token program and its slots, such as `kcc20-ref-public-mint 3/3`), `ASKS`, `BIDS` (live orders) and, only
+when some row has one, `WARN`: the indexer's `warnings` and `powers` (`live_mint_authority`, `freeze`, ...; `genesis_unverified` is left out, it
+only says the registry holds no genesis check). KOB makes no judgement of a token: there is no "verified" or "official" column.
+`SEARCH` is a case-insensitive ticker prefix or a covenant-id prefix.
+
+* **`--all`** adds every token kascov.io lists for the network (`https://kascov.io/data/<network>/tokens.json`), to find tokens that were
+  never traded on KOB. kascov is a discovery list only: the ticker (`claimed_ticker`) and decimals (`claimed_decimals`) shown are the token's
+  own claims, `ASKS` / `BIDS` are `-`, and `PROGRAM` is the KOB program the token's program hash names (`standard.view_template_hash`, else
+  `standard.template_hash`; a program KOB lists but has not reviewed says so), `unsupported` for a hash KOB has no program for and
+  `unidentified` when kascov gives none. A token the indexer lists is shown once, with the indexer's facts.
+* **Fetching.** The list is fetched only when you run the command, never in the background. The local copy (`$KOB_CACHE_DIR`, else
+  `%LOCALAPPDATA%\kob\cache`, `$XDG_CACHE_HOME/kob` or `~/.cache/kob`) is reused for the server's own `Cache-Control: max-age` (kascov sends 30
+  seconds; 30 seconds when a server names none); after that one request, conditional (`If-None-Match` / `If-Modified-Since`) when the server gave
+  an ETag or Last-Modified, so an unchanged list costs a 304. `--refresh` fetches now whatever the copy says (it implies `--all`). When kascov.io is
+  not reachable the older copy is shown with a note; with no copy the command says so and `kob tokens` without `--all` still works.
+* A full covenant id in no list is said so: kascov may not have indexed the token yet, and KOB's indexer and the node can still read it with the
+  other commands (`kob book <id>`).
+* `--json` prints one document: `{network, indexer, search, tokens: [{ticker, covenant_id, decimals, program, open_asks, open_bids, warnings,
+  source}], kascov, note}` (`source` is `indexer` or `kascov`; the counts are `null` for a kascov-only token).
+* **A ticker that names more than one token** (two lists, or two entries of the indexer) is refused by every command that takes a token, with
+  each candidate and its full covenant id; nothing is picked silently. Give the covenant id.
+
 ## Watching the live feed
 
 `kob watch` listens on the executor's WebSocket (`docs/api.md` section 4) and prints one line per event. It reads no key and signs nothing.
@@ -286,7 +314,7 @@ also reports chain reorganisations (a note, and a new read of what is shown).
 `--json` is a flag of the ten trading commands (`place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `book`,
 `orders`, `balances`). `kob token create|resume|verify-declaration` have no `--json` (text output; the files `--out-dir`
 writes are JSON), and `kob order sweep|cancel` and `kob recover` always print a JSON report. In `kob registry`, `programs`,
-`add-program` and `verify-genesis` take `--json`; `kob watch` prints one JSON line per event (its section).
+`add-program` and `verify-genesis` take `--json`; `kob tokens` prints one document with it and `kob watch` one JSON line per event (their sections).
 
 Conventions of the JSON the CLI prints itself: every amount of KAS or of a token is a **decimal string** in base units
 (sompi for KAS, the token's base units for a token; `"2500000"`, negative where it is an outflow, as in `net`), so no 64-bit

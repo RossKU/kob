@@ -99,8 +99,31 @@ fn dechunk(mut body: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
+/// An answer with its headers (names in lower case).
+#[derive(Debug, Clone)]
+pub struct Response {
+    /// Status code.
+    pub status: u16,
+    /// Headers, names in lower case.
+    pub headers: Vec<(String, String)>,
+    /// The JSON body (`null` for an empty one).
+    pub body: Value,
+}
+
+impl Response {
+    /// The first header `name` (lower case).
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+}
+
 /// `GET <indexer><path>`: the status code and the JSON body (`null` for an empty one).
 pub fn get(indexer: &str, path: &str, timeout: Duration) -> Result<(u16, Value), String> {
+    get_with(indexer, path, &[], timeout).map(|r| (r.status, r.body))
+}
+
+/// [`get`] with extra request headers (`If-None-Match`), and the answer's headers.
+pub fn get_with(indexer: &str, path: &str, headers: &[(&str, &str)], timeout: Duration) -> Result<Response, String> {
     let t = parse(indexer)?;
     let who = shown(indexer);
     let mut s = crate::tls::connect(t.secure, &t.host, t.port, timeout).map_err(|e| format!("indexer {who}: {e}"))?;
@@ -110,6 +133,13 @@ pub fn get(indexer: &str, path: &str, timeout: Duration) -> Result<(u16, Value),
     );
     if let Some(a) = &t.auth {
         req.push_str(&format!("Authorization: Basic {a}\r\n"));
+    }
+    for (k, v) in headers {
+        // a header is one line: a value that came from a server cannot add a line to the request
+        if k.contains(['\r', '\n', ':']) || v.contains(['\r', '\n']) {
+            return Err(format!("indexer {who}: bad request header {k}"));
+        }
+        req.push_str(&format!("{k}: {v}\r\n"));
     }
     req.push_str("\r\n");
     s.write_all(req.as_bytes()).map_err(|e| format!("indexer {who}: {e}"))?;
@@ -133,8 +163,9 @@ pub fn get(indexer: &str, path: &str, timeout: Duration) -> Result<(u16, Value),
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|c| c.parse().ok())
         .ok_or_else(|| format!("indexer {who}: malformed status line"))?;
-    let chunked =
-        lines.any(|l| l.to_ascii_lowercase().starts_with("transfer-encoding:") && l.to_ascii_lowercase().contains("chunked"));
+    let headers: Vec<(String, String)> =
+        lines.filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))).collect();
+    let chunked = headers.iter().any(|(k, v)| k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked"));
     if chunked {
         body = dechunk(&body).map_err(|e| format!("indexer {who}: {e}"))?;
     }
@@ -143,7 +174,7 @@ pub fn get(indexer: &str, path: &str, timeout: Duration) -> Result<(u16, Value),
     } else {
         serde_json::from_slice(&body).map_err(|e| format!("indexer {who}{path}: not JSON ({e})"))?
     };
-    Ok((status, v))
+    Ok(Response { status, headers, body: v })
 }
 
 /// [`get`] that wants a 200.
@@ -174,13 +205,17 @@ pub mod mock {
         pub routes: BTreeMap<String, Value>,
         /// Every path requested.
         pub seen: Vec<String>,
+        /// path -> extra response headers (an `ETag` makes the route answer `If-None-Match` with `304`).
+        pub headers: BTreeMap<String, Vec<(String, String)>>,
+        /// Every request's headers (names in lower case), in the order of `seen`.
+        pub request_headers: Vec<Vec<(String, String)>>,
     }
 
     /// Start a mock indexer; returns its URL.
     pub fn start(routes: BTreeMap<String, Value>) -> (String, Arc<Mutex<MockIndexer>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let st = Arc::new(Mutex::new(MockIndexer { routes, seen: vec![] }));
+        let st = Arc::new(Mutex::new(MockIndexer { routes, seen: vec![], headers: BTreeMap::new(), request_headers: vec![] }));
         let s2 = st.clone();
         thread::spawn(move || {
             for stream in listener.incoming() {
@@ -198,18 +233,33 @@ pub mod mock {
                     }
                     let line = String::from_utf8_lossy(&got).lines().next().unwrap_or("").to_string();
                     let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
-                    let body = {
+                    let sent: Vec<(String, String)> = String::from_utf8_lossy(&got)
+                        .lines()
+                        .skip(1)
+                        .filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string())))
+                        .collect();
+                    let (body, extra) = {
                         let mut s = st.lock().unwrap();
                         s.seen.push(path.clone());
-                        s.routes.get(&path).or_else(|| s.routes.get(path.split('?').next().unwrap_or(""))).cloned()
+                        s.request_headers.push(sent.clone());
+                        let extra = s.headers.get(&path).cloned().unwrap_or_default();
+                        (s.routes.get(&path).or_else(|| s.routes.get(path.split('?').next().unwrap_or(""))).cloned(), extra)
                     };
+                    let extra_text: String = extra.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+                    // a route with an ETag answers a request that has it with 304
+                    let etag = extra.iter().find(|(k, _)| k.eq_ignore_ascii_case("etag")).map(|(_, v)| v.clone());
+                    if etag.is_some() && sent.iter().any(|(k, v)| k == "if-none-match" && Some(v) == etag.as_ref()) && body.is_some() {
+                        let resp = format!("HTTP/1.1 304 Not Modified\r\n{extra_text}Connection: close\r\n\r\n");
+                        let _ = stream.write_all(resp.as_bytes());
+                        return;
+                    }
                     let (status, body) = match body {
                         Some(b) => ("200 OK", b.to_string()),
                         None => ("404 Not Found", r#"{"error":{"code":"not_found","message":"unknown"}}"#.to_string()),
                     };
                     // chunked, to exercise the decoder
                     let resp = format!(
-                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n0\r\n\r\n",
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extra_text}Transfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n0\r\n\r\n",
                         body.len()
                     );
                     let _ = stream.write_all(resp.as_bytes());
