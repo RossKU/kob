@@ -209,7 +209,10 @@ test('token issuance plans a KCC-23 creation (preparation, then the genesis) as 
   };
   const res = JSON.parse(kob.issue(s(spec)));
   assert.equal(res.token.outputs.length, 2);
-  assert.equal(res.token.program, 'KCC20Ref');
+  // the default issuance is the published public-mint build (no minter); the standalone 3 / 3 only when named
+  assert.equal(res.token.program, 'KCC20PublicMint');
+  assert.equal(res.docs.registryEntry.template_id, 'kcc20-ref-public-mint');
+  assert.equal(JSON.parse(kob.issue(s({ ...spec, program: '3x3' }))).token.program, 'KCC20Ref');
   assert.throws(() => kob.issue(s({ ...spec, program: '8x8-prototype' })), /prototype/);
   // the preparation declares the metadata (codec byte 0x00, then JSON) and pays output 0 (the genesis's carriers and fee) and change
   assert.equal(res.prep.tx.outputs.length, 2);
