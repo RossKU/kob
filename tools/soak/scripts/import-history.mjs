@@ -11,6 +11,8 @@
 // database whose history no longer reaches it (a replay or a rebuilt database drops the import: run this again). `--record-floor`
 // writes it from the database alone (no source, read-only).
 //
+// The destination (--db) must be a schema-8 store (what this build writes); a source may be schema 8 or an older store (schema 5 to 7).
+//
 // Hold the executor first (scripts/hold-child.ps1 -Name exec-b): the script refuses a database whose writer is alive.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

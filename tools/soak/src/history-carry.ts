@@ -2,10 +2,16 @@
 //
 // A token issued again (the switch of the soak tokens to KOB's standard 3 / 3 program, 2026-10-10) gets a new covenant id, and the
 // indexer keys every market read by covenant id: the trades, candles, 24 h stats and last price of `/v1/trades|candles|stats/{token}`
-// come from the `fill` rows of `order_events` (`token_cov_id`), the pair pages from `pair_fills` (`base_cov_id`, `quote_cov_id`) and
-// the KAS candles of the two legs. `carryHistory` moves those rows of the old id to the new id of the same TICKER, so the market page
-// of the new token shows one continuous chart. Nothing else is touched: the old orders keep their own `token_cov_id` (their token
-// template is not the new one, and `/v1/tokens` lists tokens from the orders), the old token's UTXO tables stay as they are.
+// come from the `fill` rows of `order_events` (`token_id`, an `ids.id`), the pair pages from `pair_fills` (`base_cov_id`,
+// `quote_cov_id`) and the KAS candles of the two legs. `carryHistory` moves those rows of the old id to the new id of the same
+// TICKER, so the market page of the new token shows one continuous chart. Nothing else is touched: the old orders keep their own
+// `token_cov_id` (their token template is not the new one, and `/v1/tokens` lists tokens from the orders), the old token's UTXO
+// tables stay as they are.
+//
+// Layouts: the destination of every write here is a schema-8 store (what this build writes: 32-byte ids interned as integers, an
+// order is `orders.id`, a token is `ids.id`; see crates/kob-executor/src/indexer/schema.sql). A database that is only READ (the
+// chart check, the source of an import) may be either that or an older store (schema 5 to 7: `covenant_id` / `token_cov_id` blobs
+// in `order_events` and `order_state`); `isSchema8` tells them apart by the column `orders.id`.
 //
 // The executor must be stopped (the database is its derived view; the lock is not checked here). `kobd index replay` rebuilds
 // the tables from the record log and undoes the carry: run it again after a replay (it is idempotent). Each carried id is recorded in
@@ -73,6 +79,11 @@ export function carryPairs(before: RegistryLike, after: RegistryLike): CarryPair
 const hex = (s: string): Uint8Array => Uint8Array.from(Buffer.from(s, 'hex'));
 const num = (n: number | bigint): number => Number(n);
 
+/** True for a schema-8 store (`orders.id` exists: ids interned as integers), false for the older blob-keyed layouts. */
+export function isSchema8(db: { prepare(sql: string): { get(...params: unknown[]): unknown } }): boolean {
+  return !!db.prepare("SELECT 1 AS x FROM pragma_table_info('orders') WHERE name = 'id'").get();
+}
+
 /**
  * Moves the market history of every pair (old id -> new id) in ONE transaction. Refuses (and changes nothing) when an order of an old id
  * is still open or partial (its later fills would stay under the old id: end every order first), when an old id was carried to another
@@ -82,6 +93,7 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
   for (const t of ['order_events', 'pair_fills', 'orders', 'order_state', 'meta']) {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t)) throw new Error(`not a KOB indexer database: no table ${t}`);
   }
+  if (!isSchema8(db)) throw new Error('the database is of an older layout (no orders.id): open it with this build first');
   const out: CarryResult[] = [];
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -89,7 +101,7 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
       if (!HEX32.test(p.from) || !HEX32.test(p.to) || p.from === p.to) throw new Error(`bad pair ${p.ticker}: ${p.from} -> ${p.to}`);
       const live = db
         .prepare(
-          "SELECT COUNT(*) AS n FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+          "SELECT COUNT(*) AS n FROM orders o JOIN order_state s ON s.order_id = o.id \
            WHERE (o.token_cov_id = ?1 OR o.quote_cov_id = ?1) AND s.status IN ('open', 'partial')",
         )
         .get(hex(p.from)) as { n: number | bigint };
@@ -102,7 +114,13 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
         const was = JSON.parse(prev.v) as { to?: string };
         if (was.to !== p.to) throw new Error(`${p.ticker}: ${p.from} was carried to ${was.to} before, not to ${p.to}`);
       }
-      const fills = num(db.prepare("UPDATE order_events SET token_cov_id = ?2 WHERE kind = 'fill' AND token_cov_id = ?1").run(hex(p.from), hex(p.to)).changes);
+      // the target is interned (a token id is a row of `ids`, never deleted); an old id with no `ids` row has no fills: the update matches nothing
+      db.prepare('INSERT OR IGNORE INTO ids (h) VALUES (?)').run(hex(p.to));
+      const fills = num(
+        db
+          .prepare("UPDATE order_events SET token_id = (SELECT id FROM ids WHERE h = ?2) WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1)")
+          .run(hex(p.from), hex(p.to)).changes,
+      );
       const pairBase = num(db.prepare('UPDATE pair_fills SET base_cov_id = ?2 WHERE base_cov_id = ?1').run(hex(p.from), hex(p.to)).changes);
       const pairQuote = num(db.prepare('UPDATE pair_fills SET quote_cov_id = ?2 WHERE quote_cov_id = ?1').run(hex(p.from), hex(p.to)).changes);
       const rec = prev ? { ...JSON.parse(prev.v), rerun: (opts.now ?? Date.now)() } : { ticker: p.ticker, to: p.to, at: (opts.now ?? Date.now)(), fills, pairBase, pairQuote };
@@ -119,7 +137,7 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
 
 // ------------------------------------------------------------------------------------------------ chart check
 //
-// What every chart must show, checked after a redeploy (`scripts/chart-history.mjs`): the first candle of each interval is the
+// What every chart must show, checked after a redeploy (`scripts/chart-history.mjs`; the database may be of either layout): the first candle of each interval is the
 // bucket of the token's first KAS trade in the database, and no fill is left under an id carried to it (a replay of the record
 // log undid the carry). A chart that starts later than the database lost history in the read path, not in the data: the
 // 2026-10-14 case (the indexer read only the newest 20 000 fills of a window, so the TUSD chart began on 10-11 although its
@@ -144,6 +162,7 @@ export interface HistoryFloor {
 
 /** Per token of the registry: its first KAS trade and the fills left under its carried ids (read-only; the executor may run). */
 export function historyFloors(db: SqlDb, reg: RegistryLike): HistoryFloor[] {
+  const v8 = isSchema8(db);
   const keys = (db.prepare("SELECT group_concat(k, ',') AS ks FROM meta WHERE k LIKE 'carried_history:%'").get() as { ks: string | null }).ks;
   const carriedTo = new Map<string, string[]>();
   for (const k of keys ? keys.split(',') : []) {
@@ -156,13 +175,21 @@ export function historyFloors(db: SqlDb, reg: RegistryLike): HistoryFloor[] {
     // the same rows as the indexer's FILL_SELECT (market.rs): a priced KAS-book fill of a known order
     const first = db
       .prepare(
-        "SELECT MIN(e.ts) AS t FROM order_events e WHERE e.kind = 'fill' AND e.token_cov_id = ? AND e.price IS NOT NULL AND e.amount > 0 \
-         AND e.side IN (1, 2) AND EXISTS (SELECT 1 FROM orders o WHERE o.covenant_id = e.covenant_id)",
+        v8
+          ? "SELECT MIN(e.ts) AS t FROM order_events e WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?) AND e.price IS NOT NULL \
+             AND e.amount > 0 AND e.side IN (1, 2) AND EXISTS (SELECT 1 FROM orders o WHERE o.id = e.order_id)"
+          : "SELECT MIN(e.ts) AS t FROM order_events e WHERE e.kind = 'fill' AND e.token_cov_id = ? AND e.price IS NOT NULL AND e.amount > 0 \
+             AND e.side IN (1, 2) AND EXISTS (SELECT 1 FROM orders o WHERE o.covenant_id = e.covenant_id)",
       )
       .get(hex(id)) as { t: number | bigint | null };
     let leftover = 0;
     for (const from of carriedTo.get(id) ?? []) {
-      leftover += num((db.prepare("SELECT COUNT(*) AS n FROM order_events WHERE kind = 'fill' AND token_cov_id = ?").get(hex(from)) as { n: number | bigint }).n);
+      const left = db.prepare(
+        v8
+          ? "SELECT COUNT(*) AS n FROM order_events WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?)"
+          : "SELECT COUNT(*) AS n FROM order_events WHERE kind = 'fill' AND token_cov_id = ?",
+      );
+      leftover += num((left.get(hex(from)) as { n: number | bigint }).n);
       leftover += num((db.prepare('SELECT COUNT(*) AS n FROM pair_fills WHERE base_cov_id = ?1 OR quote_cov_id = ?1').get(hex(from)) as { n: number | bigint }).n);
     }
     return { ticker: t.ticker, id, firstTrade: first.t == null ? null : num(first.t), leftover };
@@ -212,11 +239,16 @@ export function chartProblems(market: string, firstTrade: number | null, firstCa
 //   `closed`: it is no longer anyone's);
 // * the pair fills of the mapped tokens (a database of protocol v3 or later).
 //
+// The target is a schema-8 store (an imported order gets a fresh `orders.id`, its fills and state point at it, the token id is
+// interned in `ids`). The source may be a schema-8 store or any older one (schema 5 to 7: blob-keyed `order_events` / `order_state`).
+// `genesis_state` and `detail` are copied as they are (packed in schema 7 and 8, so rows from a schema 5 / 6 source are not read by the
+// SQL decoders of this build: docs/ops/executor.md 7.6a).
 // A database of the lot layouts (protocol v2, schema 4 or older: `orders.lot_units`) is converted exactly: a fill's amount is
 // `lots * lot_units * unit` base units and its price stays sompi per `unit` base units, which is the imported order's `scale`.
 // One transaction; the import is recorded in `meta` (`history_import:<label>`), so a re-run is a no-op. The executor must be
 // stopped. `kobd index replay` rebuilds the tables from the record log and drops the import: import again after a replay.
-// Undo: delete the `order_events` / `order_state` / `orders` rows of the orders whose `unlisted_reason` is the label's, and the meta row.
+// Undo: delete the `order_events` / `order_state` rows (by `order_id`) and the `orders` rows of the orders whose `unlisted_reason` is
+// the label's, and the meta row (the interned `ids` rows may stay).
 
 /** The read side of node:sqlite's `DatabaseSync` an import reads a source with. */
 export interface SqlSrc {
@@ -263,7 +295,13 @@ export function firstFillTs(db: SqlSrc): number | null {
 /** Every token of a source database with KAS-book fills that maps by ticker to a current id (`old`: old id -> ticker). */
 export function importPairs(src: SqlSrc, old: Map<string, string>, current: RegistryLike): CarryPair[] {
   const now = new Map((current.tokens ?? []).map((t) => [t.ticker, String(t.covenant_id).toLowerCase()]));
-  const ids = src.prepare("SELECT DISTINCT lower(hex(token_cov_id)) AS t FROM order_events WHERE kind = 'fill' AND token_cov_id IS NOT NULL").all() as Array<{ t: string }>;
+  const ids = src
+    .prepare(
+      isSchema8(src)
+        ? "SELECT DISTINCT lower(hex(i.h)) AS t FROM order_events e JOIN ids i ON i.id = e.token_id WHERE e.kind = 'fill'"
+        : "SELECT DISTINCT lower(hex(token_cov_id)) AS t FROM order_events WHERE kind = 'fill' AND token_cov_id IS NOT NULL",
+    )
+    .all() as Array<{ t: string }>;
   const out: CarryPair[] = [];
   for (const { t } of ids) {
     const ticker = old.get(t) ?? [...now].find(([, id]) => id === t)?.[0];
@@ -285,14 +323,21 @@ export function importHistory(
   if (dst.prepare("SELECT 1 AS x FROM pragma_table_info('orders') WHERE name = 'lot_units'").get()) {
     throw new Error('the target database is of the lot layouts: open it with this build first');
   }
+  if (!isSchema8(dst)) throw new Error('the target database is of an older layout (no orders.id): open it with this build first');
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(opts.label)) throw new Error(`bad label ${opts.label}`);
   const key = `history_import:${opts.label}`;
   if (dst.prepare('SELECT v FROM meta WHERE k = ?').get(key)) return { already: true, results: [] };
+  // the source layout: schema 8 (ids interned) or an older one (blob-keyed); a lot layout is always an older one
+  const srcV8 = isSchema8(src);
   const lots = hasColumn(src, 'orders', 'lot_units');
   const amount = lots ? 'e.lots * o.lot_units * o.unit' : 'e.amount';
-  const fillSql = `SELECT e.covenant_id AS cov, e.daa, e.ts, e.txid, e.tx_pos, e.side, ${amount} AS amount, e.price, e.payout, e.closes, e.detail
-     FROM order_events e JOIN orders o ON o.covenant_id = e.covenant_id
-     WHERE e.kind = 'fill' AND e.token_cov_id = ? AND e.price IS NOT NULL AND ${amount} > 0 AND e.side IN (1, 2) ORDER BY e.ts, e.id`;
+  const fillSql = srcV8
+    ? `SELECT o.covenant_id AS cov, e.daa, e.ts, e.txid, e.tx_pos, e.side, ${amount} AS amount, e.price, e.payout, e.closes, e.detail
+       FROM order_events e JOIN orders o ON o.id = e.order_id
+       WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?) AND e.price IS NOT NULL AND ${amount} > 0 AND e.side IN (1, 2) ORDER BY e.ts, e.id`
+    : `SELECT e.covenant_id AS cov, e.daa, e.ts, e.txid, e.tx_pos, e.side, ${amount} AS amount, e.price, e.payout, e.closes, e.detail
+       FROM order_events e JOIN orders o ON o.covenant_id = e.covenant_id
+       WHERE e.kind = 'fill' AND e.token_cov_id = ? AND e.price IS NOT NULL AND ${amount} > 0 AND e.side IN (1, 2) ORDER BY e.ts, e.id`;
   const quote = hasColumn(src, 'orders', 'quote_cov_id') ? 'o.quote_cov_id' : 'NULL';
   const orderSql = lots
     ? `SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.unit AS scale,
@@ -303,11 +348,15 @@ export function importHistory(
     : `SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.scale, o.min_fill,
          o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, o.reserve, o.initial_amount, o.deadline, o.genesis_state,
          o.genesis_txid, o.genesis_out, o.genesis_daa, o.parent, ${quote} AS quote_cov_id, s.status, s.filled_amount, s.last_daa
-       FROM orders o LEFT JOIN order_state s ON s.covenant_id = o.covenant_id WHERE o.covenant_id = ?`;
+       FROM orders o LEFT JOIN order_state s ON s.${srcV8 ? 'order_id = o.id' : 'covenant_id = o.covenant_id'} WHERE o.covenant_id = ?`;
   const orderOf = bigStatement(src, orderSql);
   const haveOrder = dst.prepare('SELECT 1 AS x FROM orders WHERE covenant_id = ?');
-  // `+kind`: by the order's events (order_events_cov), not by every fill of the database (the planner's pick for `kind = ?`)
-  const haveFill = dst.prepare("SELECT 1 AS x FROM order_events WHERE covenant_id = ? AND txid = ? AND +kind = 'fill'");
+  // `+e.kind`: by the order's events (order_events_cov), not by every fill of the database (the planner's pick for `kind = ?`)
+  const haveFill = dst.prepare(
+    "SELECT 1 AS x FROM orders o JOIN order_events e ON e.order_id = o.id WHERE o.covenant_id = ? AND e.txid = ? AND +e.kind = 'fill'",
+  );
+  const internToken = dst.prepare('INSERT OR IGNORE INTO ids (h) VALUES (?)');
+  const tokenIdOf = dst.prepare('SELECT id FROM ids WHERE h = ?');
   const putOrder = dst.prepare(
     `INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif,
        expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa,
@@ -315,12 +364,13 @@ export function importHistory(
      VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?, 'chain', ?)`,
   );
   const putState = dst.prepare(
-    `INSERT INTO order_state (covenant_id, status, filled_amount, remaining_amount, amount_exact, state_known, last_block, last_daa)
-     VALUES (?, ?, ?, NULL, 0, 0, 0, ?)`,
+    // the orders row is inserted first: a NULL `order_id` (its INTEGER PRIMARY KEY) would silently take a fresh rowid
+    `INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, state_known, last_block, last_daa)
+     VALUES ((SELECT id FROM orders WHERE covenant_id = ?), ?, ?, NULL, 0, 0, 0, ?)`,
   );
   const putFill = dst.prepare(
-    `INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail)
-     VALUES (?, 0, ?, ?, ?, ?, 'fill', ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, payout, closes, detail)
+     VALUES ((SELECT id FROM orders WHERE covenant_id = ?), 0, ?, ?, ?, ?, 'fill', ?, ?, ?, ?, ?, ?, ?)`,
   );
   const results: ImportResult[] = [];
   dst.exec('BEGIN IMMEDIATE');
@@ -329,6 +379,7 @@ export function importHistory(
       if (!HEX32.test(p.from) || !HEX32.test(p.to)) throw new Error(`bad pair ${p.ticker}: ${p.from} -> ${p.to}`);
       const r: ImportResult = { ...p, fills: 0, duplicates: 0, later: 0, pairFills: 0, first: null, last: null };
       const copied = new Set<string>();
+      let tokenId: unknown = null; // ids.id of the target, interned with the first fill that is copied
       for (const f of bigStatement(src, fillSql).all(hex(p.from)) as Array<Record<string, unknown>>) {
         const ts = num(f.ts as number);
         if (ts >= opts.until) {
@@ -351,7 +402,11 @@ export function importHistory(
           putState.run(o.covenant_id, status, o.filled_amount ?? 0, o.last_daa ?? o.genesis_daa);
         }
         copied.add(cov);
-        putFill.run(f.cov, f.daa, f.ts, f.txid, f.tx_pos, hex(p.to), f.side, f.amount, f.price, f.payout, f.closes ?? 0, f.detail);
+        if (tokenId == null) {
+          internToken.run(hex(p.to));
+          tokenId = (tokenIdOf.get(hex(p.to)) as { id: number | bigint }).id;
+        }
+        putFill.run(f.cov, f.daa, f.ts, f.txid, f.tx_pos, tokenId, f.side, f.amount, f.price, f.payout, f.closes ?? 0, f.detail);
         r.fills++;
         r.first = r.first == null ? ts : Math.min(r.first, ts);
         r.last = r.last == null ? ts : Math.max(r.last, ts);
