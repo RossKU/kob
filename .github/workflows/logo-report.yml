@@ -1,0 +1,77 @@
+name: logo-report
+
+# A token-logo report filed with the Issue form .github/ISSUE_TEMPLATE/logo-report.yml (docs/ops/web-hosting.md, "Token logos from the creator's address").
+# The workflow reads two fields of the issue, the covenant id (64 hex characters, checked here) and the reason (illegal, impersonation or other), posts them to
+# the indexer's POST /v1/logo-reports with source "github" and the issue number, and comments the result on the issue. The first report of a token hides its
+# logo for every viewer until the operator reviews it (docs/api.md 3.19).
+#
+# The address is the repository VARIABLE KOB_LOGO_REPORT_URL (the public indexer's https://.../v1/logo-reports; a variable, not a secret: the route is
+# public). Unset: the issue is only answered with "recorded for manual review". Nothing else of the issue is used. The issue text is untrusted: it only
+# reaches this script through environment variables, is never interpolated into a command, and nothing of it is copied into the comment.
+#
+# No secrets. The only permission is issues: write (every other permission of the token is none), to comment. No third-party action is used, so
+# there is nothing to pin.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  report:
+    if: contains(github.event.issue.labels.*.name, 'logo-report')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Post the report and comment the result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          REPORT_URL: ${{ vars.KOB_LOGO_REPORT_URL }}
+        run: |
+          set -euo pipefail
+          comment() { gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "$1"; }
+
+          # the Issue form renders "### <label>" followed by the value
+          field() { printf '%s\n' "$ISSUE_BODY" | tr -d '\r' | awk -v h="### $1" '$0 == h { on = 1; next } /^### / { on = 0 } on && NF { print; exit }'; }
+          id=$(field "Covenant id of the token" | tr -d '[:space:]' | tr 'A-F' 'a-f')
+          reason=$(field "Reason" | tr -d '[:space:]')
+
+          if ! printf '%s' "$id" | grep -Eq '^[0-9a-f]{64}$'; then
+            comment "This report was not forwarded: the covenant id must be exactly 64 hexadecimal characters. Open a new report with the correct id."
+            exit 0
+          fi
+          case "$reason" in illegal | impersonation | other) ;; *)
+            comment "This report was not forwarded: the reason must be one of illegal, impersonation, other."
+            exit 0
+          ;; esac
+
+          if [ -z "${REPORT_URL:-}" ]; then
+            comment "Thank you. This report of token \`$id\` is recorded here for manual review. (No indexer is connected to this repository, so the logo is not hidden automatically.)"
+            exit 0
+          fi
+          case "$REPORT_URL" in https://*) ;; *)
+            comment "Thank you. This report of token \`$id\` is recorded here for manual review. (The repository variable KOB_LOGO_REPORT_URL is not an https address.)"
+            exit 0
+          ;; esac
+
+          payload=$(jq -cn --arg id "$id" --arg reason "$reason" --argjson ref "$ISSUE_NUMBER" '{covenant_id: $id, reason: $reason, source: "github", ref: $ref}')
+          code=$(curl -sS --max-time 20 --proto '=https' -o response.json -w '%{http_code}' -X POST -H 'content-type: application/json' --data "$payload" "$REPORT_URL" || true)
+          code=${code:-000}
+          result=""
+          if [ "$code" = 200 ]; then result=$(jq -r '.result // empty' response.json 2>/dev/null || true); fi
+
+          case "$code:$result" in
+            200:hidden)
+              comment "Thank you. The logo of token \`$id\` is hidden now, for every viewer, until the operator has reviewed this report." ;;
+            200:recorded)
+              comment "Thank you. This report of token \`$id\` is recorded for the operator's review. The operator restored this logo recently, so it stays visible for now." ;;
+            429:*)
+              comment "Thank you. The indexer is receiving many reports at the moment, so this one is recorded here for manual review." ;;
+            *)
+              comment "Thank you. The indexer could not take this report (HTTP $code), so it is recorded here for manual review." ;;
+          esac
