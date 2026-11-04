@@ -5,11 +5,12 @@
 //
 // --public (or `ui.public: true`): everything goes through this one origin, so the page can be put behind a tunnel or proxy
 // (https): the app is configured with `<origin>/indexer` (read-only GET/HEAD relay to the indexer) and `wss://<host>/node`
-// (WebSocket relay to the TN10 node). Nothing else of the soak is reachable through it.
+// (WebSocket relay to the TN10 node). Nothing else of the soak is reachable through it. The /indexer relay is GET/HEAD only, with one
+// exception: `POST /v1/logo-reports` (the app's "Report logo" button posts it next to the blocklist), with a small body cap.
 //
 // The app is configured with `quoteTokens` (TUSD = USD): it shows KAS/USD, ETH/USD (TETH) and BTC/USD (TBTC) charts through the TUSD book.
 import { createServer, request as httpRequest } from 'node:http';
-import { connect } from 'node:net';
+import { connect, isIP } from 'node:net';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +37,8 @@ const TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.map': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 // the origin the browser sees (a tunnel terminates TLS and forwards the Host header)
@@ -69,10 +72,58 @@ const appConfig = (req) => {
   };
 };
 
-// read-only relay to the indexer: GET/HEAD only, path under /v1
+// the one write the /indexer relay passes: a logo report (docs/api.md 3.19). The indexer reads at most 1024 bytes of it, so twice that is a cap with room
+const LOGO_REPORTS = '/v1/logo-reports';
+const LOGO_REPORT_MAX_BODY = 2048;
+
+// POST /v1/logo-reports: the body (capped) goes to the indexer as it is, as JSON; the client address the tunnel saw goes along as the header the indexer's
+// `api.client_ip_header` reads (cf-connecting-ip, x-forwarded-for), so its per-client report limit is the visitor's and not the relay's
+function relayLogoReport(req, res) {
+  const tooLarge = () => {
+    res.writeHead(413, { connection: 'close' });
+    res.end(() => req.socket.destroy());
+  };
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > LOGO_REPORT_MAX_BODY) return void tooLarge();
+  const chunks = [];
+  let size = 0;
+  let over = false;
+  req.on('data', (chunk) => {
+    if (over) return;
+    size += chunk.length;
+    if (size > LOGO_REPORT_MAX_BODY) {
+      over = true;
+      chunks.length = 0;
+      tooLarge();
+    } else chunks.push(chunk);
+  });
+  req.on('error', () => res.headersSent || res.writeHead(400).end());
+  req.on('end', () => {
+    if (over) return;
+    const body = Buffer.concat(chunks);
+    const client = String(req.headers['cf-connecting-ip'] ?? '').trim();
+    const headers = { accept: 'application/json', 'content-type': 'application/json', 'content-length': body.length };
+    if (isIP(client)) {
+      headers['cf-connecting-ip'] = client;
+      headers['x-forwarded-for'] = client;
+    }
+    const up = httpRequest({ host: INDEXER.hostname, port: INDEXER.port, method: 'POST', path: LOGO_REPORTS, headers, timeout: 10_000 }, (r) => {
+      const out = { ...r.headers };
+      delete out['access-control-allow-origin'];
+      res.writeHead(r.statusCode ?? 502, out);
+      r.pipe(res);
+    });
+    up.on('timeout', () => up.destroy());
+    up.on('error', () => res.headersSent || res.writeHead(502).end());
+    up.end(body);
+  });
+}
+
+// read-only relay to the indexer: GET/HEAD only, path under /v1 (and the one POST above)
 function relayIndexer(req, res, path) {
-  if (req.method !== 'GET' && req.method !== 'HEAD') return void res.writeHead(405, { allow: 'GET, HEAD' }).end();
   const rest = path.slice('/indexer'.length) || '/';
+  if (req.method === 'POST' && rest === LOGO_REPORTS) return relayLogoReport(req, res);
+  if (req.method !== 'GET' && req.method !== 'HEAD') return void res.writeHead(405, { allow: rest === LOGO_REPORTS ? 'GET, HEAD, POST' : 'GET, HEAD' }).end();
   if (!rest.startsWith('/v1/') && rest !== '/v1') return void res.writeHead(404).end();
   const search = new URL(req.url ?? '/', 'http://x').search;
   const up = httpRequest(

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Disallow: /indexer/
+Disallow: /node/

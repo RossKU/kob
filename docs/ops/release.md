@@ -130,6 +130,12 @@ The private-key signer frame pins the SHA-256 of the token table (covenant id, t
 (`web/src/signer/table.ts`, audit 2026-10-30 G7). A deployment that serves another registry builds with `KOB_SIGNER_REGISTRY=<path to that file>`;
 otherwise the frame shows every token as unverified ("decimals assumed 8"). `npm run build:release` pins the release registry.
 
+The page's link preview (title, description, Open Graph and Twitter tags, icons, `manifest.webmanifest`, `og.png`) is in `web/index.html` and `web/public/`.
+Two build-time variables complete it (`web/head-meta.mjs`): `KOB_PUBLIC_URL=https://kob.example.org` (the public origin; `og:url` and `og:image` need absolute
+URLs, so they are emitted only when it is set) and `KOB_NETWORK=testnet-10` (a testnet build prefixes the title with "Testnet · "; default `mainnet`).
+Unset, the build is independent of any host (the `reproducible` job builds without them). `public/robots.txt` allows `/` and disallows `/indexer/` and `/node/`
+(the relays of a host that serves its own indexer and node, such as the soak's `serve-ui.mjs`).
+
 ## 5. Tests before tagging
 
 ```

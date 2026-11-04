@@ -6,6 +6,7 @@ import preact from '@preact/preset-vite';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { CSP_META, SIGNER_CSP_HEADER, SIGNER_CSP_META } from './csp.mjs';
+import { applyHead } from './head-meta.mjs';
 
 const isSignerPage = (path: string) => /(^|\/)signer\.html$/.test(path);
 
@@ -17,6 +18,16 @@ const kobCsp = () => ({
   transformIndexHtml: (_html: string, ctx: { path: string }) => [
     { tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: isSignerPage(ctx.path) ? SIGNER_CSP_META : CSP_META }, injectTo: 'head-prepend' as const },
   ],
+});
+
+// The link-preview head of the app's page (title prefix of a testnet build, og:url and og:image): see head-meta.mjs. KOB_NETWORK and KOB_PUBLIC_URL
+// are read when the build starts; unset, index.html is emitted as written. The signer page has none of it.
+const kobHead = (): Plugin => ({
+  name: 'kob-head',
+  transformIndexHtml: {
+    order: 'pre',
+    handler: (html: string, ctx: { path: string }) => (isSignerPage(ctx.path) ? html : applyHead(html, { network: process.env.KOB_NETWORK, publicUrl: process.env.KOB_PUBLIC_URL })),
+  },
 });
 
 // `vite preview` (the e2e target) serves what public/_headers asks of a production host for the signer: its page's header policy (with
@@ -72,7 +83,7 @@ const registryTableHash = tableHash(rowsOfRegistryJson(JSON.parse(readFileSync(p
 export default defineConfig({
   base: './',
   define: { __KOB_REGISTRY_TABLE_HASH__: JSON.stringify(registryTableHash) },
-  plugins: [preact(), kobCsp(), kobStableMapRefs(), kobSignerHeaders()],
+  plugins: [preact(), kobHead(), kobCsp(), kobStableMapRefs(), kobSignerHeaders()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   // keepNames: the official kaspa-wasm SDK identifies its JS classes (Transaction, TransactionOutput, Hash ...) by their `name` when it converts
   // request objects (rpc.submitTransaction: "Error converting property `covenant`" once a minifier renamed them). Found by the real-wallet TN10 run.
