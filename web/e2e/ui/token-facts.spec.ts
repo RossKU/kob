@@ -104,6 +104,28 @@ test.describe('token facts', () => {
     await expect(row.locator('.ml-line3').filter({ has: page.getByTestId('badge-high-risk') })).toHaveCount(1);
   });
 
+  test('the High risk panel closes on Escape and on a tap elsewhere even when the browser is slow to run effects (CI flake: the key came before the listener)', async ({ appPage: page, mock }) => {
+    await listExkcc(page);
+    await indexerFacts(page);
+    const id = (await mock.token()).covenant_id;
+    await page.goto('/#/market');
+    const row = page.getByTestId(`token-row-${id}`);
+    await expect(row.getByTestId('badge-high-risk')).toBeVisible();
+    // preact runs passive effects after the next frame (requestAnimationFrame, or a 35 ms timer): hold both back for 3 s, so a listener registered in a passive effect would not exist yet
+    await page.evaluate(() => {
+      window.requestAnimationFrame = () => 0;
+      const timer = window.setTimeout.bind(window);
+      window.setTimeout = ((fn: TimerHandler, ms?: number, ...args: unknown[]) => timer(fn, ms === 35 ? 3000 : ms, ...args)) as typeof window.setTimeout;
+    });
+    for (const close of ['Escape', 'tap elsewhere']) {
+      await row.getByTestId('high-risk-toggle').click();
+      await expect(page.getByTestId('high-risk-reasons')).toBeVisible();
+      if (close === 'Escape') await page.keyboard.press('Escape');
+      else await page.mouse.click(2, 2);
+      await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0, { timeout: 2000 });
+    }
+  });
+
   test('a program with a mint authority power is no High risk by itself: liveness not checked is a neutral line in the details', async ({ appPage: page, mock }) => {
     await listExkcc(page);
     await page.route(/\/v1\/tokens(\?.*)?$/, async (route) => {

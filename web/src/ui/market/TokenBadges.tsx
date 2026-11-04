@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { t, tokenAmountText } from '../../i18n';
 import { Badge, Banner } from '../kit';
 import { type TokenInfo } from '../../kob/registry';
@@ -93,7 +93,8 @@ export function RiskChip(props: { row: Pick<TokenRow, 'covenantId' | 'facts' | '
   const codes = tokenRiskCodes(r);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
+  // a layout effect: the listeners must exist in the same frame the panel appears (a passive effect runs after the next paint, up to ~35 ms later, and an Escape or tap in between was lost)
+  useLayoutEffect(() => {
     if (!pos) return;
     const close = () => setPos(null);
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
