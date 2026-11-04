@@ -1,15 +1,16 @@
 name: release
 
-# Prebuilt kob-executor and kob-cli for operators (docs/ops/executor-quickstart.md): Windows x86_64 (MSVC, static CRT),
+# Prebuilt kob-executor and kob (the command line, crate kob-cli) for operators (docs/ops/executor-quickstart.md): Windows x86_64 (MSVC, static CRT),
 # Linux x86_64 (glibc) and Android arm64 (aarch64-linux-android, bionic: for Termux on a phone), each as the testnet-10 and the mainnet
 # deployment build (docs/ops/release.md), packaged by scripts/package-release.mjs into
-# kob-executor-<version>-<network>-<target>.zip / .tar.gz with QUICKSTART.md, LICENSE, NOTICE and a SHA256SUMS of their files.
+# kobd-<version>-<network>-<target>.zip / .tar.gz (kobd, the daemon, and kob, QUICKSTART.md, LICENSE, NOTICE and a SHA256SUMS of
+# their files) and kob-<version>-<network>-<target>.zip / .tar.gz (the command line alone, with its README).
 # The Android app for tap-to-use phones (testnet-10 only; android.yml, called by the job `android` below) goes into the release as
 # kob-executor-<version>-testnet-10-android.apk, with its SHA256 in the release's SHA256SUMS like the archives. It is signed with the
 # release key when the ANDROID_* repository secrets exist (a new APK then updates the old one in place and keeps the key);
 # without them it is debug-signed, named ...-android-debug-signed.apk, and the release notes say it cannot be updated.
 #
-# * A pushed tag must be v<version> of the workspace (Cargo.toml [workspace.package], which kob-executor and kob-cli inherit):
+# * A pushed tag must be v<version> of the workspace (Cargo.toml [workspace.package], which kob-executor and kob-cli (binary kob) inherit):
 #   the version is bumped in the commit that is tagged, so --version of every binary is the tag. Any other tag fails here,
 #   before anything is built (job version, scripts/package-release.mjs --check-tag).
 # * A pushed tag v* builds every archive and attaches them, with a SHA256SUMS of the archives, to a DRAFT release of the tag:
@@ -93,7 +94,7 @@ jobs:
             echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang"
             echo "AR_aarch64_linux_android=$bin/llvm-ar"
           } >> "$GITHUB_ENV"
-      - name: Build kob-executor and kob-cli (${{ matrix.network }} deployment build, --locked)
+      - name: Build kob-executor and kob (${{ matrix.network }} deployment build, --locked)
         env:
           NETWORK: ${{ matrix.network }}
           TARGET: ${{ matrix.platform.target }}
@@ -111,7 +112,7 @@ jobs:
         env:
           TARGET: ${{ matrix.platform.target }}
         run: |
-          for b in kob-executor kob-cli; do
+          for b in kob-executor kob; do
             file "target/$TARGET/release/$b" | tee /dev/stderr | grep -q "ELF 64-bit LSB.*ARM aarch64"
           done
       - name: The binary is the build of its network (it refuses the other one before touching a node)
@@ -128,6 +129,11 @@ jobs:
           "$bin" setup --help > /dev/null
           other=mainnet; [ "$NETWORK" = mainnet ] && other=testnet-10
           out=$("$bin" index --network "$other" --data-dir "$RUNNER_TEMP/refuse" 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q "this binary is the $NETWORK deployment build"
+          kob="target/$TARGET/release/kob$ext"
+          "$kob" --version
+          out=$("$kob" book TUSD --network "$other" --indexer http://127.0.0.1:1 2>&1 || true)
           echo "$out"
           echo "$out" | grep -q "this binary is the $NETWORK deployment build"
       - name: Package
@@ -177,11 +183,11 @@ jobs:
           TAG: ${{ github.ref_name }}
           APK_SIGNED: ${{ needs.android.outputs.signed }}
         run: |
-          notes="Prebuilt kob-executor and kob-cli (docs/ops/executor-quickstart.md) and the testnet-10 Android app (the .apk; quickstart 9). Check each file against SHA256SUMS. Release hashes (scripts/release-hashes.sh): to be added before publishing."
+          notes="Prebuilt kobd (the daemon) and kob, the command line (docs/ops/executor-quickstart.md; kob-<version>-<network>-<target> holds kob alone) and the testnet-10 Android app (the .apk; quickstart 9). Check each file against SHA256SUMS. Release hashes (scripts/release-hashes.sh): to be added before publishing."
           if [ "$APK_SIGNED" = true ]; then
             notes="$notes The APK is signed with the release key: it installs over an earlier release and keeps the app's data."
           else
             notes="$notes WARNING: the APK is debug-signed (the release signing secrets were not set when it was built): no other build can update it in place, and uninstalling it deletes the operator key and its funds. Set the secrets (scripts/make-android-keystore.mjs, quickstart 9) and build again before publishing it as the app."
           fi
-          gh release create "$TAG" dist/kob-executor-* dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+          gh release create "$TAG" dist/kob-* dist/kobd-* dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
             --title "KOB $TAG" --notes "$notes"
