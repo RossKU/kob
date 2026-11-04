@@ -1,7 +1,7 @@
 # Example: a paid API on the Kaspa x402 `exact` binding
 
 `server.ts` sells `GET /report` for 0.5 KAS (or N units of a KCC-20 token, or by swapping token A), `client.ts` pays for it
-with a dev key. The facilitator is the `kobd x402` service (same operator as indexer and matcher; it holds no keys).
+with a dev key. The facilitator is the `kobd x402` service (usually the same operator as the Indexer and the Executor; it holds no keys).
 
 ```
 payer client  --GET-->  paywall (server.ts)  --POST /settle-->  facilitator (kobd x402)  --> TN10 node

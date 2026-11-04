@@ -178,7 +178,7 @@ KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd run \
 
 A first start on an empty data directory indexes the chain from the node's pruning point (about 30 h on testnet-10; over
 public nodes on a phone about 8 h) and the matcher plans nothing until that is done. With `fast_start = true` (the key
-`kobd setup` and the Android app write for a matcher; `--fast-start` for one start; `--no-fast-start` or
+`kobd setup` and the Android app write for the Executor; `--fast-start` for one start; `--no-fast-start` or
 `fast_start = false` turns it off) the first start of `run` runs two standard indexers in the one process, each with its
 own database (two histories are never merged):
 
@@ -731,7 +731,7 @@ kept:
 | Chain-block rows (hash, DAA) | the reorg / finality window only (`reorg_window_hours`, 12) | `blocks` | 98 B per block, about 42 MB in steady state at 10 BPS |
 | Everything else in the node's responses | never | | 0 |
 
-**Lean storage** (`lean = true`, `--lean`; the setup and the Android app write it for a matcher): an executor needs the live
+**Lean storage** (`lean = true`, `--lean`; the setup and the Android app write it for the Executor): an executor needs the live
 book, not the history, so the store keeps open and partly filled orders with everything the matcher, the keepers, the
 maintenance jobs and the live book of the read API read, the reorg window, and `lean_retention_days` (30; never less than
 `reorg_window_hours`) of closed orders, and deletes the rest in small periodic batches (A.1.2); a size cap
@@ -1597,7 +1597,7 @@ A pair order's `GET /v1/orders/{id}` view: `token` is A, `side` 1 (ask) or 2 (bi
 "pair": { "base": "<A>", "quote": "<B>", "base_family": "kcc20", "quote_family": "kron",
           "base_template_hash": "<hex32>", "quote_template_hash": "<hex32>", "base_scale": 1000, "quote_scale": 1000,
           "side": "ask", "price": "1000", "price_num": "1", "price_den": "1", "stop_price": "1100", "quote_now": "1000",
-          "amount_left": "6000", "prefund": "200", "delivery_carrier": "200000000",
+          "amount_left": "6000", "prefund": "200", "delivery_carrier": "100000000",
           "custodies": [ { "token": "<A>", "role": "base", "expected_amount": "6000", "utxo": { ... }, "ok": true },
                          { "token": "<B>", "role": "quote", "expected_amount": "1209", "utxo": { ... }, "ok": true } ] }
 ```
@@ -2693,7 +2693,7 @@ The planner never leaves a token to the operator (a pair order's surplus goes to
 bids) unless the opt-in surplus-inventory policy keeps it (above), but tokens can still reach the operator's key, each on
 a token output with its own carrier (`EngineConfig.token_carrier`, 10 KAS). Left alone they lock KAS: in an early TN10 soak
 each executor held 22 to 28 such UTXOs after 51 minutes (220 to 280 KAS of carriers for a few cents of tokens). With the
-matcher role, the runner runs the maintenance jobs
+matcher enabled (the Executor's default), the runner runs the maintenance jobs
 (`kob_executor::maintenance`) after the tick's matcher and keeper transactions, over the operator's own key-owned token UTXOs
 (the indexer's `token_holdings`, owner = the operator key, live; never an order's custody or stray), per token:
 

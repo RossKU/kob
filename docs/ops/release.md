@@ -2,7 +2,7 @@
 
 What a release manager does to cut a mainnet release, and what an operator needs to run it. KOB ships
 software only (ISC): the release is a commit, its reproducible artifacts and the hashes below; the
-mainnet services (node, indexer, matcher, keepers, x402 facilitator) are run by community operators.
+mainnet services (node, Indexer, Executor with its matcher and keepers, x402 facilitator) are run by community operators.
 
 Nothing in KOB has been independently audited, and no external audit precedes the launch (maintainer decision
 2026-10-12): mainnet launches as a canary, with a visible pre-audit notice in the web app (`SECURITY.md`). The order
@@ -212,7 +212,9 @@ before the wallets: an indexer refuses a payload version it does not know (`payl
 would list none of the orders the new wallets place.
 
 1. Operators upgrade their **executors / indexers** first. A database schema change says in the release notes whether
-   the database is brought up to date in place or rebuilt with `kobd index replay` (`docs/ops/executor.md` 7.6).
+   the database is brought up to date in place, migrated offline with `kobd index migrate` (schema 5, 6 or 7 to 8: about 5 GB of free disk,
+   the old file kept as `index.sqlite3.before-migrate`, and an older build refuses the schema-8 store) or rebuilt with `kobd index replay`
+   (`docs/ops/executor.md` 7.6 and 7.6a).
    Check `GET /v1/health` and that a placement made with `kob` is listed.
    `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git
    commit of the build, `null` when the build did not say) and `payload_version` (the `KOB1` payload version it reads and
@@ -253,8 +255,8 @@ wallets is safe, a rollback of an indexer below the payload version in use is no
 | Bandwidth | about **1.4 KB/s per tx/s** of chain load at `High` verbosity (1.35 MB/s at 1,000 tx/s, 4.2 MB/s = 34 Mbit/s at 3,000 tx/s); give the link 3x the peak to catch up after an outage | B 3 |
 | CPU | 3 to 10 us of one core per accepted transaction of a realistic mix, plus 0.25 to 0.3 ms per KOB transaction (single-threaded database pass: about 3,500 KOB tx/s per core at the tip); 3 to 4 % of one core at 3,000 tx/s with the default mix | B 3 "Processing capacity" |
 | Memory | 0.3 to 1 GB typical, budget up to 4 GB for full-size batches while catching up | B 3 |
-| Disk (indexer) | plan on about 10 KB per order in the full index (soak: 5.4 to 5.7 KB of database and 3.9 KB of record log per order; the synthetic 2.6 KB + 1 KB is the lower bound), plus a 42 MB constant block window; a lean matcher store is capped at 500 MB and keeps no log; the record log is the asset to back up off site | B 3, B 8, A.1.2 |
-| Keys and funds | an operator hot key for `run` (matcher, keepers, facilitator) with a small working balance; `index` alone is keyless | Part C "Keys and funds" |
+| Disk (indexer) | plan on about 10 KB per order in the full index (soak: 5.4 to 5.7 KB of database and 3.9 KB of record log per order; the synthetic 2.6 KB + 1 KB is the lower bound), plus a 42 MB constant block window; a lean Executor store is capped at 500 MB and keeps no log; the record log is the asset to back up off site | B 3, B 8, A.1.2 |
+| Keys and funds | an operator hot key for the Executor (`run`: matcher, keepers, facilitator) with a small working balance; the Indexer (`index`) alone is keyless | Part C "Keys and funds" |
 | Monitoring | `/v1/health`, textfile metrics, alerts on `gap`, lag and node version | B 6, A.4 |
 
 An operator should also keep a standby node and the TN10 drill current (B 7.8), and upgrade nodes

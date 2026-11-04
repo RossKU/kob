@@ -1,6 +1,6 @@
 # KOB matcher / executor specification (protocol v3)
 
-Status: normative for `kob-executor` and for KOB wallets. Contracts: `contracts/v2/*.sil` (protocol v3). The order
+Status: normative for `kobd` (its Executor) and for KOB wallets. Contracts: `contracts/v2/*.sil` (protocol v3). The order
 types and their user-visible semantics are listed in `order-types.md`; amounts (base units), prices (quote token per
 whole base token), the rounding rule (`quoteOf`) and the minimum fill (`minFill`) are defined in `order-types.md`,
 *Amounts, prices and rounding*, and every rule below uses them. The key words MUST, MUST NOT, SHOULD and MAY are used
@@ -14,7 +14,7 @@ hard constraints, and how triggers, trailing, if-done exits and chaining are han
 
 Roles. A **matcher** builds batches of crossing orders and earns the crossing spread plus tips. It also arms and trails
 stops, inside the batches that fill their trigger evidence (§4). A **keeper** refunds orders for their `refundTip`. One
-`kob-executor` process may play both roles. Neither holds user funds.
+A `kobd` Executor may play both roles. Neither holds user funds.
 
 ---
 

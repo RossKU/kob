@@ -8,7 +8,7 @@ object Kob {
     /** The executor's read API (its default listen address, `[api]` of kob-executor.toml). */
     const val API = "http://127.0.0.1:8090"
 
-    /** The matcher's low-funds threshold (kob-executor `MIN_FUNDS_KAS`). */
+    /** The Executor's low-funds threshold (`MIN_FUNDS_KAS` of the kob-executor crate). */
     const val MIN_FUNDS_KAS = 100.0
 
     /** The operator key file in [dir] (64 hex characters; `kobd setup` writes it). Its contents never leave the app except by the user's own export. */

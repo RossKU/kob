@@ -63,7 +63,7 @@ class WithdrawActivity : Activity() {
                     label(
                         "The executor is stopped first, because it uses the funds. The transaction is final within seconds and " +
                             "cannot be taken back: check the address. The network fee is taken from the amount for \"all\" and " +
-                            "added to it otherwise. The matcher waits for funds again when fewer than ${Kob.MIN_FUNDS_KAS.toInt()} KAS remain.",
+                            "added to it otherwise. The Executor waits for funds again when fewer than ${Kob.MIN_FUNDS_KAS.toInt()} KAS remain.",
                         12f,
                     )
                 )

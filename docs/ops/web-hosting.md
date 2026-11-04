@@ -385,7 +385,7 @@ stay on the old version, revert the commit (or clear `KOB_PAGES_PROJECT`, which 
   third-party service passes them on ("Token names and icons" in section 3), labelled "declared by its creator". A deployment must not
   turn that into a recommendation: no "verified" or "official" marks, no ordering by it, no source that rates or hides tokens.
 * **No default routing to an executor.** The app talks to an indexer (read only) and to Kaspa nodes; orders are covenants on
-  chain that any executor may fill. The deployment names no executor, matcher or facilitator, and the host runs none.
+  chain that any executor may fill. The deployment names no executor or facilitator, and the host runs none.
 * **Several indexers welcome.** `KOB_PAGES_EXTRA_INDEXER_URLS` should list independent third-party indexers when they exist;
   the app cross-checks them, reads from one of them when the primary is down ("Using backup indexer ..."), and says "single indexer, not
   cross-checked" otherwise. Users can choose their own in Settings.

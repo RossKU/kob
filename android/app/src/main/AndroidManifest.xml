@@ -46,7 +46,7 @@
             android:foregroundServiceType="dataSync|specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Runs the KOB executor (a Kaspa order-book matcher / indexer) continuously until the user stops it" />
+                android:value="Runs the KOB executor (a Kaspa order-book Executor / Indexer) continuously until the user stops it" />
         </service>
     </application>
 </manifest>

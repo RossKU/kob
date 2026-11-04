@@ -302,7 +302,7 @@ class MainActivity : Activity() {
         for (v in listOf<View>(publicRadio, ownRadio, urlEdit, matchRadio, indexRadio, saveButton)) v.isEnabled = !running
         if (running && !healthBusy) fetchHealth()
         val address = prefs.getString("address", "") ?: ""
-        // the address of a matcher is always on screen once the app is set up (it is read from the key if the app lost track of it)
+        // the address of an Executor is always on screen once the app is set up (it is read from the key if the app lost track of it)
         fundingBox.visibility = if (ok && !index) View.VISIBLE else View.GONE
         setLive(addressText, address.ifEmpty { "(reading it from the key ...)" })
         if (fundingBox.visibility == View.VISIBLE) {
@@ -367,7 +367,7 @@ class MainActivity : Activity() {
             for (part in line.split(" | ")) if (!part.startsWith("indexer ") && !part.startsWith("nodes: ") && !part.startsWith("fast start: ")) s.append(part).append('\n')
         }
         val kas = balanceKas
-        if (ok && !index && kas != null && kas < Kob.MIN_FUNDS_KAS) warnings += "funds below ${Kob.MIN_FUNDS_KAS.toInt()} KAS: the matcher waits for more"
+        if (ok && !index && kas != null && kas < Kob.MIN_FUNDS_KAS) warnings += "funds below ${Kob.MIN_FUNDS_KAS.toInt()} KAS: the Executor waits for more"
         s.append(if (warnings.isEmpty()) "Warnings: none" else "Warnings:\n" + warnings.joinToString("\n") { " - $it" })
         setLive(statusText, s.toString())
         val log = ExecutorService.lastLines(200).joinToString("\n") { it.take(300) }

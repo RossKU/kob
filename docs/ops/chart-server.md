@@ -4,7 +4,7 @@ The hosted web app (`docs/ops/web-hosting.md`) reads the order books, charts, tr
 `kobd index` (`docs/ops/executor.md`, Part B). This page runs one for the public on a home PC (or a VPS) and publishes
 it through Cloudflare Tunnel (free), without opening a port on the router.
 
-**What this server is not.** It runs the `index` role only: it holds **no key**, has **no funds**, does **no matching**, keeps
+**What this server is not.** It runs the Indexer role only (`kobd --indexer`, `kobd index`): it holds **no key**, has **no funds**, does **no matching**, keeps
 no keeper and no x402 facilitator. It follows the chain and answers read-only HTTP and WebSocket requests. It cannot place,
 fill, cancel or refund anything, and it cannot forge what the app signs (the app checks every order against the chain
 programs before it builds a transaction; `web/README.md`). Executors that match orders are run by third parties.
@@ -33,6 +33,11 @@ address needs a domain, so do it in this order:
    `KOB_PAGES_INDEXER_URL=https://chart.example.org`. The workflow does nothing until that variable is set. After you change a
    repository variable later, run *Actions* > *deploy-pages* > *Run workflow* on `master`: a changed variable alone deploys nothing.
 5. Section 5: set up an alert before you rely on it.
+
+`chart.example.org` here is a placeholder: the project's stable domain is not live yet. Until it is, a canary indexer may be
+reached through a temporary quick tunnel (a `trycloudflare.com` address, which changes whenever `cloudflared` restarts). Treat
+such an address as a canary tunnel to be replaced by the stable hostname, and do not publish it as a permanent
+`KOB_PAGES_INDEXER_URL` or as the `indexer_url` of a deployment record.
 
 ## 1. The indexer
 
@@ -78,9 +83,9 @@ cors_allow_origin = "*"
 metrics = false
 ```
 
-Start it with a double-click on `kob-executor` (or `kobd index --config kob-executor.toml`). Running the setup again
+Start it with a double-click on `kobd` (or `kobd index --config kob-executor.toml`). Running the setup again
 replaces the file: add the `[api]` table again afterwards. Run it as a service as `docs/ops/executor-quickstart.md`,
-section 6 shows (the index role has no key file and no pause file: arguments `index --config kob-executor.toml`).
+section 6 shows (the Indexer has no key file and no pause file: arguments `index --config kob-executor.toml`).
 
 **First start: the history and the fast route.** The first start reads everything the node retains, from its pruning point. The API
 answers from the start and the app shows the indexer as catching up until it is close to the tip. Over the public nodes of the
@@ -89,7 +94,7 @@ resolver that took about 2.4 hours for 36 hours of history (about 14.6 s of chai
 "`indexer catching up, ... behind the node (about 35 h), indexing 15x chain speed, caught up in about 2 h 24 min`" (`catch_up` in
 `/v1/health`: `rate_daa_per_sec`, `eta_seconds`).
 
-`fast_start` is for the matcher (`kobd run`, which trades on a second store while it indexes the history); the `index` role
+`fast_start` is for the Executor (`kobd run`, which trades on a second store while it indexes the history); the Indexer (`kobd index`)
 refuses it (`fast_start = true` or `--fast-start` stop the start with a message). The fast route of a read server is
 `start = "sink"` (top level of `kob-executor.toml`, or `--start sink`; on a data directory that is still empty): it follows the chain
 within a second of the start and lists the orders created since. The orders older than the start are **not** in that store, for
@@ -283,7 +288,7 @@ third-party indexers in the deployment helps them.
 ## 6. Upgrading, and rebuilding without chart downtime
 
 **A new release of the program.** Read the release notes (`docs/ops/release.md`, 7) for the payload version and for whether the
-database is brought up to date in place or rebuilt. Then:
+database is brought up to date in place, migrated offline with `kobd index migrate` (`executor.md`, 7.6a) or rebuilt. Then:
 
 1. `kobd --version` and `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`) say what runs now.
 2. Download the new archive, check its hash (`executor-quickstart.md`, 1) and unzip it into a new folder next to the old one.

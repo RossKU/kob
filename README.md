@@ -27,7 +27,7 @@ off-chain custody.
 * **Trade.** Open the web app, connect KasWare or Kaspire (a desktop extension) and place an order: [docs/user-guide.md](docs/user-guide.md)
   (connect, buy and sell, limit and market orders, partial fills, cancel, merge, the status banners, fees, the private-key option,
   recovering a token you created). Testnet-10 coins have no value; use them first.
-* **Run an executor** (match orders and earn the spread and tips, or serve the order book): download a prebuilt archive from the
+* **Run an Executor** (match orders and earn the spread and tips) **or an Indexer** (serve the order book): download a prebuilt archive from the
   [GitHub releases](https://github.com/RossKU/kob/releases), check its hash and double-click `kobd`; it needs no Rust and no
   node of your own by default: [docs/ops/executor-quickstart.md](docs/ops/executor-quickstart.md) (Windows, Linux, Docker, Android).
 * **Host the web app and a public read server:** [docs/ops/web-hosting.md](docs/ops/web-hosting.md) and
@@ -59,7 +59,7 @@ off-chain custody.
 | `contracts/third-party/` | Pinned third-party token programs: KaspaCom KCC20 0.2.5 (Apache-2.0), and the KCC-20 reference source and its published public-mint build (argent-lang/kcc20-reference `c8a0871`, ISC) |
 | `crates/kob-protocol` | Protocol library: pinned artifacts, state and sigscript encoding, builders for every order action and matcher shape, fee and mass pass, compute-budget table, `KOB1` payload, engine validation, golden vectors |
 | `crates/kob-wasm` | wasm-bindgen bindings over `kob-protocol` (used by the web UI and the TypeScript SDK) |
-| `crates/kob-executor` | One binary: indexer + read API (REST and WebSocket), matcher, keepers, and the x402 facilitator |
+| `crates/kob-executor` | The `kobd` daemon: the Indexer (full history, record log, read API over REST and WebSocket) and the Executor (matcher, keepers, x402 facilitator), alone or together |
 | `crates/kob-x402` | x402 wire types, verifiers (KAS, KCC-20, swap-and-pay), payer and merchant SDK, in-memory chain test kit |
 | `crates/kob-cli` | Command line ([README](crates/kob-cli/README.md)): trading (`kob place` with every order kind of the web ticket, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, planned like the web wallet; `book`, `orders`, `balances`), `kob token create`, `kob registry` (validate, verify-genesis, programs, add-program), `kob recover`, `kob order sweep` / `cancel` |
 | `crates/kob-tests` | The contracts executed in the rusty-kaspa v2.1.0 script engine: positive and negative harnesses |
@@ -91,7 +91,7 @@ scripts/build-contracts.sh                        # rewrite the artifacts after 
 
 ```
 KOB_SKIP_NETWORK_TESTS=1 cargo test --workspace --locked
-KOB_CARRIER_KAS=20 cargo test --locked -p kob-tests          # harness order carrier of 2 (the wallet default), 10 (default) or 20 KAS
+KOB_CARRIER_KAS=20 cargo test --locked -p kob-tests          # harness order carrier of 1 (the wallet default), 2, 10 (default) or 20 KAS
 scripts/build-wasm.sh --install-bindgen --test               # wasm bindings + node golden-vector tests
 node tools/ablation/ablate.mjs --list --suite all            # contract mutation catalogue (see tools/ablation/README.md)
 ```
@@ -130,7 +130,7 @@ target/release/kobd index --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
 The mainnet release build is `--features deploy-mainnet` (it pins `registry/tokens.json`); the release checklist, the
 hashes to publish, the upgrade order and the operator requirements are in `docs/ops/release.md`.
 
-`registry/tokens.example.json` lists fictional testnet tokens: replace it with your own allowlist (`registry/README.md`). `index` is the keyless, read-only role. `kobd run` adds the matcher and keepers and needs
+`registry/tokens.example.json` lists fictional testnet tokens: replace it with your own allowlist (`registry/README.md`). `kobd index` is the Indexer: the keyless, read-only role. `kobd run` is the Executor: it adds the matcher and keepers and needs
 an operator hot key (`KOB_OPERATOR_KEY_FILE`, test funds only); `docs/ops/executor.md` covers
 flags, keys, monitoring and the runbook.
 
@@ -148,7 +148,7 @@ See [docs/README.md](docs/README.md) for the index. The main entries:
   payment is retried without paying twice
 * `docs/spec/token-programs.md`: token-program profiles and onboarding a launchpad's program
 * `docs/argent.md`: KOB as an Argent app, how to import it, the router
-* `docs/ops/executor.md`: running the indexer, matcher and keepers; `docs/ops/release.md`: the mainnet release checklist
+* `docs/ops/executor.md`: running `kobd` (the Indexer, and the Executor with its matcher and keepers); `docs/ops/release.md`: the mainnet release checklist
 * `docs/security/AUDIT-2026-10.md`: the internal pre-mainnet security audit
 * `contracts/README.md`, `registry/README.md`: contracts and token registry
 

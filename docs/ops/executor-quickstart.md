@@ -230,7 +230,7 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
 
 **Back up, and move to another computer.** The only thing you cannot rebuild is the key: back up `kob-operator.key` (a plain
 64-hex-character private key; there is no seed phrase) where only you can read it. The configuration is a text file
-(`kob-executor.toml`) that setup writes again in a minute. The database is not precious: a matcher on lean storage rebuilds it
+(`kob-executor.toml`) that setup writes again in a minute. The database is not precious: an Executor on lean storage rebuilds it
 from the node within seconds on a start with an empty data directory (fast start). To move an executor:
 
 1. **Stop the old one first** (section 7 shows how). Two executors on one key spend each other's coins and waste fees; the writer
@@ -323,7 +323,7 @@ the commit you verified.
 program changes. The program is not replaced while it runs, and it does not update itself.
 
 1. **Read the release notes.** They say whether the release changes the `KOB1` payload version (indexers must go first,
-   `docs/ops/release.md`, 7) or the database (brought up to date in place, or rebuilt: step 6).
+   `docs/ops/release.md`, 7) or the database (brought up to date in place, migrated offline with `kobd index migrate`, or rebuilt: step 6).
 2. **Note what runs now:** `kobd --version` (the crate version, the release tag without the `v`) and
    `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback only unless you
    changed it). A build of a commit before the `0.1.0` release says `0.0.0`; tell builds of the same version apart by `commit`.
@@ -342,10 +342,12 @@ program changes. The program is not replaced while it runs, and it does not upda
 5. **Start** it (double-click, `systemctl start kob`, `docker run` with the same volume and the rebuilt image). It continues from
    the stored cursor. Check `kobd --version`, then `/v1/health`: `version`, `commit` and `payload_version` must be the
    release's, `state` becomes `following`, and the status line shows no `WARNING:`.
-6. **When the release notes ask for a rebuild** (the database is refused as old): a matcher on lean storage has no record log to
+6. **When the release notes ask for a rebuild** (the database is refused as old): an Executor on lean storage has no record log to
    replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
    the fast start rebuilds the live book within seconds. Make sure the key file is not inside `kob-data` (setup puts it next
-   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive rebuilds with `kobd index
+   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive of schema 5, 6 or 7 is brought to schema 8 offline with `kobd index migrate` (stop it first; about 5 GB of free
+   disk; the old file stays as `index.sqlite3.before-migrate`; an older build refuses the migrated store; `docs/ops/executor.md`, 7.6a); any
+   other archive rebuilds with `kobd index
    replay` while offline; the public read server has a way without downtime (`docs/ops/chart-server.md`, section 6).
 7. **Rollback**: stop, put `kobd.old` back, restore the `kob-data` copy of step 4 if the database changed. An indexer must
    not go below the payload version in use (`docs/ops/release.md`, 7).
@@ -426,7 +428,7 @@ for now. It is sideloaded (no store).
    not from a store.
 3. **Set up.** Open *KOB Executor*. Keep **Public nodes** (two nodes found through the Kaspa resolvers; the default of
    section 8) or enter your own node's URL, choose **Executor** or **Indexer**, and tap *Save and generate
-   key*. For the matcher the app shows its **funding address** (always on the main screen, with a *Copy address* button):
+   key*. For the Executor the app shows its **funding address** (always on the main screen, with a *Copy address* button):
    send it at least 100 testnet KAS (200 recommended; they have no value, mine or ask a faucet), and the balance appears
    under it. The key is generated on the phone (`kob-operator.key`, readable by the app only) and never leaves it unless you
    export it. **Uninstalling the app or clearing its data (Settings, Apps, KOB Executor, Storage, Clear data) deletes the key,

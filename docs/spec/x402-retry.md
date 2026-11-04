@@ -1,7 +1,7 @@
 # Retrying an x402 payment without paying twice
 
 Status: implemented in the TS SDK (`packages/kob-x402`, `KobX402Client` `retry`, `payInvoiceWithIntent` `retry`), the Rust
-payer SDK (`kob_x402::client::retry`: `pay_with_retry`, `pay_intent_with_retry`) and the facilitator (`kob-executor`, `submitRetries`, `rebroadcasts`, the intent
+payer SDK (`kob_x402::client::retry`: `pay_with_retry`, `pay_intent_with_retry`) and the facilitator (`kobd`, `submitRetries`, `rebroadcasts`, the intent
 keeper). It applies the conflict rules of [x402-swap-and-pay.md](x402-swap-and-pay.md) section 10 to every profile.
 
 A payment can fail for reasons that have nothing to do with the payer: an order the swap fills is taken by someone else

@@ -16,9 +16,9 @@ you can afford to lose.**
 Token programs (`registry/tokens.json`): the two KRON programs are `reviewed` after an internal
 review whose per-token conditions (a genesis check, no live minter) are reported as the derived
 warnings `genesis_unverified` and `live_mint_authority`; KOB lists no token. KCC-20 token
-issuance is permissionless: tokens issued with KOB's standard 3 / 3 reference program or with the
-reference's published public-mint build (KOB's second issuance option, also used by third-party
-launchpads such as Kasseal) are tradable on mainnet with no listing or curation step, and being
+issuance is permissionless: tokens issued with the reference's published public-mint build (what KOB issues by default since
+2026-11-04, also used by third-party launchpads such as Kasseal) or with the standalone 3 / 3 reference program (issued
+only when named) are tradable on mainnet with no listing or curation step, and being
 tradable says nothing about a token's safety or genuineness (curation belongs to the community token
 lists a user chooses, `registry/README.md`). The web app shows the facts instead of a verdict: wherever a token is shown (token header,
 next to the order button, market list) it prints neutral badges for the indexer's `genesis_unverified` and `live_mint_authority` and for the program's
@@ -49,7 +49,7 @@ than hours. There is no bug bounty.
 ## Scope
 
 In scope: the SilverScript order contracts, the Argent shell and router (`contracts/argent/`),
-the Rust protocol library and executor (indexer, matcher, keepers, x402 facilitator), the
+the Rust protocol library and the `kobd` daemon (the Indexer; the Executor with its matcher and keepers; the x402 facilitator), the
 WebAssembly bindings and the web UI, and the specifications in `docs/spec/`.
 
 Out of scope: vulnerabilities in third-party code that KOB only uses (rusty-kaspa, SilverScript,
@@ -62,8 +62,8 @@ those upstream. If KOB's use of them makes the problem worse, that part is in sc
   misbehaves should only be able to build invalid or unprofitable transactions; a report that
   shows otherwise is the most valuable kind.
 * There is no operator key and no admin function in the order contracts.
-* The executor holds only an operator hot key (matcher and keepers); the x402 facilitator and
-  the indexer hold none. The key is never taken from the command line: a key file or a systemd credential (an environment variable is supported but discouraged).
+* The Executor holds only an operator hot key (it runs the matcher and the keepers); the x402 facilitator and
+  the Indexer hold none. The key is never taken from the command line: a key file or a systemd credential (an environment variable is supported but discouraged).
 
 ## Disclaimer
 
