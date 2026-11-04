@@ -392,9 +392,9 @@ mod tests {
         assert!(IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap().lean);
         let i = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Indexer, false)).unwrap();
         assert_eq!((i["roles"].clone(), i["address"].is_null()), (serde_json::json!(["indexer"]), true));
-        // the balance of the combined role's key is readable like the matcher's
-        setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::ExecutorIndexer, false)).unwrap();
-        assert_eq!(operator_address(&d.path().join(CONFIG_FILE)).as_deref(), out["address"].as_str());
+        // the combined role uses the key that is there, like the Executor
+        let again = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::ExecutorIndexer, false)).unwrap();
+        assert_eq!(again["address"], out["address"]);
     }
 
     #[test]
