@@ -163,6 +163,20 @@ pub struct Roles {
     pub keeper: bool,
 }
 
+impl Roles {
+    /// The roles of a process that also indexes (`kob-executor run`), as `/v1/health` names them (`HealthSnapshot::roles`).
+    pub fn with_indexer(self) -> Vec<&'static str> {
+        let mut v = vec!["index"];
+        if self.matcher {
+            v.push("match");
+        }
+        if self.keeper {
+            v.push("keep");
+        }
+        v
+    }
+}
+
 /// Loop settings.
 #[derive(Clone, Debug)]
 pub struct RunConfig {

@@ -41,7 +41,7 @@ step-by-step page is `docs/ops/executor-quickstart.md`.
   runs `kob-executor setup`; with no terminal (a service, a pipe) it refuses and says why. When a start without
   arguments fails on a terminal, the window waits for Enter before it closes.
 * **`kob-executor setup`** (`--dir` another directory, `--no-start` write only) asks, Enter taking the default: the role
-  (matcher and keepers, or index only); the node URL (default the local node of the build's network,
+  (matcher and keepers; index only; or index and match, both in one process: the archive indexer API with the full history and the record log, `lean = false`, plus the matcher and keepers with a key, with a warning that the public API and the signing key then live on the same machine, so a public server should prefer separate machines); the node URL (default the local node of the build's network,
   `ws://127.0.0.1:18110` mainnet / `ws://127.0.0.1:18210` testnet-10: rusty-kaspa v2.1.0
   `--rpclisten-json=default`), checked at once (`getServerInfo`: network, sync, UTXO index, with the node command line on
   a failure); the data directory (`kob-data`); the hot key (a new one from the OS CSPRNG into `kob-operator.key`, owner-only
@@ -56,6 +56,16 @@ step-by-step page is `docs/ops/executor-quickstart.md`.
 * **`kob-executor.toml`** is an ordinary `--config` file (B 4) plus the `[launch]` table (`role = "run" | "index"`,
   `key_file`, `pause_file`, `x402_config`, `args`); other commands given it as `--config` ignore `[launch]`. Paths are
   relative to the file.
+* **Index and match** (`kob-executor setup`, third choice; `setup --non-interactive --role index,match`, also `match,index`) is one process
+  that serves the archive indexer API and trades with a key: the configuration is the matcher's (`[launch] role = "run"`, `key_file`,
+  `pause_file`, `fast_start = true`, `log_file`) with `lean = false` written out, so the store keeps the full history and the record log
+  is on (the `[records]` default), with no lean cap; it needs the node's UTXO index like the matcher. The disk grows like an
+  index-only archive's (quick start, section 4). The fast start applies: the matcher trades within seconds on a tip store while the
+  full history is indexed, and until the full store has caught up the API answers from the tip store (`book_complete: false`, A.1.1).
+  The public API and the signing key live on the same machine: for a public server run an index-only host for the API and a
+  matcher on another machine instead. `/v1/health` names the roles of the process (`roles`: `["index", "match", "keep"]` for
+  `run`, `["index"]` for `index`) and the metrics carry `kob_executor_role{role="index"|"match"|"keep"}` (1 for each role that
+  runs); `lean` tells whether the history is kept.
 * **Status line**: `run` and `index` log `status: ...` every `--status-secs` (60; 0 off): the indexer's state and lag,
   the transactions sent and final, the profit of the final ones, the funds, and a `WARNING:` list (node not synced or
   unreachable, paused, waiting for the indexer, funds below `--low-funds-kas`, rejections).
@@ -202,7 +212,7 @@ indexer into the tip store at the start (`fast_start_import`); a verified import
 
 `lean = true` (config; `--lean` / `--no-lean` for one start; `lean_retention_days`, default 30, `--lean-retention-days`;
 `lean_max_db_mb`, default 500, `--lean-max-db-mb`, 0 for no cap) is for an executor, whose history comes from an archive
-indexer. Default off; `kob-executor setup` and the Android app write it for the matcher role (not for `index`). What it does:
+indexer. Default off; `kob-executor setup` and the Android app write it for the matcher role (not for `index`, and for `index,match` as an explicit `lean = false`). What it does:
 
 * **Kept**: every open or partly filled order with all its rows (events, UTXOs, custody, strays, flags, amends; a partly
   filled order's fill events sum to its filled amount, so they stay), an if-done entry that a live exit names as its parent,
@@ -265,7 +275,7 @@ matcher and keeper options (C, "Running"):
 | `--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`, `--select-min-share`, `--select-seed` | on, 1, 30, 0.1, OS randomness | the weighted selection among competing executors (C, "Competing executors"; `docs/spec/matcher.md` §3.6): off plans deterministically; the weight exponent; the starvation bound in DAA; the lowest share of the optional work per tick; a fixed seed for a reproducible run. Also on `match` and `keep` |
 
 Next to `run`: `kob-executor address-balance [--dir D]` (the key's address and plain balance as one JSON object, from the configured
-node; never the secret), `kob-executor setup --non-interactive --node resolver|URL --role match|index [--new-key]` (the setup's files and one
+node; never the secret), `kob-executor setup --non-interactive --node resolver|URL --role match|index|index,match [--new-key]` (the setup's files and one
 JSON object, for scripts and the Android app) and `kob-executor withdraw --to ADDRESS --amount KAS|all [--yes] [--dry-run]` (KAS out of the
 operator key over the configured node, public resolver pair included; it takes the data directory's writer lock, so it refuses while the
 executor runs; Quick start, section 5).

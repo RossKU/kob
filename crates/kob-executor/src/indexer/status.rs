@@ -96,6 +96,9 @@ pub struct HealthSnapshot {
     /// Closed orders and rows deleted by the lean pruning since the start.
     pub lean_orders_pruned_total: u64,
     pub lean_rows_pruned_total: u64,
+    /// What this process does: `index` (the store and its read API; every process has it), and `match` / `keep` when the
+    /// matcher / the keepers of `kob-executor run` work on this store. `lean` says whether the history is kept.
+    pub roles: Vec<&'static str>,
     /// The fast start's backfill: the full store's progress (absent once the book is complete).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backfill: Option<Backfill>,
@@ -264,6 +267,7 @@ impl HealthSnapshot {
             lean: false,
             lean_orders_pruned_total: 0,
             lean_rows_pruned_total: 0,
+            roles: vec!["index"],
             backfill: None,
             gaps: vec![],
         }
@@ -437,6 +441,18 @@ impl HealthSnapshot {
             per("kob_indexer_node_dropped", "gauge", "1 once the node contradicted the primary.", &|n| {
                 n.dropped_reason.is_some() as u64
             });
+        }
+        s.push_str(
+            "# HELP kob_executor_role 1 for each role this process runs: index (the store and its read API), match, keep.
+# TYPE kob_executor_role gauge
+",
+        );
+        for role in ["index", "match", "keep"] {
+            s.push_str(&format!(
+                "kob_executor_role{{role=\"{role}\"}} {}
+",
+                self.roles.contains(&role) as u64
+            ));
         }
         s
     }
@@ -852,5 +868,23 @@ mod tests {
                 && m.contains("kob_indexer_lag_tolerance_daa 0"),
             "{m}"
         );
+    }
+
+    #[test]
+    fn health_and_metrics_name_the_roles_of_the_process() {
+        // a bare indexer (`kob-executor index`) is the index role alone
+        let mut h = HealthSnapshot::new("testnet-10");
+        assert_eq!(serde_json::to_value(&h).unwrap()["roles"], serde_json::json!(["index"]));
+        let m = h.metrics_text();
+        assert!(m.contains("kob_executor_role{role=\"index\"} 1") && m.contains("kob_executor_role{role=\"match\"} 0"), "{m}");
+        // `kob-executor run` adds the matcher and the keepers it runs
+        h.roles = crate::matcher::run::Roles { matcher: true, keeper: true }.with_indexer();
+        assert_eq!(serde_json::to_value(&h).unwrap()["roles"], serde_json::json!(["index", "match", "keep"]));
+        let m = h.metrics_text();
+        for r in ["index", "match", "keep"] {
+            assert!(m.contains(&format!("kob_executor_role{{role=\"{r}\"}} 1")), "{m}");
+        }
+        h.roles = crate::matcher::run::Roles { matcher: true, keeper: false }.with_indexer();
+        assert!(h.metrics_text().contains("kob_executor_role{role=\"keep\"} 0"));
     }
 }

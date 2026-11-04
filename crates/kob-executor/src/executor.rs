@@ -386,6 +386,7 @@ where
         }
         None => None,
     };
+    indexer.health.update(|h| h.roles = cfg.roles.with_indexer());
     let running = indexer.spawn(chain)?;
     // the book is read on a connection of its own, off the ingest lock and off the runtime's workers
     let reader = crate::indexer::db::open_reader(&indexer.cfg.db_path(), &indexer.cfg.network)?;

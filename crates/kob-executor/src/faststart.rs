@@ -405,6 +405,10 @@ where
     let tip = open_tip(&tip_cfg, plan, tip_chain.as_ref()).await?;
     let since = tip_since(&tip_cfg.data_dir);
     tip.health.update(|h| h.book_complete = false);
+    // both stores serve the API in turn: both say what this process does
+    let roles = run_cfg.roles.with_indexer();
+    tip.health.update(|h| h.roles = roles.clone());
+    full.health.update(|h| h.roles = roles);
     tracing::info!(
         tip = %tip_cfg.data_dir.display(),
         full = %cfg.data_dir.display(),

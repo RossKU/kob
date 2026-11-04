@@ -226,6 +226,7 @@ curl -s $API/v1/health
   "untrusted_windows_total": 0, "untrusted_blocks_total": 0, "confirmed_blocks_total": 0, "lies_total": 0,
   "book_complete": true,
   "lean": false, "lean_orders_pruned_total": 0, "lean_rows_pruned_total": 0,
+  "roles": ["index"],
   "ok": true,
   "caught_up": true,
   "within_lag_tolerance": true,
@@ -298,6 +299,7 @@ Every key the handler returns:
 | `prefetch_windows`, `prefetch_in_flight`, `prefetch_bytes`, `prefetch_bytes_peak`, `prefetch_window_blocks`, `prefetch_discards_total`, `prefetch_oversize_total` | Parallel fetch: windows queued ahead of the cursor and in flight, their bytes now and at most, the current window in chain blocks, plans dropped because the chain moved, windows refused as oversize. |
 | `untrusted_windows_total`, `untrusted_blocks_total`, `confirmed_blocks_total`, `lies_total` | Several nodes: windows and chain blocks fetched from a node other than the primary, how many were compared with the primary's copy before applying, and contradictions found. |
 | `lean`, `lean_orders_pruned_total`, `lean_rows_pruned_total` | Lean storage: whether it is on, and the closed orders / rows it deleted since the start. |
+| `roles` | What the process does: `index` (the store and this API; every process), plus `match` and `keep` when the matcher / the keepers of `kob-executor run` work on this store (`["index", "match", "keep"]`). An archive that also trades (`kob-executor setup --role index,match`) shows `lean: false` with `match`. The metrics carry `kob_executor_role{role="index"|"match"|"keep"}`. |
 | `counters` | Object or `null` (`null` when the counter read failed; health never turns into an error for it): `orders_total`, `orders_listed`, `orders_by_status` (object status to count, statuses with 0 omitted), `rejects_total` (KOB1 payloads that produced no order), `fills_total`, `last_block_seq`, `last_block_daa`. |
 
 **History and gaps**

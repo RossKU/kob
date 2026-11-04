@@ -17,21 +17,71 @@ use crate::setup::{
     ensure_token_list, write_config, SetupFile, SetupNode, SetupOptions, WrpcSetupNode, CONFIG_FILE, DATA_DIR, KEY_FILE,
 };
 
-/// `--role` of the non-interactive setup.
-#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+/// `--role` of the setup (the non-interactive flag and the interactive choice): `match`, `index` or both, `index,match`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRole {
-    /// Matcher and keepers (`run`; needs a funded hot key).
+    /// Matcher and keepers (`run`; needs a funded hot key). Lean storage, fast start, no record log.
     Match,
-    /// Index only (`index`; no key, no funds).
+    /// Index only (`index`; no key, no funds): full history and the record log.
     Index,
+    /// One process that is both: the archive indexer (full history, record log, `lean = false`) and the matcher and keepers
+    /// with a key (`run`). The public API and the signing key live on the same machine.
+    IndexMatch,
 }
 
 impl AppRole {
-    fn launch_role(self) -> LaunchRole {
+    /// The roles in the order of `--role` / `roles` of the output: `index` first.
+    pub fn names(self) -> &'static [&'static str] {
         match self {
-            AppRole::Match => LaunchRole::Run,
+            AppRole::Match => &["match"],
+            AppRole::Index => &["index"],
+            AppRole::IndexMatch => &["index", "match"],
+        }
+    }
+
+    /// The subcommand the role runs: `run` for every role with a key.
+    pub fn launch_role(self) -> LaunchRole {
+        match self {
+            AppRole::Match | AppRole::IndexMatch => LaunchRole::Run,
             AppRole::Index => LaunchRole::Index,
         }
+    }
+
+    /// `true` for the roles that sign with the operator's key.
+    pub fn has_key(self) -> bool {
+        self.launch_role() == LaunchRole::Run
+    }
+
+    /// `true` for the roles that keep the whole history and the record log (an archive).
+    pub fn is_archive(self) -> bool {
+        matches!(self, AppRole::Index | AppRole::IndexMatch)
+    }
+
+    /// Parses `match`, `index`, or the pair in either order (`index,match`, `match,index`), case and spaces around the names
+    /// ignored. An unknown name, an empty list or an empty element (`index,`) is an error.
+    pub fn parse(s: &str) -> Result<AppRole, String> {
+        let (mut index, mut matcher) = (false, false);
+        for part in s.split(',') {
+            match part.trim().to_ascii_lowercase().as_str() {
+                "index" => index = true,
+                "match" => matcher = true,
+                "" => return Err(format!("empty role in \"{s}\": use match, index or index,match")),
+                other => return Err(format!("unknown role \"{other}\": use match, index or index,match")),
+            }
+        }
+        Ok(match (index, matcher) {
+            (true, true) => AppRole::IndexMatch,
+            (false, true) => AppRole::Match,
+            _ => AppRole::Index,
+        })
+    }
+}
+
+impl std::str::FromStr for AppRole {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        AppRole::parse(s)
     }
 }
 
@@ -63,7 +113,8 @@ pub fn node_entry(node: &str) -> Result<String> {
 /// The non-interactive setup into `opts.dir`: writes the configuration (replacing one), the token list when the build pins no
 /// registry (kept when there) and, for the matcher role, the key file when there is none and `new_key` says to make one.
 /// Returns what the wrapper needs as a JSON object: `address` (null for index only), `config`, `key_file`, `network`,
-/// `role`, `node`, `data_dir`. The secret is never part of it.
+/// `role` (the subcommand), `roles` (`["index"]`, `["match"]` or `["index", "match"]`), `node`, `data_dir`. The secret is never
+/// part of it.
 pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value> {
     let network = match (&opts.build_network, a.network.as_deref()) {
         (Some(b), Some(g)) if b != g => bail!("this binary is the {b} build, it cannot set up {g}"),
@@ -76,7 +127,7 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
     default_wrpc_url(&network).ok_or_else(|| anyhow!("no default node endpoint for {network}"))?;
     let role = a.role.launch_role();
     let key_path = opts.dir.join(KEY_FILE);
-    if role == LaunchRole::Run && !key_path.exists() && !a.new_key {
+    if a.role.has_key() && !key_path.exists() && !a.new_key {
         bail!("the matcher role needs a key and {} has none: pass --new-key", key_path.display());
     }
     std::fs::create_dir_all(&opts.dir).with_context(|| opts.dir.display().to_string())?;
@@ -84,7 +135,7 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
     let mut launch = LaunchConfig { role, ..LaunchConfig::default() };
     let data_dir = DATA_DIR.to_string();
     let mut address = Value::Null;
-    if role == LaunchRole::Run {
+    if a.role.has_key() {
         // an existing key file is used, never replaced
         let key = if key_path.exists() { HotKey::from_file(&key_path)? } else { HotKey::create_file(&key_path)? };
         address = json!(key.address(&network).to_string());
@@ -92,8 +143,8 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
         launch.pause_file = Some(PathBuf::from(format!("{data_dir}/pause")));
     }
     let tokens_path = if opts.pinned_registry { None } else { Some(ensure_token_list(&opts.dir, &network)?.0) };
-    let fast_start = SetupFile::fast_start_for(role);
-    let lean = SetupFile::lean_for(role);
+    let fast_start = SetupFile::fast_start_for(a.role);
+    let lean = SetupFile::lean_for(a.role);
     let file = SetupFile {
         network: network.clone(),
         rpc_url: url.clone(),
@@ -111,6 +162,7 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
         "key_file": file.launch.key_file.as_ref().map(|k| opts.dir.join(k).to_string_lossy().into_owned()),
         "network": network,
         "role": role.subcommand(),
+        "roles": a.role.names(),
         "node": crate::rpc::redact_url(&url),
         "data_dir": opts.dir.join(&data_dir).to_string_lossy(),
     }))
@@ -250,6 +302,36 @@ mod tests {
         let idx_cfg = IndexerConfig::load(&dir.join(CONFIG_FILE)).unwrap();
         assert!(!idx_cfg.fast_start && !idx_cfg.lean, "index only has no use for either");
         assert_eq!(std::fs::read_to_string(&key_path).unwrap(), secret, "index only leaves the key alone");
+    }
+
+    #[test]
+    fn an_index_and_match_setup_writes_an_archive_with_a_matcher_and_a_key() {
+        let d = tempfile::tempdir().unwrap();
+        let tn = Some("testnet-10");
+        // the key is needed as for the matcher
+        let e = setup_non_interactive(&opts(d.path(), tn, true), &ask("resolver", AppRole::IndexMatch, false)).unwrap_err();
+        assert!(e.to_string().contains("--new-key"), "{e}");
+        assert!(!d.path().join(CONFIG_FILE).exists() && !d.path().join(KEY_FILE).exists());
+        let out = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::IndexMatch, true)).unwrap();
+        let key = HotKey::from_file(&d.path().join(KEY_FILE)).unwrap();
+        assert_eq!(out["address"], key.address("testnet-10").to_string());
+        assert_eq!((out["role"].as_str(), out["roles"].clone()), (Some("run"), serde_json::json!(["index", "match"])));
+        let l = crate::setup::launch_args(&d.path().join(CONFIG_FILE)).unwrap();
+        assert_eq!(l.args, ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
+        let c = IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap();
+        assert!(!c.lean && c.records.enabled, "full history and the record log");
+        assert!(c.fast_start, "the matcher trades within seconds of the first start");
+        let text = std::fs::read_to_string(d.path().join(CONFIG_FILE)).unwrap();
+        assert!(text.contains("lean = false\n"), "the archive store is written out, not left to the default: {text}");
+        // the other roles say so as well
+        let m = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Match, false)).unwrap();
+        assert_eq!(m["roles"], serde_json::json!(["match"]));
+        assert!(IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap().lean);
+        let i = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Index, false)).unwrap();
+        assert_eq!((i["roles"].clone(), i["address"].is_null()), (serde_json::json!(["index"]), true));
+        // the balance of the combined role's key is readable like the matcher's
+        setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::IndexMatch, false)).unwrap();
+        assert_eq!(operator_address(&d.path().join(CONFIG_FILE)).as_deref(), out["address"].as_str());
     }
 
     #[test]

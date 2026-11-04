@@ -92,14 +92,19 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
 1. **Network**: fixed by the binary; it says which.
 2. **Node**: public Kaspa nodes (the default: it finds the two, checks each one's network, sync state and UTXO index and
    shows their host names) or your own node (section 2).
-3. **Role**: *matcher and keepers* (the default, earns, needs a funded key) or *index only* (follows the chain and serves
-   the read API; no key, no funds). For your own node it then asks its URL: default `ws://127.0.0.1:18110` (mainnet) or
+3. **Role**: *matcher and keepers* (the default, earns, needs a funded key), *index only* (follows the chain and serves
+   the read API; no key, no funds) or *index and match* (both in one process: the archive indexer API with the full history
+   and the record log, and the matcher and keepers with a funded key). The third choice comes with a warning: **the public
+   API and the signing key then live on the same machine**. For a public server prefer separate machines: an index-only host
+   for the API and a matcher elsewhere. For your own node it then asks its URL: default `ws://127.0.0.1:18110` (mainnet) or
    `ws://127.0.0.1:18210` (testnet-10), connects at once and reports the node's version, network, sync state and UTXO index;
    on a problem it shows how to start the node and lets you check again, enter another URL, or `skip`.
 4. **Data directory**: default `kob-data` next to the program. The prompt reads "the database and the record log; a few GB",
    which fits the index-only role. For *matcher and keepers* the setup also turns on the fast start and **lean storage**: no
-   record log and a database capped at 500 MB (section 8, point 5; `docs/ops/executor.md`, A.1.2).
-5. **Operator key** (matcher and keepers): it generates a new key into `kob-operator.key` with the operating system's
+   record log and a database capped at 500 MB (section 8, point 5; `docs/ops/executor.md`, A.1.2). For *index and match* it
+   turns on the fast start but **not** lean storage (`lean = false`, the record log stays on): the data directory grows with
+   the orders like an index-only archive's (section 4, the third column), while the matcher trades from the first seconds.
+5. **Operator key** (matcher and keepers, and index and match): it generates a new key into `kob-operator.key` with the operating system's
    random generator and makes the file readable by your account only (Windows: an ACL with your account alone; Linux: mode
    `0600`), or uses a key file you name (64 hex characters). The secret is never printed. An existing
    `kob-operator.key` is offered again, never replaced.
@@ -161,12 +166,13 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
 
 **What it costs to run.** Measured and estimated figures for sizing a machine or a metered line (`docs/ops/executor.md`, Part B 3 and A.1.2):
 
-| | Matcher and keepers (lean, fast start) | Index only (full history, record log) |
-|---|---|---|
-| Disk | database capped at 500 MB (`lean_max_db_mb`), no record log, plus a constant 42 MB window of chain blocks | grows with the orders: plan on about 10 KB per order in all (soak measurements: 1.6 GB of database for 295,000 orders and 2.85 GB for 501,000, i.e. 5.4 to 5.7 KB each, plus a record log of about 3.9 KB per order, 1.2 GB for 306,000); a quiet testnet-10 is a few GB |
-| Memory | 0.3 to 1 GB typical, up to 4 GB while catching up on mainnet-sized batches | the same |
-| CPU | one core at most; 2 to 4 % of a core at 3,000 transactions per second of chain load | the same |
-| Network | about 1.4 KB per chain transaction from the node (1.35 MB/s at 1,000 transactions per second); the first catch-up over public nodes is a few GB (about 4 GB on a phone), then the steady flow; quiet testnet-10 measured 15.7 GB per day on 2026-09-29 | the same |
+| | Matcher and keepers (lean, fast start) | Index only (full history, record log) | Index and match (`--role index,match`: one process, full history, record log, matcher and keepers) |
+|---|---|---|---|
+| Disk | database capped at 500 MB (`lean_max_db_mb`), no record log, plus a constant 42 MB window of chain blocks | grows with the orders: plan on about 10 KB per order in all (soak measurements: 1.6 GB of database for 295,000 orders and 2.85 GB for 501,000, i.e. 5.4 to 5.7 KB each, plus a record log of about 3.9 KB per order, 1.2 GB for 306,000); a quiet testnet-10 is a few GB | the same as index only (no cap, record log on) |
+| Memory | 0.3 to 1 GB typical, up to 4 GB while catching up on mainnet-sized batches | the same | the same |
+| CPU | one core at most; 2 to 4 % of a core at 3,000 transactions per second of chain load | the same | the same |
+| Network | about 1.4 KB per chain transaction from the node (1.35 MB/s at 1,000 transactions per second); the first catch-up over public nodes is a few GB (about 4 GB on a phone), then the steady flow; quiet testnet-10 measured 15.7 GB per day on 2026-09-29 | the same | the same |
+| Key | yes (funded hot key) | none | yes, on the same machine as the public API: for a public server prefer separate machines |
 
 Mainnet record-log growth under real traffic is not measured yet. The status line's profit counts the final transactions since this
 run started; it is kept in memory only and starts again at zero after a restart, so the executor keeps no earnings history; to
@@ -184,10 +190,12 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   prints one JSON object: the key's address, the network and its plain balance read from the configured node
   (`balance_sompi`, `balance_kas`; when the node cannot be read, `balance_sompi` is `null` and `error` says why). It never
   prints the secret and can run while the executor runs. Its sibling for scripts and the Android app is `kob-executor setup
-  --non-interactive --node resolver|<ws-url> --role match|index [--new-key] [--network mainnet|testnet-10] [--dir <folder>]`:
+  --non-interactive --node resolver|<ws-url> --role match|index|index,match [--new-key] [--network mainnet|testnet-10] [--dir <folder>]`:
   no questions, no start; it writes the same files as the dialogue (replacing the configuration, keeping an existing key
-  file), and prints one JSON object with the `address` (`null` for index only) and the paths. `--network` is only for a
-  development build; a deployment build knows its own and refuses another.
+  file), and prints one JSON object with the `address` (`null` for index only), the `roles` (`["match"]`, `["index"]` or
+  `["index", "match"]`) and the paths. `--role index,match` (also `match,index`) is the combined role: it needs a key like
+  `match`, and writes an archive store (`lean = false`, record log on) next to the matcher; an unknown or empty role is
+  refused. `--network` is only for a development build; a deployment build knows its own and refuses another.
 * **Withdraw**: stop the executor first, then, from the same folder (or with `--dir <folder>`, or `--config <file>` for a
   configuration elsewhere):
 
