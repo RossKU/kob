@@ -356,6 +356,10 @@ on 2026-11-04: creating a token costs 0.00415 KAS either way; sending it (one ho
 0.0068 KAS with the standalone program. Tokens created earlier on the standalone program stay fully tradable. The program is fixed when the
 token is created.
 
+KOB has no "everyone mints" feature: a creation here makes the whole supply at once and never sets up a public minter or a seed. A token
+whose program has a public mint is minted on other services; it trades on KOB like any token of an allowlisted program (the published KCC-20 app
+is one), and what is left to mint shows as "Mint left" in its token details ("Status and checks").
+
 After creation the page shows the token id and "Open its market". The token appears in the Market list once a first sell order exists;
 until then only a wallet that holds it can open it. KOB keeps no listing. The "registry entry" the page offers is optional: apps read
 the on-chain record.
