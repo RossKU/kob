@@ -42,46 +42,14 @@ impl Urgency {
     }
 }
 
-/// The node's fee estimate, sompi per gram: the priority bucket, the first normal and the first low bucket.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct FeeEstimate {
-    pub priority: f64,
-    pub normal: f64,
-    pub low: f64,
-}
+pub use kob_protocol::fee_estimate::FeeEstimate;
 
-impl FeeEstimate {
-    /// Parses a `getFeeEstimate` response (`{"estimate": {"priorityBucket": {"feerate", "estimatedSeconds"}, "normalBuckets":
-    /// [...], "lowBuckets": [...]}}`, or the inner `estimate` object). An empty normal or low list takes the next faster
-    /// bucket. Every rate must be finite and positive.
-    pub fn parse(v: &serde_json::Value) -> Result<FeeEstimate, String> {
-        let e = v.get("estimate").unwrap_or(v);
-        let rate = |b: &serde_json::Value| b.get("feerate").and_then(serde_json::Value::as_f64);
-        let first = |k: &str| e.get(k).and_then(serde_json::Value::as_array).and_then(|a| a.first()).and_then(rate);
-        let priority = e.get("priorityBucket").and_then(rate).ok_or("getFeeEstimate: no priorityBucket.feerate")?;
-        let normal = first("normalBuckets").unwrap_or(priority);
-        let low = first("lowBuckets").unwrap_or(normal);
-        let est = FeeEstimate { priority, normal, low };
-        est.check()?;
-        Ok(est)
-    }
-
-    fn check(&self) -> Result<(), String> {
-        for (k, r) in [("priority", self.priority), ("normal", self.normal), ("low", self.low)] {
-            if !r.is_finite() || r <= 0.0 {
-                return Err(format!("getFeeEstimate: {k} feerate {r} is not a positive number"));
-            }
-        }
-        Ok(())
-    }
-
-    /// The bucket of an urgency.
-    pub fn bucket(&self, u: Urgency) -> f64 {
-        match u {
-            Urgency::High => self.priority,
-            Urgency::Normal => self.normal,
-            Urgency::Low => self.low,
-        }
+/// The bucket of an urgency.
+fn bucket(e: &FeeEstimate, u: Urgency) -> f64 {
+    match u {
+        Urgency::High => e.priority,
+        Urgency::Normal => e.normal,
+        Urgency::Low => e.low,
     }
 }
 
@@ -129,7 +97,7 @@ impl FeePolicy {
         let est = est.filter(|_| self.dynamic);
         let pick = |u: Urgency| match est {
             // `as u64` saturates (and maps NaN to 0, which the floor lifts)
-            Some(e) => (e.bucket(u).ceil() as u64).clamp(floor, ceiling),
+            Some(e) => (bucket(e, u).ceil() as u64).clamp(floor, ceiling),
             None => floor,
         };
         FeeRates {

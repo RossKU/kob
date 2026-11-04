@@ -81,6 +81,7 @@ calls! {
     "getBlockDagInfo" => GetBlockDagInfo, GetBlockDagInfoRequest, GetBlockDagInfoResponse;
     "getUtxosByAddresses" => GetUtxosByAddresses, GetUtxosByAddressesRequest, GetUtxosByAddressesResponse;
     "submitTransaction" => SubmitTransaction, SubmitTransactionRequest, SubmitTransactionResponse;
+    "getFeeEstimate" => GetFeeEstimate, GetFeeEstimateRequest, GetFeeEstimateResponse;
 }
 
 #[cfg(test)]
@@ -137,6 +138,7 @@ mod tests {
     fn every_request_the_cli_sends_encodes() {
         node_reads::<GetServerInfoRequest>("getServerInfo", json!({}));
         node_reads::<GetBlockDagInfoRequest>("getBlockDagInfo", json!({}));
+        node_reads::<GetFeeEstimateRequest>("getFeeEstimate", json!({}));
         let addr = "kaspatest:qz484dy4edqk52xx6srdd4a6dcwp7euxw86fl43ve2wm8umqts20kyujkrssm";
         let r = node_reads::<GetUtxosByAddressesRequest>("getUtxosByAddresses", json!({"addresses": [addr]}));
         assert_eq!(r["addresses"][0], addr);
@@ -201,7 +203,7 @@ mod tests {
         // a body shorter than its length is refused, an unknown method too
         assert!(decode("getServerInfo", &[9, 0, 0, 0, 1]).is_err());
         assert!(decode("getPeerAddresses", &body(&submitted)).is_err());
-        assert_eq!(METHODS.len(), 4);
+        assert_eq!(METHODS.len(), 5);
     }
 
     #[test]

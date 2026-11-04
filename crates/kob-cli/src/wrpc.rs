@@ -410,6 +410,8 @@ pub mod mock {
         pub daa: u64,
         /// The network `getBlockDagInfo` reports (`testnet-10` by default).
         pub network: String,
+        /// What `getFeeEstimate` answers (none: an error, as a node without the method).
+        pub fee_estimate: Option<Value>,
     }
 
     /// Start a mock node; it serves connections until the test process ends.
@@ -453,6 +455,9 @@ pub mod mock {
                                 }
                                 "getBlockDagInfo" => {
                                     json!({"id": id, "method": method, "params": {"virtualDaaScore": s.daa, "network": s.network}})
+                                }
+                                "getFeeEstimate" if s.fee_estimate.is_some() => {
+                                    json!({"id": id, "method": method, "params": s.fee_estimate.clone()})
                                 }
                                 "submitTransaction" => {
                                     s.submitted.push(params["transaction"].clone());

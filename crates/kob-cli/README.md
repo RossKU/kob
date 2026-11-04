@@ -142,6 +142,10 @@ a P2PK address or a 64-hex key; KAS to any address of the network or a 64-hex ke
   output with its owner, the net effect on the wallet in KAS and each token, the fee, the signatures asked for) before
   anything is signed. `--dry-run` stops there. Without `--yes` a terminal is asked (`yes` to continue); without a
   terminal the command refuses. A transaction that needs another key's signature is never signed.
+* A trading command pays the relay minimum (100 sompi per gram) unless `--fee-rate N` says more. When the node's fee estimate shows
+  contended blocks (`getFeeEstimate`: the first normal bucket, rounded up, at least 10 percent above the relay minimum, the executor's
+  reading in `kob_protocol::fee_estimate`) and no `--fee-rate` is given, one `note:` line on stderr says a transaction at the relay minimum may
+  wait and names `--fee-rate N`; nothing changes otherwise, and `--json` stdout is untouched. A node without the estimate gives no note.
 * The network is mainnet unless `--testnet` / `--netsuffix=10` / `--network testnet-10` names the other (a deployment build is bound to
   its own). The plan starts with `network: <name>` and the confirmation asks "Sign and submit ... on network: <name>?". The node must
   run the network named (`getBlockDagInfo`; with the public nodes, both of the pair): a signature commits to no network, so a node

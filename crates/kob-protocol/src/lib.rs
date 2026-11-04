@@ -6,6 +6,7 @@
 //!
 //! | Module | Contents |
 //! |---|---|
+//! | [`fee_estimate`] | the node's fee estimate (`getFeeEstimate`) and the congestion rule drawn from it |
 //! | [`family`] | token families (KCC-20, KRON): what differs between them and nothing else |
 //! | [`profile`] | token-program profiles (`data/programs.json`): everything KOB needs per token program, codec families, profile derivation for onboarding |
 //! | [`artifacts`] | embedded `silverc` artifacts and raw KRON token programs, template-hash pinning, network-constant checks |
@@ -35,6 +36,7 @@ pub mod build;
 pub mod defaults;
 pub mod error;
 pub mod family;
+pub mod fee_estimate;
 pub mod genesis_evidence;
 pub mod genesis_open;
 pub mod genesis_states;

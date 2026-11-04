@@ -7,6 +7,7 @@
 //! views `kob book`, `kob orders` and `kob balances` ([`trade`]).
 
 mod common;
+mod congestion;
 mod inputs;
 mod nodelink;
 mod order;
