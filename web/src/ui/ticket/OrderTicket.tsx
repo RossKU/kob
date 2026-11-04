@@ -25,6 +25,7 @@ import { readPairReferences, readReferences, type References } from '../../data/
 import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { useFailoverState } from '../shell/failover';
+import { CongestionNotice } from './CongestionNotice';
 import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
 import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, retimeLead } from '../confirm/signing-time';
@@ -828,6 +829,8 @@ export function OrderTicket(props: OrderTicketProps) {
         <span key={enterText ?? `${sideName}|${typeName}`} data-state={enterText ? 'enter' : undefined}>{enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
       <SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" />
+      {/* below the button, so it never moves it: contended blocks, and where the priority fee is switched on (congestion.ts) */}
+      <CongestionNotice active />
       {/* what the token's records say (facts, the genesis check): below the button, so a late answer of the check never moves it */}
       {props.facts}
       {ladderNote ? (

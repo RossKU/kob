@@ -163,6 +163,24 @@ export function parseFeeEstimate(raw: unknown): FeeEstimate | null {
 
 export const BUCKET_OF: Readonly<Record<Urgency, 'priority' | 'normal' | 'low'>> = Object.freeze({ high: 'priority', normal: 'normal', low: 'low' });
 
+// ------------------------------------------------------------------------------------------------ congestion
+
+/** How far above the floor the first normal bucket must be before blocks count as contended, percent (kob_protocol::fee_estimate::CONTENDED_MARGIN_PERCENT). */
+export const CONTENDED_MARGIN_PERCENT = 10;
+
+/**
+ * Whether blocks are contended (kob_protocol::fee_estimate::FeeEstimate::contended, the executor's reading of the estimate): the rate a normal-urgency
+ * transaction would pay (the first normal bucket, rounded up as the policy rounds it) is at least {@link CONTENDED_MARGIN_PERCENT} above `floor`
+ * (the relay minimum at least). An idle node reports the floor in every bucket. Only the normal bucket counts: the priority bucket costs a little
+ * more even on a quiet network and the low bucket is always the slowest. No estimate, or an unusable one: not contended (nothing is said).
+ */
+export function isContended(estimate: FeeEstimate | null | undefined, floor: bigint = RELAY_FEE_FLOOR): boolean {
+  const normal = estimate ? rateOf(estimate.normal) : null;
+  if (normal === null) return false;
+  const base = floor < RELAY_FEE_FLOOR ? RELAY_FEE_FLOOR : floor;
+  return BigInt(Math.ceil(normal)) * 100n >= base * BigInt(100 + CONTENDED_MARGIN_PERCENT);
+}
+
 // ------------------------------------------------------------------------------------------------ the rate
 
 export type FeeSource = 'estimate' | 'floor';
