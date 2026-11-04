@@ -312,10 +312,14 @@ impl World {
         (stop, h)
     }
     /// A rival keeper executes the intent right before the facilitator's own execution reaches the node.
+    /// The rival executes one DAA later than the facilitator planned: the execution's lock time is the DAA score, so one built at the very
+    /// same score is byte-identical (the keeper is not in the transaction) and would BE the facilitator's own execution, accepted as its own
+    /// (a race with the miner thread, which moves the score every few ms: on a loaded machine it did not move it between the two builds).
     fn rival(&self, creation: Txid, carrier: Option<u64>) {
         *self.spy.creation.lock().unwrap() = Some(creation);
         let (chain, ledger, book) = (self.chain.clone(), self.ledger.clone(), self.book.clone());
         *self.spy.hook.lock().unwrap() = Some(Box::new(move || {
+            chain.advance_daa(1);
             let facts = ledger.get(&hex(&creation)).unwrap().intent.unwrap().facts;
             let mut f = facts.clone();
             let u = chain.utxo(&facts.outpoint()).expect("intent output on chain");
