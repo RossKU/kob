@@ -56,7 +56,12 @@ fn small_ask(w: &World, bump: i64) -> SignedTx {
 
 fn status(cfg: &IndexerConfig, cov: &Hash32) -> Option<String> {
     let conn = open_reader(&cfg.db_path(), "testnet-10").unwrap();
-    conn.query_row("SELECT status FROM order_state WHERE covenant_id = ?1", [&cov.0[..]], |r| r.get(0)).ok()
+    conn.query_row(
+        "SELECT status FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+        [&cov.0[..]],
+        |r| r.get(0),
+    )
+    .ok()
 }
 
 /// An unspent order output as the node's `getUtxosByAddresses` reports it.

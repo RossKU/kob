@@ -109,15 +109,15 @@ pub fn prune(
     rep.over_cap = over_cap;
     let order_before = if over_cap { cursor_daa.saturating_sub(reorg_window_daa) as i64 } else { before };
     let tx = conn.transaction()?;
-    tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS lean_batch (cov BLOB PRIMARY KEY) WITHOUT ROWID; DELETE FROM lean_batch;")?;
+    tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS lean_batch (cov BLOB PRIMARY KEY, id INTEGER NOT NULL) WITHOUT ROWID; DELETE FROM lean_batch;")?;
 
     // closed orders past the retention whose exits (if-done children) are not live
     let picked = tx.execute(
         &format!(
-            "INSERT INTO lean_batch SELECT s.covenant_id FROM order_state s \
+            "INSERT INTO lean_batch SELECT p.covenant_id, p.id FROM order_state s CROSS JOIN orders p ON p.id = s.order_id \
              WHERE s.status IN {CLOSED} AND s.last_daa < ?1 AND s.last_block < ?2 \
-             AND NOT EXISTS (SELECT 1 FROM orders c JOIN order_state cs ON cs.covenant_id = c.covenant_id \
-                             WHERE c.parent = s.covenant_id AND cs.status IN ('open','partial')) \
+             AND NOT EXISTS (SELECT 1 FROM orders c JOIN order_state cs ON cs.order_id = c.id \
+                             WHERE c.parent = p.covenant_id AND cs.status IN ('open','partial')) \
              {order} LIMIT ?3",
             order = if over_cap { "ORDER BY s.last_daa" } else { "" }
         ),
@@ -125,14 +125,14 @@ pub fn prune(
     )?;
     if picked > 0 {
         for sql in [
-            "DELETE FROM order_events WHERE covenant_id IN (SELECT cov FROM lean_batch)",
-            "DELETE FROM order_amends WHERE covenant_id IN (SELECT cov FROM lean_batch)",
+            "DELETE FROM order_events WHERE order_id IN (SELECT id FROM lean_batch)",
+            "DELETE FROM order_amends WHERE order_id IN (SELECT id FROM lean_batch)",
             "DELETE FROM pair_fills WHERE covenant_id IN (SELECT cov FROM lean_batch)",
-            "DELETE FROM order_utxos WHERE covenant_id IN (SELECT cov FROM lean_batch)",
-            "DELETE FROM token_holdings WHERE owner IN (SELECT cov FROM lean_batch) AND role IN ('custody','stray')",
-            "DELETE FROM token_utxos WHERE owner IN (SELECT cov FROM lean_batch)",
+            "DELETE FROM order_utxos WHERE order_id IN (SELECT id FROM lean_batch)",
+            "DELETE FROM token_holdings WHERE owner_id IN (SELECT i.id FROM lean_batch b JOIN ids i ON i.h = b.cov) AND role IN ('custody','stray')",
+            "DELETE FROM token_utxos WHERE order_id IN (SELECT id FROM lean_batch)",
             "DELETE FROM order_flags WHERE covenant_id IN (SELECT cov FROM lean_batch)",
-            "DELETE FROM order_state WHERE covenant_id IN (SELECT cov FROM lean_batch)",
+            "DELETE FROM order_state WHERE order_id IN (SELECT id FROM lean_batch)",
         ] {
             rep.rows += tx.execute(sql, [])?;
         }

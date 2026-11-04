@@ -100,7 +100,7 @@ pub fn export_orders(conn: &Connection, maker: Option<&[u8]>, live_only: bool) -
     let network = crate::indexer::db::meta_get(conn, "network")?.unwrap_or_default();
     let mut st = conn.prepare(&format!(
         "SELECT o.template_hash, CASE WHEN u.txid IS NULL THEN {GENESIS_O} ELSE kob_ustate(u.state, {GENESIS_O}) END, o.ext_commit, o.covenant_id, o.genesis_txid, s.status, o.parent
-         FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id
+         FROM orders o JOIN order_state s ON s.order_id = o.id
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx
          WHERE (?1 IS NULL OR o.maker = ?1) AND (?2 = 0 OR s.status IN ('open', 'partial'))
          ORDER BY o.genesis_block, o.covenant_id"
@@ -144,8 +144,9 @@ fn prefund_ext(conn: &Connection, o: &ExportedOrder) -> DbResult<Option<Hash32>>
     let Some((token, _)) = state.custodies().get(1).copied() else { return Ok(None) };
     let row: Option<(String, Vec<u8>)> = conn
         .query_row(
-            "SELECT program, kob_hstate(state, family, owner, owner_kind, amount) FROM token_holdings \
-             WHERE owner = ?1 AND token_cov_id = ?2 AND role = 'custody' ORDER BY created_block DESC, idx DESC LIMIT 1",
+            "SELECT x.program, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount) FROM token_holdings x JOIN ids ow ON ow.id = x.owner_id \
+             WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.token_id = (SELECT id FROM ids WHERE h = ?2) AND x.role = 'custody' \
+             ORDER BY x.created_block DESC, x.idx DESC LIMIT 1",
             rusqlite::params![&cov.0[..], &token[..]],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -329,10 +330,11 @@ fn owned_token_scripts(conn: &Connection, covs: &[Hash32]) -> Result<Vec<OwnedTo
     use kob_protocol::artifacts::{token_template, TemplateId};
     let mut out = Vec::new();
     let mut st = conn.prepare(
-        "SELECT t.txid, t.idx, t.role, t.amount, h.program, kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount), o.ext_commit, \
+        "SELECT t.txid, t.idx, t.role, t.amount, h.program, kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount), o.ext_commit, \
          o.token_tpl_hash, o.family \
-         FROM token_utxos t LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN orders o ON o.covenant_id = t.owner \
-         WHERE t.owner = ?1 AND t.spent_block IS NULL",
+         FROM token_utxos t LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id \
+         LEFT JOIN orders o ON o.id = t.order_id \
+         WHERE t.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND t.spent_block IS NULL",
     )?;
     for cov in covs {
         type Row = (Vec<u8>, u32, String, i64, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
@@ -382,8 +384,8 @@ fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result
             concat!(
                 "SELECT kob_ustate(u.state, (SELECT ",
                 sql_genesis!("g"),
-                " FROM orders g WHERE g.covenant_id = u.covenant_id)) FROM order_utxos u \
-                 WHERE u.covenant_id = ?1 AND u.spk = ?2 AND u.state IS NOT NULL ORDER BY u.created_block DESC LIMIT 1"
+                " FROM orders g WHERE g.id = u.order_id)) FROM order_utxos u \
+                 WHERE u.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND u.spk = ?2 AND u.state IS NOT NULL ORDER BY u.created_block DESC LIMIT 1"
             ),
             rusqlite::params![&cov.0[..], spk],
             |r| r.get(0),
@@ -473,7 +475,7 @@ pub async fn reconcile_open_orders<S: ChainSource>(
     let tracked: Vec<Tracked> = {
         let g = lock(ingest);
         let mut st =
-            g.conn().prepare("SELECT txid, idx, covenant_id, spk FROM order_utxos WHERE spent_block IS NULL ORDER BY txid, idx")?;
+            g.conn().prepare("SELECT u.txid, u.idx, o.covenant_id, u.spk FROM order_utxos u JOIN orders o ON o.id = u.order_id WHERE u.spent_block IS NULL ORDER BY u.txid, u.idx")?;
         let rows = st.query_map([], |r| {
             let t: Vec<u8> = r.get(0)?;
             let c: Vec<u8> = r.get(2)?;

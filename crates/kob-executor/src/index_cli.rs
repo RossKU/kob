@@ -119,15 +119,13 @@ pub enum IndexSub {
         #[arg(long)]
         onto_database: bool,
     },
-    /// Bring the data directory to the compact storage layout (schema 6): fills-only indexes, packed state spans, a compacted
-    /// store and gzip-compressed sealed record-log segments. Stop the executor first (it takes the writer lock). A store
-    /// written by an earlier build also works as it is; this gives the space back. Safe to repeat or to stop; the previous store
-    /// file is kept beside the new one (`index.sqlite3.before-migrate`) until you delete it. Needs free disk for the
-    /// compacted copy.
+    /// Bring a data directory written by an earlier build (schema 5, 6 or 7) to the compact layout (schema 8) in one run: a new
+    /// store is built beside the old one (integer ids, packed state spans, fills-only indexes), verified row by row against it
+    /// and swapped in, and the sealed record-log segments are gzip-compressed. Stop the executor first (it takes the writer
+    /// lock); this build refuses an older store until this has run. Safe to repeat or to stop (the old store is not touched
+    /// before the swap); the previous store file is kept beside the new one (`index.sqlite3.before-migrate`) until you delete it.
+    /// Needs free disk for the new store (about three quarters of the old one) and the temporary files of the index builds.
     Migrate {
-        /// Do not compact the store into a new file (the packed rows are rewritten in place; the file keeps its size).
-        #[arg(long)]
-        no_compact: bool,
         /// Do not compress the sealed record-log segments.
         #[arg(long)]
         no_compress_log: bool,
@@ -450,17 +448,19 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
                 }
             }
         }
-        IndexSub::Migrate { no_compact, no_compress_log } => {
-            let opts = indexer::storage::Options { compact: !no_compact, compress_log: !no_compress_log };
+        IndexSub::Migrate { no_compress_log } => {
+            let opts = indexer::storage::Options { compress_log: !no_compress_log };
             let r = indexer::storage::migrate(&cfg, opts, |line| println!("{line}"))?;
             println!(
-                "store {} -> {} bytes; record log {} -> {} bytes ({} segment(s) compressed); rewritten: {}",
+                "schema {} -> {}: store {} -> {} bytes; record log {} -> {} bytes ({} segment(s) compressed); rows: {}",
+                r.from_schema,
+                indexer::db::SCHEMA_VERSION,
                 r.db_bytes_before,
                 r.db_bytes_after,
                 r.log_bytes_before,
                 r.log_bytes_after,
                 r.log_segments_compressed,
-                r.columns.iter().map(|c| format!("{} {}/{}", c.column, c.changed, c.total)).collect::<Vec<_>>().join(", ")
+                r.tables.iter().map(|t| format!("{} {}", t.table, t.rows)).collect::<Vec<_>>().join(", ")
             );
             if let Some(old) = r.kept_old {
                 println!("the previous store file is kept as {}: delete it once the executor has run on the new one", old.display());

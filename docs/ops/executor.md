@@ -742,7 +742,7 @@ The database is a *derived view* of the record log: `kobd index replay` rebuilds
 records and the follower re-syncs the tail from the node (section 7.6). Measured numbers are in
 section 3; they come from `cargo test -p kob-executor --test storage -- --nocapture`.
 
-**Compact layout (schema 7, 2026-11).** After two weeks of heavy bot trading one executor held an 8.5 GB `index.sqlite3` (7.1 KB per
+**Compact layout (schema 7 and 8, 2026-11).** After two weeks of heavy bot trading one executor held an 8.5 GB `index.sqlite3` (7.1 KB per
 fill and 7.4 KB per order, counting the whole file by the 1.19 million fills and 1.14 million orders in it) and a 3.1 GB record log. Most of
 it was the same bytes stored again, and none of it is lost now:
 
@@ -764,22 +764,35 @@ it was the same bytes stored again, and none of it is lost now:
   dropped (the owner's page index served every read it served: the query plans are unchanged); the `(token, program)` index over every
   holding (190 MB) is the table `holding_programs`, kept by triggers, which holds what its two reads wanted (the programs a token has,
   and whether it has one).
+* **Integer ids (schema 8, `indexer::ids`).** The same 32-byte ids were stored again in every row and in every index entry that named them
+  (the covenant id of an order in each of its events, UTXOs and amends; the token id in each fill and holding; the owner of a holding in two
+  of its three indexes). An order is now `orders.id` (an `INTEGER PRIMARY KEY AUTOINCREMENT`: never reused; the covenant id stays in
+  `orders`, which the order lists are ordered by), and a token's covenant id and a holding's owner are rows of `ids` (`id`, `h`; added when
+  first seen, never deleted). `order_utxos`, `order_events`, `order_amends`, `order_state`, `token_utxos` (`order_id`, `token_id`),
+  `token_holdings` (`token_id`, `owner_id`) and `holding_programs` (`token_id`) hold the integers; every statement resolves a hash with
+  one index seek (`order_of!` / `id_of!`) and every read that returns one joins back, so **the API, the order lists' ordering and every
+  event id are unchanged byte for byte**. The covenant ids of `pair_fills`, `order_flags`, `candles`, `candle_meta`, `token_events` and
+  the KCC-23 tables stay as they are (their rows are few or already keyed by them). **This build refuses a store of schema 7 or older**
+  (`OldLayout`, the file untouched) until `index migrate` (7.6a) has rebuilt it, and an older build refuses a schema-8 store.
 * **The sealed segments of the record log are kept gzip-compressed** (7.6a, 9).
 
 Measured on a copy of the TN10 soak executor (8.48 GB, 2.32 million order UTXOs, 3.74 million holdings, 1.14 million orders, 3.53 million events):
 
-| | before | after |
-|---|---|---|
-| `index.sqlite3` | 8,482,902,016 B | **5,043,793,920 B** (-40.5 %) |
-| per fill / per order (file / count) | 7,127 / 7,413 B | 4,238 / 4,407 B |
-| `order_utxos` (table + its indexes) | 1,759 MB | 733 MB |
-| `token_holdings` | 2,807 MB | 1,652 MB |
-| `orders` | 1,507 MB | 1,031 MB |
-| `order_events` | 1,660 MB | 1,004 MB |
-| sealed record-log segments | 2,953 MB | 900 MB |
+| | before | schema 7 | schema 8 |
+|---|---|---|---|
+| `index.sqlite3` | 8,482,902,016 B | 5,043,793,920 B (-40.5 %) | **3,929,993,216 B (-53.7 %)** |
+| per fill / per order (file / count) | 7,127 / 7,413 B | 4,238 / 4,407 B | **3,301 / 3,434 B** |
+| `order_utxos` (table + its indexes) | 1,759 MB | 733 MB | 605 MB |
+| `token_holdings` | 2,807 MB | 1,652 MB | 1,183 MB |
+| `orders` | 1,507 MB | 1,031 MB | 1,038 MB |
+| `order_events` | 1,660 MB | 1,004 MB | 608 MB |
+| `token_utxos` | 330 MB | 300 MB | 207 MB |
+| `order_state` | 222 MB | 143 MB | 58 MB |
+| `ids` (new) | | | 65 MB (749,662 rows) |
+| sealed record-log segments | 2,953 MB | 900 MB | 900 MB |
 
 With the soak's recent rate of 46,000 orders and 51,000
-fills a day, the file grows by about 0.20 GB a day instead of 0.34 GB, and the log by 0.04 GB instead of 0.13 GB. **The `sqlite3` shell no
+fills a day, the file grows by about 0.16 GB a day instead of 0.34 GB (schema 7: 0.20 GB; scaled by the file sizes), and the log by 0.04 GB instead of 0.13 GB. **The `sqlite3` shell no
 longer shows the packed columns as they were** (it lacks the functions): use the API (`/v1/orders`, `/v1/orders/{id}/events`,
 `/v1/token-utxos`), `index export-orders`, or a client that registers this build's functions.
 
@@ -2102,12 +2115,12 @@ binds: `indexer::kcc23::DeclSection`, flagged by bit 30 of a record's `pos`) is 
 "newer format" warning (KOB records in such a frame are skipped by it too). Declarations made before this build were never
 logged and are not recovered by a replay.
 
-**Schema.** The database is schema 7 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
-dictionary-packed genesis states and event details, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
-writer and reader: move it aside and replay (above). A schema-5 database of an earlier build is brought up to date in place at
-start-up (idempotent backfills, no replay; the read-path indexes and row counters of section 5.5 are built once, seconds on a
-large database) and its schema number moves to 7: **from then on a build of an older schema refuses it** (it would misread the packed
-values), so the way back to the older build is a backup taken before; a newer schema is refused. An old configuration's `[receipts]` table is ignored. Roll indexers out before
+**Schema.** The database is schema 8 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
+dictionary-packed genesis states and event details; schema 8: integer ids, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
+writer and reader: move it aside and replay (above). **A database of schema 5, 6 or 7 is refused untouched as well** (`database ... is of schema N: this build reads
+schema 8 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd index migrate` (7.6a) rebuilds it as schema 8 in one offline run, and
+**from then on a build of an older schema refuses the store** (a newer schema is refused by every build), so the way back to the older build is the
+`index.sqlite3.before-migrate` file `index migrate` keeps (or a backup taken before). An old configuration's `[receipts]` table is ignored. Roll indexers out before
 wallets whenever the KOB1 payload version changes: an indexer refuses a payload version it does not know, so it would list
 none of the orders the new wallets place (`docs/ops/release.md`, section 7).
 
@@ -2115,39 +2128,52 @@ none of the orders the new wallets place (`docs/ops/release.md`, section 7).
 
 ```
 systemctl stop kob-index                                           # the writer lock: nothing else may write the directory
-kobd index migrate --data-dir /var/lib/kob-index           # 15 minutes on the 8.5 GB soak store (below)
+kobd index migrate --data-dir /var/lib/kob-index                   # 18 minutes on the 8.5 GB soak store (below)
 systemctl start kob-index
 rm /var/lib/kob-index/index.sqlite3.before-migrate                 # once the executor has run on the new store
 ```
 
-A store written by an earlier build runs on this build as it is (the new rows are written packed, the old ones are read whole; the
-first start moves the schema number to 7 and counts `holding_programs` once: about 35 seconds on the soak store); `index migrate` gives the space back. It is
-repeatable and can be interrupted. In order: (1) swaps the two fill indexes for the fills-only ones and drops `token_holdings_owner`
-and `token_holdings_token_program`; (2) rewrites `order_utxos.state`, `token_holdings.state`, `orders.genesis_state` and
-`order_events.detail` in the packed form, 20,000 rows per transaction, hashing what the queries read of each batch before and after
-the rewrite and comparing (a mismatch aborts, leaving every row as it was or packed and verified); (3) compacts the store into a new file
-(`VACUUM INTO`, then `PRAGMA quick_check`), which replaces `index.sqlite3`; the old file stays beside it as
-`index.sqlite3.before-migrate`, the rollback, and the disk needs room for the old store and the new one while both exist;
-(4) gzip-compresses the sealed record-log segments (the newest stays whole; a rotation compresses the segment it just sealed from now on,
-which holds the writer for about 3 seconds per 256 MiB segment). `--no-compact` and `--no-compress-log` leave steps 3 and 4 out.
+One run takes a store of schema 5, 6 or 7 to schema 8. **The old store is not altered**: a new file, `index.sqlite3.migrating`, is built beside it and
+replaces it only when it has been verified, so a run that fails or is stopped leaves the old store as it was (the next run deletes the partial file). In order:
+(1) **copy**: the tables are created from `schema.sql` without their indexes and triggers and filled from the old store in bulk (`INSERT ... SELECT`,
+about 6.5 minutes): the orders get their integer ids (in the old row order), the token covenant ids and holding owners get their `ids` rows, every row that
+named an order, token or owner by its 32 bytes names it by the integer, the four packed columns (`order_utxos.state`, `token_holdings.state`,
+`orders.genesis_state`, `order_events.detail`) are written in the packed form (a value an earlier build wrote whole is packed, a packed one is decoded and packed again),
+and the event ids, the sequences of the autoincrement tables (an id is never reused: a sequence above the last id stays above it), the blocks, candles, pair fills, flags, KCC-23
+rows and the meta keys are kept as they were; a table the old store has and this build does not know is refused; (2) **indexes**: the indexes and triggers of `schema.sql` are built over
+the loaded rows and the row counters and program counts are counted once (45 s; the counters are compared with the ones the old store kept); (3) **verification** (9 minutes): per
+table the rows of the old store (states decoded, ids as the 32 bytes) and the rows of the new one (joined back) are hashed in the same order and compared with their counts; a
+row that does not come back identical, a row whose order or token does not exist (the integer layout cannot hold it) or a count that differs stops the migration with the old store untouched; the new
+file must also pass `PRAGMA quick_check` and open as a store of this build (80 s); (4) **swap**: the old file becomes `index.sqlite3.before-migrate`, the rollback, and the new file takes
+its place; (5) the sealed record-log segments are gzip-compressed (the newest stays whole; a rotation compresses the segment it just sealed from now on,
+which holds the writer for about 3 seconds per 256 MiB segment). `--no-compress-log` leaves step 5 out. A store that is of schema 8 already is left as it is.
 
-Measured on a copy of the TN10 soak executor (8.48 GB database, 2.3 million order UTXOs, 3.7 million holdings, 1.1 million orders, 3.5
-million events, 3.1 GB log): indexes 53 s, `order_utxos.state` 135 s, `token_holdings.state` 74 s, `orders.genesis_state` 83 s,
-`order_events.detail` 137 s, compaction and check about 6 minutes, log 34 s, **894 s in all**; the store 8.48 -> **5.04 GB**, the sealed log
-segments 2.95 -> **0.90 GB** (3.3x). The write path costs nothing measurable: `index replay` of the first 222,836 frames of that log (a
-store of 57,642 orders and 335,000 holdings) took 985 s with the build before and 981 s with this one, which reads the compressed log
-(it took the segments gzip-compressed) and writes the packed columns, and the two stores are table for table the same with their
-columns decoded. Every one of 1,010 read-API calls (books, orders, events, fills, holdings, candles, trades, stats, depth, pairs,
-snapshots, exports) and the logical content of every table returned the same JSON / digest on the migrated copy as before
+**Disk.** The old store (kept), the new store (3.93 GB for the 8.48 GB store) and the temporary files of the index builds (the sort of the largest index, 190 MB, goes
+to the system temporary directory; `SQLITE_TMPDIR` moves it) exist at the same time: **the free space fell by 4.98 GB at most beyond the old store, so plan 5 GB free for the soak store**
+(the new store is about 46 % of an 8.5 GB schema-5 store and 78 % of a schema-7 store), and the rollback file keeps the old store's size until you delete it. Memory: a 256 MiB page cache.
+
+Measured on a copy of the TN10 soak executor (8.48 GB database of schema 5, 2.3 million order UTXOs, 3.7 million holdings, 1.1 million orders, 3.5
+million events, 3.1 GB log), in one run: copy 390 s, indexes 45 s, verification 535 s, check 78 s, log 33 s, **1,080 s in all** (a store of schema 7 of the same data: 834 s: the copy is faster because the states are already packed); the store 8.48 -> **3.93 GB**, the sealed log
+segments 2.95 -> **0.90 GB** (3.3x). Every one of 1,010 read-API calls (books, orders, events, fills, holdings, candles, trades, stats, depth, pairs,
+snapshots, exports) and the logical content of all 19 tables returned the same JSON / digest on the migrated copy as on the store of schema 5
 (`cargo run --release -p kob-executor --example read_digest -- <index.sqlite3> <tokens.json>`, run with the build before and the build
-after); their times are the same or lower (`GET /v1/fills` without a token 23 s -> 0.3 ms, `GET /v1/stats/{token}` 190 ms -> 120 ms on
-average, an order's page 1.4 ms -> 0.6 ms; none slower beyond noise). Reading the compressed log (the chain check at every start,
+after; the harness reads either layout). Their times are the same or lower than on the same data in schema 7 (three alternating runs: an order's page 0.7 -> 0.6 ms, `GET /v1/stats/{token}` 190 ms
+-> 80 ms on average, the books and the market reads equal; none slower beyond noise). The write path costs nothing measurable: `index replay` of the first 222,836 frames of that log (a
+store of 57,642 orders and 335,000 holdings) took 1,016 s with the build before (schema 5) and 876 s with this one, and the two stores are table for table the same with their
+ids joined back and their columns decoded. Reading the compressed log (the chain check at every start,
 `replay`) costs about half a second per 256 MiB segment.
 
+**What is not done, and why.** Folding `token_utxos` into `token_holdings` (they overlap for the custody UTXOs whose state was proven; there is no constraint that makes that
+true for every row, and a strayed or unproven UTXO is only in `token_utxos`), deriving the `create` events from the orders (1.09 million events, about 0.17 GB net or 4 % of the file; the create item of an order would need an id of its own
+in the event pages, which are cursored by event id, and the revert and lean paths read the rows) and a zstd record log (on a 64 MiB sample of a segment gzip level 6 gives 2.9x and zstd level 3 gives 3.7x: about 0.2 GB of the 0.9 GB of sealed segments; it needs a C dependency, and an older build could not read the segments) are left out. What remains large:
+the orders' seven covenant-id indexes (520 MB) and the holdings' indexes (about 690 MB) could be shrunk further by the same integer ids, with the same kind of rebuild.
+`ids` keeps a row per owner and token ever seen (65 bytes each); the lean pruning does not delete them.
+
 The tools in `tools/soak` that read a database file directly (`chart-history.mjs`; `import-history.mjs` and `carry-history`, which copy the rows
-of older stores into a stopped executor's) use the candles and the fills' prices, which are unchanged. The two importers copy
+of older stores into a stopped executor's) use the candles and the fills' prices, which are unchanged. They write a store of schema 8 (the executor must have migrated it first) and read a
+source store of either layout. The two importers copy
 `orders.genesis_state` and `order_events.detail` as they are: from a source of schema 6 or older (whole values) that is a valid row; a source
-written by schema 7 has packed values that name dictionary columns (maker, token) the destination row may not have, so it must not be
+written by schema 7 or 8 has packed values that name dictionary columns (maker, token) the destination row may not have, so it must not be
 imported that way.
 
 #### 7.7 Wrong network / DB

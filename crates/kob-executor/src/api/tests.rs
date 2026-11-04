@@ -3,6 +3,7 @@
 use super::*;
 use crate::hex::{self, Hash32};
 use crate::indexer::db::{open_writer, ReadPool};
+use crate::indexer::ids::intern;
 use crate::indexer::status::{FillNotice, FollowerState};
 use crate::tokens::{TokenAllowlist, TokenEntry};
 use axum::body::Body;
@@ -116,16 +117,17 @@ fn seed_order(
     )
     .unwrap();
     c.execute(
-        "INSERT INTO order_state (covenant_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa) \
-         VALUES (?1, ?2, ?3, ?4, ?8, ?5, 0, 123456789012, 1, ?6, ?7)",
+        "INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa) \
+         VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), ?2, ?3, ?4, ?8, ?5, 0, 123456789012, 1, ?6, ?7)",
         params![cid(id), status, initial.unwrap_or(0) - remaining.unwrap_or(0), remaining, cid(id + 100), block, block * 100, initial.is_some() as i64],
     )
     .unwrap();
     // ask-side orders are liquidity only with an exact live custody UTXO (`amountLeft` base units)
     if side == 1 && remaining.unwrap_or(0) > 0 {
+        intern(c, &cid(TOKEN)).unwrap();
         c.execute(
-            "INSERT INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa) \
-             VALUES (?1, 1, ?2, ?3, ?4, 1000, 'custody', ?5, ?6)",
+            "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) \
+             VALUES (?1, 1, (SELECT id FROM ids WHERE h = ?2), (SELECT id FROM orders WHERE covenant_id = ?3), ?4, 1000, 'custody', ?5, ?6)",
             params![cid(id + 100), cid(TOKEN), cid(id), remaining.unwrap(), block, block * 100],
         )
         .unwrap();
@@ -134,9 +136,10 @@ fn seed_order(
 
 #[allow(clippy::too_many_arguments)]
 fn seed_event(c: &Connection, cov: u8, block: i64, daa: i64, kind: &str, side: i64, amount: i64, price: i64) {
+    intern(c, &cid(TOKEN)).unwrap();
     c.execute(
-        "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail) \
-         VALUES (?1, ?2, ?3, 1700000000000, ?4, 0, ?5, ?6, ?7, ?8, ?9, 5000, 0, '{\"k\":1}')",
+        "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, payout, closes, detail) \
+         VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), ?2, ?3, 1700000000000, ?4, 0, ?5, (SELECT id FROM ids WHERE h = ?6), ?7, ?8, ?9, 5000, 0, '{\"k\":1}')",
         params![cid(cov), block, daa, cid(block as u8 + 50), kind, cid(TOKEN), side, amount, price],
     )
     .unwrap();
@@ -257,7 +260,11 @@ async fn hot_reads_are_kept_for_one_data_generation() {
     let (_, v) = get(&app, "/v1/tokens").await;
     assert_eq!(asks(&v), Some(3));
     // what the follower would commit with a new generation: ask 1 filled
-    e.w.execute("UPDATE order_state SET status = 'filled' WHERE covenant_id = ?1", params![cid(1)]).unwrap();
+    e.w.execute(
+        "UPDATE order_state SET status = 'filled' WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+        params![cid(1)],
+    )
+    .unwrap();
     let (_, v) = get(&app, "/v1/tokens").await;
     assert_eq!(asks(&v), Some(3), "the same generation: the kept answer");
     e.state.generation.bump();
@@ -511,9 +518,10 @@ async fn arm_events_carry_their_evidence_and_receipts_are_gone() {
         r#"{{"input":0,"entry":"update","verified":true,"evidence":{{"input":1,"order":"{}","side":1,"price":"95"}}}}"#,
         h(0x44)
     );
+    intern(&e.w, &cid(TOKEN)).unwrap();
     e.w.execute(
-        "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail) \
-         VALUES (?1, 7, 900, 1700000000000, ?2, 0, 'arm', ?3, 1, NULL, NULL, NULL, 0, ?4)",
+        "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, payout, closes, detail) \
+         VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 7, 900, 1700000000000, ?2, 0, 'arm', (SELECT id FROM ids WHERE h = ?3), 1, NULL, NULL, NULL, 0, ?4)",
         params![cid(3), cid(0x57), cid(TOKEN), detail],
     )
     .unwrap();
@@ -709,9 +717,11 @@ fn seed_holding(c: &Connection, n: u8, token: u8, owner: &[u8], family: i64, amo
         ("KCC20Ref_8x8", TokenState::Kcc20(Kcc20State::p2pk(amount, owner.try_into().unwrap(), [0xee; 32])))
     };
     let kind = if family == 2 { 3 } else { 0 };
+    intern(c, &cid(token)).unwrap();
+    intern(c, owner).unwrap();
     c.execute(
-        "INSERT INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa, spent_block, spent_txid) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1000000000, ?9, 'owned', ?10, ?11, ?12, ?13)",
+        "INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa, spent_block, spent_txid) \
+         VALUES (?1, ?2, (SELECT id FROM ids WHERE h = ?3), ?4, ?5, (SELECT id FROM ids WHERE h = ?6), ?7, ?8, 1000000000, ?9, 'owned', ?10, ?11, ?12, ?13)",
         params![
             cid(n),
             n as i64 % 3,
@@ -900,9 +910,10 @@ async fn aggregated_amounts_never_overflow() {
 }
 
 fn seed_fill(c: &Connection, cov: u8, tx: u8, ts: i64, side: i64, amount: i64, price: i64) {
+    intern(c, &cid(TOKEN)).unwrap();
     c.execute(
-        "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail) \
-         VALUES (?1, 9, 990, ?2, ?3, 0, 'fill', ?4, ?5, ?6, ?7, NULL, 0, NULL)",
+        "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, payout, closes, detail) \
+         VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 9, 990, ?2, ?3, 0, 'fill', (SELECT id FROM ids WHERE h = ?4), ?5, ?6, ?7, NULL, 0, NULL)",
         params![cid(cov), ts, cid(tx), cid(TOKEN), side, amount, price],
     )
     .unwrap();
@@ -1055,13 +1066,13 @@ fn seed_live(c: &Connection, id: u8, state: &kob_protocol::state::AnyState, bloc
     )
     .unwrap();
     c.execute(
-        "INSERT INTO order_utxos (txid, idx, covenant_id, value, spk, state, created_block, created_daa) VALUES (?1, 0, ?2, 5000000000, x'00', ?3, ?4, ?5)",
+        "INSERT INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa) VALUES (?1, 0, (SELECT id FROM orders WHERE covenant_id = ?2), 5000000000, x'00', ?3, ?4, ?5)",
         params![cid(id + 100), cid(id), bytes, block, block * 100],
     )
     .unwrap();
     c.execute(
-        "INSERT INTO order_state (covenant_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa) \
-         VALUES (?1, 'open', 0, ?2, 1, ?3, 0, 5000000000, 1, ?4, ?5)",
+        "INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa) \
+         VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 'open', 0, ?2, 1, ?3, 0, 5000000000, 1, ?4, ?5)",
         params![cid(id), remaining, cid(id + 100), block, block * 100],
     )
     .unwrap();
@@ -1071,9 +1082,10 @@ fn seed_live(c: &Connection, id: u8, state: &kob_protocol::state::AnyState, bloc
         state.custody_amount().filter(|a| *a > 0).map(|a| (state.token_cov_id(), a)).into_iter().collect()
     };
     for (k, (token, amount)) in custodies.into_iter().enumerate() {
+        intern(c, &token).unwrap();
         c.execute(
-            "INSERT INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 1000, 'custody', ?6, ?7)",
+            "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) \
+             VALUES (?1, ?2, (SELECT id FROM ids WHERE h = ?3), (SELECT id FROM orders WHERE covenant_id = ?4), ?5, 1000, 'custody', ?6, ?7)",
             params![cid(id + 100), k as i64 + 1, token.to_vec(), cid(id), amount, block, block * 100],
         )
         .unwrap();
@@ -1193,7 +1205,7 @@ async fn pairs_list_and_pair_orders_in_the_order_views() {
     seed_pair(&e.w);
     // a pair order whose custody is not exact (no live custody row) is no liquidity: neither listed nor in the book
     seed_live(&e.w, 0x34, &pair_of(BASE, QUOTE, true, 1900, 2 * W), 5, 2 * W);
-    e.w.execute("DELETE FROM token_utxos WHERE owner = ?1", [cid(0x34)]).unwrap();
+    e.w.execute("DELETE FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", [cid(0x34)]).unwrap();
     let app = router(e.state.clone());
     let row = |base: u8, quote: u8, asks: i64, bids: i64| {
         serde_json::json!({"base": h(base), "quote": h(quote), "direct_asks": asks, "direct_bids": bids, "entry_asks": 0, "entry_bids": 0,
@@ -1253,9 +1265,10 @@ async fn pairs_list_and_pair_orders_in_the_order_views() {
 /// A KAS fill event of `token` (no pair fields): a trade of the token.
 #[allow(clippy::too_many_arguments)]
 fn seed_kas_fill(c: &Connection, cov: u8, token: u8, tx: u8, ts: i64, side: i64, amount: i64, price: Option<i64>) {
+    intern(c, &cid(token)).unwrap();
     c.execute(
-        "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail) \
-         VALUES (?1, 9, 990, ?2, ?3, 0, 'fill', ?4, ?5, ?6, ?7, NULL, 0, NULL)",
+        "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, payout, closes, detail) \
+         VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 9, 990, ?2, ?3, 0, 'fill', (SELECT id FROM ids WHERE h = ?4), ?5, ?6, ?7, NULL, 0, NULL)",
         params![cid(cov), ts, cid(tx), cid(token), side, amount, price],
     )
     .unwrap();

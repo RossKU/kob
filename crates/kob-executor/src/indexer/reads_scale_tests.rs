@@ -45,15 +45,26 @@ fn load(path: &std::path::Path, n: usize) {
     let pinned = kob_protocol::artifacts::pinned_hash(TemplateId::KobBid).to_vec();
     let pinned_ask = kob_protocol::artifacts::pinned_hash(TemplateId::KobAsk).to_vec();
     let tx = conn.unchecked_transaction().unwrap();
-    // the big token's holdings: one owner holds a tenth of them, 19 in 20 are spent
+    // the big token's holdings: one owner holds a tenth of them, 19 in 20 are spent. The token and the owners are rows of `ids` (the
+    // owner `aa..` once, every other holding a fresh owner: ids `owner_base + i`)
+    let t0_id = crate::indexer::ids::intern(&tx, &T0).unwrap();
+    let mut aa = [0u8; 32];
+    aa[0] = 0xaa;
+    let aa_id = crate::indexer::ids::intern(&tx, &aa).unwrap();
+    let owner_base = aa_id;
     tx.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
-         INSERT INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, \
+         INSERT INTO ids (id, h) SELECT ?2 + i, randomblob(32) FROM n WHERE i % 10 <> 0",
+        rusqlite::params![n as i64, owner_base],
+    )
+    .unwrap();
+    tx.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
+         INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
                                      created_block, created_daa, spent_block, spent_txid) \
-         SELECT randomblob(32), 0, ?2, ?3, 1, CASE WHEN i % 10 = 0 THEN x'aa00000000000000000000000000000000000000000000000000000000000000' \
-                ELSE randomblob(32) END, 0, 5, 100000000, x'08' || randomblob(111), 'owned', i / 100 + 1, i, \
-                CASE WHEN i % 20 = 0 THEN NULL ELSE i / 100 + 2 END, NULL FROM n",
-        rusqlite::params![n as i64, &T0[..], P8.name()],
+         SELECT randomblob(32), 0, ?2, ?3, 1, CASE WHEN i % 10 = 0 THEN ?4 ELSE ?5 + i END, 0, 5, 100000000, x'08' || randomblob(111), \
+                'owned', i / 100 + 1, i, CASE WHEN i % 20 = 0 THEN NULL ELSE i / 100 + 2 END, NULL FROM n",
+        rusqlite::params![n as i64, t0_id, P8.name(), aa_id, owner_base],
     )
     .unwrap();
     // orders: the big token has n / 3 resting-less filled ones; the bid-only token n / 3; 2,000 tokens have 20 listed ones each
@@ -67,8 +78,8 @@ fn load(path: &std::path::Path, n: usize) {
         )
         .unwrap();
         tx.execute(
-            "INSERT INTO order_state (covenant_id, status, filled_amount, remaining_amount, amount_exact, state_known, last_block, last_daa) \
-             SELECT covenant_id, ?1, 0, 0, 1, 1, 1, 1 FROM orders WHERE token_cov_id = ?2 AND covenant_id NOT IN (SELECT covenant_id FROM order_state)",
+            "INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, state_known, last_block, last_daa) \
+             SELECT id, ?1, 0, 0, 1, 1, 1, 1 FROM orders WHERE token_cov_id = ?2 AND id NOT IN (SELECT order_id FROM order_state)",
             rusqlite::params![status, &token],
         )
         .unwrap();
@@ -137,23 +148,24 @@ fn load(path: &std::path::Path, n: usize) {
         )
         .unwrap();
         tx.execute(
-            "INSERT INTO order_state (covenant_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, \
-                                      state_known, last_block, last_daa) VALUES (?1, 'open', 0, 10, 1, randomblob(32), 0, 1000, 1, 1, 1)",
+            "INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, \
+                                      state_known, last_block, last_daa) \
+             VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 'open', 0, 10, 1, randomblob(32), 0, 1000, 1, 1, 1)",
             [&cov],
         )
         .unwrap();
         tx.execute(
-            "INSERT INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa) \
-             VALUES (randomblob(32), 0, ?1, ?2, 10, 1, 'custody', 1, 1)",
-            rusqlite::params![&T0[..], cov],
+            "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) \
+             VALUES (randomblob(32), 0, ?1, (SELECT id FROM orders WHERE covenant_id = ?2), 10, 1, 'custody', 1, 1)",
+            rusqlite::params![t0_id, cov],
         )
         .unwrap();
         if k < 2 {
             tx.execute(
                 "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000) \
-                 INSERT INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa) \
-                 SELECT randomblob(32), 0, ?1, ?2, 1, 1, 'stray', 1, 1 FROM n",
-                rusqlite::params![&T0[..], cov],
+                 INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) \
+                 SELECT randomblob(32), 0, ?1, (SELECT id FROM orders WHERE covenant_id = ?2), 1, 1, 'stray', 1, 1 FROM n",
+                rusqlite::params![t0_id, cov],
             )
             .unwrap();
         }

@@ -1,26 +1,29 @@
-//! `kobd index migrate`: brings an existing data directory to the compact storage layout and gives the space back. A store
-//! written by an earlier build is read by this build as it is (every change below is one a reader tolerates), so the migration can
-//! run at a time of the operator's choosing; it is idempotent and can be stopped and run again.
+//! `kobd index migrate`: brings a data directory written by an earlier build (schema 5, 6 or 7) to the compact layout of
+//! schema 8 in ONE offline run, and gives the space back.
 //!
-//! The steps, each reported with its time:
+//! The store is not altered in place. A new file is built beside it and replaces it only when it has been verified; the old file
+//! stays as `index.sqlite3.before-migrate` (the rollback) until the operator deletes it. The steps, each reported with its time:
 //!
-//! 1. **Indexes.** The fills-only indexes `order_events_fills` and `order_events_fill_ts` replace the ones over every event, and
-//!    `token_holdings_owner` (which the owner's page index serves) and `token_holdings_token_program` (which the `holding_programs`
-//!    table serves) are dropped (`schema.sql`).
-//! 2. **Packed columns.** `order_utxos.state` and `token_holdings.state` (differences from a base), `orders.genesis_state` and
-//!    `order_events.detail` (deflated against a frozen dictionary) are rewritten in the form [`super::packed`] stores, in batches of
-//!    one short transaction each (`PACK_BATCH` rows). Each batch is read back through the SQL functions the queries use and its
-//!    values hashed before and after: a value that does not come back the same aborts the migration and leaves every row either as
-//!    it was or packed and verified.
-//! 3. **Compaction.** The pages freed (and the free space inside the pages the updates left) are returned by `VACUUM INTO` a new
-//!    file, which replaces `index.sqlite3`; the old file stays beside it as `index.sqlite3.before-migrate`, the rollback. The
-//!    new file needs room for the compacted store (about the packed size), and the old file stays until the operator deletes it.
-//! 4. **Record log.** Every sealed segment is gzip-compressed ([`super::recordlog::compress_sealed`]); the newest is left whole.
+//! 1. **Copy.** The tables are created from `schema.sql` (without its indexes and triggers), then filled from the old store in bulk
+//!    (`INSERT ... SELECT`, no per-row Rust): `orders` get their integer id, the token ids and holding owners get their `ids` rows
+//!    ([`super::ids`]), every row that named an order, a token or an owner by its 32 bytes names it by the integer, the packed state
+//!    columns are written in the form [`super::packed`] stores (a value an earlier build wrote whole is packed; a packed one is
+//!    packed again from its decoded form), and the event ids, the sequence numbers and every other table are kept as they were.
+//! 2. **Indexes.** `schema.sql` is applied again: the indexes and triggers are built over the loaded rows (faster than maintaining
+//!    them row by row), then the counters the triggers keep are counted once.
+//! 3. **Verification.** Per table, the rows of the old store (states decoded, ids as their 32 bytes) and the rows of the new one
+//!    (joined back) are hashed in the same order and compared with their counts: a row that does not come back identical, a row
+//!    that has no order (an orphan the integer layout cannot hold), or a count that differs aborts the migration with the old
+//!    store untouched. The new file must also pass `PRAGMA quick_check` and open as a store of this build.
+//! 4. **Swap.** The new file replaces `index.sqlite3`.
+//! 5. **Record log.** Every sealed segment is gzip-compressed ([`super::recordlog::compress_sealed`]); the newest is left whole.
 //!
-//! The data directory's writer lock ([`super::lock`]) is held throughout: no `run` or `index` can write it meanwhile.
+//! The data directory's writer lock ([`super::lock`]) is held throughout: no `run` or `index` can write it meanwhile. Free disk
+//! needed: the new store (about 3/4 of the old one) plus the temporary files of the index builds, while the old store stays. A run
+//! that stops half way leaves only `index.sqlite3.migrating`, deleted by the next run; the old store is not touched before the
+//! swap. A store that is of schema 8 already is left as it is (the record log step still runs).
 
 use super::db::{self, DbError, DbResult};
-use super::packed::GENESIS_G;
 use super::recordlog;
 use super::IndexerError;
 use crate::config::IndexerConfig;
@@ -28,52 +31,51 @@ use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// Rows rewritten per transaction.
-const PACK_BATCH: i64 = 20_000;
-/// The suffix of the file the compacted store replaced.
+/// The suffix of the file the new store replaced.
 pub const BEFORE_MIGRATE: &str = "before-migrate";
+/// The suffix of the file the new store is built in.
+const MIGRATING: &str = "migrating";
 
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
-    /// Compact the store (`VACUUM INTO`, then swap the files). Needs free disk for the new file.
-    pub compact: bool,
     /// Compress the sealed record-log segments.
     pub compress_log: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { compact: true, compress_log: true }
+        Options { compress_log: true }
     }
 }
 
-/// One packed column: rows rewritten out of rows seen.
+/// One table: rows of the old store, rows of the new one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColumnReport {
-    pub column: &'static str,
-    pub changed: u64,
-    pub total: u64,
+pub struct TableReport {
+    pub table: String,
+    pub rows: u64,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Report {
-    pub indexes_swapped: Vec<String>,
-    pub indexes_dropped: Vec<String>,
-    pub columns: Vec<ColumnReport>,
+    /// The schema version the store was at (8: nothing was rebuilt).
+    pub from_schema: i64,
+    pub tables: Vec<TableReport>,
+    /// Rows of `ids` (token covenant ids and holding owners).
+    pub ids: u64,
     pub db_bytes_before: u64,
     pub db_bytes_after: u64,
     pub log_bytes_before: u64,
     pub log_bytes_after: u64,
     pub log_segments_compressed: usize,
-    /// Where the store was before the compaction (the rollback), when it was compacted.
+    /// Where the previous store was kept, when the store was rebuilt.
     pub kept_old: Option<PathBuf>,
     pub steps: Vec<(&'static str, Duration)>,
 }
 
 impl Report {
-    /// Rows rewritten in `column` (`table.column`).
-    pub fn changed(&self, column: &str) -> u64 {
-        self.columns.iter().find(|c| c.column == column).map_or(0, |c| c.changed)
+    /// Rows the store holds in `table`.
+    pub fn rows(&self, table: &str) -> u64 {
+        self.tables.iter().find(|t| t.table == table).map_or(0, |t| t.rows)
     }
 }
 
@@ -81,205 +83,638 @@ fn file_bytes(p: &Path) -> u64 {
     ["", "-wal"].iter().map(|s| std::fs::metadata(format!("{}{s}", p.display())).map(|m| m.len()).unwrap_or(0)).sum()
 }
 
-/// The `CREATE INDEX IF NOT EXISTS <name> ...;` statement of `schema.sql`.
-fn schema_statement(name: &str) -> Option<String> {
-    let sql = include_str!("schema.sql");
-    let at = sql.find(&format!("CREATE INDEX IF NOT EXISTS {name} "))?;
-    let end = sql[at..].find(';')?;
-    Some(sql[at..at + end + 1].to_string())
-}
-
-fn index_sql(conn: &Connection, name: &str) -> rusqlite::Result<Option<String>> {
-    conn.query_row("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1", [name], |r| r.get(0)).map(Some).or_else(|e| {
-        if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
-            Ok(None)
-        } else {
-            Err(e)
-        }
-    })
-}
-
-/// Step 1.
-fn swap_indexes(conn: &Connection, rep: &mut Report) -> DbResult<()> {
-    // the owner's page index serves what `token_holdings_owner` did; `holding_programs` (kept by triggers, counted at start-up) serves what
-    // `token_holdings_token_program` did
-    for name in ["token_holdings_owner", "token_holdings_token_program"] {
-        if index_sql(conn, name)?.is_some() {
-            conn.execute_batch(&format!("DROP INDEX {name}"))?;
-            rep.indexes_dropped.push(name.to_string());
-        }
-    }
-    for name in ["order_events_fills", "order_events_fill_ts"] {
-        let wanted = schema_statement(name).ok_or_else(|| DbError::Invalid(format!("schema.sql has no index {name}")))?;
-        // the current definition has the fills-only condition (a store built by this build) or lacks it (an earlier build's)
-        if index_sql(conn, name)?.is_some_and(|have| have.contains("WHERE kind = 'fill'")) {
-            continue;
-        }
-        conn.execute_batch(&format!("DROP INDEX IF EXISTS {name}"))?;
-        conn.execute_batch(&wanted)?;
-        rep.indexes_swapped.push(name.to_string());
-    }
-    Ok(())
-}
-
 fn checkpoint(conn: &Connection) {
     // best effort: a reader holding the log back only delays the truncation
     let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
 }
 
-/// A packed column: what a query reads (`decoded`) and what is stored (`packed`), as SQL over the row of `table`.
-struct Column {
-    /// `table.column`
-    name: &'static str,
-    table: &'static str,
-    column: &'static str,
-    decoded: String,
-    packed: String,
+fn suffixed(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(format!(".{suffix}"));
+    PathBuf::from(s)
 }
 
-fn columns() -> Vec<Column> {
-    // an order UTXO's state against the genesis state of its order; both forms of the genesis state give the same base
-    let genesis = format!("(SELECT {GENESIS_G} FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)");
-    let utxo = format!("kob_ustate(state, {genesis})");
-    let holding = "kob_hstate(state, family, owner, owner_kind, amount)".to_string();
-    let gstate = "kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id)".to_string();
+fn bad(msg: String) -> DbError {
+    DbError::Invalid(msg)
+}
+
+/// The columns of `schema.table`, in table order.
+fn columns(conn: &Connection, schema: &str, table: &str) -> DbResult<Vec<String>> {
+    let mut st = conn.prepare("SELECT name FROM pragma_table_info(?1, ?2) ORDER BY cid")?;
+    let v = st.query_map(params![table, schema], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(v)
+}
+
+fn table_exists(conn: &Connection, schema: &str, table: &str) -> DbResult<bool> {
+    Ok(conn.query_row(&format!("SELECT COUNT(*) FROM {schema}.sqlite_master WHERE type = 'table' AND name = ?1"), [table], |r| {
+        r.get::<_, i64>(0)
+    })? > 0)
+}
+
+fn count(conn: &Connection, schema: &str, table: &str) -> DbResult<u64> {
+    Ok(conn.query_row(&format!("SELECT COUNT(*) FROM {schema}.{table}"), [], |r| r.get::<_, i64>(0))? as u64)
+}
+
+/// A file path as the path of a `file:` URI (read-only attach).
+fn uri_of(path: &Path) -> String {
+    let p = path.to_string_lossy().replace('\\', "/");
+    let mut out = String::from("file:");
+    if !p.starts_with('/') {
+        out.push('/');
+    }
+    for ch in p.chars() {
+        match ch {
+            '%' => out.push_str("%25"),
+            '?' => out.push_str("%3f"),
+            '#' => out.push_str("%23"),
+            ' ' => out.push_str("%20"),
+            c => out.push(c),
+        }
+    }
+    out.push_str("?mode=ro");
+    out
+}
+
+// ------------------------------------------------------------------------------------------------ copy
+
+/// How a column of the new layout is read from the old store: its expression, or `None` to take the column of that name as it is
+/// (NULL when the old store has none: a column an earlier build did not have).
+type Map<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// A table whose rows are loaded with some columns computed: every column of the new table (but `skip`) from `map` or, where it
+/// returns `None`, from the old column of the same name with alias `alias`. Old columns that are neither in the new table nor in
+/// `renamed` (the old names the map consumes) would be lost: an error.
+#[allow(clippy::too_many_arguments)]
+fn copy_mapped(
+    conn: &Connection,
+    table: &str,
+    skip: &[&str],
+    renamed: &[&str],
+    alias: &str,
+    from: &str,
+    order: &str,
+    map: Map<'_>,
+) -> DbResult<u64> {
+    if !table_exists(conn, "old", table)? {
+        return Ok(0);
+    }
+    let new_cols = columns(conn, "main", table)?;
+    let old_cols = columns(conn, "old", table)?;
+    for c in &old_cols {
+        if !new_cols.contains(c) && !renamed.contains(&c.as_str()) {
+            return Err(bad(format!("{table}: the old store has a column `{c}` that this build does not know: nothing was migrated")));
+        }
+    }
+    let target: Vec<&String> = new_cols.iter().filter(|c| !skip.contains(&c.as_str())).collect();
+    let select: Vec<String> = target
+        .iter()
+        .map(|c| map(c).unwrap_or_else(|| if old_cols.contains(c) { format!("{alias}.{c}") } else { "NULL".to_string() }))
+        .collect();
+    let sql = format!(
+        "INSERT INTO main.{table} ({}) SELECT {} FROM {from} ORDER BY {order}",
+        target.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", "),
+        select.join(", ")
+    );
+    conn.execute(&sql, [])?;
+    count(conn, "main", table)
+}
+
+/// A table loaded as it is: the old columns by name (`ORDER BY` its natural order).
+fn copy_plain(conn: &Connection, table: &str) -> DbResult<u64> {
+    if !table_exists(conn, "old", table)? {
+        return Ok(0);
+    }
+    let new_cols = columns(conn, "main", table)?;
+    let old_cols = columns(conn, "old", table)?;
+    for c in &old_cols {
+        if !new_cols.contains(c) {
+            return Err(bad(format!("{table}: the old store has a column `{c}` that this build does not know: nothing was migrated")));
+        }
+    }
+    let list = old_cols.join(", ");
+    let without_rowid: bool = conn.query_row(
+        "SELECT sql LIKE '%WITHOUT ROWID%' FROM main.sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |r| r.get(0),
+    )?;
+    // a WITHOUT ROWID table in the order of its primary key, any other in the order of its rows
+    let order = if without_rowid {
+        let mut st = conn.prepare("SELECT name FROM pragma_table_info(?1, 'main') WHERE pk > 0 ORDER BY pk")?;
+        let keys = st.query_map([table], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        keys.join(", ")
+    } else {
+        "rowid".to_string()
+    };
+    conn.execute(&format!("INSERT INTO main.{table} ({list}) SELECT {list} FROM old.{table} ORDER BY {order}"), [])?;
+    count(conn, "main", table)
+}
+
+/// The bulk load of step 1. Returns the rows per table.
+fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableReport>> {
+    let mut out: Vec<TableReport> = Vec::new();
+    let mut done = |name: &str, rows: u64, t: Instant, say: &mut dyn FnMut(&str)| {
+        say(&format!("  {name}: {rows} rows ({:.1} s)", t.elapsed().as_secs_f64()));
+        out.push(TableReport { table: name.to_string(), rows });
+    };
+    // meta: every key but the version and the counts the backfills write afresh
+    {
+        let t = Instant::now();
+        conn.execute(
+            "INSERT INTO main.meta (k, v) SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs')",
+            [],
+        )?;
+        done("meta", count(conn, "main", "meta")?, t, say);
+    }
+    {
+        let t = Instant::now();
+        let n = copy_plain(conn, "blocks")?;
+        done("blocks", n, t, say);
+    }
+
+    // the orders: ids in the order of the old rows
+    let t = Instant::now();
+    let old_orders = columns(conn, "old", "orders")?;
+    let quote = if old_orders.iter().any(|c| c == "quote_cov_id") { "o.quote_cov_id" } else { "NULL" };
+    let n = copy_mapped(conn, "orders", &["id"], &[], "o", "old.orders o", "o.rowid", &|c| {
+        (c == "genesis_state").then(|| {
+            format!(
+                "kob_gpack(kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, {quote}), o.contract, o.maker, o.token_cov_id, o.token_tpl_hash, {quote})"
+            )
+        })
+    })?;
+    done("orders", n, t, say);
+
+    // the ids: every token covenant id and holding owner (the owner of a holding may be a key, a script hash or a covenant id)
+    let t = Instant::now();
+    for sql in [
+        "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM old.token_holdings GROUP BY token_cov_id",
+        "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM old.token_utxos GROUP BY token_cov_id",
+        "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM old.order_events WHERE token_cov_id IS NOT NULL GROUP BY token_cov_id",
+        "INSERT OR IGNORE INTO main.ids (h) SELECT owner FROM old.token_holdings GROUP BY owner",
+    ] {
+        conn.execute(sql, [])?;
+    }
+    done("ids", count(conn, "main", "ids")?, t, say);
+
+    let genesis = "kob_gstate(n.genesis_state, n.maker, n.token_cov_id, n.token_tpl_hash, n.quote_cov_id)";
+    let t = Instant::now();
+    let n = copy_mapped(
+        conn,
+        "order_utxos",
+        &[],
+        &["covenant_id"],
+        "u",
+        "old.order_utxos u JOIN main.orders n ON n.covenant_id = u.covenant_id",
+        "u.rowid",
+        &|c| match c {
+            "order_id" => Some("n.id".to_string()),
+            "state" => {
+                Some(format!("CASE WHEN u.state IS NULL THEN NULL ELSE kob_pack(kob_ustate(u.state, {genesis}), {genesis}) END"))
+            }
+            _ => None,
+        },
+    )?;
+    done("order_utxos", n, t, say);
+
+    let t = Instant::now();
+    let n = copy_mapped(
+        conn,
+        "order_events",
+        &[],
+        &["covenant_id", "token_cov_id"],
+        "e",
+        "old.order_events e JOIN main.orders n ON n.covenant_id = e.covenant_id LEFT JOIN main.ids t ON t.h = e.token_cov_id",
+        "e.id",
+        &|c| match c {
+            "order_id" => Some("n.id".to_string()),
+            "token_id" => Some("t.id".to_string()),
+            "detail" => Some("CASE WHEN e.detail IS NULL THEN NULL ELSE kob_dpack(kob_dtext(e.detail), e.kind) END".to_string()),
+            _ => None,
+        },
+    )?;
+    done("order_events", n, t, say);
+
+    let t = Instant::now();
+    let n = copy_mapped(
+        conn,
+        "order_state",
+        &[],
+        &["covenant_id"],
+        "s",
+        "old.order_state s JOIN main.orders n ON n.covenant_id = s.covenant_id",
+        "n.id",
+        &|c| (c == "order_id").then(|| "n.id".to_string()),
+    )?;
+    done("order_state", n, t, say);
+
+    let t = Instant::now();
+    let n = copy_mapped(
+        conn,
+        "order_amends",
+        &[],
+        &["covenant_id"],
+        "a",
+        "old.order_amends a JOIN main.orders n ON n.covenant_id = a.covenant_id",
+        "a.id",
+        &|c| (c == "order_id").then(|| "n.id".to_string()),
+    )?;
+    done("order_amends", n, t, say);
+
+    let t = Instant::now();
+    let n = copy_mapped(
+        conn,
+        "token_utxos",
+        &[],
+        &["token_cov_id", "owner"],
+        "u",
+        "old.token_utxos u JOIN main.ids t ON t.h = u.token_cov_id JOIN main.orders n ON n.covenant_id = u.owner",
+        "u.rowid",
+        &|c| match c {
+            "token_id" => Some("t.id".to_string()),
+            "order_id" => Some("n.id".to_string()),
+            _ => None,
+        },
+    )?;
+    done("token_utxos", n, t, say);
+
+    let t = Instant::now();
+    let n = copy_mapped(
+        conn,
+        "token_holdings",
+        &[],
+        &["token_cov_id", "owner"],
+        "h",
+        "old.token_holdings h JOIN main.ids t ON t.h = h.token_cov_id JOIN main.ids w ON w.h = h.owner",
+        "h.rowid",
+        &|c| match c {
+            "token_id" => Some("t.id".to_string()),
+            "owner_id" => Some("w.id".to_string()),
+            "state" => Some(
+                "kob_hpack(kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount), h.family, h.owner, h.owner_kind, h.amount)"
+                    .to_string(),
+            ),
+            _ => None,
+        },
+    )?;
+    done("token_holdings", n, t, say);
+
+    for table in [
+        "token_events",
+        "rejects",
+        "candles",
+        "candle_meta",
+        "candle_dirty",
+        "order_flags",
+        "pair_fills",
+        "kcc23_candidates",
+        "kcc23_txs",
+        "kcc23_declarations",
+    ] {
+        let t = Instant::now();
+        let n = copy_plain(conn, table)?;
+        done(table, n, t, say);
+    }
+
+    // the sequences: an id of an autoincrement table is never reused, so the next one is above every id the old store ever gave
+    for table in ["blocks", "order_events", "order_amends", "rejects", "token_events", "pair_fills"] {
+        let old: Option<i64> = conn
+            .query_row("SELECT seq FROM old.sqlite_sequence WHERE name = ?1", [table], |r| r.get(0))
+            .map(Some)
+            .or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(None) } else { Err(e) })?;
+        let cur: Option<i64> =
+            conn.query_row(&format!("SELECT MAX({}) FROM main.{table}", if table == "blocks" { "seq" } else { "id" }), [], |r| {
+                r.get(0)
+            })?;
+        let seq = old.unwrap_or(0).max(cur.unwrap_or(0));
+        conn.execute("DELETE FROM main.sqlite_sequence WHERE name = ?1", [table])?;
+        if seq > 0 {
+            conn.execute("INSERT INTO main.sqlite_sequence (name, seq) VALUES (?1, ?2)", params![table, seq])?;
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------------------------------------------ verification
+
+/// A hash of the rows of `sql` (every column of every row) and their count.
+fn digest(conn: &Connection, sql: &str) -> DbResult<([u8; 32], u64)> {
+    use rusqlite::types::ValueRef;
+    let mut st = conn.prepare(sql)?;
+    let n = st.column_count();
+    let mut rows = st.query([])?;
+    let mut h = blake3::Hasher::new();
+    let mut rows_n = 0u64;
+    while let Some(r) = rows.next()? {
+        for i in 0..n {
+            match r.get_ref(i)? {
+                ValueRef::Null => {
+                    h.update(&[0]);
+                }
+                ValueRef::Integer(v) => {
+                    h.update(&[1]);
+                    h.update(&v.to_le_bytes());
+                }
+                ValueRef::Real(v) => {
+                    h.update(&[2]);
+                    h.update(&v.to_le_bytes());
+                }
+                ValueRef::Text(b) => {
+                    h.update(&[3]);
+                    h.update(&(b.len() as u64).to_le_bytes());
+                    h.update(b);
+                }
+                ValueRef::Blob(b) => {
+                    h.update(&[4]);
+                    h.update(&(b.len() as u64).to_le_bytes());
+                    h.update(b);
+                }
+            }
+        }
+        rows_n += 1;
+    }
+    Ok((*h.finalize().as_bytes(), rows_n))
+}
+
+/// Per table: (name, SQL on the old store, SQL on the new one).
+fn checks(old_has_quote: bool) -> Vec<(&'static str, String, String)> {
+    let q_old = if old_has_quote { "o.quote_cov_id" } else { "NULL" };
+    let go = |o: &str, q: &str| format!("kob_gstate({o}.genesis_state, {o}.maker, {o}.token_cov_id, {o}.token_tpl_hash, {q})");
+    let orders_cols = |o: &str, q: &str| {
+        format!(
+            "{o}.covenant_id, {o}.contract, {o}.template_hash, {o}.family, {o}.side, {o}.maker, {o}.token_cov_id, {o}.token_tpl_hash, {o}.ext_commit, {o}.scale, {o}.min_fill, {o}.price, {o}.tip, {o}.tif, {o}.expiry_daa, {o}.active_from, {o}.in_book, {o}.budget_rate, {o}.reserve, {o}.initial_amount, {o}.deadline, {}, {o}.genesis_txid, {o}.genesis_out, {o}.genesis_block, {o}.genesis_daa, {o}.parent, {o}.listed, {o}.unlisted_reason, {o}.origin, {q}",
+            go(o, q)
+        )
+    };
+    let gu = |o: &str| go(o, &format!("{o}.quote_cov_id"));
     vec![
-        Column {
-            name: "order_utxos.state",
-            table: "order_utxos",
-            column: "state",
-            packed: format!("kob_pack({utxo}, {genesis})"),
-            decoded: utxo,
-        },
-        Column {
-            name: "token_holdings.state",
-            table: "token_holdings",
-            column: "state",
-            packed: format!("kob_hpack({holding}, family, owner, owner_kind, amount)"),
-            decoded: holding,
-        },
-        Column {
-            name: "orders.genesis_state",
-            table: "orders",
-            column: "genesis_state",
-            packed: format!("kob_gpack({gstate}, contract, maker, token_cov_id, token_tpl_hash, quote_cov_id)"),
-            decoded: gstate,
-        },
-        Column {
-            name: "order_events.detail",
-            table: "order_events",
-            column: "detail",
-            packed: "kob_dpack(kob_dtext(detail), kind)".to_string(),
-            decoded: "kob_dtext(detail)".to_string(),
-        },
+        (
+            "orders",
+            format!("SELECT {} FROM old.orders o ORDER BY o.covenant_id", orders_cols("o", q_old)),
+            format!("SELECT {} FROM main.orders o ORDER BY o.covenant_id", orders_cols("o", "o.quote_cov_id")),
+        ),
+        (
+            "order_utxos",
+            format!(
+                "SELECT u.txid, u.idx, u.covenant_id, u.value, u.spk, kob_ustate(u.state, {}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount \
+                 FROM old.order_utxos u JOIN old.orders o ON o.covenant_id = u.covenant_id ORDER BY u.txid, u.idx",
+                go("o", q_old)
+            ),
+            format!(
+                "SELECT u.txid, u.idx, o.covenant_id, u.value, u.spk, kob_ustate(u.state, {}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount \
+                 FROM main.order_utxos u JOIN main.orders o ON o.id = u.order_id ORDER BY u.txid, u.idx",
+                gu("o")
+            ),
+        ),
+        (
+            "order_events",
+            "SELECT e.id, e.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, e.token_cov_id, e.side, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail) \
+             FROM old.order_events e ORDER BY e.id"
+                .to_string(),
+            "SELECT e.id, o.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, t.h, e.side, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail) \
+             FROM main.order_events e JOIN main.orders o ON o.id = e.order_id LEFT JOIN main.ids t ON t.id = e.token_id ORDER BY e.id"
+                .to_string(),
+        ),
+        (
+            "order_state",
+            "SELECT s.covenant_id, s.status, s.filled_amount, s.remaining_amount, s.amount_exact, s.cur_txid, s.cur_idx, s.cur_value, s.state_known, s.last_block, s.last_daa \
+             FROM old.order_state s ORDER BY s.covenant_id"
+                .to_string(),
+            "SELECT o.covenant_id, s.status, s.filled_amount, s.remaining_amount, s.amount_exact, s.cur_txid, s.cur_idx, s.cur_value, s.state_known, s.last_block, s.last_daa \
+             FROM main.order_state s JOIN main.orders o ON o.id = s.order_id ORDER BY o.covenant_id"
+                .to_string(),
+        ),
+        (
+            "order_amends",
+            "SELECT a.id, a.covenant_id, a.block_seq, a.price, a.tip, a.tif, a.expiry_daa, a.active_from, a.deadline, a.listed, a.unlisted_reason, a.budget_rate, a.reserve, a.min_fill \
+             FROM old.order_amends a ORDER BY a.id"
+                .to_string(),
+            "SELECT a.id, o.covenant_id, a.block_seq, a.price, a.tip, a.tif, a.expiry_daa, a.active_from, a.deadline, a.listed, a.unlisted_reason, a.budget_rate, a.reserve, a.min_fill \
+             FROM main.order_amends a JOIN main.orders o ON o.id = a.order_id ORDER BY a.id"
+                .to_string(),
+        ),
+        (
+            "token_utxos",
+            "SELECT u.txid, u.idx, u.token_cov_id, u.owner, u.amount, u.value, u.role, u.created_block, u.created_daa, u.spent_block, u.spent_txid FROM old.token_utxos u ORDER BY u.txid, u.idx"
+                .to_string(),
+            "SELECT u.txid, u.idx, t.h, o.covenant_id, u.amount, u.value, u.role, u.created_block, u.created_daa, u.spent_block, u.spent_txid \
+             FROM main.token_utxos u JOIN main.ids t ON t.id = u.token_id JOIN main.orders o ON o.id = u.order_id ORDER BY u.txid, u.idx"
+                .to_string(),
+        ),
+        (
+            "token_holdings",
+            "SELECT h.txid, h.idx, h.token_cov_id, h.program, h.family, h.owner, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid \
+             FROM old.token_holdings h ORDER BY h.txid, h.idx"
+                .to_string(),
+            "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid \
+             FROM main.token_holdings h JOIN main.ids t ON t.id = h.token_id JOIN main.ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx"
+                .to_string(),
+        ),
     ]
 }
 
-/// A hash of what the queries read in the rows `(lo, hi]` of the column, in rowid order.
-fn digest(conn: &Connection, col: &Column, lo: i64, hi: i64) -> DbResult<([u8; 32], u64)> {
-    let mut st = conn.prepare_cached(&format!(
-        "SELECT rowid, {} FROM {} WHERE rowid > ?1 AND rowid <= ?2 AND {} IS NOT NULL ORDER BY rowid",
-        col.decoded, col.table, col.column
-    ))?;
-    let mut rows = st.query(params![lo, hi])?;
-    let mut h = blake3::Hasher::new();
-    let mut n = 0;
-    while let Some(r) = rows.next()? {
-        h.update(&r.get::<_, i64>(0)?.to_le_bytes());
-        match r.get_ref(1)? {
-            rusqlite::types::ValueRef::Blob(b) | rusqlite::types::ValueRef::Text(b) => {
-                h.update(&(b.len() as u64).to_le_bytes());
-                h.update(b);
-            }
-            _ => {
-                h.update(&[0xff]);
-            }
+/// Step 3 (part): old and new rows, table by table, compared. Tables copied as they were are compared by `SELECT *`.
+fn verify(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<()> {
+    let old_has_quote = columns(conn, "old", "orders")?.iter().any(|c| c == "quote_cov_id");
+    for (table, old_sql, new_sql) in checks(old_has_quote) {
+        let t = Instant::now();
+        let raw = count(conn, "old", table)?;
+        let (a, na) = digest(conn, &old_sql)?;
+        let (b, nb) = digest(conn, &new_sql)?;
+        if na != raw {
+            return Err(bad(format!(
+                "{table}: {} of {raw} rows of the old store refer to an order or token that is not there; the integer layout cannot hold them. Nothing was migrated (the old store is untouched)",
+                raw - na
+            )));
         }
-        n += 1;
+        if nb != raw || a != b {
+            return Err(bad(format!(
+                "{table}: the new store does not read back as the old one ({nb} rows against {raw}{}). Nothing was migrated (the old store is untouched)",
+                if a != b { ", contents differ" } else { "" }
+            )));
+        }
+        say(&format!("  {table}: {raw} rows identical ({:.1} s)", t.elapsed().as_secs_f64()));
     }
-    Ok((*h.finalize().as_bytes(), n))
+    for table in [
+        "blocks",
+        "token_events",
+        "rejects",
+        "candles",
+        "candle_meta",
+        "candle_dirty",
+        "order_flags",
+        "pair_fills",
+        "kcc23_candidates",
+        "kcc23_txs",
+        "kcc23_declarations",
+    ] {
+        if !table_exists(conn, "old", table)? {
+            continue;
+        }
+        let t = Instant::now();
+        let cols = columns(conn, "old", table)?.join(", ");
+        let order = {
+            let mut st = conn.prepare("SELECT name FROM pragma_table_info(?1, 'main') WHERE pk > 0 ORDER BY pk")?;
+            let keys = st.query_map([table], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            keys.join(", ")
+        };
+        let (a, na) = digest(conn, &format!("SELECT {cols} FROM old.{table} ORDER BY {order}"))?;
+        let (b, nb) = digest(conn, &format!("SELECT {cols} FROM main.{table} ORDER BY {order}"))?;
+        if na != nb || a != b {
+            return Err(bad(format!(
+                "{table}: the new store does not read back as the old one ({nb} rows against {na}). Nothing was migrated (the old store is untouched)"
+            )));
+        }
+        say(&format!("  {table}: {na} rows identical ({:.1} s)", t.elapsed().as_secs_f64()));
+    }
+    let (a, _) =
+        digest(conn, "SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs') ORDER BY k")?;
+    let (b, _) =
+        digest(conn, "SELECT k, v FROM main.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs') ORDER BY k")?;
+    if a != b {
+        return Err(bad(
+            "meta: the new store does not read back as the old one. Nothing was migrated (the old store is untouched)".into()
+        ));
+    }
+    Ok(())
 }
 
-/// Step 2 for one column: returns (rows rewritten, rows seen).
-fn pack_column(conn: &Connection, col: &Column, mut progress: impl FnMut(u64)) -> DbResult<(u64, u64)> {
-    // only the rows whose stored form is not the one this build writes
-    let update = format!(
-        "UPDATE {t} SET {c} = {packed} WHERE rowid > ?1 AND rowid <= ?2 AND {c} IS NOT NULL AND {c} IS NOT {packed}",
-        t = col.table,
-        c = col.column,
-        packed = col.packed
-    );
-    let next_batch = format!("SELECT MAX(rowid) FROM (SELECT rowid FROM {} WHERE rowid > ?1 ORDER BY rowid LIMIT ?2)", col.table);
-    let (mut changed, mut seen, mut last) = (0u64, 0u64, 0i64);
-    loop {
-        let Some(hi) = conn.query_row(&next_batch, params![last, PACK_BATCH], |r| r.get::<_, Option<i64>>(0))? else { break };
-        let tx = conn.unchecked_transaction()?;
-        let (before, n) = digest(&tx, col, last, hi)?;
-        let rewritten = tx.execute(&update, params![last, hi])?;
-        if rewritten > 0 {
-            let (after, _) = digest(&tx, col, last, hi)?;
-            if after != before {
-                // the transaction is dropped, not committed: this batch stays as it was
-                return Err(DbError::Invalid(format!(
-                    "{}: rows {last}..{hi} do not read back as they did before they were rewritten; nothing from this batch was kept",
-                    col.name
-                )));
-            }
-        }
-        tx.commit()?;
-        changed += rewritten as u64;
-        seen += n;
-        last = hi;
-        progress(seen);
-        if (seen / PACK_BATCH as u64).is_multiple_of(25) {
-            checkpoint(conn);
-        }
-    }
-    checkpoint(conn);
-    Ok((changed, seen))
-}
+// ------------------------------------------------------------------------------------------------ build and swap
 
-/// Step 3: the store, compacted into a new file that replaces the old one (kept beside it).
-fn compact(cfg: &IndexerConfig, conn: Connection) -> DbResult<PathBuf> {
-    let path = cfg.db_path();
-    checkpoint(&conn);
-    let mut new = path.as_os_str().to_owned();
-    new.push(".compacting");
-    let new = PathBuf::from(new);
-    for suffix in ["", "-wal", "-shm"] {
+/// Steps 1 to 3: the new store in `new`, loaded, indexed and verified against `old`.
+fn build(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &mut impl FnMut(&str)) -> DbResult<()> {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
     }
-    conn.execute("VACUUM INTO ?1", [new.to_string_lossy().as_ref()])?;
-    drop(conn);
-    // the copy opens as a store of this build (schema, counters, state) before it replaces anything
-    {
-        let check = db::open_writer_with(&new, &cfg.network, cfg.lean)?;
-        let ok: String = check.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
-        if ok != "ok" {
-            return Err(DbError::Invalid(format!("the compacted copy fails its check ({ok}); the store was not replaced")));
-        }
-        checkpoint(&check);
+    let conn = Connection::open(new)?;
+    // a crash leaves a file nobody reads: no journal, no sync
+    conn.pragma_update(None, "journal_mode", "OFF")?;
+    conn.pragma_update(None, "synchronous", "OFF")?;
+    conn.pragma_update(None, "cache_size", -262_144)?;
+    // the sorts of the index builds go to disk (the system temporary directory, or SQLITE_TMPDIR)
+    conn.pragma_update(None, "temp_store", "FILE")?;
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    conn.pragma_update(None, "recursive_triggers", "OFF")?;
+    super::packed::register(&conn)?;
+    conn.execute("ATTACH DATABASE ?1 AS old", [uri_of(old)])?;
+    let page_size: i64 = conn.query_row("PRAGMA old.page_size", [], |r| r.get(0))?;
+    conn.pragma_update(None, "page_size", page_size)?;
+    if cfg.lean {
+        conn.pragma_update(None, "auto_vacuum", 2)?;
     }
+
+    // the tables from the schema, then without the indexes and triggers: they are built over the loaded rows
+    conn.execute_batch(include_str!("schema.sql"))?;
+    let drops: Vec<String> = {
+        let mut st = conn.prepare(
+            "SELECT 'DROP ' || type || ' ' || name FROM main.sqlite_master WHERE (type = 'trigger') OR (type = 'index' AND sql IS NOT NULL)",
+        )?;
+        let v = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    for d in drops {
+        conn.execute_batch(&d)?;
+    }
+
+    // a table of the old store that this build does not have would be lost: refuse before anything is copied (receipts: retired in schema 3)
+    {
+        let mut st = conn.prepare(
+            "SELECT name FROM old.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'receipts' \
+             AND name NOT IN (SELECT name FROM main.sqlite_master WHERE type = 'table') ORDER BY name",
+        )?;
+        let unknown = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        if !unknown.is_empty() {
+            return Err(bad(format!(
+                "the old store has tables this build does not know ({}): nothing was migrated (the old store is untouched)",
+                unknown.join(", ")
+            )));
+        }
+    }
+
+    let t = Instant::now();
+    say("copy:");
+    conn.execute_batch("BEGIN")?;
+    let tables = load(&conn, say)?;
+    conn.execute_batch("COMMIT")?;
+    rep.ids = tables.iter().find(|t| t.table == "ids").map_or(0, |t| t.rows);
+    rep.tables = tables;
+    rep.steps.push(("copy", t.elapsed()));
+
+    let t = Instant::now();
+    conn.execute_batch(include_str!("schema.sql"))?;
+    // the counts the triggers keep, counted once (as a store without them gets them at start-up)
+    db::backfill_counters(&conn)?;
+    db::backfill_holding_programs(&conn)?;
+    // the counters the old store kept against the ones counted from the rows
+    if table_exists(&conn, "old", "counters")? {
+        let (a, _) = digest(&conn, "SELECT name, n FROM old.counters WHERE n != 0 ORDER BY name")?;
+        let (b, _) = digest(&conn, "SELECT name, n FROM main.counters WHERE n != 0 ORDER BY name")?;
+        say(if a == b {
+            "  counters: the same as the old store kept"
+        } else {
+            "  counters: counted afresh (the old store's differ: its triggers had drifted, or it predates them)"
+        });
+    }
+    conn.execute("INSERT OR REPLACE INTO main.meta (k, v) VALUES ('schema_version', ?1)", [db::SCHEMA_VERSION.to_string()])?;
+    rep.steps.push(("indexes", t.elapsed()));
+    say(&format!("indexes: built ({:.1} s)", t.elapsed().as_secs_f64()));
+
+    let t = Instant::now();
+    say("verify:");
+    verify(&conn, say)?;
+    rep.steps.push(("verify", t.elapsed()));
+    conn.execute_batch("DETACH DATABASE old")?;
+    drop(conn);
+
+    // the file opens as a store of this build before it replaces anything
+    let t = Instant::now();
+    let check = db::open_writer_with(new, &cfg.network, cfg.lean)?;
+    let ok: String = check.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+    if ok != "ok" {
+        return Err(bad(format!("the new store fails its check ({ok}); the store was not replaced")));
+    }
+    checkpoint(&check);
+    drop(check);
     for suffix in ["-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
     }
-    let mut old = path.as_os_str().to_owned();
-    old.push(format!(".{BEFORE_MIGRATE}"));
-    let old = PathBuf::from(old);
+    say(&format!("check: the new store opens and passes quick_check ({:.1} s)", t.elapsed().as_secs_f64()));
+    Ok(())
+}
+
+/// Step 4: `new` takes the place of `path`; the old file is kept beside it.
+fn swap(path: &Path, new: &Path) -> DbResult<PathBuf> {
+    let old = suffixed(path, BEFORE_MIGRATE);
     if old.exists() {
-        return Err(DbError::Invalid(format!("{} exists already: delete it (or move it away) first", old.display())));
+        return Err(bad(format!("{} exists already: delete it (or move it away) first", old.display())));
     }
     // the old file's -wal and -shm belong to it; the new file starts clean
-    std::fs::rename(&path, &old)?;
+    std::fs::rename(path, &old)?;
     for suffix in ["-wal", "-shm"] {
-        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        let from = format!("{}{suffix}", path.display());
+        if Path::new(&from).exists() {
+            std::fs::rename(&from, format!("{}{suffix}", old.display()))?;
+        }
     }
-    if let Err(e) = std::fs::rename(&new, &path) {
+    if let Err(e) = std::fs::rename(new, path) {
         // put the store back
-        let _ = std::fs::rename(&old, &path);
+        let _ = std::fs::rename(&old, path);
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::rename(format!("{}{suffix}", old.display()), format!("{}{suffix}", path.display()));
+        }
         return Err(e.into());
     }
     Ok(old)
+}
+
+/// The schema version a store file says it is (0: none).
+fn stored_version(path: &Path) -> DbResult<i64> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI)?;
+    conn.busy_timeout(Duration::from_secs(30))?;
+    db::refuse_pre_v3(&conn, path)?;
+    if !table_exists(&conn, "main", "meta")? {
+        return Ok(0);
+    }
+    Ok(db::meta_get(&conn, "schema_version")?.and_then(|v| v.parse().ok()).unwrap_or(0))
 }
 
 fn note(steps: &mut Vec<(&'static str, Duration)>, say: &mut impl FnMut(&str), name: &'static str, t: Instant, what: String) {
@@ -299,32 +734,39 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
         rep.log_bytes_before = recordlog::log_bytes(&cfg.records_dir()).unwrap_or(0);
     }
 
-    let conn = db::open_writer_with(&path, &cfg.network, cfg.lean)?;
-
-    let t = Instant::now();
-    swap_indexes(&conn, &mut rep)?;
-    note(&mut rep.steps, &mut say, "indexes", t, format!("rebuilt {:?}, dropped {:?}", rep.indexes_swapped, rep.indexes_dropped));
-
-    for col in columns() {
-        let t = Instant::now();
-        let name = col.name;
-        let (changed, total) = pack_column(&conn, &col, |seen| {
-            if seen % 500_000 < PACK_BATCH as u64 {
-                say(&format!("{name}: {seen} rows seen"));
-            }
-        })?;
-        rep.columns.push(ColumnReport { column: name, changed, total });
-        note(&mut rep.steps, &mut say, name, t, format!("{changed} of {total} rewritten"));
+    rep.from_schema = stored_version(&path)?;
+    if rep.from_schema > db::SCHEMA_VERSION {
+        return Err(DbError::SchemaTooNew { found: rep.from_schema, supported: db::SCHEMA_VERSION }.into());
     }
-
-    if opts.compact {
-        let t = Instant::now();
-        let old = compact(cfg, conn)?;
-        note(&mut rep.steps, &mut say, "compact", t, format!("the store was rewritten; the previous file is {}", old.display()));
-        rep.kept_old = Some(old);
+    if rep.from_schema == db::SCHEMA_VERSION {
+        say(&format!("the store is of schema {} already: nothing to rebuild", db::SCHEMA_VERSION));
+    } else if rep.from_schema < 5 {
+        return Err(IndexerError::Config(format!(
+            "{}: schema {}: open it once with the previous build (`run` or `index`) so that it is brought to schema 5 or later, or rebuild it with `index replay`",
+            path.display(),
+            rep.from_schema
+        )));
     } else {
-        checkpoint(&conn);
-        drop(conn);
+        say(&format!("schema {} -> {}: building the new store beside the old one", rep.from_schema, db::SCHEMA_VERSION));
+        let new = suffixed(&path, MIGRATING);
+        let t = Instant::now();
+        if let Err(e) = build(cfg, &path, &new, &mut rep, &mut say) {
+            // nothing of the half-built file is worth keeping; the old store was not touched
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
+            }
+            return Err(e.into());
+        }
+        let t_swap = Instant::now();
+        let old = swap(&path, &new)?;
+        note(&mut rep.steps, &mut say, "swap", t_swap, format!("the previous store is {}", old.display()));
+        say(&format!(
+            "store: {} bytes -> {} bytes ({:.1} s in all)",
+            rep.db_bytes_before,
+            file_bytes(&path),
+            t.elapsed().as_secs_f64()
+        ));
+        rep.kept_old = Some(old);
     }
     rep.db_bytes_after = file_bytes(&path);
 

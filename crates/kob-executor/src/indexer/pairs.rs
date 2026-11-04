@@ -177,7 +177,8 @@ fn eligible(state: &AnyState, udaa: i64, deadline: Option<i64>, now: i64, ctx: &
 /// UTXO per custody token, at the exact amount, and no other custody row.
 pub fn pair_custody_ok(conn: &Connection, cov: &[u8], state: &AnyState) -> DbResult<bool> {
     let mut st = conn.prepare_cached(
-        "SELECT token_cov_id, amount FROM token_utxos WHERE owner = ?1 AND role = 'custody' AND spent_block IS NULL",
+        "SELECT tk.h, t.amount FROM token_utxos t JOIN ids tk ON tk.id = t.token_id \
+         WHERE t.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND t.role = 'custody' AND t.spent_block IS NULL",
     )?;
     let mut live: Vec<(Vec<u8>, i64)> = st.query_map([cov], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut want: Vec<(Vec<u8>, i64)> = state.custodies().into_iter().filter(|c| c.1 != 0).map(|(t, a)| (t.to_vec(), a)).collect();
@@ -196,7 +197,7 @@ struct LivePair {
 fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: &ReadCtx) -> DbResult<Vec<LivePair>> {
     let sql = format!(
         "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline FROM order_state s \
-         CROSS JOIN orders o ON o.covenant_id = s.covenant_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
+         CROSS JOIN orders o ON o.id = s.order_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE o.listed = 1 AND o.token_cov_id = ?1 AND o.quote_cov_id = ?2 AND s.status IN ('open','partial') AND s.state_known = 1 \
          AND u.spent_block IS NULL AND {NOT_FROZEN} AND {pinned} ORDER BY o.genesis_block, o.covenant_id LIMIT 2000",
         pinned = pinned_template()
@@ -228,7 +229,7 @@ fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i
     let (kinds, dir) = if side == 1 { ("'KobAsk','KobAskKron'", "ASC") } else { ("'KobBid','KobBidKron'", "DESC") };
     let sql = format!(
         "SELECT o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, s.remaining_amount, o.deadline FROM order_state s \
-         CROSS JOIN orders o ON o.covenant_id = s.covenant_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
+         CROSS JOIN orders o ON o.id = s.order_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE o.token_cov_id = ?1 AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 AND o.contract IN ({kinds}) \
          AND s.status IN ('open','partial') AND s.state_known = 1 AND u.spent_block IS NULL AND {NOT_FROZEN} AND {CUSTODY_OK} \
          AND {pinned} ORDER BY (o.price * 1.0 / MAX(COALESCE(o.scale, 1), 1)) {dir}, o.genesis_block ASC, o.covenant_id ASC LIMIT ?3",
@@ -445,7 +446,7 @@ pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResu
     let now = eval_daa(conn, ctx)?.min(i64::MAX as u64) as i64;
     let sql = format!(
         "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, o.token_cov_id, o.quote_cov_id FROM order_state s \
-         CROSS JOIN orders o ON o.covenant_id = s.covenant_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
+         CROSS JOIN orders o ON o.id = s.order_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE o.listed = 1 AND o.quote_cov_id IS NOT NULL AND s.status IN ('open','partial') AND s.state_known = 1 \
          AND u.spent_block IS NULL AND (?1 IS NULL OR o.token_cov_id = ?1 OR o.quote_cov_id = ?1) AND {NOT_FROZEN} \
          AND {pinned} ORDER BY o.genesis_block, o.covenant_id LIMIT 20000",

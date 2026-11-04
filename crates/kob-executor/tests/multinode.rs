@@ -242,7 +242,15 @@ fn chain(c: &Ctx, blocks: u64) -> Vec<Hash32> {
 fn statuses(m: &Multi, covs: &[Hash32]) -> Vec<String> {
     let g = m.ingest.lock().unwrap();
     covs.iter()
-        .map(|c| g.conn().query_row("SELECT status FROM order_state WHERE covenant_id = ?1", [&c.0[..]], |r| r.get(0)).unwrap())
+        .map(|c| {
+            g.conn()
+                .query_row(
+                    "SELECT status FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+                    [&c.0[..]],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        })
         .collect()
 }
 

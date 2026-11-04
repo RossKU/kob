@@ -47,7 +47,7 @@ fn events(c: &Ctx, cov: &Hash32) -> Vec<(String, Option<i64>, Option<i64>, serde
     let g = c.hs.ingest.lock().unwrap();
     let mut st = g
         .conn()
-        .prepare("SELECT kind, amount, price, kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 ORDER BY id")
+        .prepare("SELECT kind, amount, price, kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) ORDER BY id")
         .unwrap();
     st.query_map([&cov.0[..]], |r| {
         let d: Option<String> = r.get(3)?;
@@ -84,7 +84,7 @@ fn live_custodies(c: &Ctx, cov: &Hash32) -> Vec<(Hash32, i64)> {
     let g = c.hs.ingest.lock().unwrap();
     let mut st = g
         .conn()
-        .prepare("SELECT token_cov_id, amount FROM token_utxos WHERE owner = ?1 AND role = 'custody' AND spent_block IS NULL ORDER BY amount")
+        .prepare("SELECT t.h, u.amount FROM token_utxos u JOIN ids t ON t.id = u.token_id WHERE u.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND u.role = 'custody' AND u.spent_block IS NULL ORDER BY u.amount")
         .unwrap();
     st.query_map([&cov.0[..]], |r| Ok((Hash32::from_slice(&r.get::<_, Vec<u8>>(0)?).unwrap(), r.get(1)?)))
         .unwrap()
@@ -323,7 +323,13 @@ async fn an_ioc_pair_ask_returns_the_rest_and_a_pair_bid_closes_returning_its_es
     c.push(&[&t]).await;
     assert_eq!(c.hs.status(&px.cov), "killed");
     assert_eq!(c.hs.event_kinds(&px.cov), ["create", "fill", "kill"]);
-    assert_eq!(c.hs.query::<i64>("SELECT remaining_amount FROM order_state WHERE covenant_id = ?1", [&px.cov.0[..]]), 7 * WHOLE);
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT remaining_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&px.cov.0[..]]
+        ),
+        7 * WHOLE
+    );
     assert!(live_custodies(&c, &px.cov).is_empty());
 
     // a pair BID filled completely from inventory: pays floor(10 000) of its 10 004 escrow, the 4 left return to the maker
@@ -408,7 +414,13 @@ async fn a_pair_order_is_refunded_by_anyone_after_expiry_and_cancelled_with_stra
     c.push(&[&cancel]).await;
     assert_eq!(c.hs.status(&py.cov), "cancelled");
     assert_eq!(c.hs.event_kinds(&py.cov), ["create", "cancel"]);
-    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&py.cov.0[..]]), 0);
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL",
+            [&py.cov.0[..]]
+        ),
+        0
+    );
 }
 
 #[tokio::test]

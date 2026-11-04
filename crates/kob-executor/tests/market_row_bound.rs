@@ -21,12 +21,13 @@ fn seed(n: i64) -> (rusqlite::Connection, [u8; 32]) {
         rusqlite::params![vec![1u8; 32], vec![2u8; 32], vec![3u8; 8]],
     )
     .unwrap();
+    kob_executor::indexer::ids::intern(&conn, &token).unwrap();
     let tx = conn.unchecked_transaction().unwrap();
     {
         let mut st = tx
             .prepare(
-                "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, closes, detail) \
-                 VALUES (?1, 1, ?2, ?3, ?4, 0, 'fill', ?5, 1, 1000, 250000000, 0, '{}')",
+                "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail) \
+                 VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 1, ?2, ?3, ?4, 0, 'fill', (SELECT id FROM ids WHERE h = ?5), 1, 1000, 250000000, 0, '{}')",
             )
             .unwrap();
         for i in 0..n {
@@ -82,10 +83,11 @@ fn seed_mixed(conn: &rusqlite::Connection, token: [u8; 32], ask: [u8; 32], bid: 
         )
         .unwrap();
     }
+    kob_executor::indexer::ids::intern(conn, &token).unwrap();
     let mut st = conn
         .prepare(
-            "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, closes, detail) \
-             VALUES (?1, 1, ?2, ?3, ?4, 0, 'fill', ?5, ?6, ?7, ?8, 0, '{}')",
+            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail) \
+             VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 1, ?2, ?3, ?4, 0, 'fill', (SELECT id FROM ids WHERE h = ?5), ?6, ?7, ?8, 0, '{}')",
         )
         .unwrap();
     for i in 0..txs {
@@ -111,7 +113,7 @@ fn streamed_candles_equal_the_candles_of_every_trade() {
     let rows: Vec<market::FillRow> = conn
         .prepare(
             "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, o.scale, o.genesis_daa FROM order_events e \
-             JOIN orders o ON o.covenant_id = e.covenant_id WHERE e.kind = 'fill' AND e.token_cov_id = ?1",
+             JOIN orders o ON o.id = e.order_id WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1)",
         )
         .unwrap()
         .query_map(rusqlite::params![token.to_vec()], |r| {
@@ -176,7 +178,11 @@ fn pair_candles_with_a_small_limit_are_the_tail_of_the_whole_series() {
     seed_mixed(&conn, a, [7u8; 32], [8u8; 32], 600, 0);
     // B trades less often and starts later: buckets of A alone carry B's last close forward
     seed_mixed(&conn, b, [9u8; 32], [10u8; 32], 120, 5_000);
-    conn.execute("UPDATE order_events SET ts = ts + 600000 WHERE token_cov_id = ?1", rusqlite::params![b.to_vec()]).unwrap();
+    conn.execute(
+        "UPDATE order_events SET ts = ts + 600000 WHERE token_id = (SELECT id FROM ids WHERE h = ?1)",
+        rusqlite::params![b.to_vec()],
+    )
+    .unwrap();
     for (name, iv) in [("1m", 60_000i64), ("5m", 300_000)] {
         let all = pairs::pair_candles(&conn, &Hash32(a), &Hash32(b), (Some(3), Some(3)), name, iv, Some(0), None, 1500).unwrap();
         let n = all.items.len();
@@ -197,7 +203,7 @@ fn the_window_query_uses_the_time_index() {
     let (conn, _t) = seed(10);
     let plan: Vec<String> = conn
         .prepare(
-            "EXPLAIN QUERY PLAN SELECT e.id FROM order_events e WHERE e.kind = 'fill' AND e.token_cov_id = ?1 AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts DESC LIMIT 5",
+            "EXPLAIN QUERY PLAN SELECT e.id FROM order_events e WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts DESC LIMIT 5",
         )
         .unwrap()
         .query_map(rusqlite::params![vec![0x70u8; 32], 0i64, 1i64], |r| r.get::<_, String>(3))

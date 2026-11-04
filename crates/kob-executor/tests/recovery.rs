@@ -56,7 +56,11 @@ fn order_status(idx: &Indexer, cov: &Hash32) -> String {
         .lock()
         .unwrap()
         .conn()
-        .query_row("SELECT status FROM order_state WHERE covenant_id = ?1", [&cov.0[..]], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&cov.0[..]],
+            |r| r.get(0),
+        )
         .unwrap()
 }
 
@@ -580,16 +584,26 @@ async fn reconcile_closes_spent_outputs_and_adopts_continuations() {
     assert_eq!(hs.status(&covs[0]), "open");
     assert_eq!(hs.status(&covs[1]), "closed");
     assert_eq!(hs.status(&covs[2]), "open");
-    let cur: Vec<u8> = hs.query("SELECT cur_txid FROM order_state WHERE covenant_id = ?1", [&covs[2].0[..]]);
+    let cur: Vec<u8> =
+        hs.query("SELECT cur_txid FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", [&covs[2].0[..]]);
     assert_eq!(cur, cont3.0 .0.to_vec());
-    assert_eq!(hs.query::<i64>("SELECT cur_value FROM order_state WHERE covenant_id = ?1", [&covs[2].0[..]]), 7_000_000);
+    assert_eq!(
+        hs.query::<i64>(
+            "SELECT cur_value FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&covs[2].0[..]]
+        ),
+        7_000_000
+    );
     // custody of a gap-closed or gap-adopted order is unknown until its next spend: never counted
     let live: i64 = hs.query(
-        "SELECT COUNT(*) FROM token_utxos WHERE owner IN (?1, ?2) AND spent_block IS NULL",
+        "SELECT COUNT(*) FROM token_utxos WHERE order_id IN ((SELECT id FROM orders WHERE covenant_id = ?1), (SELECT id FROM orders WHERE covenant_id = ?2)) AND spent_block IS NULL",
         rusqlite::params![&covs[1].0[..], &covs[2].0[..]],
     );
     assert_eq!(live, 0);
-    let live: i64 = hs.query("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&covs[0].0[..]]);
+    let live: i64 = hs.query(
+        "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL",
+        [&covs[0].0[..]],
+    );
     assert_eq!(live, 1, "an untouched order keeps its custody");
     let _ = Arc::new(());
 }

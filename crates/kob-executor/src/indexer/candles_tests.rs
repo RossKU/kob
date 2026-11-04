@@ -38,9 +38,10 @@ fn add_order(conn: &Connection, cov: u8, tok: u8, scale: i64, genesis_block: i64
 /// One transaction of `fills` fills (order, side, amount, price) at `ts`, in block `seq`, marking the buckets as the processor does.
 fn add_tx(conn: &Connection, txid: u64, seq: i64, ts: i64, tok: u8, fills: &[(u8, i64, i64, i64)]) {
     for (cov, side, amount, price) in fills {
+        crate::indexer::ids::intern(conn, &[tok; 32]).unwrap();
         conn.execute(
-            "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, closes) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, 'fill', ?6, ?7, ?8, ?9, 0)",
+            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes) \
+             VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), ?2, ?3, ?4, ?5, 0, 'fill', (SELECT id FROM ids WHERE h = ?6), ?7, ?8, ?9, 0)",
             params![vec![*cov; 32], seq, ts / 100, ts, txid.to_be_bytes().repeat(4), vec![tok; 32], side, amount, price],
         )
         .unwrap();
@@ -141,9 +142,11 @@ fn random_histories_reverts_and_windows_match_the_reference() {
                 let basis = token_basis(&conn, &tokens, &t).unwrap();
                 let view = api_candles(&conn, &t, None, name, iv, None, None, 500).unwrap();
                 let newest: Option<i64> = conn
-                    .query_row("SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_cov_id = ?1", [t.0.to_vec()], |r| {
-                        r.get(0)
-                    })
+                    .query_row(
+                        "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1)",
+                        [t.0.to_vec()],
+                        |r| r.get(0),
+                    )
                     .unwrap();
                 let end = newest.map(|n| (n.div_euclid(iv) + 1) * iv).unwrap_or(0);
                 let want = scan_candles(&conn, &t, basis, iv, end.saturating_sub(iv * 500), end, 500).unwrap();
@@ -224,15 +227,8 @@ fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
     let conn = open_writer(&path, "testnet-10").unwrap();
     // 300 orders over two scales for one token; the fills: three per transaction, one transaction a second
     let t0 = 1_700_000_000_000i64;
-    conn.execute(
-        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
-         INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, closes) \
-         SELECT CAST(printf('%032d', i % 300) AS BLOB), i / 300 + 1, i, ?2 + (i / 3) * 1000, CAST(printf('%032d', i / 3) AS BLOB), 0, 'fill', \
-                ?3, 1 + (i % 2), 1 + (i * 7919) % 5000, 1000 + (i * 104729) % 700, 0 FROM n",
-        params![n as i64, t0, vec![1u8; 32]],
-    )
-    .unwrap();
-    // the orders the fills name (their covenant ids are the zero-padded numbers above)
+    // the orders the fills name (their covenant ids are the zero-padded numbers below); an event refers to its order by `orders.id`, so
+    // the orders come first. Orders 1 and 3 (all-0x01 / all-0x03 ids) are the ones the later `add_tx` fills name.
     let pinned = kob_protocol::artifacts::pinned_hash(kob_protocol::artifacts::TemplateId::KobBid).to_vec();
     conn.execute(
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 299) \
@@ -241,6 +237,19 @@ fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
          SELECT CAST(printf('%032d', i) AS BLOB), 'KobBid', ?1, 1, 2, x'01', ?2, CASE WHEN i % 2 = 0 THEN 100000000 ELSE 1000 END, 1000, 1, x'00', \
                 1, 10 + i, 1, 'chain' FROM n",
         params![pinned, vec![1u8; 32]],
+    )
+    .unwrap();
+    // after the 300 above in the first-order rule (genesis block 2), so the token's price basis is still theirs
+    add_order(&conn, 1, 1, 1_000, 2, 1);
+    add_order(&conn, 3, 1, 1_000, 2, 1);
+    crate::indexer::ids::intern(&conn, &[1u8; 32]).unwrap();
+    conn.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
+         INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes) \
+         SELECT (SELECT id FROM orders WHERE covenant_id = CAST(printf('%032d', i % 300) AS BLOB)), i / 300 + 1, i, ?2 + (i / 3) * 1000, \
+                CAST(printf('%032d', i / 3) AS BLOB), 0, 'fill', \
+                (SELECT id FROM ids WHERE h = ?3), 1 + (i % 2), 1 + (i * 7919) % 5000, 1000 + (i * 104729) % 700, 0 FROM n",
+        params![n as i64, t0, vec![1u8; 32]],
     )
     .unwrap();
     let tokens = TokenAllowlist::from_entries([]);
@@ -325,7 +334,8 @@ fn fills_written_by_a_build_that_does_not_maintain_the_aggregates_are_rebuilt_at
     // the earlier build: a new fill and a reverted one, no aggregates touched
     conn.execute("DELETE FROM order_events WHERE block_seq = 10", []).unwrap();
     conn.execute(
-        "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, closes)          VALUES (?1, 11, 11, ?2, ?3, 0, 'fill', ?4, 1, 99, 5000, 0)",
+        "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes) \
+         VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 11, 11, ?2, ?3, 0, 'fill', (SELECT id FROM ids WHERE h = ?4), 1, 99, 5000, 0)",
         params![vec![1u8; 32], t0 + 700_000, vec![0xabu8; 32], vec![1u8; 32]],
     )
     .unwrap();

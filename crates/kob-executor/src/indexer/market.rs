@@ -184,8 +184,8 @@ pub(crate) fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
 
 pub(crate) const FILL_SELECT: &str =
     "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, COALESCE(o.scale, 1), o.genesis_daa \
-     FROM order_events e JOIN orders o ON o.covenant_id = e.covenant_id \
-     WHERE e.kind = 'fill' AND e.token_cov_id = ?1 AND e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2)";
+     FROM order_events e JOIN orders o ON o.id = e.order_id \
+     WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2)";
 
 pub(crate) fn fill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FillRow> {
     Ok(FillRow {
@@ -336,7 +336,7 @@ fn window_trades(conn: &Connection, token: &Hash32, from: i64, to: i64, basis: i
 fn newest_fill_ts(conn: &Connection, token: &Hash32) -> DbResult<Option<i64>> {
     Ok(conn.query_row(
         // price IS NOT NULL: a pair order's fill (no KAS price, founder rule) is not a KAS trade of its token
-        "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_cov_id = ?1 AND price IS NOT NULL",
+        "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1) AND price IS NOT NULL",
         params![token.0.to_vec()],
         |r| r.get::<_, Option<i64>>(0),
     )?)
@@ -364,7 +364,7 @@ pub fn candle_series(
 /// The price (per `basis`) of the last KAS trade of `token` before `ts` (ms), if any.
 pub fn last_trade_price_before(conn: &Connection, token: &Hash32, basis: i128, ts: i64) -> DbResult<Option<i128>> {
     let last: Option<i64> = conn.query_row(
-        "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_cov_id = ?1 AND price IS NOT NULL AND ts < ?2",
+        "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1) AND price IS NOT NULL AND ts < ?2",
         params![token.0.to_vec(), ts],
         |r| r.get(0),
     )?;

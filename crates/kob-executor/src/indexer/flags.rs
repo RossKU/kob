@@ -8,14 +8,17 @@
 //! passes clears the flag. A flag belongs to one order UTXO, so it lapses when the order moves.
 
 use super::db::DbResult;
+use super::ids::order_of;
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// Flags the order at its current UTXO. Returns false when the order has no known current UTXO (nothing to flag).
 pub fn set(conn: &Connection, order: &[u8; 32], reason: &str, daa: u64) -> DbResult<bool> {
     let cur: Option<(Vec<u8>, i64)> = conn
-        .query_row("SELECT cur_txid, cur_idx FROM order_state WHERE covenant_id = ?1 AND cur_txid IS NOT NULL", [&order[..]], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_row(
+            concat!("SELECT cur_txid, cur_idx FROM order_state WHERE order_id = ", order_of!("?1"), " AND cur_txid IS NOT NULL"),
+            [&order[..]],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()?;
     let Some((txid, idx)) = cur else { return Ok(false) };
     conn.execute(
@@ -36,7 +39,7 @@ pub fn clear(conn: &Connection, order: &[u8; 32]) -> DbResult<bool> {
 pub fn reason(conn: &Connection, order: &[u8; 32]) -> DbResult<Option<String>> {
     Ok(conn
         .query_row(
-            "SELECT f.reason FROM order_flags f JOIN order_state s ON s.covenant_id = f.covenant_id \
+            "SELECT f.reason FROM order_flags f JOIN orders o ON o.covenant_id = f.covenant_id JOIN order_state s ON s.order_id = o.id \
              WHERE f.covenant_id = ?1 AND f.txid = s.cur_txid AND f.idx = s.cur_idx",
             [&order[..]],
             |r| r.get(0),

@@ -58,7 +58,7 @@ fn poison(c: &Ctx, mut built: BuiltTx, net_before: i64, victim: Hash32) -> Signe
 fn live_roles(c: &Ctx, owner: &Hash32) -> Vec<(String, i64)> {
     let g = c.hs.ingest.lock().unwrap();
     let mut st =
-        g.conn().prepare("SELECT role, amount FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL ORDER BY amount").unwrap();
+        g.conn().prepare("SELECT role, amount FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL ORDER BY amount").unwrap();
     st.query_map([&owner.0[..]], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect()
 }
 

@@ -124,9 +124,27 @@ async fn kron_ask_create_fill_fill_closes_with_exact_custody() {
     c.push(&[&fill2]).await;
     assert_eq!(c.hs.status(&cov), "filled");
     assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "fill"]);
-    assert_eq!(c.hs.query::<i64>("SELECT filled_amount FROM order_state WHERE covenant_id = ?1", [&cov.0[..]]), 10 * WHOLE);
-    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&cov.0[..]]), 0);
-    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND role = 'custody'", [&cov.0[..]]), 2);
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT filled_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&cov.0[..]]
+        ),
+        10 * WHOLE
+    );
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL",
+            [&cov.0[..]]
+        ),
+        0
+    );
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND role = 'custody'",
+            [&cov.0[..]]
+        ),
+        2
+    );
 }
 
 #[tokio::test]
@@ -141,7 +159,13 @@ async fn kron_ask_cancel_and_keeper_refund() {
     c.push(&[&cancel]).await;
     assert_eq!(c.hs.status(&cov), "cancelled");
     assert_eq!(c.hs.event_kinds(&cov), ["create", "cancel"]);
-    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&cov.0[..]]), 0);
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL",
+            [&cov.0[..]]
+        ),
+        0
+    );
 
     // a keeper refunds an expired ask at its refund time
     let a = AskState { expiry_daa: c.daa() as i64 + 2_000, ..ka(ask(MAKER_A, P250 + 1)) };
@@ -181,7 +205,10 @@ async fn kron_bid_escrow_fills_and_the_maker_is_delivered_tokens() {
     assert_eq!(c.hs.event_kinds(&cov), ["create", "fill"]);
     assert_eq!(c.hs.status(&cov), "partial");
     assert!(c.hs.tip_state(&cov).is_some(), "the bid continues with the rest of its escrow");
-    let n: i64 = c.hs.query("SELECT amount FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let n: i64 = c.hs.query(
+        "SELECT amount FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'fill'",
+        [&cov.0[..]],
+    );
     assert_eq!(n, 4 * WHOLE);
 }
 
@@ -207,7 +234,13 @@ async fn kron_ioc_orders_are_killed_and_day_orders_record_their_deadline() {
     }));
     c.push(&[&kill]).await;
     assert_eq!(c.hs.status(&cov), "killed");
-    assert_eq!(c.hs.query::<i64>("SELECT remaining_amount FROM order_state WHERE covenant_id = ?1", [&cov.0[..]]), 10 * WHOLE);
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT remaining_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&cov.0[..]]
+        ),
+        10 * WHOLE
+    );
 
     let d = kob_protocol::defaults::day_order(c.daa(), 1_790_694_000, Some(10_020));
     let a = AskState { expiry_daa: d.expiry_daa as i64, ..ka(ask(MAKER_A, P250 + 2)) };
@@ -232,7 +265,12 @@ async fn kron_strays_are_flagged_never_counted_and_swept_by_the_makers_cancel() 
     c.push(&[&stray]).await;
     let roles: Vec<(String, i64)> = {
         let g = c.hs.ingest.lock().unwrap();
-        let mut st = g.conn().prepare("SELECT role, amount FROM token_utxos WHERE owner = ?1 ORDER BY role").unwrap();
+        let mut st = g
+            .conn()
+            .prepare(
+                "SELECT role, amount FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) ORDER BY role",
+            )
+            .unwrap();
         st.query_map([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect()
     };
     assert_eq!(roles, [("custody".to_string(), 10 * WHOLE), ("stray".to_string(), 10 * WHOLE)]);
@@ -285,7 +323,13 @@ async fn kron_if_done_entries_create_exits_and_repeat_cycles_merge() {
     );
     let rv = view(&c, &exit).repeat.expect("a booked exit");
     assert_eq!((rv.role, rv.parent.as_deref()), ("exit", Some(cov.to_hex().as_str())));
-    assert_eq!(c.hs.query::<i64>("SELECT amount FROM token_utxos WHERE owner = ?1 AND role = 'custody'", [&exit.0[..]]), 4 * WHOLE);
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT amount FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND role = 'custody'",
+            [&exit.0[..]]
+        ),
+        4 * WHOLE
+    );
     assert!(view(&c, &exit).custody.unwrap().ok);
 
     let entry_utxo = c.w.order(&fill, find_cov(&fill, &cov).unwrap(), entry6.clone());
@@ -471,9 +515,11 @@ async fn kron_reorgs_revert_fills_creates_and_custody_exactly_and_the_log_replay
     assert_eq!(c.hs.status(&cov), "open");
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobAskKron(a)));
     let g = c.hs.ingest.lock().unwrap();
-    let live = g
-        .conn()
-        .query_row("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&cov.0[..]], |r| r.get::<_, i64>(0));
+    let live = g.conn().query_row(
+        "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL",
+        [&cov.0[..]],
+        |r| r.get::<_, i64>(0),
+    );
     assert_eq!(live.unwrap(), 1, "the original custody is live again");
     drop(g);
     assert_eq!(

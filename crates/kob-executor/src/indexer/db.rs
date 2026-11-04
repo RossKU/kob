@@ -18,9 +18,10 @@ use tokio::sync::Semaphore;
 /// 6 (2026-11): the state spans of `order_utxos` and `token_holdings` are stored packed ([`super::packed`]): a build of schema 5
 /// misreads them, so it refuses a schema 6 store. 7: `orders.genesis_state` and `order_events.detail` are stored deflated against frozen
 /// dictionaries, and `holding_programs` replaces the `(token, program)` index of the holdings: a build of schema 6 misreads the former.
-/// The first start of a newer build on an older store moves its number up; `index migrate` packs what an earlier build wrote whole
-/// and gives the space back.
-pub const SCHEMA_VERSION: i64 = 7;
+/// 8: the 32-byte ids the big tables repeated are integers (`orders.id`, `ids`; [`super::ids`]): the tables have other columns, so no
+/// build reads a store of another schema than its own, and this one refuses a store of schema 7 or older until `index migrate` has rebuilt
+/// it ([`refuse_old_layout`]).
+pub const SCHEMA_VERSION: i64 = 8;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +40,10 @@ pub enum DbError {
          which rebuilds it from the record log"
     )]
     PreV3(String),
+    #[error(
+        "database {0} is of schema {1}: this build reads schema {SCHEMA_VERSION} only. Stop every writer of the data directory and run `kobd index migrate` on it (offline; it          builds the new store beside the old one and keeps the old file as `index.sqlite3.before-migrate`)"
+    )]
+    OldLayout(String, i64),
     #[error("{0}")]
     Invalid(String),
 }
@@ -88,6 +93,7 @@ pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Conn
     pragmas(&conn, true)?;
     // before anything is created or altered: an older database is refused as it is
     refuse_pre_v3(&conn, path)?;
+    refuse_old_layout(&conn, path)?;
     if lean {
         // the WAL of a lean store is kept small too (the default limit is 64 MiB)
         conn.pragma_update(None, "journal_size_limit", 8 * 1024 * 1024)?;
@@ -103,6 +109,21 @@ pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Conn
     init_meta(&conn, network)?;
     super::candles::configure(&conn, lean)?;
     Ok(conn)
+}
+
+/// A store of schema 7 or older has the tables of the earlier layout (covenant ids and token ids in every row): opening it with this build
+/// would build the new indexes on columns that are not there. Refused untouched, with the way out (`index migrate`); checked before the schema is applied.
+pub fn refuse_old_layout(conn: &Connection, path: &Path) -> DbResult<()> {
+    let has_meta: bool = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'")?.exists([])?;
+    if !has_meta {
+        return Ok(());
+    }
+    if let Some(v) = meta_get(conn, "schema_version")?.and_then(|v| v.parse::<i64>().ok()) {
+        if v < SCHEMA_VERSION {
+            return Err(DbError::OldLayout(path.display().to_string(), v));
+        }
+    }
+    Ok(())
 }
 
 /// A database written by a build before protocol v3 (schema 4 or older) has the column `orders.lot_units` of the older
@@ -211,7 +232,7 @@ pub fn backfill_holding_programs(conn: &Connection) -> DbResult<(usize, usize)> 
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch("DELETE FROM holding_programs;")?;
     let programs = tx.execute(
-        "INSERT INTO holding_programs (token_cov_id, program, n) SELECT token_cov_id, program, COUNT(*) FROM token_holdings GROUP BY token_cov_id, program",
+        "INSERT INTO holding_programs (token_id, program, n) SELECT token_id, program, COUNT(*) FROM token_holdings GROUP BY token_id, program",
         [],
     )?;
     let holdings: i64 = tx.query_row("SELECT COALESCE(SUM(n), 0) FROM holding_programs", [], |r| r.get(0))?;
@@ -311,7 +332,7 @@ pub fn backfill_unknown_pair_extensions(conn: &Connection) -> DbResult<usize> {
 pub fn backfill_stop_entry_books(conn: &Connection) -> DbResult<usize> {
     let ids: Vec<Vec<u8>> = conn
         .prepare(
-            "SELECT o.covenant_id FROM order_state s CROSS JOIN orders o ON o.covenant_id = s.covenant_id              WHERE o.in_book = 1 AND o.contract IN ('KobIfdAsk','KobIfdBid','KobIfdAskKron','KobIfdBidKron')                AND s.status IN ('open','partial')",
+            "SELECT o.covenant_id FROM order_state s CROSS JOIN orders o ON o.id = s.order_id              WHERE o.in_book = 1 AND o.contract IN ('KobIfdAsk','KobIfdBid','KobIfdAskKron','KobIfdBidKron')                AND s.status IN ('open','partial')",
         )?
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
@@ -362,6 +383,7 @@ pub fn open_reader(path: &Path, network: &str) -> DbResult<Connection> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
     pragmas(&conn, false)?;
     refuse_pre_v3(&conn, path)?;
+    refuse_old_layout(&conn, path)?;
     let found: i64 = meta_get(&conn, "schema_version")?.and_then(|v| v.parse().ok()).unwrap_or(0);
     if found != SCHEMA_VERSION {
         return Err(DbError::Invalid(format!(
@@ -566,13 +588,17 @@ mod tests {
     use super::*;
 
     fn programs(c: &Connection) -> Vec<(u8, String, i64)> {
-        let mut st = c.prepare("SELECT token_cov_id, program, n FROM holding_programs ORDER BY token_cov_id, program").unwrap();
+        let mut st = c
+            .prepare("SELECT t.h, p.program, p.n FROM holding_programs p JOIN ids t ON t.id = p.token_id ORDER BY t.h, p.program")
+            .unwrap();
         st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?[0], r.get(1)?, r.get(2)?))).unwrap().map(|r| r.unwrap()).collect()
     }
 
     fn holding(c: &Connection, txid: u8, token: u8, program: &str) {
+        super::super::ids::intern(c, &[token; 32]).unwrap();
+        super::super::ids::intern(c, &[9u8; 32]).unwrap();
         c.execute(
-            "INSERT OR IGNORE INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa)              VALUES (?1, 0, ?2, ?3, 1, ?4, 0, 5, 1, x'08', 'owned', 1, 1)",
+            "INSERT OR IGNORE INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa)              VALUES (?1, 0, (SELECT id FROM ids WHERE h = ?2), ?3, 1, (SELECT id FROM ids WHERE h = ?4), 0, 5, 1, x'08', 'owned', 1, 1)",
             rusqlite::params![vec![txid; 32], vec![token; 32], program, vec![9u8; 32]],
         )
         .unwrap();
@@ -596,8 +622,11 @@ mod tests {
             [(1, "KCC20Ref_8x8".into(), 2), (2, "KCC20Ref_8x8".into(), 1)],
             "a spend changes nothing, the last of a program takes its row"
         );
-        c.execute("UPDATE token_holdings SET token_cov_id = ?1 WHERE txid = ?2", rusqlite::params![vec![2u8; 32], vec![1u8; 32]])
-            .unwrap();
+        c.execute(
+            "UPDATE token_holdings SET token_id = (SELECT id FROM ids WHERE h = ?1) WHERE txid = ?2",
+            rusqlite::params![vec![2u8; 32], vec![1u8; 32]],
+        )
+        .unwrap();
         assert_eq!(programs(&c), [(1, "KCC20Ref_8x8".into(), 1), (2, "KCC20Ref_8x8".into(), 2)]);
         // a database that never had the table: counted at the next open, once
         let before = programs(&c);
@@ -666,9 +695,15 @@ mod tests {
             c.execute_batch("CREATE INDEX receipts_created ON receipts (txid); INSERT INTO receipts VALUES (x'00', 0)").unwrap();
             meta_set(&c, "schema_version", "2").unwrap();
         }
+        let has_receipts =
+            |c: &Connection| c.prepare("SELECT 1 FROM sqlite_master WHERE name LIKE 'receipts%'").unwrap().exists([]).unwrap();
+        // since schema 8 a store of an older schema is refused untouched (`index migrate` rebuilds it): nothing is dropped from it
+        assert!(matches!(open_writer(&p, "testnet-10"), Err(DbError::OldLayout(_, 2))));
+        assert!(has_receipts(&Connection::open(&p).unwrap()), "the refused store is left as it was");
+        // a current store that carries the retired table (the migration step is idempotent and still runs) loses it
+        meta_set(&Connection::open(&p).unwrap(), "schema_version", &SCHEMA_VERSION.to_string()).unwrap();
         let c = open_writer(&p, "testnet-10").unwrap();
-        let has: bool = c.prepare("SELECT 1 FROM sqlite_master WHERE name LIKE 'receipts%'").unwrap().exists([]).unwrap();
-        assert!(!has, "the receipts table and its indexes are dropped");
+        assert!(!has_receipts(&c), "the receipts table and its indexes are dropped");
         assert_eq!(meta_get(&c, "schema_version").unwrap(), Some(SCHEMA_VERSION.to_string()));
     }
 

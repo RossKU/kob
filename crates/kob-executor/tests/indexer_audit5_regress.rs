@@ -66,7 +66,7 @@ mod v4 {
     }
 
     pub fn programs(c: &Ctx) -> Vec<String> {
-        c.hs.query::<String>("SELECT COALESCE(group_concat(DISTINCT program), '') FROM token_holdings WHERE token_cov_id = x'7171717171717171717171717171717171717171717171717171717171717171'", [])
+        c.hs.query::<String>("SELECT COALESCE(group_concat(DISTINCT program), '') FROM token_holdings WHERE token_id = (SELECT id FROM ids WHERE h = x'7171717171717171717171717171717171717171717171717171717171717171')", [])
             .split(',')
             .map(|s| s.to_string())
             .collect()
@@ -150,8 +150,8 @@ fn hex_of(h: &Hash32) -> String {
 
 fn amend_row(conn: &rusqlite::Connection, cov: &[u8], seq: i64, price: i64, min_fill: Option<i64>, listed: i64, reason: Option<&str>) {
     conn.execute(
-        "INSERT INTO order_amends (covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill) \
-         VALUES (?1, ?2, ?3, 0, 0, 1, 1, NULL, ?4, ?5, NULL, NULL, ?6)",
+        "INSERT INTO order_amends (order_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill) \
+         VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), ?2, ?3, 0, 0, 1, 1, NULL, ?4, ?5, NULL, NULL, ?6)",
         params![cov, seq, price, listed, reason, min_fill],
     )
     .unwrap();
@@ -209,8 +209,8 @@ fn i16_revert_of_a_mass_unlisting_is_bounded() {
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO order_amends (covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, listed, min_fill) \
-         SELECT covenant_id, 7, 1000, 0, 0, 1, 1, 1, NULL FROM orders",
+        "INSERT INTO order_amends (order_id, block_seq, price, tip, tif, expiry_daa, active_from, listed, min_fill) \
+         SELECT id, 7, 1000, 0, 0, 1, 1, 1, NULL FROM orders",
         [],
     )
     .unwrap();
@@ -243,11 +243,14 @@ fn i17_a_token_with_a_holding_is_not_evicted_by_junk_tokens() {
     )
     .unwrap();
     let real = vec![0x70u8; 32];
+    let owner = vec![0x71u8; 32];
+    kob_executor::indexer::ids::intern(&conn, &real).unwrap();
+    kob_executor::indexer::ids::intern(&conn, &owner).unwrap();
     insert_order(&conn, &[0xee; 32], &real, &tpl, 1000, 1);
     conn.execute(
-        "INSERT INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa) \
-         VALUES (randomblob(32), 0, ?1, ?2, 1, randomblob(32), 0, 5, 100000000, randomblob(112), 'owned', 1, 1)",
-        params![real, program.name()],
+        "INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa) \
+         VALUES (randomblob(32), 0, (SELECT id FROM ids WHERE h = ?1), ?2, 1, (SELECT id FROM ids WHERE h = ?3), 0, 5, 100000000, randomblob(112), 'owned', 1, 1)",
+        params![real, program.name(), owner],
     )
     .unwrap();
     let strict =
@@ -278,8 +281,8 @@ fn i15_a_pair_route_without_listed_legs_does_not_scan_the_live_set() {
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO order_state (covenant_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa) \
-         SELECT covenant_id, 'open', 0, 10, 1, randomblob(32), 0, 1000, 1, 1, 1 FROM orders",
+        "INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa) \
+         SELECT id, 'open', 0, 10, 1, randomblob(32), 0, 1000, 1, 1, 1 FROM orders",
         [],
     )
     .unwrap();

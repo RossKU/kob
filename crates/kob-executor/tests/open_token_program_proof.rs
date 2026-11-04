@@ -172,9 +172,11 @@ async fn several_programs_of_one_kron_token_are_all_proven_by_its_holdings() {
     honest_kron_ask(&c).await;
     let g = c.hs.ingest.lock().unwrap();
     let conn = g.conn();
+    kob_executor::indexer::ids::intern(conn, &TOKEN_COV_KRON).unwrap();
+    kob_executor::indexer::ids::intern(conn, &[0u8]).unwrap();
     for (i, p) in [K2732, K3].into_iter().enumerate() {
         conn.execute(
-            "INSERT OR IGNORE INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa)              VALUES (?1, 0, ?2, ?3, 2, x'00', 0, 1, 1, x'00', 'owned', 1, 1)",
+            "INSERT OR IGNORE INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa)              VALUES (?1, 0, (SELECT id FROM ids WHERE h = ?2), ?3, 2, (SELECT id FROM ids WHERE h = x'00'), 0, 1, 1, x'00', 'owned', 1, 1)",
             rusqlite::params![vec![0xee_u8, i as u8], &TOKEN_COV_KRON[..], p.name()],
         )
         .unwrap();

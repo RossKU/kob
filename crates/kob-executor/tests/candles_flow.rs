@@ -23,7 +23,11 @@ fn charts_equal_the_fills(c: &Ctx, token: &Hash32) {
     for (name, iv) in [("1m", IVS[0]), ("5m", IVS[1]), ("1h", IVS[2]), ("1d", IVS[3])] {
         let view = chart(conn, token, None, name, iv, None, None, 500).unwrap();
         let newest: Option<i64> = conn
-            .query_row("SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_cov_id = ?1", [&token.0[..]], |r| r.get(0))
+            .query_row(
+                "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1)",
+                [&token.0[..]],
+                |r| r.get(0),
+            )
             .unwrap();
         let end = newest.map(|n| (n.div_euclid(iv) + 1) * iv).unwrap_or(0);
         let want = scan_candles(conn, token, basis, iv, end.saturating_sub(iv * 500), end, 500).unwrap();

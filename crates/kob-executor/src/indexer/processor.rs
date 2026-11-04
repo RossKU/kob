@@ -27,6 +27,7 @@
 //!   reorg is an exact revert.
 
 use super::db::{DbError, DbResult};
+use super::ids::{id_of, intern, order_of};
 use super::packed::{sql_genesis, sql_ustate};
 use super::record::{Extractor, Reveal, TxRecord};
 use super::recordlog::LogOp;
@@ -143,7 +144,7 @@ struct UtxoRow {
 
 fn load_order_utxo(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Option<UtxoRow>> {
     Ok(conn
-        .prepare_cached("SELECT covenant_id FROM order_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
+        .prepare_cached("SELECT o.covenant_id FROM order_utxos u JOIN orders o ON o.id = u.order_id WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL")?
         .query_row(params![&txid.0[..], idx], |r| Ok(UtxoRow { covenant_id: hash_at(r, 0)? }))
         .optional()?)
 }
@@ -155,16 +156,24 @@ pub fn order_exists(conn: &Connection, cov: &Hash32) -> DbResult<bool> {
 /// Whether the order already has a live custody row (a second one never becomes custody).
 fn has_live_custody(conn: &Connection, cov: &Hash32) -> DbResult<bool> {
     Ok(conn
-        .prepare_cached("SELECT 1 FROM token_utxos WHERE owner = ?1 AND role = 'custody' AND spent_block IS NULL LIMIT 1")?
+        .prepare_cached(concat!(
+            "SELECT 1 FROM token_utxos WHERE order_id = ",
+            order_of!("?1"),
+            " AND role = 'custody' AND spent_block IS NULL LIMIT 1"
+        ))?
         .exists([&cov.0[..]])?)
 }
 
 /// Whether the order already has a live custody row of `token` (a pair order holds at most one custody per token).
 fn has_live_custody_of(conn: &Connection, cov: &Hash32, token: &Hash32) -> DbResult<bool> {
     Ok(conn
-        .prepare_cached(
-            "SELECT 1 FROM token_utxos WHERE owner = ?1 AND token_cov_id = ?2 AND role = 'custody' AND spent_block IS NULL LIMIT 1",
-        )?
+        .prepare_cached(concat!(
+            "SELECT 1 FROM token_utxos WHERE order_id = ",
+            order_of!("?1"),
+            " AND token_id = ",
+            id_of!("?2"),
+            " AND role = 'custody' AND spent_block IS NULL LIMIT 1"
+        ))?
         .exists(params![&cov.0[..], &token.0[..]])?)
 }
 
@@ -175,8 +184,14 @@ fn has_live_custody_of(conn: &Connection, cov: &Hash32, token: &Hash32) -> DbRes
 fn pair_custody_exts(conn: &Connection, cov: &Hash32, token: &Hash32, state: &AnyState) -> DbResult<Vec<[u8; 32]>> {
     let mut v = vec![];
     let mut st = conn.prepare_cached(
-        "SELECT program, kob_hstate(state, family, owner, owner_kind, amount) FROM token_holdings \
-         WHERE owner = ?1 AND token_cov_id = ?2 AND role = 'custody' ORDER BY created_block DESC, idx DESC LIMIT 4",
+        concat!(
+            "SELECT h.program, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount) FROM token_holdings h JOIN ids w ON w.id = h.owner_id \
+             WHERE h.owner_id = ",
+            id_of!("?1"),
+            " AND h.token_id = ",
+            id_of!("?2"),
+            " AND h.role = 'custody' ORDER BY h.created_block DESC, h.idx DESC LIMIT 4"
+        ),
     )?;
     let rows = st.query_map(params![&cov.0[..], &token.0[..]], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
     for r in rows {
@@ -244,7 +259,7 @@ fn is_exact_custody(
         .prepare_cached(concat!(
             "SELECT o.contract, o.token_cov_id, o.ext_commit, ",
             sql_ustate!("u", "o"),
-            " FROM orders o JOIN order_utxos u ON u.covenant_id = o.covenant_id AND u.spent_block IS NULL \
+            " FROM orders o JOIN order_utxos u ON u.order_id = o.id AND u.spent_block IS NULL \
                  WHERE o.covenant_id = ?1 ORDER BY u.created_block DESC, u.idx DESC LIMIT 1"
         ))?
         .query_row([&cov.0[..]], |r| {
@@ -612,10 +627,12 @@ impl Processor {
                     role = "custody";
                 }
             }
-            conn.prepare_cached(
-                "INSERT OR IGNORE INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            )?
-            .execute(params![&txid.0[..], t.out, &token.0[..], &t.owner.0[..], t.amount, out.value as i64, role, seq, daa as i64])?;
+            conn.prepare_cached(concat!(
+                "INSERT OR IGNORE INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) VALUES (?1,?2,?3,",
+                order_of!("?4"),
+                ",?5,?6,?7,?8,?9)"
+            ))?
+            .execute(params![&txid.0[..], t.out, intern(conn, &token.0)?, &t.owner.0[..], t.amount, out.value as i64, role, seq, daa as i64])?;
             // a placement record may already have stored this very output as the custody: keep the stored role
             let stored: String = conn
                 .prepare_cached("SELECT role FROM token_utxos WHERE txid = ?1 AND idx = ?2")?
@@ -707,17 +724,18 @@ impl Processor {
         };
         // the first holding under a program proves it: the orders already listed under another program for the covenant id were
         // placed before the proof existed (audit 2026-10-30 V4)
+        let token_id = intern(conn, &token.0)?;
         let proven_before = conn
-            .prepare_cached("SELECT 1 FROM holding_programs WHERE token_cov_id = ?1 AND program = ?2")?
-            .exists(params![&token.0[..], program.name()])?;
+            .prepare_cached("SELECT 1 FROM holding_programs WHERE token_id = ?1 AND program = ?2")?
+            .exists(params![token_id, program.name()])?;
         conn.prepare_cached(
-            "INSERT OR IGNORE INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, created_block, created_daa) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,kob_hpack(?10,?5,?6,?7,?8),?11,?12,?13)",
+            "INSERT OR IGNORE INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa) \
+             VALUES (?1,?2,?3,?4,?5,?14,?7,?8,?9,kob_hpack(?10,?5,?6,?7,?8),?11,?12,?13)",
         )?
         .execute(params![
             &txid.0[..],
             idx,
-            &token.0[..],
+            token_id,
             program.name(),
             state.family().code(),
             &state.owner()[..],
@@ -727,7 +745,8 @@ impl Processor {
             state.encode(),
             role,
             seq,
-            daa as i64
+            daa as i64,
+            intern(conn, &state.owner()[..])?
         ])?;
         if !proven_before {
             self.unlist_conflicting(conn, token, seq)?;
@@ -765,7 +784,7 @@ impl Processor {
                 continue;
             }
             conn.prepare_cached(
-                "INSERT INTO order_amends (covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill)                  SELECT covenant_id, ?2, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill FROM orders WHERE covenant_id = ?1",
+                "INSERT INTO order_amends (order_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill)                  SELECT id, ?2, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill FROM orders WHERE covenant_id = ?1",
             )?
             .execute(params![&cov.0[..], seq])?;
             conn.prepare_cached("UPDATE orders SET listed = ?2, unlisted_reason = ?3 WHERE covenant_id = ?1")?.execute(params![
@@ -796,7 +815,7 @@ impl Processor {
                 continue;
             }
             conn.prepare_cached(
-                "INSERT INTO order_amends (covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill)                  SELECT covenant_id, ?3, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill                  FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash = ?2 AND listed = 1",
+                "INSERT INTO order_amends (order_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill)                  SELECT id, ?3, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill                  FROM orders WHERE token_cov_id = ?1 AND token_tpl_hash = ?2 AND listed = 1",
             )?
             .execute(params![&token.0[..], &tpl, seq])?;
             conn.prepare_cached(
@@ -1012,19 +1031,23 @@ impl Processor {
         self.insert_utxo(conn, &n.covenant_id, &n.txid, n.out_index, n.out_value, &n.out_spk, Some(&state_bytes), n.block_seq, n.daa)?;
         for c in n.custody.iter().chain(n.prefund.iter()) {
             let ctok = c.token.unwrap_or(token);
-            conn.prepare_cached(
-                "INSERT OR IGNORE INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa) VALUES (?1,?2,?3,?4,?5,?6,'custody',?7,?8)",
-            )?
-            .execute(params![&c.txid.0[..], c.index, &ctok.0[..], &n.covenant_id.0[..], c.amount, c.value as i64, n.block_seq, n.daa as i64])?;
+            conn.prepare_cached(concat!(
+                "INSERT OR IGNORE INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) VALUES (?1,?2,?3,",
+                order_of!("?4"),
+                ",?5,?6,'custody',?7,?8)"
+            ))?
+            .execute(params![&c.txid.0[..], c.index, intern(conn, &ctok.0)?, &n.covenant_id.0[..], c.amount, c.value as i64, n.block_seq, n.daa as i64])?;
             // a chain placement proves the custody's state from its transfer leader (step 5b); an import verified the custody
             // script the state below produces, so it is proven the same way
             if n.origin == "import" {
                 self.custody_holding(conn, &n.covenant_id, &n.state, c, ext, n.block_seq, n.daa)?;
             }
         }
-        conn.prepare_cached(
-            "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, closes, detail) VALUES (?1,?2,?3,?4,?5,?6,'create',?7,?8,?9,?10,0,kob_dpack(?11,'create'))",
-        )?
+        conn.prepare_cached(concat!(
+            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail) VALUES (",
+            order_of!("?1"),
+            ",?2,?3,?4,?5,?6,'create',?7,?8,?9,?10,0,kob_dpack(?11,'create'))"
+        ))?
         .execute(params![
             &n.covenant_id.0[..],
             n.block_seq,
@@ -1032,7 +1055,7 @@ impl Processor {
             n.ts as i64,
             &n.txid.0[..],
             n.tx_pos,
-            &token.0[..],
+            intern(conn, &token.0)?,
             side as i64,
             initial_amount,
             price,
@@ -1230,8 +1253,8 @@ impl Processor {
         carrier: u64,
     ) -> DbResult<()> {
         conn.prepare_cached(
-            "INSERT INTO order_amends (covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill) \
-             SELECT covenant_id, ?2, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill FROM orders WHERE covenant_id = ?1",
+            "INSERT INTO order_amends (order_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill) \
+             SELECT id, ?2, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill FROM orders WHERE covenant_id = ?1",
         )?
         .execute(params![&cov.0[..], ctx.seq])?;
         // a bid's budget rate and reserve follow its new terms (its remaining amount is the buying power of its escrow)
@@ -1281,12 +1304,12 @@ impl Processor {
     ) -> DbResult<()> {
         conn.prepare_cached(
             // the state is stored as its difference from the order's genesis state ([`super::packed`]); the order row is written
-            // before its first UTXO
+            // before its first UTXO (an output of a covenant with no order row is not stored: no read could see it)
             concat!(
-                "INSERT OR REPLACE INTO order_utxos (txid, idx, covenant_id, value, spk, state, created_block, created_daa) \
-                 VALUES (?1,?2,?3,?4,?5,kob_pack(?6, (SELECT ",
+                "INSERT OR REPLACE INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa) \
+                 SELECT ?1, ?2, g.id, ?4, ?5, kob_pack(?6, ",
                 sql_genesis!("g"),
-                " FROM orders g WHERE g.covenant_id = ?3)),?7,?8)"
+                "), ?7, ?8 FROM orders g WHERE g.covenant_id = ?3"
             ),
         )?
         .execute(params![&txid.0[..], idx, &cov.0[..], value as i64, spk, state, seq, daa as i64])?;
@@ -1661,9 +1684,11 @@ impl Processor {
             } else {
                 json!({"input": s.input_idx, "entry": s.entry, "remainder": true}).to_string()
             };
-            conn.prepare_cached(
-                "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, detail) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,kob_dpack(?14,?7))",
-            )?
+            conn.prepare_cached(concat!(
+                "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, payout, closes, detail) VALUES (",
+                order_of!("?1"),
+                ",?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,kob_dpack(?14,?7))"
+            ))?
             .execute(params![
                 &s.cov.0[..],
                 seq,
@@ -1672,7 +1697,7 @@ impl Processor {
                 &txid.0[..],
                 rec.pos as i64,
                 kind,
-                s.order.token.map(|t| t.0.to_vec()),
+                s.order.token.map(|t| intern(conn, &t.0)).transpose()?,
                 s.order.side as i64,
                 amount,
                 price,
@@ -1957,13 +1982,16 @@ type TipRow = (Vec<u8>, i64, i64, Option<Vec<u8>>);
 const TIP_UTXO_SQL: &str = concat!(
     "SELECT txid, idx, value, kob_ustate(state, (SELECT ",
     sql_genesis!("g"),
-    " FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)) \
-     FROM order_utxos WHERE covenant_id = ?1 AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1"
+    " FROM orders g WHERE g.id = order_utxos.order_id)) \
+     FROM order_utxos WHERE order_id = ",
+    order_of!("?1"),
+    " AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1"
 );
 
 /// The fill amounts of one order (see [`refresh_order_state`] for the `+kind`). Summed in Rust, saturating: base-unit
 /// amounts of hostile orders can sum past an `i64`, where SQLite's `SUM` fails (a failed refresh would stall the follower).
-pub(crate) const FILLED_AMOUNT_SQL: &str = "SELECT amount FROM order_events WHERE covenant_id = ?1 AND +kind = 'fill'";
+pub(crate) const FILLED_AMOUNT_SQL: &str =
+    concat!("SELECT amount FROM order_events WHERE order_id = ", order_of!("?1"), " AND +kind = 'fill'");
 
 /// Base units filled from one order: the sum of its fill events, saturating at `i64::MAX`.
 fn filled_amount(conn: &Connection, cov: &Hash32) -> DbResult<i64> {
@@ -1980,7 +2008,7 @@ fn filled_amount(conn: &Connection, cov: &Hash32) -> DbResult<i64> {
 /// after every revert, so it is the single definition of "status".
 pub fn refresh_order_state(conn: &Connection, cov: &Hash32) -> DbResult<()> {
     let Some(order) = load_order_full(conn, cov)? else {
-        conn.execute("DELETE FROM order_state WHERE covenant_id = ?1", [&cov.0[..]])?;
+        conn.execute(concat!("DELETE FROM order_state WHERE order_id = ", order_of!("?1")), [&cov.0[..]])?;
         return Ok(());
     };
     // `+kind`: through the order's own events (`order_events_cov`). On `kind = 'fill'` alone the planner picks the
@@ -1990,11 +2018,19 @@ pub fn refresh_order_state(conn: &Connection, cov: &Hash32) -> DbResult<()> {
     let tip: Option<TipRow> =
         conn.prepare_cached(TIP_UTXO_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional()?;
     let last: Option<(i64, i64)> = conn
-        .prepare_cached("SELECT block_seq, daa FROM order_events WHERE covenant_id = ?1 ORDER BY id DESC LIMIT 1")?
+        .prepare_cached(concat!(
+            "SELECT block_seq, daa FROM order_events WHERE order_id = ",
+            order_of!("?1"),
+            " ORDER BY id DESC LIMIT 1"
+        ))?
         .query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     let closing: Option<(String, Option<i64>)> = conn
-        .prepare_cached("SELECT kind, amount FROM order_events WHERE covenant_id = ?1 AND closes = 1 ORDER BY id DESC LIMIT 1")?
+        .prepare_cached(concat!(
+            "SELECT kind, amount FROM order_events WHERE order_id = ",
+            order_of!("?1"),
+            " AND closes = 1 ORDER BY id DESC LIMIT 1"
+        ))?
         .query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     let status = match (&tip, closing.as_ref().map(|c| c.0.as_str())) {
@@ -2030,9 +2066,11 @@ pub fn refresh_order_state(conn: &Connection, cov: &Hash32) -> DbResult<()> {
         }
     };
     let (last_block, last_daa) = last.unwrap_or((0, 0));
-    conn.prepare_cached(
-        "INSERT OR REPLACE INTO order_state (covenant_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-    )?
+    conn.prepare_cached(concat!(
+        "INSERT OR REPLACE INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa) VALUES (",
+        order_of!("?1"),
+        ",?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    ))?
     .execute(params![
         &cov.0[..],
         status,
@@ -2096,15 +2134,19 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
         }
         Ok(())
     };
-    collect("SELECT DISTINCT covenant_id FROM order_events WHERE block_seq = ?1")?;
-    collect("SELECT covenant_id FROM order_utxos WHERE created_block = ?1 OR spent_block = ?1")?;
+    collect("SELECT DISTINCT o.covenant_id FROM order_events e JOIN orders o ON o.id = e.order_id WHERE e.block_seq = ?1")?;
+    collect(
+        "SELECT o.covenant_id FROM order_utxos u JOIN orders o ON o.id = u.order_id WHERE u.created_block = ?1 OR u.spent_block = ?1",
+    )?;
     collect("SELECT covenant_id FROM orders WHERE genesis_block = ?1")?;
-    collect("SELECT owner FROM token_utxos WHERE created_block = ?1 OR spent_block = ?1")?;
+    collect(
+        "SELECT o.covenant_id FROM token_utxos t JOIN orders o ON o.id = t.order_id WHERE t.created_block = ?1 OR t.spent_block = ?1",
+    )?;
     // a holding a reverted block created or spent belongs to a token whose holders' view changes (owners are not always orders)
     let mut holding_tokens: BTreeSet<Hash32> = BTreeSet::new();
     {
         let mut st =
-            conn.prepare_cached("SELECT DISTINCT token_cov_id FROM token_holdings WHERE created_block = ?1 OR spent_block = ?1")?;
+            conn.prepare_cached("SELECT DISTINCT i.h FROM token_holdings t JOIN ids i ON i.id = t.token_id WHERE t.created_block = ?1 OR t.spent_block = ?1")?;
         for r in st.query_map([seq], |r| hash_at(r, 0))? {
             holding_tokens.insert(r?);
         }
@@ -2124,11 +2166,11 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     // time cost 19 s on a soak-sized store, audit 2026-10-30 I16). An order amended twice in the block takes the terms of its OLDEST
     // row (what it applied newest first), its min_fill the oldest one that was recorded.
     changed += conn.execute(
-        "WITH first AS (SELECT MIN(id) AS id FROM order_amends WHERE block_seq = ?1 GROUP BY covenant_id)          UPDATE orders SET price = a.price, tip = a.tip, tif = a.tif, expiry_daa = a.expiry_daa, active_from = a.active_from,                 deadline = a.deadline, listed = a.listed, unlisted_reason = a.unlisted_reason, budget_rate = a.budget_rate,                 reserve = a.reserve          FROM order_amends a WHERE a.id IN (SELECT id FROM first) AND orders.covenant_id = a.covenant_id",
+        "WITH first AS (SELECT MIN(id) AS id FROM order_amends WHERE block_seq = ?1 GROUP BY order_id)          UPDATE orders SET price = a.price, tip = a.tip, tif = a.tif, expiry_daa = a.expiry_daa, active_from = a.active_from,                 deadline = a.deadline, listed = a.listed, unlisted_reason = a.unlisted_reason, budget_rate = a.budget_rate,                 reserve = a.reserve          FROM order_amends a WHERE a.id IN (SELECT id FROM first) AND orders.id = a.order_id",
         [seq],
     )?;
     changed += conn.execute(
-        "WITH first AS (SELECT MIN(id) AS id FROM order_amends WHERE block_seq = ?1 AND min_fill IS NOT NULL GROUP BY covenant_id)          UPDATE orders SET min_fill = a.min_fill FROM order_amends a WHERE a.id IN (SELECT id FROM first) AND orders.covenant_id = a.covenant_id",
+        "WITH first AS (SELECT MIN(id) AS id FROM order_amends WHERE block_seq = ?1 AND min_fill IS NOT NULL GROUP BY order_id)          UPDATE orders SET min_fill = a.min_fill FROM order_amends a WHERE a.id IN (SELECT id FROM first) AND orders.id = a.order_id",
         [seq],
     )?;
     changed += conn.execute("DELETE FROM order_amends WHERE block_seq = ?1", [seq])?;
@@ -2147,6 +2189,8 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     changed += conn.execute("UPDATE token_holdings SET spent_block = NULL, spent_txid = NULL WHERE spent_block = ?1", [seq])?;
     changed += conn.execute("DELETE FROM token_events WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM rejects WHERE block_seq = ?1", [seq])?;
+    // the state rows of the orders this block created go with them (a row left would name an order that is gone)
+    changed += conn.execute("DELETE FROM order_state WHERE order_id IN (SELECT id FROM orders WHERE genesis_block = ?1)", [seq])?;
     changed += conn.execute("DELETE FROM orders WHERE genesis_block = ?1", [seq])?;
     changed += super::kcc23::revert(conn, seq)?;
     conn.execute("DELETE FROM blocks WHERE seq = ?1", [seq])?;
@@ -2254,10 +2298,18 @@ impl Processor {
                     .prepare_cached("UPDATE order_utxos SET spent_block = 0, spent_entry = 'gap' WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
                     .execute(params![&txid.0[..], index])?;
                 if n > 0 {
-                    conn.prepare_cached("UPDATE token_utxos SET spent_block = 0 WHERE owner = ?1 AND spent_block IS NULL")?
-                        .execute([&covenant_id.0[..]])?;
-                    conn.prepare_cached("UPDATE token_holdings SET spent_block = 0 WHERE owner = ?1 AND role IN ('custody','stray') AND spent_block IS NULL")?
-                        .execute([&covenant_id.0[..]])?;
+                    conn.prepare_cached(concat!(
+                        "UPDATE token_utxos SET spent_block = 0 WHERE order_id = ",
+                        order_of!("?1"),
+                        " AND spent_block IS NULL"
+                    ))?
+                    .execute([&covenant_id.0[..]])?;
+                    conn.prepare_cached(concat!(
+                        "UPDATE token_holdings SET spent_block = 0 WHERE owner_id = ",
+                        id_of!("?1"),
+                        " AND role IN ('custody','stray') AND spent_block IS NULL"
+                    ))?
+                    .execute([&covenant_id.0[..]])?;
                     self.gap_event(conn, covenant_id, txid, cursor_daa, "unknown", true, json!({"reason": "gap_close"}))?;
                     refresh_order_state(conn, covenant_id)?;
                     delta.orders.insert(*covenant_id);
@@ -2272,7 +2324,7 @@ impl Processor {
                     .prepare_cached(concat!(
                         "SELECT kob_ustate(u.state, (SELECT ",
                         sql_genesis!("g"),
-                        " FROM orders g WHERE g.covenant_id = u.covenant_id)) \
+                        " FROM orders g WHERE g.id = u.order_id)) \
                              FROM order_utxos u WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL"
                     ))?
                     .query_row(params![&old_txid.0[..], old_index], |r| r.get(0))
@@ -2286,8 +2338,11 @@ impl Processor {
                     // (the reconciliation checked each at the script its proven state produces)
                     let kept: HashSet<(Hash32, u32)> = keep.iter().copied().collect();
                     let owned: Vec<(Hash32, u32)> = {
-                        let mut st =
-                            conn.prepare_cached("SELECT txid, idx FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL")?;
+                        let mut st = conn.prepare_cached(concat!(
+                            "SELECT txid, idx FROM token_utxos WHERE order_id = ",
+                            order_of!("?1"),
+                            " AND spent_block IS NULL"
+                        ))?;
                         let rows = st.query_map([&covenant_id.0[..]], |r| Ok((hash_at(r, 0)?, r.get::<_, u32>(1)?)))?;
                         rows.collect::<rusqlite::Result<_>>()?
                     };
@@ -2317,11 +2372,13 @@ impl Processor {
                             .prepare_cached("SELECT 1 FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
                             .exists(params![&c.txid.0[..], c.index])?;
                         if !live {
-                            conn.prepare_cached(
-                                "INSERT INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa) VALUES (?1,?2,?3,?4,?5,?6,'custody',0,?7) \
-                                 ON CONFLICT(txid, idx) DO UPDATE SET spent_block = NULL, spent_txid = NULL, role = 'custody'",
-                            )?
-                            .execute(params![&c.txid.0[..], c.index, &token.0[..], &covenant_id.0[..], c.amount, c.value as i64, udaa as i64])?;
+                            conn.prepare_cached(concat!(
+                                "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) VALUES (?1,?2,?3,",
+                                order_of!("?4"),
+                                ",?5,?6,'custody',0,?7) \
+                                 ON CONFLICT(txid, idx) DO UPDATE SET spent_block = NULL, spent_txid = NULL, role = 'custody'"
+                            ))?
+                            .execute(params![&c.txid.0[..], c.index, intern(conn, &token.0)?, &covenant_id.0[..], c.amount, c.value as i64, udaa as i64])?;
                             let nc = NewCustody { txid: c.txid, index: c.index, value: c.value, amount: c.amount, token: Some(token) };
                             self.custody_holding(conn, covenant_id, &st, &nc, Some(c.ext.0), 0, udaa)?;
                         }
@@ -2361,8 +2418,9 @@ impl Processor {
         if order.template != st.template_id() {
             return Ok(false);
         }
-        let live =
-            conn.prepare_cached("SELECT 1 FROM order_utxos WHERE covenant_id = ?1 AND spent_block IS NULL")?.exists([&cov.0[..]])?;
+        let live = conn
+            .prepare_cached(concat!("SELECT 1 FROM order_utxos WHERE order_id = ", order_of!("?1"), " AND spent_block IS NULL"))?
+            .exists([&cov.0[..]])?;
         if live {
             return Ok(false);
         }
@@ -2371,11 +2429,13 @@ impl Processor {
         self.insert_utxo(conn, cov, &txid, index, value, spk, Some(&state), 0, daa)?;
         let token = Hash32(st.token_cov_id());
         if let Some(c) = custody {
-            conn.prepare_cached(
-                "INSERT INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa) VALUES (?1,?2,?3,?4,?5,?6,'custody',0,?7) \
-                 ON CONFLICT(txid, idx) DO UPDATE SET spent_block = NULL, spent_txid = NULL",
-            )?
-            .execute(params![&c.txid.0[..], c.index, &c.token.unwrap_or(token).0[..], &cov.0[..], c.amount, c.value as i64, daa as i64])?;
+            conn.prepare_cached(concat!(
+                "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) VALUES (?1,?2,?3,",
+                order_of!("?4"),
+                ",?5,?6,'custody',0,?7) \
+                 ON CONFLICT(txid, idx) DO UPDATE SET spent_block = NULL, spent_txid = NULL"
+            ))?
+            .execute(params![&c.txid.0[..], c.index, intern(conn, &c.token.unwrap_or(token).0)?, &cov.0[..], c.amount, c.value as i64, daa as i64])?;
             let ext = match ext {
                 Some(e) => Some(e),
                 None => order_ext_commit(conn, cov)?,
@@ -2400,10 +2460,21 @@ impl Processor {
         detail: serde_json::Value,
     ) -> DbResult<()> {
         let (token, side) = load_order(conn, cov)?.map(|o| (o.token, o.side)).unwrap_or((None, 0));
-        conn.prepare_cached(
-            "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, closes, detail) VALUES (?1, 0, ?2, 0, ?3, 0, ?4, ?5, ?6, ?7, kob_dpack(?8, ?4))",
-        )?
-        .execute(params![&cov.0[..], daa as i64, &txid.0[..], kind, token.map(|t| t.0.to_vec()), side as i64, closes as i64, detail.to_string()])?;
+        conn.prepare_cached(concat!(
+            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, closes, detail) VALUES (",
+            order_of!("?1"),
+            ", 0, ?2, 0, ?3, 0, ?4, ?5, ?6, ?7, kob_dpack(?8, ?4))"
+        ))?
+        .execute(params![
+            &cov.0[..],
+            daa as i64,
+            &txid.0[..],
+            kind,
+            token.map(|t| intern(conn, &t.0)).transpose()?,
+            side as i64,
+            closes as i64,
+            detail.to_string()
+        ])?;
         Ok(())
     }
 }
@@ -2673,11 +2744,15 @@ mod tests {
         assert!(p.contains("order_events_cov"), "{p}");
         for sql in [
             TIP_UTXO_SQL,
-            "SELECT block_seq, daa FROM order_events WHERE covenant_id = ?1 ORDER BY id DESC LIMIT 1",
-            "SELECT kind, amount FROM order_events WHERE covenant_id = ?1 AND closes = 1 ORDER BY id DESC LIMIT 1",
+            concat!("SELECT block_seq, daa FROM order_events WHERE order_id = ", order_of!("?1"), " ORDER BY id DESC LIMIT 1"),
+            concat!(
+                "SELECT kind, amount FROM order_events WHERE order_id = ",
+                order_of!("?1"),
+                " AND closes = 1 ORDER BY id DESC LIMIT 1"
+            ),
         ] {
             let p = plan(sql);
-            assert!(p.contains("_cov (covenant_id=?)"), "{sql}: {p}");
+            assert!(p.contains("_cov (order_id=?"), "{sql}: {p}");
         }
     }
 }

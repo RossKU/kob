@@ -182,7 +182,7 @@ async fn every_exit_view_carries_its_extension_commitment_and_proven_token_state
                 c.push(&[&cancel]).await;
                 assert_eq!(c.hs.status(&exit), "cancelled", "{label}");
                 assert_eq!(
-                    c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&exit.0[..]]),
+                    c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL", [&exit.0[..]]),
                     0,
                     "{label}: the cancel swept every token of the exit"
                 );

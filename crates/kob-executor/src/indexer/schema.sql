@@ -3,6 +3,12 @@
 -- The database is a DERIVED view: the permanent source is the record log (`recordlog.rs`), and
 -- `kobd index replay` rebuilds every table below from it.
 --
+-- Identities (schema 8): the 32-byte ids that the big tables repeat are stored once and referred to by integer. An order is
+-- `orders.id` (AUTOINCREMENT: never reused, so no reverted order's id can name a later one); its covenant id stays in `orders` (the order of
+-- the order lists is the order of the covenant ids). A token's covenant id and a holding's owner are rows of `ids`, never deleted.
+-- Rust still speaks `Hash32`: a statement resolves one with `(SELECT id FROM orders WHERE covenant_id = ?)` or
+-- `(SELECT id FROM ids WHERE h = ?)`, and a read that returns one joins back (`indexer::ids`).
+--
 -- Reorg model: every mutable row is stamped with the chain block (`seq`) that created or spent it.
 -- Reverting a chain block deletes what it created, un-spends what it spent, and re-derives
 -- `order_state` for the affected covenants. Nothing else is ever updated in place, so a revert is
@@ -30,8 +36,14 @@ CREATE INDEX IF NOT EXISTS blocks_daa ON blocks (daa);
 --
 -- Quantities are token BASE UNITS; prices and tips are sompi per WHOLE token (`scale` base units of the order's token; a
 -- pair order's price is in its state: token B base units per whole A).
+CREATE TABLE IF NOT EXISTS ids (
+    id INTEGER PRIMARY KEY,
+    h  BLOB NOT NULL UNIQUE
+);
+
 CREATE TABLE IF NOT EXISTS orders (
-    covenant_id   BLOB PRIMARY KEY,
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    covenant_id   BLOB NOT NULL UNIQUE,
     contract      TEXT NOT NULL,          -- KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdBid, KobIfdAsk (+ the ...Kron kinds), KobPair, KobCondPair, KobIfdPair
     template_hash BLOB NOT NULL,
     family        INTEGER NOT NULL,
@@ -75,7 +87,7 @@ CREATE INDEX IF NOT EXISTS orders_parent ON orders (parent);
 CREATE TABLE IF NOT EXISTS order_utxos (
     txid          BLOB NOT NULL,
     idx           INTEGER NOT NULL,
-    covenant_id   BLOB NOT NULL,
+    order_id      INTEGER NOT NULL,       -- orders.id
     value         INTEGER NOT NULL,
     spk           BLOB NOT NULL,          -- version (2 bytes BE) + script, as the node reports it
     state         BLOB,                   -- state span when known (NULL after an underivable state change)
@@ -87,21 +99,21 @@ CREATE TABLE IF NOT EXISTS order_utxos (
     spent_amount  INTEGER,                -- a fill: base units filled
     PRIMARY KEY (txid, idx)
 );
-CREATE INDEX IF NOT EXISTS order_utxos_cov ON order_utxos (covenant_id);
+CREATE INDEX IF NOT EXISTS order_utxos_cov ON order_utxos (order_id);
 CREATE INDEX IF NOT EXISTS order_utxos_created ON order_utxos (created_block);
 CREATE INDEX IF NOT EXISTS order_utxos_spent ON order_utxos (spent_block);
 
 -- Lifecycle events. kind: create | fill | cancel | amend | refund | kill | arm | trail | rearm | unknown
 CREATE TABLE IF NOT EXISTS order_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    covenant_id BLOB NOT NULL,
+    order_id    INTEGER NOT NULL,         -- orders.id
     block_seq   INTEGER NOT NULL,
     daa         INTEGER NOT NULL,
     ts          INTEGER NOT NULL,
     txid        BLOB NOT NULL,
     tx_pos      INTEGER NOT NULL,         -- position of the transaction in the chain block
     kind        TEXT NOT NULL,
-    token_cov_id BLOB,
+    token_id    INTEGER,                  -- ids.id of the token covenant id
     side        INTEGER,
     amount      INTEGER,                  -- base units (fill: filled; create: amountLeft; kill: returned; refund: left)
     price       INTEGER,                  -- sompi per whole token
@@ -109,16 +121,16 @@ CREATE TABLE IF NOT EXISTS order_events (
     closes      INTEGER NOT NULL DEFAULT 0,
     detail      TEXT
 );
-CREATE INDEX IF NOT EXISTS order_events_cov ON order_events (covenant_id, id);
+CREATE INDEX IF NOT EXISTS order_events_cov ON order_events (order_id, id);
 CREATE INDEX IF NOT EXISTS order_events_block ON order_events (block_seq);
 -- The fills only (about a third of the events): `kind = 'fill'` is in every read that wants them, so the planner takes this index for exactly those
--- (a store built before 2026-11 had them as `(kind, token_cov_id, id)` over every event; `index migrate` swaps it).
-CREATE INDEX IF NOT EXISTS order_events_fills ON order_events (token_cov_id, id) WHERE kind = 'fill';
+-- (a store built before 2026-11 had them as `(kind, token_cov_id, id)` over every event; `index migrate` builds the store anew).
+CREATE INDEX IF NOT EXISTS order_events_fills ON order_events (token_id, id) WHERE kind = 'fill';
 
 -- In-place amends (AMEND record): the order row's terms BEFORE the amend of block `block_seq` (restored on revert).
 CREATE TABLE IF NOT EXISTS order_amends (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    covenant_id     BLOB NOT NULL,
+    order_id        INTEGER NOT NULL,     -- orders.id
     block_seq       INTEGER NOT NULL,
     price           INTEGER,
     tip             INTEGER,
@@ -138,7 +150,7 @@ CREATE INDEX IF NOT EXISTS order_amends_block ON order_amends (block_seq);
 
 -- Derived, re-computable view of each order (see processor::refresh_order_state).
 CREATE TABLE IF NOT EXISTS order_state (
-    covenant_id    BLOB PRIMARY KEY,
+    order_id       INTEGER PRIMARY KEY,   -- orders.id
     status         TEXT NOT NULL,         -- open | partial | filled | cancelled | refunded | killed | closed
     filled_amount  INTEGER NOT NULL,      -- base units filled (the sum of the fill events, saturating)
     remaining_amount INTEGER,             -- base units left (a bid: its buying power); NULL when unknown
@@ -160,8 +172,8 @@ CREATE INDEX IF NOT EXISTS order_state_status ON order_state (status);
 CREATE TABLE IF NOT EXISTS token_utxos (
     txid          BLOB NOT NULL,
     idx           INTEGER NOT NULL,
-    token_cov_id  BLOB NOT NULL,
-    owner         BLOB NOT NULL,          -- the order covenant id
+    token_id      INTEGER NOT NULL,       -- ids.id of the token covenant id
+    order_id      INTEGER NOT NULL,       -- orders.id of the owner: the order covenant id
     amount        INTEGER NOT NULL,       -- token base units
     value         INTEGER NOT NULL,       -- KAS carrier
     role          TEXT NOT NULL,          -- custody | stray
@@ -171,10 +183,10 @@ CREATE TABLE IF NOT EXISTS token_utxos (
     spent_txid    BLOB,
     PRIMARY KEY (txid, idx)
 );
-CREATE INDEX IF NOT EXISTS token_utxos_owner ON token_utxos (owner);
+CREATE INDEX IF NOT EXISTS token_utxos_owner ON token_utxos (order_id);
 -- The live custody of an order (`reads::CUSTODY_OK`, once per live ask in every book, count and stats read): strays sent to an order id
 -- are not in it, so they cost those reads nothing.
-CREATE INDEX IF NOT EXISTS token_utxos_custody_live ON token_utxos (owner, amount) WHERE role = 'custody' AND spent_block IS NULL;
+CREATE INDEX IF NOT EXISTS token_utxos_custody_live ON token_utxos (order_id, amount) WHERE role = 'custody' AND spent_block IS NULL;
 CREATE INDEX IF NOT EXISTS token_utxos_created ON token_utxos (created_block);
 CREATE INDEX IF NOT EXISTS token_utxos_spent ON token_utxos (spent_block);
 
@@ -213,10 +225,10 @@ CREATE INDEX IF NOT EXISTS rejects_block ON rejects (block_seq);
 CREATE TABLE IF NOT EXISTS token_holdings (
     txid          BLOB NOT NULL,
     idx           INTEGER NOT NULL,
-    token_cov_id  BLOB NOT NULL,
+    token_id      INTEGER NOT NULL,       -- ids.id of the token covenant id
     program       TEXT NOT NULL,          -- token program template (KCC20Ref_8x8, KronToken2433, ...)
     family        INTEGER NOT NULL,       -- 1 kcc20, 2 kron (KOB1 family byte)
-    owner         BLOB NOT NULL,          -- the state's 32-byte owner (x-only key, script hash or covenant id)
+    owner_id      INTEGER NOT NULL,       -- ids.id of the state's 32-byte owner (x-only key, script hash or covenant id)
     owner_kind    INTEGER NOT NULL,       -- kcc20 owner_scheme, kron id_type
     amount        INTEGER NOT NULL,       -- token base units
     value         INTEGER NOT NULL,       -- KAS carrier
@@ -233,39 +245,39 @@ CREATE TABLE IF NOT EXISTS token_holdings (
 -- asked once per inserted holding (`processor::insert_holding`: has the token a holding under this program yet). `holding_programs` is that
 -- set with a count, kept by the triggers below in the transaction of every insert and delete of a holding (a batch, a revert, a replay,
 -- the lean pruning): a few rows per token instead of the 190 MB `(token_cov_id, program)` index over every holding that served the same
--- two reads. A database without it gets it at start-up, counted once (`db::backfill_holding_programs`); `index migrate` drops that index.
+-- two reads. `index migrate` counts it once (`db::backfill_holding_programs`) for a store that did not have it.
 CREATE TABLE IF NOT EXISTS holding_programs (
-    token_cov_id BLOB NOT NULL,
+    token_id     INTEGER NOT NULL,        -- ids.id of the token covenant id
     program      TEXT NOT NULL,
     n            INTEGER NOT NULL,        -- holdings of the token under the program, spent ones included
-    PRIMARY KEY (token_cov_id, program)
+    PRIMARY KEY (token_id, program)
 ) WITHOUT ROWID;
 CREATE TRIGGER IF NOT EXISTS holding_programs_insert AFTER INSERT ON token_holdings BEGIN
-    INSERT INTO holding_programs (token_cov_id, program, n) VALUES (NEW.token_cov_id, NEW.program, 1)
-        ON CONFLICT (token_cov_id, program) DO UPDATE SET n = n + 1;
+    INSERT INTO holding_programs (token_id, program, n) VALUES (NEW.token_id, NEW.program, 1)
+        ON CONFLICT (token_id, program) DO UPDATE SET n = n + 1;
 END;
 CREATE TRIGGER IF NOT EXISTS holding_programs_delete AFTER DELETE ON token_holdings BEGIN
-    UPDATE holding_programs SET n = n - 1 WHERE token_cov_id = OLD.token_cov_id AND program = OLD.program;
-    DELETE FROM holding_programs WHERE token_cov_id = OLD.token_cov_id AND program = OLD.program AND n <= 0;
+    UPDATE holding_programs SET n = n - 1 WHERE token_id = OLD.token_id AND program = OLD.program;
+    DELETE FROM holding_programs WHERE token_id = OLD.token_id AND program = OLD.program AND n <= 0;
 END;
-CREATE TRIGGER IF NOT EXISTS holding_programs_update AFTER UPDATE OF token_cov_id, program ON token_holdings
-    WHEN OLD.token_cov_id IS NOT NEW.token_cov_id OR OLD.program IS NOT NEW.program BEGIN
-    UPDATE holding_programs SET n = n - 1 WHERE token_cov_id = OLD.token_cov_id AND program = OLD.program;
-    DELETE FROM holding_programs WHERE token_cov_id = OLD.token_cov_id AND program = OLD.program AND n <= 0;
-    INSERT INTO holding_programs (token_cov_id, program, n) VALUES (NEW.token_cov_id, NEW.program, 1)
-        ON CONFLICT (token_cov_id, program) DO UPDATE SET n = n + 1;
+CREATE TRIGGER IF NOT EXISTS holding_programs_update AFTER UPDATE OF token_id, program ON token_holdings
+    WHEN OLD.token_id IS NOT NEW.token_id OR OLD.program IS NOT NEW.program BEGIN
+    UPDATE holding_programs SET n = n - 1 WHERE token_id = OLD.token_id AND program = OLD.program;
+    DELETE FROM holding_programs WHERE token_id = OLD.token_id AND program = OLD.program AND n <= 0;
+    INSERT INTO holding_programs (token_id, program, n) VALUES (NEW.token_id, NEW.program, 1)
+        ON CONFLICT (token_id, program) DO UPDATE SET n = n + 1;
 END;
 -- The holdings of a token or of an owner in page order, spent ones included (`GET /v1/token-utxos?spent=true`): no sort of the lot.
 -- (The token's page index replaces the `(token_cov_id, owner)` one, which no read used. An earlier store also had `(owner, token_cov_id)`:
--- the owner's page index serves the pair, in page order and without the sort; `index migrate` drops it.)
-CREATE INDEX IF NOT EXISTS token_holdings_token_page ON token_holdings (token_cov_id, created_block, txid, idx);
-CREATE INDEX IF NOT EXISTS token_holdings_owner_page ON token_holdings (owner, created_block, txid, idx);
+-- the owner's page index serves the pair, in page order and without the sort; `index migrate` does not build it.)
+CREATE INDEX IF NOT EXISTS token_holdings_token_page ON token_holdings (token_id, created_block, txid, idx);
+CREATE INDEX IF NOT EXISTS token_holdings_owner_page ON token_holdings (owner_id, created_block, txid, idx);
 CREATE INDEX IF NOT EXISTS token_holdings_created ON token_holdings (created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_spent ON token_holdings (spent_block);
 -- The unspent holdings of an owner or of a token, oldest first (`GET /v1/token-utxos`, the operator's own tokens): the live
 -- rows only, in the order a page is read, however many spent rows the owner or the token has.
-CREATE INDEX IF NOT EXISTS token_holdings_live_owner ON token_holdings (owner, created_block, txid, idx) WHERE spent_block IS NULL;
-CREATE INDEX IF NOT EXISTS token_holdings_live_token ON token_holdings (token_cov_id, created_block, txid, idx) WHERE spent_block IS NULL;
+CREATE INDEX IF NOT EXISTS token_holdings_live_owner ON token_holdings (owner_id, created_block, txid, idx) WHERE spent_block IS NULL;
+CREATE INDEX IF NOT EXISTS token_holdings_live_token ON token_holdings (token_id, created_block, txid, idx) WHERE spent_block IS NULL;
 
 -- Maintained candle aggregates (`indexer::candles`): one row per bucket of the four intervals the API serves, written with the fills it
 -- holds. Values are decimal text (i128). A token's rows are complete once it has a `candle_meta` row (the price basis they were built
@@ -307,7 +319,7 @@ CREATE TABLE IF NOT EXISTS order_flags (
 
 -- Market reads: candles and 24 h stats select fills by time window, and the API asks for the newest event time.
 -- The fills only, as `order_events_fills` (earlier stores: `(kind, token_cov_id, ts)` over every event).
-CREATE INDEX IF NOT EXISTS order_events_fill_ts ON order_events (token_cov_id, ts) WHERE kind = 'fill';
+CREATE INDEX IF NOT EXISTS order_events_fill_ts ON order_events (token_id, ts) WHERE kind = 'fill';
 CREATE INDEX IF NOT EXISTS order_events_ts ON order_events (ts);
 CREATE INDEX IF NOT EXISTS orders_token_genesis ON orders (token_cov_id, genesis_block, covenant_id);
 -- The distinct programs the orders of a token pin, by skip-scan (`reads::claimed_programs`, `reads::open_standard_scale`): evaluated for
@@ -407,7 +419,7 @@ CREATE TRIGGER IF NOT EXISTS counters_orders_listed AFTER UPDATE OF listed ON or
 END;
 CREATE TRIGGER IF NOT EXISTS counters_state_replace BEFORE INSERT ON order_state BEGIN
     UPDATE counters SET n = n - 1
-        WHERE name = 'status:' || (SELECT s.status FROM order_state s WHERE s.covenant_id = NEW.covenant_id);
+        WHERE name = 'status:' || (SELECT s.status FROM order_state s WHERE s.order_id = NEW.order_id);
 END;
 CREATE TRIGGER IF NOT EXISTS counters_state_insert AFTER INSERT ON order_state BEGIN
     INSERT INTO counters (name, n) VALUES ('status:' || NEW.status, 1) ON CONFLICT (name) DO UPDATE SET n = n + 1;

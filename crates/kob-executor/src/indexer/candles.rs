@@ -78,8 +78,8 @@ pub fn mark_block(conn: &Connection, seq: i64) -> DbResult<()> {
     if enabled(conn) {
         conn.prepare_cached(
             "INSERT OR IGNORE INTO candle_dirty (token_cov_id, t) \
-             SELECT DISTINCT token_cov_id, ts - ((ts % 60000) + 60000) % 60000 FROM order_events \
-             WHERE block_seq = ?1 AND kind = 'fill' AND token_cov_id IS NOT NULL",
+             SELECT DISTINCT tk.h, e.ts - ((e.ts % 60000) + 60000) % 60000 FROM order_events e JOIN ids tk ON tk.id = e.token_id \
+             WHERE e.block_seq = ?1 AND e.kind = 'fill'",
         )?
         .execute([seq])?;
     }
@@ -290,10 +290,12 @@ pub fn backfill(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Backfill
         );
     }
     // the distinct tokens that have fills: one index seek each (`order_events_fills`)
-    let mut next = conn.prepare_cached("SELECT MIN(token_cov_id) FROM order_events WHERE kind = 'fill' AND token_cov_id > ?1")?;
-    let mut after: Vec<u8> = Vec::new();
-    while let Some(token) = next.query_row([&after], |r| r.get::<_, Option<Vec<u8>>>(0))? {
-        after.clone_from(&token);
+    let mut next = conn.prepare_cached("SELECT MIN(token_id) FROM order_events WHERE kind = 'fill' AND token_id > ?1")?;
+    let mut hash = conn.prepare_cached("SELECT h FROM ids WHERE id = ?1")?;
+    let mut after: i64 = 0;
+    while let Some(token_id) = next.query_row([after], |r| r.get::<_, Option<i64>>(0))? {
+        after = token_id;
+        let token: Vec<u8> = hash.query_row([token_id], |r| r.get(0))?;
         let Ok(id) = <[u8; 32]>::try_from(token.as_slice()) else { continue };
         let id = Hash32(id);
         let basis = token_basis(conn, tokens, &id)?;

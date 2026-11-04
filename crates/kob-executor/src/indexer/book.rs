@@ -84,8 +84,9 @@ pub fn snapshot(conn: &Connection, _operator: Option<[u8; 32]>) -> DbResult<Memo
 /// a taker's own inventory) land here; the maintenance jobs (`crate::maintenance`) merge or sell them.
 pub fn operator_tokens(conn: &Connection, operator: &[u8; 32]) -> DbResult<Vec<crate::maintenance::OwnToken>> {
     let mut st = conn.prepare_cached(
-        "SELECT txid, idx, token_cov_id, program, value, kob_hstate(state, family, owner, owner_kind, amount), created_daa FROM token_holdings \
-         WHERE owner = ?1 AND spent_block IS NULL ORDER BY created_block, txid, idx",
+        "SELECT x.txid, x.idx, tk.h, x.program, x.value, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.created_daa FROM token_holdings x \
+         JOIN ids tk ON tk.id = x.token_id JOIN ids ow ON ow.id = x.owner_id \
+         WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.spent_block IS NULL ORDER BY x.created_block, x.txid, x.idx",
     )?;
     let rows = st.query_map([&operator[..]], |r| {
         Ok((
@@ -137,9 +138,10 @@ struct OwnedToken {
 
 fn owned_tokens(conn: &Connection) -> DbResult<HashMap<[u8; 32], Vec<OwnedToken>>> {
     let mut st = conn.prepare_cached(
-        "SELECT t.owner, t.txid, t.idx, t.amount, t.value, t.role, t.created_daa, t.token_cov_id, h.program, \
-                kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount) \
-         FROM token_utxos t LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx \
+        "SELECT fo.covenant_id, t.txid, t.idx, t.amount, t.value, t.role, t.created_daa, tk.h, h.program, \
+                kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount) \
+         FROM token_utxos t JOIN orders fo ON fo.id = t.order_id JOIN ids tk ON tk.id = t.token_id \
+         LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id \
          WHERE t.spent_block IS NULL ORDER BY t.created_block, t.txid, t.idx",
     )?;
     let rows = st.query_map([], |r| {
@@ -202,7 +204,7 @@ pub(crate) fn live_orders_sql() -> &'static str {
              o.template_hash \
              FROM order_state s \
              CROSS JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-             CROSS JOIN orders o ON o.covenant_id = s.covenant_id \
+             CROSS JOIN orders o ON o.id = s.order_id \
              WHERE s.status IN ('open','partial') AND o.listed = ?1 AND s.state_known = 1 AND u.spent_block IS NULL AND u.state IS NOT NULL \
              AND {} \
              ORDER BY o.genesis_block, o.covenant_id",

@@ -84,6 +84,10 @@ fn table_digest(conn: &Connection, label: &str, sql: &str) {
     println!("table:{label}\t{:.1}\t{n} rows {d}", t.elapsed().as_secs_f64() * 1000.0);
 }
 
+fn has_col(conn: &Connection, table: &str, col: &str) -> bool {
+    conn.query_row("SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2", [table, col], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0
+}
+
 /// The columns of `table` in order, the packed ones decoded when this build has the functions (`orders.genesis_state`, `order_events.detail`).
 fn columns_with(conn: &Connection, table: &str) -> String {
     let mut st = conn.prepare(&format!("SELECT name FROM pragma_table_info('{table}')")).expect("table info");
@@ -123,11 +127,32 @@ fn main() {
             &conn,
             "SELECT maker FROM (SELECT maker, COUNT(*) c FROM orders WHERE maker IS NOT NULL GROUP BY 1 ORDER BY c DESC, maker LIMIT 6)",
         );
-        let owners_top =
-            blobs(&conn, "SELECT owner FROM (SELECT owner, COUNT(*) c FROM token_holdings GROUP BY 1 ORDER BY c DESC, owner LIMIT 6)");
-        let owners_mid = blobs(&conn, "SELECT owner FROM token_holdings WHERE rowid IN (777, 1500000, 3000000)");
-        let live =
-            blobs(&conn, "SELECT covenant_id FROM order_state WHERE status IN ('open','partial') ORDER BY covenant_id LIMIT 120");
+        // schema 8 keeps the owners and the order of a state row as integers: the same samples through the join
+        let interned = has_col(&conn, "orders", "id");
+        let owners_top = blobs(
+            &conn,
+            if interned {
+                "SELECT w.h FROM (SELECT owner_id, COUNT(*) c FROM token_holdings GROUP BY 1) x JOIN ids w ON w.id = x.owner_id ORDER BY x.c DESC, w.h LIMIT 6"
+            } else {
+                "SELECT owner FROM (SELECT owner, COUNT(*) c FROM token_holdings GROUP BY 1 ORDER BY c DESC, owner LIMIT 6)"
+            },
+        );
+        let owners_mid = blobs(
+            &conn,
+            if interned {
+                "SELECT w.h FROM token_holdings h JOIN ids w ON w.id = h.owner_id WHERE h.rowid IN (777, 1500000, 3000000) ORDER BY h.rowid"
+            } else {
+                "SELECT owner FROM token_holdings WHERE rowid IN (777, 1500000, 3000000)"
+            },
+        );
+        let live = blobs(
+            &conn,
+            if interned {
+                "SELECT o.covenant_id FROM order_state s JOIN orders o ON o.id = s.order_id WHERE s.status IN ('open','partial') ORDER BY o.covenant_id LIMIT 120"
+            } else {
+                "SELECT covenant_id FROM order_state WHERE status IN ('open','partial') ORDER BY covenant_id LIMIT 120"
+            },
+        );
         let mut ids: Vec<Vec<u8>> = live;
         for b in 0u16..256 {
             let mut lo = [0u8; 32];
@@ -293,6 +318,7 @@ fn main() {
 
     // ---- logical digests of every table (stored states decoded)
     if !skip_tables {
+        let interned = has_col(&conn, "orders", "id");
         let ustate = if has_fn(&conn, "kob_ustate") {
             "kob_ustate(u.state, (SELECT kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id) FROM orders o WHERE o.covenant_id = u.covenant_id))"
         } else {
@@ -300,16 +326,56 @@ fn main() {
         };
         let hstate =
             if has_fn(&conn, "kob_hstate") { "kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount)" } else { "h.state" };
-        table_digest(
-            &conn,
-            "order_utxos",
-            &format!("SELECT u.txid, u.idx, u.covenant_id, u.value, u.spk, {ustate}, u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount FROM order_utxos u ORDER BY u.rowid"),
-        );
-        table_digest(
-            &conn,
-            "token_holdings",
-            &format!("SELECT h.txid, h.idx, h.token_cov_id, h.program, h.family, h.owner, h.owner_kind, h.amount, h.value, {hstate}, h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings h ORDER BY h.rowid"),
-        );
+        if interned {
+            // schema 8: the same rows, the same columns in the same order, with the ids joined back to their 32 bytes
+            let gen = "kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id)";
+            table_digest(
+                &conn,
+                "order_utxos",
+                &format!("SELECT u.txid, u.idx, o.covenant_id, u.value, u.spk, kob_ustate(u.state, {gen}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount FROM order_utxos u JOIN orders o ON o.id = u.order_id ORDER BY u.rowid"),
+            );
+            table_digest(
+                &conn,
+                "token_holdings",
+                "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.rowid",
+            );
+            table_digest(
+                &conn,
+                "order_events",
+                "SELECT e.id, o.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, t.h, e.side, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail) FROM order_events e JOIN orders o ON o.id = e.order_id LEFT JOIN ids t ON t.id = e.token_id ORDER BY e.id",
+            );
+            table_digest(
+                &conn,
+                "order_amends",
+                "SELECT a.id, o.covenant_id, a.block_seq, a.price, a.tip, a.tif, a.expiry_daa, a.active_from, a.deadline, a.listed, a.unlisted_reason, a.budget_rate, a.reserve, a.min_fill FROM order_amends a JOIN orders o ON o.id = a.order_id ORDER BY a.id",
+            );
+            table_digest(
+                &conn,
+                "order_state",
+                "SELECT o.covenant_id, s.status, s.filled_amount, s.remaining_amount, s.amount_exact, s.cur_txid, s.cur_idx, s.cur_value, s.state_known, s.last_block, s.last_daa FROM order_state s JOIN orders o ON o.id = s.order_id ORDER BY o.covenant_id",
+            );
+            table_digest(
+                &conn,
+                "token_utxos",
+                "SELECT u.txid, u.idx, t.h, o.covenant_id, u.amount, u.value, u.role, u.created_block, u.created_daa, u.spent_block, u.spent_txid FROM token_utxos u JOIN ids t ON t.id = u.token_id JOIN orders o ON o.id = u.order_id ORDER BY u.txid, u.idx",
+            );
+            table_digest(
+                &conn,
+                "orders",
+                "SELECT covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id), genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id FROM orders ORDER BY rowid",
+            );
+        } else {
+            table_digest(
+                &conn,
+                "order_utxos",
+                &format!("SELECT u.txid, u.idx, u.covenant_id, u.value, u.spk, {ustate}, u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount FROM order_utxos u ORDER BY u.rowid"),
+            );
+            table_digest(
+                &conn,
+                "token_holdings",
+                &format!("SELECT h.txid, h.idx, h.token_cov_id, h.program, h.family, h.owner, h.owner_kind, h.amount, h.value, {hstate}, h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings h ORDER BY h.rowid"),
+            );
+        }
         for t in [
             "orders",
             "order_events",
@@ -331,7 +397,9 @@ fn main() {
             let exists: i64 = conn
                 .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [t], |r| r.get(0))
                 .unwrap_or(0);
-            if exists > 0 {
+            // the tables that name orders, tokens or owners by integer were digested above, joined back
+            let done = interned && matches!(t, "orders" | "order_events" | "order_amends" | "order_state" | "token_utxos");
+            if exists > 0 && !done {
                 // by the primary key where there is one that means something: rowids are renumbered by a vacuum, and a start-up re-derivation
                 // of a row rewrites it at the end
                 let order = match t {

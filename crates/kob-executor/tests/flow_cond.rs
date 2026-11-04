@@ -68,7 +68,10 @@ async fn a_resting_fill_arms_a_stop_in_the_same_batch_then_it_fills_in_a_band() 
     assert_eq!(au.start_price, "200000000");
     assert_eq!(au.end_price, expect.stop_floor().to_string());
     // the fill quote is the stop price at t inside the band
-    let price: i64 = c.hs.query("SELECT price FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let price: i64 = c.hs.query(
+        "SELECT price FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'fill'",
+        [&cov.0[..]],
+    );
     assert_eq!(price, armed.stop_at(false, t, arm_daa as i64).unwrap());
     assert_eq!(price, 198_000_000, "a third of the way into a 3% band: 1% below the stop");
 }
@@ -108,7 +111,10 @@ async fn a_stop_leg_fills_at_its_trigger_in_the_batch_of_its_evidence() {
     assert_eq!(d["evidence"]["order"], r.cov(&c).to_hex());
     assert_eq!(d["evidence"]["price"], "195000000");
     // a banded stop fills at the stop itself when it triggers (the band opens from the arming)
-    let price: i64 = c.hs.query("SELECT price FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let price: i64 = c.hs.query(
+        "SELECT price FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'fill'",
+        [&cov.0[..]],
+    );
     assert_eq!(price, co.stop_at(true, 0, 0).unwrap());
     assert_eq!(price, 200_000_000);
     assert_eq!(c.hs.event_kinds(&r.cov(&c)), ["create", "fill"]);

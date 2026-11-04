@@ -104,7 +104,10 @@ async fn ask_and_bid_on_a_kasparocket_token_are_indexed_listed_matched_and_fille
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobAsk(a6)));
     let rest = spk_to_string(&Kcc20State::custody(6 * WHOLE, cov.0, EXT).spk_with(template(KR)));
     let ci = fill.tx.outputs.iter().position(|o| o.script_public_key == rest).expect("custody after the fill");
-    let live: i64 = c.hs.query("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&cov.0[..]]);
+    let live: i64 = c.hs.query(
+        "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL",
+        [&cov.0[..]],
+    );
     assert_eq!(live, 1);
     let program: String =
         c.hs.query("SELECT program FROM token_holdings WHERE txid = ?1 AND idx = ?2", rusqlite::params![&fill.tx.id[..], ci as i64]);

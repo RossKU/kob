@@ -14,6 +14,7 @@
 
 use crate::hex::{self, Hash32};
 use crate::indexer::db::{DbError, DbResult};
+use crate::indexer::ids::{id_of, order_of};
 use crate::indexer::packed::{sql_genesis, sql_ustate, GENESIS_O};
 use crate::tokens::TokenAllowlist;
 use kob_protocol::artifacts::TemplateId;
@@ -198,7 +199,11 @@ pub fn market_scale(conn: &Connection, cov: &[u8]) -> DbResult<Option<i64>> {
 /// one seek per distinct program, however many holdings the token has (the `SELECT DISTINCT` it replaced read all of them: 18 s on the
 /// soak; audit I9). At most one seek per program this build knows.
 pub fn proven_programs(conn: &Connection, token: &[u8]) -> DbResult<Vec<Vec<u8>>> {
-    let mut st = conn.prepare_cached("SELECT MIN(program) FROM holding_programs WHERE token_cov_id = ?1 AND program > ?2")?;
+    let mut st = conn.prepare_cached(concat!(
+        "SELECT MIN(program) FROM holding_programs WHERE token_id = ",
+        id_of!("?1"),
+        " AND program > ?2"
+    ))?;
     let mut names: Vec<String> = Vec::new();
     let mut prev = String::new();
     while names.len() <= TemplateId::ALL.len() {
@@ -531,7 +536,7 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
     }
     if rows.len() > max {
         // over the cap: the rows of tokens with a holding first, then the others in the list's order
-        let mut held = conn.prepare_cached("SELECT 1 FROM token_holdings WHERE token_cov_id = ?1 LIMIT 1")?;
+        let mut held = conn.prepare_cached(concat!("SELECT 1 FROM token_holdings WHERE token_id = ", id_of!("?1"), " LIMIT 1"))?;
         let mut proven: std::collections::HashMap<Vec<u8>, bool> = std::collections::HashMap::new();
         let mut keep: Vec<(Vec<u8>, Reverse<i64>, Vec<u8>)> = Vec::with_capacity(max);
         let mut rest: Vec<(Vec<u8>, Reverse<i64>, Vec<u8>)> = Vec::new();
@@ -628,8 +633,8 @@ pub struct BookView {
 /// Ask-side orders are liquidity only while exactly one live custody UTXO holds `amountLeft` base units
 /// (`docs/spec/matcher.md` 1.2); bid-side orders hold KAS and need no custody.
 pub(crate) const CUSTODY_OK: &str = "(o.side = 2 OR (\
-     (SELECT COUNT(*) FROM token_utxos t WHERE t.owner = o.covenant_id AND t.role = 'custody' AND t.spent_block IS NULL) = 1 \
-     AND (SELECT t.amount FROM token_utxos t WHERE t.owner = o.covenant_id AND t.role = 'custody' AND t.spent_block IS NULL) \
+     (SELECT COUNT(*) FROM token_utxos t WHERE t.order_id = o.id AND t.role = 'custody' AND t.spent_block IS NULL) = 1 \
+     AND (SELECT t.amount FROM token_utxos t WHERE t.order_id = o.id AND t.role = 'custody' AND t.spent_block IS NULL) \
          = s.remaining_amount))";
 
 /// SQL order key of a book: the price per base unit (`price / scale`, a REAL: display order; the aggregated levels compare
@@ -655,7 +660,7 @@ pub(crate) const HAS_AMOUNT: &str = "COALESCE(s.remaining_amount, 1) > 0";
 /// keeps `s.status IN ('open','partial')`, so the rows come from `order_state_status` (the few live orders) and are joined to
 /// their orders; `CROSS JOIN` keeps that order (SQLite does not reorder it). Joined the other way the planner read every
 /// order of the token (`orders_book`) or of the whole history to find them: 0.2 to 2 s per read on a store of 300,000 orders.
-pub(crate) const LIVE_FROM: &str = "FROM order_state s CROSS JOIN orders o ON o.covenant_id = s.covenant_id";
+pub(crate) const LIVE_FROM: &str = "FROM order_state s CROSS JOIN orders o ON o.id = s.order_id";
 
 /// SQL predicate (alias `o` = orders): the order's template is one this build pins ([`kob_protocol::artifacts::PINNED`]).
 /// An order under any other template is unknown to this build (`docs/spec/template-retirement.md`): the indexer never lists
@@ -1210,7 +1215,7 @@ const ORDER_SELECT: &str = concat!(
     ", u.created_daa, fl.reason, ",
     sql_genesis!("o"),
     " \
-    FROM orders o LEFT JOIN order_state s ON s.covenant_id = o.covenant_id \
+    FROM orders o LEFT JOIN order_state s ON s.order_id = o.id \
     LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
     LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx"
 );
@@ -1411,10 +1416,11 @@ pub struct TokenUtxoView {
 
 /// The columns [`token_utxo_from_row`] reads (`t` = `token_utxos`, `h` = the output's proven `token_holdings` row).
 const TOKEN_UTXO_COLUMNS: &str =
-    "t.txid, t.idx, t.token_cov_id, t.owner, t.amount, t.value, t.role, t.created_daa, t.spent_block, t.spent_txid, h.program, kob_hstate(h.state, h.family, h.owner, h.owner_kind, h.amount), \
-     (fo.token_cov_id IS NOT NULL AND t.token_cov_id != fo.token_cov_id AND (fo.quote_cov_id IS NULL OR t.token_cov_id != fo.quote_cov_id))";
-const TOKEN_UTXO_FROM: &str =
-    "FROM token_utxos t LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN orders fo ON fo.covenant_id = t.owner";
+    "t.txid, t.idx, tk.h, fo.covenant_id, t.amount, t.value, t.role, t.created_daa, t.spent_block, t.spent_txid, h.program, kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount), \
+     (fo.token_cov_id IS NOT NULL AND tk.h != fo.token_cov_id AND (fo.quote_cov_id IS NULL OR tk.h != fo.quote_cov_id))";
+/// `fo` is the owning order (the order of a token UTXO always exists: it is the row the UTXO was stored under), `tk` the token.
+const TOKEN_UTXO_FROM: &str = "FROM token_utxos t JOIN ids tk ON tk.id = t.token_id JOIN orders fo ON fo.id = t.order_id \
+     LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id";
 
 /// A proven token state span as JSON, decoded with the program the indexer proved it for.
 fn proven_state_json(program: Option<String>, state: Option<Vec<u8>>) -> Option<Value> {
@@ -1458,7 +1464,7 @@ pub struct CustodyView {
 
 fn live_token_utxos(conn: &Connection, ctx: &ReadCtx, owner: &Hash32, role: &str, limit: usize) -> DbResult<Vec<TokenUtxoView>> {
     let sql = format!(
-        "SELECT {TOKEN_UTXO_COLUMNS} {TOKEN_UTXO_FROM} WHERE t.owner = ?1 AND t.role = ?2 AND t.spent_block IS NULL \
+        "SELECT {TOKEN_UTXO_COLUMNS} {TOKEN_UTXO_FROM} WHERE t.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND t.role = ?2 AND t.spent_block IS NULL \
          ORDER BY t.created_block, t.txid, t.idx LIMIT ?3"
     );
     let mut st = conn.prepare(&sql)?;
@@ -1535,7 +1541,11 @@ fn attach_holdings(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32, v: &m
     let strays = live_token_utxos(conn, ctx, covenant_id, "stray", MAX_VIEW_STRAYS + 1)?;
     if strays.len() > MAX_VIEW_STRAYS {
         v.strays_total = Some(conn.query_row(
-            "SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND role = 'stray' AND spent_block IS NULL",
+            concat!(
+                "SELECT COUNT(*) FROM token_utxos WHERE order_id = ",
+                order_of!("?1"),
+                " AND role = 'stray' AND spent_block IS NULL"
+            ),
             [covenant_id.0.to_vec()],
             |r| r.get(0),
         )?);
@@ -1558,9 +1568,9 @@ pub struct StrayView {
 /// Stray token UTXOs (sent to an order id outside the protocol), newest first.
 pub fn strays(conn: &Connection, ctx: &ReadCtx, maker: Option<&[u8]>, limit: usize) -> DbResult<Vec<StrayView>> {
     let sql = format!(
-        "SELECT {TOKEN_UTXO_COLUMNS}, s.status, o.maker \
-         {TOKEN_UTXO_FROM} LEFT JOIN orders o ON o.covenant_id = t.owner LEFT JOIN order_state s ON s.covenant_id = t.owner \
-         WHERE t.role = 'stray' AND t.spent_block IS NULL AND (?1 IS NULL OR o.maker = ?1) \
+        "SELECT {TOKEN_UTXO_COLUMNS}, s.status, fo.maker \
+         {TOKEN_UTXO_FROM} LEFT JOIN order_state s ON s.order_id = t.order_id \
+         WHERE t.role = 'stray' AND t.spent_block IS NULL AND (?1 IS NULL OR fo.maker = ?1) \
          ORDER BY t.created_block DESC, t.txid, t.idx LIMIT ?2"
     );
     let mut st = conn.prepare(&sql)?;
@@ -1630,7 +1640,7 @@ const ORDER_SELECT_BY_STATUS: &str = concat!(
     ", u.created_daa, fl.reason, ",
     sql_genesis!("o"),
     " \
-    FROM order_state s CROSS JOIN orders o ON o.covenant_id = s.covenant_id \
+    FROM order_state s CROSS JOIN orders o ON o.id = s.order_id \
     LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
     LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx"
 );
@@ -1769,8 +1779,9 @@ pub struct EventView {
     pub settled: bool,
 }
 
-const EVENT_SELECT: &str =
-    "SELECT id, covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, kob_dtext(detail) FROM order_events";
+/// `e` is the event, `o` its order, `t` its token (`CROSS JOIN`: the events come first, in the order the page reads them).
+const EVENT_SELECT: &str = "SELECT e.id, o.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, t.h, e.side, e.amount, e.price, e.payout, e.closes, \
+     kob_dtext(e.detail) FROM order_events e CROSS JOIN orders o ON o.id = e.order_id LEFT JOIN ids t ON t.id = e.token_id";
 
 fn event_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<EventView> {
     let daa: i64 = r.get(3)?;
@@ -1804,7 +1815,9 @@ pub fn order_events(
     limit: usize,
     after: Option<i64>,
 ) -> DbResult<Page<EventView>> {
-    let sql = format!("{EVENT_SELECT} WHERE covenant_id = ?1 AND id > ?2 ORDER BY id ASC LIMIT ?3");
+    let sql = format!(
+        "{EVENT_SELECT} WHERE e.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND e.id > ?2 ORDER BY e.id ASC LIMIT ?3"
+    );
     let mut st = conn.prepare(&sql)?;
     let mut items = st
         .query_map(rusqlite::params![covenant_id.0.to_vec(), after.unwrap_or(0), limit as i64 + 1], |r| event_from_row(r, ctx))?
@@ -1827,22 +1840,22 @@ pub fn fills(
     before: Option<i64>,
     limit: usize,
 ) -> DbResult<Page<EventView>> {
-    let mut conds = vec!["kind = 'fill'".to_string()];
+    let mut conds = vec!["e.kind = 'fill'".to_string()];
     let mut args: Vec<SqlValue> = Vec::new();
     if let Some(t) = token {
         args.push(SqlValue::Blob(t.0.to_vec()));
-        conds.push(format!("token_cov_id = ?{}", args.len()));
+        conds.push(format!("e.token_id = (SELECT id FROM ids WHERE h = ?{})", args.len()));
     }
     if let Some(s) = side {
         args.push(SqlValue::Integer(s));
-        conds.push(format!("side = ?{}", args.len()));
+        conds.push(format!("e.side = ?{}", args.len()));
     }
     if let Some(b) = before {
         args.push(SqlValue::Integer(b));
-        conds.push(format!("id < ?{}", args.len()));
+        conds.push(format!("e.id < ?{}", args.len()));
     }
     args.push(SqlValue::Integer(limit as i64 + 1));
-    let sql = format!("{EVENT_SELECT} WHERE {} ORDER BY id DESC LIMIT ?{}", conds.join(" AND "), args.len());
+    let sql = format!("{EVENT_SELECT} WHERE {} ORDER BY e.id DESC LIMIT ?{}", conds.join(" AND "), args.len());
     let mut st = conn.prepare(&sql)?;
     let mut items = st.query_map(params_from_iter(args.iter()), |r| event_from_row(r, ctx))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let next_cursor = if items.len() > limit {
@@ -2002,18 +2015,18 @@ pub fn holdings(
     let mut args: Vec<SqlValue> = Vec::new();
     if let Some(o) = &f.owner {
         args.push(SqlValue::Blob(o.clone()));
-        conds.push(format!("owner = ?{}", args.len()));
+        conds.push(format!("x.owner_id = (SELECT id FROM ids WHERE h = ?{})", args.len()));
     }
     if let Some(t) = &f.token {
         args.push(SqlValue::Blob(t.0.to_vec()));
         // An owner's unspent holdings are read through `token_holdings_live_owner` (its live rows only, in page order) and the
         // token is a filter on them (`+`: no index may take it), never through `token_holdings_owner` (owner, token), which
         // holds every spent row of the pair as well: 22,000 rows read for 10 on the TN10 soak.
-        let col = if f.owner.is_some() && !f.include_spent { "+token_cov_id" } else { "token_cov_id" };
-        conds.push(format!("{col} = ?{}", args.len()));
+        let col = if f.owner.is_some() && !f.include_spent { "+x.token_id" } else { "x.token_id" };
+        conds.push(format!("{col} = (SELECT id FROM ids WHERE h = ?{})", args.len()));
     }
     if !f.include_spent {
-        conds.push("spent_block IS NULL".to_string());
+        conds.push("x.spent_block IS NULL".to_string());
     }
     if let Some((b, t, i)) = cursor {
         args.push(SqlValue::Integer(b));
@@ -2022,13 +2035,13 @@ pub fn holdings(
         let nt = args.len();
         args.push(SqlValue::Integer(i));
         let ni = args.len();
-        conds.push(format!("(created_block, txid, idx) > (?{nb}, ?{nt}, ?{ni})"));
+        conds.push(format!("(x.created_block, x.txid, x.idx) > (?{nb}, ?{nt}, ?{ni})"));
     }
     args.push(SqlValue::Integer(limit as i64 + 1));
     let sql = format!(
-        "SELECT txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, \
-         kob_hstate(state, family, owner, owner_kind, amount), role, created_block, created_daa, spent_block, spent_txid \
-         FROM token_holdings {} ORDER BY created_block, txid, idx LIMIT ?{}",
+        "SELECT x.txid, x.idx, tk.h, x.program, x.family, ow.h, x.owner_kind, x.amount, x.value, \
+         kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.role, x.created_block, x.created_daa, x.spent_block, x.spent_txid \
+         FROM token_holdings x CROSS JOIN ids tk ON tk.id = x.token_id CROSS JOIN ids ow ON ow.id = x.owner_id {} ORDER BY x.created_block, x.txid, x.idx LIMIT ?{}",
         if conds.is_empty() { String::new() } else { format!("WHERE {}", conds.join(" AND ")) },
         args.len()
     );

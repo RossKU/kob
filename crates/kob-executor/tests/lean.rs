@@ -126,10 +126,10 @@ fn live_rows(h: &Harness) -> Vec<String> {
     let mut st = g
         .conn()
         .prepare(
-            "SELECT hex(s.covenant_id), s.status, s.filled_amount, s.remaining_amount, hex(s.cur_txid), s.cur_idx, \
-             (SELECT COUNT(*) FROM order_events e WHERE e.covenant_id = s.covenant_id), \
-             (SELECT COUNT(*) FROM token_utxos t WHERE t.owner = s.covenant_id AND t.spent_block IS NULL) \
-             FROM order_state s WHERE s.status IN ('open','partial') ORDER BY s.covenant_id",
+            "SELECT hex(o.covenant_id), s.status, s.filled_amount, s.remaining_amount, hex(s.cur_txid), s.cur_idx, \
+             (SELECT COUNT(*) FROM order_events e WHERE e.order_id = s.order_id), \
+             (SELECT COUNT(*) FROM token_utxos t WHERE t.order_id = s.order_id AND t.spent_block IS NULL) \
+             FROM order_state s JOIN orders o ON o.id = s.order_id WHERE s.status IN ('open','partial') ORDER BY o.covenant_id",
         )
         .unwrap();
     st.query_map([], |r| {
@@ -252,7 +252,7 @@ async fn lean_pruning_keeps_what_the_matcher_reads_and_the_file_bounded() {
         let g = lean.ingest.lock().unwrap();
         let cov: Vec<u8> = g
             .conn()
-            .query_row("SELECT covenant_id FROM order_state WHERE status = 'partial' ORDER BY last_block LIMIT 1", [], |r| r.get(0))
+            .query_row("SELECT o.covenant_id FROM order_state s JOIN orders o ON o.id = s.order_id WHERE s.status = 'partial' ORDER BY s.last_block LIMIT 1", [], |r| r.get(0))
             .expect("a partly filled order is still live");
         drop(g);
         let cov = Hash32::from_slice(&cov).unwrap();
@@ -267,7 +267,10 @@ async fn lean_pruning_keeps_what_the_matcher_reads_and_the_file_bounded() {
     lean.sync().await;
     assert_eq!(lean.status(&old_at), "filled");
     assert_eq!(full.status(&old_at), "filled");
-    let f: i64 = lean.query("SELECT filled_amount FROM order_state WHERE covenant_id = ?1", [&old_at.0[..]]);
+    let f: i64 = lean.query(
+        "SELECT filled_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+        [&old_at.0[..]],
+    );
     assert_eq!(f, 10 * WHOLE, "the fills of an order that was live all along are never pruned");
     assert_eq!(book_json(&full), book_json(&lean));
 

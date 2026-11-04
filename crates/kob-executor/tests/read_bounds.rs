@@ -34,12 +34,13 @@ async fn an_order_view_bounds_its_strays() {
     let ctx = ReadCtx { node_daa: Some(c.daa()), settle_depth_daa: 100, now_unix: None };
     let seed = |n: usize| {
         let g = c.hs.ingest.lock().unwrap();
+        kob_executor::indexer::ids::intern(g.conn(), &TOKEN_COV).unwrap();
         let tx = g.conn().unchecked_transaction().unwrap();
         {
             let mut st = tx
                 .prepare(
-                    "INSERT OR IGNORE INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa) \
-                     VALUES (?1, 0, ?2, ?3, 1, 8000000, 'stray', 1, 1)",
+                    "INSERT OR IGNORE INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) \
+                     VALUES (?1, 0, (SELECT id FROM ids WHERE h = ?2), (SELECT id FROM orders WHERE covenant_id = ?3), 1, 8000000, 'stray', 1, 1)",
                 )
                 .unwrap();
             for i in 0..n {

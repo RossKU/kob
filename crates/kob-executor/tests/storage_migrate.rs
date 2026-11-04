@@ -1,6 +1,7 @@
-//! `index migrate`: a store written whole by an earlier build (states in full, the fills-only indexes absent,
-//! `token_holdings_owner` present) is repacked, its indexes swapped and the file compacted, and no read changes: every table
-//! digests the same with its states decoded, the API reads return the same JSON, and a second run changes nothing.
+//! `index migrate`: a store written by an earlier build (schema 5: states whole, no counters, the indexes of that time; schema 7: packed
+//! states, 32-byte ids in every row) is rebuilt as schema 8 (integer ids) in one run, and no read changes: every table digests the same
+//! with its ids joined back and its states decoded, the API reads return the same JSON, the event ids and sequences are kept, a
+//! store this build refuses is left as it is, and the migrated store goes on being indexed.
 
 mod common;
 
@@ -15,6 +16,10 @@ use kob_protocol::state::*;
 use kob_protocol::tx::*;
 use rusqlite::{Connection, OpenFlags};
 use sha2::{Digest, Sha256};
+use std::path::Path;
+
+/// The schema of the last build that stored 32-byte ids in every row (schema 7), as a fixture.
+const SCHEMA7: &str = include_str!("fixtures/schema7.sql");
 
 fn cancel(c: &Ctx, order: OrderUtxo<AnyState>, custody: Option<TokenUtxo>, strays: Vec<TokenUtxo>) -> SignedTx {
     c.w.sign(&Action::CancelOrder(CancelOrder {
@@ -35,13 +40,14 @@ fn cancel(c: &Ctx, order: OrderUtxo<AnyState>, custody: Option<TokenUtxo>, stray
 
 /// A store with orders that were placed and left, partly filled, swept and cancelled, and the token holdings they moved.
 async fn flows() -> Ctx {
-    let c = Ctx::new();
-    scenario(&c, || {}).await;
+    let mut c = Ctx::new();
+    scenario(&mut c, |_| {}).await;
     c
 }
 
-/// [`flows`] on a given context; `mid` runs once the first ask and a stray to it are indexed and before anything spends them.
-async fn scenario(c: &Ctx, mid: impl FnOnce()) {
+/// [`flows`] on a given context; `mid` runs once the first ask and a stray to it are indexed and before anything spends them (it may
+/// replace the context's indexer: the chain goes on from the node).
+async fn scenario(c: &mut Ctx, mid: impl FnOnce(&mut Ctx)) {
     // an ask that is partly filled twice and then cancelled with a stray swept
     let a = ask(MAKER_A, P250);
     let create = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
@@ -49,7 +55,7 @@ async fn scenario(c: &Ctx, mid: impl FnOnce()) {
     let cov = c.w.cov(&create, 0);
     let stray = c.w.stray(cov, 10 * WHOLE, TAKER);
     c.push(&[&stray]).await;
-    mid();
+    mid(c);
     let custody = c.w.token_at(&create, 1, Kcc20State::custody(10 * WHOLE, cov.0, EXT));
     let leg = Leg::Ask { order: c.w.order(&create, 0, a.clone()), custody, amount: 4 * WHOLE, t: None };
     let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), vec![leg])));
@@ -70,48 +76,69 @@ async fn scenario(c: &Ctx, mid: impl FnOnce()) {
     c.push(&[&open]).await;
 }
 
-/// Every row of the tables the migration touches or reads, states decoded, hashed per table.
+/// Every row of every table, ids joined back to their 32 bytes and states decoded, hashed per table. The same text reads a schema 8 store.
 fn table_digests(conn: &Connection) -> Vec<(String, u64, String)> {
-    let queries = [
+    let gen = "kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id)";
+    let mut queries: Vec<(&str, String)> = vec![
+        (
+            "orders",
+            "SELECT covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, ext_commit, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id), genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_cov_id FROM orders ORDER BY covenant_id".to_string(),
+        ),
         (
             "order_utxos",
-            "SELECT txid, idx, covenant_id, value, spk, kob_ustate(state, (SELECT kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id) FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)), created_block, created_daa, spent_block, spent_txid, spent_entry, spent_amount FROM order_utxos ORDER BY txid, idx",
+            format!("SELECT u.txid, u.idx, o.covenant_id, u.value, u.spk, kob_ustate(u.state, {gen}), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount FROM order_utxos u JOIN orders o ON o.id = u.order_id ORDER BY u.txid, u.idx"),
+        ),
+        (
+            "order_events",
+            "SELECT e.id, o.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, t.h, e.side, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail) FROM order_events e JOIN orders o ON o.id = e.order_id LEFT JOIN ids t ON t.id = e.token_id ORDER BY e.id".to_string(),
+        ),
+        (
+            "order_state",
+            "SELECT o.covenant_id, s.status, s.filled_amount, s.remaining_amount, s.amount_exact, s.cur_txid, s.cur_idx, s.cur_value, s.state_known, s.last_block, s.last_daa FROM order_state s JOIN orders o ON o.id = s.order_id ORDER BY o.covenant_id".to_string(),
+        ),
+        (
+            "order_amends",
+            "SELECT a.id, o.covenant_id, a.block_seq, a.price, a.tip, a.tif, a.expiry_daa, a.active_from, a.deadline, a.listed, a.unlisted_reason, a.budget_rate, a.reserve, a.min_fill FROM order_amends a JOIN orders o ON o.id = a.order_id ORDER BY a.id".to_string(),
+        ),
+        (
+            "token_utxos",
+            "SELECT u.txid, u.idx, t.h, o.covenant_id, u.amount, u.value, u.role, u.created_block, u.created_daa, u.spent_block, u.spent_txid FROM token_utxos u JOIN ids t ON t.id = u.token_id JOIN orders o ON o.id = u.order_id ORDER BY u.txid, u.idx".to_string(),
         ),
         (
             "token_holdings",
-            "SELECT txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, kob_hstate(state, family, owner, owner_kind, amount), role, created_block, created_daa, spent_block, spent_txid FROM token_holdings ORDER BY txid, idx",
+            "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx".to_string(),
         ),
-        ("orders", "SELECT * FROM orders ORDER BY covenant_id"),
-        ("order_events", "SELECT * FROM order_events ORDER BY id"),
-        ("order_state", "SELECT * FROM order_state ORDER BY covenant_id"),
-        ("token_utxos", "SELECT * FROM token_utxos ORDER BY txid, idx"),
-        ("counters", "SELECT * FROM counters ORDER BY name"),
+        ("counters", "SELECT name, n FROM counters WHERE n != 0 ORDER BY name".to_string()),
+        (
+            "holding_programs",
+            "SELECT t.h, p.program, p.n FROM holding_programs p JOIN ids t ON t.id = p.token_id ORDER BY t.h, p.program".to_string(),
+        ),
+        (
+            "meta",
+            "SELECT k, v FROM meta WHERE k NOT IN ('schema_version') ORDER BY k".to_string(),
+        ),
     ];
+    for t in [
+        "blocks",
+        "token_events",
+        "rejects",
+        "candles",
+        "candle_meta",
+        "candle_dirty",
+        "order_flags",
+        "pair_fills",
+        "kcc23_candidates",
+        "kcc23_txs",
+        "kcc23_declarations",
+    ] {
+        queries.push((t, format!("SELECT * FROM {t} ORDER BY 1, 2")));
+    }
     queries
         .iter()
         .map(|(name, sql)| {
             let mut h = Sha256::new();
             let mut n = 0u64;
-            // the packed columns of `SELECT *`, decoded
-            let sql = &match *name {
-                "orders" => sql.replace(
-                    "SELECT *",
-                    &format!(
-                        "SELECT {}",
-                        columns_with(
-                            conn,
-                            "orders",
-                            "genesis_state",
-                            "kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id)"
-                        )
-                    ),
-                ),
-                "order_events" => {
-                    sql.replace("SELECT *", &format!("SELECT {}", columns_with(conn, "order_events", "detail", "kob_dtext(detail)")))
-                }
-                _ => sql.to_string(),
-            };
-            let mut st = conn.prepare(sql).unwrap();
+            let mut st = conn.prepare(sql).unwrap_or_else(|e| panic!("{name}: {e}"));
             let cols = st.column_count();
             let mut rows = st.query([]).unwrap();
             while let Some(r) = rows.next().unwrap() {
@@ -125,14 +152,7 @@ fn table_digests(conn: &Connection) -> Vec<(String, u64, String)> {
         .collect()
 }
 
-/// The columns of a table in order, `column` replaced by `expr`.
-fn columns_with(conn: &Connection, table: &str, column: &str, expr: &str) -> String {
-    let mut st = conn.prepare(&format!("SELECT name FROM pragma_table_info('{table}')")).unwrap();
-    let names: Vec<String> = st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
-    names.iter().map(|n| if n == column { expr.to_string() } else { n.clone() }).collect::<Vec<_>>().join(", ")
-}
-
-/// The API reads that carry the packed columns, as JSON.
+/// The API reads that carry the ids and the packed columns, as JSON.
 fn reads_json(conn: &Connection) -> Vec<String> {
     let ctx = reads::ReadCtx { node_daa: Some(1_000_000), settle_depth_daa: 100, now_unix: None };
     let mut out = vec![];
@@ -149,15 +169,24 @@ fn reads_json(conn: &Connection) -> Vec<String> {
     out.push(serde_json::to_string(&reads::orders(conn, &ctx, &OrderFilter::default(), 100, None).unwrap()).unwrap());
     out.push(serde_json::to_string(&reads::book(conn, &ctx, &Hash32(TOKEN_COV), 10, false).unwrap()).unwrap());
     out.push(serde_json::to_string(&reads::strays(conn, &ctx, None, 10).unwrap()).unwrap());
+    out.push(serde_json::to_string(&reads::fills(conn, &ctx, None, None, None, 100).unwrap()).unwrap());
     for spent in [false, true] {
         let f = HoldingFilter { owner: None, token: Some(Hash32(TOKEN_COV)), include_spent: spent };
+        out.push(serde_json::to_string(&reads::holdings(conn, &ctx, &f, 100, None).unwrap()).unwrap());
+    }
+    // the holdings of an owner: the owner of one holding of the store
+    let owner: Option<Vec<u8>> = conn
+        .query_row("SELECT w.h FROM token_holdings h JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx LIMIT 1", [], |r| r.get(0))
+        .ok();
+    if let Some(o) = owner {
+        let f = HoldingFilter { owner: Some(o), token: None, include_spent: true };
         out.push(serde_json::to_string(&reads::holdings(conn, &ctx, &f, 100, None).unwrap()).unwrap());
     }
     out.push(serde_json::to_string(&book::snapshot(conn, None).unwrap()).unwrap());
     out
 }
 
-fn open_ro(path: &std::path::Path) -> Connection {
+fn open_ro(path: &Path) -> Connection {
     let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     packed::register(&c).unwrap();
     c
@@ -166,62 +195,174 @@ fn open_ro(path: &std::path::Path) -> Connection {
 /// Bytes of the packed columns: order UTXO states, holding states, genesis states, event details.
 fn state_bytes(conn: &Connection) -> (i64, i64, i64, i64) {
     conn.query_row(
-        "SELECT (SELECT SUM(LENGTH(state)) FROM order_utxos), (SELECT SUM(LENGTH(state)) FROM token_holdings),                 (SELECT SUM(LENGTH(genesis_state)) FROM orders), (SELECT SUM(LENGTH(detail)) FROM order_events)",
+        "SELECT (SELECT SUM(LENGTH(state)) FROM order_utxos), (SELECT SUM(LENGTH(state)) FROM token_holdings), (SELECT SUM(LENGTH(genesis_state)) FROM orders), (SELECT SUM(LENGTH(detail)) FROM order_events)",
         [],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )
     .unwrap()
 }
 
-fn index_sql(conn: &Connection, name: &str) -> Option<String> {
-    conn.query_row("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1", [name], |r| r.get(0)).ok()
+fn config(dir: &Path) -> IndexerConfig {
+    let mut cfg = IndexerConfig { data_dir: dir.to_path_buf(), network: "testnet-10".into(), ..Default::default() };
+    cfg.records.enabled = false;
+    cfg
 }
 
-#[tokio::test]
-async fn migrate_repacks_a_whole_store_and_no_read_changes() {
-    let c = flows().await;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("index.sqlite3");
-    {
-        let g = c.hs.ingest.lock().unwrap();
-        g.conn().execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()]).unwrap();
+/// The columns of `table` of the schema-7 database `conn` (all of them exist in the schema 8 table, bar the ids).
+fn cols(conn: &Connection, table: &str) -> Vec<String> {
+    let mut st = conn.prepare("SELECT name FROM pragma_table_info(?1, 'main') ORDER BY cid").unwrap();
+    st.query_map([table], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+}
+
+/// Writes `dest` as the store an earlier build would have left of the schema 8 store `src`: the layout of schema 7 with the 32-byte
+/// ids in every row. With `whole` it is the store of schema 5 (every state whole, no row counters, the indexes of that time). The
+/// event sequence is moved 50 above its last id, as a reverted tail leaves it.
+fn legacy_store(src: &Path, dest: &Path, whole: bool) {
+    for s in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{s}", dest.display()));
     }
-    // the store as an earlier build left it: every state whole, the indexes of schema 5, schema version 5
-    {
-        let w = Connection::open(&path).unwrap();
-        packed::register(&w).unwrap();
+    let w = Connection::open(dest).unwrap();
+    packed::register(&w).unwrap();
+    w.execute_batch(SCHEMA7).unwrap();
+    w.execute("ATTACH DATABASE ?1 AS cur", [src.to_string_lossy().as_ref()]).unwrap();
+    let list = |t: &str, f: &dyn Fn(&str) -> Option<String>| -> (String, String) {
+        let names = cols(&w, t);
+        let sel = names.iter().map(|c| f(c).unwrap_or_else(|| format!("x.{c}"))).collect::<Vec<_>>().join(", ");
+        (names.join(", "), sel)
+    };
+    let genesis_whole =
+        |o: &str| format!("kob_gstate({o}.genesis_state, {o}.maker, {o}.token_cov_id, {o}.token_tpl_hash, {o}.quote_cov_id)");
+    let go = genesis_whole("o");
+    let run = |sql: String| {
+        w.execute(&sql, []).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    };
+    let (c, s) = list("orders", &|c| (whole && c == "genesis_state").then(|| genesis_whole("x")));
+    run(format!("INSERT INTO orders ({c}) SELECT {s} FROM cur.orders x ORDER BY x.id"));
+    let (c, s) = list("order_utxos", &|c| match c {
+        "covenant_id" => Some("o.covenant_id".to_string()),
+        "state" if whole => Some(format!("kob_ustate(x.state, {go})")),
+        _ => None,
+    });
+    run(format!(
+        "INSERT INTO order_utxos ({c}) SELECT {s} FROM cur.order_utxos x JOIN cur.orders o ON o.id = x.order_id ORDER BY x.rowid"
+    ));
+    let (c, s) = list("order_events", &|c| match c {
+        "covenant_id" => Some("o.covenant_id".to_string()),
+        "token_cov_id" => Some("t.h".to_string()),
+        "detail" if whole => Some("kob_dtext(x.detail)".to_string()),
+        _ => None,
+    });
+    run(format!("INSERT INTO order_events ({c}) SELECT {s} FROM cur.order_events x JOIN cur.orders o ON o.id = x.order_id LEFT JOIN cur.ids t ON t.id = x.token_id ORDER BY x.id"));
+    let (c, s) = list("order_state", &|c| (c == "covenant_id").then(|| "o.covenant_id".to_string()));
+    run(format!(
+        "INSERT INTO order_state ({c}) SELECT {s} FROM cur.order_state x JOIN cur.orders o ON o.id = x.order_id ORDER BY x.order_id"
+    ));
+    let (c, s) = list("order_amends", &|c| (c == "covenant_id").then(|| "o.covenant_id".to_string()));
+    run(format!(
+        "INSERT INTO order_amends ({c}) SELECT {s} FROM cur.order_amends x JOIN cur.orders o ON o.id = x.order_id ORDER BY x.id"
+    ));
+    let (c, s) = list("token_utxos", &|c| match c {
+        "token_cov_id" => Some("t.h".to_string()),
+        "owner" => Some("o.covenant_id".to_string()),
+        _ => None,
+    });
+    run(format!("INSERT INTO token_utxos ({c}) SELECT {s} FROM cur.token_utxos x JOIN cur.ids t ON t.id = x.token_id JOIN cur.orders o ON o.id = x.order_id ORDER BY x.rowid"));
+    let (c, s) = list("token_holdings", &|c| match c {
+        "token_cov_id" => Some("t.h".to_string()),
+        "owner" => Some("w.h".to_string()),
+        "state" if whole => Some("kob_hstate(x.state, x.family, w.h, x.owner_kind, x.amount)".to_string()),
+        _ => None,
+    });
+    run(format!("INSERT INTO token_holdings ({c}) SELECT {s} FROM cur.token_holdings x JOIN cur.ids t ON t.id = x.token_id JOIN cur.ids w ON w.id = x.owner_id ORDER BY x.rowid"));
+    for t in [
+        "blocks",
+        "token_events",
+        "rejects",
+        "candles",
+        "candle_meta",
+        "candle_dirty",
+        "order_flags",
+        "pair_fills",
+        "kcc23_candidates",
+        "kcc23_txs",
+        "kcc23_declarations",
+    ] {
+        let names = cols(&w, t).join(", ");
+        run(format!("INSERT INTO {t} ({names}) SELECT {names} FROM cur.{t} ORDER BY 1"));
+    }
+    run("INSERT INTO meta (k, v) SELECT k, v FROM cur.meta WHERE k NOT IN ('schema_version')".to_string());
+    if whole {
+        // schema 5: no row counters, no program counts, the indexes of that time
         w.execute_batch(
-            "UPDATE order_utxos SET state = kob_ustate(state, (SELECT kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id) FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)); \
-             UPDATE orders SET genesis_state = kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id); \
-             UPDATE order_events SET detail = kob_dtext(detail); \
-             UPDATE token_holdings SET state = kob_hstate(state, family, owner, owner_kind, amount); \
+            "DROP TRIGGER holding_programs_insert; DROP TRIGGER holding_programs_delete; DROP TRIGGER holding_programs_update; \
+             DROP TABLE holding_programs; DELETE FROM meta WHERE k IN ('holding_programs', 'counters'); \
              DROP INDEX order_events_fills; DROP INDEX order_events_fill_ts; \
              CREATE INDEX order_events_fills ON order_events (kind, token_cov_id, id); \
              CREATE INDEX order_events_fill_ts ON order_events (kind, token_cov_id, ts); \
              CREATE INDEX token_holdings_owner ON token_holdings (owner, token_cov_id); \
-             CREATE INDEX token_holdings_token_program ON token_holdings (token_cov_id, program); \
-             DROP TRIGGER holding_programs_insert; DROP TRIGGER holding_programs_delete; DROP TRIGGER holding_programs_update; \
-             DROP TABLE holding_programs; DELETE FROM meta WHERE k = 'holding_programs'; \
-             UPDATE meta SET v = '5' WHERE k = 'schema_version';",
+             CREATE INDEX token_holdings_token_program ON token_holdings (token_cov_id, program);",
         )
         .unwrap();
+        let triggers: Vec<String> = {
+            let mut st = w.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'counters_%'").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        for t in triggers {
+            w.execute_batch(&format!("DROP TRIGGER {t}")).unwrap();
+        }
+        w.execute_batch("DROP TABLE counters").unwrap();
     }
-    let whole = open_ro(&path);
-    let (utxo_whole, holding_whole, genesis_whole, detail_whole) = state_bytes(&whole);
-    let digests_before = table_digests(&whole);
-    assert!(digests_before.iter().find(|d| d.0 == "order_utxos").unwrap().1 >= 4);
-    drop(whole);
+    // the sequences of the autoincrement tables, as the source had them, the events' ahead of their last id
+    w.execute_batch(
+        "UPDATE sqlite_sequence SET seq = (SELECT seq FROM cur.sqlite_sequence c WHERE c.name = sqlite_sequence.name) \
+         WHERE name IN (SELECT name FROM cur.sqlite_sequence); \
+         UPDATE sqlite_sequence SET seq = seq + 50 WHERE name = 'order_events';",
+    )
+    .unwrap();
+    w.execute(
+        "INSERT INTO meta (k, v) VALUES ('schema_version', ?1) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+        [if whole { "5" } else { "7" }],
+    )
+    .unwrap();
+    w.execute_batch("DETACH DATABASE cur").unwrap();
+}
 
-    let mut cfg = IndexerConfig { data_dir: dir.path().to_path_buf(), network: "testnet-10".into(), ..Default::default() };
-    cfg.records.enabled = false;
+fn sequence(conn: &Connection, table: &str) -> i64 {
+    conn.query_row("SELECT seq FROM sqlite_sequence WHERE name = ?1", [table], |r| r.get(0)).unwrap()
+}
+
+/// `VACUUM INTO` a file of the store the flows ran on.
+fn snapshot_file(c: &Ctx, path: &Path) {
+    let g = c.hs.ingest.lock().unwrap();
+    g.conn().execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()]).unwrap();
+}
+
+#[tokio::test]
+async fn migrate_rebuilds_a_schema_5_store_as_schema_8_and_no_read_changes() {
+    let c = flows().await;
+    let dir = tempfile::tempdir().unwrap();
+    let cur = dir.path().join("current.sqlite3");
+    snapshot_file(&c, &cur);
+    let path = dir.path().join("index.sqlite3");
+    legacy_store(&cur, &path, true);
+    std::fs::remove_file(&cur).unwrap();
+    let digests_before = {
+        let g = c.hs.ingest.lock().unwrap();
+        table_digests(g.conn())
+    };
+    assert!(digests_before.iter().find(|d| d.0 == "order_utxos").unwrap().1 >= 4);
+    let (utxo_whole, holding_whole, genesis_whole, detail_whole) = state_bytes(&open_ro(&path));
+    let seq_before = sequence(&open_ro(&path), "order_events");
+
+    let cfg = config(dir.path());
     let mut lines = vec![];
     let rep = storage::migrate(&cfg, storage::Options::default(), |l| lines.push(l.to_string())).unwrap();
-    assert!(rep.changed("order_utxos.state") > 0 && rep.changed("token_holdings.state") > 0, "{rep:?}");
-    assert!(rep.changed("orders.genesis_state") > 0 && rep.changed("order_events.detail") > 0, "{rep:?}");
-    assert_eq!(rep.indexes_dropped, ["token_holdings_owner", "token_holdings_token_program"]);
-    assert_eq!(rep.indexes_swapped, ["order_events_fills", "order_events_fill_ts"]);
-    let old = rep.kept_old.clone().expect("compacted");
+    assert_eq!(rep.from_schema, 5, "{lines:?}");
+    assert_eq!(rep.rows("orders"), digests_before.iter().find(|d| d.0 == "orders").unwrap().1);
+    assert!(rep.ids > 0);
+    let old = rep.kept_old.clone().expect("rebuilt");
     assert!(old.exists() && old.to_string_lossy().ends_with("index.sqlite3.before-migrate"));
+    assert!(!dir.path().join("index.sqlite3.migrating").exists());
 
     let after = open_ro(&path);
     let (utxo_after, holding_after, genesis_after, detail_after) = state_bytes(&after);
@@ -229,24 +370,29 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
     assert!(holding_after < holding_whole / 2, "{holding_after} vs {holding_whole}");
     assert!(genesis_after < genesis_whole / 2, "{genesis_after} vs {genesis_whole}");
     assert!(detail_after < detail_whole, "{detail_after} vs {detail_whole}");
-    assert_eq!(table_digests(&after), digests_before, "every table reads the same, its states decoded");
-    for name in ["order_events_fills", "order_events_fill_ts"] {
-        assert!(index_sql(&after, name).unwrap().contains("WHERE kind = 'fill'"), "{name}");
-    }
-    assert!(index_sql(&after, "token_holdings_owner").is_none() && index_sql(&after, "token_holdings_token_program").is_none());
-    // the programs of the holdings, counted at the start of the migration, are what a count of the holdings says
-    let counted: Vec<(Vec<u8>, String, i64)> = {
-        let mut st = after.prepare("SELECT token_cov_id, program, n FROM holding_programs ORDER BY 1, 2").unwrap();
-        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(|r| r.unwrap()).collect()
-    };
-    let real: Vec<(Vec<u8>, String, i64)> = {
-        let mut st = after.prepare("SELECT token_cov_id, program, COUNT(*) FROM token_holdings GROUP BY 1, 2 ORDER BY 1, 2").unwrap();
-        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(|r| r.unwrap()).collect()
-    };
-    assert!(!real.is_empty());
-    assert_eq!(counted, real);
-    assert_eq!(db::meta_get(&after, "schema_version").unwrap().as_deref(), Some("7"));
+    // every table reads the same: ids joined back, states decoded (the counters were counted afresh, and equal what the writer kept)
+    assert_eq!(table_digests(&after), digests_before);
+    assert_eq!(db::meta_get(&after, "schema_version").unwrap().as_deref(), Some(db::SCHEMA_VERSION.to_string().as_str()));
     assert_eq!(after.query_row::<String, _, _>("PRAGMA integrity_check", [], |r| r.get(0)).unwrap(), "ok");
+    // the sequence of the events is kept (an id is never reused), and the event ids are the old ones
+    assert_eq!(sequence(&after, "order_events"), seq_before);
+    // the fills-only indexes of schema.sql, none of the indexes of schema 5
+    let index_sql = |name: &str| -> Option<String> {
+        after.query_row("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1", [name], |r| r.get(0)).ok()
+    };
+    for name in ["order_events_fills", "order_events_fill_ts"] {
+        assert!(index_sql(name).unwrap().contains("WHERE kind = 'fill'"), "{name}");
+    }
+    assert!(index_sql("token_holdings_owner").is_none() && index_sql("token_holdings_token_program").is_none());
+    // the programs of the holdings are what a count of the holdings says
+    let counted: i64 = after.query_row("SELECT SUM(n) FROM holding_programs", [], |r| r.get(0)).unwrap();
+    let real: i64 = after.query_row("SELECT COUNT(*) FROM token_holdings", [], |r| r.get(0)).unwrap();
+    assert!(real > 0);
+    assert_eq!(counted, real);
+    // the ids are what the rows name: every id is used, none twice
+    let (ids, distinct): (i64, i64) =
+        after.query_row("SELECT COUNT(*), COUNT(DISTINCT h) FROM ids", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!(ids, distinct);
 
     // the API reads: the migrated store answers what the in-memory store the flows ran on answers
     let migrated = reads_json(&after);
@@ -254,47 +400,108 @@ async fn migrate_repacks_a_whole_store_and_no_read_changes() {
         let g = c.hs.ingest.lock().unwrap();
         reads_json(g.conn())
     };
-    assert_eq!(migrated, original);
+    assert_eq!(migrated.len(), original.len());
+    for (i, (m, o)) in migrated.iter().zip(&original).enumerate() {
+        if m != o {
+            let at = m.chars().zip(o.chars()).position(|(x, y)| x != y).unwrap_or(0);
+            let dir = std::env::temp_dir();
+            std::fs::write(dir.join("sm_migrated.json"), m).unwrap();
+            std::fs::write(dir.join("sm_original.json"), o).unwrap();
+            panic!("read {i} differs at {at} (both written to {})", dir.display());
+        }
+    }
     drop(after);
 
     // a second run changes nothing (and keeps the first run's rollback file out of the way)
     std::fs::remove_file(&old).unwrap();
     let again = storage::migrate(&cfg, storage::Options::default(), |_| {}).unwrap();
-    assert!(again.columns.iter().all(|c| c.changed == 0), "{again:?}");
-    assert!(again.indexes_swapped.is_empty() && again.indexes_dropped.is_empty());
+    assert_eq!(again.from_schema, db::SCHEMA_VERSION);
+    assert!(again.tables.is_empty() && again.kept_old.is_none(), "{again:?}");
     assert_eq!(table_digests(&open_ro(&path)), digests_before);
 }
 
 #[tokio::test]
-async fn a_store_written_by_this_build_is_packed_already_and_the_migration_changes_nothing() {
-    let c = flows().await;
+async fn a_schema_7_store_is_migrated_in_the_middle_of_a_chain_and_the_indexer_goes_on_from_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.sqlite3");
-    {
+    let mut c = Ctx::with(Harness::new(db::open_writer(&path, "testnet-10").unwrap(), None));
+    let (cfg, p) = (config(dir.path()), path.clone());
+    let d = dir.path().to_path_buf();
+    scenario(&mut c, move |c| {
+        let node = c.hs.node.clone();
+        let cur = d.join("current.sqlite3");
+        snapshot_file(c, &cur);
+        // the indexer lets go of the file (a placeholder store in its place), the file becomes the store of schema 7 and is migrated
+        c.hs = Harness::new(db::open_memory("testnet-10").unwrap(), None);
+        legacy_store(&cur, &p, false);
+        std::fs::remove_file(&cur).unwrap();
+        let rep = storage::migrate(&cfg, storage::Options::default(), |_| {}).unwrap();
+        assert_eq!(rep.from_schema, 7);
+        let w = db::open_writer(&p, "testnet-10").unwrap();
+        // the next event id is above every id the old store gave out (the sequence was ahead of the last event)
+        assert!(sequence(&w, "order_events") >= 50);
+        c.hs = Harness::with_node(node, w, None, wide_window());
+    })
+    .await;
+    let control = flows().await;
+    let migrated = {
         let g = c.hs.ingest.lock().unwrap();
-        let conn = g.conn();
-        // the writer packs: an order that was only placed has the few bytes of its genesis state's delta, never the 300
-        let (n, short): (i64, i64) = conn
-            .query_row(
-                "SELECT COUNT(*), SUM(LENGTH(u.state) < LENGTH((SELECT kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id) FROM orders o WHERE o.covenant_id = u.covenant_id)) / 2) FROM order_utxos u",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert!(n >= 4 && short >= 1, "{n} {short}");
-        // a holding is shorter than its 112 whole bytes (an extension commitment is the part it keeps)
-        let holdings_packed: i64 =
-            conn.query_row("SELECT COUNT(*) FROM token_holdings WHERE LENGTH(state) < 100", [], |r| r.get(0)).unwrap();
-        assert!(holdings_packed >= 1);
-        conn.execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()]).unwrap();
+        (table_digests(g.conn()), reads_json(g.conn()))
+    };
+    let straight = {
+        let g = control.hs.ingest.lock().unwrap();
+        (table_digests(g.conn()), reads_json(g.conn()))
+    };
+    // the rows the chain added after the migration are the rows it adds to a store that was never migrated, except the ids of the events
+    // (the migrated sequence skipped 50)
+    let strip = |v: &Vec<(String, u64, String)>| -> Vec<(String, u64)> { v.iter().map(|d| (d.0.clone(), d.1)).collect() };
+    assert_eq!(strip(&migrated.0), strip(&straight.0));
+    for ((name, _, a), (_, _, b)) in migrated.0.iter().zip(&straight.0) {
+        // the event ids differ by the skipped sequence, and the candles' position in the events (meta) follows them
+        if !matches!(name.as_str(), "order_events" | "meta") {
+            assert_eq!(a, b, "{name}");
+        }
     }
-    let before = table_digests(&open_ro(&path));
-    let mut cfg = IndexerConfig { data_dir: dir.path().to_path_buf(), network: "testnet-10".into(), ..Default::default() };
-    cfg.records.enabled = false;
-    let rep = storage::migrate(&cfg, storage::Options { compact: false, compress_log: false }, |_| {}).unwrap();
-    assert!(rep.columns.iter().all(|c| c.changed == 0), "{rep:?}");
-    assert!(rep.indexes_swapped.is_empty() && rep.indexes_dropped.is_empty());
-    assert_eq!(table_digests(&open_ro(&path)), before);
+    assert_eq!(migrated.1.len(), straight.1.len());
+    let g = c.hs.ingest.lock().unwrap();
+    assert_eq!(g.conn().query_row::<String, _, _>("PRAGMA integrity_check", [], |r| r.get(0)).unwrap(), "ok");
+    // the events the chain added after the migration carry ids above the old sequence
+    let high: i64 = g.conn().query_row("SELECT COUNT(*) FROM order_events WHERE id > 50", [], |r| r.get(0)).unwrap();
+    assert!(high >= 1);
+}
+
+#[tokio::test]
+async fn an_old_layout_store_is_refused_untouched_and_a_row_the_integers_cannot_hold_stops_the_migration() {
+    let c = flows().await;
+    let dir = tempfile::tempdir().unwrap();
+    let cur = dir.path().join("current.sqlite3");
+    snapshot_file(&c, &cur);
+    let path = dir.path().join("index.sqlite3");
+    legacy_store(&cur, &path, false);
+    std::fs::remove_file(&cur).unwrap();
+
+    // this build opens no store of an older layout, for writing or for reading, and says what to run
+    for e in [db::open_writer(&path, "testnet-10").err().unwrap(), db::open_reader(&path, "testnet-10").err().unwrap()] {
+        let msg = e.to_string();
+        assert!(msg.contains("index migrate") && msg.contains("schema 7"), "{msg}");
+    }
+
+    // an event of an order that has no row: the integer layout cannot hold it, so nothing is migrated and nothing is changed
+    {
+        let w = Connection::open(&path).unwrap();
+        w.execute(
+            "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind, closes) VALUES (?1, 1, 1, 1, ?1, 0, 'cancel', 0)",
+            [vec![0xEEu8; 32]],
+        )
+        .unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    let cfg = config(dir.path());
+    let err = storage::migrate(&cfg, storage::Options::default(), |_| {}).unwrap_err().to_string();
+    assert!(err.contains("order_events") && err.contains("untouched"), "{err}");
+    assert!(!dir.path().join("index.sqlite3.migrating").exists(), "the half-built file is removed");
+    assert!(!dir.path().join("index.sqlite3.before-migrate").exists());
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the old store is byte for byte what it was");
 }
 
 /// A store of whole values (what an earlier build wrote) goes on being indexed by this build: the rows the flow adds are packed, the ones
@@ -303,13 +510,17 @@ async fn a_store_written_by_this_build_is_packed_already_and_the_migration_chang
 async fn a_whole_store_mixes_with_the_packed_rows_this_build_adds_and_reads_the_same() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.sqlite3");
-    let c = Ctx::with(Harness::new(db::open_writer(&path, "testnet-10").unwrap(), None));
-    scenario(&c, || {
+    let mut c = Ctx::with(Harness::new(db::open_writer(&path, "testnet-10").unwrap(), None));
+    let p = path.clone();
+    scenario(&mut c, move |_| {
         // everything indexed so far is made whole, as an earlier build left it
-        let w = Connection::open(&path).unwrap();
+        let w = Connection::open(&p).unwrap();
         packed::register(&w).unwrap();
         w.execute_batch(
-            "UPDATE order_utxos SET state = kob_ustate(state, (SELECT kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id) FROM orders g WHERE g.covenant_id = order_utxos.covenant_id));              UPDATE orders SET genesis_state = kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id);              UPDATE order_events SET detail = kob_dtext(detail);              UPDATE token_holdings SET state = kob_hstate(state, family, owner, owner_kind, amount);",
+            "UPDATE order_utxos SET state = kob_ustate(state, (SELECT kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id) FROM orders g WHERE g.id = order_utxos.order_id)); \
+             UPDATE orders SET genesis_state = kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id); \
+             UPDATE order_events SET detail = kob_dtext(detail); \
+             UPDATE token_holdings SET state = kob_hstate(state, family, (SELECT h FROM ids WHERE id = token_holdings.owner_id), owner_kind, amount);",
         )
         .unwrap();
     })
@@ -334,4 +545,39 @@ async fn a_whole_store_mixes_with_the_packed_rows_this_build_adds_and_reads_the_
         .unwrap();
     assert!(whole >= 1 && short >= 1, "{whole} whole and {short} packed genesis states");
     assert_eq!(table_digests(g.conn()), table_digests(control.hs.ingest.lock().unwrap().conn()));
+}
+
+#[tokio::test]
+async fn an_unknown_table_stops_the_migration_and_a_lean_store_stays_lean() {
+    let c = flows().await;
+    let dir = tempfile::tempdir().unwrap();
+    let cur = dir.path().join("current.sqlite3");
+    snapshot_file(&c, &cur);
+    let path = dir.path().join("index.sqlite3");
+    legacy_store(&cur, &path, false);
+    std::fs::remove_file(&cur).unwrap();
+    // a table the old store has and this build does not would be lost: the migration says so and builds nothing
+    Connection::open(&path).unwrap().execute_batch("CREATE TABLE mystery (x)").unwrap();
+    let err = storage::migrate(&config(dir.path()), storage::Options::default(), |_| {}).unwrap_err().to_string();
+    assert!(err.contains("mystery") && err.contains("untouched"), "{err}");
+    assert!(!dir.path().join("index.sqlite3.migrating").exists());
+    Connection::open(&path).unwrap().execute_batch("DROP TABLE mystery").unwrap();
+
+    // a lean store (incremental auto-vacuum) is rebuilt as one
+    let mut lean = config(dir.path());
+    lean.lean = true;
+    let rep = storage::migrate(&lean, storage::Options::default(), |_| {}).unwrap();
+    assert_eq!(rep.from_schema, 7);
+    let after = open_ro(&path);
+    let auto_vacuum: i64 = after.query_row("PRAGMA auto_vacuum", [], |r| r.get(0)).unwrap();
+    assert_eq!(auto_vacuum, 2);
+    let original = {
+        let g = c.hs.ingest.lock().unwrap();
+        table_digests(g.conn())
+    };
+    // a lean store keeps no candle aggregates (the writer empties them and records that: `candles::configure`); every other table is as it was
+    let kept = |v: Vec<(String, u64, String)>| -> Vec<(String, u64, String)> {
+        v.into_iter().filter(|d| !matches!(d.0.as_str(), "candles" | "candle_meta" | "meta")).collect()
+    };
+    assert_eq!(kept(table_digests(&after)), kept(original));
 }

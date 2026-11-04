@@ -53,12 +53,17 @@ async fn ifd_buy_first_entry_creates_exits_that_take_profit() {
     assert_eq!(v.children.as_deref(), Some(&[exit.to_hex()][..]));
     assert_eq!(c.hs.event_kinds(&exit), ["create"]);
     // the exit's custody is exactly the bought amount
-    let amount: i64 = c.hs.query("SELECT amount FROM token_utxos WHERE owner = ?1 AND role = 'custody'", [&exit.0[..]]);
+    let amount: i64 = c.hs.query(
+        "SELECT amount FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND role = 'custody'",
+        [&exit.0[..]],
+    );
     assert_eq!(amount, 4 * WHOLE);
     let cv = view(&c, &exit).custody.expect("ask-side exit has a custody check");
     assert!(cv.ok, "{cv:?}");
-    let entry_fill_detail: String =
-        c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let entry_fill_detail: String = c.hs.query(
+        "SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'fill'",
+        [&cov.0[..]],
+    );
     assert!(entry_fill_detail.contains(&exit.to_hex()), "the fill event names its exit");
 
     // the exit takes profit on all 4 whole tokens (leg 0): it closes; the entry is untouched
@@ -112,7 +117,13 @@ async fn ifd_sell_first_entry_holds_custody_and_creates_bid_exits() {
     assert!(cv.ok, "{cv:?}");
     assert_eq!(cv.expected_amount.as_deref(), Some("6000"));
     // the bid-side exit owns no tokens
-    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1", [&exit.0[..]]), 0);
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&exit.0[..]]
+        ),
+        0
+    );
 }
 
 #[tokio::test]
@@ -170,21 +181,32 @@ async fn repeat_buy_first_cycle_merges_take_profits_into_the_entry() {
     assert_eq!(c.hs.tip_state(&exit), Some(AnyState::KobCondAsk(exit1.clone())));
     assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "rearm"]);
     assert_eq!(c.hs.event_kinds(&exit), ["create", "fill"]);
-    let d: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&exit.0[..]]);
+    let d: String = c.hs.query(
+        "SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'fill'",
+        [&exit.0[..]],
+    );
     assert!(d.contains("merged_into") && d.contains(&cov.to_hex()), "{d}");
-    let d: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'rearm'", [&cov.0[..]]);
+    let d: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'rearm'", [&cov.0[..]]);
     assert!(d.contains(&exit.to_hex()), "the re-arm names the exit that took profit: {d}");
     let (amount, filled): (i64, i64) = {
         let g = c.hs.ingest.lock().unwrap();
         g.conn()
-            .query_row("SELECT amount FROM order_events WHERE covenant_id = ?1 AND kind = 'rearm'", [&cov.0[..]], |r| {
-                Ok((r.get(0)?, 0))
-            })
+            .query_row(
+                "SELECT amount FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'rearm'",
+                [&cov.0[..]],
+                |r| Ok((r.get(0)?, 0)),
+            )
             .unwrap()
     };
     assert_eq!((amount, filled), (3 * WHOLE, 0));
     // the entry's own fills exclude the re-armed amount
-    assert_eq!(c.hs.query::<i64>("SELECT filled_amount FROM order_state WHERE covenant_id = ?1", [&cov.0[..]]), 4 * WHOLE);
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT filled_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&cov.0[..]]
+        ),
+        4 * WHOLE
+    );
 
     // the exit's last whole token sells out and merges again: the entry gets its carriers back and 10 whole tokens
     let entry_utxo = c.w.order(&tp, find_cov(&tp, &cov).unwrap(), entry9.clone());
@@ -319,7 +341,10 @@ async fn empty_repeating_entry_waits_without_custody_gets_a_new_one_on_merge_and
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobIfdAsk(waiting.clone())));
     assert_ne!(c.hs.status(&cov), "filled", "a repeating entry outlives its last fill");
     assert_eq!(
-        c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&cov.0[..]]),
+        c.hs.query::<i64>(
+            "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL",
+            [&cov.0[..]]
+        ),
         0,
         "no custody while empty"
     );
@@ -387,7 +412,7 @@ async fn empty_repeating_entry_waits_without_custody_gets_a_new_one_on_merge_and
     }));
     c.push(&[&close]).await;
     assert_eq!(c.hs.status(&cov), "refunded");
-    let d: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'refund'", [&cov.0[..]]);
+    let d: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'refund'", [&cov.0[..]]);
     assert!(d.contains("\"close\""), "the empty entry was closed with `close()`: {d}");
 }
 
@@ -429,7 +454,10 @@ async fn a_buy_stop_entry_triggers_in_the_batch_of_its_evidence_and_creates_its_
     assert_eq!(d["evidence"]["order"], r.cov(&c).to_hex());
     assert_eq!(d["evidence"]["side"], SIDE_BID);
     assert_eq!(d["evidence"]["price"], "256000000");
-    let price: i64 = c.hs.query("SELECT price FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let price: i64 = c.hs.query(
+        "SELECT price FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'fill'",
+        [&cov.0[..]],
+    );
     assert_eq!(price, ib.price_at(true, 0, 0).unwrap());
     assert_eq!(price, 255_000_000, "a banded stop entry fills at its trigger");
     let (_, exit) = find_fresh(&fill, &[cov, r.cov(&c)]).expect("the exit");

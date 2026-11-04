@@ -44,16 +44,24 @@ async fn ask_create_fill_fill_closes() {
     c.push(&[&fill2]).await;
     assert_eq!(c.hs.status(&cov), "filled");
     assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "fill"]);
-    let filled: i64 = c.hs.query("SELECT filled_amount FROM order_state WHERE covenant_id = ?1", [&cov.0[..]]);
+    let filled: i64 = c
+        .hs
+        .query("SELECT filled_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", [&cov.0[..]]);
     assert_eq!(filled, 10 * WHOLE);
     // custody rows: created by the create, replaced by the first fill, spent by the second
-    let live: i64 = c.hs.query("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&cov.0[..]]);
+    let live: i64 = c.hs.query(
+        "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL",
+        [&cov.0[..]],
+    );
     assert_eq!(live, 0);
-    let total: i64 = c.hs.query("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND role = 'custody'", [&cov.0[..]]);
+    let total: i64 = c.hs.query(
+        "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND role = 'custody'",
+        [&cov.0[..]],
+    );
     assert_eq!(total, 2);
     // the maker's payout is the value of the output at the input's position
     let payout: i64 = c.hs.query(
-        "SELECT payout FROM order_events WHERE covenant_id = ?1 AND txid = ?2",
+        "SELECT payout FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND txid = ?2",
         rusqlite::params![&cov.0[..], &fill1.tx.id[..]],
     );
     assert_eq!(payout as u64, fill1.tx.outputs[0].value);
@@ -85,7 +93,10 @@ async fn ask_cancel_returns_tokens_and_closes() {
     c.push(&[&cancel]).await;
     assert_eq!(c.hs.status(&cov), "cancelled");
     assert_eq!(c.hs.event_kinds(&cov), ["create", "cancel"]);
-    let live: i64 = c.hs.query("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NULL", [&cov.0[..]]);
+    let live: i64 = c.hs.query(
+        "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NULL",
+        [&cov.0[..]],
+    );
     assert_eq!(live, 0, "the custody was spent by the cancel");
 }
 
@@ -133,8 +144,10 @@ async fn a_terminal_bid_fill_reports_the_makers_refund_output() {
     let refund = fill.tx.outputs.last().unwrap();
     assert!(refund.value >= slack, "the slack goes back to the maker: {}", refund.value);
     c.push(&[&fill]).await;
-    let detail: String =
-        c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let detail: String = c.hs.query(
+        "SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'fill'",
+        [&cov.0[..]],
+    );
     let d: serde_json::Value = serde_json::from_str(&detail).unwrap();
     assert_eq!(d["refund_value"].as_str().unwrap().parse::<u64>().unwrap(), refund.value);
     assert_eq!(d["delivery_value"].as_str().unwrap().parse::<u64>().unwrap(), fill.tx.outputs[0].value);
@@ -155,13 +168,18 @@ async fn bid_escrow_fills_and_reports_estimated_amount() {
     c.push(&[&create]).await;
     let cov = c.w.cov(&create, 0);
     assert_eq!(c.hs.status(&cov), "open");
-    let remaining: i64 = c.hs.query("SELECT remaining_amount FROM order_state WHERE covenant_id = ?1", [&cov.0[..]]);
+    let remaining: i64 = c.hs.query(
+        "SELECT remaining_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+        [&cov.0[..]],
+    );
     assert_eq!(
         remaining,
         ((escrow as i64 - DC) as i128 * SCALE as i128 / b0.budget_rate().unwrap() as i128) as i64,
         "an upper bound: the escrow less one delivery carrier, in base units at the budget rate"
     );
-    let exact: i64 = c.hs.query("SELECT amount_exact FROM order_state WHERE covenant_id = ?1", [&cov.0[..]]);
+    let exact: i64 = c
+        .hs
+        .query("SELECT amount_exact FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", [&cov.0[..]]);
     assert_eq!(exact, 0, "a bid's quantity is its escrow, not an exact count");
     // a taker sells 4 whole tokens into it
     let mut b = batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None }]);
@@ -170,7 +188,10 @@ async fn bid_escrow_fills_and_reports_estimated_amount() {
     c.push(&[&fill]).await;
     assert_eq!(c.hs.status(&cov), "partial");
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobBid(b0.clone())), "a bid's script never changes");
-    let remaining: i64 = c.hs.query("SELECT remaining_amount FROM order_state WHERE covenant_id = ?1", [&cov.0[..]]);
+    let remaining: i64 = c.hs.query(
+        "SELECT remaining_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+        [&cov.0[..]],
+    );
     assert!(
         remaining < ((escrow as i64 - DC) as i128 * SCALE as i128 / b0.budget_rate().unwrap() as i128) as i64,
         "the estimate falls with the escrow"
@@ -179,8 +200,10 @@ async fn bid_escrow_fills_and_reports_estimated_amount() {
     let n: i64 = c.hs.query("SELECT COUNT(*) FROM token_utxos", []);
     assert_eq!(n, 0);
     // the fill event reports the escrow before and after: what the buy drew never exceeds its all-in limit plus the delivery carrier
-    let detail: String =
-        c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let detail: String = c.hs.query(
+        "SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'fill'",
+        [&cov.0[..]],
+    );
     let d: serde_json::Value = serde_json::from_str(&detail).unwrap();
     let before: i64 = d["escrow_before"].as_str().unwrap().parse().unwrap();
     let after: i64 = d["escrow_after"].as_str().unwrap().parse().unwrap();
@@ -255,16 +278,21 @@ async fn market_ioc_auction_partial_fill_returns_the_rest_as_a_kill() {
     let (amount, closes): (i64, i64) = {
         let g = c.hs.ingest.lock().unwrap();
         g.conn()
-            .query_row("SELECT amount, closes FROM order_events WHERE covenant_id = ?1 AND kind = 'kill'", [&cov.0[..]], |r| {
+            .query_row("SELECT amount, closes FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'kill'", [&cov.0[..]], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .unwrap()
     };
     assert_eq!((amount, closes), (6 * WHOLE, 1), "6 unfilled whole tokens were returned");
-    let filled: i64 = c.hs.query("SELECT filled_amount FROM order_state WHERE covenant_id = ?1", [&cov.0[..]]);
+    let filled: i64 = c
+        .hs
+        .query("SELECT filled_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", [&cov.0[..]]);
     assert_eq!(filled, 4 * WHOLE);
     // the fill quote is the auction bound at t
-    let price: i64 = c.hs.query("SELECT price FROM order_events WHERE covenant_id = ?1 AND kind = 'fill'", [&cov.0[..]]);
+    let price: i64 = c.hs.query(
+        "SELECT price FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'fill'",
+        [&cov.0[..]],
+    );
     assert_eq!(price, a.price_at(t, daa).unwrap());
 }
 
@@ -295,7 +323,10 @@ async fn ioc_and_fok_are_killed_by_a_keeper_after_the_window() {
         c.push(&[&refund]).await;
         assert_eq!(c.hs.status(&cov), "killed", "tif {tif}");
         assert_eq!(c.hs.event_kinds(&cov), ["create", "kill"]);
-        let left: i64 = c.hs.query("SELECT remaining_amount FROM order_state WHERE covenant_id = ?1", [&cov.0[..]]);
+        let left: i64 = c.hs.query(
+            "SELECT remaining_amount FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&cov.0[..]],
+        );
         assert_eq!(left, 10 * WHOLE, "the whole amount came back");
     }
 }
@@ -385,6 +416,6 @@ async fn day_order_deadline_is_recorded_and_flagged() {
     let v = view_at(&c, &cov, d.deadline);
     assert!(v.deadline_passed, "conforming matchers stop at the deadline (UTC clock)");
     assert_eq!(v.status, "open", "on chain the order lives until its expiry");
-    let ev: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = 'create'", [&cov.0[..]]);
+    let ev: String = c.hs.query("SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'create'", [&cov.0[..]]);
     assert!(ev.contains(&d.deadline.to_string()));
 }

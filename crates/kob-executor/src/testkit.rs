@@ -1249,35 +1249,35 @@ pub fn snapshot(conn: &Connection) -> String {
         &[23],
     );
     dump(
-        "SELECT txid, idx, covenant_id, value, spk, kob_ustate(state, (SELECT kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id) FROM orders g WHERE g.covenant_id = order_utxos.covenant_id)), created_block, created_daa, spent_block, spent_txid, spent_entry, spent_amount FROM order_utxos ORDER BY txid, idx",
+        "SELECT u.txid, u.idx, g.covenant_id, u.value, u.spk, kob_ustate(u.state, kob_gstate(g.genesis_state, g.maker, g.token_cov_id, g.token_tpl_hash, g.quote_cov_id)), u.created_block, u.created_daa, u.spent_block, u.spent_txid, u.spent_entry, u.spent_amount FROM order_utxos u JOIN orders g ON g.id = u.order_id ORDER BY u.txid, u.idx",
         12,
         &mut out,
         "utxo",
         &[6, 8],
     );
     dump(
-        "SELECT covenant_id, block_seq, daa, ts, txid, tx_pos, kind, token_cov_id, side, amount, price, payout, closes, kob_dtext(detail) FROM order_events ORDER BY id",
+        "SELECT o.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, t.h, e.side, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail) FROM order_events e JOIN orders o ON o.id = e.order_id LEFT JOIN ids t ON t.id = e.token_id ORDER BY e.id",
         14,
         &mut out,
         "event",
         &[1],
     );
     dump(
-        "SELECT covenant_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa FROM order_state ORDER BY covenant_id",
+        "SELECT o.covenant_id, s.status, s.filled_amount, s.remaining_amount, s.amount_exact, s.cur_txid, s.cur_idx, s.cur_value, s.state_known, s.last_block, s.last_daa FROM order_state s JOIN orders o ON o.id = s.order_id ORDER BY o.covenant_id",
         11,
         &mut out,
         "state",
         &[9],
     );
     dump(
-        "SELECT txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa, spent_block, spent_txid FROM token_utxos ORDER BY txid, idx",
+        "SELECT u.txid, u.idx, t.h, o.covenant_id, u.amount, u.value, u.role, u.created_block, u.created_daa, u.spent_block, u.spent_txid FROM token_utxos u JOIN ids t ON t.id = u.token_id JOIN orders o ON o.id = u.order_id ORDER BY u.txid, u.idx",
         11,
         &mut out,
         "token_utxo",
         &[7, 9],
     );
     dump(
-        "SELECT txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, kob_hstate(state, family, owner, owner_kind, amount), role, created_block, created_daa, spent_block, spent_txid FROM token_holdings ORDER BY txid, idx",
+        "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx",
         15,
         &mut out,
         "holding",
@@ -1292,7 +1292,7 @@ pub fn snapshot(conn: &Connection) -> String {
     );
     dump("SELECT block_seq, txid, reason FROM rejects ORDER BY id", 3, &mut out, "reject", &[0]);
     dump(
-        "SELECT covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason FROM order_amends ORDER BY id",
+        "SELECT o.covenant_id, a.block_seq, a.price, a.tip, a.tif, a.expiry_daa, a.active_from, a.deadline, a.listed, a.unlisted_reason FROM order_amends a JOIN orders o ON o.id = a.order_id ORDER BY a.id",
         10,
         &mut out,
         "amend",
@@ -1505,7 +1505,7 @@ impl Harness {
     }
 
     pub fn status(&self, cov: &Hash32) -> String {
-        self.query("SELECT status FROM order_state WHERE covenant_id = ?1", [&cov.0[..]])
+        self.query("SELECT status FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", [&cov.0[..]])
     }
 
     /// The proven state of an order's current UTXO.
@@ -1514,7 +1514,7 @@ impl Harness {
         let (contract, state): (String, Option<Vec<u8>>) = g
             .conn()
             .query_row(
-                "SELECT o.contract, kob_ustate(u.state, kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id)) FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+                "SELECT o.contract, kob_ustate(u.state, kob_gstate(o.genesis_state, o.maker, o.token_cov_id, o.token_tpl_hash, o.quote_cov_id)) FROM orders o JOIN order_state s ON s.order_id = o.id \
                  LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx WHERE o.covenant_id = ?1",
                 [&cov.0[..]],
                 |r| Ok((r.get(0)?, r.get(1)?)),
@@ -1526,14 +1526,17 @@ impl Harness {
     /// Rows of `order_events.kind` of an order, oldest first.
     pub fn event_kinds(&self, cov: &Hash32) -> Vec<String> {
         let g = self.ingest.lock().unwrap();
-        let mut st = g.conn().prepare("SELECT kind FROM order_events WHERE covenant_id = ?1 ORDER BY id").unwrap();
+        let mut st = g
+            .conn()
+            .prepare("SELECT kind FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) ORDER BY id")
+            .unwrap();
         st.query_map([&cov.0[..]], |r| r.get::<_, String>(0)).unwrap().map(|r| r.unwrap()).collect()
     }
 
     /// The `detail` JSON of an order's latest event of `kind` (e.g. `detail["evidence"]` of an arm).
     pub fn event_detail(&self, cov: &Hash32, kind: &str) -> serde_json::Value {
         let d: String = self.query(
-            "SELECT kob_dtext(detail) FROM order_events WHERE covenant_id = ?1 AND kind = ?2 ORDER BY id DESC LIMIT 1",
+            "SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = ?2 ORDER BY id DESC LIMIT 1",
             rusqlite::params![&cov.0[..], kind],
         );
         serde_json::from_str(&d).unwrap()

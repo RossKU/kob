@@ -46,7 +46,12 @@ async fn stray_is_flagged_never_counted_as_custody_and_swept_by_the_cancel() {
     c.push(&[&stray]).await;
     let roles: Vec<(String, i64)> = {
         let g = c.hs.ingest.lock().unwrap();
-        let mut st = g.conn().prepare("SELECT role, amount FROM token_utxos WHERE owner = ?1 ORDER BY role").unwrap();
+        let mut st = g
+            .conn()
+            .prepare(
+                "SELECT role, amount FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) ORDER BY role",
+            )
+            .unwrap();
         st.query_map([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect()
     };
     assert_eq!(roles, [("custody".to_string(), 10 * WHOLE), ("stray".to_string(), 10 * WHOLE)]);
@@ -141,8 +146,20 @@ async fn tokens_sent_to_an_unknown_covenant_id_are_ignored() {
         )
     };
     assert_eq!(without_holdings(c.hs.snapshot()), without_holdings(before));
-    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1", [&[0x99u8; 32][..]]), 0);
-    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_holdings WHERE role = 'owned' AND owner = ?1", [&[0x99u8; 32][..]]), 1);
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&[0x99u8; 32][..]]
+        ),
+        0
+    );
+    assert_eq!(
+        c.hs.query::<i64>(
+            "SELECT COUNT(*) FROM token_holdings WHERE role = 'owned' AND owner_id = (SELECT id FROM ids WHERE h = ?1)",
+            [&[0x99u8; 32][..]]
+        ),
+        1
+    );
 }
 
 #[tokio::test]
@@ -181,7 +198,7 @@ async fn cancel_replace_closes_the_old_order_and_creates_the_new_one_from_its_pl
     assert_eq!(c.hs.status(&new), "open");
     assert_eq!(c.hs.tip_state(&new), Some(AnyState::KobAsk(new_state)));
     assert!(view(&c, &new).custody.unwrap().ok, "the replacement holds the old custody's amount");
-    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE owner = ?1 AND spent_block IS NOT NULL", [&old.0[..]]), 1);
+    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND spent_block IS NOT NULL", [&old.0[..]]), 1);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -364,7 +381,7 @@ async fn foreign_strays_are_flagged_and_the_maker_sweeps_every_stray_in_place() 
         let g = c.hs.ingest.lock().unwrap();
         let kinds: Vec<String> = g
             .conn()
-            .prepare("SELECT kind FROM order_events WHERE covenant_id = ?1 ORDER BY id")
+            .prepare("SELECT kind FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) ORDER BY id")
             .unwrap()
             .query_map([&cov.0[..]], |r| r.get(0))
             .unwrap()

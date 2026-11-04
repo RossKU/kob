@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::indexer::db::open_memory;
+use crate::indexer::ids::intern;
 use rusqlite::params;
 
 /// A small deterministic generator.
@@ -89,8 +90,8 @@ fn store(seed: u64, n: usize) -> Connection {
         let remaining: Option<i64> = r.pick(&[None, Some(0), Some(10), Some(25)]);
         let (txid, idx) = (r.bytes(), r.below(3) as i64);
         conn.execute(
-            "INSERT OR REPLACE INTO order_state (covenant_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, \
-             cur_value, state_known, last_block, last_daa) VALUES (?1,?2,0,?3,?4,?5,?6,1000,?7,1,?8)",
+            "INSERT OR REPLACE INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, \
+             cur_value, state_known, last_block, last_daa) VALUES ((SELECT id FROM orders WHERE covenant_id = ?1),?2,0,?3,?4,?5,?6,1000,?7,1,?8)",
             params![
                 cov,
                 status,
@@ -107,8 +108,8 @@ fn store(seed: u64, n: usize) -> Connection {
             // the current UTXO's row: unspent, spent (a stale state) or not stored
             if r.below(10) != 0 {
                 conn.execute(
-                    "INSERT INTO order_utxos (txid, idx, covenant_id, value, spk, state, created_block, created_daa, spent_block) \
-                     VALUES (?1,?2,?3,1000,x'00',?4,1,?5,?6)",
+                    "INSERT INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa, spent_block) \
+                     VALUES (?1,?2,(SELECT id FROM orders WHERE covenant_id = ?3),1000,x'00',?4,1,?5,?6)",
                     params![
                         txid,
                         idx,
@@ -125,9 +126,10 @@ fn store(seed: u64, n: usize) -> Connection {
             }
             // custody: none, one (right or wrong amount), two
             for _ in 0..r.pick(&[0u64, 1, 1, 1, 2]) {
+                intern(&conn, &tok(1)).unwrap();
                 conn.execute(
-                    "INSERT INTO token_utxos (txid, idx, token_cov_id, owner, amount, value, role, created_block, created_daa, spent_block) \
-                     VALUES (?1,0,?2,?3,?4,1,?5,1,1,?6)",
+                    "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa, spent_block) \
+                     VALUES (?1,0,(SELECT id FROM ids WHERE h = ?2),(SELECT id FROM orders WHERE covenant_id = ?3),?4,1,?5,1,1,?6)",
                     params![
                         r.bytes(),
                         tok(1),
@@ -149,17 +151,18 @@ fn store(seed: u64, n: usize) -> Connection {
         .unwrap();
     }
     for _ in 0..n {
+        let (txid, idx) = (r.bytes(), r.below(2) as i64);
+        let token = tok(1 + r.below(3) as u8);
+        let owner = vec![1 + r.below(3) as u8; 32];
+        let created_block = r.below(15) as i64;
+        let spent_block = if r.below(3) == 0 { None } else { Some(4i64) };
+        intern(&conn, &token).unwrap();
+        intern(&conn, &owner).unwrap();
         conn.execute(
-            "INSERT INTO token_holdings (txid, idx, token_cov_id, program, family, owner, owner_kind, amount, value, state, role, \
-             created_block, created_daa, spent_block) VALUES (?1,?2,?3,'KCC20Ref_8x8',1,?4,0,5,1,x'08','owned',?5,1,?6)",
-            params![
-                r.bytes(),
-                r.below(2) as i64,
-                tok(1 + r.below(3) as u8),
-                vec![1 + r.below(3) as u8; 32],
-                r.below(15) as i64,
-                if r.below(3) == 0 { None } else { Some(4i64) }
-            ],
+            "INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
+             created_block, created_daa, spent_block) VALUES (?1,?2,(SELECT id FROM ids WHERE h = ?3),'KCC20Ref_8x8',1,\
+             (SELECT id FROM ids WHERE h = ?4),0,5,1,x'08','owned',?5,1,?6)",
+            params![txid, idx, token, owner, created_block, spent_block],
         )
         .unwrap();
     }
@@ -329,7 +332,7 @@ fn sorted(mut v: Vec<Vec<SqlValue>>) -> Vec<String> {
     s
 }
 
-const OLD_FROM: &str = "FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id";
+const OLD_FROM: &str = "FROM orders o JOIN order_state s ON s.order_id = o.id";
 
 #[test]
 fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
@@ -379,7 +382,7 @@ fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
         // the matcher's live orders (listed and not), in the book's order
         for listed in [0i64, 1] {
             let old = format!(
-                "SELECT o.covenant_id, u.txid, u.idx FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+                "SELECT o.covenant_id, u.txid, u.idx FROM orders o JOIN order_state s ON s.order_id = o.id \
                  JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
                  WHERE o.listed = ?1 AND s.state_known = 1 AND u.spent_block IS NULL AND u.state IS NOT NULL AND {} \
                  ORDER BY o.genesis_block, o.covenant_id",
@@ -457,11 +460,11 @@ fn the_holdings_pages_are_the_same_through_the_live_indexes() {
                     let mut args = vec![];
                     if let Some(o) = &owner {
                         args.push(SqlValue::Blob(o.clone()));
-                        sql.push_str(&format!(" AND owner = ?{}", args.len()));
+                        sql.push_str(&format!(" AND owner_id = (SELECT id FROM ids WHERE h = ?{})", args.len()));
                     }
                     if let Some(t) = &token {
                         args.push(SqlValue::Blob(t.0.to_vec()));
-                        sql.push_str(&format!(" AND token_cov_id = ?{}", args.len()));
+                        sql.push_str(&format!(" AND token_id = (SELECT id FROM ids WHERE h = ?{})", args.len()));
                     }
                     if !spent {
                         sql.push_str(" AND spent_block IS NULL");
@@ -494,13 +497,13 @@ fn the_kept_counters_follow_inserts_replacements_and_deletes() {
     // a refresh replaces the state row with another status; a revert deletes orders, states, events and rejects
     conn.execute("UPDATE order_state SET status = 'filled' WHERE rowid % 3 = 0", []).unwrap();
     conn.execute(
-        "INSERT OR REPLACE INTO order_state (covenant_id, status, filled_amount, amount_exact, state_known, last_block, last_daa) \
-         SELECT covenant_id, 'killed', 0, 0, 1, 1, 1 FROM order_state WHERE rowid % 5 = 0",
+        "INSERT OR REPLACE INTO order_state (order_id, status, filled_amount, amount_exact, state_known, last_block, last_daa) \
+         SELECT order_id, 'killed', 0, 0, 1, 1, 1 FROM order_state WHERE rowid % 5 = 0",
         [],
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO order_events (covenant_id, block_seq, daa, ts, txid, tx_pos, kind) SELECT covenant_id, 3, 1, 1, x'00', 0, \
+        "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind) SELECT id, 3, 1, 1, x'00', 0, \
          CASE WHEN rowid % 2 = 0 THEN 'fill' ELSE 'cancel' END FROM orders",
         [],
     )
@@ -539,7 +542,10 @@ fn the_unfiltered_orders_list_reads_a_page_in_index_order_whatever_one_block_hol
         )
         .unwrap();
     let mut s2 = conn
-        .prepare("INSERT INTO order_state (covenant_id, status, filled_amount, state_known, last_block, last_daa) VALUES (?1,'filled',0,1,1,1)")
+        .prepare(
+            "INSERT INTO order_state (order_id, status, filled_amount, state_known, last_block, last_daa) \
+             VALUES ((SELECT id FROM orders WHERE covenant_id = ?1),'filled',0,1,1,1)",
+        )
         .unwrap();
     let n = 240_000i64;
     for i in 0..n {
