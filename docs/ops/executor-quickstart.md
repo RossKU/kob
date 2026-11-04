@@ -34,7 +34,7 @@ node and the other way round. Start on testnet-10 if you have never run one.
 The program is called `kobd` (the KOB daemon; before it was `kob-executor`). Its files keep their names: `kob-executor.toml`, `kob-executor.log`, `kob-operator.key`.
 
 Each `kobd-...` archive holds `kobd` (the daemon: the Executor and the Indexer roles), `kob` (the command-line client), this page, `LICENSE` and a
-`SHA256SUMS` of its files; the release also lists a `SHA256SUMS` of every archive and of the APK. Check the archive you downloaded against
+`SHA256SUMS` of its files; the release also lists a `SHA256SUMS` of every archive and of the APK. The command line alone is also published as `kob-<version>-<network>-<target>` (the `kob` binary, its README, `LICENSE` and `NOTICE`). Check the archive you downloaded against
 it before you run anything:
 
 ```
