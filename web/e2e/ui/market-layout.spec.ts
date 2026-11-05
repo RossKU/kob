@@ -19,7 +19,7 @@ for (const width of [900, 1100, 1280, 1600, 1774]) {
     // the full width of the page content: from the left edge of the book / chart column to the right edge of the ticket column
     expect(Math.abs(f.right - ticket.right), 'right edge = the ticket column').toBeLessThan(2);
     expect(f.left, 'left edge at or before the chart').toBeLessThanOrEqual(chart.left + 1);
-    expect(f.top, 'under the ticket').toBeGreaterThanOrEqual(ticket.bottom - 1);
+    expect(f.top - ticket.bottom, 'under the ticket, with the page gap (12px)').toBeGreaterThanOrEqual(11);
     // the two cards are side by side (one row), the status card folded
     const cards = facts.locator(':scope > section');
     expect(await cards.count()).toBeGreaterThanOrEqual(2);

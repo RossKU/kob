@@ -37,6 +37,8 @@ body:has(.market-page) .container { max-width: 1520px; }
 .mkt-area-details { min-width: 0; }
 @media (min-width: 760px) {
   .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book ticket' 'depth ticket' 'tape ticket' '. ticket'; grid-template-rows: auto auto auto auto 1fr; margin-bottom: -12px; /* the empty last row's gap */ }
+  /* the ticket keeps the page gap (12px) to the facts under the grid when it is the tallest column: the grid's -12px only cancels the empty last row's gap */
+  .mkt-area-ticket { margin-bottom: 12px; }
 }
 @media (min-width: 1200px) {
   /* the last row is an empty one that takes whatever height the ticket still has over the other panels */
