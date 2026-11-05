@@ -166,16 +166,17 @@ export function usdTokenOf<T extends { covenantId: string }>(quoteTokens: Readon
   return tokens.find((x) => quoteTokens[x.covenantId.toLowerCase()] === 'USD') ?? null;
 }
 
-export type HomeTarget = { name: 'pair'; base: string; quote: string } | { name: 'token'; covenantId: string } | { name: 'market' };
+export type HomeTarget = { name: 'pair'; base: string; quote: string } | { name: 'token'; covenantId: string } | { name: 'market' } | { name: 'landing' };
 
 /**
- * The landing screen of config `home`: `list`, `kas-usd`, `usd:<id>`, `market:<id>`, or `auto` = KAS/USD when a USD quote token is configured, else the
+ * The landing screen of config `home`: `landing` (the default: the landing page, src/ui/landing), `list`, `kas-usd`, `usd:<id>`, `market:<id>`, or `auto` = KAS/USD when a USD quote token is configured, else the
  * market page (chart) of the first tradable registry token, else the list. KAS/USD is the USD token's own KAS book shown inverted (a native market with
  * its book, trades and ticket: the token page, whose default orientation for a USD token is KAS/USD), not a derived route. `usd:<id>` is that token in USD:
  * the tradable pair page `<id>/<USD token>` (needs the USD token); `market:<id>` a registry token: otherwise `auto` applies.
  */
 export function resolveHome(home: string, usdToken: string | null, tokens: readonly { covenantId: string; tradable: boolean }[]): HomeTarget {
   const known = (id: string) => tokens.some((x) => x.covenantId === id);
+  if (home === 'landing') return { name: 'landing' };
   if (home === 'list') return { name: 'market' };
   if (home === 'kas-usd' && usdToken) return { name: 'token', covenantId: usdToken };
   const m = /^(usd|market):([0-9a-f]{64})$/.exec(home);

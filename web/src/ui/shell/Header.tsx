@@ -21,7 +21,7 @@ const NAV = [
 ] as const;
 
 /** Logo: the favicon's design (public/favicon.svg), fixed brand colours on a dark tile in both themes (not theme variables). */
-function Logo() {
+export function Logo() {
   return (
     <svg class="brand-mark" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
       <rect width="512" height="512" rx="96" fill="#0f1d1c" />

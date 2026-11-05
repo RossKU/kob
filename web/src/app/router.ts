@@ -1,10 +1,10 @@
 // Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair; the old `#/pair/<base>/<quote>` is an alias), `#/usd/kas` + `#/usd/<covenantId>` (legacy: redirected to the tradable USD pages), `#/orders`, `#/create` (the old `#/issue` leads there),
-// `#/settings`. An empty hash is the landing screen (`home`: config `home`, by default a chart); an unknown one is the market list.
+// `#/settings`. An empty hash is the landing screen (`home`: config `home`, by default the landing page, src/ui/landing; an operator may set a chart or the list); an unknown one is the market list.
 // The parsing / formatting is pure (tested in router.test.ts); only `useRoute` / `navigate` touch `window`.
 import { useEffect, useState } from 'preact/hooks';
 
 export type Route =
-  /** the landing screen (empty hash): resolved by the app from config `home` (a chart by default, or the market list) */
+  /** the landing screen (empty hash): resolved by the app from config `home` (the landing page by default, or a chart, a pair or the market list) */
   | { name: 'home'; covenantId?: undefined }
   | { name: 'market'; covenantId?: undefined; invalidToken?: string }
   /**

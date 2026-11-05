@@ -11,7 +11,7 @@ test('a click on Connect before the extension injects connects to the extension,
   const config = buildWalletConfig({ wallet: 'kasware', secretKey: TEST_KEYS.alice.secretKey });
   // the extension is not there when the page starts; the test lets it appear (as real extensions do, a moment after the page's scripts) right after the click
   await page.addInitScript({ content: `window.__injectWallet = () => { ${mockWalletInitScript(config)} };` });
-  await page.goto('/');
+  await page.goto('/#/market');
   await page.getByTestId('wallet-connect-local-key').click(); // the button as it reads while no wallet is known yet
   await page.evaluate(() => (window as unknown as { __injectWallet: () => void }).__injectWallet());
   await expect(page.getByTestId('wallet-address')).toBeVisible({ timeout: 15_000 });
@@ -20,7 +20,7 @@ test('a click on Connect before the extension injects connects to the extension,
 });
 
 test('without any extension the click opens the private key entry once the first look is over', async ({ appPage: page }) => {
-  await page.goto('/');
+  await page.goto('/#/market');
   await page.getByTestId('wallet-connect-local-key').click();
   await expect(page.getByTestId('signer-overlay')).toBeVisible({ timeout: 15_000 });
 });

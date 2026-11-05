@@ -9,7 +9,7 @@ async function seeded(mock: import('../fixtures').MockClient) {
   return { id: tok.covenant_id, short: `${tok.covenant_id.slice(0, 4)}…${tok.covenant_id.slice(-4)}` };
 }
 
-// `/` is the landing chart (config `home`, default `auto`); the token list lives at `#/market`
+// `/` is the landing page (config `home`, default `landing`: landing.spec.ts); the token list lives at `#/market`
 test.describe('shell and token list', () => {
   test.use({ appPath: '/#/market' });
 
@@ -329,7 +329,7 @@ test.describe('health banners', () => {
 
   test('a lagging or stale indexer is announced and the book is marked as possibly out of date', async ({ appPage, mock }) => {
     await mock.setHealth('following', 20_000); // 2000 s behind
-    await appPage.goto('/');
+    await appPage.goto('/#/market');
     await expect(appPage.getByTestId('banner-indexer')).toContainText('behind');
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-level', 'bad');
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-level', 'bad');

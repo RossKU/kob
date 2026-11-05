@@ -11,9 +11,10 @@ import { HEALTH_CODES } from './health';
 import { ORDER_STATUSES, ORDER_TYPE_KEYS } from '../orders/orders-model';
 import { POSITION_PHASES } from '../orders/position-model';
 import { KNOWN_POWERS } from '../market/token-model';
+import { LANDING_NETWORKS } from '../landing/landing-model';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
-const AREAS = ['ui/kit', 'ui/shell', 'ui/market', 'ui/orders', 'ui/settings', 'app'];
+const AREAS = ['ui/kit', 'ui/shell', 'ui/market', 'ui/orders', 'ui/settings', 'ui/landing', 'app'];
 
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((f) => {
@@ -53,6 +54,7 @@ describe('i18n key usage', () => {
     family('market.chart', ['empty', 'unsupported', 'off']);
     family('market.live', ['live', 'polling', 'off', 'liveHint', 'pollingHint', 'offHint']);
     family('shell.theme', ['toLight', 'toDark']);
+    for (const net of LANDING_NETWORKS) for (const k of ['landing.tx.note', 'landing.trust.audit.body', 'landing.disc.lead', 'landing.disc.tail']) family(k, [net]);
     family('orders.status', ORDER_STATUSES);
     family('orders.source', ['node', 'nodeHint', 'record', 'recordHint', 'none', 'noneHint']);
     family('orders.flow.state', ['pending', 'preparing', 'sending', 'submitted', 'cancelled', 'failed']);

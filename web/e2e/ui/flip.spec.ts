@@ -270,7 +270,8 @@ test.describe('the ticket in an inverted market', () => {
 
 test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker> flipped', () => {
   const QUOTE = 'e7'.repeat(32);
-  test.use({ appConfig: { quoteTokens: { [QUOTE]: 'USD' } } });
+  // home: auto, an operator's explicit landing screen (the default empty hash is the landing page)
+  test.use({ appConfig: { quoteTokens: { [QUOTE]: 'USD' }, home: 'auto' } });
 
   /** the example registry with EXKCC listed and EXUSD (6 decimals) as a second listed token, matching the mock pair seed */
   async function listBoth(page: Page): Promise<void> {
@@ -395,12 +396,16 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
   });
 });
 
-test('the landing screen is a chart, the market list is at #/market', async ({ appPage: page, mock }) => {
-  await listExkcc(page);
-  await page.goto('/');
-  await expect(page.getByTestId('token-page')).toHaveAttribute('data-token', await seeded(mock));
-  await expect(page.getByTestId('price-chart')).toBeVisible();
-  await expect(page.getByTestId('token-list-view')).toHaveCount(0);
-  await page.goto('/#/market');
-  await expect(page.getByTestId('token-list-view')).toBeVisible();
+// an operator's explicit config home (the default empty hash is the landing page: landing.spec.ts)
+test.describe('home: auto', () => {
+  test.use({ appConfig: { home: 'auto' } });
+  test('the empty hash is a chart, the market list is at #/market', async ({ appPage: page, mock }) => {
+    await listExkcc(page);
+    await page.goto('/');
+    await expect(page.getByTestId('token-page')).toHaveAttribute('data-token', await seeded(mock));
+    await expect(page.getByTestId('price-chart')).toBeVisible();
+    await expect(page.getByTestId('token-list-view')).toHaveCount(0);
+    await page.goto('/#/market');
+    await expect(page.getByTestId('token-list-view')).toBeVisible();
+  });
 });

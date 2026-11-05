@@ -92,7 +92,7 @@ test.describe('indexer failover', () => {
     await withExtras(page, [b.url]);
     await mock.setHealth('node_unavailable');
     await listExkcc(page);
-    await page.goto('/');
+    await page.goto('/#/market');
     const banner = page.getByTestId('banner-backup-indexer');
     await expect(banner).toBeVisible({ timeout: 60_000 });
     await expect(banner).toContainText(`Using backup indexer ${b.host}`);
@@ -106,7 +106,7 @@ test.describe('indexer failover', () => {
     await wrongPayload.client.setHealth('following', 0, { payload_version: 99 });
     await withExtras(page, [wrongNet.url, wrongPayload.url]);
     await mock.setHealth('node_unavailable');
-    await page.goto('/');
+    await page.goto('/#/market');
     // the primary's own banner says what is wrong; no backup banner appears
     await expect(page.getByTestId('banner-indexer')).toBeVisible({ timeout: 60_000 });
     await page.waitForTimeout(8_000);
@@ -143,7 +143,7 @@ test.describe('indexer failover', () => {
     await withExtras(page, [`http://${longHost}`]);
     await b.client.setHealth('following', 0, { book_complete: false, history_from_daa: 990 });
     await mock.setHealth('node_unavailable');
-    await page.goto('/');
+    await page.goto('/#/market');
     const banner = page.getByTestId('banner-backup-indexer');
     await expect(banner).toBeVisible({ timeout: 60_000 });
     await expect(banner).toContainText(`Using backup indexer ${longHost}`);

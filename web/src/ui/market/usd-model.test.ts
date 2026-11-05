@@ -78,6 +78,9 @@ describe('usd-model', () => {
     expect(resolveHome('auto', null, tokens)).toEqual({ name: 'token', covenantId: A });
     expect(resolveHome('auto', null, [])).toEqual({ name: 'market' });
     expect(resolveHome('list', B, tokens)).toEqual({ name: 'market' });
+    // the default: the landing page, whatever the tokens
+    expect(resolveHome('landing', B, tokens)).toEqual({ name: 'landing' });
+    expect(resolveHome('landing', null, [])).toEqual({ name: 'landing' });
     // `usd:<id>` = that token against the USD token: the tradable pair page
     expect(resolveHome(`usd:${A}`, B, tokens)).toEqual({ name: 'pair', base: A, quote: B });
     expect(resolveHome(`usd:${B}`, B, tokens)).toEqual({ name: 'token', covenantId: B });

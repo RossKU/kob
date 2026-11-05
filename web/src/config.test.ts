@@ -40,7 +40,7 @@ describe('mergeConfig', () => {
     expect(mergeConfig()).toEqual({
       network: 'mainnet', indexerUrl: '', extraIndexerUrls: [], nodeUrl: '', registryUrl: './registry/tokens.json',
       features: { kastle: false, test: false, priorityFee: false }, fees: { dynamic: true, maxRate: 1000, maxFeeKas: 1 }, allowQueryOverrides: false,
-      quoteTokens: {}, home: 'auto', explorerUrl: '', tokenNamesUrl: 'https://kascov.io/data', marketStartToleranceBps: 1000,
+      quoteTokens: {}, home: 'landing', explorerUrl: '', tokenNamesUrl: 'https://kascov.io/data', marketStartToleranceBps: 1000,
       logoBlocklistUrl: '', ipfsGatewayUrl: 'https://dweb.link/ipfs',
     });
     expect(DEFAULT_CONFIG.features.kastle).toBe(false);
@@ -268,13 +268,15 @@ describe('USD quote tokens and the landing screen', () => {
     expect(bad.config.quoteTokens).toEqual({});
     expect(bad.warnings.some((w) => w.field === 'quoteTokens')).toBe(true);
   });
-  it('home: auto by default, validated', () => {
-    expect(resolveConfig({}).config.home).toBe('auto');
+  it('home: the landing page by default, validated', () => {
+    expect(resolveConfig({}).config.home).toBe('landing');
+    expect(resolveConfig({ file: { home: 'auto' } }).config.home).toBe('auto');
+    expect(resolveConfig({ file: { home: 'landing' } }).config.home).toBe('landing');
     expect(resolveConfig({ file: { home: 'list' } }).config.home).toBe('list');
     expect(resolveConfig({ file: { home: `usd:${ID}` } }).config.home).toBe(`usd:${ID}`);
     expect(resolveConfig({ settings: { home: 'kas-usd' } }).config.home).toBe('kas-usd');
     const r = resolveConfig({ file: { home: 'usd:nope' } });
-    expect(r.config.home).toBe('auto');
+    expect(r.config.home).toBe('landing');
     expect(r.warnings.some((w) => w.field === 'home')).toBe(true);
   });
 });

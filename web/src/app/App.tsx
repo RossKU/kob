@@ -1,11 +1,13 @@
-// Application shell: header, status bar, global banners, the routed view, footer, toasts.
+// Application shell: header, status bar, global banners, the routed view, footer, toasts; or, at the empty hash by default, the landing page in its place.
 import { useEffect, useRef } from 'preact/hooks';
 import type { ConfigWarning, StoredOverride } from '../config';
 import { t } from '../i18n';
 import { IssueView } from '../ui/issue/IssueView';
 import { ToastHost } from '../ui/kit';
 import { MarketView } from '../ui/market/MarketView';
-import { resolveHome, usdTokenOf } from '../ui/market/usd-model';
+import { usdTokenOf } from '../ui/market/usd-model';
+import { LandingPage } from '../ui/landing/LandingPage';
+import { homeTargetOf, showsLanding } from '../ui/landing/landing-model';
 import { OrdersView } from '../ui/orders/OrdersView';
 import { SettingsView } from '../ui/settings/SettingsView';
 import { GlobalBanners } from '../ui/shell/Banners';
@@ -23,11 +25,13 @@ import { logoBlocklist, logoBlocklistUrlOf } from '../data/logo-blocklist';
 import { routeToHash, useRoute, usdMarketHash, type Route } from './router';
 import { appTitle, Titled, useDocumentTitle } from './page-title';
 
-/** The landing screen (empty hash, config `home`): a chart by default; the market list stays at `#/market`. */
+/**
+ * The empty hash inside the shell: an operator's explicit config `home` (a chart, a pair or the list). The default `landing` never gets here: the App
+ * draws the landing page in place of the whole shell (`showsLanding`). The market list stays at `#/market`.
+ */
 function HomeView() {
   const { config, registry } = useServices();
-  const usd = usdTokenOf(config.quoteTokens, registry.tokens);
-  const target = resolveHome(config.home, usd?.covenantId ?? null, registry.tokens);
+  const target = homeTargetOf(config, registry.tokens);
   if (target.name === 'pair') return <MarketView pair={{ base: target.base, quote: target.quote }} />;
   if (target.name === 'token') return <MarketView covenantId={target.covenantId} />;
   return (
@@ -153,8 +157,32 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
     return () => feed.close();
   }, [services.feed]);
 
+  // the empty hash with the default config `home`: the landing page, a full page with its own nav, in place of the whole shell (header, banners,
+  // footer); every other route shows the shell
+  const landing = showsLanding(route, services.config, services.registry.tokens);
+
   return (
     <div class="app">
+      {landing ? (
+        <ViewBoundary resetKey={routeKey}>
+          <LandingPage />
+        </ViewBoundary>
+      ) : (
+        <AppShell route={route} routeKey={routeKey} warnings={props.warnings} storedOverrides={props.storedOverrides ?? []} />
+      )}
+      <ViewBoundary resetKey={routeKey}>
+        <AutoRefundRunner />
+        <ToastHost />
+      </ViewBoundary>
+    </div>
+  );
+}
+
+/** The shell around every routed view: the skip link, the header, the global banners, the view and the footer. */
+function AppShell(props: { route: Route; routeKey: string; warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
+  const { route, routeKey } = props;
+  return (
+    <>
       {/* keyboard users jump past the header; a hash link would be a route here, so it moves the focus itself */}
       <a
         class="skip-link"
@@ -174,10 +202,10 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
           <ViewBoundary resetKey={routeKey}>
             <Header route={route} />
           </ViewBoundary>
-          <main class="container main" id="main" tabIndex={-1} data-testid="main" data-route={routeToHash(route)}>
+          <main class="container main" id="main" tabIndex={-1} data-testid="main" data-route={routeKey}>
             <ViewBoundary resetKey={routeKey}>
               <PreAuditBanner />
-              <GlobalBanners warnings={props.warnings} storedOverrides={props.storedOverrides ?? []} />
+              <GlobalBanners warnings={props.warnings} storedOverrides={props.storedOverrides} />
             </ViewBoundary>
             <ViewBoundary resetKey={routeKey}>
               <RoutedView route={route} warnings={props.warnings} />
@@ -188,10 +216,6 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
           </ViewBoundary>
         </StatusProvider>
       </NotifyProvider>
-      <ViewBoundary resetKey={routeKey}>
-        <AutoRefundRunner />
-        <ToastHost />
-      </ViewBoundary>
-    </div>
+    </>
   );
 }

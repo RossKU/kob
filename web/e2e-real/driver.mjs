@@ -294,7 +294,8 @@ export async function openApp(ctx, baseUrl, config) {
   await page.addInitScript((c) => {
     window.__KOB_CONFIG__ = c;
   }, config);
-  await page.goto(baseUrl + '/');
+  // the market list: the empty hash is the landing page, which has no app header (no wallet buttons)
+  await page.goto(baseUrl + '/#/market');
   await page.getByTestId('main').waitFor({ timeout: 60_000 }).catch(() => {});
   return h;
 }

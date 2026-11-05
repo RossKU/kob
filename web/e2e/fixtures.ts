@@ -267,7 +267,7 @@ export const test = base.extend<AppOptions & TestFixtures, WorkerFixtures>({
   walletOptions: [{}, { option: true }],
   appConfig: [{}, { option: true }],
   autoOpen: [true, { option: true }],
-  appPath: ['/', { option: true }],
+  appPath: ['/#/market', { option: true }],
   failOnPageError: [true, { option: true }],
   covenantChecked: [true, { option: true }],
 

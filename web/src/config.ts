@@ -45,7 +45,8 @@ export interface AppConfig {
    */
   quoteTokens: Record<string, QuoteCurrency>;
   /**
-   * The landing screen (empty hash): `auto` (default: the USD token's market, <ticker>/KAS, when a USD reference token is configured, else the first
+   * The landing screen (empty hash): `landing` (default: the landing page, src/ui/landing: what KOB is, with its own nav and "Open the app" to `#/market`;
+   * a visitor arriving from outside sees it), `auto` (the USD token's market, <ticker>/KAS, when a USD reference token is configured, else the first
    * tradable registry token's market, else the market list), `list`, `kas-usd` (the USD token's market), `usd:<covenant id>` (the pair page `<id>/<USD token>`) or `market:<covenant id>`
    * (that token's market page). The market list stays at `#/market` (header navigation).
    */
@@ -85,7 +86,7 @@ export const MARKET_START_TOLERANCE_MIN = 10;
 export const MARKET_START_TOLERANCE_MAX = 5_000;
 
 export type QuoteCurrency = 'USD';
-export type HomeSetting = 'auto' | 'list' | 'kas-usd' | `usd:${string}` | `market:${string}`;
+export type HomeSetting = 'landing' | 'auto' | 'list' | 'kas-usd' | `usd:${string}` | `market:${string}`;
 
 export { DEFAULT_FEES, FEE_MAX_KAS_MAX, FEE_MAX_RATE_MAX, FEE_MAX_RATE_MIN, parseMaxFeeKas, parseMaxRate, type FeeSettings };
 
@@ -107,7 +108,7 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   fees: DEFAULT_FEES,
   allowQueryOverrides: false,
   quoteTokens: Object.freeze({}) as Record<string, QuoteCurrency>,
-  home: 'auto' as HomeSetting,
+  home: 'landing' as HomeSetting,
   explorerUrl: '',
   tokenNamesUrl: DEFAULT_TOKEN_NAMES_URL,
   marketStartToleranceBps: 1_000,
@@ -127,7 +128,7 @@ export function explorerTxUrl(c: Pick<AppConfig, 'network' | 'explorerUrl'>, txi
   return `${explorerBase(c)}/transactions/${txid.toLowerCase()}`;
 }
 
-const HOME_RE = /^(auto|list|kas-usd|(usd|market):[0-9a-f]{64})$/;
+const HOME_RE = /^(landing|auto|list|kas-usd|(usd|market):[0-9a-f]{64})$/;
 /** A valid landing-screen setting, or null. */
 export function parseHome(v: unknown): HomeSetting | null {
   if (typeof v !== 'string') return null;
@@ -331,7 +332,7 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
   if ('home' in raw) {
     const h = parseHome(raw.home);
     if (h) out.home = h;
-    else bad('home', 'landing screen (auto, list, kas-usd, usd:<covenant id>, market:<covenant id>)');
+    else bad('home', 'landing screen (landing, auto, list, kas-usd, usd:<covenant id>, market:<covenant id>)');
   }
   if ('fees' in raw) {
     if (isObj(raw.fees)) {
