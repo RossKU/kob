@@ -125,7 +125,7 @@ file up where only you can read it.
 | Node | `rpc_url = "resolver"`: two public testnet-10 nodes found through the Kaspa resolvers (outbound HTTPS and WSS, port 443), one cross-checking the other. Your own node instead: `kaspad --testnet --netsuffix=10 --utxoindex --rpclisten-json=default` and `--node ws://127.0.0.1:18210` in the setup (required for Miner Mode; `docs/ops/executor-quickstart.md`, section 2) |
 | Ports | the read API on `127.0.0.1:8090` (loopback; `--listen <addr>` or `[api] listen`). Nothing listens publicly and no inbound port is needed |
 | Health | `GET /v1/health` (`ok`, `state`, `roles`, `network`, lag), `GET /v1/health/ready` (200 / 503 for a probe); fields in `docs/api.md` |
-| Files | `kob-executor.toml` (the configuration; `./kobd` starts it in its own folder, so its relative paths are taken from there: run the other commands from that folder too), `kob-tokens.json` (the supported token programs), `kob-operator.key` (Executor only), `kob-data/` (the SQLite store and, for the Indexer, the record log) |
+| Files | `kob-executor.toml` (the configuration; its relative paths are taken from its folder), `kob-tokens.json` (the supported token programs), `kob-operator.key` (Executor only), `kob-data/` (the SQLite store and, for the Indexer, the record log) |
 | Logs | the console, with a status line every minute; `--log-file kob-executor.log` (or `log_file = "kob-executor.log"` in the configuration) also writes a rotated file. `RUST_LOG=debug` for more |
 | Pause, stop | the file `kob-data/pause` pauses an Executor's trading; Ctrl+C stops either role cleanly; the next start continues where it stopped |
 
