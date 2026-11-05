@@ -70,6 +70,11 @@
 .tk-slider { --thumb: 18px; --slider-fill: var(--primary); position: relative; display: block; margin-top: -4px; min-width: 0; }
 .tk-slider[data-side='buy'] { --slider-fill: var(--buy); }
 .tk-slider[data-side='sell'] { --slider-fill: var(--sell); }
+/* the place button takes the side's colour, as the Buy / Sell switch above it; until the order can be placed it is plainly grey (not a faded side colour) */
+.btn.btn-primary.tk-place[data-side='buy'] { background: var(--buy); border-color: var(--buy); color: var(--surface); }
+.btn.btn-primary.tk-place[data-side='sell'] { background: var(--sell); border-color: var(--sell); color: var(--surface); }
+.btn.btn-primary.tk-place:hover:not(:disabled) { filter: brightness(0.92); }
+.btn.btn-primary.tk-place:disabled:not(.btn-loading) { background: var(--surface-2); border-color: var(--border); color: var(--muted); opacity: 1; }
 @media (max-width: 759px), (pointer: coarse) { .tk-slider { --thumb: 44px; } }
 .tk-slider-track { position: relative; }
 .tk-slider-range {

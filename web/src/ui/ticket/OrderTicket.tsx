@@ -825,7 +825,7 @@ export function OrderTicket(props: OrderTicketProps) {
           </ul>
         ) : null}
       </div>
-      <Button variant="primary" block onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
+      <Button variant="primary" block class="tk-place" data-side={form.side} onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
         <span key={enterText ?? `${sideName}|${typeName}`} data-state={enterText ? 'enter' : undefined}>{enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
       <SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" />
