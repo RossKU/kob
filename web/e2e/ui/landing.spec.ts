@@ -100,3 +100,12 @@ test.describe('mainnet build', () => {
     await expect(page.getByTestId('landing')).not.toContainText(/testnet|test tokens/i);
   });
 });
+
+test('a portrait screen (a phone showing the desktop site, a tablet) gets no full-screen hero: the headline sits near the top', async ({ appPage: page }) => {
+  await page.setViewportSize({ width: 980, height: 2200 });
+  await page.goto('/#/');
+  await expect(page.locator('.lp-hero h1')).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.querySelector('.lp-hero h1')?.getBoundingClientRect().y ?? Infinity), { message: 'no screen of empty space above the headline' })
+    .toBeLessThan(500);
+});

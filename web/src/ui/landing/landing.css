@@ -77,8 +77,10 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 }
 
 /* hero */
-.lp-hero { position: relative; min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; justify-content: flex-end; padding: 120px 0 56px; }
-@media (max-width: 700px) { .lp-hero { min-height: 0; padding: 112px 0 40px; } }
+/* a landscape screen: the hero fills the first screen (capped on a very tall monitor) with the text at its foot */
+.lp-hero { position: relative; min-height: min(100vh, 1100px); min-height: min(100svh, 1100px); display: flex; flex-direction: column; justify-content: flex-end; padding: 120px 0 56px; }
+/* a phone, and any portrait screen (a tablet, a phone showing the desktop site): no full-screen hero, or the text would sit under a screen of empty space */
+@media (max-width: 700px), (max-aspect-ratio: 4/5) { .lp-hero { min-height: 0; padding: 112px 0 40px; } }
 .lp .lp-kicker { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 30px; font: 500 13px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); }
 .lp-chip { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 11px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn); font: 600 11px/1 var(--mono); letter-spacing: 0.08em; }
 .lp-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
