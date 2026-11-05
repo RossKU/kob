@@ -244,3 +244,12 @@ test.describe('phone', () => {
     await expect(page.getByTestId('chip-dot')).toBeVisible();
   });
 });
+
+test('desktop 900 px: the brand shows its name beside the logo when the row has room for it (no wallet connected)', async ({ appPage: page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.goto('/#/market');
+  await expect(page.getByTestId('wallet-connect-list')).toBeVisible();
+  await expect(page.locator('header.header')).toHaveAttribute('data-layout', 'wide');
+  await expect.poll(async () => page.getByTestId('brand').locator('span').evaluate((e) => e.getBoundingClientRect().width)).toBeGreaterThan(20);
+  expect(await noScroll(page)).toBe(true);
+});

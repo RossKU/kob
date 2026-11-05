@@ -6,7 +6,7 @@ import { useTheme } from './theme';
 import { NotifyBell } from '../notify/NotificationPanel';
 import { WalletButton } from './WalletButton';
 import { NetworkChip } from './NetworkBadge';
-import { TIGHT_QUERY, useMedia, useNarrow, useSqueezeCheck } from './narrow';
+import { TIGHT_QUERY, useBrandName, useMedia, useNarrow, useSqueezeCheck } from './narrow';
 import { useRef } from 'preact/hooks';
 import { Popover } from './Popover';
 import { StatusDot, StatusLines, useStatusLevel } from './StatusBar';
@@ -135,9 +135,10 @@ export function Header(props: { route: Route }) {
   const level = useStatusLevel();
   const inner = useRef<HTMLDivElement>(null);
   useSqueezeCheck(inner, narrow);
+  const brandName = useBrandName(inner, narrow);
   const active = navOf(props.route);
   return (
-    <header class="header" data-layout={narrow ? 'narrow' : 'wide'}>
+    <header class="header" data-layout={narrow ? 'narrow' : 'wide'} data-brand={brandName ? 'name' : undefined}>
       <div class="container header-inner" ref={inner}>
         <a class="brand" href={routeToHash({ name: 'home' })} data-testid="brand">
           <Logo />

@@ -449,9 +449,10 @@ body.modal-open { overflow: hidden; }
 @media (max-width: 430px) {
   .net-chip .net-pre { display: none; }
 }
-/* a desktop that is not wide: the brand shrinks to the logo, the chip, the tabs and the buttons tighten (so the whole row fits down to about 900 px even on wide fonts) */
+/* a desktop that is not wide: the brand shrinks to the logo unless the row has room for its name (data-brand, narrow.ts useBrandName), the chip, the tabs and
+   the buttons tighten (so the whole row fits down to about 900 px even on wide fonts) */
 @media (min-width: 720px) and (max-width: 1199px) {
-  .header .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .header:not([data-brand='name']) .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .nav { gap: 0; }
   .nav a { padding: 6px 5px; font-size: 0.88rem; }
   .header-inner { gap: 6px; }

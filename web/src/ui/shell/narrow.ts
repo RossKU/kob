@@ -82,7 +82,43 @@ function wideWidth(el: HTMLElement): number | null {
   const toolGap = px(getComputedStyle(tools).columnGap);
   const items = Array.from(tools.children) as HTMLElement[];
   const toolsWidth = items.reduce((s, c) => s + c.getBoundingClientRect().width, 0) + toolGap * Math.max(0, items.length - 1);
-  return brand.getBoundingClientRect().width + nav.getBoundingClientRect().width + toolsWidth + 2 * gap;
+  // the brand counts as its logo only: its name is shown on top only when there is room for it (`useBrandName`), never at the cost of the tabs
+  return brand.getBoundingClientRect().width - brandNameWidth(brand) + nav.getBoundingClientRect().width + toolsWidth + 2 * gap;
+}
+
+/** The width the brand's name takes beside the logo (its text and the gap before it), 0 while it is hidden. */
+function brandNameWidth(brand: HTMLElement): number {
+  const name = brand.querySelector<HTMLElement>('span');
+  if (!name || name.getBoundingClientRect().width <= 1) return 0;
+  return name.getBoundingClientRect().width + px(getComputedStyle(brand).columnGap);
+}
+
+/**
+ * For the header's wide row on a desktop that is not wide (720-1199 px, where styles.css hides the brand's name by default): true while the row has room
+ * for the name beside the logo on top of the tabs and the tools (a disconnected wallet's short buttons, a wider window), so the name is shown whenever it fits.
+ */
+export function useBrandName(root: { current: HTMLElement | null }, narrow: boolean): boolean {
+  const [fits, setFits] = useState(false);
+  useLayoutEffect(() => {
+    const el = root.current;
+    if (!el || narrow || typeof ResizeObserver !== 'function') return;
+    const check = () => {
+      const brand = el.querySelector<HTMLElement>('.brand');
+      const name = brand?.querySelector<HTMLElement>('span');
+      const needed = wideWidth(el);
+      if (!brand || !name || needed === null) return;
+      // the name's own width, also while it is clipped to 1 px (scrollWidth is its text's width)
+      const nameWidth = name.scrollWidth + px(getComputedStyle(brand).columnGap);
+      setFits(needed + nameWidth + SPARE_PX <= roomOf(el));
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    for (const c of Array.from(el.querySelector('.header-tools')?.children ?? [])) ro.observe(c);
+    void document.fonts?.ready.then(check);
+    return () => ro.disconnect();
+  }, [narrow]);
+  return fits && !narrow;
 }
 
 /**
