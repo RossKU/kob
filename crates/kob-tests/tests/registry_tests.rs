@@ -36,6 +36,9 @@ const PUBLIC_MINT_SIL: &str = "contracts/third-party/kcc20-reference/KCC20.publi
 /// KaspaRocket's 10 / 10 build of the same actor (`contracts/third-party/kasparocket`): the same handle cut.
 const KASPAROCKET_ARTIFACT: &str = "contracts/artifacts/KaspaRocketToken11458.json";
 const KASPAROCKET_SIL: &str = "contracts/third-party/kasparocket/KCC20.public-mint.10x10.sil";
+/// KForge's 6 / 6 build of the same actor (`contracts/third-party/kforge-kcc20`): the same handle cut.
+const KFORGE_ARTIFACT: &str = "contracts/artifacts/KForgeToken7214.json";
+const KFORGE_SIL: &str = "contracts/third-party/kforge-kcc20/KCC20.public-mint.6x6.sil";
 
 fn check_kcc20(t: &Template) {
     let json = String::from_utf8(read(&t.source.path)).unwrap();
@@ -45,7 +48,7 @@ fn check_kcc20(t: &Template) {
     let mut len = c.compiled.state_span.len;
     let total = c.compiled.bytecode.len();
     let bc = &c.compiled.bytecode;
-    let handle = t.source.path == PUBLIC_MINT_ARTIFACT || t.source.path == KASPAROCKET_ARTIFACT;
+    let handle = [PUBLIC_MINT_ARTIFACT, KASPAROCKET_ARTIFACT, KFORGE_ARTIFACT].contains(&t.source.path.as_str());
     if handle {
         // the context field (0x20 ‖ the Sil template hash) ends the handle's prefix; the open state is the 112-byte KCC20State
         assert_eq!(bc[off], 0x20, "{}: context push", t.id);
@@ -78,8 +81,12 @@ fn check_kcc20(t: &Template) {
     // slot limits: from the compiled program's source, or (third-party programs, no source here) from the artifact's own
     // program information, which must also carry the draft's transfer entries and owner schemes
     if handle {
-        let src =
-            String::from_utf8(read(if t.source.path == PUBLIC_MINT_ARTIFACT { PUBLIC_MINT_SIL } else { KASPAROCKET_SIL })).unwrap();
+        let sil = match t.source.path.as_str() {
+            PUBLIC_MINT_ARTIFACT => PUBLIC_MINT_SIL,
+            KASPAROCKET_ARTIFACT => KASPAROCKET_SIL,
+            _ => KFORGE_SIL,
+        };
+        let src = String::from_utf8(read(sil)).unwrap();
         assert_eq!(t.max_token_inputs as i64, source_int(&src, "MAX_DELEGATES") + 1, "{}: max token inputs", t.id);
         assert_eq!(t.max_token_outputs as i64, source_int(&src, "MAX_TOKEN_OUTPUTS"), "{}: max token outputs", t.id);
     } else if t.source.path.starts_with("contracts/third-party/") {
@@ -125,7 +132,7 @@ fn check_kron(t: &Template) {
 #[test]
 fn shipped_registry_templates_match_the_pinned_programs() {
     let r: Registry = Registry::parse(&String::from_utf8(read("registry/tokens.json")).unwrap()).expect("tokens.json validates");
-    assert_eq!(r.templates.len(), 7);
+    assert_eq!(r.templates.len(), 8);
     for t in &r.templates {
         match t.family {
             Family::Kcc20 => check_kcc20(t),
@@ -145,6 +152,7 @@ fn shipped_registry_templates_match_the_pinned_programs() {
         "kcc20-kaspacom-0-2-5",
         "kcc20-ref-public-mint",
         "kasparocket-token-11458",
+        "kforge-token-7214",
     ] {
         assert!(r.template(id).is_some(), "template {id} missing");
     }

@@ -201,6 +201,35 @@
         "upstream": "https://github.com/La-Gauffre/KaspaRocket-Silverscript-Contract commit 86fe1e8e7dc9a89e4852d9c5e28b5b70648cc23b kcc20.sil (no licence file in that repository); the token logic is argentc output of https://github.com/argent-lang/kcc20-reference commit c8a087117735a1f87c5c6d115fcddeaf2562c784 (ISC); KOB builds it from contracts/third-party/kasparocket/KCC20.public-mint.10x10.sil (ISC-derived); unaudited",
         "note": "The KaspaRocket launchpad's token program: the KCC20 actor of the published KCC20PublicMint app built with 9 delegates / 10 token outputs. Its state is the compiler-owned context gen__kcc20_template (the program's own Sil template hash ff3ae732..., constant in every UTXO) followed by the standard 112-byte KCC20State; the template KOB pins is the KCC-1 actor-type handle (prefix = the 1-byte Sil prefix plus the context push, 34 B; suffix 11,312 B), so the unmodified KOB orders custody and fill it. See contracts/third-party/kasparocket/UPSTREAM.md."
       }
+    },
+    {
+      "id": "kforge-token-7214",
+      "family": "kcc20",
+      "template_hash": "da96d352c404ad7835bc9857b9ae54ae634f41f83a837a5c913ab58cb9f0dec7",
+      "prefix_len": 34,
+      "suffix_len": 7068,
+      "state_len": 112,
+      "max_token_inputs": 6,
+      "max_token_outputs": 6,
+      "escrow": {
+        "owner_scheme": 4,
+        "borrow_scheme": 0
+      },
+      "review_status": "reviewed",
+      "capabilities": [],
+      "risks": [
+        "A UTXO owned (owner_scheme 4) by the token's own covenant id is spendable by anyone (any input of the token unlocks it); KOB never creates such an output (informational).",
+        "Genesis contamination: the covenant id commits only to the P2SH hashes of the genesis outputs, so a genesis may hide a non-template output able to mint look-alike tokens or feed a fake balance into a transfer; kob registry verify-genesis checks every genesis output of a token (genesis_verified: true); every other token carries the warning genesis_unverified. No companions: a genesis group holding anything but holders of this program (e.g. the app issuers, unused by KForge) does not verify.",
+        "Decimals are not on chain: KForge genesis transactions carry no payload and its launch payloads (KFORGE6 JSON) and API name no decimals; KOB has no default for this program, so a token without a KCC-23 declaration or a list entry takes its decimals from the market or the user, as for any undeclared token.",
+        "A 7,214-byte program revealed by every token input: about 2.5 times the script bytes of kcc20-ref-3x3 per token input. 6 token inputs / 6 outputs per transfer.",
+        "A KForge launch moves the whole supply into its bonding curve (a third-party covenant KOB did not review, owner scheme 4), which at graduation moves its liquidity reserve into KForge's AMM pool (another one). While a token is on the curve or in the pool, most of its supply sits and trades there: markets beside KOB's book, not settlement paths of KOB orders. They move only the tokens they own: a holder (owner scheme 0) needs its key's signature.",
+        "Reviewed (internal review only, no independent audit; 2026-11-05, docs/spec/token-programs.md section 6): the KCC20 actor of kcc20-reference (the reviewed kcc20-ref-public-mint) with only its slot bounds set to 6 / 6, reproduced from upstream's source and matching KForge's published artifact and source hash; supply is fixed at genesis (no mint, burn or authority entry; borrowing is the reference rule, disabled on every KOB custody). This build supports trading it; its tokens trade without a registry entry."
+      ],
+      "source": {
+        "path": "contracts/artifacts/KForgeToken7214.json",
+        "upstream": "https://github.com/argent-lang/kcc20-reference commit 27f8403fee55863125b044c73b2c9449d997a6ca (token program as at c8a087117735a1f87c5c6d115fcddeaf2562c784, ISC) with MAX_DELEGATES 5 / MAX_TOKEN_OUTPUTS 6, as KForge publishes it (https://api.kforge.xyz/v6/registry, /kcc20/artifact; source kcc20_argent.sil, blake2b-256 354841165fb93eea8c7114a70534ad5f7bc7f4143ba3c08fe4a7cc11c2c28d26); KOB builds it from contracts/third-party/kforge-kcc20/KCC20.public-mint.6x6.sil (ISC-derived); unaudited",
+        "note": "The KForge launchpad's token program: the KCC20 actor of the published KCC20PublicMint app built with 5 delegates / 6 token outputs. Its state is the compiler-owned context gen__kcc20_template (the program's own Sil template hash 3c1a50ad..., constant in every UTXO) followed by the standard 112-byte KCC20State; the template KOB pins is the KCC-1 actor-type handle (prefix = the 1-byte Sil prefix plus the context push, 34 B; suffix 7,068 B), so the unmodified KOB orders custody and fill it. See contracts/third-party/kforge-kcc20/UPSTREAM.md."
+      }
     }
   ],
   "tokens": [

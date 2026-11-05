@@ -222,6 +222,26 @@ export const TOKEN_PROGRAMS = [
     networks: ['mainnet', 'testnet-10'],
     defaultDecimals: { decimals: 3, source: 'KaspaRocket convention' },
   },
+  {
+    name: 'KForgeToken7214',
+    registryId: 'kforge-token-7214',
+    codec: 'kcc20',
+    templateHash: 'da96d352c404ad7835bc9857b9ae54ae634f41f83a837a5c913ab58cb9f0dec7',
+    prefixLen: 34,
+    stateLen: 112,
+    suffixLen: 7068,
+    maxTokenInputs: 6,
+    maxTokenOutputs: 6,
+    custodyOwner: 4,
+    holderOwner: 0,
+    carrierFloor: '1',
+    witnessScheme: 'kcc20-transfer',
+    trailingPushes: [],
+    routerIntents: false,
+    review: 'reviewed',
+    networks: ['mainnet', 'testnet-10'],
+    defaultDecimals: null,
+  },
 ] as const;
 
 type Row = (typeof TOKEN_PROGRAMS)[number];

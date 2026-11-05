@@ -113,7 +113,7 @@
   ],
   "registry": {
     "path": "registry/tokens.json",
-    "sha256": "13db2ae7ba4383a12958cca495bf5598eacbcd66749ba3f313e9ba87936e7f2e",
+    "sha256": "040aa610ef3d104c1ef31f035ca1b5958a261976d708f77dafdab51473f2ce52",
     "schema_version": 1,
     "strict_templates": [
       {
@@ -135,6 +135,10 @@
       {
         "id": "kasparocket-token-11458",
         "template_hash": "3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1"
+      },
+      {
+        "id": "kforge-token-7214",
+        "template_hash": "da96d352c404ad7835bc9857b9ae54ae634f41f83a837a5c913ab58cb9f0dec7"
       }
     ],
     "pending_templates": [

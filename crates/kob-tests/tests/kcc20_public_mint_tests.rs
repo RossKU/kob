@@ -1,8 +1,9 @@
 //! KOB orders on tokens of the published build of the KCC-20 reference: the `KCC20` actor of upstream's `KCC20PublicMint`
 //! app (argent-lang/kcc20-reference `c8a0871`, `fixtures/public-mint/sil/KCC20.sil`, vendored in
-//! `contracts/third-party/kcc20-reference`), embedded as `TemplateId::Kcc20PublicMint`, and KaspaRocket's build of the same
+//! `contracts/third-party/kcc20-reference`), embedded as `TemplateId::Kcc20PublicMint`, KaspaRocket's build of the same
 //! actor at 10 / 10 token slots (`contracts/third-party/kasparocket`, `TemplateId::KaspaRocketToken11458`, handle `3d689d62...`,
-//! suffix 11,312 B). Every test below runs on both builds (`BUILDS`).
+//! suffix 11,312 B) and KForge's at 6 / 6 (`contracts/third-party/kforge-kcc20`, `TemplateId::KForgeToken7214`, handle
+//! `da96d352...`, suffix 7,068 B). Every test below runs on every build (`BUILDS`).
 //!
 //! Its state is `0x20 ‖ gen__kcc20_template` (the compiler-owned context: the program's own Sil template hash, the same in
 //! every UTXO) followed by the standard 112-byte `KCC20State`. KOB pins the program as its KCC-1 actor-type handle, the
@@ -18,10 +19,11 @@
 //!     updates, repeat merges, cancels; KobAsk / KobBid, conditional, if-done, pair kinds) passes on every input,
 //!     including the token program's own leader / delegator template checks when several holders (custodies of
 //!     different orders) are spent in one transaction (up to the program's 3 token inputs, a fourth refused; on the
-//!     10 / 10 build eight custodies, the most a KOB order transaction carries, and a ninth refused);
+//!     6 / 6 build six custodies and a seventh refused; on the 10 / 10 build eight custodies, the most a KOB order
+//!     transaction carries, and a ninth refused);
 //!   - negatives: the same transactions with the custody / delivery tokens' context field replaced (a consistent holder of
 //!     another `gen__kcc20_template` value under the same covenant id), or with the tokens moved to the standalone build
-//!     (and the standalone scenarios moved to the published build; the two published builds swapped), are refused by every
+//!     (and the standalone scenarios moved to the published build; the published builds swapped), are refused by every
 //!     order that settles against them;
 //!     an order that pins the Sil cut (`9703112e...`, prefix 1) refuses the custody, and the builders refuse such terms.
 //!
@@ -49,10 +51,11 @@ use silverscript_abi::{encode_runtime_state_script, ArtifactValue};
 
 const PM: TemplateId = TemplateId::Kcc20PublicMint;
 const KR: TemplateId = TemplateId::KaspaRocketToken11458;
+const KF: TemplateId = TemplateId::KForgeToken7214;
 const SA: TemplateId = TemplateId::Kcc20Ref;
 
-/// A build of the published `KCC20` actor KOB trades: the public-mint build (3 / 3) and KaspaRocket's 10 / 10 build of it
-/// (`contracts/third-party/kasparocket`): its Sil template hash (the context value), the handle KOB pins, the program and
+/// A build of the published `KCC20` actor KOB trades: the public-mint build (3 / 3), KaspaRocket's 10 / 10 build of it
+/// (`contracts/third-party/kasparocket`) and KForge's 6 / 6 build (`contracts/third-party/kforge-kcc20`): its Sil template hash (the context value), the handle KOB pins, the program and
 /// suffix lengths and its token slots.
 struct Build {
     p: TemplateId,
@@ -62,7 +65,7 @@ struct Build {
     suffix: usize,
     slots: usize,
 }
-const BUILDS: [Build; 2] = [
+const BUILDS: [Build; 3] = [
     Build {
         p: PM,
         sil: "9703112ee6e3555107cd168858992b77d3b74f655205b2b463b1f9ec2ec73cf7",
@@ -78,6 +81,14 @@ const BUILDS: [Build; 2] = [
         len: 11_458,
         suffix: 11_312,
         slots: 10,
+    },
+    Build {
+        p: KF,
+        sil: "3c1a50add31375a61341f0e041c5eb35ba122684894d37fea8270441088c8564",
+        handle: "da96d352c404ad7835bc9857b9ae54ae634f41f83a837a5c913ab58cb9f0dec7",
+        len: 7_214,
+        suffix: 7_068,
+        slots: 6,
     },
 ];
 /// A context value that is not the program's template hash.
@@ -356,9 +367,10 @@ fn order_grid(p: TemplateId) {
     }
 }
 
-/// Three custodies under one leader on each build; beyond the slots: the 3 / 3 build refuses a fourth token input, and on
-/// KaspaRocket's 10 / 10 build eight custodies (the most a KOB order transaction carries) run and a ninth is refused by the
-/// builders (and by the orders on chain: `kob_ifd_pair_tests` NIS8 / NIS9).
+/// Three custodies under one leader on each build; beyond the slots: the 3 / 3 build refuses a fourth token input, KForge's
+/// 6 / 6 build runs six custodies and refuses a seventh, and on KaspaRocket's 10 / 10 build eight custodies (the most a KOB
+/// order transaction carries) run and a ninth is refused by the builders (and by the orders on chain: `kob_ifd_pair_tests`
+/// NIS8 / NIS9).
 #[test]
 fn custodies_of_three_orders_share_one_transfer_and_a_fourth_is_refused() {
     for b in &BUILDS {
@@ -381,6 +393,13 @@ fn sweeps(b: &Build) {
     if b.slots == 3 {
         let four = sweep(p, 3).unwrap();
         assert!(build_with(&four, &budgets).is_err(), "a fourth token input is beyond the program's 3 / 3 slots");
+    } else if b.slots < 8 {
+        let full = Ed::new("sweep-full", &built(sweep(p, b.slots - 1).unwrap()));
+        assert_eq!(readers(&full, TOKEN_COV).len(), b.slots, "{} asks, each owning one custody", b.slots);
+        run.ok(&full);
+        let over = sweep(p, b.slots).unwrap();
+        let e = build_with(&over, &budgets).expect_err("a token input beyond the program's slots");
+        println!("SWEEP{} {}: refused by the builders: {e}", b.slots + 1, p.name());
     } else {
         let eight = Ed::new("sweep8", &built(sweep(p, 7).unwrap()));
         assert_eq!(readers(&eight, TOKEN_COV).len(), 8, "eight asks, each owning one custody");
@@ -456,8 +475,9 @@ fn move_program(e: &mut Ed, from: TemplateId, to: TemplateId) -> Vec<[u8; 32]> {
 fn the_standalone_build_and_the_published_build_are_different_tokens_to_an_order() {
     let subs = pinned();
     let mut cases = 0;
-    // the standalone build, the public-mint build and KaspaRocket's 10 / 10 build: three different tokens to an order
-    for (from, to) in [(PM, SA), (SA, PM), (KR, PM), (PM, KR), (KR, SA)] {
+    // the standalone build, the public-mint build, KaspaRocket's 10 / 10 and KForge's 6 / 6 builds: four different tokens to an
+    // order
+    for (from, to) in [(PM, SA), (SA, PM), (KR, PM), (PM, KR), (KR, SA), (KF, PM), (PM, KF), (KF, KR), (KR, KF), (KF, SA)] {
         for (name, a) in shapes(from) {
             let mut e = Ed::new(&name, &built(a));
             let toks = tokens_on(&e, from);

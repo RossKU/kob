@@ -1064,7 +1064,7 @@ pub mod deployment {
     pub const MANIFEST: &str = include_str!("../../../contracts/deploy/mainnet/deployment.json");
     /// sha256 (lowercase hex, LF-normalised bytes) of the registry the record pins: the `registry.sha256` of [`MANIFEST`]
     /// and [`crate::registry::default_registry_sha256`] (checked by the tests).
-    pub const REGISTRY_SHA256: &str = "13db2ae7ba4383a12958cca495bf5598eacbcd66749ba3f313e9ba87936e7f2e";
+    pub const REGISTRY_SHA256: &str = "040aa610ef3d104c1ef31f035ca1b5958a261976d708f77dafdab51473f2ce52";
 }
 
 /// The order templates a network's deployment record lists (`scripts/build-deploy.sh`): every embedded order kind; on mainnet

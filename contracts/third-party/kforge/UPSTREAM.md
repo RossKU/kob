@@ -1,4 +1,8 @@
-# KForge token program (third-party, observed on chain): `KForgeToken1785`, testnet-10, pending review
+# KForge token program (third-party, observed on chain): `KForgeToken1785`, testnet-10, pending review (legacy)
+
+**Legacy.** KForge's current tokens (mainnet and testnet-10) use the KCC-20 reference actor at 6 / 6 slots: `KForgeToken7214`,
+`../kforge-kcc20/UPSTREAM.md` (reviewed). This earlier KRON-layout program, which KForge's registry no longer names, stays
+testnet-10 only and `pending-review`, kept so that the tokens issued with it stay readable.
 
 | | |
 |---|---|

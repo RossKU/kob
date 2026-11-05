@@ -1354,14 +1354,17 @@ mod tests {
             .and_then(|x| x.description.as_deref())
             .is_some_and(|s| !s.contains("listed") && !s.contains("official"))));
         assert_eq!(d.allowlist().len(), 8);
-        assert_eq!(d.templates.len(), 7);
+        assert_eq!(d.templates.len(), 8);
         // internal review of the two KRON programs (2026-09-30, `review_b2_kron.rs`): reviewed with conditions (per-token genesis check and
         // no live minter, facts each token shows as derived warnings); the reference KCC-20 3/3 program, KOB's standard one, is reviewed
         // (internal review only, maintainer decision 2026-10-12: tradable on mainnet), and so is the reference's published public-mint
-        // build (2026-10-13, the same permissionless KCC-20 policy), and KaspaRocket's 10 / 10 build of it (2026-10-27); the 8/8
-        // prototype and KaspaCom's are pending
+        // build (2026-10-13, the same permissionless KCC-20 policy), KaspaRocket's 10 / 10 build of it (2026-10-27) and KForge's 6 / 6
+        // build (2026-11-05); the 8/8 prototype and KaspaCom's are pending
         let strict: Vec<&str> = d.strict_templates().map(|t| t.id.as_str()).collect();
-        assert_eq!(strict, ["kcc20-ref-3x3", "kron-2433", "kron-2732", "kcc20-ref-public-mint", "kasparocket-token-11458"]);
+        assert_eq!(
+            strict,
+            ["kcc20-ref-3x3", "kron-2433", "kron-2732", "kcc20-ref-public-mint", "kasparocket-token-11458", "kforge-token-7214"]
+        );
         let r3 = d.template("kcc20-ref-3x3").unwrap();
         assert!(r3.risks.iter().any(|r| r.starts_with("Reviewed (internal review only") && r.contains("verify_genesis")));
         for id in ["kcc20-ref-8x8", "kcc20-kaspacom-0-2-5"] {
@@ -1421,7 +1424,7 @@ mod tests {
         let reviewed: Vec<Template> =
             d.templates.iter().map(|t| Template { review_status: ReviewStatus::Reviewed, ..t.clone() }).collect();
         assert_eq!(ex.templates, reviewed, "example carries the same pinned templates");
-        assert_eq!(ex.strict_templates().count(), 7);
+        assert_eq!(ex.strict_templates().count(), 8);
         assert!(ex.validate_for_network("testnet-10").is_ok());
         // both example entries are on reviewed (supported) programs: both give an allowlist row, unchecked as they are
         assert_eq!(ex.allowlist().len(), 2);

@@ -262,6 +262,51 @@
         "decimals": 3,
         "source": "KaspaRocket convention"
       }
+    },
+    {
+      "name": "KForgeToken7214",
+      "variant": "KForgeToken7214",
+      "registry_id": "kforge-token-7214",
+      "record_code": 12,
+      "summary": "KForge launchpad token program (mainnet and testnet-10): the KCC20 actor of the reference KCC20PublicMint app built with 6 / 6 token slots (5 delegates), 7,214-byte redeem script, 34-byte prefix with the gen__kcc20_template context field.",
+      "source": {
+        "kind": "silverc-artifact",
+        "path": "contracts/artifacts/KForgeToken7214.json",
+        "context_fields": [
+          "gen__kcc20_template"
+        ]
+      },
+      "template_hash": "da96d352c404ad7835bc9857b9ae54ae634f41f83a837a5c913ab58cb9f0dec7",
+      "layout": {
+        "prefix_len": 34,
+        "state_len": 112,
+        "suffix_len": 7068
+      },
+      "codec": "kcc20",
+      "owners": {
+        "custody": 4,
+        "holder": 0
+      },
+      "slots": {
+        "inputs": 6,
+        "outputs": 6
+      },
+      "carrier_floor": 1,
+      "witness": {
+        "scheme": "kcc20-transfer"
+      },
+      "router_intents": false,
+      "genesis": {
+        "minters": "genesis-only"
+      },
+      "review": {
+        "status": "reviewed",
+        "basis": "internal review (2026-11-05, docs/spec/token-programs.md section 6, contracts/third-party/kforge-kcc20/UPSTREAM.md): the KCC20 actor of kcc20-reference (the reviewed KCC20PublicMint; the token program is the same at c8a0871 and 27f8403) with only its slot bounds set to 6 / 6; upstream's own build at 27f8403 with those bounds reproduces KForge's published artifact (/kcc20/artifact) except its module path strings, KOB's silverc v1.0.0 reproduces its KCC20 bytecode, and the derived source is the one KForge's registry names (blake2b-256 354841165fb9...); the redeem scripts of KForge token UTXOs on testnet-10 and mainnet are these bytes; a testnet-10 launch genesis verifies (one token output, nothing else bound to the token's covenant id); no mint, burn or authority entry (minters genesis-only); the order grid and the seven-input refusal on its holders (kcc20_public_mint_tests); KForge declares no decimals (no default)"
+      },
+      "networks": [
+        "mainnet",
+        "testnet-10"
+      ]
     }
   ]
 }

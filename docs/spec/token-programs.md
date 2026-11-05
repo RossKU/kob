@@ -176,10 +176,14 @@ notes:
 | Reference issuers `27f8403` | `kcc20-ref-public-mint` (no new program) | Data and a second pinned build of the genesis companions: the `PublicMint` / `TokenSeed` issuers gained `rebalance_value`, the holder program did not change; reviewed against section 5 item 5 (no supply or mint-authority power) in `docs/spec/kcc-conformance.md` 4.3 |
 | KaspaCom 0.2.5 | `kcc20-kaspacom-0-2-5` | Data: profile with `carrier_floor` 0.5 KAS (measured), `router_intents: false`, `minters: unknown` (minter lanes behind the extension commitment). Stays `pending-review` (finding K-1) |
 | KRON launchpad | `kron-2433`, `kron-2732` | The KRON codec family (orders and builders, reviewed B2); both programs are data on it |
-| KForge (testnet-10) | `KForgeToken1785` | Code: the delivery id_type 0 builds of the KRON order kinds and id_type 0 holder spends (a token-level signature in the signature column). Data: profile with holder 0, slots 1 / 3, `networks: [testnet-10]`, `pending-review`; see below |
+| KForge (testnet-10, legacy) | `KForgeToken1785` | Code: the delivery id_type 0 builds of the KRON order kinds and id_type 0 holder spends (a token-level signature in the signature column). Data: profile with holder 0, slots 1 / 3, `networks: [testnet-10]`, `pending-review`; see below |
 | KaspaRocket | `KaspaRocketToken11458` | Data plus a profile field: the published public-mint `KCC20` actor at 10 / 10 slots (a derived source, since 2026-10-14 also the publisher's, and its build), profile with slots 10 / 10, `minters: genesis-only`, `default_decimals` 3 (the KaspaRocket convention, `networks: [mainnet, testnet-10]`), reviewed 2026-10-27; see below |
+| KForge (KCC-20) | `KForgeToken7214` | Data: the published public-mint `KCC20` actor at 6 / 6 slots (a derived source, the one KForge's registry names by hash, and its build), profile with slots 6 / 6, `minters: genesis-only`, no default decimals, `networks: [mainnet, testnet-10]`, reviewed 2026-11-05; see below |
 
-### KForge
+### KForge (legacy, `KForgeToken1785`)
+
+KForge's current tokens use the KCC-20 reference actor (`KForgeToken7214`, below); this KRON-layout program is an earlier one observed
+on testnet-10, which KForge's registry no longer names. It stays testnet-10 only and `pending-review`.
 
 `crates/kob-tests/tests/program_kforgetoken1785.rs`, fixtures in `contracts/third-party/kforge/` (`program.bin`, a redeem script
 observed on testnet-10; `observed-transfer.json`, a real transfer).
@@ -263,6 +267,46 @@ testnet-10 launch: genesis, the supply's move into the launch's pool, the pool's
   transfer, a `KobAsk` placed, partly taken by another key and cancelled with the CLI; its token inputs carry the launchpad's
   own prefix and suffix.
 * `router_intents: false` for now (router intents do not name the program). Not reviewed: KaspaRocket's pool and escrow programs.
+
+### KForge (KCC-20, `KForgeToken7214`)
+
+`crates/kob-tests/tests/program_kforgetoken7214.rs`, fixtures in `contracts/third-party/kforge-kcc20/` (`observed.json`: a real testnet-10
+launch, its genesis and the move of the supply into the curve, and a mainnet sell back to a curve; `UPSTREAM.md`). Reviewed (internal
+review only, 2026-11-05): tradable on mainnet.
+
+* **Provenance.** KForge publishes its token program as data (`/v6/registry`: `argent-lang/kcc20-reference`, 6 token inputs / 6
+  outputs, Sil template hash `3c1a50ad...`, the source `kcc20_argent.sil` by its blake2b-256; `/kcc20/artifact`: the app's artifact).
+  Upstream's own build at `27f8403` with `MAX_DELEGATES` 5 and `MAX_TOKEN_OUTPUTS` 6 reproduces that artifact in every field but its
+  module path strings; its generated `KCC20.sil` is `KCC20.public-mint.6x6.sil` (seven lines apart from the vendored fixture, the
+  seventh the program's own suffix length) without KOB's header, and hashes to the source hash KForge names; silverc v1.0.0 compiles it
+  to the published bytecode. Derived from the artifact (`kob registry add-program ... --slots 6/6`): the KCC-1 actor-type handle cut
+  (prefix 34 B with the `gen__kcc20_template` context, state 112 B, suffix 7,068 B), template hash
+  `da96d352c404ad7835bc9857b9ae54ae634f41f83a837a5c913ab58cb9f0dec7`, witness `kcc20-transfer`. Every rule of the program is the reviewed
+  `KCC20PublicMint` actor's: only the two slot bounds differ.
+* **On chain** (2026-11-05, public nodes only): on testnet-10 the genesis and the launch of TESTCAT (the creator's 1,000,000,000 base units
+  into the curve's custody) carry this program and rebuild to their ids; the genesis verifies as a fixed supply with nothing else bound to
+  the token's covenant id. On mainnet three curve custodies are live UTXOs at the program's P2SH, and a sell reveals two redeem scripts of
+  the program (a holder and the curve's custody). The genesis of mainnet tokens is not checked: each carries `genesis_unverified` until it
+  is (`kob registry verify-genesis`).
+* **Authority and supply.** The program has `transfer` and `transfer_delegator` only: no mint, burn, freeze, admin or upgrade entry; a
+  transfer conserves the amount, every covenant output is the leader's and a `KCC20` of its template, every other input of the covenant must
+  be one. KForge's artifact also carries the app's `PublicMint` and `TokenSeed` issuers built against this template; its launches use
+  neither, so `minters: genesis-only` with no companions (a genesis group holding anything but holders of the program does not verify). The
+  curve and the pool are KForge's own covenants, outside the token's group, and KOB did not review them: they hold tokens in covenant-id
+  custody (owner scheme 4) and can move only those; a holder (scheme 0) moves only with its key's signature (or on the reference's borrow
+  path, which can only add tokens to it, when its borrow scheme allows it; KOB's custodies have it disabled).
+* **Decimals.** KForge declares none (no genesis payload, none in the `KFORGE6` launch payload or the API): the profile has no
+  `default_decimals`, and a token without a KCC-23 declaration or a list's decimals takes them from its market or the user.
+* **Markets beside KOB.** While a token is on KForge's curve or in its pool, most of its supply sits and trades there. KOB offers its own
+  book only and does not route to them; the app recognises the token by its program, nothing else changes.
+* **Builders, engine and order suites.** KOB's builder reproduces the observed token inputs (the curve's delegating custody byte for
+  byte, a key holder's leader push for push: KForge's builder pushes a one-byte group such as the owner scheme `04` of a single next
+  state as `01 04`, not KCC-1's `PushMinimal` `OP_4`, so KOB's strict decoder does not index that output, a curve custody; groups of
+  two or more states and scheme-0 holders encode the same in both forms); measured in the engine: custody released only with an input of its covenant, holders only with their key's
+  signature, exact conservation, 6 token inputs and 6 token outputs, a carrier floor of 1 sompi; a `KobAsk` placed and cancelled.
+  `kcc20_public_mint_tests.rs` runs on the build: every KAS-book, branch and pair shape, three and six custodies under one leader and a
+  seventh refused by the builders, the context-field swap and the program swaps (the standalone build and the three published
+  builds are different tokens to an order).
 
 ## 7. Invariants
 

@@ -51,10 +51,12 @@ srcs=()
 # index of a source name in names (bash 3 has no associative arrays), empty if none
 name_index() { local i; for i in "${!names[@]}"; do [ "${names[$i]}" = "$1" ] && { echo "$i"; return 0; }; done; return 0; }
 # Third-party sources compiled as they are vendored (source|artifact name): the KCC20 actor of upstream's KCC20PublicMint
-# app (contracts/third-party/kcc20-reference/UPSTREAM.md), and the build of that actor KaspaRocket deploys on testnet-10
-# (10 / 10 token slots, contracts/third-party/kasparocket/UPSTREAM.md).
+# app (contracts/third-party/kcc20-reference/UPSTREAM.md), and the builds of that actor KaspaRocket deploys (10 / 10 token
+# slots, contracts/third-party/kasparocket/UPSTREAM.md) and KForge deploys (6 / 6 token slots,
+# contracts/third-party/kforge-kcc20/UPSTREAM.md).
 THIRD_PARTY=("contracts/third-party/kcc20-reference/KCC20.public-mint.sil|KCC20PublicMint"
-  "contracts/third-party/kasparocket/KCC20.public-mint.10x10.sil|KaspaRocketToken11458")
+  "contracts/third-party/kasparocket/KCC20.public-mint.10x10.sil|KaspaRocketToken11458"
+  "contracts/third-party/kforge-kcc20/KCC20.public-mint.6x6.sil|KForgeToken7214")
 # Parameterised builds (source|artifact name|constructor arguments|NAME=value ...): the KRON order kinds whose maker
 # deliveries are KRON id_type 0 (a token-level signature) instead of 3 (address presence), for token programs whose holders
 # are id_type 0 (KForge, testnet-10; contracts/adapters/kron/README.md). TYPE_DELIVERY is the parameter; their constructor

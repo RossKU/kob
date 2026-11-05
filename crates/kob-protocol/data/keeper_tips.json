@@ -47,6 +47,12 @@
     "updateFee": "959200",
     "keeperTip": "2000000"
   },
+  "KForgeToken7214": {
+    "refundFee": "2603800",
+    "refundTip": "5300000",
+    "updateFee": "1069600",
+    "keeperTip": "2200000"
+  },
   "KaspaRocketToken11458": {
     "refundFee": "3452600",
     "refundTip": "7000000",

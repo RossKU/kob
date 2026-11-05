@@ -42,7 +42,7 @@ pub fn check_generated_source(name: &str, generated: &str) {
 /// the 3 / 3 runs). Unset (or `KCC20Ref`): the reference 3 / 3 program. `KCC20PublicMint`: the published public-mint build
 /// (`TemplateId::Kcc20PublicMint`, 3 / 3, pinned template), how the KAS-kind suites and their ablation catalogs are run on
 /// that program (audit AUD-PM). `KaspaRocketToken11458`: KaspaRocket's 10 / 10 build of the same actor (its review of
-/// 2026-10-27). Anything else panics.
+/// 2026-10-27). `KForgeToken7214`: KForge's 6 / 6 build of it (its review of 2026-11-05). Anything else panics.
 #[allow(dead_code)]
 pub fn kcc20_33_program() -> kob_protocol::artifacts::TemplateId {
     use kob_protocol::artifacts::TemplateId;
@@ -50,7 +50,8 @@ pub fn kcc20_33_program() -> kob_protocol::artifacts::TemplateId {
         Err(_) | Ok("") | Ok("KCC20Ref") => TemplateId::Kcc20Ref,
         Ok("KCC20PublicMint") => TemplateId::Kcc20PublicMint,
         Ok("KaspaRocketToken11458") => TemplateId::KaspaRocketToken11458,
-        Ok(other) => panic!("KOB_KCC20_PROGRAM={other}: expected KCC20Ref, KCC20PublicMint or KaspaRocketToken11458"),
+        Ok("KForgeToken7214") => TemplateId::KForgeToken7214,
+        Ok(other) => panic!("KOB_KCC20_PROGRAM={other}: expected KCC20Ref, KCC20PublicMint, KaspaRocketToken11458 or KForgeToken7214"),
     }
 }
 
