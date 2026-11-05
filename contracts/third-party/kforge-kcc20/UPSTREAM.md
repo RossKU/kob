@@ -77,8 +77,9 @@ uses neither, so the program's profile is `minters: genesis-only` with no compan
 group would not verify).
 
 Decimals: KForge declares none (the genesis has no payload, the `KFORGE6` launch payload and the API name none; its site was not
-reachable for reading). KOB sets no default for the program: a token without a KCC-23 declaration or a list's decimals takes them from
-its market or the user.
+reachable for reading). A launch mints 1,000,000,000 base units and KForge shows its tokens as whole units, so KOB uses 0 for a token of
+the program that declares none: the profile's `default_decimals`, source "KForge convention" (maintainer decision 2026-11-05; a token
+declaring decimals under KCC-23, or a list's decimals, comes first).
 
 ## In KOB
 

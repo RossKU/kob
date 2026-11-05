@@ -1106,6 +1106,24 @@ mod tests {
         assert_eq!((m.decimals, m.scale, m.decimals_from), (6, 1_000_000, DecimalsFrom::Declared));
     }
 
+    /// A KForge token (no decimals declared, 1e9 base units shown as whole tokens) takes the KForge convention, 0: its
+    /// scale is 1 (a price per base unit), and a --decimals of another scale is refused.
+    #[test]
+    fn a_kforge_token_takes_zero_decimals_from_its_program() {
+        let p = TemplateId::KForgeToken7214;
+        let d = kob_protocol::profile::of(p).and_then(|x| x.default_decimals.clone()).expect("a default");
+        assert_eq!((d.decimals, d.source.as_str()), (0, "KForge convention"));
+        let key = to_hex(&[9; 32]);
+        let idx = vec![open_facts(9, p)];
+        let none = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(None) };
+        let open = |entered| OpenToken { entered, ..OpenToken::new("mainnet", &none) };
+        let m = resolve_with(&key, &[], &idx, Some(&open(None))).unwrap();
+        assert_eq!((m.decimals, m.scale, m.decimals_from, m.program), (0, 1, DecimalsFrom::Program, p));
+        assert_eq!(resolve_with(&key, &[], &idx, Some(&open(Some(0)))).unwrap().scale, 1);
+        let e = resolve_with(&key, &[], &idx, Some(&open(Some(8)))).unwrap_err();
+        assert!(e.contains("--decimals 8 differs") && e.contains("KForge convention"), "{e}");
+    }
+
     /// TN10 2026-10-15 O-3: the market of a token without decimals keeps the scale its first order set after every order of
     /// it has ended: the indexer's `market_scale` decides (the book, empty, tells nothing), a --decimals of another scale is
     /// refused, and the same one is accepted. An older indexer (no `market_scale`): the scale of the open orders, as before.

@@ -240,7 +240,7 @@ export const TOKEN_PROGRAMS = [
     routerIntents: false,
     review: 'reviewed',
     networks: ['mainnet', 'testnet-10'],
-    defaultDecimals: null,
+    defaultDecimals: { decimals: 0, source: 'KForge convention' },
   },
 ] as const;
 

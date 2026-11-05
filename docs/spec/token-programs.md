@@ -31,7 +31,7 @@ reads the entry.
 | `router_intents` | Whether router intents may name the program | `router::intent_program` |
 | `genesis` | `minters` (`genesis-only` or `unknown`) and `companions` (section 3) | `registry::verify_genesis`, `genesis_evidence` (condition C2) |
 | `review` | `status` (`reviewed`, `pending-review`, `test-only`) and its `basis` | equal to the shipped registry's `review_status` (checked) |
-| `default_decimals` | Optional `decimals` (0..=9) and `source`: the decimals a token of the program that declares none is shown and traded with, a launchpad's convention (KaspaRocket: 3, "KaspaRocket convention"); a token's KCC-23 declaration and a list's decimals come first | kob-cli `resolve_with`, web `open-token.ts` / `token-display.ts` |
+| `default_decimals` | Optional `decimals` (0..=9) and `source`: the decimals a token of the program that declares none is shown and traded with, a launchpad's convention (KaspaRocket: 3, "KaspaRocket convention"; KForge: 0, "KForge convention"); a token's KCC-23 declaration and a list's decimals come first | kob-cli `resolve_with`, web `open-token.ts` / `token-display.ts` |
 | `networks` | The networks the program's tokens exist on (empty: any). A program not on mainnet is not on the shipped (mainnet) registry and no mainnet build trades it; a KRON program with holder 0 must name its networks, without mainnet | registry tests, `kob place` / web open markets |
 
 The compute budgets and keeper tips are measured, not declared: `data/compute_budgets.json`, `data/keeper_tips.json` and
@@ -178,7 +178,7 @@ notes:
 | KRON launchpad | `kron-2433`, `kron-2732` | The KRON codec family (orders and builders, reviewed B2); both programs are data on it |
 | KForge (testnet-10, legacy) | `KForgeToken1785` | Code: the delivery id_type 0 builds of the KRON order kinds and id_type 0 holder spends (a token-level signature in the signature column). Data: profile with holder 0, slots 1 / 3, `networks: [testnet-10]`, `pending-review`; see below |
 | KaspaRocket | `KaspaRocketToken11458` | Data plus a profile field: the published public-mint `KCC20` actor at 10 / 10 slots (a derived source, since 2026-10-14 also the publisher's, and its build), profile with slots 10 / 10, `minters: genesis-only`, `default_decimals` 3 (the KaspaRocket convention, `networks: [mainnet, testnet-10]`), reviewed 2026-10-27; see below |
-| KForge (KCC-20) | `KForgeToken7214` | Data: the published public-mint `KCC20` actor at 6 / 6 slots (a derived source, the one KForge's registry names by hash, and its build), profile with slots 6 / 6, `minters: genesis-only`, no default decimals, `networks: [mainnet, testnet-10]`, reviewed 2026-11-05; see below |
+| KForge (KCC-20) | `KForgeToken7214` | Data: the published public-mint `KCC20` actor at 6 / 6 slots (a derived source, the one KForge's registry names by hash, and its build), profile with slots 6 / 6, `minters: genesis-only`, `default_decimals` 0 (the KForge convention), `networks: [mainnet, testnet-10]`, reviewed 2026-11-05; see below |
 
 ### KForge (legacy, `KForgeToken1785`)
 
@@ -295,8 +295,9 @@ review only, 2026-11-05): tradable on mainnet.
   curve and the pool are KForge's own covenants, outside the token's group, and KOB did not review them: they hold tokens in covenant-id
   custody (owner scheme 4) and can move only those; a holder (scheme 0) moves only with its key's signature (or on the reference's borrow
   path, which can only add tokens to it, when its borrow scheme allows it; KOB's custodies have it disabled).
-* **Decimals.** KForge declares none (no genesis payload, none in the `KFORGE6` launch payload or the API): the profile has no
-  `default_decimals`, and a token without a KCC-23 declaration or a list's decimals takes them from its market or the user.
+* **Decimals.** KForge declares none (no genesis payload, none in the `KFORGE6` launch payload or the API). A launch mints 1,000,000,000
+  base units and KForge shows them as whole tokens, so the profile's `default_decimals` is 0, source "KForge convention" (maintainer
+  decision 2026-11-05): what the CLI and the web app use for a token without a KCC-23 declaration or a list's decimals.
 * **Markets beside KOB.** While a token is on KForge's curve or in its pool, most of its supply sits and trades there. KOB offers its own
   book only and does not route to them; the app recognises the token by its program, nothing else changes.
 * **Builders, engine and order suites.** KOB's builder reproduces the observed token inputs (the curve's delegating custody byte for

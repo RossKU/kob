@@ -301,12 +301,16 @@
       },
       "review": {
         "status": "reviewed",
-        "basis": "internal review (2026-11-05, docs/spec/token-programs.md section 6, contracts/third-party/kforge-kcc20/UPSTREAM.md): the KCC20 actor of kcc20-reference (the reviewed KCC20PublicMint; the token program is the same at c8a0871 and 27f8403) with only its slot bounds set to 6 / 6; upstream's own build at 27f8403 with those bounds reproduces KForge's published artifact (/kcc20/artifact) except its module path strings, KOB's silverc v1.0.0 reproduces its KCC20 bytecode, and the derived source is the one KForge's registry names (blake2b-256 354841165fb9...); the redeem scripts of KForge token UTXOs on testnet-10 and mainnet are these bytes; a testnet-10 launch genesis verifies (one token output, nothing else bound to the token's covenant id); no mint, burn or authority entry (minters genesis-only); the order grid and the seven-input refusal on its holders (kcc20_public_mint_tests); KForge declares no decimals (no default)"
+        "basis": "internal review (2026-11-05, docs/spec/token-programs.md section 6, contracts/third-party/kforge-kcc20/UPSTREAM.md): the KCC20 actor of kcc20-reference (the reviewed KCC20PublicMint; the token program is the same at c8a0871 and 27f8403) with only its slot bounds set to 6 / 6; upstream's own build at 27f8403 with those bounds reproduces KForge's published artifact (/kcc20/artifact) except its module path strings, KOB's silverc v1.0.0 reproduces its KCC20 bytecode, and the derived source is the one KForge's registry names (blake2b-256 354841165fb9...); the redeem scripts of KForge token UTXOs on testnet-10 and mainnet are these bytes; a testnet-10 launch genesis verifies (one token output, nothing else bound to the token's covenant id); no mint, burn or authority entry (minters genesis-only); the order grid and the seven-input refusal on its holders (kcc20_public_mint_tests); KForge declares no decimals: the KForge convention (0) for a token that declares none (a launch mints 1e9 base units and KForge shows whole tokens)"
       },
       "networks": [
         "mainnet",
         "testnet-10"
-      ]
+      ],
+      "default_decimals": {
+        "decimals": 0,
+        "source": "KForge convention"
+      }
     }
   ]
 }

@@ -7,7 +7,7 @@
 //! publishes (`kcc20_argent.sil`, blake2b-256 `35484116...`). Fixture of a real launch: `contracts/third-party/kforge-kcc20/observed.json`
 //! (the testnet-10 token genesis and the launch that moves the supply to the curve, and a mainnet sell back to a curve). The
 //! profile is in `crates/kob-protocol/data/programs.json` (`reviewed`, `networks: [mainnet, testnet-10]`, `minters: genesis-only`,
-//! no default decimals). The order grid on its holders: `kcc20_public_mint_tests.rs`; the review: `docs/spec/token-programs.md`
+//! default decimals 0, the KForge convention). The order grid on its holders: `kcc20_public_mint_tests.rs`; the review: `docs/spec/token-programs.md`
 //! section 6.
 //!
 //! What the reviewer checklist of `docs/spec/token-programs.md` (section 5) asks, item by item:
@@ -189,7 +189,9 @@ fn profile_matches_the_embedded_bytes() {
     assert!(!p.router_intents);
     assert_eq!(p.genesis.minters, kob_protocol::profile::MinterSource::GenesisOnly);
     assert!(p.genesis.companions.is_empty(), "KForge launches put no issuer actor in the token's group");
-    assert!(p.default_decimals.is_none(), "KForge declares no decimals (contracts/third-party/kforge-kcc20/UPSTREAM.md)");
+    // KForge declares no decimals; its launches mint 1e9 base units shown as whole tokens (contracts/third-party/kforge-kcc20/UPSTREAM.md)
+    let d = p.default_decimals.as_ref().expect("default decimals");
+    assert_eq!((d.decimals, d.source.as_str()), (0, "KForge convention"));
     // the legacy KRON-layout KForge program stays testnet-10 only and pending review
     let legacy = TemplateId::KForgeToken1785.profile().unwrap();
     assert_eq!((legacy.review.status, legacy.networks.clone()), (ProgramReview::PendingReview, vec!["testnet-10".to_string()]));

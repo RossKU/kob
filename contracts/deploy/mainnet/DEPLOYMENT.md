@@ -40,7 +40,7 @@ records" in contracts/README.md.
 | | |
 |---|---|
 | File | `registry/tokens.json` (schema 1) |
-| sha256 (LF) | `040aa610ef3d104c1ef31f035ca1b5958a261976d708f77dafdab51473f2ce52` |
+| sha256 (LF) | `fc3e62a38cd52b4a7eb437b80d32853bdc4c0d6aad9c79ddf007e1c95f91b2f6` |
 | Supported programs (strict templates) | kcc20-ref-3x3 `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e`, kcc20-ref-public-mint `734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498`, kasparocket-token-11458 `3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1`, kforge-token-7214 `da96d352c404ad7835bc9857b9ae54ae634f41f83a837a5c913ab58cb9f0dec7` |
 | Pending review | kcc20-ref-8x8, kcc20-kaspacom-0-2-5 |
 

@@ -83,6 +83,8 @@ describe('displayToken: a program with default decimals (KaspaRocket convention)
     noteTokenProgram('mainnet', ID, 'KaspaRocketToken11458');
     expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem())).toMatchObject({ decimals: 3, decimalsSource: 'program' });
     expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem())!.decimalsSource).toBe('assumed');
+    // KForge's default is 0 (a falsy number is still a default)
+    expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem(), null, 'KForgeToken7214')).toMatchObject({ decimals: 0, decimalsSource: 'program', decimalsConvention: 'KForge convention' });
     // a program without a default changes nothing; a registry entry comes first
     expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem(), null, 'KCC20PublicMint')).toMatchObject({ decimals: 8, decimalsSource: 'assumed' });
     expect(displayToken(registry, 'mainnet', REG, mem(), null, 'KaspaRocketToken11458')).toMatchObject({ decimals: 6 });

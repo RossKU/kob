@@ -269,6 +269,19 @@ describe('a token of a program with default decimals (KaspaRocket: 3, its conven
   });
 });
 
+describe('a KForge token (default decimals 0, the KForge convention)', () => {
+  const kf = kob.templates().find((t) => t.name === 'KForgeToken7214')!;
+
+  it('opens at 0 decimals (scale 1, a price per base unit), the source named; a market of another scale is a conflict', () => {
+    const r = synthesizeOpenToken(kob, view({ template_hash: kf.hash }), [], null, null, [], { network: 'mainnet' });
+    expect(r).toMatchObject({ ok: true, info: { program: 'KForgeToken7214', decimals: 0, openScale: 'program', decimalsConvention: 'KForge convention', slots: { inputs: 6, outputs: 6 } } });
+    if (!r.ok) return;
+    expect(toTokenMarket(kob, r.info.json)).toMatchObject({ scale: 1n, decimals: 0 });
+    expect(synthesizeOpenToken(kob, view({ template_hash: kf.hash }), [{ scale: 1 }], null, null, [], { network: 'mainnet' })).toMatchObject({ ok: true, info: { decimals: 0 } });
+    expect(synthesizeOpenToken(kob, view({ template_hash: kf.hash }), [{ scale: 100_000_000 }], null, null, [], { network: 'mainnet' })).toEqual({ ok: false, reason: 'scale-conflict' });
+  });
+});
+
 describe('findPublicToken: a covenant id no list names, from token outputs the indexer names and the node confirmed, whoever holds them', () => {
   const state = (ext = EXT) => ({ amount: '5', owner: '22'.repeat(32), owner_scheme: 4, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: ext });
   const out = (program: string, ext = EXT, cov = ID) => ({ transactionId: '11'.repeat(32), index: 0, amount: '100000000', covenantId: cov, program, state: state(ext) }) as never;
