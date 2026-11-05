@@ -8,8 +8,10 @@ body:has(.market-page) .container { max-width: 1520px; }
 .market-page .section-head { margin-bottom: 8px; }
 .market-page .section-head h2 { font-size: 0.95rem; letter-spacing: 0.01em; }
 
-/* the token facts and the (folded) template verification sit side by side: the folded one is one line, not as tall as its neighbour */
-.mkt-details { align-items: start; }
+/* the token facts, the (folded) template verification and the logo check flow into as many columns as the full width holds (a card is at least 24rem wide, so
+   a 64-hex id or hash takes one or two lines, not a tall narrow strip); the folded one is one line, not as tall as its neighbour */
+.mkt-details { display: grid; gap: 12px; align-items: start; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); }
+.mkt-details > * { min-width: 0; }
 /* a folded section is one line: its title and a short summary, never wrapped */
 .market-page .section-collapsed .section-head { margin-bottom: 0; flex-wrap: nowrap; justify-content: flex-start; gap: 12px; }
 .section-summary { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -23,7 +25,7 @@ body:has(.market-page) .container { max-width: 1520px; }
 .mkt-grid {
   display: grid; gap: 12px; align-items: start;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: 'chart' 'book' 'ticket' 'depth' 'tape' 'details';
+  grid-template-areas: 'chart' 'book' 'ticket' 'depth' 'tape';
 }
 .mkt-lower { display: contents; }
 .mkt-area-book { grid-area: book; }
@@ -31,13 +33,14 @@ body:has(.market-page) .container { max-width: 1520px; }
 .mkt-area-ticket { grid-area: ticket; align-self: start; min-width: 0; }
 .mkt-area-depth { grid-area: depth; }
 .mkt-area-tape { grid-area: tape; }
-.mkt-area-details { grid-area: details; min-width: 0; }
+/* under the grid, on the full width of the page (a sibling of .mkt-grid) */
+.mkt-area-details { min-width: 0; }
 @media (min-width: 760px) {
-  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book ticket' 'depth ticket' 'tape ticket' 'details ticket' '. ticket'; grid-template-rows: auto auto auto auto auto 1fr; margin-bottom: -12px; /* the empty last row's gap */ }
+  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book ticket' 'depth ticket' 'tape ticket' '. ticket'; grid-template-rows: auto auto auto auto 1fr; margin-bottom: -12px; /* the empty last row's gap */ }
 }
 @media (min-width: 1200px) {
-  /* the ticket column runs beside the details too; the last row is an empty one that takes whatever height the ticket still has over the other panels */
-  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) 360px; grid-template-rows: auto auto auto 1fr; grid-template-areas: 'book chart ticket' 'book lower ticket' 'details details ticket' '. . ticket'; margin-bottom: -12px; }
+  /* the last row is an empty one that takes whatever height the ticket still has over the other panels */
+  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) 360px; grid-template-rows: auto auto 1fr; grid-template-areas: 'book chart ticket' 'book lower ticket' '. . ticket'; margin-bottom: -12px; }
   .mkt-lower { display: grid; grid-area: lower; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
   .mkt-lower > * { grid-area: auto; }
 }

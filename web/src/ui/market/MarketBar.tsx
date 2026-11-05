@@ -128,8 +128,9 @@ export function MarketShell(props: {
           </div>
         ) : null}
         {props.ticket}
-        {props.details ? <div class="mkt-area-details">{props.details}</div> : null}
       </div>
+      {/* the facts take the full width under the grid (never a column of it, so no column is left empty beside them); DOM order = reading order */}
+      {props.details ? <div class="mkt-area-details">{props.details}</div> : null}
       {/* phone only (market.css): jumps to the ticket */}
       {ticketAway ? (
         <button type="button" class="mkt-trade-fab" onClick={jumpToTicket} aria-label={t('market.ticket.jump')} data-testid="market-trade-jump">

@@ -42,7 +42,7 @@ test('token creation: the image address says each viewer loads the logo from it,
 });
 
 for (const width of [1280, 880, 390]) {
-  test(`${width} px: unfolding Advanced options makes the ticket taller by itself (nothing below it moves, no gap under the depth chart)`, async ({ appPage: page, mock }) => {
+  test(`${width} px: unfolding Advanced options makes the ticket taller by itself (the panels beside it stay put, no gap under the depth chart; the full-width facts keep clear of it)`, async ({ appPage: page, mock }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width, height: 900 });
     await fund(mock);
@@ -62,10 +62,12 @@ for (const width of [1280, 880, 390]) {
     for (const id of ids) open[id] = await box(id);
     expect(open['ticket-container']!.height - closed['ticket-container']!.height, 'the ticket grew').toBeGreaterThan(100);
     if (width >= 760) {
-      // the ticket is a column of its own: the depth chart (and the trades beside or under it) and the details stay where they were
+      // the ticket is a column of its own: the depth chart (and the trades beside or under it) stay where they were
       expect(Math.abs(open['depth-section']!.y - closed['depth-section']!.y)).toBeLessThan(2);
       expect(Math.abs(open['depth-section']!.height - closed['depth-section']!.height)).toBeLessThan(2);
-      expect(Math.abs(open['token-details']!.y - closed['token-details']!.y)).toBeLessThan(2);
+      // the facts take the full width under the whole grid: they follow the ticket down only when it grows past the panels beside it, and never overlap it
+      expect(open['token-details']!.y).toBeGreaterThanOrEqual(open['ticket-container']!.y + open['ticket-container']!.height - 1);
+      expect(open['token-details']!.y - closed['token-details']!.y).toBeLessThanOrEqual(open['ticket-container']!.height - closed['ticket-container']!.height + 2);
     } else {
       // a phone is one column: the ticket sits above the depth chart, which moves down with it
       expect(open['ticket-container']!.y).toBeLessThan(open['depth-section']!.y);

@@ -196,7 +196,7 @@ function TokenStatusDetails(props: { row: TokenRow; services: Pick<Services, 're
 export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'>; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null; /** the row with KOB's own genesis check applied (a token page): what the status section is printed from */ checked?: TokenRow }) {
   const r = props.row;
   return (
-    <div class="grid-2 mkt-details" data-testid="token-details">
+    <div class="mkt-details" data-testid="token-details">
       <Section title={t('market.token.info')} class="mkt-card">
         <KeyValueList
           compact
