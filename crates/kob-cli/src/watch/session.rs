@@ -1,6 +1,6 @@
 //! The watch loop: connect to the executor's WebSocket, subscribe, print what arrives, refetch the REST resources `book` and
 //! `order` notices point to (debounced), keep the connection alive with pings and, when it drops, reconnect with a growing
-//! pause and start from fresh state (`docs/api.md` section 4.4: the server replays nothing). Blocking, one thread: the socket
+//! pause and start from fresh state (`docs/api-reference.md` section 4.4: the server replays nothing). Blocking, one thread: the socket
 //! is polled with a short read timeout so a pending refetch, a ping and Ctrl-C are served between frames.
 
 use std::collections::BTreeMap;

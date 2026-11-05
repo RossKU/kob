@@ -72,7 +72,7 @@ const appConfig = (req) => {
   };
 };
 
-// the one write the /indexer relay passes: a logo report (docs/api.md 3.19). The indexer reads at most 1024 bytes of it, so twice that is a cap with room
+// the one write the /indexer relay passes: a logo report (docs/api-reference.md 3.19). The indexer reads at most 1024 bytes of it, so twice that is a cap with room
 const LOGO_REPORTS = '/v1/logo-reports';
 const LOGO_REPORT_MAX_BODY = 2048;
 

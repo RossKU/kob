@@ -1,4 +1,4 @@
-//! The token-logo blocklist: reports in, the list of hidden tokens out (docs/api.md, *Logo reports*).
+//! The token-logo blocklist: reports in, the list of hidden tokens out (docs/api-reference.md, 3.19 and 3.20).
 //!
 //! KOB keeps and serves no third-party image: a token's logo is loaded by each viewer's browser from the address its creator gave.
 //! What the operator can do about an image that should not be shown is to hide it, and that is this module:

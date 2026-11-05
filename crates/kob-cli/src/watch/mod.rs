@@ -1,4 +1,4 @@
-//! `kob watch`: follow the executor's WebSocket feed (`docs/api.md` section 4) from a terminal or a pipe. Read-only: no key is
+//! `kob watch`: follow the executor's WebSocket feed (`docs/api-reference.md` section 4) from a terminal or a pipe. Read-only: no key is
 //! read and nothing is signed. The WebSocket address is the indexer's (`--indexer` / `$KOB_INDEXER_URL`) with `http` turned
 //! into `ws` and `/v1/ws` appended.
 

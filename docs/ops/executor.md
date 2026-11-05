@@ -1361,7 +1361,7 @@ the same options.
 
 **Token-logo reports (`[logo_reports]`, `logo-reports`).** KOB shows a token's logo straight from the address its creator gave, in
 the viewer's browser, and keeps no image. With `[logo_reports] enabled = true` this server also takes reports of such logos and
-serves the list of hidden ones (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`; the keys are in docs/api.md, section 6, the routes
+serves the list of hidden ones (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`; the keys are in docs/api-reference.md, section 6, the routes
 in 3.19 and 3.20). The first report of a token hides its logo at once; you review it:
 
 ```

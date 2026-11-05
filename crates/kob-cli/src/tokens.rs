@@ -1,4 +1,4 @@
-//! `kob tokens [SEARCH] [--all] [--json]`: the tokens with a KOB market (the indexer's `GET /v1/tokens`, `docs/api.md` 3.4), and
+//! `kob tokens [SEARCH] [--all] [--json]`: the tokens with a KOB market (the indexer's `GET /v1/tokens`, `docs/api-reference.md` 3.4), and
 //! with `--all` every token kascov.io lists for the network, to find tokens that were never traded on KOB. Read-only: no key, no
 //! node. kascov is a discovery list only: its ticker and decimals are the token's own claims, and the one fact taken from it
 //! besides is the program hash, which says whether KOB knows the program (`kob registry programs`).

@@ -70,7 +70,7 @@ the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `
   credentials, no referrer): if it can and the bytes hash to `image_hash`, the picture is shown from a `blob:` URL as checked; if they do not, the letter is shown with
   the note "The picture at this address does not match the hash in the token's creation record"; if the host sends no CORS header (the usual case) nothing can be
   checked and the plain, unchecked image is shown as before. SVG, `data:` URLs and IP-literal or `localhost` hosts are refused. A logo that is reported is hidden for everyone until the operator of the
-  indexer restores it (`docs/api.md` 3.19, `docs/ops/web-hosting.md`, *Token logos from the creator's address*). Use `ipfs://`, or an `image_hash`, if a change of the picture must not go unnoticed.
+  indexer restores it (`docs/api-reference.md` 3.19, `docs/ops/web-hosting.md`, *Token logos from the creator's address*). Use `ipfs://`, or an `image_hash`, if a change of the picture must not go unnoticed.
 * The token's facts in the registry format that issuance writes (`registry_entry.json`, for tools and community lists that read that
   format; not a listing request) keep `display.icon` / `display.x` / `display.telegram` and carry the
   declared object verbatim as `display.kcc23`.

@@ -1,4 +1,4 @@
-//! How `kob watch` words the executor's frames (`docs/api.md` section 4.2): one human line per event. Pure: no clock, no I/O.
+//! How `kob watch` words the executor's frames (`docs/api-reference.md` section 4.2): one human line per event. Pure: no clock, no I/O.
 
 use serde_json::Value;
 

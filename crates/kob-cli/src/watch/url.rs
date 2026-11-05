@@ -1,4 +1,4 @@
-//! The executor's WebSocket address, derived from the indexer URL (`docs/api.md` section 4: `ws://<host>/v1/ws`).
+//! The executor's WebSocket address, derived from the indexer URL (`docs/api-reference.md` section 4: `ws://<host>/v1/ws`).
 
 use crate::trade::http::{b64, shown};
 

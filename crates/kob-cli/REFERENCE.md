@@ -437,7 +437,7 @@ Per family:
 
 ## kob tokens details
 
-- **Default list** is the indexer's `GET /v1/tokens` (`docs/api.md` 3.4): every token an order was placed for, plus the
+- **Default list** is the indexer's `GET /v1/tokens` (`docs/api-reference.md` 3.4): every token an order was placed for, plus the
   registry's. It reads no key and no node.
 - **Columns.** `TICKER` (the registry's, else the symbol of the token's verified KCC-23 declaration, else blank),
   `COVENANT ID` (always whole: tickers collide, the id is the identity), `DEC`, `PROGRAM` (program and slots, such as

@@ -188,7 +188,7 @@ page fills it from a file the creator picks, `docs/spec/token-metadata.md` 2). S
   reviews it with `kobd index logo-reports` (`docs/ops/executor.md`) and may restore it; reports of a restored token are only recorded for `cooldown_secs`
   (default 6 hours). The same list is fed by the GitHub Issue form `.github/ISSUE_TEMPLATE/logo-report.yml` through the workflow `.github/workflows/logo-report.yml`,
   which posts to the repository variable `KOB_LOGO_REPORT_URL` (the public indexer's `/v1/logo-reports` address; unset: the workflow only comments that the report
-  waits for manual review). The indexer needs `[logo_reports] enabled = true` (`docs/ops/chart-server.md`, `docs/api.md` 3.19 and 3.20).
+  waits for manual review). The indexer needs `[logo_reports] enabled = true` (`docs/ops/chart-server.md`, `docs/api-reference.md` 3.19 and 3.20).
 * **Privacy.** The creator's host (and an IPFS gateway) sees the visitor's IP address, the time, and that this token's logo was looked at, and the host
   decides what it sends. KOB's own host sees nothing of this.
 

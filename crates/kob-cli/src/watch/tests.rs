@@ -1,4 +1,4 @@
-//! `kob watch` against a local server that speaks the executor's WebSocket protocol (`docs/api.md` section 4) and a few REST
+//! `kob watch` against a local server that speaks the executor's WebSocket protocol (`docs/api-reference.md` section 4) and a few REST
 //! routes on the same port: the frames, the refetch of notices (debounced), the reconnect, the errors.
 
 use std::collections::BTreeMap;

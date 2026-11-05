@@ -3,7 +3,7 @@ name: logo-report
 # A token-logo report filed with the Issue form .github/ISSUE_TEMPLATE/logo-report.yml (docs/ops/web-hosting.md, "Token logos from the creator's address").
 # The workflow reads two fields of the issue, the covenant id (64 hex characters, checked here) and the reason (illegal, impersonation or other), posts them to
 # the indexer's POST /v1/logo-reports with source "github" and the issue number, and comments the result on the issue. The first report of a token hides its
-# logo for every viewer until the operator reviews it (docs/api.md 3.19).
+# logo for every viewer until the operator reviews it (docs/api-reference.md 3.19).
 #
 # The address is the repository VARIABLE KOB_LOGO_REPORT_URL (the public indexer's https://.../v1/logo-reports; a variable, not a secret: the route is
 # public). Unset: the issue is only answered with "recorded for manual review". Nothing else of the issue is used. The issue text is untrusted: it only
