@@ -20,7 +20,7 @@ import { changedFields, changesServers, clearKobStorage, describeStorageKey, for
 const reload = () => window.location.reload();
 
 function ConnectionSettings() {
-  const { config } = useServices();
+  const { config, standalone } = useServices();
   const [form, setForm] = useState<SettingsForm>(() => formFromConfig(config));
   const [ack, setAck] = useState(false);
   const [saved, setSaved] = useState<'ok' | 'failed' | null>(null);
@@ -40,6 +40,8 @@ function ConnectionSettings() {
     const ok = saveSettings(settingsPatch(v.clean, changes));
     setSaved(ok ? 'ok' : 'failed');
     setStoredServers(storedServerFields(readSettings()));
+    // the standalone switches apply at once (data/standalone.ts); saved, they also apply on the next visit
+    if (ok) standalone?.setPrefs({ manual: v.clean.standaloneManual, auto: v.clean.standaloneAuto, autoReturn: v.clean.standaloneAutoReturn });
   };
   const resetServers = () => {
     const ok = saveSettings(resetServersPatch());
@@ -64,6 +66,9 @@ function ConnectionSettings() {
           <Checkbox checked={form.kastle} onChange={(c) => set('kastle', c)} label={t('settings.kastle')} hint={t('settings.kastle.hint')} data-testid="settings-kastle" />
           <Checkbox checked={form.priorityFee} onChange={(c) => set('priorityFee', c)} label={t('settings.priorityFee')} hint={t('settings.priorityFee.hint')} data-testid="settings-priority-fee" />
           <Checkbox checked={form.dynamicFee} onChange={(c) => set('dynamicFee', c)} label={t('settings.dynamicFee')} hint={t('settings.dynamicFee.hint')} data-testid="settings-dynamic-fee" />
+          <Checkbox checked={form.standaloneManual} onChange={(c) => set('standaloneManual', c)} label={t('settings.standalone.manual')} hint={t('settings.standalone.manual.hint')} data-testid="settings-standalone" />
+          <Checkbox checked={form.standaloneAuto} onChange={(c) => set('standaloneAuto', c)} label={t('settings.standalone.auto')} hint={t('settings.standalone.auto.hint')} data-testid="settings-standalone-auto" />
+          <Checkbox checked={form.standaloneAutoReturn} onChange={(c) => set('standaloneAutoReturn', c)} label={t('settings.standalone.autoReturn')} hint={t('settings.standalone.autoReturn.hint')} data-testid="settings-standalone-return" />
           {servers ? <Checkbox checked={ack} onChange={setAck} label={t('settings.servers.ack')} data-testid="settings-servers-ack" /> : null}
           <div class="row">
             <Button variant="primary" disabled={!v.ok || changes.length === 0 || (servers && !ack)} onClick={save} data-testid="settings-save">

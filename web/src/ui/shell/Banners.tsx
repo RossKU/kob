@@ -1,11 +1,12 @@
 import { useServices, useWallet } from '../../app/context';
 import type { ConfigWarning, StoredOverride } from '../../config';
 import { t } from '../../i18n';
-import { Banner } from '../kit';
+import { Banner, Button } from '../kit';
 import { shortAddress } from '../kit/format';
 import { useFailoverState } from './failover';
 import { formatLag } from './health';
 import { useSystemStatus } from './StatusProvider';
+import { clockText, useStandalone } from './standalone';
 
 /**
  * Global banners under the status bar: settings that were ignored, test mode, registry failure, wallet trouble, node / indexer health.
@@ -14,8 +15,9 @@ import { useSystemStatus } from './StatusProvider';
  * Each has a `data-testid` starting with `banner-`.
  */
 export function GlobalBanners(props: { warnings: ConfigWarning[]; storedOverrides?: StoredOverride[] }) {
-  const { config, registryError, failover } = useServices();
+  const { config, registryError, failover, standalone } = useServices();
   const backup = useFailoverState(failover);
+  const sa = useStandalone(standalone);
   const wallet = useWallet();
   const { node, indexer } = useSystemStatus();
   const a = indexer.assessment;
@@ -125,7 +127,31 @@ export function GlobalBanners(props: { warnings: ConfigWarning[]; storedOverride
       </Banner>,
     );
   }
-  if (a.code === 'not-configured') {
+  // standalone mode (data/standalone.ts): what the page shows comes from the node since the mode started
+  if (sa?.active) {
+    const time = clockText(sa.sinceMs ?? Date.now());
+    banners.push(
+      <Banner
+        key="standalone"
+        tone={sa.reason === 'manual' ? 'info' : 'warn'}
+        title={t('shell.banner.standaloneTitle', { time })}
+        data-testid="banner-standalone"
+      >
+        {t(sa.reason === 'manual' ? 'shell.banner.standalone' : 'shell.banner.standaloneAuto', { time })}
+        {sa.phase === 'connecting' ? <div class="small muted" data-testid="standalone-connecting">{t('shell.banner.standaloneConnecting')}</div> : null}
+        {sa.indexerBack ? (
+          <div class="row" style="margin-top:6px" data-testid="standalone-back">
+            <span>{t('shell.banner.standaloneBack')}</span>
+            <Button small variant="primary" onClick={() => standalone?.returnToIndexer()} data-testid="standalone-return">{t('shell.banner.standaloneReturn')}</Button>
+          </div>
+        ) : null}{' '}
+        <a href="#/settings">{t('shell.banner.standaloneSettings')}</a>
+      </Banner>,
+    );
+  }
+  if (sa?.active) {
+    // the standalone banner says what the indexer's state means for the page (or, on by the setting, the indexer is not asked at all)
+  } else if (a.code === 'not-configured') {
     banners.push(<Banner key="noidx" tone="info" data-testid="banner-no-indexer">{t('shell.banner.noIndexer')}</Banner>);
   } else if (a.code === 'unreachable') {
     banners.push(

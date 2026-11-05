@@ -21,6 +21,7 @@ describe('validateSettings', () => {
   it('rejects wrong schemes, credentials in URLs and unknown networks, field by field', () => {
     const v = validateSettings({
       network: 'devnet' as never, indexerUrl: 'ws://idx.example', nodeUrl: 'ftp://node', registryUrl: '//evil.example/x.json', kastle: false, priorityFee: false, dynamicFee: true,
+      standaloneManual: false, standaloneAuto: true, standaloneAutoReturn: true,
     });
     expect(v.ok).toBe(false);
     expect(v.errors).toEqual({ network: 'network', indexerUrl: 'url', nodeUrl: 'url', registryUrl: 'registry' });
@@ -33,6 +34,29 @@ describe('validateSettings', () => {
     expect(validateSettings({ ...f, registryUrl: 'https://reg.example/tokens.json' }).ok).toBe(true);
     expect(validateSettings({ ...f, registryUrl: 'javascript:alert(1)' }).ok).toBe(false);
     expect(validateSettings({ ...f, registryUrl: '' }).ok).toBe(false);
+  });
+});
+
+describe('standalone mode settings', () => {
+  it('default to: off, fall back automatically, return automatically; each is a field of its own and no server change', () => {
+    const c = base();
+    const f = formFromConfig(c);
+    expect([f.standaloneManual, f.standaloneAuto, f.standaloneAutoReturn]).toEqual([false, true, true]);
+    const ch = changedFields(c, { ...f, standaloneManual: true, standaloneAutoReturn: false });
+    expect(ch).toEqual(['standaloneManual', 'standaloneAutoReturn']);
+    expect(changesServers(ch)).toBe(false);
+    expect(settingsPatch(validateSettings({ ...f, standaloneManual: true, standaloneAutoReturn: false }).clean, ch)).toEqual({ standalone: { manual: true, autoReturn: false } });
+  });
+
+  it('are persisted and read back like the other settings (invalid values are dropped)', () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    expect(saveSettings({ standalone: { manual: true, auto: false } }, storage)).toBe(true);
+    expect(saveSettings({ standalone: { autoReturn: 'nope' } }, storage)).toBe(true);
+    const settings = readSettings(storage);
+    expect(settings).toEqual({ standalone: { manual: true, auto: false } });
+    expect(mergeConfig({ settings }).standalone).toEqual({ manual: true, auto: false, autoReturn: true });
+    expect(DEFAULT_CONFIG.standalone).toEqual({ manual: false, auto: true, autoReturn: true });
   });
 });
 

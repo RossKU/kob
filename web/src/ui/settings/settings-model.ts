@@ -11,7 +11,14 @@ export interface SettingsForm {
   priorityFee: boolean;
   /** `fees.dynamic`: pay the node's current fee estimate per action instead of the relay minimum */
   dynamicFee: boolean;
+  /** standalone mode (data/standalone.ts): always on; fall back to it when the indexer is down; return to the indexer when it is back */
+  standaloneManual: boolean;
+  standaloneAuto: boolean;
+  standaloneAutoReturn: boolean;
 }
+
+/** The flags of the form that are saved as they are (no server, no validation). */
+export type SettingsFlag = 'kastle' | 'priorityFee' | 'dynamicFee' | 'standaloneManual' | 'standaloneAuto' | 'standaloneAutoReturn';
 
 export type SettingsField = 'network' | 'indexerUrl' | 'nodeUrl' | 'registryUrl';
 export type SettingsErrorCode = 'network' | 'url' | 'registry';
@@ -24,6 +31,9 @@ export const formFromConfig = (c: AppConfig): SettingsForm => ({
   kastle: c.features.kastle,
   priorityFee: c.features.priorityFee,
   dynamicFee: c.fees.dynamic,
+  standaloneManual: c.standalone.manual,
+  standaloneAuto: c.standalone.auto,
+  standaloneAutoReturn: c.standalone.autoReturn,
 });
 
 export interface SettingsValidation {
@@ -47,14 +57,17 @@ export function validateSettings(f: SettingsForm): SettingsValidation {
   return {
     ok: Object.keys(errors).length === 0,
     errors,
-    clean: { network: network ?? f.network, indexerUrl: indexer ?? f.indexerUrl, nodeUrl: node ?? f.nodeUrl, registryUrl: registry ?? f.registryUrl, kastle: f.kastle, priorityFee: f.priorityFee, dynamicFee: f.dynamicFee },
+    clean: {
+      network: network ?? f.network, indexerUrl: indexer ?? f.indexerUrl, nodeUrl: node ?? f.nodeUrl, registryUrl: registry ?? f.registryUrl, kastle: f.kastle, priorityFee: f.priorityFee, dynamicFee: f.dynamicFee,
+      standaloneManual: f.standaloneManual, standaloneAuto: f.standaloneAuto, standaloneAutoReturn: f.standaloneAutoReturn,
+    },
   };
 }
 
 /** Fields whose value differs from the running configuration (compared after normalisation). */
-export function changedFields(current: AppConfig, form: SettingsForm): (SettingsField | 'kastle' | 'priorityFee' | 'dynamicFee')[] {
+export function changedFields(current: AppConfig, form: SettingsForm): (SettingsField | SettingsFlag)[] {
   const v = validateSettings(form).clean;
-  const out: (SettingsField | 'kastle' | 'priorityFee' | 'dynamicFee')[] = [];
+  const out: (SettingsField | SettingsFlag)[] = [];
   if (v.network !== current.network) out.push('network');
   if (v.indexerUrl !== current.indexerUrl) out.push('indexerUrl');
   if (v.nodeUrl !== current.nodeUrl) out.push('nodeUrl');
@@ -62,6 +75,9 @@ export function changedFields(current: AppConfig, form: SettingsForm): (Settings
   if (v.kastle !== current.features.kastle) out.push('kastle');
   if (v.priorityFee !== current.features.priorityFee) out.push('priorityFee');
   if (v.dynamicFee !== current.fees.dynamic) out.push('dynamicFee');
+  if (v.standaloneManual !== current.standalone.manual) out.push('standaloneManual');
+  if (v.standaloneAuto !== current.standalone.auto) out.push('standaloneAuto');
+  if (v.standaloneAutoReturn !== current.standalone.autoReturn) out.push('standaloneAutoReturn');
   return out;
 }
 
@@ -74,7 +90,10 @@ export const changesServers = (fields: readonly string[]): boolean => fields.som
  * site's own servers would no longer apply.
  */
 export function settingsPatch(clean: SettingsForm, only?: readonly string[]): Record<string, unknown> {
-  const all = { network: clean.network, indexerUrl: clean.indexerUrl, nodeUrl: clean.nodeUrl, registryUrl: clean.registryUrl, features: { kastle: clean.kastle, priorityFee: clean.priorityFee }, fees: { dynamic: clean.dynamicFee } };
+  const all = {
+    network: clean.network, indexerUrl: clean.indexerUrl, nodeUrl: clean.nodeUrl, registryUrl: clean.registryUrl, features: { kastle: clean.kastle, priorityFee: clean.priorityFee },
+    fees: { dynamic: clean.dynamicFee }, standalone: { manual: clean.standaloneManual, auto: clean.standaloneAuto, autoReturn: clean.standaloneAutoReturn },
+  };
   if (!only) return all;
   const out: Record<string, unknown> = {};
   for (const f of ['network', 'indexerUrl', 'nodeUrl', 'registryUrl'] as const) if (only.includes(f)) out[f] = all[f];
@@ -83,6 +102,11 @@ export function settingsPatch(clean: SettingsForm, only?: readonly string[]): Re
   if (only.includes('priorityFee')) features.priorityFee = clean.priorityFee;
   if (Object.keys(features).length) out.features = features;
   if (only.includes('dynamicFee')) out.fees = { dynamic: clean.dynamicFee };
+  const standalone: Record<string, boolean> = {};
+  if (only.includes('standaloneManual')) standalone.manual = clean.standaloneManual;
+  if (only.includes('standaloneAuto')) standalone.auto = clean.standaloneAuto;
+  if (only.includes('standaloneAutoReturn')) standalone.autoReturn = clean.standaloneAutoReturn;
+  if (Object.keys(standalone).length) out.standalone = standalone;
   return out;
 }
 

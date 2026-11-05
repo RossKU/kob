@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
@@ -24,6 +24,7 @@ import { buildTokenRows, filterTokens, isNameless, parseCovenantId, tradableHere
 import { useKascov } from './use-kascov';
 import { usePooledSlots } from './use-market-list';
 import { isAbort } from '../kit/hooks';
+import { clockText, useStandalone } from '../shell/standalone';
 
 function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
   const { indexer, registry, kob } = useServices();
@@ -216,14 +217,23 @@ const pairToken = (r: TokenRow): PairToken => ({ covenantId: r.covenantId, ticke
  * sortable by every column (24 h volume first), searchable, add by covenant id. A phone shows the name, the price and the change.
  */
 export function TokenList(props: { invalidToken?: string }) {
-  const { registry, indexer, kob, config } = useServices();
-  const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
-  const pairs = useAsync((signal) => (indexer ? indexer.pairs(undefined, { signal }) : Promise.resolve(null)), [indexer]);
+  const { registry, indexer, kob, config, standalone } = useServices();
+  // standalone mode (data/standalone.ts): the list and its figures are what this page saw on the node since the mode started, read again as it sees more
+  const sa = useStandalone(standalone);
+  const saKey = sa?.active ? `standalone:${sa.version}` : 'indexer';
+  const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, saKey]);
+  const pairs = useAsync((signal) => (indexer ? indexer.pairs(undefined, { signal }) : Promise.resolve(null)), [indexer, !!sa?.active]);
   const [query, setQuery] = useState('');
   const [showNameless, setShowNameless] = useState(false);
   const [pasted, setPasted] = useState<IndexerTokenView[]>([]);
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
   const [generation, setGeneration] = useState(0);
+  const firstKey = useRef(saKey);
+  useEffect(() => {
+    if (firstKey.current === saKey) return;
+    firstKey.current = saKey;
+    setGeneration((g) => g + 1);
+  }, [saKey]);
 
   // a token this build cannot trade is not listed (a direct link to it shows a short "not tradable" page)
   // a token the registry does not list is named by its verified KCC-23 declaration (its ticker, name and decimals)
@@ -307,6 +317,7 @@ export function TokenList(props: { invalidToken?: string }) {
           <Field label={t('market.search.label')} type="search" value={query} onValue={setQuery} placeholder={t('market.search.placeholder')} data-testid="token-search" />
         </div>
         <ListLegend names={kascov.status} />
+        {sa?.active && sa.sinceMs !== null ? <p class="small muted" data-testid="token-list-standalone">{t('market.list.standalone', { time: clockText(sa.sinceMs) })}</p> : null}
         <ErrorBanner error={tokens.error} title={t('market.list.indexerError')} onRetry={tokens.reload} data-testid="token-list-error" />
         <Table dense class="ml-table ml-tokens" data-testid="token-table">
           <thead>

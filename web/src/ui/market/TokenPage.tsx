@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { displayToken } from '../../app/token-display';
 import { pageTitle, useDocumentTitle } from '../../app/page-title';
 import { useDeclaration, useDeclarationLookup } from '../../app/use-declaration';
@@ -10,6 +10,7 @@ import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, 
 import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
 import { useSystemStatus } from '../shell/StatusProvider';
+import { clockText, useStandalone } from '../shell/standalone';
 import { buildBookModel, groupSizesAt, inferTick, levelsFromView } from './book-model';
 import { useStaleSince } from './book-stale';
 import { useOpenToken } from './use-open-token';
@@ -44,6 +45,15 @@ import { tradeRows } from './trades-model';
 import './market.css';
 
 const BOOK_DEPTH = 12;
+
+/** Standalone mode (data/standalone.ts): a figure built from what was seen since the mode started says so. */
+function SinceBadge(props: { since: number; area: string }) {
+  return (
+    <Badge tone="info" data-testid={`${props.area}-standalone`} title={t('market.standalone.sinceHint')}>
+      {t('market.standalone.since', { time: clockText(props.since) })}
+    </Badge>
+  );
+}
 const TAPE_LIMIT = 50;
 
 /**
@@ -56,6 +66,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const { indexer: health } = useSystemStatus();
   const { registry, indexer, kob } = services;
   const id = props.covenantId;
+  // standalone mode: the book, the trades and the figures come from what this page saw on the node since `sa.sinceMs`
+  const sa = useStandalone(services.standalone);
+  const standalone = sa?.active ? sa : null;
   // the close of a position (My orders): `?ticket=sell&amount=N` (buy first) opens the ticket on a market SELL of the N base units the position
   // bought and has not sold yet, `?ticket=cover&amount=N` (sell first) on a market BUY of the N it sold; `?ticket=close` on "close (sell all)"
   const [prefill, setPrefill] = useState<{ side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: 'close' | 'market' } | undefined>(
@@ -72,7 +85,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [groupIdxNative, setGroupIdxNative] = useState(0);
   const [groupIdxInv, setGroupIdxInv] = useState(0);
 
-  const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
+  const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, !!standalone]);
   // a token the registry does not list is named by its verified KCC-23 declaration (the selector, the title, the name)
   const declaredOf = useDeclarationLookup();
   const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, [], declaredOf), [registry, tokens.data, declaredOf]);
@@ -169,6 +182,19 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     if (full) setResyncKey((k) => k + 1);
   };
   const mode = useLiveRefresh(services, [`book:${id}`, `fills:${id}`], (e) => !e.token || e.token === id, (full) => refreshAll(false, full));
+  // entering or leaving standalone mode: everything is read again from the other source (in full); in the mode, every change of what was seen too
+  const saActive = !!standalone;
+  const firstMode = useRef(true);
+  useEffect(() => {
+    if (firstMode.current) {
+      firstMode.current = false;
+      return;
+    }
+    refreshAll(true, true);
+  }, [saActive]);
+  useEffect(() => {
+    if (standalone) refreshAll(false);
+  }, [standalone?.version]);
 
   // every book row carries its own scale; the market's is the token's standard scale (`10^decimals`, at most 10^9): prices per whole token. The
   // decimals: the registry's, else the scale its orders set, else this browser's issuance of it, else 8 (the same rule as everywhere: never base units)
@@ -304,12 +330,18 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   }
 
   const info = row.info;
-  const stale = health.assessment.level === 'warn' || health.assessment.level === 'bad';
+  // the standalone book is the node's, not an indexer's that fell behind
+  const stale = !standalone && (health.assessment.level === 'warn' || health.assessment.level === 'bad');
+  const liveKind = standalone ? 'standalone' : mode;
   const liveBadge = (
-    <Badge tone={mode === 'live' ? 'ok' : mode === 'polling' ? 'info' : 'neutral'} data-testid="live-indicator" title={t(`market.live.${mode}Hint`)}>
-      {t(`market.live.${mode}`)}
+    <Badge tone={mode === 'live' ? 'ok' : mode === 'polling' ? 'info' : 'neutral'} data-testid="live-indicator" title={t(`market.live.${liveKind}Hint`)}>
+      {t(`market.live.${liveKind}`)}
     </Badge>
   );
+  const since = standalone?.sinceMs ?? null;
+  // an open-list token is traded in standalone mode only with decimals known without the indexer (its declaration or its program's default): the
+  // scale its orders seen since the mode started use is no evidence of the market's
+  const standaloneScaleBlocked = !!standalone && row.source !== 'registry' && (open.reason === 'no-scale' || (!!info?.openList && info.openScale !== 'declared' && info.openScale !== 'program'));
   // the pair selector: a change of side leads to another market; the same token with the other order is only a flip
   const onPair = (next: DisplayedPair) => {
     const m = marketFor(next);
@@ -346,6 +378,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             </Banner>
           ) : null}
           <CrossCheckBanner token={id} refreshKey={liveKey} />
+          {since !== null ? <div class="row"><SinceBadge since={since} area="stats" /></div> : null}
         </>
       }
       stats={<MarketStats model={statsForView} ticker={name} inverted={inverted} loading={!!indexer && stats.data === undefined && stats.loading} unsupported={stats.data === null && !!indexer} />}
@@ -367,6 +400,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           }
         >
           {!indexer ? <Banner tone="info">{t('market.book.noIndexer')}</Banner> : null}
+          {standalone && since !== null ? (
+            <p class="small muted" data-testid="book-standalone">{t(standalone.reason === 'manual' ? 'market.book.standaloneManual' : 'market.book.standaloneAuto', { time: clockText(since) })}</p>
+          ) : null}
           {/* with a book on screen a failed pull is only the subtle marker below; the banner is for a page that has no book to show */}
           <ErrorBanner error={book.data ? null : book.error} title={t('market.book.error')} onRetry={book.reload} data-testid="book-error" />
           <StaleSince since={bookStaleSince} />
@@ -380,23 +416,28 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         </Section>
       }
       chart={
-        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card">
+        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" /> : undefined}>
           <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} />
         </Section>
       }
       depth={
-        <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card">
+        <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card" actions={since !== null ? <SinceBadge since={since} area="depth" /> : undefined}>
           <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
         </Section>
       }
       tape={
         <div class="mkt-area-tape">
+          {since !== null ? <div class="row"><SinceBadge since={since} area="tape" /></div> : null}
           <TradeTape tape={tape} loading={trades.loading} error={trades.error} onRetry={trades.reload} decimals={decimals} ticker={name} dp={dp} tick={baseTick} inverted={inverted} />
         </div>
       }
       ticket={
         <div class="stack mkt-area-ticket">
-          {info && row.tradable ? (
+          {standaloneScaleBlocked ? (
+            <Section title={t('market.ticket.title')} data-testid="ticket-unavailable" class="mkt-card">
+              <Banner tone="warn" data-testid="ticket-standalone-scale">{t('market.ticket.standaloneScale')}</Banner>
+            </Section>
+          ) : info && row.tradable ? (
             <div data-testid="ticket-container">
               {info.openScale === 'entered' ? (
                 <Banner tone="info" data-testid="first-order-entered">

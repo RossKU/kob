@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Services } from '../../app/services';
 import type { FeedStatus } from '../../data/indexer';
 import { onVisibilityChange, pageVisible, useInterval } from '../kit/hooks';
+import { useStandalone } from '../shell/standalone';
 
 export type LiveMode = 'live' | 'polling' | 'off';
 
@@ -44,12 +45,14 @@ export class LiveGate {
 }
 
 /**
+ * In standalone mode (data/standalone.ts) the indexer's feed is not used: the views poll what the node stream saw (in memory, every `pollMs`).
+ *
  * Calls `refresh(full)` when the feed reports a change on `channels` (debounced) and, while the socket is not open, every `pollMs` (default 5 s).
  * Subscribes on mount, unsubscribes on unmount. A hidden page skips both and refreshes once when shown, if it missed anything (`LiveGate`);
  * `o.background` keeps it live while hidden (the notifications). Returns the current mode.
  */
 export function useLiveRefresh(
-  s: Pick<Services, 'feed' | 'indexer'>,
+  s: Pick<Services, 'feed' | 'indexer' | 'standalone'>,
   channels: readonly string[],
   /** `order`: the covenant id a fill notice names (fills only) */
   relevant: (e: { token?: string | null; order?: string }) => boolean,
@@ -57,7 +60,9 @@ export function useLiveRefresh(
   pollMs: number = POLL_MS,
   o: { background?: boolean } = {},
 ): LiveMode {
-  const [status, setStatus] = useState<FeedStatus | null>(s.feed ? s.feed.status : null);
+  const sa = useStandalone(s.standalone);
+  const feedOf = sa?.active ? null : s.feed;
+  const [status, setStatus] = useState<FeedStatus | null>(feedOf ? feedOf.status : null);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
   const relevantRef = useRef(relevant);
@@ -66,7 +71,7 @@ export function useLiveRefresh(
   const background = !!o.background;
 
   useEffect(() => {
-    const feed = s.feed;
+    const feed = feedOf;
     if (!feed) return;
     setStatus(feed.status);
     const gate = new LiveGate(background || pageVisible());
@@ -112,9 +117,9 @@ export function useLiveRefresh(
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.feed, key, background]);
+  }, [feedOf, key, background]);
 
-  const mode = liveMode(!!s.indexer, s.feed ? status : null);
+  const mode = liveMode(!!s.indexer, feedOf ? status : null);
   // the poll pauses on a hidden page and catches up when it is shown (useInterval)
   useInterval(() => refreshRef.current(false), pollMs, mode === 'polling', { background });
   return mode;

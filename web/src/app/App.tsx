@@ -18,6 +18,8 @@ import { StatusProvider } from '../ui/shell/StatusProvider';
 import { NotifyProvider } from '../ui/notify/NotifyProvider';
 import { ViewBoundary } from '../ui/shell/ViewBoundary';
 import { AutoRefundRunner } from '../ui/orders/AutoRefund';
+import { StandaloneReceipts } from '../ui/shell/StandaloneReceipts';
+import { useStandalone } from '../ui/shell/standalone';
 import { useServices } from './context';
 import { useDeclarationsVersion } from './use-declaration';
 import { loadDeclaration, noteTokenProgram, restoreDeclarations } from '../data/token-declarations';
@@ -144,10 +146,12 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
   const blocklistUrl = logoBlocklistUrlOf(services.config);
   useEffect(() => logoBlocklist.start(blocklistUrl), [blocklistUrl]);
 
-  // one socket for the whole app: the shell subscribes to the global channels, views add their own (book:<token>, fills:<token>)
+  // one socket for the whole app: the shell subscribes to the global channels, views add their own (book:<token>, fills:<token>); none while standalone
+  // mode is on by the setting (the indexer is not asked for the market)
+  const manualStandalone = useStandalone(services.standalone)?.reason === 'manual';
   useEffect(() => {
     const feed = services.feed;
-    if (!feed) return;
+    if (!feed || manualStandalone) return;
     try {
       feed.subscribe(['health', 'reorg']);
       feed.connect();
@@ -155,7 +159,7 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
       /* a browser without WebSocket: views fall back to polling */
     }
     return () => feed.close();
-  }, [services.feed]);
+  }, [services.feed, manualStandalone]);
 
   // the empty hash with the default config `home`: the landing page, a full page with its own nav, in place of the whole shell (header, banners,
   // footer); every other route shows the shell
@@ -172,6 +176,7 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
       )}
       <ViewBoundary resetKey={routeKey}>
         <AutoRefundRunner />
+        <StandaloneReceipts />
         <ToastHost />
       </ViewBoundary>
     </div>
