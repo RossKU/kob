@@ -4,10 +4,13 @@
 //   POST {base}/node/utxos   body { addresses }     -> { entries: NodeUtxo[] }
 //   POST {base}/node/submit  body { transaction }   -> { transactionId }   or HTTP 400 { error }
 //   GET  {base}/node/fee-estimate                    -> the node's `getFeeEstimate` answer ({ estimate: { priorityBucket, normalBuckets, lowBuckets } }); optional: any failure = no estimate
+//   GET  {base}/node/blocks?after=<seq>              -> { tip, blocks: [{ seq, header, transactions }] }: the blocks after `seq` (none without `after`: the tip
+//                                                      only), in the wRPC `block-added` layout (data/block-stream.ts); polled while blocks are followed
 // Never used against a real node: submission there must go through wRPC (see node-rpc.ts).
 import { parseFeeEstimate, type FeeEstimate } from '../kob/fee-policy';
 import type { TxJson } from '../kob/types';
-import type { NodeApi, NodeInfo, NodeUtxo } from './node';
+import type { BlockSubscription, NodeApi, NodeInfo, NodeUtxo } from './node';
+import { streamBlockOf, type StreamBlock } from './block-stream';
 import { normalizeNetwork } from './kaspa-sdk';
 import { NodeError, describeNodeError, rawErrorText } from './node-error';
 
@@ -19,6 +22,8 @@ export interface HttpMockNodeOptions {
   fetch?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
+  /** how often `subscribeBlocks` asks for new blocks, ms (default 1000) */
+  blockPollMs?: number;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -30,6 +35,7 @@ export class HttpMockNode implements NodeApi {
   private readonly f: typeof fetch;
   private readonly now: () => number;
   private readonly timeoutMs: number;
+  private readonly blockPollMs: number;
 
   constructor(o: HttpMockNodeOptions) {
     this.base = o.baseUrl.replace(/\/+$/, '');
@@ -37,6 +43,7 @@ export class HttpMockNode implements NodeApi {
     this.f = o.fetch ?? ((...a) => fetch(...a));
     this.now = o.now ?? Date.now;
     this.timeoutMs = o.timeoutMs ?? 10_000;
+    this.blockPollMs = o.blockPollMs ?? 1_000;
   }
 
   private async request(method: 'GET' | 'POST', path: string, body?: unknown): Promise<{ status: number; json: unknown }> {
@@ -126,6 +133,60 @@ export class HttpMockNode implements NodeApi {
     } catch {
       return null;
     }
+  }
+
+  /** One read of `/node/blocks`: the tip and the blocks after `after` (null: the tip only). */
+  private async blocksAfter(after: number | null): Promise<{ tip: number; blocks: StreamBlock[] }> {
+    const { status, json } = await this.request('GET', after === null ? '/node/blocks' : `/node/blocks?after=${after}`);
+    if (status !== 200) throw this.failure(status, json);
+    if (!isRecord(json) || typeof json.tip !== 'number' || !Array.isArray(json.blocks)) throw new NodeError('bad-response', 'The mock node answered /node/blocks with an unexpected shape.');
+    const blocks: StreamBlock[] = [];
+    for (const b of json.blocks) {
+      const sb = streamBlockOf(b);
+      if (sb) blocks.push(sb);
+    }
+    return { tip: json.tip, blocks };
+  }
+
+  /**
+   * Follows the mock node's blocks by polling `/node/blocks` every `blockPollMs`: the blocks after the tip at subscription time, in order. A failed
+   * poll is retried; the first answer after one or more failures reports a gap (`onGap`), as a dropped wRPC link does.
+   */
+  async subscribeBlocks(onBlock: (b: StreamBlock) => void, onGap?: () => void): Promise<BlockSubscription> {
+    let cursor = (await this.blocksAfter(null)).tip;
+    let closed = false;
+    let failed = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async (): Promise<void> => {
+      timer = null;
+      if (closed) return;
+      try {
+        const r = await this.blocksAfter(cursor);
+        if (closed) return;
+        if (failed) {
+          failed = false;
+          onGap?.();
+        }
+        for (const b of r.blocks) {
+          try {
+            onBlock(b);
+          } catch {
+            /* a subscriber's bug must not stop the poll */
+          }
+        }
+        cursor = r.tip;
+      } catch {
+        failed = true;
+      }
+      if (!closed) timer = setTimeout(() => void poll(), this.blockPollMs);
+    };
+    timer = setTimeout(() => void poll(), this.blockPollMs);
+    return {
+      close: async () => {
+        closed = true;
+        if (timer) clearTimeout(timer);
+      },
+    };
   }
 
   async submitTransaction(tx: TxJson): Promise<string> {

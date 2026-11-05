@@ -3,7 +3,8 @@
 // endpoint drops the per-input compute budget of tx v1, which the covenants need.
 import { parseFeeEstimate, type FeeEstimate } from '../kob/fee-policy';
 import type { Hex, TxJson } from '../kob/types';
-import type { NodeApi, NodeInfo, NodeUtxo } from './node';
+import type { BlockSubscription, NodeApi, NodeInfo, NodeUtxo } from './node';
+import { streamBlockOf, type StreamBlock } from './block-stream';
 import { joinSpkString, normalizeNetwork, spkStringToAddress, type KaspaSdk, type SdkRpcClient, type SdkUtxoEntryReference } from './kaspa-sdk';
 import { NodeError, describeNodeError, isConnectionError, rawErrorText } from './node-error';
 
@@ -167,6 +168,23 @@ export class KaspaRpcNode implements NodeApi {
   private connecting: Promise<NodeInfo> | null = null;
   private state: RpcNodeStatus = 'idle';
   private readonly listeners = new Set<(s: RpcNodeStatus) => void>();
+  /** block subscribers (standalone mode) and the client whose `block-added` notifications feed them */
+  private readonly blockSubs = new Set<{ onBlock: (b: StreamBlock) => void; onGap?: (() => void) | undefined }>();
+  private blockRpc: SdkRpcClient | null = null;
+  /** the link dropped since the blocks were last subscribed: the next `connect` subscribes again and reports a gap */
+  private blocksStale = false;
+  private readonly onBlockAdded = (ev?: unknown): void => {
+    const data = (ev as { data?: { block?: unknown } } | undefined)?.data;
+    const b = streamBlockOf(data?.block);
+    if (!b) return;
+    for (const s of [...this.blockSubs]) {
+      try {
+        s.onBlock(b);
+      } catch {
+        /* a subscriber's bug must not stop the others */
+      }
+    }
+  };
 
   constructor(o: KaspaRpcNodeOptions) {
     this.sdk = o.sdk;
@@ -226,13 +244,27 @@ export class KaspaRpcNode implements NodeApi {
       this.setState('idle');
       throw new NodeError('unavailable', `Cannot create the node client: ${rawErrorText(e)}`, rawErrorText(e));
     }
-    rpc.addEventListener('connect', () => this.state !== 'closed' && this.setState('connected'));
-    rpc.addEventListener('disconnect', () => this.state !== 'closed' && this.setState('disconnected'));
+    rpc.addEventListener('connect', () => {
+      if (this.state === 'closed') return;
+      this.setState('connected');
+      // the SDK's automatic reconnect does not restore the node's subscriptions: subscribe again, and the subscribers learn they may have missed blocks
+      if (this.blocksStale && this.blockRpc === rpc && this.blockSubs.size) {
+        this.blocksStale = false;
+        void this.resubscribe(rpc);
+      }
+    });
+    rpc.addEventListener('disconnect', () => {
+      if (this.state === 'closed') return;
+      this.setState('disconnected');
+      if (this.blockRpc === rpc) this.blocksStale = true;
+    });
     this.rpc = rpc;
     try {
       await timed(rpc.connect({ blockAsyncConnect: true, timeoutDuration: this.connectTimeoutMs }), this.connectTimeoutMs + this.connectGraceMs, 'connect');
       const info = await this.info();
       this.setState('connected');
+      // a new client after a lost link: the block subscribers follow it (and may have missed blocks)
+      if (this.blockSubs.size && this.blockRpc !== rpc) void this.resubscribe(rpc);
       return info;
     } catch (e) {
       await this.dispose();
@@ -285,9 +317,11 @@ export class KaspaRpcNode implements NodeApi {
     const rpc = this.rpc;
     this.rpc = null;
     if (!rpc) return;
+    if (this.blockRpc === rpc) this.blockRpc = null;
     try {
       rpc.removeEventListener?.('connect');
       rpc.removeEventListener?.('disconnect');
+      rpc.removeEventListener?.('block-added', this.onBlockAdded);
     } catch {
       /* ignore */
     }
@@ -368,6 +402,89 @@ export class KaspaRpcNode implements NodeApi {
       return parseFeeEstimate(raw);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Follows the node's new blocks (`subscribeBlockAdded`): every `block-added` notification is handed over as a `StreamBlock`. After a lost link the
+   * subscription is made again on the restored client and `onGap` says that blocks may have been missed meanwhile.
+   */
+  async subscribeBlocks(onBlock: (b: StreamBlock) => void, onGap?: () => void): Promise<BlockSubscription> {
+    const rpc = await this.ready();
+    if (typeof rpc.subscribeBlockAdded !== 'function') throw new NodeError('unavailable', 'This node client cannot follow new blocks.');
+    const sub = { onBlock, onGap };
+    this.blockSubs.add(sub);
+    if (this.blockRpc !== rpc) {
+      try {
+        await this.attachBlocks(rpc);
+      } catch (e) {
+        this.blockSubs.delete(sub);
+        throw describeNodeError(e, 'read');
+      }
+    }
+    return {
+      close: async () => {
+        if (!this.blockSubs.delete(sub) || this.blockSubs.size) return;
+        await this.detachBlocks();
+      },
+    };
+  }
+
+  private async attachBlocks(rpc: SdkRpcClient): Promise<void> {
+    const old = this.blockRpc;
+    if (old && old !== rpc) {
+      try {
+        old.removeEventListener?.('block-added', this.onBlockAdded);
+      } catch {
+        /* the old client is gone */
+      }
+    }
+    this.blockRpc = rpc;
+    this.blocksStale = false;
+    rpc.addEventListener('block-added', this.onBlockAdded);
+    try {
+      await timed(rpc.subscribeBlockAdded!(), this.callTimeoutMs, 'subscribeBlockAdded');
+    } catch (e) {
+      if (this.blockRpc === rpc) this.blockRpc = null;
+      try {
+        rpc.removeEventListener?.('block-added', this.onBlockAdded);
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    }
+  }
+
+  private async detachBlocks(): Promise<void> {
+    const rpc = this.blockRpc;
+    this.blockRpc = null;
+    if (!rpc) return;
+    try {
+      rpc.removeEventListener?.('block-added', this.onBlockAdded);
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (rpc.isConnected && typeof rpc.unsubscribeBlockAdded === 'function') await timed(rpc.unsubscribeBlockAdded(), DISCONNECT_WAIT_MS, 'unsubscribeBlockAdded');
+    } catch {
+      /* the link is gone: nothing to unsubscribe */
+    }
+  }
+
+  /** Subscribes again on `rpc` (a restored link) and tells every subscriber that blocks may have been missed. A failure is a gap too. */
+  private async resubscribe(rpc: SdkRpcClient): Promise<void> {
+    try {
+      if (this.blockRpc === rpc) await timed(rpc.subscribeBlockAdded!(), this.callTimeoutMs, 'subscribeBlockAdded');
+      else await this.attachBlocks(rpc);
+    } catch {
+      this.blocksStale = true;
+    }
+    for (const s of [...this.blockSubs]) {
+      try {
+        s.onGap?.();
+      } catch {
+        /* ignore */
+      }
     }
   }
 

@@ -80,8 +80,11 @@ export interface SdkRpcClient {
   readonly isConnected: boolean;
   connect(options?: SdkConnectOptions): Promise<void>;
   disconnect(): Promise<void>;
-  addEventListener(event: 'connect' | 'disconnect', callback: () => void): void;
-  removeEventListener?(event: 'connect' | 'disconnect', callback?: () => void): void;
+  addEventListener(event: 'connect' | 'disconnect' | 'block-added', callback: (event?: unknown) => void): void;
+  removeEventListener?(event: 'connect' | 'disconnect' | 'block-added', callback?: (event?: unknown) => void): void;
+  /** `block-added` notifications (standalone mode, data/block-stream.ts); absent on test fakes */
+  subscribeBlockAdded?(): Promise<void>;
+  unsubscribeBlockAdded?(): Promise<void>;
   getBlockDagInfo(): Promise<SdkBlockDagInfo>;
   /** a block by hash (headers only with `includeTransactions: false`); used for the long-window DAA rate. Absent on test fakes. */
   getBlock?(request: { hash: string; includeTransactions: boolean }): Promise<SdkBlockHeaderInfo>;

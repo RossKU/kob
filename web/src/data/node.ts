@@ -6,6 +6,7 @@
 // Submission always goes through node RPC (never REST: REST drops the per-input compute budget).
 import type { FeeEstimate } from '../kob/fee-policy';
 import type { Hex, TxJson } from '../kob/types';
+import type { StreamBlock } from './block-stream';
 
 export interface NodeUtxo {
   /** address the UTXO was found under (P2PK address of a key, or the P2SH address of a covenant script) */
@@ -44,4 +45,15 @@ export interface NodeApi {
    * Optional: an implementation without it is treated as null.
    */
   getFeeEstimate?(): Promise<FeeEstimate | null>;
+  /**
+   * Follows the node's new blocks (wRPC `block-added`; the mock node: `GET /node/blocks`) for standalone mode (data/standalone.ts): `onBlock` gets every
+   * block from now on, `onGap` is called when blocks may have been missed (the link dropped and came back). Rejects when the node cannot be asked.
+   * Optional: a node without it has no standalone mode.
+   */
+  subscribeBlocks?(onBlock: (block: StreamBlock) => void, onGap?: () => void): Promise<BlockSubscription>;
+}
+
+/** A running block subscription (`NodeApi.subscribeBlocks`). */
+export interface BlockSubscription {
+  close(): Promise<void>;
 }
