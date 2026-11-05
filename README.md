@@ -27,14 +27,14 @@ off-chain custody.
 * **Trade.** Open the web app, connect KasWare or Kaspire (a desktop extension) and place an order: [docs/user-guide.md](docs/user-guide.md)
   (connect, buy and sell, limit and market orders, partial fills, cancel, merge, the status banners, fees, the private-key option,
   recovering a token you created). Testnet-10 coins have no value; use them first.
-* **Run an Executor** (match orders and earn the spread and tips) **or an Indexer** (serve the order book): download a prebuilt archive from the
-  [GitHub releases](https://github.com/RossKU/kob/releases), check its hash and double-click `kobd`; it needs no Rust and no
-  node of your own by default: [docs/ops/executor-quickstart.md](docs/ops/executor-quickstart.md) (Windows, Linux, Docker, Android).
+* **Run an Indexer** (serve the order book, no key) **or an Executor** (match orders and earn the spread and tips): build `kobd`
+  from source and start it, [below](#run-kobd-on-testnet-10-from-source); the step-by-step operator page (services, Docker,
+  Android, upgrades, withdrawals) is [docs/ops/executor-quickstart.md](docs/ops/executor-quickstart.md).
 * **Host the web app and a public read server:** [docs/ops/web-hosting.md](docs/ops/web-hosting.md) and
   [docs/ops/chart-server.md](docs/ops/chart-server.md).
 * **Build a bot or an integration:** the read API is documented in [docs/api.md](docs/api.md); orders are placed with the command
   line [crates/kob-cli/README.md](crates/kob-cli/README.md) (`--json`) or the web app.
-* **Build from source:** the Quickstart below.
+* **Develop:** [Develop and test](#develop-and-test) below and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Status
 
@@ -51,33 +51,92 @@ off-chain custody.
 * The Argent build needs two `argentc` patches that are not upstream (`argent/UPSTREAM.md`).
 * Interfaces, encodings and artifact ids can still change.
 
-## Repository map
+## Run `kobd` on testnet-10 (from source)
 
-| Path | Contents |
+`kobd` is one program with two roles. The **Indexer** (`kobd index`) is keyless and read-only: it follows the chain, keeps the
+order history and serves the read API the web app and bots use. The **Executor** (`kobd run`) adds the matcher and the keepers:
+it fills crossing orders and refunds expired ones with a funded **hot key** and earns the spreads and tips. Building from source
+is the supported route; tagged releases (`docs/ops/executor-quickstart.md`, section 1) can lag `master`. Testnet-10 coins have no
+value: start there.
+
+**1. Prerequisites.** Git, [rustup](https://rustup.rs) (the pinned toolchain, Rust 1.94.0, installs itself on the first
+build) and a C compiler (two dependencies, SQLite and secp256k1, compile C code). About 6 GB of disk for the build, a few GB
+for an Indexer's data; no OpenSSL, protoc or clang.
+
+* **Windows 10 / 11:** [Git for Windows](https://git-scm.com/download/win), rustup with its default MSVC toolchain, and the
+  Visual Studio Build Tools with *Desktop development with C++* (the rustup installer offers them). Use PowerShell.
+* **Linux:** `sudo apt install git curl build-essential` (or your distribution's equivalent), then rustup.
+
+**2. Build.** The `deploy-tn10` build serves testnet-10 only and refuses any other network. The first build downloads
+rusty-kaspa `v2.1.0` and takes some minutes.
+
+```
+git clone https://github.com/RossKU/kob.git
+cd kob
+cargo build --release --locked -p kob-executor --features deploy-tn10
+```
+
+The binary is `target/release/kobd` (`target\release\kobd.exe` on Windows); `kobd --version` prints `kobd 0.1.0`. Give it a
+folder of its own, outside the repository and outside any folder a cloud service syncs: its configuration, key and data live
+next to it.
+
+```
+# Linux                                         # Windows (PowerShell)
+mkdir ~/kob-tn10                                mkdir C:\kob-tn10
+cp target/release/kobd ~/kob-tn10/              copy target\release\kobd.exe C:\kob-tn10\
+cd ~/kob-tn10                                   cd C:\kob-tn10
+```
+
+**3. An Indexer (no key, no funds).**
+
+```
+./kobd setup --non-interactive --node resolver --indexer     # writes kob-executor.toml and kob-tokens.json
+./kobd                                                         # runs it in the foreground: kobd index --config kob-executor.toml
+curl -s http://127.0.0.1:8090/v1/health                        # in a second terminal (Windows: curl.exe -s ...)
+```
+
+(On Windows write `.\kobd.exe` for `./kobd`.) `./kobd` with no configuration in its folder runs the same setup as a dialogue
+instead (Enter takes each default). The health answer names `"network":"testnet-10"`, `"roles":["indexer"]` and a `state`
+that goes `starting`, `catching_up`, `following`: the first start reads everything the node retains (about 36 hours of
+chain, roughly 2.5 hours over public nodes) and `ok` turns `true` once the lag alarms clear. For the fast route (the books
+from now on only), put `start = "sink"` at the top of `kob-executor.toml` (above `[launch]`) before the first start. A
+public read server behind a tunnel: `docs/ops/chart-server.md`.
+
+**4. An Executor (a funded hot key).** Give it a second folder with its own copy of `kobd` (for example `~/kob-tn10-exec`;
+two processes cannot share a data directory) and run, in that folder:
+
+```
+./kobd setup --non-interactive --node resolver --executor --new-key     # prints the key's funding "address"
+./kobd run --config kob-executor.toml --key-file kob-operator.key --pause-file kob-data/pause --dry-run
+./kobd                                                                     # live: the same command without --dry-run
+```
+
+The setup generates `kob-operator.key` (64 hex characters, readable by your account only) and turns on lean storage and the
+fast start. Send the address at least 100 testnet KAS (mine them or ask a faucet), as a few transfers of 10 KAS or more;
+`./kobd address-balance` shows the balance. `--dry-run` builds and validates every transaction and submits nothing: let it run
+until its status line says `indexer following` and `/v1/health` says `"roles":["executor"]`, stop it, then start `./kobd`. The
+key is a hot key and KOB is pre-audit: keep only working capital on it, never more than you can afford to lose, and back the
+file up where only you can read it.
+
+**What runs where.**
+
+| What | Where |
 |---|---|
-| `contracts/` | SilverScript sources (`v2/` the order covenants, `orders/` the original plain orders of the v1 test suites, `kcc20/`, `adapters/kron/`), compiled `artifacts/` (committed, reproducible), `silverc.lock`, `SHA256SUMS`, `deploy/` (per-network deployment records), and the Argent app in `contracts/argent/` |
-| `contracts/third-party/` | Pinned third-party token programs: KaspaCom KCC20 0.2.5 (Apache-2.0), and the KCC-20 reference source and its published public-mint build (argent-lang/kcc20-reference `c8a0871`, ISC) |
-| `crates/kob-protocol` | Protocol library: pinned artifacts, state and sigscript encoding, builders for every order action and matcher shape, fee and mass pass, compute-budget table, `KOB1` payload, engine validation, golden vectors |
-| `crates/kob-wasm` | wasm-bindgen bindings over `kob-protocol` (used by the web UI and the TypeScript SDK) |
-| `crates/kob-executor` | The `kobd` daemon: the Indexer (full history, record log, read API over REST and WebSocket) and the Executor (matcher, keepers, x402 facilitator), alone or together |
-| `crates/kob-x402` | x402 wire types, verifiers (KAS, KCC-20, swap-and-pay), payer and merchant SDK, in-memory chain test kit |
-| `crates/kob-cli` | Command line ([README](crates/kob-cli/README.md)): trading (`kob place` with every order kind of the web ticket, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, planned like the web wallet; `book`, `orders`, `balances`), `kob token create`, `kob registry` (validate, verify-genesis, programs, add-program), `kob recover`, `kob order sweep` / `cancel` |
-| `crates/kob-tests` | The contracts executed in the rusty-kaspa v2.1.0 script engine: positive and negative harnesses |
-| `web/` | Static, client-side, non-custodial web UI (TypeScript, Preact) over `kob-wasm`; mock indexer and node for offline use |
-| `packages/kob-x402` | TypeScript x402 SDK and an example paid API |
-| `registry/` | Token registry: the supported programs and a pinned snapshot of token facts (no curation) |
-| `argent/` | Pinned Argent upstream commit, our two patches, reproducible `argentc` build |
-| `vendor/` | SilverScript v1.0.0 (patched for rusty-kaspa v2.1.0) and the Argent artifact crate |
-| `tools/` | `ablation` (contract mutation runner), `sil2argent` (publishes hand-written contracts as an Argent artifact), `router-gen` (router generator), `soak` (testnet market simulator), `wallet-gate` (browser-wallet covenant-signing checks) |
-| `scripts/` | `build-contracts.sh`, `build-argent.sh`, `build-wasm.sh`, `build-deploy.sh` (and `lib/`, their shared helpers) |
-| `docs/` | Specifications and operator guides, see [docs/README.md](docs/README.md) |
+| Node | `rpc_url = "resolver"`: two public testnet-10 nodes found through the Kaspa resolvers (outbound HTTPS and WSS, port 443), one cross-checking the other. Your own node instead: `kaspad --testnet --netsuffix=10 --utxoindex --rpclisten-json=default` and `--node ws://127.0.0.1:18210` in the setup (required for Miner Mode; `docs/ops/executor-quickstart.md`, section 2) |
+| Ports | the read API on `127.0.0.1:8090` (loopback; `--listen <addr>` or `[api] listen`). Nothing listens publicly and no inbound port is needed |
+| Health | `GET /v1/health` (`ok`, `state`, `roles`, `network`, lag), `GET /v1/health/ready` (200 / 503 for a probe); fields in `docs/api.md` |
+| Files | `kob-executor.toml` (the configuration; `./kobd` starts it in its own folder, so its relative paths are taken from there: run the other commands from that folder too), `kob-tokens.json` (the supported token programs), `kob-operator.key` (Executor only), `kob-data/` (the SQLite store and, for the Indexer, the record log) |
+| Logs | the console, with a status line every minute; `--log-file kob-executor.log` (or `log_file = "kob-executor.log"` in the configuration) also writes a rotated file. `RUST_LOG=debug` for more |
+| Pause, stop | the file `kob-data/pause` pauses an Executor's trading; Ctrl+C stops either role cleanly; the next start continues where it stopped |
 
-## Quickstart
+Next: services (Task Scheduler, systemd), Docker, upgrades and withdrawals in `docs/ops/executor-quickstart.md`; every flag,
+the configuration keys, the economics and the runbook in `docs/ops/executor.md`. `kobd --help` and `kobd <command> --help` list
+the options. The mainnet build is `--features deploy-mainnet`; mainnet is a pre-audit canary (`docs/ops/release.md`).
 
-Requirements: `rustup` (the toolchain, Rust 1.94.0 with the wasm32 target, is pinned by
-`rust-toolchain.toml`), a POSIX shell (Git Bash on Windows) for the scripts, and Node 22 or
-newer for the web UI and tools. rusty-kaspa is a git dependency at tag `v2.1.0`, so the first
-build downloads it.
+## Develop and test
+
+Requirements: the prerequisites of the section above, the `wasm32-unknown-unknown` target (`rust-toolchain.toml` adds it),
+a POSIX shell (Git Bash on Windows) for the scripts, and Node 22 or newer for the web UI and tools.
 
 **Build the contracts.** The committed artifacts must reproduce byte for byte:
 
@@ -97,7 +156,7 @@ node tools/ablation/ablate.mjs --list --suite all            # contract mutation
 ```
 
 Without `KOB_SKIP_NETWORK_TESTS=1` some `kob-executor` tests contact a testnet-10 node and mine
-their own funds. Do that only on purpose.
+their own funds. Do that only on purpose. `CONTRIBUTING.md` lists the lint and the other checks CI runs.
 
 **Run the web UI in mock mode** (no node, no wallet, no network):
 
@@ -115,43 +174,47 @@ The web app defaults to mainnet, no indexer and the SDK's public resolver. A rea
 your own settings and a browser wallet; see `web/README.md`. On mainnet it is a pre-audit canary:
 use only funds you can afford to lose.
 
-**Run `kobd` against testnet-10.** You need a testnet-10 node with the JSON wRPC
-listener (`kaspad --utxoindex --testnet --netsuffix=10 --rpclisten-json=127.0.0.1:18210`,
-see `docs/ops/executor.md`, Part B). The testnet-10 build (`deploy-tn10`) records the network of
-`contracts/deploy/testnet-10` and refuses any other `--network`; its templates are the reference ones
-(no template depends on a network, and there is no genesis step):
+**Builds of `kobd`.** `--features deploy-tn10` (above) records the network of `contracts/deploy/testnet-10` and refuses any
+other; its templates are the reference ones (no template depends on a network, and there is no genesis step). The reference
+build (no feature) needs `--network` on every command; `--features deploy-mainnet` pins `registry/tokens.json`, and its release
+checklist, the hashes to publish, the upgrade order and the operator requirements are in `docs/ops/release.md`. A token list of
+your own goes in `tokens_path` (`registry/tokens.example.json` is a format example with fictional testnet tokens;
+`registry/README.md`).
 
-```
-cargo build --release --locked -p kob-executor --features deploy-tn10
-target/release/kobd index --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
-    --data-dir ./kob-data --tokens registry/tokens.example.json --listen 127.0.0.1:8090
-```
+## Repository map
 
-The mainnet release build is `--features deploy-mainnet` (it pins `registry/tokens.json`); the release checklist, the
-hashes to publish, the upgrade order and the operator requirements are in `docs/ops/release.md`.
-
-`registry/tokens.example.json` lists fictional testnet tokens: replace it with your own allowlist (`registry/README.md`). `kobd index` is the Indexer: the keyless, read-only role. `kobd run` is the Executor: it adds the matcher and keepers and needs
-an operator hot key (`KOB_OPERATOR_KEY_FILE`, test funds only); `docs/ops/executor.md` covers
-flags, keys, monitoring and the runbook.
+| Path | Contents |
+|---|---|
+| `contracts/` | SilverScript sources (`v2/` the order covenants, `orders/` the original plain orders of the v1 test suites, `kcc20/`, `adapters/kron/`), compiled `artifacts/` (committed, reproducible), `silverc.lock`, `SHA256SUMS`, `deploy/` (per-network deployment records), and the Argent app in `contracts/argent/` |
+| `contracts/third-party/` | Pinned third-party token programs, each with its provenance (`UPSTREAM.md`): KaspaCom KCC20 0.2.5 (Apache-2.0), the KCC-20 reference source and its published public-mint build (argent-lang/kcc20-reference `c8a0871`, ISC), and programs observed on chain (`kasparocket/`, `kforge/`, `kforge-kcc20/`, `kusdt/`) |
+| `crates/kob-protocol` | Protocol library: pinned artifacts, state and sigscript encoding, builders for every order action and matcher shape, fee and mass pass, compute-budget table, `KOB1` payload, engine validation, golden vectors |
+| `crates/kob-wasm` | wasm-bindgen bindings over `kob-protocol` (used by the web UI and the TypeScript SDK) |
+| `crates/kob-executor` | The `kobd` daemon: the Indexer (full history, record log, read API over REST and WebSocket) and the Executor (matcher, keepers, x402 facilitator), alone or together |
+| `crates/kob-x402` | x402 wire types, verifiers (KAS, KCC-20, swap-and-pay), payer and merchant SDK, in-memory chain test kit |
+| `crates/kob-cli` | Command line ([README](crates/kob-cli/README.md)): trading (`kob place` with every order kind of the web ticket, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, planned like the web wallet; `book`, `orders`, `balances`), `kob token create`, `kob registry` (validate, verify-genesis, programs, add-program), `kob recover`, `kob order sweep` / `cancel` |
+| `crates/kob-tests` | The contracts executed in the rusty-kaspa v2.1.0 script engine: positive and negative harnesses |
+| `web/` | Static, client-side, non-custodial web UI (TypeScript, Preact) over `kob-wasm`; mock indexer and node for offline use |
+| `packages/kob-x402` | TypeScript x402 SDK and an example paid API |
+| `registry/` | Token registry: the supported programs and a pinned snapshot of token facts (no curation) |
+| `argent/` | Pinned Argent upstream commit, our two patches, reproducible `argentc` build |
+| `vendor/` | SilverScript v1.0.0 (patched for rusty-kaspa v2.1.0) and the Argent artifact crate |
+| `tools/` | `ablation` (contract mutation runner), `sil2argent` (publishes hand-written contracts as an Argent artifact), `router-gen` (router generator), `soak` (testnet market simulator), `wallet-gate` (browser-wallet covenant-signing checks) |
+| `android/` | The testnet-10 Android app: `kobd` in a foreground service with a setup and status screen (`docs/ops/executor-quickstart.md`, section 9) |
+| `scripts/` | Builds (`build-contracts.sh`, `build-argent.sh`, `build-wasm.sh`, `build-deploy.sh`, `build-state-dicts.mjs`; `lib/`, their shared helpers), checks (`check-pins.mjs`, `check-wallet-gate.mjs`) and release tooling (`release-hashes.sh`, `package-release.mjs`, `make-android-keystore.mjs`; `docs/ops/release.md`) |
+| `Dockerfile` | A `kobd` image of one network, built from source (`docs/ops/executor-quickstart.md`, section 6) |
+| `docs/` | Specifications and operator guides, see [docs/README.md](docs/README.md) |
 
 ## Documentation
 
-See [docs/README.md](docs/README.md) for the index. The main entries:
+[docs/README.md](docs/README.md) is the index of every document. The ones most readers need:
 
-* `docs/user-guide.md`: how to trade in the web app (wallets, orders, fees, recovery)
-* `docs/faq.md`: questions people asked: who signs what, front-running, settlement, stablecoin pricing on a KAS book
-* `docs/api.md`: the executor's read API (HTTP and WebSocket) reference
-* `docs/ops/executor-quickstart.md`: run an executor from a download; `docs/ops/web-hosting.md`, `docs/ops/chart-server.md`: host the app and a public read server
-* `docs/spec/matcher.md`: normative matcher, executor and wallet rules
-* `docs/spec/order-types.md`: the order types and their semantics
-* `docs/spec/kob1-payload.md`: the `KOB1` payload and placement record
-* `docs/spec/x402-kcc20-profile.md`, `docs/spec/x402-swap-and-pay.md`: x402 proposals; `docs/spec/x402-retry.md`: how a
-  payment is retried without paying twice
-* `docs/spec/token-programs.md`: token-program profiles and onboarding a launchpad's program
-* `docs/argent.md`: KOB as an Argent app, how to import it, the router
-* `docs/ops/executor.md`: running `kobd` (the Indexer, and the Executor with its matcher and keepers); `docs/ops/release.md`: the mainnet release checklist
+* `docs/user-guide.md`: trading in the web app (wallets, orders, fees, recovery); `docs/faq.md`: who signs what, front-running,
+  settlement, stablecoin pricing on a KAS book
+* `docs/ops/executor-quickstart.md`: running an Indexer or an Executor step by step; `docs/ops/executor.md`: the full operations
+  guide (every flag and configuration key, storage, the runbook, the matcher's economics)
+* `docs/api.md`: the read API (HTTP and WebSocket); `crates/kob-cli/README.md`: the `kob` command line
+* `docs/spec/`: the normative rules (`matcher.md`, `order-types.md`, `kob1-payload.md`, the x402 profiles, token programs)
 * `docs/security/AUDIT-2026-10.md`: the internal pre-mainnet security audit
-* `contracts/README.md`, `registry/README.md`: contracts and token registry
 
 ## Security and disclaimer
 
