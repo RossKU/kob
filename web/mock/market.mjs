@@ -241,6 +241,15 @@ export function statsView(chain, tokenId) {
   const mid = bestAsk !== null && bestBid !== null ? (bestAsk + bestBid) / 2n : null;
   const spread = mid !== null && mid > 0n ? Number(((bestAsk - bestBid) * 10_000n) / mid) : null;
   const counts = tokensView(chain).tokens.find((t) => t.covenant_id === tok.covenant_id);
+  // sompi the asks up to +2 % and the bids down to -2 % of the mid (with one side only: around its best price) are worth (the executor's `depth_2pct_quote`)
+  const ref = mid ?? bestAsk ?? bestBid;
+  let depth = null;
+  if (basis !== null && ref !== null && ref > 0n) {
+    const worth = (m) => (m.amount * m.price) / basis;
+    depth = 0n;
+    for (const m of mergedSide(levels.asks, basis, 1)) if (m.price * 100n <= ref * 102n) depth += worth(m);
+    for (const m of mergedSide(levels.bids, basis, 2)) if (m.price * 100n >= ref * 98n) depth += worth(m);
+  }
   return {
     token: tok.covenant_id,
     price_basis: str(basis),
@@ -262,6 +271,7 @@ export function statsView(chain, tokenId) {
     spread_bps: spread,
     open_asks: counts?.open_asks ?? 0,
     open_bids: counts?.open_bids ?? 0,
+    depth_2pct_quote: str(depth),
   };
 }
 

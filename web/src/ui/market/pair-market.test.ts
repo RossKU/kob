@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PairBookView, PairCandleView, PairCandlesView, PairFillView, PairFillsView, PairLevelView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
-import { DAY_MS, pairDepthSeries, pairFillsOf, pairRatioCandles, pairStatsModel, pairTapeColumns, pairVolumeOf } from './pair-market';
+import { DAY_MS, pairDepthOf, pairDepthSeries, pairFillsOf, pairRatioCandles, pairStatsModel, pairTapeColumns, pairVolumeOf } from './pair-market';
 import type { RatioCandle } from './usd-model';
 
 // BASE: 8 decimals, scale 1e8; QUOTE: 6 decimals, scale 1e6.
@@ -147,5 +147,35 @@ describe('pair 24 h figures: prices from the KAS series, volumes from pair fills
     expect(s.source).toBe('none');
     expect([s.model.last, s.model.high, s.model.low, s.model.volume, s.model.quoteVolume, s.model.trades]).toEqual([null, null, null, null, null, null]);
     expect(DAY_MS).toBe(86_400_000);
+  });
+});
+
+describe('pair depth within 2 % of the mid (the market list)', () => {
+  it('sums amount x price (QUOTE base units) of the asks up to +2 % and the bids down to -2 % of the mid, every source, both ends inclusive', () => {
+    // best ask 51 000, best bid 50 000 (QUOTE base units per 1e8 BASE base units): mid 50 500, band 49 490 .. 51 510
+    const b = book(
+      [lv('direct', '51000', '100000000', '300000000'), lv('route', '51510', '100000000', '100000000'), lv('direct', '51511', '100000000', '100000000')],
+      [lv('entry', '50000', '100000000', '100000000'), lv('direct', '49490', '100000000', '200000000'), lv('direct', '49489', '100000000', '900000000')],
+    );
+    // 3 x 51 000 + 1 x 51 510 + 1 x 50 000 + 2 x 49 490
+    expect(pairDepthOf(b, BASE, QUOTE)).toEqual({ quote: 153_000n + 51_510n + 50_000n + 98_980n, atLeast: false });
+  });
+
+  it('one side only: around the best price of that side; an empty book or a view of another pair has none', () => {
+    const bids = book([], [lv('direct', '50000', '100000000', '100000000'), lv('direct', '48999', '100000000', '100000000')]);
+    expect(pairDepthOf(bids, BASE, QUOTE)).toEqual({ quote: 50_000n, atLeast: false });
+    const asks = book([lv('direct', '50000', '100000000', '100000000'), lv('direct', '51001', '100000000', '100000000')], []);
+    expect(pairDepthOf(asks, BASE, QUOTE)).toEqual({ quote: 50_000n, atLeast: false });
+    expect(pairDepthOf(book([], []), BASE, QUOTE)).toBeNull();
+    expect(pairDepthOf(bids, QUOTE, BASE)).toBeNull();
+    expect(pairDepthOf(null, BASE, QUOTE)).toBeNull();
+  });
+
+  it('is a lower bound when a side came back full and still inside the band', () => {
+    const b = book([lv('direct', '51000', '100000000', '100000000')], [lv('direct', '50000', '100000000', '100000000'), lv('direct', '49900', '100000000', '100000000')]);
+    expect(pairDepthOf(b, BASE, QUOTE, 2)).toEqual({ quote: 51_000n + 50_000n + 49_900n, atLeast: true });
+    // the bids side is full but the last level it returned is outside the band: nothing beyond it can count
+    const c = book([lv('direct', '51000', '100000000', '100000000')], [lv('direct', '50000', '100000000', '100000000'), lv('direct', '40000', '100000000', '100000000')]);
+    expect(pairDepthOf(c, BASE, QUOTE, 2)).toEqual({ quote: 101_000n, atLeast: false });
   });
 });

@@ -794,11 +794,16 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// One aggregated level before it is rendered: `((price, scale), (amount, orders, estimated))`.
+pub(crate) type RawBookLevel = ((i64, i64), (i128, i64, bool));
+
 /// Aggregated levels of one side: per (`price`, `scale`), the amounts summed in 128 bits (base units of hostile orders can sum
 /// past an `i64`, where SQLite's `SUM` fails), ordered EXACTLY by the price per base unit (`price / scale`, compared by
 /// cross-multiplication; asks ascending, bids descending; at one price per base unit by `price`, then `scale`, in the same
-/// direction). Every live listed order of the side a matcher may fill now ([`fillable_now`]) is read (the book of one token).
-fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<LevelView>> {
+/// direction). Every live listed order of the side a matcher may fill now ([`fillable_now`]) is read (the book of one token). Numbers only:
+/// [`book_side_levels`] renders the first `depth` of them, the 24 h statistics read the ones near the touch without a string per level (one
+/// scan of the token's live orders either way).
+pub(crate) fn book_side_sorted(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64) -> DbResult<Vec<RawBookLevel>> {
     let live = fillable_now(book_daa(conn, ctx)?, ctx.now_unix);
     let pinned = pinned_template();
     let sql = format!(
@@ -829,7 +834,11 @@ fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
             o.reverse()
         }
     });
-    Ok(out
+    Ok(out)
+}
+
+fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<LevelView>> {
+    Ok(book_side_sorted(conn, ctx, token, side)?
         .into_iter()
         .take(depth)
         .map(|((price, scale), (amount, orders, estimated))| LevelView {

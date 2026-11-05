@@ -82,6 +82,12 @@ export interface KascovToken {
   imageUrl: string | null;
   /** kascov marks the token `verified` (`status`): its own, third-party remark; KOB has not checked the token by it */
   verified: boolean;
+  /**
+   * the token's total supply in base units as kascov reports it (`supply_str`, else a safe-integer `supply`); null without one, and null for a token kascov says can
+   * still be issued (`issuance_remaining_str` other than 0: the supply is not fixed). Display only: the market list divides the last price by it for a market cap
+   * (labelled as kascov's), and only for a token kascov marks `verified`.
+   */
+  supply?: bigint | null;
 }
 
 /**
@@ -122,6 +128,14 @@ export function safeImageUrl(v: unknown): string | null {
   }
 }
 
+/** `supply_str` (exact digits) else a safe-integer `supply`; null when absent, malformed, or the token can still be issued (`issuance_remaining_str` is not 0). */
+function supplyOf(o: Record<string, unknown>): bigint | null {
+  const remaining = o.issuance_remaining_str;
+  if (typeof remaining === 'string' && !/^0+$/.test(remaining)) return null;
+  if (typeof o.supply_str === 'string') return /^\d{1,40}$/.test(o.supply_str) ? BigInt(o.supply_str) : null;
+  return typeof o.supply === 'number' && Number.isSafeInteger(o.supply) && o.supply >= 0 ? BigInt(o.supply) : null;
+}
+
 /** One entry of `tokens`, null when it has no usable covenant id. */
 export function parseKascovToken(raw: unknown): KascovToken | null {
   const o = asObject(raw);
@@ -138,6 +152,7 @@ export function parseKascovToken(raw: unknown): KascovToken | null {
     imageHash,
     imageUrl: typeof o.claimed_image === 'string' && o.claimed_image.trim().length > 0 && o.claimed_image.length <= 2048 ? o.claimed_image.trim() : null,
     verified: o.status === 'verified',
+    supply: supplyOf(o),
   };
 }
 

@@ -62,7 +62,7 @@ for (const vp of VIEWPORTS) {
       await openKascov(page, '/market');
       const link = page.getByTestId(`token-link-${REF_ID}`);
       await expect(page.getByTestId(`token-row-${REF_ID}`)).toHaveAttribute('data-source', 'kascov');
-      await expect(page.getByTestId(`token-orders-${REF_ID}`)).toHaveText('no orders');
+      await expect(page.getByTestId(`token-depth-${REF_ID}`)).toHaveText('no orders');
       await link.click();
 
       // never the dead end

@@ -1,5 +1,5 @@
 // The market list (`#/market`) against the mock stack: the 24 h figures of each token's KAS market (`/v1/stats`: last price, change, KAS volume,
-// spread, open orders), the token pairs with live pair orders (`/v1/pairs`, price implied through the two KAS markets, 24 h pair volume), sorting by
+// spread, depth within 2 % of the mid, market cap), the token pairs with live pair orders (`/v1/pairs`, price implied through the two KAS markets, 24 h pair volume), sorting by
 // every column (24 h volume first; mouse and keyboard), search over tokens and pairs, a row whose figures the indexer cannot give, and the phone layout.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
@@ -46,7 +46,7 @@ const rowIds = async (page: Page) =>
   (await page.locator('[data-testid="token-table"] tbody tr').evaluateAll((trs) => trs.map((tr) => (tr.getAttribute('data-testid') ?? '').replace('token-row-', ''))))
     .filter((id) => id === QUOTE || id === EXKCC);
 
-test('a token row shows its last price in KAS, the 24 h change, KAS volume, spread and open orders, with exact figures in the tooltips', async ({ appPage: page, mock }) => {
+test('a token row shows its last price in KAS, the 24 h change, KAS volume, spread and the depth within 2 % (order counts in its tooltip), with exact figures in the tooltips; no supply, no market cap', async ({ appPage: page, mock }) => {
   const id = (await mock.token()).covenant_id;
   await page.goto('/#/market');
   const row = page.getByTestId(`token-row-${id}`);
@@ -61,8 +61,12 @@ test('a token row shows its last price in KAS, the 24 h change, KAS volume, spre
   await expect(row.getByTestId(`token-volume-${id}`)).toHaveAttribute('title', new RegExp(`KAS · ${stats.trades_24h} trades in 24 h$`));
   await expect(row.getByTestId(`token-spread-${id}`)).toHaveText(/^\d+\.\d\d%$/);
   await expect(row.getByTestId(`token-spread-${id}`)).toHaveAttribute('title', /^Best bid 0\.0\d+ · best ask 0\.0\d+ \(KAS per EXKCC\)$/);
-  await expect(row.getByTestId(`token-orders-${id}`)).toHaveText(String(stats.open_asks + stats.open_bids));
-  await expect(row.getByTestId(`token-orders-${id}`)).toHaveAttribute('title', `${stats.open_asks} asks · ${stats.open_bids} bids`);
+  // the executor's `depth_2pct_quote` (sompi): the KAS the book offers within 2 % of its mid
+  expect(stats.depth_2pct_quote).toMatch(/^\d+$/);
+  await expect(row.getByTestId(`token-depth-${id}`)).toHaveText((Number(stats.depth_2pct_quote) / 1e8).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  await expect(row.getByTestId(`token-depth-${id}`)).toHaveAttribute('title', new RegExp(`KAS · ${stats.open_asks} asks · ${stats.open_bids} bids$`));
+  // a token with no supply KOB can vouch for has no market cap
+  await expect(row.getByTestId(`token-mcap-${id}`)).toHaveText('—');
   // the list opens by 24 h volume, most traded first
   await expect(page.getByTestId('sort-volume').locator('xpath=..')).toHaveAttribute('aria-sort', 'descending');
   // no pair has live pair orders: no pair table
@@ -90,15 +94,17 @@ test('sorting: 24 h volume first, every header sorts (click and keyboard), searc
   expect(await rowIds(page)).toEqual([exkcc, QUOTE]);
   await expect(page.getByTestId('sort-volume').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'none');
 
-  // the pair EXKCC/EXUSD: its price implied through both KAS markets (EXKCC's ~0.025 EXUSD per KAS's 0.502 KAS), its live pair orders, no spread
+  // the pair EXKCC/EXUSD: its price implied through both KAS markets (EXKCC's ~0.025 EXUSD per KAS's 0.502 KAS), the depth near its mid (live pair orders in the tooltip), no spread
   const pairId = `${exkcc}-${QUOTE}`;
   const pair = page.getByTestId(`pair-row-${pairId}`);
   await expect(pair).toHaveAttribute('data-state', 'ready');
   await expect(page.getByTestId(`pair-link-${pairId}`)).toHaveText(`EXKCC (${exkcc.slice(0, 4)}…${exkcc.slice(-4)}) / EXUSD (e7e7…e7e7)`);
   await expect(page.getByTestId(`pair-link-${pairId}`)).toHaveAttribute('href', `#/market/${exkcc}/${QUOTE}`);
   await expect(pair.getByTestId(`pair-last-${pairId}`)).toHaveAttribute('title', /^0\.0\d+ \(EXUSD per EXKCC\)$/);
-  await expect(pair.getByTestId(`pair-orders-${pairId}`)).toHaveText('6');
-  await expect(pair.getByTestId(`pair-orders-${pairId}`)).toHaveAttribute('title', '3 asks · 2 bids · 1 conditional');
+  await expect(pair.getByTestId(`pair-depth-${pairId}`)).toHaveText(/^≥?[\d,.]+[KMBT]?$/);
+  await expect(pair.getByTestId(`pair-depth-${pairId}`)).toHaveAttribute('title', /EXUSD · 3 asks · 2 bids · 1 conditional/);
+  // a pair has no supply: no market cap column
+  await expect(page.getByTestId('pair-table').getByTestId('sort-mcap')).toHaveCount(0);
   await expect(pair.getByTestId(`pair-spread-${pairId}`)).toHaveText('—');
   await expect(pair.getByTestId(`pair-volume-${pairId}`)).toHaveText('0.00');
   await expect(pair.getByTestId(`pair-volume-${pairId}`)).toHaveAttribute('title', /EXUSD · 0 pair fills in 24 h$/);
@@ -129,12 +135,10 @@ test('a token whose 24 h figures the indexer cannot give shows — without break
   await page.goto('/#/market');
   const bad = page.getByTestId(`token-row-${QUOTE}`);
   await expect(bad).toHaveAttribute('data-state', 'unavailable');
-  for (const k of ['last', 'change', 'volume', 'spread']) {
+  for (const k of ['last', 'change', 'volume', 'mcap', 'spread', 'depth']) {
     await expect(bad.getByTestId(`token-${k}-${QUOTE}`)).toHaveText('—');
     await expect(bad.getByTestId(`token-${k}-${QUOTE}`)).toHaveAttribute('title', 'Unavailable from the indexer');
   }
-  // the order counts come from the token list, not the stats
-  await expect(bad.getByTestId(`token-orders-${QUOTE}`)).not.toHaveText('—');
   await expect(page.getByTestId(`token-row-${exkcc}`)).toHaveAttribute('data-state', 'ready');
   await expect(page.getByTestId(`token-last-${exkcc}`)).toHaveText(/^0\.0\d+$/);
   // a row without figures sorts last whatever the direction
@@ -196,7 +200,7 @@ test.describe('phone', () => {
     await expect(row.getByTestId(`token-link-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-last-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-change-${exkcc}`)).toBeVisible();
-    for (const k of ['volume', 'spread', 'orders']) await expect(row.getByTestId(`token-${k}-${exkcc}`)).toBeHidden();
+    for (const k of ['volume', 'mcap', 'spread', 'depth']) await expect(row.getByTestId(`token-${k}-${exkcc}`)).toBeHidden();
     // the identity block stays on the left, the shortened id under the name
     await expect(row.getByTestId(`identity-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-hash-${exkcc}`)).toBeVisible();

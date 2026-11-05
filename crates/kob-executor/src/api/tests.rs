@@ -1004,6 +1004,9 @@ async fn market_data_trades_candles_stats_depth() {
     assert_eq!((v["best_bid"].as_str(), v["best_ask"].as_str(), v["mid"].as_str()), (Some("260000"), Some("250000"), Some("255000")));
     assert_eq!(v["spread_bps"], -392);
     assert_eq!((v["open_asks"].as_i64(), v["open_bids"].as_i64()), (Some(3), Some(2)));
+    // depth within 2 % of the mid (255 000: 249 900 .. 260 100): the 250 000 ask level (9 000 base units = 2 250 000 sompi) and the 260 000 bid level (7 000 = 1 820 000);
+    // the 300 000 ask and the 240 000 bid are outside
+    assert_eq!(v["depth_2pct_quote"], "4070000");
 
     // depth: per-basis levels, best first, cumulative
     let (s, v) = get(&app, &format!("/v1/depth/{}", h(TOKEN))).await;
@@ -1023,7 +1026,7 @@ async fn market_data_trades_candles_stats_depth() {
     // an unknown token: empty, never an error
     let (s, v) = get(&app, &format!("/v1/stats/{}", h(0x55))).await;
     assert_eq!(s, StatusCode::OK);
-    assert!(v["last"].is_null() && v["best_bid"].is_null());
+    assert!(v["last"].is_null() && v["best_bid"].is_null() && v["depth_2pct_quote"].is_null());
     assert_eq!(v["trades_24h"], 0);
     let (_, v) = get(&app, &format!("/v1/candles/{}", h(0x55))).await;
     assert!(v["items"].as_array().unwrap().is_empty());

@@ -53,7 +53,7 @@ describe('parseKascovToken', () => {
     const t = parseKascovToken(entry());
     expect(t).toEqual({
       covenantId: ID('a'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: ID('b'), imageHash: sha(PNG), imageUrl: 'https://storage.googleapis.com/bucket/a.png',
-      verified: true,
+      verified: true, supply: null,
     });
     // review / alive change nothing; status only flips the third-party remark (kascov's `verified`, no other word counts)
     expect(parseKascovToken(entry({ alive: false, standard: { view_template_hash: ID('b'), review: 'rejected' } }))).toEqual(t);
@@ -71,7 +71,7 @@ describe('parseKascovToken', () => {
 
   it('missing, empty or wrongly typed fields are null; the claimed image address is kept with or without a hash (it is only ever shown unchecked, data/logos.ts); bad decimals are null', () => {
     const t = parseKascovToken({ covenant_id: ID('a'), claimed_ticker: 7, claimed_name: '   ', claimed_decimals: 2.5, claimed_image: 'https://x.example/a.png', standard: 'weird' })!;
-    expect(t).toEqual({ covenantId: ID('a'), ticker: null, name: null, decimals: null, templateHash: null, imageHash: null, imageUrl: 'https://x.example/a.png', verified: false });
+    expect(t).toEqual({ covenantId: ID('a'), ticker: null, name: null, decimals: null, templateHash: null, imageHash: null, imageUrl: 'https://x.example/a.png', verified: false, supply: null });
     expect(parseKascovToken(entry({ claimed_decimals: 19 }))!.decimals).toBeNull();
     expect(parseKascovToken(entry({ claimed_decimals: 0 }))!.decimals).toBe(0);
     expect(parseKascovToken(entry({ claimed_image: 7 }))!.imageUrl).toBeNull();
@@ -83,6 +83,16 @@ describe('parseKascovToken', () => {
     expect(parseKascovToken(entry({ standard: { view_template_hash: 'abc' } }))!.templateHash).toBeNull();
   });
 
+  it('reads the supply (display only): the exact string, else a safe integer; none when absent, malformed, or the token can still be issued', () => {
+    const supply = (over: Record<string, unknown>) => parseKascovToken(entry(over))!.supply;
+    expect(supply({ supply_str: '100000000000000000', supply: 100000000000000000 })).toBe(100_000_000_000_000_000n);
+    expect(supply({ supply: 1_200_000_000 })).toBe(1_200_000_000n);
+    expect(supply({ supply_str: '0' })).toBe(0n);
+    for (const bad of [{}, { supply_str: '-5' }, { supply_str: '1e9' }, { supply_str: '' }, { supply: 1.5 }, { supply: -1 }, { supply: 2 ** 60 }, { supply_str: 7 }]) expect(supply(bad), JSON.stringify(bad)).toBeNull();
+    // kascov says more can be issued: the supply is not fixed, so it is not used
+    expect(supply({ supply_str: '1000', issuance_remaining_str: '500' })).toBeNull();
+    expect(supply({ supply_str: '1000', issuance_remaining_str: '0' })).toBe(1000n);
+  });
   it('an entry without a usable covenant id is nothing', () => {
     for (const bad of [null, 7, 'x', [], {}, { covenant_id: 'abc' }, { covenant_id: ID('g') }]) expect(parseKascovToken(bad)).toBeNull();
   });

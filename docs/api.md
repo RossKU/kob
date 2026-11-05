@@ -798,6 +798,10 @@ indexer recorded (not the wall clock), so a stalled follower shows stale numbers
 `last`, `last_ts`, `last_side`, `open_24h`, `high_24h`, `low_24h`, `change_24h_bps`, `best_bid`, `best_ask`, `mid`,
 `spread_bps` and `ts` are `null` when they do not exist yet. `volume_24h` (base units), `quote_volume_24h` (sompi) and prices are
 strings; `trades_24h`, `open_asks`, `open_bids`, `change_24h_bps` and `spread_bps` (basis points) are numbers.
+
+`depth_2pct_quote` (sompi, a string; absent on older executors) is what the resting asks up to 2 % above the mid and the resting bids down to 2 % below it
+are worth (amount x limit price; a bid counts its escrow's buying power, an upper bound): how much can trade without moving the price more than 2 %. With
+one side only, the reference price is that side's best price; `null` for an empty book. It comes from the same scan of the token's live orders as `best_bid` / `best_ask`.
 `window_truncated` is true when the day held more than 20,000 fill rows and the figures cover the newest ones. `best_bid`,
 `best_ask`, `mid` and the open counts come from the listed book of section 3.6.
 

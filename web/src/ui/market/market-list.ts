@@ -2,11 +2,13 @@
 // (BASE/QUOTE), with the 24 h figures the indexer already serves:
 //
 //   * a token's KAS market: `GET /v1/stats/<token>` (one call per token): last price, 24 h change, 24 h KAS volume and trade count, best bid / ask
-//     and spread; the open order counts of `GET /v1/tokens`.
+//     and spread, the KAS the book offers within 2 % of its mid (`depth_2pct_quote`; an older indexer sends none: "—"); the open order counts of
+//     `GET /v1/tokens` (the depth tooltip). The MARKET CAP is the last trade price x the token's total supply (`supplyOf`: the registry's verified genesis record
+//     of a token with no way to mint more, else the supply kascov.io reports for a token it marks verified, labelled as kascov's); none without both.
 //   * a token pair (`GET /v1/pairs`, both tokens tradable and in the registry, as the pair page needs): last price and change implied through the two
 //     KAS markets (the same `usdStats` the pair page uses: prices come only from KAS-book fills), the 24 h pair volume of
-//     `GET /v1/pairs/<base>/<quote>/fills?limit=1` (`volume_24h`, in QUOTE), the live pair order counts of the summary. No bid / ask here (the pair
-//     book is on the pair page).
+//     `GET /v1/pairs/<base>/<quote>/fills?limit=1` (`volume_24h`, in QUOTE), the depth within 2 % of the mid of `GET /v1/pairs/<base>/<quote>/book`
+//     (QUOTE, `pairDepthOf`), the live pair order counts of the summary (the depth tooltip). No bid / ask here (the pair book is on the pair page).
 //
 // Each figure is a cell (text + tooltip): prices with about five significant digits (the market's tick when the registry has one), compact K / M / B
 // when a cell would be too wide, never a cut digit (the exact figure is in the tooltip). A row whose figures are still loading or unavailable shows
@@ -17,7 +19,7 @@ import { cmpRational, formatRational, significantDp, type Rational } from '../..
 import { fitAmountColumn, fitDecimalTexts, tickPriceFraction } from '../kit/format';
 import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, priceDecimals, toneOf, unitsToNumber, type Tone } from './market-model';
 import { kasPerToken } from './orientation';
-import type { PairVolume } from './pair-market';
+import type { PairDepth, PairVolume } from './pair-market';
 import { filterTokens, tokenLabel, type TokenRow } from './token-model';
 import { usdStats } from './usd-model';
 
@@ -93,7 +95,7 @@ export function volumeCell(v: bigint | null, decimals: number, unit: string, not
 
 // ------------------------------------------------------------------------------------------------ entries
 
-export type SortKey = 'market' | 'last' | 'change' | 'volume' | 'spread' | 'orders';
+export type SortKey = 'market' | 'last' | 'change' | 'volume' | 'mcap' | 'spread' | 'depth';
 export type SortDir = 'asc' | 'desc';
 export interface SortState { key: SortKey; dir: SortDir }
 
@@ -111,11 +113,11 @@ export interface ListEntry {
   loading: boolean;
   /** the 24 h figures could not be read (no indexer, a route it does not serve, an error) */
   unavailable: boolean;
-  /** a token listed from kascov.io that no order of the KOB indexer names: the row says "no orders" and sorts after every other row without a figure */
+  /** a token listed from kascov.io that no order of the KOB indexer names: the depth cell says "no orders" and the row sorts after every other row without a figure */
   noOrders?: boolean;
   /** the values the columns sort by (null: none, always last) */
-  sort: { last: Rational | null; change: number | null; volume: number | null; spread: number | null; orders: number | null };
-  cells: { last: Cell; change: Cell; volume: Cell; spread: Cell; orders: Cell };
+  sort: { last: Rational | null; change: number | null; volume: number | null; mcap: number | null; spread: number | null; depth: number | null };
+  cells: { last: Cell; change: Cell; volume: Cell; mcap: Cell; spread: Cell; depth: Cell };
 }
 
 const finiteInt = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : null);
@@ -125,19 +127,60 @@ export function tokenPriceDp(row: Pick<TokenRow, 'tick' | 'scale'>, decimals: nu
   return tickPriceFraction(row.tick, decimals, row.scale) ?? priceDecimals(ref !== null && basis ? basisToTokenSompi(ref, decimals, basis) : null);
 }
 
-const ordersCell = (asks: number | null, bids: number | null): Cell =>
-  asks === null && bids === null ? EMPTY : { text: String((asks ?? 0) + (bids ?? 0)), title: t('market.list.ordersTitle', { asks: asks ?? 0, bids: bids ?? 0 }) };
+/** The open order counts as a tooltip note (`3 asks · 4 bids`); null when neither is known. */
+const ordersNote = (asks: number | null, bids: number | null): string | null =>
+  asks === null && bids === null ? null : t('market.list.ordersTitle', { asks: asks ?? 0, bids: bids ?? 0 });
 
-/** A token only kascov.io names (`source: 'kascov'`): nothing is fetched for it, every figure is empty and the orders cell says "no orders". */
+/** The total supply a market cap divides by, in base units, and where it comes from. */
+export interface Supply { units: bigint; source: 'registry' | 'kascov' }
+
+/**
+ * A token's fixed total supply, or null when KOB has no sound figure:
+ *   1. the registry's genesis record when it is verified and the token has no way to mint more (no minter output, no public-mint allowance, no live minter): a fact
+ *      re-derivable from the chain;
+ *   2. else the supply kascov.io reports (data/kascov.ts), only for a token it marks `verified` (it checked every event of the token's history, supply conserved),
+ *      only when its declared decimals agree with the ones the market uses, and not for a token it says can still be issued. Third party and unchecked by KOB: the
+ *      cell says so.
+ * (The indexer holds no token output, so it cannot know a supply.)
+ */
+export function supplyOf(row: Pick<TokenRow, 'info' | 'kascov'>): Supply | null {
+  const j = row.info?.json;
+  const g = j?.genesis;
+  if (j?.genesis_verified === true && g && (g.minter_outputs?.length ?? 0) === 0 && (g.live_minters?.length ?? 0) === 0 && !g.mint_allowance && Number.isSafeInteger(g.supply) && g.supply > 0) {
+    return { units: BigInt(g.supply), source: 'registry' };
+  }
+  const k = row.kascov;
+  if (k?.verified && k.supply != null && k.supply > 0n && !k.decimalsDiffers) return { units: k.supply, source: 'kascov' };
+  return null;
+}
+
+/**
+ * The market cap cell in KAS: the last trade price (`last`, KAS per whole token) x the supply (`decimals`: the token's decimals, which the supply is in base units of);
+ * the tooltip holds the exact figure and the supply it used with its source. Nothing without a price or a supply. The sort value is whole KAS.
+ */
+export function marketCapCell(last: Rational | null, supply: Supply | null, decimals: number, ticker: string): { cell: Cell; value: number | null } {
+  if (!last || last.num <= 0n || !supply) return { cell: EMPTY, value: null };
+  const sompi = (last.num * supply.units * 100_000_000n) / (last.den * 10n ** BigInt(decimals));
+  const whole = exactText({ num: supply.units, den: 10n ** BigInt(decimals) });
+  const note = t(supply.source === 'registry' ? 'market.list.mcapSupplyRegistry' : 'market.list.mcapSupplyKascov', { supply: whole, unit: ticker });
+  return { cell: volumeCell(sompi, 8, 'KAS', note), value: unitsToNumber(sompi, 8) };
+}
+
+/** The depth cell of a token in KAS (`depth_2pct_quote`, sompi); empty for an empty book or an indexer that does not send it. */
+export function depthCell(sompi: bigint | null, note: string | null): { cell: Cell; value: number | null } {
+  return sompi === null ? { cell: EMPTY, value: null } : { cell: volumeCell(sompi, 8, 'KAS', note), value: unitsToNumber(sompi, 8) };
+}
+
+/** A token only kascov.io names (`source: 'kascov'`): nothing is fetched for it, every figure is empty and the depth cell says "no orders". */
 export function kascovEntry(row: TokenRow): ListEntry {
   return {
     key: row.covenantId, kind: 'token', name: tokenLabel(row).toLowerCase(), loading: false, unavailable: false, noOrders: true,
-    sort: { last: null, change: null, volume: null, spread: null, orders: null },
-    cells: { last: EMPTY, change: EMPTY, volume: EMPTY, spread: EMPTY, orders: { text: t('market.list.noOrders'), title: t('market.list.noOrdersTitle') } },
+    sort: { last: null, change: null, volume: null, mcap: null, spread: null, depth: null },
+    cells: { last: EMPTY, change: EMPTY, volume: EMPTY, mcap: EMPTY, spread: EMPTY, depth: { text: t('market.list.noOrders'), title: t('market.list.noOrdersTitle') } },
   };
 }
 
-/** A token's KAS market (TOKEN/KAS) from its `/v1/stats` slot; the open order counts of `/v1/tokens` are there before the stats. */
+/** A token's KAS market (TOKEN/KAS) from its `/v1/stats` slot; the open order counts of `/v1/tokens` (the depth tooltip) are there before the stats. */
 export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
   const label = tokenLabel(row);
   const v = slot.state === 'ok' ? slot.value : null;
@@ -145,8 +188,8 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
   const bids = row.openBids ?? finiteInt(v?.open_bids);
   const base: ListEntry = {
     key: row.covenantId, kind: 'token', name: label.toLowerCase(), loading: slot.state === 'loading', unavailable: slot.state === 'none',
-    sort: { last: null, change: null, volume: null, spread: null, orders: asks === null && bids === null ? null : (asks ?? 0) + (bids ?? 0) },
-    cells: { last: EMPTY, change: EMPTY, volume: EMPTY, spread: EMPTY, orders: ordersCell(asks, bids) },
+    sort: { last: null, change: null, volume: null, mcap: null, spread: null, depth: null },
+    cells: { last: EMPTY, change: EMPTY, volume: EMPTY, mcap: EMPTY, spread: EMPTY, depth: EMPTY },
   };
   if (!v) return base;
   const basis = basisOf(v.price_basis);
@@ -165,6 +208,8 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
   const qv = bigOrNull(v.quote_volume_24h);
   const trades = finiteInt(v.trades_24h);
   const spreadBps = finiteInt(v.spread_bps);
+  const mcap = marketCapCell(lastR, supplyOf(row), decimals, row.ticker || label);
+  const depth = depthCell(bigOrNull(v.depth_2pct_quote), ordersNote(asks, bids));
   const side = (p: bigint | null): string => {
     const r = kas(p);
     return r ? formatRational(r, dp, 'nearest', dp, ',') : '—';
@@ -172,15 +217,23 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
   const quotes = bid !== null || ask !== null ? t('market.list.spreadTitle', { bid: side(bid), ask: side(ask), unit }) : null;
   return {
     ...base,
-    sort: { ...base.sort, last: lastR, change: bps, volume: qv === null ? null : unitsToNumber(qv, 8), spread: spreadBps },
+    sort: { ...base.sort, last: lastR, change: bps, volume: qv === null ? null : unitsToNumber(qv, 8), mcap: mcap.value, spread: spreadBps, depth: depth.value },
     cells: {
       ...base.cells,
       last: priceCell(lastR, dp, unit),
       change: changeCell(bps),
       volume: volumeCell(qv, 8, 'KAS', trades === null ? null : t('market.list.trades', { n: trades })),
+      mcap: mcap.cell,
+      depth: depth.cell,
       spread: spreadBps === null ? { text: null, title: quotes } : { text: bpsPercentText(spreadBps).replace('+', ''), title: quotes },
     },
   };
+}
+
+/** The depth cell of a pair (QUOTE base units within 2 % of the mid); a lower bound is marked with a leading "≥" and says so. */
+export function pairDepthCell(d: PairDepth, decimals: number, unit: string, note: string | null): Cell {
+  const c = volumeCell(d.quote, decimals, unit, note);
+  return d.atLeast ? { text: c.text === null ? null : `≥${c.text}`, title: `${c.title ?? ''} · ${t('market.list.depthAtLeast')}` } : c;
 }
 
 /** A token pair with live pair orders whose two tokens the list offers. */
@@ -213,13 +266,12 @@ export const pairLabelOf = (p: Pick<ListedPair, 'base' | 'quote'>): string => `$
 
 /**
  * A token pair: last price and change implied through the two KAS markets (the pair page's figures: no price ever comes from a pair fill), the 24 h
- * pair volume in QUOTE, the live pair order counts. The spread cell says the best prices are on the pair page.
+ * pair volume in QUOTE, the depth within 2 % of the mid in QUOTE (the live pair order counts in its tooltip). The spread cell says the best prices are on the pair page.
  */
-export function pairEntry(p: ListedPair, baseStats: Slot<StatsView>, quoteStats: Slot<StatsView>, volume: Slot<PairVolume | null>): ListEntry {
+export function pairEntry(p: ListedPair, baseStats: Slot<StatsView>, quoteStats: Slot<StatsView>, volume: Slot<PairVolume | null>, depth: Slot<PairDepth | null> = NONE): ListEntry {
   const s = p.summary;
   const asks = s.direct_asks + s.entry_asks;
   const bids = s.direct_bids + s.entry_bids;
-  const orders = asks + bids + s.conditionals;
   const bd = p.base.decimals ?? 0;
   const qd = p.quote.decimals ?? 0;
   const stats =
@@ -227,17 +279,19 @@ export function pairEntry(p: ListedPair, baseStats: Slot<StatsView>, quoteStats:
   const last = stats?.last ?? null;
   const unit = t('market.stats.unitOf', { base: p.base.ticker, quote: p.quote.ticker });
   const vol = volume.state === 'ok' ? volume.value : null;
-  const loading = baseStats.state === 'loading' || quoteStats.state === 'loading' || volume.state === 'loading';
+  const dep = depth.state === 'ok' ? depth.value : null;
+  const loading = baseStats.state === 'loading' || quoteStats.state === 'loading' || volume.state === 'loading' || depth.state === 'loading';
   const unavailable = !loading && (baseStats.state === 'none' || quoteStats.state === 'none') && volume.state === 'none';
   return {
     key: p.key, kind: 'pair', name: pairLabelOf(p).toLowerCase(), loading, unavailable,
-    sort: { last, change: stats?.changeBps ?? null, volume: vol ? unitsToNumber(vol.b, qd) : null, spread: null, orders },
+    sort: { last, change: stats?.changeBps ?? null, volume: vol ? unitsToNumber(vol.b, qd) : null, mcap: null, spread: null, depth: dep ? unitsToNumber(dep.quote, qd) : null },
     cells: {
       last: priceCell(last, last ? significantDp(last, 5, 2, 10) : 4, unit),
       change: changeCell(stats?.changeBps ?? null),
       volume: vol ? volumeCell(vol.b, qd, p.quote.ticker, t('market.list.pairFills', { n: vol.fills })) : EMPTY,
+      mcap: EMPTY,
       spread: { text: null, title: t('market.list.pairSpread') },
-      orders: { text: String(orders), title: t('market.list.pairOrdersTitle', { asks, bids, conditionals: s.conditionals }) },
+      depth: dep ? pairDepthCell(dep, qd, p.quote.ticker, t('market.list.pairOrdersTitle', { asks, bids, conditionals: s.conditionals })) : EMPTY,
     },
   };
 }

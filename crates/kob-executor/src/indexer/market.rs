@@ -554,26 +554,47 @@ pub struct StatsView {
     pub spread_bps: Option<i64>,
     pub open_asks: i64,
     pub open_bids: i64,
+    /// Sompi: what the resting asks up to 2 % above the mid and the resting bids down to 2 % below it are worth (a bid at its escrow's buying power: an upper bound),
+    /// i.e. how much can trade without moving the price more than 2 %. With one side only the reference is that side's best price; `null` for an empty book.
+    pub depth_2pct_quote: Option<String>,
 }
 
 const DAY_MS: i64 = 86_400_000;
 
-fn best_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbResult<(Option<i128>, Option<i128>)> {
-    let b = reads::book(conn, ctx, token, 5, true)?;
-    let best = |s: &BookSide, ask: bool| -> Option<i128> {
-        match s {
-            BookSide::Levels(ls) => {
-                let it = ls.iter().filter_map(|l| l.price.parse::<i64>().ok().map(|p| per_basis(p, l.scale, basis)));
-                if ask {
-                    it.min()
-                } else {
-                    it.max()
-                }
-            }
-            BookSide::Orders(_) => None,
-        }
-    };
-    Ok((best(&b.bids, false), best(&b.asks, true)))
+/// The touch of a token's book and the depth near it, from ONE scan of its live orders per side (the same scan the `book` read makes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Touch {
+    /// Sompi per `basis` base units.
+    bid: Option<i128>,
+    ask: Option<i128>,
+    /// Sompi the resting asks up to [`DEPTH_BAND_PERCENT`] % above the reference price and the resting bids down to that much below it are worth.
+    depth: Option<i128>,
+}
+
+/// The band of `depth_2pct_quote`: percent above (asks) and below (bids) the reference price.
+const DEPTH_BAND_PERCENT: i128 = 2;
+
+/// The reference price of the depth band: the mid of the touch; with one side only, that side's best price; none for an empty book (or a price that is not positive).
+fn depth_reference(bid: Option<i128>, ask: Option<i128>) -> Option<i128> {
+    bid.zip(ask).map(|(b, a)| a.saturating_add(b) / 2).or(bid).or(ask).filter(|r| *r > 0)
+}
+
+fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbResult<Touch> {
+    let asks = reads::book_side_sorted(conn, ctx, token, 1)?;
+    let bids = reads::book_side_sorted(conn, ctx, token, 2)?;
+    let price = |l: &reads::RawBookLevel| per_basis(l.0 .0, l.0 .1, basis);
+    // levels are in book order (exact price per base unit, best first), so the first one is the best and the band is a prefix
+    let ask = asks.first().map(price);
+    let bid = bids.first().map(price);
+    let depth = depth_reference(bid, ask).map(|r| {
+        let up = r.saturating_mul(100 + DEPTH_BAND_PERCENT);
+        let down = r.saturating_mul(100 - DEPTH_BAND_PERCENT);
+        let value = |l: &reads::RawBookLevel| (l.1 .0).saturating_mul(l.0 .0 as i128) / (l.0 .1.max(1) as i128);
+        let a = asks.iter().take_while(|l| price(l).saturating_mul(100) <= up).fold(0i128, |s, l| s.saturating_add(value(l)));
+        let b = bids.iter().take_while(|l| price(l).saturating_mul(100) >= down).fold(0i128, |s, l| s.saturating_add(value(l)));
+        a.saturating_add(b)
+    });
+    Ok(Touch { bid, ask, depth })
 }
 
 pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<u32>) -> DbResult<StatsView> {
@@ -599,7 +620,7 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         (Some(o), Some(l)) if o > 0 && !window.is_empty() => i64::try_from(l.saturating_sub(o).saturating_mul(10_000) / o).ok(),
         _ => None,
     };
-    let (bid, ask) = best_levels(conn, ctx, token, basis)?;
+    let Touch { bid, ask, depth: depth_2pct } = touch(conn, ctx, token, basis)?;
     let mid = bid.zip(ask).map(|(b, a)| a.saturating_add(b) / 2);
     let spread = match (bid, ask, mid) {
         (Some(b), Some(a), Some(m)) if m > 0 => i64::try_from(a.saturating_sub(b).saturating_mul(10_000) / m).ok(),
@@ -648,6 +669,7 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         spread_bps: spread,
         open_asks,
         open_bids,
+        depth_2pct_quote: depth_2pct.map(|v| v.to_string()),
     })
 }
 
@@ -742,6 +764,16 @@ pub fn depth(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn depth_reference_is_the_mid_else_the_side_that_exists() {
+        assert_eq!(depth_reference(Some(100), Some(110)), Some(105));
+        assert_eq!(depth_reference(Some(100), None), Some(100));
+        assert_eq!(depth_reference(None, Some(110)), Some(110));
+        assert_eq!(depth_reference(None, None), None);
+        // a price that is not positive is no reference
+        assert_eq!(depth_reference(Some(0), None), None);
+    }
 
     /// A fill of `amount` base units at `price` sompi per whole token of 100 base units (scale 100); the basis is 100.
     fn f(id: i64, tx: u8, ts: i64, side: i64, amount: i64, price: i64, gdaa: i64) -> FillRow {

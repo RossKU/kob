@@ -205,3 +205,44 @@ export function pairStatsModel(a: {
   }
   return { model: m, source: 'none', fills: 0 };
 }
+
+// ------------------------------------------------------------------------------------------------ depth near the touch (market list)
+
+/** Levels per side the market list reads of a pair book (the server's page limit is 200 by default). */
+export const PAIR_DEPTH_LEVELS = 100;
+
+/** The market list's depth of a pair: QUOTE base units within ±2 % of the mid; `atLeast` when the book is deeper than the levels read (a lower bound). */
+export interface PairDepth { quote: bigint; atLeast: boolean }
+
+/**
+ * What the pair book offers within 2 % of its mid, in QUOTE base units: the resting asks up to 2 % above the mid and the bids down to 2 % below it, every source
+ * (a filler may net, route or fill from inventory, so all of them are fillable: pair-model.ts), each level worth `amount x price` (rounded down). The mid is the middle
+ * of the best ask and the best bid; with one side only, that side's best price is the reference; none for an empty book. A view for another pair is null.
+ * `levels`: how many levels per side the view was asked for; a side that came back full and still inside the band may hold more, so the figure is `atLeast`.
+ */
+export function pairDepthOf(view: PairBookView | null | undefined, base: PairToken, quote: PairToken, levels = PAIR_DEPTH_LEVELS): PairDepth | null {
+  if (!view || view.base !== base.covenantId || view.quote !== quote.covenantId) return null;
+  const parse = (ls: readonly PairLevelView[]) =>
+    ls.flatMap((l) => {
+      const unit = reduce({ num: BigInt(l.price_num), den: BigInt(l.price_den) });
+      const amount = BigInt(l.amount);
+      return unit.num > 0n && unit.den > 0n && amount > 0n ? [{ unit, amount }] : [];
+    });
+  const asks = parse(view.asks).sort((a, b) => cmpRational(a.unit, b.unit));
+  const bids = parse(view.bids).sort((a, b) => cmpRational(b.unit, a.unit));
+  const a0 = asks[0]?.unit;
+  const b0 = bids[0]?.unit;
+  const ref: Rational | null =
+    a0 && b0 ? reduce({ num: a0.num * b0.den + b0.num * a0.den, den: 2n * a0.den * b0.den }) : (a0 ?? b0 ?? null);
+  if (!ref) return null;
+  // price <= ref x 1.02 (asks) / price >= ref x 0.98 (bids), exactly
+  const above = (u: Rational): boolean => u.num * 100n * ref.den <= ref.num * 102n * u.den;
+  const below = (u: Rational): boolean => u.num * 100n * ref.den >= ref.num * 98n * u.den;
+  const side = (ls: readonly { unit: Rational; amount: bigint }[], inside: (u: Rational) => boolean, returned: number) => {
+    const inBand = ls.filter((l) => inside(l.unit));
+    return { value: inBand.reduce((s, l) => s + (l.amount * l.unit.num) / l.unit.den, 0n), full: returned >= levels && inBand.length === ls.length };
+  };
+  const a = side(asks, above, view.asks.length);
+  const b = side(bids, below, view.bids.length);
+  return { quote: a.value + b.value, atLeast: a.full || b.full };
+}

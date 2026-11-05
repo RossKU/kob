@@ -176,6 +176,8 @@ export interface KascovMeta {
   /** the icon's committed hash and sources (data/kascov.ts `iconSources`); null without one */
   imageHash: string | null;
   imageUrl: string | null;
+  /** kascov's total supply of the token in base units (data/kascov.ts `supply`): only the market list's market cap uses it, labelled as kascov's */
+  supply?: bigint | null;
 }
 
 export interface TokenRow {

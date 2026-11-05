@@ -452,6 +452,11 @@ export interface StatsView {
   spread_bps: number | null;
   open_asks: number | null;
   open_bids: number | null;
+  /**
+   * sompi: what the resting asks up to 2 % above the mid and the resting bids down to 2 % below it are worth (one side only: around that side's best price);
+   * null for an empty book; absent on older executors
+   */
+  depth_2pct_quote?: string | null;
 }
 
 export interface DepthLevelView {

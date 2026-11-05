@@ -64,9 +64,9 @@ test.describe('with kascov.io', () => {
     await page.getByTestId('legend-toggle').click();
     await expect(page.getByTestId('legend-source')).toContainText('name and ticker from kascov.io (declared by their creator)');
     await expect(page.getByTestId('token-table')).not.toContainText('declared by their creator');
-    await expect(page.getByTestId(`token-orders-${SAVED}`)).toHaveText('no orders');
+    await expect(page.getByTestId(`token-depth-${SAVED}`)).toHaveText('no orders');
     // nothing of its figures is invented
-    for (const f of ['last', 'change', 'volume', 'spread']) await expect(page.getByTestId(`token-${f}-${SAVED}`)).toHaveText('—');
+    for (const f of ['last', 'change', 'volume', 'mcap', 'spread']) await expect(page.getByTestId(`token-${f}-${SAVED}`)).toHaveText('—');
 
     // the program decides: a pinned program on this network is listed (kascov's status does not decide it), an unpinned one is not
     for (const id of [SAVED, MISMATCH, NO_CORS, NO_IMAGE, PUBLIC_MINT, INVALID, MAINNET_ONLY]) await expect(page.getByTestId(`token-row-${id}`)).toHaveCount(1);
@@ -115,9 +115,9 @@ test.describe('with kascov.io', () => {
     expect(await overflow(page)).toBe(0);
 
     // the default sort is by 24 h volume: the rows with no orders stay after the KOB row in both directions of another figure column too
-    await page.getByTestId('sort-orders').first().click();
+    await page.getByTestId('sort-depth').first().click();
     expect((await shownIds(page))[0]).toBe(exkcc);
-    await page.getByTestId('sort-orders').first().click();
+    await page.getByTestId('sort-depth').first().click();
     expect((await shownIds(page))[0]).toBe(exkcc);
     // search reaches the kascov names
     await page.getByTestId('token-search').fill('public mint');
@@ -134,7 +134,7 @@ test.describe('with kascov.io', () => {
     await page.getByTestId(`token-icon-${SAVED}`).scrollIntoViewIfNeeded();
     await expect(page.getByTestId(`token-icon-${SAVED}`)).toHaveAttribute('data-icon', 'image');
     await expect(page.getByTestId(`token-no-orders-narrow-${SAVED}`)).toBeVisible();
-    await expect(page.getByTestId(`token-orders-${SAVED}`)).toBeHidden();
+    await expect(page.getByTestId(`token-depth-${SAVED}`)).toBeHidden();
     await expect(page.getByTestId(`kascov-source-${SAVED}`)).toBeVisible();
     expect(await overflow(page)).toBe(0);
     // the narrowest rows too: the note of a disagreement does not widen the page

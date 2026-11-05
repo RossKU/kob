@@ -19,10 +19,11 @@ import {
   ariaSort, DEFAULT_SORT, filterPairs, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, sortEntries, tokenEntry,
   type Cell, type ListedPair, type ListEntry, type Slot, type SortKey, type SortState,
 } from './market-list';
-import { pairVolumeOf, type PairVolume } from './pair-market';
+import { PAIR_DEPTH_LEVELS, pairDepthOf, pairVolumeOf, type PairDepth, type PairVolume } from './pair-market';
 import { buildTokenRows, filterTokens, isNameless, parseCovenantId, tradableHere, tradableRows, type TokenRow } from './token-model';
 import { useKascov } from './use-kascov';
 import { usePooledSlots } from './use-market-list';
+import { isAbort } from '../kit/hooks';
 
 function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
   const { indexer, registry, kob } = useServices();
@@ -110,14 +111,20 @@ function Figure(props: { cell: Cell; entry: ListEntry; testid: string; cls?: str
   );
 }
 
-/** The figure columns of both tables, in order: key, header, the class that hides it on a narrow screen. */
-const FIGURES: { key: Exclude<SortKey, 'market'>; label: (kas: boolean) => string; hint?: string; cls?: string }[] = [
+/**
+ * The figure columns, in order: key, header, the class that hides it on a narrow screen (a phone keeps the price and the change: the market cap and the depth
+ * would not fit a card beside the name, the covenant id and the badges). The market cap is a token's (a pair has no supply).
+ */
+const FIGURES: { key: Exclude<SortKey, 'market'>; label: (kas: boolean) => string; hint?: string; cls?: string; tokensOnly?: true }[] = [
   { key: 'last', label: (kas) => (kas ? t('market.col.lastIn', { quote: 'KAS' }) : t('market.col.last')), hint: 'market.col.lastHint', cls: 'ml-last' },
   { key: 'change', label: () => t('market.col.change'), hint: 'market.col.changeHint', cls: 'ml-change' },
   { key: 'volume', label: (kas) => (kas ? t('market.col.volumeIn', { quote: 'KAS' }) : t('market.col.volume')), cls: 'ml-md' },
+  { key: 'mcap', label: () => t('market.col.mcap', { quote: 'KAS' }), hint: 'market.col.mcapHint', cls: 'ml-md', tokensOnly: true },
   { key: 'spread', label: () => t('market.col.spread'), cls: 'ml-md' },
-  { key: 'orders', label: () => t('market.col.orders'), cls: 'ml-md' },
+  { key: 'depth', label: (kas) => (kas ? t('market.col.depthIn', { quote: 'KAS' }) : t('market.col.depth')), hint: 'market.col.depthHint', cls: 'ml-md' },
 ];
+const TOKEN_FIGURES = FIGURES;
+const PAIR_FIGURES = FIGURES.filter((f) => !f.tokensOnly);
 
 /** A sortable column header: a button (keyboard and screen reader: `aria-sort` on the header cell). */
 function SortHeader(props: { k: SortKey; label: string; hint?: string | undefined; sort: SortState; onSort: (k: SortKey) => void; right?: boolean; cls?: string | undefined }) {
@@ -155,7 +162,7 @@ function TokenTableRow({ row, entry }: { row: TokenRow; entry: ListEntry }) {
                   {sub}
                   {row.declared && row.decimals !== null ? <TokenNote token={{ decimalsSource: 'declared', decimals: row.decimals }} /> : null}
                   <KascovNote row={row} compact />
-                  {/* the orders column is hidden on a phone: the row says it here */}
+                  {/* the depth column is hidden on a phone: the row says it here */}
                   {row.source === 'kascov' ? <span class="ml-only-narrow" data-testid={`token-no-orders-narrow-${row.covenantId}`}> · {t('market.list.noOrders')}</span> : null}
                 </span>
               ) : null}
@@ -171,7 +178,7 @@ function TokenTableRow({ row, entry }: { row: TokenRow; entry: ListEntry }) {
           </div>
         </div>
       </td>
-      {FIGURES.map((f) => <Figure key={f.key} cell={entry.cells[f.key]} entry={entry} testid={`token-${f.key}-${row.covenantId}`} cls={f.cls} />)}
+      {TOKEN_FIGURES.map((f) => <Figure key={f.key} cell={entry.cells[f.key]} entry={entry} testid={`token-${f.key}-${row.covenantId}`} cls={f.cls} />)}
     </tr>
   );
 }
@@ -185,17 +192,27 @@ function PairTableRow({ pair, entry }: { pair: ListedPair; entry: ListEntry }) {
           {pairLabelOf(pair)}
         </a>
       </td>
-      {FIGURES.map((f) => <Figure key={f.key} cell={entry.cells[f.key]} entry={entry} testid={`pair-${f.key}-${id}`} cls={f.cls} />)}
+      {PAIR_FIGURES.map((f) => <Figure key={f.key} cell={entry.cells[f.key]} entry={entry} testid={`pair-${f.key}-${id}`} cls={f.cls} />)}
     </tr>
   );
+}
+
+/** What the list reads of a pair besides its two KAS markets: the 24 h pair volume and the depth within 2 % of the mid (either may be missing). */
+interface PairFigures { volume: PairVolume | null; depth: PairDepth | null }
+
+/** One figure of the pair slots as its own slot: a pair whose figures are none leaves it unavailable. */
+function sliceOf<T>(slots: Map<string, Slot<PairFigures | null>>, pick: (f: PairFigures) => T | null): Map<string, Slot<T | null>> {
+  const out = new Map<string, Slot<T | null>>();
+  for (const [k, s] of slots) out.set(k, s.state === 'ok' ? { state: 'ok', value: pick(s.value!) } : s);
+  return out;
 }
 
 const pairToken = (r: TokenRow): PairToken => ({ covenantId: r.covenantId, ticker: r.ticker, decimals: r.decimals ?? 0, scale: r.scale ?? 1n });
 
 /**
- * Market list: every token this build can trade as its KAS market (TOKEN/KAS: last price, 24 h change, 24 h KAS volume, spread, open orders; the
- * token's badges and its full token hash), and the token pairs with live pair orders (BASE/QUOTE, the same columns); sortable by every column (24 h
- * volume first), searchable, add by covenant id. A phone shows the name, the price and the change.
+ * Market list: every token this build can trade as its KAS market (TOKEN/KAS: last price, 24 h change, 24 h KAS volume, market cap, spread, depth within
+ * 2 % of the mid; the token's badges and its full token hash), and the token pairs with live pair orders (BASE/QUOTE, the same columns without the market cap);
+ * sortable by every column (24 h volume first), searchable, add by covenant id. A phone shows the name, the price and the change.
  */
 export function TokenList(props: { invalidToken?: string }) {
   const { registry, indexer, kob, config } = useServices();
@@ -227,17 +244,29 @@ export function TokenList(props: { invalidToken?: string }) {
   const loadStats = useMemo(() => (indexer ? (id: string, signal: AbortSignal) => indexer.stats(id, { signal }) : null), [indexer]);
   const stats = usePooledSlots(statKeys, loadStats, generation);
   const pairKeys = useMemo(() => (pairs.data !== undefined || pairs.error ? listed.map((p) => p.key) : null), [pairs.data, pairs.error, listed]);
-  const loadVolume = useMemo(() => {
+  const loadPairFigures = useMemo(() => {
     if (!indexer) return null;
     const byKey = new Map(listed.map((p) => [p.key, p]));
-    return async (key: string, signal: AbortSignal): Promise<PairVolume | null> => {
+    return async (key: string, signal: AbortSignal): Promise<PairFigures | null> => {
       const p = byKey.get(key);
       if (!p) return null;
-      const view = await indexer.pairFills(p.base.covenantId, p.quote.covenantId, { limit: 1 }, { signal });
-      return pairVolumeOf(view, pairToken(p.base), pairToken(p.quote));
+      const [base, quote] = [pairToken(p.base), pairToken(p.quote)];
+      // the 24 h volume and the depth near the mid (the pair book): a book that cannot be read leaves only its own cell empty
+      const [view, book] = await Promise.all([
+        indexer.pairFills(p.base.covenantId, p.quote.covenantId, { limit: 1 }, { signal }),
+        indexer.pairBook(p.base.covenantId, p.quote.covenantId, { depth: PAIR_DEPTH_LEVELS }, { signal }).catch((e: unknown) => {
+          if (isAbort(e)) throw e;
+          return null;
+        }),
+      ]);
+      const volume = pairVolumeOf(view, base, quote);
+      const depth = pairDepthOf(book, base, quote);
+      return volume === null && depth === null ? null : { volume, depth };
     };
   }, [indexer, listed]);
-  const volumes = usePooledSlots(pairKeys, loadVolume, generation);
+  const pairFigures = usePooledSlots(pairKeys, loadPairFigures, generation);
+  const volumes = useMemo(() => sliceOf(pairFigures, (f) => f.volume), [pairFigures]);
+  const depths = useMemo(() => sliceOf(pairFigures, (f) => f.depth), [pairFigures]);
 
   const shownRows = useMemo(() => {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);
@@ -252,10 +281,10 @@ export function TokenList(props: { invalidToken?: string }) {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);
     const byKey = new Map(listed.map((p) => [p.key, p]));
     const entries = filterPairs(listed, query).map((p) =>
-      pairEntry(p, slotOf(p.base.covenantId), slotOf(p.quote.covenantId), volumes.get(p.key) ?? (indexer ? LOADING : NONE)),
+      pairEntry(p, slotOf(p.base.covenantId), slotOf(p.quote.covenantId), volumes.get(p.key) ?? (indexer ? LOADING : NONE), depths.get(p.key) ?? (indexer ? LOADING : NONE)),
     );
     return sortEntries(entries, sort).map((e) => ({ entry: e, pair: byKey.get(e.key)! }));
-  }, [listed, query, sort, stats, volumes, indexer]);
+  }, [listed, query, sort, stats, volumes, depths, indexer]);
 
   const onSort = (k: SortKey) => setSort((s) => nextSort(s, k));
   const refresh = () => {
@@ -263,7 +292,7 @@ export function TokenList(props: { invalidToken?: string }) {
     pairs.reload();
     setGeneration((g) => g + 1);
   };
-  const cols = FIGURES.length + 1;
+  const cols = TOKEN_FIGURES.length + 1;
 
   return (
     <div class="stack" data-testid="token-list-view">
@@ -282,7 +311,7 @@ export function TokenList(props: { invalidToken?: string }) {
           <thead>
             <tr>
               <SortHeader k="market" label={t('market.col.token')} sort={sort} onSort={onSort} />
-              {FIGURES.map((f) => <SortHeader key={f.key} k={f.key} label={f.label(true)} hint={f.hint ? t(f.hint) : undefined} sort={sort} onSort={onSort} right cls={f.cls} />)}
+              {TOKEN_FIGURES.map((f) => <SortHeader key={f.key} k={f.key} label={f.label(true)} hint={f.hint ? t(f.hint) : undefined} sort={sort} onSort={onSort} right cls={f.cls} />)}
             </tr>
           </thead>
           <tbody>
@@ -311,12 +340,12 @@ export function TokenList(props: { invalidToken?: string }) {
               <thead>
                 <tr>
                   <SortHeader k="market" label={t('market.col.pair')} sort={sort} onSort={onSort} />
-                  {FIGURES.map((f) => <SortHeader key={f.key} k={f.key} label={f.label(false)} hint={f.hint ? t(f.hint) : undefined} sort={sort} onSort={onSort} right cls={f.cls} />)}
+                  {PAIR_FIGURES.map((f) => <SortHeader key={f.key} k={f.key} label={f.label(false)} hint={f.hint ? t(f.hint) : undefined} sort={sort} onSort={onSort} right cls={f.cls} />)}
                 </tr>
               </thead>
               <tbody>
                 {shownPairs.length === 0 ? (
-                  <TableMessage colSpan={FIGURES.length + 1} data-testid="pair-list-empty">{t('market.pairs.noMatch')}</TableMessage>
+                  <TableMessage colSpan={PAIR_FIGURES.length + 1} data-testid="pair-list-empty">{t('market.pairs.noMatch')}</TableMessage>
                 ) : (
                   shownPairs.map(({ pair, entry }) => <PairTableRow key={pair.key} pair={pair} entry={entry} />)
                 )}
