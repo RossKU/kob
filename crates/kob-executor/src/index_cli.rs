@@ -194,9 +194,25 @@ pub enum LogoCmd {
     Import { file: PathBuf },
 }
 
+/// The relative paths of a configuration file (`data_dir`, `tokens_path`, `[records] dir`) are relative to the file's
+/// directory, as `log_file` is (`crate::cli`), so `--config <dir>/kob-executor.toml` started from any directory reads the
+/// same files as a start in `<dir>`. A file named without a directory (the launcher's `--config kob-executor.toml`, run in
+/// the file's directory) keeps its paths as written. Paths given as flags stay relative to the working directory.
+fn relative_to_config(cfg: &mut IndexerConfig, file: &std::path::Path) {
+    let Some(base) = file.parent().filter(|d| !d.as_os_str().is_empty()) else { return };
+    cfg.data_dir = crate::logging::resolve(base, &cfg.data_dir);
+    for p in [cfg.tokens_path.as_mut(), cfg.records.dir.as_mut()].into_iter().flatten() {
+        *p = crate::logging::resolve(base, p);
+    }
+}
+
 pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     let mut cfg = match &a.config {
-        Some(p) => IndexerConfig::load(p)?,
+        Some(p) => {
+            let mut c = IndexerConfig::load(p)?;
+            relative_to_config(&mut c, p);
+            c
+        }
         None => IndexerConfig::default(),
     };
     if let Some(v) = &a.network {
@@ -625,6 +641,36 @@ mod tests {
         let c = cfg(&[]);
         let own = crate::config::default_wrpc_url(&c.network).unwrap();
         assert!(c.nodes.is_empty() && c.rpc_url == own, "an own node by default on the command line");
+    }
+
+    /// `--config <dir>/kob-executor.toml` from another directory reads the files next to the configuration (the setup's
+    /// relative `data_dir`, `tokens_path`, `[records] dir`); absolute paths, a bare file name (the launcher, run in the
+    /// file's directory) and paths given as flags are left as they are.
+    #[test]
+    fn relative_paths_of_a_config_file_are_taken_from_its_directory() {
+        let _g = crate::rpc::resolver::tests::serial();
+        let d = tempfile::tempdir().unwrap();
+        let abs = d.path().join("elsewhere").join("tokens.json");
+        let file = d.path().join("kob-executor.toml");
+        let toml = |tokens: &std::path::Path| {
+            format!("data_dir = \"kob-data\"\ntokens_path = {:?}\n[records]\ndir = \"logs/records\"\n", tokens.to_string_lossy())
+        };
+        std::fs::write(&file, toml(std::path::Path::new("kob-tokens.json"))).unwrap();
+        let path = file.to_string_lossy().into_owned();
+        let c = cfg(&["--config", &path]);
+        assert_eq!(c.data_dir, d.path().join("kob-data"));
+        assert_eq!(c.tokens_path, Some(d.path().join("kob-tokens.json")));
+        assert_eq!(c.records_dir(), d.path().join("logs/records"));
+        // flags win and stay relative to the working directory
+        let c = cfg(&["--config", &path, "--data-dir", "here", "--tokens", "t.json"]);
+        assert_eq!((c.data_dir, c.tokens_path), (PathBuf::from("here"), Some(PathBuf::from("t.json"))));
+        // an absolute path in the file is kept
+        std::fs::write(&file, toml(&abs)).unwrap();
+        assert_eq!(cfg(&["--config", &path]).tokens_path, Some(abs));
+        // a bare file name: the paths as written (the launcher changes to the file's directory first)
+        let mut c: IndexerConfig = toml::from_str("data_dir = \"kob-data\"\ntokens_path = \"kob-tokens.json\"").unwrap();
+        relative_to_config(&mut c, std::path::Path::new("kob-executor.toml"));
+        assert_eq!((c.data_dir, c.tokens_path), (PathBuf::from("kob-data"), Some(PathBuf::from("kob-tokens.json"))));
     }
 
     /// `kobd index` (follow and serve) refuses what it would otherwise ignore: the options of role `run` its configuration
