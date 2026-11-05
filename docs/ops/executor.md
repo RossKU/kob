@@ -1292,7 +1292,7 @@ build aside, above); an unknown key (a misspelt one included) is refused at star
 network = "testnet-10"
 rpc_url = "ws://127.0.0.1:18210"
 data_dir = "/var/lib/kob-index"
-start = "pruning_point"          # or "sink", or { hash = "<chain block hash>" }
+start = "pruning_point"          # or "sink", or { hash = "<chain block hash>" }; the file takes pruning_point, --start takes pruning-point (or pruning_point)
 fast_start = false               # `kobd run`, empty data dir: trade at once on a tip store, index the history meanwhile; A.1.1
 lean = false                     # keep the live book and lean_retention_days of closed orders, no record log, a shrinking file; A.1.2
 lean_retention_days = 30         # lean: days a closed order (and its fills and events) stays readable
