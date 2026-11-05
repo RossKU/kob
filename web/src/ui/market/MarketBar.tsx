@@ -121,13 +121,12 @@ export function MarketShell(props: {
       <div class="mkt-grid">
         {props.book}
         {props.chart}
-        {props.depth || props.tape ? (
-          <div class="mkt-lower">
-            {props.depth}
-            {props.tape}
-          </div>
-        ) : null}
-        {props.ticket}
+        {props.depth}
+        {/* two columns: the trades sit under the ticket, so neither column runs long beside an empty one (market.css); otherwise its children are grid items */}
+        <div class="mkt-side">
+          {props.ticket}
+          {props.tape}
+        </div>
       </div>
       {/* the facts take the full width under the grid (never a column of it, so no column is left empty beside them); DOM order = reading order */}
       {props.details ? <div class="mkt-area-details">{props.details}</div> : null}

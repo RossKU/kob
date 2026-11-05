@@ -21,30 +21,34 @@ body:has(.market-page) .container { max-width: 1520px; }
 .mkt-top .field > label { font-size: 0.78rem; color: var(--muted); font-weight: 600; }
 
 /* The ticket is a column of its own (never a cell of a row it shares with the book or the depth chart): it spans the rows of the other panels, so unfolding
-   "Advanced options" makes the ticket taller by itself, with no gap under the depth chart or the trades and nothing below pushed down. A phone is one column. */
+   "Advanced options" makes the ticket taller by itself, with no gap under the book or the depth chart (on two columns the trades under the ticket move down
+   with it). A phone is one column. */
 .mkt-grid {
   display: grid; gap: 12px; align-items: start;
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas: 'chart' 'book' 'ticket' 'depth' 'tape';
 }
-.mkt-lower { display: contents; }
+/* the ticket and the trades: grid items of their own on a phone and on three columns, one column on two */
+.mkt-side { display: contents; }
 .mkt-area-book { grid-area: book; }
 .mkt-area-chart { grid-area: chart; }
 .mkt-area-ticket { grid-area: ticket; align-self: start; min-width: 0; }
 .mkt-area-depth { grid-area: depth; }
-.mkt-area-tape { grid-area: tape; }
+.mkt-area-tape { grid-area: tape; min-width: 0; }
 /* under the grid, on the full width of the page (a sibling of .mkt-grid) */
 .mkt-area-details { min-width: 0; }
 @media (min-width: 760px) {
-  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book ticket' 'depth ticket' 'tape ticket' '. ticket'; grid-template-rows: auto auto auto auto 1fr; margin-bottom: -12px; /* the empty last row's gap */ }
-  /* the ticket keeps the page gap (12px) to the facts under the grid when it is the tallest column: the grid's -12px only cancels the empty last row's gap */
-  .mkt-area-ticket { margin-bottom: 12px; }
+  /* left: the book and the depth chart; right: the ticket with the trades under it. The last row is an empty one that takes whatever height the right
+     column has over the left, so the left panels never stretch */
+  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book side' 'depth side' '. side'; grid-template-rows: auto auto auto 1fr; margin-bottom: -12px; /* the empty last row's gap */ }
+  /* the tallest column keeps the page gap (12px) to the facts under the grid: the grid's -12px only cancels the empty last row's gap */
+  .mkt-side { display: flex; flex-direction: column; gap: 12px; grid-area: side; align-self: start; min-width: 0; margin-bottom: 12px; }
 }
 @media (min-width: 1200px) {
-  /* the last row is an empty one that takes whatever height the ticket still has over the other panels */
-  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) 360px; grid-template-rows: auto auto 1fr; grid-template-areas: 'book chart ticket' 'book lower ticket' '. . ticket'; margin-bottom: -12px; }
-  .mkt-lower { display: grid; grid-area: lower; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-  .mkt-lower > * { grid-area: auto; }
+  /* the depth chart and the trades share the middle under the chart; the last row is an empty one that takes whatever height the ticket still has over the other panels */
+  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) minmax(0, 1fr) 360px; grid-template-rows: auto auto 1fr; grid-template-areas: 'book chart chart ticket' 'book depth tape ticket' '. . . ticket'; margin-bottom: -12px; }
+  .mkt-side { display: contents; }
+  .mkt-area-ticket { margin-bottom: 12px; }
 }
 
 /* ------------------------------------------------------------------ token title bar */

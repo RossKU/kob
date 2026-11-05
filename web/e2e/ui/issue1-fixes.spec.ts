@@ -62,7 +62,7 @@ for (const width of [1280, 880, 390]) {
     for (const id of ids) open[id] = await box(id);
     expect(open['ticket-container']!.height - closed['ticket-container']!.height, 'the ticket grew').toBeGreaterThan(100);
     if (width >= 760) {
-      // the ticket is a column of its own: the depth chart (and the trades beside or under it) stay where they were
+      // the ticket is a column of its own: the depth chart stays where it was (the trades sit beside it on three columns, under the ticket on two)
       expect(Math.abs(open['depth-section']!.y - closed['depth-section']!.y)).toBeLessThan(2);
       expect(Math.abs(open['depth-section']!.height - closed['depth-section']!.height)).toBeLessThan(2);
       // the facts take the full width under the whole grid: they follow the ticket down only when it grows past the panels beside it, and never overlap it

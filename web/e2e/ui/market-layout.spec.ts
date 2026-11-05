@@ -1,5 +1,5 @@
 // The token page's facts (Token details, Status and checks, logo check) use the full width of the page on 2 and 3 columns: they flow side by side under the
-// whole grid (book, chart, ticket), no column of the page is left empty beside them, and a 64-hex id takes one or two lines. A phone stays one column.
+// whole grid (book, chart, ticket), the trades fill the right column under the ticket on 2 columns, no column of the page is left empty beside them, and a 64-hex id takes one or two lines. A phone stays one column.
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 
@@ -20,6 +20,14 @@ for (const width of [900, 1100, 1280, 1600, 1774]) {
     expect(Math.abs(f.right - ticket.right), 'right edge = the ticket column').toBeLessThan(2);
     expect(f.left, 'left edge at or before the chart').toBeLessThanOrEqual(chart.left + 1);
     expect(f.top - ticket.bottom, 'under the ticket, with the page gap (12px)').toBeGreaterThanOrEqual(11);
+    // two columns: the trades sit under the ticket in the right column (no empty half beside the depth chart); three: beside the depth chart
+    const tape = await page.locator(".mkt-area-tape").evaluate((el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top + scrollY }; });
+    if (width < 1200) {
+      expect(Math.abs(tape.left - ticket.left), "trades in the ticket column").toBeLessThan(2);
+      expect(tape.top - ticket.bottom, "trades under the ticket").toBeGreaterThanOrEqual(11);
+    } else {
+      expect(tape.left, "trades left of the ticket column").toBeLessThan(ticket.left);
+    }
     // the two cards are side by side (one row), the status card folded
     const cards = facts.locator(':scope > section');
     expect(await cards.count()).toBeGreaterThanOrEqual(2);
