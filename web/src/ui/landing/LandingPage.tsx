@@ -235,23 +235,25 @@ export function LandingPage() {
                   <span>{t('landing.tx.head')}</span>
                   <b>{t('landing.tx.decoded')}</b>
                 </div>
+                <div class="lp-tx-sec">{t('landing.tx.place')}</div>
                 <dl>
-                  <dt>{t('landing.tx.action')}</dt>
-                  <dd>{t('landing.tx.action.v')}</dd>
-                  <dt>{t('landing.tx.side')}</dt>
-                  <dd>
-                    <span class="lp-s">{t('landing.tx.side.sell')}</span> {t('landing.tx.side.v')}
-                  </dd>
+                  <dt>{t('landing.tx.token')}</dt>
+                  <dd class="lp-s">{t('landing.tx.token.v')}</dd>
+                  <dt>{t('landing.tx.kas')}</dt>
+                  <dd class="lp-s">{t('landing.tx.kas.v')}</dd>
+                  <dt>{t('landing.tx.locked')}</dt>
+                  <dd>{t('landing.tx.locked.v')}</dd>
+                  <dt>{t('landing.tx.fee')}</dt>
+                  <dd>{t('landing.tx.fee.v')}</dd>
+                </dl>
+                <div class="lp-tx-sec">{t('landing.tx.order')}</div>
+                <dl>
+                  <dt>{t('landing.tx.amount')}</dt>
+                  <dd>{t('landing.tx.amount.v')}</dd>
                   <dt>{t('landing.tx.limit')}</dt>
                   <dd>{t('landing.tx.limit.v')}</dd>
-                  <dt>{t('landing.tx.filled')}</dt>
-                  <dd>
-                    <span class="lp-b">{t('landing.tx.filled.plus')}</span> {t('landing.tx.filled.v')}
-                  </dd>
-                  <dt>{t('landing.tx.creates')}</dt>
-                  <dd>{t('landing.tx.creates.v')}</dd>
-                  <dt>{t('landing.tx.tif')}</dt>
-                  <dd>{t('landing.tx.tif.v')}</dd>
+                  <dt>{t('landing.tx.expires')}</dt>
+                  <dd>{t('landing.tx.expires.v')}</dd>
                 </dl>
                 <div class="lp-ok">
                   <i />
