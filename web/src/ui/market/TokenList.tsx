@@ -10,7 +10,7 @@ import { StatusBadges } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { IdCopy } from './IdCopy';
 import { ListLegend } from './ListLegend';
-import { KascovNote } from './KascovNote';
+import { hasKascovMismatch, KascovMismatch, KascovNote } from './KascovNote';
 import { mergeKascov } from './kascov-merge';
 import { TokenIcon } from './TokenIcon';
 import { TokenNote } from './TokenNote';
@@ -170,9 +170,10 @@ function TokenTableRow({ row, entry }: { row: TokenRow; entry: ListEntry }) {
             <div class="ml-line2">
               <IdCopy value={row.covenantId} data-testid={`token-hash-${row.covenantId}`} />
             </div>
-            <div class="ml-line3" data-testid={`token-badges-${row.covenantId}`}>
+            <div class={hasKascovMismatch(row) ? 'ml-line3 ml-line3-wrap' : 'ml-line3'} data-testid={`token-badges-${row.covenantId}`}>
               <span class="ml-badges">
                 <StatusBadges row={row} />
+                <KascovMismatch row={row} />
               </span>
             </div>
           </div>

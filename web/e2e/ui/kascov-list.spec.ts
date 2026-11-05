@@ -77,8 +77,24 @@ test.describe('with kascov.io', () => {
     expect(ids[0]).toBe(exkcc);
     expect(new Set(ids)).toEqual(new Set([exkcc, KOB_OTHER, SAVED, MISMATCH, NO_CORS, NO_IMAGE, PUBLIC_MINT, INVALID, MAINNET_ONLY]));
     await expect(page.getByTestId(`token-link-${exkcc}`)).toContainText('EXKCC');
-    await expect(page.getByTestId(`kascov-ticker-differs-${exkcc}`)).toHaveText('(kascov.io says FAKE)');
-    await expect(page.getByTestId(`kascov-decimals-differ-${exkcc}`)).toContainText('kascov.io says 2 decimals, KOB uses 8');
+    // a short badge each; the full sentence with both values is the tooltip, and a tap or the keyboard opens it as a panel (a title does not exist on a touch screen)
+    const tickerBadge = page.getByTestId(`kascov-ticker-differs-${exkcc}`);
+    const decimalsBadge = page.getByTestId(`kascov-decimals-differ-${exkcc}`);
+    await expect(tickerBadge).toHaveText(/ticker differs$/);
+    await expect(decimalsBadge).toHaveText(/decimals differ$/);
+    await expect(tickerBadge).toHaveAttribute('title', /kascov.io says the ticker is FAKE; KOB shows EXKCC/);
+    await expect(decimalsBadge).toHaveAttribute('title', /kascov.io says 2 decimals .* KOB uses 8/);
+    await expect(page.getByTestId(`kascov-decimals-differ-detail-${exkcc}`)).toHaveCount(0);
+    await decimalsBadge.click();
+    await expect(decimalsBadge).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByTestId(`kascov-decimals-differ-detail-${exkcc}`)).toContainText('kascov.io says 2 decimals');
+    await expect(page.getByTestId(`kascov-decimals-differ-detail-${exkcc}`)).toContainText('KOB uses 8');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId(`kascov-decimals-differ-detail-${exkcc}`)).toHaveCount(0);
+    await expect(decimalsBadge).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId(`kascov-decimals-differ-detail-${exkcc}`)).toBeVisible();
+    await page.keyboard.press('Escape');
     await expect(page.getByTestId(`kascov-source-${exkcc}`)).toHaveCount(0);
 
     // icons: the saved copy hashes to the committed hash and is shown from a blob: URL it decodes from; every other case is a letter
@@ -140,6 +156,16 @@ test.describe('with kascov.io', () => {
     // the narrowest rows too: the note of a disagreement does not widen the page
     await expect(page.getByTestId(`kascov-ticker-differs-${exkcc}`)).toBeVisible();
     expect(await overflow(page)).toBe(0);
+    // a tap on the badge opens the full sentence inside the screen
+    await page.getByTestId(`kascov-ticker-differs-${exkcc}`).click();
+    const panel = page.getByTestId(`kascov-ticker-differs-detail-${exkcc}`);
+    await expect(panel).toContainText('kascov.io says the ticker is FAKE; KOB shows EXKCC');
+    const box = (await panel.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(375);
+    expect(await overflow(page)).toBe(0);
+    await page.getByTestId(`kascov-ticker-differs-${exkcc}`).click();
+    await expect(panel).toHaveCount(0);
   });
 
   test('the token page names a token KOB has no ticker for from kascov, with its icon, and the facts stay KOB\'s', async ({ appPage: page, mock }) => {

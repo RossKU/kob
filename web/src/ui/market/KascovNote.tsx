@@ -1,11 +1,12 @@
 // The small muted notes of a row whose words came from kascov.io (in the style of TokenNote): where the name and ticker come from, and a disagreement
-// with what KOB derived. Nothing for a row kascov added nothing visible to.
+// with what KOB derived (short warn badges, see KascovMismatch). Nothing for a row kascov added nothing visible to.
 import { t } from '../../i18n';
+import { TipBadge } from './TipBadge';
 import type { TokenRow } from './token-model';
 
 /** `compact` (list rows): the source is the small marker "via kascov", the sentence is its tooltip and the legend above the list says it once. */
 export function KascovNote(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'decimals' | 'kascov'>; compact?: boolean }) {
-  const { covenantId, decimals, kascov: k, ticker } = props.row;
+  const { covenantId, kascov: k } = props.row;
   if (!k) return null;
   const what = k.usedName && k.usedTicker ? 'nameTicker' : k.usedName ? 'name' : k.usedTicker ? 'ticker' : null;
   return (
@@ -20,17 +21,38 @@ export function KascovNote(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' 
           {t(`market.kascov.source.${what}`)}
         </span>
       ) : null}
+      {props.compact ? null : <KascovMismatch row={props.row} />}
+    </>
+  );
+}
+
+/** Whether kascov.io disagrees with KOB about the ticker or the decimals of a row (what `KascovMismatch` shows). */
+export const hasKascovMismatch = (row: Pick<TokenRow, 'kascov'>): boolean => !!row.kascov && (row.kascov.tickerDiffers || row.kascov.decimalsDiffers);
+
+/**
+ * The disagreements with KOB as short warn badges: "ticker differs", "decimals differ". The full sentence, with kascov's value and KOB's, is each badge's
+ * tooltip and, on a tap or the keyboard, a small panel (TipBadge). A list row shows them on its badge line (the name line cuts what does not fit).
+ */
+export function KascovMismatch(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'decimals' | 'kascov'> }) {
+  const { covenantId, decimals, kascov: k, ticker } = props.row;
+  if (!k) return null;
+  return (
+    <>
       {k.tickerDiffers ? (
-        <span class="small muted token-note" title={t('market.kascov.tickerDiffersTitle', { kascov: k.ticker ?? '', kob: ticker })} data-testid={`kascov-ticker-differs-${covenantId}`}>
-          {' '}
-          ({t('market.kascov.tickerDiffers', { ticker: k.ticker ?? '' })})
-        </span>
+        <TipBadge
+          label={t('market.kascov.tickerDiffers')}
+          detail={t('market.kascov.tickerDiffersTitle', { kascov: k.ticker ?? '', kob: ticker })}
+          data-testid={`kascov-ticker-differs-${covenantId}`}
+          data-detail-testid={`kascov-ticker-differs-detail-${covenantId}`}
+        />
       ) : null}
       {k.decimalsDiffers ? (
-        <span class="small muted token-note" title={t('market.kascov.decimalsDiffersTitle', { kascov: k.decimals ?? '', kob: decimals ?? '' })} data-testid={`kascov-decimals-differ-${covenantId}`}>
-          {' '}
-          ({t('market.kascov.decimalsDiffers', { kascov: k.decimals ?? '', kob: decimals ?? '' })})
-        </span>
+        <TipBadge
+          label={t('market.kascov.decimalsDiffers')}
+          detail={t('market.kascov.decimalsDiffersTitle', { kascov: k.decimals ?? '', kob: decimals ?? '' })}
+          data-testid={`kascov-decimals-differ-${covenantId}`}
+          data-detail-testid={`kascov-decimals-differ-detail-${covenantId}`}
+        />
       ) : null}
     </>
   );

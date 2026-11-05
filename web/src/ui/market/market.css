@@ -382,3 +382,8 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .risk-panel { position: fixed; z-index: 60; width: min(22rem, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; font-size: 0.85rem; white-space: normal; text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .risk-panel ul { margin: 6px 0; padding-left: 18px; }
 .risk-panel p { margin: 4px 0 0; }
+.tip-btn { appearance: none; border: 0; font: inherit; font-size: 0.85em; line-height: inherit; cursor: pointer; white-space: nowrap; vertical-align: baseline; }
+.tip-btn:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+.tip-panel { position: fixed; z-index: 60; width: min(20rem, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; font-size: 0.85rem; white-space: normal; text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.ml-line3-wrap { height: auto; min-height: 1.25rem; flex-wrap: wrap; gap: 2px 8px; }
+.ml-line3-wrap .ml-badges { flex-wrap: wrap; }
