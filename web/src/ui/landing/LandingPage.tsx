@@ -329,15 +329,17 @@ export function LandingPage() {
 
         <section class="lp-final">
           <div class="lp-wrap">
-            <span class="lp-mini lp-rv" aria-hidden="true">
-              <Logo />
-            </span>
-            <h2>
-              <Ln>{t('landing.final.l1')}</Ln>
-              <Ln d={1} class="lp-accent">
-                {t('landing.final.l2')}
-              </Ln>
-            </h2>
+            <div class="lp-final-head">
+              <h2>
+                <Ln>{t('landing.final.l1')}</Ln>
+                <Ln d={1} class="lp-accent">
+                  {t('landing.final.l2')}
+                </Ln>
+              </h2>
+              <span class="lp-mini lp-rv" aria-hidden="true">
+                <Logo />
+              </span>
+            </div>
             <Ctas class="lp-rv lp-d2" />
           </div>
         </section>

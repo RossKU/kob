@@ -81,8 +81,8 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 .lp-hero { position: relative; min-height: min(100vh, 1100px); min-height: min(100svh, 1100px); display: flex; flex-direction: column; justify-content: flex-end; padding: 120px 0 56px; }
 /* a phone, and any portrait screen (a tablet, a phone showing the desktop site): no full-screen hero, or the text would sit under a screen of empty space */
 @media (max-width: 700px), (max-aspect-ratio: 4/5) { .lp-hero { min-height: 0; padding: 112px 0 40px; } }
-.lp .lp-kicker { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 30px; font: 500 13px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); }
-.lp-chip { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 11px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn); font: 600 11px/1 var(--mono); letter-spacing: 0.08em; }
+.lp .lp-kicker { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 30px; font: 500 clamp(15px, 1.25vw, 18px)/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); }
+.lp-chip { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 13px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn); font: 600 12px/1 var(--mono); letter-spacing: 0.08em; }
 .lp-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .lp h1 { font: 800 clamp(44px, min(11.6vw, 15vh), 200px)/0.88 var(--display); letter-spacing: -0.06em; text-wrap: nowrap; white-space: nowrap; }
 .lp-ln { display: block; overflow: hidden; padding-bottom: 0.16em; margin-bottom: -0.16em; }
@@ -189,7 +189,11 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 .lp-final { padding: clamp(80px, 12vw, 180px) 0 clamp(64px, 8vw, 120px); text-align: left; position: relative; overflow: hidden; }
 .lp-final h2 { font: 800 clamp(56px, 14vw, 240px)/0.84 var(--display); letter-spacing: -0.065em; }
 .lp-final .lp-ctas { margin-top: 44px; }
-.lp-final .lp-mini { position: absolute; right: var(--gut); top: clamp(60px, 10vw, 140px); width: clamp(64px, 10vw, 150px); height: 150px; display: flex; align-items: center; }
+/* the heading and the mark share one row: the mark is sized from the heading's own font size and centred on its two lines, so it keeps its
+   place at every width (it was absolutely placed and drifted from the heading as the page scaled) */
+.lp-final-head { display: flex; align-items: center; justify-content: space-between; gap: clamp(16px, 4vw, 64px); }
+.lp-final-head h2 { flex: 1 1 auto; min-width: 0; }
+.lp-final .lp-mini { flex: none; width: clamp(67px, 16.8vw, 288px); display: flex; align-items: center; }
 .lp-final .lp-mini .brand-mark { display: block; width: 100%; height: auto; }
 
 /* footer */
@@ -212,3 +216,5 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 .lp-links a { color: var(--teal); font-weight: 600; }
 /* a grid column never grows past the screen for its widest line (the terminal scrolls inside its card instead) */
 .lp-decode > * { min-width: 0; }
+/* the hero is a flex column: without a width its wrapper shrinks to its content and the auto margins centre it, off the nav's left edge */
+.lp-hero > .lp-wrap { width: 100%; }
