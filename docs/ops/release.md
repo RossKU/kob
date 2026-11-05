@@ -191,7 +191,7 @@ built with the runner image's NDK clang for API 24), each as the `deploy-tn10` a
 checks that each binary refuses the other network (not the Android one, which cannot run on the x86_64 runner: it is only
 checked to be an arm64 ELF). `scripts/package-release.mjs` packs each into two archives,
 `kobd-<version>-<network>-<target>.zip` (Windows) or `.tar.gz` with `kobd`, `kob`, `QUICKSTART.md`, `LICENSE`, `NOTICE`
-and a `SHA256SUMS` of those files, and `kob-<version>-<network>-<target>` (the command line alone, with its `README.md`); the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
+and a `SHA256SUMS` of those files, and `kob-<version>-<network>-<target>` (the command line alone, with its `README.md` and `REFERENCE.md`); the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
 release job attaches the twelve archives, the Android app and a `SHA256SUMS` of them all to a **draft** release of the tag: add the output of
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
 runs the same builds as a dry run that only uploads workflow artifacts. The binaries and archives are not code-signed (the

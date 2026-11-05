@@ -4,7 +4,7 @@ name: release
 # Linux x86_64 (glibc) and Android arm64 (aarch64-linux-android, bionic: for Termux on a phone), each as the testnet-10 and the mainnet
 # deployment build (docs/ops/release.md), packaged by scripts/package-release.mjs into
 # kobd-<version>-<network>-<target>.zip / .tar.gz (kobd, the daemon, and kob, QUICKSTART.md, LICENSE, NOTICE and a SHA256SUMS of
-# their files) and kob-<version>-<network>-<target>.zip / .tar.gz (the command line alone, with its README).
+# their files) and kob-<version>-<network>-<target>.zip / .tar.gz (the command line alone, with its README and REFERENCE).
 # The Android app for tap-to-use phones (testnet-10 only; android.yml, called by the job `android` below) goes into the release as
 # kobd-<version>-testnet-10-android.apk, with its SHA256 in the release's SHA256SUMS like the archives. It is signed with the
 # release key when the ANDROID_* repository secrets exist (a new APK then updates the old one in place and keeps the key);

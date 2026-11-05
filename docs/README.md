@@ -10,7 +10,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | [user-guide.md](user-guide.md) | Trading in the web app: connecting KasWare / Kaspire or the private-key option, buying and selling, limit and market orders, partial fills, cancel and refund, merging token UTXOs, the token fact badges, where token names and icons come from (kascov.io) and the icon switch, the node and indexer banners, fees, recovering a token you created |
 | [faq.md](faq.md) | Questions people asked: custodial or not, who signs what, front-running, settlement atomicity (and Miner Mode), and how market and limit orders work for a USD stablecoin when KAS moves |
 | [api.md](api.md) | The executor's read API: every HTTP endpoint and query parameter, response fields, `/v1/health`, the WebSocket messages, errors, limits and the `[api]` configuration |
-| [../crates/kob-cli/README.md](../crates/kob-cli/README.md) | The `kob` command line: trading, token issuance, recovery; the `--json` output and exit codes for scripts and bots |
+| [../crates/kob-cli/README.md](../crates/kob-cli/README.md) | The `kob` command line: trading, token issuance, recovery, scripts and bots; [REFERENCE.md](../crates/kob-cli/REFERENCE.md) has every option, the `--json` output and the exit codes |
 | [development.md](development.md) | Developing KOB: building and checking the contracts, the test suites, the web UI in mock mode, the `kobd` build features |
 | [repository-map.md](repository-map.md) | What lives where in this repository |
 

@@ -11,7 +11,7 @@
 // Two archives per network and target, `.zip` (Windows targets) or `.tar.gz` (every other target), each holding one directory of
 // its name: `kobd-<version>-<network>-<target>` with kobd (the daemon) and kob (the command line), QUICKSTART.md
 // (docs/ops/executor-quickstart.md), LICENSE, NOTICE and a SHA256SUMS of those files; and `kob-<version>-<network>-<target>` with
-// kob alone, README.md (crates/kob-cli/README.md), LICENSE, NOTICE and a SHA256SUMS of those files. The archive is written here, not by zip / tar: the bytes depend only on the inputs and on
+// kob alone, README.md and REFERENCE.md (crates/kob-cli/), LICENSE, NOTICE and a SHA256SUMS of those files. The archive is written here, not by zip / tar: the bytes depend only on the inputs and on
 // SOURCE_DATE_EPOCH (default: the commit time of HEAD) as every entry's time, fixed modes and no owner names, so two builds of
 // identical binaries give identical archives on any runner (docs/ops/release.md 6). Needs Node >= 22 (zlib.crc32).
 import fs from 'node:fs';
@@ -177,7 +177,12 @@ function packageOne(o) {
     ['QUICKSTART.md', text(path.join(root, 'docs/ops/executor-quickstart.md')), 0o644],
     ...legal,
   ]);
-  write(`kob-${o.version}-${o.network}-${o.target}`, [kob, ['README.md', text(path.join(root, 'crates/kob-cli/README.md')), 0o644], ...legal]);
+  write(`kob-${o.version}-${o.network}-${o.target}`, [
+    kob,
+    ['README.md', text(path.join(root, 'crates/kob-cli/README.md')), 0o644],
+    ['REFERENCE.md', text(path.join(root, 'crates/kob-cli/REFERENCE.md')), 0o644],
+    ...legal,
+  ]);
 }
 
 /** The tag is `v` + the version the binaries report: [workspace.package] version, inherited by kob-executor (the crate of kobd) and kob-cli, and
