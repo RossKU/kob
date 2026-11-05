@@ -51,6 +51,11 @@ worker its own in-process server (and enables parallel runs). Ports: `KOB_MOCK_P
   stray / owned token UTXOs (states read from the KCC-20 leader's signature script, as the real indexer does) and close orders on cancel / refund;
   a cancel with a verified SWEEP record (same script, same covenant id from the order input) is a continuation: the order stays live at the new outpoint (event `sweep`).
   The DAA advances 10/s plus `/mock/advance-daa`.
+* Mock node blocks (standalone mode, `mock/blocks.mjs`): every accepted transaction is one block; `GET /node/blocks?after=<seq>` -> `{tip, blocks}`
+  in the wRPC `block-added` layout (no input UTXO entries; without `after`: the tip only). Seeded and simulated changes have no transaction, so no
+  block. `POST /mock/place {key, side: ask | bid, price, amount, token?}` places an order with a REAL transaction of a test key, `POST /mock/take
+  {covenant_id, amount?}` fills a plain ask or bid with a REAL batch of the filler; `POST /mock/indexer {down: true | false}` makes every `/v1/*` route
+  (and the WebSocket) answer 503 while the node stays up; `GET /mock/order?id=` reads an order's indexer view whatever that switch says.
 * `GET /registry/tokens.json`: the example registry (`registry/tokens.example.json`); the fixtures point `registryUrl` here.
 * Control (`POST /mock/...`, JSON): `reset` (default seed; `{seed:false}` empty; `{history:{...}}` adds a history), `seed` (`{tokens, orders, book, fills,
   trades, history, utxos}`), `utxo` (give KAS / tokens),

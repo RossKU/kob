@@ -32,6 +32,8 @@ test('copy buttons keep their label on one line (token details)', async ({ appPa
 });
 
 test.describe('market panels when the indexer cannot be reached', () => {
+  // the panels of a page that has no indexer data at all: the automatic standalone fallback (e2e/ui/standalone.spec.ts) is off here
+  test.use({ appConfig: { standalone: { auto: false } } });
   test('chart and depth show no endless skeleton, the trades panel no "No trades yet"', async ({ appPage: page, mock }) => {
     await listExkcc(page);
     const tok = await mock.token();

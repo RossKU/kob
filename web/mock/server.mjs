@@ -14,6 +14,7 @@ import { ApiError, HEX64, Rejection, badRequest, notFound, sleep } from './util.
 import * as V from './views.mjs';
 import * as M from './market.mjs';
 import * as P from './pairs.mjs';
+import { BlockLog, placeReal, takeReal } from './blocks.mjs';
 
 const CORS = {
   'access-control-allow-origin': '*',
@@ -132,7 +133,11 @@ export async function startMockServer(opts = {}) {
   const kob = loadKobMock();
   const chain = new MockChain(kob, { network: opts.network, settleDepthDaa: opts.settleDepthDaa, daaPerSecond: opts.daaPerSecond, startDaa: opts.startDaa });
   // artificial latency of every API answer (`/mock/*` never waits): `latencyMs` plus a uniform `jitterMs`, on every route or only the indexer's (`/v1/*`)
-  const ctl = { latencyMs: 0, jitterMs: 0, scope: 'all' };
+  // `indexerDown`: every indexer route (`/v1/*`, the WebSocket included) answers 503 while the node stays up (standalone mode)
+  const ctl = { latencyMs: 0, jitterMs: 0, scope: 'all', indexerDown: false };
+  // the node's blocks: one per accepted transaction (mock/blocks.mjs)
+  const blockLog = new BlockLog();
+  chain.txListeners.add((tx, daa, ts) => blockLog.record(tx, daa, ts));
   // `GET /node/fee-estimate` answers this (null: the route is missing, 404, as on a node without getFeeEstimate)
   let feeEstimate = opts.feeEstimate === undefined ? { ...DEFAULT_FEE_ESTIMATE } : opts.feeEstimate;
   const sessions = new Set();
@@ -203,7 +208,7 @@ export async function startMockServer(opts = {}) {
     }
   });
   server.on('upgrade', (req, socket, head) => {
-    if (new URL(req.url ?? '/', 'http://mock').pathname !== '/v1/ws') {
+    if (new URL(req.url ?? '/', 'http://mock').pathname !== '/v1/ws' || ctl.indexerDown) {
       socket.destroy();
       return;
     }
@@ -217,6 +222,7 @@ export async function startMockServer(opts = {}) {
     const post = method === 'POST';
     const ok = (body) => ({ body });
     let m;
+    if (ctl.indexerDown && path.startsWith('/v1/')) throw new ApiError(503, 'unavailable', 'mock: the indexer is down');
     // ---- indexer read API
     if (get && path === '/v1/health') return ok(V.healthView(chain));
     if (get && path === '/v1/health/ready') return V.readyView(chain);
@@ -271,6 +277,12 @@ export async function startMockServer(opts = {}) {
       if (!feeEstimate) throw notFound('no such route');
       return ok({ estimate: { priorityBucket: { feerate: feeEstimate.priority, estimatedSeconds: 1 }, normalBuckets: [{ feerate: feeEstimate.normal, estimatedSeconds: 30 }], lowBuckets: [{ feerate: feeEstimate.low, estimatedSeconds: 1800 }] } });
     }
+    // the blocks after `after` (standalone mode follows them); the tip only without it
+    if (get && path === '/node/blocks') {
+      if (chain.health.state === 'node_unavailable') throw new ApiError(503, 'node_unavailable', 'mock: node unavailable');
+      const after = q.get('after');
+      return ok(blockLog.view(after === null ? null : Number(after)));
+    }
     if (post && path === '/node/utxos') {
       const body = await readJson(req);
       return ok({ entries: chain.utxosByAddresses(body.addresses) });
@@ -295,6 +307,8 @@ export async function startMockServer(opts = {}) {
       ctl.latencyMs = 0;
       ctl.jitterMs = 0;
       ctl.scope = 'all';
+      ctl.indexerDown = false;
+      blockLog.reset();
       feeEstimate = { ...DEFAULT_FEE_ESTIMATE };
       seedAll(body.seed !== false, body.fund === true, body.history ?? false, body.pair ?? false);
       return ok(summary(chain));
@@ -312,6 +326,22 @@ export async function startMockServer(opts = {}) {
       if (n < 0n) throw badRequest('sompi must be non-negative');
       chain.minOrderValue = n;
       return ok({ min_order_value_sompi: n.toString() });
+    }
+    // the indexer goes down (or comes back) while the node stays up: `{ down: true | false }`
+    if (post && path === '/mock/indexer') {
+      ctl.indexerDown = body.down !== false;
+      if (ctl.indexerDown) {
+        for (const s of sessions) s.ws.terminate();
+        sessions.clear();
+      }
+      return ok({ down: ctl.indexerDown });
+    }
+    // an order placed with a real transaction (a block the node announces): { key, side: 'ask' | 'bid', price, amount, token? }
+    if (post && path === '/mock/place') return ok(placeReal(chain, body));
+    // a plain ask or bid filled by a real batch of the mock's filler: { covenant_id, amount? }
+    if (post && path === '/mock/take') {
+      if (!HEX64.test(body.covenant_id ?? '')) throw badRequest('covenant_id must be 64 hex characters');
+      return ok(takeReal(chain, body.covenant_id, body.amount));
     }
     if (post && path === '/mock/fee-estimate') {
       feeEstimate = body.off ? null : { priority: Number(body.priority ?? 100), normal: Number(body.normal ?? 100), low: Number(body.low ?? 100) };
@@ -403,6 +433,12 @@ export async function startMockServer(opts = {}) {
     if (get && path === '/mock/submitted') {
       const full = q.get('full') !== '0';
       return ok({ items: chain.submissions.map((s) => (full ? s : { ...s, tx: undefined })) });
+    }
+    // the indexer view of an order whatever the indexer's state (`/mock/indexer` down included)
+    if (get && path === '/mock/order') {
+      const o = chain.orders.get(String(q.get('id') ?? '').toLowerCase());
+      if (!o) throw notFound('unknown covenant id');
+      return ok(V.orderView(chain, o, V.ctxOf(chain), true));
     }
     if (get && path === '/mock/state') {
       return ok({ ...summary(chain), unix: chain.nowUnix(), ws_clients: sessions.size, latency_ms: ctl.latencyMs, health: chain.health, rejects: chain.rejects });

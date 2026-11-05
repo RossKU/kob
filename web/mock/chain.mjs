@@ -47,6 +47,8 @@ export class MockChain {
     this.transferTag = this.templates.get('KCC20Ref').entries.transfer;
     /** @type {Set<(ev: object) => void>} */
     this.listeners = new Set();
+    /** every accepted transaction, as it was submitted (the mock node's blocks, mock/blocks.mjs) @type {Set<(tx: object, daa: number, tsMs: number) => void>} */
+    this.txListeners = new Set();
     this.reset();
   }
 
@@ -440,6 +442,7 @@ export class MockChain {
     const daa = this.daa();
     const seq = ++this.blockSeq;
     this.txs.add(txid);
+    for (const l of this.txListeners) l(tx, daa, this.nowMs());
     this.captureDeclarations(tx);
 
     // 1. inputs

@@ -325,7 +325,8 @@ test.describe('wallet', () => {
 });
 
 test.describe('health banners', () => {
-  test.use({ autoOpen: false });
+  // the indexer's own banners and marks: the automatic standalone fallback (e2e/ui/standalone.spec.ts) would replace them once a bad state persists
+  test.use({ autoOpen: false, appConfig: { standalone: { auto: false } } });
 
   test('a lagging or stale indexer is announced and the book is marked as possibly out of date', async ({ appPage, mock }) => {
     await mock.setHealth('following', 20_000); // 2000 s behind
