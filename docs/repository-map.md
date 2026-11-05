@@ -1,0 +1,22 @@
+# Repository map
+
+| Path | Contents |
+|---|---|
+| `contracts/` | SilverScript sources (`v2/` the order covenants, `orders/` the original plain orders of the v1 test suites, `kcc20/`, `adapters/kron/`), compiled `artifacts/` (committed, reproducible), `silverc.lock`, `SHA256SUMS`, `deploy/` (per-network deployment records), and the Argent app in `contracts/argent/` |
+| `contracts/third-party/` | Pinned third-party token programs, each with its provenance (`UPSTREAM.md`): KaspaCom KCC20 0.2.5 (Apache-2.0), the KCC-20 reference source and its published public-mint build (argent-lang/kcc20-reference `c8a0871`, ISC), and programs observed on chain (`kasparocket/`, `kforge/`, `kforge-kcc20/`, `kusdt/`) |
+| `crates/kob-protocol` | Protocol library: pinned artifacts, state and sigscript encoding, builders for every order action and matcher shape, fee and mass pass, compute-budget table, `KOB1` payload, engine validation, golden vectors |
+| `crates/kob-wasm` | wasm-bindgen bindings over `kob-protocol` (used by the web UI and the TypeScript SDK) |
+| `crates/kob-executor` | The `kobd` daemon: the Indexer (full history, record log, read API over REST and WebSocket) and the Executor (matcher, keepers, x402 facilitator), alone or together |
+| `crates/kob-x402` | x402 wire types, verifiers (KAS, KCC-20, swap-and-pay), payer and merchant SDK, in-memory chain test kit |
+| `crates/kob-cli` | Command line ([README](../crates/kob-cli/README.md)): trading (`kob place` with every order kind of the web ticket, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, planned like the web wallet; `book`, `orders`, `balances`), `kob token create`, `kob registry` (validate, verify-genesis, programs, add-program), `kob recover`, `kob order sweep` / `cancel` |
+| `crates/kob-tests` | The contracts executed in the rusty-kaspa v2.1.0 script engine: positive and negative harnesses |
+| `web/` | Static, client-side, non-custodial web UI (TypeScript, Preact) over `kob-wasm`; mock indexer and node for offline use |
+| `packages/kob-x402` | TypeScript x402 SDK and an example paid API |
+| `registry/` | Token registry: the supported programs and a pinned snapshot of token facts (no curation) |
+| `argent/` | Pinned Argent upstream commit, our two patches, reproducible `argentc` build |
+| `vendor/` | SilverScript v1.0.0 (patched for rusty-kaspa v2.1.0) and the Argent artifact crate |
+| `tools/` | `ablation` (contract mutation runner), `sil2argent` (publishes hand-written contracts as an Argent artifact), `router-gen` (router generator), `soak` (testnet market simulator), `wallet-gate` (browser-wallet covenant-signing checks) |
+| `android/` | The testnet-10 Android app: `kobd` in a foreground service with a setup and status screen (`docs/ops/executor-quickstart.md`, section 9) |
+| `scripts/` | Builds (`build-contracts.sh`, `build-argent.sh`, `build-wasm.sh`, `build-deploy.sh`, `build-state-dicts.mjs`; `lib/`, their shared helpers), checks (`check-pins.mjs`, `check-wallet-gate.mjs`) and release tooling (`release-hashes.sh`, `package-release.mjs`, `make-android-keystore.mjs`; `docs/ops/release.md`) |
+| `Dockerfile` | A `kobd` image of one network, built from source (`docs/ops/executor-quickstart.md`, section 6) |
+| `docs/` | Specifications and operator guides, see [README.md](README.md) |

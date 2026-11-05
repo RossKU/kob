@@ -3,8 +3,8 @@
 Anyone can run a KOB executor: it follows the chain, lists the order book and, with a small funded hot key, matches
 crossing orders and refunds expired ones, earning the spreads and the makers' tips (`docs/ops/executor.md`, Part C,
 *Economics*). This page takes you from a build (or a download) to a running executor. The full operations guide is
-`docs/ops/executor.md`; the short version of sections 1 to 3 for a source build is the README, *Run `kobd` on testnet-10
-(from source)*.
+`docs/ops/executor.md`; the short version of sections 1 to 3 for a source build is
+[run-from-source.md](run-from-source.md).
 
 The executor talks to nothing but the Kaspa node you point it at (public nodes found through the Kaspa resolvers by default,
 or your own). It sends no telemetry, charges no fee, does not update itself and connects to no server of the KOB project.

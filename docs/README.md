@@ -11,6 +11,8 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | [faq.md](faq.md) | Questions people asked: custodial or not, who signs what, front-running, settlement atomicity (and Miner Mode), and how market and limit orders work for a USD stablecoin when KAS moves |
 | [api.md](api.md) | The executor's read API: every HTTP endpoint and query parameter, response fields, `/v1/health`, the WebSocket messages, errors, limits and the `[api]` configuration |
 | [../crates/kob-cli/README.md](../crates/kob-cli/README.md) | The `kob` command line: trading, token issuance, recovery; the `--json` output and exit codes for scripts and bots |
+| [development.md](development.md) | Developing KOB: building and checking the contracts, the test suites, the web UI in mock mode, the `kobd` build features |
+| [repository-map.md](repository-map.md) | What lives where in this repository |
 
 ## Specifications (`docs/spec/`)
 
@@ -31,7 +33,8 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 
 | Document | What it covers |
 |---|---|
-| [ops/executor-quickstart.md](ops/executor-quickstart.md) | Run an Indexer or an Executor from a source build or a release archive: setup, node, funding, what to watch, withdraw, services, upgrade, Docker, Android (the short from-source path is the [README](../README.md#run-kobd-on-testnet-10-from-source)) |
+| [ops/run-from-source.md](ops/run-from-source.md) | The short path from a clone to a running `kobd` on testnet-10: prerequisites (Windows, Linux), build, an Indexer, an Executor, what runs where |
+| [ops/executor-quickstart.md](ops/executor-quickstart.md) | Run an Indexer or an Executor from a source build or a release archive: setup, node, funding, what to watch, withdraw, services, upgrade, Docker, Android (the short from-source path is [ops/run-from-source.md](ops/run-from-source.md)) |
 | [ops/executor.md](ops/executor.md) | Running `kobd`: one process (`run`), the Indexer (Part B: node, storage, read API, runbook) and the Executor's matcher and keepers (Part C: keys, economics, flags) |
 | [ops/web-hosting.md](ops/web-hosting.md) | Hosting the web app on Cloudflare Pages: account, token, repository variables, the deploy gate, the token-names source (kascov.io: refresh policy, CSP, privacy), rollback, neutrality rules |
 | [ops/chart-server.md](ops/chart-server.md) | A public read server (`kobd index` behind Cloudflare Tunnel): setup order, tunnel, backups, alerts, upgrading without downtime |
