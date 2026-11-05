@@ -16,7 +16,7 @@ transactions", and it cannot send the security headers of `web/public/_headers` 
 
 1. Create a Cloudflare account (free plan) at https://dash.cloudflare.com/sign-up and verify the e-mail address.
 2. Note the **Account ID**: dashboard, *Workers & Pages*, right-hand column (or the URL `dash.cloudflare.com/<account id>/...`).
-3. Create the Pages project as a **Direct Upload** project (not "Connect to Git": Cloudflare's build image cannot build the app,
+3. (Optional: the workflow's first run creates it with the API token of section 2 when it does not exist.) Create the Pages project as a **Direct Upload** project (not "Connect to Git": Cloudflare's build image cannot build the app,
    which needs Rust and wasm-bindgen; GitHub Actions builds it and uploads the result). From a PC with Node 22:
 
    ```

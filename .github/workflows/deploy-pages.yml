@@ -192,6 +192,16 @@ jobs:
       - name: sha256 of every file deployed (the logic of scripts/release-hashes.sh)
         working-directory: .
         run: find web/dist -type f | LC_ALL=C sort | xargs sha256sum > "$RUNNER_TEMP/deployed.sha256"
+      # a first run creates the Direct Upload project (docs/ops/web-hosting.md 1); on later runs it exists and this step's failure is ignored
+      - name: Create the Pages project if it does not exist yet
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.152.0"
+          packageManager: npm
+          command: pages project create ${{ needs.config.outputs.project }} --production-branch=${{ needs.config.outputs.branch }}
       - name: Upload web/dist to Cloudflare Pages
         id: deploy
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
