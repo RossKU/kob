@@ -31,7 +31,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 
 | Document | What it covers |
 |---|---|
-| [ops/executor-quickstart.md](ops/executor-quickstart.md) | Run an executor from a prebuilt download: setup, funding, what to watch, withdraw, services, upgrade, Docker, Android |
+| [ops/executor-quickstart.md](ops/executor-quickstart.md) | Run an Indexer or an Executor from a source build or a release archive: setup, node, funding, what to watch, withdraw, services, upgrade, Docker, Android (the short from-source path is the [README](../README.md#run-kobd-on-testnet-10-from-source)) |
 | [ops/executor.md](ops/executor.md) | Running `kobd`: one process (`run`), the Indexer (Part B: node, storage, read API, runbook) and the Executor's matcher and keepers (Part C: keys, economics, flags) |
 | [ops/web-hosting.md](ops/web-hosting.md) | Hosting the web app on Cloudflare Pages: account, token, repository variables, the deploy gate, the token-names source (kascov.io: refresh policy, CSP, privacy), rollback, neutrality rules |
 | [ops/chart-server.md](ops/chart-server.md) | A public read server (`kobd index` behind Cloudflare Tunnel): setup order, tunnel, backups, alerts, upgrading without downtime |
@@ -42,6 +42,17 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | Document | What it covers |
 |---|---|
 | [security/AUDIT-2026-10.md](security/AUDIT-2026-10.md) | The internal pre-mainnet security audit (canary gate): invariants, findings, ablation, fuzzing, live testnet-10 attacks, residual risks |
+
+## Test reports (`docs/testing/`)
+
+Dated testnet-10 runs, kept as evidence (their transaction ids are chain data, not build pins): what was exercised, on which commit, with
+what result.
+
+| Document | What it covers |
+|---|---|
+| [testing/TN10-TEST-2026-10.md](testing/TN10-TEST-2026-10.md) | The first live testnet-10 roll (commit `8c1606c`): every KAS-book order kind, x402, the registry checks, the live attacks on the pair orders (section 13) and the recovery drills of 2026-10-20 (section 14) |
+| [testing/TN10-TEST-2026-10-14.md](testing/TN10-TEST-2026-10-14.md) | The roll onto `cf90250` |
+| [testing/TN10-TEST-2026-10-15.md](testing/TN10-TEST-2026-10-15.md) | The roll onto `dadd20e` |
 
 ## Argent
 
