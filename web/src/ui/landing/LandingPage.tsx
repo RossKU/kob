@@ -111,6 +111,19 @@ function Row(props: { k: string; v: string; vClass: string; warn?: boolean; chil
   );
 }
 
+/** The bots section's terminal for `network`: commands only (a dry run), the shape of a script's or an agent's loop. */
+function botExample(network: string): string {
+  return [
+    `$ kob book TUSD --network ${network} --json`,
+    '$ kob place limit --token TUSD --side buy \\',
+    '    --amount 100TUSD --price 0.24KAS \\',
+    `    --network ${network} --key-file maker.key \\`,
+    '    --dry-run --json',
+    '$ kob watch fills --token TUSD --json',
+    '# one JSON event per line (NDJSON)',
+  ].join('\n');
+}
+
 export function LandingPage() {
   const { config } = useServices();
   useDocumentTitle(appTitle());
@@ -248,6 +261,34 @@ export function LandingPage() {
               <p class="lp-tx-note" data-testid="landing-tx-note">
                 {net.txNote}
               </p>
+            </div>
+          </div>
+        </section>
+
+        <section class="lp-sec lp-sec-flush" data-testid="landing-bots">
+          <div class="lp-wrap lp-decode">
+            <div>
+              <div class="lp-label lp-rv">{t('landing.bots.label')}</div>
+              <h2 class="lp-big">
+                <Ln>{t('landing.bots.l1')}</Ln>
+                <Ln d={1} class="lp-dim">
+                  {t('landing.bots.l2')}
+                </Ln>
+              </h2>
+              <p class="lp-intro lp-rv">{t('landing.bots.intro')}</p>
+              <p class="lp-intro lp-rv lp-links">
+                <a href={`${REPO_URL}/tree/master/crates/kob-cli`}>{t('landing.bots.cli')}</a>
+                <a href={`${REPO_URL}/blob/master/docs/api.md`}>{t('landing.bots.api')}</a>
+              </p>
+            </div>
+            <div class="lp-rv lp-d1">
+              <div class="lp-tx lp-code" role="img" aria-label={t('landing.bots.aria')}>
+                <div class="lp-tx-h">
+                  <span>{t('landing.bots.head')}</span>
+                  <b>{t('landing.bots.json')}</b>
+                </div>
+                <pre>{botExample(config.network)}</pre>
+              </div>
             </div>
           </div>
         </section>

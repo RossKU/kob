@@ -203,3 +203,10 @@ body.lp-body { background: #050808; overflow-x: hidden; }
   .lp-ln > span, .lp-rv, .lp-fade { transform: none !important; opacity: 1 !important; }
   .lp-bb { width: var(--w) !important; }
 }
+
+/* bots: a terminal card in the sign-request card's frame, and two plain links */
+.lp-code pre { margin: 12px 0 0; font: 500 13px/1.7 var(--mono); color: var(--fg); white-space: pre; overflow-x: auto; }
+.lp-links { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+.lp-links a { color: var(--teal); font-weight: 600; }
+/* a grid column never grows past the screen for its widest line (the terminal scrolls inside its card instead) */
+.lp-decode > * { min-width: 0; }

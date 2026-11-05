@@ -26,10 +26,24 @@ curl -s http://127.0.0.1:8090/v1/health
 Windows, the Executor, ports, files and logs: [docs/ops/run-from-source.md](docs/ops/run-from-source.md). Services, Docker,
 Android and upgrades: [docs/ops/executor-quickstart.md](docs/ops/executor-quickstart.md).
 
+## Bots and AI agents
+
+The `kob` command line plans and signs exactly what the web wallet does, and every trading command prints one JSON document
+(`--json`) with documented exit codes, so a script or an agent can read the book, place and cancel orders and follow fills:
+
+```
+cargo build --release --bin kob
+kob book TUSD --network testnet-10 --json
+kob place limit --token TUSD --side buy --amount 100TUSD --price 0.24KAS --network testnet-10 --key-file maker.key --dry-run --json
+kob watch fills --token TUSD --network testnet-10 --json        # NDJSON, one event per line
+```
+
+Every command and kind: [crates/kob-cli](crates/kob-cli/README.md). The read API (HTTP and WebSocket, no key):
+[docs/api.md](docs/api.md).
+
 ## Documentation
 
 * [docs/README.md](docs/README.md): the index of every document
-* [docs/api.md](docs/api.md): the read API; [crates/kob-cli](crates/kob-cli/README.md): the `kob` command line
 * [docs/spec/](docs/spec/): order types, the matcher, the payload, token programs
 * [docs/development.md](docs/development.md): build the contracts, run the tests, the web UI in mock mode;
   [docs/repository-map.md](docs/repository-map.md): what lives where

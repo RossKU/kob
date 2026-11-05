@@ -109,3 +109,13 @@ test('a portrait screen (a phone showing the desktop site, a tablet) gets no ful
     .poll(() => page.evaluate(() => document.querySelector('.lp-hero h1')?.getBoundingClientRect().y ?? Infinity), { message: 'no screen of empty space above the headline' })
     .toBeLessThan(500);
 });
+
+test('390 px: the bots section (command line, read API) fits the screen: no text or terminal runs past its edge', async ({ appPage: page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/#/');
+  const sec = page.getByTestId('landing-bots');
+  await sec.scrollIntoViewIfNeeded();
+  await expect(sec.getByRole('link', { name: /Command line/ })).toBeVisible();
+  const rights = await sec.evaluate((el) => [...el.querySelectorAll('p, h2, .lp-tx')].map((e) => e.getBoundingClientRect().right));
+  for (const r of rights) expect(r).toBeLessThanOrEqual(390);
+});
