@@ -80,7 +80,15 @@ export interface AppConfig {
    * Default `https://dweb.link/ipfs`. config.json / `__KOB_CONFIG__` only.
    */
   ipfsGatewayUrl: string;
+  /**
+   * Standalone mode (data/standalone.ts: the market from the node's blocks, no indexer): `manual` on from the start (the indexer is not asked for the
+   * market), `auto` fall back to it when the indexer cannot be used (default on), `autoReturn` go back to the indexer once it answers again (default on;
+   * off: a banner offers to). Any layer, the Settings screen included.
+   */
+  standalone: StandaloneSettings;
 }
+
+export interface StandaloneSettings { manual: boolean; auto: boolean; autoReturn: boolean }
 
 export const MARKET_START_TOLERANCE_MIN = 10;
 export const MARKET_START_TOLERANCE_MAX = 5_000;
@@ -114,6 +122,7 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   marketStartToleranceBps: 1_000,
   logoBlocklistUrl: '',
   ipfsGatewayUrl: DEFAULT_IPFS_GATEWAY_URL,
+  standalone: Object.freeze({ manual: false, auto: true, autoReturn: true }) as StandaloneSettings,
 });
 
 /** Default block explorer of each network (kaspa.stream: `<base>/transactions/<txid>`). */
@@ -216,6 +225,9 @@ export interface ConfigPatch {
   marketStartToleranceBps?: number;
   logoBlocklistUrl?: string;
   ipfsGatewayUrl?: string;
+  standaloneManual?: boolean;
+  standaloneAuto?: boolean;
+  standaloneAutoReturn?: boolean;
 }
 
 export interface ConfigWarning { layer: string; field: string; message: string }
@@ -323,6 +335,16 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
       else bad('ipfsGatewayUrl', 'URL (use https; empty turns ipfs:// logos off)');
     }
   }
+  if ('standalone' in raw) {
+    if (isObj(raw.standalone)) {
+      for (const [k, field] of [['manual', 'standaloneManual'], ['auto', 'standaloneAuto'], ['autoReturn', 'standaloneAutoReturn']] as const) {
+        if (!(k in raw.standalone)) continue;
+        const f = parseFlag(raw.standalone[k]);
+        if (f !== null) out[field] = f;
+        else bad(`standalone.${k}`, 'flag');
+      }
+    } else bad('standalone', 'standalone object');
+  }
   if ('marketStartToleranceBps' in raw) {
     const v = raw.marketStartToleranceBps;
     if (!deployment) warnings.push({ layer, field: 'marketStartToleranceBps', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
@@ -413,13 +435,18 @@ function apply(base: AppConfig, p: ConfigPatch): AppConfig {
     marketStartToleranceBps: p.marketStartToleranceBps ?? base.marketStartToleranceBps,
     logoBlocklistUrl: p.logoBlocklistUrl ?? base.logoBlocklistUrl,
     ipfsGatewayUrl: p.ipfsGatewayUrl ?? base.ipfsGatewayUrl,
+    standalone: {
+      manual: p.standaloneManual ?? base.standalone.manual,
+      auto: p.standaloneAuto ?? base.standalone.auto,
+      autoReturn: p.standaloneAutoReturn ?? base.standalone.autoReturn,
+    },
   };
 }
 
 /** Pure merge of all layers; invalid values are ignored and reported in `warnings`. */
 export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
   const warnings: ConfigWarning[] = [];
-  let cfg = apply({ ...DEFAULT_CONFIG, features: { ...DEFAULT_CONFIG.features }, fees: { ...DEFAULT_CONFIG.fees }, quoteTokens: { ...DEFAULT_CONFIG.quoteTokens } }, {});
+  let cfg = apply({ ...DEFAULT_CONFIG, features: { ...DEFAULT_CONFIG.features }, fees: { ...DEFAULT_CONFIG.fees }, quoteTokens: { ...DEFAULT_CONFIG.quoteTokens }, standalone: { ...DEFAULT_CONFIG.standalone } }, {});
   cfg = apply(cfg, sanitizeLayer('config.json', layers.file, false, warnings));
   cfg = apply(cfg, sanitizeLayer('__KOB_CONFIG__', layers.injected, true, warnings));
   const deployment = cfg;
@@ -485,6 +512,7 @@ export interface UserSettings {
   features?: { kastle?: boolean; priorityFee?: boolean };
   fees?: { dynamic?: boolean; maxRate?: number; maxFeeKas?: number };
   allowQueryOverrides?: boolean;
+  standalone?: { manual?: boolean; auto?: boolean; autoReturn?: boolean };
 }
 
 /** Merges `patch` into the stored settings (validated: invalid fields are dropped). `null` values remove a field. */
@@ -497,6 +525,7 @@ export function saveSettings(patch: Record<string, unknown>, storage: StorageLik
       if (v === null) delete merged[k];
       else if (k === 'features' && isObj(v)) merged.features = { ...(isObj(merged.features) ? merged.features : {}), ...v };
       else if (k === 'fees' && isObj(v)) merged.fees = { ...(isObj(merged.fees) ? merged.fees : {}), ...v };
+      else if (k === 'standalone' && isObj(v)) merged.standalone = { ...(isObj(merged.standalone) ? merged.standalone : {}), ...v };
       else merged[k] = v;
     }
     // never persist `features.test`, even if a caller passes it
@@ -518,6 +547,13 @@ export function saveSettings(patch: Record<string, unknown>, storage: StorageLik
       };
     }
     if (clean.allowQueryOverrides !== undefined) out.allowQueryOverrides = clean.allowQueryOverrides;
+    if (clean.standaloneManual !== undefined || clean.standaloneAuto !== undefined || clean.standaloneAutoReturn !== undefined) {
+      out.standalone = {
+        ...(clean.standaloneManual !== undefined ? { manual: clean.standaloneManual } : {}),
+        ...(clean.standaloneAuto !== undefined ? { auto: clean.standaloneAuto } : {}),
+        ...(clean.standaloneAutoReturn !== undefined ? { autoReturn: clean.standaloneAutoReturn } : {}),
+      };
+    }
     storage.setItem(SETTINGS_KEY, JSON.stringify(out));
     return true;
   } catch {

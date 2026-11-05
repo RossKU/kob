@@ -6,6 +6,8 @@ import { normalizeNetwork } from '../../data/kaspa-sdk';
 export type HealthLevel = 'ok' | 'warn' | 'bad' | 'unknown';
 export const HEALTH_CODES = [
   'ok', 'not-configured', 'loading', 'unreachable', 'starting', 'catching-up', 'lagging', 'stale', 'node-unavailable', 'gap', 'unknown-state', 'wrong-network',
+  // standalone mode switched on in Settings: the indexer is not asked (ui/shell/status.ts)
+  'standalone',
 ] as const;
 export type HealthCode = (typeof HEALTH_CODES)[number];
 

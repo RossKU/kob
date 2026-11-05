@@ -7,11 +7,13 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { Services } from '../../app/services';
 import type { IndexerFailover } from '../../data/indexer-failover';
+import type { StandaloneController } from '../../data/standalone';
 import type { FeedStatus } from '../../data/indexer';
 import type { HealthTickNotice, HealthView } from '../../data/indexer-types';
 import { Coalescer, pageVisible, toError, useInterval } from '../kit/hooks';
 import { assessIndexerHealth, type HealthAssessment } from './health';
 import { isDeepReorg } from './reorg-notice';
+import { useStandalone } from './standalone';
 
 export const HEALTH_POLL_MS = 15_000;
 /** feed-triggered health reads (reorg, resync, a state change) are at least this far apart */
@@ -71,7 +73,7 @@ export function healthPushDue(frame: { type: string; data: unknown }, held: Heal
 }
 
 /** Polls `indexer.health()` (coalesced: never two reads in flight) and re-reads it on the feed's pushes that matter (see the head of this file). */
-export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'> & { failover?: IndexerFailover | null }): IndexerStatus {
+export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'> & { failover?: IndexerFailover | null; standalone?: StandaloneController | null }): IndexerStatus {
   const [health, setHealth] = useState<HealthView | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const alive = useRef(true);
@@ -79,11 +81,16 @@ export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'
   const held = useRef<HealthView | null>(null);
   held.current = health;
   const seenEpoch = useRef(s.failover ? s.failover.epoch : 0);
+  const standalone = useStandalone(s.standalone);
+  const manual = standalone?.reason === 'manual';
 
   const refresh = useCallback(() => {
     const indexer = s.indexer;
-    if (!indexer || !runs.current.request()) return;
+    // standalone mode switched on in Settings: the indexer is not asked, not even for its health
+    if (!indexer || s.standalone?.manual || !runs.current.request()) return;
     const failover = s.failover ?? null;
+    const network = s.config.network;
+    const sa = s.standalone ?? null;
     const once = (): void => {
       runs.current.started();
       // the answer belongs to the indexer that was active when the read was made: after a switch it is dropped
@@ -96,6 +103,7 @@ export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'
             setHealth(h);
             setError(null);
             failover?.report(epoch, { health: h, error: null });
+            sa?.report(assessIndexerHealth({ health: h, error: null, configured: true, network }));
           }
           if (runs.current.settled() || !current()) once();
         },
@@ -104,13 +112,14 @@ export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'
           if (current()) {
             setError(toError(e));
             failover?.report(epoch, { health: null, error: toError(e) });
+            sa?.report(assessIndexerHealth({ health: null, error: toError(e), configured: true, network }));
           }
           if (runs.current.settled() || !current()) once();
         },
       );
     };
     once();
-  }, [s.indexer, s.failover]);
+  }, [s.indexer, s.failover, s.standalone, s.config.network]);
 
   // another indexer is in use now: the answer of the old one says nothing about it
   useEffect(() => {
@@ -159,9 +168,18 @@ export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'
     };
   }, [s.feed, refresh]);
 
-  const assessment = assessIndexerHealth({ health, error, configured: !!s.indexer, network: s.config.network });
+  // back from a manual standalone mode: read the health at once
+  const wasManual = useRef(manual);
+  useEffect(() => {
+    if (wasManual.current && !manual) refresh();
+    wasManual.current = manual;
+  }, [manual]);
+  const assessment = manual ? standaloneAssessment : assessIndexerHealth({ health, error, configured: !!s.indexer, network: s.config.network });
   return { health, error, assessment, refresh };
 }
+
+/** The indexer's status while standalone mode is on by the setting: not asked (neither good nor bad). */
+const standaloneAssessment: HealthAssessment = { level: 'unknown', code: 'standalone', lagSeconds: null, fresh: false };
 
 export interface NodeStatus {
   /** undefined until the first answer */

@@ -4,7 +4,8 @@ import { indexerKey, type AppConfig } from '../config';
 import { createFeeService, type FeeService } from '../kob/fee-policy';
 import { HttpIndexer, IndexerFeed, type IndexerApi } from '../data/indexer';
 import { IndexerFailover, failoverIndexer, pinnedIndexer } from '../data/indexer-failover';
-import { loadKaspaSdk, type KaspaSdk } from '../data/kaspa-sdk';
+import { loadKaspaSdk, spkStringToAddress, type KaspaSdk } from '../data/kaspa-sdk';
+import { ENTER_CHECK_FAILOVER_MS, StandaloneController, modeIndexer, standaloneUnavailable } from '../data/standalone';
 import type { NodeApi } from '../data/node';
 import { createNode } from '../data/node-factory';
 import { TokenTracker } from '../data/token-tracker';
@@ -40,6 +41,11 @@ export interface Services {
   tracker: TokenTracker;
   /** the dynamic fee policy (from `config.fees`) and the oracle that reads the node's fee estimate */
   fees: FeeService;
+  /**
+   * standalone mode (data/standalone.ts): the market from the node's blocks while the indexer cannot be used, or always (`config.standalone`); while it
+   * is active `indexer` answers from it. null when the node cannot follow blocks or the caller supplied its own indexer.
+   */
+  standalone?: StandaloneController | null;
 }
 
 export interface CreateServicesOverrides {
@@ -51,6 +57,7 @@ export interface CreateServicesOverrides {
   verifiers?: { label: string; api: IndexerApi }[];
   fees?: FeeService;
   fetch?: typeof fetch;
+  standalone?: StandaloneController | null;
 }
 
 async function loadRegistry(
@@ -77,6 +84,15 @@ export function feeServiceFor(config: Pick<AppConfig, 'fees'>, node: Pick<NodeAp
 export function independentIndexers(config: Pick<AppConfig, 'indexerUrl' | 'extraIndexerUrls'>): string[] {
   const primary = config.indexerUrl ? indexerKey(config.indexerUrl) : null;
   return config.extraIndexerUrls.filter((u) => indexerKey(u) !== primary);
+}
+
+/** The indexer of an app without one (standalone mode switched on in Settings): every read says so. */
+function noIndexer(): IndexerApi {
+  return new Proxy({} as IndexerApi, {
+    get: () => async () => {
+      throw standaloneUnavailable('no indexer is configured: this');
+    },
+  });
 }
 
 /** Loads kob-wasm and the kaspa SDK, connects the node (lazily: a failing node does not block the UI), reads the registry. */
@@ -120,12 +136,49 @@ export async function createServices(config: AppConfig, o: CreateServicesOverrid
   }
   const { registry, error } = await loadRegistry(config, kob, fetchFn);
   const utxos = createUtxoService({ node, sdk, network: config.network });
+  // standalone mode over the configured indexer (or none: then only when it is switched on in Settings)
+  let standalone: StandaloneController | null = null;
+  if (o.standalone !== undefined) standalone = o.standalone;
+  else if (o.indexer === undefined && typeof node.subscribeBlocks === 'function' && (indexer || config.standalone.manual)) {
+    standalone = new StandaloneController({
+      kob, node, network: config.network, prefs: config.standalone, ...(failover ? { enterCheckMs: ENTER_CHECK_FAILOVER_MS } : {}),
+      toAddress: (spk) => spkStringToAddress(sdk, spk, config.network),
+      indexer: indexer ?? { health: async () => Promise.reject(standaloneUnavailable('no indexer is configured: this')) },
+      registry: (token) => {
+        const t = registry.byCovenantId.get(token);
+        if (!t) return null;
+        let scale: bigint | null = null;
+        try {
+          scale = kob.defaultScale(t.decimals);
+        } catch {
+          scale = null;
+        }
+        return { templateHash: t.templateHash, extensionCommitment: t.extensionCommitment, scale };
+      },
+    });
+  }
+  if (standalone) {
+    const sa = standalone;
+    indexer = modeIndexer(indexer ?? noIndexer(), sa);
+    const inner = pinned;
+    pinned = () => (sa.state.active ? sa.indexer : inner());
+    const baseVerifiers = verifiersOf;
+    // the book is the node's: no indexer is asked to cross-check it (one empty list: a view's dependency list sees no change)
+    const none: { label: string; api: IndexerApi }[] = [];
+    verifiersOf = () => (sa.state.active ? none : baseVerifiers());
+    // switched on in Settings: no indexer connection for the market, the feed included
+    const quiet = () => {
+      if (sa.manual) feed?.close();
+    };
+    quiet();
+    sa.subscribe(quiet);
+  }
   const tracker = new TokenTracker({ kob, node, sdk, network: config.network, indexer });
   return {
     config, kob, sdk, node, indexer, feed, registry, registryError: error,
     get verifiers() {
       return verifiersOf();
     },
-    failover, pinnedIndexer: pinned, utxos, tracker, fees: o.fees ?? feeServiceFor(config, node),
+    failover, pinnedIndexer: pinned, utxos, tracker, fees: o.fees ?? feeServiceFor(config, node), standalone,
   };
 }

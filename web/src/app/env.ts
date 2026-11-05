@@ -201,14 +201,19 @@ export async function readCoinsPart(s: Pick<Services, 'node' | 'utxos' | 'fees'>
 }
 
 export async function readHoldingsPart(
-  s: Pick<Services, 'indexer' | 'tracker'>,
+  s: Pick<Services, 'indexer' | 'tracker' | 'standalone'>,
   wallet: Pick<WalletInfo, 'pubkey'>,
   token: TokenInfo,
   market: TokenMarket,
   o: Pick<BuildEnvOptions, 'offline'> = {},
 ): Promise<HoldingsPart> {
   if (!token.program) throw new Error(`token ${token.ticker} is not tradable in this build`);
-  const mine = s.indexer && !o.offline ? s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }).catch(() => null) : Promise.resolve([]);
+  // standalone mode (data/standalone.ts): the wallet's orders in the book the planner gets are the ones that book lists (seen on the node, or resolved from
+  // the wallet's receipts); no indexer is asked
+  const sa = s.standalone?.state.active ? s.standalone : null;
+  const mine = sa
+    ? Promise.resolve(sa.ownOrders(wallet.pubkey, token.covenantId))
+    : s.indexer && !o.offline ? s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }).catch(() => null) : Promise.resolve([]);
   const [tokenUtxos, orders] = await Promise.all([s.tracker.tokenUtxosFor(wallet.pubkey, { covenantId: token.covenantId, program: token.program }), mine]);
   return { tokenUtxos, ownOrders: orders ? ownOrderRefs(market, orders) : null };
 }

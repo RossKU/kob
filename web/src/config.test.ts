@@ -41,9 +41,18 @@ describe('mergeConfig', () => {
       network: 'mainnet', indexerUrl: '', extraIndexerUrls: [], nodeUrl: '', registryUrl: './registry/tokens.json',
       features: { kastle: false, test: false, priorityFee: false }, fees: { dynamic: true, maxRate: 1000, maxFeeKas: 1 }, allowQueryOverrides: false,
       quoteTokens: {}, home: 'landing', explorerUrl: '', tokenNamesUrl: 'https://kascov.io/data', marketStartToleranceBps: 1000,
-      logoBlocklistUrl: '', ipfsGatewayUrl: 'https://dweb.link/ipfs',
+      logoBlocklistUrl: '', ipfsGatewayUrl: 'https://dweb.link/ipfs', standalone: { manual: false, auto: true, autoReturn: true },
     });
     expect(DEFAULT_CONFIG.features.kastle).toBe(false);
+  });
+
+  it('standalone mode settings: from any layer, flags only (an invalid one is reported and ignored)', () => {
+    const w: { field: string }[] = [];
+    const r = resolveConfig({ file: { standalone: { auto: false } }, settings: { standalone: { manual: true, autoReturn: 'yes please' } } });
+    expect(r.config.standalone).toEqual({ manual: true, auto: false, autoReturn: true });
+    w.push(...r.warnings);
+    expect(w.map((x) => x.field)).toEqual(['standalone.autoReturn']);
+    expect(resolveConfig({ injected: { standalone: true } }).warnings.map((x) => x.field)).toEqual(['standalone']);
   });
 
   it('later layers win: file < injected < settings', () => {
