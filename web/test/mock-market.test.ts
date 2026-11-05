@@ -202,6 +202,7 @@ describe('mock market data (explicit trades)', () => {
       spread_bps: 160, // 40_000 * 10000 / 2_500_000
       open_asks: 4,
       open_bids: 2,
+      depth_2pct_quote: '34940000',
     });
     // moving the chain clock 30 h forward empties the window: volumes 0, window prices null, last stays
     await postOn(srv, '/mock/advance-daa', { seconds: 30 * 3600 });
