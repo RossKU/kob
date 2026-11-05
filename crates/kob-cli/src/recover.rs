@@ -16,7 +16,7 @@ use kob_protocol::artifacts::{token_template_by_hash, TemplateId};
 use kob_protocol::build::{build, Action, CancelOrder};
 use kob_protocol::json::{hex32, to_hex};
 use kob_protocol::state::{AnyState, TokenState};
-use kob_protocol::tx::{FeeOptions, OrderUtxo, TokenUtxo, MIN_FEE_RATE};
+use kob_protocol::tx::{FeeMode, FeeOptions, OrderUtxo, TokenUtxo, MIN_FEE_RATE};
 use kob_protocol::Family;
 use serde_json::{json, Value};
 
@@ -35,7 +35,7 @@ kob recover: find orders on the node from a backup, a recovery / export file or 
 USAGE
   kob recover --from <FILE>... --node ws://HOST:PORT [--network NET] [--maker <PUBKEY>] [--out <report.json>]
               [--amount-left [<COVENANT ID>=]<AMOUNT>]...
-              [--cancel --key <HEX | env:VAR | file:PATH> [--yes | --dry-run] [--fee-rate N] [--out-dir <DIR>]]
+              [--cancel --key <HEX | env:VAR | file:PATH> [--yes | --dry-run] [--fee-rate N] [--priority-fee] [--out-dir <DIR>]]
 
 INPUT
   --from        repeatable. The web wallet's backup ({\"format\":\"kob-backup\",..}), the indexer recovery / export file
@@ -84,6 +84,8 @@ CANCEL
                 without a terminal the cancel is refused (status `refused`, exit 1) and nothing is signed.
   --dry-run     build, sign and engine-validate, write, never submit (excludes --yes)
   --fee-rate    sompi per gram (default 100)
+  --priority-fee  also pay for the storage mass (KIP-9), as the web app's \"Pay the priority fee\": a higher fee, worth it only when blocks are
+                contended (charged at --fee-rate on the storage-inclusive mass)
   --out-dir     write <covenant id>.cancel.json (the signed transaction and its submitRequest) here
 ";
 
@@ -115,6 +117,8 @@ pub struct Args {
     pub yes: bool,
     /// Fee rate.
     pub fee_rate: u64,
+    /// The storage-inclusive priority fee instead of the relay floor.
+    pub priority_fee: bool,
     /// Where the signed cancels go.
     pub out_dir: Option<PathBuf>,
 }
@@ -150,6 +154,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
         dry_run: false,
         yes: false,
         fee_rate: MIN_FEE_RATE,
+        priority_fee: false,
         out_dir: None,
     };
     let mut it = args.iter();
@@ -170,6 +175,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
                 let v = val("--fee-rate")?;
                 a.fee_rate = v.parse().map_err(|_| format!("--fee-rate must be a positive integer, got `{v}`"))?;
             }
+            "--priority-fee" => a.priority_fee = true,
             "--out-dir" => a.out_dir = Some(PathBuf::from(val("--out-dir")?)),
             other => return Err(format!("unknown argument `{other}` (see `kob recover --help`)")),
         }
@@ -182,8 +188,8 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
     if a.cancel && a.key.is_none() {
         return Err("--cancel needs --key".into());
     }
-    if !a.cancel && (a.key.is_some() || a.dry_run || a.yes || a.out_dir.is_some()) {
-        return Err("--key, --yes, --dry-run and --out-dir belong to --cancel".into());
+    if !a.cancel && (a.key.is_some() || a.dry_run || a.yes || a.out_dir.is_some() || a.priority_fee) {
+        return Err("--key, --yes, --dry-run, --priority-fee and --out-dir belong to --cancel".into());
     }
     if a.yes && a.dry_run {
         return Err("--yes and --dry-run exclude each other".into());
@@ -619,7 +625,7 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
         Custody::Unknown(why) => return Err(format!("prefund custody {why}: not cancelled")),
     };
     let utxo = utxo_of(u);
-    let fee = FeeOptions::rate(a.fee_rate);
+    let fee = FeeOptions { fee_rate: Some(a.fee_rate), fee_mode: if a.priority_fee { FeeMode::Priority } else { FeeMode::Relay } };
     let (built, funding) = build_funded(true, &a.node, &a.network, &maker, |funding| {
         build(&Action::CancelOrder(CancelOrder {
             order: OrderUtxo { utxo: utxo.clone(), state: state.clone() },

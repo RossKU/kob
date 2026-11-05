@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
-use kob_protocol::tx::{pubkey_of, MIN_FEE_RATE};
+use kob_protocol::tx::{pubkey_of, FeeMode, FeeOptions, MIN_FEE_RATE};
 
 use crate::common::Signer;
 
@@ -16,7 +16,7 @@ pub const KEY_ENV: &str = "KOB_KEY";
 pub const COMMON_VALUE_FLAGS: &[&str] =
     &["--network", "--node", "--indexer", "--key-file", "--key-env", "--fee-rate", "--out-dir", "--registry", "--key"];
 /// Flags every trading command takes without a value.
-pub const COMMON_BOOL_FLAGS: &[&str] = &["--yes", "-y", "--dry-run", "--json"];
+pub const COMMON_BOOL_FLAGS: &[&str] = &["--yes", "-y", "--dry-run", "--json", "--priority-fee"];
 
 /// Help text of the shared options.
 pub const COMMON_HELP: &str = "\
@@ -33,6 +33,8 @@ COMMON OPTIONS
                     a key on the command line (--key) is refused: arguments are visible to other users (ps)
   --registry FILE   token registry (default: the one this build embeds, when its network matches)
   --fee-rate N      sompi per gram (default: the relay floor, 100)
+  --priority-fee    also pay for the storage mass (KIP-9), as the web app's \"Pay the priority fee\" does: a higher fee, worth it
+                    only when blocks are contended (the fee is charged at --fee-rate, default 100, on the storage-inclusive mass)
   --dry-run         show the plan and stop: nothing is signed
   --yes, -y         sign and submit without asking (otherwise a terminal asks; without a terminal, refused)
   --json            print the plan and the result as one JSON document (the result is in its `result` key)
@@ -113,6 +115,8 @@ pub struct Common {
     pub indexer: Option<String>,
     /// Fee rate.
     pub fee_rate: Option<u64>,
+    /// `--priority-fee`: the storage-inclusive fee instead of the relay floor.
+    pub priority_fee: bool,
     /// Dry run.
     pub dry_run: bool,
     /// Sign without asking.
@@ -154,6 +158,7 @@ impl Common {
             node,
             indexer,
             fee_rate,
+            priority_fee: p.has("--priority-fee"),
             dry_run: p.has("--dry-run"),
             yes: p.has("--yes"),
             json: p.has("--json"),
@@ -162,6 +167,20 @@ impl Common {
             key_file: p.get("--key-file").map(PathBuf::from),
             key_env: p.get("--key-env").unwrap_or(KEY_ENV).to_string(),
         })
+    }
+
+    /// The fee mode of the plan: the relay floor, or the storage-inclusive priority fee with `--priority-fee`.
+    pub fn fee_mode(&self) -> FeeMode {
+        if self.priority_fee {
+            FeeMode::Priority
+        } else {
+            FeeMode::Relay
+        }
+    }
+
+    /// The fee options every builder of the command gets.
+    pub fn fee_options(&self) -> FeeOptions {
+        FeeOptions { fee_rate: self.fee_rate, fee_mode: self.fee_mode() }
     }
 
     /// The node, required.
@@ -264,6 +283,26 @@ mod tests {
         // the environment variable
         let c = Common::from(&parse(&v("--key-env KOB_TEST_KEY_UNSET_X --network testnet-10"), &[], &[]).unwrap()).unwrap();
         assert!(c.signer(&[]).unwrap_err().contains("KOB_TEST_KEY_UNSET_X"));
+    }
+
+    #[test]
+    fn the_priority_fee_flag_is_off_by_default_and_takes_no_value() {
+        use kob_protocol::tx::FeeMode;
+        let c = Common::from(&parse(&v("--network testnet-10"), &[], &[]).unwrap()).unwrap();
+        assert!(!c.priority_fee);
+        assert_eq!(c.fee_mode(), FeeMode::Relay);
+        assert_eq!(c.fee_options(), FeeOptions { fee_rate: None, fee_mode: FeeMode::Relay });
+
+        let c = Common::from(&parse(&v("--network testnet-10 --priority-fee"), &[], &[]).unwrap()).unwrap();
+        assert!(c.priority_fee);
+        assert_eq!(c.fee_options(), FeeOptions { fee_rate: None, fee_mode: FeeMode::Priority });
+        // together with a rate: the rate is the one the storage-inclusive mass is charged at
+        let c = Common::from(&parse(&v("--network testnet-10 --fee-rate 150 --priority-fee"), &[], &[]).unwrap()).unwrap();
+        assert_eq!(c.fee_options(), FeeOptions { fee_rate: Some(150), fee_mode: FeeMode::Priority });
+        // a switch: no value, and the rate rules stand
+        assert!(parse(&v("--priority-fee=1"), &[], &[]).unwrap_err().contains("takes no value"));
+        assert!(Common::from(&parse(&v("--network testnet-10 --fee-rate 5 --priority-fee"), &[], &[]).unwrap()).is_err());
+        assert!(COMMON_HELP.contains("--priority-fee"));
     }
 
     #[test]

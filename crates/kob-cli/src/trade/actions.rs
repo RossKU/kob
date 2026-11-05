@@ -584,7 +584,7 @@ pub fn run_replace(args: &[String]) -> i32 {
         } else {
             vec![]
         };
-        let fee = FeeOptions { fee_rate: c.fee_rate, ..Default::default() };
+        let fee = c.fee_options();
         let (built, in_place, more) = build_replace(&live, &rep, value, &funding, &token_utxos, &ms, &signer.pubkey, &fee, None)?;
         notes.extend(more);
         let mut lines = order_lines(&live, &ms);
@@ -700,7 +700,7 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     if let Some(pp) = &env.pair {
         token_utxos.extend(pp.quote_utxos.iter().cloned());
     }
-    let fee = FeeOptions { fee_rate: c.fee_rate, ..Default::default() };
+    let fee = c.fee_options();
     let (built, _, more) = build_replace(live, &rep, value, &env.funding, &token_utxos, ms, &signer.pubkey, &fee, token_carrier)?;
     let mut lines = order_lines(live, ms);
     lines.push(format!("replacement: {} holding {}", rep.template_id().name(), units::kas(value as i128)));
@@ -767,6 +767,7 @@ pub fn run_cancel(args: &[String]) -> i32 {
                 dry_run: true,
                 yes: false,
                 fee_rate: c.fee_rate.unwrap_or(kob_protocol::tx::MIN_FEE_RATE),
+                priority_fee: c.priority_fee,
                 out_dir: None,
                 out: None,
             };
@@ -853,7 +854,7 @@ pub fn run_refund(args: &[String]) -> i32 {
         }
         let ms = markets_of(&c, &live).unwrap_or_default();
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
-        let fee = FeeOptions { fee_rate: c.fee_rate, ..Default::default() };
+        let fee = c.fee_options();
         let holding = live.order.state.custody_amount().unwrap_or(0) > 0 || live.order.state.is_pair();
         let make = |f: Vec<KeyUtxo>| RefundOrder {
             order: live.order.clone(),
@@ -1031,7 +1032,7 @@ pub fn run_take(args: &[String]) -> i32 {
             let usable = usable_token_utxos(m, &signer.pubkey, &mine);
             select_tokens(&usable, amount, m.slots.0.min(MAX_TOKEN_INPUTS), &m.name()).map_err(|e| e.message)?
         };
-        let fee = FeeOptions { fee_rate: c.fee_rate, ..Default::default() };
+        let fee = c.fee_options();
         let make = |f: Vec<KeyUtxo>| Batch {
             lock_time: lock as u64,
             legs: vec![leg.clone()],
@@ -1172,7 +1173,7 @@ pub fn run_send(args: &[String]) -> i32 {
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
         let mut coins = funding.clone();
         coins.sort_by(|a, b| b.utxo.amount.cmp(&a.utxo.amount));
-        let fee = FeeOptions { fee_rate: c.fee_rate, ..Default::default() };
+        let fee = c.fee_options();
         if what.eq_ignore_ascii_case("kas") {
             if p.get("--carrier").is_some() {
                 return Err("--carrier applies to a token send".into());

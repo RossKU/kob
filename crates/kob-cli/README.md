@@ -142,11 +142,17 @@ a P2PK address or a 64-hex key; KAS to any address of the network or a 64-hex ke
   output with its owner, the net effect on the wallet in KAS and each token, the fee, the signatures asked for) before
   anything is signed. `--dry-run` stops there. Without `--yes` a terminal is asked (`yes` to continue); without a
   terminal the command refuses. A transaction that needs another key's signature is never signed.
-* A trading command pays the relay minimum (100 sompi per gram) unless `--fee-rate N` says more. When the node's fee estimate shows
-  contended blocks (`getFeeEstimate`: the first normal bucket, rounded up, at least 10 percent above the relay minimum, the executor's
-  reading in `kob_protocol::fee_estimate`) and no `--fee-rate` is given, one `note:` line on stderr says KOB transactions are ranked by their storage mass, which the fee does not
-  cover, so they may wait; the CLI has no storage-inclusive fee (the web app's "Pay the priority fee"): `--fee-rate N` raises the fee, but it is still
-  charged on the compute and transient mass only. Nothing changes otherwise, and `--json` stdout is untouched. A node without the estimate gives no note.
+* A trading command pays the relay minimum (100 sompi per gram, charged on the compute and transient mass) unless `--fee-rate N` says more.
+  Under contention the block template ranks transactions by fee over their storage mass too, which that fee does not cover, so KOB
+  transactions (their storage mass grows with the carrier) can wait. `--priority-fee` is the web app's "Pay the priority fee": the fee
+  is charged on the storage-inclusive mass (the largest of the compute, transient and storage mass; never below the relay minimum),
+  at `--fee-rate` (default 100). It is higher, so it is opt-in; the plan then says "(priority fee, storage mass included)" and its
+  `--json` has `"fee_mode": "priority"`. Without the flag nothing about the fee changes. `kob order sweep|cancel` and
+  `kob recover --cancel` take `--priority-fee` too. When the node's fee estimate shows contended blocks (`getFeeEstimate`: the first
+  normal bucket, rounded up, at least 10 percent above the relay minimum, the executor's reading in `kob_protocol::fee_estimate`) and
+  neither `--fee-rate` nor `--priority-fee` is given, one `note:` line on stderr says KOB transactions are ranked by their storage
+  mass, which the normal fee does not cover, so they may wait, and points at `--priority-fee` (`--fee-rate N` alone is still charged on
+  the compute and transient mass only). `--json` stdout is untouched. A node without the estimate gives no note.
 * The network is mainnet unless `--testnet` / `--netsuffix=10` / `--network testnet-10` names the other (a deployment build is bound to
   its own). The plan starts with `network: <name>` and the confirmation asks "Sign and submit ... on network: <name>?". The node must
   run the network named (`getBlockDagInfo`; with the public nodes, both of the pair): a signature commits to no network, so a node

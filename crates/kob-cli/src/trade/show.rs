@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use kob_protocol::json::to_hex;
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::TokenState;
-use kob_protocol::tx::{spk_to_string, BuiltTx, SigPlan};
+use kob_protocol::tx::{spk_to_string, BuiltTx, FeeMode, SigPlan};
 use serde_json::{json, Value};
 
 use super::market::show_id;
@@ -50,6 +50,8 @@ pub struct Decoded {
     pub token_net: BTreeMap<[u8; 32], i128>,
     /// Network fee.
     pub fee: u64,
+    /// The fee is the storage-inclusive priority fee (`--priority-fee`), not the relay floor.
+    pub priority_fee: bool,
     /// Inputs the wallet key signs.
     pub signatures: usize,
     /// Signatures of other keys (refused by the signer).
@@ -65,6 +67,7 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
         kas_net: 0,
         token_net: BTreeMap::new(),
         fee: built.fee.fee,
+        priority_fee: built.fee.fee_mode == FeeMode::Priority,
         signatures: built.sign.iter().filter(|s| s.pubkey == *me).count(),
         foreign_signatures: built.sign.iter().filter(|s| s.pubkey != *me).count(),
     };
@@ -176,7 +179,11 @@ pub fn lines(d: &Decoded, units: &Units, txid: &[u8; 32]) -> Vec<String> {
     let mut v = vec![format!("transaction {} (unsigned): {} inputs, {} outputs", to_hex(txid), d.inputs.len(), d.outputs.len())];
     v.extend(d.inputs.iter().map(|l| format!("  {l}")));
     v.extend(d.outputs.iter().map(|l| format!("  {l}")));
-    v.push(format!("network fee: {}", kas(d.fee as i128)));
+    v.push(format!(
+        "network fee: {}{}",
+        kas(d.fee as i128),
+        if d.priority_fee { " (priority fee, storage mass included)" } else { "" }
+    ));
     let mut net = vec![format!("{}{}", if d.kas_net >= 0 { "+" } else { "" }, kas(d.kas_net))];
     for (cov, n) in &d.token_net {
         net.push(format!("{}{}", if *n >= 0 { "+" } else { "" }, tok(units, cov, *n)));
@@ -192,7 +199,7 @@ pub fn lines(d: &Decoded, units: &Units, txid: &[u8; 32]) -> Vec<String> {
 
 /// The decoded transaction as JSON.
 pub fn json_of(d: &Decoded, built: &BuiltTx) -> Value {
-    json!({
+    let mut v = json!({
         "txid": to_hex(&built.tx.id),
         "inputs": d.inputs,
         "outputs": d.outputs,
@@ -202,5 +209,10 @@ pub fn json_of(d: &Decoded, built: &BuiltTx) -> Value {
             "tokens": d.token_net.iter().map(|(c, n)| (to_hex(c), Value::String(n.to_string()))).collect::<serde_json::Map<_, _>>(),
         },
         "signatures": d.signatures,
-    })
+    });
+    // only a priority fee is named: the document of a relay-floor plan is unchanged
+    if d.priority_fee {
+        v["fee_mode"] = json!("priority");
+    }
+    v
 }

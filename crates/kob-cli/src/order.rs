@@ -12,7 +12,7 @@ use kob_protocol::artifacts::{token_template, token_template_by_hash, TemplateId
 use kob_protocol::build::{build, Action, CancelOrder, ForeignStrays, SweepOrder, TokenRef};
 use kob_protocol::json::to_hex;
 use kob_protocol::state::{AnyState, TokenState};
-use kob_protocol::tx::{spk_to_string, FeeOptions, OrderUtxo, TokenUtxo, Utxo, MIN_FEE_RATE};
+use kob_protocol::tx::{spk_to_string, FeeMode, FeeOptions, OrderUtxo, TokenUtxo, Utxo, MIN_FEE_RATE};
 use serde_json::{json, Value};
 
 use crate::common::{
@@ -28,7 +28,7 @@ kob order: the maker's stray sweep in place and the maker's cancel, from an inde
 
 USAGE
   kob order sweep  --view <FILE>... --key <HEX | env:VAR | file:PATH> --node ws://HOST:PORT
-                   [--network NET] [--yes | --dry-run] [--fee-rate N] [--out-dir <DIR>] [--out <report.json>]
+                   [--network NET] [--yes | --dry-run] [--fee-rate N] [--priority-fee] [--out-dir <DIR>] [--out <report.json>]
   kob order cancel --view <FILE>... --key <KEY> --node ws://HOST:PORT [same options]
 
 INPUT
@@ -66,6 +66,8 @@ OUTPUT
                 without a terminal the order is refused (status `refused`, exit 1) and nothing is signed.
   --dry-run     build, sign and engine-validate, write, never submit (excludes --yes)
   --fee-rate    sompi per gram (default 100)
+  --priority-fee  also pay for the storage mass (KIP-9), as the web app's \"Pay the priority fee\": a higher fee, worth it only when blocks are
+                contended (charged at --fee-rate on the storage-inclusive mass)
   --out-dir     write <covenant id>.sweep.json / <covenant id>.cancel.json (signed transaction and submitRequest) here
   --out         write the JSON report here (default: stdout); one line per order goes to stderr
 ";
@@ -98,6 +100,8 @@ pub struct Args {
     pub yes: bool,
     /// Fee rate.
     pub fee_rate: u64,
+    /// The storage-inclusive priority fee instead of the relay floor.
+    pub priority_fee: bool,
     /// Where the signed transactions go.
     pub out_dir: Option<PathBuf>,
     /// Report path.
@@ -115,6 +119,7 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
         dry_run: false,
         yes: false,
         fee_rate: MIN_FEE_RATE,
+        priority_fee: false,
         out_dir: None,
         out: None,
     };
@@ -132,6 +137,7 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
                 let v = val("--fee-rate")?;
                 a.fee_rate = v.parse().map_err(|_| format!("--fee-rate must be a positive integer, got `{v}`"))?;
             }
+            "--priority-fee" => a.priority_fee = true,
             "--out-dir" => a.out_dir = Some(PathBuf::from(val("--out-dir")?)),
             "--out" => a.out = Some(PathBuf::from(val("--out")?)),
             other => return Err(format!("unknown argument `{other}` (see `kob order --help`)")),
@@ -422,7 +428,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
         o.json["left_behind"] = json!(left);
         return Ok(Err(o));
     }
-    let fee = FeeOptions::rate(a.fee_rate);
+    let fee = FeeOptions { fee_rate: Some(a.fee_rate), fee_mode: if a.priority_fee { FeeMode::Priority } else { FeeMode::Relay } };
     let maker = state.maker();
     let plain_ask = matches!(state, AnyState::KobAsk(_) | AnyState::KobAskKron(_));
     let (built, funding) = match a.op {

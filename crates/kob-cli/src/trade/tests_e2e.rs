@@ -716,6 +716,7 @@ fn planned(intent: crate::trade::plan::Intent, pair: bool) -> (AnyState, u64) {
         funding: vec![KeyUtxo { utxo: utxo(1, 1000 * KAS, None), pubkey: pk(0x11) }],
         token_utxos: vec![TokenUtxo { utxo: utxo(2, 2 * KAS, Some(TOKEN)), state: user_token(pk(0x11), 100 * SCALE) }],
         fee_rate: None,
+        fee_mode: Default::default(),
         carrier: None,
         pair: pair.then(|| PairPart {
             quote_utxos: vec![TokenUtxo {

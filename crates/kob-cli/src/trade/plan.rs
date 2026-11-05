@@ -24,7 +24,7 @@ use kob_protocol::payload::recover_orders;
 use kob_protocol::state::{
     AnyState, AskState, BidState, CondAskState, CondBidState, IfdAskState, IfdBidState, PairState, SIDE_ASK, SIDE_BID,
 };
-use kob_protocol::tx::{BuiltTx, FeeOptions, KeyUtxo, TokenUtxo, COVENANT_OUTPUT_MIN, DUST_OUTPUT_MIN};
+use kob_protocol::tx::{BuiltTx, FeeMode, FeeOptions, KeyUtxo, TokenUtxo, COVENANT_OUTPUT_MIN, DUST_OUTPUT_MIN};
 use kob_protocol::Family;
 
 use super::market::TokenMarket;
@@ -256,6 +256,8 @@ pub struct Env {
     pub token_utxos: Vec<TokenUtxo>,
     /// Explicit fee rate (sompi per gram); `None`: the relay floor.
     pub fee_rate: Option<u64>,
+    /// How the fee is sized: the relay floor (default) or the storage-inclusive priority fee (`--priority-fee`).
+    pub fee_mode: FeeMode,
     /// KAS on every covenant UTXO (default 1 KAS).
     pub carrier: Option<u64>,
     /// A pair order's quote token B.
@@ -1176,7 +1178,7 @@ pub(crate) struct CreateResult {
 }
 
 pub(crate) fn fee_options(env: &Env) -> FeeOptions {
-    FeeOptions { fee_rate: env.fee_rate, ..Default::default() }
+    FeeOptions { fee_rate: env.fee_rate, fee_mode: env.fee_mode }
 }
 
 pub(crate) fn carrier_issues(env: &Env, order: &AnyState, token_carrier: i64) -> Vec<Issue> {

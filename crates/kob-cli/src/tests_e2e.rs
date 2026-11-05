@@ -641,6 +641,61 @@ fn a1_view(f: &Fixture, cur: (u8, u32)) -> Value {
 }
 
 #[test]
+fn order_and_recover_take_the_priority_fee_flag() {
+    use kob_protocol::tx::FeeMode;
+    // parsing: off by default, a switch without a value; `kob recover` takes it with --cancel only
+    let o = |extra: &str| {
+        order::parse_args(order::Op::Cancel, &v(&format!("--view a.json --key 00 --node ws://x:1 --network {NET} {extra}")))
+    };
+    assert!(!o("").unwrap().priority_fee);
+    assert!(o("--priority-fee").unwrap().priority_fee);
+    assert!(o("--priority-fee=1").is_err());
+    let r = |extra: &str| recover::parse_args(&v(&format!("--from a.json --node ws://x:1 --network {NET} {extra}")));
+    assert!(!r("--cancel --key 00").unwrap().priority_fee);
+    assert!(r("--cancel --key 00 --priority-fee --fee-rate 150").unwrap().priority_fee);
+    assert!(r("--priority-fee").unwrap_err().contains("belong to --cancel"));
+    assert!(order::USAGE.contains("--priority-fee") && recover::USAGE.contains("--priority-fee"));
+
+    // the fee actually built: a bid's sweep pays its fee from a plain UTXO of the maker
+    let f = fixture();
+    let (url, _node) = mock::start(f.utxos.clone());
+    let dir = tmp("order-priority");
+    let bid_view = view(
+        A2,
+        template(TemplateId::KobBid).hash,
+        any_json(&f.a2),
+        (0x21, 0),
+        f.bid_value,
+        None,
+        vec![tview(P, TOKEN, 0x23, 5, A2, false, true)],
+    );
+    let file = write(&dir, "a2.json", &bid_view);
+    let key = to_hex(&sk(1));
+    let sweep = |extra: &str| {
+        let a = order::parse_args(
+            order::Op::Sweep,
+            &v(&format!(
+                "--view {} --key {key} --node {url} --network {NET} --out-dir {} --dry-run {extra}",
+                file.display(),
+                dir.join("out").display()
+            )),
+        )
+        .unwrap();
+        let (report, ok) = order::execute(&a).unwrap();
+        assert!(ok, "{report}");
+        signed_from(report["orders"][0]["file"].as_str().unwrap())
+    };
+    let relay = sweep("");
+    let prio = sweep("--priority-fee");
+    assert_eq!(relay.fee.fee_mode, FeeMode::Relay);
+    assert_eq!(prio.fee.fee_mode, FeeMode::Priority);
+    // the priority fee is the relay floor or above it, charged on the storage-inclusive mass, at the default rate
+    assert_eq!(prio.fee.min_fee, kob_protocol::tx::priority_fee(&prio.fee.mass, relay.fee.fee_rate));
+    assert!(prio.fee.min_fee >= relay.fee.min_fee && prio.fee.fee >= relay.fee.fee, "{:?} {:?}", prio.fee, relay.fee);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn order_sweep_and_cancel_from_views() {
     let f = fixture();
     let (url, node) = mock::start(f.utxos.clone());

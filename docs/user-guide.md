@@ -319,6 +319,7 @@ exactly the node's relay minimum) and "Dynamic network fee" (pay the rate the no
 minimum). Neither is the "Priority tip" of the ticket, which goes to the matcher. When the node's fee estimate shows contended blocks
 (the normal rate at least 10 percent above the relay minimum), the ticket shows a small notice under the order button (KOB transactions are ranked by their storage mass, which the normal fee does not cover, so they
 may wait), with a link to "Pay the priority fee" in Settings; it only informs, it never changes a fee or a setting, and it is not shown when that switch is on.
+The command-line tool has the first switch as `--priority-fee` (its notice under contention names the flag).
 
 ## 11. Private-key guidance
 

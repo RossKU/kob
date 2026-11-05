@@ -64,8 +64,8 @@ pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &
         eprintln!("error: {e}");
         return 1;
     }
-    // contended blocks and no --fee-rate: one line on stderr (never in the --json document), the rate stays the relay minimum
-    if let Some(n) = c.need_node().ok().and_then(|n| crate::congestion::note(n, c.fee_rate)) {
+    // contended blocks and no --fee-rate / --priority-fee: one line on stderr (never in the --json document), the fee stays the relay minimum
+    if let Some(n) = c.need_node().ok().and_then(|n| crate::congestion::note(n, c.fee_rate, c.priority_fee)) {
         eprintln!("{n}");
     }
     let decoded = show::decode(&r.built, &signer.pubkey, units);

@@ -745,6 +745,7 @@ pub fn env_of(
         funding,
         token_utxos,
         fee_rate: c.fee_rate,
+        fee_mode: c.fee_mode(),
         carrier: None,
         pair,
     };

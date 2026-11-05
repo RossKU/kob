@@ -285,7 +285,7 @@ pub fn run(args: &[String]) -> i32 {
         let m = market::resolve_with(key, &reg, &idx, Some(&open))?;
         let utxos = data::token_utxos(indexer, node, &c.network, &m, &signer.pubkey)?;
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
-        let fee = FeeOptions { fee_rate: c.fee_rate, ..Default::default() };
+        let fee = c.fee_options();
         let links = plan(&m, &signer.pubkey, &utxos, &funding, &fee)?;
         let mut units = Units::new();
         units.insert(m.cov, m.unit());

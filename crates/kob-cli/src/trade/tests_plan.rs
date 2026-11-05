@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::payload::recover_orders;
 use kob_protocol::state::{AnyState, TokenState};
-use kob_protocol::tx::{finalize, pubkey_of, sign_locally, FinalizeOptions, KeyUtxo, TokenUtxo, Utxo};
+use kob_protocol::tx::{finalize, pubkey_of, sign_locally, BuiltTx, FinalizeOptions, KeyUtxo, TokenUtxo, Utxo};
 use kob_protocol::verify::validate_signed;
 use serde_json::Value;
 
@@ -86,6 +86,7 @@ pub(super) fn env(m: &TokenMarket) -> Env {
         funding: vec![key_utxo(1, 1000 * KAS)],
         token_utxos: vec![token_utxo(m, 2, 100 * TOK)],
         fee_rate: None,
+        fee_mode: Default::default(),
         carrier: Some(C as u64),
         pair: None,
     }
@@ -712,4 +713,46 @@ fn a_market_sell_needs_an_acknowledgement_or_a_floor() {
     // a small buy in line with the last fill: a warning
     let p = plan_order(&e, &mk(Side::Buy, None));
     assert!(p.ok && codes(&p).contains(&"MARKET_START_NO_INDEPENDENT_REFERENCE"), "{:?}", p.issues);
+}
+
+#[test]
+fn the_priority_fee_is_the_storage_inclusive_fee_and_the_default_is_untouched() {
+    use kob_protocol::tx::{min_fee, priority_fee, FeeMode, MIN_FEE_RATE};
+    let m = &markets()[0];
+    let intent = || Intent::Limit(limit(Side::Sell, 10 * TOK, 300_000_000));
+    // a 1 KAS carrier: its storage mass (4 x 10^12 / carrier) is above the compute mass, so the priority fee is above the relay floor
+    let base = Env { carrier: Some(KAS as u64), ..env(m) };
+    let relay_tx = valid(&base, intent()).built.unwrap();
+    let relay = relay_tx.fee.clone();
+    assert_eq!(base.fee_mode, FeeMode::Relay);
+    assert_eq!((relay.fee_mode, relay.fee_rate, relay.min_fee), (FeeMode::Relay, MIN_FEE_RATE, min_fee(&relay.mass, MIN_FEE_RATE)));
+    assert!(relay.mass.storage > relay.mass.fee_mass, "{:?}", relay.mass);
+
+    let prio_tx = valid(&Env { fee_mode: FeeMode::Priority, ..base.clone() }, intent()).built.unwrap();
+    let prio = prio_tx.fee.clone();
+    assert_eq!(prio.fee_mode, FeeMode::Priority);
+    assert_eq!(prio.min_fee, priority_fee(&prio.mass, MIN_FEE_RATE));
+    assert!(prio.fee >= prio.min_fee && prio.min_fee > relay.min_fee, "{prio:?} vs {relay:?}");
+    assert!(prio.fee > relay.fee);
+    // the fee mass (the relay floor) is the same transaction's: only the charged mass differs
+    assert_eq!(prio.mass.fee_mass, relay.mass.fee_mass);
+
+    // the plan names a priority fee (text and JSON); a relay-floor plan reads and prints as before
+    {
+        use super::show::{decode, json_of, lines};
+        let u = super::show::Units::new();
+        let (dr, dp) = (decode(&relay_tx, &maker(), &u), decode(&prio_tx, &maker(), &u));
+        let fee_line = |d: &super::show::Decoded, t: &BuiltTx| {
+            lines(d, &u, &t.tx.id).into_iter().find(|l| l.starts_with("network fee: ")).unwrap()
+        };
+        assert!(!fee_line(&dr, &relay_tx).contains("priority"));
+        assert!(fee_line(&dp, &prio_tx).ends_with("(priority fee, storage mass included)"));
+        assert!(json_of(&dr, &relay_tx).get("fee_mode").is_none());
+        assert_eq!(json_of(&dp, &prio_tx)["fee_mode"], "priority");
+    }
+
+    // at an explicit rate the priority fee is charged at that rate
+    let at = valid(&Env { fee_rate: Some(200), fee_mode: FeeMode::Priority, ..base }, intent()).built.unwrap().fee;
+    assert_eq!((at.fee_rate, at.fee_mode), (200, FeeMode::Priority));
+    assert_eq!(at.min_fee, priority_fee(&at.mass, 200));
 }

@@ -46,7 +46,7 @@ USAGE
 ";
 
 /// Options `kob watch` takes from the shared set: it signs nothing and needs no node.
-const REFUSED: &[&str] = &["--yes", "--dry-run", "--key-file", "--key-env", "--fee-rate", "--out-dir", "--node"];
+const REFUSED: &[&str] = &["--yes", "--dry-run", "--key-file", "--key-env", "--fee-rate", "--priority-fee", "--out-dir", "--node"];
 
 fn bail(e: &str, code: i32) -> i32 {
     eprintln!("error: {e}");
