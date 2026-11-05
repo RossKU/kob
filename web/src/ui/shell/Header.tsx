@@ -25,10 +25,14 @@ function Logo() {
   return (
     <svg class="brand-mark" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
       <rect width="512" height="512" rx="96" fill="#0f1d1c" />
-      <rect x="44" y="54" width="424" height="80" rx="40" fill="#d9434b" />
-      <rect x="244" y="156" width="224" height="80" rx="40" fill="#ec8a8e" />
-      <rect x="244" y="276" width="224" height="80" rx="40" fill="#77d0ad" />
-      <rect x="44" y="378" width="424" height="80" rx="40" fill="#2c9e77" />
+      <rect x="44" y="46" width="424" height="43.75" rx="21.875" fill="#d9434b" />
+      <rect x="126" y="99.75" width="342" height="43.75" rx="21.875" fill="#e3646a" />
+      <rect x="208" y="153.5" width="260" height="43.75" rx="21.875" fill="#ec8a8e" />
+      <rect x="290" y="207.25" width="178" height="43.75" rx="21.875" fill="#f4b4b6" />
+      <rect x="290" y="261" width="178" height="43.75" rx="21.875" fill="#a6e3c9" />
+      <rect x="208" y="314.75" width="260" height="43.75" rx="21.875" fill="#77d0ad" />
+      <rect x="126" y="368.5" width="342" height="43.75" rx="21.875" fill="#4bb990" />
+      <rect x="44" y="422.25" width="424" height="43.75" rx="21.875" fill="#2c9e77" />
     </svg>
   );
 }

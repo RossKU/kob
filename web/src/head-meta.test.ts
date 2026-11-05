@@ -55,7 +55,7 @@ describe('index.html head', () => {
 });
 
 describe('the header logo', () => {
-  it("draws the favicon's four bars in its fixed colours (same rects as public/favicon.svg)", () => {
+  it("draws the favicon's eight bars in its fixed colours (same rects as public/favicon.svg)", () => {
     const attrs = (s: string) =>
       [...s.matchAll(/<rect\b([^>]*?)\s*\/>/g)].map((m) => [...m[1]!.matchAll(/(\w+)="([^"]*)"/g)].map((a) => `${a[1]}=${a[2]}`).sort().join(' '));
     const fav = readFileSync(web('public/favicon.svg'), 'utf8');
