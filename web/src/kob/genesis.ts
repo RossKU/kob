@@ -38,11 +38,16 @@ export interface GenesisVerified {
   outputs: number[];
   /** token units the genesis created in holders */
   supply: bigint;
-  /** genesis outputs that carry a mint authority (a `PublicMint` of the public-mint app, a KRON minter) */
+  /** genesis outputs that carry a mint authority (a `PublicMint` of the public-mint app, a KRON minter, a bridge's minter) */
   minterOutputs: number[];
   /** the sum of the genesis `PublicMint` allowances: what anyone could still mint when the genesis was made (0 without one) */
   mintAllowance: bigint;
   seedOutputs: number[];
+  /**
+   * genesis outputs that are companions the program's profile pins by template hash, with their role (`bridge-minter`: a federated bridge's minter, kUSDT's
+   * BridgeMint, which mints against deposits on another chain and is also among `minterOutputs`)
+   */
+  companionOutputs: { index: number; role: string }[];
   /** the build of the public-mint app whose actors the genesis holds */
   issuer: string | null;
   /** outputs whose redeem script was rebuilt (an unspent TokenSeed) */
@@ -67,6 +72,13 @@ interface RawGenesis {
 }
 
 const ints = (v: unknown): number[] => (Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)) : []);
+const companions = (v: unknown): { index: number; role: string }[] =>
+  Array.isArray(v)
+    ? v.flatMap((c: unknown) => {
+        const o = c && typeof c === 'object' ? (c as Record<string, unknown>) : {};
+        return Number.isInteger(o.index) && typeof o.role === 'string' ? [{ index: o.index as number, role: o.role }] : [];
+      })
+    : [];
 const big = (v: unknown): bigint => {
   try {
     return typeof v === 'string' && /^-?\d+$/.test(v) ? BigInt(v) : 0n;
@@ -103,6 +115,7 @@ export function verifyGenesis(kob: KobWasm, req: GenesisRequest): GenesisVerdict
         minterOutputs: ints(out.minterOutputs),
         mintAllowance: big(out.mintAllowance),
         seedOutputs: ints(out.seedOutputs),
+        companionOutputs: companions(out.companionOutputs),
         issuer: typeof out.issuer === 'string' ? out.issuer : null,
         rebuilt: ints(out.rebuilt),
       };

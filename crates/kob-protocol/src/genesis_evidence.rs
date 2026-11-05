@@ -407,8 +407,10 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
         daa_score: g.accepting_block_daa_score,
         outputs: group.iter().map(|(n, _)| *n).collect(),
         supply: report.supply,
-        mint_allowance: (program.is_some_and(crate::public_mint::is_app_holder) && !report.minter_outputs.is_empty())
-            .then_some(report.mint_allowance),
+        // the allowance of the genesis PublicMint outputs; a bridge's minter has none KOB reads (it is no public mint)
+        mint_allowance: (program.is_some_and(crate::public_mint::is_app_holder)
+            && report.minter_outputs.iter().any(|m| !report.is_bridge_minter(*m)))
+        .then_some(report.mint_allowance),
         issuer: report.issuer,
         minter_outputs: report.minter_outputs,
         live_minters,

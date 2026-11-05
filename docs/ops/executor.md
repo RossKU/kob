@@ -1665,6 +1665,10 @@ One item (the leading fields are those of the custody / stray token UTXO views, 
   `value` are decimal strings, `state_hex` is the state span (112 bytes KCC-20, 46 bytes KRON).
 * `role`: `owned` (any holder that is not a KOB order), `custody` or `stray` (owned by an order id, as in `custody` /
   `strays` of `GET /v1/orders/{id}`).
+* A burned output is not listed (never stored): a KCC-20 state of owner scheme 3 at the burn owner the transaction's kUSDT
+  redemption payload names for that output (`kob_protocol::kusdt::is_burned`; its owner is the hash of a script that starts
+  with `OP_RETURN`, so the tokens can never move). Decided when the transaction is extracted: an output an older build wrote to
+  the record log stays `owned` (a replay reads the log, not the transaction).
 
 **What is indexed, and why it can be trusted.** A token output is a P2SH output: its script hash commits to the whole state, so
 the state is not readable from the output. It is read from the transaction that *created* it (the KCC-20 transfer leader's

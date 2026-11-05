@@ -41,6 +41,11 @@ export type GenesisCheck =
       /** the genesis holds a KRON minter (`is_minter = 1`): it mints any amount, so there is no allowance to state (`mintAllowance` is null) */
       mintUnbounded?: boolean;
       /**
+       * The token is issued by a federated bridge: the genesis holds the minter KOB pins as a `bridge-minter` companion (kUSDT's BridgeMint, which mints
+       * against deposits locked on another chain when its signers sign). Not a public mint: it adds nothing to `mintAllowance`.
+       */
+      bridge?: boolean;
+      /**
        * Every genesis public minter is still unspent according to the source, so no mint has used it: the allowance is all still there. False/null:
        * a mint may have used some (how much is left is not checked).
        */
@@ -304,7 +309,9 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
   }
 
   function verified(v: Extract<GenesisVerdict, { status: 'verified' }>, source: GenesisSource, live: (boolean | null)[], outputs: { index: number }[]): GenesisCheck {
-    const minters = v.minterOutputs;
+    // a bridge's minter is a mint authority, but not a public mint with an allowance: it is named as the token's issuance instead
+    const bridgeAt = new Set(v.companionOutputs.filter((c) => c.role === 'bridge-minter').map((c) => c.index));
+    const minters = v.minterOutputs.filter((m) => !bridgeAt.has(m));
     const kron = familyOfProgram(v.program as TokenProgram) === 'kron';
     const liveOf = (index: number) => live[outputs.findIndex((x) => x.index === index)] ?? null;
     return {
@@ -313,6 +320,7 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
       mintAllowance: minters.length > 0 && !kron ? v.mintAllowance : null,
       ...(minters.length > 0 && kron ? { mintUnbounded: true } : {}),
       mintersUnspent: minters.length === 0 ? null : minters.every((m) => liveOf(m) === true) ? true : minters.some((m) => liveOf(m) === false) ? false : null,
+      ...(bridgeAt.size > 0 ? { bridge: true } : {}),
     };
   }
 

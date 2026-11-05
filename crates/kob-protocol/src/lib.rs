@@ -23,6 +23,7 @@
 //! | [`payload`] | `KOB1` versioned TLV payload and trustless order recovery |
 //! | [`payment`] | plain KAS payments and sweeps from P2PK coins (`kob send KAS`, `kobd withdraw`) |
 //! | [`public_mint`] | the `PublicMint` / `TokenSeed` actors of the published `KCC20PublicMint` app (genesis check of its tokens) |
+//! | [`kusdt`] | kUSDT, a federated-bridge token of that app: its pinned `BridgeMint` companion, burn owners and redemption payloads |
 //! | [`verify`] | validation through the rusty-kaspa v2.1.0 script engine (feature `engine`) |
 //! | [`vectors`] | golden-vector file format |
 //! | [`redact`] | node and indexer URLs as they may be logged or shown (no credentials, no API keys) |
@@ -46,6 +47,7 @@ pub mod kcc1;
 pub mod kcc2;
 pub mod kcc20;
 pub mod kcc23;
+pub mod kusdt;
 pub mod payload;
 pub mod payment;
 pub mod profile;

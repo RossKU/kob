@@ -10,6 +10,7 @@ import { expect, test } from '../fixtures';
 import { listExkcc } from '../helpers/env';
 import { horizontalOverflow } from '../helpers/i18n';
 import { mockExplorer, mockKascov, programHash } from '../helpers/kascov';
+import { kusdtRecording } from '../../src/testing/kusdt-chain';
 
 test.use({ autoOpen: false });
 
@@ -130,6 +131,37 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('high-risk-reasons')).toContainText('not an instance of its token program');
       await expect(header.getByTestId('genesis-failed-warning')).toContainText('not an instance of its token program');
       await expect(header.getByTestId('token-fact-genesis_verified')).toHaveCount(0);
+    });
+
+    test('a federated-bridge token (kUSDT): the Issuance row names the bridge, the custody note is folded, no public mint is counted', async ({ appPage: page }) => {
+      const k = kusdtRecording();
+      const entry = { covenant_id: k.covenantId, claimed_ticker: k.ticker, claimed_name: k.ticker, program: PM, status: 'unvalidated' };
+      await open(page, `/market/${k.covenantId}`, { tokens: [entry], files: { [k.covenantId]: k.kascov }, txs: { [k.genesisTxid]: k.explorerTx } });
+      const header = page.getByTestId('token-header');
+      await expect(await status(page, 'genesis_verified')).toContainText('Genesis verified');
+      await expect(page.getByTestId('token-program')).toContainText('checked from its genesis');
+      // the issuance, from the genesis check (the pinned BridgeMint), with where its description comes from
+      const issuance = page.getByTestId('token-issuance');
+      await expect(issuance).toContainText('Federated bridge (BridgeMint)');
+      await expect(page.getByTestId('token-issuance-source')).toHaveText('per issuer docs');
+      // the custody note: folded until tapped
+      const note = page.getByTestId('token-bridge-note');
+      await expect(note).toBeVisible();
+      await expect(note.getByTestId('token-bridge-note-text')).toBeHidden();
+      await note.getByRole('button', { name: 'Bridge custody' }).click();
+      await expect(note.getByTestId('token-bridge-note-text')).toContainText("held by the bridge's signers");
+      await expect(note.getByTestId('token-bridge-note-text')).toContainText('can be lost');
+      // a bridge's minter is no public mint: no allowance line, no High risk
+      await expect(page.getByTestId('status-fact-mint_allowance')).toHaveCount(0);
+      await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
+      expect(await horizontalOverflow(page)).toBe(0);
+    });
+
+    test('a token whose genesis holds no bridge has no Issuance row and no custody note', async ({ appPage: page }) => {
+      await open(page, `/market/${KQA.covenantId}`, { tokens: [listed(KQA)], files: files(KQA) });
+      await expect(await status(page, 'genesis_verified')).toContainText('Genesis verified');
+      await expect(page.getByTestId('token-issuance')).toHaveCount(0);
+      await expect(page.getByTestId('token-bridge-note')).toHaveCount(0);
     });
 
     test('the history is not available: the token stays "Genesis not verified" with the reason (kascov\'s chip stays as it was, with the reason in its tooltip)', async ({ appPage: page }) => {

@@ -321,6 +321,12 @@ export default {
   'market.powers.title': 'The issuer has special powers over this token',
   'market.powers.warning': "This token's program can freeze or seize balances. Escrowed orders can fail or be lost at the issuer's discretion.",
   'market.token.powers': 'Program powers',
+  'market.token.issuance': 'Issuance',
+  'market.issuance.bridge': 'Federated bridge (BridgeMint)',
+  'market.issuance.perIssuer': 'per issuer docs',
+  'market.bridge.title': 'Bridge custody',
+  'market.bridge.text':
+    "This token is minted by a bridge against USDT locked on Ethereum and BNB Chain. That backing is held by the bridge's signers, not by this token or by KOB: if they misbehave or lose their keys, the backing, and with it the token's value, can be lost. KOB does not check the bridge or its backing.",
   'market.power.mint-authority': 'mint authority',
   'market.power.public-mint': 'public mint',
   'market.power.burn': 'burn',

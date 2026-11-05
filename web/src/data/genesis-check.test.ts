@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { createGenesisChecker, EXPLORER_BASE, lastPush, parseExplorerGenesis, parseKascovGenesis, revealFromSpend, type GenesisCheck, type GenesisChecker } from './genesis-check';
 import { verifyGenesis, type GenesisRequest } from '../kob/genesis';
 import { loadKobNode } from '../kob/wasm.node';
+import { kusdtRecording } from '../testing/kusdt-chain';
 
 interface Case {
   name: string;
@@ -136,6 +137,41 @@ describe('verifying recorded tokens', () => {
       const r = verifyGenesis(kob, v.request);
       expect(r.status, v.name).toBe(v.expect.status);
     }
+  });
+});
+
+describe('a federated-bridge token (kUSDT, testnet-10: its BridgeMint pinned by hash)', () => {
+  const k = kusdtRecording();
+  const net = (): Net => {
+    const urls: string[] = [];
+    const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+    const f = (async (input: string) => {
+      const u = String(input);
+      urls.push(u);
+      if (u === `${BASE}/testnet-10/c/${k.covenantId}.json`) return json(k.kascov);
+      if (u.startsWith(`${EXPLORER_BASE['testnet-10']}/transactions/${k.genesisTxid}?`)) return json(k.explorerTx);
+      throw new Error(`a test must not reach ${u}`);
+    }) as unknown as typeof fetch;
+    return { urls, fetch: f };
+  };
+
+  it('verifies from the chain bytes, says the issuance is a bridge and counts no public mint for it', async () => {
+    const n = net();
+    const r = await checkerFor(n).check('testnet-10', k.covenantId, { kascovBase: BASE });
+    // the TokenSeed nobody revealed is rebuilt from the creator's key, which only the explorer's transaction names
+    expect(r).toMatchObject({ status: 'verified', source: 'explorer', program: 'KCC20PublicMint', supply: 0n, bridge: true, mintAllowance: null, mintersUnspent: null });
+    expect(n.urls).toHaveLength(2);
+  });
+
+  it('the verdict lists the BridgeMint as a mint authority and as the bridge-minter companion; another verdict is no bridge', async () => {
+    const sent: GenesisRequest[] = [];
+    await checkerFor(net(), { verify: (r) => (sent.push(r), verifyGenesis(kob, r)) }).check('testnet-10', k.covenantId, { kascovBase: BASE });
+    const v = verifyGenesis(kob, sent.at(-1)!);
+    expect(v).toMatchObject({ status: 'verified', minterOutputs: [0], seedOutputs: [1], companionOutputs: [{ index: 0, role: 'bridge-minter' }], mintAllowance: 0n });
+    // a public mint beside it (as a verdict could say) is still counted as one; a token without the companion is no bridge
+    const both = (r: GenesisRequest) => ({ ...verifyGenesis(kob, r), minterOutputs: [0, 1], mintAllowance: 5n }) as ReturnType<typeof verifyGenesis>;
+    expect(await checkerFor(net(), { verify: both }).check('testnet-10', k.covenantId, { kascovBase: BASE })).toMatchObject({ bridge: true, mintAllowance: 5n });
+    expect(await run(checkerFor(recorded(caseOf('kqa-publicmint-seed'))), caseOf('kqa-publicmint-seed'))).not.toHaveProperty('bridge');
   });
 });
 

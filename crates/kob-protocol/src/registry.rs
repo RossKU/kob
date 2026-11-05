@@ -329,7 +329,8 @@ pub struct GenesisReport {
     /// Total token amount the genesis created (sum of the genesis holders' amounts).
     pub supply: i64,
     /// Genesis outputs that carry a mint authority, by output index: KRON outputs with `is_minter != 0`, and the
-    /// `PublicMint` outputs of a token of the published `KCC20PublicMint` app ([`crate::public_mint`]). A KRON transaction
+    /// `PublicMint` outputs of a token of the published `KCC20PublicMint` app ([`crate::public_mint`]), and a federated bridge's
+    /// minter (a `bridge-minter` companion, also in `companion_outputs`; it adds nothing to `mint_allowance`). A KRON transaction
     /// can create a minter output only when it spends a minter (every non-minter token input refuses minter outputs), and
     /// only a `PublicMint` creates a `PublicMint`, so an empty list proves the token can never have a live minter. KaspaCom's
     /// KCC-20 program keeps its minter lanes behind the extension commitment, which this check cannot see: always empty
@@ -343,7 +344,8 @@ pub struct GenesisReport {
     #[serde(default)]
     pub seed_outputs: Vec<u32>,
     /// Genesis outputs that are opaque companions the program's profile declares (a launchpad's curve, pool or vault bound
-    /// to the token's covenant id; `genesis.companions` of `data/programs.json`): no amount, no mint authority.
+    /// to the token's covenant id; `genesis.companions` of `data/programs.json`): no amount, and no mint authority except a
+    /// `bridge-minter`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub companion_outputs: Vec<CompanionOutput>,
     /// The upstream build of the published public-mint app whose `PublicMint` / `TokenSeed` actors the genesis holds
@@ -353,12 +355,19 @@ pub struct GenesisReport {
     pub issuer: Option<String>,
 }
 
+impl GenesisReport {
+    /// True when output `index` is a federated bridge's minter (a `bridge-minter` companion).
+    pub fn is_bridge_minter(&self, index: u32) -> bool {
+        self.companion_outputs.iter().any(|c| c.index == index && c.role == crate::profile::CompanionRole::BridgeMinter.as_str())
+    }
+}
+
 /// An opaque companion output of a genesis group (see [`GenesisReport::companion_outputs`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompanionOutput {
     /// Output index in the genesis transaction.
     pub index: u32,
-    /// The role the profile declares (`curve`, `pool`, `vault`, `seed`).
+    /// The role the profile declares (`curve`, `pool`, `vault`, `seed`, `bridge-minter`).
     pub role: String,
 }
 
@@ -1244,6 +1253,29 @@ pub fn verify_genesis_with(
                     c
                 }
                 crate::profile::CompanionMatch::Opaque(role) => {
+                    if role == crate::profile::CompanionRole::BridgeMinter {
+                        // a federated bridge's minter (kUSDT's BridgeMint): a mint authority without an allowance KOB reads; what
+                        // it mints carries its extension commitment, which must be the token's one class
+                        let e = profile
+                            .genesis
+                            .companions
+                            .iter()
+                            .filter(|r| r.role == role)
+                            .find_map(|r| r.opaque_state(redeem))
+                            .and_then(crate::kusdt::bridge_mint_extension)
+                            .ok_or_else(|| {
+                                GenesisError::BadState(o.index, "a BridgeMint state without its extension commitment".into())
+                            })?;
+                        let want = *ext.get_or_insert(e);
+                        if e != want {
+                            return Err(GenesisError::ExtensionCommitment(
+                                o.index,
+                                crate::json::to_hex(&e),
+                                crate::json::to_hex(&want),
+                            ));
+                        }
+                        minter_outputs.push(o.index);
+                    }
                     companion_outputs.push(CompanionOutput { index: o.index, role: role.as_str().to_string() });
                     continue;
                 }

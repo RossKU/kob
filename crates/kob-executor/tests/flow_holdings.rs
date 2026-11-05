@@ -386,3 +386,70 @@ async fn the_outputs_of_a_token_genesis_are_the_owners_holdings_from_the_first_b
     c.hs.sync().await;
     assert!(list(&c, &HoldingFilter { owner: None, token: Some(cov), include_spent: true }).is_empty());
 }
+
+/// TAKER sends 300 of the KCC-20 test token to the kUSDT burn owner of `(chain 02, address)` (owner scheme 3, `Blake2b` of an
+/// `OP_RETURN` script): the real `SendTokens` builder, the recipient re-targeted before signing (as `World::stray`), the
+/// transaction carrying `payload` (a redemption payload names its burn outputs). Returns the transaction and the burn's output.
+async fn send_to_burn(c: &Ctx, payload: impl Fn(u8) -> Vec<u8>) -> (SignedTx, usize) {
+    let address = [0x6d; 20];
+    let tok = c.w.token(TAKER, 1_000);
+    let req = SendTokens {
+        token: TokenRef { covenant_id: TOKEN_COV, program: T3 },
+        tokens: vec![tok],
+        recipients: vec![TokenRecipient { pubkey: pk(30), amount: 300, carrier: CARRIER }],
+        token_change: Some(pk(TAKER)),
+        token_change_carrier: CARRIER,
+        funding: vec![c.w.coin(TAKER, 100)],
+        records: vec![],
+        change: None,
+        fee: FeeOptions::default(),
+    };
+    let mut built = build(&Action::SendTokens(req)).unwrap();
+    let tpl = token_template(T3);
+    let from = Kcc20State::p2pk(300, pk(30), EXT);
+    let to = Kcc20State {
+        owner_scheme: kob_protocol::kcc2::P2SH,
+        ..Kcc20State::p2pk(300, kob_protocol::kusdt::burn_owner(2, &address), EXT)
+    };
+    let from_spk = spk_to_string(&TokenState::Kcc20(from.clone()).spk_with(tpl));
+    let at = built.tx.outputs.iter().position(|o| o.script_public_key == from_spk).expect("recipient output");
+    built.tx.outputs[at].script_public_key = spk_to_string(&TokenState::Kcc20(to.clone()).spk_with(tpl));
+    // the payload is paid for by mass: the fee comes out of the burn's carrier
+    built.tx.outputs[at].value -= 5_000_000;
+    for p in built.plans.iter_mut() {
+        if let SigPlan::TokenLeader { next_states, .. } = p {
+            next_states.iter_mut().filter(|s| **s == from).for_each(|s| *s = to.clone());
+        }
+    }
+    built.tx.payload = payload(at as u8);
+    let tx = c.w.resign(built, true);
+    c.push(&[&tx]).await;
+    (tx, at)
+}
+
+/// kUSDT burns (`contracts/third-party/kusdt/UPSTREAM.md`): an output whose proven state is at the burn owner the transaction's
+/// redemption payload names for it can never move, so it is no holding; the change of the same transfer is. Without that payload
+/// (or with one naming another output or address) the same output is an ordinary holding of owner kind 3: a script hash alone
+/// proves nothing.
+#[tokio::test]
+async fn a_kusdt_burn_named_by_its_redemption_payload_is_not_a_holding() {
+    let redemption = |out: u8, address: [u8; 20]| [b"KUSDT\x01\x01".as_slice(), &[out, 0x02], &address].concat();
+    let by_token = HoldingFilter { owner: None, token: Some(Hash32(TOKEN_COV)), include_spent: false };
+    let c = Ctx::new();
+    let (_, _) = send_to_burn(&c, |at| redemption(at, [0x6d; 20])).await;
+    let held: Vec<(String, i64)> = list(&c, &by_token).into_iter().map(|v| (v.amount, v.owner_kind)).collect();
+    assert_eq!(held, [("700".to_string(), 0)], "only the change is a holding");
+    for payload in [None, Some(1u8), Some(2)] {
+        let c = Ctx::new();
+        let (_, at) = send_to_burn(&c, |at| match payload {
+            None => vec![],
+            // another output's index, or the right output with another address
+            Some(1) => redemption(at + 1, [0x6d; 20]),
+            _ => redemption(at, [0x6e; 20]),
+        })
+        .await;
+        let mut held: Vec<(String, i64)> = list(&c, &by_token).into_iter().map(|v| (v.amount, v.owner_kind)).collect();
+        held.sort();
+        assert_eq!(held, [("300".to_string(), 3), ("700".to_string(), 0)], "{payload:?} (burn at output {at})");
+    }
+}

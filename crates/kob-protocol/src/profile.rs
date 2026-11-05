@@ -187,6 +187,10 @@ pub enum CompanionRole {
     Pool,
     /// A vault / escrow of the launchpad.
     Vault,
+    /// A federated bridge's minter (kUSDT's `BridgeMint`, [`crate::kusdt`]): mints against deposits its signers attest on another
+    /// chain. Opaque (pinned by its template hash, KOB does not review it), but a mint authority: the genesis check lists it among
+    /// the minters, with no allowance, and holds the extension commitment of its mints to the token's one class.
+    BridgeMinter,
 }
 
 impl CompanionRole {
@@ -197,6 +201,7 @@ impl CompanionRole {
             CompanionRole::Curve => "curve",
             CompanionRole::Pool => "pool",
             CompanionRole::Vault => "vault",
+            CompanionRole::BridgeMinter => "bridge-minter",
         }
     }
 }
@@ -208,7 +213,8 @@ impl CompanionRole {
 ///
 /// Either `decoder` (a companion whose state KOB reads: the code in [`crate::public_mint`]) or an opaque program given by
 /// `template_hash` and its cut (`prefix_len`, `state_len`, `suffix_len`): an instance is recognised by the template hash of
-/// its cut, carries no token amount and no mint authority (the reviewer confirms both).
+/// its cut, carries no token amount and no mint authority (the reviewer confirms both), except a `bridge-minter`, a mint authority
+/// whose extension commitment the genesis check reads ([`CompanionRole::BridgeMinter`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompanionRule {
@@ -235,6 +241,12 @@ impl CompanionRule {
         };
         redeem.len() == l.prefix_len + l.state_len + l.suffix_len
             && silverscript_abi::template_hash(&redeem[..l.prefix_len], &redeem[l.prefix_len + l.state_len..]) == h
+    }
+
+    /// The state span of `redeem` when it is an instance of this opaque companion.
+    pub fn opaque_state<'a>(&self, redeem: &'a [u8]) -> Option<&'a [u8]> {
+        let l = self.layout.filter(|_| self.matches_opaque(redeem))?;
+        Some(&redeem[l.prefix_len..l.prefix_len + l.state_len])
     }
 }
 
@@ -606,6 +618,12 @@ impl ProgramProfile {
                     }
                     if comp.role == CompanionRole::Minter {
                         return e("a minter companion needs a decoder (its allowance bounds the supply)".into());
+                    }
+                    if comp.role == CompanionRole::BridgeMinter && l.state_len != crate::kusdt::BRIDGE_MINT_STATE_LEN {
+                        return e(format!(
+                            "a bridge-minter companion is kUSDT's BridgeMint, whose state span is {} bytes",
+                            crate::kusdt::BRIDGE_MINT_STATE_LEN
+                        ));
                     }
                 }
                 _ => return e("a companion is either `decoder` or `template_hash` + `layout`".into()),
@@ -1391,6 +1409,14 @@ mod tests {
             note: None,
         }))
         .contains("needs a decoder"));
+        assert!(bad(&|p| p.genesis.companions.push(CompanionRule {
+            role: CompanionRole::BridgeMinter,
+            decoder: None,
+            template_hash: Some("00".repeat(32)),
+            layout: Some(Layout { prefix_len: 34, state_len: 112, suffix_len: 1 }),
+            note: None,
+        }))
+        .contains("kUSDT's BridgeMint"));
         assert!(bad(&|p| p.genesis.companions.push(CompanionRule {
             role: CompanionRole::Seed,
             decoder: Some("kcc20-public-mint/PublicMint".into()),

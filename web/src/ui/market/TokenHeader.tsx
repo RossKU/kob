@@ -192,9 +192,24 @@ function TokenStatusDetails(props: { row: TokenRow; services: Pick<Services, 're
   );
 }
 
-/** Token facts (bottom of the page): covenant id, program (what it runs and how that was established), decimals, price scale, tick, open orders; a registry token's template checks are in "Status and checks". */
+/**
+ * The custody note of a token its genesis check found issued by a federated bridge (kUSDT's BridgeMint, pinned by its hash): the backing is held by the
+ * bridge's signers on another chain, and nothing here can check it. Folded by default (founder 2026-11-05: it would fill the page), like "Status and checks".
+ */
+function BridgeCustodyNote() {
+  return (
+    <Section title={t('market.bridge.title')} collapsible defaultOpen={false} data-testid="token-bridge-note">
+      <p class="small" style="margin:0" data-testid="token-bridge-note-text">{t('market.bridge.text')}</p>
+    </Section>
+  );
+}
+
+/** Token facts (bottom of the page): covenant id, program (what it runs and how that was established), issuance by a bridge, decimals, price scale, tick, open orders; a registry token's template checks are in "Status and checks". */
 export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'>; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null; /** the row with KOB's own genesis check applied (a token page): what the status section is printed from */ checked?: TokenRow }) {
   const r = props.row;
+  const g = (props.checked ?? r).genesis;
+  // from the genesis check only (the pinned BridgeMint in the token's genesis group), never from a name or a list
+  const bridge = g?.status === 'verified' && g.bridge === true;
   return (
     <div class="mkt-details" data-testid="token-details">
       <Section title={t('market.token.info')} class="mkt-card">
@@ -203,6 +218,15 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
           items={[
             { label: t('market.token.covenantId'), value: <CopyText value={r.covenantId} short={false} data-testid="token-covenant-id" /> },
             { label: t('market.program.label'), value: <span data-testid="token-program">{programFactText(props.checked ?? r)}</span> },
+            {
+              label: t('market.token.issuance'),
+              value: (
+                <span data-testid="token-issuance">
+                  {t('market.issuance.bridge')} <span class="small muted" data-testid="token-issuance-source">{t('market.issuance.perIssuer')}</span>
+                </span>
+              ),
+              show: bridge,
+            },
             { label: t('market.token.decimals'), value: r.decimals ?? '-' },
             {
               label: t('market.token.scale'),
@@ -226,6 +250,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
           ]}
         />
       </Section>
+      {bridge ? <BridgeCustodyNote /> : null}
       <TokenStatusDetails row={props.checked ?? r} services={props.services} note={props.note} />
       <LogoSection row={r} />
     </div>

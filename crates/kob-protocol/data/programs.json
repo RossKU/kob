@@ -129,7 +129,8 @@
         "minters": "genesis-only",
         "companions": [
           { "role": "minter", "decoder": "kcc20-public-mint/PublicMint", "note": "the app's PublicMint: its remaining allowance bounds the supply (supply + mint_allowance)" },
-          { "role": "seed", "decoder": "kcc20-public-mint/TokenSeed", "note": "the app's TokenSeed: zero-amount holder factory" }
+          { "role": "seed", "decoder": "kcc20-public-mint/TokenSeed", "note": "the app's TokenSeed: zero-amount holder factory" },
+          { "role": "bridge-minter", "template_hash": "15e5532d4115550df60b7f9b1af2a0c996463cc4ba243bcdf9c478174fb6da40", "layout": { "prefix_len": 34, "state_len": 173, "suffix_len": 4151 }, "note": "kUSDT's BridgeMint (contracts/third-party/kusdt/UPSTREAM.md): a federated bridge's minter, 3 of 5 signers mint against USDT locked on Ethereum / BNB Chain; pinned by hash, not reviewed; its gen__kcc20_template is this program's" }
         ]
       },
       "review": { "status": "reviewed", "basis": "internal review (maintainer decision 2026-10-13): order suites on its holders, the genesis suite (a Kasseal launch included), the executor flow test" }

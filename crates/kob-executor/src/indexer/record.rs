@@ -19,7 +19,8 @@
 //!   creating input reveals (a transfer leader's `next_states`, the columns of a KRON token input, the `recipient_state`
 //!   of a public-mint app's `mint` / `create`) and the output's script public key proves: a *holding* (`HeldOut`),
 //!   whoever owns it; an input that spends a tracked holding is relevant too (it marks the holding spent). Outputs of a
-//!   program this build does not pin, or of a look-alike, prove nothing and are not kept,
+//!   program this build does not pin, or of a look-alike, prove nothing and are not kept; nor are burned outputs (a state
+//!   at a burn owner the transaction's kUSDT redemption payload names, `kob_protocol::kusdt::is_burned`: it can never move),
 //! * the transaction is a KCC-23 candidate preparation or a verified genesis of one (`super::kcc23`): its record carries a
 //!   declaration section (the transaction's id-relevant fields), and nothing else unless it is relevant to KOB too.
 
@@ -808,6 +809,9 @@ impl Extractor<'_> {
         let mut leaders: HashMap<u32, Option<Leader>> = HashMap::new();
         let mut genesis: Option<Vec<Leader>> = None;
         let mut used: HashSet<(u32, usize)> = HashSet::new();
+        // the burns a kUSDT redemption payload names: an output proven to hold such a state is burned (its owner is the hash of a
+        // script that starts with OP_RETURN), not a holding
+        let burns = kob_protocol::kusdt::redemption_entries(&tx.payload.0).unwrap_or_default();
         for (j, o) in tx.outputs.iter().enumerate() {
             let Some(c) = &o.covenant else { continue };
             let token = c.covenant_id;
@@ -837,6 +841,9 @@ impl Extractor<'_> {
                     }
                     // the state is proven: the P2SH it produces is this output's script public key
                     used.insert((c.authorizing_input, k));
+                    if kob_protocol::kusdt::is_burned(&burns, j as u32, s) {
+                        break 'found;
+                    }
                     let owner = Hash32(s.owner());
                     let order_owned = s.is_covenant_owned()
                         && if order_gate {
