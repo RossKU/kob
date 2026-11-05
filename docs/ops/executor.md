@@ -31,9 +31,11 @@ be measured during the TN10 soak, **[U]** unknown.
 
 ## Quick start (operators)
 
-Download the release archive of your network and platform, check its hash, run a local rusty-kaspa node with
-`--utxoindex --rpclisten-json=default`, then start `kobd` without arguments (a double click on Windows). The
-step-by-step page is `docs/ops/executor-quickstart.md`.
+Build `kobd` of your network from source (`cargo build --release --locked -p kob-executor --features deploy-tn10`, or
+`deploy-mainnet`) or download a release archive and check its hash, put it in a folder of its own and start it without
+arguments (a double click on Windows): the setup chooses the node (public nodes through the Kaspa resolvers by default, or a
+local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the roles. The commands of a source build are in the
+README, *Run `kobd` on testnet-10 (from source)*; the step-by-step page is `docs/ops/executor-quickstart.md`.
 
 * **Without arguments** the binary looks for `kob-executor.toml` in its own directory. With one, it runs the file's
   `[launch]` role exactly as `kobd <role> --config kob-executor.toml [--key-file ...] [--pause-file ...]

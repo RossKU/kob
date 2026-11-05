@@ -42,7 +42,8 @@ named Cloudflare tunnel: the web app, a read-only relay of its indexer at `https
 
 ## 1. The indexer
 
-Download and check the binary of the network (testnet-10 for now): `docs/ops/executor-quickstart.md`, section 1.
+Build the binary of the network from source, or download and check a release archive (testnet-10 for now):
+`docs/ops/executor-quickstart.md`, section 1 (the README, *Run `kobd` on testnet-10 (from source)*, has the commands).
 
 **Node.** Either your own rusty-kaspa node on the same machine (recommended for a public server: faster, and nobody between
 you and the chain; `docs/ops/executor-quickstart.md`, section 2), or the public nodes the Kaspa resolvers name
