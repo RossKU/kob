@@ -129,7 +129,7 @@ fn streamed_candles_equal_the_candles_of_every_trade() {
                 amount: r.get(5)?,
                 price: r.get(6)?,
                 scale: r.get(7)?,
-                genesis_daa: r.get(8)?,
+                since_daa: r.get(8)?,
             })
         })
         .unwrap()

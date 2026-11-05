@@ -6,7 +6,8 @@
 //! ONE transaction on ONE token. Its `amount` (token base units moved from sellers to buyers) is the sum of the ask-side fills'
 //! amounts, and its `quote` the same fills' `quoteOf(amount, price, scale)` (rounded down, sompi). A transaction without
 //! ask-side fills (a wallet taking a resting bid directly, e.g. swap-and-pay) is measured on its bid side. The **resting** side
-//! is the side whose orders are older (smaller `genesis_daa`); it sets the trade price (its volume-weighted price) and the other
+//! is the side whose orders are older (smaller `since_daa`: the DAA of the order's placement, or of its latest in-place amend before
+//! the fill, since an amend replaces the terms and restarts the order's age, `docs/spec/matcher.md` 1.1); it sets the trade price (its volume-weighted price) and the other
 //! side is the aggressor (`side`: `buy` when the aggressor bought, i.e. asks were resting). With one side only, that side is
 //! resting and the aggressor is the direct taker.
 //!
@@ -43,7 +44,8 @@ pub struct FillRow {
     pub price: i64,
     /// Base units per whole token of the filled order.
     pub scale: i64,
-    pub genesis_daa: i64,
+    /// DAA at which the order's terms of this fill were set: its placement, or its latest in-place amend before the fill.
+    pub since_daa: i64,
 }
 
 /// A trade (see the module docs). Amounts in base units / sompi, price per basis.
@@ -66,7 +68,7 @@ fn per_basis(price: i64, scale: i64, basis: i128) -> i128 {
     (price as i128).saturating_mul(basis) / scale.max(1) as i128
 }
 
-/// Per side: (base units, sompi at the fills' quotes, base units x price per basis, oldest genesis DAA).
+/// Per side: (base units, sompi at the fills' quotes, base units x price per basis, oldest terms DAA).
 fn side_sums(rows: &[&FillRow], basis: i128) -> (i128, i128, i128, i64) {
     let mut amount = 0i128;
     let mut quote = 0i128;
@@ -77,7 +79,7 @@ fn side_sums(rows: &[&FillRow], basis: i128) -> (i128, i128, i128, i64) {
         amount = amount.saturating_add(n);
         quote = quote.saturating_add(n.saturating_mul(r.price as i128) / r.scale.max(1) as i128);
         weighted = weighted.saturating_add(n.saturating_mul(per_basis(r.price, r.scale, basis)));
-        oldest = oldest.min(r.genesis_daa);
+        oldest = oldest.min(r.since_daa);
     }
     (amount, quote, weighted, oldest)
 }
@@ -94,7 +96,7 @@ pub fn trade_of(fills: &[FillRow], basis: i128) -> Option<Trade> {
     if amount <= 0 || basis <= 0 {
         return None;
     }
-    // the resting side sets the price; ties (same genesis DAA) go to the asks
+    // the resting side sets the price; ties (same terms DAA) go to the asks
     let asks_rest = if a_amt > 0 && b_amt > 0 { a_age <= b_age } else { a_amt > 0 };
     let (r_amt, r_w) = if asks_rest { (a_amt, a_w) } else { (b_amt, b_w) };
     Some(Trade {
@@ -183,7 +185,8 @@ pub(crate) fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
 // ------------------------------------------------------------------------------------------------ SQL
 
 pub(crate) const FILL_SELECT: &str =
-    "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, COALESCE(o.scale, 1), o.genesis_daa \
+    "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, COALESCE(o.scale, 1), \
+     COALESCE((SELECT a.daa FROM order_events a WHERE a.order_id = e.order_id AND a.kind = 'amend' AND a.id < e.id ORDER BY a.id DESC LIMIT 1), o.genesis_daa) \
      FROM order_events e JOIN orders o ON o.id = e.order_id \
      WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2)";
 
@@ -197,7 +200,7 @@ pub(crate) fn fill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FillRow> {
         amount: r.get(5)?,
         price: r.get(6)?,
         scale: r.get(7)?,
-        genesis_daa: r.get(8)?,
+        since_daa: r.get(8)?,
     })
 }
 
@@ -777,7 +780,7 @@ mod tests {
 
     /// A fill of `amount` base units at `price` sompi per whole token of 100 base units (scale 100); the basis is 100.
     fn f(id: i64, tx: u8, ts: i64, side: i64, amount: i64, price: i64, gdaa: i64) -> FillRow {
-        FillRow { id, txid: vec![tx; 32], ts, daa: ts / 100, side, amount, price, scale: 100, genesis_daa: gdaa }
+        FillRow { id, txid: vec![tx; 32], ts, daa: ts / 100, side, amount, price, scale: 100, since_daa: gdaa }
     }
 
     #[test]
@@ -788,6 +791,15 @@ mod tests {
         // the bid rested (older): the seller aggressed, the price is the bid's
         let t = trade_of(&[f(3, 2, 1000, 1, 100, 250, 30), f(4, 2, 1000, 2, 100, 260, 20)], 100).unwrap();
         assert_eq!((t.price, t.buy), (260, false));
+    }
+
+    /// A fill of an order with a long history of fills finds the order's latest amend through the amend index, not by walking its events.
+    #[test]
+    fn the_age_of_a_fill_is_read_through_the_amend_index() {
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        let mut st = conn.prepare(&format!("EXPLAIN QUERY PLAN {FILL_SELECT}")).unwrap();
+        let plan: Vec<String> = st.query_map([vec![0u8; 32]], |r| r.get::<_, String>(3)).unwrap().map(|r| r.unwrap()).collect();
+        assert!(plan.iter().any(|p| p.contains("order_events_amends")), "{plan:?}");
     }
 
     #[test]

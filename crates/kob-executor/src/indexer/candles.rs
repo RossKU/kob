@@ -23,6 +23,8 @@
 //! transaction that maintains them records the newest event id it saw (`meta.candles_event`); a start that finds another id has
 //! the aggregates discarded and rebuilt ([`backfill`]), so a rollback and a second upgrade never serve stale charts.
 //!
+//! **Price rule.** A change of how a trade is priced (`PRICE_RULE`) makes [`backfill`] discard the rows of the earlier rule once and rebuild them.
+//!
 //! **Lean stores** prune the fills they chart, so they keep no aggregates (`meta.candles` is not `on`; [`enabled`]).
 //!
 //! The aggregates answer exactly what the fills do: `tests` compare them with the reference over random histories, reverts and
@@ -41,6 +43,9 @@ pub const IVS: [i64; 4] = [60_000, 300_000, 3_600_000, 86_400_000];
 
 const BASE: i64 = IVS[0];
 
+/// The version of the trade price rule the stored rows were built with (`meta.candles_rule`); [`backfill`] rebuilds the rows of another one.
+const PRICE_RULE: &str = "2";
+
 /// Whether this store maintains aggregates (`meta.candles = on`: set when the store is opened as an archive, never on a lean store).
 pub fn enabled(conn: &Connection) -> bool {
     meta_get(conn, "candles").ok().flatten().as_deref() == Some("on")
@@ -55,7 +60,9 @@ pub fn configure(conn: &Connection, lean: bool) -> DbResult<()> {
             meta_set(conn, "candles", "off")?;
         }
     } else if meta_get(conn, "candles")?.as_deref() != Some("on") {
+        // a store that had no aggregates: whatever rows it gets are built by this build's rule
         meta_set(conn, "candles", "on")?;
+        meta_set(conn, "candles_rule", PRICE_RULE)?;
     }
     Ok(())
 }
@@ -280,6 +287,12 @@ pub fn backfill(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Backfill
     let mut report = Backfill::default();
     if !enabled(conn) {
         return Ok(report);
+    }
+    // the trade price rule changed (2: the age of an order that was amended is the DAA of its latest amend, not of its placement):
+    // rows built by a build of the earlier rule are discarded and rebuilt from the fills
+    if meta_get(conn, "candles_rule")?.as_deref() != Some(PRICE_RULE) {
+        conn.execute_batch("DELETE FROM candles; DELETE FROM candle_meta; DELETE FROM candle_dirty;")?;
+        meta_set(conn, "candles_rule", PRICE_RULE)?;
     }
     // fills written or reverted by a build that did not maintain the aggregates: they are not to be trusted, all of them are rebuilt
     let now = newest_event(conn)?.to_string();

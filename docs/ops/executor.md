@@ -1513,8 +1513,8 @@ timestamps are the chain block's unix milliseconds.
 * **Trade** = every fill event of ONE transaction on ONE token. `amount` is the ask side's filled base units (the bid side's when
   no ask filled: a wallet took a resting bid directly, as swap-and-pay does), `quote` the same fills' `quoteOf(amount, price, scale)`
   rounded down per fill (a fill of another scale is converted to the basis: `price × price_basis / scale`). The
-  **resting** side is the side whose orders are older (smaller genesis DAA; a tie goes to the asks): its volume-weighted price is the trade
-  price, and `side` names the **aggressor** (`buy` when the asks rested). `id` is the smallest fill event id of the trade (paging:
+  **resting** side is the side whose orders are older (smaller DAA of its current terms: its placement, or its latest in-place amend before the fill, because an amend restarts the age; a tie goes to the asks): its volume-weighted price is the trade
+  price, and `side` names the **aggressor** (`buy` when the asks rested). The two sides of a fill can quote different prices (a bid pays its all-in quote, an ask receives its own, and the crossing spread is the matcher's): each side's fill event keeps its own quote, the trade is the resting side's. `id` is the smallest fill event id of the trade (paging:
   `before`). Integer arithmetic, rounded down.
 * **Candles**: bucket = `floor(ts / interval) * interval` (UTC), `o h l c volume quote_volume trades`; buckets without trades are omitted
   (clients carry the close forward). Without `from` the window is the `limit` intervals (default 500, at most 1500) ending with the

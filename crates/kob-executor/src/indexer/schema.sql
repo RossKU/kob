@@ -130,6 +130,9 @@ CREATE INDEX IF NOT EXISTS order_events_block ON order_events (block_seq);
 -- The fills only (about a third of the events): `kind = 'fill'` is in every read that wants them, so the planner takes this index for exactly those
 -- (a store built before 2026-11 had them as `(kind, token_cov_id, id)` over every event; `index migrate` builds the store anew).
 CREATE INDEX IF NOT EXISTS order_events_fills ON order_events (token_id, id) WHERE kind = 'fill';
+-- The in-place amends of an order (a few per order, if any): the price rule of the trades reads the latest one before a fill (`market::FILL_SELECT`),
+-- so a fill of an order with a long history of fills does not walk that history back to the amend.
+CREATE INDEX IF NOT EXISTS order_events_amends ON order_events (order_id, id) WHERE kind = 'amend';
 
 -- In-place amends (AMEND record): the order row's terms BEFORE the amend of block `block_seq` (restored on revert).
 CREATE TABLE IF NOT EXISTS order_amends (

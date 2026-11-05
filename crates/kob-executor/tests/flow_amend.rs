@@ -11,6 +11,7 @@ mod common;
 use common::*;
 use kob_executor::hex::Hash32;
 use kob_executor::indexer::book;
+use kob_executor::indexer::market;
 use kob_executor::indexer::reads::{self, ReadCtx};
 use kob_executor::testkit::*;
 use kob_protocol::build::*;
@@ -337,4 +338,81 @@ async fn a_bid_amend_that_changes_the_scale_is_listed_nowhere() {
     assert!(matcher_book(&c).iter().all(|o| o.id() != cov.0));
     assert!(bid_prices(&c).is_empty());
     assert!(c.hs.query::<String>("SELECT reason FROM rejects", []).starts_with("amend:"));
+}
+
+/// The price rule of the trades (the resting side, the older one, sets the price) reads the age of an order from its CURRENT terms: an
+/// in-place amend replaces them and restarts the age. A bid placed first and a later ask, the ask amended before the bid: the ask has
+/// rested at its terms longer, the bid is the aggressor, and the trade (and its candle) is at the ask's price. By the placement time
+/// alone the bid would count as older and the chart would show the bid's price, which no maker received (the TN10 soak, 2026-11-05).
+#[tokio::test]
+async fn an_amend_restarts_the_age_that_decides_which_side_sets_the_trade_price() {
+    let c = Ctx::new();
+    let token = Hash32(TOKEN_COV);
+    // the bid is placed first, low, funded for 5 whole tokens at its final price
+    let b0 = bid(MAKER_B, P240 / 10);
+    let b1 = BidState { price: P250, ..b0.clone() };
+    let create_b = c.w.create_tx(AnyState::KobBid(b0.clone()), b1.escrow(5 * WHOLE, 2).unwrap() as u64, MAKER_B, 0);
+    c.push(&[&create_b]).await;
+    let cov_b = c.w.cov(&create_b, 0);
+    // the ask is placed later, high, and amended down to 240 BEFORE the bid is amended up to 250
+    let (create_a, cov_a, a0, custody) = placed(&c).await;
+    let a1 = AskState { price: P240, ..a0.clone() };
+    let am_a = c.w.sign(&Action::AmendOrder(amend_req(&c, &create_a, 0, &a0, a1.clone())));
+    c.push(&[&am_a]).await;
+    let am_b = c.w.sign(&Action::AmendOrder(AmendOrder {
+        order: c.w.order(&create_b, 0, AnyState::KobBid(b0.clone())),
+        amended: AnyState::KobBid(b1.clone()),
+        value: None,
+        funding: vec![],
+        change: None,
+        lock_time: 0,
+        deadline: None,
+        records: vec![],
+        fee: FeeOptions::default(),
+    }));
+    c.push(&[&am_b]).await;
+    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM rejects", []), 0);
+
+    // they cross in one transaction
+    let legs = vec![
+        Leg::Ask { order: c.w.order(&am_a, 0, a1.clone()), custody, amount: 2 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&am_b, 0, b1.clone()), amount: 2 * WHOLE, t: None },
+    ];
+    let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), legs)));
+    c.push(&[&fill]).await;
+    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM rejects", []), 0);
+    assert_eq!(c.hs.event_kinds(&cov_a), ["create", "amend", "fill"]);
+    assert_eq!(c.hs.event_kinds(&cov_b), ["create", "amend", "fill"]);
+    // each side's fill event keeps its own quote
+    let fill_price = |cov: &Hash32| {
+        c.hs.query::<i64>(
+            "SELECT price FROM order_events WHERE kind = 'fill' AND order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&cov.0[..]],
+        )
+    };
+    assert_eq!((fill_price(&cov_a), fill_price(&cov_b)), (P240, P250));
+    // by placement the bid is the older order, by its current terms the ask
+    let genesis = |cov: &Hash32| c.hs.query::<i64>("SELECT genesis_daa FROM orders WHERE covenant_id = ?1", [&cov.0[..]]);
+    assert!(genesis(&cov_b) < genesis(&cov_a));
+
+    let g = c.hs.ingest.lock().unwrap();
+    let conn = g.conn();
+    let t = market::trades(conn, &read_ctx(&c), &token, None, None, 10).unwrap();
+    assert_eq!(t.items.len(), 1);
+    assert_eq!(t.items[0].price, P240.to_string(), "the ask rested at its current terms: the trade is at its price");
+    assert_eq!(t.items[0].side, "buy", "the bid aggressed");
+    let basis = market::price_basis(conn, &token, None).unwrap();
+    let candle = market::scan_candles(conn, &token, basis, 60_000, 0, i64::MAX, 10).unwrap();
+    assert_eq!(candle.len(), 1);
+    assert_eq!(candle[0].c, P240 as i128);
+    // the maintained aggregates agree, and rows built by the earlier rule (no `candles_rule`) are rebuilt by the next backfill
+    let rows = |conn: &rusqlite::Connection| -> Vec<String> {
+        let mut st = conn.prepare("SELECT o FROM candles WHERE iv = 60000").unwrap();
+        st.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(rows(conn), [P240.to_string()]);
+    conn.execute("UPDATE candles SET o = ?1", [P250.to_string()]).unwrap();
+    conn.execute("DELETE FROM meta WHERE k = 'candles_rule'", []).unwrap();
+    kob_executor::indexer::candles::backfill(conn, &kob_executor::tokens::TokenAllowlist::from_entries([])).unwrap();
+    assert_eq!(rows(conn), [P240.to_string()]);
 }
