@@ -23,7 +23,7 @@
 //! transaction that maintains them records the newest event id it saw (`meta.candles_event`); a start that finds another id has
 //! the aggregates discarded and rebuilt ([`backfill`]), so a rollback and a second upgrade never serve stale charts.
 //!
-//! **Price rule.** A change of how a trade is priced (`PRICE_RULE`) makes [`backfill`] discard the rows of the earlier rule once and rebuild them.
+//! **Price rule.** A change of how a trade is priced (`PRICE_RULE`) makes [`backfill`] rebuild every token's rows once, each token's in one transaction that replaces its old rows (no gap, no wait for the readers).
 //!
 //! **Lean stores** prune the fills they chart, so they keep no aggregates (`meta.candles` is not `on`; [`enabled`]).
 //!
@@ -288,12 +288,10 @@ pub fn backfill(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Backfill
     if !enabled(conn) {
         return Ok(report);
     }
-    // the trade price rule changed (2: the age of an order that was amended is the DAA of its latest amend, not of its placement):
-    // rows built by a build of the earlier rule are discarded and rebuilt from the fills
-    if meta_get(conn, "candles_rule")?.as_deref() != Some(PRICE_RULE) {
-        conn.execute_batch("DELETE FROM candles; DELETE FROM candle_meta; DELETE FROM candle_dirty;")?;
-        meta_set(conn, "candles_rule", PRICE_RULE)?;
-    }
+    // the trade price rule changed (2: the age of an order that was amended is the DAA of its latest amend, not of its placement): every
+    // token's rows are rebuilt from the fills. Nothing is deleted first: a token's rows are replaced in one transaction ([`rebuild`]), so a
+    // reader sees the old rows (right but for the changed trades) until the new ones commit, and never an empty or half-built chart
+    let stale_rule = meta_get(conn, "candles_rule")?.as_deref() != Some(PRICE_RULE);
     // fills written or reverted by a build that did not maintain the aggregates: they are not to be trusted, all of them are rebuilt
     let now = newest_event(conn)?.to_string();
     if meta_get(conn, "candles_event")?.is_some_and(|m| m != now) {
@@ -312,7 +310,7 @@ pub fn backfill(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Backfill
         let Ok(id) = <[u8; 32]>::try_from(token.as_slice()) else { continue };
         let id = Hash32(id);
         let basis = token_basis(conn, tokens, &id)?;
-        if meta_basis(conn, &token)? == Some(basis) {
+        if !stale_rule && meta_basis(conn, &token)? == Some(basis) {
             continue;
         }
         let tx = conn.unchecked_transaction()?;
@@ -323,6 +321,10 @@ pub fn backfill(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Backfill
         report.tokens += 1;
     }
     meta_set(conn, "candles_event", &now)?;
+    // every token is rebuilt by the rule: an interrupted run starts over with the rule unmarked
+    if stale_rule {
+        meta_set(conn, "candles_rule", PRICE_RULE)?;
+    }
     Ok(report)
 }
 

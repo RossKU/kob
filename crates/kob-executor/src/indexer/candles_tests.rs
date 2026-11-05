@@ -365,3 +365,51 @@ fn fills_written_by_a_build_that_does_not_maintain_the_aggregates_are_rebuilt_at
     }
     assert_eq!(backfill(&conn, &tokens).unwrap(), Backfill::default());
 }
+
+/// A change of the price rule rebuilds every token's rows, and a chart read while that runs is never empty, partial or answered from the
+/// fills: each token's rows are replaced in one transaction, nothing is deleted before (the public chart API stays continuous).
+#[test]
+fn a_rule_rebuild_never_leaves_a_reader_without_the_old_rows() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rule.db");
+    let conn = open_writer(&path, "testnet-10").unwrap();
+    let tokens = TokenAllowlist::from_entries([]);
+    add_order(&conn, 1, 1, 1_000, 1, 1);
+    add_order(&conn, 2, 2, 1_000, 1, 1);
+    let t0 = 1_700_000_000_000i64;
+    conn.execute_batch("BEGIN").unwrap();
+    for i in 0..6_000u64 {
+        let tok = 1 + (i % 2) as u8;
+        add_tx(&conn, i + 1, 1 + i as i64 / 50, t0 + i as i64 * 20_000, tok, &[(tok, 1, 5 + (i % 7) as i64, 1_000 + (i % 13) as i64)]);
+    }
+    conn.execute_batch("COMMIT").unwrap();
+    assert!(backfill(&conn, &tokens).unwrap().tokens == 2);
+    let (iv, from, to) = (IVS[0], t0 - 10 * IVS[0], t0 + 2_000 * IVS[0]);
+    let want = read(&conn, &token(1), 1_000, iv, from, to, 5_000).unwrap().expect("rows");
+    assert!(want.len() > 1_000);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let (p, s, w) = (path.clone(), stop.clone(), want.clone());
+    let reader = std::thread::spawn(move || {
+        let r = crate::indexer::db::open_reader(&p, "testnet-10").unwrap();
+        let mut reads = 0u64;
+        while !s.load(Ordering::Relaxed) {
+            let got = read(&r, &token(1), 1_000, iv, from, to, 5_000).unwrap();
+            assert_eq!(got.as_ref(), Some(&w), "a chart read during the rebuild");
+            reads += 1;
+        }
+        reads
+    });
+    for _ in 0..5 {
+        // the rule marker of the earlier build: every token is rebuilt, one transaction each
+        conn.execute("DELETE FROM meta WHERE k = 'candles_rule'", []).unwrap();
+        assert_eq!(backfill(&conn, &tokens).unwrap().tokens, 2);
+        assert_eq!(meta_get(&conn, "candles_rule").unwrap().as_deref(), Some(PRICE_RULE));
+        // marked: the next start has nothing to do
+        assert_eq!(backfill(&conn, &tokens).unwrap(), Backfill::default());
+    }
+    stop.store(true, Ordering::Relaxed);
+    assert!(reader.join().unwrap() > 0);
+}
