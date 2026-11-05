@@ -277,7 +277,9 @@ impl TokenAllowlist {
         let p = path.display().to_string();
         let s = std::fs::read_to_string(path).map_err(|e| TokenLoadError::Io(p.clone(), e))?;
         let mut list = Self::parse(&s).map_err(|e| TokenLoadError::Parse(p.clone(), e))?;
-        list.info = Some(RegistryInfo { source: p, sha256: sha256_hex(s.as_bytes()) });
+        // the public provenance names the file only: the operator's directories (a home folder, a user name) never reach an API reader
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        list.info = Some(RegistryInfo { source: format!("file:{name}"), sha256: sha256_hex(s.as_bytes()) });
         Ok(list)
     }
 
@@ -888,7 +890,7 @@ mod tests {
         );
         assert_eq!(embedded.len(), 8);
         let info = t.info().expect("provenance");
-        assert!(info.source.ends_with("tokens.json"));
+        assert_eq!(info.source, "file:tokens.json", "the file name only, never the operator's directories");
         use sha2::{Digest, Sha256};
         assert_eq!(info.sha256, crate::hex::encode(&Sha256::digest(text.as_bytes())));
         assert!(TokenAllowlist::parse(&text).unwrap().info().is_none(), "in-memory lists have none");

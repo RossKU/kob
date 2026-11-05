@@ -357,7 +357,7 @@ curl -s $API/v1/tokens
 { "tokens": [ {
     "ticker": "KRON", "covenant_id": "<hex32>", "template_hash": "<hex32>", "extension_commitment": "<hex32>",
     "family": "kcc20", "decimals": 3, "decimals_source": "registry", "scale": 1000, "market_scale": null,
-    "registry": { "source": "kob-tokens.json", "sha256": "<hex32>" },
+    "registry": { "source": "file:kob-tokens.json", "sha256": "<hex32>" },
     "genesis_verified": null, "warnings": ["genesis_unverified"], "powers": [], "template_id": "KCC20Ref_8x8",
     "open_asks": 4, "open_bids": 3, "declaration": true
 } ] }
@@ -375,7 +375,7 @@ curl -s $API/v1/tokens
 | `scale` | number or null | The standard scale `10^decimals` (at most `10^9`) of a registry entry that has `decimals`; `null` otherwise. A token whose decimals are derived (a declaration, a program default) lists only orders at `10^min(decimals, 9)` too (reason `non_standard_scale` otherwise), so its market scale is that one. |
 | `market_scale` | number or null | Only for a token without any `decimals`: the scale of its earliest listed order, which stays the market's scale; `null` otherwise (a token with `decimals` has its scale from them). |
 | `program_ambiguous`, `candidate_templates` | `true`, array of hex; **omitted** | Present only when order placements name more than one strict-list program for the covenant id. The indexer holds no token output to tell which is the token's, so it names none: `template_hash`, `template_id`, `family` and `extension_commitment` are `null` and `candidate_templates` lists the claims. A client proves the program from a token output the node confirms, or does not trade the token. |
-| `registry` | object or null | The registry document the facts come from: `source` (path or `inline`) and `sha256` of its exact bytes. The operator's copy, not chain data. |
+| `registry` | object or null | The registry document the facts come from: `source` (`file:<file name>` without its directories, or `embedded:registry/tokens.json`) and `sha256` of its exact bytes. The operator's copy, not chain data. |
 | `genesis_verified` | bool or null | The registry's fact: every genesis output was checked against the pinned program; `null` when it does not say. |
 | `warnings` | array of string | Derived from facts: `genesis_unverified` (unless `genesis_verified` is true), `live_mint_authority` (a genesis record lists a live mint authority; supply can still grow). Show them. |
 | `powers` | array of string | Capabilities of the program that reach balances or supply (`freeze`, `seize`, `blacklist`, `mint-authority`, ...). |
