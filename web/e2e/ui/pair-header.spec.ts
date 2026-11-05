@@ -3,7 +3,7 @@
 // at every width (the identity blocks are 36 px on a phone); then one compact line per
 // token (ticker, short id with copy, name, chips). A token's KAS market: compact, the identity block at the left and two lines to its right (ticker / KAS with
 // the swap; then the short id with copy, the name, the Live chip, KCC-20 and the genesis chip), no row half empty. Checked at 1280, 880, 390 and 360 px.
-import { mkdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
@@ -23,7 +23,6 @@ async function listPair(page: Page): Promise<void> {
   );
 }
 
-const SHOTS = 'C:/Users/momot/AppData/Local/Temp/claude/C--Users-momot/7a592281-b954-49d7-9841-0ba23d934ae0/scratchpad/audit/shots/pairhd';
 
 const box = async (loc: ReturnType<Page['getByTestId']>) => (await loc.first().boundingBox())!;
 
@@ -74,10 +73,7 @@ for (const width of [1280, 880, 390, 360]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     // the selector is still there (market-unified.spec.ts drives it)
     await expect(header.getByTestId('market-base-select')).toBeAttached();
-    if (width !== 880) {
-      mkdirSync(SHOTS, { recursive: true });
-      await header.screenshot({ path: `${SHOTS}/pair-header-${width}.png` });
-    }
+    if (width !== 880) await header.screenshot({ path: test.info().outputPath(`pair-header-${width}.png`) });
   });
 
   test(`${width} px: a token's KAS market header is the identity block with two lines to its right, no empty row`, async ({ appPage: page, mock }) => {
