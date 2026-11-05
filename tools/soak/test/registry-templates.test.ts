@@ -3,17 +3,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { externalRegistryToken, soakTemplates, TEMPLATE_PUBLIC_MINT, TEMPLATE_STANDARD, TEST_PROGRAM_TEMPLATES } from '../src/registry-templates.ts';
+import { externalRegistryToken, soakTemplates, TEMPLATE_KFORGE_7214, TEMPLATE_PUBLIC_MINT, TEMPLATE_STANDARD, TEST_PROGRAM_TEMPLATES } from '../src/registry-templates.ts';
 
 const shipped = JSON.parse(readFileSync(new URL('../../../registry/tokens.json', import.meta.url), 'utf8')) as {
   templates: Record<string, unknown>[];
 };
 
 test('the soak templates pin what the shipped registry pins', () => {
-  for (const t of [TEMPLATE_STANDARD, TEMPLATE_PUBLIC_MINT]) {
+  for (const t of [TEMPLATE_STANDARD, TEMPLATE_PUBLIC_MINT, TEMPLATE_KFORGE_7214]) {
     const s = shipped.templates.find((x) => x.id === t.id)!;
     assert.ok(s, t.id);
-    for (const k of ['template_hash', 'prefix_len', 'suffix_len', 'state_len', 'max_token_inputs', 'max_token_outputs', 'review_status'] as const) {
+    for (const k of ['template_hash', 'prefix_len', 'suffix_len', 'state_len', 'max_token_inputs', 'max_token_outputs', 'escrow', 'review_status'] as const) {
       assert.deepEqual(t[k], s[k], `${t.id} ${k}`);
     }
   }
@@ -55,5 +55,8 @@ test('the launchpad test programs pin what the embedded profiles say, and are ad
   assert.deepEqual(ids(soakTemplates([kf])), ['kcc20-ref-3x3', 'kforge-token-1785']);
   const e = externalRegistryToken(kf);
   assert.deepEqual([e.template_id, e.family, e.extension_commitment, e.max_token_inputs, e.max_token_outputs], ['kforge-token-1785', 'kron', null, 1, 3]);
+  assert.deepEqual(ids(soakTemplates([], ['KForgeToken7214', 'KForgeToken1785'])), ['kcc20-ref-3x3', 'kforge-token-1785', 'kforge-token-7214']);
+  const k7 = externalRegistryToken({ ticker: 'KF7', name: 'KForge 6/6 test', covenantId: '39'.repeat(32), program: 'KForgeToken7214', decimals: 8 });
+  assert.deepEqual([k7.template_id, k7.family, k7.extension_commitment, k7.max_token_inputs, k7.max_token_outputs], ['kforge-token-7214', 'kcc20', '0'.repeat(64), 6, 6]);
   assert.throws(() => soakTemplates([], ['KForge']), /unknown program KForge/);
 });
