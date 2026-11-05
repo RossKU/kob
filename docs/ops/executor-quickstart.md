@@ -2,8 +2,9 @@
 
 Anyone can run a KOB executor: it follows the chain, lists the order book and, with a small funded hot key, matches
 crossing orders and refunds expired ones, earning the spreads and the makers' tips (`docs/ops/executor.md`, Part C,
-*Economics*). This page takes you from the download to a running executor. The full operations guide is
-`docs/ops/executor.md`.
+*Economics*). This page takes you from a build (or a download) to a running executor. The full operations guide is
+`docs/ops/executor.md`; the short version of sections 1 to 3 for a source build is the README, *Run `kobd` on testnet-10
+(from source)*.
 
 The executor talks to nothing but the Kaspa node you point it at (public nodes found through the Kaspa resolvers by default,
 or your own). It sends no telemetry, charges no fee, does not update itself and connects to no server of the KOB project.
@@ -15,10 +16,28 @@ capital only (section 3). What one of its transactions can pay in fees is capped
 executor signs only inputs of its own key and the covenants enforce every order, but a bad node can still stall it or make it
 waste fees, which is why public nodes are used as a cross-checked pair (section 2).
 
-## 1. Download and check
+## 1. Build from source, or download and check
 
-Prebuilt binaries are attached to each [GitHub release](https://github.com/RossKU/kob/releases), one archive per network and
-platform:
+**Build from source (the supported route).** It needs Git, [rustup](https://rustup.rs) (the toolchain pinned by
+`rust-toolchain.toml` installs itself) and a C compiler: on Windows the Visual Studio Build Tools with *Desktop development
+with C++* (the rustup installer offers them), on Linux `build-essential` or its equivalent. About 6 GB of disk for the build.
+Build the binary of one network from the commit you mean to run:
+
+```
+git clone https://github.com/RossKU/kob.git
+cd kob
+cargo build --release --locked -p kob-executor --features deploy-tn10      # testnet-10; deploy-mainnet for mainnet
+```
+
+Then copy `target/release/kobd` (`target\release\kobd.exe` on Windows) into a folder of its own, as below, and go on with
+section 2. A build of your own is not flagged by Windows SmartScreen. `kobd --version` and `/v1/health` (`version`) tell which code runs;
+set `KOB_GIT_COMMIT=$(git rev-parse HEAD)` for the build and `/v1/health` also reports the `commit` (`docs/ops/release.md`, 4).
+The command-line client `kob` is `cargo build --release --locked -p kob-cli`
+(`crates/kob-cli/README.md`).
+
+**Download.** Prebuilt binaries are attached to a [GitHub release](https://github.com/RossKU/kob/releases) when one is cut. A
+release can lag `master`; so far only testnet-10 binaries have been published (release `v0.1.0`, whose archives still carry
+the earlier name, `kob-executor-0.1.0-testnet-10-...`). One archive per network and platform:
 
 | Archive | For |
 |---|---|
@@ -52,7 +71,7 @@ attested, and the `SHA256SUMS` sits on the same release page as the archives, so
 that the release is genuine: compare the hashes with the copy in the release announcement, and, for an executor that will hold
 funds, rebuild it from the tagged commit.
 
-Unzip it into a folder of its own that your account can write to (for example `C:\kob` or `~/kob`; not `Program Files`):
+Unzip the archive (or copy the binary you built) into a folder of its own that your account can write to (for example `C:\kob` or `~/kob`; not `Program Files`):
 the setup writes its configuration, the key file and the database next to the program. **Extract the archive first**: do not
 double-click the program inside the zip viewer (Windows then runs it from a temporary folder and the key and the database
 would be written there), and avoid a folder that a cloud service syncs (OneDrive, Dropbox, ...), which would upload the key file.
@@ -327,8 +346,8 @@ program changes. The program is not replaced while it runs, and it does not upda
 2. **Note what runs now:** `kobd --version` (the crate version, the release tag without the `v`) and
    `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback only unless you
    changed it). A build of a commit before the `0.1.0` release says `0.0.0`; tell builds of the same version apart by `commit`.
-3. **Download and check** the new archive (section 1). Unzip it into a new folder; the archive holds the programs and this page,
-   never your configuration.
+3. **Build or download** the new version (section 1): `git pull` (or check out the tag) and run the same `cargo build`, or download
+   and check the new archive and unzip it into a new folder; the archive holds the programs and this page, never your configuration.
 4. **Stop gracefully** and swap:
    * a window: Ctrl+C (or close the window); Linux service: `systemctl stop kob`; Docker: `docker stop kob`; Windows Task
      Scheduler: Ctrl+C in a window you opened yourself is the clean way; *End* on a task kills the process, which the database
