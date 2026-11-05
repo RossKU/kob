@@ -82,7 +82,7 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 /* a phone, and any portrait screen (a tablet, a phone showing the desktop site): no full-screen hero, or the text would sit under a screen of empty space */
 @media (max-width: 700px), (max-aspect-ratio: 4/5) { .lp-hero { min-height: 0; padding: 112px 0 40px; } }
 .lp .lp-kicker { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 30px; font: 500 clamp(15px, 1.25vw, 18px)/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); }
-.lp-chip { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 13px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn); font: 600 12px/1 var(--mono); letter-spacing: 0.08em; }
+.lp-chip { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 11px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn); font: 600 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
 .lp-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .lp h1 { font: 800 clamp(44px, min(11.6vw, 15vh), 200px)/0.88 var(--display); letter-spacing: -0.06em; text-wrap: nowrap; white-space: nowrap; }
 .lp-ln { display: block; overflow: hidden; padding-bottom: 0.16em; margin-bottom: -0.16em; }
@@ -218,3 +218,9 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 .lp-decode > * { min-width: 0; }
 /* the hero is a flex column: without a width its wrapper shrinks to its content and the auto margins centre it, off the nav's left edge */
 .lp-hero > .lp-wrap { width: 100%; }
+/* the network chip sits in the nav; a phone's nav has no room for it, so there it stays beside the kicker */
+.lp-hero-chip { display: none; }
+@media (max-width: 560px) {
+  .lp-nav-chip { display: none; }
+  .lp-hero-chip { display: inline-flex; }
+}

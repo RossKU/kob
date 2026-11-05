@@ -71,7 +71,7 @@ function Ctas(props: { class?: string }) {
   );
 }
 
-function Nav() {
+function Nav(props: { chip: string; chipTip: string }) {
   const scrolled = useScrolled();
   return (
     <header class={`lp-nav${scrolled ? ' lp-scrolled' : ''}`} data-testid="landing-nav">
@@ -79,6 +79,9 @@ function Nav() {
       <div class="lp-wrap">
         <Brand testid="landing-brand" />
         <nav class="lp-nav-r" aria-label={t('landing.nav.label')}>
+          <span class="lp-chip lp-nav-chip" title={props.chipTip} data-testid="landing-nav-chip">
+            {props.chip}
+          </span>
           <a class="lp-gh" href={REPO_URL}>
             {t('landing.github')}
           </a>
@@ -147,13 +150,13 @@ export function LandingPage() {
 
   return (
     <div class="lp" ref={root} data-testid="landing" data-network={config.network}>
-      <Nav />
+      <Nav chip={net.chip} chipTip={net.chipTip} />
       <main class="lp-main" id="main" tabIndex={-1} data-testid="main" data-route="#/">
         <section class={`lp-hero${go ? ' lp-go' : ''}`} data-testid="landing-hero">
           <div class="lp-wrap">
             <p class="lp-kicker lp-fade">
               {t('landing.kicker')}{' '}
-              <span class="lp-chip" title={net.chipTip} data-testid="landing-chip">
+              <span class="lp-chip lp-hero-chip" title={net.chipTip} data-testid="landing-chip">
                 {net.chip}
               </span>
             </p>
