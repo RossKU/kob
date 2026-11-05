@@ -68,6 +68,7 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
 | `KOB_PAGES_TOKEN_NAMES_URL` | no | the source of token names and icons: the base of a kascov.io-shaped data set, `https://...` (default `https://kascov.io/data`); `off` = none (see "Token names and icons" below) |
 | `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
+| `KOB_PAGES_PUBLIC_URL` | no | the origin the app is served from, `https://...` (the custom domain of section 5, e.g. `https://kob.kaspa.ag`): the link preview's `og:url` and `og:image` need it; empty = no absolute preview links |
 
 ### Further indexers: cross-check and failover
 

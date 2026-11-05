@@ -158,8 +158,12 @@ jobs:
       - run: npm run build:wasm -- --copy
       - run: npm run typecheck
       - run: npm test
-      # the release bundle (vite build plus dist/registry/tokens.json, docs/ops/release.md 4)
+      # the release bundle (vite build plus dist/registry/tokens.json, docs/ops/release.md 4); the link-preview head (web/head-meta.mjs) takes the
+      # network and, when set, the public origin the deployment is served from (og:url, og:image)
       - run: npm run build:release
+        env:
+          KOB_NETWORK: ${{ vars.KOB_PAGES_NETWORK || 'testnet-10' }}
+          KOB_PUBLIC_URL: ${{ vars.KOB_PAGES_PUBLIC_URL }}
       - name: Release hashes (the deployment record reproduces, the bundle embeds and ships the registry the mainnet record pins)
         working-directory: .
         run: |
