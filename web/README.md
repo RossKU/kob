@@ -217,7 +217,18 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   ready (the header status dot's own health judgement) the book, charts, tokens and orders are read from a healthy further indexer on the same network that reports the
   payload version of this build (`book_complete: true` first; a store that began late is used last and the banner says "History may be incomplete"), under the
   banner "Using backup indexer <host>"; the app switches back after two good probes of the primary. The feed reconnects to the indexer in use, one ticket's
-  environment is read from one indexer, and the cross-check continues against the others (the primary only while it answers well). No book is built from the node.
+  environment is read from one indexer, and the cross-check continues against the others (the primary only while it answers well). The indexers' book is never
+  mixed with one built from the node; with no usable indexer, standalone mode takes over (next).
+* **Standalone mode** (`src/data/standalone.ts`, user guide 9). When the indexer in use stays bad (`assessIndexerHealth` level `bad`, asked once more after 5 s,
+  20 s with failover) or Settings switch it on (`standalone.manual`), the app follows the node's new blocks (`NodeApi.subscribeBlocks`: wRPC `block-added`, the
+  mock's `GET /node/blocks`), re-derives every KOB1 placement record with kob-wasm `recoverOrders` record by record (`src/kob/stream-orders.ts`), reads every
+  spend of a plain ask / bid from its signature script (the redeem script must be exactly kob-wasm's script of the state it holds; the entry by its tag, the
+  fill size from `nb`) and follows the order to its continuation, and lists an order only once `confirmSnapshotsOnNode` confirmed it (`src/data/stream-book.ts`:
+  GTC, no auction, live, worth 1 KAS or more, a registry token only with its program, commitment and scale). The wallet's receipts are resolved on the node and
+  join the book (`StandaloneReceipts`). `services.indexer` then answers the book, order views, token list, trades, candles, stats and depth from that
+  (`src/data/stream-market.ts`: fills counted once the node holds an output of their transaction), labelled "since hh:mm"; everything else fails as with the
+  indexer down. The ticket, the book check and the signing are unchanged; an open-list token is traded only with declared or program-default decimals. The
+  first usable report ends an automatic mode (`standalone.autoReturn`; off: a banner button). Settings / any config layer: `standalone: { manual, auto, autoReturn }`.
 * **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the order cannot be placed: one error line
   ("Could not read the token's guard data; try again in a moment") until the ticket's background refresh reads them, then it clears by itself.
 * **Book against the node.** Every read of the order book for a KAS market (`readMarketPart`, `src/app/book-verify.ts`) checks the first orders of each
