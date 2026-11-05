@@ -35,15 +35,18 @@ set `KOB_GIT_COMMIT=$(git rev-parse HEAD)` for the build and `/v1/health` also r
 The command-line client `kob` is `cargo build --release --locked -p kob-cli`
 (`crates/kob-cli/README.md`).
 
-**Download.** Prebuilt binaries are attached to a [GitHub release](https://github.com/RossKU/kob/releases) when one is cut. A
-release can lag `master`; so far only testnet-10 binaries have been published (release `v0.1.0`, whose archives still carry
-the earlier name, `kob-executor-0.1.0-testnet-10-...`). One archive per network and platform:
+**Download.** Prebuilt binaries are attached to a [GitHub release](https://github.com/RossKU/kob/releases) when one is cut, and a
+release can lag `master`. **The only release so far is `v0.1.0`, testnet-10 only: no mainnet archive has been published.** Its
+files still carry the earlier program name: `kob-executor-0.1.0-testnet-10-x86_64-pc-windows-msvc.zip`,
+`...-x86_64-unknown-linux-gnu.tar.gz`, `...-aarch64-linux-android.tar.gz`, `kob-executor-0.1.0-testnet-10-android.apk` and a
+`SHA256SUMS`. The table is the naming of later releases (`scripts/package-release.mjs`); the mainnet rows apply only once a
+mainnet release exists:
 
 | Archive | For |
 |---|---|
-| `kobd-<version>-mainnet-x86_64-pc-windows-msvc.zip` | mainnet, Windows 10 / 11 (64-bit) |
-| `kobd-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz` | mainnet, Linux x86-64 (glibc) |
-| `kobd-<version>-mainnet-aarch64-linux-android.tar.gz` | mainnet, an Android phone through Termux (arm64; section 8) |
+| `kobd-<version>-mainnet-x86_64-pc-windows-msvc.zip` | mainnet, Windows 10 / 11 (64-bit); not published yet |
+| `kobd-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz` | mainnet, Linux x86-64 (glibc); not published yet |
+| `kobd-<version>-mainnet-aarch64-linux-android.tar.gz` | mainnet, an Android phone through Termux (arm64; section 8); not published yet |
 | `kobd-<version>-testnet-10-...` | the same for testnet-10 |
 | `kobd-<version>-testnet-10-android.apk` | the testnet-10 Android app, a tap-to-use install on an arm64 phone (section 9) |
 
