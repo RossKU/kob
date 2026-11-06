@@ -33,7 +33,7 @@ so their hashes are the ones this checklist publishes; a plain build is for deve
 Both deployment records are embedded in every build, which is how a plain build finds the default indexer of the network it runs
 for.
 
-The record's `indexer_url` (the default indexer of `kob`; the testnet-10 record names the canary indexer, `https://kob.kaspa.ag/indexer`, and the
+The record's `indexer_url` (the default indexer of `kob`; the testnet-10 record names the canary indexer, `https://kob-api.kaspa.ag`, and the
 mainnet one is `null` until the official index-only server's address is decided; https on mainnet, no credentials) is edited in `deployment.json` and carried over by `scripts/build-deploy.sh mainnet`, which regenerates
 `DEPLOYMENT.md` and `SHA256SUMS`; set it in the commit that is released.
 
