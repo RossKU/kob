@@ -478,7 +478,7 @@ itself (`127.0.0.1:8090`).
 
 | Line | Meaning |
 |---|---|
-| `Executor: running for ...` / `restarting in N s` / `stopped` | The service; `(restarted Nx)` counts restarts after an exit. |
+| `Executor: running for ...` / `updating the database` / `restarting in N s` / `stopped` | The service; `(restarted Nx)` counts restarts after an exit. |
 | `Indexer: following, caught up, N orders indexed` | `GET /v1/health`: the follower's `state`, `caught_up` or the lag behind the chain. |
 | `Order book: partial, trading on orders seen since HH:mm` | Fast start (`book_complete: false`); the time is the phone's. |
 | `History: X to index, full book in about Y` | The fast start's background indexing (`backfill`). |
@@ -486,7 +486,7 @@ itself (`127.0.0.1:8090`).
 | `N transactions sent, N final, N pending, ...` | The Executor's status line of the last minute (section 4). |
 | `funds X KAS` | The key's funds; the balance under the address shows the same. |
 | `Read API: not reachable yet` | The executor is starting, or its API is not up. |
-| `Warnings:` | A restart, a catch-up more than an hour behind, a node error, funds below 100 KAS, and the `WARNING:` part of the status line (section 4). |
+| `Warnings:` | A restart, a failed database update (`not started: ...`), a catch-up more than an hour behind, a node error, funds below 100 KAS, and the `WARNING:` part of the status line (section 4). |
 | `Log` | The last 200 lines of the executor's output (the app keeps 300 in memory; there is no log file). |
 
 Below 100 KAS the Executor warns "funds low" and keeps trading while its coins last: 100 KAS is an alert level, not a stop.
@@ -515,10 +515,15 @@ certificate's SHA-256 is in the workflow summary) update each other in place; `v
 Android refuses a downgrade. A `-debug-signed` APK has a throwaway key: Android answers "App not installed", and the only way
 to a newer build is uninstalling, which deletes the key. Withdraw first.
 
-**From v0.1.0.** The v0.1.0 app wrote its database in schema 5; later builds read schema 9 only and the app cannot run
-`kobd index migrate`, so after the update the executor stops with an error and restarts again and again. Before updating,
-withdraw the funds; after it, if the log shows the schema error, uninstall, install the new APK and set it up again (a new
-key).
+**Database update.** Each time you switch the executor on, the app first runs `kobd index migrate` on its database (the
+status says `updating the database`). On a current database this takes a moment and changes nothing. A database of an
+earlier version (v0.1.0 wrote schema 5; this build reads schema 9) is rebuilt beside the old one, checked row by row and
+only then swapped in; the key file is not touched and the orders are kept. It needs free storage about the size of the
+database (the Executor's is at most 500 MB) and can take some minutes. The old file stays in the app's storage as
+`index.sqlite3.before-migrate`. If the update fails (for example, not enough storage), the app does not start the
+executor and does not retry: the status says why, and switching it on again starts the update over. The old database is
+unchanged until an update succeeds. No withdrawal is needed before updating from v0.1.0 (it is release-signed like later
+builds).
 
 ### Not in the app
 

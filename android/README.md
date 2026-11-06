@@ -8,7 +8,7 @@ How to install and use it: `docs/ops/executor-quickstart.md`, section 9.
 | File | What it does |
 |---|---|
 | `app/src/main/kotlin/org/kob/executor/MainActivity.kt` | Setup (node, role), funding address and balance, run switch, status and log |
-| `.../ExecutorService.kt` | Foreground service: runs `kobd` with no arguments, keeps a wake lock, restarts it after an exit (5 s, doubling to 5 min) |
+| `.../ExecutorService.kt` | Foreground service: updates the database (`index migrate`), then runs `kobd` with no arguments, keeps a wake lock, restarts it after an exit (5 s, doubling to 5 min) |
 | `.../Kob.kt` | Where the binary and the files are; runs `kobd` subcommands |
 | `.../WithdrawActivity.kt` | Stops the executor, then `kobd withdraw --to ... --amount ... --yes` |
 | `.../ExportKeyActivity.kt` | Shows, copies or saves the operator key (no screenshots) |
@@ -19,6 +19,8 @@ The app is plain framework views (no AndroidX, no layout files). Its files are i
 
 * `kobd setup --non-interactive --node resolver|<url> --executor|--indexer --dir <files/kob> --new-key`: writes the
   configuration and, for the Executor, the key; prints one JSON object (`address`, `roles`, ...).
+* `kobd index --config <files/kob>/kob-executor.toml migrate`, before each start when `kob-data/index.sqlite3` exists: brings
+  a store of an earlier build to the current schema (a moment on a current one). If it fails, the service stops and shows why.
 * `kobd` with no arguments and `KOB_EXECUTOR_DIR=<files/kob>`: runs the configuration. The app reads its stdout for the log
   and the status line, and `http://127.0.0.1:8090/v1/health` for the status screen.
 * `kobd address-balance --dir <files/kob>`: the funding address and its balance (one JSON object).

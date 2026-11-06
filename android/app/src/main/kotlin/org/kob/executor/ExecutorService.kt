@@ -12,12 +12,15 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
  * Runs `kobd` (the roles of kob-executor.toml) as a foreground service: a persistent notification and a wake lock
  * while it runs. If the process exits it is started again after a growing pause; the user stops it with ACTION_STOP.
+ * Before the first start of a service run, a database of an earlier build is brought to the current schema
+ * (`kobd index migrate`); if that fails, the service stops and says why instead of restarting.
  */
 class ExecutorService : Service() {
     companion object {
@@ -31,8 +34,11 @@ class ExecutorService : Service() {
         private const val BACKOFF_MIN_MS = 5_000L
         private const val BACKOFF_MAX_MS = 300_000L
 
-        /** stopped, running or restarting (waiting to start again after an exit). */
+        /** stopped, updating (the database update before the start), running or restarting (waiting to start again after an exit). */
         @Volatile var state = "stopped"
+        /** Why the last start was given up (a failed database update) and what to do; null when it was not. */
+        @Volatile var failure: String? = null
+        @Volatile var updatingSinceMs = 0L
         @Volatile var startedAtMs = 0L
         @Volatile var restarts = 0
         @Volatile var retryAtMs = 0L
@@ -78,6 +84,7 @@ class ExecutorService : Service() {
         prefs.edit().putBoolean(PREF_RUNNING, true).apply()
         if (supervisor?.isAlive != true) {
             wanted = true
+            failure = null
             stopLatch = CountDownLatch(1)
             restarts = 0
             acquireWakeLock()
@@ -115,8 +122,13 @@ class ExecutorService : Service() {
         }, "kob-stop").start()
     }
 
-    /** The executor, again and again until [wanted] is cleared. */
+    /** The database update, then the executor, again and again until [wanted] is cleared. */
     private fun supervise(latch: CountDownLatch) {
+        val why = updateDatabase()
+        if (why != null && wanted) {
+            giveUp(why)
+            return
+        }
         var backoff = BACKOFF_MIN_MS
         while (wanted) {
             Kob.killStale(this)
@@ -148,6 +160,67 @@ class ExecutorService : Service() {
         state = "stopped"
     }
 
+    /**
+     * Brings a database written by an earlier build (the v0.1.0 app wrote schema 5) to the schema this kobd reads:
+     * `kobd index --config <dir>/kob-executor.toml migrate`. It builds the new store beside the old one, verifies it row by row
+     * and only then swaps it in (the old file stays as index.sqlite3.before-migrate); the key file is not touched. A store of the
+     * current schema is left as it is (a moment); without a store (a first start) nothing runs. Returns null when the start may
+     * go on, else what failed and what to do.
+     */
+    private fun updateDatabase(): String? {
+        val db = File(Kob.dir(this), "kob-data/index.sqlite3")
+        if (!db.isFile) return null
+        Kob.killStale(this)
+        // the new store is about 3/4 of the old one, plus the temporary files of the index builds
+        val need = db.length() + File(db.path + "-wal").length()
+        val free = db.parentFile?.usableSpace ?: Long.MAX_VALUE
+        if (free < need) {
+            return "not enough free storage to check and update the database (${free shr 20} MB free, about ${need shr 20} MB " +
+                "needed). Free up space on the phone, then switch Run on again."
+        }
+        updatingSinceMs = System.currentTimeMillis()
+        state = "updating"
+        notify("Updating the database")
+        push("checking the database (kobd index migrate) ...")
+        var error: String? = null
+        var last = ""
+        val code = try {
+            val cfg = File(Kob.dir(this), "kob-executor.toml").path
+            val p = Kob.command(this, "index", "--config", cfg, "migrate").redirectErrorStream(true).start()
+            process = p
+            p.outputStream.close()
+            p.inputStream.bufferedReader().forEachLine {
+                push(it)
+                if (it.startsWith("Error:")) error = it.removePrefix("Error:").trim()
+                if (it.isNotBlank()) last = it
+            }
+            p.waitFor()
+        } catch (e: Exception) {
+            error = e.toString()
+            -1
+        } finally {
+            process = null
+        }
+        if (code == 0 || !wanted) return null
+        val what = (error ?: last.ifBlank { "exit code $code" }).take(400)
+        return "the database could not be updated: $what. The old database is unchanged until an update succeeds. Switch Run " +
+            "on to try again; if it fails again, copy the log and report it."
+    }
+
+    /** Stops the service after a failed database update: no restart loop; the main screen shows [failure]. */
+    private fun giveUp(why: String) {
+        failure = why
+        push("not started: $why")
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(PREF_RUNNING, false).apply()
+        wanted = false
+        state = "stopped"
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTE_ID, notification("Not started: the database could not be updated. Open the app.", ongoing = false))
+        stopSelf()
+    }
+
     private fun enterForeground() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
@@ -163,14 +236,14 @@ class ExecutorService : Service() {
     }
 
     @Suppress("DEPRECATION") // Notification.Builder(Context) below API 26 (no channels)
-    private fun notification(text: String): Notification {
+    private fun notification(text: String, ongoing: Boolean = true): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL) else Notification.Builder(this)
         return b.setContentTitle("KOB executor")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentIntent(open)
-            .setOngoing(true)
+            .setOngoing(ongoing)
             .build()
     }
 

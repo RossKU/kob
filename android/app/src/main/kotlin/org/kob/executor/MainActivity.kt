@@ -308,7 +308,8 @@ class MainActivity : Activity() {
         val index = role() == "index"
         // the settings do not change under a running executor
         for (v in listOf<View>(publicRadio, ownRadio, urlEdit, matchRadio, indexRadio, saveButton)) v.isEnabled = !running
-        if (running && !healthBusy) fetchHealth()
+        val updating = st == "updating"
+        if (running && !updating && !healthBusy) fetchHealth()
         val address = prefs.getString("address", "") ?: ""
         // the address of an Executor is always on screen once the app is set up (it is read from the key if the app lost track of it)
         fundingBox.visibility = if (ok && !index) View.VISIBLE else View.GONE
@@ -327,6 +328,10 @@ class MainActivity : Activity() {
         s.append("Executor: ")
         when (st) {
             "running" -> s.append("running for ${human((System.currentTimeMillis() - ExecutorService.startedAtMs) / 1000)}")
+            "updating" -> s.append(
+                "updating the database (${human((System.currentTimeMillis() - ExecutorService.updatingSinceMs) / 1000)} so far; " +
+                    "an update from an earlier version can take some minutes)"
+            )
             "restarting" -> {
                 s.append("restarting in ${maxOf(0, (ExecutorService.retryAtMs - System.currentTimeMillis()) / 1000)} s")
                 warnings += "the executor ended (${ExecutorService.lastExit}) and is started again"
@@ -337,7 +342,7 @@ class MainActivity : Activity() {
         s.append('\n')
 
         val h = health
-        if (running && h != null) {
+        if (running && !updating && h != null) {
             val lag = if (h.isNull("lag_seconds")) null else h.optLong("lag_seconds")
             val caught = h.optBoolean("caught_up")
             s.append("Indexer: ${h.optString("state").replace('_', ' ')}, ")
@@ -366,14 +371,15 @@ class MainActivity : Activity() {
             }
             if (!caught && lag != null && lag > 3600) warnings += "catching up: ${human(lag)} behind (the first catch-up takes hours)"
             if (!h.isNull("last_error") && h.optString("state") != "following") warnings += "node: ${h.optString("last_error")}"
-        } else if (running) {
+        } else if (running && !updating) {
             s.append("Read API: ${healthError ?: "waiting for it"}\n")
         }
         val line = statusLine()
-        if (running && line != null) {
+        if (running && !updating && line != null) {
             // "indexer ... | nodes ... | N transactions sent, ... | funds X KAS | no warnings"
             for (part in line.split(" | ")) if (!part.startsWith("indexer ") && !part.startsWith("nodes: ") && !part.startsWith("fast start: ")) s.append(part).append('\n')
         }
+        ExecutorService.failure?.let { if (!running) warnings += "not started: $it" }
         val kas = balanceKas
         if (ok && !index && kas != null && kas < Kob.MIN_FUNDS_KAS) warnings += "funds below ${Kob.MIN_FUNDS_KAS.toInt()} KAS: send more to the funding address (it trades while the coins last)"
         s.append(if (warnings.isEmpty()) "Warnings: none" else "Warnings:\n" + warnings.joinToString("\n") { " - $it" })
