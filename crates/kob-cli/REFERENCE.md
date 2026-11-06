@@ -511,8 +511,8 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
   1 KAS); the freed carriers pay the fee. One confirmation signs the chain; each later link waits up to `--wait-secs`
   (default 30) for the node to show the previous output.
 - **`kob order sweep --view FILE...`** returns an order's strays to the maker while the order continues in place (same
-  covenant id). **`kob order cancel --view FILE...`** is the maker's cancel from saved indexer views (older contract versions
-  too). Views come from `GET /v1/orders/{id}` or a page such as `GET /v1/orders?maker=<pubkey>&status=active`.
+  covenant id). **`kob order cancel --view FILE...`** is the maker's cancel from saved indexer views (an order under a retired template of
+  the cancel-only table too: through that template's own cancel entry; `kob order sweep` skips such an order). Views come from `GET /v1/orders/{id}` or a page such as `GET /v1/orders?maker=<pubkey>&status=active`.
 - **`kob recover --from FILE... [--amount-left [ID=]AMOUNT] [--cancel --key ...]`** finds the maker's orders on a node alone,
   from the web wallet's backup, an indexer recovery / export file or an indexer view. The search is not exhaustive: an order
   partly filled by an unusual amount is reported `not_found` unless you pass `--amount-left`. `--cancel` cancels every live

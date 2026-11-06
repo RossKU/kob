@@ -26,6 +26,7 @@ fn input_kind(p: &SigPlan) -> String {
         SigPlan::TokenDelegator { template, .. } => format!("{}.delegator", template.name()),
         SigPlan::KronToken { template, .. } => format!("{}.token", template.name()),
         SigPlan::Router { actor, entry, .. } => format!("router.{actor}.{entry}"),
+        SigPlan::RetiredCancel { template, .. } => format!("{}.cancel(retired)", template.name()),
     }
 }
 

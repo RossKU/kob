@@ -488,6 +488,7 @@ pub fn build_replace(
     }
     let (built, _) = build_with_funding(funding, vec![], |f| {
         Action::CancelOrder(CancelOrder {
+            retired: None,
             order: live.order.clone(),
             custody: live.custody.clone(),
             prefund: live.prefund.clone(),
@@ -737,6 +738,9 @@ USAGE
   The order's KAS, its custody, the strays of its own token(s) and foreign strays (other tokens sent to it) return to
   the maker in one transaction per order; strays one transaction cannot take are reported. Fee from the released KAS,
   else the smallest sufficient KAS UTXO of the key. (`kob order cancel --view FILE` does the same from saved views.)
+  An order under an older contract version (a retired template of this build's cancel-only table, which the indexer's
+  single-order view marks `cancel_only`) is cancelled through that template's own cancel entry; nothing else is built
+  for it.
 ";
 
 /// Run `kob cancel`.

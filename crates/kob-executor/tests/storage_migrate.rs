@@ -37,6 +37,7 @@ enum Legacy {
 
 fn cancel(c: &Ctx, order: OrderUtxo<AnyState>, custody: Option<TokenUtxo>, strays: Vec<TokenUtxo>) -> SignedTx {
     c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order,
         custody,

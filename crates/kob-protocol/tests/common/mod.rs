@@ -798,6 +798,7 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
     // ------------------------------------------------ cancel, cancel-replace (incl. strays)
     let a_id = cov(0xa1);
     let cancel = |o: OrderUtxo<AnyState>, custody: Option<TokenUtxo>| CancelOrder {
+        retired: None,
         prefund: None,
         order: o,
         custody,
@@ -854,12 +855,14 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
     // "Cancel all" of a repeat position: the entry and its booked exits in one transaction.
     let entry_b = IfdBidState { rpt_amount: 1 + 16 * WHOLE, amount_left: 3 * WHOLE, ..ifd_bid(MAKER_A, 10, t3) };
     let exit_items = [(0xc1u8, 4i64, 30u8), (0xc2, 3, 34)].map(|(c, n, tag)| CancelItem {
+        retired: None,
         prefund: None,
         order: order(tag, carrier(), cov(c), 2_000, AnyState::KobCondAsk(booked_ask_exit(t3, n))),
         custody: Some(custody(tag + 1, n, cov(c), 2_000)),
         strays: vec![],
     });
     let mut orders = vec![CancelItem {
+        retired: None,
         prefund: None,
         order: order(50, entry_b.escrow().unwrap() as u64, cov(0xd1), 1_000, AnyState::KobIfdBid(entry_b)),
         custody: None,
@@ -882,12 +885,14 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
         "cancel.position.repeatSellFirst",
         Action::CancelPosition(position(vec![
             CancelItem {
+                retired: None,
                 prefund: None,
                 order: order(60, entry_a.escrow(carrier() as i64).unwrap() as u64, cov(0xf1), 1_000, AnyState::KobIfdAsk(entry_a)),
                 custody: Some(custody(61, 6, cov(0xf1), 1_000)),
                 strays: vec![],
             },
             CancelItem {
+                retired: None,
                 prefund: None,
                 order: order(40, xb.escrow(1).unwrap() as u64, cov(0xe1), 2_000, AnyState::KobCondBid(xb)),
                 custody: None,

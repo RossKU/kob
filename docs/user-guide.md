@@ -264,6 +264,12 @@ Status words: open, partly filled, filled, cancelled, refunded, expired (IOC/FOK
   (the new order is good for another 90 days from now).
 * **Stray tokens.** Tokens sent to an order from outside are not liquidity. "Sweep strays" returns them and keeps the order open;
   a cancel returns them too. Once an order closes, its strays are lost for good.
+* **Older contract versions.** A contract change gives new orders a new contract version; an order you placed before keeps its own
+  until it ends. Nothing fills it any more, arms or trails its stop or runs its exits. An order of a version this app still knows is
+  marked "older contract version — cancel only": its terms are shown, **Cancel** (and "Cancel all") returns its tokens, carriers,
+  strays and KAS to you, and the signer says "Cancel an order under an older contract version (cancel only)". Amend, Sweep and Refund
+  are not offered for it: cancel it and place it again. An order of a version this app does not know is marked "older contract version"
+  without a Cancel button; cancel it with the KOB release it was placed with.
 
 **Balances the wallet does not show** (top of My orders) lists free tokens, tokens "In your orders", strays, "Free KAS", "KAS
 locked in orders" and "KAS on your token UTXOs": every token UTXO carries KAS (its carrier and, after a buy, a price

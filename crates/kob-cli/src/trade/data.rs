@@ -461,6 +461,11 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
     }
     let state = view.state.clone().ok_or("the indexer has not proven the order's current state")?;
     let (txid, index, _) = view.current.ok_or("the order has no current UTXO (it has ended)")?;
+    if kob_protocol::retired::retired_by_hash(&view.template_hash).is_some() {
+        return Err(
+            "the order is under an older contract version: it is only cancelled (kob cancel), nothing else is built for it".into()
+        );
+    }
     let tpl = order_template(&view.template_hash).ok_or("the order's template is not pinned by this build")?;
     let ospk = order_spk(tpl, &state)?;
     // custodies and own strays

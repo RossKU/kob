@@ -230,10 +230,12 @@ fn input_item(i: &MIn) -> Item {
     let value = i.entry.amount;
     let (holder, what) = match &i.plan {
         SigPlan::P2pk { pubkey } => (Holder::Key(*pubkey), What::Kas),
-        SigPlan::Entry { template: t, state, .. } => match AnyState::decode(*t, state) {
-            Ok(s) => (cov.map(Holder::Cov).unwrap_or(Holder::Unknown), What::Order(*t, s)),
-            Err(e) => (Holder::Unknown, What::Other(format!("undecodable {}: {e}", t.name()))),
-        },
+        SigPlan::Entry { template: t, state, .. } | SigPlan::RetiredCancel { template: t, state, .. } => {
+            match AnyState::decode(*t, state) {
+                Ok(s) => (cov.map(Holder::Cov).unwrap_or(Holder::Unknown), What::Order(*t, s)),
+                Err(e) => (Holder::Unknown, What::Other(format!("undecodable {}: {e}", t.name()))),
+            }
+        }
         SigPlan::TokenLeader { template: t, state, .. } | SigPlan::TokenDelegator { template: t, state, .. } => {
             let s = TokenState::Kcc20(state.clone());
             (token_holder(&s), What::Token(cov, *t, s))

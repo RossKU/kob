@@ -105,6 +105,13 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
                 token_in(&mut d, i, &TokenState::Kron(state.clone()), cov, value, me, units)
             }
             SigPlan::Router { actor, entry, .. } => format!("in  #{i}  router {actor} `{entry}` ({})", kas(value)),
+            SigPlan::RetiredCancel { template, retired, .. } => format!(
+                "in  #{i}  order {} {} `cancel` (older contract version {}, cancel only; {} on it)",
+                template.name(),
+                inp.utxo.covenant_id.map(|c| show_id(&c, "")).unwrap_or_default(),
+                &kob_protocol::json::to_hex(retired)[..8],
+                kas(value)
+            ),
         };
         d.inputs.push(line);
     }
@@ -115,7 +122,9 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
         .iter()
         .zip(&built.plans)
         .filter_map(|(i, p)| match p {
-            SigPlan::Entry { template, .. } => i.utxo.covenant_id.map(|c| (c, template.name().to_string())),
+            SigPlan::Entry { template, .. } | SigPlan::RetiredCancel { template, .. } => {
+                i.utxo.covenant_id.map(|c| (c, template.name().to_string()))
+            }
             _ => None,
         })
         .collect();

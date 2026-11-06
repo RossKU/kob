@@ -44,7 +44,8 @@ pub mod api {
         kob_protocol::VERSION.to_string()
     }
     pub fn self_check() -> R<()> {
-        artifacts::self_check()
+        artifacts::self_check()?;
+        kob_protocol::retired::self_check()
     }
     pub fn templates() -> R<String> {
         out(&artifacts::template_infos())
@@ -165,6 +166,19 @@ pub mod api {
         let s: AnyState = parse("state", state)?;
         s.validate().map_err(|e| e.to_string())?;
         Ok(tx::spk_to_string(&s.spk()))
+    }
+    /// The cancel-only table (`kob_protocol::retired`): today's kind, hash, label, the commit that retired it, the last release
+    /// that carries it, and its only entry (`cancel`).
+    pub fn retired_templates() -> R<String> {
+        out(&kob_protocol::retired::retired_infos())
+    }
+    /// P2SH script public key of an order state under a retired template (`retired`: its hash, of the state's kind).
+    pub fn retired_script_public_key(retired: &str, state: &str) -> R<String> {
+        let s: AnyState = parse("state", state)?;
+        s.validate().map_err(|e| e.to_string())?;
+        let h = kob_protocol::json::hex32(retired)?;
+        let r = kob_protocol::retired::retired_for(&h, s.template_id()).map_err(|e| e.to_string())?;
+        Ok(tx::spk_to_string(&r.spk(&s.encode()).map_err(|e| e.to_string())?))
     }
     /// Encodes a token state of either family (the KRON layout has `id_type` / `is_minter`).
     pub fn encode_token_state(state: &str) -> R<String> {
@@ -971,6 +985,19 @@ pub fn redeem_script(state: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = scriptPublicKey)]
 pub fn script_public_key(state: &str) -> Result<String, JsError> {
     js(api::script_public_key(state))
+}
+
+/// The cancel-only table of retired order templates: `[{"kind", "hash", "label", "retiredBy", "lastRelease", "entries"}]`. An
+/// order under one of them is only ever cancelled by its maker (`cancelOrder` / `cancelPosition` with its `retired` hash).
+#[wasm_bindgen(js_name = retiredTemplates)]
+pub fn retired_templates() -> Result<String, JsError> {
+    js(api::retired_templates())
+}
+
+/// P2SH script public key (kaspa string form) of an order state under the retired template `retired` (its hash, hex).
+#[wasm_bindgen(js_name = retiredScriptPublicKey)]
+pub fn retired_script_public_key(retired: &str, state: &str) -> Result<String, JsError> {
+    js(api::retired_script_public_key(retired, state))
 }
 
 /// Encodes a token state of either family (KCC-20 `owner_scheme` layout or KRON `id_type` layout).

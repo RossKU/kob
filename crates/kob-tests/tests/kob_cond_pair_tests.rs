@@ -151,6 +151,7 @@ pub fn cancel_of(c: CondPairState, pa: TemplateId, pb: TemplateId, strays: Vec<T
     let ask = c.is_ask();
     let custody = tutxo(s_prog(ask, pa, pb), s_tok(ask), 71, c.custody, OID, true);
     Action::CancelOrder(CancelOrder {
+        retired: None,
         order: order(70, PV, OID, ODAA as u64, AnyState::KobCondPair(c)),
         custody: Some(custody),
         prefund: None,

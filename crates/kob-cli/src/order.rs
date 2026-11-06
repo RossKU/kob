@@ -16,8 +16,8 @@ use kob_protocol::tx::{spk_to_string, FeeMode, FeeOptions, OrderUtxo, TokenUtxo,
 use serde_json::{json, Value};
 
 use crate::common::{
-    b_token, build_funded, kas, lookup, order_spk, order_template, outpoint_str, sign_validate_send, spk_bytes, utxo_of, write_json,
-    Funding, Signer,
+    b_token, build_funded, kas, lookup, order_script, outpoint_str, sign_validate_send, spk_bytes, utxo_of, write_json, Funding,
+    Signer,
 };
 use crate::inputs::{self, TokenView, View};
 use crate::recover::custody_targets;
@@ -58,8 +58,9 @@ CANCEL (every order given)
   token inputs) and foreign strays back to the maker with the order's KAS; strays left behind are reported. Fee from
   the order's released KAS, else the smallest sufficient plain KAS UTXO of the maker.
 
-  An order of a template this build does not pin is skipped (its maker ends it with a raw transaction spending the
-  order's own cancel entry).
+  An order under a RETIRED template of this build's cancel-only table (an older contract version) is cancelled the same
+  way, through that template's own cancel entry (nothing else is built for it: `kob order sweep` skips it). An order of
+  any other template this build does not pin is skipped (its maker ends it with the KOB release it was placed with).
 
 OUTPUT
   --yes, -y     sign and submit without asking. Without it, each order is described and a terminal asks (type yes);
@@ -289,10 +290,20 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
         return Ok(Err(skip(format!("another maker's order ({})", to_hex(&state.maker())))));
     }
     let Some((cur_txid, cur_index, _)) = v.current else { return Ok(Err(skip("the view names no current UTXO (closed?)"))) };
-    let Some(tpl) = order_template(&v.template_hash) else {
-        return Ok(Err(skip("template is not pinned by this build")));
+    let Some(script) = order_script(&v.template_hash) else {
+        return Ok(Err(skip("template is neither pinned by this build nor in its cancel-only table")));
     };
-    let order_spk = order_spk(tpl, state)?;
+    if script.retired().is_some() && a.op == Op::Sweep {
+        return Ok(Err(skip("an order under an older contract version is only cancelled (kob order cancel)")));
+    }
+    if state.template_id() != script.kind() {
+        return Ok(Err(refuse(format!(
+            "the view's state is a {}, its template a {}",
+            state.template_id().name(),
+            script.kind().name()
+        ))));
+    }
+    let order_spk = script.spk(state)?;
     let own_program = state
         .token_tpl_hash()
         .and_then(|h| token_template_by_hash(&h))
@@ -447,6 +458,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
         })?,
         Op::Cancel => build_funded(true, &a.node, &a.network, &maker, |funding| {
             build(&Action::CancelOrder(CancelOrder {
+                retired: script.retired(),
                 order: OrderUtxo { utxo: order_utxo.clone(), state: state.clone() },
                 custody: custody.clone(),
                 prefund: prefund.clone(),
@@ -488,7 +500,11 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
         Op::Cancel => (
             format!("{covh}.cancel.json"),
             format!(
-                "cancel {covh}: ends the order; returns {}{} and the order's KAS to the maker; fee paid by {paid_by}",
+                "cancel {covh}{}: ends the order; returns {}{} and the order's KAS to the maker; fee paid by {paid_by}",
+                match script {
+                    crate::common::OrderScript::Retired(r) => format!(" (older contract version, cancel only: {})", r.label()),
+                    crate::common::OrderScript::Pinned(_) => String::new(),
+                },
                 custody
                     .iter()
                     .chain(prefund.iter())
@@ -502,7 +518,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
             ),
         ),
     };
-    let info = json!({"action": if a.op == Op::Sweep { "sweep" } else { "cancel" }, "covenant_id": covh, "kind": state.template_id().name(), "returned": returned});
+    let info = json!({"action": if a.op == Op::Sweep { "sweep" } else { "cancel" }, "covenant_id": covh, "kind": state.template_id().name(), "template": script.describe(), "returned": returned});
     Ok(Ok(Prepared { built, name, info, disclosure, funding, returned, left }))
 }
 

@@ -534,9 +534,11 @@ orders". Any route answers `504 timeout` when a read outlasts `request_timeout_m
 
 ### 3.9 `GET /v1/orders/{covenant_id}`
 
-One order. `404 not_found` ("unknown covenant id") when the id is unknown **or** its template is not one this build pins
-([spec/template-retirement.md](spec/template-retirement.md)); `400` when the id is not 32 bytes of hex. Light lane. The
-single-order view adds `children`, `custody` and `strays`.
+One order. `404 not_found` ("unknown covenant id") when the id is unknown **or** its template is neither one this build pins
+nor one of its cancel-only table ([spec/template-retirement.md](spec/template-retirement.md)); `400` when the id is not 32
+bytes of hex. Light lane. The single-order view adds `children`, `custody` and `strays`. An order under a retired template of
+the cancel-only table is served with `"cancel_only": true` (its `template_hash` is the retired one): only its maker's cancel is
+built for it; no list includes it.
 
 ```
 curl -s $API/v1/orders/$ORDER

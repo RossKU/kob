@@ -65,6 +65,7 @@ async fn compact_records_are_a_small_fraction_of_the_raw_transactions() {
     c.push(&[&fill]).await;
     let a6 = AskState { amount_left: 6 * WHOLE, ..a };
     let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order: c.w.order(&fill, find_cov(&fill, &cov).unwrap(), AnyState::KobAsk(a6)),
         custody: Some(c.w.token_at(&fill, find_custody(&fill, &cov, 6 * WHOLE).unwrap(), Kcc20State::custody(6 * WHOLE, cov.0, EXT))),

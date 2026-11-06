@@ -576,6 +576,7 @@ mod kob_orders_on_kforge {
             state: TokenState::Kron(KronState::custody(10, order_cov)),
         };
         let cancel = Action::CancelOrder(CancelOrder {
+            retired: None,
             order: OrderUtxo {
                 utxo: Utxo {
                     transaction_id: tx.id,

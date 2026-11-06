@@ -82,6 +82,7 @@ fn cancel(w: &World, live: &Live) -> SignedTx {
     let ci = find_custody(&live.tx, &live.cov, live.left).unwrap_or(1);
     let oi = find_cov(&live.tx, &live.cov).unwrap_or(0);
     let req = CancelOrder {
+        retired: None,
         prefund: None,
         order: w.order(&live.tx, oi, AnyState::KobAsk(live.state.clone())),
         custody: Some(w.token_at(&live.tx, ci, Kcc20State::custody(live.left, live.cov.0, EXT))),

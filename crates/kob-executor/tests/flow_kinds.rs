@@ -76,6 +76,7 @@ async fn ask_cancel_returns_tokens_and_closes() {
     let cov = c.w.cov(&create, 0);
     let custody = c.w.token_at(&create, 1, Kcc20State::custody(10 * WHOLE, cov.0, EXT));
     let req = CancelOrder {
+        retired: None,
         prefund: None,
         order: c.w.order(&create, 0, AnyState::KobAsk(a)),
         custody: Some(custody),
@@ -214,6 +215,7 @@ async fn bid_escrow_fills_and_reports_estimated_amount() {
     // cancel the rest
     let oi = find_cov(&fill, &cov).unwrap();
     let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order: c.w.order(&fill, oi, AnyState::KobBid(b0)),
         custody: None,

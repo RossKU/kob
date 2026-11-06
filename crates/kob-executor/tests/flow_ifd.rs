@@ -253,12 +253,14 @@ async fn cancel_all_of_a_repeat_position_cancels_entry_and_exits_in_one_transact
         &c,
         vec![
             CancelItem {
+                retired: None,
                 prefund: None,
                 order: c.w.order(&fill, find_cov(&fill, &cov).unwrap(), AnyState::KobIfdBid(entry6)),
                 custody: None,
                 strays: vec![],
             },
             CancelItem {
+                retired: None,
                 prefund: None,
                 order: c.w.order(&fill, xi, AnyState::KobCondAsk(exit4)),
                 custody: Some(c.w.token_at(&fill, ci, Kcc20State::custody(4 * WHOLE, exit.0, EXT))),

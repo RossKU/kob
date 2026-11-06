@@ -217,6 +217,7 @@ fn chain(c: &Ctx, blocks: u64) -> Vec<Hash32> {
             let (create, a) = asks.remove(0);
             let cov = c.w.cov(&create, 0);
             let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+                retired: None,
                 prefund: None,
                 order: c.w.order(&create, 0, AnyState::KobAsk(a)),
                 custody: Some(c.w.token_at(&create, 1, Kcc20State::custody(2 * WHOLE, cov.0, EXT))),

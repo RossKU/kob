@@ -282,6 +282,7 @@ fn sell_two_bids(rtip: i64) -> Action {
 
 fn cancel(o: OrderUtxo<AnyState>, custody: Option<TokenUtxo>) -> Action {
     Action::CancelOrder(CancelOrder {
+        retired: None,
         order: o,
         custody,
         prefund: None,

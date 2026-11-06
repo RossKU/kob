@@ -398,6 +398,7 @@ async fn a_pair_order_is_refunded_by_anyone_after_expiry_and_cancelled_with_stra
     let v = view(&c, &py.cov);
     assert!(v.strays.as_ref().unwrap().iter().all(|s| !s.foreign));
     let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         order: c.w.order(&py.create, 0, AnyState::KobPair(y.clone())),
         custody: o.custody.clone(),
         prefund: None,

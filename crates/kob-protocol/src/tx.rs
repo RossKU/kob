@@ -224,6 +224,21 @@ pub enum SigPlan {
         #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
         signer: Option<[u8; 32]>,
     },
+    /// The maker's `cancel(sig)` of an order under a RETIRED template (`crate::retired`, the cancel-only table): the redeem script
+    /// is the retired template's `prefix ‖ state ‖ suffix` (`template`: today's kind whose state layout and cancel entry it
+    /// shares). No other entry of a retired template is ever built: this plan names no entry.
+    #[serde(rename_all = "camelCase")]
+    RetiredCancel {
+        template: TemplateId,
+        /// The retired template hash.
+        #[serde(with = "crate::json::field")]
+        retired: [u8; 32],
+        #[serde(with = "crate::json::field")]
+        state: Vec<u8>,
+        /// The order's maker: the key whose SIGHASH_ALL signature `cancel` checks.
+        #[serde(with = "crate::json::field")]
+        maker: [u8; 32],
+    },
     /// Entry call of a KOB router intent (`crate::router`): the actor by name and its state span.
     #[serde(rename_all = "camelCase")]
     Router {
@@ -252,6 +267,7 @@ impl SigPlan {
                 Witness::CovenantId => None,
             },
             SigPlan::KronToken { signer, .. } => *signer,
+            SigPlan::RetiredCancel { maker, .. } => Some(*maker),
         }
     }
 
@@ -265,6 +281,9 @@ impl SigPlan {
             }
             SigPlan::KronToken { template: t, state, .. } => Some(state.redeem_with(token_template(*t))),
             SigPlan::Router { actor, state, .. } => router_actor(actor).ok()?.template().redeem(state).ok(),
+            SigPlan::RetiredCancel { template: t, retired, state, .. } => {
+                crate::retired::retired_for(retired, *t).ok()?.redeem(state).ok()
+            }
         }
     }
 
@@ -289,6 +308,9 @@ impl SigPlan {
                 }
                 a.template().redeem(state).map(|_| ())
             }
+            SigPlan::RetiredCancel { template: t, retired, state, .. } => {
+                crate::retired::retired_for(retired, *t)?.redeem(state).map(|_| ())
+            }
         }
     }
 
@@ -302,7 +324,7 @@ impl SigPlan {
             }
             SigPlan::KronToken { template: t, state, .. } => state.spk_with(token_template(*t)),
             // an unknown actor or a malformed state gives an unspendable empty script (`check` refuses such a plan)
-            SigPlan::Router { .. } => self
+            SigPlan::Router { .. } | SigPlan::RetiredCancel { .. } => self
                 .redeem()
                 .map(|r| kaspa_txscript::pay_to_script_hash_script(&r))
                 .unwrap_or_else(|| ScriptPublicKey::new(0, Default::default())),
@@ -362,6 +384,9 @@ impl SigPlan {
                     });
                 }
                 crate::router::entry_sigscript(a, state, entry, &vals)
+            }
+            SigPlan::RetiredCancel { template: t, retired, state, .. } => {
+                crate::retired::retired_for(retired, *t)?.cancel_sigscript(state, need("retired cancel")?)
             }
         }
     }

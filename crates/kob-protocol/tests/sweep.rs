@@ -151,6 +151,7 @@ fn foreign_strays_go_back_to_the_maker_with_a_cancel_and_with_a_permissionless_r
         // the maker's cancel of an ask with custody, an own stray and foreign strays
         let a = AnyState::KobAsk(ask(MAKER_A, P250, t)).into_family(t.family());
         let c = CancelOrder {
+            retired: None,
             prefund: None,
             order: order(70, CARRIER, O, 1_000, a.clone()),
             custody: Some(tutxo(t, TOKEN_COV, 71, 10 * WHOLE, O, true)),

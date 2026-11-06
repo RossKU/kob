@@ -264,6 +264,7 @@ async fn the_open_token_list_reports_the_scale_of_the_earliest_order_after_it_en
     let first = c.w.cov(&create, 0);
     assert_eq!((list().open_bids, list().market_scale), (1, Some(SCALE)));
     let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order: c.w.order(&create, 0, AnyState::KobBid(b.clone())),
         custody: None,

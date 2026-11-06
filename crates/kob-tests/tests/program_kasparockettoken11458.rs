@@ -661,6 +661,7 @@ mod kob_orders {
             format!("0000{}", kob_protocol::json::to_hex(custody.state.as_kcc20().unwrap().spk_with(template(program())).script()))
         );
         let cancel = Action::CancelOrder(CancelOrder {
+            retired: None,
             order: OrderUtxo {
                 utxo: Utxo { transaction_id: tx.id, index: 0, amount: 10 * KAS, block_daa_score: 600, covenant_id: Some(order_cov) },
                 state: s,

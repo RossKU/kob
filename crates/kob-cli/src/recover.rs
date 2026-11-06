@@ -21,9 +21,9 @@ use kob_protocol::Family;
 use serde_json::{json, Value};
 
 use crate::common::{
-    amount_is_the_only_mutable_field, amount_left_in, build_funded, decode_state, encode_state, kas, lookup, order_spk,
-    order_template, outpoint_str, parse_amount, script_is_fixed, sign_validate_send, spk_bytes, utxo_of, with_amount_left, write_json,
-    Funding, Signer,
+    amount_is_the_only_mutable_field, amount_left_in, build_funded, decode_state, encode_state, kas, lookup, order_script,
+    outpoint_str, parse_amount, script_is_fixed, sign_validate_send, spk_bytes, utxo_of, with_amount_left, write_json, Funding,
+    OrderScript, Signer,
 };
 use crate::inputs::{self, Entry, Rejected};
 use crate::wrpc::NodeUtxo;
@@ -64,8 +64,10 @@ SEARCH
   custody (`amountLeft` base units owned by the covenant id) is rebuilt and looked up the same way: `verified`,
   `missing`, or `unknown` (KCC-20 without an extension commitment in the file). `not_found`: spent, or a state the
   search did not reach (see above; kinds with a stop, an armed band or repeat fields also change other fields).
-  `unsupported`: the template is not pinned by this build, or the state does not decode. An order of a template this
-  build does not pin is ended by its maker with a raw transaction spending the order's own cancel entry.
+  `unsupported`: the template is neither pinned by this build nor in its cancel-only table, or the state does not
+  decode. An order under a RETIRED template of the cancel-only table (an older contract version) is searched under that
+  template's own script, and --cancel cancels it through that template's cancel entry (nothing else is built for it); an
+  order of any other template this build does not pin is ended by its maker with the KOB release it was placed with.
 
 OUTPUT
   --out         write the JSON report here (default: stdout); a summary goes to stderr. Each live order carries
@@ -225,13 +227,19 @@ pub struct Candidate {
 /// 3. each known state with `amountLeft = original - k x minFill`, k = 1, 2, ... while positive. A partial fill splices
 ///    the new `amountLeft` into the script and any amount of at least `minFill` may have been filled, so this is a
 ///    bounded guess and NOT exhaustive.
+#[cfg(test)]
 pub fn candidates(tpl: TemplateId, known: &[AnyState], hints: &[i64]) -> Vec<Candidate> {
+    candidates_under(OrderScript::Pinned(tpl), known, hints)
+}
+
+/// [`candidates`] under a pinned or a retired template (the scripts of a retired template's orders are its own).
+pub fn candidates_under(script: OrderScript, known: &[AnyState], hints: &[i64]) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = vec![];
     let push = |s: AnyState, via: &'static str, out: &mut Vec<Candidate>| {
         if out.len() >= MAX_CANDIDATES {
             return;
         }
-        if let Ok(spk) = order_spk(tpl, &s) {
+        if let Ok(spk) = script.spk(&s) {
             if !out.iter().any(|c| c.spk == spk) {
                 out.push(Candidate { state: s, spk, via });
             }
@@ -365,8 +373,10 @@ impl Status {
 pub struct Found {
     /// The merged entry.
     pub entry: Entry,
-    /// The template (when this build pins it).
+    /// The order kind of its template (when this build pins it or keeps it in its cancel-only table).
     pub tpl: Option<TemplateId>,
+    /// The template: pinned, or retired (cancel only).
+    pub script: Option<OrderScript>,
     /// Status.
     pub status: Status,
     /// Explanation.
@@ -404,7 +414,8 @@ fn hints_for(hints: &[(Option<[u8; 32]>, String)], covenant_id: [u8; 32], scale:
 fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String)]) -> (Found, Vec<Candidate>) {
     let mut f = Found {
         entry: e.clone(),
-        tpl: order_template(&e.template_hash),
+        tpl: order_script(&e.template_hash).map(|s| s.kind()),
+        script: order_script(&e.template_hash),
         status: Status::Unsupported,
         note: String::new(),
         known: None,
@@ -415,8 +426,8 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
         prefund: Custody::None,
         cancel: None,
     };
-    let Some(tpl) = f.tpl else {
-        f.note = "template is not pinned by this build".into();
+    let (Some(tpl), Some(script)) = (f.tpl, f.script) else {
+        f.note = "template is neither pinned by this build nor in its cancel-only table".into();
         return (f, vec![]);
     };
     let mut known: Vec<AnyState> = vec![];
@@ -453,7 +464,7 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
     }
     let (amounts, notes) = hints_for(hints, e.covenant_id, Some(first.scale()));
     f.note += &notes;
-    let c = candidates(tpl, &known, &amounts);
+    let c = candidates_under(script, &known, &amounts);
     f.searched = c.len();
     f.status = Status::NotFound;
     (f, c)
@@ -557,7 +568,7 @@ pub fn order_json(f: &Found) -> Value {
     let mut v = json!({
         "covenant_id": to_hex(&f.entry.covenant_id),
         "kind": state.map(|s| s.template_id().name()),
-        "template": f.tpl.map(|_| "pinned"),
+        "template": f.script.map(|s| s.describe()),
         "template_hash": to_hex(&f.entry.template_hash),
         "maker": state.map(|s| to_hex(&s.maker())),
         "status": f.status.label(),
@@ -628,6 +639,7 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
     let fee = FeeOptions { fee_rate: Some(a.fee_rate), fee_mode: if a.priority_fee { FeeMode::Priority } else { FeeMode::Relay } };
     let (built, funding) = build_funded(true, &a.node, &a.network, &maker, |funding| {
         build(&Action::CancelOrder(CancelOrder {
+            retired: f.script.and_then(|s| s.retired()),
             order: OrderUtxo { utxo: utxo.clone(), state: state.clone() },
             custody: custody.clone(),
             prefund: prefund.clone(),
@@ -723,7 +735,7 @@ fn summary(report: &Value, a: &Args) {
             o["status"].as_str().unwrap_or(""),
             o["covenant_id"].as_str().unwrap_or(""),
             o["kind"].as_str().unwrap_or("?"),
-            o["template"].as_str().unwrap_or("template not pinned by this build")
+            o["template"].as_str().unwrap_or("template neither pinned by this build nor in its cancel-only table")
         );
         if let Some(op) = o["outpoint"].as_str() {
             let v = o["value"].as_str().and_then(|v| v.parse().ok()).unwrap_or(0);

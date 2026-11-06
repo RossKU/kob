@@ -63,6 +63,7 @@ fn find_cust(t: &SignedTx, owner: &Hash32, amount: i64) -> Option<usize> {
 
 fn cancel_req(c: &Ctx, order: OrderUtxo<AnyState>, custody: Option<TokenUtxo>, strays: Vec<TokenUtxo>) -> SignedTx {
     c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order,
         custody,

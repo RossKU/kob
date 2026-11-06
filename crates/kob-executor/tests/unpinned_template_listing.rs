@@ -7,7 +7,8 @@
 //! order's output: such an order is unknown to this build, like an order of any other template it does not pin. No read
 //! returns it: not the matcher's and keepers' live orders, not the public book, its counts and stats, not `/v1/orders`, and
 //! not `/v1/orders/{id}` (not found: the web wallet then resolves the order from its own placement record and marks it
-//! `old-template`).
+//! `old-template`). The one exception is an order under a RETIRED template of the cancel-only table (`kob_protocol::retired`):
+//! `/v1/orders/{id}` serves it, marked `cancel_only`, for its maker's cancel; it is still listed nowhere.
 
 mod common;
 
@@ -91,4 +92,45 @@ async fn a_resting_ask_of_an_unpinned_template_leaves_every_book_list_and_count(
     record_under_another_template(&c, &cov);
     assert_eq!(c.hs.status(&cov), "open", "still live on chain (its maker cancels it with the release it was placed with)");
     assert_eq!(seen(&c, &cov), (false, false, false, false, false, 0), "another template: listed nowhere, not found by id");
+}
+
+/// The database of an older build: the order recorded under `tpl` (a template hash of the same layout).
+fn record_under(c: &Ctx, cov: &Hash32, tpl: [u8; 32]) {
+    let g = c.hs.ingest.lock().unwrap();
+    kob_executor::indexer::ids::intern(g.conn(), &tpl).unwrap();
+    g.conn()
+        .execute(
+            "UPDATE orders SET template_id = (SELECT id FROM ids WHERE h = ?1) WHERE covenant_id = ?2",
+            rusqlite::params![&tpl[..], &cov.0[..]],
+        )
+        .unwrap();
+}
+
+/// An order under a RETIRED template of the cancel-only table (`kob_protocol::retired`, the bid re-version's `KobBid` b995661f):
+/// listed nowhere and offered to no matcher or keeper, like any template this build does not pin, but the single-order view
+/// serves it, marked `cancel_only` and naming the retired template, so that its maker can find and cancel it (`kob cancel`).
+#[tokio::test]
+async fn an_order_of_a_retired_template_is_served_by_id_only_and_marked_cancel_only() {
+    let c = Ctx::new();
+    let b = bid(MAKER_A, 245_000_000);
+    let value = b.escrow(10 * WHOLE, 3).unwrap() as u64;
+    let create = c.w.create_tx(AnyState::KobBid(b), value, MAKER_A, 0);
+    c.push(&[&create]).await;
+    let cov = c.w.cov(&create, 0);
+    assert!(reads::order(c.hs.ingest.lock().unwrap().conn(), &read_ctx(&c), &cov).unwrap().unwrap().cancel_only.is_none());
+    let retired = kob_protocol::retired::retired().iter().find(|r| r.label() == "KobBid b995661f").unwrap();
+    record_under(&c, &cov, retired.hash);
+    let offered = |c: &Ctx| {
+        let g = c.hs.ingest.lock().unwrap();
+        let ids = |v: Vec<kob_executor::matcher::book::ListedOrder>| v.iter().any(|o| o.id() == cov.0);
+        (ids(listed_orders(g.conn()).unwrap()), ids(unlisted_orders(g.conn()).unwrap()))
+    };
+    assert_eq!(offered(&c), (false, false), "neither listed nor offered to the keepers");
+    let g = c.hs.ingest.lock().unwrap();
+    let f = OrderFilter { maker: None, token: Some(Hash32(TOKEN_COV)), status: None };
+    assert!(!reads::orders(g.conn(), &read_ctx(&c), &f, 100, None).unwrap().items.iter().any(|o| o.covenant_id == cov.to_hex()));
+    let v = reads::order(g.conn(), &read_ctx(&c), &cov).unwrap().expect("the single-order view serves it");
+    assert_eq!(v.cancel_only, Some(true));
+    assert_eq!(v.template_hash, retired.hash_hex());
+    assert!(v.state_known && v.current.is_some(), "its current UTXO and state are what its maker's cancel spends");
 }

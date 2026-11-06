@@ -509,6 +509,11 @@ pub struct CreateOrder {
 #[serde(rename_all = "camelCase")]
 pub struct CancelOrder {
     pub order: OrderUtxo<AnyState>,
+    /// The order is under a RETIRED template (`crate::retired`, the cancel-only table): its template hash, of the kind the state
+    /// decodes as. Only the maker's plain cancel is built for it ([`SigPlan::RetiredCancel`]): no replacement, no top-up, no
+    /// records.
+    #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
+    pub retired: Option<[u8; 32]>,
     /// Token-holding kinds: the custody token UTXO (a pair order: the first of [`AnyState::custodies`]).
     #[serde(default)]
     pub custody: Option<TokenUtxo>,
@@ -977,11 +982,14 @@ pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx>
     let o = &r.order;
     let id = o.state.template_id();
     let (tokens, custodies, suffix) = own_tokens(&o.state)?;
+    if r.retired.is_some() && (r.replace.is_some() || !r.tokens.is_empty() || !r.records.is_empty()) {
+        return invalid("an order under a retired template is only cancelled: no replacement, top-up or records");
+    }
     let subject = CancelSubject {
         maker: o.state.maker(),
         tokens,
         custodies,
-        plan: entry(id, o.state.encode(), "cancel", vec![Arg::Sig(o.state.maker())]),
+        plan: cancel_plan(&o.state, r.retired)?,
         role: format!("{}.cancel{suffix}", id.name()),
     };
     let parts = CancelParts {
@@ -998,6 +1006,20 @@ pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx>
         fee: &r.fee,
     };
     cancel_with(subject, &o.utxo, parts, budgets)
+}
+
+/// The signing plan of the maker's cancel of an order: its template's `cancel(sig)`, or, for an order under a retired template
+/// (`retired`: its template hash), [`SigPlan::RetiredCancel`] of that template, which must be in the cancel-only table and of the
+/// kind the state decodes as.
+fn cancel_plan(s: &AnyState, retired: Option<[u8; 32]>) -> Result<SigPlan> {
+    let id = s.template_id();
+    Ok(match retired {
+        None => entry(id, s.encode(), "cancel", vec![Arg::Sig(s.maker())]),
+        Some(h) => {
+            let r = crate::retired::retired_for(&h, id)?;
+            SigPlan::RetiredCancel { template: r.kind, retired: r.hash, state: s.encode(), maker: s.maker() }
+        }
+    })
 }
 
 /// The inputs and options of a cancel (of [`CancelOrder`]).
@@ -1221,6 +1243,9 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
 #[serde(rename_all = "camelCase")]
 pub struct CancelItem {
     pub order: OrderUtxo<AnyState>,
+    /// The order is under a RETIRED template (`crate::retired`): its template hash ([`CancelOrder::retired`]).
+    #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
+    pub retired: Option<[u8; 32]>,
     #[serde(default)]
     pub custody: Option<TokenUtxo>,
     /// A sell-first `KobIfdPair`'s B prefund custody.
@@ -1255,6 +1280,9 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
     let first = r.orders.first().ok_or_else(|| Error::Invalid("nothing to cancel".into()))?;
     let maker = first.order.state.maker();
     let (tokens, _, _) = own_tokens(&first.order.state)?;
+    if r.orders.iter().any(|o| o.retired.is_some()) && !r.records.is_empty() {
+        return invalid("a cancel of orders under a retired template carries no records");
+    }
     let mut d = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(maker)))?;
     let mut items = vec![];
     for it in &r.orders {
@@ -1264,12 +1292,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
             return invalid("a position cancel covers one maker's orders of one token (or one pair)");
         }
         let id = s.template_id();
-        d.add_input(
-            &it.order.utxo,
-            entry(id, s.encode(), "cancel", vec![Arg::Sig(maker)]),
-            format!("{}.cancel{suffix}", id.name()),
-            0,
-        );
+        d.add_input(&it.order.utxo, cancel_plan(s, it.retired)?, format!("{}.cancel{suffix}", id.name()), 0);
         items.push((it, custodies));
     }
     // per token: (units, extension, first carrier)

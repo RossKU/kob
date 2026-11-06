@@ -14,6 +14,7 @@ use kob_protocol::tx::*;
 
 fn cancel(c: &Ctx, order: OrderUtxo<AnyState>, custody: Option<TokenUtxo>, strays: Vec<TokenUtxo>) -> SignedTx {
     c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order,
         custody,
@@ -172,6 +173,7 @@ async fn cancel_replace_closes_the_old_order_and_creates_the_new_one_from_its_pl
     let custody = c.w.token_at(&create, 1, Kcc20State::custody(10 * WHOLE, old.0, EXT));
     let new_state = AskState { price: 240_000_000, ..a.clone() };
     let req = CancelOrder {
+        retired: None,
         prefund: None,
         order: c.w.order(&create, 0, AnyState::KobAsk(a)),
         custody: Some(custody),

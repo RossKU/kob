@@ -306,6 +306,7 @@ fn cancel_entry(s: IfdPairState, pa: TemplateId, pb: TemplateId, strays: Vec<Tok
     let (custody, prefund) = if a_cust.is_some() { (a_cust, b_cust) } else { (b_cust, None) };
     let v = ifd_value(&s);
     Action::CancelOrder(CancelOrder {
+        retired: None,
         order: order(70, v, E_ID, 1_000, AnyState::KobIfdPair(s)),
         custody,
         prefund,

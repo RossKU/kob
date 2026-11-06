@@ -11,7 +11,7 @@ use kob_protocol::json::{from_hex, hex32, to_hex};
 use kob_protocol::state::{AnyState, TokenState};
 use serde_json::Value;
 
-use crate::common::{encode_state, order_template, read_json};
+use crate::common::{encode_state, order_script, read_json};
 
 /// One order of a backup or export file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,8 +91,8 @@ pub struct View {
 impl View {
     /// The view as a recovery entry (its proven state, if any).
     pub fn entry(&self) -> Entry {
-        let spans = match (&self.state, order_template(&self.template_hash)) {
-            (Some(s), Some(t)) => encode_state(t, s).map(|b| vec![b]).unwrap_or_default(),
+        let spans = match (&self.state, order_script(&self.template_hash)) {
+            (Some(s), Some(t)) => encode_state(t.kind(), s).map(|b| vec![b]).unwrap_or_default(),
             _ => vec![],
         };
         Entry {

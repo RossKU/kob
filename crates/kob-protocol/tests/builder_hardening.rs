@@ -72,6 +72,7 @@ fn hostile_exit_state_is_refused_not_trapped() {
 fn builders_refuse_the_hostile_order_without_panicking() {
     let st = hostile_ifd_bid(3);
     let cancel = CancelOrder {
+        retired: None,
         prefund: None,
         order: order(50, 100 * KAS, cov(0xd1), 1_000, st.clone()),
         custody: None,

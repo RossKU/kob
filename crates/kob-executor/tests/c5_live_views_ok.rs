@@ -60,6 +60,7 @@ fn cancel_from_view(c: &Ctx, v: &OrderView) -> SignedTx {
     let custody = v.custody.as_ref().and_then(|cv| cv.utxo.as_ref()).map(token_from_view);
     let strays = v.strays.as_deref().unwrap_or_default().iter().map(token_from_view).collect();
     c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order,
         custody,

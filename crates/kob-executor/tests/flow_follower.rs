@@ -436,6 +436,7 @@ impl Gen {
                     return None;
                 }
                 let tx = c.w.try_sign(&Action::CancelOrder(CancelOrder {
+                    retired: None,
                     prefund: None,
                     order: c.w.order(&lv.tx, lv.idx, lv.state.clone().into_family(self.fam)),
                     custody,

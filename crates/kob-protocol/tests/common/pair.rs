@@ -542,6 +542,7 @@ fn create(order_state: AnyState, value: u64, tokens: Vec<TokenUtxo>) -> Action {
 
 fn cancel(s: AnyState, value: u64, custody: Option<TokenUtxo>, prefund: Option<TokenUtxo>, strays: Vec<TokenUtxo>) -> Action {
     Action::CancelOrder(CancelOrder {
+        retired: None,
         order: order(70, value, X_ID, 1_000, s),
         custody,
         prefund,

@@ -206,6 +206,7 @@ async fn oco_take_profit_leg_fills_without_arming_and_can_be_cancelled() {
     let oi = find_cov(&fill, &cov).unwrap();
     let ci = find_custody(&fill, &cov, 7 * WHOLE).unwrap();
     let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order: c.w.order(&fill, oi, AnyState::KobCondAsk(expect)),
         custody: Some(c.w.token_at(&fill, ci, Kcc20State::custody(7 * WHOLE, cov.0, EXT))),

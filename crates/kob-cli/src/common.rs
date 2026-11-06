@@ -150,6 +150,55 @@ pub fn order_spk(id: TemplateId, s: &AnyState) -> Result<ScriptPublicKey, String
     Ok(template(id).spk(&encode_state(id, s)?))
 }
 
+/// The template an order sits under: one this build pins, or a RETIRED one of its cancel-only table
+/// (`kob_protocol::retired`), for which only the maker's cancel is ever built.
+#[derive(Clone, Copy, Debug)]
+pub enum OrderScript {
+    /// A pinned order kind.
+    Pinned(TemplateId),
+    /// A retired template (its kind is today's kind of the same state layout).
+    Retired(&'static kob_protocol::retired::RetiredTemplate),
+}
+
+impl OrderScript {
+    /// The order kind its state decodes as.
+    pub fn kind(self) -> TemplateId {
+        match self {
+            OrderScript::Pinned(t) => t,
+            OrderScript::Retired(r) => r.kind,
+        }
+    }
+
+    /// The retired template hash (`CancelOrder::retired`), `None` for a pinned template.
+    pub fn retired(self) -> Option<[u8; 32]> {
+        match self {
+            OrderScript::Pinned(_) => None,
+            OrderScript::Retired(r) => Some(r.hash),
+        }
+    }
+
+    /// The order's P2SH script public key for a state of [`OrderScript::kind`].
+    pub fn spk(self, s: &AnyState) -> Result<ScriptPublicKey, String> {
+        match self {
+            OrderScript::Pinned(t) => order_spk(t, s),
+            OrderScript::Retired(r) => r.spk(&encode_state(r.kind, s)?).map_err(|e| e.to_string()),
+        }
+    }
+
+    /// How a report names it: `pinned`, or `retired (cancel only): KobBid b995661f`.
+    pub fn describe(self) -> String {
+        match self {
+            OrderScript::Pinned(_) => "pinned".into(),
+            OrderScript::Retired(r) => format!("retired (cancel only): {}", r.label()),
+        }
+    }
+}
+
+/// The template of an order with this template hash: [`order_template`], else a retired template of the cancel-only table.
+pub fn order_script(hash: &[u8; 32]) -> Option<OrderScript> {
+    order_template(hash).map(OrderScript::Pinned).or_else(|| kob_protocol::retired::retired_by_hash(hash).map(OrderScript::Retired))
+}
+
 /// Base units still open (`amountLeft`), and for a bid its remaining buying power in an escrow of `value` sompi.
 pub fn amount_left_in(s: &AnyState, value: u64) -> Option<i64> {
     match s {

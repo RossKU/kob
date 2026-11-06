@@ -287,6 +287,7 @@ impl Kob {
             }
             let (_, fill, a6, cov) = self.filled.pop_front().expect("checked");
             let cancel = self.w.sign(&Action::CancelOrder(CancelOrder {
+                retired: None,
                 order: self.w.order(&fill, find_cov(&fill, &cov).expect("continuation"), AnyState::KobAsk(a6)),
                 custody: Some(self.w.token_at(
                     &fill,

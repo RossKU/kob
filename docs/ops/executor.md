@@ -619,7 +619,9 @@ node (wRPC JSON)  ->  follower  ->  extract  ->  ingest (one atomic SQLite commi
   the P2SH of a pinned template is never recovered. Orders a database carried over a template change still holds (indexed
   by an older build) are left out of every read: the books, their counts and the stats, the pair books, `/v1/orders`, and
   the matcher's and keepers' live orders; `GET /v1/orders/{id}` (and its events) answers 404, so the web wallet resolves
-  such an order from its own placement record and marks it `old-template`.
+  such an order from its own placement record and marks it `old-template`. The exception is a retired template of the
+  cancel-only table (`kob_protocol::retired`): `GET /v1/orders/{id}` serves such an order marked `cancel_only`, so that its
+  maker can cancel it; it is still left out of every list, book and plan.
 * **Lineage.** Every later spend is classified from the input's own signature script (the revealed
   redeem script must hash to the spent output and match a pinned template; the dispatch tag selects
   the entry, the arguments give the amount in base units). The continuation's state is *proven*, not assumed: the
@@ -2083,7 +2085,8 @@ kob recover --from backup.json --node ws://127.0.0.1:18210 --network testnet-10 
 
 Inputs: the web wallet's backup (`kob-backup`), this export format (version 1 or 2), or indexer order views
 (`GET /v1/orders/{id}`, or a page of them). Orders are deduplicated by covenant id; every state a file names is a search
-candidate and nothing else in a file is trusted. Each order's template must be one this build pins (any other is
+candidate and nothing else in a file is trusted. Each order's template must be one this build pins or a retired one of its
+cancel-only table, searched under that template's own script and cancelled through its own cancel entry (any other is
 `unsupported`: `docs/spec/template-retirement.md`). The candidates are, in this order: the last proven
 state and the given state; each with `amountLeft` = the `--amount-left` hints; each with `amountLeft` = original −
 k × `minFill` for k = 1, 2, … (at most 200 candidates in all). A partial fill splices the new `amountLeft` into the

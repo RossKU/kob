@@ -436,7 +436,7 @@ fn recover_finds_cancels_and_submits() {
     assert!(note.contains("--amount-left") && note.contains("not exhaustive"), "{note}");
     // a template this build does not pin is unknown: unsupported, never searched
     assert_eq!(st([0xb0; 32]), "unsupported");
-    assert_eq!(by_cov(&report, [0xb0; 32])["note"], "template is not pinned by this build");
+    assert_eq!(by_cov(&report, [0xb0; 32])["note"], "template is neither pinned by this build nor in its cancel-only table");
     assert_eq!(by_cov(&report, [0xb0; 32])["candidates"], 0);
     assert_eq!(report["summary"]["live"], 4);
     assert_eq!(report["summary"]["not_found"], 2);
@@ -842,7 +842,7 @@ fn order_sweep_and_cancel_from_views() {
     .unwrap();
     let (report, _) = order::execute(&a).unwrap();
     assert_eq!(report["orders"][0]["status"], "skipped");
-    assert_eq!(report["orders"][0]["reason"], "template is not pinned by this build");
+    assert_eq!(report["orders"][0]["reason"], "template is neither pinned by this build nor in its cancel-only table");
     let (report, _) = sweep(&up, "--dry-run");
     assert_eq!(report["orders"][0]["status"], "skipped");
 
@@ -1000,6 +1000,73 @@ fn candidate_search() {
     let (st, _) = recover::custody_target(&placed, A1, Some(EXT)).unwrap().unwrap();
     assert_eq!((st.amount(), st.owner()), (10 * SCALE, A1));
     assert!(recover::custody_target(&bid_state, A2, None).unwrap().is_none());
+}
+
+/// An order under a RETIRED template of the cancel-only table (`KobBid` b995661f, the bid re-version): `kob order cancel` (from the
+/// indexer's single-order view, `cancel_only`) and `kob recover --cancel` (from a backup record) cancel it through that template's
+/// own script, engine-validated; `kob order sweep` skips it; nothing is submitted in a dry run.
+#[test]
+fn retired_template_orders_are_cancelled_from_views_and_backups() {
+    const AR: [u8; 32] = [0xd1; 32];
+    let r = kob_protocol::retired::retired().iter().find(|r| r.label() == "KobBid b995661f").unwrap();
+    let b = bid(1);
+    let value = b.escrow(10 * SCALE, 3).unwrap() as u64;
+    let s = AnyState::KobBid(b);
+    let spk = r.spk(&s.encode()).unwrap();
+    assert_ne!(spk, s.spk(), "the retired script is not today's");
+    let (url, node) =
+        mock::start(vec![node_utxo(&spk, 0xd2, 0, value, Some(AR)), node_utxo(&p2pk_spk(&pk(1)), 0x91, 0, 50 * KAS, None)]);
+    let dir = tmp("retired");
+    let key = to_hex(&sk(1));
+    let mut vw = view(AR, r.hash, any_json(&s), (0xd2, 0), value, None, vec![]);
+    vw["cancel_only"] = json!(true);
+    let p = write(&dir, "retired.json", &vw);
+    let run = |op: order::Op| {
+        let a = order::parse_args(
+            op,
+            &v(&format!(
+                "--view {} --key {key} --node {url} --network {NET} --dry-run --out-dir {}",
+                p.display(),
+                dir.join("out").display()
+            )),
+        )
+        .unwrap();
+        order::execute(&a).unwrap()
+    };
+    let (report, ok) = run(order::Op::Cancel);
+    assert!(ok, "{report}");
+    let o = &report["orders"][0];
+    assert_eq!(o["status"], "signed", "{o}");
+    assert!(o["disclosure"].as_str().unwrap().contains("older contract version, cancel only: KobBid b995661f"), "{o}");
+    let signed = signed_from(o["file"].as_str().unwrap());
+    assert_eq!(signed.tx.inputs[0].utxo.script_public_key, spk_to_string(&spk), "the order input is the retired template's script");
+    let (report, _) = run(order::Op::Sweep);
+    assert_eq!(report["orders"][0]["status"], "skipped", "{report}");
+
+    // the web wallet's backup record of it: found on the node under the retired script and cancelled with --cancel
+    let rec = record(AR, "KobBid", r.hash, &hex_state(&s), pk(1));
+    let backup = write(
+        &dir,
+        "backup.json",
+        &json!({"format": "kob-backup", "version": 1, "network": NET, "exportedAt": "2026-11-06T00:00:00Z", "records": [rec], "txs": {}}),
+    );
+    let a = recover::parse_args(&v(&format!(
+        "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key {key} --out-dir {}",
+        backup.display(),
+        to_hex(&pk(1)),
+        dir.join("signed").display()
+    )))
+    .unwrap();
+    let (report, ok) = recover::execute(&a).unwrap();
+    assert!(ok, "{report}");
+    let o = by_cov(&report, AR);
+    assert_eq!(o["status"], "live", "{o}");
+    assert_eq!(o["template"], "retired (cancel only): KobBid b995661f");
+    assert_eq!(o["cancel"]["status"], "signed", "{o}");
+    let signed = signed_from(o["cancel"]["file"].as_str().unwrap());
+    assert_eq!(signed.tx.inputs[0].utxo.script_public_key, spk_to_string(&spk));
+    assert!(node.lock().unwrap().submitted.is_empty(), "a dry run submits nothing");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// Pair orders (protocol v3): a sell-first `KobIfdPair` holds TWO custodies (its A and its B prefund) and a `KobPair` BID a

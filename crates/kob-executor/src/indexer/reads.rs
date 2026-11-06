@@ -706,6 +706,21 @@ pub(crate) fn pinned_template() -> &'static str {
     })
 }
 
+/// [`pinned_template`] or a retired template of the cancel-only table (`kob_protocol::retired`): the predicate of the single-order
+/// view only ([`order`]), which serves such an order (`cancel_only`) so that its maker can find and cancel it. No list, book, count or
+/// plan uses it.
+pub(crate) fn pinned_or_cancel_only_template() -> &'static str {
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SQL.get_or_init(|| {
+        let hashes: Vec<String> = kob_protocol::artifacts::PINNED
+            .iter()
+            .map(|(_, h)| format!("x'{h}'"))
+            .chain(kob_protocol::retired::retired().iter().map(|r| format!("x'{}'", r.hash_hex())))
+            .collect();
+        format!("o.template_id IN (SELECT id FROM ids WHERE h IN ({}))", hashes.join(","))
+    })
+}
+
 const BOOK_WHERE: &str = concat!(
     "o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 \
      AND s.status IN ('open','partial') AND s.state_known = 1 AND o.price IS NOT NULL AND COALESCE(s.remaining_amount, 1) > 0 AND ",
@@ -1078,6 +1093,10 @@ pub struct OrderView {
     /// and B), `live_mint_authority` when a genesis record of one of them lists a live mint authority. Filled by the API
     /// ([`OrderView::with_warnings`]), which holds the token registry.
     pub warnings: Vec<&'static str>,
+    /// The order is under a RETIRED template of the cancel-only table (`kob_protocol::retired`, `template_hash` names it): only its
+    /// maker's cancel is ever built for it. Only the single-order view serves such an order; no list, book or plan includes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel_only: Option<bool>,
 }
 
 impl OrderView {
@@ -1307,6 +1326,7 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         quote = sompi(r.get(10)?);
     }
     Ok(OrderView {
+        cancel_only: None,
         covenant_id: hx(r.get(0)?),
         contract,
         template_hash: hx(r.get(2)?),
@@ -1520,16 +1540,21 @@ pub const MAX_VIEW_STRAYS: usize = 100;
 
 /// One order by covenant id, with the covenant ids of any exit orders it created, its custody and strays.
 ///
-/// An order under a template this build does not pin is not found (`None`: a 404), as `/v1/orders` never lists it
-/// (`docs/spec/template-retirement.md`: unknown to this build, like any other template). Its view would carry a state
-/// decoded with today's template and a current UTXO whose script nothing this build plans hashes to: a client building its
-/// cancel from that view fails on chain. Not found here, the web wallet resolves the order from its own placement record,
-/// whose template it does not pin either, and marks it `old-template` (ended with the release it was placed with).
+/// An order under a template this build neither pins nor keeps in its cancel-only table is not found (`None`: a 404), as
+/// `/v1/orders` never lists it (`docs/spec/template-retirement.md`: unknown to this build, like any other template). Its view
+/// would carry a state decoded with today's template and a current UTXO whose script nothing this build plans hashes to: a
+/// client building its cancel from that view fails on chain. Not found here, the web wallet resolves the order from its own
+/// placement record and marks it `old-template` (ended with the release it was placed with). An order under a RETIRED template
+/// of the cancel-only table (`kob_protocol::retired`) is served, marked `cancel_only` (its `template_hash` is the retired one):
+/// its maker's cancel spends that template's `cancel(sig)`, the only thing this build builds for it. No list includes it.
 pub fn order(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32) -> DbResult<Option<OrderView>> {
     let pinned = pinned_template();
-    let sql = format!("{ORDER_SELECT} WHERE o.covenant_id = ?1 AND {pinned}");
+    let sql = format!("{ORDER_SELECT} WHERE o.covenant_id = ?1 AND {}", pinned_or_cancel_only_template());
     let v = conn.query_row(&sql, [covenant_id.0.to_vec()], |r| order_from_row(r, ctx)).optional()?;
     let Some(mut v) = v else { return Ok(None) };
+    if kob_protocol::json::hex32(&v.template_hash).ok().and_then(|h| kob_protocol::retired::retired_by_hash(&h)).is_some() {
+        v.cancel_only = Some(true);
+    }
     let mut st = conn.prepare(&format!(
         "SELECT o.covenant_id FROM orders o WHERE o.parent = ?1 AND {pinned} ORDER BY o.genesis_block, o.covenant_id"
     ))?;

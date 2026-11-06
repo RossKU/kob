@@ -127,6 +127,7 @@ async fn record_log_replay_rebuilds_an_identical_database_and_holds_no_raw_data(
     // reorg: the bid's block and the ask's fill disappear; the bid is cancelled instead
     let cov_b = w.cov(&create_b, 0);
     let cancel = w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order: w.order(&create_b, 0, AnyState::KobBid(b)),
         custody: None,
@@ -500,6 +501,7 @@ async fn maker_export_import_is_verified_against_the_node_utxo_set() {
     // the imported lineage is live: a later cancel on chain closes it
     let custody = w.token_at(&fill, ci, Kcc20State::custody(6 * WHOLE, cov.0, EXT));
     let cancel = w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
         prefund: None,
         order: w.order(&fill, oi, AnyState::KobAsk(a6.clone())),
         custody: Some(custody),
