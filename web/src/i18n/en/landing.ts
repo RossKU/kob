@@ -17,9 +17,9 @@ export default {
   'landing.hero.lead': 'Limit orders for KCC-20 tokens, straight from your wallet.',
   'landing.hero.body': 'Every order is its own covenant UTXO on L1. KOB is open-source software — your keys never leave your wallet.',
 
-  'landing.bleed.label': 'The KOB mark: asks over bids',
-  'landing.bleed.title': 'Asks over bids.',
-  'landing.bleed.body': 'The order book lives on Kaspa. Each bar is made of orders anyone can see on-chain.',
+  'landing.bleed.label': 'The KOB mark: sell orders above buy orders',
+  'landing.bleed.title': 'Real orders only.',
+  'landing.bleed.body': 'Every bar is an order with its funds locked on Kaspa — no indicative quotes, and anyone can check it on-chain.',
 
   'landing.how.label': 'How it works',
   'landing.how.l1': 'Wallet. Covenant.',
