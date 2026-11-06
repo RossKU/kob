@@ -32,22 +32,37 @@
 .act-vis-panel h4 { margin: 4px 0 6px; font-size: 0.74rem; color: var(--muted); font-weight: 600; }
 .act-vis-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
 .act-vis-note { margin: 8px 0 0; }
-.act-new { border: 0; border-radius: 99px; padding: 3px 10px; background: var(--info-bg); color: var(--info); font: inherit; font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+.act-new { border: 0; border-radius: 99px; padding: 3px 10px; min-width: 5.6em; background: var(--info-bg); color: var(--info); font: inherit; font-size: 0.78rem; font-weight: 600; cursor: pointer; text-align: center; }
+.act-new-off { visibility: hidden; }
 
 /* ---- the table */
-.act-log { font-size: 0.83rem; font-variant-numeric: tabular-nums; }
+/* The table fits its card at every width (container queries on the log, not the window: the same log is full width on the Activity page and under a
+   token page). Every column but the icons has a floor and a share of the rest; the ids and addresses take what is left and end in an ellipsis. Narrower:
+   the pie goes (the count or ✓ stays), then the Wallet column, then two lines per row. Rows have a fixed height and sit at their place by a transform
+   (ActivityRows.tsx): a row arriving above them moves them without a layout shift. */
+.act-log { container: actlog / inline-size; font-size: 0.83rem; font-variant-numeric: tabular-nums; min-width: 0; }
 .act-head, .act-row {
-  display: grid; align-items: center; gap: 10px; padding: 0 8px;
-  grid-template-columns: 30px 60px minmax(110px, 1fr) minmax(150px, 1.5fr) minmax(140px, 1.3fr) minmax(90px, 0.8fr) 58px 78px;
+  display: grid; align-items: center; column-gap: 10px; padding: 0 8px; box-sizing: border-box;
+  grid-template-columns: 28px 56px minmax(80px, 1.2fr) minmax(90px, 1.8fr) minmax(110px, 0.8fr) minmax(84px, 0.6fr) 64px 84px;
 }
 .act-head { color: var(--muted); font-size: 0.74rem; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.act-head > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-num { text-align: right; }
-.act-row { min-height: 40px; padding-top: 3px; padding-bottom: 3px; border-bottom: 1px solid var(--border); color: inherit; text-decoration: none; }
+.act-body { --act-row-h: 46px; }
+.act-body.act-rows { position: relative; height: calc(var(--n) * var(--act-row-h)); }
+.act-row { border-bottom: 1px solid var(--border); color: inherit; text-decoration: none; }
+.act-rows > .act-row {
+  position: absolute; top: 0; left: 0; right: 0; height: var(--act-row-h); overflow: hidden;
+  transform: translateY(calc(var(--i) * var(--act-row-h))); transition: transform 0.22s ease-out;
+}
 a.act-row:hover { background: var(--surface-2); }
 a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: -2px; }
 .act-row.fresh { animation: act-flash 1.2s ease-out; }
 @keyframes act-flash { from { background: var(--info-bg); } to { background: transparent; } }
-@media (prefers-reduced-motion: reduce) { .act-row.fresh { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .act-row.fresh { animation: none; }
+  .act-rows > .act-row { transition: none; }
+}
 .act-row > span { min-width: 0; }
 
 .act-ty { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; }
@@ -58,26 +73,62 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-ty-cancel { color: var(--muted); background: var(--surface-3); }
 .act-ty-refund, .act-ty-stop { color: var(--warn); background: var(--warn-bg); }
 
-.act-c-mk { display: flex; align-items: center; gap: 2px; }
-.act-mk { display: inline-flex; align-items: center; }
+.act-c-mk { display: flex; align-items: center; gap: 2px; overflow: hidden; }
+.act-mk { display: inline-flex; align-items: center; flex: none; }
 .act-mk .tk-icon { --tk-size: 22px; }
 .act-sl { color: var(--muted); margin: 0 1px; font-size: 0.8rem; }
-.act-more { color: var(--muted); font-size: 0.72rem; margin-left: 3px; }
-.act-txm { display: none; margin-left: 8px; font-family: var(--mono); color: var(--link); font-size: 0.78rem; }
+.act-more { color: var(--muted); font-size: 0.72rem; margin-left: 3px; flex: none; }
+.act-txm { display: none; min-width: 0; margin-left: 8px; font-family: var(--mono); color: var(--link); font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-c-tx { font-family: var(--mono); color: var(--link); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.act-c-who { font-family: var(--mono); color: var(--muted); font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.act-sep { font-style: normal; color: var(--muted); }
-.act-tag { font-style: normal; font-family: var(--font); font-size: 0.72rem; color: var(--muted); margin-left: 6px; }
+/* the order owners: one address takes the cell, two ("A ⇄ B") share it, each ending in an ellipsis */
+.act-c-who { display: flex; align-items: center; gap: 6px; font-family: var(--mono); color: var(--muted); font-size: 0.78rem; white-space: nowrap; overflow: hidden; }
+.act-w { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.act-sep, .act-tag { flex: none; font-style: normal; }
+.act-sep { color: var(--muted); }
+.act-tag { font-family: var(--font); font-size: 0.72rem; color: var(--muted); }
 .act-c-amt b { font-weight: 600; }
 .act-c-amt.act-buy b { color: var(--buy); }
 .act-c-amt.act-sell b { color: var(--sell); }
 .act-c-amt b, .act-sub { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-sub { color: var(--muted); font-size: 0.74rem; }
+.act-c-px { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-c-conf { display: inline-flex; align-items: center; gap: 5px; justify-content: flex-end; color: var(--muted); font-size: 0.76rem; }
+/* the count in a box of its own width, so a count that grows (9, 10, ...) moves nothing */
+.act-c-conf > span:first-child { display: inline-block; min-width: 3ch; text-align: right; }
 .act-pie { display: inline-block; width: 13px; height: 13px; border-radius: 50%; flex: none; background: conic-gradient(var(--warn) calc(var(--p) * 1%), var(--surface-3) 0); }
 .act-ok { color: var(--ok); font-weight: 700; }
-.act-c-time { color: var(--muted); white-space: nowrap; }
+.act-c-time { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-empty { padding: 18px 8px; text-align: center; }
+
+/* a medium card: no pie (the count, or ✓), tighter columns */
+@container actlog (max-width: 899px) {
+  .act-head, .act-row { column-gap: 8px; grid-template-columns: 28px 50px minmax(70px, 1fr) minmax(80px, 1.2fr) minmax(100px, 1.1fr) minmax(70px, 0.7fr) 36px 76px; }
+  .act-row .act-pie { display: none; }
+}
+/* a small card: the Wallet column folds (the owners stay in the row's title) */
+@container actlog (max-width: 699px) {
+  .act-head, .act-row { grid-template-columns: 28px 48px minmax(70px, 1fr) minmax(100px, 1.2fr) minmax(64px, 0.7fr) 36px 70px; }
+  .act-head > :nth-child(4), .act-row > .act-c-who { display: none; }
+}
+/* a phone: two lines per row (icon | market and tx over the wallet | amount over the confirmations and the time) */
+@container actlog (max-width: 559px) {
+  .act-head { display: none; }
+  .act-body { --act-row-h: 64px; }
+  .act-row {
+    grid-template-columns: 30px minmax(0, 1fr) auto auto;
+    grid-template-areas: 'ty top top amt' 'ty bot conf time';
+    gap: 2px 10px; padding: 6px 4px; align-content: center;
+  }
+  .act-row > .act-c-ty { grid-area: ty; align-self: center; }
+  .act-row > .act-c-mk { grid-area: top; }
+  .act-row > .act-c-tx, .act-row > .act-c-px { display: none; }
+  .act-row > .act-c-who { display: flex; grid-area: bot; }
+  .act-row > .act-c-amt { grid-area: amt; max-width: 46vw; }
+  .act-row > .act-c-conf { grid-area: conf; font-size: 0.72rem; }
+  .act-row .act-pie { display: inline-block; }
+  .act-row > .act-c-time { grid-area: time; font-size: 0.74rem; }
+  .act-txm { display: block; }
+}
 
 .act-foot { display: flex; flex-wrap: wrap; gap: 8px 12px; justify-content: space-between; align-items: center; padding-top: 8px; }
 .act-foot-r { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; }
@@ -87,22 +138,8 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 /* the token and pair pages: the log takes the full width under the exchange grid */
 .mkt-area-activity { min-width: 0; }
 
-/* ---- a phone: two lines per row (icon | market + tx, wallet | amount, confirmations + time) */
+/* ---- a phone: the tools start at the left */
 @media (max-width: 759px) {
-  .act-head { display: none; }
-  .act-row {
-    grid-template-columns: 30px minmax(0, 1fr) auto auto;
-    grid-template-areas: 'ty top top amt' 'ty bot conf time';
-    gap: 2px 10px; padding: 7px 4px;
-  }
-  .act-row > .act-c-ty { grid-area: ty; align-self: center; }
-  .act-row > .act-c-mk { grid-area: top; }
-  .act-row > .act-c-tx, .act-row > .act-c-px { display: none; }
-  .act-row > .act-c-who { grid-area: bot; }
-  .act-row > .act-c-amt { grid-area: amt; }
-  .act-row > .act-c-conf { grid-area: conf; font-size: 0.72rem; }
-  .act-row > .act-c-time { grid-area: time; font-size: 0.74rem; }
-  .act-txm { display: inline; }
   .act-tools { justify-content: flex-start; }
   .act .section-head > .row { justify-content: flex-start; }
   .act-sel { max-width: 11rem; }

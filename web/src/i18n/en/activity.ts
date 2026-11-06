@@ -93,6 +93,7 @@ export default {
   'activity.moreMarketsTitle': 'and {n} more market(s) in this transaction',
 
   'activity.conf.settled': 'settled',
+  'activity.conf.confirming': 'confirming',
   'activity.conf.title': '{n} of {total} DAA, about {s} s',
   'activity.conf.settledTitle': 'Settled: {total} DAA or more',
   'activity.conf.unknown': 'confirmations unknown',

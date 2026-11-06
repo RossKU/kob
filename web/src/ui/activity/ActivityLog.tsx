@@ -4,7 +4,7 @@
 //
 // Every row is a real link to the transaction on the network's explorer (new tab, `noopener noreferrer`), so a row must never move under the pointer:
 // while the list is paused, pointed at or focused, new rows are held (`heldView`) and counted in a "+N new" pill that releases them.
-import type { ComponentChildren } from 'preact';
+import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
@@ -12,21 +12,18 @@ import { activityMarketParam } from '../../app/router';
 import { explorerTxUrl } from '../../config';
 import { pubkeyToAddress } from '../../data/kaspa-sdk';
 import type { PairFillsView } from '../../data/indexer-types';
-import { formatDateTime, t } from '../../i18n';
+import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { pow10 } from '../../kob/units';
-import { Badge, Button, ErrorBanner, fitAmountColumn, Section, unitsFraction, useInterval } from '../kit';
-import { priceDecimals, priceText } from '../market/market-model';
-import { TokenIcon } from '../market/TokenIcon';
+import { Badge, Button, ErrorBanner, Section } from '../kit';
 import { Popover } from '../shell/Popover';
 import { clockText } from '../shell/standalone';
 import {
-  ALL_KINDS, AVAILABLE_KINDS, PAGE_ROWS, rowHref, SETTLE_DAA, confirmationsAt, daaNow, filterRows, heldView, marketKeyOf, readPrefs, rowMakers, rowTime, sameMarket, shortWallet,
-  shownKinds, writePrefs,
+  ALL_KINDS, AVAILABLE_KINDS, PAGE_ROWS, rowHref, SETTLE_DAA, filterRows, heldView, marketKeyOf, readPrefs, rowMakers, sameMarket, shownKinds, writePrefs,
   type ActivityKind, type ActivityPrefs, type ActivityRow, type ActorFilter, type MarketFilter, type MarketRef, type PrefsScope,
 } from './activity-model';
-import { KindGlyph, KindIcon, kindLabel } from './ActivityIcons';
+import { KindGlyph, KindIcon } from './ActivityIcons';
+import { ActivityRowView, type RowFormat } from './ActivityRows';
 import { useActivity } from './use-activity';
 import '../market/market.css';
 import './activity.css';
@@ -50,7 +47,7 @@ export interface ActivityLogProps {
   'data-testid'?: string;
 }
 
-export function ActivityLog(props: ActivityLogProps) {
+function ActivityLogView(props: ActivityLogProps) {
   const services = useServices();
   const { config, registry, sdk } = services;
   const wallet = useWallet();
@@ -72,8 +69,13 @@ export function ActivityLog(props: ActivityLogProps) {
   }, []);
   const data = useActivity({ market: props.market, kinds, pairFills: props.pairFills ?? null, onScreen });
 
-  const nameOf = (token: Hex): string => displayToken(registry, config.network, token)?.ticker || longId(token);
-  const decimalsOf = (token: Hex): number => displayToken(registry, config.network, token)?.decimals ?? 8;
+  const { nameOf, decimalsOf } = useMemo(
+    () => ({
+      nameOf: (token: Hex): string => displayToken(registry, config.network, token)?.ticker || longId(token),
+      decimalsOf: (token: Hex): number => displayToken(registry, config.network, token)?.decimals ?? 8,
+    }),
+    [registry, config.network],
+  );
   const addressOf = (pk: Hex): string | null => {
     const k = `${config.network}:${pk}`;
     if (!addressCache.has(k)) {
@@ -128,21 +130,24 @@ export function ActivityLog(props: ActivityLogProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wanted]);
 
-  // the confirmation pies move while a row on screen is not settled
-  const [now, setNow] = useState(Date.now());
-  const chainDaa = daaNow(data.chain, now);
-  const unsettled = shown.some((r) => !confirmationsAt(r, chainDaa).settled);
-  useInterval(() => setNow(Date.now()), 1000, unsettled);
-
-  const explorerHost = (() => {
+  // how the rows name things: one object per registry and network, so the memoized rows see equal props between renders
+  const fmt = useMemo<RowFormat>(() => {
+    let explorerHost = 'the explorer';
     try {
-      return new URL(explorerTxUrl(config, '0'.repeat(64)) ?? '').host;
+      explorerHost = new URL(explorerTxUrl(config, '0'.repeat(64)) ?? '').host;
     } catch {
-      return 'the explorer';
+      /* no explorer configured */
     }
-  })();
-
-  const marketText = (m: MarketRef): string => (m.kind === 'token' ? t('activity.market.kas', { ticker: nameOf(m.token) }) : t('activity.market.pair', { base: nameOf(m.base), quote: nameOf(m.quote) }));
+    return {
+      nameOf,
+      decimalsOf,
+      marketText: (m: MarketRef) => (m.kind === 'token' ? t('activity.market.kas', { ticker: nameOf(m.token) }) : t('activity.market.pair', { base: nameOf(m.base), quote: nameOf(m.quote) })),
+      explorerHost,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registry, config]);
+  const marketText = fmt.marketText;
+  const today = new Date().toDateString();
   const liveKind = data.mode === 'standalone' ? 'standalone' : data.mode === 'off' ? 'off' : held ? 'held' : data.mode;
 
   // ---- the header's tools
@@ -248,11 +253,19 @@ export function ActivityLog(props: ActivityLogProps) {
           <p class="small muted act-vis-note">{t('activity.vis.phase2')}</p>
         </div>
       </Popover>
-      {view.held > 0 ? (
-        <button type="button" class="act-new" onClick={release} title={t('activity.newRowsTitle')} data-testid="activity-new" {...(paused ? { 'aria-live': 'polite' } : {})}>
-          {t('activity.newRows', { n: view.held })}
-        </button>
-      ) : null}
+      {/* always in the row (hidden while nothing is held), so the tools never move when it comes and goes */}
+      <button
+        type="button"
+        class={`act-new${view.held > 0 ? '' : ' act-new-off'}`}
+        onClick={release}
+        title={t('activity.newRowsTitle')}
+        tabIndex={view.held > 0 ? 0 : -1}
+        aria-hidden={view.held > 0 ? undefined : 'true'}
+        {...(view.held > 0 ? { 'data-testid': 'activity-new' } : {})}
+        {...(paused ? { 'aria-live': 'polite' } : {})}
+      >
+        {t('activity.newRows', { n: view.held })}
+      </button>
       <button
         type="button"
         class="act-ib"
@@ -284,90 +297,6 @@ export function ActivityLog(props: ActivityLogProps) {
     </span>
   );
 
-  // ---- rows
-  const rowEl = (r: ActivityRow) => {
-    const href = rowHref(config, r);
-    const conf = confirmationsAt(r, chainDaa);
-    const makers = rowMakers(r, data);
-    const pendingLookup = r.orders.some((id) => data.order(id) === undefined);
-    const addrs = makers.map((pk) => addressOf(pk) ?? longId(pk));
-    const amountToken = r.amount?.token ?? null;
-    const amount = r.amount && amountToken ? cellText(r.amount.units, decimalsOf(amountToken)) : null;
-    const amountText = amount && amountToken ? `${amount.text} ${nameOf(amountToken)}` : '—';
-    let sub: string = '';
-    if (r.value?.kind === 'kas') sub = `${fitAmountColumn([r.value.sompi], 8, { fraction: 2, width: 16 })[0]!.text} KAS`;
-    else if (r.value?.kind === 'token') sub = `${cellText(r.value.units, decimalsOf(r.value.token)).text} ${nameOf(r.value.token)}`;
-    else if (r.pairSide) sub = t(r.pairSide === 'ask' ? 'activity.pairAsk' : 'activity.pairBid');
-    const priceTokenDecimals = r.market.kind === 'token' ? decimalsOf(r.market.token) : 0;
-    const price = r.price ? priceRange(r.price, priceTokenDecimals) : '—';
-    const kindText = r.kinds.length > 1 ? r.kinds.map((k) => kindLabel(k, r.side)).join(' + ') : kindLabel(r.kind, r.side);
-    const confText = conf.settled ? t('activity.conf.settled') : conf.n === null ? t('activity.conf.unknown') : t('activity.rowConf', { n: conf.n, total: SETTLE_DAA });
-    const time = rowTime(r.timeMs, now);
-    const fullTime = r.timeMs !== null ? `${formatDateTime(Math.floor(r.timeMs / 1000), { timeStyle: 'medium' })}${r.timeEstimated ? ` (${t('activity.timeEstimated')})` : ''}` : `DAA ${r.daa}`;
-    const label = t('activity.rowLabel', { kind: kindText, market: marketText(r.market), amount: amountText, conf: confText, time: fullTime, explorer: explorerHost });
-    const cells: ComponentChildren = (
-      <>
-        <span class="act-c-ty" role="cell">
-          <KindIcon kind={r.kind} side={r.side} />
-        </span>
-        <span class="act-c-mk" role="cell" title={marketText(r.market)}>
-          <MarketIcons market={r.market} nameOf={nameOf} />
-          {r.moreMarkets > 0 ? <span class="act-more" title={t('activity.moreMarketsTitle', { n: r.moreMarkets })}>{t('activity.moreMarkets', { n: r.moreMarkets })}</span> : null}
-          <span class="act-txm">{r.txid.slice(0, 8)}</span>
-        </span>
-        <span class="act-c-tx" role="cell">{`${r.txid.slice(0, 8)}…${r.txid.slice(-7)}`}</span>
-        <span class="act-c-who" role="cell" title={addrs.length ? t('activity.wallet.title', { list: addrs.join(', ') }) : undefined} data-testid="activity-wallet">
-          {addrs.length ? (
-            addrs.slice(0, 2).flatMap((a, i) => [
-              ...(i > 0 ? [<i key={`s`} class="act-sep" aria-hidden="true">{' ⇄ '}</i>] : []),
-              <span key={a}>{shortWallet(a)}</span>,
-            ])
-          ) : (
-            <span class="muted">{pendingLookup ? t('activity.wallet.pending') : t('activity.wallet.unknown')}</span>
-          )}
-          {addrs.length > 2 ? <i class="act-sep">{` +${addrs.length - 2}`}</i> : null}
-          {r.placed > 1 ? <i class="act-tag" title={t('activity.wallet.ladderTitle', { n: r.placed })}>{t('activity.wallet.ladder', { n: r.placed })}</i> : null}
-          {r.counterparty ? <i class="act-tag">{t(`activity.cp.${r.counterparty}`)}</i> : null}
-        </span>
-        <span class={`act-c-amt act-num${r.side ? ` act-${r.side}` : ''}`} role="cell" title={amount?.exact ? `${amount.exact} ${amountToken ? nameOf(amountToken) : ''}` : undefined}>
-          <b>{amountText}</b>
-          {sub ? <span class="act-sub">{sub}</span> : null}
-        </span>
-        <span class="act-c-px act-num" role="cell">{price}</span>
-        <span class="act-c-conf act-num" role="cell" title={conf.settled ? t('activity.conf.settledTitle', { total: SETTLE_DAA }) : conf.n !== null ? t('activity.conf.title', { n: conf.n, total: SETTLE_DAA, s: Math.max(0, Math.ceil((SETTLE_DAA - conf.n) / 10)) }) : undefined} data-settled={conf.settled ? 'true' : 'false'}>
-          {conf.settled ? (
-            <span class="act-ok" aria-hidden="true">{'✓'}</span>
-          ) : (
-            <>
-              <span>{conf.n ?? '…'}</span>
-              <i class="act-pie" style={`--p:${Math.min(100, Math.round(((conf.n ?? 0) / SETTLE_DAA) * 100))}`} aria-hidden="true" />
-            </>
-          )}
-        </span>
-        <span class="act-c-time act-num" role="cell" title={fullTime}>{time}</span>
-      </>
-    );
-    const attrs = {
-      key: r.key,
-      role: 'row' as const,
-      class: `act-row${fresh.has(r.key) ? ' fresh' : ''}`,
-      'data-testid': 'activity-row',
-      'data-kind': r.kind,
-      'data-side': r.side ?? '',
-      'data-txid': r.txid,
-      'data-market': marketKeyOf(r.market),
-      'aria-label': label,
-      title: `${kindText} · ${t('activity.openTx', { explorer: explorerHost })}`,
-    };
-    return href ? (
-      <a {...attrs} href={href} target="_blank" rel="noopener noreferrer">
-        {cells}
-      </a>
-    ) : (
-      <div {...attrs}>{cells}</div>
-    );
-  };
-
   const legendKinds = ALL_KINDS.filter((k) => AVAILABLE_KINDS.includes(k));
   return (
     <Section title={title} actions={tools} class="act" data-testid={props['data-testid'] ?? 'activity'}>
@@ -384,7 +313,8 @@ export function ActivityLog(props: ActivityLogProps) {
           <span role="columnheader" class="act-num">{t('activity.col.time')}</span>
         </div>
         <div
-          class="act-body"
+          class={`act-body${shown.length ? ' act-rows' : ''}`}
+          style={shown.length ? `--n:${shown.length}` : undefined}
           role="rowgroup"
           // a pointer that MOVES in the list holds it (a list that slid under a resting pointer does not)
           onPointerMove={(e) => !hover && (e as PointerEvent).pointerType !== 'touch' && setHover(true)}
@@ -396,7 +326,24 @@ export function ActivityLog(props: ActivityLogProps) {
           }}
         >
           {shown.length ? (
-            shown.map(rowEl)
+            shown.map((r, i) => {
+              const makers = rowMakers(r, data);
+              return (
+                <ActivityRowView
+                  key={r.key}
+                  row={r}
+                  i={i}
+                  fresh={fresh.has(r.key)}
+                  href={rowHref(config, r)}
+                  addrs={makers.map((pk) => addressOf(pk) ?? longId(pk)).join('\n')}
+                  pending={r.orders.some((id) => data.order(id) === undefined)}
+                  chainDaa={data.chain?.daa ?? null}
+                  chainAt={data.chain?.atMs ?? null}
+                  today={today}
+                  fmt={fmt}
+                />
+              );
+            })
           ) : data.loading ? (
             <div class="act-empty" data-testid="activity-loading">
               {Array.from({ length: 6 }, (_, i) => <div key={i} class="skeleton skeleton-line" style={`margin:12px 8px;opacity:${1 - i * 0.12}`} />)}
@@ -448,30 +395,19 @@ export function ActivityLog(props: ActivityLogProps) {
   );
 }
 
-/** One token icon for a KAS book, `A / B` for a pair (the tickers in the cell's title and the row's label). */
-function MarketIcons(props: { market: MarketRef; nameOf: (t: Hex) => string }) {
-  const m = props.market;
-  const icon = (id: Hex) => <TokenIcon row={{ covenantId: id, ticker: props.nameOf(id), kascov: null }} size={22} anonymous />;
-  return m.kind === 'token' ? (
-    <span class="act-mk">{icon(m.token)}</span>
-  ) : (
-    <span class="act-mk">
-      {icon(m.base)}
-      <span class="act-sl" aria-hidden="true">/</span>
-      {icon(m.quote)}
-    </span>
-  );
-}
-
-/** An amount in one cell: the exact amount when it fits, else fewer decimals or K / M / B (the exact amount in `exact`). */
-function cellText(units: bigint, decimals: number): { text: string; exact: string | null } {
-  return fitAmountColumn([units], decimals, { fraction: Math.min(unitsFraction(units, decimals), 6), width: 12 })[0]!;
-}
-
-/** KAS per whole token (the row's own precision); a ladder shows its range. */
-function priceRange(p: { low: bigint; high: bigint; scale: bigint }, decimals: number): string {
-  const perToken = (x: bigint) => (p.scale > 0n ? (x * pow10(decimals)) / p.scale : x);
-  const dp = priceDecimals(perToken(p.high));
-  const one = (x: bigint) => priceText(x, decimals, p.scale, dp);
-  return p.low === p.high ? one(p.low) : `${one(p.low)}–${one(p.high)}`;
-}
+/**
+ * The log, rendered again only when its own inputs change: a token or pair page re-renders on every book notice, and the log above has its own
+ * live data (a page's market object is a new one each time; its key is what counts).
+ */
+export const ActivityLog = memo(
+  ActivityLogView,
+  (a, b) =>
+    marketKeyOf(a.market) === marketKeyOf(b.market) &&
+    (a.pageMarket ? marketKeyOf(a.pageMarket) : '') === (b.pageMarket ? marketKeyOf(b.pageMarket) : '') &&
+    a.onMarketChange === b.onMarketChange &&
+    a.prefsScope === b.prefsScope &&
+    a.pairFills?.view === b.pairFills?.view &&
+    a.allLink === b.allLink &&
+    a.pageRows === b.pageRows &&
+    a['data-testid'] === b['data-testid'],
+);

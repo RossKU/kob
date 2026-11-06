@@ -91,7 +91,10 @@ export function useActivity(o: {
   const onScreenRef = useRef(onScreen);
   onScreenRef.current = onScreen;
   const missed = useRef(false);
-  const read = () => {
+  /** the next read replaces the newest page (a reorg or a reconnect), see ActivityStore.readNewest */
+  const replaceNext = useRef(false);
+  const read = (asReplace = false) => {
+    if (asReplace) replaceNext.current = true;
     if (!onScreenRef.current) {
       missed.current = true;
       return;
@@ -105,7 +108,9 @@ export function useActivity(o: {
       return;
     }
     f.busy = true;
-    s.readNewest({ fills: true, placed: kindsRef.current.has('placed') })
+    const replace = replaceNext.current;
+    replaceNext.current = false;
+    s.readNewest({ fills: true, placed: kindsRef.current.has('placed'), replace })
       .then(() => {
         if (storeRef.current === s) setError(null);
       })
@@ -148,7 +153,8 @@ export function useActivity(o: {
     services,
     channels,
     (e) => m.kind === 'all' || !e.token || (m.kind === 'token' ? e.token === m.token : e.token === m.base || e.token === m.quote),
-    (full) => (full ? setResetKey((k) => k + 1) : read()),
+    // a reorg or a reconnect: the newest page again, what it no longer lists is dropped; the list is never emptied and rebuilt (no flicker)
+    (full) => read(full),
     POLL_MS,
   );
   // the placements have no notice: polled while shown and the socket carries the fills

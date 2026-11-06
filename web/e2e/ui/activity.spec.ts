@@ -85,13 +85,15 @@ test.describe('activity page', () => {
     await expect(first).toHaveAttribute('aria-label', /opens tn10\.kaspa\.stream in a new tab/);
     // the columns: market icons, short tx, wallet, amount (+ KAS value), price, confirmations, time
     const fill = rows(page).and(page.locator('[data-kind="fill"]')).first();
-    await expect(fill.locator('.act-c-tx')).toHaveText(/^[0-9a-f]{8}…[0-9a-f]{7}$/);
+    // the whole id (the column shows as much as fits, then an ellipsis), whole in its title too
+    await expect(fill.locator('.act-c-tx')).toHaveText(/^[0-9a-f]{64}$/);
+    await expect(fill.locator('.act-c-tx')).toHaveAttribute('title', /^[0-9a-f]{64}$/);
     await expect(fill.locator('.act-c-amt')).toContainText('EXKCC');
     await expect(fill.locator('.act-c-amt')).toContainText('KAS');
     await expect(fill.locator('.act-c-px')).toHaveText(/^0\.0\d+$/);
     await expect(fill.locator('.act-c-time')).toHaveText(/^\d{2}(:\d{2}:\d{2}|-\d{2} \d{2}:\d{2})$/);
     // the owners of the filled orders are looked up: a short address (the full one in the title)
-    await expect(fill.getByTestId('activity-wallet')).toHaveText(/q[0-9a-z]{3}…[0-9a-z]{4}/, { timeout: 15_000 });
+    await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{40,}/, { timeout: 15_000 });
     await expect(fill.getByTestId('activity-wallet')).toHaveAttribute('title', /kaspatest:/);
     // the legend under the table: phase 1 kinds and the confirmation marks
     await expect(page.getByTestId('activity-legend')).toContainText('fill, taker bought');
@@ -282,4 +284,85 @@ test.describe('activity on a phone', () => {
     expect(await overflow()).toBe(0);
     await shot(page, 'pair-390', 'dark', false);
   });
+});
+
+// the table fits its card at every width: narrower cards drop the pie, then the Wallet column, then take two lines per row; never a sideways scroll
+const WIDTHS = [390, 760, 887, 1000, 1100, 1280, 1440, 1774];
+test('the log fits its card at every width, on the Activity page and under a token page (no element past the card, no page scroll sideways)', async ({ appPage: page, mock }) => {
+  test.setTimeout(120_000);
+  const token = await seedPair(page, mock);
+  const outside = () =>
+    page.evaluate(() => {
+      const card = document.querySelector('[data-testid="activity"]')!.getBoundingClientRect();
+      const bad: string[] = [];
+      for (const e of document.querySelectorAll('[data-testid="activity"] *')) {
+        const r = e.getBoundingClientRect();
+        if (r.width === 0 || (e as HTMLElement).closest('.hp-panel')) continue;
+        if (r.right > card.right + 1 || r.left < card.left - 1) bad.push(`${e.tagName}.${String((e as HTMLElement).className).slice(0, 30)} ${Math.round(r.left)}-${Math.round(r.right)} card ${Math.round(card.left)}-${Math.round(card.right)}`);
+      }
+      return { bad: bad.slice(0, 5), scrollX: document.documentElement.scrollWidth - window.innerWidth };
+    });
+  for (const route of ['/#/activity', `/#/market/${token}`]) {
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(route);
+      await showActivity(page);
+      await expect(rows(page).first()).toBeVisible();
+      await expect.poll(outside, { message: `${route} at ${width} px` }).toEqual({ bad: [], scrollX: 0 });
+    }
+  }
+});
+
+// live updates move nothing on the page: rows sit at fixed heights and slide by a transform, a row is never re-created, the tools keep their place
+test('20 live updates: no layout shift (CLS 0), rows kept (not re-created), the tools still', async ({ appPage: page, mock }) => {
+  test.setTimeout(120_000);
+  const token = await seedToken(page, mock);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`/#/market/${token}`);
+  await showActivity(page);
+  await expect(rows(page)).toHaveCount(20);
+  await page.mouse.move(2, 2);
+  await page.waitForTimeout(1500);
+  // the tools within the log's card (the book above changes height as its orders fill: the whole card may move, its contents must not)
+  const tools = async () => { const [t, c] = [(await page.locator('.act-tools').boundingBox())!, (await page.getByTestId('activity').boundingBox())!]; return { x: t.x - c.x, y: t.y - c.y }; };
+  const toolsBefore = await tools();
+  await page.evaluate(() => {
+    const w = window as unknown as { __cls: { value: number; log: number; sources: string[] } };
+    w.__cls = { value: 0, log: 0, sources: [] };
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries() as unknown as { value: number; hadRecentInput: boolean; sources?: { node?: Node | null }[] }[]) {
+        if (e.hadRecentInput) continue;
+        w.__cls.value += e.value;
+        const log = document.querySelector('[data-testid="activity"]');
+        for (const s of e.sources ?? []) {
+          const n = s.node as HTMLElement | null;
+          if (n && log?.contains(n)) w.__cls.log += e.value;
+          w.__cls.sources.push(`${n && log?.contains(n) ? 'log:' : ''}${n?.nodeName ?? '?'}.${n?.className?.toString().slice(0, 40) ?? ''}[${(n?.textContent ?? '').slice(0, 20)}]`);
+        }
+      }
+    }).observe({ type: 'layout-shift', buffered: false });
+    // every row now on screen is marked: a re-created row would lose the mark
+    for (const r of document.querySelectorAll('[data-testid="activity-row"]')) (r as unknown as { __kept: boolean }).__kept = true;
+  });
+  const marked = await attrs(page, 'data-txid');
+  const orders = (await mock.ordersOf('maker', 'active')).filter((o: { token: string }) => o.token === token).slice(0, 20);
+  expect(orders.length).toBeGreaterThanOrEqual(20);
+  const first = (await attrs(page, 'data-txid'))[0];
+  for (const o of orders) {
+    await mock.fill(o.covenant_id);
+    await page.waitForTimeout(250);
+  }
+  // the newest rows came in above it (it moved down, or off the 20 rows shown)
+  await expect.poll(async () => { const i = (await attrs(page, 'data-txid')).indexOf(first!); return i === -1 || i >= 10; }, { timeout: 30_000 }).toBe(true);
+  await page.waitForTimeout(1500);
+  const cls = await page.evaluate(() => (window as unknown as { __cls: { value: number; log: number; sources: string[] } }).__cls);
+  console.log(`CLS over 20 updates: page ${cls.value.toFixed(4)}, from the activity log ${cls.log.toFixed(4)} (shifted: ${[...new Set(cls.sources)].join(', ') || 'none'})`);
+  // nothing in the log shifts; the page's total stays far under the "good" threshold (0.1) though the order book above changes as its orders fill
+  expect(cls.log).toBe(0);
+  expect(cls.value).toBeLessThan(0.05);
+  // rows still on screen are the same nodes
+  const kept = await page.evaluate((ids) => ids.filter((id) => { const r = document.querySelector(`[data-testid="activity-row"][data-txid="${id}"]`); return r && !(r as unknown as { __kept?: boolean }).__kept; }), marked);
+  expect(kept, 're-created rows').toEqual([]);
+  const toolsAfter = await tools();
+  expect(Math.abs(toolsAfter.x - toolsBefore.x) + Math.abs(toolsAfter.y - toolsBefore.y)).toBeLessThan(1);
 });

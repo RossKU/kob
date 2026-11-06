@@ -32,6 +32,11 @@ export interface StoreSources {
   pairFills?: { base: Hex; quote: Hex; view: PairFillsView | null | undefined } | null;
 }
 
+/** What a row shows: two rows with the same signature render the same (the list keeps the older object). */
+export const rowSignature = (r: ActivityRow): string =>
+  [r.kind, r.kinds.join('+'), r.side, r.daa, r.seq, r.orders.join(','), r.placed, r.amount ? `${r.amount.token}:${r.amount.units}` : '', r.value ? `${r.value.kind}:${'sompi' in r.value ? r.value.sompi : `${r.value.token}:${r.value.units}`}` : '',
+    r.price ? `${r.price.low}-${r.price.high}/${r.price.scale}` : '', r.pairSide, r.counterparty, r.moreMarkets, r.timeMs, r.timeEstimated, r.confirmations, r.settled].join('|');
+
 export class ActivityStore {
   readonly fills = new Map<string, EventView>();
   readonly orders = new Map<Hex, OrderView>();
@@ -96,11 +101,28 @@ export class ActivityStore {
 
   /** Every row of the market filter, newest first, capped; rows below a source's horizon wait for "Load older". */
   rows(kinds: ReadonlySet<ActivityKind>): ActivityRow[] {
+    // built again only when the records changed (`version`) or the shown kinds did; a row whose content is unchanged keeps its object, so the list's
+    // memoized rows are not rendered again (ActivityRows.tsx)
+    const memoKey = `${this.version}|${[...kinds].sort().join(',')}`;
+    if (this.rowsMemo?.key === memoKey) return this.rowsMemo.rows;
     const ctx = this.ctx();
     const merged = mergeRows([fillRows(this.fills.values(), ctx), placedRows(this.orders.values(), ctx)], Number.MAX_SAFE_INTEGER).filter((r) => inMarket(r, this.market));
     const h = this.horizon(kinds);
-    return (h === null ? merged : merged.filter((r) => r.daa >= h)).slice(0, ROW_CAP);
+    const fresh = (h === null ? merged : merged.filter((r) => r.daa >= h)).slice(0, ROW_CAP);
+    const next = new Map<string, { sig: string; row: ActivityRow }>();
+    const rows = fresh.map((r) => {
+      const sig = rowSignature(r);
+      const had = this.stable.get(r.key);
+      const row = had && had.sig === sig ? had.row : r;
+      next.set(r.key, { sig, row });
+      return row;
+    });
+    this.stable = next;
+    this.rowsMemo = { key: memoKey, rows };
+    return rows;
   }
+  private rowsMemo: { key: string; rows: ActivityRow[] } | null = null;
+  private stable = new Map<string, { sig: string; row: ActivityRow }>();
 
   /** The DAA score down to which every shown source is complete (null: all of them are). */
   horizon(kinds: ReadonlySet<ActivityKind>): number | null {
@@ -234,8 +256,10 @@ export class ActivityStore {
    * The newest records: fills (unless the pair page supplies them) and, with `placed`, placements; a newest page that does not reach what is already
    * known reads on (GAP_PAGES at most), so a pause leaves no hole. The first read also sets the cursors for "Load older".
    */
-  async readNewest(o: { fills: boolean; placed: boolean; ordersLimit?: number }): Promise<void> {
+  async readNewest(o: { fills: boolean; placed: boolean; ordersLimit?: number; replace?: boolean }): Promise<void> {
     const gen = this.gen;
+    // a reorg or a reconnect: the newest page is read again and what it no longer lists is dropped (the rows stay on screen meanwhile)
+    if (o.replace) this.replacing = true;
     if (this.src.standalone) {
       this.readStandalone();
       this.bump();
@@ -248,8 +272,20 @@ export class ActivityStore {
       if (this.fillsCursor === undefined) this.fillsCursor = this.src.pairFills.view.next_cursor;
     }
     if (o.placed) tasks.push(this.readNewestOrders(gen, o.ordersLimit ?? (this.ordersCursor === undefined ? FIRST_LIMIT : POLL_ORDERS_LIMIT)));
-    await Promise.all(tasks);
+    try {
+      await Promise.all(tasks);
+    } finally {
+      this.replacing = false;
+    }
     if (gen === this.gen) this.bump();
+  }
+
+  /** set by a replacing read: the next newest page of each source drops the records above its oldest one that it does not list (reverted) */
+  private replacing = false;
+
+  /** Drops the records newer than `fromDaa` that the page just read does not list (they were reverted). */
+  private dropReverted<T>(map: Map<string, T>, listed: ReadonlySet<string>, fromDaa: number, daaOf: (v: T) => number): void {
+    for (const [k, v] of [...map]) if (daaOf(v) >= fromDaa && !listed.has(k)) map.delete(k);
   }
 
   private async readNewestFills(gen: number): Promise<void> {
@@ -260,6 +296,10 @@ export class ActivityStore {
       const page = await this.fillsPage(before);
       if (gen !== this.gen) return;
       const keys = page.pair ? page.pair.items.map((f) => `p:${f.id}`) : page.items.map((e) => `e:${e.id}`);
+      if (this.replacing && i === 0) {
+        const daas = page.pair ? page.pair.items.map((f) => f.daa) : page.items.map((e) => e.daa);
+        if (daas.length) this.dropReverted(this.fills, new Set(keys), Math.min(...daas), (e) => e.daa);
+      }
       if (page.pair) this.addPairFills(page.pair);
       else this.addFills(page.items);
       if (first) this.fillsCursor = page.next;
@@ -275,6 +315,9 @@ export class ActivityStore {
     for (let i = 0; i < (first ? 1 : GAP_PAGES); i++) {
       const page = await this.ordersPage(limit, cursor);
       if (gen !== this.gen) return;
+      if (this.replacing && i === 0 && page.items.length) {
+        this.dropReverted(this.orders, new Set(page.items.map((x) => x.covenant_id.toLowerCase())), Math.min(...page.items.map((x) => x.genesis.daa)), (x) => x.genesis.daa);
+      }
       this.addOrders(page.items);
       if (first) this.ordersCursor = page.next;
       if (first || !page.next || known.size === 0 || page.items.some((x) => known.has(x.covenant_id.toLowerCase()))) return;
