@@ -130,6 +130,8 @@ export function SiteHeader(props: {
   innerRef?: Ref<HTMLDivElement>;
   layout?: 'narrow' | 'wide';
   brandName?: boolean;
+  /** the app's wide row with its tabs in the true centre (narrow.ts useHeaderLayout) */
+  centred?: boolean;
   testid?: string;
 }) {
   const scrolled = useScrolled();
@@ -140,6 +142,7 @@ export function SiteHeader(props: {
       data-scrolled={scrolled ? '' : undefined}
       data-layout={props.layout}
       data-brand={props.brandName ? 'name' : undefined}
+      data-centred={props.centred ? '' : undefined}
       data-testid={props.testid}
     >
       <div class="container header-inner" ref={props.innerRef}>

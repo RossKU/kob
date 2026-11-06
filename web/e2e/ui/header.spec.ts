@@ -253,3 +253,27 @@ test('desktop 900 px: the brand shows its name beside the logo when the row has 
   await expect.poll(async () => page.getByTestId('brand').locator('span').evaluate((e) => e.getBoundingClientRect().width)).toBeGreaterThan(20);
   expect(await noScroll(page)).toBe(true);
 });
+
+test('desktop 1440 px: the tabs sit in the true centre of the row (the brand left, the tools right); Connect is the landing page\'s pill', async ({ appPage: page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto('/#/market');
+  await expect(page.locator('header.header')).toHaveAttribute('data-centred', '');
+  const nav = (await page.locator('.header .nav').boundingBox())!;
+  expect(Math.abs(nav.x + nav.width / 2 - 720)).toBeLessThan(1);
+  const connect = page.getByTestId('wallet-connect-kasware');
+  await expect(connect).toHaveClass(/btn-pill/);
+  const s = await connect.evaluate((e) => { const c = getComputedStyle(e); return { r: parseFloat(c.borderTopLeftRadius), h: e.getBoundingClientRect().height }; });
+  expect(s.r).toBeGreaterThanOrEqual(s.h / 2 - 0.5);
+  // a connected wallet's chip is wider than a centred row allows: the tabs keep the middle of the room between the brand and the tools, one row
+  await connect.click();
+  await expect(page.getByTestId('wallet-connected')).toBeVisible();
+  await expect(page.getByTestId('nav-market')).toBeVisible();
+  const brand = (await page.getByTestId('brand').boundingBox())!;
+  const tools = (await page.locator('.header .header-tools').boundingBox())!;
+  const nav2 = (await page.locator('.header .nav').boundingBox())!;
+  const left = nav2.x - (brand.x + brand.width);
+  const right = tools.x - (nav2.x + nav2.width);
+  expect(left).toBeGreaterThan(0);
+  expect(right).toBeGreaterThan(0);
+  if ((await page.locator('header.header').getAttribute('data-centred')) === null) expect(Math.abs(left - right)).toBeLessThan(2);
+});

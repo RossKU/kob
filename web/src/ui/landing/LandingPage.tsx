@@ -67,7 +67,7 @@ function Nav() {
           {t('landing.github')}
         </a>
         <NetworkChip network={config.network} short={tight} />
-        <a class="btn btn-primary btn-sm" href={APP_HASH} data-testid="landing-open-app">
+        <a class="btn btn-sm btn-pill" href={APP_HASH} data-testid="landing-open-app">
           {t('landing.openApp')}
         </a>
         <ThemeToggle />

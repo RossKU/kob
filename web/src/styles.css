@@ -200,6 +200,14 @@ small, .small { font-size: 0.85em; }
    texts are wider than the row (a long translation, wide fonts) wraps the tools to a second line instead of overlapping them */
 .header-inner { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-height: calc(var(--frame-h) - 1px); padding-top: 4px; padding-bottom: 4px; min-width: 0; }
 .header .brand { flex: 0 0 auto; }
+/* the app's wide row: the brand left, the tools right, the tabs between them; where the row has room (data-centred, narrow.ts useHeaderLayout) in the
+   true centre of the row, else (a wide wallet chip) in the middle of the room between the brand and the tools */
+.header[data-context='app'][data-layout='wide'] .nav { margin: 0 auto; }
+.header[data-context='app'][data-layout='wide'] .header-tools { margin-left: 0; }
+.header[data-centred] .header-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.header[data-centred] .brand { justify-self: start; }
+.header[data-centred] .nav { justify-self: center; }
+.header[data-centred] .header-tools { justify-self: end; margin-left: 0; }
 /* the brand lockup (header and footer): the logo with its thin ring, the name in the system font */
 .brand { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font); font-weight: 800; font-size: 18px; line-height: 1; letter-spacing: -0.01em; color: var(--text); text-decoration: none; }
 .brand-mark { width: var(--logo); height: var(--logo); flex: none; }
@@ -212,6 +220,10 @@ small, .small { font-size: 0.85em; }
 .nav a[aria-current='page'] { background: var(--surface-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--primary); }
 /* every header control is one height (the buttons, the tabs, the wallet chip); an icon button is square */
 .header .btn-sm { min-height: var(--ctl-h); padding: 0 12px; border-radius: var(--ctl-r); font-size: 14px; }
+/* the header's call to action (the landing page's "Open the app", the app's "Connect"): the landing page's solid pill in the text colour on the page's
+   background (a white pill with dark text on dark, a near-black one on light); hover: the logo's green */
+.header .btn.btn-pill { border-radius: 999px; padding: 0 16px; background: var(--text); border-color: var(--text); color: var(--bg); }
+.header .btn.btn-pill:hover:not(:disabled) { background: var(--primary); border-color: var(--primary); color: var(--primary-contrast); }
 .header .header-tools .btn-icon, .header .header-tools .notify-bell, .header .header-tools .menu-button { min-width: var(--ctl-h); padding: 0 7px; }
 .header-tools { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin-left: auto; min-width: 0; }
 .header-wallet { display: flex; align-items: center; min-width: 0; }
@@ -504,16 +516,20 @@ body.modal-open { overflow: hidden; }
 /* a small phone: the chip keeps the dot and the network; "pre-audit" is in its tooltip, the menu and the banner (so a connected row fits on any font) */
 @media (max-width: 430px) {
   .header[data-context='app'] .net-chip .net-pre { display: none; }
+  .header .btn.btn-pill { padding: 0 12px; }
 }
-/* a narrow phone: the landing page's row (brand, chip, Open the app, theme toggle) shows the logo alone, as the app's does (the name stays for screen readers) */
-@media (max-width: 389px) {
+/* a phone: the landing page's row (brand, chip, Open the app, theme toggle) keeps room to spare on wide fonts (a Linux font is wider than Windows'): the
+   logo alone (the name stays for screen readers), the chip's short form ("tn10"; "pre-audit" is in its tooltip, the hero and the footer), tighter gaps */
+@media (max-width: 430px) {
   .header[data-context='landing'] .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .header[data-context='landing'] .net-chip .net-pre { display: none; }
+  .header[data-context='landing'] .header-tools { gap: 4px; }
 }
 /* a very small phone: the landing page's chip moves to the hero, beside the kicker (landing.css) */
 @media (max-width: 359px) {
   .header[data-context='landing'] .net-chip { display: none; }
 }
-/* a desktop that is not wide: the brand shrinks to the logo unless the row has room for its name (data-brand, narrow.ts useBrandName), the chip, the tabs and
+/* a desktop that is not wide: the brand shrinks to the logo unless the row has room for its name (data-brand, narrow.ts useHeaderLayout), the chip, the tabs and
    the buttons tighten (so the whole row fits down to about 900 px even on wide fonts) */
 @media (min-width: 720px) and (max-width: 1199px) {
   .header[data-context='app']:not([data-brand='name']) .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
@@ -522,6 +538,7 @@ body.modal-open { overflow: hidden; }
   .header-inner { gap: 6px; }
   .header-tools { gap: 4px; }
   .header-tools .btn-sm { padding: 0 8px; font-size: 13px; }
+  .header .header-tools .btn.btn-pill { padding: 0 12px; }
   .wallet-actions { gap: 4px; }
   .net-chip { font-size: 11px; padding: 0 7px; }
   .header .wallet-chip .btn-sm { gap: 4px; font-size: 12px; }

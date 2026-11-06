@@ -79,11 +79,16 @@ function wideWidth(el: HTMLElement): number | null {
   const tools = el.querySelector<HTMLElement>('.header-tools');
   if (!brand || !nav || !tools) return null;
   const gap = px(getComputedStyle(el).columnGap);
+  // the brand counts as its logo only: its name is shown on top only when there is room for it (`useHeaderLayout`), never at the cost of the tabs; the
+  // tabs and the tools at their content widths, whether the row is centred or packed (the narrow layout takes over only when even the packed row overflows)
+  return rowWidths({ logo: brand.getBoundingClientRect().width - brandNameWidth(brand), name: 0, nav: nav.getBoundingClientRect().width, tools: toolsWidth(tools), gap }, false).packed;
+}
+
+/** The tools' natural width: their items and the gaps between them (not their box, which a centred row may stretch). */
+function toolsWidth(tools: HTMLElement): number {
   const toolGap = px(getComputedStyle(tools).columnGap);
   const items = Array.from(tools.children) as HTMLElement[];
-  const toolsWidth = items.reduce((s, c) => s + c.getBoundingClientRect().width, 0) + toolGap * Math.max(0, items.length - 1);
-  // the brand counts as its logo only: its name is shown on top only when there is room for it (`useBrandName`), never at the cost of the tabs
-  return brand.getBoundingClientRect().width - brandNameWidth(brand) + nav.getBoundingClientRect().width + toolsWidth + 2 * gap;
+  return items.reduce((s, c) => s + c.getBoundingClientRect().width, 0) + toolGap * Math.max(0, items.length - 1);
 }
 
 /** The width the brand's name takes beside the logo (its text and the gap before it), 0 while it is hidden. */
@@ -93,23 +98,52 @@ function brandNameWidth(brand: HTMLElement): number {
   return name.getBoundingClientRect().width + px(getComputedStyle(brand).columnGap);
 }
 
+/** From this width styles.css always shows the brand's name beside the logo (below it only where `useHeaderLayout` finds room for it). */
+const NAME_QUERY = '(min-width: 1200px)';
+
 /**
- * For the header's wide row on a desktop that is not wide (720-1199 px, where styles.css hides the brand's name by default): true while the row has room
- * for the name beside the logo on top of the tabs and the tools (a disconnected wallet's short buttons, a wider window), so the name is shown whenever it fits.
+ * The widths of the wide row (pure): `packed` = the brand, the tabs and the tools side by side; `centred` = the tabs in the true centre of the row, so
+ * each side takes the wider of the brand and the tools. `withName` adds the brand's name beside the logo.
  */
-export function useBrandName(root: { current: HTMLElement | null }, narrow: boolean): boolean {
-  const [fits, setFits] = useState(false);
+export function rowWidths(m: { logo: number; name: number; nav: number; tools: number; gap: number }, withName: boolean): { packed: number; centred: number } {
+  const brand = m.logo + (withName ? m.name : 0);
+  return { packed: brand + m.nav + m.tools + 2 * m.gap, centred: m.nav + 2 * Math.max(brand, m.tools) + 2 * m.gap };
+}
+
+/**
+ * The wide row's arrangement (pure): the tabs centred when the row has room for that (with the name where styles.css always shows it, `nameForced`),
+ * else packed after the brand; the brand's name shown on a desktop that is not wide whenever the chosen arrangement still has room for it.
+ */
+export function headerLayout(m: { logo: number; name: number; nav: number; tools: number; gap: number; room: number }, nameForced: boolean): { centred: boolean; brandName: boolean } {
+  const fits = (w: number) => w + SPARE_PX <= m.room;
+  const centred = fits(rowWidths(m, nameForced).centred);
+  const withName = rowWidths(m, true);
+  return { centred, brandName: centred ? fits(withName.centred) : fits(withName.packed) };
+}
+
+/**
+ * For the header's wide row: whether its tabs sit in the true centre of the row (brand left, tools right) and, on a desktop that is not wide (720-1199 px,
+ * where styles.css hides the brand's name by default), whether the name fits beside the logo. Measured after every layout change of the row's parts (the
+ * wallet's buttons, the fonts loading, a resize); the narrow layout (`useSqueezeCheck`) takes over only when even the packed row does not fit.
+ */
+export function useHeaderLayout(root: { current: HTMLElement | null }, narrow: boolean): { centred: boolean; brandName: boolean } {
+  const [layout, setLayout] = useState({ centred: false, brandName: false });
   useLayoutEffect(() => {
     const el = root.current;
     if (!el || narrow || typeof ResizeObserver !== 'function') return;
     const check = () => {
       const brand = el.querySelector<HTMLElement>('.brand');
       const name = brand?.querySelector<HTMLElement>('span');
-      const needed = wideWidth(el);
-      if (!brand || !name || needed === null) return;
+      const nav = el.querySelector<HTMLElement>('.nav');
+      const tools = el.querySelector<HTMLElement>('.header-tools');
+      if (!brand || !name || !nav || !tools) return;
       // the name's own width, also while it is clipped to 1 px (scrollWidth is its text's width)
       const nameWidth = name.scrollWidth + px(getComputedStyle(brand).columnGap);
-      setFits(needed + nameWidth + SPARE_PX <= roomOf(el));
+      const next = headerLayout(
+        { logo: brand.getBoundingClientRect().width - brandNameWidth(brand), name: nameWidth, nav: nav.getBoundingClientRect().width, tools: toolsWidth(tools), gap: px(getComputedStyle(el).columnGap), room: roomOf(el) },
+        typeof matchMedia === 'function' && matchMedia(NAME_QUERY).matches,
+      );
+      setLayout((l) => (l.centred === next.centred && l.brandName === next.brandName ? l : next));
     };
     check();
     const ro = new ResizeObserver(check);
@@ -118,8 +152,9 @@ export function useBrandName(root: { current: HTMLElement | null }, narrow: bool
     void document.fonts?.ready.then(check);
     return () => ro.disconnect();
   }, [narrow]);
-  return fits && !narrow;
+  return narrow ? { centred: false, brandName: false } : layout;
 }
+
 
 /**
  * For the header. In the wide layout: after every layout and on every resize, measures the row; when it is wider than its room the narrow layout takes over and

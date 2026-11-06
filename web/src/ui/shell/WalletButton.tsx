@@ -110,10 +110,12 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
       <Button
         small={!props.gate}
         variant="primary"
+        // the header's Connect is the landing page's pill (styles.css .btn-pill); the Create token page's gate keeps the primary button
+        {...(props.gate ? {} : { class: 'btn-pill' })}
         data-testid={testid}
         loading={w.connecting || waiting}
         onClick={onConnect}
-        {...(noExtension && !supported ? { 'data-state': 'unavailable', class: 'btn-off', title: t(keyAllowed ? 'signer.unsupported' : 'signer.mirrorOff') } : {})}
+        {...(noExtension && !supported ? { 'data-state': 'unavailable', class: props.gate ? 'btn-off' : 'btn-pill btn-off', title: t(keyAllowed ? 'signer.unsupported' : 'signer.mirrorOff') } : {})}
       >
         {w.connecting || waiting ? t('shell.wallet.connecting') : t('shell.wallet.connectShort')}
       </Button>

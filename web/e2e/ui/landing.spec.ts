@@ -236,3 +236,28 @@ test('390 px: the bots section (command line, read API) fits the screen: no text
   const rights = await sec.evaluate((el) => [...el.querySelectorAll('p, h2, .lp-tx')].map((e) => e.getBoundingClientRect().right));
   for (const r of rights) expect(r).toBeLessThanOrEqual(390);
 });
+
+// the CI runner's fonts (DejaVu Sans) are wider than a desktop's: the phone row keeps room to spare on a font as wide (Verdana), and nothing scrolls sideways
+for (const width of [360, 390]) {
+  test(`${width} px on a wide font: the header row has room to spare and the page does not scroll sideways`, async ({ appPage: page }) => {
+    await page.addInitScript(() => {
+      document.addEventListener('DOMContentLoaded', () => {
+        const s = document.createElement('style');
+        s.textContent = 'html, body, button, input, select, a, span, h1, h2, h3, p { font-family: Verdana, "DejaVu Sans", sans-serif !important; }';
+        document.head.append(s);
+      });
+    });
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/');
+    await expect(page.getByTestId('landing-hero')).toHaveClass(/lp-go/);
+    const box = async (id: string) => (await page.getByTestId(id).boundingBox())!;
+    const [brand, chip, toggle] = [await box('landing-brand'), await box('network-chip'), await box('theme-toggle')];
+    // the row's own width (the brand, a gap, the tools) at most 330 px at 360: about 30 px to spare for a still wider font
+    const natural = brand.x + brand.width + 6 + (toggle.x + toggle.width - chip.x);
+    expect(natural).toBeLessThanOrEqual(width - 30);
+    expect(toggle.x + toggle.width).toBeLessThanOrEqual(width - 15);
+    expect(await noScroll(page)).toBe(true);
+    await page.getByTestId('landing-bigbook').scrollIntoViewIfNeeded();
+    expect(await noScroll(page)).toBe(true);
+  });
+}

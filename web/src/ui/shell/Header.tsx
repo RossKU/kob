@@ -6,7 +6,7 @@ import { Brand, SiteHeader, ThemeToggle } from './Frame';
 import { NotifyBell } from '../notify/NotificationPanel';
 import { WalletButton } from './WalletButton';
 import { NetworkChip } from './NetworkBadge';
-import { TIGHT_QUERY, useBrandName, useMedia, useNarrow, useSqueezeCheck } from './narrow';
+import { TIGHT_QUERY, useHeaderLayout, useMedia, useNarrow, useSqueezeCheck } from './narrow';
 import { useRef } from 'preact/hooks';
 import { Popover } from './Popover';
 import { StatusDot, StatusLines, useStatusLevel } from './StatusBar';
@@ -93,13 +93,14 @@ export function Header(props: { route: Route }) {
   const level = useStatusLevel();
   const inner = useRef<HTMLDivElement>(null);
   useSqueezeCheck(inner, narrow);
-  const brandName = useBrandName(inner, narrow);
+  const { brandName, centred } = useHeaderLayout(inner, narrow);
   const active = navOf(props.route);
   return (
     <SiteHeader
       context="app"
       layout={narrow ? 'narrow' : 'wide'}
       brandName={brandName}
+      centred={centred}
       innerRef={inner}
       brand={<Brand href={routeToHash({ name: 'home' })} testid="brand" />}
     >

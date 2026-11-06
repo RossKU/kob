@@ -92,7 +92,8 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 .lp-hero-foot p b { color: var(--fg); font-weight: 600; }
 .lp-ctas { display: flex; flex-wrap: wrap; gap: 12px; }
 .lp-ctas .lp-pill { height: 54px; padding: 0 26px; font-size: 16px; }
-@media (max-width: 480px) { .lp-ctas .lp-pill { flex: 1 1 0; padding: 0 16px; } }
+/* a phone: the two buttons share the row, and wrap to two rows rather than run past the screen on a wide font */
+@media (max-width: 480px) { .lp-ctas .lp-pill { flex: 1 1 auto; justify-content: center; padding: 0 16px; } }
 .lp-fade { opacity: 0; transform: translateY(14px); transition: opacity 1s var(--ease) 0.5s, transform 1s var(--ease) 0.5s; }
 .lp-go .lp-fade { opacity: 1; transform: none; }
 
