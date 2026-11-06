@@ -218,6 +218,7 @@ export function OrderRow(props: OrderRowProps) {
 
       <KeyValueList
         compact
+        flow
         items={[
           ...(row.pair ? pairItems(row, tk, bToken) : []),
           // an auction's bound is its END price (the worst it can fill at), never labelled a limit; its start is only the expected price

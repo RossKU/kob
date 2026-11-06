@@ -58,7 +58,6 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 .lp-pill { display: inline-flex; align-items: center; gap: 10px; height: 42px; padding: 0 20px; border-radius: 99px; font: 600 15px/1 var(--sans); letter-spacing: -0.01em; transition: transform 0.25s var(--ease), background 0.2s, color 0.2s, border-color 0.2s; white-space: nowrap; }
 .lp-pill:hover { transform: translateY(-1px); }
 .lp .lp-pill-solid { background: var(--fg); color: var(--bg); }
-.lp .lp-pill-solid:hover { background: var(--teal); color: var(--teal-ink); }
 .lp-pill-line { border: 1.5px solid var(--line-2); }
 .lp-pill-line:hover { border-color: var(--fg); }
 .lp-pill .lp-ico { width: 18px; height: 18px; }

@@ -226,9 +226,9 @@ small, .small { font-size: 0.85em; }
 /* every header control is one height (the buttons, the tabs, the wallet chip); an icon button is square */
 .header .btn-sm { min-height: var(--ctl-h); padding: 0 12px; border-radius: var(--ctl-r); font-size: 14px; }
 /* the header's call to action (the landing page's "Open the app", the app's "Connect"): the landing page's solid pill in the text colour on the page's
-   background (a white pill with dark text on dark, a near-black one on light); hover: the logo's green */
+   background (a white pill with dark text on dark, a near-black one on light); hover: the same pill, a shade softer */
 .header .btn.btn-pill { border-radius: 999px; padding: 0 16px; background: var(--text); border-color: var(--text); color: var(--bg); }
-.header .btn.btn-pill:hover:not(:disabled) { background: var(--primary); border-color: var(--primary); color: var(--primary-contrast); }
+.header .btn.btn-pill:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 86%, var(--bg)); border-color: color-mix(in srgb, var(--text) 86%, var(--bg)); color: var(--bg); }
 .header .header-tools .btn-icon, .header .header-tools .notify-bell, .header .header-tools .menu-button { min-width: var(--ctl-h); padding: 0 7px; }
 .header-tools { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin-left: auto; min-width: 0; }
 .header-wallet { display: flex; align-items: center; min-width: 0; }
@@ -455,6 +455,9 @@ body.modal-open { overflow: hidden; }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .kv dd .amount { white-space: normal; } /* a very long amount (18 decimals) wraps inside its card instead of widening the page */
 .kv-compact { gap: 2px 12px; font-size: 0.9rem; }
+.kv-box { container-type: inline-size; min-width: 0; }
+@container (min-width: 640px) { .kv-flow { grid-template-columns: repeat(2, minmax(110px, max-content) minmax(0, 1fr)); } }
+@container (min-width: 1040px) { .kv-flow { grid-template-columns: repeat(3, minmax(110px, max-content) minmax(0, 1fr)); } }
 @media (max-width: 520px) { .kv { grid-template-columns: 1fr; gap: 0; } .kv dd { margin-bottom: 6px; } }
 
 .amount { font-variant-numeric: tabular-nums; white-space: nowrap; }

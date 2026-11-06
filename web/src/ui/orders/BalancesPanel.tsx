@@ -72,6 +72,7 @@ export function BalancesPanel(props: {
         <>
           <KeyValueList
             compact
+            flow
             data-testid="kas-balance"
             items={[
               { label: t('market.balances.kasFree'), value: free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.free} group /> : t('common.unavailable'), 'data-testid': 'kas-free' },

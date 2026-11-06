@@ -9,10 +9,13 @@ export interface KeyValueItem {
   show?: boolean;
 }
 
-/** `<dl>` of label / value rows (definition list semantics, two columns on wide screens, stacked on a phone). */
-export function KeyValueList(props: { items: KeyValueItem[]; compact?: boolean; 'data-testid'?: string }) {
-  return (
-    <dl class={`kv${props.compact ? ' kv-compact' : ''}`} data-testid={props['data-testid']}>
+/**
+ * `<dl>` of label / value rows (definition list semantics, two columns on wide screens, stacked on a phone). `flow`: on a wide card the rows run in two or
+ * three label / value groups side by side (a container query on the card), so a short list does not leave the right of the card empty.
+ */
+export function KeyValueList(props: { items: KeyValueItem[]; compact?: boolean; flow?: boolean; 'data-testid'?: string }) {
+  const list = (
+    <dl class={`kv${props.compact ? ' kv-compact' : ''}${props.flow ? ' kv-flow' : ''}`} data-testid={props['data-testid']}>
       {props.items
         .filter((i) => i.show !== false)
         .map((i, n) => (
@@ -23,4 +26,5 @@ export function KeyValueList(props: { items: KeyValueItem[]; compact?: boolean; 
         ))}
     </dl>
   );
+  return props.flow ? <div class="kv-box">{list}</div> : list;
 }
