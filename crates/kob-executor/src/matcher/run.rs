@@ -164,7 +164,7 @@ pub struct Roles {
 }
 
 impl Roles {
-    /// The roles of `kobd run` as `/v1/health` names them (`HealthSnapshot::roles`): `executor` while the matcher or
+    /// The roles of `kobd --executor` as `/v1/health` names them (`HealthSnapshot::roles`): `executor` while the matcher or
     /// the keepers work, and `indexer` when the store keeps the history (`lean = false`): over a lean store the process is the
     /// Executor alone, over a full one it is the Executor and the Indexer.
     pub fn health_roles(self, lean: bool) -> Vec<&'static str> {
@@ -344,7 +344,7 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     pub fee_rates: crate::fee::FeeRates,
     /// The matcher's configured rate (`engine.planner.fee_rate` at start): the lowest rate a batch is planned at.
     pub plan_base_rate: u64,
-    /// Where the rates are published for the rest of the process (the x402 facilitator of `kobd run`).
+    /// Where the rates are published for the rest of the process (the x402 facilitator of `kobd --executor`).
     pub fee_board: Option<crate::fee::FeeBoard>,
     /// Kills and refunds this process submitted that are not accepted yet, by txid ([`Runner::replace_stuck`]).
     pub keeper_inflight: BTreeMap<[u8; 32], InFlightJob>,
@@ -1465,7 +1465,7 @@ pub fn kas_text(sompi: i64) -> String {
     }
 }
 
-/// The one-line status an operator watching the console reads (`kobd run --status-secs`, every 60 s by default):
+/// The one-line status an operator watching the console reads (`kobd --executor --status-secs`, every 60 s by default):
 /// where the book is, what the executor sent and earned since the start, its funds, and what needs attention. The metrics
 /// file (`--metrics-file`) carries the same facts for monitoring.
 pub fn status_line(f: &StatusFacts) -> String {

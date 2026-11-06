@@ -50,7 +50,7 @@
 //! ```
 //!
 //! `intents` (intent-based swap-and-pay, `kob-intent-v1`) needs the book: it is served only inside
-//! `kobd run` (`--x402-config`), where the indexer's book is at hand; the stand-alone `kobd x402`
+//! `kobd --executor` (`--x402-config`), where the indexer's book is at hand; the stand-alone `kobd x402`
 //! refuses it. `invoices` works in both.
 
 use std::collections::HashSet;
@@ -315,7 +315,7 @@ pub struct X402Config {
     pub write_timeout_ms: u64,
     /// Relative to the configuration file's directory ([`X402Config::load`]).
     pub kill_switch_file: Option<String>,
-    /// The process's pause file (`kobd run --pause-file`); not a configuration key.
+    /// The process's pause file (`kobd --executor --pause-file`); not a configuration key.
     #[serde(skip)]
     pub pause_file: Option<std::path::PathBuf>,
     /// Reverse proxies (CIDR or bare IP) whose forwarded-client header is believed. Behind a proxy on the same host

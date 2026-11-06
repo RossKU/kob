@@ -268,7 +268,7 @@ pub struct IndexerConfig {
     pub primary_fetch: bool,
     pub data_dir: PathBuf,
     pub start: StartMode,
-    /// `kobd run` on an empty data directory trades at once and fills in the history afterwards ([`crate::faststart`]):
+    /// `kobd --executor` on an empty data directory trades at once and fills in the history afterwards ([`crate::faststart`]):
     /// a second store in `<data_dir>/tip` follows the chain from the node's current sink (seconds) and the matcher and
     /// keepers work on it, while the normal store indexes the history from the pruning point; when that has caught up, the
     /// executor switches to it and deletes the tip store. Default false (the setup writes true for a matcher). Without
@@ -319,7 +319,7 @@ pub struct IndexerConfig {
     /// follower's state (`catching_up` included); beyond it they plan nothing. 0: only while `following` (the strict gate).
     /// `/v1/health` keeps `caught_up` strict and adds `within_lag_tolerance`.
     pub max_lag_secs: u64,
-    /// `kobd run` asks the node which listed orders it still holds (and leaves out those it no longer does) only while
+    /// `kobd --executor` asks the node which listed orders it still holds (and leaves out those it no longer does) only while
     /// the store is at least this many seconds behind the node: the query is a node round trip per tick, which loses races to
     /// other executors when the book is current anyway. 0: ask every tick.
     pub verify_live_orders_min_lag_secs: u64,
@@ -415,10 +415,10 @@ impl Default for IndexerConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LaunchRole {
-    /// `kobd run`: the indexer, the matcher and the keepers (needs the operator's key).
+    /// `kobd --executor`: the indexer, the matcher and the keepers (needs the operator's key).
     #[default]
     Run,
-    /// `kobd index`: the indexer and its read API alone (no key, no funds).
+    /// `kobd --indexer`: the indexer and its read API alone (no key, no funds).
     Index,
 }
 

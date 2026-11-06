@@ -1,4 +1,5 @@
-//! The indexer's command line: `kobd index` (and the option set `kobd run` shares).
+//! The indexer's command line: the options of a start (`kobd --indexer`, and the set `kobd --executor` shares) and the
+//! Indexer's tools, `kobd index <tool>` (migrate, replay, export-orders, export-book, import-orders, logo-reports, rebase).
 
 use crate::config::NodeConfig;
 use crate::config::{IndexerConfig, StartMode};
@@ -11,7 +12,7 @@ use clap::{Args, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// `kobd index`.
+/// `kobd index <tool>`.
 #[derive(Args)]
 pub struct IndexArgs {
     #[command(flatten)]
@@ -20,7 +21,7 @@ pub struct IndexArgs {
     pub sub: Option<IndexSub>,
 }
 
-/// The indexer options every role that embeds the indexer takes (`index`, `run`).
+/// The indexer options every start takes (`kobd --indexer`, `kobd --executor`) and the tools of `kobd index`.
 #[derive(Args, Clone, Debug)]
 pub struct IndexOpts {
     /// TOML configuration file (all keys optional); flags override it.
@@ -63,7 +64,7 @@ pub struct IndexOpts {
     /// Where a fresh database starts: `pruning-point` (default), `sink`, or a chain block hash.
     #[arg(long, global = true)]
     pub start: Option<StartMode>,
-    /// `run` on an empty data directory: trade at once on a store that follows the chain from the node's sink, and index the
+    /// The Executor on an empty data directory: trade at once on a store that follows the chain from the node's sink, and index the
     /// history into the normal store meanwhile (`fast_start` in the configuration; docs/ops/executor.md, *Fast start*).
     #[arg(long, global = true, conflicts_with = "no_fast_start")]
     pub fast_start: bool,
@@ -95,7 +96,7 @@ pub struct IndexOpts {
     /// Hours of chain blocks kept for reorgs (the finality window; default 12).
     #[arg(long, global = true)]
     pub reorg_window_hours: Option<u64>,
-    /// Log a one-line status (the indexer's lag; with `run` also the transactions sent, the profit, the funds and the
+    /// Log a one-line status (the indexer's lag; with the Executor also the transactions sent, the profit, the funds and the
     /// warnings) every this many seconds; 0: never.
     #[arg(long, global = true, default_value_t = 60)]
     pub status_secs: u64,
@@ -110,7 +111,8 @@ impl IndexOpts {
 
 #[derive(Subcommand)]
 pub enum IndexSub {
-    /// Follow the node and serve the API (the default when no subcommand is given).
+    /// Removed: the Indexer starts as `kobd --indexer` (refused with a message that says so).
+    #[command(hide = true)]
     Run,
     /// Rebuild a NEW database from the record log (the log is not modified), then follow the node from its cursor.
     Replay {
@@ -362,21 +364,21 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
 
 pub use crate::shutdown::shutdown_signal;
 
-/// What `kobd index` (follow and serve) refuses instead of ignoring: the options of role `run` that its configuration sets.
+/// What the Indexer (`kobd --indexer`) refuses instead of ignoring: the options of role `run` that its configuration sets.
 /// The launcher refuses the same `[launch]` keys (`setup::launch_args`); `fast_start` needs the matcher the index role does not have.
 /// `file`: the configuration file, for the message.
 pub fn refuse_run_only_options(cfg: &IndexerConfig, file: Option<&std::path::Path>) -> Result<()> {
     let at = file.map(|p| format!("{}: ", p.display())).unwrap_or_default();
     if let Some(k) = cfg.launch.as_ref().and_then(|l| l.run_only_key()) {
         anyhow::bail!(
-            "{at}[launch] {k} is an option of role \"run\", not of `kobd index` (the index role has no key, no kill switch and no x402 \
-             facilitator): remove it, or start `kobd run`"
+            "{at}[launch] {k} is an option of role \"run\", not of the Indexer (`kobd --indexer` has no key, no kill switch and no \
+             x402 facilitator): remove it, or start the Executor (`kobd --executor`)"
         );
     }
     if cfg.fast_start {
         anyhow::bail!(
-            "{at}fast_start is an option of `kobd run` (it lets the matcher trade at once on a store that follows the chain from the \
-             node's sink while the history is indexed); `kobd index` has no matcher. To follow at once, set `start = \"sink\"` (--start sink): \
+            "{at}fast_start is an option of the Executor (`kobd --executor`: it lets the matcher trade at once on a store that follows \
+             the chain from the node's sink while the history is indexed); the Indexer has no matcher. To follow at once, set `start = \"sink\"` (--start sink): \
              orders older than the start are then not in the store and /v1/health reports book_complete false. Otherwise let it catch up: \
              the status line and /v1/health show the time to go"
         );
@@ -384,36 +386,47 @@ pub fn refuse_run_only_options(cfg: &IndexerConfig, file: Option<&std::path::Pat
     Ok(())
 }
 
-/// Runs the indexer command.
-pub async fn run_index(a: IndexArgs) -> Result<()> {
-    let cfg = build_config(&a.opts)?;
-    let sub = a.sub.unwrap_or(IndexSub::Run);
-    if matches!(sub, IndexSub::Run) {
-        refuse_run_only_options(&cfg, a.opts.config.as_deref())?;
-    }
-    match sub {
-        IndexSub::Run => {
-            tracing::info!(network = %cfg.network, rpc = %redact_url(cfg.primary_url()), data = %cfg.data_dir.display(), "starting indexer");
-            // listening before the slow part: a Ctrl+C while the store opens is not lost
-            let shutdown = shutdown_signal();
-            let idx = Indexer::open(cfg)?;
-            let status = a.opts.status_every().map(|every| {
-                let health = idx.health.clone();
-                tokio::spawn(async move {
-                    let mut t = tokio::time::interval(every);
-                    t.tick().await;
-                    loop {
-                        t.tick().await;
-                        tracing::info!("status: {}", health.snapshot().status_line());
-                    }
-                })
-            });
-            let r = idx.run(shutdown).await;
-            if let Some(s) = status {
-                s.abort();
+/// What `kobd index` without a tool, and the removed `kobd index run`, answer: the Indexer starts with the role flag.
+pub const INDEX_START_MOVED: &str = "`kobd index` no longer starts the Indexer: start it with `kobd --indexer` and the same \
+     options (for example `kobd --indexer --config kob-executor.toml`), or plain `kobd` for the configuration the setup wrote; \
+     `kobd index` keeps the Indexer's tools (migrate, replay, export-orders, export-book, import-orders, logo-reports, rebase)";
+
+/// The Indexer: follow the node and serve the read API (`kobd --indexer`).
+pub async fn follow_and_serve(opts: IndexOpts) -> Result<()> {
+    let cfg = build_config(&opts)?;
+    refuse_run_only_options(&cfg, opts.config.as_deref())?;
+    tracing::info!(network = %cfg.network, rpc = %redact_url(cfg.primary_url()), data = %cfg.data_dir.display(), "starting indexer");
+    // listening before the slow part: a Ctrl+C while the store opens is not lost
+    let shutdown = shutdown_signal();
+    let idx = Indexer::open(cfg)?;
+    let status = opts.status_every().map(|every| {
+        let health = idx.health.clone();
+        tokio::spawn(async move {
+            let mut t = tokio::time::interval(every);
+            t.tick().await;
+            loop {
+                t.tick().await;
+                tracing::info!("status: {}", health.snapshot().status_line());
             }
-            r?;
-        }
+        })
+    });
+    let r = idx.run(shutdown).await;
+    if let Some(s) = status {
+        s.abort();
+    }
+    r?;
+    Ok(())
+}
+
+/// Runs a tool of `kobd index`.
+pub async fn run_index(a: IndexArgs) -> Result<()> {
+    let sub = match a.sub {
+        None | Some(IndexSub::Run) => anyhow::bail!(INDEX_START_MOVED),
+        Some(sub) => sub,
+    };
+    let cfg = build_config(&a.opts)?;
+    match sub {
+        IndexSub::Run => unreachable!("refused above"),
         IndexSub::Replay { onto_database: true } => {
             let f = indexer::replay_onto_database(&cfg)?;
             let r = &f.replay;
@@ -673,7 +686,7 @@ mod tests {
         assert_eq!((c.data_dir, c.tokens_path), (PathBuf::from("kob-data"), Some(PathBuf::from("kob-tokens.json"))));
     }
 
-    /// `kobd index` (follow and serve) refuses what it would otherwise ignore: the options of role `run` its configuration
+    /// The Indexer (`kobd --indexer`) refuses what it would otherwise ignore: the options of role `run` its configuration
     /// sets (the launcher refuses the same `[launch]` keys), and `fast_start`, which needs the matcher the index role does not have.
     #[test]
     fn index_refuses_the_options_of_role_run_instead_of_ignoring_them() {
@@ -697,7 +710,9 @@ mod tests {
         // fast start: refused with the way out (the sink start) named
         let e = refuse_run_only_options(&parse("fast_start = true"), Some(file)).unwrap_err().to_string();
         assert!(
-            e.contains("fast_start is an option of `kobd run`") && e.contains("start = \"sink\"") && e.contains("book_complete"),
+            e.contains("fast_start is an option of the Executor (`kobd --executor`")
+                && e.contains("start = \"sink\"")
+                && e.contains("book_complete"),
             "{e}"
         );
         // and the flag does the same: --fast-start switches it on for one start

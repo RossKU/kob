@@ -111,40 +111,13 @@ impl AppRole {
         cfg.launch.as_ref().map(|l| AppRole::from_parts(l.role, cfg.lean))
     }
 
-    /// Parses the old spelling of `--role` (deprecated): `match` (the Executor), `index` (the Indexer), or the pair in either
-    /// order (`index,match`, `match,index`), case and spaces around the names ignored. An unknown name, an empty list or an
-    /// empty element (`index,`) is an error.
-    pub fn parse(s: &str) -> Result<AppRole, String> {
-        let (mut index, mut matcher) = (false, false);
-        for part in s.split(',') {
-            match part.trim().to_ascii_lowercase().as_str() {
-                "index" => index = true,
-                "match" => matcher = true,
-                "" => {
-                    return Err(format!(
-                        "empty role in \"{s}\": use --executor, --indexer or both (--role match|index|index,match is deprecated)"
-                    ))
-                }
-                other => {
-                    return Err(format!(
-                        "unknown role \"{other}\": use --executor, --indexer or both (--role match|index|index,match is deprecated)"
-                    ))
-                }
-            }
+    /// The role flags of the roles, as a start names them: `--executor`, `--indexer` or `--executor --indexer`.
+    pub fn flags(self) -> &'static [&'static str] {
+        match self {
+            AppRole::Executor => &["--executor"],
+            AppRole::Indexer => &["--indexer"],
+            AppRole::ExecutorIndexer => &["--executor", "--indexer"],
         }
-        Ok(match (index, matcher) {
-            (true, true) => AppRole::ExecutorIndexer,
-            (false, true) => AppRole::Executor,
-            _ => AppRole::Indexer,
-        })
-    }
-}
-
-impl std::str::FromStr for AppRole {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        AppRole::parse(s)
     }
 }
 
@@ -342,7 +315,7 @@ mod tests {
         assert!(!out.to_string().contains(secret.trim()), "the secret is never printed");
         // the configuration is what a start without arguments reads
         let l = crate::setup::launch_args(&dir.join(CONFIG_FILE)).unwrap();
-        assert_eq!(l.args, ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
         let c = IndexerConfig::load(&dir.join(CONFIG_FILE)).unwrap();
         assert_eq!((c.network.as_str(), c.rpc_url.as_str()), ("testnet-10", "resolver"));
         assert!(c.fast_start, "the app's first start trades within seconds (docs/ops/executor.md, Fast start)");
@@ -361,7 +334,7 @@ mod tests {
         // index only: no key options, no address
         let out4 = setup_non_interactive(&opts(&dir, tn, false), &ask("resolver", AppRole::Indexer, false)).unwrap();
         assert_eq!((out4["address"].is_null(), out4["key_file"].is_null(), out4["role"].as_str()), (true, true, Some("index")));
-        assert_eq!(crate::setup::launch_args(&dir.join(CONFIG_FILE)).unwrap().args, ["index", "--config", CONFIG_FILE]);
+        assert_eq!(crate::setup::launch_args(&dir.join(CONFIG_FILE)).unwrap().args, ["--config", CONFIG_FILE]);
         let idx_cfg = IndexerConfig::load(&dir.join(CONFIG_FILE)).unwrap();
         assert!(!idx_cfg.fast_start && !idx_cfg.lean, "index only has no use for either");
         assert_eq!(std::fs::read_to_string(&key_path).unwrap(), secret, "index only leaves the key alone");
@@ -380,7 +353,7 @@ mod tests {
         assert_eq!(out["address"], key.address("testnet-10").to_string());
         assert_eq!((out["role"].as_str(), out["roles"].clone()), (Some("run"), serde_json::json!(["executor", "indexer"])));
         let l = crate::setup::launch_args(&d.path().join(CONFIG_FILE)).unwrap();
-        assert_eq!(l.args, ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
         let c = IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap();
         assert!(!c.lean && c.records.enabled, "full history and the record log");
         assert!(c.fast_start, "the matcher trades within seconds of the first start");

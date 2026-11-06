@@ -178,8 +178,10 @@ function specs() {
   for (const ex of cfg.executors) {
     const dir = join(RUN, ex.name);
     mkdirSync(join(dir, 'data'), { recursive: true });
+    // the roles: the Executor alone on lean storage (`--lean` in its args), else the Executor and the Indexer over a full store
+    const roles = (ex.args ?? []).includes('--lean') ? ['--executor'] : ['--executor', '--indexer'];
     const args = [
-      'run',
+      ...roles,
       '--network', 'testnet-10',
       '--rpc-url', cfg.nodeUrl,
       '--data-dir', join(dir, 'data'),

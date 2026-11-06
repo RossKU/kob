@@ -1,4 +1,4 @@
-//! The two roles at the command line: `setup --executor | --indexer | --executor --indexer`, the deprecated `--role`, and a start
+//! The two roles at the command line: `setup --executor | --indexer | --executor --indexer`, the removed `--role` (refused), and a start
 //! with role flags against a configuration set up for other roles. The binary end to end; nothing here contacts a node.
 
 use std::path::Path;
@@ -69,18 +69,16 @@ fn setup_takes_the_role_flags_and_writes_each_roles_configuration() {
 }
 
 #[test]
-fn the_old_role_flag_still_works_and_says_it_is_deprecated() {
+fn the_removed_role_option_is_refused_with_the_role_flags_named() {
     let d = tempfile::tempdir().unwrap();
-    for (role, roles) in [
-        ("match", serde_json::json!(["executor"])),
-        ("index", serde_json::json!(["indexer"])),
-        ("index,match", serde_json::json!(["executor", "indexer"])),
-        ("match,index", serde_json::json!(["executor", "indexer"])),
-    ] {
-        let (v, err) = setup(d.path(), &["--role", role]);
-        assert_eq!(v["roles"], roles, "--role {role}");
-        assert!(err.contains("--role is deprecated"), "{err}");
+    for role in ["match", "index", "index,match"] {
+        let out =
+            run(d.path(), &["setup", "--non-interactive", "--node", "resolver", "--new-key", "--network", network(), "--role", role]);
+        assert!(!out.status.success(), "--role {role}");
+        let err = text(&out.stderr);
+        assert!(err.contains("--role is gone") && err.contains("--executor, --indexer or both"), "{err}");
     }
+    assert!(!d.path().join("kob-executor.toml").exists() && !d.path().join("kob-operator.key").exists());
 }
 
 #[test]
@@ -124,6 +122,19 @@ fn a_start_with_role_flags_needs_a_configuration_of_exactly_those_roles() {
     setup(d.path(), &["--indexer"]);
     let err = text(&run(d.path(), &["--executor", "--indexer"]).stderr);
     assert!(err.contains("is set up for the Indexer but the command line asks for the Executor and Indexer"), "{err}");
+    // the same check for a configuration named with --config, from another directory
+    let other = tempfile::tempdir().unwrap();
+    let cfg = d.path().join("kob-executor.toml");
+    let err = text(&run(other.path(), &["--executor", "--config", cfg.to_str().unwrap()]).stderr);
+    assert!(err.contains("is set up for the Indexer but the command line asks for the Executor"), "{err}");
+    // the Indexer's configuration takes no option of the Executor
+    let err = text(&run(d.path(), &["--dry-run"]).stderr);
+    assert!(err.contains("the Indexer takes the indexer's options only") && err.contains("--dry-run"), "{err}");
+    // a plain --config file names no roles: the command line must
+    let plain = other.path().join("plain.toml");
+    std::fs::write(&plain, format!("network = \"{}\"\n", network())).unwrap();
+    let err = text(&run(other.path(), &["--config", plain.to_str().unwrap()]).stderr);
+    assert!(err.contains("has no [launch] table") && err.contains("kobd --executor --config"), "{err}");
 }
 
 #[test]
@@ -135,5 +146,5 @@ fn the_help_names_the_roles() {
         assert!(out.status.success() && help.contains("--executor") && help.contains("--indexer"), "{args:?}: {help}");
     }
     let help = text(&run(d.path(), &["setup", "--help"]).stdout);
-    assert!(!help.contains("--role"), "the deprecated spelling is hidden: {help}");
+    assert!(!help.contains("--role"), "the removed spelling is hidden: {help}");
 }

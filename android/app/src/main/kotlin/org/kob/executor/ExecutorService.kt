@@ -134,7 +134,7 @@ class ExecutorService : Service() {
             Kob.killStale(this)
             val began = SystemClock.elapsedRealtime()
             try {
-                // no arguments: kob-executor.toml of KOB_EXECUTOR_DIR, the same as `kobd run|index --config ...`
+                // no arguments: kob-executor.toml of KOB_EXECUTOR_DIR, the same as `kobd --executor|--indexer --config ...`
                 val p = Kob.command(this).redirectErrorStream(true).start()
                 process = p
                 p.outputStream.close()

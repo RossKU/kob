@@ -1,10 +1,11 @@
 //! First run for an operator who downloaded the binary: `kobd setup`, and the binary started without arguments
 //! (what a double click does).
 //!
-//! Started without arguments, the binary looks for [`CONFIG_FILE`] in its own directory ([`no_args_start`]). With one, it
-//! runs what the file's `[launch]` table says ([`launch_args`]): exactly `kobd <role> --config kob-executor.toml
-//! ...` in the file's directory, printed before it starts, so the same line moves unchanged to a service. Without one, and
-//! on a terminal, it runs the interactive setup ([`run_setup`]), which writes the file and then starts the same way.
+//! Started without arguments (or with role flags only), the binary looks for [`CONFIG_FILE`] in its own directory
+//! ([`no_args_start`]). With one, it starts what the file's `[launch]` table says ([`launch_args`]): exactly `kobd --executor
+//! --config kob-executor.toml ...` (or `--indexer`) in the file's directory, printed before it starts. Without one, and on a
+//! terminal, it runs the interactive setup ([`run_setup`]), which writes the file and then starts the same way; a service
+//! starts it with the one line the setup prints ([`service_line`]).
 //!
 //! Nothing here talks to anything but the node the operator names (the local node of the build's network by default,
 //! [`default_wrpc_url`]): no telemetry, no fee, no project server, no update check.
@@ -64,10 +65,9 @@ pub struct SetupArgs {
     /// API; no key) or both in one process. Without a flag the interactive setup asks.
     #[command(flatten)]
     pub roles: crate::app::RoleFlags,
-    /// Deprecated spelling of the role flags, non-interactive only: `match` is `--executor`, `index` is `--indexer`,
-    /// `index,match` (also `match,index`) is both.
-    #[arg(long, value_parser = crate::app::AppRole::parse, requires = "non_interactive", hide = true, conflicts_with_all = ["executor", "indexer"])]
-    pub role: Option<crate::app::AppRole>,
+    /// The removed spelling of the role flags (`--role match|index|index,match`): refused with a message naming the role flags.
+    #[arg(long, hide = true)]
+    pub role: Option<String>,
     /// Non-interactive: make the operator key when the directory has none (an existing key file is never replaced).
     #[arg(long, requires = "non_interactive")]
     pub new_key: bool,
@@ -132,20 +132,23 @@ pub fn program_path() -> String {
     std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "kobd".into())
 }
 
-/// A start from a configuration file: run `args` (the subcommand and its options, without the program name) in `dir`.
+/// A start from a configuration file: the roles' start with the options `args` (without the program name and the role flags)
+/// in `dir`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
     pub dir: PathBuf,
     pub args: Vec<String>,
     pub role: LaunchRole,
+    /// The roles the file was set up for (`[launch] role` and `lean`).
+    pub roles: AppRole,
     /// The read API's address (`None`: off), for the operator's first look.
     pub api: Option<std::net::SocketAddr>,
     pub pause_file: Option<PathBuf>,
 }
 
-/// The command line the configuration at `path` stands for. The file must parse as a `--config` file (every indexer key is
-/// checked, unknown ones refused) and carry a `[launch]` table; the paths it names stay as written, relative to the file's
-/// directory, which the caller makes the working directory.
+/// The start options the configuration at `path` stands for: `--config <file name>`, the `[launch]` paths and `[launch] args`.
+/// The file must parse as a `--config` file (every indexer key is checked, unknown ones refused) and carry a `[launch]` table;
+/// the paths it names stay as written, relative to the file's directory, which the caller makes the working directory.
 pub fn launch_args(path: &Path) -> Result<Launch> {
     let cfg = IndexerConfig::load(path)?;
     let launch = cfg
@@ -154,7 +157,7 @@ pub fn launch_args(path: &Path) -> Result<Launch> {
         .ok_or_else(|| anyhow!("{} has no [launch] table: run `kobd setup`, or start a subcommand with --config", path.display()))?;
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf();
     let name = path.file_name().ok_or_else(|| anyhow!("{} is not a file", path.display()))?;
-    let mut args = vec![launch.role.subcommand().to_string(), "--config".to_string(), name.to_string_lossy().into_owned()];
+    let mut args = vec!["--config".to_string(), name.to_string_lossy().into_owned()];
     let run_only = [("key_file", &launch.key_file), ("pause_file", &launch.pause_file), ("x402_config", &launch.x402_config)];
     match launch.role {
         LaunchRole::Run => {
@@ -173,7 +176,8 @@ pub fn launch_args(path: &Path) -> Result<Launch> {
     }
     args.extend(launch.args.iter().cloned());
     let api = cfg.api.enabled.then_some(cfg.api.listen);
-    Ok(Launch { dir, args, role: launch.role, api, pause_file: launch.pause_file })
+    let roles = AppRole::from_parts(launch.role, cfg.lean);
+    Ok(Launch { dir, args, role: launch.role, roles, api, pause_file: launch.pause_file })
 }
 
 /// `s` as one shell word: as is when it needs no quoting, else in double quotes.
@@ -185,12 +189,26 @@ fn shell_word(s: &str) -> String {
     }
 }
 
-/// The two lines that run `launch` from a terminal (Windows `cmd`, or a POSIX shell): change to its directory, then the
-/// program with its arguments. What a service runs (docs/ops/executor-quickstart.md).
+/// The two lines that run `launch` with every option spelt out, from a terminal (Windows `cmd`, or a POSIX shell): change to its
+/// directory, then the program with the role flags and the options (what the start banner shows).
 pub fn command_line(launch: &Launch, program: &str) -> String {
     let cd = if cfg!(windows) { "cd /d" } else { "cd" };
-    let args: Vec<String> = launch.args.iter().map(|a| shell_word(a)).collect();
+    let flags = launch.roles.flags().iter().map(|f| f.to_string());
+    let args: Vec<String> = flags.chain(launch.args.iter().map(|a| shell_word(a))).collect();
     format!("{cd} {}\n{} {}", shell_word(&launch.dir.to_string_lossy()), shell_word(program), args.join(" "))
+}
+
+/// The one line a service (or a terminal anywhere) starts the configuration of `dir` with: the program and the role flags, plus
+/// `--config <file>` when `dir` is not the directory the program reads by itself (`$KOB_EXECUTOR_DIR`, else its own).
+pub fn service_line(dir: &Path, roles: AppRole, program: &str) -> String {
+    let mut words = vec![shell_word(program)];
+    words.extend(roles.flags().iter().map(|f| f.to_string()));
+    let own = home_dir().ok().and_then(|h| h.canonicalize().ok());
+    if own.is_none() || own != dir.canonicalize().ok() {
+        words.push("--config".into());
+        words.push(shell_word(&dir.join(CONFIG_FILE).to_string_lossy()));
+    }
+    words.join(" ")
 }
 
 /// The configuration file the setup writes: the indexer keys it chose and the `[launch]` table.
@@ -245,16 +263,17 @@ impl SetupFile {
     /// The file's text: a header that says what it is, then the keys (a valid `--config` file).
     pub fn text(&self) -> Result<String> {
         let body = toml::to_string(self).context("cannot write the configuration")?;
+        let roles = AppRole::from_parts(self.launch.role, self.lean.unwrap_or(false));
         Ok(format!(
             "# kobd configuration, written by `kobd setup`.\n\
              # Roles: {}.\n\
              #\n\
-             # Started without arguments, kobd reads this file from its own directory and runs the [launch] role with\n\
-             # it (`kobd {} --config {CONFIG_FILE} ...`, printed at the start). Relative paths are relative to this\n\
-             # file's directory. Every key of docs/ops/executor.md (Part B, 4) may be added; [launch] args takes further\n\
-             # options of the role, e.g. args = [\"--sweep-own-strays\"]. `kobd setup` again replaces this file.\n\n{body}",
-            AppRole::from_parts(self.launch.role, self.lean.unwrap_or(false)).display(),
-            self.launch.role.subcommand()
+             # Started without arguments (or as `kobd {flags}`), kobd reads this file from its own directory and starts\n\
+             # its roles (`kobd {flags} --config {CONFIG_FILE} ...`, printed at the start). Relative paths are relative\n\
+             # to this file's directory. Every key of docs/ops/executor.md (Part B, 4) may be added; [launch] args takes\n\
+             # further start options, e.g. args = [\"--sweep-own-strays\"]. `kobd setup` again replaces this file.\n\n{body}",
+            roles.display(),
+            flags = roles.flags().join(" ")
         ))
     }
 }
@@ -670,13 +689,11 @@ pub fn run_setup_with(
     let l = launch_args(&config_path)?;
     io.say("");
     io.say(&format!("Wrote {}.", config_path.display()));
-    io.say("It is the same as running (e.g. from a service):");
+    io.say("Start it (also from a service) with:");
     io.say("");
-    for line in command_line(&l, &opts.program).lines() {
-        io.say(&format!("    {line}"));
-    }
+    io.say(&format!("    {}", service_line(&opts.dir, l.roles, &opts.program)));
     io.say("");
-    io.say("From now on, starting kobd without arguments (a double click) runs it.");
+    io.say("From now on, starting kobd without arguments (a double click) runs it too.");
     if ask_yes(io, "Start the executor now?", true)? {
         Ok(Some(config_path))
     } else {
@@ -983,15 +1000,12 @@ mod tests {
         assert_eq!(c.launch.as_ref(), Some(&f.launch));
         let l = launch_args(&p).unwrap();
         assert_eq!(l.dir, d.path());
-        assert_eq!(
-            l.args,
-            ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause", "--sweep-own-strays"]
-        );
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause", "--sweep-own-strays"]);
         assert_eq!(l.api, Some("127.0.0.1:8090".parse().unwrap()));
         let cl = command_line(&l, "kobd.exe");
         assert!(
             cl.ends_with(
-                "\nkobd.exe run --config kob-executor.toml --key-file kob-operator.key --pause-file kob-data/pause \
+                "\nkobd.exe --executor --config kob-executor.toml --key-file kob-operator.key --pause-file kob-data/pause \
                  --sweep-own-strays"
             ),
             "{cl}"
@@ -999,7 +1013,7 @@ mod tests {
         // index only: no key options; a key option there is refused, not dropped
         let idx = SetupFile { launch: LaunchConfig { role: LaunchRole::Index, ..LaunchConfig::default() }, ..f.clone() };
         std::fs::write(&p, idx.text().unwrap()).unwrap();
-        assert_eq!(launch_args(&p).unwrap().args, ["index", "--config", CONFIG_FILE]);
+        assert_eq!(launch_args(&p).unwrap().args, ["--config", CONFIG_FILE]);
         std::fs::write(&p, idx.text().unwrap().replace("role = \"index\"", "role = \"index\"\nkey_file = \"k\"")).unwrap();
         assert!(launch_args(&p).unwrap_err().to_string().contains("key_file"));
         // a misspelt launch key is refused like any other
@@ -1052,12 +1066,12 @@ mod tests {
         assert!(out.contains(&k.address("testnet-10").to_string()));
         // the configuration, the token list, and the command line it stands for
         let l = launch_args(&d.path().join(CONFIG_FILE)).unwrap();
-        assert_eq!(l.args, ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
         let c = IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap();
         assert_eq!(c.rpc_url, "resolver", "public nodes (index_cli adds the second, resolver:2)");
         assert_eq!(c.tokens_path, Some(PathBuf::from(TOKENS_FILE)));
         assert!(d.path().join(TOKENS_FILE).is_file());
-        assert!(out.contains("kobd run --config kob-executor.toml --key-file kob-operator.key"), "{out}");
+        assert!(out.contains("Start it (also from a service) with:") && out.contains("kobd --executor --config "), "{out}");
         assert!(!d.path().join(format!("{CONFIG_FILE}.tmp")).exists());
 
         // again: the configuration is kept unless replaced
@@ -1067,7 +1081,7 @@ mod tests {
         // replaced: the existing key is offered (never a new one over it), index only this time
         let mut io = Script::new(&["y", "", "2", "", "n"]);
         assert_eq!(run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap(), None);
-        assert_eq!(launch_args(&d.path().join(CONFIG_FILE)).unwrap().args, ["index", "--config", CONFIG_FILE]);
+        assert_eq!(launch_args(&d.path().join(CONFIG_FILE)).unwrap().args, ["--config", CONFIG_FILE]);
         assert_eq!(std::fs::read_to_string(d.path().join(KEY_FILE)).unwrap(), secret, "the key file is untouched");
         let mut io = Script::new(&["y", "", "", "", "", "<enter>", "", "n"]);
         // (replace, public nodes, role, data dir, use the key, Enter while waiting, x402, start)
@@ -1124,9 +1138,9 @@ mod tests {
             let t = written(role, "testnet-10");
             assert!(t.starts_with("# kobd configuration, written by"), "{t}");
             let (head, body) = t.split_once("\n\n").unwrap();
-            let sub = role.launch_role().subcommand();
+            let flags = role.flags().join(" ");
             assert!(head.contains(&format!("# Roles: {}.", role.display())), "{head}");
-            assert!(head.contains(&format!("(`kobd {sub} --config kob-executor.toml")), "{head}");
+            assert!(head.contains(&format!("(`kobd {flags} --config kob-executor.toml")), "{head}");
             body.to_string()
         };
         let head = "network = \"testnet-10\"\nrpc_url = \"resolver\"\ndata_dir = \"kob-data\"\ntokens_path = \"kob-tokens.json\"\n";
@@ -1146,7 +1160,7 @@ mod tests {
         );
     }
 
-    /// The run-time side: the written file, read the way `kobd run` reads it, is an archive with a matcher.
+    /// The run-time side: the written file, read the way `kobd --executor` reads it, is an archive with a matcher.
     #[test]
     fn executor_and_indexer_runs_as_an_archive_with_an_executor() {
         use clap::Parser as _;
@@ -1166,7 +1180,7 @@ mod tests {
         };
         let (l, c) = built(AppRole::ExecutorIndexer);
         assert_eq!(l.role, LaunchRole::Run);
-        assert_eq!(l.args, ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
         assert!(!c.lean, "no lean cap: the store keeps the history");
         assert!(c.records.enabled, "the record log is on");
         assert!(c.fast_start && c.api.enabled, "the matcher trades at once; the read API is served");
@@ -1175,44 +1189,20 @@ mod tests {
         assert!(m.lean && !m.records.enabled);
         // index only keeps the history too, and has no matcher to start fast
         let (l, i) = built(AppRole::Indexer);
-        assert_eq!(l.args, ["index", "--config", CONFIG_FILE]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE]);
         assert!(!i.lean && i.records.enabled && !i.fast_start);
     }
 
     #[test]
-    fn the_role_list_accepts_either_order_and_refuses_the_rest() {
-        for (s, want) in [
-            ("match", AppRole::Executor),
-            ("index", AppRole::Indexer),
-            ("index,match", AppRole::ExecutorIndexer),
-            ("match,index", AppRole::ExecutorIndexer),
-            (" Index , MATCH ", AppRole::ExecutorIndexer),
-            ("index,index", AppRole::Indexer),
-            ("match,match", AppRole::Executor),
-        ] {
-            assert_eq!(AppRole::parse(s), Ok(want), "{s}");
-        }
-        for bad in
-            ["", " ", ",", "index,", ",match", "index,,match", "keep", "index,keep", "match;index", "run", "both", "index match"]
-        {
-            assert!(AppRole::parse(bad).is_err(), "{bad:?} must be refused");
-        }
-        assert!(AppRole::parse("keep").unwrap_err().contains("unknown role"));
-        assert!(AppRole::parse("").unwrap_err().contains("empty role"));
-        // the command line takes the same list
+    fn the_removed_role_option_is_still_parsed_to_be_refused() {
         use clap::Parser as _;
         #[derive(clap::Parser)]
         struct Cli {
             #[command(flatten)]
             setup: SetupArgs,
         }
-        let parse = |role: &str| {
-            Cli::try_parse_from(["x", "--non-interactive", "--node", "resolver", "--role", role]).map(|c| c.setup.role.unwrap())
-        };
-        assert_eq!(parse("index,match").unwrap(), AppRole::ExecutorIndexer);
-        assert_eq!(parse("match,index").unwrap(), AppRole::ExecutorIndexer);
-        assert_eq!(parse("match").unwrap(), AppRole::Executor);
-        assert!(parse("index,").is_err() && parse("").is_err() && parse("keep").is_err());
+        let c = Cli::try_parse_from(["x", "--non-interactive", "--node", "resolver", "--role", "index"]).unwrap();
+        assert_eq!(c.setup.role.as_deref(), Some("index"), "the caller refuses it with the role flags named");
     }
 
     /// The third choice of the dialogue: the warning is shown, the key and the funding come as for the matcher, and the file
@@ -1279,7 +1269,7 @@ mod tests {
         let l = launch_args(&d.path().join(CONFIG_FILE)).unwrap();
         assert_eq!(
             l.args,
-            ["run", "--config", CONFIG_FILE, "--key-file", kps.as_str(), "--pause-file", "data/pause", "--x402-config", "x402.json"]
+            ["--config", CONFIG_FILE, "--key-file", kps.as_str(), "--pause-file", "data/pause", "--x402-config", "x402.json"]
         );
     }
 

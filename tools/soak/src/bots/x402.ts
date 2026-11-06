@@ -1,5 +1,5 @@
 // x402 on the soak market: a merchant paywall (packages/kob-x402 `createPaywall`) with three priced resources, settled through the
-// `kobd run --x402-config` facilitator, and a payer that pays them in turn:
+// `kobd --executor --x402-config` facilitator, and a payer that pays them in turn:
 //   /native  0.5 KAS                      standard-native KAS payment
 //   /token   0.25 TUSD                    KCC-20 exact payment
 //   /swap    0.5 KAS paid WITH TUSD       swap-and-pay: the payer sells TUSD into resting KOB bids in the payment transaction

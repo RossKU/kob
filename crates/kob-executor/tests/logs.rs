@@ -25,7 +25,7 @@ fn run(dir: &std::path::Path, port: u16, extra: &[&str]) -> Child {
         kob_executor::matcher::wallet::HotKey::create_file(&key).unwrap();
     }
     Command::new(env!("CARGO_BIN_EXE_kobd"))
-        .args(["run", "--no-fast-start", "--no-api", "--network", "testnet-10", "--rpc-url"])
+        .args(["--executor", "--no-fast-start", "--no-api", "--network", "testnet-10", "--rpc-url"])
         .arg(format!("ws://127.0.0.1:{port}"))
         .arg("--data-dir")
         .arg(dir.join("data"))

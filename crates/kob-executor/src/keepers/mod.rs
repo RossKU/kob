@@ -131,7 +131,7 @@ pub const DEFAULT_SUBSIDY_WINDOW_DAA: u64 = 36_000;
 /// Default [`KeeperConfig::subsidy_max_jobs`].
 pub const DEFAULT_SUBSIDY_MAX_JOBS: usize = 8;
 
-/// Command-line options of the keepers' liveness under fee pressure (`kobd run`, `keep`, `match --keep`).
+/// Command-line options of the keepers' liveness under fee pressure (`kobd --executor`, `keep`, `match --keep`).
 #[derive(clap::Args, Debug, Clone)]
 pub struct LivenessArgs {
     /// Keepers: the most KAS of its own funding the operator adds to the fee of ONE kill or refund whose refund tip pays it

@@ -683,7 +683,7 @@ fn create_ask(net: &Net, rep: &mut Report, maker: &Key, t: &Issued, holding: &To
 
 // ------------------------------------------------------------------------------------------ facilitator service
 
-/// The in-process indexer (as in `kobd run`): follows TN10 from the sink the test starts at; the
+/// The in-process indexer (as in `kobd --executor`): follows TN10 from the sink the test starts at; the
 /// facilitator follows acceptance through it, and swap quotes come from its book.
 struct Idx {
     ingest: Arc<Mutex<Ingest>>,
@@ -782,7 +782,7 @@ impl Drop for Svc {
     }
 }
 
-/// Starts the facilitator as `kobd run` does (real `NodeChain` for UTXO facts and submission, the
+/// Starts the facilitator as `kobd --executor` does (real `NodeChain` for UTXO facts and submission, the
 /// in-process indexer's acceptance tracking for finality, real verifiers) behind its HTTP service on an
 /// ephemeral port.
 fn start_service(net: &Net, idx: &Idx, ledger: Arc<Ledger>, merchant: &Key, assets: &[String], tokens: &[Value]) -> Svc {
@@ -989,7 +989,7 @@ fn assert_accepted(net: &Net, svc: &Svc, txid: &Txid, merchant_out: &Outpoint, m
     assert!(!net.in_mempool(txid), "an accepted transaction must have left the mempool");
     let e = svc.fac.ledger.get(&hex(txid)).expect("ledger entry");
     assert_eq!(e.state, State::Accepted, "ledger state");
-    // the indexer's acceptance tracking (the facilitator of `kobd run`) sees it too; the ledger may have settled first
+    // the indexer's acceptance tracking (the facilitator of `kobd --executor`) sees it too; the ledger may have settled first
     // from the UTXO set, so give the indexer's virtual-chain feed time to catch up on a busy node
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {

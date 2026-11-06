@@ -1081,7 +1081,7 @@ fn kill_switch_file_disables_the_facilitator() {
     assert!(!fac.killed());
 }
 
-/// `kobd run --pause-file` disables the facilitator like its own kill-switch file; a pause file whose state
+/// `kobd --executor --pause-file` disables the facilitator like its own kill-switch file; a pause file whose state
 /// cannot be read counts as present.
 #[test]
 fn the_process_pause_file_disables_the_facilitator() {

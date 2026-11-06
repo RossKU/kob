@@ -271,7 +271,7 @@ impl Indexer {
     }
 
     /// Start the follower and (when enabled) the API server on the current runtime. The indexer
-    /// stays usable (`ingest`, `health`) while they run: `kobd run` reads the book through
+    /// stays usable (`ingest`, `health`) while they run: `kobd --executor` reads the book through
     /// the same `ingest` handle. The follower moves the store past a gap the node's pruning caused instead of halting at it
     /// ([`recovery`]).
     pub fn spawn<S: ChainSource>(&self, source: Arc<S>) -> Result<Running, IndexerError> {

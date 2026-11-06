@@ -69,20 +69,46 @@ fn exe_fails(args: &[&str]) -> String {
 }
 
 #[test]
-fn run_needs_a_role_and_a_key_and_index_keeps_its_subcommands() {
+fn the_executor_needs_a_role_and_a_key_and_index_keeps_its_tools() {
     let dir = std::env::temp_dir().join(format!("kob-cli-run-{}", std::process::id()));
     let data = dir.to_str().unwrap();
-    // both roles off is `index`
-    let err = exe_fails(&["run", "--no-match", "--no-keep", "--data-dir", data]);
-    assert!(err.contains("kobd index"), "{err}");
+    // both roles off is the Indexer
+    let err = exe_fails(&["--executor", "--no-match", "--no-keep", "--data-dir", data]);
+    assert!(err.contains("kobd --indexer"), "{err}");
     // the keyed roles never start without a key (and never touch the data directory first)
-    let err = exe_fails(&["run", "--data-dir", data, "--network", "testnet-10"]);
+    let err = exe_fails(&["--executor", "--data-dir", data, "--network", "testnet-10"]);
     assert!(err.contains("no operator key"), "{err}");
     assert!(!dir.exists());
-    // the reference build implies no network: `run`, `index`, `match` and `keep` refuse to guess one (never testnet-10)
+    // options and no configuration: the roles must be named
+    let err = exe_fails(&["--data-dir", data, "--network", "testnet-10"]);
+    assert!(err.contains("name the roles"), "{err}");
+    // the Indexer takes the indexer's options only
+    let err = exe_fails(&["--indexer", "--dry-run", "--data-dir", data, "--network", "testnet-10"]);
+    assert!(err.contains("the Indexer takes the indexer's options only"), "{err}");
+    // the removed starts say what replaced them, and start nothing
+    for (args, new) in [
+        (
+            vec!["run", "--data-dir", data, "--network", "testnet-10"],
+            "`kobd run` no longer starts the Executor: start it with `kobd --executor`",
+        ),
+        (vec!["run", "--help"], "`kobd run` no longer starts the Executor: start it with `kobd --executor`"),
+        (
+            vec!["index", "--data-dir", data, "--network", "testnet-10"],
+            "`kobd index` no longer starts the Indexer: start it with `kobd --indexer`",
+        ),
+        (
+            vec!["index", "run", "--data-dir", data, "--network", "testnet-10"],
+            "`kobd index` no longer starts the Indexer: start it with `kobd --indexer`",
+        ),
+    ] {
+        let err = exe_fails(&args);
+        assert!(err.contains(new), "{args:?}: {err}");
+    }
+    assert!(!dir.exists());
+    // the reference build implies no network: the Executor, `index`, `match` and `keep` refuse to guess one (never testnet-10)
     if kob_protocol::artifacts::deployment_network().is_none() {
         for args in [
-            vec!["run", "--data-dir", data],
+            vec!["--executor", "--data-dir", data],
             vec!["index", "export-orders", "--data-dir", data],
             vec!["match", "--book-file", "book.json"],
             vec!["keep", "--book-file", "book.json"],
@@ -110,11 +136,15 @@ fn run_needs_a_role_and_a_key_and_index_keeps_its_subcommands() {
     let (help, _) = exe(&["match", "--help"]);
     assert!(help.contains("--max-book-lag-daa"), "{help}");
     let (help, _) = exe(&["--help"]);
-    for cmd in ["run", "index", "match", "keep"] {
+    for cmd in ["kobd setup", "kobd index <migrate", "kobd match", "kobd keep", "--executor", "--indexer"] {
         assert!(help.contains(cmd), "{help}");
     }
-    let (help, _) = exe(&["run", "--help"]);
+    assert!(!help.contains("kobd run"), "{help}");
     for flag in [
+        "--dry-run",
+        "--config",
+        "--listen",
+        "--pause-file",
         "--key-file",
         "--max-book-lag-daa",
         "--no-match",

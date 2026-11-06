@@ -2,8 +2,8 @@
 //!
 //! The database and the record log have exactly one writer: the record log is a hash chain whose next frame
 //! commits to the previous one, so two processes appending to it (on TN10, `index import-orders` run next to a
-//! running `run`) interleave and break the chain (`record log frame N is corrupt: chain hash mismatch`), after which
-//! both refuse the directory. Every command that writes a data directory (`run`, `index`, `index import-orders`,
+//! running Executor) interleave and break the chain (`record log frame N is corrupt: chain hash mismatch`), after which
+//! both refuse the directory. Every command that writes a data directory (the Executor, the Indexer, `index import-orders`,
 //! `index rebase`, `index replay`) therefore takes an exclusive OS lock on `<data_dir>/kob-writer.lock` and on
 //! `<records_dir>/kob-writer.lock` (the log may be configured elsewhere) for as long as it runs; the OS releases it
 //! when the process exits, crashed or not. Readers do not lock: the read API and `index export-orders` open the
@@ -27,7 +27,7 @@ pub struct WriterLock {
 pub enum LockError {
     #[error(
         "{dir} is in use by another kobd writer ({owner}): stop it first, or point this command at another data directory. \
-         `run` and `index` hold the lock while they run; read-only commands (`index export-orders`, the read API) work next to it. \
+         A running Executor or Indexer holds the lock; read-only commands (`index export-orders`, the read API) work next to it. \
          Lock file: {lock}"
     )]
     Busy { dir: String, owner: String, lock: String },

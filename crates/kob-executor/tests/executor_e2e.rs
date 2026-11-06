@@ -360,7 +360,7 @@ async fn the_matcher_plans_from_the_indexed_book_and_acceptance_comes_from_the_i
     }
 }
 
-/// `kobd run` reads the book on a read-only connection of its own (`IndexerSource::with_reader`), on the blocking
+/// `kobd --executor` reads the book on a read-only connection of its own (`IndexerSource::with_reader`), on the blocking
 /// thread pool: the book the writer's connection reads, read while the follower holds the ingest lock (a commit in
 /// progress), and the same plan from it.
 #[tokio::test]

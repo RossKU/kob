@@ -15,7 +15,7 @@ export interface ExecutorConfig {
   api: string;
   /** x402 facilitator listen address (only one executor runs the facilitator) */
   x402?: string;
-  /** extra `kobd run` flags */
+  /** extra start flags of `kobd --executor` (`--lean` keeps it the Executor alone; without it, also the Indexer) */
   args?: string[];
 }
 

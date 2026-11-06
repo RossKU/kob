@@ -250,7 +250,7 @@ impl Rpc for WrpcClient {
 pub struct NodeChain {
     rpc: Box<dyn Rpc>,
     network: Network,
-    /// Further nodes every submission goes to as well (`kobd run`: the other nodes of the indexer that take
+    /// Further nodes every submission goes to as well (`kobd --executor`: the other nodes of the indexer that take
     /// submissions, the second public node of a resolver pair among them), as the matcher's `MultiSubmit` does.
     peers: Vec<std::sync::Arc<dyn Rpc>>,
     /// How long a submission waits for a peer's verdict when the primary gave none.
@@ -729,7 +729,7 @@ mod tests {
         assert!(matches!(chain.submit(&tx), Err(SubmitError::Rejected(_))));
     }
 
-    /// Inside \`kobd run\` the facilitator's submissions go to every node that takes them (the pair's second node):
+    /// Inside \`kobd --executor\` the facilitator's submissions go to every node that takes them (the pair's second node):
     /// the primary's verdict when it gives one that takes the transaction, else the first peer that takes it, else the
     /// primary's refusal (or a peer's when the primary gave none).
     #[test]

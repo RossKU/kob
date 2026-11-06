@@ -1,4 +1,4 @@
-//! The facilitator's chain view inside `kobd run`: node RPC for UTXO facts and submission,
+//! The facilitator's chain view inside `kobd --executor`: node RPC for UTXO facts and submission,
 //! and the indexer's acceptance tracking (the same selected-chain follower the matcher uses) for
 //! finality.
 //!

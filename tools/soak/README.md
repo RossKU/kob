@@ -5,7 +5,7 @@ A live testnet-10 market that looks and behaves like a real one. Three test KCC-
 **Binance KAS/USDT** (1 TUSD ≈ 1 USD worth of KAS), **TETH** and **TBTC** (1 ≈ 1 ETH / 1 BTC worth of KAS, Binance ETH/USDT and
 BTC/USDT over KAS/USDT), each with its own KAS book, and the TETH/TUSD and TBTC/TUSD pairs. A market maker quotes every KAS book,
 five traders place every KOB order type in the KAS books and as pair orders, a payer makes x402 payments (KAS, KCC-20,
-swap-and-pay, invoices paid by an intent), two competing `kobd run` instances (indexer + matcher + keepers) fill and
+swap-and-pay, invoices paid by an intent), two competing `kobd --executor` instances (indexer + matcher + keepers) fill and
 maintain the books, an invariant checker reads everything, and the web UI runs on the live data. Everything runs on one Windows PC
 against a testnet-10 node of your own (`ws://127.0.0.1:18210` by default; point `config.json` at it); all KAS comes from
 self-mining.
@@ -49,8 +49,8 @@ A checker state file of another protocol generation (`run/state/checker.json` wi
 ```
 supervisor (scripts/supervisor.mjs)            restarts crashed children (backoff 2 s .. 60 s), rotates logs (20 MB x 5), samples memory / CPU
  ├─ miner      bin/tn10-miner.exe              GPU (OpenCL) or CPU miner, coinbase -> the bank key (maturity 1000 DAA), in bursts below a bank watermark
- ├─ exec-a     kobd run                indexer + API :8091, matcher + keepers (hot key execA), x402 facilitator :8401
- ├─ exec-b     kobd run                indexer + API :8092, matcher + keepers (hot key execB): competes with exec-a
+ ├─ exec-a     kobd --executor         indexer + API :8091, matcher + keepers (hot key execA), x402 facilitator :8401
+ ├─ exec-b     kobd --executor         indexer + API :8092, matcher + keepers (hot key execB): competes with exec-a
  ├─ bots       node dist/soak.mjs bots         bank, market maker, 5 traders, x402 merchant (:8480) + payer
  ├─ checker    node dist/soak.mjs checker      protocol invariants -> run/incidents.jsonl, report -> run/reports/
  └─ ui         node scripts/serve-ui.mjs       the web app on live data, http://127.0.0.1:8490/

@@ -33,7 +33,7 @@ fn every_node_url_flag_has_an_environment_alternative() {
         let expect: Vec<(String, Option<String>)> = expect.iter().map(|(f, e)| (f.to_string(), Some(e.to_string()))).collect();
         assert_eq!(got, expect);
     };
-    // `index` and `run` (the indexer options; `run`'s facilitator uses the indexer's node)
+    // the starts, `--indexer` and `--executor` (the indexer options; the facilitator of `--executor` uses the indexer's node)
     want(IndexOpts::augment_args(ClapCommand::new("index")), &[("rpc-url", "KOB_NODE_WRPC"), ("node", "KOB_INDEX_NODES")]);
     // `match` and `keep`
     want(CommonArgs::augment_args(ClapCommand::new("match")), &[("rpc-url", "KOB_NODE_WRPC")]);

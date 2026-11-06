@@ -1,4 +1,4 @@
-//! The x402 facilitator role of `kob-executor`: alone (`kobd x402`) or inside `kobd run`
+//! The x402 facilitator role of `kob-executor`: alone (`kobd x402`) or inside `kobd --executor`
 //! (`--x402-config`), where it follows acceptance through the indexer.
 //!
 //! | Module | Contents |
@@ -9,7 +9,7 @@
 //! | [`facilitator`] | `supported`, `verify`, `settle`, `reconcile` |
 //! | [`http`] | axum service: admission, authentication, routes, server loop |
 //! | [`ratelimit`] | token buckets |
-//! | [`indexed`] | `ChainView` over the node and the indexer's acceptance tracking (`kobd run`) |
+//! | [`indexed`] | `ChainView` over the node and the indexer's acceptance tracking (`kobd --executor`) |
 //! | [`quote`] | swap-and-pay quotes from an indexer's book; the book view of intent executions |
 
 pub mod config;
@@ -126,7 +126,7 @@ pub fn node_chain(cfg: &X402Config, built: &Built) -> Result<NodeChain, String> 
     Ok(chain)
 }
 
-/// The book intent payments are executed against (inside `kobd run`: the indexer's).
+/// The book intent payments are executed against (inside `kobd --executor`: the indexer's).
 pub type BookFn = Arc<dyn Fn() -> Result<kob_x402::intent::BookView, String> + Send + Sync>;
 
 /// Opens the ledger and builds the facilitator over `chain`, then reconciles the ledger once. Without a book,
@@ -169,7 +169,9 @@ pub fn prepare_with(
         },
     );
     if cfg.intents.enabled {
-        let book = book.ok_or("intents need the indexer's book: enable them in kobd run (--x402-config), not in kobd x402")?;
+        let book = book.ok_or(
+            "intents need the indexer's book: enable them in the Executor (kobd --executor --x402-config ...), not in kobd x402",
+        )?;
         let keeper = kob_protocol::registry::parse_hex32(&cfg.intents.keeper_pubkey).ok_or("intents.keeperPubkey")?;
         fac = fac.with_intents(facilitator::IntentRuntime {
             book,
