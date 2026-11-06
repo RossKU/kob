@@ -150,3 +150,8 @@ export async function openSettingsAdvanced(page: Page): Promise<void> {
   if (await page.getByTestId('settings-servers').isHidden()) await box.getByRole('button').first().click();
   await expect(page.getByTestId('settings-servers')).toBeVisible();
 }
+
+/** Scrolls the activity log into view: under a token or pair page it reads nothing while it is off screen (ui/activity/use-activity.ts). */
+export async function showActivity(page: Page): Promise<void> {
+  await page.getByTestId('activity-list').first().scrollIntoViewIfNeeded();
+}

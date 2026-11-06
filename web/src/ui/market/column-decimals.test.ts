@@ -1,16 +1,13 @@
 // Fixed decimals per column: every row of a numeric column shows the SAME number of decimals (trailing zeros kept), chosen once per market / view, so
-// the decimal points line up (right-aligned, tabular figures). Covers the token order book (native and inverted), the trade tape (native and
-// inverted) and the pair (implied) book with the values of the TBTC/TUSD pair-book screenshot.
+// the decimal points line up (right-aligned, tabular figures). Covers the token order book (native and inverted) and the pair (implied) book with the values of the TBTC/TUSD pair-book screenshot.
 import { describe, expect, it } from 'vitest';
 import type { PairBookView, PairLevelView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { buildBookModel } from './book-model';
 import { buildPairBook } from './pair-model';
 import { plainPrice } from './PairBook';
-import { flippedBookView, nativeBookView, tapeColumns } from './orientation';
-import { pairTapeColumns, type PairFill } from './pair-market';
+import { flippedBookView, nativeBookView } from './orientation';
 import { CELL_CHARS } from '../kit/format';
-import type { Tape, TapeRow } from './market-model';
 
 const decimalsOf = (text: string): number => (text.includes('.') ? text.split('.')[1]!.length : 0);
 const sameDecimals = (texts: string[]): boolean => new Set(texts.map(decimalsOf)).size === 1;
@@ -72,53 +69,6 @@ describe('token book: fixed decimals per column', () => {
 });
 
 // ---- trade tape
-const trade = (id: string, price: bigint, amount: bigint, quote: bigint): TapeRow => ({ id, timeMs: null, daa: 1, side: 'buy', price, amount, quote, settled: true, fills: 1 });
-
-describe('trade tape: fixed decimals per column', () => {
-  // KAS per token 84_392.43 / 80_607.2 / 80_482: price = sompi per 1e8 base units
-  const tape: Tape = {
-    basis: 100_000_000n,
-    source: 'trades',
-    rows: [trade('1', 8_439_243_000_000n, 600n, 50_600n), trade('2', 8_060_720_000_000n, 1130n, 91_100n), trade('3', 8_048_200_000_000n, 2365n, 190_300n), trade('4', 8_048_200_000_000n, 21_240n, 1_709_500n)],
-  };
-
-  it('native: one price precision and one size precision for every row (the finest amount shown, as far as the cell allows)', () => {
-    const c = tapeColumns(tape, { decimals: 8, dp: 2, inverted: false, ticker: 'TBTC' });
-    expect(c.map((r) => r.price)).toEqual(['84,392.43', '80,607.20', '80,482.00', '80,482.00']);
-    // eight decimals take ten characters, the tape cell shows nine: six decimals for the column, the exact amount in the tooltip
-    expect(c.map((r) => r.size)).toEqual(['0.000006', '0.000011', '0.000024', '0.000212']);
-    expect(c.map((r) => r.sizeTitle)).toEqual([null, '0.0000113 TBTC', '0.00002365 TBTC', '0.0002124 TBTC']);
-  });
-
-  it('native: coarse amounts keep a short size column (the finest row decides)', () => {
-    const t2: Tape = { ...tape, rows: [trade('1', 8_439_243_000_000n, 1_000_000n, 0n), trade('2', 8_439_243_000_000n, 25_000_000n, 0n)] };
-    const c = tapeColumns(t2, { decimals: 8, dp: 2, inverted: false });
-    expect(c.map((r) => r.size)).toEqual(['0.01', '0.25']);
-  });
-
-  it('inverted: tokens per KAS and the KAS size, each at one fixed precision', () => {
-    const c = tapeColumns(tape, { decimals: 8, dp: 8, inverted: true, tick: 100n });
-    expect(sameDecimals(c.map((r) => r.price))).toBe(true);
-    // eight decimals do not fit a tape cell (nine characters): six, the exact price in the tooltip
-    expect(decimalsOf(c[0]!.price)).toBe(6);
-    expect(c[0]!.priceTitle).toMatch(/^0\.\d{8}$/);
-    expect(sameDecimals(c.map((r) => r.size))).toBe(true);
-    expect(decimalsOf(c[0]!.size)).toBe(6);
-  });
-
-  it('inverted: a row finer than the tick does not widen the KAS column (rounded to the tick precision)', () => {
-    const fine: Tape = { ...tape, rows: [trade('1', 8_439_243_000_000n, 150_000_000n, 14_351_840_000n), trade('2', 8_439_243_000_000n, 150_000_000n, 2_392_470_001n)] };
-    const c = tapeColumns(fine, { decimals: 8, dp: 4, inverted: true, tick: 10_000n });
-    expect(c.map((r) => r.size)).toEqual(['143.5184', '23.9247']);
-  });
-
-  it('rows without a value show a dash and do not change the column precision', () => {
-    const t2: Tape = { ...tape, rows: [trade('1', 8_439_243_000_000n, 150_000_000n, 1n), { ...trade('2', 8_439_243_000_000n, 0n, 0n), amount: null, price: null }] };
-    const c = tapeColumns(t2, { decimals: 8, dp: 2, inverted: false });
-    expect(c.map((r) => r.size)).toEqual(['1.5', '—']);
-    expect(c[1]!.price).toBe('—');
-  });
-});
 
 // ---- pair (implied) book
 const TBTC: PairToken = { covenantId: 'aa'.repeat(32), ticker: 'TBTC', decimals: 8, scale: 100_000_000n };
@@ -200,16 +150,6 @@ describe('book, pair book and tapes with 0 and 18 decimals and huge amounts', ()
     expect(n.asks[1]!.sizeTitle).toBe('12,345,678,901 ZERO');
     expect(n.asks[0]!.sizeTitle).toBeNull();
     expect(fits([...n.asks, ...n.bids].map((r) => r.totalText))).toBe(true);
-  });
-
-  it('trade tape and pair fills of 18 decimals', () => {
-    const t18: Tape = { basis: 1_000_000_000n, source: 'trades', rows: [trade('1', 25n, 56_609_953n * E18, 1_415_248_825n), trade('2', 25n, 1n, 0n)] };
-    expect(tapeColumns(t18, { decimals: 18, dp: 2, inverted: false }).map((r) => r.size)).toEqual(['56.61M', '<0.01']);
-    const fill = (id: number, a: bigint, b: bigint | null): PairFill => ({ id, txid: 'aa'.repeat(32), timeMs: null, daa: 1, side: 'buy', baseUnits: a, quoteUnits: b, counterparty: 'route', settled: true });
-    const A: PairToken = { covenantId: 'aa'.repeat(32), ticker: 'BIG', decimals: 18, scale: 1_000_000_000n };
-    const B: PairToken = { covenantId: 'bb'.repeat(32), ticker: 'ZERO', decimals: 0, scale: 1n };
-    const cols = pairTapeColumns([fill(1, 123_456_789n * E18, 98_765_432_101n), fill(2, 1n, 1n)], A, B);
-    expect(cols).toEqual([{ base: '123.46M', quote: '98.77B' }, { base: '<0.01', quote: '1' }]);
   });
 
   it('pair book amounts of 18 decimals keep every row inside the cell, the exact amount in the title', () => {

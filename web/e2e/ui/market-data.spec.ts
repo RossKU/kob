@@ -1,5 +1,5 @@
 // Market data of the token page against the mock indexer's market endpoints (`/v1/trades|candles|stats|depth`): the 24 h stats strip, the
-// candlestick chart with its interval switch, the depth chart, the trade tape, price grouping of the book, the theme toggle, and a phone
+// candlestick chart with its interval switch, the depth chart, the activity log, price grouping of the book, the theme toggle, and a phone
 // layout without horizontal scroll. The mock seeds a deterministic 48 h price history (`mock.seedHistory`) on top of the default book.
 // `KOB_SHOTS=1` also saves full-page screenshots (dark / light / phone) to test-results/shots/.
 import { expect, test } from '../fixtures';
@@ -17,7 +17,7 @@ async function openWithHistory(page: import('@playwright/test').Page, mock: impo
 }
 
 test.describe('market data', () => {
-  test('stats, candles, depth and the trade tape render from the market-data endpoints', async ({ appPage: page, mock }) => {
+  test('stats, candles, depth and the activity log render from the market-data endpoints', async ({ appPage: page, mock }) => {
     await openWithHistory(page, mock);
     // 24 h stats
     const stats = page.getByTestId('market-stats');
@@ -59,23 +59,25 @@ test.describe('market data', () => {
     await expect(depth.locator('path.bid-area')).toHaveCount(1);
     await expect(depth.locator('path.ask-area')).toHaveCount(1);
 
-    // trade tape from /v1/trades: newest first, both aggressor sides coloured
-    const tape = page.getByTestId(TESTID.tradesList);
-    await expect(tape).toHaveAttribute('data-source', 'trades');
-    await expect(tape.getByTestId('trade-row')).toHaveCount(50);
-    await expect(tape.locator('[data-testid="trade-row"][data-side="buy"]').first()).toBeVisible();
-    await expect(tape.locator('[data-testid="trade-row"][data-side="sell"]').first()).toBeVisible();
-    await expect(tape.getByTestId('trade-row').first()).toContainText(/\d{2}:\d{2}:\d{2}/);
+    // the activity log (the fills of /v1/fills): newest first, both taker sides coloured, the time of each
+    const log = page.getByTestId(TESTID.activityList);
+    await page.getByTestId('activity-actor-executions').click();
+    const fills = log.locator('[data-testid="activity-row"][data-kind="fill"]');
+    await expect(fills).toHaveCount(20);
+    await expect(log.locator('[data-testid="activity-row"][data-side="buy"]').first()).toBeVisible();
+    await expect(log.locator('[data-testid="activity-row"][data-side="sell"]').first()).toBeVisible();
+    await expect(fills.first()).toContainText(/\d{2}(:\d{2}:\d{2}|-\d{2} \d{2}:\d{2})/);
   });
 
-  test('a new fill reaches the tape and the stats without a reload', async ({ appPage: page, mock }) => {
+  test('a new fill reaches the activity log and the stats without a reload', async ({ appPage: page, mock }) => {
     await openWithHistory(page, mock);
     await expect(page.getByTestId('live-indicator')).toHaveText('Live');
     const trades = await page.getByTestId('stat-trades').innerText();
     const ask = (await mock.ordersOf('maker', 'active')).find((o: { side: number }) => o.side === 1);
     await mock.fill(ask!.covenant_id);
     await expect(page.getByTestId('stat-trades')).not.toHaveText(trades);
-    await expect(page.getByTestId(TESTID.tradesList).getByTestId('trade-row').first()).toHaveAttribute('data-side', 'buy');
+    await page.getByTestId(TESTID.activityList).scrollIntoViewIfNeeded();
+    await expect(page.getByTestId(TESTID.activityList).locator('[data-testid=activity-row][data-kind=fill]').first()).toHaveAttribute('data-side', 'buy');
   });
 
   test('price grouping merges book levels and keeps asks above bids', async ({ appPage: page, mock }) => {
@@ -142,7 +144,8 @@ test.describe('market data on a phone', () => {
     await openWithHistory(page, mock);
     await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'ready');
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
-    await expect(page.getByTestId(TESTID.tradesList).getByTestId('trade-row').first()).toBeVisible();
+    await page.getByTestId(TESTID.activityList).scrollIntoViewIfNeeded();
+    await expect(page.getByTestId(TESTID.activityList).getByTestId('activity-row').first()).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBe(0);
     if (SHOTS) {

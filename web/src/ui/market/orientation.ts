@@ -15,11 +15,11 @@
 import type { DepthView, StatsView } from '../../data/indexer-types';
 import { formatRational, parseDecimal, ratToNumber, reduce, significantDp, type Rational } from '../../kob/pair';
 import { formatUnits, pow10, quoteOf, SOMPI_PER_KAS } from '../../kob/units';
-import { columnFraction, fitAmountColumn, fitDecimalTexts, TAPE_CELL_CHARS, tickKasFraction, type AmountCell } from '../kit/format';
+import { columnFraction, fitAmountColumn, fitDecimalTexts, tickKasFraction, type AmountCell } from '../kit/format';
 import type { BookModel, BookRow, Level } from './book-model';
 import {
   amountText, basisOf, basisToNumber, bigOrNull, bpsPercentText, compactText, priceText, toneOf, unitsToNumber,
-  type Candle, type ChartBar, type DepthPoint, type DepthSeries, type StatsModel, type Tape, type VolumeBar,
+  type Candle, type ChartBar, type DepthPoint, type DepthSeries, type StatsModel, type VolumeBar,
 } from './market-model';
 
 // ------------------------------------------------------------------------------------------------ remembered choice
@@ -342,40 +342,6 @@ export function flippedBookView(m: BookModel, c: BookViewCtx): BookView {
     spread = { text: ratioText(spreadR, c.dp), pct: pct !== null ? (pct / 100).toFixed(2) : null };
   }
   return { asks, bids, head: c.labels, mid, spread, anyEstimated: m.anyEstimated };
-}
-
-// ------------------------------------------------------------------------------------------------ trade tape columns
-
-export interface TapeColumnsCtx {
-  decimals: number;
-  /** price decimals of the shown orientation */
-  dp: number;
-  inverted: boolean;
-  /** the market's tick, sompi per whole token (fixes the decimals of the KAS size column of the inverted view) */
-  tick?: bigint | null;
-  /** the token's ticker (the unit of a rounded size's exact amount in its tooltip) */
-  ticker?: string;
-}
-
-/**
- * The price and size texts of every tape row with ONE number of decimals per column (chosen once for the whole tape: price `dp`, size from the
- * finest row / the tick), trailing zeros kept, so the decimal points line up. '—' for a value the row does not have.
- */
-export function tapeColumns(tape: Tape, c: TapeColumnsCtx): { price: string; priceTitle: string | null; size: string; sizeTitle: string | null }[] {
-  const basis = tape.basis;
-  const sizeFr = c.inverted
-    ? c.tick
-      ? tickKasFraction(c.tick) // the market's tick fixes the KAS column (like the book's size column); a finer row is rounded, its exact amount is in the row title
-      : columnFraction(tape.rows.map((r) => r.quote), 8)
-    : columnFraction(tape.rows.map((r) => r.amount), c.decimals);
-  // never a cut digit: a column too wide for its cell shows fewer decimals or K / M / B (the exact amount is in the row title)
-  const width = TAPE_CELL_CHARS;
-  const sizes = c.inverted ? fitAmountColumn(tape.rows.map((r) => r.quote), 8, { fraction: sizeFr, width, unit: 'KAS' }) : fitAmountColumn(tape.rows.map((r) => r.amount), c.decimals, { fraction: sizeFr, width, unit: c.ticker });
-  const prices = fitDecimalTexts(
-    tape.rows.map((r) => (r.price === null ? '—' : c.inverted ? (basis ? flippedPriceText(r.price, c.decimals, basis, c.dp) : '—') : priceText(r.price, c.decimals, basis ?? 0n, c.dp))),
-    { width },
-  );
-  return tape.rows.map((_r, i) => ({ price: prices[i]!.text, priceTitle: prices[i]!.exact, size: sizes[i]!.text, sizeTitle: sizes[i]!.exact }));
 }
 
 // ------------------------------------------------------------------------------------------------ 24 h stats

@@ -21,7 +21,7 @@
 // indexer down.
 import type { IndexerApi } from './indexer';
 import { IndexerError } from './indexer';
-import type { BookView, CandleInterval, HealthView, IndexerTokenView, OrderView } from './indexer-types';
+import type { BookView, CandleInterval, EventView, HealthView, IndexerTokenView, OrderView } from './indexer-types';
 import type { BlockSubscription, NodeApi } from './node';
 import type { StreamBlock } from './block-stream';
 import { StreamBook, bookViewOf, listingOf, orderViewOf, tokensViewOf, type ListingContext, type RegistryFacts } from './stream-book';
@@ -288,6 +288,35 @@ export class StandaloneController {
   }
   private fillsOf(token: Hex): SeenFill[] {
     return this.fills.get(token.toLowerCase()) ?? [];
+  }
+  /**
+   * What the activity log can show in this mode (ui/activity): the fills the node confirmed (every token, as `/v1/fills` events, newest first) and the
+   * placements this page saw in the node's blocks (as order views, with their placement transaction). Only what happened since the mode started; no
+   * cancels, refunds or pair orders (phase 1 of the log, and pair orders are not followed here).
+   */
+  seenActivity(): { fills: EventView[]; orders: OrderView[] } {
+    const fills: EventView[] = [];
+    for (const list of this.fills.values()) {
+      for (const f of list) {
+        fills.push({
+          id: f.seq, covenant_id: f.covenantId ?? '', block_seq: 0, daa: Number(f.daa), ts: f.ts, txid: f.txid, tx_pos: 0, kind: 'fill', token: f.token,
+          side: f.side === 'sell' ? 1 : 2, amount: f.amount.toString(), price: f.price.toString(), payout: null, closes: false, detail: null, confirmations: null, settled: false,
+        });
+      }
+    }
+    fills.sort((a, b) => b.id - a.id);
+    const ctx = this.ctx();
+    const since = this.snap.sinceMs ?? 0;
+    const orders: OrderView[] = [];
+    for (const e of this.book.entries()) {
+      if (!e.confirmed || e.origin !== 'stream' || !e.genesis.txid || e.seenMs < since) continue;
+      try {
+        orders.push(orderViewOf(e, ctx));
+      } catch {
+        /* an order this build cannot describe is not listed */
+      }
+    }
+    return { fills, orders };
   }
   tradesView(token: Hex, q: { limit?: number; before?: number | string } = {}) {
     return tradesView(token.toLowerCase(), this.fillsOf(token), this.basisOf(token), q);

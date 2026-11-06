@@ -1,8 +1,8 @@
-// Transaction links to the block explorer (kaspa.stream; the base follows the network, TN10 in this stack): a recent-trades row, an order's placement
+// Transaction links to the block explorer (kaspa.stream; the base follows the network, TN10 in this stack): an activity-log row of the token page, an order's placement
 // transaction and its fill rows in My orders open the transaction in a NEW tab. The explorer itself is stubbed (no network access in the mock stack).
 import type { BrowserContext, Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
-import { fund, listExkcc, openMarket, gotoNav } from '../helpers/env';
+import { fund, listExkcc, openMarket, gotoNav, showActivity } from '../helpers/env';
 import { fillFields, pickType, placeOrder } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -13,13 +13,14 @@ async function stubExplorer(ctx: BrowserContext): Promise<void> {
   await ctx.route('https://tn10.kaspa.stream/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>explorer stub</title>' }));
 }
 
-test('recent trades: a row is a link to its transaction on the TN10 explorer, opened in a new tab', async ({ appPage: page, mock }) => {
+test('activity log: a row is a link to its transaction on the TN10 explorer, opened in a new tab', async ({ appPage: page, mock }) => {
   await stubExplorer(page.context());
   await mock.seedHistory({ hours: 48, trades: 600, seed: 7 });
   await listExkcc(page);
   const tok = await mock.token();
   await page.goto(`/#/market/${tok.covenant_id}`);
-  const row = page.getByTestId('trades-list').getByTestId('trade-row').first();
+  await showActivity(page);
+  const row = page.getByTestId('activity-list').locator('[data-testid=activity-row][data-kind=fill]').first();
   await expect(row).toHaveAttribute('href', TN10);
   await expect(row).toHaveAttribute('target', '_blank');
   await expect(row).toHaveAttribute('rel', /noopener/);

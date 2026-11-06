@@ -26,7 +26,6 @@ async function listBoth(page: Page): Promise<void> {
 const box = async (page: Page, id: string) => (await page.getByTestId(id).boundingBox())!;
 const pairOf = (page: Page) => page.getByTestId('market-pair');
 const num = (s: string | null | undefined): number => Number((s ?? '').replace(/[,%+\s]/g, ''));
-const decimalsOf = (x: string): number => (x.includes('.') ? x.split('.')[1]!.length : 0);
 
 test.describe('one market page, a pair selector', () => {
   test('there is no "Trade against" control; BASE / QUOTE is the title and the quote selector lists KAS and the other tokens', async ({ appPage: page, mock }) => {
@@ -246,26 +245,6 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     await expect(help).not.toContainText('a sell order resting at or below your stop');
     await page.getByTestId('order-type').selectOption('limit');
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') })).toContainText('a Buy receives the KAS minus the tip');
-  });
-
-  test('recent trades: the KAS amount column of the inverted view has one fixed precision, the same rule as the book', async ({ appPage: page, mock }) => {
-    await mock.seedHistory();
-    await listExkcc(page);
-    const base = (await mock.token()).covenant_id;
-    await page.goto(`/#/market/${base}`);
-    const col = async () => {
-      const rows = page.getByTestId('trades-list').getByTestId('trade-row');
-      await expect(rows.first()).toBeVisible();
-      return rows.evaluateAll((els) => els.map((e) => (e.querySelectorAll('[role="cell"]')[1] as HTMLElement).innerText));
-    };
-    const native = await col();
-    expect(new Set(native.map(decimalsOf)).size).toBe(1);
-    await page.getByTestId('market-flip').click();
-    await expect(page.getByTestId('trades-list')).toContainText('Amount (KAS)');
-    const inv = await col();
-    expect(new Set(inv.map(decimalsOf)).size).toBe(1);
-    // protocol v3 has no price tick (the registry's legacy tick is ignored): the column has ONE precision for every row, at most the 8 of a sompi
-    expect(decimalsOf(inv[0]!)).toBeLessThanOrEqual(8);
   });
 });
 

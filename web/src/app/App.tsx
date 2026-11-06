@@ -2,6 +2,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { ConfigWarning, StoredOverride } from '../config';
 import { t } from '../i18n';
+import { ActivityPage } from '../ui/activity/ActivityPage';
 import { IssueView } from '../ui/issue/IssueView';
 import { ToastHost } from '../ui/kit';
 import { MarketView } from '../ui/market/MarketView';
@@ -75,6 +76,12 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
       return <MarketView covenantId={r.covenantId} {...(r.ticket ? { ticket: r.ticket } : {})} {...(r.amount ? { amount: r.amount } : {})} />;
     case 'pair':
       return <MarketView pair={{ base: r.base, quote: r.quote }} />;
+    case 'activity':
+      return (
+        <Titled page="activity">
+          <ActivityPage {...(r.market ? { market: r.market } : {})} />
+        </Titled>
+      );
     case 'orders':
       return (
         <Titled page="orders">

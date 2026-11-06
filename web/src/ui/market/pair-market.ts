@@ -11,7 +11,6 @@
 import type { PairBookView, PairCandlesView, PairFillsView, PairLevelView, PairRateView } from '../../data/indexer-types';
 import { formatUnits } from '../../kob/units';
 import { cmpRational, ratToNumber, reduce, wholePrice, type PairToken, type Rational } from '../../kob/pair';
-import { columnFraction, fitAmountColumn, TAPE_CELL_CHARS } from '../kit/format';
 import { compactText, unitsToNumber, toneOf, bpsPercentText, type DepthSeries, type StatsModel } from './market-model';
 import type { RatioCandle } from './usd-model';
 import { usdText } from './usd-model';
@@ -72,56 +71,6 @@ export function pairRatioCandles(view: PairCandlesView, base: PairToken, quote: 
     }))
     .filter((c) => c.o.num > 0n && c.h.num > 0n && c.l.num > 0n && c.c.num > 0n)
     .sort((a, b) => a.t - b.t);
-}
-
-// ------------------------------------------------------------------------------------------------ fills of a pair (volume only)
-
-export interface PairFill {
-  /** the indexer's fill id (unique) */
-  id: number;
-  txid: string;
-  /** unix ms; null when the indexer does not know it */
-  timeMs: number | null;
-  daa: number;
-  /** the taker's side on BASE: `buy` when a pair order selling BASE (an ask) was filled, `sell` when one buying BASE (a bid) was */
-  side: 'buy' | 'sell';
-  /** BASE base units filled */
-  baseUnits: bigint;
-  /** QUOTE base units the maker received (an ask) or paid (a bid); null when the indexer does not report it */
-  quoteUnits: bigint | null;
-  /** how it was filled: `route` (through the KAS books), `netting` (against an opposite pair order), `inventory` (the filler's tokens) */
-  counterparty: string;
-  settled: boolean;
-}
-
-/**
- * The fills of the pair BASE/QUOTE (`/v1/pairs/{base}/{quote}/fills`), newest first. VOLUME only: no price is read from them (the founder price
- * rule). A view of another pair yields none; malformed rows and duplicates are dropped.
- */
-export function pairFillsOf(view: PairFillsView | null | undefined, base: PairToken, quote: PairToken): PairFill[] {
-  if (!view || view.base !== base.covenantId || view.quote !== quote.covenantId) return [];
-  const seen = new Set<number>();
-  const out: PairFill[] = [];
-  for (const f of view.items) {
-    const a = decBig(f.amount_a);
-    if (seen.has(f.id) || a === null || a <= 0n) continue;
-    seen.add(f.id);
-    out.push({
-      id: f.id, txid: f.txid, timeMs: typeof f.ts === 'number' && f.ts > 0 ? f.ts : null, daa: f.daa, side: f.side === 'ask' ? 'buy' : 'sell', baseUnits: a,
-      quoteUnits: decBig(f.amount_b), counterparty: typeof f.counterparty === 'string' ? f.counterparty : 'inventory', settled: !!f.settled,
-    });
-  }
-  return out.sort((x, y) => y.daa - x.daa || y.id - x.id);
-}
-
-/** The BASE and QUOTE amount texts of every row with ONE number of decimals per column (the finest amount shown), trailing zeros kept. */
-export function pairTapeColumns(fills: readonly PairFill[], base: PairToken, quote: PairToken): { base: string; quote: string }[] {
-  const fa = columnFraction(fills.map((f) => f.baseUnits), base.decimals);
-  const fb = columnFraction(fills.flatMap((f) => (f.quoteUnits === null ? [] : [f.quoteUnits])), quote.decimals);
-  // never a cut digit: a column too wide for its cell shows fewer decimals or K / M / B (the exact amounts are in the row title)
-  const a = fitAmountColumn(fills.map((f) => f.baseUnits), base.decimals, { fraction: fa, width: TAPE_CELL_CHARS });
-  const b = fitAmountColumn(fills.map((f) => f.quoteUnits), quote.decimals, { fraction: fb, width: TAPE_CELL_CHARS });
-  return fills.map((_f, i) => ({ base: a[i]!.text, quote: b[i]!.text }));
 }
 
 // ------------------------------------------------------------------------------------------------ 24 h figures

@@ -169,8 +169,6 @@ export function tickPriceFraction(tick: bigint | null | undefined, decimals: num
 
 /** Characters a numeric cell of the order book shows without cutting a digit (its narrowest column, desktop and phone). */
 export const CELL_CHARS = 10;
-/** The same for the trade tapes (three or four columns in a narrower panel). */
-export const TAPE_CELL_CHARS = 9;
 
 /** One cell of an amount column: the text shown and, when that text is not the exact amount, the exact amount for the tooltip. */
 export interface AmountCell {

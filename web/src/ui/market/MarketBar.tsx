@@ -91,8 +91,9 @@ export function MarketShell(props: {
   book: ComponentChildren;
   chart: ComponentChildren;
   depth?: ComponentChildren;
-  tape?: ComponentChildren;
   ticket: ComponentChildren;
+  /** the activity log of the market: the full width under the grid, above the facts */
+  activity?: ComponentChildren;
   details?: ComponentChildren;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -122,12 +123,10 @@ export function MarketShell(props: {
         {props.book}
         {props.chart}
         {props.depth}
-        {/* two columns: the trades sit under the ticket, so neither column runs long beside an empty one (market.css); otherwise its children are grid items */}
-        <div class="mkt-side">
-          {props.ticket}
-          {props.tape}
-        </div>
+        {/* two columns: the ticket is a column of its own beside the book and the depth chart (market.css); otherwise its children are grid items */}
+        <div class="mkt-side">{props.ticket}</div>
       </div>
+      {props.activity}
       {/* the facts take the full width under the grid (never a column of it, so no column is left empty beside them); DOM order = reading order */}
       {props.details ? <div class="mkt-area-details">{props.details}</div> : null}
       {/* phone only (market.css): jumps to the ticket */}

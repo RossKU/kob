@@ -1,4 +1,4 @@
-/* Token page (exchange layout): stats strip, order book | chart + depth + tape | ticket. Desktop 3 columns (>= 1200 px), tablet 2, phone 1.
+/* Token page (exchange layout): stats strip, order book | chart + depth | ticket, the activity log under them. Desktop 3 columns (>= 1200 px), tablet 2, phone 1.
    Every figure uses tabular numerals; panels keep their height while loading (skeletons), so nothing jumps when data arrives. */
 
 body:has(.market-page) .container { max-width: 1520px; }
@@ -26,27 +26,26 @@ body:has(.market-page) .container { max-width: 1520px; }
 .mkt-grid {
   display: grid; gap: 12px; align-items: start;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: 'chart' 'book' 'ticket' 'depth' 'tape';
+  grid-template-areas: 'chart' 'book' 'ticket' 'depth';
 }
-/* the ticket and the trades: grid items of their own on a phone and on three columns, one column on two */
+/* the ticket: a grid item of its own on a phone and on three columns, a column on two */
 .mkt-side { display: contents; }
 .mkt-area-book { grid-area: book; }
 .mkt-area-chart { grid-area: chart; }
 .mkt-area-ticket { grid-area: ticket; align-self: start; min-width: 0; }
 .mkt-area-depth { grid-area: depth; }
-.mkt-area-tape { grid-area: tape; min-width: 0; }
-/* under the grid, on the full width of the page (a sibling of .mkt-grid) */
+/* under the grid, on the full width of the page (siblings of .mkt-grid): the activity log (ui/activity), then the facts */
 .mkt-area-details { min-width: 0; }
 @media (min-width: 760px) {
-  /* left: the book and the depth chart; right: the ticket with the trades under it. The last row is an empty one that takes whatever height the right
+  /* left: the book and the depth chart; right: the ticket. The last row is an empty one that takes whatever height the right
      column has over the left, so the left panels never stretch */
   .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book side' 'depth side' '. side'; grid-template-rows: auto auto auto 1fr; margin-bottom: -12px; /* the empty last row's gap */ }
   /* the tallest column keeps the page gap (12px) to the facts under the grid: the grid's -12px only cancels the empty last row's gap */
   .mkt-side { display: flex; flex-direction: column; gap: 12px; grid-area: side; align-self: start; min-width: 0; margin-bottom: 12px; }
 }
 @media (min-width: 1200px) {
-  /* the depth chart and the trades share the middle under the chart; the last row is an empty one that takes whatever height the ticket still has over the other panels */
-  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) minmax(0, 1fr) 360px; grid-template-rows: auto auto 1fr; grid-template-areas: 'book chart chart ticket' 'book depth tape ticket' '. . . ticket'; margin-bottom: -12px; }
+  /* the depth chart takes the middle under the chart; the last row is an empty one that takes whatever height the ticket still has over the other panels */
+  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) minmax(0, 1fr) 360px; grid-template-rows: auto auto 1fr; grid-template-areas: 'book chart chart ticket' 'book depth depth ticket' '. . . ticket'; margin-bottom: -12px; }
   .mkt-side { display: contents; }
   .mkt-area-ticket { margin-bottom: 12px; }
 }
@@ -161,23 +160,6 @@ body:has(.market-page) .container { max-width: 1520px; }
 .ob-mid .small { font-size: 0.76rem; }
 .ob-foot { margin: 6px 0 0; font-size: 0.74rem; color: var(--muted); height: 3.1em; overflow: hidden; } /* two lines: the note on estimated sizes comes and goes with the book */
 
-/* ------------------------------------------------------------------ trade tape */
-
-.tape { font-size: 0.82rem; font-variant-numeric: tabular-nums; }
-.tape-head, .tape-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr); gap: 6px; padding: 0 8px; }
-.tape-head { color: var(--muted); font-size: 0.74rem; padding-bottom: 4px; height: 2.9em; overflow: hidden; align-items: end; } /* two lines of titles, whatever their text */
-.tape-head > span, .tape-row > span { text-align: right; }
-.tape-body { height: 262px; overflow-y: auto; overscroll-behavior: contain; }
-.tape-row { height: 21px; line-height: 21px; }
-.tape-row:hover { background: var(--surface-2); }
-.tape-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tape-row .tape-time { color: var(--muted); }
-.tape-row[data-side='buy'] .tape-price { color: var(--buy); }
-.tape-row[data-side='sell'] .tape-price { color: var(--sell); }
-.tape-row.fresh { animation: flash 1s ease-out; }
-@keyframes flash { from { background: var(--surface-3); } to { background: transparent; } }
-@media (prefers-reduced-motion: reduce) { .tape-row.fresh { animation: none; } }
-
 /* ---- pair view (token/token pair orders) */
 .pair-title { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
 .pair-title .pair-name { font-size: 1.35rem; font-weight: 800; letter-spacing: 0.01em; }
@@ -189,14 +171,6 @@ body:has(.market-page) .container { max-width: 1520px; }
 .pair-direct { font-size: 0.72rem; font-weight: 600; }
 .pair-entry-tag { font-weight: 500; color: var(--muted); }
 .pair-book .pair-entry .book-price { text-decoration: underline dotted; text-underline-offset: 3px; }
-/* the pair fills: amounts of BASE and QUOTE, the counterparty, the time (no price: a pair fill never makes one) */
-.pair-tape .tape-head, .pair-tape .tape-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 0.8fr); }
-/* a narrow panel has no room for four columns: the counterparty (also in each row's title) gives way so the amounts and the time keep every digit */
-.pair-tape { container-type: inline-size; }
-@container (max-width: 360px) {
-  .pair-tape .tape-head, .pair-tape .tape-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.8fr); }
-  .pair-tape .tape-head > span:nth-child(3), .pair-tape .tape-row > span:nth-child(3) { display: none; }
-}
 .pair-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
 
 /* ---- the pair selector of the title bar: `BASE / QUOTE`, each side a drop-down laid invisibly over its label */
@@ -213,11 +187,6 @@ body:has(.market-page) .container { max-width: 1520px; }
 .flip-btn { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; min-height: 32px; color: var(--muted); border-color: var(--border); }
 .flip-btn:hover:not(:disabled) { color: var(--text); }
 .flip-icon { display: block; }
-
-/* ---- a trade row is a link to the transaction on the block explorer */
-a.tape-row { color: inherit; text-decoration: none; cursor: pointer; }
-a.tape-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: -2px; }
-a.tape-row:hover .tape-time { color: var(--text); }
 
 /* ---- market list (#/market): sortable figure columns; a phone keeps the name, the price and the change */
 .ml-table .nowrap { white-space: nowrap; }

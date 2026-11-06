@@ -1,6 +1,6 @@
 // A token pair page has the same panels as a KAS market, in the same places: the 24 h strip, the chart, the depth chart of the pair book, the pair's
 // fills and the facts of BOTH tokens. The founder price rule: prices come only from the two KAS markets (last, change, high, low, the chart), the
-// fills of pair orders are VOLUME only (the volume tiles and the fills list, which has amounts of both tokens, the counterparty and the time, and no
+// fills of pair orders are VOLUME only (the volume tiles and the activity log's fill rows, which have amounts of both tokens, the counterparty and the time, and no
 // price column). The flip (base <-> quote) applies to all of it. Mock stack: the pair seed (EXKCC/EXUSD with resting pair orders and an EXUSD KAS
 // book), a seeded history of both KAS markets (the pair candles), and simulated fills of a resting pair ask and a resting pair bid.
 import { readFileSync } from 'node:fs';
@@ -11,7 +11,6 @@ test.use({ autoOpen: false });
 
 const QUOTE = 'e7'.repeat(32);
 const num = (s: string | null | undefined): number => Number((s ?? '').replace(/[,%+≥\s]/g, ''));
-const decimalsOf = (x: string): number => (x.includes('.') ? x.split('.')[1]!.length : 0);
 
 /** The example registry with EXKCC listed and a second listed KCC-20, EXUSD (6 decimals), matching the mock pair seed. */
 async function listPair(page: Page): Promise<void> {
@@ -90,30 +89,26 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await expect(depth.locator('.bid-area')).toHaveCount(1);
   await expect(depth.locator('.ask-area')).toHaveCount(1);
 
-  // the pair's fills: amounts of both tokens, the counterparty and the time, newest first; NO price column (a pair fill never makes a price)
-  const trades = page.getByTestId('trades-section');
-  const rows = trades.getByTestId('trade-row');
+  // the pair's fills in the activity log (preset to the pair): amounts of both tokens and how each was filled, newest first; NO price (a pair fill
+  // never makes a price)
+  const trades = page.getByTestId('activity');
+  await trades.scrollIntoViewIfNeeded();
+  await expect(trades.getByTestId('activity-market')).toHaveValue(`${base}/${QUOTE}`);
+  const rows = trades.locator('[data-testid=activity-row][data-kind=fill]');
   await expect(rows).toHaveCount(2);
-  await expect(trades.getByTestId('trades-list')).toHaveAttribute('data-source', 'pair');
-  await expect(trades).toContainText('Pair fills');
-  await expect(trades).toContainText('Amount (EXKCC)');
-  await expect(trades).toContainText('Amount (EXUSD)');
-  await expect(trades).toContainText('Filled via');
-  await expect(trades).not.toContainText('Price');
-  await expect(page.getByTestId('pair-trades-note')).toContainText('Pair fills: volume only');
   const sides = await rows.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.side));
   expect([...sides].sort()).toEqual(['buy', 'sell']);
-  const counterparties = await rows.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.counterparty));
-  for (const c of counterparties) expect(['route', 'netting', 'inventory']).toContain(c);
-  const cells = async () => rows.evaluateAll((els) => els.map((e) => [...e.querySelectorAll('[role="cell"]')].map((c) => (c as HTMLElement).innerText)));
-  const nat = await cells();
-  expect(nat[0]).toHaveLength(4);
-  expect(new Set(nat.map((r) => decimalsOf(r[0]!))).size).toBe(1);
-  expect(new Set(nat.map((r) => decimalsOf(r[1]!))).size).toBe(1);
-  // one whole EXKCC each (the mock fills one token by default), about 0.05 EXUSD each
-  for (const r of nat) {
-    expect(num(r[0])).toBe(1);
-    expect(Math.abs(num(r[1]) - 0.05)).toBeLessThan(0.002);
+  for (const r of await rows.all()) {
+    await expect(r).toHaveAttribute('data-market', `${base}/${QUOTE}`);
+    await expect(r.locator('.act-c-px')).toHaveText('—');
+    await expect(r.locator('.act-c-who')).toContainText(/via KAS route|netting|from inventory/);
+    // one whole EXKCC each (the mock fills one token by default), about 0.05 EXUSD each
+    const a = await r.locator('.act-c-amt b').innerText();
+    const b = await r.locator('.act-sub').innerText();
+    expect(a).toMatch(/ EXKCC$/);
+    expect(b).toMatch(/ EXUSD$/);
+    expect(num(a.replace(' EXKCC', ''))).toBe(1);
+    expect(Math.abs(num(b.replace(' EXUSD', '')) - 0.05)).toBeLessThan(0.002);
   }
 
   // the facts of both tokens: covenant id, decimals, price scale, template verification
@@ -132,11 +127,11 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await expect(page.getByTestId('pair-details').getByTestId('badge-family')).toHaveCount(2);
   await expect(facts.nth(1).getByTestId('token-program')).toContainText(/KCC-20 (.+) · template matched$/);
   await expect(facts.nth(1).getByTestId('token-status-details')).toBeVisible();
-  // the same places as a KAS market: depth and trades under the chart, the facts below everything
+  // the same places as a KAS market: depth under the chart, the activity log under the grid, the facts below everything
   const box = async (id: string) => (await page.getByTestId(id).boundingBox())!;
   expect((await box('depth-section')).y).toBeGreaterThan((await box('chart-section')).y);
-  expect((await box('trades-section')).y).toBeGreaterThan((await box('chart-section')).y);
-  expect((await box('pair-details')).y).toBeGreaterThan((await box('depth-section')).y + (await box('depth-section')).height - 1);
+  expect((await box('activity')).y).toBeGreaterThan((await box('depth-section')).y + (await box('depth-section')).height - 1);
+  expect((await box('pair-details')).y).toBeGreaterThan((await box('activity')).y + (await box('activity')).height - 1);
 
   // flip: base and quote swap (another pair: EXUSD/EXKCC); every panel follows. The fills above are of EXKCC/EXUSD orders: an oriented pair view
   // never lists them inverted, so the flipped pair has no fill and no volume, while its prices are the inverse range of the same KAS markets
@@ -155,21 +150,25 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   expect(flipHigh * low).toBeLessThan(2);
   await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
   await expect(page.getByTestId('depth-chart')).toContainText('EXUSD');
-  await expect(trades).toContainText('Amount (EXUSD)');
-  await expect(page.getByTestId('trades-empty')).toBeVisible();
+  // the log follows the page: preset to the flipped pair, whose own fills are none
+  await trades.scrollIntoViewIfNeeded();
+  await expect(trades.getByTestId('activity-market')).toHaveValue(`${QUOTE}/${base}`);
+  await expect(trades.getByTestId('activity-loading')).toHaveCount(0);
+  await expect(trades.locator('[data-testid=activity-row][data-kind=fill]')).toHaveCount(0);
   const flippedFacts = page.getByTestId('pair-token-details');
   await expect(flippedFacts.nth(0)).toHaveAttribute('data-token', QUOTE);
   await expect(flippedFacts.nth(1)).toHaveAttribute('data-token', base);
 });
 
-test('pair page without a pair fill: the prices still come from the two KAS markets, the volume is zero and the fills list says what it contains', async ({ appPage: page, mock }) => {
+test('pair page without a pair fill: the prices still come from the two KAS markets, the volume is zero and the activity log has no fill', async ({ appPage: page, mock }) => {
   const base = await setup(page, mock, false);
   await page.goto(`/#/market/${base}/${QUOTE}`);
   await expectFigures(page, PRICE_TILES);
   await expect(page.getByTestId('market-stats')).toHaveAttribute('data-volume-source', 'fills');
   await expect(tile(page, 'stat-trades')).toHaveText('0');
-  await expect(page.getByTestId('trades-empty')).toBeVisible();
-  await expect(page.getByTestId('pair-trades-note')).toContainText('Pair fills: volume only');
+  await page.getByTestId('activity').scrollIntoViewIfNeeded();
+  await expect(page.getByTestId('activity').getByTestId('activity-loading')).toHaveCount(0);
+  await expect(page.getByTestId('activity').locator('[data-testid=activity-row][data-kind=fill]')).toHaveCount(0);
   await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
   await expect(page.getByTestId('pair-token-details')).toHaveCount(2);
 });

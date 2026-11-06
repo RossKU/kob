@@ -1,9 +1,10 @@
-// Amounts in the order book, the pair book and the trade tapes never lose a digit to the cell edge ("56,609,95…", "0.0000000…"): a column too
+// Amounts in the order book, the pair book and the activity log never lose a digit to the cell edge ("56,609,95…", "0.0000000…"): a column too
 // wide for its cells shows fewer decimals or K / M / B, and the exact amount is in the cell's / row's tooltip. Tokens of 0 and 18 decimals with
 // huge and one-base-unit amounts (the indexer answers are rewritten on the way), on a desktop and a phone width. Mock stack.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
+import { showActivity } from '../helpers/env';
 
 test.use({ autoOpen: false });
 
@@ -31,10 +32,10 @@ async function rewrite(page: Page, re: RegExp, edit: (body: Record<string, unkno
   });
 }
 
-/** Every numeric cell of the books and tapes on screen whose text is cut by its box (the cell is narrower than its text). */
+/** Every numeric cell of the books and the activity log on screen whose text is cut by its box (the cell is narrower than its text). */
 async function cutCells(page: Page): Promise<string[]> {
   return page.evaluate(() => {
-    const sel = '[data-testid=book-ask-row] > span, [data-testid=book-bid-row] > span, [data-testid=pair-level] > span:not(.pair-src), [data-testid=trade-row] > span';
+    const sel = '[data-testid=book-ask-row] > span, [data-testid=book-bid-row] > span, [data-testid=pair-level] > span:not(.pair-src), [data-testid=activity-row] .act-c-amt b, [data-testid=activity-row] .act-sub, [data-testid=activity-row] .act-c-px';
     return [...document.querySelectorAll<HTMLElement>(sel)].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => `${el.textContent} (${el.scrollWidth} > ${el.clientWidth})`);
   });
 }
@@ -47,7 +48,7 @@ async function atBothWidths(page: Page, check: () => Promise<void>): Promise<voi
 }
 
 for (const decimals of [0, 18]) {
-  test(`token book and trade tape of ${decimals} decimals: huge and one-base-unit amounts keep every digit`, async ({ appPage: page, mock }) => {
+  test(`token book and activity log of ${decimals} decimals: huge and one-base-unit amounts keep every digit`, async ({ appPage: page, mock }) => {
     const id = (decimals === 0 ? 'd0' : 'd1').repeat(32);
     const ticker = decimals === 0 ? 'WHOLE' : 'EIGHTEEN';
     const unit = 10n ** BigInt(decimals);
@@ -68,17 +69,30 @@ for (const decimals of [0, 18]) {
     await page.route(new RegExp(`/v1/trades/${id}`), (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ token: id, price_basis: scale.toString(), decimals, items: [trade(1, huge), trade(2, 1n), trade(3, 3n * unit)], next_cursor: null }) }),
     );
+    // the same three trades as the fill events the activity log reads
+    const fillEvent = (n: number, amount: bigint) => ({ ...trade(n, amount), kind: 'fill', covenant_id: 'ab'.repeat(32), block_seq: 0, tx_pos: 0, token: id, side: n % 2 ? 1 : 2, payout: null, closes: false, detail: null });
+    await page.route(/\/v1\/fills\?/, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ items: [fillEvent(1, huge), fillEvent(2, 1n), fillEvent(3, 3n * unit)], next_cursor: null }) }),
+    );
     await page.goto(`/#/market/${id}`);
     const book = page.getByTestId('order-book');
     await expect(book.getByTestId('book-ask-row').first()).toBeVisible();
-    await expect(page.getByTestId('trade-row')).toHaveCount(3);
+    await showActivity(page);
+    const fills = page.locator('[data-testid=activity-row][data-kind=fill]');
+    await expect(fills).toHaveCount(3);
     const bigRow = book.locator(`[data-testid=book-ask-row][data-amount="${huge}"]`);
     await expect(bigRow.locator(':scope > span').nth(1)).toHaveText(/^~?56\.61M$/);
     await expect(bigRow.locator(':scope > span').nth(1)).toHaveAttribute('title', decimals ? `56,609,953.000000000000000001 ${ticker}` : `56,609,953 ${ticker}`);
     // a level the mock marks as estimated carries the "~" mark before the amount
     await expect(book.locator('[data-testid=book-bid-row][data-amount="1"] > span').nth(1)).toHaveText(decimals ? /^~?<0\.01$/ : /^~?1$/);
-    await expect(page.getByTestId('trade-row').first().locator(':scope > span').nth(1)).toHaveText('56.61M');
-    await expect(page.getByTestId('trade-row').first().locator(':scope > span').nth(1)).toHaveAttribute('title', decimals ? `56,609,953.000000000000000001 ${ticker}` : `56,609,953 ${ticker}`);
+    // the log's amount cell is wide: whole digits fit as they are; 18 decimals do not (K / M / B, the exact amount in the title)
+    if (decimals) {
+      await expect(fills.first().locator('.act-c-amt b')).toHaveText(`56.61M ${ticker}`);
+      await expect(fills.first().locator('.act-c-amt')).toHaveAttribute('title', `56,609,953.000000000000000001 ${ticker}`);
+    } else {
+      await expect(fills.first().locator('.act-c-amt b')).toHaveText(`56,609,953 ${ticker}`);
+      await expect(fills.first().locator('.act-c-amt')).not.toHaveAttribute('title', /./);
+    }
     await atBothWidths(page, async () => {
       expect(await cutCells(page)).toEqual([]);
     });
@@ -87,7 +101,7 @@ for (const decimals of [0, 18]) {
   });
 }
 
-test('pair book and pair fills: a huge and a one-base-unit amount keep every digit', async ({ appPage: page, mock }) => {
+test('pair book and the pair fills in the activity log: a huge and a one-base-unit amount keep every digit', async ({ appPage: page, mock }) => {
   await mock.seed({ pair: true });
   await listTokens(page, [{ ticker: 'EXUSD', covenant_id: PAIR_QUOTE, decimals: 6 }]);
   const base = (await mock.token()).covenant_id;
@@ -111,11 +125,14 @@ test('pair book and pair fills: a huge and a one-base-unit amount keep every dig
   });
   await page.goto(`/#/market/${base}/${PAIR_QUOTE}`);
   await expect(page.getByTestId('pair-level').first()).toBeVisible();
-  await expect(page.getByTestId('trade-row')).toHaveCount(2);
+  await showActivity(page);
+  const fills = page.locator('[data-testid=activity-row][data-kind=fill]');
+  await expect(fills).toHaveCount(2);
   const big = page.locator('[data-testid=pair-level][data-amount="5660995312345678"] > span').nth(1);
   await expect(big).toHaveText('56.61M');
   await expect(big).toHaveAttribute('title', '56,609,953.12345678 EXKCC');
-  await expect(page.getByTestId('trade-row').first().locator(':scope > span').first()).toHaveText('56.61M');
+  await expect(fills.first().locator('.act-c-amt b')).toHaveText('56.61M EXKCC');
+  await expect(fills.first().locator('.act-sub')).toHaveText('123.46M EXUSD');
   await atBothWidths(page, async () => {
     expect(await cutCells(page)).toEqual([]);
   });

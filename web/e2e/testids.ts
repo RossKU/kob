@@ -3,6 +3,7 @@
 export const TESTID = {
   // navigation
   navMarket: 'nav-market',
+  navActivity: 'nav-activity',
   navOrders: 'nav-orders',
   navCreate: 'nav-create',
   navSettings: 'nav-settings',
@@ -19,7 +20,7 @@ export const TESTID = {
   tokenSelect: 'market-base-select',
   bookAsks: 'book-asks',
   bookBids: 'book-bids',
-  tradesList: 'trades-list',
+  activityList: 'activity-list',
   // order ticket
   orderType: 'order-type',
   orderSideBuy: 'order-side-buy',

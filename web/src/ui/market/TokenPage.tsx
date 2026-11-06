@@ -40,7 +40,7 @@ import { applyKascov, kascovRowOf } from './kascov-merge';
 import { useGenesisCheck } from './use-genesis-check';
 import { useKascov } from './use-kascov';
 import { applyGenesisCheck, buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
-import { TradeTape } from './TradesPanel';
+import { MarketActivity } from '../activity/ActivityPage';
 import { tradeRows } from './trades-model';
 import './market.css';
 
@@ -57,7 +57,7 @@ function SinceBadge(props: { since: number; area: string }) {
 const TAPE_LIMIT = 50;
 
 /**
- * `#/market/<covenantId>`: an exchange layout. Title bar + 24 h stats; order book | price chart, depth and trade tape | order ticket;
+ * `#/market/<covenantId>`: an exchange layout. Title bar + 24 h stats; order book | price chart and depth | order ticket; the activity log of the market (ui/activity, full width);
  * token facts below. Live: the WebSocket feed (`book:` / `fills:`) triggers a debounced refetch, 5 s polling without it.
  */
 export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; amount?: string }) {
@@ -157,11 +157,11 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   }, [row?.info, headerRow]);
 
   const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: 60, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
-  // the trade tape: `/v1/trades`, or the fill events of an indexer without it
+  // the latest trades (the last price and the page's price precision; the list of trades is the activity log below): `/v1/trades`, or the fill events of an indexer without it
   const trades = useAsync(
     async (signal) => {
       if (!indexer) return null;
-      // the tape, the stats and the depth decorate the page: low fetch priority, the order ticket's reads get a connection first
+      // the trades, the stats and the depth decorate the page: low fetch priority, the order ticket's reads get a connection first
       const v = await indexer.trades(id, { limit: TAPE_LIMIT }, { signal, priority: 'low' });
       if (v) return { kind: 'trades' as const, v };
       return { kind: 'fills' as const, v: await indexer.fills({ token: id, limit: TAPE_LIMIT }, { signal, priority: 'low' }) };
@@ -425,12 +425,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
         </Section>
       }
-      tape={
-        <div class="mkt-area-tape">
-          {since !== null ? <div class="row"><SinceBadge since={since} area="tape" /></div> : null}
-          <TradeTape tape={tape} loading={trades.loading} error={trades.error} onRetry={trades.reload} decimals={decimals} ticker={name} dp={dp} tick={baseTick} inverted={inverted} />
-        </div>
-      }
       ticket={
         <div class="stack mkt-area-ticket">
           {standaloneScaleBlocked ? (
@@ -477,6 +471,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           )}
         </div>
       }
+      activity={<MarketActivity market={{ kind: 'token', token: id }} />}
       details={<TokenDetails row={row} services={services} note={onChain ? shown : null} {...(checkedRow ? { checked: checkedRow } : {})} />}
     />
   );

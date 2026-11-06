@@ -18,7 +18,7 @@ export function avatarLetter(ticker: string, covenantId: string): string {
 export const avatarHue = (covenantId: string): number => (parseInt(covenantId.slice(0, 4), 16) || 0) % 360;
 
 /** `size` (px) is the diameter when the icon is not sized by its container (`.idb`, `.ml-name`); the default is 24 px; the letter follows it. */
-export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: number }) {
+export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: number; /** a repeated icon (the rows of a list) carries no test id of its own */ anonymous?: boolean }) {
   const root = useRef<HTMLSpanElement>(null);
   const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined');
   const [loaded, setLoaded] = useState<string | null>(null);
@@ -47,7 +47,7 @@ export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' |
       class="tk-icon"
       style={`--tk-h:${avatarHue(covenantId)}${size ? `;--tk-size:${size}px` : ''}`}
       aria-hidden="true"
-      data-testid={`token-icon-${covenantId}`}
+      data-testid={props.anonymous ? undefined : `token-icon-${covenantId}`}
       data-icon={logo.state === 'checked' || logo.state === 'ipfs' || logo.state === 'verified' ? 'image' : logo.state === 'creator' ? 'creator-image' : 'letter'}
       {...(logo.state === 'creator' ? { title: t('market.logo.unchecked') } : {})}
       {...(logo.state === 'verified' ? { title: t('market.logo.verified.short') } : {})}

@@ -34,7 +34,7 @@ test('copy buttons keep their label on one line (token details)', async ({ appPa
 test.describe('market panels when the indexer cannot be reached', () => {
   // the panels of a page that has no indexer data at all: the automatic standalone fallback (e2e/ui/standalone.spec.ts) is off here
   test.use({ appConfig: { standalone: { auto: false } } });
-  test('chart and depth show no endless skeleton, the trades panel no "No trades yet"', async ({ appPage: page, mock }) => {
+  test('chart and depth show no endless skeleton, the activity log no "No activity yet"', async ({ appPage: page, mock }) => {
     await listExkcc(page);
     const tok = await mock.token();
     // the app learns the token from the registry; every indexer read fails
@@ -43,8 +43,9 @@ test.describe('market panels when the indexer cannot be reached', () => {
     await expect(page.getByTestId('book-error')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'error');
     await expect(page.getByTestId('chart-loading')).toHaveCount(0);
-    await expect(page.getByTestId('trades-error')).toBeVisible();
-    await expect(page.getByTestId('trades-section').getByText('No trades yet.')).toHaveCount(0);
+    await page.getByTestId('activity-list').scrollIntoViewIfNeeded();
+    await expect(page.getByTestId('activity-error')).toBeVisible();
+    await expect(page.getByTestId('activity').getByText('No activity yet.')).toHaveCount(0);
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'empty');
     await expect(page.getByTestId('depth-empty')).toHaveText('The book could not be loaded.');
     // no book, no grouping to offer (it showed "0.00000001")

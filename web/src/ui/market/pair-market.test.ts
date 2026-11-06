@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PairBookView, PairCandleView, PairCandlesView, PairFillView, PairFillsView, PairLevelView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
-import { DAY_MS, pairDepthOf, pairDepthSeries, pairFillsOf, pairRatioCandles, pairStatsModel, pairTapeColumns, pairVolumeOf } from './pair-market';
+import { DAY_MS, pairDepthOf, pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
 import type { RatioCandle } from './usd-model';
 
 // BASE: 8 decimals, scale 1e8; QUOTE: 6 decimals, scale 1e6.
@@ -9,41 +9,9 @@ const BASE: PairToken = { covenantId: 'aa'.repeat(32), ticker: 'BTC', decimals: 
 const QUOTE: PairToken = { covenantId: 'bb'.repeat(32), ticker: 'USDT', decimals: 6, scale: 1_000_000n };
 const BTC = 100_000_000n;
 
-let nextId = 1;
-const fill = (side: 'ask' | 'bid', a: bigint, b: bigint | null, o: Partial<PairFillView> = {}): PairFillView => ({
-  id: nextId++, txid: 'ee'.repeat(32), ts: 1_000_000 + nextId * 1000, daa: 1000 + nextId, order: 'dd'.repeat(32), contract: 'KobPair', side,
-  amount_a: a.toString(), amount_b: b === null ? null : b.toString(), price: '5050000', price_num: '101', price_den: '2000', a_scale: 100_000_000,
-  tip_kas: '0', counterparty: 'route', price_source: 'none', confirmations: 10, settled: true, ...o,
-});
 const fillsView = (items: PairFillView[], vol = { amount_a: '0', amount_b: '0', fills: 0 }): PairFillsView => ({ base: BASE.covenantId, quote: QUOTE.covenantId, volume_24h: vol, items, next_cursor: null });
 
-describe('pair fills: volume only (a pair fill never makes a price)', () => {
-  it('an ask fill (the order sold BASE): the taker bought; a bid fill: the taker sold; amounts of both tokens and the counterparty, newest first', () => {
-    const rows = pairFillsOf(fillsView([fill('ask', 2n * BTC, 101_000n), fill('bid', BTC / 2n, 25_000n, { counterparty: 'netting' })]), BASE, QUOTE);
-    expect(rows.map((r) => [r.side, r.baseUnits, r.quoteUnits, r.counterparty])).toEqual([
-      ['sell', 50_000_000n, 25_000n, 'netting'],
-      ['buy', 200_000_000n, 101_000n, 'route'],
-    ]);
-    expect(Object.keys(rows[0]!)).not.toContain('price');
-  });
-
-  it('drops a view of another pair, malformed amounts and duplicates; a missing B amount stays unknown', () => {
-    const dup = fill('ask', BTC, 50_000n);
-    const rows = pairFillsOf(fillsView([dup, dup, fill('ask', 0n, 1n), { ...fill('ask', BTC, null), amount_a: 'x' }, fill('bid', BTC, null, { counterparty: 'inventory' })]), BASE, QUOTE);
-    expect(rows).toHaveLength(2);
-    expect(rows.map((r) => r.quoteUnits)).toEqual([null, 50_000n]);
-    expect(pairFillsOf(fillsView([fill('ask', BTC, 1n)]), QUOTE, BASE)).toEqual([]);
-    expect(pairFillsOf(null, BASE, QUOTE)).toEqual([]);
-  });
-
-  it('columns have one number of decimals per token (the finest amount shown); an unknown B amount shows a dash', () => {
-    const rows = pairFillsOf(fillsView([fill('ask', 2n * BTC, 101_000n), fill('bid', 60_000_001n, 3_000_000n), fill('ask', BTC, null)]), BASE, QUOTE);
-    const cols = pairTapeColumns(rows, BASE, QUOTE);
-    // eight decimals take ten characters, a tape cell shows nine: six for the column (the exact amounts are in the row title)
-    expect(cols.map((c) => c.base)).toEqual(['1.000000', '0.600000', '2.000000']);
-    expect(cols.map((c) => c.quote)).toEqual(['—', '3.000', '0.101']);
-  });
-
+describe('pair fills: the 24 h volume (a pair fill never makes a price)', () => {
   it('the 24 h pair volume of the fills view; none for a view of another pair', () => {
     const v = fillsView([], { amount_a: '300000000', amount_b: '151500', fills: 2 });
     expect(pairVolumeOf(v, BASE, QUOTE)).toEqual({ a: 300_000_000n, b: 151_500n, fills: 2 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { navOf, parseHash, routeToHash, tokenRoute, type Route, pairRoute, usdMarketHash, usdMarketRoute } from './router';
+import { activityRoute, navOf, parseHash, routeToHash, tokenRoute, type Route, pairRoute, usdMarketHash, usdMarketRoute } from './router';
 
 const ID = 'ab'.repeat(32);
 
@@ -111,5 +111,17 @@ describe('router', () => {
     expect(parseHash(`#/pair/${ID}/${ID}`).name).toBe('market');
     expect(parseHash(`#/pair/${ID}`)).toMatchObject({ name: 'market' });
     expect(parseHash('#/pair/xyz/abc')).toMatchObject({ name: 'market', invalidToken: 'xyz/abc' });
+  });
+
+  it('the activity page: every market, or the one its link names (a KAS book of one token, or a pair); anything else is every market', () => {
+    const Q = 'cd'.repeat(32);
+    expect(parseHash('#/activity')).toEqual({ name: 'activity' });
+    expect(navOf({ name: 'activity' })).toBe('activity');
+    expect(parseHash(`#/activity?market=${ID.toUpperCase()}`)).toEqual({ name: 'activity', market: { kind: 'token', token: ID } });
+    expect(parseHash(`#/activity?market=${ID}/${Q}`)).toEqual({ name: 'activity', market: { kind: 'pair', base: ID, quote: Q } });
+    expect(parseHash(`#/activity?market=${ID}%2F${Q}`)).toEqual({ name: 'activity', market: { kind: 'pair', base: ID, quote: Q } });
+    for (const bad of ['nope', `${ID}/${ID}`, `${ID}/x`, `${ID}/${Q}/${Q}`, '']) expect(parseHash(`#/activity?market=${bad}`)).toEqual({ name: 'activity' });
+    for (const r of [activityRoute(), activityRoute({ kind: 'token', token: ID }), activityRoute({ kind: 'pair', base: ID, quote: Q })]) expect(parseHash(routeToHash(r))).toEqual(r);
+    expect(routeToHash(activityRoute({ kind: 'pair', base: ID, quote: Q }))).toBe(`#/activity?market=${ID}/${Q}`);
   });
 });

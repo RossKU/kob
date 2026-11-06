@@ -7,7 +7,7 @@ guide walks through the web app as it is today. The labels in quotation marks ar
 `docs/security/AUDIT-2026-10.md`). Trade only funds you can afford to lose. Testnet-10 coins have no value; use them to learn.
 
 Contents: [1 What you need](#1-what-you-need) | [2 Connect a wallet](#2-connect-a-wallet) |
-[3 Find a token](#3-find-a-token-and-read-its-facts) | [4 Buy and sell](#4-buy-and-sell) |
+[3 Find a token](#3-find-a-token-and-read-its-facts) | [4 Buy and sell](#4-buy-and-sell) | [4a Activity](#4a-activity) |
 [5 Limit and market orders](#5-limit-and-market-orders) | [6 Partial fills](#6-partial-fills-and-you-may-receive-up-to) |
 [7 Your orders: cancel, refund, renew](#7-your-orders-cancel-refund-renew) | [8 Merge token UTXOs](#8-merge-token-utxos) |
 [9 Status banners](#9-status-banners-node-and-indexer) | [10 Fees: what goes where](#10-fees-what-goes-where) |
@@ -122,8 +122,8 @@ without badges is not thereby safe: the badges only report what could be checked
 
 ## 4. Buy and sell
 
-Open a token. The page shows the order book (asks above, bids below), recent trades, a price chart and the **Trade** panel with the
-order ticket. On a phone, the "Trade" button jumps to the ticket.
+Open a token. The page shows the order book (asks above, bids below), a price chart, the depth chart and the **Trade** panel with the
+order ticket, and under them the market's **activity log** (section 4a). On a phone, the "Trade" button jumps to the ticket.
 
 * **Buy** pays KAS and receives the token. **Sell** gives the token and receives KAS. Pick it with the **Buy / Sell** switch.
 * Prices are in KAS per whole token. The price is rounded to the market's price step "in your favour" and the page tells you when it
@@ -169,6 +169,24 @@ disable the button. You may see:
 If a red error line shows instead, it names what is missing, for example "Not enough KAS: needs X, you have Y (short Z)" or
 "Not enough tokens". A self-trade is refused ("This order would trade against your own order"): cancel the other order first or
 change the price.
+
+## 4a. Activity
+
+The **Activity** tab lists what happens on KOB, one row per transaction, newest first, as it happens: a type icon, the market (one token
+icon for a token's KAS book, two for a pair), the transaction id, the wallet of the order owner the row is about (a fill names both orders'
+owners, `A ⇄ B`, when it crossed two KOB orders), the amount and its KAS value, the price in KAS, the confirmations (a pie that fills up to
+100 DAA, then ✓) and the time. A click opens the transaction on the network's explorer (kaspa.stream, tn10.kaspa.stream on testnet-10) in
+a new tab. The same log sits under every token and pair page, set to that market; its filter can be widened there, and "All activity →"
+opens the Activity tab with the same filter (`#/activity?market=<covenant id>` or `?market=<A>/<B>`, a link you can share).
+
+* **Vis** chooses what is listed: placed orders and fills; All / Orders (signed by the order owner) / Executions (sent by an executor);
+  "mine only" with a wallet connected. The choice is remembered in this browser.
+* While the list is paused (⏸), or the pointer or the keyboard focus is in it, new rows wait behind a "+N new" pill, so a row never
+  moves under a click.
+* Not listed yet: cancels, amends, refunds, kills, expiries and stop arms. The indexer records them per order only; they join the log
+  with an indexer update. Which executor sent a fill is not recorded on chain in a form the indexer keeps, so the log shows roles, not
+  executors.
+* In standalone mode the log shows what the page saw on your node since the mode started ("since hh:mm"), and nothing older.
 
 ## 5. Limit and market orders
 
@@ -317,7 +335,7 @@ What it shows, and its limits:
 - **Only plain limit orders** rest in this book: asks and bids that are good till cancelled, without a price auction, worth at least 1 KAS.
   Stop and take-profit orders, if-done entries, IOC / FOK orders and pair orders are not listed. A partially filled order is followed when
   the app can derive its new state from the fill; when it cannot, the order leaves the book until the indexer is back.
-- **Charts and figures from what was seen.** Last price, 24 h figures, the price chart, recent trades and the depth chart are built from
+- **Charts and figures from what was seen.** Last price, 24 h figures, the price chart, the activity log and the depth chart are built from
   the fills seen since standalone mode started (a fill counts once your node shows its transaction) and from the partial book. Each is marked
   "Since hh:mm only (standalone mode)": earlier trades are not included, so "24 h" means "since hh:mm" when that is shorter.
 - **Needs the indexer, so unavailable here:** pair markets, holders and token holdings the indexer lists (the token UTXOs known to this

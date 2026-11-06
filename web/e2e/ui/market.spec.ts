@@ -171,7 +171,9 @@ test.describe('token page', () => {
     await expect(bids.last().locator('.book-bar, i')).toHaveAttribute('style', /width:\s*(100|9\d(\.\d+)?)%/);
     await expect(appPage.getByTestId('depth-chart').locator('svg')).toBeVisible();
 
-    await expect(appPage.getByTestId(TESTID.tradesList).getByTestId('trade-row')).toHaveCount(8);
+    // the activity log under the grid: the 8 seeded fills (Executions: the fills alone)
+    await appPage.getByTestId('activity-actor-executions').click();
+    await expect(appPage.getByTestId(TESTID.activityList).locator('[data-testid=activity-row][data-kind=fill]')).toHaveCount(8);
     // clicking a level prefills the ticket (a stub until the ticket lands): it must not break the page
     await asks.last().click();
     await expect(appPage.getByTestId('token-page')).toBeVisible();
@@ -219,7 +221,8 @@ test.describe('token page', () => {
     const { id } = await seeded(mock);
     await appPage.goto(`/#/market/${id}`);
     await expect(appPage.getByTestId('live-indicator')).toHaveText('Live');
-    const trades = appPage.getByTestId(TESTID.tradesList).getByTestId('trade-row');
+    await appPage.getByTestId('activity-actor-executions').click();
+    const trades = appPage.getByTestId(TESTID.activityList).locator('[data-testid=activity-row][data-kind=fill]');
     await expect(trades).toHaveCount(8);
     const [ask] = await mock.ordersOf('maker', 'active');
     await mock.fill(ask.covenant_id);

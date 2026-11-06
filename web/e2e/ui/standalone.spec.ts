@@ -51,14 +51,20 @@ test.describe('standalone mode', () => {
     // the seeded orders were never in a block this page saw: not shown
     await expect(page.getByTestId('book-empty')).toBeVisible({ timeout: 20_000 });
     // the market data is built from what is seen, and says since when
-    for (const area of ['stats', 'chart', 'depth', 'tape']) await expect(page.getByTestId(`${area}-standalone`)).toContainText(/^Since \d\d:\d\d only \(standalone mode\)$/);
+    for (const area of ['stats', 'chart', 'depth']) await expect(page.getByTestId(`${area}-standalone`)).toContainText(/^Since \d\d:\d\d only \(standalone mode\)$/);
     await expect(page.getByTestId('live-indicator')).toHaveText('Standalone');
+    // the activity log too: what was seen since then, nothing older
+    await expect(page.getByTestId('activity-since')).toHaveText(/^since \d\d:\d\d$/);
+    await expect(page.getByTestId('activity-nothing-before')).toBeVisible();
 
     // an ask placed now, with a real transaction: listed once the node holds it
     const placed = await placeOnChain(mock, 'carol', HIGH_ASK, 50n);
     await expect(asks(page)).toHaveCount(1, { timeout: 20_000 });
     await expect(page.getByTestId('book-ask-row')).toHaveCount(1);
     expect(placed.covenant_id).toMatch(/^[0-9a-f]{64}$/);
+    // and its placement is a row of the activity log
+    await page.getByTestId('activity-list').scrollIntoViewIfNeeded();
+    await expect(page.locator('[data-testid=activity-row][data-kind=placed]')).toHaveCount(1, { timeout: 20_000 });
 
     // the indexer is back: its book wins (the seeded levels and the new ask), the labels go
     await indexerDown(mock, false);
@@ -96,11 +102,16 @@ test.describe('standalone mode', () => {
     expect(onChainTerms(buy)[0]!.state.price).toBe(HIGH_ASK.toString());
     expect(wallet).not.toBeNull();
 
-    // a matcher fills 10 of carol's ask with a real transaction: the trade is in the tape, and the book follows the order to its continuation
+    // a matcher fills 10 of carol's ask with a real transaction: the fill is in the activity log ("since HH:MM"), and the book follows the order to its continuation
     await mock.post('/mock/take', { covenant_id: carol.covenant_id, amount: (10n * TOKEN).toString() });
-    await expect(page.getByTestId('trade-row')).toHaveCount(1, { timeout: 30_000 });
-    await expect(page.getByTestId('trade-row').first()).toContainText('0.03');
-    await expect(page.getByTestId('tape-standalone')).toBeVisible();
+    // (the log on screen, the pointer off it: a pointer moving in it holds new rows back)
+    await page.getByTestId('activity-list').scrollIntoViewIfNeeded();
+    await page.mouse.move(1, 1);
+    const fills = page.locator('[data-testid=activity-row][data-kind=fill]');
+    await expect(fills).toHaveCount(1, { timeout: 30_000 });
+    await expect(fills.first()).toContainText('0.03');
+    await expect(page.getByTestId('activity-since')).toBeVisible();
+    await expect(page.getByTestId('activity-live')).toHaveAttribute('data-mode', 'standalone');
     await expect(asks(page)).toHaveCount(2);
     await expect(page.getByTestId('book-ask-row').filter({ hasText: '40' })).toHaveCount(1);
   });

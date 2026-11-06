@@ -1,4 +1,4 @@
-// Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair; the old `#/pair/<base>/<quote>` is an alias), `#/usd/kas` + `#/usd/<covenantId>` (legacy: redirected to the tradable USD pages), `#/orders`, `#/create` (the old `#/issue` leads there),
+// Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair; the old `#/pair/<base>/<quote>` is an alias), `#/usd/kas` + `#/usd/<covenantId>` (legacy: redirected to the tradable USD pages), `#/activity` (`?market=<id>` or `?market=<base>/<quote>`: one market), `#/orders`, `#/create` (the old `#/issue` leads there),
 // `#/settings`. An empty hash is the landing screen (`home`: config `home`, by default the landing page, src/ui/landing; an operator may set a chart or the list); an unknown one is the market list.
 // The parsing / formatting is pure (tested in router.test.ts); only `useRoute` / `navigate` touch `window`.
 import { useEffect, useState } from 'preact/hooks';
@@ -19,7 +19,15 @@ export type Route =
   | { name: 'token'; covenantId: string; ticket?: TicketPreset; amount?: string }
   /** token/token pair BASE/QUOTE (pair orders of every type, prices in QUOTE per BASE): `#/market/<base>/<quote>` (alias `#/pair/<base>/<quote>`) */
   | { name: 'pair'; base: string; quote: string; covenantId?: undefined }
+  /**
+   * `#/activity`: the activity log of every market; `?market=<covenant id>` narrows it to one token's KAS book, `?market=<base>/<quote>` to one pair (a link
+   * that can be shared)
+   */
+  | { name: 'activity'; market?: ActivityMarket; covenantId?: undefined }
   | { name: 'orders' | 'create' | 'settings'; covenantId?: undefined };
+
+/** The market an activity link names: one token's KAS book or one token/token pair. */
+export type ActivityMarket = { kind: 'token'; token: string } | { kind: 'pair'; base: string; quote: string };
 
 export type RouteName = Route['name'];
 
@@ -81,6 +89,10 @@ export function parseHash(hash: string): Route {
     }
     return HEX64.test(id) ? { name: 'token', covenantId: id.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}) } : { name: 'market', invalidToken: id.slice(0, 80) };
   }
+  if (page === 'activity') {
+    const market = activityMarketOf(query?.get('market') ?? '');
+    return market ? { name: 'activity', market } : { name: 'activity' };
+  }
   if ((PAGES as readonly string[]).includes(page)) return { name: page as (typeof PAGES)[number] };
   // the token creation page was `#/issue` before it was named "Create token": the old address still leads there
   if (page === 'issue') return { name: 'create' };
@@ -100,13 +112,25 @@ export function routeToHash(route: Route): string {
       return `#/usd/${route.asset.toLowerCase()}`;
     case 'home':
       return '#/';
+    case 'activity':
+      return route.market ? `#/activity?market=${activityMarketParam(route.market)}` : '#/activity';
     default:
       return `#/${route.name}`;
   }
 }
 
+/** `?market=` of an activity link: `<covenant id>` (a token's KAS book) or `<base>/<quote>` (a pair); anything else is no market (null). */
+export function activityMarketOf(m: string): ActivityMarket | null {
+  const [a, b, extra] = m.split('/');
+  if (extra !== undefined || !a || !HEX64.test(a)) return null;
+  if (b === undefined) return { kind: 'token', token: a.toLowerCase() };
+  return HEX64.test(b) && a.toLowerCase() !== b.toLowerCase() ? { kind: 'pair', base: a.toLowerCase(), quote: b.toLowerCase() } : null;
+}
+export const activityMarketParam = (m: ActivityMarket): string => (m.kind === 'token' ? m.token.toLowerCase() : `${m.base.toLowerCase()}/${m.quote.toLowerCase()}`);
+export const activityRoute = (market?: ActivityMarket | null): Route => (market ? { name: 'activity', market } : { name: 'activity' });
+
 /** Which top-level nav entry a route belongs to. */
-export const navOf = (route: Route): 'market' | 'orders' | 'create' | 'settings' =>
+export const navOf = (route: Route): 'market' | 'activity' | 'orders' | 'create' | 'settings' =>
   route.name === 'token' || route.name === 'pair' || route.name === 'usd' || route.name === 'home' ? 'market' : route.name;
 
 export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint): Route => ({

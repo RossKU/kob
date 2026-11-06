@@ -31,7 +31,10 @@ async function stat(page: Page, id: string): Promise<number> {
 }
 
 async function sides(page: Page): Promise<string[]> {
-  return page.getByTestId(TESTID.tradesList).getByTestId('trade-row').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.side ?? ''));
+  await page.getByTestId('activity-list').scrollIntoViewIfNeeded();
+  const fills = page.getByTestId('activity-list').locator('[data-testid=activity-row][data-kind=fill]');
+  await expect(fills.first()).toBeVisible();
+  return fills.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.side ?? ''));
 }
 
 async function legend(page: Page): Promise<{ o: number; h: number; l: number; c: number }> {
@@ -119,9 +122,10 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     expect(close(mid, (bidPrices[0]! + askPrices.at(-1)!) / 2, 0.001)).toBe(true);
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
 
-    // trades: same trades, the aggressor side flips (the taker who bought the token sold KAS), the price is inverted
-    const flippedSides = await sides(page);
-    expect(flippedSides).toEqual(nativeSides.map((s) => (s === 'buy' ? 'sell' : s === 'sell' ? 'buy' : s)));
+    // the activity log is the same in both orientations (it is the log of every view of the market: amounts in the token, prices in KAS, the
+    // colour the taker's side on the token)
+    expect(nativeSides.length).toBeGreaterThan(0);
+    expect(await sides(page)).toEqual(nativeSides);
 
     // stats
     const last = await stat(page, 'stat-last');
@@ -335,7 +339,7 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
     await expect(page.getByTestId('usd-page')).toHaveCount(0);
     await expect(page.getByTestId('order-book')).toBeVisible();
-    await expect(page.getByTestId('trades-list')).toBeVisible();
+    await expect(page.getByTestId('activity-list')).toBeVisible();
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     await connectWallet(page);
     // the flipped view, KAS/EXUSD: amounts in KAS

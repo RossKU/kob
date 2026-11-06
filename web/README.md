@@ -47,12 +47,12 @@ chart of the first tradable token, else the list), `list`, `kas-usd` (the USD to
 
 ## Market page
 
-`#/market/<token>` is an exchange layout: title bar and 24 h stats (`GET /v1/stats`), then order book | price chart, depth chart and trade tape |
-order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phones without horizontal scroll), token facts below.
+`#/market/<token>` is an exchange layout: title bar and 24 h stats (`GET /v1/stats`), then order book | price chart and depth chart |
+order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phones without horizontal scroll), the market's activity log (full width), token facts below.
 
 * **Data.** `GET /v1/trades|candles|stats|depth/{token}` (`src/data/indexer.ts`, contract in the executor docs). Prices are sompi per `price_basis`
   token base units; KAS per whole token = `price / 1e8 * 10^decimals / price_basis` (`src/ui/market/market-model.ts`, exact bigint text, floats only for
-  chart coordinates). An indexer without these routes (404 / 405 / 501) degrades per panel: the tape falls back to `/v1/fills`, depth to the book,
+  chart coordinates). An indexer without these routes (404 / 405 / 501) degrades per panel: the last trade falls back to `/v1/fills`, depth to the book,
   stats and candles show "no data".
 * **Chart.** Candles 1m / 5m / 1h / 1d (remembered) with a volume histogram; empty buckets carry the previous close (flat, muted, zero volume).
   The chart library is loaded on demand (its own ~63 kB gzip chunk).
@@ -116,6 +116,20 @@ attribution requirement: the NOTICE ("TradingView Lightweight Charts™ Copyrigh
 https://www.tradingview.com/ on the pages that use it. We keep the library's default `attributionLogo` on the chart (a link to TradingView, which the
 README says satisfies the link requirement) and show the notice with the link in the footer of every app page (`src/ui/shell/Frame.tsx`, `SiteFooter`). Do not remove either.
 Its only dependency, `fancy-canvas`, is MIT.
+
+## Activity log
+
+`#/activity` (and the same component under every token and pair page, preset to that market) is `src/ui/activity`: one row per transaction,
+newest first, each row a link to the transaction on the explorer (`config.explorerTxUrl`). `activity-model.ts` (pure: records -> rows,
+filters, the stored filters `kob.activity.v1`, the hold that keeps rows still under the pointer), `activity-store.ts` (the reads and the
+order-owner lookups), `use-activity.ts` (live: the `fills` channels, polls), `ActivityLog.tsx`.
+
+* **Phase 1 (now, no indexer change):** fills (`/v1/fills`, a pair's from `/v1/pairs/{a}/{b}/fills`, which the pair page already reads) and
+  placements (`/v1/orders`, polled every 10 s: the indexer sends no notice for them). The owners of filled orders are looked up once per
+  order (`/v1/orders/{id}`). Standalone mode: what the page saw on the node (`StandaloneController.seenActivity`).
+* **Phase 2 (needs the indexer):** a global event list (`GET /v1/events`, filterable by kind and market) and an `events` WebSocket channel
+  bring cancels, amends, refunds, kills, expiries and stop arms (their kinds, icons and filter slots exist already; Vis offers only the phase-1
+  kinds until then).
 
 ## Token/token pairs
 

@@ -33,8 +33,8 @@ import { useStaleSince } from './book-stale';
 import { loadCandles, type ChartView } from './candle-feed';
 import { StaleSince } from './OrderBook';
 import { buildPairBook, pickOf, type PairLevelRow } from './pair-model';
-import { pairDepthSeries, pairFillsOf, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
-import { PairTrades } from './PairTrades';
+import { pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
+import { MarketActivity } from '../activity/ActivityPage';
 import { TokenFacts, tokenTitle } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { PairDetails, TokenLine } from './TokenHeader';
@@ -137,7 +137,6 @@ export function PairPage(props: { base: string; quote: string }) {
   const last = cur?.last ?? null;
   const change = cur?.changeBps ?? null;
   const dp = usdDp(last);
-  const pairFills = useMemo(() => (fills.data && base && quote ? pairFillsOf(fills.data, base, quote) : fills.data === null ? [] : undefined), [fills.data, base, quote]);
   const pairStats = useMemo(
     () =>
       base && quote
@@ -156,6 +155,8 @@ export function PairPage(props: { base: string; quote: string }) {
         : null,
     [base, quote, last, change, dp, cc, cur, fills.data],
   );
+  // the activity log reads this pair's fills from here (the route is heavy: never read twice)
+  const pairFillsSrc = useMemo(() => ({ base: props.base, quote: props.quote, view: fills.data }), [props.base, props.quote, fills.data]);
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
 
   const blocked = [baseInfo, quoteInfo].find((x) => x && !x.tradable);
@@ -270,11 +271,6 @@ export function PairPage(props: { base: string; quote: string }) {
           />
         </Section>
       }
-      tape={
-        <div class="mkt-area-tape">
-          <PairTrades fills={pairFills} loading={fills.loading} error={fills.error} onRetry={fills.reload} base={base} quote={quote} />
-        </div>
-      }
       ticket={
         <div class="stack mkt-area-ticket">
           <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} facts={<TokenFacts rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} compact data-testid="ticket-token-facts" />} />
@@ -283,6 +279,7 @@ export function PairPage(props: { base: string; quote: string }) {
           </p>
         </div>
       }
+      activity={<MarketActivity market={{ kind: 'pair', base: props.base, quote: props.quote }} pairFills={pairFillsSrc} />}
       details={<PairDetails shared={shared} rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} services={services} />}
     />
   );
