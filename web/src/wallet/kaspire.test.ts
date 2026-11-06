@@ -98,6 +98,11 @@ describe('Kaspire adapter: signTx request shape', () => {
     expect(kaspireSignatureScript(send, send.sign[0]!, { dispatchTag }).mode).toBe('wrap-signature');
     expect(dispatchTagFrom(kob)('KobAsk', 'nope')).toBeNull();
     expect(dispatchTagFrom(kob)('KobBid', 'cancel')).toMatch(/^[0-9a-f]{8}$/);
+    // the maker's cancel of an order under a retired template: the same cancel(sig), mirrored with today's tag
+    const p0 = cancel.plans[0]!;
+    if (p0.kind !== 'entry') throw new Error('not an entry');
+    const retired = { ...cancel, plans: [{ kind: 'retiredCancel' as const, template: p0.template, retired: kob.retiredTemplates()[0]!.hash, state: p0.state, maker: cancel.sign[0]!.pubkey }, ...cancel.plans.slice(1)] };
+    expect(kaspireSignatureScript(retired, retired.sign[0]!, { dispatchTag })).toEqual({ mode: 'ordered-args', args: [{ type: 'signature', prefixHex: '' }, { type: 'data', hex: 'a0893109' }] });
   });
 });
 

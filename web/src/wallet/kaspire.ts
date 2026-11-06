@@ -59,6 +59,11 @@ export function kaspireSignatureScript(built: BuiltTx, req: SignRequest, deps: P
     const tag = deps.dispatchTag(plan.template, plan.entry);
     if (tag) return { mode: 'ordered-args', args: [{ type: 'signature', prefixHex: '' }, { type: 'data', hex: tag }] };
   }
+  // the maker's cancel of an order under a retired template: the same `cancel(sig)` (kob-protocol checks that its ABI and tag are today's)
+  if (deps.mode !== 'wrap-signature' && plan?.kind === 'retiredCancel' && deps.dispatchTag) {
+    const tag = deps.dispatchTag(plan.template, 'cancel');
+    if (tag) return { mode: 'ordered-args', args: [{ type: 'signature', prefixHex: '' }, { type: 'data', hex: tag }] };
+  }
   return { mode: 'wrap-signature' };
 }
 

@@ -881,6 +881,27 @@ export class MockChain {
   }
 
   /**
+   * An order placed by an older build under a RETIRED template of the cancel-only table (`retired`: its hash, kob-wasm `retiredTemplates`): its
+   * UTXO at that template's script with its covenant id, and the placement record the wallet of that build kept. The indexer here does not know
+   * it (like an indexer that never recorded it: `/v1/orders/{id}` answers 404), so the wallet resolves it from that record; its maker's cancel
+   * spends it like any covenant UTXO (validated in the engine).
+   */
+  seedRetiredOrder(any, retired, { value } = {}) {
+    if (!this.kob.retiredTemplates().some((r) => r.hash === retired && r.kind === any.kind)) throw badRequest(`${retired} is not a retired ${any.kind} template`);
+    const n = ++this.synth;
+    const txid = syntheticId('retired-tx', n);
+    const cov = syntheticId('retired-cov', n);
+    const val = BigInt(value ?? DEFAULT_CARRIER);
+    this.addUtxo({ txid, index: 0, amount: val, spk: this.kob.retiredScriptPublicKey(retired, any), covenantId: cov, daa: this.daa(), kind: 'covenant' });
+    const record = {
+      version: 1, network: this.network, maker: any.state.maker, txid: null, output: null, covenantId: cov, kind: any.kind, templateHash: retired,
+      state: this.kob.encodeState(any), amount: 'amountLeft' in any.state ? String(any.state.amountLeft) : null, custody: null, value: val.toString(),
+      deadline: null, placedAtUnix: String(this.nowUnix()), placedAtDaa: String(this.daa()),
+    };
+    return { covenant_id: cov, txid, value: val.toString(), record };
+  }
+
+  /**
    * A finished order (filled or cancelled) with its events: history for the trades list. No UTXOs. `genesisDaa` / `genesisTs` and a
    * fill's `daa` / `ts` / `txid` override the defaults (market history: explicit times, two orders filled in one transaction).
    */

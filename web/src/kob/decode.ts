@@ -73,6 +73,7 @@ export const SIGNING_ISSUE_CODES = [
   'output-unknown', 'sign-foreign-key', 'sign-mismatch', 'sign-unexpected', 'sighash-type', 'expected-orders', 'expected-kas-locked',
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
+  'retired-not-cancel',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
@@ -133,6 +134,8 @@ export interface DecodedInput {
     /** cancel = maker cancel, refund = expiry / kill / close refund, fill = any matching entry, update = arm / trail */
     action: 'cancel' | 'refund' | 'fill' | 'update' | 'other';
     description: OrderDescription | null; makerIsWallet: boolean;
+    /** the order is under a RETIRED template of the cancel-only table (an older contract version): its hash; only its maker's cancel is signed */
+    retired?: Hex;
   };
 }
 
@@ -198,6 +201,8 @@ export interface DecodedSpend {
   sweptTo?: { output: number; utxos: number; kas: bigint };
   /** the order is armed / trailed by this tx: its trigger evidence (null for every other spend) */
   trigger: DecodedTrigger | null;
+  /** the order is under a RETIRED template of the cancel-only table: its hash (the only spend of it this frame signs is its maker's cancel) */
+  retired?: Hex;
 }
 
 /**
@@ -413,6 +418,8 @@ function planSigner(p: SigPlan): Hex | null {
     // a KRON token input carries no signature (address presence is a P2PK input of the owner elsewhere), except an id_type 0 holder's
     // (a token-level signature in its signature column: KForge)
     case 'kronToken': return p.signer ?? null;
+    // the maker's cancel of an order under a retired template: the maker's SIGHASH_ALL signature
+    case 'retiredCancel': return p.maker;
   }
 }
 
@@ -489,6 +496,35 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         return {
           ...base, type: 'order', ownedBy: 'covenant',
           order: { kind: os.kind, template: plan.template, covenantId: inp.utxo.covenantId, entry: plan.entry, action, description, makerIsWallet },
+        };
+      }
+      return { ...base, type: 'unknown', ownedBy: 'covenant', order: null };
+    }
+    if (plan.kind === 'retiredCancel') {
+      // an order under a RETIRED template (cancel-only table): its state decodes as today's kind of the same name, its script is the retired
+      // template's (kob-wasm derives it from the cancel-only table: an unknown hash derives nothing and the input does not match)
+      let state: ReturnType<KobWasm['decodeState']> | null = null;
+      let derivedSpk: string | null = null;
+      try {
+        state = kob.decodeState(plan.template, plan.state);
+        derivedSpk = kob.retiredScriptPublicKey(plan.retired, state);
+      } catch {
+        state = null;
+      }
+      mustMatch(derivedSpk, `${plan.template} contract of an older version (cancel only)`);
+      const action = actionOfRole(role, 'cancel');
+      if (action !== 'cancel') add('retired-not-cancel', `input ${i}: an order under an older contract version is only cancelled by its maker, not spent by "${role}"`, { input: i });
+      if (state && isOrderKind(state.kind)) {
+        const os = state as OrderState;
+        orderStates.set(i, os);
+        const makerIsWallet = os.state.maker === maker;
+        if (plan.maker !== os.state.maker) add('sign-mismatch', `input ${i}: the plan wants a signature by ${shortId(plan.maker)}, but the order's maker is ${shortId(os.state.maker)}`, { input: i });
+        if (!makerIsWallet) {
+          add('order-not-maker', `input ${i}: a cancel of an order that belongs to another key (${shortId(os.state.maker)}) cannot be signed by this wallet`, { input: i, params: { maker: os.state.maker } });
+        }
+        return {
+          ...base, type: 'order', ownedBy: 'covenant',
+          order: { kind: os.kind, template: plan.template, covenantId: inp.utxo.covenantId, entry: 'cancel', action: 'cancel', description: describeOrder(os, kob), makerIsWallet, retired: plan.retired },
         };
       }
       return { ...base, type: 'unknown', ownedBy: 'covenant', order: null };
@@ -1213,12 +1249,14 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       // owned by the same id, must stay where it is: `expected.untouched`)
       if (swept) {
         return {
+          ...(o.retired ? { retired: o.retired } : {}),
           input: d.index, covenantId: cov, description: o.description, action: 'sweep' as const, makerIsWallet: o.makerIsWallet,
           tokensReleased: total, strays: total, otherStrays: [...others.values()], pairTokens, trigger: null,
           sweptTo: { output: sw!.output, utxos: owned.length, kas: owned.reduce((x, t) => x + t.amount, 0n) },
         };
       }
       return {
+        ...(o.retired ? { retired: o.retired } : {}),
         input: d.index, covenantId: cov, description: o.description, action: o.action, makerIsWallet: o.makerIsWallet,
         tokensReleased: total, strays: strayOf(total, expectedCustody), otherStrays: [...others.values()], pairTokens,
         trigger: triggers.get(d.index) ?? null,
@@ -1396,6 +1434,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const tokenOnly = spends.length === 0 && !createdOrders && tokens.length > 0;
   const kind: SigningKind = createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
   if (createdOrders && !payload) add('no-order-records', 'orders are created but the payload carries no KOB1 records');
+  // an order under a retired template is only cancelled: no replacement, sweep or anything else in the same transaction
+  if (spends.some((s) => s.retired) && kind !== 'cancel' && kind !== 'cancel-position') {
+    add('retired-not-cancel', `an order under an older contract version is only cancelled by its maker, but this transaction is a ${kind}`);
+  }
   if (cancels.length && released > 0n) add('kas-released', `${formatKas(released)} KAS held by the cancelled order(s) return to you`, { params: { released } });
 
   const severity = (s: IssueLevel) => issues.filter((i) => i.severity === s);

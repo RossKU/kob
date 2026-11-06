@@ -90,6 +90,9 @@ export default {
   'orders.cancelBlocked.old-template': 'Placed with an older contract version this app cannot build for.',
   'orders.oldTemplate.badge': 'older contract version',
   'orders.oldTemplate.hint': 'Older contract version: this app cannot look it up or cancel it.',
+  'orders.oldTemplate.noCancel': 'This app cannot cancel it yet: its contract version is not in the cancel-only list. Use the KOB release it was placed with.',
+  'orders.cancelOnly.badge': 'older contract version — cancel only',
+  'orders.cancelOnly.hint': 'Placed with an older contract version: this app only cancels it (its tokens and KAS return to you). Nothing fills it any more.',
   'orders.oldTemplate.title': 'Orders on a contract version this app cannot spend',
   'orders.oldTemplate.body': '{count} saved order(s) use an older contract version: this app cannot find, cancel or refund them, and matchers no longer fill them, arm or trail their stops or run their exits. Export your records (KOB backup), cancel them with the KOB release they were placed with and place them again, or refund them with it after expiry.',
 
@@ -293,6 +296,7 @@ export default {
   'orders.issue.sweep.stray-unproven': 'A stray of another token has no proven state ({outpoint}): it cannot be moved.',
   'orders.issue.sweep.strays-unknown': 'Strays not fully read: a later sweep may find more.',
   'orders.issue.cancel.not-maker': 'This order belongs to another key: only its maker can cancel it.',
+  'orders.issue.cancel.retired-cancel-only': 'An older contract version: this app only cancels this order.',
   'orders.issue.cancel.custody-missing': 'The token custody of this order could not be found. Refresh and try again.',
   'orders.issue.cancel.strays-exceed-slots': '{strays} stray token outputs, but one transaction moves only {room}: cancelling abandons the rest.',
   'orders.issue.cancel.build-failed': 'The transaction could not be built: {message}',

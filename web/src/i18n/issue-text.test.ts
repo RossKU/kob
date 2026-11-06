@@ -273,7 +273,7 @@ describe('issueText: pre-sign findings of the decoder', () => {
       'expected-quote-escrowed': { params: { expected: 1000n, actual: 900n } },
       'trigger-evidence-invalid': { input: 0, params: { evidence: 2 } }, 'trigger-rule-unmet': { input: 0, params: { evidence: 1 } }, 'trigger-evidence': { input: 0, params: { evidence: 1 } },
       'other-strays-swept': { input: 1, params: { amount: '2.5 TSTB', token: 'TSTB (7171…7171)' } },
-      'sweep-invalid': { output: 0, input: 0 }, 'expected-sweep-ids': { params: { expected: 1, actual: 0 } }, 'sweep-custody-spent': { input: 1 },
+      'sweep-invalid': { output: 0, input: 0 }, 'expected-sweep-ids': { params: { expected: 1, actual: 0 } }, 'sweep-custody-spent': { input: 1 }, 'retired-not-cancel': { input: 0 },
       'swept-in-place': { input: 0, output: 0, params: { utxos: 3 } },
     };
     expect(Object.keys(sample).sort()).toEqual([...SIGNING_ISSUE_CODES].sort());

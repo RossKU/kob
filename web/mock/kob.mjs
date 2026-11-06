@@ -28,6 +28,8 @@ export function loadKobMock() {
     decodeState: (kind, hex) => call('decodeState', () => j(raw.decodeState(kind, hex))),
     encodeState: (state) => call('encodeState', () => raw.encodeState(JSON.stringify(state))),
     scriptPublicKey: (state) => call('scriptPublicKey', () => raw.scriptPublicKey(JSON.stringify(state))),
+    retiredTemplates: () => call('retiredTemplates', () => j(raw.retiredTemplates())),
+    retiredScriptPublicKey: (retired, state) => call('retiredScriptPublicKey', () => raw.retiredScriptPublicKey(retired, JSON.stringify(state))),
     tokenScriptPublicKey: (program, state) => call('tokenScriptPublicKey', () => raw.tokenScriptPublicKey(program, JSON.stringify(state))),
   };
 }

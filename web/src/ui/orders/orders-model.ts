@@ -6,7 +6,7 @@ import { GTC_DAYS, MARKET_AUCTION_DAA, MAX_IDLE_DAA, daaToUnix, gtcRenewalUnix, 
 import { asOrderState, baseKind, custodiesOf, custodyAmountOf, describeOrder, holdsTokens, isMultiFillMarket, isPairKind, type OrderDescription } from '../../kob/order-facts';
 import { pairOfView } from '../../kob/pair-view';
 import type { Clock } from '../../kob/plan-types';
-import { recordCodec, type PlacementRecord, type ResolvedRecord } from '../../kob/records';
+import { recordCodec, retiredOf, type PlacementRecord, type RecordKind, type ResolvedRecord } from '../../kob/records';
 import type { Hex, OrderState, PairKind, PairTriggerRule } from '../../kob/types';
 import type { KobWasm } from '../../kob/wasm';
 import { decaySlope } from '../../kob/orders/simple';
@@ -88,6 +88,23 @@ export function entryState(e: OrderEntry, kob: KobWasm | null): { state: OrderSt
 }
 
 const ENDED = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
+
+/**
+ * True when the order is under a retired template of the cancel-only table: the indexer's single view says so (`cancel_only`, or its template hash
+ * is one), the node resolution of the wallet's record found it under one, or the record names one.
+ */
+export function isCancelOnly(e: OrderEntry, kob: KobWasm | null): boolean {
+  if (e.resolved?.retired) return true;
+  const v = e.view;
+  if (v?.cancel_only === true) return true;
+  if (!kob) return false;
+  if (v && retiredOf(kob, { kind: v.contract as RecordKind, templateHash: v.template_hash })) return true;
+  try {
+    return !!e.record && !!recordCodec(kob, e.record)?.retired;
+  } catch {
+    return false;
+  }
+}
 
 function statusOf(e: OrderEntry): OrderStatusUi {
   if (e.view) {
@@ -236,8 +253,16 @@ export interface OrderRowModel {
    * commitment is unknown), 'custody-missing' (no custody UTXO at its address), 'old-template' (placed with an older contract version)
    */
   cancelBlocked: 'no-extension' | 'custody-missing' | 'old-template' | null;
-  /** the wallet's record of this order names an order template this build does not pin (an older contract version, C5-02) */
+  /**
+   * the wallet's record of this order names an order template this build neither pins nor keeps in its cancel-only table (an older contract
+   * version, C5-02): nothing can be built for it here (no Cancel button, one line says why)
+   */
   oldTemplate: boolean;
+  /**
+   * the order is under a RETIRED template of the cancel-only table (an older contract version): its maker's cancel is the only action this app
+   * builds for it (no amend, sweep or refund); its terms decode with today's kind of the same name
+   */
+  cancelOnly: boolean;
   strayCount: number;
   /** a live bid whose escrow no longer funds one base unit (the indexer counts amount 0): hidden from the book, refund (cancel) or top it up */
   unfundable: boolean;
@@ -380,6 +405,7 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
   const viaView = !!v && v.state_known && v.current !== null;
   const r = e.resolved;
   const oldTemplate = r?.status === 'old-template';
+  const cancelOnly = isCancelOnly(e, ctx.kob);
   const needsCustody = !!es && holdsTokens(es.state.kind) && (custodyAmountOf(es.state) ?? 0n) > 0n;
   const cancelBlocked: OrderRowModel['cancelBlocked'] = viaView
     ? null
@@ -400,11 +426,12 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
     label: labelText(e.record?.label),
     // a cancel needs a live order whose current UTXO can be found: proven indexer state, or a node-resolved record
     canCancel: live && (viaView || viaRecord),
-    canRefund: refundable,
-    canAmend: live && !!es && amendKind(es.state, typeKey) !== null && es.source !== 'record',
+    canRefund: refundable && !cancelOnly,
+    canAmend: live && !cancelOnly && !!es && amendKind(es.state, typeKey) !== null && es.source !== 'record',
     plannedExit: plannedExitOf(desc, amountLeft),
     cancelBlocked: live || oldTemplate ? cancelBlocked : null,
     oldTemplate,
+    cancelOnly,
     strayCount: v?.strays ? v.strays.filter((s) => !s.spent).length : 0,
     // a sold-out repeat ENTRY waiting for its exits to re-arm it also has amount 0 left: that is a healthy position, not an unfundable bid
     unfundable: live && side === 'buy' && v !== null && bi(v.amount_left) === 0n && v.repeat?.role !== 'entry',

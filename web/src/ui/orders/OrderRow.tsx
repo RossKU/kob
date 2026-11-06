@@ -143,7 +143,8 @@ export function OrderRow(props: OrderRowProps) {
   const disabledReason = !canSign ? t('orders.actions.needWallet') : undefined;
   const cancelHint = row.canCancel ? undefined : row.cancelBlocked ? t(`orders.cancelBlocked.${row.cancelBlocked}`) : t('orders.actions.cannotCancel');
   // strays of a live order the wallet can spend: the maker's sweep returns them while the order lives on
-  const canSweep = row.live && row.canCancel && row.strayCount > 0;
+  // (an order under an older contract version is only cancelled: no sweep)
+  const canSweep = row.live && row.canCancel && row.strayCount > 0 && !row.cancelOnly;
 
   return (
     <div class={`order-card${props.nested ? ' nested' : ''}`} data-testid={`order-row-${row.id}`} data-status={row.status} data-type={row.typeKey} data-side={row.side} data-live={row.live ? '1' : '0'}>
@@ -165,6 +166,7 @@ export function OrderRow(props: OrderRowProps) {
           {row.possiblyFrozen ? <Badge tone="bad" title={t('orders.frozen.hint')} data-testid="order-frozen-badge">{t('orders.frozen.badge')}</Badge> : null}
           {row.custodyOk === false ? <Badge tone="bad" data-testid="order-custody-bad">{t('orders.custodyBad')}</Badge> : null}
           {row.oldTemplate ? <Badge tone="warn" title={t('orders.oldTemplate.hint')} data-testid="order-old-template">{t('orders.oldTemplate.badge')}</Badge> : null}
+          {row.cancelOnly ? <Badge tone="warn" title={t('orders.cancelOnly.hint')} data-testid="order-cancel-only">{t('orders.cancelOnly.badge')}</Badge> : null}
           {row.source !== 'indexer' ? <Badge tone="warn" title={t(`orders.source.${row.source}Hint`)} data-testid="order-source">{t(`orders.source.${row.source}`)}</Badge> : null}
         </div>
         <div class="small muted">
@@ -288,7 +290,10 @@ export function OrderRow(props: OrderRowProps) {
 
       {props.loadEvents && filledAmountOf(row) > 0n ? <OrderFills row={row} token={tk} quote={bToken} network={config.network} loadEvents={props.loadEvents} /> : null}
 
-      {row.live || row.status === 'unknown' ? (
+      {row.oldTemplate ? (
+        // nothing in this build can spend it: no Cancel button, one line why
+        <p class="small muted" style="margin-top:8px" data-testid={`order-old-template-why-${row.id}`}>{t('orders.oldTemplate.noCancel')}</p>
+      ) : row.live || row.status === 'unknown' ? (
         <div class="order-actions" style="margin-top:8px">
           <Button
             small

@@ -146,7 +146,8 @@ export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck 
   const own = ownTokenFacts(st);
   const tplOf = (token: Hex | null | undefined): Hex => own.find((t) => t.covenantId === token)?.tplHash ?? own[0]!.tplHash;
   const cs = custodiesOf(st);
-  const orderSpk = kob.scriptPublicKey(st);
+  // an order under a retired template (cancel only) sits at the script of that template
+  const orderSpk = snap.retired ? kob.retiredScriptPublicKey(snap.retired, st) : kob.scriptPublicKey(st);
   // each custody on its own token's program (the first: custodies[0], the prefund: custodies[1])
   const custodyToken = cs[0]?.token ?? own[0]!.covenantId;
   const prefundToken = cs[1]?.token ?? null;

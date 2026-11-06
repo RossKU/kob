@@ -361,7 +361,7 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
   if (k.released > 0n) lines.push({ label: t('signer.net.released'), value: kas(k.released), dir: null });
   // WHICH of the wallet's orders a cancel closes (8 + 8 hex of its covenant id, as the token is named): a hostile indexer can only swap one of the user's own orders for another, and this makes the swap visible (S7)
   for (const sp of s.spends.filter((x) => x.makerIsWallet && x.covenantId && (x.action === 'cancel' || x.action === 'refund' || x.action === 'sweep')).slice(0, MAX_CLOSED_LINES)) {
-    lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : 'signer.net.closes'), value: longId(sp.covenantId!), dir: null });
+    lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : sp.retired ? 'signer.net.closesRetired' : 'signer.net.closes'), value: longId(sp.covenantId!), dir: null });
   }
   if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
   const fromTokens = freedFromTokens(s);
@@ -372,7 +372,9 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
     return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain;
   });
   const found = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...(terms ? scaleMismatches(s, hints) : [])];
-  return { title: t(merged ? 'signer.kind.merge' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...(s.inputs.length > s.signatures ? { unsignedKas: true } : {}), ...problemsOf(found), decoded: s };
+  // the maker's cancel of an order under an older contract version (the cancel-only table): said as such, with what returns to the wallet
+  const retiredCancel = (s.kind === 'cancel' || s.kind === 'cancel-position') && s.spends.some((x) => x.retired);
+  return { title: t(merged ? 'signer.kind.merge' : retiredCancel ? 'signer.kind.cancelRetired' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...(s.inputs.length > s.signatures ? { unsignedKas: true } : {}), ...problemsOf(found), decoded: s };
 }
 
 /** Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. */

@@ -32,7 +32,7 @@ import type { NodeApi, NodeUtxo } from '../data/node';
 import { asOrderState, big, custodiesOf, extensionOf, familyOfKind, familyOfOrder, isIfdKind, isOrderKind, pairExtFor, pairFactsOf, sideOf, tokenTplHashOf } from './order-facts';
 import { custodyState, extensionOfState } from './token-state';
 import { recoverSweeps } from './sweep';
-import type { Hex, OrderKind, OrderState, OrderUtxo, SigPlan, TokenProgram, TokenState, TokenUtxo, TxJson, U64 } from './types';
+import type { Hex, OrderKind, OrderState, OrderUtxo, RetiredTemplateInfo, SigPlan, TokenProgram, TokenState, TokenUtxo, TxJson, U64 } from './types';
 import type { KobWasm } from './wasm';
 
 
@@ -443,6 +443,8 @@ export interface ResolvedRecord {
   checked: number;
   /** live ask kinds without a custody: why ('no-extension': the token's extension commitment is unknown, so its custody cannot be rebuilt) */
   custodyIssue?: 'no-extension' | 'not-found' | null;
+  /** the order is under a RETIRED template of the cancel-only table: its hash (only its maker's cancel is ever built); absent / null otherwise */
+  retired?: Hex | null;
 }
 
 export interface ResolveOpts {
@@ -462,12 +464,36 @@ export function pinnedTemplateHash(kob: KobWasm, kind: RecordKind): Hex | null {
 }
 
 /**
- * True when the record names an order template this build does not pin (C5-02): this build can neither build for nor spend it; its maker ends the
- * order with a raw transaction spending the order's own cancel entry.
+ * True when the record names an order template this build neither pins nor keeps in its cancel-only table (C5-02): this build can neither build
+ * for nor spend it; its maker ends the order with the release it was placed with (a raw transaction spending the order's own cancel entry).
  */
 export const isOldTemplate = (kob: KobWasm, r: PlacementRecord): boolean => recordCodec(kob, r) === null;
 
-/** How a record's state span maps to a state and a script under the template this build pins. */
+const retiredCache = new WeakMap<KobWasm, RetiredTemplateInfo[]>();
+
+/** The cancel-only table of this build (kob-wasm `retiredTemplates`); empty when the module has none. */
+export function retiredTemplates(kob: KobWasm): RetiredTemplateInfo[] {
+  let t = retiredCache.get(kob);
+  if (!t) {
+    try {
+      t = typeof kob.retiredTemplates === 'function' ? kob.retiredTemplates() : [];
+    } catch {
+      t = [];
+    }
+    retiredCache.set(kob, t);
+  }
+  return t;
+}
+
+/**
+ * The retired template (cancel-only table) a record names: its template hash under the kind it was placed as; null for a template this build
+ * pins and for one it does not know at all.
+ */
+export function retiredOf(kob: KobWasm, r: Pick<PlacementRecord, 'kind' | 'templateHash'>): RetiredTemplateInfo | null {
+  return retiredTemplates(kob).find((x) => x.hash === r.templateHash && x.kind === r.kind) ?? null;
+}
+
+/** How a record's state span maps to a state and a script under its template (pinned, or a retired one of the cancel-only table). */
 export interface RecordCodec {
   /** state span (of the record's template) -> its state */
   decode(hex: Hex): OrderState;
@@ -475,16 +501,22 @@ export interface RecordCodec {
   encode(state: OrderState): Hex;
   /** script public key of the order with that state span */
   spanSpk(hex: Hex): string;
+  /** the record's template is a retired one (cancel only): its hash; null for a pinned template */
+  retired: Hex | null;
 }
 
-/** The codec of a record's template, or null when this build does not pin it. */
+/**
+ * The codec of a record's template, or null when this build neither pins it nor keeps it in its cancel-only table. A retired template shares the
+ * state layout of today's kind of the same name (kob-protocol `retired`): only its script differs.
+ */
 export function recordCodec(kob: KobWasm, r: Pick<PlacementRecord, 'kind' | 'templateHash' | 'state'>): RecordCodec | null {
-  if (pinnedTemplateHash(kob, r.kind) !== r.templateHash) return null;
-  return {
-    decode: (hex) => kob.decodeState(r.kind as OrderKind, hex) as OrderState,
-    encode: (st) => kob.encodeState(st),
-    spanSpk: (hex) => kob.scriptPublicKey(kob.decodeState(r.kind as OrderKind, hex)),
-  };
+  const decode = (hex: Hex) => kob.decodeState(r.kind as OrderKind, hex) as OrderState;
+  if (pinnedTemplateHash(kob, r.kind) === r.templateHash) {
+    return { decode, encode: (st) => kob.encodeState(st), spanSpk: (hex) => kob.scriptPublicKey(decode(hex)), retired: null };
+  }
+  const ret = retiredOf(kob, r);
+  if (!ret) return null;
+  return { decode, encode: (st) => kob.encodeState(st), spanSpk: (hex) => kob.retiredScriptPublicKey(ret.hash, decode(hex)), retired: ret.hash };
 }
 
 /** The record's last proven state, decoded (null when absent or not a canonical state of the record's kind and maker). */
@@ -663,8 +695,9 @@ export async function resolveRecord(
     custody: TokenUtxo | null,
     changed: boolean,
     custodyIssue: ResolvedRecord['custodyIssue'] = null,
-  ): ResolvedRecord => ({ status, covenantId: record.covenantId, order, custody, strays: [], stateChanged: changed, checked, custodyIssue });
-  // 0. a template this build does not pin: its script cannot be derived (it would never be found and look "spent")
+  ): ResolvedRecord => ({ status, covenantId: record.covenantId, order, custody, strays: [], stateChanged: changed, checked, custodyIssue, ...(codec?.retired ? { retired: codec.retired } : {}) });
+  // 0. a template this build neither pins nor keeps for cancels: its script cannot be derived (it would never be found and look "spent"); a
+  // retired template of the cancel-only table is searched under its own script
   const codec = recordCodec(kob, record);
   if (!codec) return result('old-template', null, null, false);
   const spkOf = (st: OrderState): string => codec.spanSpk(codec.encode(st));

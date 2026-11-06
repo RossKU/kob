@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 import { MockChain, DEFAULT_CARRIER } from './chain.mjs';
 import { loadKobMock } from './kob.mjs';
 import { TEST_PUBKEYS } from './keys.mjs';
-import { applyDefaultSeed, applySeed, giveSpec, resolveKey, seedHistory, summary } from './seed.mjs';
+import { applyDefaultSeed, applySeed, buildOrderState, giveSpec, resolveKey, seedHistory, summary } from './seed.mjs';
 import { ApiError, HEX64, Rejection, badRequest, notFound, sleep } from './util.mjs';
 import * as V from './views.mjs';
 import * as M from './market.mjs';
@@ -350,6 +350,14 @@ export async function startMockServer(opts = {}) {
     if (post && path === '/mock/seed') {
       const out = applySeed(chain, body);
       return ok(body.pair ? { ...out, pair: P.seedPair(chain, body.pair === true ? {} : body.pair) } : out);
+    }
+    if (post && path === '/mock/retired-order') {
+      // a plain bid of the first token placed by an older build under a retired template (`label`, e.g. "KobBid b995661f"): only its maker's
+      // cancel can spend it
+      const r = chain.kob.retiredTemplates().find((x) => x.label === (body.label ?? 'KobBid b995661f'));
+      if (!r) throw badRequest(`no retired template ${body.label}`);
+      const any = buildOrderState(chain, { side: 'bid', maker: body.maker ?? 'alice', price: body.price, amount: body.amount });
+      return ok(chain.seedRetiredOrder(any, r.hash, { value: body.value ?? '1000000000' }));
     }
     if (post && path === '/mock/utxo') {
       const spec = { ...body };

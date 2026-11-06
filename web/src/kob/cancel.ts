@@ -71,6 +71,11 @@ export interface OrderSnapshot {
   foreign?: ForeignStrays[];
   /** foreign strays without a proven state or program: nothing can build their spend, they stay with the order id (reported) */
   foreignUnproven?: UnprovenStray[];
+  /**
+   * the order is under a RETIRED template of the cancel-only table (kob-wasm `retiredTemplates`): its hash. Only its maker's plain cancel is
+   * built (`planCancel`, `planCancelAll`); every other planner refuses it (`cancel.retired-cancel-only`)
+   */
+  retired?: Hex | null;
 }
 
 export class SnapshotError extends Error {
@@ -214,6 +219,7 @@ export function snapshotFromRecord(resolved: ResolvedRecord, strays: TokenUtxo[]
   if (resolved.status !== 'live' || !resolved.order) throw new SnapshotError('not-live', `order ${resolved.covenantId} is ${resolved.status}, nothing to spend`);
   return {
     covenantId: resolved.covenantId, order: resolved.order, custody: resolved.custody, ...(resolved.prefund ? { prefund: resolved.prefund } : {}), strays, refundDueDaa: null, deadline, source: 'record',
+    ...(resolved.retired ? { retired: resolved.retired } : {}),
   };
 }
 
@@ -565,13 +571,19 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   }
   const foreign = prepareForeign(env, snap, opts, issues);
   if (!Array.isArray(foreign)) return foreign;
-  const item: CancelItem = { order: snap.order, custody: snap.custody, ...(snap.prefund ? { prefund: snap.prefund } : {}), strays: kept };
+  const item: CancelItem = { order: snap.order, custody: snap.custody, ...(snap.prefund ? { prefund: snap.prefund } : {}), strays: kept, ...(snap.retired ? { retired: snap.retired } : {}) };
   const first = groups[0]!;
   const baseExt = (snap.custody && cs[0]?.token === first.token ? extensionOfState(snap.custody.state) : null) ?? first.ext ?? extensionOf(st) ?? null;
   return { item, snap: { ...snap, strays: kept, foreign }, issues, slots: first.slots, ext: baseExt, groups, foreign };
 }
 
 const isErr = (p: Prepared | { error: PlanIssue[] }): p is { error: PlanIssue[] } => 'error' in p;
+
+/** An order under a retired template is only cancelled by its maker: every other planner refuses it with this plan. */
+const retiredOnly = (snap: OrderSnapshot): CancelPlan | null =>
+  snap.retired
+    ? failed([issue('cancel.retired-cancel-only', 'error', 'this order is under an older contract version: this app only cancels it', { covenantId: snap.covenantId })], [snap.covenantId])
+    : null;
 
 /** `quoteReturned` of a plan when the order owns a quote token (a pair order), else nothing. */
 const quoteField = (snap: OrderSnapshot, quote: bigint): { quoteReturned?: bigint } => (ownTokenFacts(snap.order.state).some((t) => t.role === 'quote') ? { quoteReturned: quote } : {});
@@ -584,7 +596,7 @@ export function planCancel(env0: CancelEnv, order: OrderSnapshot, opts: CancelOp
   const p = prepare(env, order, opts);
   if (isErr(p)) return failed(p.error);
   const make = (funding: KeyUtxo[]): CancelRequest => ({
-    action: 'cancelOrder', order: p.item.order, custody: p.item.custody ?? null, ...(p.item.prefund ? { prefund: p.item.prefund } : {}), strays: p.item.strays ?? [],
+    action: 'cancelOrder', order: p.item.order, ...(order.retired ? { retired: order.retired } : {}), custody: p.item.custody ?? null, ...(p.item.prefund ? { prefund: p.item.prefund } : {}), strays: p.item.strays ?? [],
     tokens: [], funding, change: env.changeTo ?? null, replace: null, ...(p.foreign.length ? { foreign: p.foreign } : {}), lockTime: '0', records: [], fee: feeOpts(env),
   });
   const r = buildWithFunding(env, make);
@@ -700,6 +712,8 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
   const rep = replacement.order;
   const old = order.order.state;
   const issues: PlanIssue[] = [];
+  const only = retiredOnly(order);
+  if (only) return only;
   if (rep.state.maker !== env.maker) return failed([issue('cancel.replacement-wrong-maker', 'error', 'the replacement must belong to the wallet key')], [order.covenantId]);
   if (tokenCovIdOf(rep) !== tokenCovIdOf(old) || quoteCovIdOf(rep) !== quoteCovIdOf(old)) {
     return failed([issue('cancel.replacement-wrong-token', 'error', 'the replacement must trade the same token (a pair order: the same pair) as the cancelled order')], [order.covenantId]);
@@ -871,6 +885,8 @@ function buildPosition(env: CancelEnv, chunk: Prepared[]): CancelPlan {
  */
 export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   const env = withUrgency(env0, 'normal');
+  const only = retiredOnly(snap);
+  if (only) return only;
   const st = snap.order.state;
   const cov = snap.covenantId;
   if (st.state.maker !== env.maker) {
@@ -977,6 +993,8 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
  */
 export function planRefund(env0: CancelEnv, order: OrderSnapshot, opts: { reclaimTip?: boolean } = {}): CancelPlan {
   const env = withUrgency(env0, 'normal');
+  const only = retiredOnly(order);
+  if (only) return only;
   if (order.order.state.state.maker !== env.maker) {
     return failed([issue('cancel.not-maker', 'error', 'this order belongs to another key', { covenantId: order.covenantId })]);
   }

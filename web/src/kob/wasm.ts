@@ -7,7 +7,7 @@
 //   * node (vitest, mock server, e2e harness): `loadKobNode()` from `./wasm.node` (web/wasm/node)
 import type {
   ActionRequest, AnyState, BuiltTx, DayOrder, FinalizeOptions, Hex, InputSignature, MassReport, Payload, PayloadRecord,
-  RecoveredAmend, RecoveredOrder, SignedTx, SigPlan, TemplateInfo, TemplateName, Tips, TokenProgram, TokenState,
+  RecoveredAmend, RecoveredOrder, RetiredTemplateInfo, SignedTx, SigPlan, TemplateInfo, TemplateName, Tips, TokenProgram, TokenState,
   Touch, TxJson, PairEvidence, PairTokensInfo, PairTriggerRule, OrderState,
 } from './types';
 
@@ -25,6 +25,8 @@ export interface RawKobWasm {
   decodeState(kind: string, hex: string): string;
   redeemScript(state: string): string;
   scriptPublicKey(state: string): string;
+  retiredTemplates(): string;
+  retiredScriptPublicKey(retired: string, state: string): string;
   encodeTokenState(state: string): string;
   decodeTokenState(hex: string): string;
   tokenScriptPublicKey(program: string, state: string): string;
@@ -151,6 +153,10 @@ export interface KobWasm {
   redeemScript(state: AnyState): Hex;
   /** P2SH script public key in kaspa string form (`version(u16 BE hex) + script hex`). */
   scriptPublicKey(state: AnyState): string;
+  /** the cancel-only table: retired order templates (an order under one is only ever cancelled by its maker) */
+  retiredTemplates(): RetiredTemplateInfo[];
+  /** P2SH script public key of an order state under the retired template `retired` (its hash, of the state's kind) */
+  retiredScriptPublicKey(retired: Hex, state: AnyState): string;
   /** either family's layout (KRON: `id_type` / `is_minter`) */
   encodeTokenState(state: TokenState): Hex;
   /** 46 bytes decode as KRON, 112 bytes as KCC-20 */
@@ -359,6 +365,8 @@ export function createKob(raw: RawKobWasm): KobWasm {
     decodeState: (k, h) => wrap('decodeState', () => j(raw.decodeState(k, h))),
     redeemScript: (st) => wrap('redeemScript', () => raw.redeemScript(JSON.stringify(st))),
     scriptPublicKey: (st) => wrap('scriptPublicKey', () => raw.scriptPublicKey(JSON.stringify(st))),
+    retiredTemplates: () => wrap('retiredTemplates', () => j(raw.retiredTemplates())),
+    retiredScriptPublicKey: (h, st) => wrap('retiredScriptPublicKey', () => raw.retiredScriptPublicKey(h, JSON.stringify(st))),
     encodeTokenState: (st) => wrap('encodeTokenState', () => raw.encodeTokenState(JSON.stringify(st))),
     decodeTokenState: (h) => wrap('decodeTokenState', () => j(raw.decodeTokenState(h))),
     tokenScriptPublicKey: (p, st) => wrap('tokenScriptPublicKey', () => raw.tokenScriptPublicKey(p, JSON.stringify(st))),

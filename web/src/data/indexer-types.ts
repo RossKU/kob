@@ -321,6 +321,11 @@ export interface OrderView {
   possibly_frozen?: boolean;
   /** warnings of the order's token(s) (`genesis_unverified`, matcher.md 1.2a), as on `/v1/tokens`; absent on older executors */
   warnings?: string[];
+  /**
+   * the order is under a RETIRED template of the cancel-only table (`template_hash` names it): only its maker's cancel is built; served by the
+   * single-order view only (absent otherwise and on older executors, which answer 404 for it)
+   */
+  cancel_only?: boolean;
 }
 
 export interface EventView {

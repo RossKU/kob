@@ -337,6 +337,8 @@ export interface Replacement { order: OrderState; value: U64; tokenCarrier?: U64
 export interface CancelOrderRequest {
   action: 'cancelOrder';
   order: OrderUtxo<OrderState>;
+  /** the order is under a RETIRED template (kob-wasm `retiredTemplates`, cancel only): its template hash; only a plain cancel is built */
+  retired?: Hex | null;
   /** the custody (a pair order: the first of kob-wasm `custodies`) */
   custody?: TokenUtxo | null;
   /** a sell-first `KobIfdPair`'s B prefund custody (the second of `custodies`) */
@@ -397,7 +399,7 @@ export interface AmendOrderRequest {
   ownKeys?: Hex[];
 }
 
-export interface CancelItem { order: OrderUtxo<OrderState>; custody?: TokenUtxo | null; prefund?: TokenUtxo | null; strays?: TokenUtxo[] }
+export interface CancelItem { order: OrderUtxo<OrderState>; custody?: TokenUtxo | null; prefund?: TokenUtxo | null; strays?: TokenUtxo[]; retired?: Hex | null }
 export interface CancelPositionRequest {
   action: 'cancelPosition';
   orders: CancelItem[];
@@ -449,7 +451,12 @@ export type SigPlan =
   | { kind: 'tokenLeader'; template: TokenProgram; state: Kcc20State; nextStates: Kcc20State[]; witness: SigWitness }
   | { kind: 'tokenDelegator'; template: TokenProgram; state: Kcc20State; witness: SigWitness }
   /** KRON token input: no leader and no signature of its own (address presence = a P2PK input of the owner elsewhere); `witnesses` = hex, one input index per token input */
-  | { kind: 'kronToken'; template: TokenProgram; state: KronState; nextStates: KronState[]; witnesses: Hex; signer?: Hex };
+  | { kind: 'kronToken'; template: TokenProgram; state: KronState; nextStates: KronState[]; witnesses: Hex; signer?: Hex }
+  /** the maker's `cancel(sig)` of an order under a RETIRED template (`retired`: its hash; `template`: today's kind of the same state layout): no other entry */
+  | { kind: 'retiredCancel'; template: TemplateName; retired: Hex; state: Hex; maker: Hex };
+
+/** One template of the cancel-only table (kob-wasm `retiredTemplates`): an order under it is only ever cancelled by its maker. */
+export interface RetiredTemplateInfo { kind: TemplateName; hash: Hex; label: string; retiredBy: string; lastRelease: string; entries: string[] }
 
 export interface SignRequest {
   inputIndex: number;

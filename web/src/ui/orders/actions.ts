@@ -8,7 +8,7 @@ import {
   type CancelPlan, type OrderSnapshot, type ReplacementSpec,
 } from '../../kob/cancel';
 import { confirmSnapshotOnNode } from '../../kob/node-verify';
-import { resolveRecord, type RecordStore } from '../../kob/records';
+import { resolveRecord, retiredOf, type RecordKind, type RecordStore } from '../../kob/records';
 import { familyOfKind, quoteCovIdOf, tokenCovIdOf } from '../../kob/order-facts';
 import { isLiveStatus, type Position } from '../../kob/positions';
 import { custodyState, extensionOfState } from '../../kob/token-state';
@@ -45,7 +45,10 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
     try {
       const detail = await s.indexer.order(entry.id);
       if (detail && detail.state_known && detail.current) {
-        const snap = snapshotFromOrderView(detail);
+        // an order under a retired template of the cancel-only table: its view names that template, its script is that template's
+        const ret = retiredOf(s.kob, { kind: detail.contract as RecordKind, templateHash: detail.template_hash });
+        const snap0 = snapshotFromOrderView(detail);
+        const snap = ret ? { ...snap0, retired: ret.hash } : snap0;
         // an ask without a known custody UTXO cannot be cancelled from the indexer's data alone: the node lookup below may find it
         const needsCustody = entry.view?.side === 1 || detail.side === 1;
         if (!needsCustody || snap.custody || !entry.record) return await onNode(snap);
