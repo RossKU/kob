@@ -2,7 +2,7 @@
 // Dutch decay / rising bid. Pipeline: validate -> exact OrderState -> funding / tokens -> kob.build (createOrder) -> Disclosure.
 //
 // Reference: docs/spec/order-types.md, docs/spec/matcher.md sections 2.1 (quote functions), 10.2-10.5 (market, streaming, FOK / IOC,
-// marketable limit), 10.10 (day orders), contracts/v2/KobAsk.sil and KobBid.sil. User-input problems are `issues` (stable codes,
+// marketable limit), 10.10 (day orders), contracts/orders/KobAsk.sil and KobBid.sil. User-input problems are `issues` (stable codes,
 // see ISSUE_CATALOG in common-issues.ts); nothing here throws for them.
 import type { Disclosure, OrderPlan, PlanEnv, PlanFills, PlanIssue } from '../plan-types';
 import type { OrderState } from '../types';

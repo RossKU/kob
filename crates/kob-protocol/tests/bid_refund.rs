@@ -1,4 +1,4 @@
-//! The builder's side of the terminal-bid refund (`contracts/v2/KobBid.sil` `refundTo`): the KAS a terminal bid fill does not
+//! The builder's side of the terminal-bid refund (`contracts/orders/KobBid.sil` `refundTo`): the KAS a terminal bid fill does not
 //! spend beyond its delivery carrier returns to the maker as a plain P2PK output at output `M - 1 - i`; the legs with a refund
 //! are put first; a remainder below `REFUND_MIN` stays on the delivery. Every transaction is validated in the engine.
 

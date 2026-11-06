@@ -175,11 +175,11 @@ fn kcc20_programs_use_the_unkeyed_p2pkh_hash() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let files = [
         "contracts/kcc20/KCC20Ref.sil",
-        "contracts/kcc20/variants/KCC20Ref_4x5.sil",
-        "contracts/kcc20/variants/KCC20Ref_8x8.sil",
-        "contracts/kcc20/variants/KCC20Ref_16x16.sil",
-        "contracts/kcc20/p2/KCC20P2.sil",
-        "contracts/kcc20/p2/KCC20Opt.sil",
+        "contracts/prototypes/kcc20/variants/KCC20Ref_4x5.sil",
+        "contracts/prototypes/kcc20/variants/KCC20Ref_8x8.sil",
+        "contracts/prototypes/kcc20/variants/KCC20Ref_16x16.sil",
+        "contracts/prototypes/kcc20/p2/KCC20P2.sil",
+        "contracts/prototypes/kcc20/p2/KCC20Opt.sil",
         "contracts/argent/KOBToken/sil/KCC20.sil",
         "contracts/argent/kcc20_8x8.ag",
         "tools/wallet-gate/contracts/KCC20Ref.sil",

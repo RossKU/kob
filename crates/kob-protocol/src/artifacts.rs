@@ -542,20 +542,20 @@ fn raw_program_bytes(id: TemplateId) -> &'static [u8] {
 pub const KRON_STATE_LEN: usize = 46;
 
 /// Constructor files that carry build constants (checked against the templates).
-const CTOR_COND_ASK: &str = include_str!("../../../contracts/v2/KobCondAsk.ctor.json");
-const CTOR_COND_BID: &str = include_str!("../../../contracts/v2/KobCondBid.ctor.json");
-const CTOR_IFD_BID: &str = include_str!("../../../contracts/v2/KobIfdBid.ctor.json");
-const CTOR_IFD_ASK: &str = include_str!("../../../contracts/v2/KobIfdAsk.ctor.json");
-const CTOR_COND_PAIR: &str = include_str!("../../../contracts/v2/KobCondPair.ctor.json");
-const CTOR_IFD_PAIR: &str = include_str!("../../../contracts/v2/KobIfdPair.ctor.json");
-const KRON_CTOR_COND_ASK: &str = include_str!("../../../contracts/adapters/kron/v2/KobCondAskKron.ctor.json");
-const KRON_CTOR_COND_BID: &str = include_str!("../../../contracts/adapters/kron/v2/KobCondBidKron.ctor.json");
-const KRON_CTOR_IFD_BID: &str = include_str!("../../../contracts/adapters/kron/v2/KobIfdBidKron.ctor.json");
-const KRON_CTOR_IFD_ASK: &str = include_str!("../../../contracts/adapters/kron/v2/KobIfdAskKron.ctor.json");
-const KRON_D0_CTOR_COND_ASK: &str = include_str!("../../../contracts/adapters/kron/v2/delivery0/KobCondAskKronD0.ctor.json");
-const KRON_D0_CTOR_COND_BID: &str = include_str!("../../../contracts/adapters/kron/v2/delivery0/KobCondBidKronD0.ctor.json");
-const KRON_D0_CTOR_IFD_BID: &str = include_str!("../../../contracts/adapters/kron/v2/delivery0/KobIfdBidKronD0.ctor.json");
-const KRON_D0_CTOR_IFD_ASK: &str = include_str!("../../../contracts/adapters/kron/v2/delivery0/KobIfdAskKronD0.ctor.json");
+const CTOR_COND_ASK: &str = include_str!("../../../contracts/orders/KobCondAsk.ctor.json");
+const CTOR_COND_BID: &str = include_str!("../../../contracts/orders/KobCondBid.ctor.json");
+const CTOR_IFD_BID: &str = include_str!("../../../contracts/orders/KobIfdBid.ctor.json");
+const CTOR_IFD_ASK: &str = include_str!("../../../contracts/orders/KobIfdAsk.ctor.json");
+const CTOR_COND_PAIR: &str = include_str!("../../../contracts/orders/KobCondPair.ctor.json");
+const CTOR_IFD_PAIR: &str = include_str!("../../../contracts/orders/KobIfdPair.ctor.json");
+const KRON_CTOR_COND_ASK: &str = include_str!("../../../contracts/orders/kron/KobCondAskKron.ctor.json");
+const KRON_CTOR_COND_BID: &str = include_str!("../../../contracts/orders/kron/KobCondBidKron.ctor.json");
+const KRON_CTOR_IFD_BID: &str = include_str!("../../../contracts/orders/kron/KobIfdBidKron.ctor.json");
+const KRON_CTOR_IFD_ASK: &str = include_str!("../../../contracts/orders/kron/KobIfdAskKron.ctor.json");
+const KRON_D0_CTOR_COND_ASK: &str = include_str!("../../../contracts/orders/kron/delivery0/KobCondAskKronD0.ctor.json");
+const KRON_D0_CTOR_COND_BID: &str = include_str!("../../../contracts/orders/kron/delivery0/KobCondBidKronD0.ctor.json");
+const KRON_D0_CTOR_IFD_BID: &str = include_str!("../../../contracts/orders/kron/delivery0/KobIfdBidKronD0.ctor.json");
+const KRON_D0_CTOR_IFD_ASK: &str = include_str!("../../../contracts/orders/kron/delivery0/KobIfdAskKronD0.ctor.json");
 
 /// A pinned token program of either family: the redeem script of a token UTXO is
 /// `prefix ‖ state ‖ suffix`. KCC-20 programs come from their artifacts, KRON programs from the raw

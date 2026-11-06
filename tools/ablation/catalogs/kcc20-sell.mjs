@@ -1,4 +1,4 @@
-// KCC-20 sell-first suite (protocol v3: amounts in base units, prices per whole token): contracts/v2.
+// KCC-20 sell-first suite (protocol v3: amounts in base units, prices per whole token): contracts/orders.
 // Ported from ablate.sh; scenario ids follow the current test names (NRP* / NRPB*, formerly NR* / NRB*).
 // Touch trigger: the T*-* entries (lib/touch.mjs generates one per evidence check; see README).
 // Protocol v3 checks (minFill, quoteOf rounding, price >= tip, the repeat merge pushes): the V-* entries, flipped
@@ -36,7 +36,7 @@ export const suite = {
   name: 'kcc20-sell',
   family: 'KCC-20 v2',
   testBin: 'kob_v2_tests',
-  srcDir: 'contracts/v2',
+  srcDir: 'contracts/orders',
   templateMarker: null,
   expectedTemplates: 1,
 };

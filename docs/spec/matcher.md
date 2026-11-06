@@ -1,6 +1,6 @@
 # KOB matcher / executor specification (protocol v3)
 
-Status: normative for `kobd` (its Executor) and for KOB wallets. Contracts: `contracts/v2/*.sil` (protocol v3). The order
+Status: normative for `kobd` (its Executor) and for KOB wallets. Contracts: `contracts/orders/*.sil` (protocol v3). The order
 types and their user-visible semantics are listed in `order-types.md`; amounts (base units), prices (quote token per
 whole base token), the rounding rule (`quoteOf`) and the minimum fill (`minFill`) are defined in `order-types.md`,
 *Amounts, prices and rounding*, and every rule below uses them. The key words MUST, MUST NOT, SHOULD and MAY are used
@@ -436,7 +436,7 @@ An IOC larger than one transaction gets the largest single-transaction fill; it 
 ### 3.5 Pair orders: netting, routing and prices
 
 A pair order (`KobPair`, `KobCondPair`, `KobIfdPair` of a pair A/B, `order-types.md`, *Pair orders*) enforces only its own
-guarantees (`contracts/v2/KobPair.sil` header): what it receives and pays (an ask at least `⌈n·p/scale(A)⌉` of B for
+guarantees (`contracts/orders/KobPair.sil` header): what it receives and pays (an ask at least `⌈n·p/scale(A)⌉` of B for
 exactly n of A; a `KobPair` bid exactly `⌊n·p/scale(A)⌋` of B for exactly n of A, a `KobCondPair` / `KobIfdPair` bid at
 most that), the exact amounts of the tokens it holds, the stray guards of both tokens, its positional outputs (the maker's
 token at the order's input index, the custody rest or return at the custody input's index, the continuation the only

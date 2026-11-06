@@ -68,9 +68,6 @@ jobs:
         run: |
           KOB_CARRIER_KAS=1 cargo test --locked -p kob-tests
           KOB_CARRIER_KAS=20 cargo test --locked -p kob-tests
-      - name: Engine harness, alternate KRON template as primary
-        shell: bash
-        run: KOB_KRON_TPL=2732 cargo test --locked -p kob-tests --test kob_kron_adapter_tests
 
   wasm:
     runs-on: ubuntu-latest

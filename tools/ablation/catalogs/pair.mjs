@@ -1,4 +1,4 @@
-// KobPair (contracts/v2/KobPair.sil): the plain pair order, one template for both sides and both token families.
+// KobPair (contracts/orders/KobPair.sil): the plain pair order, one template for both sides and both token families.
 // Test binary: crates/kob-tests/tests/kob_pair_tests.rs (scenario ids NP.., run on the two mixed program pairs
 // KCC20Ref_8x8 + KronToken2433 and KronToken2433 + KCC20Ref_8x8). Ids with `sk` / `sr` / `tk` / `tr` exist only where the
 // custody S / the bought token T is KCC-20 / KRON. The C1 fake-quote mutations (Q4 / Q5 / Q6) are witnessed by the
@@ -24,7 +24,7 @@ export const suite = {
   name: 'pair',
   family: 'pair orders: KobPair',
   testBin: 'kob_pair_tests',
-  srcDir: 'contracts/v2',
+  srcDir: 'contracts/orders',
   templateMarker: null,
   expectedTemplates: 1,
 };

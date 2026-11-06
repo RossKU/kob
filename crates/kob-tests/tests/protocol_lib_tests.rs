@@ -11,7 +11,7 @@ use silverscript_abi::ArtifactValue;
 use silverscript_lang::compiler::CompileOptions;
 
 fn ctor_constants(name: &str, count: usize) -> Vec<ArtifactValue> {
-    let path = common::repo_root().join("contracts/v2").join(format!("{name}.ctor.json"));
+    let path = common::repo_root().join("contracts/orders").join(format!("{name}.ctor.json"));
     let all: Vec<ArtifactValue> = serde_json::from_slice(&std::fs::read(path).expect("ctor")).expect("ctor json");
     all[..count].to_vec()
 }

@@ -1,4 +1,4 @@
-// KRON buy-side suite: contracts/adapters/kron/v2 (KobCondBidKron, KobIfdAskKron), protocol v3 (no lots).
+// KRON buy-side suite: contracts/orders/kron (KobCondBidKron, KobIfdAskKron), protocol v3 (no lots).
 // Ported from the protocol v2 catalog: ids, notes and expectations preserved, every edit retargeted to the v3
 // contract text (amounts in base units, prices sompi per whole token, quoteOf rounding, merge argument -(k * 2^53 + m)).
 // New v3 checks get their own mutations (minFill, the quoteOf floor / ceil choices, price >= tip, the update parent
@@ -33,7 +33,7 @@ export const suite = {
   name: 'kron-buy',
   family: 'KRON adapter (v3, buy-side contracts)',
   testBin: 'kob_kron_v2_buy_tests',
-  srcDir: 'contracts/adapters/kron/v2',
+  srcDir: 'contracts/orders/kron',
   templateMarker: /^=== KRON template (\S+)/,
   expectedTemplates: 2,
 };

@@ -1,7 +1,7 @@
-//! KOB optional batch leader for the KCC-20 reference holder program (`contracts/kcc20/p2/KCC20Opt.sil`, generated
+//! KOB optional batch leader for the KCC-20 reference holder program (`contracts/prototypes/kcc20/p2/KCC20Opt.sil`, generated
 //! by `kob_protocol::kcc20::kcc20_opt_holder_source`): the 3/3 reference program whose delegator path accepts as
 //! leader its own template or, only when the commitment `B_TPL` / `B_PRE` / `B_SUF` is set (all zeros disables it), the batch-leader template
-//! that `B_TPL` / `B_PRE` / `B_SUF` commit to (here `contracts/kcc20/p2/KCC20Batch.sil`, unchanged). Executed with KOB
+//! that `B_TPL` / `B_PRE` / `B_SUF` commit to (here `contracts/prototypes/kcc20/p2/KCC20Batch.sil`, unchanged). Executed with KOB
 //! v2 orders in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20 covenant context and script-unit metering, and compared
 //! with the reference 3/3, the 8/8 and 16/16 slot-limit variants and proposal P2 (`KCC20P2.sil`).
 //!
@@ -1165,9 +1165,10 @@ fn opt_holder_source_matches_generator() {
     let generated = kob_protocol::kcc20::kcc20_opt_holder_source(&base).expect("generate");
     common::check_generated_source("KCC20Opt", &generated);
     // the committed artifact is the disabled instance
-    let ctor: Vec<ArtifactValue> =
-        serde_json::from_str(&std::fs::read_to_string(common::repo_root().join("contracts/kcc20/p2/KCC20Opt.ctor.json")).unwrap())
-            .unwrap();
+    let ctor: Vec<ArtifactValue> = serde_json::from_str(
+        &std::fs::read_to_string(common::repo_root().join("contracts/prototypes/kcc20/p2/KCC20Opt.ctor.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         serde_json::to_value(&ctor[..3]).unwrap(),
         serde_json::to_value(opt_consts(false)).unwrap(),

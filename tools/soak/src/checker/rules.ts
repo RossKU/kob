@@ -3,7 +3,7 @@
 // Protocol v3 has no lots: every quantity (`n`, `amountLeft`, `minFill`, `minTouch`, custody) is token BASE UNITS; every price and tip is
 // sompi per WHOLE token, i.e. per `scale` base units (`scale = 10^decimals`, a state field of the order). The value of n base units at the
 // rate r is `quoteOf(n, r) = n * r / scale`, rounded in the maker's favour (BigInt: exact, no 64-bit limit). The formulas are those of
-// crates/kob-protocol/src/state.rs and contracts/v2/*.sil, docs/spec/matcher.md §2.1 and docs/spec/order-types.md "Amounts, prices and rounding":
+// crates/kob-protocol/src/state.rs and contracts/orders/*.sil, docs/spec/matcher.md §2.1 and docs/spec/order-types.md "Amounts, prices and rounding":
 //
 //   sell (ask side) receives at least  ceil(n * (q - tip) / scale)      q = the order's quote at the fill's time argument t
 //   buy  (bid side) pays at most       floor(n * (q + tip) / scale)
@@ -451,7 +451,7 @@ export function stopMayHaveMoved(s: Record<string, string>, live: boolean, index
 
 /**
  * Invariant 5 (touch trigger): an `arm` / `trail` event of a conditional order or stop entry must be backed by a fill (n > 0) in
- * the SAME transaction of a plain resting `KobAsk` / `KobBid` (or Kron) of the same token and scale (`evidence`, contracts/v2 `touch`):
+ * the SAME transaction of a plain resting `KobAsk` / `KobBid` (or Kron) of the same token and scale (`evidence`, contracts/orders `touch`):
  *   common      amount (base units) >= minTouch; slope == 0; exposedSince + minRestDaa <= the tx's DAA (the event's `daa` is
  *               never below the lock time, so failing it is certain); the tx's DAA >= activeFrom
  *   arm         KobCondAsk / KobIfdAsk: a resting ASK (side 1) with price <= stop (entryStop);

@@ -3,7 +3,7 @@
 //! id_type 0 (a token-level signature in the signature column). Fixtures: `contracts/third-party/kforge/` (`program.bin`, a
 //! redeem script observed on testnet-10; `observed-transfer.json`, a real transfer). The profile is in
 //! `crates/kob-protocol/data/programs.json` (`pending-review`, `networks: [testnet-10]`); KOB's KRON order kinds serve it in
-//! their delivery id_type 0 builds (`*KronD0`, `contracts/adapters/kron/README.md`).
+//! their delivery id_type 0 builds (`*KronD0`, `contracts/orders/kron/README.md`).
 //!
 //! What the reviewer checklist of `docs/spec/token-programs.md` (section 5) asks, item by item:
 //!

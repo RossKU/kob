@@ -1,7 +1,7 @@
 # KOB order types (protocol v3)
 
 Public reference: every order type KOB offers, the covenant that enforces it, its entries, and what
-the user can expect. Contracts: `contracts/v2/*.sil`. Matching, keeper and wallet rules:
+the user can expect. Contracts: `contracts/orders/*.sil`. Matching, keeper and wallet rules:
 `matcher.md`.
 
 Every order is a covenant UTXO on Kaspa. Its price, quantity, custody, trigger and time rules are
@@ -13,7 +13,7 @@ earns the crossing spread plus the tips. Every order type exists on a token's KA
 
 This section is normative for every covenant and for all off-chain code (protocol library, builders, indexer, planner,
 SDK, wallet): off-chain code computes exactly what the covenants compute. The covenant source of the rule is the
-`KobAsk` header (`contracts/v2/KobAsk.sil`); every other template refers to it.
+`KobAsk` header (`contracts/orders/KobAsk.sil`); every other template refers to it.
 
 **One rule.** An order is an `amount` of its **base token**, in base units (any positive amount; there are no lots), at
 a limit `price` in its **quote token** per WHOLE base token: `price` quote units per `scale` base units, where
@@ -193,7 +193,7 @@ is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fil
 | `KobCondPair` (pair A/B, either side) | custody of S + KAS for its carriers and tip | `settle(n > 0, upd 0)` fill on the take-profit / limit leg or the stop leg (armed, or armed in this fill by the evidence) (anyone), `settle(0, upd 0)` refund, `settle(0, upd 1)` update: arm (`k = 0`) or trail (`k ≥ 1`) next to the evidence (anyone; never next to its repeat entry; the keeper takes up to `keeperTip`), `cancel` (maker) |
 | `KobIfdPair` (pair A/B, either side) | buy-first: the B escrow; sell-first: A (exactly `amountLeft`) and a B prefund; + carriers | `fill(n > 0)` entry fill creating one `KobCondPair` exit (anyone), `fill(merge)` re-arm a repeat, `fill(0, upd 0)` refund (also of an empty repeating entry), `fill(0, upd 1)` update: arm a stop entry (needs `amountLeft > 0` and the stop on the right side of the limit), `cancel` (maker) |
 
-The KRON family has a twin of every KAS-quoted kind (`KobAskKron` … `KobIfdAskKron`, `contracts/adapters/kron/README.md`);
+The KRON family has a twin of every KAS-quoted kind (`KobAskKron` … `KobIfdAskKron`, `contracts/orders/kron/README.md`);
 each pair template is one template for both families of each of its tokens (its state names the family of A and of B).
 
 ## Order types
@@ -280,7 +280,7 @@ A pair A/B is two tokens (covenant id, token program, scale), each of either fam
 B the quote, and A ≠ B (the wallet, the builders and the indexer refuse A = B). Every order type of the KAS ticket
 exists on a pair, with the same amount rule: an amount of A in base units at a price in base units of B per whole A,
 rounded in the maker's favour, with the same `minFill` rule. Three templates cover them, each ONE template for both
-sides and all four family combinations (`contracts/v2/KobPair.sil`, `KobCondPair.sil`, `KobIfdPair.sil`; the headers
+sides and all four family combinations (`contracts/orders/KobPair.sil`, `KobCondPair.sil`, `KobIfdPair.sil`; the headers
 are the reference):
 
 | Order type | Pair template | Key fields |

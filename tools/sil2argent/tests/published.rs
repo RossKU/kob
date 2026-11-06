@@ -25,10 +25,10 @@ fn source(actor: &str) -> ActorSource {
     }
 }
 
-/// Every contracts/v2/*.sil is an actor of KOBOrders, and nothing else is.
+/// Every contracts/orders/*.sil is an actor of KOBOrders, and nothing else is.
 fn order_names() -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(root().join("contracts/v2"))
-        .expect("contracts/v2")
+    let mut names: Vec<String> = std::fs::read_dir(root().join("contracts/orders"))
+        .expect("contracts/orders")
         .filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".sil")).map(str::to_string))
         .collect();

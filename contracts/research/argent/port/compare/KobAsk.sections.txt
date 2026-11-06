@@ -1,9 +1,9 @@
-# KobAsk: bytes per section (constructor arguments contracts/v2/KobAsk.ctor.json); written by crates/kob-tests/tests/argent_port_compare_tests.rs
+# KobAsk: bytes per section (constructor arguments contracts/orders/KobAsk.ctor.json); written by crates/kob-tests/tests/argent_port_compare_tests.rs
 # Each construct is removed from the source after the ones above it and the script compiled again. The
 # first number is the size difference; "removed opcodes" are the offsets, in the full script, of the opcodes
 # that disappear; "also" are the other changes (see the header of KobAsk.<variant>.opcodes.txt).
 
-KobAsk, hand-written SilverScript (contracts/v2/KobAsk.sil): 1684 B
+KobAsk, hand-written SilverScript (contracts/orders/KobAsk.sil): 1684 B
   entry settle   [287, 1605) 1318 B
   entry cancel   [1615, 1680) 65 B
   spk  -  79 B  continuation check: scriptPubKey == contSpk(amountLeft - n) (splice of amountLeft)
@@ -13,7 +13,7 @@ KobAsk, hand-written SilverScript (contracts/v2/KobAsk.sil): 1684 B
          removed opcodes 21 B at [889, 896) 7 B, [1202, 1209) 7 B, [1350, 1357) 7 B (settle 21 B)
   rest  1584 B  everything else
 
-KobAsk, idiomatic Argent port (argentc output) (contracts/argent/port-out/KobAsk.idiomatic.sil): 2705 B
+KobAsk, idiomatic Argent port (argentc output) (contracts/research/argent/port-out/KobAsk.idiomatic.sil): 2705 B
   entry settle   [287, 2621) 2334 B
   entry cancel   [2631, 2701) 70 B
   bec  - 514 B  generated become: cont.length == count, validateOutputState per continuation
@@ -30,7 +30,7 @@ KobAsk, idiomatic Argent port (argentc output) (contracts/argent/port-out/KobAsk
          removed opcodes 5 B at [2639, 2644) 5 B (cancel 5 B)
   rest  1584 B  everything else
 
-KobAsk, idiomatic port with become lowered to a splice (prototype D1) (contracts/argent/port/KobAsk.splice1.sil): 1713 B
+KobAsk, idiomatic port with become lowered to a splice (prototype D1) (contracts/research/argent/port/KobAsk.splice1.sil): 1713 B
   entry settle   [287, 1629) 1342 B
   entry cancel   [1639, 1709) 70 B
   spl  -  73 B  become as a splice: len == count, scriptPubKey == this script with amountLeft replaced

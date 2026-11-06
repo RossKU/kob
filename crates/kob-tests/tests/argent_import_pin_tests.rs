@@ -64,11 +64,11 @@ fn argentc_imports_only_the_pinned_kob_orders_artifact() {
     let published = root.join("contracts/argent/KOBOrders/artifact.json");
 
     // the forged KOBOrders: KobAsk without the maker payout check, wrapped by sil2argent (consistent, new id)
-    let good = std::fs::read_to_string(root.join("contracts/v2/KobAsk.sil")).unwrap().replace("\r\n", "\n");
+    let good = std::fs::read_to_string(root.join("contracts/orders/KobAsk.sil")).unwrap().replace("\r\n", "\n");
     let needle = "            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n";
     assert_eq!(good.matches(needle).count(), 1);
     let ctor: Vec<ArtifactValue> =
-        serde_json::from_slice(&std::fs::read(root.join("contracts/v2/KobAsk.ctor.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(root.join("contracts/orders/KobAsk.ctor.json")).unwrap()).unwrap();
     let evil = compile_to_sil_abi_artifact(&good.replace(needle, ""), &ctor).expect("compile the forged KobAsk");
     let evil_json = work.join("EvilKobAsk.json");
     std::fs::write(&evil_json, serde_json::to_string_pretty(&evil).unwrap() + "\n").unwrap();

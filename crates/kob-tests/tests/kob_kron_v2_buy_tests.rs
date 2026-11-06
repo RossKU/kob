@@ -348,7 +348,7 @@ impl Net {
         vec![bytes(&token.as_bytes()), bytes(&self.k.hash), int(0), int(self.k.suffix.len() as i64)]
     }
     /// The evidence templates a conditional order / stop entry inlines (KobAskKron, then KobBidKron:
-    /// hash, prefix and suffix length), as in contracts/adapters/kron/v2/KobCondBidKron.ctor.json.
+    /// hash, prefix and suffix length), as in contracts/orders/kron/KobCondBidKron.ctor.json.
     fn ev_consts(&self) -> Vec<ArtifactValue> {
         let mut a = self.tpl_consts(&self.ask_tpl);
         a.extend(self.tpl_consts(&self.bid_tpl));
@@ -1706,7 +1706,7 @@ fn kron_v2_buy_sizes_layouts_sigops() {
         // The evidence templates this harness inlines are the ones the committed ctor files carry.
         let ctor = |name: &str| -> Vec<ArtifactValue> {
             serde_json::from_slice(
-                &std::fs::read(common::repo_root().join(format!("contracts/adapters/kron/v2/{name}.ctor.json"))).expect("ctor"),
+                &std::fs::read(common::repo_root().join(format!("contracts/orders/kron/{name}.ctor.json"))).expect("ctor"),
             )
             .expect("ctor json")
         };
@@ -4264,7 +4264,7 @@ fn kron_v2_buy_v3_merge_push() {
     assert!(enc > 0 && enc < i64::MAX, "k = 999, m = 2^53 - 1 fits an 8-byte script number");
     assert_eq!((enc / MERGE_K, enc % MERGE_K), (999, MERGE_K - 1), "the argument decodes to k = 999, m = 2^53 - 1");
 
-    // KRON token outputs are capped at 1 <= amount <= 1e9 base units (contracts/adapters/kron/README.md), far below
+    // KRON token outputs are capped at 1 <= amount <= 1e9 base units (contracts/orders/kron/README.md), far below
     // 2^53, so a booked exit amount can never approach the merge-argument limit on KRON (the token program rejects
     // any UTXO of that size). The n < MERGE_K booking guard is therefore unreachable on KRON and is exercised on the
     // KCC-20 twin; here only the argument encoding is checked (above). Positive and attack merges at buildable

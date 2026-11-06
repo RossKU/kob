@@ -16,6 +16,6 @@ KOB embeds this program as `KForgeToken1785` (`crates/kob-protocol/data/programs
 `kob registry add-program contracts/third-party/kforge/program.bin --name KForgeToken1785 --slots 1/3 --holder 0 --network testnet-10`):
 `pending-review`, `networks: [testnet-10]`, so it is on no registry shipped with KOB (the shipped registry is mainnet's) and a
 mainnet build never trades it; a testnet-10 build trades its tokens through the delivery id_type 0 builds of the KRON order
-kinds (`KobAskKronD0` .. `KobIfdAskKronD0`, `contracts/adapters/kron/README.md`), because the program refuses address-presence
+kinds (`KobAskKronD0` .. `KobIfdAskKronD0`, `contracts/orders/kron/README.md`), because the program refuses address-presence
 holders (id_type 3) and authorises id_type 0 holders by a token-level signature. Measured facts and the review items with a test:
 `crates/kob-tests/tests/program_kforgetoken1785.rs`; what is still open: `docs/spec/token-programs.md` section 6.

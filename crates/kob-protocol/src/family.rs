@@ -4,7 +4,7 @@
 //! and nothing else: the token state codec, the owner types the order contracts use, how an input
 //! is authorised (signature script columns), the slot limits and the order templates (one adapter
 //! per family). The order logic, the builders' transaction layouts and the entry arguments are the
-//! same in every family; `contracts/adapters/kron/README.md` lists the (small) differences.
+//! same in every family; `contracts/orders/kron/README.md` lists the (small) differences.
 //!
 //! | | `kcc20` | `kron` |
 //! |---|---|---|

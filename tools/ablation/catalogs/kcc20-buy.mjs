@@ -1,4 +1,4 @@
-// KCC-20 buy-side lifecycle suite (protocol v3, base units, no lot layouts): contracts/v2.
+// KCC-20 buy-side lifecycle suite (protocol v3, base units, no lot layouts): contracts/orders.
 // Scenario ids follow the current test names (NRP* / NRPB*; new v3 attacks V3* / NV3*).
 // Touch trigger: the T*-* entries (lib/touch.mjs generates one per evidence check; see README). The touch keys
 // renamed in v3: `unit` -> `scale`, `units` -> `mintouch` (the evidence quotes per the same scale; n >= minTouch base units).
@@ -37,7 +37,7 @@ export const suite = {
   name: 'kcc20-buy',
   family: 'KCC-20 v3',
   testBin: 'kob_v2_buy_tests',
-  srcDir: 'contracts/v2',
+  srcDir: 'contracts/orders',
   templateMarker: null,
   expectedTemplates: 1,
 };

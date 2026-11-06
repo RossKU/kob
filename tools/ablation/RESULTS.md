@@ -207,7 +207,7 @@ The records of the earlier runs (the protocol v3 KAS kinds of 2026-10-05/06, the
 
 ## kcc20-sell
 
-KCC-20 v2; test binary `kob_v2_tests`; contracts `contracts/v2`. 98/98 confirmed, 3/3 defence-in-depth held (expected NOT to flip).
+KCC-20 v2; test binary `kob_v2_tests`; contracts `contracts/orders`. 98/98 confirmed, 3/3 defence-in-depth held (expected NOT to flip).
 Baseline (no mutation): v2_lifecycle_stop_auction_keeper_trailing clean, v3_rounding clean, v2_fix_pass_regressions clean, v3_merge_push clean, v2_negative_trigger_manipulation clean, v2_touch_cond_settle clean, v2_touch_cond_settle_3x3 clean, v2_repeat_ifd_attacks clean, v2_touch_cond_arm clean, v2_touch_cond_trail clean, v2_touch_cond_arm_3x3 clean, v2_touch_cond_trail_3x3 clean, v2_touch_ifd_arm clean, v2_touch_ifd_fill clean, v2_touch_ifd_fill_3x3 clean, v3_min_fill clean, v3_tip clean, v2_lifecycle_stray_custody clean, v3_fok clean, v2_touch_ifd_arm_3x3 clean, v2_lifecycle_ifd_stop_entry clean.
 
 | id | contract | check ablated | expected | flipped | status |
@@ -324,7 +324,7 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## kcc20-buy
 
-KCC-20 v3; test binary `kob_v2_buy_tests`; contracts `contracts/v2`. 97/97 confirmed, 4/4 defence-in-depth held (expected NOT to flip).
+KCC-20 v3; test binary `kob_v2_buy_tests`; contracts `contracts/orders`. 97/97 confirmed, 4/4 defence-in-depth held (expected NOT to flip).
 Baseline (no mutation): v3_buy_merge_base clean, v2_buy_touch_cond_settle clean, v2_buy_touch_cond_settle_3x3 clean, v2_buy_lifecycle clean, v2_buy_touch_cond_arm clean, v2_buy_touch_cond_trail clean, v2_buy_repeat_ifd_attacks clean, v2_buy_negative clean, v2_buy_touch_cond_arm_3x3 clean, v2_buy_touch_cond_trail_3x3 clean, v2_buy_touch_ifd_arm clean, v2_buy_touch_ifd_fill clean, v3_buy_min_fill clean, v2_buy_touch_ifd_fill_3x3 clean, v3_buy_rounding clean, v3_buy_tip clean, v3_buy_merge_push clean, empty_repeating_ifda_refund_is_refused clean, v2_buy_touch_ifd_arm_3x3 clean.
 
 | id | contract | check ablated | expected | flipped | status |
@@ -445,7 +445,7 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## kron-sell
 
-KRON adapter (protocol v3, sell-side contracts); test binary `kob_kron_v2_tests`; contracts `contracts/adapters/kron/v2`. 145/145 confirmed, 3/3 defence-in-depth held (expected NOT to flip).
+KRON adapter (protocol v3, sell-side contracts); test binary `kob_kron_v2_tests`; contracts `contracts/orders/kron`. 145/145 confirmed, 3/3 defence-in-depth held (expected NOT to flip).
 Baseline (no mutation): v2_lifecycle_stray_custody clean, v2_lifecycle_auctions_and_kill clean, v2_kron_v23_extra_attacks clean, v2_lifecycle_stop_auction_keeper_trailing clean, v2_negative_trigger_manipulation clean, v3_min_fill clean, v3_merge_push clean, v2_kron_fix_pass_regressions clean, v2_lifecycle_ifd_stop_entry clean, v2_touch_ifd_arm clean, v2_touch_cond_settle clean, v2_repeat_ifd_attacks clean, v2_touch_cond_arm clean, v3_tip clean, v3_merge_limits clean, v3_rounding clean, v2_touch_cond_trail clean, v2_touch_ifd_fill clean.
 
 | id | contract | check ablated | expected | flipped 2433 | flipped 2732 | status |
@@ -614,7 +614,7 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## kron-buy
 
-KRON adapter (v3, buy-side contracts); test binary `kob_kron_v2_buy_tests`; contracts `contracts/adapters/kron/v2`. 110/110 confirmed, 4/4 defence-in-depth held (expected NOT to flip; IA24 after the NRPB2 fix, re-run alone).
+KRON adapter (v3, buy-side contracts); test binary `kob_kron_v2_buy_tests`; contracts `contracts/orders/kron`. 110/110 confirmed, 4/4 defence-in-depth held (expected NOT to flip; IA24 after the NRPB2 fix, re-run alone).
 Baseline (no mutation): kron_v2_buy_touch_cond_arm clean, kron_v2_buy_touch_cond_trail clean, kron_v2_buy_trail_cap_attack clean, kron_v2_buy_lifecycle clean, kron_v2_buy_v3_min_fill clean, kron_v2_buy_v3_rounding clean, kron_v2_buy_v3_merge_push clean, kron_v2_buy_lifecycle_dust_custody clean, kron_v2_buy_negative clean, kron_v2_buy_repeat_ifd_attacks clean, kron_v2_buy_v3_tip clean, kron_v2_buy_touch_ifd_arm clean, kron_empty_repeating_ifda_refund_is_refused clean, kron_v2_buy_touch_cond_settle clean, kron_v2_buy_touch_ifd_fill clean.
 
 | id | contract | check ablated | expected | flipped 2433 | flipped 2732 | status |
@@ -746,7 +746,7 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## pair
 
-pair orders: KobPair; test binary `kob_pair_tests`; contracts `contracts/v2`. 82/82 confirmed, 2/2 defence-in-depth held (expected NOT to flip).
+pair orders: KobPair; test binary `kob_pair_tests`; contracts `contracts/orders`. 82/82 confirmed, 2/2 defence-in-depth held (expected NOT to flip).
 Baseline (no mutation): pair_aliasing clean, pair_custody clean, pair_params clean, pair_settlement clean, pair_strays clean, pair_lifecycle clean, pair_fake_quotes clean, kob_cond_pair_tests::cond_pair_evidence_fake_quotes clean, pair_carriers clean, pair_outputs clean.
 
 | id | contract | check ablated | expected | flipped | status |
@@ -846,7 +846,7 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## cond-pair
 
-pair orders: KobCondPair (excl. repeat merges); test binary `kob_cond_pair_tests`; contracts `contracts/v2`. 116/116 confirmed, 10/10 defence-in-depth held (expected NOT to flip).
+pair orders: KobCondPair (excl. repeat merges); test binary `kob_cond_pair_tests`; contracts `contracts/orders`. 116/116 confirmed, 10/10 defence-in-depth held (expected NOT to flip).
 Baseline (no mutation): cond_pair_updates clean, cond_pair_lifecycle clean, cond_pair_settlement clean, cond_pair_evidence_ev1 clean, cond_pair_evidence_ev0 clean, cond_pair_evidence_tk clean, cond_pair_evidence_exposure clean, cond_pair_trailing clean, cond_pair_fills clean, cond_pair_overflow clean, cond_pair_custody clean, cond_pair_evidence_misc clean, cond_pair_carriers clean.
 
 | id | contract | check ablated | expected | flipped | status |
@@ -989,7 +989,7 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## ifd-pair
 
-KobIfdPair pair order; test binary `kob_ifd_pair_tests`; contracts `contracts/v2`. 122/122 confirmed, 4/4 defence-in-depth held (expected NOT to flip).
+KobIfdPair pair order; test binary `kob_ifd_pair_tests`; contracts `contracts/orders`. 122/122 confirmed, 4/4 defence-in-depth held (expected NOT to flip).
 Baseline (no mutation): ifd_fill_sell clean, ifd_fill_buy clean, ifd_update clean, ifd_strays clean, ifd_custody clean, ifd_encoding clean, ifd_aliasing clean, ifd_exit_genesis clean, ifd_merge_rules clean, ifd_refund clean, ifd_evidence clean, ifd_merge clean, ifd_hostile clean, ifd_update_rules clean, ifd_refund_rules clean, ifd_ev_template clean, ifd_outputs clean, ifd_stray_slots clean, ifd_custody_marks clean, ifd_fill_rules clean, ifd_ev_tk clean, ifd_ev_battery clean, ifd_merge_refund clean, ifd_limits clean.
 
 | id | contract | check ablated | expected | flipped | status |
@@ -1132,7 +1132,7 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## cond-pair-rpt
 
-KobCondPair repeat / merge (exit of KobIfdPair); test binary `kob_ifd_pair_tests`; contracts `contracts/v2`. 10/10 confirmed, 2/2 defence-in-depth held (expected NOT to flip).
+KobCondPair repeat / merge (exit of KobIfdPair); test binary `kob_ifd_pair_tests`; contracts `contracts/orders`. 10/10 confirmed, 2/2 defence-in-depth held (expected NOT to flip).
 Baseline (no mutation): cond_rpt_until clean, cond_rpt_profit clean, cond_rpt_merge_k clean, cond_rpt_rules clean, ifd_merge_rules clean.
 
 | id | contract | check ablated | expected | flipped | status |

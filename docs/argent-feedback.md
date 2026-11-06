@@ -162,7 +162,7 @@ an imported template, so one order cannot hold handles for two token families. O
 (token A for token B) need exactly that.
 
 * Where: `KobPair` in `contracts/argent/KOBOrders.ag` (state `KobPairState`; likewise `KobCondPair`,
-  `KobIfdPair`) and `contracts/v2/KobPair.sil`: the token sold and the token bought are stored as plain
+  `KobIfdPair`) and `contracts/orders/KobPair.sil`: the token sold and the token bought are stored as plain
   template hash plus prefix and suffix lengths (`sTplHash`, `sPre`, `sSuf`, `tTplHash`, `tPre`, `tSuf`)
   rather than as `actor_type` handles, which is what we would use if the comparison were possible.
 * Answer: work in progress. We will switch to the Argent form when it lands.
@@ -224,7 +224,7 @@ swap).
 ### 10. Size of a 1:1 port of hand-written orders (status: measured)
 
 Question from the Argent team: what exactly is duplicated by a port?
-`contracts/argent/port/kob_ask_port.ag` is `KobAsk` (`contracts/v2/KobAsk.sil`) with the body
+`contracts/research/argent/port/kob_ask_port.ag` is `KobAsk` (`contracts/orders/KobAsk.sil`) with the body
 verbatim, plus what Argent requires (`emits next: KobAsk[0..=1]` and a bulk `become` of the
 continuation state, `amountLeft - n`, when the ask rests). One forced edit: `self` is reserved (the
 local is renamed). The hand-written order uses `if` statements, not `a ? b : c` (which argentc's

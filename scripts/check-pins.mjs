@@ -3,7 +3,7 @@
 //
 //   node scripts/check-pins.mjs [repo root]      exit 1 if a constant matches no generated artifact
 //
-// Known hashes: every 64-hex string and every 32-byte array in contracts/artifacts, contracts/argent,
+// Known hashes: every 64-hex string and every 32-byte array in contracts/artifacts, contracts/argent, contracts/research,
 // contracts/deploy and contracts/third-party (the outputs scripts/build-contracts.sh and scripts/build-deploy.sh
 // reproduce, plus the vendored third-party artifacts they list), except the Argent sources (`.ag`, written by hand) and
 // the pin files among them (contracts/argent/examples): a pin never vouches for itself. Pin files: the Rust pin tables, the TS SDK
@@ -42,7 +42,7 @@ const collect = (v, src) => {
 // A pin file is never also a source of known hashes: its constants would then match themselves. The Argent examples are pin
 // files (below); their generated outputs (contracts/argent/examples-out) are the source.
 const PIN_DIRS = ['contracts/argent/examples/'];
-const outputs = ['contracts/artifacts', 'contracts/argent', 'contracts/deploy', 'contracts/third-party']
+const outputs = ['contracts/artifacts', 'contracts/argent', 'contracts/research', 'contracts/deploy', 'contracts/third-party']
   .flatMap((d) => walk(path.join(root, d)))
   .filter((f) => !PIN_DIRS.some((p) => rel(f).startsWith(p)))
   // Argent sources are inputs written by hand, not generated outputs: a hash they quote is known only through the artifact built from them

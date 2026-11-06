@@ -1,4 +1,4 @@
-// KobCondPair (contracts/v2/KobCondPair.sil): the pair conditional (stop / stop-limit / trailing / TP leg / OCO, and the
+// KobCondPair (contracts/orders/KobCondPair.sil): the pair conditional (stop / stop-limit / trailing / TP leg / OCO, and the
 // exit of KobIfdPair). This catalog owns EVERY check of KobCondPair EXCEPT the repeat-IFD merge / re-arm checks, which
 // the cond-pair-rpt catalog owns (the TP fill with / without the entry, rptUntil, the budget / prefund / proceeds of a
 // re-arm, the sell-out, and the update / stop-leg "never next to the entry" rules: `OpCovInputCount(parent) == 0`,
@@ -33,7 +33,7 @@ export const suite = {
   name: 'cond-pair',
   family: 'pair orders: KobCondPair (excl. repeat merges)',
   testBin: 'kob_cond_pair_tests',
-  srcDir: 'contracts/v2',
+  srcDir: 'contracts/orders',
   templateMarker: null,
   expectedTemplates: 1,
 };

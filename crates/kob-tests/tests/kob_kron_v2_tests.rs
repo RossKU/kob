@@ -2,7 +2,7 @@
 //! by a plain fill in the same transaction, touch) executed against the REAL KRON token program bytes (the two pinned
 //! mainnet templates, 2,433 B and 2,732 B) in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20 covenant context and
 //! script-unit metering. Port of kob_v2_tests.rs (same scenario ids and structure; every scenario of the KCC-20 suite
-//! exists here) plus the KRON-specific custody / token-program attacks of the v1 adapter suite (kob_kron_adapter_tests.rs)
+//! exists here) plus the KRON-specific custody / token-program attacks
 //! applied to the v2 orders.
 //!
 //! Amounts are base units of the token (SCALE = 1000 base units per whole token, a 3-decimal token), prices and tips
@@ -489,7 +489,7 @@ impl Net {
         vec![bytes(&token.as_bytes()), bytes(&self.t.k.hash), int(0), int(self.t.k.suffix.len() as i64)]
     }
     /// The evidence templates a conditional order / stop entry inlines (KobAskKron, then KobBidKron:
-    /// hash, prefix and suffix length), as in contracts/adapters/kron/v2/KobCondAskKron.ctor.json.
+    /// hash, prefix and suffix length), as in contracts/orders/kron/KobCondAskKron.ctor.json.
     fn ev_consts(&self) -> Vec<ArtifactValue> {
         let mut a = self.tpl_consts(&self.ask_tpl);
         a.extend(self.tpl_consts(&self.bid_tpl));
@@ -2341,7 +2341,7 @@ fn v2_sizes_layouts_sigops_body(f: &Fx) {
     // The evidence templates this harness inlines are the ones the committed ctor files carry.
     let ctor = |name: &str| -> Vec<ArtifactValue> {
         serde_json::from_slice(
-            &std::fs::read(common::repo_root().join(format!("contracts/adapters/kron/v2/{name}.ctor.json"))).expect("ctor"),
+            &std::fs::read(common::repo_root().join(format!("contracts/orders/kron/{name}.ctor.json"))).expect("ctor"),
         )
         .expect("ctor json")
     };

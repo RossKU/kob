@@ -1,4 +1,4 @@
-// KRON sell-side suite: contracts/adapters/kron/v2 (KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron), protocol v3
+// KRON sell-side suite: contracts/orders/kron (KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron), protocol v3
 // (amounts in base units, minFill, quoteOf rounding in the maker's favour, merge argument -(k * 2^53 + m)).
 // Ported from the ad-hoc ablate_sell.mjs; ids and expectations preserved where the check still exists. Each mutation must
 // flip its scenarios on BOTH pinned KRON templates (the tests loop over both and print "=== KRON template <file>").
@@ -34,7 +34,7 @@ export const suite = {
   name: 'kron-sell',
   family: 'KRON adapter (protocol v3, sell-side contracts)',
   testBin: 'kob_kron_v2_tests',
-  srcDir: 'contracts/adapters/kron/v2',
+  srcDir: 'contracts/orders/kron',
   templateMarker: /^=== KRON template (\S+)/,
   expectedTemplates: 2,
 };

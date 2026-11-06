@@ -16,9 +16,10 @@ fn sources_with_ctor() -> Vec<PathBuf> {
             if path.is_dir() {
                 // contracts/argent holds Argent apps: argentc output (generated .sil without constructor
                 // files, checked by scripts/build-argent.sh and the router harness) and their sources.
+                // contracts/research holds the same kind of argentc output (the Argent port of KobAsk, not a KOB contract).
                 // contracts/third-party holds vendored upstream programs that are not compiled here (a .sil there is a
                 // reference copy, tested where it is used: kcc20_reference_tests.rs).
-                if path.file_name().is_some_and(|n| n == "argent" || n == "third-party") {
+                if path.file_name().is_some_and(|n| n == "argent" || n == "research" || n == "third-party") {
                     continue;
                 }
                 walk(&path, out);
@@ -37,8 +38,9 @@ fn sources_with_ctor() -> Vec<PathBuf> {
 fn committed_artifacts_match_sources() {
     let sources = sources_with_ctor();
     // 25 since the pair phase (KobCross replaced by KobPair, KobCondPair, KobIfdPair: one template each for both sides and
-    // both families of a token pair); 26 with the optional batch-leader holder (kcc20/p2/KCC20Opt, not issued)
-    assert_eq!(sources.len(), 26, "expected 26 contract sources, found {sources:?}");
+    // both families of a token pair); 26 with the optional batch-leader holder (prototypes/kcc20/p2/KCC20Opt, not issued); 22
+    // without the four v1 orders (AskOrder, BidOrder, AskOrderKron, BidOrderKron, removed)
+    assert_eq!(sources.len(), 22, "expected 22 contract sources, found {sources:?}");
     for src in sources {
         let name = src.file_stem().unwrap().to_string_lossy().to_string();
         let ctor_path = src.with_extension("ctor.json");

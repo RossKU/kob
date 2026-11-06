@@ -36,7 +36,7 @@ pub struct TokenLimits {
     pub max_output_amount: Option<i64>,
 }
 
-/// KRON token program slots (`contracts/adapters/kron/README.md`).
+/// KRON token program slots (`contracts/orders/kron/README.md`).
 pub const KRON_SLOTS: (usize, usize) = (4, 5);
 /// Token inputs a KRON order accepts in one transaction.
 pub const KRON_MAX_TOK_IN: usize = 4;

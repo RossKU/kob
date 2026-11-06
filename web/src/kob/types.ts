@@ -106,7 +106,7 @@ export interface IfdAskState {
  * token B, `price` B base units per WHOLE A (`scale(A)` base units of A). S = the token the order sells and holds in custody (an ASK: A; a BID:
  * B, its escrow), T = the token it buys. ASK (side 1): a fill of n delivers at least `ceil(n * p(t) / scale(A))` of B to the maker; BID (side 2):
  * pays exactly `floor(n * p(t) / scale(A))` of B and receives exactly n of A. Tips, keeper tips and carriers are KAS (`tip`: sompi per whole A,
- * prefunded on the order UTXO, released rounded down per fill). contracts/v2/KobPair.sil.
+ * prefunded on the order UTXO, released rounded down per fill). contracts/orders/KobPair.sil.
  */
 export interface PairState {
   maker: Hex;

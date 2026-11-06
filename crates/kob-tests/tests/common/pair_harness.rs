@@ -1,4 +1,4 @@
-//! Engine harness of the pair order suites (`KobPair`, `KobCondPair`, `KobIfdPair`; contracts/v2): the three pair
+//! Engine harness of the pair order suites (`KobPair`, `KobCondPair`, `KobIfdPair`; contracts/orders): the three pair
 //! templates compiled from their (possibly mutated) sources, and a transaction editor over honest `kob-protocol` builds.
 //!
 //! Include it next to the `kob-protocol` fixtures in a test binary:
@@ -140,7 +140,7 @@ impl Subs {
     pub fn compile_deps(deps: &[(TemplateId, &[TemplateId])]) -> Subs {
         let mut subs = BTreeMap::new();
         for &(id, ds) in deps {
-            let ctor = format!("contracts/v2/{}.ctor.json", id.name());
+            let ctor = format!("contracts/orders/{}.ctor.json", id.name());
             let mut args: Vec<ArtifactValue> =
                 serde_json::from_str(&std::fs::read_to_string(common::repo_root().join(&ctor)).unwrap()).expect("ctor json");
             for d in ds {

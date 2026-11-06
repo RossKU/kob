@@ -109,7 +109,7 @@ fn check_kcc20(t: &Template) {
         assert_eq!(t.max_token_outputs as i64, source_int(&src, "MAX_TOKEN_OUTPUTS"), "{}: max token outputs", t.id);
     }
     // escrow owner types = what KobAsk custodies
-    let ask = String::from_utf8(read("contracts/v2/KobAsk.sil")).unwrap();
+    let ask = String::from_utf8(read("contracts/orders/KobAsk.sil")).unwrap();
     assert_eq!(t.escrow.owner_scheme, Some(source_byte(&ask, "SCHEME_COVID")), "{}: escrow owner scheme", t.id);
     assert_eq!(t.escrow.borrow_scheme, Some(source_byte(&ask, "BORROW_DISABLED")), "{}: escrow borrow scheme", t.id);
 }
@@ -122,10 +122,13 @@ fn check_kron(t: &Template) {
     assert_eq!(hexs(&template_hash(&[], &b[46..])), t.template_hash, "{}: template hash", t.id);
     // state span opens with the KRON state pushes: 0x20 owner | 0x01 id_type | 0x08 amount | 0x01 is_minter
     assert_eq!((b[0], b[33], b[35], b[44]), (0x20, 0x01, 0x08, 0x01), "{}: KRON state layout at offset 0", t.id);
-    let ask = String::from_utf8(read("contracts/adapters/kron/AskOrderKron.sil")).unwrap();
+    // escrow owner types = what KobAskKron custodies: id_type TYPE_COVID, is_minter 0 (the `0x01 0x00` push it requires at
+    // state [44..46)), deliveries TYPE_DELIVERY
+    let ask = String::from_utf8(read("contracts/orders/kron/KobAskKron.sil")).unwrap();
     assert_eq!(t.escrow.id_type, Some(source_byte(&ask, "TYPE_COVID")), "{}: escrow id_type", t.id);
-    assert_eq!(t.escrow.is_minter, Some(source_byte(&ask, "NOT_MINTER")), "{}: escrow is_minter", t.id);
-    assert_eq!(t.escrow.delivery_id_type, Some(source_byte(&ask, "TYPE_ADDRESS")), "{}: default delivery id_type", t.id);
+    assert!(ask.contains("require(tin.slice(44, 46) == byte[](0x0100));"), "KobAskKron: custody is_minter check not found");
+    assert_eq!(t.escrow.is_minter, Some(0), "{}: escrow is_minter", t.id);
+    assert_eq!(t.escrow.delivery_id_type, Some(source_byte(&ask, "TYPE_DELIVERY")), "{}: default delivery id_type", t.id);
     assert_eq!((t.max_token_inputs, t.max_token_outputs), (4, 5), "{}: KRON token limits (1-4 in, 1-5 out)", t.id);
 }
 

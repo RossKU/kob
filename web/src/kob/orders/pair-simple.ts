@@ -1,4 +1,4 @@
-// Planner of the plain pair kinds (`KobPair`, contracts/v2/KobPair.sil): the same intents as planSimple (intent-simple.ts) on a pair A/B: limit
+// Planner of the plain pair kinds (`KobPair`, contracts/orders/KobPair.sil): the same intents as planSimple (intent-simple.ts) on a pair A/B: limit
 // GTC / GTD / day / timed activation with the crossing policy, IOC, FOK, market, streaming, close (IOC / FOK auctions from the pair book's touch to
 // the slippage bound), TWAP / DCA (interval / maxFill, optional per-slice auction), Dutch / rising.
 //

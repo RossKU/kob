@@ -302,7 +302,7 @@ KOB proposed this for upstream KCC-20 and withdrew the proposal on 2026-10-10 (a
 role; KOB uses the standard 3 / 3). The prototype stays as a measurement. The default configuration compiles
 `max_token_inputs` / `max_token_outputs` = 3 into the holder program, and every token
 input pushes the whole program, so larger limits make every transfer dearer (1 -> 1 payment: 3/3 0.00667 KAS, 8/8
-0.01354, 16/16 0.02454). `contracts/kcc20/p2/KCC20Opt.sil` (generated from the reference by
+0.01354, 16/16 0.02454). `contracts/prototypes/kcc20/p2/KCC20Opt.sil` (generated from the reference by
 `kob_protocol::kcc20::kcc20_opt_holder_source`) keeps holders on the 3/3 program and adds an optional batch-leader
 commitment: constructor constants `B_TPL` / `B_PRE` / `B_SUF` (template hash and prefix / suffix lengths). The
 delegator path, instead of the reference's unused read of the leader state, accepts as leader its own template (P2SH

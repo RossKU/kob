@@ -30,7 +30,7 @@ pub enum Role {
     Sig,
 }
 
-/// Roles of an order entry's arguments (`contracts/v2/*.sil`).
+/// Roles of an order entry's arguments (`contracts/orders/*.sil`).
 pub fn roles(t: TemplateId, entry: &str) -> &'static [Role] {
     use Role::*;
     let base = t.base();

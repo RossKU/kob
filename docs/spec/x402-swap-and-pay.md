@@ -440,7 +440,8 @@ accepted; then the payment cannot be accepted, and a payer input can likewise be
 - **The payer re-quotes and re-signs.** The facilitator can never rebuild the transaction for the
   payer: SIGHASH_ALL covers every input and output, so substituting an order (an input) or
   redirecting an output invalidates the payer's signatures. The KOB negative tests demonstrate it
-  (`crates/kob-tests/tests/kob_gap_tests.rs`, `gap_swap_resign_required`): SWR1, the facilitator
+  (`crates/kob-x402/tests/swap.rs`, `substituted_order_outpoint_after_signing_swr1` and
+  `merchant_output_redirected_after_signing_swr2`): SWR1, the facilitator
   swaps the named ask outpoint after signing, and the payer's token-leader signature no longer
   verifies; SWR2, the merchant B output is redirected after signing, and validation fails. No
   ANYONECANPAY or SINGLE hash type is allowed, precisely so that this holds.
@@ -1104,8 +1105,7 @@ Not implemented: published vector files under `crates/kob-x402/vectors/swap/` (t
 not exist), in the format of the companion proposal (requirements, both canonical JSON preimages
 and hashes, payload bytes, safe-json transaction, trusted UTXOs, recomputed id, expected diagnostic
 and public reason for negatives). The cases below are engine-validated scenarios in
-`crates/kob-tests/tests/kob_gap_tests.rs` (SW1 to SW4 and the re-sign negatives SWR1 and SWR2), in
-`crates/kob-x402/tests/swap.rs` and `swap_families.rs` (verifier and payer SDK against an
+`crates/kob-x402/tests/swap.rs` and `swap_families.rs` (SW1 to SW4 shapes, the re-sign negatives SWR1 and SWR2; verifier and payer SDK against an
 engine-validated chain; the KRON and KaspaCom-template cases; `swap-neg-hashtype` in
 `swap_payer_token_witness_must_use_sighash_all`, `swap_payer_token_delegator_witness_must_use_sighash_all`,
 `swap_funding_input_signature_must_use_sighash_all` and `every_family_signs_with_sighash_all_only`), and through the facilitator in
@@ -1178,8 +1178,9 @@ The conformance cases of intent mode and invoices are listed in sections 17.11 a
 - `x402-kcc20-profile.md` (companion proposal).
 - KOB `docs/spec/order-types.md`, `docs/spec/matcher.md` (positional outputs, custody, strays),
   `docs/spec/kob1-payload.md` (`X402` record, pinned order template hashes),
-  `contracts/v2/KobBid.sil`, `contracts/v2/KobAsk.sil` (positional rules).
-- KOB `crates/kob-tests/tests/kob_gap_tests.rs` (`gap_swap_and_pay`, `gap_swap_resign_required`).
+  `contracts/orders/KobBid.sil`, `contracts/orders/KobAsk.sil` (positional rules).
+- KOB `crates/kob-x402/tests/swap.rs` (`substituted_order_outpoint_after_signing_swr1`,
+  `merchant_output_redirected_after_signing_swr2`).
 - KOB `crates/kob-x402`: `wire.rs` (`RoutePayload`, `BINDING_SWAP`), `common.rs`
   (`PayloadCommit.route_pay_asset`), `error.rs` (`Diag::OrderConflict`, `Diag::RouteAliasing`).
 - KIP-9 (extended mass), KIP-20 (covenant ids).

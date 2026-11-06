@@ -1,4 +1,4 @@
-//! `KobPair` (contracts/v2/KobPair.sil, one template for both sides and both token families) security suite, executed in
+//! `KobPair` (contracts/orders/KobPair.sil, one template for both sides and both token families) security suite, executed in
 //! the script engine against the template compiled from source (`common/pair_harness.rs`; an ablation run executes the
 //! mutated covenant everywhere it appears).
 //!

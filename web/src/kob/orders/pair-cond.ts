@@ -1,4 +1,4 @@
-// Planner of the pair conditionals (`KobCondPair`, contracts/v2/KobCondPair.sil): stop-market, stop-limit, trailing stop (optionally with a
+// Planner of the pair conditionals (`KobCondPair`, contracts/orders/KobCondPair.sil): stop-market, stop-limit, trailing stop (optionally with a
 // take-profit), take-profit and OCO on a pair A/B, from the same intents as planCond (intent-cond.ts), and the dispatch of the if-done types to
 // pair-ifd.ts.
 //

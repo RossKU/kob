@@ -1872,7 +1872,7 @@ pub struct Batch {
     pub taker_token_carrier: u64,
     /// Tokens (covenant ids) whose surplus the taker keeps: the base units the batch releases beyond what its legs take go to
     /// the taker's token output (`taker`, or the token's `receivers` entry) instead of the delivery of the first pair ask
-    /// buying the token. A pair ask's guarantee is a floor (`contracts/v2/KobPair.sil`: `tOut >= ceil`), so its delivery
+    /// buying the token. A pair ask's guarantee is a floor (`contracts/orders/KobPair.sil`: `tOut >= ceil`), so its delivery
     /// is then exactly what its covenant amount needs. Empty (the default): the surplus goes to the pair ask.
     #[serde(with = "crate::json::field_vec", default, skip_serializing_if = "Vec::is_empty")]
     pub keep_surplus: Vec<[u8; 32]>,

@@ -2,7 +2,7 @@
 
 | Path | Contents |
 |---|---|
-| `contracts/` | SilverScript sources (`v2/` the order covenants, `orders/` the original plain orders of the v1 test suites, `kcc20/`, `adapters/kron/`), compiled `artifacts/` (committed, reproducible), `silverc.lock`, `SHA256SUMS`, `deploy/` (per-network deployment records), and the Argent app in `contracts/argent/` |
+| `contracts/` | SilverScript sources (`orders/` the order covenants, `orders/kron/` their KRON twins, `kcc20/`, `prototypes/`, `research/`, `adapters/kron/templates/`), compiled `artifacts/` (committed, reproducible), `silverc.lock`, `SHA256SUMS`, `deploy/` (per-network deployment records), and the Argent app in `contracts/argent/` |
 | `contracts/third-party/` | Pinned third-party token programs, each with its provenance (`UPSTREAM.md`): KaspaCom KCC20 0.2.5 (Apache-2.0), the KCC-20 reference source and its published public-mint build (argent-lang/kcc20-reference `c8a0871`, ISC), and programs observed on chain (`kasparocket/`, `kforge/`, `kforge-kcc20/`, `kusdt/`) |
 | `crates/kob-protocol` | Protocol library: pinned artifacts, state and sigscript encoding, builders for every order action and matcher shape, fee and mass pass, compute-budget table, `KOB1` payload, engine validation, golden vectors |
 | `crates/kob-wasm` | wasm-bindgen bindings over `kob-protocol` (used by the web UI and the TypeScript SDK) |

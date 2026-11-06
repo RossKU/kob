@@ -5,7 +5,7 @@
 //! Amounts are token base units (any amount); prices and tips are sompi per whole token (`SCALE` base
 //! units). Every order executes at its own all-in limit or better, rounded in the maker's favour
 //! (quoteOf: up for what a maker receives, down for what a maker pays); the crossing spread and the
-//! tips are the matcher's. Contract sources are read from `contracts/v2/`.
+//! tips are the matcher's. Contract sources are read from `contracts/orders/`.
 //! Run: cargo test --release -p kob-tests --test kob_v2_tests -- --nocapture --test-threads=1
 
 mod common;
@@ -461,7 +461,7 @@ impl Net {
         vec![bytes(&token.as_bytes()), bytes(&self.t.hash), int(self.t.prefix.len() as i64), int(self.t.suffix.len() as i64)]
     }
     /// The evidence templates a conditional order / stop entry inlines (KobAsk, then KobBid: hash,
-    /// prefix and suffix length), as in contracts/v2/KobCondAsk.ctor.json.
+    /// prefix and suffix length), as in contracts/orders/KobCondAsk.ctor.json.
     fn ev_consts(&self) -> Vec<ArtifactValue> {
         let mut a = self.tpl_consts(&self.ask_tpl);
         a.extend(self.tpl_consts(&self.bid_tpl));
@@ -2325,7 +2325,7 @@ fn v2_sizes_layouts_sigops() {
     }
     // The evidence templates this harness inlines are the ones the committed ctor files carry.
     let ctor = |name: &str| -> Vec<ArtifactValue> {
-        serde_json::from_slice(&std::fs::read(common::repo_root().join(format!("contracts/v2/{name}.ctor.json"))).expect("ctor"))
+        serde_json::from_slice(&std::fs::read(common::repo_root().join(format!("contracts/orders/{name}.ctor.json"))).expect("ctor"))
             .expect("ctor json")
     };
     assert_eq!(ctor("KobCondAsk")[..6], n.ev_consts()[..], "KobCondAsk ctor: ASK_TPL/PRE/SUF, BID_TPL/PRE/SUF");

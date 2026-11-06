@@ -977,7 +977,7 @@ pub(crate) struct Draft {
     /// Refund outputs of terminal bid fills: (bid input index, value, maker key). Each is a plain P2PK output of the maker at
     /// output `M - 1 - i` (M the number of outputs of the sealed transaction), so the refunds close the transaction in the
     /// reverse order of their inputs, which must be inputs 0..k (`seal` refuses anything else): the covenants pin exactly this
-    /// slot (contracts/v2/KobBid.sil `refundTo`).
+    /// slot (contracts/orders/KobBid.sil `refundTo`).
     pub refunds: Vec<(usize, u64, [u8; 32], [u8; 32])>,
 }
 

@@ -863,7 +863,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
 
   // ---------------------------------------------------------------- triggers (touch evidence of armed / trailed orders)
   /**
-   * The trigger of order input `i` spent through `plan`, or null when this spend arms nothing. Mirrors the covenants (contracts/v2 KobCondAsk /
+   * The trigger of order input `i` spent through `plan`, or null when this spend arms nothing. Mirrors the covenants (contracts/orders KobCondAsk /
    * KobCondBid / KobIfdBid / KobIfdAsk `settle` / `fill` / `update` and their `touch*` functions), whose entry signatures are
    *   KobCondAsk.settle(nb, tokenIn, tokOut, leg, ev, tk, t)          KobCondBid.settle(nb, tokenTplIn, leg, ev, t)
    *   KobIfdBid.fill(nb, tokenTplIn, exitOut, cPre, cSuf, ev, t)       KobIfdAsk.settle(nb, tokenIn, tokOut, exitOut, cPre, cSuf, ev, tk, t)
@@ -969,7 +969,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   }
   /**
    * The trigger of a pair stop (`KobCondPair` stop leg, `KobIfdPair` stop entry) spent through `plan`, or null when this spend arms nothing.
-   * Entries (contracts/v2 KobCondPair / KobIfdPair headers):
+   * Entries (contracts/orders KobCondPair / KobIfdPair headers):
    *   KobCondPair.settle(nb, custIn, tTplIn, t, sOut, tOut, leg, evA, evB, tk, evMode, upd, k)
    *   KobIfdPair.fill(nb, aIn, bIn, aTplIn, bTplIn, exitOut, amt, cPre, cSuf, evA, evB, tk, evMode, t, aOut, bOut, xc, upd)
    * nb > 0 with upd 0 on an unarmed stop (a conditional's leg 1) arms in the fill; nb 0 with upd 1 is the update (a conditional's k = 0 arms, k >= 1

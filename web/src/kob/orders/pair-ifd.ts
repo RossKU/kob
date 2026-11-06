@@ -1,4 +1,4 @@
-// IFD / IFO / bracket and repeat IFD / IFO on a pair A/B (`KobIfdPair`, contracts/v2/KobIfdPair.sil; docs/spec/order-types.md "Pair if-done
+// IFD / IFO / bracket and repeat IFD / IFO on a pair A/B (`KobIfdPair`, contracts/orders/KobIfdPair.sil; docs/spec/order-types.md "Pair if-done
 // entries"), from the same intents as cond-ifd.ts.
 //
 //   buy-first (side BID):  holds a B escrow (the spend of its whole amount at its limit, kob-wasm `ifdPairBCustodyNeeded`) and buys A; every

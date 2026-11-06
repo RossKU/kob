@@ -38,7 +38,7 @@ Please report suspected vulnerabilities **privately**, not in public issues:
   to reach you, without any detail, and the maintainer will move the conversation to a private
   channel.
 
-Helpful details: the affected file or contract (`contracts/v2/*.sil`, `crates/kob-protocol`,
+Helpful details: the affected file or contract (`contracts/orders/*.sil`, `crates/kob-protocol`,
 `crates/kob-executor`, ...), a transaction or test that reproduces it (the harness in
 `crates/kob-tests` runs contracts in the rusty-kaspa v2.1.0 script engine, which makes small
 reproductions easy), and what an attacker gains.

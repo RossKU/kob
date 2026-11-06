@@ -1,8 +1,8 @@
 //! The size of a 1:1 Argent port of a hand-written order (docs/argent-feedback.md, item 10).
 //!
-//! `contracts/argent/port/kob_ask_port.ag` is `contracts/v2/KobAsk.sil` ported 1:1 to Argent (the body verbatim, plus
+//! `contracts/research/argent/port/kob_ask_port.ag` is `contracts/orders/KobAsk.sil` ported 1:1 to Argent (the body verbatim, plus
 //! the `emits next: KobAsk[0..=1]` / `become` Argent requires); `scripts/build-argent.sh` publishes its generated
-//! SilverScript under `contracts/argent/port-out/`. This test compiles the hand-written order and the port with the same
+//! SilverScript under `contracts/research/argent/port-out/`. This test compiles the hand-written order and the port with the same
 //! constructor arguments and attributes the difference in bytes: each generated check and each body check it duplicates
 //! is removed from the source on its own and the compiled size is measured again. Run with `--nocapture` for the table.
 
@@ -18,7 +18,7 @@ fn read(rel: &str) -> String {
 }
 
 fn size(src: &str, what: &str) -> usize {
-    let ctor: Vec<ArtifactValue> = serde_json::from_str(&read("contracts/v2/KobAsk.ctor.json")).expect("ctor json");
+    let ctor: Vec<ArtifactValue> = serde_json::from_str(&read("contracts/orders/KobAsk.ctor.json")).expect("ctor json");
     bytecode(&compile_contract(src, &ctor, CompileOptions::default()).unwrap_or_else(|e| panic!("compile {what}: {e:?}"))).len()
 }
 
@@ -59,8 +59,8 @@ const BODY_SPK: (&str, &str, usize) =
 
 #[test]
 fn kob_ask_port_size_attribution() {
-    let hand = read("contracts/v2/KobAsk.sil");
-    let port = read("contracts/argent/port-out/KobAsk.port.sil");
+    let hand = read("contracts/orders/KobAsk.sil");
+    let port = read("contracts/research/argent/port-out/KobAsk.port.sil");
     let h = size(&hand, "hand-written KobAsk");
     let p = size(&port, "port");
     let without = |edits: &[(&str, &str, usize)], what: &str| size(&edit(&port, edits), what);
@@ -75,8 +75,11 @@ fn kob_ask_port_size_attribution() {
     let dedup = without(&[BODY_COUNT[0], BODY_COUNT[1], BODY_SPK], "port - duplicated body checks");
     let skeleton = size(&edit(&port, &[GEN_BOUNDS, GEN_BECOME, GEN_CANCEL, PORT_CONT[0], PORT_CONT[1]]), "port - Argent additions");
 
-    println!("KobAsk, hand-written (contracts/v2/KobAsk.sil)                {h:>5} B");
-    println!("KobAsk, 1:1 Argent port (contracts/argent/port-out)           {p:>5} B  ({:+} vs hand-written)", p as i64 - h as i64);
+    println!("KobAsk, hand-written (contracts/orders/KobAsk.sil)                {h:>5} B");
+    println!(
+        "KobAsk, 1:1 Argent port (contracts/research/argent/port-out)           {p:>5} B  ({:+} vs hand-written)",
+        p as i64 - h as i64
+    );
     println!("  generated: output count bounds (0 <= count <= 1)            {g_bounds:>5} B");
     println!("  generated: become (count == len, validateOutputState)       {g_become:>5} B");
     println!("  generated: cancel `OpAuthOutputCount == 0`                  {g_cancel:>5} B");

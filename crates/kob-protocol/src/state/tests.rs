@@ -369,7 +369,7 @@ fn typed_states_roundtrip_committed_artifacts() {
 
 #[test]
 fn ctor_files_match_typed_states() {
-    let ctor: Vec<ArtifactValue> = serde_json::from_str(include_str!("../../../../contracts/v2/KobAsk.ctor.json")).unwrap();
+    let ctor: Vec<ArtifactValue> = serde_json::from_str(include_str!("../../../../contracts/orders/KobAsk.ctor.json")).unwrap();
     let t = template(TemplateId::KobAsk);
     let s = AskState::from_redeem(&t.contract().compiled.bytecode).unwrap();
     assert_eq!(ArtifactValue::Bytes(s.maker.to_vec()), ctor[0]);

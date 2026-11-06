@@ -1,4 +1,4 @@
-// KobCondPair repeat / merge checks (contracts/v2/KobCondPair.sil), the ones a KobIfdPair re-arm (merge) exercises on the
+// KobCondPair repeat / merge checks (contracts/orders/KobCondPair.sil), the ones a KobIfdPair re-arm (merge) exercises on the
 // EXIT input. Test binary: kob_ifd_pair_tests (the re-arm scenarios). The other KobCondPair checks (plain stop / limit /
 // trailing fills, the evidence battery, strays, custody, non-repeat continuation) are the `cond-pair` catalog of the other
 // suite agent. Scenario ids NCR.. (and the NIX.. merge scenarios of ifd_merge_rules); each runs on both mixed pairs.
@@ -8,7 +8,7 @@ export const suite = {
   name: 'cond-pair-rpt',
   family: 'KobCondPair repeat / merge (exit of KobIfdPair)',
   testBin: 'kob_ifd_pair_tests',
-  srcDir: 'contracts/v2',
+  srcDir: 'contracts/orders',
   templateMarker: null,
   expectedTemplates: 1,
 };

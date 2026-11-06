@@ -204,7 +204,7 @@ observed on testnet-10; `observed-transfer.json`, a real transfer).
   other selector value moves a holder's tokens without its signature, releases a custody without its covenant or mints.
 * Because KOB's KRON order templates deliver to makers with id_type 3 (`TYPE_DELIVERY`), a KForge maker could never spend such a
   delivery: the KRON kinds have a second build with `TYPE_DELIVERY = 0x00` (`KobAskKronD0` .. `KobIfdAskKronD0`, a build parameter
-  of the same sources, `contracts/adapters/kron/README.md`), and the profile's `owners.holder` selects it
+  of the same sources, `contracts/orders/kron/README.md`), and the profile's `owners.holder` selects it
   (`TemplateId::for_program`; an order's build follows from the token program its state pins, an instance of the other build is
   not recognised). The builders spend id_type 0 holdings with the owner's signature (`SigPlan::KronToken.signer`, a sign request
   for the token input with its redeem script, as for a KCC-20 holder input: KasWare's `signPskt` and Kaspire's `signPskt` with a

@@ -1,9 +1,9 @@
 //! `become` as a splice (docs/argent-feedback.md, item 10): the hand-written order, the Argent ports and a prototype of
 //! a splice lowering of `become`, run side by side in the rusty-kaspa v2.1.0 script engine.
 //!
-//! Variants of `KobAsk`, all compiled with the same constructor arguments (`contracts/v2/KobAsk.ctor.json`):
-//!   A  hand-written SilverScript (`contracts/v2/KobAsk.sil`);
-//!   B  the 1:1 Argent port (`contracts/argent/port/kob_ask_port.ag` -> argentc -> `port-out/KobAsk.port.sil`);
+//! Variants of `KobAsk`, all compiled with the same constructor arguments (`contracts/orders/KobAsk.ctor.json`):
+//!   A  hand-written SilverScript (`contracts/orders/KobAsk.sil`);
+//!   B  the 1:1 Argent port (`contracts/research/argent/port/kob_ask_port.ag` -> argentc -> `port-out/KobAsk.port.sil`);
 //!   C  the idiomatic port, B without the body checks the generated ones repeat (`kob_ask_port_idiomatic.ag` ->
 //!      `port-out/KobAsk.idiomatic.sil`; it must equal B with those lines removed);
 //!   D  a prototype of a splice lowering of `become`: C's generated SilverScript with the continuation state literal and
@@ -51,7 +51,7 @@ fn read(rel: &str) -> String {
 }
 
 fn compile(src: &str, what: &str) -> SilAbiArtifact {
-    let ctor: Vec<ArtifactValue> = serde_json::from_str(&read("contracts/v2/KobAsk.ctor.json")).expect("ctor json");
+    let ctor: Vec<ArtifactValue> = serde_json::from_str(&read("contracts/orders/KobAsk.ctor.json")).expect("ctor json");
     common::compile_contract(src, &ctor, CompileOptions::default()).unwrap_or_else(|e| panic!("compile {what}: {e:?}"))
 }
 
@@ -455,9 +455,9 @@ fn cost(var: &Variant, ed: &Ed) -> Cost {
 
 #[test]
 fn become_as_splice_vs_hand_written() {
-    let a_src = read("contracts/v2/KobAsk.sil");
-    let b_src = read("contracts/argent/port-out/KobAsk.port.sil");
-    let c_src = read("contracts/argent/port-out/KobAsk.idiomatic.sil");
+    let a_src = read("contracts/orders/KobAsk.sil");
+    let b_src = read("contracts/research/argent/port-out/KobAsk.port.sil");
+    let c_src = read("contracts/research/argent/port-out/KobAsk.idiomatic.sil");
     assert_eq!(c_src, edit(&b_src, &BODY_DUPS), "KobAsk.idiomatic.sil is KobAsk.port.sil without the repeated body checks");
     let c_art = compile(&c_src, "C");
     let layout = common::state_layout(&c_art);
@@ -466,7 +466,9 @@ fn become_as_splice_vs_hand_written() {
     let d_src = become_as_splice(&c_src, layout.start, layout.len, Slots::Arrays);
     let d1_src = become_as_splice(&c_src, layout.start, layout.len, Slots::One);
     // the prototype as committed (for reading; the test always transforms C itself)
-    for (f, s) in [("contracts/argent/port/KobAsk.splice.sil", &d_src), ("contracts/argent/port/KobAsk.splice1.sil", &d1_src)] {
+    for (f, s) in
+        [("contracts/research/argent/port/KobAsk.splice.sil", &d_src), ("contracts/research/argent/port/KobAsk.splice1.sil", &d1_src)]
+    {
         if std::env::var_os("KOB_WRITE_SPLICE").is_some() {
             std::fs::write(common::repo_root().join(f), s).unwrap();
         }

@@ -1,14 +1,14 @@
 //! Opcode-level comparison of the hand-written `KobAsk` and its idiomatic Argent port (docs/argent-port-compare.md,
 //! docs/argent-feedback.md item 10).
 //!
-//! Three variants, compiled with the same constructor arguments (`contracts/v2/KobAsk.ctor.json`):
-//!   hand       `contracts/v2/KobAsk.sil` (hand-written SilverScript);
-//!   idiomatic  `contracts/argent/port-out/KobAsk.idiomatic.sil` (argentc output of `port/kob_ask_port_idiomatic.ag`);
-//!   splice1    `contracts/argent/port/KobAsk.splice1.sil` (the idiomatic port with `become` lowered to a splice of the
+//! Three variants, compiled with the same constructor arguments (`contracts/orders/KobAsk.ctor.json`):
+//!   hand       `contracts/orders/KobAsk.sil` (hand-written SilverScript);
+//!   idiomatic  `contracts/research/argent/port-out/KobAsk.idiomatic.sil` (argentc output of `port/kob_ask_port_idiomatic.ag`);
+//!   splice1    `contracts/research/argent/port/KobAsk.splice1.sil` (the idiomatic port with `become` lowered to a splice of the
 //!              changed field, written by `argent_become_splice_tests.rs`).
 //!
-//! For each variant this writes an annotated disassembly to `contracts/argent/port/compare/KobAsk.<variant>.opcodes.txt`
-//! and a per-section byte table to `contracts/argent/port/compare/KobAsk.sections.txt`:
+//! For each variant this writes an annotated disassembly to `contracts/research/argent/port/compare/KobAsk.<variant>.opcodes.txt`
+//! and a per-section byte table to `contracts/research/argent/port/compare/KobAsk.sections.txt`:
 //!   - every opcode with its offset in the redeem script and its push data;
 //!   - the source statement it was compiled from (silverscript-lang `record_debug_infos`; the bytecode is asserted to be
 //!     identical to a compile without debug info);
@@ -32,8 +32,8 @@ use silverscript_lang::ast::parse_contract_ast;
 use silverscript_lang::compiler::{artifact_value_to_expr, compile_contract, CompileOptions};
 use silverscript_lang::debug_info::{DebugStep, StepKind};
 
-const CTOR: &str = "contracts/v2/KobAsk.ctor.json";
-const OUT_DIR: &str = "contracts/argent/port/compare";
+const CTOR: &str = "contracts/orders/KobAsk.ctor.json";
+const OUT_DIR: &str = "contracts/research/argent/port/compare";
 const THIS: &str = "crates/kob-tests/tests/argent_port_compare_tests.rs";
 
 fn read(rel: &str) -> String {
@@ -377,9 +377,9 @@ fn state_literal(src: &str) -> String {
 }
 
 fn variants() -> Vec<Variant> {
-    let hand = read("contracts/v2/KobAsk.sil");
-    let idio = read("contracts/argent/port-out/KobAsk.idiomatic.sil");
-    let spl1 = read("contracts/argent/port/KobAsk.splice1.sil");
+    let hand = read("contracts/orders/KobAsk.sil");
+    let idio = read("contracts/research/argent/port-out/KobAsk.idiomatic.sil");
+    let spl1 = read("contracts/research/argent/port/KobAsk.splice1.sil");
     let lit = state_literal(&idio);
     let d1_check = {
         let at = spl1.find("        require(gen__next_len == gen__next_output_count);\n").expect("D1 splice block");
@@ -389,7 +389,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             file: "hand",
             title: "KobAsk, hand-written SilverScript",
-            src_path: "contracts/v2/KobAsk.sil",
+            src_path: "contracts/orders/KobAsk.sil",
             src: hand,
             constructs: vec![
                 Construct {
@@ -410,7 +410,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             file: "idiomatic",
             title: "KobAsk, idiomatic Argent port (argentc output)",
-            src_path: "contracts/argent/port-out/KobAsk.idiomatic.sil",
+            src_path: "contracts/research/argent/port-out/KobAsk.idiomatic.sil",
             src: idio,
             constructs: vec![
                 Construct {
@@ -443,7 +443,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             file: "splice1",
             title: "KobAsk, idiomatic port with become lowered to a splice (prototype D1)",
-            src_path: "contracts/argent/port/KobAsk.splice1.sil",
+            src_path: "contracts/research/argent/port/KobAsk.splice1.sil",
             src: spl1,
             constructs: vec![
                 Construct {

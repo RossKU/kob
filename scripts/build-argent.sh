@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Reproducible build of the Argent side of KOB (contracts/argent/).
+# Reproducible build of the Argent side of KOB (contracts/argent/, and the port measurement under contracts/research/argent/).
 #
-#   scripts/build-argent.sh            write contracts/argent/{KOBOrders,KOBOrdersKron,KOBToken,router,examples-out,port-out}
+#   scripts/build-argent.sh            write contracts/argent/{KOBOrders,KOBOrdersKron,KOBToken,router,examples-out} and
+#                                      contracts/research/argent/port-out
 #   scripts/build-argent.sh --check    fail (exit 1) if any of them differs; writes nothing
 #
 # Pipeline (all inputs are committed; outputs are deterministic):
@@ -10,11 +11,11 @@
 #   1. argent/build-argentc.sh    argentc from the pinned upstream commit + patches
 #   2. KOBOrders   argentc compiles the interface KOBOrders.ag to a skeleton; tools/sil2argent
 #                  replaces every generated contract by the silverc artifact of the hand-written
-#                  contracts/v2/*.sil (contracts/artifacts/*.json) and recomputes handles and id.
+#                  contracts/orders/*.sil (contracts/artifacts/*.json) and recomputes handles and id.
 #   2b. KOBOrdersKron  the same for KOBOrdersKron.ag (the KRON limit orders KobAskKron, KobBidKron of
-#                  contracts/adapters/kron/v2/*.sil): a separate app, so the KOBOrders id stays as published.
+#                  contracts/orders/kron/*.sil): a separate app, so the KOBOrders id stays as published.
 #   3. KOBToken    argentc compiles kcc20_8x8.ag; its program must equal
-#                  contracts/kcc20/variants/KCC20Ref_8x8.sil and its handle the silverc template.
+#                  contracts/prototypes/kcc20/variants/KCC20Ref_8x8.sil and its handle the silverc template.
 #   3b. KCC20Ref   argentc compiles the vendored upstream contracts/third-party/kcc20-reference/kcc20.ag as a
 #                  single-actor app; its program must equal contracts/kcc20/KCC20Ref.sil and its handle the
 #                  silverc template (checked, not published).
@@ -22,8 +23,8 @@
 #                  (steps 2, 2b); the token programs are open ICC handles in the intents' state.
 #   5. examples    contracts/argent/examples/*.ag (third-party imports) must compile; their generated SilverScript is
 #                  published under contracts/argent/examples-out/ (engine-tested), nothing else.
-#   6. port        contracts/argent/port/kob_ask_port.ag (KobAsk ported 1:1, a size measurement) must compile; its
-#                  generated SilverScript is published under contracts/argent/port-out/.
+#   6. port        contracts/research/argent/port/kob_ask_port.ag (KobAsk ported 1:1, a size measurement) must compile; its
+#                  generated SilverScript is published under contracts/research/argent/port-out/.
 # Needs the silverc artifacts to be current: scripts/build-contracts.sh runs this after them.
 set -euo pipefail
 
@@ -60,7 +61,7 @@ STAGE_NATIVE=$(cygpath -m "$STAGE/src" 2>/dev/null || echo "$STAGE/src")
 
 # 2. KOBOrders
 actors=()
-for f in $(ls contracts/v2/*.sil | LC_ALL=C sort); do
+for f in $(ls contracts/orders/*.sil | LC_ALL=C sort); do
   n=$(basename "$f" .sil)
   actors+=("$n=contracts/artifacts/$n.json")
 done
@@ -105,9 +106,9 @@ fi
 # 3. KOBToken
 (cd "$STAGE/src" && "$ARGENTC" build kcc20_8x8.ag --out ../out/KOBToken >/dev/null)
 strip_sil() { tr -d '\r' < "$1" | sed -E 's#^[[:space:]]*//.*$##' | grep -v '^[[:space:]]*$' || true; }
-if ! diff <(strip_sil "$STAGE/out/KOBToken/sil/KCC20.sil") <(strip_sil contracts/kcc20/variants/KCC20Ref_8x8.sil) >/dev/null; then
-  echo "KOBToken: argentc output differs from contracts/kcc20/variants/KCC20Ref_8x8.sil" >&2
-  diff <(strip_sil "$STAGE/out/KOBToken/sil/KCC20.sil") <(strip_sil contracts/kcc20/variants/KCC20Ref_8x8.sil) >&2 || true
+if ! diff <(strip_sil "$STAGE/out/KOBToken/sil/KCC20.sil") <(strip_sil contracts/prototypes/kcc20/variants/KCC20Ref_8x8.sil) >/dev/null; then
+  echo "KOBToken: argentc output differs from contracts/prototypes/kcc20/variants/KCC20Ref_8x8.sil" >&2
+  diff <(strip_sil "$STAGE/out/KOBToken/sil/KCC20.sil") <(strip_sil contracts/prototypes/kcc20/variants/KCC20Ref_8x8.sil) >&2 || true
   exit 1
 fi
 "$S2A" handles "$STAGE/out/KOBToken/artifact.json" KCC20=contracts/artifacts/KCC20Ref_8x8.json >/dev/null
@@ -138,11 +139,11 @@ for f in contracts/argent/examples/*.ag; do
   (cd "$STAGE/src/examples" && "$ARGENTC" build "$n.ag" --out "../../out/examples/$n" >/dev/null)
 done
 
-# 6. The 1:1 Argent port of KobAsk (contracts/argent/port/, docs/argent-feedback.md item 10): a measurement, not a KOB
-#    contract. Only its generated SilverScript is published (contracts/argent/port-out/, compared with the hand-written
+# 6. The 1:1 Argent port of KobAsk (contracts/research/argent/port/, docs/argent-feedback.md item 10): a measurement, not a KOB
+#    contract. Only its generated SilverScript is published (contracts/research/argent/port-out/, compared with the hand-written
 #    KobAsk by crates/kob-tests/tests/argent_port_tests.rs).
 mkdir -p "$STAGE/src/port"
-cp contracts/argent/port/*.ag "$STAGE/src/port/"
+cp contracts/research/argent/port/*.ag "$STAGE/src/port/"
 (cd "$STAGE/src/port" && "$ARGENTC" build kob_ask_port.ag --out ../../out/port >/dev/null)
 # its idiomatic variant (the body checks the generated ones repeat removed; argent_become_splice_tests.rs)
 (cd "$STAGE/src/port" && "$ARGENTC" build kob_ask_port_idiomatic.ag --out ../../out/port-idiomatic >/dev/null)
@@ -171,18 +172,23 @@ find "$PUB" -type f -exec sh -c 'tr -d "\r" < "$1" > "$1.lf" && mv "$1.lf" "$1"'
 # The router must link exactly the artifacts published next to it.
 "$S2A" links "$PUB/router/artifact.json" "$PUB/KOBOrders/artifact.json" "$PUB/KOBOrdersKron/artifact.json" "$PUB/KOBToken/artifact.json"
 
+# published tree -> committed directory (the port is research, not a KOB contract: contracts/research/argent)
 fail=0
 for d in KOBOrders KOBOrdersKron KOBToken router examples-out port-out; do
+  case "$d" in
+    port-out) dest=contracts/research/argent/$d ;;
+    *) dest=contracts/argent/$d ;;
+  esac
   if [ "$MODE" = check ]; then
-    if diff -r --strip-trailing-cr "$PUB/$d" "contracts/argent/$d" >/dev/null 2>&1; then
-      echo "ok      contracts/argent/$d"
+    if diff -r --strip-trailing-cr "$PUB/$d" "$dest" >/dev/null 2>&1; then
+      echo "ok      $dest"
     else
-      echo "DIFFERS contracts/argent/$d" >&2; fail=1
+      echo "DIFFERS $dest" >&2; fail=1
     fi
   else
-    rm -rf "contracts/argent/$d"
-    cp -r "$PUB/$d" "contracts/argent/$d"
-    echo "wrote   contracts/argent/$d"
+    rm -rf "$dest"
+    cp -r "$PUB/$d" "$dest"
+    echo "wrote   $dest"
   fi
 done
-[ "$fail" = 0 ] || { echo "contracts/argent is stale: run scripts/build-argent.sh" >&2; exit 1; }
+[ "$fail" = 0 ] || { echo "contracts/argent or contracts/research/argent is stale: run scripts/build-argent.sh" >&2; exit 1; }

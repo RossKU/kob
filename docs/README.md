@@ -71,7 +71,7 @@ what result.
 | Document | What it covers |
 |---|---|
 | [../contracts/README.md](../contracts/README.md) | Contract sources, artifacts, reproducible builds, deployment records |
-| [../contracts/adapters/kron/README.md](../contracts/adapters/kron/README.md) | The KRON token adapters |
+| [../contracts/orders/kron/README.md](../contracts/orders/kron/README.md) | The KRON token adapters |
 | [../registry/README.md](../registry/README.md) | The token registry: strict template list, open token list |
 | [../web/README.md](../web/README.md) | The web UI, its mock stack and tests |
 | [../packages/kob-x402/examples/paid-api/README.md](../packages/kob-x402/examples/paid-api/README.md) | Example paid API using the TypeScript x402 SDK |

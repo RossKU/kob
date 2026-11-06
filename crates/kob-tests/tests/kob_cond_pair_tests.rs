@@ -1,4 +1,4 @@
-//! `KobCondPair` (contracts/v2/KobCondPair.sil) security suite, executed in the script engine against the template
+//! `KobCondPair` (contracts/orders/KobCondPair.sil) security suite, executed in the script engine against the template
 //! compiled from source (`common/pair_harness.rs`). This file owns everything of `KobCondPair` EXCEPT the repeat-IFD
 //! merge checks (the suite agent of `kob_ifd_pair_tests.rs` owns those): the KobPair-style settlement of a leg fill
 //! (ceil / floor, exact custody, the stray guards of both tokens on every path, output aliasing), the trigger evidence

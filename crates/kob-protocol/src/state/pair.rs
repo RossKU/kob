@@ -3,7 +3,7 @@
 //! order (the ceil for what the maker receives, the floor for what it pays). Tips, keeper tips and carriers are KAS (tips:
 //! sompi per whole A, rounded down).
 //!
-//! Three templates, each ONE template for both sides and both token families (`contracts/v2/KobPair.sil`,
+//! Three templates, each ONE template for both sides and both token families (`contracts/orders/KobPair.sil`,
 //! `KobCondPair.sil`, `KobIfdPair.sil`; the headers are the reference):
 //!
 //! * [`PairState`] (`KobPair`, kind 0x08): plain ask / bid with IOC / FOK, Dutch / rising decay, TWAP / DCA, close. Side

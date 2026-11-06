@@ -40,21 +40,21 @@ use kob_protocol::verify::execute;
 /// The 15 order templates (the KAS-quoted kinds of both families; one template each for the pair kinds, serving both
 /// sides and both families): every bounded scan they run.
 const ORDER_SOURCES: [&str; 15] = [
-    "contracts/v2/KobAsk.sil",
-    "contracts/v2/KobBid.sil",
-    "contracts/v2/KobCondAsk.sil",
-    "contracts/v2/KobCondBid.sil",
-    "contracts/v2/KobIfdBid.sil",
-    "contracts/v2/KobIfdAsk.sil",
-    "contracts/v2/KobPair.sil",
-    "contracts/v2/KobCondPair.sil",
-    "contracts/v2/KobIfdPair.sil",
-    "contracts/adapters/kron/v2/KobAskKron.sil",
-    "contracts/adapters/kron/v2/KobBidKron.sil",
-    "contracts/adapters/kron/v2/KobCondAskKron.sil",
-    "contracts/adapters/kron/v2/KobCondBidKron.sil",
-    "contracts/adapters/kron/v2/KobIfdBidKron.sil",
-    "contracts/adapters/kron/v2/KobIfdAskKron.sil",
+    "contracts/orders/KobAsk.sil",
+    "contracts/orders/KobBid.sil",
+    "contracts/orders/KobCondAsk.sil",
+    "contracts/orders/KobCondBid.sil",
+    "contracts/orders/KobIfdBid.sil",
+    "contracts/orders/KobIfdAsk.sil",
+    "contracts/orders/KobPair.sil",
+    "contracts/orders/KobCondPair.sil",
+    "contracts/orders/KobIfdPair.sil",
+    "contracts/orders/kron/KobAskKron.sil",
+    "contracts/orders/kron/KobBidKron.sil",
+    "contracts/orders/kron/KobCondAskKron.sil",
+    "contracts/orders/kron/KobCondBidKron.sil",
+    "contracts/orders/kron/KobIfdBidKron.sil",
+    "contracts/orders/kron/KobIfdAskKron.sil",
 ];
 
 /// One bounded scan: `require(cnt <= CAP);` followed by its unrolled slot lines.
@@ -190,7 +190,7 @@ fn c4_p8_unrolled_scans_cover_every_slot() {
     assert_eq!(expected_scans, 15, "bounded scans of the 15 order templates");
 
     // the checker is not vacuous
-    let ask = std::fs::read_to_string(common::repo_root().join("contracts/v2/KobAsk.sil")).unwrap();
+    let ask = std::fs::read_to_string(common::repo_root().join("contracts/orders/KobAsk.sil")).unwrap();
     let line5 = ask.lines().find(|l| l.trim_start().starts_with("if (cnt > 5)")).expect("slot 5").to_string();
     let dropped = ask.replace(&format!("{line5}\n"), "");
     assert!(!scan_problems(&dropped).is_empty(), "a dropped slot line must be flagged");
@@ -198,7 +198,7 @@ fn c4_p8_unrolled_scans_cover_every_slot() {
     assert!(!scan_problems(&wrong).is_empty(), "a slot line reading another slot must be flagged");
     let unguarded = ask.replace(&line5, &line5.replace("!= me", "== me || true"));
     assert!(!scan_problems(&unguarded).is_empty(), "a slot line without its guard must be flagged");
-    let pair = std::fs::read_to_string(common::repo_root().join("contracts/v2/KobPair.sil")).unwrap();
+    let pair = std::fs::read_to_string(common::repo_root().join("contracts/orders/KobPair.sil")).unwrap();
     let x7 = pair.lines().find(|l| l.trim_start().starts_with("if (cnt > 7)")).expect("pair slot 7").to_string();
     assert!(!scan_problems(&pair.replace(&format!("{x7}\n"), "")).is_empty(), "a dropped pair slot must be flagged");
 }

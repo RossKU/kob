@@ -1,4 +1,4 @@
-//! KobIfdPair (contracts/v2/KobIfdPair.sil) attack suite, and the repeat / merge checks of its exit KobCondPair.
+//! KobIfdPair (contracts/orders/KobIfdPair.sil) attack suite, and the repeat / merge checks of its exit KobCondPair.
 //! Run: cargo test -p kob-tests --test kob_ifd_pair_tests -- --nocapture --test-threads=1
 
 mod common;

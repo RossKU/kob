@@ -365,7 +365,7 @@ impl Net {
         vec![bytes(&token.as_bytes()), bytes(&self.t.hash), int(self.t.prefix.len() as i64), int(self.t.suffix.len() as i64)]
     }
     /// The evidence templates a conditional order / stop entry inlines (KobAsk, then KobBid: hash,
-    /// prefix and suffix length), as in contracts/v2/KobCondBid.ctor.json.
+    /// prefix and suffix length), as in contracts/orders/KobCondBid.ctor.json.
     fn ev_consts(&self) -> Vec<ArtifactValue> {
         let mut a = self.tpl_consts(&self.ask_tpl);
         a.extend(self.tpl_consts(&self.bid_tpl));

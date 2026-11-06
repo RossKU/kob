@@ -18,4 +18,4 @@ acts on minter UTXOs; there is no freeze or seize entry; but finding K-1, engine
 `set_public_mint_active` plus a `transfer_delegator` input leaves one covenant output unchecked, so the creator of a mint_policy 2
 token can mint past max_supply or plant a non-program covenant UTXO), and a 25.5 KB program that every token
 input reveals in its signature script. KOB does not own or audit it beyond the engine tests in
-`crates/kob-tests/tests/kob_kaspacom_tests.rs`, `kob_kaspacom_v2_tests.rs`, `review_b2_kaspacom.rs` and the pre-audit notes in `registry/tokens.json` (its template is `pending-review`).
+`crates/kob-tests/tests/kob_kaspacom_v2_tests.rs`, `review_b2_kaspacom.rs` and the pre-audit notes in `registry/tokens.json` (its template is `pending-review`).

@@ -1,4 +1,4 @@
-//! Pre-mainnet internal security audit (2026-10-12) of the pair templates (`contracts/v2/KobPair.sil`, `KobCondPair.sil`,
+//! Pre-mainnet internal security audit (2026-10-12) of the pair templates (`contracts/orders/KobPair.sil`, `KobCondPair.sil`,
 //! `KobIfdPair.sil`) and of the trigger evidence of the KAS-quoted stops: reproducers for the suspicions of that review that
 //! were not refuted by reading the code, executed in the script engine against the templates compiled from source
 //! (`common/pair_harness.rs`).

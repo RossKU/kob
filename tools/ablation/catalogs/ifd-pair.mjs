@@ -1,4 +1,4 @@
-// KobIfdPair pair order (contracts/v2/KobIfdPair.sil): IF-DONE / repeat entry, both sides and both families.
+// KobIfdPair pair order (contracts/orders/KobIfdPair.sil): IF-DONE / repeat entry, both sides and both families.
 // Test binary: kob_ifd_pair_tests. Scenario ids NI..; each attack flips on both mixed pairs (KCC/KRON, KRON/KCC).
 // The exit-side (KobCondPair) repeat / merge checks a merge scenario of this binary flips live in cond-pair-rpt.mjs.
 // Ids with a `k` / `r` suffix exist only where the token read is KCC-20 / KRON; NIH4 / NIP1 run on KCC/KCC (two tokens of
@@ -26,7 +26,7 @@ export const suite = {
   name: 'ifd-pair',
   family: 'KobIfdPair pair order',
   testBin: 'kob_ifd_pair_tests',
-  srcDir: 'contracts/v2',
+  srcDir: 'contracts/orders',
   templateMarker: null,
   expectedTemplates: 1,
 };

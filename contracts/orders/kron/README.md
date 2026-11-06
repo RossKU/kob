@@ -1,28 +1,27 @@
 # KRON family adapter
 
 KOB order contracts for the KRON token family: the legacy 46-byte token state that is live on mainnet (two pinned
-token programs, 2,433 B and 2,732 B, see `templates/README.md`). One order contract per order kind, a port of the
-KCC-20 v2 contracts in `contracts/v2/` with only the token codec and the owner types changed. The protocol layer
+token programs, 2,433 B and 2,732 B, see `contracts/adapters/kron/templates/README.md`). One order contract per order kind, a port of the
+KCC-20 protocol v3 contracts in `contracts/orders/` with only the token codec and the owner types changed. The protocol layer
 stays family-blind: a family is (state codec, owner-type mapping, sigscript / witness builder, template allowlist).
 A KAS-quoted order pins one `tokenCovId`, one template hash and one state codec. The orders that span two tokens are
-the pair orders of a pair A/B, `contracts/v2/KobPair.sil`, `KobCondPair.sil` and `KobIfdPair.sil`: one template each
+the pair orders of a pair A/B, `contracts/orders/KobPair.sil`, `KobCondPair.sil` and `KobIfdPair.sil`: one template each
 for both families, whose state names the family, program hash and lengths of each token (the custody codec of the token
 it holds, the delivery codec of the token it buys), so A and B may be of different families. They have no KRON twins.
 
-Each `v2/Kob*Kron.sil` header lists the differences from its KCC-20 twin; the same logic otherwise applies, including
+Each `Kob*Kron.sil` header lists the differences from its KCC-20 twin; the same logic otherwise applies, including
 the protocol v3 amount rule: amounts in token base units, prices in sompi per whole token (`scale` = 10^decimals base
 units), every quote value rounded in the maker's favour (`quoteOf`, `docs/spec/order-types.md`), a minimum fill
 `minFill` in every kind.
 
 | Source | KCC-20 counterpart | Notes |
 |---|---|---|
-| `v2/KobAskKron.sil` | `KobAsk` | limit sell, all-in price + tip, `minFill`, decay auction (`decayStep`), TWAP (`maxFill`), IOC/FOK (killable at +600 DAA), soft expiry + 90-day idle bound, exact custody (`amountLeft`) and stray guard |
-| `v2/KobBidKron.sil` | `KobBid` | limit buy, no `extensionCommitment` state field (KRON has none), `minFill`, `decayStep`, IOC/FOK kill, refuses token inputs in refund, stray guard in fill |
-| `v2/KobCondAskKron.sil` | `KobCondAsk` | stop, stop-limit (auction over `bandDaa`), trailing stop (multi-step), take-profit, OCO; `keeperTip`; exact custody; triggers from a `KobAskKron` / `KobBidKron` fill in the same transaction (touch); exit of repeat IFD (`parent`, `rptPrice`, `rptUntil`) |
-| `v2/KobCondBidKron.sil` | `KobCondBid` | buy-stop, buy-stop-limit, trailing buy, limit buy, OCO; same lifecycle fields; exit of repeat sell-first IFD |
-| `v2/KobIfdBidKron.sil` | `KobIfdBid` | if-done buy (IFD/IFO/bracket), partial fills, stop entry, `minFill`, repeat (`rptAmount`, merge), exit = `KobCondAskKron` |
-| `v2/KobIfdAskKron.sil` | `KobIfdAsk` | sell-first if-done, partial fills, stop entry, repeat (merge into the entry custody), `close`, exit = `KobCondBidKron` |
-| `AskOrderKron.sil`, `BidOrderKron.sil` | `AskOrder`, `BidOrder` | v1 plain orders (used by the v1 test suite) |
+| `KobAskKron.sil` | `KobAsk` | limit sell, all-in price + tip, `minFill`, decay auction (`decayStep`), TWAP (`maxFill`), IOC/FOK (killable at +600 DAA), soft expiry + 90-day idle bound, exact custody (`amountLeft`) and stray guard |
+| `KobBidKron.sil` | `KobBid` | limit buy, no `extensionCommitment` state field (KRON has none), `minFill`, `decayStep`, IOC/FOK kill, refuses token inputs in refund, stray guard in fill |
+| `KobCondAskKron.sil` | `KobCondAsk` | stop, stop-limit (auction over `bandDaa`), trailing stop (multi-step), take-profit, OCO; `keeperTip`; exact custody; triggers from a `KobAskKron` / `KobBidKron` fill in the same transaction (touch); exit of repeat IFD (`parent`, `rptPrice`, `rptUntil`) |
+| `KobCondBidKron.sil` | `KobCondBid` | buy-stop, buy-stop-limit, trailing buy, limit buy, OCO; same lifecycle fields; exit of repeat sell-first IFD |
+| `KobIfdBidKron.sil` | `KobIfdBid` | if-done buy (IFD/IFO/bracket), partial fills, stop entry, `minFill`, repeat (`rptAmount`, merge), exit = `KobCondAskKron` |
+| `KobIfdAskKron.sil` | `KobIfdAsk` | sell-first if-done, partial fills, stop entry, repeat (merge into the entry custody), `close`, exit = `KobCondBidKron` |
 
 ## Token codec and owner types
 
@@ -41,7 +40,7 @@ State (template offset 0, 46 B): `0x20 owner[32] | 0x01 id_type | 0x08 amount (L
   contract, `TYPE_DELIVERY = 0x03` (`KRON_DELIVERY` in the pair templates), and a **build parameter**: the
   delivery id_type 0 builds `KobAskKronD0` .. `KobIfdAskKronD0` are the same sources with `TYPE_DELIVERY = 0x00`
   (`scripts/build-contracts.sh`, `VARIANTS`: the derived source exists only in the build directory; one byte of each
-  bytecode differs, `01 03` -> `01 00`, the lengths are the same), their constructor arguments in `v2/delivery0/`
+  bytecode differs, `01 03` -> `01 00`, the lengths are the same), their constructor arguments in `delivery0/`
   (the template chain of that build: evidence `KobAskKronD0` / `KobBidKronD0`, exits `KobCondAskKronD0` /
   `KobCondBidKronD0`; token placeholder: the KForge program). `KobIfdBidKronD0` delivers only into its exit's custody
   and differs in its template chain alone. They serve the KRON programs whose holders are id_type 0 (the profile's
@@ -68,7 +67,7 @@ State (template offset 0, 46 B): `0x20 owner[32] | 0x01 id_type | 0x08 amount (L
 
 ## Order rules on KRON
 
-The lifecycle rules of `contracts/v2/` apply with the KRON codec and limits:
+The lifecycle rules of `contracts/orders/` apply with the KRON codec and limits:
 
 - **Exact custody.** Asks, conditional sells (incl. every if-done exit) and if-done sells of a KRON token carry a
   mutable `amountLeft`; `tokenIn` must be the KRON UTXO with owner = the order's covenant id (`id_type 2`, state
@@ -82,7 +81,7 @@ The lifecycle rules of `contracts/v2/` apply with the KRON codec and limits:
   input owned by the order id (the evidence fill next to it brings token inputs of its own).
   Only the maker's `cancel` (SIGHASH_ALL) moves strays.
 - **Auctions, IOC/FOK kill, stop auctions and `armed`, `keeperTip`, multi-step trailing, stop entries, `minFill`
-  and `minTouch` (base units)**: same logic as `contracts/v2/`, only the codec and the limits differ.
+  and `minTouch` (base units)**: same logic as `contracts/orders/`, only the codec and the limits differ.
 - **Repeat IFD / IFO.** `rptAmount` on `KobIfdBidKron` / `KobIfdAskKron`; booked exits carry `parent`,
   `rptPrice` (`rptPre`) and `rptUntil`; a booked take-profit merges its entry (`settle` / `fill` with
   `-(k*2^53+m)`, both sides checking the other's leading 8-byte push) so the entry's covenant id persists across cycles;
@@ -136,5 +135,5 @@ outputs are bound to the first token input; outputs must hold 1..=1e9 units. `cr
 validates every builder output on both real templates in the v2.1.0 engine (`kron.*` golden vectors).
 
 Tests: `crates/kob-tests/tests/kob_kron_v2_tests.rs` (sell side) and `kob_kron_v2_buy_tests.rs` (buy side),
-both against the real KRON bytes of both templates; `kob_kron_adapter_tests.rs` is the v1 suite.
+both against the real KRON bytes of both templates.
 Nothing here has been independently audited (the internal pre-mainnet audit: `docs/security/AUDIT-2026-10.md`).
