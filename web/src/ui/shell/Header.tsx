@@ -24,7 +24,8 @@ const NAV = [
 export function Logo() {
   return (
     <svg class="brand-mark" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
-      <rect width="512" height="512" rx="96" fill="#0f1d1c" />
+      <rect width="512" height="512" rx="96" fill="#ffffff" fill-opacity="0.6" />
+      <rect x="24" y="24" width="464" height="464" rx="78" fill="#0f1d1c" />
       <rect x="44" y="46" width="424" height="43.75" rx="21.875" fill="#d9434b" />
       <rect x="126" y="99.75" width="342" height="43.75" rx="21.875" fill="#e3646a" />
       <rect x="208" y="153.5" width="260" height="43.75" rx="21.875" fill="#ec8a8e" />
