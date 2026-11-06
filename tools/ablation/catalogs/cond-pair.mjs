@@ -4,7 +4,7 @@
 // re-arm, the sell-out, and the update / stop-leg "never next to the entry" rules: `OpCovInputCount(parent) == 0`,
 // `require(present == 0)`, `tx.daa >= rptUntil`, the merge argument, `n < MERGE_K`, `dOut > 0`, the re-arming sell-out).
 //
-// Test binary: crates/kob-tests/tests/kob_cond_pair_tests.rs (ids NC..; a / b = the ASK / BID side, sk / sr / tk = the
+// Test binary: crates/kob-tests/tests/kob/kob_cond_pair_tests.rs (ids NC..; a / b = the ASK / BID side, sk / sr / tk = the
 // custody S / the bought token T is KCC-20 / KRON). Attacks run on the two mixed program pairs (KCC20Ref_8x8 +
 // KronToken2433, KronToken2433 + KCC20Ref_8x8), NC59 on KCC-20 / KCC-20 (see cond_pair_evidence_tk). Scenarios that edit
 // the evidence order's own state also fail that order's input: `inputOnly` (the proof is the conditional's own input).

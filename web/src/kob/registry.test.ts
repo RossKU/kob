@@ -39,7 +39,7 @@ describe('shipped registries', () => {
     expect(displayName(pepe)).toBe('PEPE (a73c…47cd)');
     const raw = JSON.parse(shippedRegistryJson());
     expect(raw.tokens.every((t: { genesis?: { live_minters?: string[]; minter_outputs: number[] } }) => t.genesis?.live_minters?.length === 0 && t.genesis.minter_outputs.length === 0)).toBe(true);
-    // the KRON programs are reviewed with conditions (internal review, `crates/kob-tests/tests/review_b2_kron.rs`)
+    // the KRON programs are reviewed with conditions (internal review, `crates/kob-tests/tests/audit/review_b2_kron.rs`)
     expect(r.tokens.every((t) => t.tradable && t.untradableReason === null && t.templateMatchesPinned)).toBe(true);
     const review = Object.fromEntries(r.templates.map((t) => [t.id, t.review_status]));
     expect(review).toMatchObject({ 'kcc20-ref-3x3': 'reviewed', 'kcc20-ref-8x8': 'pending-review', 'kron-2433': 'reviewed', 'kron-2732': 'reviewed', 'kcc20-kaspacom-0-2-5': 'pending-review', 'kcc20-ref-public-mint': 'reviewed' });

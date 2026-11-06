@@ -2,7 +2,7 @@
 //!
 //! Pinned to kaspanet/kccs `main` at `411b41bc14b3fda8f3a0548242c555f3597cad1a` (KCC-1 in Last Call since 2026-10-01,
 //! compliance rewrite #27). The official vectors are vendored in `crates/kob-tests/vectors/kcc1/` and executed by
-//! `crates/kob-tests/tests/kcc1_conformance_tests.rs`.
+//! `crates/kob-tests/tests/kcc20/kcc1_conformance_tests.rs`.
 //!
 //! KOB encodes its own programs' arguments and state through `silverscript-abi` (the vectors show it conforms). This
 //! module adds what KOB needs beyond that encoder:

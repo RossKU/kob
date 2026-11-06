@@ -330,7 +330,7 @@ updates − network fee` of the transaction subject to:
 - per token: the slot limits of its program (3/3 reference and its published public-mint build, the programs KOB issues; the 4/5, 8/8 and 16/16 prototypes;
   KRON 4/5) and `MAX_TOK_IN` of its family (KCC-20 8, KRON 4), one extension commitment. `MAX_TOK_IN` is an upper bound: a
   3/3 transaction never carries more than 3 token inputs of its token, so the orders' stray scan covers all of them
-  (`crates/kob-tests/tests/kcc20_standard_slots_tests.rs`);
+  (`crates/kob-tests/tests/kcc20/kcc20_standard_slots_tests.rs`);
 - positional outputs (order input i ↔ output i; if-done fills add one exit output; a custody's rest or return at its
   custody input's index); the KAS a terminal bid fill (`KobBid`, `KobCondBid`, KRON twins) does not spend beyond its
   delivery carrier returns to the maker as a plain P2PK output when it is at least `REFUND_MIN` (1 KAS), at output

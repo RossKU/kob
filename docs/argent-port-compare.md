@@ -36,4 +36,4 @@ A hand-made sketch of that output, [`KobAsk.splice1.sil`](../contracts/research/
 * `cancel ... emits none` refuses a cancel that re-creates the order under the same covenant id (our amend). A does
   not. In our tests (1,004 cases) this is the only behavioural difference.
 * Regenerate: `KOB_WRITE_COMPARE=1 cargo test --release -p kob-tests --test argent_port_compare_tests`
-  ([test](../crates/kob-tests/tests/argent_port_compare_tests.rs)).
+  ([test](../crates/kob-tests/tests/argent/argent_port_compare_tests.rs)).

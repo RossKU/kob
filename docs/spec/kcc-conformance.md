@@ -86,7 +86,7 @@ push prefixes, so every KOB caller re-encodes to check (`kcc1::decode_state`, `S
 KCC-2 #30 replaced the keyed `Hash(pubkey, "PublicKeyHash")` with the unkeyed `Hash(pubkey)`. The reference program
 (unmerged `600646873e` and merged `c8a0871` alike) computes `p2pkh_hash` as `blake3(public_key)`, which compiles to
 `OP_BLAKE3`, the unkeyed hash; KOB's copies derive from it (`KCC20Ref.sil`; the slot variants, `KCC20P2`, `KCC20Opt`,
-`KOBToken` and the wallet-gate copy). `crates/kob-tests/tests/kcc2_conformance_tests.rs`
+`KOBToken` and the wallet-gate copy). `crates/kob-tests/tests/kcc20/kcc2_conformance_tests.rs`
 (`kcc20_programs_use_the_unkeyed_p2pkh_hash`) tracks this: it fails if a keyed form returns or the provenance commit moves.
 
 ### 4.2 The merged reference (2026-10-09)
@@ -123,7 +123,7 @@ order-contract change: it pins the build as its KCC-1 actor-type handle, the vie
 `kcc20-ref-public-mint`, reviewed by internal review only since 2026-10-13, like the standalone 3/3). Orders take the token template per order and read
 the state at fixed offsets inside the 112 bytes, the stray guard locates the owner from the end of the redeem script, and
 every token output an order pins is the custody's own prefix (context included), state and suffix, which is what the
-published transfer writes. `crates/kob-tests/tests/kcc20_public_mint_tests.rs` runs every order shape on such tokens
+published transfer writes. `crates/kob-tests/tests/kcc20/kcc20_public_mint_tests.rs` runs every order shape on such tokens
 (custodies of three orders under one published leader included) and refuses holders with another context value or of the
 standalone build; `kob token create --program public-mint` issues one (a genesis of `KCC20` holders only); a genesis with the app's
 `PublicMint` and `TokenSeed` actors, as upstream recommends, is verified as in section 4.3. The
@@ -219,7 +219,7 @@ whoever funds a later `mint` / `create` keeps that value (`minter.value == self.
 its live cells (`live_minters`) must follow a `rebalance_value` spend to its identical successor cell; the indexer reads such a spend
 as no mint (`created_holder` is `None` for it).
 
-Evidence: `crates/kob-tests/tests/kcc20_public_mint_genesis_tests.rs` (rusty-kaspa v2.1.0 engine: the genesis passes the
+Evidence: `crates/kob-tests/tests/kcc20/kcc20_public_mint_genesis_tests.rs` (rusty-kaspa v2.1.0 engine: the genesis passes the
 covenant context and `verify_genesis`; the genesis minter mints a holder of the pinned handle, the seed creates a
 zero-amount holder, and the two then transfer as `KCC20` holders; the refusals above; the registry record and its live-mint-authority fact
 over chain evidence, `genesis_evidence::verify_token`).
@@ -264,7 +264,7 @@ mainnet).
 The order templates do not change. Their stray scan reads up to `MAX_TOK_IN = 8` token inputs of the order's token and
 refuses more; with a 3 / 3 token a transaction carries at most 3 (the leader takes at most 2 delegates, and after a
 verified genesis every input of the token's covenant id is a holder of that program), so the bound is never the binding
-limit and the scan reads every token input such a transaction has. `crates/kob-tests/tests/kcc20_standard_slots_tests.rs`:
+limit and the scan reads every token input such a transaction has. `crates/kob-tests/tests/kcc20/kcc20_standard_slots_tests.rs`:
 a stray of the settling ask at token-input slot 1 or 2 is refused by the ask; four token inputs (the custody and three
 fillers, no stray) are refused by the 3 / 3 leader while the ask's scan passes; the 8 / 8 prototype takes the same four.
 The builders enforce each program's slots, and the matcher clears a book that needs more custodies than 3 over chained
@@ -352,7 +352,7 @@ the genesis (KCC-1 section 7.2). The merged reference's published build (`KCC20P
 reads its leader with `readInputStateWithTemplate`, so only a `KCC20` can lead, which is what `KCC20Opt` disabled does; and
 a `KCC20` leader takes at most 2 delegates and 3 outputs.
 
-Transactions per holder count (`crates/kob-tests/tests/kcc20_reference_tests.rs`, `transfer_capacity_per_transaction`):
+Transactions per holder count (`crates/kob-tests/tests/kcc20/kcc20_reference_tests.rs`, `transfer_capacity_per_transaction`):
 with the standard program a transaction carries at most 3 token inputs and 3 token outputs of one token (one covenant
 family, one leader). Holders that stay on the standard 3/3 program cannot be settled 16 at a time: in the published build
 every holder refuses a foreign leader (16 of 16 refused), and in the standalone build only a leader seeded by the token's

@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(old.list(), example.list());
         // the shipped registry: the eight KRON-family tokens of the census, every genesis output checked on mainnet data and no
         // live mint authority (`registry/evidence/`, `kob registry verify-genesis`), so none carries a warning; the two KRON
-        // programs are reviewed with conditions (`crates/kob-tests/tests/review_b2_kron.rs`), which opens the list to every token on them
+        // programs are reviewed with conditions (`crates/kob-tests/tests/audit/review_b2_kron.rs`), which opens the list to every token on them
         let shipped = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry/tokens.json")).unwrap();
         let shipped = TokenAllowlist::parse(&shipped).unwrap();
         assert_eq!(shipped.len(), 8);

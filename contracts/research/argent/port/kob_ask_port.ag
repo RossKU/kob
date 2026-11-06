@@ -14,7 +14,7 @@
 // same facts again, which is part of what is measured.
 //
 // Build: scripts/build-argent.sh compiles it and publishes the generated SilverScript as
-// contracts/research/argent/port-out/KobAsk.port.sil. crates/kob-tests/tests/argent_port_tests.rs compares the
+// contracts/research/argent/port-out/KobAsk.port.sil. crates/kob-tests/tests/argent/argent_port_tests.rs compares the
 // compiled bytes with the hand-written template and attributes the difference.
 
 const byte SCHEME_P2PK = 0x00;

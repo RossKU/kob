@@ -3,8 +3,8 @@
 //! Pinned to kaspanet/kccs `main` at `411b41bc14b3fda8f3a0548242c555f3597cad1a` (KCC-2 in Last Call since 2026-10-01;
 //! #30 made the P2PKH authorities the UNKEYED `Hash(pubkey)` and split the registry into a standard and a custom range).
 //! The official vectors are vendored in `crates/kob-tests/vectors/kcc2/` and executed by
-//! `crates/kob-tests/tests/kcc2_conformance_tests.rs` (pure checks below) and by
-//! `crates/kob-tests/tests/kcc20_conformance_tests.rs` (the same cases executed in KOB's KCC-20 programs).
+//! `crates/kob-tests/tests/kcc20/kcc2_conformance_tests.rs` (pure checks below) and by
+//! `crates/kob-tests/tests/kcc20/kcc20_conformance_tests.rs` (the same cases executed in KOB's KCC-20 programs).
 //!
 //! KCC-20 (KOB's token programs) uses every assigned scheme `0x00`-`0x04` as its `owner_scheme` and no custom scheme.
 //! The functions here are the off-chain mirror of what the programs check; the programs themselves are the authority.

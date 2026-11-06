@@ -134,6 +134,6 @@ id_type 3, so a transaction that spends key-held KRON tokens must include a fund
 outputs are bound to the first token input; outputs must hold 1..=1e9 units. `crates/kob-protocol/tests/`
 validates every builder output on both real templates in the v2.1.0 engine (`kron.*` golden vectors).
 
-Tests: `crates/kob-tests/tests/kob_kron_v2_tests.rs` (sell side) and `kob_kron_v2_buy_tests.rs` (buy side),
+Tests: `crates/kob-tests/tests/kob/kob_kron_v2_tests.rs` (sell side) and `kob_kron_v2_buy_tests.rs` (buy side),
 both against the real KRON bytes of both templates.
 Nothing here has been independently audited (the internal pre-mainnet audit: `docs/security/AUDIT-2026-10.md`).

@@ -5,7 +5,7 @@
 // validateOutputState checks it). Everything else is kob_ask_port.ag verbatim, contSpk included (now unused).
 //
 // Build: scripts/build-argent.sh publishes the generated SilverScript as
-// contracts/research/argent/port-out/KobAsk.idiomatic.sil; crates/kob-tests/tests/argent_become_splice_tests.rs runs it
+// contracts/research/argent/port-out/KobAsk.idiomatic.sil; crates/kob-tests/tests/argent/argent_become_splice_tests.rs runs it
 // in the script engine next to the hand-written order, the 1:1 port and a splice prototype of `become`.
 
 const byte SCHEME_P2PK = 0x00;

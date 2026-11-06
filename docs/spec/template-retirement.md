@@ -22,7 +22,7 @@ template hash from those bytes on load. Every retired template has the state lay
 `a0893109`) of today's kind of the same name, so its orders' terms decode with today's codec and only their script differs.
 The maker cancels such an order in the current app or CLI (`CancelOrder::retired` / `CancelItem::retired`, the signing plan
 `retiredCancel`): custody, strays and the carrier back to the maker exactly as its `cancel(sig)` requires, validated for every
-retired template in the script engine (`crates/kob-tests/tests/retired_cancel_tests.rs`). **Nothing else is built:** no fill, stop,
+retired template in the script engine (`crates/kob-tests/tests/kob/retired_cancel_tests.rs`). **Nothing else is built:** no fill, stop,
 trail, merge, sweep, amend, cancel-replace or refund, no listing, and no placement record of it is accepted. The web wallet
 resolves the order from its own placement record under the retired script, marks it "older contract version — cancel only", and
 counts it in Cancel all; its signer shows such a cancel as "Cancel an order under an older contract version (cancel only)" and

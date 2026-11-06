@@ -9605,7 +9605,7 @@
       "used": "449748363989768225"
     }
   ],
-  "generatedBy": "crates/kob-tests/tests/c6_diff.rs wallet_vectors (KOB_REGEN=1 rewrites); Rust: kob_protocol::state",
+  "generatedBy": "crates/kob-tests/tests/audit/c6_diff.rs wallet_vectors (KOB_REGEN=1 rewrites); Rust: kob_protocol::state",
   "legsWorst": [
     {
       "askStopWorst": "0",

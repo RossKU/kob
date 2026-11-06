@@ -13,7 +13,7 @@
 //! today's codec ([`crate::state::AnyState::decode`]) and only its bytecode differs. The bytes are the compiled bytecode of the
 //! retired artifact, taken from the last commit that carried it (`data/retired/<Kind>.<hash prefix>.bin`,
 //! `scripts/extract-retired.mjs`); each template hash is recomputed from them (`template_hash(prefix, suffix)`), so a changed
-//! file fails to load. The script engine tests (`crates/kob-tests/tests/retired_cancel_tests.rs`) validate the cancel of every
+//! file fails to load. The script engine tests (`crates/kob-tests/tests/kob/retired_cancel_tests.rs`) validate the cancel of every
 //! retired template and show that its other entries are not reachable through this table.
 
 use std::sync::OnceLock;

@@ -69,7 +69,7 @@ build trades its tokens without a registry entry (each carries `genesis_unverifi
 KCC-20 codec program (custody 4, holder 0, witness `kcc20-transfer`): the KCC-20 order kinds serve it unchanged. A
 transaction spending KOB orders carries at most 8 token inputs of one token (the orders' stray scan,
 `MAX_TOK_IN_KCC20`); the program's own limit is 10. Measured facts and the review items with a test:
-`crates/kob-tests/tests/program_kasparockettoken11458.rs`; the order grid, the pair attacks and the nine-input refusal on its
+`crates/kob-tests/tests/programs/program_kasparockettoken11458.rs`; the order grid, the pair attacks and the nine-input refusal on its
 holders: `kcc20_public_mint_tests.rs`, `audit_pair_sec_tests.rs`, the pair suites (`pair_harness::mixed_pairs_kr`),
 `kob_ifd_pair_tests.rs` NIS8 / NIS9; the executor: `crates/kob-executor/tests/flow_kasparocket.rs`; the review:
 `docs/spec/token-programs.md` section 6.

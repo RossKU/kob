@@ -1,7 +1,7 @@
 // C6 differential vectors, web TS <-> Rust: the wallet arithmetic this app takes from kob-protocol `state.rs` (the quote rule, a bid's
 // budget, escrow and buying power, stop-band worst prices, the largest band within a limit, the worst price over both legs) on random
 // inputs with boundaries and near-overflow values. The expected values are Rust's (`c6-economics.vectors.json`, generated and kept current
-// by `crates/kob-tests/tests/c6_diff.rs`, `KOB_REGEN=1`); every TS result, and every kob-wasm helper the planners call, must equal them
+// by `crates/kob-tests/tests/audit/c6_diff.rs`, `KOB_REGEN=1`); every TS result, and every kob-wasm helper the planners call, must equal them
 // exactly.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';

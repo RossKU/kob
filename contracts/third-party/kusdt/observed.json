@@ -1,5 +1,5 @@
 {
-  "$comment": "kUSDT on testnet-10 (kaspador.github.io/kusdt-docs), read from public chain data 2026-11-05: the genesis transaction (output 0 the BridgeMint, output 1 a TokenSeed of the public-mint app, output 2 the creator's change), the BridgeMint redeem script as its first spend revealed it, and a redemption whose payload names its burn output 0 (chain 02, BNB Chain) and whose output 0 holds 20,000,000 base units at that burn owner. Used by crates/kob-tests/tests/kusdt_bridge_tests.rs; see UPSTREAM.md.",
+  "$comment": "kUSDT on testnet-10 (kaspador.github.io/kusdt-docs), read from public chain data 2026-11-05: the genesis transaction (output 0 the BridgeMint, output 1 a TokenSeed of the public-mint app, output 2 the creator's change), the BridgeMint redeem script as its first spend revealed it, and a redemption whose payload names its burn output 0 (chain 02, BNB Chain) and whose output 0 holds 20,000,000 base units at that burn owner. Used by crates/kob-tests/tests/programs/kusdt_bridge_tests.rs; see UPSTREAM.md.",
   "network": "testnet-10",
   "token": {
     "ticker": "kUSDT",

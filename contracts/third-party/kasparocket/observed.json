@@ -1,5 +1,5 @@
 {
- "$comment": "KaspaRocket launch of the token ZKASB on testnet-10 (kasparocket.fun, read from api-tn10.kaspa.org on 2026-10-14): the token genesis, the creator's move of the whole supply into the launch's LP_AMM pool (covenant-id custody, owner scheme 4), the pool's own genesis and the first buy from the pool. Inputs carry their spent outputs (`entry`); lock time, gas and sequences are 0. crates/kob-tests/tests/program_kasparockettoken11458.rs rebuilds the transactions (their ids), reproduces the token inputs' signature scripts with KOB's builder and runs them in the engine.",
+ "$comment": "KaspaRocket launch of the token ZKASB on testnet-10 (kasparocket.fun, read from api-tn10.kaspa.org on 2026-10-14): the token genesis, the creator's move of the whole supply into the launch's LP_AMM pool (covenant-id custody, owner scheme 4), the pool's own genesis and the first buy from the pool. Inputs carry their spent outputs (`entry`); lock time, gas and sequences are 0. crates/kob-tests/tests/programs/program_kasparockettoken11458.rs rebuilds the transactions (their ids), reproduces the token inputs' signature scripts with KOB's builder and runs them in the engine.",
  "network": "testnet-10",
  "token": {
   "ticker": "ZKASB",

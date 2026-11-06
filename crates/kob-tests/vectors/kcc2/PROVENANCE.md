@@ -13,7 +13,7 @@
 | Fetched | 2026-10-02, `git show 411b41b:kcc-0002/vectors/authority-schemes.json` from a clone of kaspanet/kccs |
 | License | The kccs repository is CC0 1.0 Universal (`LICENSE.md`); the vectors are redistributed unchanged |
 
-`crates/kob-tests/tests/kcc2_conformance_tests.rs` asserts the sha256 above. The vectors' public keys are secp256k1
+`crates/kob-tests/tests/kcc20/kcc2_conformance_tests.rs` asserts the sha256 above. The vectors' public keys are secp256k1
 multiples of the generator (`79be...` = 1G, `c6047f...` = 2G, `0379be...` = -G), so the program-level test in
-`crates/kob-tests/tests/kcc20_conformance_tests.rs` signs with the matching secret keys (1, 2, n-1) and executes every
+`crates/kob-tests/tests/kcc20/kcc20_conformance_tests.rs` signs with the matching secret keys (1, 2, n-1) and executes every
 approval check in KOB's KCC-20 programs.

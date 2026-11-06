@@ -83,7 +83,7 @@ transactions. Two cases:
   covenant id it names, and `verify_genesis` recomputes the token's id over the outputs bound to it. Kasseal's launch carries
   the curve's genesis (its own covenant id) and the creator's change beside the two token outputs; KForge's curve ("rung") is
   its own covenant. The token outputs are then typically owned by the curve's covenant id (KCC-20 owner scheme 4, KRON
-  id_type 2): `crates/kob-tests/tests/kcc20_public_mint_genesis_tests.rs`
+  id_type 2): `crates/kob-tests/tests/kcc20/kcc20_public_mint_genesis_tests.rs`
   `a_kasseal_launch_genesis_verifies_as_a_fixed_supply_public_mint_token`.
 * **Companions bound to the token's own covenant id** are accepted only when the program's profile declares them
   (`genesis.companions`), by role: `minter`, `seed`, `curve`, `pool`, `vault`, `bridge-minter`. A companion is either *decoded* (`decoder`:
@@ -188,7 +188,7 @@ notes:
 KForge's current tokens use the KCC-20 reference actor (`KForgeToken7214`, below); this KRON-layout program is an earlier one observed
 on testnet-10, which KForge's registry no longer names. It stays testnet-10 only and `pending-review`.
 
-`crates/kob-tests/tests/program_kforgetoken1785.rs`, fixtures in `contracts/third-party/kforge/` (`program.bin`, a redeem script
+`crates/kob-tests/tests/programs/program_kforgetoken1785.rs`, fixtures in `contracts/third-party/kforge/` (`program.bin`, a redeem script
 observed on testnet-10; `observed-transfer.json`, a real transfer).
 
 * Derived from the bytes alone (`kob registry add-program ... --slots 1/3 --holder 0 --network testnet-10`): KRON codec, a one-byte
@@ -218,7 +218,7 @@ observed on testnet-10; `observed-transfer.json`, a real transfer).
 
 ### KaspaRocket
 
-`crates/kob-tests/tests/program_kasparockettoken11458.rs`, fixtures in `contracts/third-party/kasparocket/` (`observed.json`, a real
+`crates/kob-tests/tests/programs/program_kasparockettoken11458.rs`, fixtures in `contracts/third-party/kasparocket/` (`observed.json`, a real
 testnet-10 launch: genesis, the supply's move into the launch's pool, the pool's genesis, the first buy; `UPSTREAM.md`). Reviewed
 (internal review only, maintainer decision 2026-10-27): tradable on mainnet.
 
@@ -273,7 +273,7 @@ testnet-10 launch: genesis, the supply's move into the launch's pool, the pool's
 
 ### KForge (KCC-20, `KForgeToken7214`)
 
-`crates/kob-tests/tests/program_kforgetoken7214.rs`, fixtures in `contracts/third-party/kforge-kcc20/` (`observed.json`: a real testnet-10
+`crates/kob-tests/tests/programs/program_kforgetoken7214.rs`, fixtures in `contracts/third-party/kforge-kcc20/` (`observed.json`: a real testnet-10
 launch, its genesis and the move of the supply into the curve, and a mainnet sell back to a curve; `UPSTREAM.md`). Reviewed (internal
 review only, 2026-11-05): tradable on mainnet.
 
@@ -315,7 +315,7 @@ review only, 2026-11-05): tradable on mainnet.
 ### kUSDT (federated bridge, `KCC20PublicMint`)
 
 `contracts/third-party/kusdt/UPSTREAM.md` (what the issuer publishes, what KOB checked, the trust it rests on),
-`crates/kob-tests/tests/kusdt_bridge_tests.rs` and `crates/kob-protocol/src/kusdt.rs`; fixture `contracts/third-party/kusdt/observed.json`
+`crates/kob-tests/tests/programs/kusdt_bridge_tests.rs` and `crates/kob-protocol/src/kusdt.rs`; fixture `contracts/third-party/kusdt/observed.json`
 (testnet-10).
 
 * **Program.** kUSDT holders are the `KCC20` of the published public-mint app byte for byte, so its orders and transfers are

@@ -7,7 +7,7 @@
 //! holds one `PublicMint` (the advertised supply as its allowance) and at least one `TokenSeed`, and no pre-minted
 //! balances. KOB takes their programs from upstream's published artifacts (`contracts/third-party/kcc20-reference/
 //! public-mint.artifact.json` for `c8a0871` and `public-mint.27f8403.artifact.json`, vendored unmodified and pinned by
-//! sha256 in `crates/kob-tests/tests/kcc20_reference_tests.rs`) and checks the Sil template hash of each against the
+//! sha256 in `crates/kob-tests/tests/kcc20/kcc20_reference_tests.rs`) and checks the Sil template hash of each against the
 //! constants below. The `KCC20` holder program is the same bytes in both builds (Sil hash [`KCC20_SIL_HASH`]); only the two
 //! issuers differ, so a token of either build is the same token program to every order.
 //!

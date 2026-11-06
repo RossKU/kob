@@ -1,5 +1,5 @@
 # KobAsk, idiomatic Argent port (argentc output): contracts/research/argent/port-out/KobAsk.idiomatic.sil (2705 B redeem script)
-# constructor arguments: contracts/orders/KobAsk.ctor.json; written by crates/kob-tests/tests/argent_port_compare_tests.rs
+# constructor arguments: contracts/orders/KobAsk.ctor.json; written by crates/kob-tests/tests/argent/argent_port_compare_tests.rs
 # regenerate: KOB_WRITE_COMPARE=1 cargo test --release -p kob-tests --test argent_port_compare_tests
 #
 # Columns: offset in the redeem script (decimal), size, tag, opcode, push data (hex; longer than 16 B abbreviated).

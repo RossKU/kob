@@ -7,11 +7,11 @@
 //! transfer of that token pays for them (the whole program is pushed in every token input's
 //! sigscript). KOB issues the reference in that standard configuration. The variants with other
 //! limits (4/5, 8/8, 16/16, [`kcc20_source_with_limits`]), proposal P2 and `KCC20Opt` are prototypes:
-//! kept and tested (`crates/kob-tests/tests/kcc20_limits_tests.rs`, `kcc20_p2_tests.rs`,
+//! kept and tested (`crates/kob-tests/tests/kcc20/kcc20_limits_tests.rs`, `kcc20_p2_tests.rs`,
 //! `kcc20_opt_tests.rs`), never issued.
 
 /// Proposal P2 (holders on the 3/3 program plus a matcher-held batch leader, `contracts/prototypes/kcc20/p2/`, tested in
-/// `crates/kob-tests/tests/kcc20_p2_tests.rs`) is a prototype and is NOT used for issuance.
+/// `crates/kob-tests/tests/kcc20/kcc20_p2_tests.rs`) is a prototype and is NOT used for issuance.
 pub const ISSUE_USE_P2_BATCH_LEADER: bool = false;
 /// Holder inputs and outputs a P2 batch leader can process in one transaction.
 pub const P2_BATCH_SLOTS: usize = 16;

@@ -3,10 +3,11 @@
 //!
 //! Include it next to the `kob-protocol` fixtures in a test binary:
 //! ```ignore
+//! #[path = "../common/mod.rs"]
 //! mod common;
-//! #[path = "../../kob-protocol/tests/common/mod.rs"]
+//! #[path = "../../../kob-protocol/tests/common/mod.rs"]
 //! mod fx;
-//! #[path = "common/pair_harness.rs"]
+//! #[path = "../common/pair_harness.rs"]
 //! mod ph;
 //! ```
 //!

@@ -18,4 +18,4 @@ KOB embeds this program as `KForgeToken1785` (`crates/kob-protocol/data/programs
 mainnet build never trades it; a testnet-10 build trades its tokens through the delivery id_type 0 builds of the KRON order
 kinds (`KobAskKronD0` .. `KobIfdAskKronD0`, `contracts/orders/kron/README.md`), because the program refuses address-presence
 holders (id_type 3) and authorises id_type 0 holders by a token-level signature. Measured facts and the review items with a test:
-`crates/kob-tests/tests/program_kforgetoken1785.rs`; what is still open: `docs/spec/token-programs.md` section 6.
+`crates/kob-tests/tests/programs/program_kforgetoken1785.rs`; what is still open: `docs/spec/token-programs.md` section 6.

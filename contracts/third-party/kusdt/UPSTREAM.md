@@ -35,7 +35,7 @@ describes:
   suffix, which are also what the issuer's published wasm core (`@kusdt/core` `layout`) reports for `BridgeMint`.
 * The genesis group (`73e7a514...`) recomputes to the token's covenant id `6711958e...` and verifies under `KCC20PublicMint` with the
   `BridgeMint` as its `bridge-minter` companion and the unspent `TokenSeed` rebuilt from the creator's key
-  (`crates/kob-tests/tests/kusdt_bridge_tests.rs`). Without the pin the same group fails as contaminated.
+  (`crates/kob-tests/tests/programs/kusdt_bridge_tests.rs`). Without the pin the same group fails as contaminated.
 * The issuer's worked burn example (owner `09d6acad...`) and the observed redemption (`929bf07b...`): its output 0 is the
   `KCC20PublicMint` P2SH of a 20,000,000-unit state at the burn owner its payload names.
 

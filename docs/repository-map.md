@@ -9,7 +9,7 @@
 | `crates/kob-executor` | The `kobd` daemon: the Indexer (full history, record log, read API over REST and WebSocket) and the Executor (matcher, keepers, x402 facilitator), alone or together; its `Dockerfile` builds a `kobd` image of one network from source (`docs/ops/executor-quickstart.md`, section 6) |
 | `crates/kob-x402` | x402 wire types, verifiers (KAS, KCC-20, swap-and-pay), payer and merchant SDK, in-memory chain test kit |
 | `crates/kob-cli` | Command line ([README](../crates/kob-cli/README.md)): trading (`kob place` with every order kind of the web ticket, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, planned like the web wallet; `book`, `orders`, `balances`), `kob token create`, `kob registry` (validate, verify-genesis, programs, add-program), `kob recover`, `kob order sweep` / `cancel` |
-| `crates/kob-tests` | The contracts executed in the rusty-kaspa v2.1.0 script engine: positive and negative harnesses |
+| `crates/kob-tests` | The contracts executed in the rusty-kaspa v2.1.0 script engine: positive and negative harnesses, by area in `tests/` (`kob/`, `kcc20/`, `argent/`, `audit/`, `programs/`) |
 | `web/` | Static, client-side, non-custodial web UI (TypeScript, Preact) over `kob-wasm`; mock indexer and node for offline use; module map in [web/src/README.md](../web/src/README.md) |
 | `packages/kob-x402` | TypeScript x402 SDK and an example paid API |
 | `registry/` | Token registry: the supported programs and a pinned snapshot of token facts (no curation) |

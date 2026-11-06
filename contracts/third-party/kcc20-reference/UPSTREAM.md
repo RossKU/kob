@@ -15,7 +15,7 @@
 | `KCC20.public-mint.sil` | `fixtures/public-mint/sil/KCC20.sil` | `cab6cc21f1ea3d1e0be1caa0907f3996bcd0ea04` | `9c61d62a1b90ad541bbf5c48ec53faaff1826cbc6f26bd42fa429df5c295316c` (12,136 B) |
 | `public-mint.artifact.json` | `fixtures/public-mint/artifact.json` | `30a4a75b45bc75764e55702e6486987667ae1764` | `a419f2aa5f18f2917bf1cd69fbf04942ef746fc832f8e1fcd7625582d4c6c771` (110,136 B) |
 
-The three files are byte for byte the upstream blobs; `crates/kob-tests/tests/kcc20_reference_tests.rs` pins the sha256
+The three files are byte for byte the upstream blobs; `crates/kob-tests/tests/kcc20/kcc20_reference_tests.rs` pins the sha256
 values. The fixtures are renamed so that they are not mistaken for KOB files. `KCC20.public-mint.ctor.json` is KOB's
 (the constructor arguments `scripts/build-contracts.sh` compiles the fixture with: `gen__kcc20_template` = the program's
 own Sil template hash, then the example state of `contracts/kcc20/KCC20Ref.ctor.json`); the build writes
@@ -30,7 +30,7 @@ what is generated from them) are programs. Each issuer gains one entry, `rebalan
 the very blobs of `c8a0871`, so the token program and its hash are unchanged: the `KCC20` contract inside the new
 `artifact.json` is byte for byte the old one (4,031 B, state 1+145, Sil template hash `9703112e...`), and so are the holders'
 handle `734850b0...` and every order. The unchanged `public-mint.artifact.json` above is the `c8a0871` build; the `27f8403` files are
-vendored beside it (same rules: unmodified blobs, pinned by sha256 in `crates/kob-tests/tests/kcc20_reference_tests.rs`):
+vendored beside it (same rules: unmodified blobs, pinned by sha256 in `crates/kob-tests/tests/kcc20/kcc20_reference_tests.rs`):
 
 | File | Upstream path | Git blob | sha256 |
 |---|---|---|---|
@@ -102,7 +102,7 @@ Sil suffix (3,885 B), template hash `734850b0af0aeef49f009167bf9ddd238fd8c5cdbe2
 (`TemplateId::Kcc20PublicMint`, registry `kcc20-ref-public-mint`). The order contracts take the token template per order
 (`tokenTplHash`, `tplPrefixLen`, `tplSuffixLen`) and read the state at fixed offsets inside the 112 bytes, so they custody,
 fill and rebuild such tokens unchanged; a holder with any other context value is another template to them. Evidence:
-`crates/kob-tests/tests/kcc20_public_mint_tests.rs` and `registry_tests.rs` (the handle cut equals upstream's).
+`crates/kob-tests/tests/kcc20/kcc20_public_mint_tests.rs` and `registry_tests.rs` (the handle cut equals upstream's).
 `kob token create --program public-mint` issues a fixed-supply token of the published build (a genesis of `KCC20`
 holders, no `PublicMint`, no `TokenSeed`).
 
@@ -113,4 +113,4 @@ from `public-mint.artifact.json` (`crates/kob-protocol/src/public_mint.rs`, Sil 
 `f79a3fccf6f87d7076662410a17e54d1531889d9b60f630f9fbb8465a384e62d` at `c8a0871`; `8c87ce6e...` and `6ea2c53a...` at `27f8403`), requires their template fields to name the app's
 own programs and one extension commitment, and reports the minters' allowance: the maximum supply is the genesis holders'
 amounts plus that allowance, fixed at genesis. Rules and evidence: `docs/spec/kcc-conformance.md` section 4.3,
-`crates/kob-tests/tests/kcc20_public_mint_genesis_tests.rs`.
+`crates/kob-tests/tests/kcc20/kcc20_public_mint_genesis_tests.rs`.

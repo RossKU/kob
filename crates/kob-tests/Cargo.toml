@@ -20,3 +20,183 @@ silverscript-abi.workspace = true
 silverscript-lang.workspace = true
 blake3.workspace = true
 sha2 = "0.10"
+
+# Test targets by area. Names stay flat, so `cargo test --test <name>` and CI filters do not depend on the folder. A new test file
+# under a folder runs only once it has an entry here; one directly under tests/ (where `kob registry add-program` writes its stub)
+# is discovered without one.
+
+[[test]]
+name = "artifacts_tests"
+path = "tests/kob/artifacts_tests.rs"
+
+[[test]]
+name = "kob_ask_custody_ext_tests"
+path = "tests/kob/kob_ask_custody_ext_tests.rs"
+
+[[test]]
+name = "kob_cond_pair_tests"
+path = "tests/kob/kob_cond_pair_tests.rs"
+
+[[test]]
+name = "kob_ifd_pair_tests"
+path = "tests/kob/kob_ifd_pair_tests.rs"
+
+[[test]]
+name = "kob_kaspacom_v2_tests"
+path = "tests/kob/kob_kaspacom_v2_tests.rs"
+
+[[test]]
+name = "kob_kron_v2_buy_tests"
+path = "tests/kob/kob_kron_v2_buy_tests.rs"
+
+[[test]]
+name = "kob_kron_v2_tests"
+path = "tests/kob/kob_kron_v2_tests.rs"
+
+[[test]]
+name = "kob_pair_custody_ext_tests"
+path = "tests/kob/kob_pair_custody_ext_tests.rs"
+
+[[test]]
+name = "kob_pair_shapes_tests"
+path = "tests/kob/kob_pair_shapes_tests.rs"
+
+[[test]]
+name = "kob_pair_tests"
+path = "tests/kob/kob_pair_tests.rs"
+
+[[test]]
+name = "kob_v2_buy_tests"
+path = "tests/kob/kob_v2_buy_tests.rs"
+
+[[test]]
+name = "kob_v2_tests"
+path = "tests/kob/kob_v2_tests.rs"
+
+[[test]]
+name = "protocol_lib_tests"
+path = "tests/kob/protocol_lib_tests.rs"
+
+[[test]]
+name = "registry_tests"
+path = "tests/kob/registry_tests.rs"
+
+[[test]]
+name = "retired_cancel_tests"
+path = "tests/kob/retired_cancel_tests.rs"
+
+[[test]]
+name = "kcc1_conformance_tests"
+path = "tests/kcc20/kcc1_conformance_tests.rs"
+
+[[test]]
+name = "kcc20_conformance_tests"
+path = "tests/kcc20/kcc20_conformance_tests.rs"
+
+[[test]]
+name = "kcc20_issue_tests"
+path = "tests/kcc20/kcc20_issue_tests.rs"
+
+[[test]]
+name = "kcc20_issuer_27f8403_tests"
+path = "tests/kcc20/kcc20_issuer_27f8403_tests.rs"
+
+[[test]]
+name = "kcc20_limits_tests"
+path = "tests/kcc20/kcc20_limits_tests.rs"
+
+[[test]]
+name = "kcc20_opt_tests"
+path = "tests/kcc20/kcc20_opt_tests.rs"
+
+[[test]]
+name = "kcc20_p2_tests"
+path = "tests/kcc20/kcc20_p2_tests.rs"
+
+[[test]]
+name = "kcc20_public_mint_genesis_tests"
+path = "tests/kcc20/kcc20_public_mint_genesis_tests.rs"
+
+[[test]]
+name = "kcc20_public_mint_tests"
+path = "tests/kcc20/kcc20_public_mint_tests.rs"
+
+[[test]]
+name = "kcc20_reference_tests"
+path = "tests/kcc20/kcc20_reference_tests.rs"
+
+[[test]]
+name = "kcc20_standard_slots_tests"
+path = "tests/kcc20/kcc20_standard_slots_tests.rs"
+
+[[test]]
+name = "kcc23_conformance_tests"
+path = "tests/kcc20/kcc23_conformance_tests.rs"
+
+[[test]]
+name = "kcc2_conformance_tests"
+path = "tests/kcc20/kcc2_conformance_tests.rs"
+
+[[test]]
+name = "argent_become_splice_tests"
+path = "tests/argent/argent_become_splice_tests.rs"
+
+[[test]]
+name = "argent_import_pin_tests"
+path = "tests/argent/argent_import_pin_tests.rs"
+
+[[test]]
+name = "argent_port_compare_tests"
+path = "tests/argent/argent_port_compare_tests.rs"
+
+[[test]]
+name = "argent_port_tests"
+path = "tests/argent/argent_port_tests.rs"
+
+[[test]]
+name = "argent_router_tests"
+path = "tests/argent/argent_router_tests.rs"
+
+[[test]]
+name = "audit_pair_sec_tests"
+path = "tests/audit/audit_pair_sec_tests.rs"
+
+[[test]]
+name = "audit_rest_interval_tests"
+path = "tests/audit/audit_rest_interval_tests.rs"
+
+[[test]]
+name = "c4_security_tests"
+path = "tests/audit/c4_security_tests.rs"
+
+[[test]]
+name = "c6_diff"
+path = "tests/audit/c6_diff.rs"
+
+[[test]]
+name = "c6_fuzz"
+path = "tests/audit/c6_fuzz.rs"
+
+[[test]]
+name = "review_b2_kaspacom"
+path = "tests/audit/review_b2_kaspacom.rs"
+
+[[test]]
+name = "review_b2_kron"
+path = "tests/audit/review_b2_kron.rs"
+
+[[test]]
+name = "kusdt_bridge_tests"
+path = "tests/programs/kusdt_bridge_tests.rs"
+
+[[test]]
+name = "program_kasparockettoken11458"
+path = "tests/programs/program_kasparockettoken11458.rs"
+
+[[test]]
+name = "program_kforgetoken1785"
+path = "tests/programs/program_kforgetoken1785.rs"
+
+[[test]]
+name = "program_kforgetoken7214"
+path = "tests/programs/program_kforgetoken7214.rs"

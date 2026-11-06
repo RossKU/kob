@@ -20,6 +20,6 @@ gains seven amount-threshold cases (`threshold-zero`, `threshold-negative`, `thr
 permit them (KCC-20 section 5: a negative threshold behaves as zero, a contract MAY require a non-negative one). Every
 other byte is unchanged.
 
-`crates/kob-tests/tests/kcc20_conformance_tests.rs` asserts the sha256 above, so any edit or drift fails the test suite.
+`crates/kob-tests/tests/kcc20/kcc20_conformance_tests.rs` asserts the sha256 above, so any edit or drift fails the test suite.
 The vectors contain no signature verification results ("signature checks are stipulated to succeed", all keys and signatures are
 placeholder byte patterns), so the test executes the same structures with real keys; see the header of that test file.

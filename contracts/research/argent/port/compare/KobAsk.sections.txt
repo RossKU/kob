@@ -1,4 +1,4 @@
-# KobAsk: bytes per section (constructor arguments contracts/orders/KobAsk.ctor.json); written by crates/kob-tests/tests/argent_port_compare_tests.rs
+# KobAsk: bytes per section (constructor arguments contracts/orders/KobAsk.ctor.json); written by crates/kob-tests/tests/argent/argent_port_compare_tests.rs
 # Each construct is removed from the source after the ones above it and the script compiled again. The
 # first number is the size difference; "removed opcodes" are the offsets, in the full script, of the opcodes
 # that disappear; "also" are the other changes (see the header of KobAsk.<variant>.opcodes.txt).

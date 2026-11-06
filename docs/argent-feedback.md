@@ -67,7 +67,7 @@ router an intent owns outputs `j` and `j + 1` and must be the last input.
 
 * Where: `tools/router-gen/router_head.ag` ("POSITIONAL ANTI-ALIASING RULE"),
   `docs/argent.md` ("Positional anti-aliasing rule").
-* Repro: `crates/kob-tests/tests/argent_router_tests.rs`, the ablation cases `A-K7`, `A-K8`
+* Repro: `crates/kob-tests/tests/argent/argent_router_tests.rs`, the ablation cases `A-K7`, `A-K8`
   (with the rule removed the attack transactions validate; on the shipped router they reject).
 * Answer: app-level business logic, no compiler help expected. The rule stays hand-written and
   reviewed. It may be worth a line in Argent's docs as a known pattern.
@@ -88,7 +88,7 @@ have consistent receipts.
 * Answer (to the question "where exactly would you expect a verification that does not currently
   exist?"): the above.
 
-* Where: `docs/argent.md` ("Trust"), `crates/kob-tests/tests/argent_import_pin_tests.rs`.
+* Where: `docs/argent.md` ("Trust"), `crates/kob-tests/tests/argent/argent_import_pin_tests.rs`.
 * Repro: `argent_import_pin_tests.rs` builds `contracts/argent/examples/closed_icc_gate.ag` against
   the genuine artifact (links its handle), a forged self-consistent artifact with the same app name
   and ABI (refused under the pin), without a pin (refused), and against the interface SOURCE
@@ -199,14 +199,14 @@ differs from the single-actor build.
   the template, so only a `KCC20` can lead). KOB builds `kcc20.ag` as a single-actor app (2,915 B,
   state 1 + 112) and checks that build in `scripts/build-argent.sh`; both builds are vendored and
   compared in `contracts/third-party/kcc20-reference/UPSTREAM.md` and
-  `crates/kob-tests/tests/kcc20_reference_tests.rs`. A standard way to publish a single-actor build of
+  `crates/kob-tests/tests/kcc20/kcc20_reference_tests.rs`. A standard way to publish a single-actor build of
   a library actor (or a stable state view that keeps the 1 + 112 layout) would let token programs and
   their importers share one byte layout.
 * For tokens of the published build, the handle is the view we need: the context field holds the
   program's own template hash in every UTXO, so the handle of `template/kcc20` (prefix 34 B, the
   112-byte state open, `734850b0...`) is a fixed template, and KOB's orders custody and fill such
   tokens unchanged once they pin it (`TemplateId::Kcc20PublicMint`,
-  `crates/kob-tests/tests/kcc20_public_mint_tests.rs`).
+  `crates/kob-tests/tests/kcc20/kcc20_public_mint_tests.rs`).
 * Repro: append a second actor and an `app` listing both to `kcc20_8x8.ag`, build, and compare
   `sil/KCC20.sil` and the artifact's `template_plan.templates[KCC20].actor_type_handle` with
   `contracts/argent/KOBToken/`.
@@ -228,7 +228,7 @@ Question from the Argent team: what exactly is duplicated by a port?
 verbatim, plus what Argent requires (`emits next: KobAsk[0..=1]` and a bulk `become` of the
 continuation state, `amountLeft - n`, when the ask rests). One forced edit: `self` is reserved (the
 local is renamed). The hand-written order uses `if` statements, not `a ? b : c` (which argentc's
-lexer rejects), so nothing else is rewritten. `crates/kob-tests/tests/argent_port_tests.rs`
+lexer rejects), so nothing else is rewritten. `crates/kob-tests/tests/argent/argent_port_tests.rs`
 compiles both with the same constructor arguments and removes each check on its own to measure it
 (`cargo test -p kob-tests --test argent_port_tests -- --nocapture`):
 
@@ -360,6 +360,6 @@ published name had to be used, although on chain the check is structural.
 
 ## What we can share
 
-Patches, the harness (`crates/kob-tests/tests/argent_router_tests.rs`: positive transactions,
+Patches, the harness (`crates/kob-tests/tests/argent/argent_router_tests.rs`: positive transactions,
 negative cases and ablation pairs, run in rusty-kaspa v2.1.0's script engine) and the ablation
 results (`tools/ablation/RESULTS.md`), if any of it is useful to Argent's own tests.

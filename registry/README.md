@@ -71,7 +71,7 @@ registry changes happen only in a release (`docs/ops/release.md`, 3).
 **Family** = a token program lineage KOB can escrow: `kcc20` (draft KCC-20, 112-byte state) or `kron` (KRON, 46-byte state). One
 order-contract pair per family; a token of one family can never trade through the other family's orders.
 
-**`templates`** (pinned token programs; hashes are recomputed from the committed artifacts/bytes by `crates/kob-tests/tests/registry_tests.rs`):
+**`templates`** (pinned token programs; hashes are recomputed from the committed artifacts/bytes by `crates/kob-tests/tests/kob/registry_tests.rs`):
 
 - `capabilities` (optional list, default none): `mint-authority`, `public-mint`, `burn`, `freeze`, `seize`, `blacklist`
 - `risks` (optional list of strings, default none): declared risks that are not a capability (missing hardening, signing assumptions)

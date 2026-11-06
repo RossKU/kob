@@ -87,7 +87,7 @@ Embedded as `KForgeToken7214` (`crates/kob-protocol/data/programs.json`): `revie
 testnet-10]`, on the shipped registry's strict list (`kforge-token-7214`), so a mainnet build trades its tokens without a registry
 entry. It is a KCC-20 codec program (custody 4, holder 0, witness `kcc20-transfer`): the KCC-20 order kinds serve it unchanged, within
 the program's 6 token inputs / 6 token outputs. KOB offers only its own book; a token still on KForge's curve or in its pool trades there
-too, and KOB does not route to either. Tests: `crates/kob-tests/tests/program_kforgetoken7214.rs` (provenance, the observed cells,
+too, and KOB does not route to either. Tests: `crates/kob-tests/tests/programs/program_kforgetoken7214.rs` (provenance, the observed cells,
 owners, conservation, slots, carrier floor, KOB orders) and `kcc20_public_mint_tests.rs` (the order grid on its holders, six custodies
 and a seventh refused, the context-field and program swaps); the review: `docs/spec/token-programs.md` section 6.
 

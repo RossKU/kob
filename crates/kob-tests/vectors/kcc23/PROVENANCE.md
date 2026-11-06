@@ -14,5 +14,5 @@
 | License | The kccs repository is CC0 1.0 Universal (`LICENSE.md`); the vectors are redistributed unchanged |
 
 KCC-23 is a Draft: when upstream changes the vectors, replace the file, update this table and the sha256 in
-`crates/kob-tests/tests/kcc23_conformance_tests.rs` (which asserts it, so any edit or drift fails the test suite), and check
+`crates/kob-tests/tests/kcc20/kcc23_conformance_tests.rs` (which asserts it, so any edit or drift fails the test suite), and check
 `crates/kob-protocol/src/kcc23.rs`, the one module that implements the format.

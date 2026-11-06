@@ -141,7 +141,7 @@ done
 
 # 6. The 1:1 Argent port of KobAsk (contracts/research/argent/port/, docs/argent-feedback.md item 10): a measurement, not a KOB
 #    contract. Only its generated SilverScript is published (contracts/research/argent/port-out/, compared with the hand-written
-#    KobAsk by crates/kob-tests/tests/argent_port_tests.rs).
+#    KobAsk by crates/kob-tests/tests/argent/argent_port_tests.rs).
 mkdir -p "$STAGE/src/port"
 cp contracts/research/argent/port/*.ag "$STAGE/src/port/"
 (cd "$STAGE/src/port" && "$ARGENTC" build kob_ask_port.ag --out ../../out/port >/dev/null)

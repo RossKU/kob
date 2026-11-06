@@ -290,7 +290,7 @@ the right setting.
 * **KRON adapter ablations**: in `kron-sell` and `kron-buy`, the pin of the only token output is removed by an `rxDel` on the
   `validateOutputStateWithInputTemplate(...)` call after the `Pin the only token output` comment; `IA24a` and `IA24b` are the
   defence-in-depth pair (`hold`) with their measured scenario lists.
-* **Argent router** (`crates/kob-tests/tests/argent_router_tests.rs`, `router_ablation_*`): ablates the generated router
+* **Argent router** (`crates/kob-tests/tests/argent/argent_router_tests.rs`, `router_ablation_*`): ablates the generated router
   source inside the test itself. Each ablation edits one entry and asserts that every needle occurs exactly once, so it
   cannot silently be a no-op. That in-test variant is kept as is; this tool covers only the contract-source ablations of
   the order suites.

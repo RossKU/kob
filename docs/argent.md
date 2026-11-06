@@ -112,7 +112,7 @@ actor PriceGate owns PriceGateState {
 ```
 
 The complete example is `contracts/argent/examples/closed_icc_gate.ag` (compiled by
-`scripts/build-argent.sh`; `crates/kob-tests/tests/argent_import_pin_tests.rs` builds it against the
+`scripts/build-argent.sh`; `crates/kob-tests/tests/argent/argent_import_pin_tests.rs` builds it against the
 genuine and a forged artifact).
 
 1. Copy `contracts/argent/KOBOrders/artifact.json` (the reference build, final on every network) into your repository and
@@ -411,7 +411,7 @@ per bid (`A-M2`) or `max_sell_a` per bid (`A-M4`), a sweep that breaks the payer
 
 ### Evidence
 
-`crates/kob-tests/tests/argent_router_tests.rs` runs everything in rusty-kaspa v2.1.0's script engine
+`crates/kob-tests/tests/argent/argent_router_tests.rs` runs everything in rusty-kaspa v2.1.0's script engine
 with covenant context and script-unit metering: positive transactions, negative cases and
 ablation pairs. Positive: R1 (KAS -> token, with an ask tip), R2 (token -> KAS), R3 (token -> KAS ->
 token), R4a-c (cancels, a token intent's with its lock), C1 and N-C1-2 (a token intent's cancel without its lock is refused; `c4_router_token_cancel_checks_the_lock_owner`: one that spends another token UTXO of the same token at j + 1 is refused too, and accepted by the actor with the owner check removed), E1-E4 (expiry of each intent kind at and after the
@@ -436,7 +436,7 @@ executes and validates every actor on every program pair of its family (8/8, 3/3
 KRON 2,433 B with an 8/8 token B, KRON 2,732 B with a 3/3 token B; the 3/3 program refuses the three-bid sells at
 creation), cancels and expires every one of them (redirected payouts, changes and expiries, an expiry 1 ms early, a
 cancel by another key and one without its lock are rejected at the intent input), and measures the cancel and expire
-budgets over all of them. `crates/kob-tests/tests/c4_security_tests.rs` (`aud_rt_router_token_cancel_refuses_a_minter_or_borrow_enabled_lock`)
+budgets over all of them. `crates/kob-tests/tests/audit/c4_security_tests.rs` (`aud_rt_router_token_cancel_refuses_a_minter_or_borrow_enabled_lock`)
 edits the lock of an honest cancel into a borrow-enabled (KCC-20) or minter (KRON) UTXO: the router refuses it at the intent
 input, and the same actor without that line of its cancel accepts it (AUD-RT). `c4_router_token_cancel_checks_the_lock_owner`
 forges a payer-signed cancel that spends the payer's own tokens in place of the lock, on the 8/8 and 3/3 programs and on

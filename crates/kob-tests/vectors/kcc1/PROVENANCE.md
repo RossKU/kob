@@ -14,5 +14,5 @@
 | Fetched | 2026-10-02, `git show 411b41b:kcc-0001/vectors/conformance.json` from a clone of kaspanet/kccs |
 | License | The kccs repository is CC0 1.0 Universal (`LICENSE.md`); the vectors are redistributed unchanged |
 
-`crates/kob-tests/tests/kcc1_conformance_tests.rs` asserts the sha256 above, so any edit or drift fails the test suite.
+`crates/kob-tests/tests/kcc20/kcc1_conformance_tests.rs` asserts the sha256 above, so any edit or drift fails the test suite.
 Re-vendor (and update the sha256 there) when the file changes upstream; KCC-1 is in Last Call, not Final.

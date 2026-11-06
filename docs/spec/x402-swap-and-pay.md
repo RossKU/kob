@@ -873,12 +873,12 @@ Engine-validated cases: `crates/kob-protocol/tests/intent_builders.rs` (every ro
 executed and validated on every program pair of its family: 8/8, 3/3, 3/3 to 8/8, both KRON programs;
 redirected outputs rejected by the router; the payer's cancel; the cancel budget; every shape expired at
 its deadline, rejected 1 ms before it and with its KAS or tokens redirected),
-`crates/kob-tests/tests/c4_security_tests.rs` (the cancel's lock owner check on KCC-20 and KRON, and its refusal of a
+`crates/kob-tests/tests/audit/c4_security_tests.rs` (the cancel's lock owner check on KCC-20 and KRON, and its refusal of a
 borrow-enabled or minter lock, each with its ablation),
 `crates/kob-x402/tests/intent.rs` (payer SDK, verifier and keeper over the in-memory chain; `intent-neg-hashtype`
 in `intent_creation_payer_signatures_must_use_sighash_all`) and
 `crates/kob-executor/tests/x402_intents.rs` (the facilitator end to end). The router's own covenant rules
-are covered by `crates/kob-tests/tests/argent_router_tests.rs` (positive, negative and ablation cases).
+are covered by `crates/kob-tests/tests/argent/argent_router_tests.rs` (positive, negative and ablation cases).
 
 | Id | Case | Expected |
 |---|---|---|
