@@ -72,9 +72,11 @@ what result.
 |---|---|
 | [../contracts/README.md](../contracts/README.md) | Contract sources, artifacts, reproducible builds, deployment records |
 | [../contracts/orders/kron/README.md](../contracts/orders/kron/README.md) | The KRON token adapters |
+| [../contracts/prototypes/README.md](../contracts/prototypes/README.md), [../contracts/research/README.md](../contracts/research/README.md) | What is not deployed |
 | [../registry/README.md](../registry/README.md) | The token registry: strict template list, open token list |
-| [../web/README.md](../web/README.md) | The web UI, its mock stack and tests |
+| [../web/README.md](../web/README.md) | The web UI, its mock stack and tests ([src/README.md](../web/src/README.md): the module map) |
 | [../packages/kob-x402/examples/paid-api/README.md](../packages/kob-x402/examples/paid-api/README.md) | Example paid API using the TypeScript x402 SDK |
+| [../tools/README.md](../tools/README.md) | The tools: role, use by CI and build scripts |
 | [../tools/ablation/README.md](../tools/ablation/README.md) | Contract mutation testing: which check rejects which attack ([RESULTS.md](../tools/ablation/RESULTS.md): the latest runs) |
 | [../tools/soak/README.md](../tools/soak/README.md) | The testnet-10 market simulator: processes, bots, checker, operation, the latest run |
 | [../tools/wallet-gate/README.md](../tools/wallet-gate/README.md) | Checks that browser wallets can sign covenant inputs |

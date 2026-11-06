@@ -1,7 +1,8 @@
 # FAQ
 
 Answers to questions people asked about KOB. Every claim links to the code or specification it rests on, pinned to the commit
-named in each section (sections 1-4: [`633c06a1`](https://github.com/RossKU/kob/tree/633c06a182241ffcca40b3afff1fd161147e27b3)).
+named in each section (sections 1-4: [`633c06a1`](https://github.com/RossKU/kob/tree/633c06a182241ffcca40b3afff1fd161147e27b3)). Those links show
+the files at that commit (`contracts/v2/` then); the live orders are in `contracts/orders/`.
 
 **Miner Mode** is a testnet-10 proof of concept, not a released feature: a miner that also runs a KOB executor puts the fills it
 builds into its own block templates and pays no network fee for them. It changes who pays the fee and how a transaction reaches a

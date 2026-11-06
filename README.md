@@ -42,6 +42,11 @@ kob watch fills --token TUSD --network testnet-10 --json        # NDJSON, one ev
 Every command and kind: [crates/kob-cli](crates/kob-cli/README.md). The read API (HTTP and WebSocket, no key):
 [docs/api.md](docs/api.md).
 
+## Audit scope
+
+The live contracts are `contracts/orders/`; [contracts/README.md](contracts/README.md) states what is deployed, what to audit, and what
+is a prototype or third-party.
+
 ## Documentation
 
 * [docs/README.md](docs/README.md): the index of every document

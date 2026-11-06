@@ -1,3 +1,8 @@
+> **Not deployed, not in audit scope.** This kit carries its own snapshot of the protocol v1 `BidOrder.sil` (and an older
+> KCC-20 reference copy) in `contracts/` and `artifacts/`, only to check that browser wallets can sign a covenant input.
+> They are not the deployed contracts (the repository's `contracts/orders/`, see `contracts/README.md`) and are not to be
+> audited. `scripts/check-wallet-gate.mjs` byte-checks them against their sources; do not edit them.
+
 # KOB wallet gate kit
 
 **Question:** can the browser wallets **KasWare**, **Kaspire** (and **Kastle**, for reference) sign a **covenant (P2SH) input** in a

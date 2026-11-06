@@ -1,44 +1,207 @@
 # Contracts
 
-SilverScript sources of the KOB order book, their compiled artifacts, the Argent shell around them, and the
-pinned third-party token programs the tests run against.
+## What is deployed / what to audit
+
+- **KOB order contracts:** `orders/*.sil` (9 templates, protocol v3) and their KRON-family twins `orders/kron/*.sil`
+  (6 templates). The exact templates of each network are in `deploy/<network>/deployment.json`; the testnet-10 record
+  adds the six `*KronD0` builds of `orders/kron/`.
+- **Token programs KOB issues** (upstream code, not KOB's): by default the published public-mint app
+  (`third-party/kcc20-reference/KCC20.public-mint.sil`, registry `kcc20-ref-public-mint`); with `--program 3x3` the
+  standalone build `kcc20/KCC20Ref.sil` (registry `kcc20-ref-3x3`).
+- **Not deployed:** `prototypes/` and `research/` are not KOB production code. Do not audit them as such.
+- **External:** `third-party/` and `adapters/kron/templates/` are token programs of other projects that KOB pins and
+  tests against.
+
+SilverScript sources of the KOB order book, their compiled artifacts, the Argent shell around them, and the pinned
+third-party token programs the tests run against.
+
+**Moved paths (2026-11-06).** The sources moved with no compiled byte changed; only their comments were updated.
+
+- `contracts/v2/` is now `orders/`. The v1 `orders/AskOrder.sil` and `BidOrder.sil` were deleted.
+- `contracts/adapters/kron/v2/` and `contracts/adapters/kron/README.md` are now `orders/kron/`. The v1
+  `adapters/kron/{AskOrderKron,BidOrderKron}.sil` were deleted.
+- `kcc20/variants/` and `kcc20/p2/` are now `prototypes/kcc20/`.
+- `argent/port*` is now `research/argent/`.
 
 ## Map
 
 | Path | What |
 |---|---|
-| `orders/KobAsk.sil`, `orders/KobBid.sil` | Protocol v3 limit sell / buy for KCC-20 tokens against KAS. Per-order values live in the state span (one template per kind); any amount in token base units at a price in sompi per whole token (`scale` = 10^decimals base units), rounded in the maker's favour (`quoteOf`, the rule every kind refers to: `KobAsk` header, `docs/spec/order-types.md`), a minimum fill (`minFill`), all-in price with an optional priority tip, decay auction and TWAP, IOC / FOK, timed activation, soft expiry with a 90-day idle bound (KOB code) |
-| `orders/KobCondAsk.sil`, `orders/KobCondBid.sil` | Conditional sell / buy in one UTXO: stop, stop-limit, trailing, take-profit / limit leg, OCO. The stop arms (and trails) only from the fill of a plain resting `KobAsk` / `KobBid` in the same transaction (touch trigger, `docs/spec/matcher.md` section 4) (KOB code) |
-| `orders/KobIfdBid.sil`, `orders/KobIfdAsk.sil` | If-done entries (IFD / IFO / bracket, optionally repeating): buy-first continuing as a committed `KobCondAsk` exit, sell-first continuing as a committed `KobCondBid` exit (KOB code) |
-| `orders/KobPair.sil` | Pair order of a token/token pair A/B (an amount of base A at a price in base units of B per whole A, the same rounding and `minFill` rule as every kind): plain ask / bid with IOC / FOK, Dutch / rising decay, TWAP / DCA, market (IOC decay auction), streaming, close. One template for both sides (S, the token sold and held in an exact custody; T, the token bought, delivered at the order's input index) and every family mix of A and B. An ask holds exactly its amount of A, a bid pays EXACTLY its quote from a B escrow, and the order prefunds its delivery carriers and KAS tip, so every quote it shows is takeable. It enforces only its own guarantees (option 2): matchers route through the KAS books, net opposite pair orders or fill from inventory. Stray guards for both tokens (KOB code) |
-| `orders/KobCondPair.sil` | Pair conditional (stop, stop-limit, trailing, take-profit / limit leg, OCO) and the exit of `KobIfdPair` (repeat fields): the logic of `KobCondAsk` / `KobCondBid` with prices in B per whole A and the settlement of `KobPair`. Its stops arm (and trail) from trigger evidence in one of two modes: two plain resting KAS-book fills, one of A and one of B, in the same transaction (their implied rate, compared exactly), or the fill of a resting `KobPair` of the same pair (`docs/spec/matcher.md` section 4.7) (KOB code) |
-| `orders/KobIfdPair.sil` | Pair if-done entry (IFD / IFO / bracket / repeat, stop entries): buy-first (side BID: a B escrow, exit `KobCondPair` ASK) or sell-first (side ASK: an A custody and a B prefund custody, exit `KobCondPair` BID); every fill creates a fresh exit covenant, repeat merges re-arm the entry (KOB code) |
-| `kcc20/KCC20Ref.sil` | Reference KCC-20 token, argent-lang/kcc20-reference `c8a0871` (PR #1 merged): upstream `kcc20.ag` built as a single-actor app (state 1+112 B, 3 token inputs / 3 token outputs per transaction), reproduced from `third-party/kcc20-reference/kcc20.ag` by `scripts/build-argent.sh` (not KOB code, ISC licence, not audited). It is the standalone 3/3 build that `kob token create --program 3x3` issues (registry `kcc20-ref-3x3`); the default issuance is the published public-mint app (registry `kcc20-ref-public-mint`). |
-| `prototypes/kcc20/variants/KCC20Ref_*.sil` | Prototypes, not used for issuance: the reference token with other per-transaction slot limits (4/5, 8/8, 16/16). `KCC20Ref_8x8` stays pinned so that testnet tokens issued with it remain tradable; the CLI issues it only as `--program 8x8-prototype` |
-| `prototypes/kcc20/p2/KCC20P2.sil`, `prototypes/kcc20/p2/KCC20Batch.sil` | Prototype, proposal P2 (KOB code): the 3/3 reference holder program with a two-entry leader allowlist, and the 16-slot batch leader (amount 0, held by a matcher key, permissionless clones of a public seed). Implemented and tested, not used for issuance |
-| `prototypes/kcc20/p2/KCC20Opt.sil` | Prototype, optional batch leader (KOB code; the proposal for upstream KCC-20 was withdrawn, KOB uses the standard 3/3): the 3/3 reference holder program whose delegator accepts as leader its own template or the batch-leader template committed by the constructor constants `B_TPL` / `B_PRE` / `B_SUF` (`KCC20Batch` above); all zeros disables it, and the committed artifact is that disabled instance. Generated by `kob_protocol::kcc20::kcc20_opt_holder_source`, tested in `crates/kob-tests/tests/kcc20_opt_tests.rs` and the KCC-20 conformance harness, see `docs/spec/kcc-conformance.md` section 6. Not used for issuance |
-| `orders/kron/` | The same order logic for the KRON-46 token family: `orders/kron/Kob*Kron.sil` (protocol v3 twins of every KAS-quoted kind, `id_type` custody codec; the pair orders have no twins: `orders/KobPair.sil`, `KobCondPair.sil` and `KobIfdPair.sil` serve KRON tokens as A, as B or both); see `orders/kron/README.md` |
-| `orders/kron/delivery0/*.ctor.json` | Constructor arguments of the delivery id_type 0 builds of the KRON kinds (`KobAskKronD0` .. `KobIfdAskKronD0`: the `orders/kron/Kob*Kron.sil` sources with the build parameter `TYPE_DELIVERY = 0x00`, `scripts/build-contracts.sh` `VARIANTS`), for KRON programs whose holders are id_type 0 (KForge, testnet-10); see `orders/kron/README.md` |
-| `adapters/kron/templates/*.bin` | The two KRON token programs (2,433 B and 2,732 B), see `adapters/kron/templates/README.md` |
-| `third-party/kaspacom-kcc20/` | KaspaCom's KCC20 0.2.5 token program artifact, vendored unmodified (Apache-2.0, provenance in `UPSTREAM.md`): a third-party KCC-20-compatible template accepted through the registry's strict template list (`registry/tokens.json`), tested in `crates/kob-tests/tests/kob_kaspacom_v2_tests.rs` |
-| `third-party/kcc20-reference/` | The KCC-20 reference, argent-lang/kcc20-reference `c8a0871`, vendored unmodified (ISC, provenance in `UPSTREAM.md`): `kcc20.ag`, the source `kcc20/KCC20Ref.sil` is built from, and `KCC20.public-mint.sil`, the build upstream publishes (its `KCC20PublicMint` app: state 1+145 B with a compiler-owned template field), compiled unmodified by `scripts/build-contracts.sh` into `artifacts/KCC20PublicMint.json` with KOB's `KCC20.public-mint.ctor.json`, and upstream's `public-mint.artifact.json`, whose actor-type handle of `KCC20` (the context field in a 34-byte prefix, the 112-byte state open) is the template KOB pins for tokens of that build (`TemplateId::Kcc20PublicMint`, tested in `crates/kob-tests/tests/kcc20_reference_tests.rs` and `kcc20_public_mint_tests.rs`); the artifact's `PublicMint` and `TokenSeed` programs are what the genesis check of such tokens accepts beside the holders (`crates/kob-protocol/src/public_mint.rs`, `kcc20_public_mint_genesis_tests.rs`). The issuers of upstream `27f8403` (they add the owner-signed `rebalance_value`; the `KCC20` actor is unchanged) are vendored beside them as `public-mint.27f8403.artifact.json`, `public_mint.27f8403.ag`, `token_seed.27f8403.ag`, `PublicMint.27f8403.sil` and `TokenSeed.27f8403.sil` and accepted too (`kcc20_issuer_27f8403_tests.rs`) |
+| `orders/KobAsk.sil`, `orders/KobBid.sil` | Limit sell / buy of a KCC-20 token against KAS (KOB code) |
+| `orders/KobCondAsk.sil`, `orders/KobCondBid.sil` | Conditional sell / buy: stop, stop-limit, trailing, take-profit, OCO (KOB code) |
+| `orders/KobIfdBid.sil`, `orders/KobIfdAsk.sil` | If-done entries: IFD / IFO / bracket, optionally repeating (KOB code) |
+| `orders/KobPair.sil` | Pair order of a token/token pair A/B (KOB code) |
+| `orders/KobCondPair.sil` | Pair conditional, and the exit of `KobIfdPair` (KOB code) |
+| `orders/KobIfdPair.sil` | Pair if-done entry (KOB code) |
+| `orders/kron/Kob*Kron.sil` | KRON-46 twins of every KAS-quoted kind (KOB code) |
+| `orders/kron/delivery0/*.ctor.json` | Constructor arguments of the `*KronD0` builds (delivery id_type 0) |
+| `kcc20/KCC20Ref.sil` | The standalone KCC-20 reference, 3/3, issued with `--program 3x3` (not KOB code) |
+| `prototypes/kcc20/variants/KCC20Ref_*.sil` | Prototype: the reference token with other slot limits (not deployed) |
+| `prototypes/kcc20/p2/KCC20P2.sil`, `KCC20Batch.sil` | Prototype: proposal P2 (not deployed) |
+| `prototypes/kcc20/p2/KCC20Opt.sil` | Prototype: optional batch leader (not deployed) |
+| `adapters/kron/templates/*.bin` | The two KRON token programs (third-party) |
+| `third-party/kaspacom-kcc20/` | KaspaCom's KCC20 0.2.5 token program artifact (third-party, Apache-2.0) |
+| `third-party/kcc20-reference/` | The KCC-20 reference, its public-mint build and issuers (third-party, ISC) |
+| `third-party/kasparocket/` | The KaspaRocket launchpad token program (third-party, observed on chain) |
+| `third-party/kforge-kcc20/` | The KForge launchpad's 6 / 6 KCC-20 build (third-party, observed on chain) |
+| `third-party/kforge/` | KForge's KRON-codec token program `KForgeToken1785` (third-party, testnet-10) |
+| `third-party/kusdt/` | kUSDT, a federated-bridge token of `KCC20PublicMint` (third-party, testnet-10) |
 | `*.ctor.json` | Constructor arguments used to compile the artifact next to each source |
-| `artifacts/*.json` | `silverc` output, committed and checked for reproducibility |
+| `artifacts/*.json` | `silverc` output, committed and checked for reproducibility (see *Artifacts*) |
 | `silverc.lock` | Pinned compiler version and sha256 digests |
-| `SHA256SUMS` | Digest of every source, constructor file, template, artifact, third-party file and `argent/` file |
-| `deploy/<network>/` | Deployment record of a network (`deployment.json`, `DEPLOYMENT.md`, own `SHA256SUMS`), see below |
-| `argent/KOBOrders.ag`, `argent/kcc20_8x8.ag` | Argent interface of the nine hand-written v2 contracts (states, entries, emits; placeholder bodies), and the Argent source of the 8/8 token prototype (KCC-20 reference, only the two limits changed; not used for issuance) |
-| `argent/KOBOrders/artifact.json` | Published Argent app artifact `KOBOrders`: the nine v2 contracts (`KobAsk`, `KobBid`, `KobCondAsk`, `KobCondBid`, `KobIfdBid`, `KobIfdAsk`, `KobPair`, `KobCondPair`, `KobIfdPair`) as actors with their actor-type handles (`tools/sil2argent`) |
-| `argent/KOBOrdersKron.ag`, `argent/KOBOrdersKron/artifact.json` | Argent interface and published app artifact `KOBOrdersKron`: the KRON limit orders (`KobAskKron`, `KobBidKron` of `orders/kron/`) with their handles, a separate app so the `KOBOrders` id stays as published; the router observes `KobBidKron` |
-| `argent/KOBToken/` | argentc output for the 8/8 token prototype (not used for issuance); its program is `prototypes/kcc20/variants/KCC20Ref_8x8.sil` and its handle the silverc template of `artifacts/KCC20Ref_8x8.json` |
-| `argent/kob_router.ag`, `argent/router/` | KOB's composition layer in Argent (payment intents, swap-and-pay; one actor per fill shape, 30 in all: KCC-20 and KRON token A; the token programs are open ICC handles in each intent's state), written by `tools/router-gen`, and its argentc output (`sil/*.sil` are generated and committed) |
-| `argent/examples/*.ag`, `argent/examples-out/` | Third-party closed- and open-ICC examples (`docs/argent.md`); their argentc SilverScript output is published for the engine test of the closed-ICC gate |
-| `research/argent/port/kob_ask_port.ag`, `research/argent/port-out/` | 1:1 Argent port of `KobAsk`, a size measurement (`docs/argent-feedback.md`, item 10), not a KOB contract; its generated SilverScript is compared with the hand-written one by `crates/kob-tests/tests/argent_port_tests.rs` |
-| `research/argent/port/compare/` | opcode listings of the hand-written `KobAsk`, its idiomatic Argent port and the `become` splice prototype, section by section (`docs/argent-port-compare.md`); written and checked by `crates/kob-tests/tests/argent_port_compare_tests.rs` |
+| `SHA256SUMS` | Digest of every input and output file |
+| `deploy/<network>/` | Deployment record of a network (`deployment.json`, `DEPLOYMENT.md`, own `SHA256SUMS`) |
+| `argent/KOBOrders.ag`, `argent/KOBOrders/` | Argent interface and published app artifact of the nine orders of `orders/` |
+| `argent/KOBOrdersKron.ag`, `argent/KOBOrdersKron/` | Argent interface and published app artifact of the KRON limit orders |
+| `argent/kcc20_8x8.ag`, `argent/KOBToken/` | Argent source and argentc output of the 8/8 token prototype (not issued) |
+| `argent/kob_router.ag` | **Derived (generated by `tools/router-gen`):** swap-and-pay router source |
+| `argent/router/` | **Derived (generated):** argentc output of the router |
+| `argent/examples/*.ag` | Third-party closed- and open-ICC examples (`docs/argent.md`) |
+| `argent/examples-out/` | **Derived (generated):** argentc output of the examples |
+| `research/argent/` | Argent port of `KobAsk` and its comparison, a size measurement (not deployed) |
 
-The `argent/` outputs are derived, not authored: `KOBOrders` and `KOBOrdersKron` wrap the silverc artifacts of `orders/*.sil`
-and `orders/kron/Kob{Ask,Bid}Kron.sil` (their handles are those templates), the router and the token are compiled by `argentc` from the pinned Argent upstream
-(`vendor/argent-upstream/UPSTREAM.md`). `contracts/argent/**` is in `SHA256SUMS` and reproduced by `--check`.
+### Order contracts (`orders/`)
+
+- **`KobAsk`, `KobBid`.** Protocol v3 limit sell / buy for KCC-20 tokens against KAS.
+  - Per-order values live in the state span (one template per kind).
+  - Any amount in token base units at a price in sompi per whole token (`scale` = 10^decimals base units),
+    rounded in the maker's favour. `quoteOf` is the rule every kind refers to (`KobAsk` header,
+    `docs/spec/order-types.md`).
+  - A minimum fill (`minFill`), all-in price with an optional priority tip, decay auction and TWAP, IOC / FOK,
+    timed activation, soft expiry with a 90-day idle bound.
+- **`KobCondAsk`, `KobCondBid`.** Conditional sell / buy in one UTXO: stop, stop-limit, trailing, take-profit /
+  limit leg, OCO. The stop arms (and trails) only from the fill of a plain resting `KobAsk` / `KobBid` in the same
+  transaction (touch trigger, `docs/spec/matcher.md` section 4).
+- **`KobIfdBid`, `KobIfdAsk`.** If-done entries (IFD / IFO / bracket, optionally repeating): buy-first continuing
+  as a committed `KobCondAsk` exit, sell-first continuing as a committed `KobCondBid` exit.
+- **`KobPair`.** Pair order of a token/token pair A/B: an amount of base A at a price in base units of B per whole
+  A, the same rounding and `minFill` rule as every kind.
+  - Plain ask / bid with IOC / FOK, Dutch / rising decay, TWAP / DCA, market (IOC decay auction), streaming, close.
+  - One template for both sides and every family mix of A and B: S is the token sold and held in an exact
+    custody; T is the token bought, delivered at the order's input index.
+  - An ask holds exactly its amount of A; a bid pays EXACTLY its quote from a B escrow. The order prefunds its
+    delivery carriers and KAS tip, so every quote it shows is takeable.
+  - It enforces only its own guarantees (option 2): matchers route through the KAS books, net opposite pair
+    orders or fill from inventory. Stray guards for both tokens.
+- **`KobCondPair`.** Pair conditional (stop, stop-limit, trailing, take-profit / limit leg, OCO) and the exit of
+  `KobIfdPair` (repeat fields): the logic of `KobCondAsk` / `KobCondBid` with prices in B per whole A and the
+  settlement of `KobPair`. Its stops arm (and trail) from trigger evidence in one of two modes:
+  - two plain resting KAS-book fills, one of A and one of B, in the same transaction (their implied rate,
+    compared exactly);
+  - or the fill of a resting `KobPair` of the same pair (`docs/spec/matcher.md` section 4.7).
+- **`KobIfdPair`.** Pair if-done entry (IFD / IFO / bracket / repeat, stop entries):
+  - buy-first (side BID: a B escrow, exit `KobCondPair` ASK);
+  - or sell-first (side ASK: an A custody and a B prefund custody, exit `KobCondPair` BID).
+  - Every fill creates a fresh exit covenant; repeat merges re-arm the entry.
+- **`orders/kron/Kob*Kron.sil`.** The same order logic for the KRON-46 token family: protocol v3 twins of every
+  KAS-quoted kind (`id_type` custody codec). The pair orders have no twins: `orders/KobPair.sil`, `KobCondPair.sil`
+  and `KobIfdPair.sil` serve KRON tokens as A, as B or both. See `orders/kron/README.md`.
+- **`orders/kron/delivery0/*.ctor.json`.** Constructor arguments of the delivery id_type 0 builds of the KRON kinds
+  (`KobAskKronD0` .. `KobIfdAskKronD0`): the `orders/kron/Kob*Kron.sil` sources with the build parameter
+  `TYPE_DELIVERY = 0x00` (`scripts/build-contracts.sh` `VARIANTS`), for KRON programs whose holders are id_type 0
+  (KForge, testnet-10). See `orders/kron/README.md`.
+
+### Token programs
+
+- **`kcc20/KCC20Ref.sil`.** Reference KCC-20 token, argent-lang/kcc20-reference `c8a0871` (PR #1 merged): upstream
+  `kcc20.ag` built as a single-actor app (state 1+112 B, 3 token inputs / 3 token outputs per transaction).
+  - Reproduced from `third-party/kcc20-reference/kcc20.ag` by `scripts/build-argent.sh`.
+  - Not KOB code, ISC licence, not audited.
+  - The standalone 3/3 build that `kob token create --program 3x3` issues (registry `kcc20-ref-3x3`). The default
+    issuance is the published public-mint app (registry `kcc20-ref-public-mint`).
+- **`prototypes/kcc20/variants/KCC20Ref_*.sil`.** Prototypes, not used for issuance: the reference token with other
+  per-transaction slot limits (4/5, 8/8, 16/16). `KCC20Ref_8x8` stays pinned so that testnet tokens issued with it
+  remain tradable; the CLI issues it only as `--program 8x8-prototype`.
+- **`prototypes/kcc20/p2/KCC20P2.sil`, `KCC20Batch.sil`.** Prototype, proposal P2 (KOB code): the 3/3 reference
+  holder program with a two-entry leader allowlist, and the 16-slot batch leader (amount 0, held by a matcher key,
+  permissionless clones of a public seed). Implemented and tested, not used for issuance.
+- **`prototypes/kcc20/p2/KCC20Opt.sil`.** Prototype, optional batch leader (KOB code; the proposal for upstream
+  KCC-20 was withdrawn, KOB uses the standard 3/3). Not used for issuance.
+  - The 3/3 reference holder program whose delegator accepts as leader its own template or the batch-leader
+    template committed by the constructor constants `B_TPL` / `B_PRE` / `B_SUF` (`KCC20Batch` above).
+  - All zeros disables it, and the committed artifact is that disabled instance.
+  - Generated by `kob_protocol::kcc20::kcc20_opt_holder_source`, tested in `kcc20_opt_tests.rs` and the KCC-20
+    conformance harness (`docs/spec/kcc-conformance.md` section 6).
+- **`adapters/kron/templates/*.bin`.** The two KRON token programs (2,433 B and 2,732 B), see
+  `adapters/kron/templates/README.md`. They stay at this path: `registry/tokens.json`, pinned by the mainnet
+  deployment record, names it.
+- **`third-party/kaspacom-kcc20/`.** KaspaCom's KCC20 0.2.5 token program artifact, vendored unmodified (Apache-2.0,
+  provenance in `UPSTREAM.md`): a third-party KCC-20-compatible template accepted through the registry's strict
+  template list (`registry/tokens.json`), tested in `kob_kaspacom_v2_tests.rs` and `review_b2_kaspacom.rs`.
+- **`third-party/kcc20-reference/`.** The KCC-20 reference, argent-lang/kcc20-reference `c8a0871`, vendored
+  unmodified (ISC, provenance in `UPSTREAM.md`):
+  - `kcc20.ag`, the source `kcc20/KCC20Ref.sil` is built from;
+  - `KCC20.public-mint.sil`, the build upstream publishes (its `KCC20PublicMint` app: state 1+145 B with a
+    compiler-owned template field), compiled unmodified by `scripts/build-contracts.sh` into
+    `artifacts/KCC20PublicMint.json` with KOB's `KCC20.public-mint.ctor.json`;
+  - upstream's `public-mint.artifact.json`, whose actor-type handle of `KCC20` (the context field in a 34-byte
+    prefix, the 112-byte state open) is the template KOB pins for tokens of that build
+    (`TemplateId::Kcc20PublicMint`, tested in `kcc20_reference_tests.rs` and `kcc20_public_mint_tests.rs`). The
+    artifact's `PublicMint` and `TokenSeed` programs are what the genesis check of such tokens accepts beside the
+    holders (`crates/kob-protocol/src/public_mint.rs`, `kcc20_public_mint_genesis_tests.rs`);
+  - the issuers of upstream `27f8403` (they add the owner-signed `rebalance_value`; the `KCC20` actor is
+    unchanged), vendored beside them as `public-mint.27f8403.artifact.json`, `public_mint.27f8403.ag`,
+    `token_seed.27f8403.ag`, `PublicMint.27f8403.sil` and `TokenSeed.27f8403.sil` and accepted too
+    (`kcc20_issuer_27f8403_tests.rs`).
+- **`third-party/kasparocket/`.** `KCC20.public-mint.10x10.sil` and its constructor file, compiled by
+  `scripts/build-contracts.sh` (`THIRD_PARTY`) into `artifacts/KaspaRocketToken11458.json`; provenance and review
+  in `UPSTREAM.md`.
+- **`third-party/kforge-kcc20/`.** `KCC20.public-mint.6x6.sil` and its constructor file, compiled the same way into
+  `artifacts/KForgeToken7214.json`; provenance and review in `UPSTREAM.md`.
+- **`third-party/kforge/`.** `program.bin`, the KForge token program observed on testnet-10 (`KForgeToken1785`,
+  pending review); provenance in `UPSTREAM.md`.
+
+### Argent (`argent/`)
+
+- `KOBOrders.ag` is the Argent interface of the nine hand-written order contracts of `orders/` (states, entries,
+  emits; placeholder bodies). `KOBOrders/artifact.json` is the published Argent app artifact `KOBOrders`: the nine
+  order contracts (`KobAsk`, `KobBid`, `KobCondAsk`, `KobCondBid`, `KobIfdBid`, `KobIfdAsk`, `KobPair`,
+  `KobCondPair`, `KobIfdPair`) as actors with their actor-type handles (`tools/sil2argent`).
+- `KOBOrdersKron.ag` and `KOBOrdersKron/artifact.json`: the Argent interface and published app artifact
+  `KOBOrdersKron`, the KRON limit orders (`KobAskKron`, `KobBidKron` of `orders/kron/`) with their handles. It is a
+  separate app so the `KOBOrders` id stays as published; the router observes `KobBidKron`.
+- `kcc20_8x8.ag` is the Argent source of the 8/8 token prototype (KCC-20 reference, only the two limits changed;
+  not used for issuance). `KOBToken/` is its argentc output; its program is
+  `prototypes/kcc20/variants/KCC20Ref_8x8.sil` and its handle the silverc template of `artifacts/KCC20Ref_8x8.json`.
+- `kob_router.ag` is KOB's composition layer in Argent (payment intents, swap-and-pay; one actor per fill shape,
+  30 in all: KCC-20 and KRON token A; the token programs are open ICC handles in each intent's state), written by
+  `tools/router-gen`. `router/` is its argentc output (`sil/*.sil` are generated and committed).
+- `examples/*.ag` are third-party closed- and open-ICC examples (`docs/argent.md`); their argentc SilverScript
+  output in `examples-out/` is published for the engine test of the closed-ICC gate.
+
+The `argent/` outputs are derived, not authored: `KOBOrders` and `KOBOrdersKron` wrap the silverc artifacts of
+`orders/*.sil` and `orders/kron/Kob{Ask,Bid}Kron.sil` (their handles are those templates), the router and the token
+are compiled by `argentc` from the pinned Argent upstream (`vendor/argent-upstream/UPSTREAM.md`).
+`contracts/argent/**` is in `SHA256SUMS` and reproduced by `--check`.
+
+### Research (`research/argent/`)
+
+- `port/kob_ask_port.ag` and `port-out/`: 1:1 Argent port of `KobAsk`, a size measurement
+  (`docs/argent-feedback.md`, item 10), not a KOB contract. Its generated SilverScript is compared with the
+  hand-written one by `argent_port_tests.rs`.
+- `port/compare/`: opcode listings of the hand-written `KobAsk`, its idiomatic Argent port and the `become` splice
+  prototype, section by section (`docs/argent-port-compare.md`); written and checked by
+  `argent_port_compare_tests.rs`.
+
+## Artifacts
+
+The 31 files of `artifacts/`. "Live" means listed in a deployment record (`deploy/<network>/deployment.json`) or
+issued by KOB; nothing else is deployed by KOB.
+
+| Artifact | Status | Source |
+|---|---|---|
+| `KobAsk`, `KobBid`, `KobCondAsk`, `KobCondBid`, `KobIfdAsk`, `KobIfdBid` | Live: mainnet, testnet-10 | `orders/` |
+| `KobPair`, `KobCondPair`, `KobIfdPair` | Live: mainnet, testnet-10 | `orders/` |
+| `KobAskKron`, `KobBidKron`, `KobCondAskKron` | Live: mainnet, testnet-10 | `orders/kron/` |
+| `KobCondBidKron`, `KobIfdAskKron`, `KobIfdBidKron` | Live: mainnet, testnet-10 | `orders/kron/` |
+| The six `Kob*KronD0` builds | Live: testnet-10 only | `orders/kron/`, `orders/kron/delivery0/` |
+| `KCC20PublicMint` | Live: KOB's default issuance (upstream build, third-party) | `third-party/kcc20-reference/` |
+| `KCC20Ref` | Live: issued with `--program 3x3` (upstream reference, not KOB code) | `kcc20/` |
+| `KaspaRocketToken11458` | Third-party: traded on mainnet, testnet-10 | `third-party/kasparocket/` |
+| `KForgeToken7214` | Third-party: traded on mainnet, testnet-10 | `third-party/kforge-kcc20/` |
+| `KCC20Ref_8x8` | Prototype: pinned so testnet tokens issued with it stay tradable | `prototypes/kcc20/variants/` |
+| `KCC20Ref_4x5`, `KCC20Ref_16x16` | Prototype: tests only | `prototypes/kcc20/variants/` |
+| `KCC20P2`, `KCC20Batch`, `KCC20Opt` | Prototype: tests only | `prototypes/kcc20/p2/` |
 
 ## Constructor arguments and templates
 
@@ -60,11 +223,11 @@ No template depends on a network or a genesis, so every template is final at bui
 ## Rebuild and verify
 
 ```
-scripts/build-contracts.sh              # rewrite artifacts, contracts/argent and SHA256SUMS
+scripts/build-contracts.sh              # rewrite artifacts, contracts/argent, contracts/research/argent, SHA256SUMS
 scripts/build-contracts.sh --check      # fail if anything differs (CI)
 scripts/build-contracts.sh --upstream   # same, using the official silverc v1.0.0 release binary
-scripts/build-contracts.sh --no-argent  # skip contracts/argent (no argentc build)
-scripts/build-argent.sh [--check]       # only contracts/argent (see vendor/argent-upstream/UPSTREAM.md, docs/argent.md)
+scripts/build-contracts.sh --no-argent  # skip the Argent side (no argentc build)
+scripts/build-argent.sh [--check]       # only the Argent side (see vendor/argent-upstream/UPSTREAM.md, docs/argent.md)
 ```
 
 ## Deployment records
@@ -79,17 +242,22 @@ scripts/build-deploy.sh mainnet [--check]    # contracts/deploy/mainnet (also pi
 ```
 
 It lists every order template of both families from `contracts/artifacts` (`scripts/lib/deploy.mjs`: name, template
-hash, prefix / suffix lengths) in `deployment.json` and `DEPLOYMENT.md`, and its own `SHA256SUMS` pins those artifacts,
-so a change of any order template shows up as a stale deployment record. When `registry/tokens.json` is the
-registry of the network (its `network` field: mainnet), the record also pins it (`registry`: path, sha256 of
-the LF bytes, supported and pending templates, the token entries with their genesis-check fact) and its `SHA256SUMS` lists it, so a registry change makes the
-record stale too. The record also carries `indexer_url`: the default indexer of the network, the official index-only server whose API
-`kob` (the command line) reads when neither `--indexer` nor `$KOB_INDEXER_URL` names one. The testnet-10 record names the public canary indexer (`https://kob-api.kaspa.ag`, the canary's keyless index-only server; older builds named `https://kob.kaspa.ag/indexer`, which now redirects there, see `crates/kob-cli/README.md`); the mainnet record is `null` until mainnet launches and its address is decided. A value
-is an `https://` URL on mainnet (`http://` or `https://` elsewhere) with a host and no credentials, query or fragment (checked by
-`scripts/lib/deploy.mjs` and by `kob_protocol::artifacts::check_indexer_url`). Edit it in `deployment.json` and run
-`scripts/build-deploy.sh <network>` (the script carries the value over and regenerates `DEPLOYMENT.md` and `SHA256SUMS`). Both records
-are embedded in every build (`artifacts::deployment_indexer_url(network)`), so a reference build reads the one of the network it runs for.
-Needs node.
+hash, prefix / suffix lengths) in `deployment.json` and `DEPLOYMENT.md`, and its own `SHA256SUMS` pins those
+artifacts, so a change of any order template shows up as a stale deployment record. When `registry/tokens.json` is the
+registry of the network (its `network` field: mainnet), the record also pins it (`registry`: path, sha256 of the LF
+bytes, supported and pending templates, the token entries with their genesis-check fact) and its `SHA256SUMS` lists
+it, so a registry change makes the record stale too.
+
+The record also carries `indexer_url`: the default indexer of the network, the official index-only server whose API
+`kob` (the command line) reads when neither `--indexer` nor `$KOB_INDEXER_URL` names one. The testnet-10 record names
+the public canary indexer (`https://kob-api.kaspa.ag`, the canary's keyless index-only server; older builds named
+`https://kob.kaspa.ag/indexer`, which now redirects there, see `crates/kob-cli/README.md`); the mainnet record is
+`null` until mainnet launches and its address is decided. A value is an `https://` URL on mainnet (`http://` or
+`https://` elsewhere) with a host and no credentials, query or fragment (checked by `scripts/lib/deploy.mjs` and by
+`kob_protocol::artifacts::check_indexer_url`). Edit it in `deployment.json` and run `scripts/build-deploy.sh
+<network>` (the script carries the value over and regenerates `DEPLOYMENT.md` and `SHA256SUMS`). Both records are
+embedded in every build (`artifacts::deployment_indexer_url(network)`), so a reference build reads the one of the
+network it runs for. Needs node.
 
 Binaries that embed the record (cargo features `deploy-tn10` / `deploy-mainnet`, exclusive, off by default):
 
