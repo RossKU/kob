@@ -113,7 +113,7 @@
   ],
   "registry": {
     "path": "registry/tokens.json",
-    "sha256": "fc3e62a38cd52b4a7eb437b80d32853bdc4c0d6aad9c79ddf007e1c95f91b2f6",
+    "sha256": "a8949e77a76165535e70115e26020f4b4b6165d6167271ae3419e3d4668a20d8",
     "schema_version": 1,
     "strict_templates": [
       {
