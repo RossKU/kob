@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { CSP_META, SIGNER_CSP_HEADER, SIGNER_CSP_META } from './csp.mjs';
 import { applyHead } from './head-meta.mjs';
+import { parseMirror } from './src/app/mirror';
 
 const isSignerPage = (path: string) => /(^|\/)signer\.html$/.test(path);
 
@@ -79,10 +80,14 @@ const kobStableMapRefs = (): Plugin => ({
 // whose table differs from the served one shows every token as unverified).
 const registryTableHash = tableHash(rowsOfRegistryJson(JSON.parse(readFileSync(process.env.KOB_SIGNER_REGISTRY || DEFAULT_REGISTRY_PATH, 'utf8'))));
 
+// The hosting mirror (src/app/mirror.ts): KOB_MIRROR=github-pages builds the GitHub Pages fallback (script frame guard, no private-key signing).
+// Unset for every other build. An unknown value fails the build.
+const mirror = parseMirror(process.env.KOB_MIRROR);
+
 // Static, client-side build: `vite build` -> dist/ (serve from any static host; relative asset URLs).
 export default defineConfig({
   base: './',
-  define: { __KOB_REGISTRY_TABLE_HASH__: JSON.stringify(registryTableHash) },
+  define: { __KOB_REGISTRY_TABLE_HASH__: JSON.stringify(registryTableHash), __KOB_MIRROR__: JSON.stringify(mirror) },
   plugins: [preact(), kobHead(), kobCsp(), kobStableMapRefs(), kobSignerHeaders()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   // keepNames: the official kaspa-wasm SDK identifies its JS classes (Transaction, TransactionOutput, Hash ...) by their `name` when it converts

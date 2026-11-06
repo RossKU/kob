@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zipSync, strToU8 } from 'fflate';
 import { afterAll, describe, expect, it } from 'vitest';
-import { DEFAULT_MOUNTS, resolveStatic, startStaticServer } from '../e2e/serve-static.mjs';
+import { DEFAULT_MOUNTS, distMounts, resolveStatic, startStaticServer } from '../e2e/serve-static.mjs';
 import * as testids from '../e2e/testids';
 import * as real from '../e2e-real/common.mjs';
 
@@ -43,6 +43,15 @@ describe('static fixture server', () => {
     expect(resolveStatic('/sdk/../../package.json', DEFAULT_MOUNTS)).toBeNull();
     expect(resolveStatic('/x\0y', DEFAULT_MOUNTS)).toBeNull();
     expect(resolveStatic('/%E0%A4%A', DEFAULT_MOUNTS)).toBeNull();
+  });
+
+  it('serves web/dist under a sub-path for the GitHub Pages mirror check (--dist /kob/), whatever slashes the prefix is given with', () => {
+    for (const p of ['/kob/', 'kob', '/kob', 'kob/']) expect(distMounts(p)).toEqual([{ prefix: '/kob/', dir: expect.stringMatching(/web[\\/]dist$/) }]);
+    expect(distMounts('/')[0]!.prefix).toBe('/');
+    const m = [{ prefix: '/kob/', dir: join(DEFAULT_MOUNTS[2]!.dir) }];
+    expect(resolveStatic('/kob/', m)).toMatch(/fixtures-site[\\/]index\.html$/);
+    expect(resolveStatic('/index.html', m)).toBeNull(); // nothing outside the sub-path
+    expect(resolveStatic('/kob/../package.json', m)).toBeNull();
   });
 });
 

@@ -9,6 +9,7 @@ import type { WalletAdapter, WalletId, WalletInfo } from '../wallet/types';
 import type { BuiltTx } from '../kob/types';
 import { signerRegistryTable, signerTokenHints } from './token-hints';
 import { SignerFrame, type SignerMode } from '../ui/shell/SignerFrame';
+import { privateKeySigningAllowed } from './mirror';
 import type { Services } from './services';
 import { watchWallet, type WalletNotice } from './wallet-events';
 
@@ -148,6 +149,7 @@ export function WalletProvider(props: { services: Services; children: ComponentC
   );
 
   const openPrivateKey = useCallback(() => {
+    if (!privateKeySigningAllowed()) return; // the GitHub Pages mirror: never offered (app/mirror.ts)
     setError(null);
     setSignerMode('connect');
   }, []);

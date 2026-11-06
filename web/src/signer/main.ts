@@ -17,6 +17,7 @@ import { fromParent, parseAppMessage, toApp, type SignerToApp } from './protocol
 import { SeenTracker, visibilityCheckSupported } from './seen';
 import type { SignerSummary, SummaryOrder } from './summary';
 import { DAA_PER_SECOND, untilWords } from './words';
+import { privateKeySigningAllowed, showFrameGuard } from '../app/mirror';
 
 /** the app's origin: the origin of this page's URL (this document's own origin is opaque, "null") */
 const APP_ORIGIN = new URL(location.href).origin;
@@ -385,6 +386,12 @@ function requestView(core: SignerCore, req: PendingRequest): void {
 // ------------------------------------------------------------------------------------------------ boot
 
 async function boot(): Promise<void> {
+  // a mirror whose host cannot send this page's header policy (sandbox, frame-ancestors 'self'; app/mirror.ts): no key entry at all, framed or
+  // not; only the reason and a link to the app (outside any frame)
+  if (!privateKeySigningAllowed()) {
+    showFrameGuard(document, root, new URL('./', location.href).href, { title: t('signer.mirrorOffTitle'), body: t('signer.mirrorOff'), link: t('signer.mirrorOpenApp') });
+    return;
+  }
   if (window.parent === window) {
     show(el('p', { class: 'muted' }, t('signer.notFramed')));
     return;

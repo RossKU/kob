@@ -64,3 +64,6 @@ button:disabled { color: var(--muted); background: var(--bg); border-color: var(
 .app-hints p { margin: 0 0 2px; font-style: italic; }
 .app-hints ul { margin: 0; padding-left: 18px; }
 .app-hints li + li { margin-top: 4px; }
+
+/* The GitHub Pages mirror (app/mirror.ts): the page shows only why there is no key entry, and a link to the app. */
+.frame-guard-url { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }

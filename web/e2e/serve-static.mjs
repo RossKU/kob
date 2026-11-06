@@ -1,6 +1,8 @@
 // Tiny static file server for the e2e INFRA tests (the placeholder page in e2e/fixtures-site plus the vendored kaspa SDK and the kob-wasm
 // web bindings). The real app is served by `vite preview` (see playwright.config.ts); this exists so the infrastructure is testable
 // before / without a UI build.   node e2e/serve-static.mjs [--port 4174] [--host 127.0.0.1]
+// With `--dist <prefix>` it serves the built app (web/dist) under that sub-path instead, with no response headers beyond the content type: what
+// GitHub Pages does for the mirror (playwright.ghpages.config.ts serves `--dist /kob/`).
 import http from 'node:http';
 import { once } from 'node:events';
 import { createReadStream, statSync } from 'node:fs';
@@ -23,6 +25,16 @@ const TYPES = {
   '.wasm': 'application/wasm',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.webmanifest': 'application/manifest+json',
+  '.txt': 'text/plain; charset=utf-8',
+  '.map': 'application/json',
+};
+
+/** The built app (web/dist) under a sub-path such as `/kob/` (a GitHub Pages project site). */
+export const distMounts = (prefix) => {
+  const name = String(prefix).replace(/^\/+|\/+$/g, '');
+  const p = name === '' ? '/' : `/${name}/`;
+  return [{ prefix: p, dir: join(WEB, 'dist') }];
 };
 
 /** Resolves a URL path against the mounts; null when it escapes its root or does not exist. */
@@ -78,6 +90,7 @@ export async function startStaticServer({ port = 4174, host = '127.0.0.1', mount
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   const arg = (n, d) => (args.includes(n) ? args[args.indexOf(n) + 1] : d);
-  const s = await startStaticServer({ port: Number(arg('--port', 4174)), host: arg('--host', '127.0.0.1') });
-  console.log(`e2e fixtures site on ${s.url}`);
+  const dist = arg('--dist', null);
+  const s = await startStaticServer({ port: Number(arg('--port', 4174)), host: arg('--host', '127.0.0.1'), mounts: dist ? distMounts(dist) : DEFAULT_MOUNTS });
+  console.log(dist ? `web/dist under ${distMounts(dist)[0].prefix} on ${s.url}` : `e2e fixtures site on ${s.url}`);
 }

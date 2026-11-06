@@ -481,3 +481,8 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 .signer-frame { display: block; width: 100%; border: 0; height: 120px; }
 /* until the frame reports its content height (SignerFrame.tsx), a request gets the viewport */
 .signer-frame-sign, .signer-frame-hidden { height: calc(100vh - 70px); }
+
+/* The frame notice of the GitHub Pages mirror (app/mirror.ts): shown instead of the app when the page is inside a frame. */
+.frame-guard { max-width: 34rem; margin: 12vh auto 0; padding: 0 16px; }
+.frame-guard h1 { font-size: 1.25rem; margin: 0 0 8px; }
+.frame-guard-url { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }

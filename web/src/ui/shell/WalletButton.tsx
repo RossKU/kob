@@ -3,6 +3,7 @@ import { useWallet } from '../../app/context';
 import { useServices } from '../../app/context';
 import { t } from '../../i18n';
 import { visibilityCheckSupported } from '../../signer/seen';
+import { privateKeySigningAllowed } from '../../app/mirror';
 import { Badge, Button, CopyText, Modal } from '../kit';
 import { isPhoneBrowser } from './platform';
 import { useNarrow } from './narrow';
@@ -72,7 +73,9 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
   const w = useWallet();
   const narrow = useNarrow();
   const [dialog, setDialog] = useState<'wallets' | 'key' | null>(null);
-  const supported = visibilityCheckSupported();
+  // the GitHub Pages mirror offers no private key (app/mirror.ts): Connect without an extension says why, as where the browser cannot run the signer
+  const keyAllowed = privateKeySigningAllowed();
+  const supported = keyAllowed && visibilityCheckSupported();
   const phone = isPhoneBrowser();
   const only = w.detected.length === 1 ? w.detected[0]! : null;
   const noExtension = w.detected.length === 0;
@@ -110,7 +113,7 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
         data-testid={testid}
         loading={w.connecting || waiting}
         onClick={onConnect}
-        {...(noExtension && !supported ? { 'data-state': 'unavailable', class: 'btn-off', title: t('signer.unsupported') } : {})}
+        {...(noExtension && !supported ? { 'data-state': 'unavailable', class: 'btn-off', title: t(keyAllowed ? 'signer.unsupported' : 'signer.mirrorOff') } : {})}
       >
         {w.connecting || waiting ? t('shell.wallet.connecting') : t('shell.wallet.connectShort')}
       </Button>
@@ -126,8 +129,12 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
         </Modal>
       ) : null}
       {dialog === 'key' ? (
-        <Modal title={t('signer.unsupportedTitle')} onClose={() => setDialog(null)} data-testid="wallet-dialog">
-          <p data-testid="wallet-key-unsupported">{t(phone ? 'signer.unsupportedWhyPhone' : 'signer.unsupportedWhy')}</p>
+        <Modal title={t(keyAllowed ? 'signer.unsupportedTitle' : 'signer.mirrorOffTitle')} onClose={() => setDialog(null)} data-testid="wallet-dialog">
+          {keyAllowed ? (
+            <p data-testid="wallet-key-unsupported">{t(phone ? 'signer.unsupportedWhyPhone' : 'signer.unsupportedWhy')}</p>
+          ) : (
+            <p data-testid="wallet-key-mirror">{t('signer.mirrorOff')}</p>
+          )}
         </Modal>
       ) : null}
     </div>

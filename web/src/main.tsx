@@ -11,6 +11,8 @@ import { BootError, BootScreen } from './ui/shell/Boot';
 import { initTheme } from './ui/shell/theme';
 import { installTrustedTypesPolicy } from './app/trusted-types';
 import { installTranslationSafety } from './app/translation-safe';
+import { frameGuardOn, isFramed, showFrameGuard } from './app/mirror';
+import { t } from './i18n';
 
 // before anything renders: the only Trusted Types policy (csp.mjs), letting just the chart's attribution logo reach a DOM sink
 installTrustedTypesPolicy();
@@ -52,4 +54,10 @@ async function boot(): Promise<void> {
   }
 }
 
-void boot();
+// a mirror whose host cannot send frame-ancestors (app/mirror.ts): inside a frame, the page shows only a notice and a link to open it on its own
+if (frameGuardOn() && isFramed()) {
+  initTheme();
+  showFrameGuard(document, root, location.href, { title: t('shell.frame.title'), body: t('shell.frame.body'), link: t('shell.frame.link') });
+} else {
+  void boot();
+}

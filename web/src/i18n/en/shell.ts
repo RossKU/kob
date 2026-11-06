@@ -13,6 +13,9 @@ export default {
   'shell.network.mainnet': 'mainnet',
   'shell.network.testnet-10': 'testnet-10',
 
+  'shell.frame.title': 'KOB cannot be used inside a frame',
+  'shell.frame.body': 'Another page has embedded KOB. To protect your wallet from clicks that page could hide or redirect, nothing here works while framed.',
+  'shell.frame.link': 'Open KOB on its own',
   'shell.wallet.connect': 'Connect {wallet}',
   'shell.wallet.connectShort': 'Connect',
   'shell.wallet.chooseTitle': 'Connect a wallet',

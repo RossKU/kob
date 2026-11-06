@@ -15,6 +15,7 @@ import {
 import { NotifySettingsSection } from '../notify/NotifySettings';
 import { IndexerTrust } from '../shell/IndexerTrust';
 import { visibilityCheckSupported } from '../../signer/seen';
+import { privateKeySigningAllowed } from '../../app/mirror';
 import { changedFields, changesServers, clearKobStorage, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
 
 const reload = () => window.location.reload();
@@ -135,6 +136,14 @@ function TokenIconsSettings() {
 function PrivateKeySettings() {
   const w = useWallet();
   const supported = visibilityCheckSupported();
+  // the GitHub Pages mirror (app/mirror.ts): no private key option, one line in its place says why
+  if (!privateKeySigningAllowed()) {
+    return (
+      <Section title={t('settings.key.title')} data-testid="settings-private-key-section">
+        <p class="small muted" data-testid="settings-private-key-mirror">{t('signer.mirrorOff')}</p>
+      </Section>
+    );
+  }
   return (
     <Section title={t('settings.key.title')} data-testid="settings-private-key-section">
       <p class="small muted">{t('settings.key.explain')}</p>

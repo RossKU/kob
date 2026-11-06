@@ -36,6 +36,7 @@ import { isKeyOwned } from '../../kob/token-state';
 import type { Services } from '../../app/services';
 import { ConnectBar } from '../shell/WalletButton';
 import { visibilityCheckSupported } from '../../signer/seen';
+import { privateKeySigningAllowed } from '../../app/mirror';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { Banner, Button, ErrorBanner, Field, FieldShell, KeyValueList, Section, Segmented, Spinner, kasText, shortId, useAsync } from '../kit';
 import {
@@ -663,7 +664,11 @@ export function IssueView() {
           }
         >
           <p>{t('issue.connect.body')}</p>
-          {wallet.detected.length === 0 && visibilityCheckSupported() ? <p class="muted" data-testid="issue-connect-none">{t('issue.connect.none')}</p> : null}
+          {wallet.detected.length === 0 && !privateKeySigningAllowed() ? (
+            <p class="muted" data-testid="issue-connect-mirror">{t('signer.mirrorOff')}</p>
+          ) : wallet.detected.length === 0 && visibilityCheckSupported() ? (
+            <p class="muted" data-testid="issue-connect-none">{t('issue.connect.none')}</p>
+          ) : null}
           {wallet.error ? <p class="field-error wrap-anywhere">{wallet.error}</p> : null}
         </Banner>
       );
