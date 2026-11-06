@@ -1,6 +1,6 @@
 pragma silverscript ^0.1.0;
 
-// KobIfdBidKron: KRON twin of contracts/v2/KobIfdBid.sil (protocol v3, no lots); differences:
+// KobIfdBidKron: KRON twin of contracts/orders/KobIfdBid.sil (protocol v3, no lots); differences:
 //   - Token codec: the legacy 46-byte KRON state, 0x20 owner[32] | 0x01 id_type | 0x08 amount | 0x01 is_minter (no
 //     borrow or extension fields), hence no extensionCommitment argument. The n bought base units are delivered into
 //     the exit's custody as owner = exit covenant id, id_type 2 (TYPE_COVID), is_minter 0.
@@ -15,7 +15,7 @@ pragma silverscript ^0.1.0;
 // the minimum fill, the price auction, repeat / merge (merge argument -(k * MERGE_K + m), MERGE_K = 2^53, both
 // sides check the other's leading 8-byte push), and the key invariants (fill and update both require the stop
 // ordering; the armed encoding 0 / 1 / auction origin; a merge into an armed, unfilled entry records the origin).
-// See contracts/adapters/kron/README.md.
+// See contracts/orders/kron/README.md.
 contract KobIfdBidKron(
     byte[32] COND_TPL,
     int COND_PRE,

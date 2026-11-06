@@ -1,7 +1,7 @@
 pragma silverscript ^0.1.0;
 
-// KRON twin of contracts/v2/KobCondBid.sil (legs, entries, state and invariants are described
-// there; family notes in contracts/adapters/kron/README.md); differences:
+// KRON twin of contracts/orders/KobCondBid.sil (legs, entries, state and invariants are described
+// there; family notes in contracts/orders/kron/README.md); differences:
 //  - No extensionCommitment (constructor and state: 33 bytes less), so the state windows in
 //    contSpk sit 33 bytes earlier: stopPrice [191..199), amountLeft [254..262), armed [263..271).
 //  - Token codec: the 46-byte KRON state (see KronState below). The delivery output is built in that
@@ -92,7 +92,7 @@ contract KobCondBidKron(
 
     // Maker deliveries (refunds, bought tokens): KRON id_type 3 (address presence), the type KRON's
     // wallets and SDK use for user balances. Type 0 (token-level signature) is the alternative;
-    // change this one constant and rebuild to switch (see contracts/adapters/kron/README.md).
+    // change this one constant and rebuild to switch (see contracts/orders/kron/README.md).
     byte constant TYPE_DELIVERY = 0x03;
     byte constant SIGHASH_ALL = 0x01;
     int constant SIDE_ASK = 1;

@@ -1,4 +1,4 @@
-// KOBOrders: Argent interface of the nine hand-written KOB contracts (protocol v3) in contracts/v2/*.sil
+// KOBOrders: Argent interface of the nine hand-written KOB contracts (protocol v3) in contracts/orders/*.sil
 // (KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdAsk, KobIfdBid, and the pair orders KobPair, KobCondPair, KobIfdPair).
 //
 // THIS FILE IS NOT THE IMPLEMENTATION. The order programs are hand-written SilverScript shipped as
@@ -30,7 +30,7 @@
 // orders), so a partial fill or an update continues with a DIFFERENT state. Readers of an observed order must not assume a byte-identical
 // continuation.
 //
-// Build constants (inlined in the .sil, fixed by contracts/v2/*.ctor.json): KobCondAsk / KobCondBid
+// Build constants (inlined in the .sil, fixed by contracts/orders/*.ctor.json): KobCondAsk / KobCondBid
 // embed the KobAsk and KobBid templates (their trigger evidence is a fill of such an order in the same
 // transaction); KobIfdBid / KobIfdAsk embed the exit template and the evidence template of their stop
 // entry; KobCondPair embeds the KobAsk and KobBid templates of both families and KobPair (its trigger evidence: two

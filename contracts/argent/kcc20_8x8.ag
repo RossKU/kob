@@ -10,7 +10,7 @@
 // route selected by the first witness byte.
 //
 // Why it is Argent source: scripts/build-argent.sh compiles it with argentc and requires the generated
-// SilverScript to equal (comments stripped) contracts/kcc20/variants/KCC20Ref_8x8.sil; the app handle
+// SilverScript to equal (comments stripped) contracts/prototypes/kcc20/variants/KCC20Ref_8x8.sil; the app handle
 // is the silverc template of contracts/artifacts/KCC20Ref_8x8.json. Output: contracts/argent/KOBToken/
 // (generated). It is a single-actor app of its own, not an actor of KOBOrders: an actor in a
 // multi-actor app gets compiler-owned template fields, which would change the token program

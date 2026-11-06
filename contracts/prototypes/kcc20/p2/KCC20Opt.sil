@@ -1,5 +1,5 @@
 pragma silverscript ^0.1.0;
-// KOB variant (not upstream): optional batch leader. Identical to ../KCC20Ref.sil except that the
+// KOB variant (not upstream): optional batch leader. Identical to contracts/kcc20/KCC20Ref.sil except that the
 // delegator path checks its leader: the leader must be this template (P2SH checked, same prefix and
 // suffix) or the batch-leader template committed by the constructor constants B_TPL / B_PRE / B_SUF
 // (KOB template hash and prefix / suffix lengths of a leader with a 126-byte state, such as

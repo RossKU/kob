@@ -1,6 +1,6 @@
 pragma silverscript ^0.1.0;
 
-// KRON twin of contracts/v2/KobBid.sil (limit buy of a token, paid in KAS, protocol v3, no lots); differences:
+// KRON twin of contracts/orders/KobBid.sil (limit buy of a token, paid in KAS, protocol v3, no lots); differences:
 //  - Token codec: the KRON state is 46 B, `0x20 owner[32] | 0x01 id_type | 0x08 amount (LE i64) |
 //    0x01 is_minter`, not the 112 B KCC-20 state. The delivery at output i is KronState { owner: maker,
 //    id_type: 3 (address presence, TYPE_DELIVERY), amount: n base units, is_minter: 0 }.
@@ -10,7 +10,7 @@ pragma silverscript ^0.1.0;
 //    4 slots, and it reads the owner at sigscript_len + 1 - 46 - tplSuffixLen.
 // Everything else is identical: entries (fill, cancel, refund), amounts and prices (base units at sompi per
 // whole token, quoteOf rounding in the maker's favour), all-in price and budget encoding, minimum fill,
-// rising bid / DCA, IOC/FOK, positional and stray rules. See contracts/adapters/kron/README.md.
+// rising bid / DCA, IOC/FOK, positional and stray rules. See contracts/orders/kron/README.md.
 contract KobBidKron(
     pubkey init_maker,
     byte[32] init_tokenCovId,
@@ -65,7 +65,7 @@ contract KobBidKron(
 
     // Maker deliveries (refunds, bought tokens): KRON id_type 3 (address presence), the type KRON's
     // wallets and SDK use for user balances. Type 0 (token-level signature) is the alternative;
-    // change this one constant and rebuild to switch (see contracts/adapters/kron/README.md).
+    // change this one constant and rebuild to switch (see contracts/orders/kron/README.md).
     byte constant TYPE_DELIVERY = 0x03;
     byte constant SIGHASH_ALL = 0x01;
     int constant TIF_GTC = 0;

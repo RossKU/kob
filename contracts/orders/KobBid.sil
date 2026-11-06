@@ -3,7 +3,7 @@ pragma silverscript ^0.1.0;
 // KobBid: limit buy of a KCC-20 token, paid in plain KAS (protocol v3, no lots). The base buy order: the
 // conditional, if-done and cross contracts refer to it and to KobAsk for the stray guard,
 // positional rules, IOC/FOK, the price formulas and the rounding rule (KobAsk header).
-// KRON twin: adapters/kron/v2/KobBidKron.sil.
+// KRON twin: kron/KobBidKron.sil.
 //
 // Entries:
 //   fill(nb, tokenTplIn, t)  anyone, once tx.daa >= activeFrom: buy n = int(nb) base units; tokenTplIn is

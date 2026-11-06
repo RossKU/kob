@@ -1,6 +1,6 @@
 pragma silverscript ^0.1.0;
 
-// KobIfdAskKron: KRON twin of contracts/v2/KobIfdAsk.sil (protocol v3, no lots); differences:
+// KobIfdAskKron: KRON twin of contracts/orders/KobIfdAsk.sil (protocol v3, no lots); differences:
 //   - Token codec: the legacy 46-byte KRON state, 0x20 owner[32] | 0x01 id_type | 0x08 amount | 0x01 is_minter (no
 //     borrow or extension fields): owner [1..33), id_type [34], amount [36..44), is_minter [45], the bytes at 33, 35
 //     and 44 being push opcodes. Custody = owner is this covenant id, id_type 2 (TYPE_COVID),
@@ -19,7 +19,7 @@ pragma silverscript ^0.1.0;
 // in the maker's favour), the minimum fill, the price auction, repeat / merge (merge argument -(k * MERGE_K + m),
 // MERGE_K = 2^53, both sides check the other's leading 8-byte push), and the key invariants (settle and update
 // both require the stop ordering; the armed encoding 0 / 1 / auction origin; a merge into an armed, unfilled entry records
-// the origin). See contracts/adapters/kron/README.md.
+// the origin). See contracts/orders/kron/README.md.
 contract KobIfdAskKron(
     byte[32] COND_BID_TPL,
     int COND_BID_PRE,
@@ -87,7 +87,7 @@ contract KobIfdAskKron(
     byte constant TYPE_COVID = 0x02;
     // Maker deliveries (refunds, bought tokens): KRON id_type 3 (address presence), the type KRON's
     // wallets and SDK use for user balances. Type 0 (token-level signature) is the alternative;
-    // change this one constant and rebuild to switch (see contracts/adapters/kron/README.md).
+    // change this one constant and rebuild to switch (see contracts/orders/kron/README.md).
     byte constant TYPE_DELIVERY = 0x03;
     byte constant SIGHASH_ALL = 0x01;
     // MAX_IDLE: 90 days of DAA. ASK_STATE_LEN: KobAskKron state. EXIT_STATE_LEN: KobCondBidKron state with repeat fields.

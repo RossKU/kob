@@ -2,7 +2,7 @@ pragma silverscript ^0.1.0;
 
 // KobAsk: limit sell of a KCC-20 token for KAS (protocol v3, no lots). The base order of the family: the
 // conditional, if-done and cross contracts refer to this header for the stray guard, the positional
-// rules, IOC/FOK, the price formulas and the rounding rule. KRON twin: adapters/kron/v2/KobAskKron.sil.
+// rules, IOC/FOK, the price formulas and the rounding rule. KRON twin: kron/KobAskKron.sil.
 //
 // Entries:
 //   settle(nb, tokenIn, tokOut, t)

@@ -148,7 +148,7 @@ const byte SIGHASH_ALL = 0x01;
 const byte[32] ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
 // Most sompi an expiry may keep of the intent's KAS (its network fee and whatever the expirer keeps).
 const int EXPIRE_MAX_FEE = 10000000;
-// KRON id_type values the router uses (contracts/adapters/kron/README.md): an intent's lock is owned by its
+// KRON id_type values the router uses (contracts/orders/kron/README.md): an intent's lock is owned by its
 // covenant id (2); deliveries and the payer's change are held by address presence (3): a P2PK input of the owner
 // key authorises them, the type KRON wallets hold and KobBidKron delivers.
 const byte KRON_ID_COVENANT = 0x02;

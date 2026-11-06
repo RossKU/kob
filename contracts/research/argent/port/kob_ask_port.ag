@@ -1,4 +1,4 @@
-// Measurement, NOT a KOB contract: KobAsk (contracts/v2/KobAsk.sil) ported 1:1 to Argent, to measure what
+// Measurement, NOT a KOB contract: KobAsk (contracts/orders/KobAsk.sil) ported 1:1 to Argent, to measure what
 // Argent adds to a hand-written order (docs/argent-feedback.md, item 10). KOB publishes the hand-written
 // order; this file is not part of the KOBOrders artifact.
 //
@@ -14,7 +14,7 @@
 // same facts again, which is part of what is measured.
 //
 // Build: scripts/build-argent.sh compiles it and publishes the generated SilverScript as
-// contracts/argent/port-out/KobAsk.port.sil. crates/kob-tests/tests/argent_port_tests.rs compares the
+// contracts/research/argent/port-out/KobAsk.port.sil. crates/kob-tests/tests/argent_port_tests.rs compares the
 // compiled bytes with the hand-written template and attributes the difference.
 
 const byte SCHEME_P2PK = 0x00;
