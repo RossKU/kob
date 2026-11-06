@@ -1,6 +1,6 @@
-// The activity log (ui/activity): the Activity page (#/activity, every market or the one in its URL) and the same log on the token and pair pages,
+// The activity log (ui/activity): the Activity page (#/activity, every market) and the same log on the token and pair pages,
 // against the mock indexer: one row per transaction, newest first, each row a link to the transaction on tn10.kaspa.stream (new tab, noopener);
-// fills and placements (phase 1), the Vis filters and their persistence, the market filter in the URL, live rows, pause and the "+N new" hold,
+// fills and placements (phase 1), the Vis filters and their persistence, live rows, pause and the "+N new" hold,
 // a phone layout without horizontal scroll. `KOB_ACTIVITY_SHOTS=<dir>` also saves screenshots (1440 and 390 px, dark and light).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -142,20 +142,29 @@ test.describe('activity page', () => {
     await expect(rows(page).first()).toBeVisible();
   });
 
-  test('the market filter is in the URL: a token page and the Activity page share links', async ({ appPage: page, mock }) => {
+  test('the Activity page shows every market and has no market filter; an old link with a market shows every market too', async ({ appPage: page, mock }) => {
     const base = await seedPair(page, mock);
     await page.goto('/#/activity');
     await expect(rows(page).first()).toBeVisible();
+    await expect(page.getByTestId('activity-market')).toHaveCount(0);
     // every market: the pair's fills and EXKCC's KAS book
     await expect.poll(async () => new Set(await attrs(page, 'data-market')).has(`${base}/${QUOTE}`)).toBe(true);
-    await page.getByTestId('activity-market').selectOption(base);
-    await expect(page).toHaveURL(new RegExp(`#/activity\\?market=${base}$`));
-    await expect.poll(async () => [...new Set(await attrs(page, 'data-market'))]).toEqual([base]);
-    await page.goto(`/#/activity?market=${base}/${QUOTE}`);
-    await expect(page.getByTestId('activity-market')).toHaveValue(`${base}/${QUOTE}`);
-    await expect.poll(async () => [...new Set(await attrs(page, 'data-market'))]).toEqual([`${base}/${QUOTE}`]);
-    await page.getByTestId('activity-market').selectOption('all');
-    await expect(page).toHaveURL(/#\/activity$/);
+    await expect.poll(async () => new Set(await attrs(page, 'data-market')).has(base)).toBe(true);
+    await page.goto(`/#/activity?market=${base}`);
+    await expect(page.getByTestId('activity-market')).toHaveCount(0);
+    await expect.poll(async () => new Set(await attrs(page, 'data-market')).has(`${base}/${QUOTE}`)).toBe(true);
+  });
+
+  test('the Activity page shows the bare icons; the token page keeps their tiles', async ({ appPage: page, mock }) => {
+    const base = await seedPair(page, mock);
+    const tile = (root: string) => page.locator(`[data-testid="${root}"] .act-row .act-ty`).first().evaluate((e) => getComputedStyle(e).backgroundColor);
+    await page.goto('/#/activity');
+    await expect(rows(page).first()).toBeVisible();
+    expect(await tile('activity-page')).toBe('rgba(0, 0, 0, 0)');
+    await page.goto(`/#/market/${base}`);
+    await showActivity(page);
+    await expect(page.getByTestId('token-page').getByTestId('activity-row').first()).toBeVisible();
+    expect(await tile('token-page')).not.toBe('rgba(0, 0, 0, 0)');
   });
 
   test('live: a new fill arrives at the top; paused or pointed at, it is held behind "+N new" until released', async ({ appPage: page, mock }) => {
@@ -206,7 +215,7 @@ test.describe('the log on the token and pair pages', () => {
     await expect(log.getByTestId('activity-row').first()).toBeVisible();
     await expect(log.getByTestId('activity-market')).toHaveValue(base);
     await expect.poll(async () => [...new Set(await attrs(page, 'data-market'))]).toEqual([base]);
-    await expect(log.getByTestId('activity-all-link')).toHaveAttribute('href', `#/activity?market=${base}`);
+    await expect(log.getByTestId('activity-all-link')).toHaveAttribute('href', '#/activity');
     // layout: under the chart, the depth chart and the book, above the facts; as wide as the grid; the depth chart spans the two middle columns
     const box = async (id: string) => (await page.getByTestId(id).first().boundingBox())!;
     const [grid, act, depth, chart, details] = [(await page.locator('.mkt-grid').boundingBox())!, await box('activity'), await box('depth-section'), await box('chart-section'), (await page.locator('.mkt-area-details').boundingBox())!];
@@ -222,10 +231,10 @@ test.describe('the log on the token and pair pages', () => {
     await expect.poll(async () => [...new Set(await attrs(page, 'data-market'))]).toEqual([base]);
     await shot(page, 'token-1440', 'dark');
     await shot(page, 'token-1440', 'light');
-    // the link opens the Activity page with the same filter
+    // the link opens the Activity page
     await log.getByTestId('activity-all-link').click();
-    await expect(page).toHaveURL(new RegExp(`#/activity\\?market=${base}$`));
-    await expect(page.getByTestId('activity-page').getByTestId('activity-market')).toHaveValue(base);
+    await expect(page).toHaveURL(/#\/activity$/);
+    await expect(page.getByTestId('activity-page')).toBeVisible();
   });
 
   test('pair page: the pair\'s fills (both sides, A and B amounts, no price: a pair fill never makes one), its placements', async ({ appPage: page, mock }) => {
@@ -247,7 +256,7 @@ test.describe('the log on the token and pair pages', () => {
       await expect(r.locator('.act-c-mk .tk-icon')).toHaveCount(2);
     }
     await expect(log.locator('[data-testid="activity-row"][data-kind="placed"]').first()).toBeVisible();
-    await expect(log.getByTestId('activity-all-link')).toHaveAttribute('href', `#/activity?market=${base}/${QUOTE}`);
+    await expect(log.getByTestId('activity-all-link')).toHaveAttribute('href', '#/activity');
     await shot(page, 'pair-1440', 'dark');
     await shot(page, 'pair-1440', 'light');
   });

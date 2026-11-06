@@ -1,6 +1,6 @@
 // The activity log (kaspa.stream's transaction list, for KOB): one row per transaction, newest first, live. The SAME component on the Activity page
-// (#/activity, every market or the one in its URL) and on the token and pair pages (preset to that market; the viewer can widen it, and "All
-// activity →" opens the Activity page with the same filter).
+// (#/activity, every market, no market filter) and on the token and pair pages (preset to that market; the viewer can widen it, and "All activity →"
+// opens the Activity page).
 //
 // Every row is a real link to the transaction on the network's explorer (new tab, `noopener noreferrer`), so a row must never move under the pointer:
 // while the list is paused, pointed at or focused, new rows are held (`heldView`) and counted in a "+N new" pill that releases them.
@@ -8,7 +8,6 @@ import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
-import { activityMarketParam } from '../../app/router';
 import { explorerTxUrl } from '../../config';
 import { pubkeyToAddress } from '../../data/kaspa-sdk';
 import type { PairFillsView } from '../../data/indexer-types';
@@ -40,7 +39,7 @@ export interface ActivityLogProps {
   prefsScope: PrefsScope;
   /** the pair page's own copy of the pair's fills */
   pairFills?: { base: Hex; quote: Hex; view: PairFillsView | null | undefined } | null;
-  /** a link to the Activity page with this filter (on the token and pair pages) */
+  /** a link to the Activity page (on the token and pair pages) */
   allLink?: boolean;
   /** rows shown at first and added by each "Load older" (default PAGE_ROWS) */
   pageRows?: number;
@@ -203,22 +202,25 @@ function ActivityLogView(props: ActivityLogProps) {
         ))}
       </div>
       <span class="act-kinds">{kindToggles}</span>
-      <select
-        class="act-sel"
-        aria-label={t('activity.market.label')}
-        data-testid="activity-market"
-        value={marketKeyOf(props.market)}
-        onChange={(e) => {
-          const o = marketOptions.find((x) => x.value === (e.target as HTMLSelectElement).value);
-          if (o && !sameMarket(o.m, props.market)) props.onMarketChange(o.m);
-        }}
-      >
-        {marketOptions.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+      {/* the market filter belongs to the token and pair pages; the Activity page shows every market */}
+      {props.pageMarket ? (
+        <select
+          class="act-sel"
+          aria-label={t('activity.market.label')}
+          data-testid="activity-market"
+          value={marketKeyOf(props.market)}
+          onChange={(e) => {
+            const o = marketOptions.find((x) => x.value === (e.target as HTMLSelectElement).value);
+            if (o && !sameMarket(o.m, props.market)) props.onMarketChange(o.m);
+          }}
+        >
+          {marketOptions.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      ) : null}
       <button
         type="button"
         class="act-ib act-mine"
@@ -357,7 +359,7 @@ function ActivityLogView(props: ActivityLogProps) {
         <span class="small muted" data-testid="activity-showing">{t('activity.showing', { shown: shown.length, kept: view.rows.length })}</span>
         <span class="act-foot-r">
           {props.allLink ? (
-            <a href={`#/activity${props.market.kind === 'all' ? '' : `?market=${activityMarketParam(props.market)}`}`} class="small" title={t('activity.allActivityTitle')} data-testid="activity-all-link">
+            <a href="#/activity" class="small" title={t('activity.allActivityTitle')} data-testid="activity-all-link">
               {t('activity.allActivity')}
             </a>
           ) : null}

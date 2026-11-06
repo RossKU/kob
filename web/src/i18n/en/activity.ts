@@ -2,7 +2,7 @@ export default {
   'activity.title': 'Activity',
   'activity.allMarkets': 'all markets',
   'activity.allActivity': 'All activity →',
-  'activity.allActivityTitle': 'Opens the Activity page with this filter',
+  'activity.allActivityTitle': 'Opens the Activity page',
   'activity.tableLabel': 'KOB activity, one row per transaction',
 
   'activity.col.kind': 'Kind',

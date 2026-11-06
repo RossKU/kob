@@ -79,7 +79,7 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
     case 'activity':
       return (
         <Titled page="activity">
-          <ActivityPage {...(r.market ? { market: r.market } : {})} />
+          <ActivityPage />
         </Titled>
       );
     case 'orders':

@@ -72,6 +72,8 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-ty-sell { color: var(--sell); background: var(--sell-bg); }
 .act-ty-cancel { color: var(--muted); background: var(--surface-3); }
 .act-ty-refund, .act-ty-stop { color: var(--warn); background: var(--warn-bg); }
+/* the Activity tab: the icon alone (the token and pair pages keep the tile) */
+.act-page .act-ty { background: none; }
 
 .act-c-mk { display: flex; align-items: center; gap: 2px; overflow: hidden; }
 .act-mk { display: inline-flex; align-items: center; flex: none; }
