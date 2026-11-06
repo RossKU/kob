@@ -69,8 +69,9 @@ body.lp-body { background: #050808; overflow-x: hidden; }
   position: relative; min-height: min(calc(100vh - var(--frame-h, 56px)), 1100px); min-height: min(calc(100svh - var(--frame-h, 56px)), 1100px);
   display: flex; flex-direction: column; justify-content: flex-end; padding: 48px 0 56px;
 }
-/* a phone, and any portrait screen (a tablet, a phone showing the desktop site): no full-screen hero, or the text would sit under a screen of empty space */
-@media (max-width: 700px), (max-aspect-ratio: 4/5) { .lp-hero { min-height: 0; padding: 44px 0 40px; } }
+/* a phone, a portrait or near-square screen (a tablet, an unfolded phone, a zoomed-out page, a phone showing the desktop site): no full-screen hero,
+   or the text would sit under a screen of empty space; only a clearly landscape screen (wider than 5:4) gets the full-screen hero */
+@media (max-width: 700px), (max-aspect-ratio: 5/4) { .lp-hero { min-height: 0; padding: 44px 0 40px; } }
 .lp .lp-kicker { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 30px; font: 500 clamp(15px, 1.25vw, 18px)/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); }
 .lp-chip { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 11px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn); font: 600 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
 .lp-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
@@ -168,11 +169,12 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 
 /* trust */
 .lp-ledger { margin-top: clamp(48px, 7vw, 96px); border-top: 1.5px solid var(--fg); }
-.lp-lr { display: grid; grid-template-columns: 1fr auto; gap: 6px 24px; align-items: baseline; padding: clamp(22px, 3vw, 36px) 0; border-bottom: 1px solid var(--line); }
-@media (min-width: 900px) { .lp-lr { grid-template-columns: minmax(260px, 1fr) 1.2fr minmax(200px, auto); } }
+.lp-lr { display: grid; grid-template-columns: 1fr auto; gap: 6px 24px; align-items: center; padding: clamp(22px, 3vw, 36px) 0; border-bottom: 1px solid var(--line); }
+/* the key, the sentence and the verdict share one centre line; every row is at least as tall as a two-line sentence, so the verdicts sit at an even rhythm */
+@media (min-width: 900px) { .lp-lr { grid-template-columns: minmax(220px, 0.8fr) 2fr minmax(220px, auto); min-height: clamp(120px, 10vw, 150px); } }
 .lp-lr .lp-k { font: 700 clamp(22px, 2.4vw, 34px)/1.1 var(--display); letter-spacing: -0.03em; }
 .lp-lr .lp-v { font: 800 clamp(34px, 4.6vw, 76px)/0.9 var(--display); letter-spacing: -0.05em; text-align: right; grid-column: 2; grid-row: 1; }
-.lp-lr p { color: var(--fg-2); font-size: 16px; max-width: 32em; grid-column: 1 / -1; }
+.lp-lr p { color: var(--fg-2); font-size: 16px; max-width: 40em; grid-column: 1 / -1; }
 @media (min-width: 900px) {
   .lp-lr p { grid-column: 2; grid-row: 1; }
   .lp-lr .lp-v { grid-column: 3; }
