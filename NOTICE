@@ -16,8 +16,8 @@ Vendored source code
 
 * argent-artifact (Argent artifact data model) -- vendor/argent-artifact/
   Copyright 2026 Argent-lang developers. ISC License (vendor/argent-artifact/LICENSE).
-  Also, argent/patches/ contains patches against the Argent compiler (argent-lang/argent, ISC),
-  applied to a separate checkout at build time (argent/UPSTREAM.md); the Argent sources are not
+  Also, vendor/argent-upstream/patches/ contains patches against the Argent compiler (argent-lang/argent, ISC),
+  applied to a separate checkout at build time (vendor/argent-upstream/UPSTREAM.md); the Argent sources are not
   stored in this repository.
 
 Vendored data and token programs
@@ -76,7 +76,7 @@ Dependencies that are not stored here
       `[patch.crates-io]` entry in Cargo.toml;
     - do not add terms that forbid modifying the program for one's own use or reverse
       engineering it to debug such modifications.
-  `cargo deny check licenses` (deny.toml) accepts LGPL-3.0-only for these two crates only, so
+  `cargo deny check licenses` (.cargo/deny.toml) accepts LGPL-3.0-only for these two crates only, so
   another copyleft dependency is not taken in unnoticed.
 
 * TradingView Lightweight Charts (Apache-2.0) is bundled into the web app. Its attribution

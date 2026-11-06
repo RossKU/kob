@@ -20,7 +20,7 @@ scripts/build-wasm.sh --install-bindgen --test                  # wasm bindings 
 Web UI (Node >= 22): `scripts/build-wasm.sh --install-bindgen --web --slim` at the repo root, then from `web/`:
 `npm ci`, `npm run fetch-sdk`, `npm run build:wasm -- --copy`, `npm run typecheck`, `npm test`,
 `npm run e2e`. `.github/workflows/ci.yml` is the authoritative list of what must pass; besides the commands above it also runs
-`scripts/build-deploy.sh testnet-10 --check` and `mainnet --check`, `node scripts/check-pins.mjs`, `cargo deny --locked check` and
+`scripts/build-deploy.sh testnet-10 --check` and `mainnet --check`, `node scripts/check-pins.mjs`, `cargo deny --locked --config .cargo/deny.toml check` and
 `npm audit` on the three lockfiles.
 
 **Hashes in documents.** `node scripts/check-pins.mjs` fails when a 64-hex constant in a pinned file (the docs, the Rust pin

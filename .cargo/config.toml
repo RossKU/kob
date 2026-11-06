@@ -1,3 +1,7 @@
+# clippy.toml lives in this folder, not at the workspace root: `relative` resolves the value against the parent of .cargo.
+[env]
+CLIPPY_CONF_DIR = { value = ".cargo", relative = true }
+
 # getrandom 0.3 selects its wasm backend by cfg, not by feature alone. Every crate that
 # builds for wasm32-unknown-unknown (kob-wasm, silverscript-*) needs this flag.
 [target.wasm32-unknown-unknown]

@@ -6,7 +6,7 @@
 //! third-party closed-ICC example against it and linked the forged handle. With the pin it refuses, and it refuses
 //! an artifact import without a pin. The concern is specific to artifact-backed imports: a source import of the same
 //! app (`import "../KOBOrders.ag";`) compiles it and links the handle argentc derived itself (docs/argent-feedback.md,
-//! item 4). Needs the argentc and sil2argent binaries (`argent/build-argentc.sh`,
+//! item 4). Needs the argentc and sil2argent binaries (`vendor/argent-upstream/build-argentc.sh`,
 //! `cargo build -p sil2argent`): `KOB_ARGENTC` / `KOB_SIL2ARGENT`, else `<target>/argent/release/argentc` and
 //! `<target>/debug/sil2argent` of `CARGO_TARGET_DIR` or the repo's `target/`. Skipped when they are absent
 //! (scripts/build-argent.sh --check exercises the pin with the genuine artifact in CI).

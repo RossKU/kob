@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Reproducible build of `argentc` (the Argent compiler): the pinned upstream commit plus our patches.
 #
-#   argent/build-argentc.sh              clone (if needed), pin, patch, build; prints the binary path
-#   argent/build-argentc.sh --verify     also check vendor/argent-artifact against the pinned upstream
+#   vendor/argent-upstream/build-argentc.sh              clone (if needed), pin, patch, build; prints the binary path
+#   vendor/argent-upstream/build-argentc.sh --verify     also check vendor/argent-artifact against the pinned upstream
 #
-# Inputs: argent/upstream.lock (url, rev) and argent/patches/*.patch (applied in name order).
-# The checkout lives in argent/upstream/ (git-ignored). On every run its whole tree (tracked, untracked
+# Inputs: vendor/argent-upstream/upstream.lock (url, rev) and vendor/argent-upstream/patches/*.patch (applied in name order).
+# The checkout lives in vendor/argent-upstream/upstream/ (git-ignored). On every run its whole tree (tracked, untracked
 # and ignored files) is compared with the pinned commit plus the patches; any difference (a local edit,
 # an extra file, a missing patch) resets it to the pin and re-applies the patches, so local edits there
 # are discarded and argentc is always built from exactly the pinned source. The build uses the KOB
@@ -13,14 +13,14 @@
 #   ARGENT_URL=<path or url>   clone source override (the pinned rev is still enforced)
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 ROOT=$PWD
-[ -f "$ROOT/argent/upstream.lock" ] || { echo "build-argentc: not in the KOB repository ($ROOT)" >&2; exit 2; }
-UP=$ROOT/argent/upstream
-lock_get() { awk -v k="$1" '$1==k {print $2}' argent/upstream.lock; }
+[ -f "$ROOT/vendor/argent-upstream/upstream.lock" ] || { echo "build-argentc: not in the KOB repository ($ROOT)" >&2; exit 2; }
+UP=$ROOT/vendor/argent-upstream/upstream
+lock_get() { awk -v k="$1" '$1==k {print $2}' vendor/argent-upstream/upstream.lock; }
 URL=${ARGENT_URL:-$(lock_get url)}
 REV=$(lock_get rev)
-[[ "$REV" =~ ^[0-9a-f]{40}$ ]] || { echo "argent/upstream.lock: rev must be a full commit id" >&2; exit 2; }
+[[ "$REV" =~ ^[0-9a-f]{40}$ ]] || { echo "vendor/argent-upstream/upstream.lock: rev must be a full commit id" >&2; exit 2; }
 VERIFY=0
 for arg in "$@"; do
   case "$arg" in
@@ -35,15 +35,15 @@ if [ ! -d "$UP/.git" ]; then
 fi
 # Every git command below runs on the checkout only; a missing or broken checkout must not fall back
 # to an enclosing repository.
-export GIT_CEILING_DIRECTORIES=$ROOT/argent
+export GIT_CEILING_DIRECTORIES=$ROOT/vendor/argent-upstream
 ug() { git -C "$UP" "$@"; }
-[ "$(cd "$UP" && git rev-parse --show-toplevel)" -ef "$UP" ] || { echo "argent/upstream is not a git checkout: delete it" >&2; exit 1; }
+[ "$(cd "$UP" && git rev-parse --show-toplevel)" -ef "$UP" ] || { echo "vendor/argent-upstream/upstream is not a git checkout: delete it" >&2; exit 1; }
 ug config core.autocrlf false
 if ! ug cat-file -e "$REV^{commit}" 2>/dev/null; then
   ug fetch --quiet origin "$REV" || ug fetch --quiet origin
 fi
 PATCHES=()
-while IFS= read -r p; do PATCHES+=("$p"); done < <(ls argent/patches/*.patch | LC_ALL=C sort)
+while IFS= read -r p; do PATCHES+=("$p"); done < <(ls vendor/argent-upstream/patches/*.patch | LC_ALL=C sort)
 
 # Expected tree: the pinned commit with the patches applied, built in a scratch index (the checkout is
 # not touched).
@@ -54,7 +54,7 @@ for p in "${PATCHES[@]}"; do
   GIT_INDEX_FILE=$IDX/want ug apply --cached --whitespace=nowarn "$ROOT/$p"
 done
 WANT=$(GIT_INDEX_FILE=$IDX/want ug write-tree)
-# Actual tree: every file under argent/upstream except .git, ignored ones included, hashed as its bytes are on disk.
+# Actual tree: every file under vendor/argent-upstream/upstream except .git, ignored ones included, hashed as its bytes are on disk.
 # Not `git add`: it runs the clean filters and text conversions the checkout's own .git/config, .git/info/attributes
 # and .gitattributes name, which can make an edited file hash as the pinned one. `hash-object --no-filters` runs none.
 tree_of_checkout() {
@@ -83,7 +83,7 @@ tree_of_checkout() {
 # An unchanged, correct tree is left alone so it keeps its mtimes and cargo does not rebuild argentc.
 HAVE=$(tree_of_checkout)
 if [ "$HAVE" != "$WANT" ]; then
-  [ -f "$UP/.git/kob-stamp" ] && echo "argent/upstream differs from $REV + patches: resetting it" >&2
+  [ -f "$UP/.git/kob-stamp" ] && echo "vendor/argent-upstream/upstream differs from $REV + patches: resetting it" >&2
   ug reset --quiet --hard "$REV"
   ug clean --quiet -ffdx
   [ "$(ug rev-parse HEAD)" = "$REV" ] || { echo "argent upstream is not at $REV" >&2; exit 1; }
@@ -93,12 +93,12 @@ if [ "$HAVE" != "$WANT" ]; then
   done
   echo "$WANT" > "$UP/.git/kob-stamp"
   HAVE=$(tree_of_checkout)
-  [ "$HAVE" = "$WANT" ] || { echo "argent/upstream is not $REV + patches after the reset (tree $HAVE, want $WANT)" >&2; exit 1; }
+  [ "$HAVE" = "$WANT" ] || { echo "vendor/argent-upstream/upstream is not $REV + patches after the reset (tree $HAVE, want $WANT)" >&2; exit 1; }
 fi
 
 if [ "$VERIFY" = 1 ]; then
   # The tree check above already ran; state what was verified.
-  echo "argent/upstream is $REV + ${#PATCHES[@]} patches, nothing else (tree $WANT)" >&2
+  echo "vendor/argent-upstream/upstream is $REV + ${#PATCHES[@]} patches, nothing else (tree $WANT)" >&2
   # vendor/argent-artifact must be the pinned upstream crate: src/ identical, Cargo.toml only wired.
   if ! diff -r "$UP/crates/argent-artifact/src" vendor/argent-artifact/src >/dev/null; then
     echo "vendor/argent-artifact/src differs from argent upstream $REV" >&2
@@ -111,7 +111,7 @@ fi
 TARGET=${ARGENT_TARGET_DIR:-$ROOT/target/argent}
 cargo build --release --locked -q --manifest-path "$UP/Cargo.toml" --bin argentc --target-dir "$TARGET"
 # --locked must not have rewritten anything in the checkout.
-[ "$(tree_of_checkout)" = "$WANT" ] || { echo "argent/upstream changed during the build" >&2; exit 1; }
+[ "$(tree_of_checkout)" = "$WANT" ] || { echo "vendor/argent-upstream/upstream changed during the build" >&2; exit 1; }
 BIN=$TARGET/release/argentc
 [ -x "$BIN" ] || BIN=$BIN.exe
 echo "$BIN"

@@ -18,7 +18,7 @@
 #                                         instead of building vendor/silverscript
 #   SILVERC=/path/to/silverc              use this binary as-is (overrides both)
 #   ... --no-argent                       skip the Argent artifacts (contracts/argent, needs argentc,
-#                                         built from the pinned upstream: see argent/UPSTREAM.md)
+#                                         built from the pinned upstream: see vendor/argent-upstream/UPSTREAM.md)
 #
 # Sources are passed to silverc as repo-relative paths from the repo root because the artifact
 # records `source_path`; that keeps the output independent of the checkout location.

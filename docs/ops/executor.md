@@ -79,7 +79,7 @@ local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the role
   unreachable, paused, waiting for the indexer, funds below `--low-funds-kas`, rejections).
 * **Nodes**: the setup offers public Kaspa nodes (the default, `rpc_url = "resolver"`: a cross-checked pair, Part C,
   *Node*) or the operator's own node (recommended; required for Miner Mode).
-* `KOB_EXECUTOR_DIR` names another directory than the executable's for both (the `Dockerfile` sets `/data`, its volume).
+* `KOB_EXECUTOR_DIR` names another directory than the executable's for both (`crates/kob-executor/Dockerfile` sets `/data`, its volume).
 * Nothing connects anywhere but to the configured node: no telemetry, no fee, no project server, no auto-update.
 
 ---

@@ -147,7 +147,7 @@ scripts/build-wasm.sh --test
 cd web && npm test && npm run e2e
 node scripts/check-pins.mjs                                     # every 64-hex constant in the pinned docs and sources matches a generated artifact
 scripts/build-deploy.sh testnet-10 --check && scripts/build-deploy.sh mainnet --check
-cargo deny --locked check                                       # advisories, bans, licenses, sources (cargo-deny 0.20.2)
+cargo deny --locked --config .cargo/deny.toml check             # advisories, bans, licenses, sources (cargo-deny 0.20.2)
 ```
 
 `node scripts/check-pins.mjs` fails when a 64-hex constant in a pinned file (the docs among them) is not a hash the generated
@@ -196,7 +196,7 @@ release job attaches the twelve archives, the Android app and a `SHA256SUMS` of 
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
 runs the same builds as a dry run that only uploads workflow artifacts. The binaries and archives are not code-signed (the
 Windows binary shows SmartScreen); the Android app is signed with the **release key** (below). No container image is
-published (the repository's `Dockerfile` builds one from the source for operators who want a container, quickstart 6).
+published (`crates/kob-executor/Dockerfile` builds one from the source for operators who want a container, quickstart 6).
 
 **The Android app in the release** (`android/`, built by `.github/workflows/android.yml`, which `release.yml` calls as the job
 `android`): `kobd-<version>-testnet-10-android.apk`, built with the testnet-10 deployment build of the executor and
@@ -225,7 +225,7 @@ would list none of the orders the new wallets place.
    `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git
    commit of the build, `null` when the build did not say) and `payload_version` (the `KOB1` payload version it reads and
    writes). Compare them with the release: `curl -s https://<indexer>/v1/health | jq '{version, commit, payload_version}'`.
-   The release workflow (`.github/workflows/release.yml`) and the `Dockerfile` (`--build-arg KOB_GIT_COMMIT=...`) set
+   The release workflow (`.github/workflows/release.yml`) and `crates/kob-executor/Dockerfile` (`--build-arg KOB_GIT_COMMIT=...`) set
    `KOB_GIT_COMMIT` to the tagged commit; a plain `cargo build` leaves `commit` null. The value is read with `option_env!`
    at compile time: there is no build script, no `git` call and no timestamp, so the same source, toolchain and
    `KOB_GIT_COMMIT` give the same binary bytes (a build with another commit differs in that string only; to compare a

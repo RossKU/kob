@@ -38,7 +38,7 @@ pinned third-party token programs the tests run against.
 
 The `argent/` outputs are derived, not authored: `KOBOrders` and `KOBOrdersKron` wrap the silverc artifacts of `orders/*.sil`
 and `orders/kron/Kob{Ask,Bid}Kron.sil` (their handles are those templates), the router and the token are compiled by `argentc` from the pinned Argent upstream
-(`argent/UPSTREAM.md`). `contracts/argent/**` is in `SHA256SUMS` and reproduced by `--check`.
+(`vendor/argent-upstream/UPSTREAM.md`). `contracts/argent/**` is in `SHA256SUMS` and reproduced by `--check`.
 
 ## Constructor arguments and templates
 
@@ -64,7 +64,7 @@ scripts/build-contracts.sh              # rewrite artifacts, contracts/argent an
 scripts/build-contracts.sh --check      # fail if anything differs (CI)
 scripts/build-contracts.sh --upstream   # same, using the official silverc v1.0.0 release binary
 scripts/build-contracts.sh --no-argent  # skip contracts/argent (no argentc build)
-scripts/build-argent.sh [--check]       # only contracts/argent (see argent/UPSTREAM.md, docs/argent.md)
+scripts/build-argent.sh [--check]       # only contracts/argent (see vendor/argent-upstream/UPSTREAM.md, docs/argent.md)
 ```
 
 ## Deployment records

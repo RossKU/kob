@@ -8,7 +8,7 @@
 # Pipeline (all inputs are committed; outputs are deterministic):
 #   0. router.ag   tools/router-gen/gen-router.sh writes contracts/argent/kob_router.ag (one actor per
 #                  fill shape); --check fails if the committed file is not what the generator writes.
-#   1. argent/build-argentc.sh    argentc from the pinned upstream commit + patches
+#   1. vendor/argent-upstream/build-argentc.sh    argentc from the pinned upstream commit + patches
 #   2. KOBOrders   argentc compiles the interface KOBOrders.ag to a skeleton; tools/sil2argent
 #                  replaces every generated contract by the silverc artifact of the hand-written
 #                  contracts/orders/*.sil (contracts/artifacts/*.json) and recomputes handles and id.
@@ -43,7 +43,7 @@ done
 if [ "$MODE" = check ]; then bash tools/router-gen/gen-router.sh --check || exit 1; else bash tools/router-gen/gen-router.sh; fi
 
 # 1. argentc (pinned upstream + patches) and sil2argent
-ARGENTC=$(argent/build-argentc.sh --verify | tail -n1)
+ARGENTC=$(vendor/argent-upstream/build-argentc.sh --verify | tail -n1)
 cargo build --locked -q -p sil2argent
 S2A="${CARGO_TARGET_DIR:-$ROOT/target}/debug/sil2argent"
 [ -x "$S2A" ] || S2A="$S2A.exe"

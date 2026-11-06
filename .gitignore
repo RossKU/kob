@@ -11,7 +11,7 @@ crates/kob-wasm/pkg-mainnet/
 crates/kob-wasm/pkg-node-mainnet/
 crates/kob-wasm/pkg-slim/
 crates/kob-wasm/pkg-node-slim/
-/argent/upstream/
+/vendor/argent-upstream/upstream/
 .env.*
 !.env.example
 *.tsbuildinfo

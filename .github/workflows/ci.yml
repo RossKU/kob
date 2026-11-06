@@ -141,8 +141,8 @@ jobs:
         run: bash scripts/build-wasm.sh --install-bindgen --test
 
   deps:
-    # Dependency policy: RustSec advisories, licences and sources (deny.toml lists every accepted advisory with its reason), and the
-    # npm advisories of the three lockfiles. New advisories make this job fail until they are fixed or accepted in deny.toml.
+    # Dependency policy: RustSec advisories, licences and sources (.cargo/deny.toml lists every accepted advisory with its reason), and the
+    # npm advisories of the three lockfiles. New advisories make this job fail until they are fixed or accepted in .cargo/deny.toml.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -154,7 +154,7 @@ jobs:
       - name: cargo-deny 0.20.2 (crates.io, --locked)
         run: cargo install cargo-deny --version 0.20.2 --locked
       - name: cargo deny check (advisories, bans, licenses, sources)
-        run: cargo deny --locked check
+        run: cargo deny --locked --config .cargo/deny.toml check
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22

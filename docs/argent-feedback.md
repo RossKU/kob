@@ -9,11 +9,11 @@ way; corrections are very welcome.**
 
 Everything below is against the pinned upstream commit `b312deda6fe10f6493c8d49eb748e3f61860458a`
 (master of 2026-09-30, after the module loading rework #62; SilverScript v1.0.0) plus our two
-patches (`argent/UPSTREAM.md`); every compiler-dependent result was measured on it. To rebuild that
+patches (`vendor/argent-upstream/UPSTREAM.md`); every compiler-dependent result was measured on it. To rebuild that
 `argentc`:
 
 ```
-argent/build-argentc.sh          # clone, pin, patch, build; prints the path of argentc
+vendor/argent-upstream/build-argentc.sh          # clone, pin, patch, build; prints the path of argentc
 scripts/build-argent.sh --check  # builds contracts/argent with it and checks the committed output
 ```
 
@@ -22,7 +22,7 @@ The code is pre-audit and Argent is pre-1.0; nothing here is meant as criticism 
 ## Items
 
 Status tags: **as designed** (confirmed by the Argent team), **planned upstream**, **patched**
-(fixed for KOB by a patch in `argent/patches/`), **open**, **closed**. Where an item carries an
+(fixed for KOB by a patch in `vendor/argent-upstream/patches/`), **open**, **closed**. Where an item carries an
 "Answer", it is the Argent team's reply of 2026-10-01.
 
 | Item | Topic | Status |
@@ -267,7 +267,7 @@ v2.1.0. Patch 0001 (Argent issue #64) moves the dependencies to `tag = "v2.1.0"`
 `silverscript-*` at our patched vendored copy and adapts two lines of `crates/argent-runtime`
 (`MAINNET_PARAMS.block_mass_limits`, covenants always enabled). It applies to `b312ded` unchanged.
 
-* Where: `argent/patches/0001-argent-rusty-kaspa-v2.1.0.patch`, `vendor/silverscript/UPSTREAM.md`.
+* Where: `vendor/argent-upstream/patches/0001-argent-rusty-kaspa-v2.1.0.patch`, `vendor/silverscript/UPSTREAM.md`.
 * Answer: to be decided (#64).
 
 ### 12. Closed ICC import of an artifact without source (status: patched, 0002; PR #69 open)
@@ -282,7 +282,7 @@ importer's artifact is identical to the one built against the source import, and
 unpinned artifact, a pin on a source import, a tampered artifact and an artifact as the root are
 refused.
 
-* Where: `argent/patches/0002-argent-artifact-backed-app-imports.patch` (the fuller version KOB
+* Where: `vendor/argent-upstream/patches/0002-argent-artifact-backed-app-imports.patch` (the fuller version KOB
   applies, with upstream-style tests and docs), `contracts/argent/examples/closed_icc_gate.ag`,
   `tools/router-gen/router_head.ag`.
 * Answer: a PR is welcome. Opened as argent-lang/argent#69 (open, one commit) from the fork
@@ -300,7 +300,7 @@ script engine), not from anything Argent ships, and is withdrawn.
 ### 14. An artifact does not prove which compiler built it (status: closed)
 
 Answer: artifacts are not self-verifying by design; a trusted provider or a full compiler
-validation is required. KOB does the latter: `argent/build-argentc.sh` builds the pinned `argentc`,
+validation is required. KOB does the latter: `vendor/argent-upstream/build-argentc.sh` builds the pinned `argentc`,
 `scripts/build-argent.sh --check` rebuilds the committed artifacts and fails on any difference, and
 `sil2argent verify <artifact.json> --id <artifact id> ...` re-derives what a published artifact
 claims without `argentc` (`tools/sil2argent`). An informational compiler version field would be

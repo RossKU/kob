@@ -11,7 +11,7 @@
 // hash as a constant, records the KOBOrders artifact id and the interface fingerprint in this app's
 // artifact, and reads the ask's state with the published KobAskState layout.
 //
-// The import PINS the artifact id (`id "..."`, argent/patches/0002): argentc refuses an artifact with
+// The import PINS the artifact id (`id "..."`, vendor/argent-upstream/patches/0002): argentc refuses an artifact with
 // any other id, and one without a pin, because a forged artifact with the same app name and ABI is
 // self-consistent too. Pin the id you reviewed (`sil2argent verify`).
 //

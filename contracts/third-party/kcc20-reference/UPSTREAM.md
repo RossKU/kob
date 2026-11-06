@@ -50,7 +50,7 @@ Reproduced two ways (2026-10-27). (1) Upstream's own build, `cargo +1.94.1 run -
 `root` / `modules` path strings of `artifact.json` and `manifest.json` differ (absolute Windows paths of the build machine). (2) KOB's
 silverc (silverscript v1.0.0): `kobs_silverc_rebuilds_the_27f8403_issuers_to_the_pinned_hashes` compiles the vendored generated
 `PublicMint.27f8403.sil` and `TokenSeed.27f8403.sil` to the same template hashes, cuts and `rebalance_value` tag. KOB's own pinned
-argentc (`argent/upstream.lock`, `b312deda`) is older than `9a9f4b1` and cannot rebuild a multi-actor app to these bytes (it emits other
+argentc (`vendor/argent-upstream/upstream.lock`, `b312deda`) is older than `9a9f4b1` and cannot rebuild a multi-actor app to these bytes (it emits other
 dispatch tags and a different `KCC20` hash for the same sources), so these issuers are reproduced with upstream's pin, not with
 `scripts/build-argent.sh`.
 

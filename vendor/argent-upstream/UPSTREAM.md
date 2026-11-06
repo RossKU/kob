@@ -11,14 +11,14 @@ Argent compiler (`argentc`) used for that, holds our two patches to it and build
 | SilverScript | v1.0.0 (`3ed97333`), which upstream pins since #60; built from `vendor/silverscript` (patch 0001) |
 | Pin file | `upstream.lock` (url, rev), read by `build-argentc.sh` |
 | Patches | `patches/*.patch`, applied in name order on top of the pin |
-| Checkout | `argent/upstream/` (git-ignored; created and reset to the pin by the build script) |
+| Checkout | `vendor/argent-upstream/upstream/` (git-ignored; created and reset to the pin by the build script) |
 | Build output | `target/argent/release/argentc` (`ARGENT_TARGET_DIR` overrides) |
 
 ## Build
 
 ```
-argent/build-argentc.sh              # clone, pin, patch, build; prints the path of argentc
-argent/build-argentc.sh --verify     # also check vendor/argent-artifact against the pinned crate
+vendor/argent-upstream/build-argentc.sh              # clone, pin, patch, build; prints the path of argentc
+vendor/argent-upstream/build-argentc.sh --verify     # also check vendor/argent-artifact against the pinned crate
 ARGENT_URL=<path or url> ...         # clone source override (the pin is still enforced)
 ```
 
@@ -28,7 +28,7 @@ commit plus the patches (the expected git tree is computed in a scratch index); 
 (a local edit, an extra file, a changed pin or patch) it resets the checkout, cleans it and
 re-applies the patches, and it fails if the tree still differs or changes during the build. A
 checkout that already matches is left alone, so an unchanged tree does not rebuild. `--verify`
-reports the verified tree and also checks `vendor/argent-artifact`. Delete `argent/upstream/` to
+reports the verified tree and also checks `vendor/argent-artifact`. Delete `vendor/argent-upstream/upstream/` to
 force a fresh clone. `scripts/build-argent.sh` calls it; that is the
 entry point CI uses (`scripts/build-contracts.sh --check`).
 
@@ -40,7 +40,7 @@ Both patches are needed at `b312ded`:
    against rusty-kaspa `a41a333b`; Toccata mainnet runs node v2.1.0. The patch moves the rusty-kaspa
    dependencies to `tag = "v2.1.0"` (root `Cargo.toml` and `Cargo.lock`), points
    `silverscript-abi`/`silverscript-lang` at `vendor/silverscript` (KOB's v2.1.0 port of
-   SilverScript v1.0.0, `../../vendor/silverscript` from the checkout), and adapts two lines of
+   SilverScript v1.0.0, `../../silverscript` from the checkout), and adapts two lines of
    `argent-runtime` to the v2.1.0 API (`MAINNET_PARAMS.block_mass_limits`, covenants always
    enabled). Same family as `vendor/silverscript/patches/0001`. Drop it when upstream builds against v2.1.0.
 2. `0002-argent-artifact-backed-app-imports.patch` (parser, loader, bundle builder; tests and docs).
@@ -75,8 +75,8 @@ checkout. `build-argentc.sh --verify` fails if it drifts from the pin.
 
 ## Updating the pin
 
-1. Set `rev` in `upstream.lock`; delete `argent/upstream/`.
-2. Re-create the patches against the new commit (`git -C argent/upstream diff`), keep the
+1. Set `rev` in `upstream.lock`; delete `vendor/argent-upstream/upstream/`.
+2. Re-create the patches against the new commit (`git -C vendor/argent-upstream/upstream diff`), keep the
    numbering.
 3. Re-import `crates/argent-artifact/src` into `vendor/argent-artifact/src` and update the commit in
    `vendor/argent-artifact/UPSTREAM.md`.

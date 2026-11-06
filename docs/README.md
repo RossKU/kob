@@ -64,7 +64,7 @@ what result.
 | [argent.md](argent.md) | KOB as an Argent app: published artifacts, importing KOB orders from another Argent app, the swap-and-pay router |
 | [argent-feedback.md](argent-feedback.md) | Questions and findings for the Argent team, each with its status and where it can be reproduced |
 | [argent-port-compare.md](argent-port-compare.md) | `KobAsk` hand-written versus its Argent port: where the size difference comes from |
-| [../argent/UPSTREAM.md](../argent/UPSTREAM.md) | The pinned Argent commit, our two patches, how to rebuild `argentc` and update the pin |
+| [../vendor/argent-upstream/UPSTREAM.md](../vendor/argent-upstream/UPSTREAM.md) | The pinned Argent commit, our two patches, how to rebuild `argentc` and update the pin |
 
 ## Component documentation
 

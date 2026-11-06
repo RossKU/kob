@@ -1,10 +1,13 @@
 # kobd (the KOB daemon) for Linux operators (docs/ops/executor-quickstart.md, "Docker"). One image serves one network, the
 # deployment build of NETWORK (mainnet or testnet-10, docs/ops/release.md):
 #
-#   docker build --build-arg NETWORK=mainnet -t kobd:mainnet .
+#   docker build -f crates/kob-executor/Dockerfile --build-arg NETWORK=mainnet -t kobd:mainnet .
 #   install -d -o 10001 -g 10001 -m 0700 /srv/kob
 #   docker run -it --rm --network host -v /srv/kob:/data kobd:mainnet setup --no-start
 #   docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kobd:mainnet
+#
+# The build context is the repository root. Dockerfile.dockerignore, next to this file, keeps build outputs and anything that could
+# be a secret out of it; it needs BuildKit (the default builder since Docker 23.0).
 #
 # The volume /data holds the configuration, the operator's key file (mode 0600, owned by uid 10001) and the data directory.
 # KOB_EXECUTOR_DIR=/data makes it the directory of `setup` and of the start without arguments (the default command), which

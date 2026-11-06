@@ -319,13 +319,13 @@ WantedBy=multi-user.target
 seconds, for example while the network is still coming up after a boot.) The hardened unit of the operations guide, with the key
 as a systemd credential, is `docs/ops/executor.md`, A.3.
 
-**Docker (Linux)**: the repository's `Dockerfile` builds the executor of one network from the source (pinned base images, a
+**Docker (Linux)**: `crates/kob-executor/Dockerfile` builds the executor of one network from the source (pinned base images, a
 non-root user, uid 10001). The volume `/data` holds the configuration, the key file and the data directory
 (`KOB_EXECUTOR_DIR=/data` in the image: the directory of the setup and of a start without arguments); the setup runs in the
 container once, then the container runs what it wrote:
 
 ```
-docker build --build-arg NETWORK=mainnet -t kobd:mainnet .      # or NETWORK=testnet-10
+docker build -f crates/kob-executor/Dockerfile --build-arg NETWORK=mainnet -t kobd:mainnet .      # or NETWORK=testnet-10
 sudo install -d -o 10001 -g 10001 -m 0700 /srv/kob
 docker run -it --rm --network host -v /srv/kob:/data kobd:mainnet setup --no-start
 docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kobd:mainnet

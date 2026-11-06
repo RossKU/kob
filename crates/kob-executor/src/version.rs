@@ -1,7 +1,7 @@
 //! The build this executor is: its crate version, and the git commit when the build says which one it is.
 //!
 //! The commit comes from the environment variable `KOB_GIT_COMMIT` at BUILD time (`option_env!`), set by the release
-//! workflow (`.github/workflows/release.yml`) and the `Dockerfile`; a plain `cargo build` has none, and a build is the same
+//! workflow (`.github/workflows/release.yml`) and `crates/kob-executor/Dockerfile`; a plain `cargo build` has none, and a build is the same
 //! bytes with or without a git checkout around it: there is no build script, no `git` call, no timestamp. `GET /v1/health`
 //! reports both (`version`, `commit`), so an operator or a host can check which release an indexer runs
 //! (docs/ops/release.md, 7).

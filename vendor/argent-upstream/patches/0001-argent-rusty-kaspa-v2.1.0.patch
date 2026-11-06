@@ -195,8 +195,8 @@ index 8adaedb..5057e66 100644
  # Silverscript v1.0.0: https://github.com/kaspanet/silverscript/releases/tag/v1.0.0
 -silverscript-abi = { git = "https://github.com/kaspanet/silverscript", rev = "3ed973335b59269293564805cc2c58a14595ec03", package = "silverscript-abi" }
 -silverscript-lang = { git = "https://github.com/kaspanet/silverscript", rev = "3ed973335b59269293564805cc2c58a14595ec03", package = "silverscript-lang" }
-+silverscript-abi = { path = "../../vendor/silverscript/silverscript-abi" }
-+silverscript-lang = { path = "../../vendor/silverscript/silverscript-lang" }
++silverscript-abi = { path = "../../silverscript/silverscript-abi" }
++silverscript-lang = { path = "../../silverscript/silverscript-lang" }
  thiserror = "2"
  
  [package]
