@@ -11,6 +11,7 @@ the Pages half of it.
 Why Pages and not GitHub Pages: GitHub Pages may not be used for sites "primarily directed at facilitating commercial
 transactions", and it cannot send the security headers of `web/public/_headers` (Content-Security-Policy with
 `frame-ancestors 'none'`, `X-Frame-Options: DENY`, the signer page's own policy). Pages reads `_headers` from the upload.
+A GitHub Pages mirror exists only as a fallback entrance, with those differences made explicit (section 10).
 
 ## 1. Cloudflare account and Pages project
 
@@ -393,3 +394,28 @@ stay on the old version, revert the commit (or clear `KOB_PAGES_PROJECT`, which 
 * **No telemetry.** No analytics, no tracking scripts, no Cloudflare Web Analytics.
 * **Risk disclosure stays.** The app's warnings and disclosures (token powers, unverified genesis, look-alike tickers, the
   order disclosure before signing) are never removed or softened by a deployment.
+
+## 10. GitHub Pages mirror (fallback entrance)
+
+https://rossku.github.io/kob/ serves the same app from GitHub Pages, for when Cloudflare is unreachable. The main site stays
+https://kob.kaspa.ag. `.github/workflows/deploy-gh-pages.yml` deploys it on the same pushes to `master` as `deploy-pages.yml` (and on
+*Run workflow*): the same build and unit tests, `config.json` from the same `KOB_PAGES_*` variables (no secret is used), then
+`actions/upload-pages-artifact` and `actions/deploy-pages` into the environment `github-pages`. Repository setting: *Settings > Pages >
+Source: GitHub Actions* (`gh api -X POST repos/RossKU/kob/pages -f build_type=workflow`).
+
+GitHub Pages sends no custom response headers, so `_headers` does not apply. The mirror is built with `KOB_MIRROR=github-pages`
+(`web/src/app/mirror.ts`; every other build is unchanged) and differs in exactly this:
+
+* **CSP from a `<meta>` only.** The policy of `_headers` (`web/csp.mjs`, Trusted Types included) minus what a meta cannot carry:
+  `frame-ancestors`, `X-Frame-Options`, the signer page's `sandbox`, and `X-Content-Type-Options` / `Referrer-Policy` (the page's
+  `<meta name="referrer" content="no-referrer">` stays).
+* **Frame guard by script.** A page inside a frame shows only a short notice and a link that opens it on its own; nothing
+  interactive is rendered. It is part of the bundle (no inline script), so it holds under the CSP and Trusted Types.
+* **No private-key signing.** The signer page depends on its header policy, so the mirror never offers it: Connect without a wallet
+  extension, Settings and the Create token page say why in one line, and `signer.html` shows only that reason and a link to the app.
+* **No og:url / og:image.** `KOB_PUBLIC_URL` takes an origin without a path; the mirror lives under `/kob/`.
+
+Before the upload the job runs `npm run e2e:ghpages` (`web/e2e/ghpages`: the build under `/kob/` from a server that sends no headers,
+with the mock stack); after it, it fetches `index.html`, `signer.html` and `config.json` back and compares them byte for byte. To
+check by hand: `KOB_MIRROR=github-pages npm run build:release`, then `npm run e2e:ghpages` in `web/`. To take the mirror down:
+*Settings > Pages > Unpublish site* (or disable the workflow).

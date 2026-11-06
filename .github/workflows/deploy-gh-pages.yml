@@ -1,0 +1,249 @@
+name: deploy-gh-pages
+
+# The GitHub Pages mirror of the web app, https://rossku.github.io/kob/ (docs/ops/web-hosting.md, "GitHub Pages mirror"): a fallback entrance
+# that does not depend on Cloudflare. The main site stays the Cloudflare Pages deployment of deploy-pages.yml.
+#
+# On the same pushes as deploy-pages.yml, and on workflow_dispatch: the web app is built and tested as deploy-pages does (wasm, typecheck, unit
+# tests, `build:release`, config.json from the same repository variables KOB_PAGES_* through web/scripts/pages-config.mjs), but with
+# KOB_MIRROR=github-pages (web/src/app/mirror.ts). GitHub Pages sends no custom response headers, so public/_headers does not apply there and the
+# mirror build differs in exactly this:
+#   * the CSP is the <meta> one every build embeds (web/csp.mjs: the policy of public/_headers without frame-ancestors, which a meta cannot carry);
+#   * a script frame guard: a framed page shows only a notice and a link to open it on its own;
+#   * no private-key signing (wallet extensions only): the signer page relies on its header policy (sandbox, frame-ancestors 'self').
+# Its Playwright check (npm run e2e:ghpages: the build under /kob/ with no headers, the mock stack) runs before the upload; the deployment is then
+# fetched back and index.html, signer.html and config.json are compared byte for byte with the build.
+#
+# Without the variable KOB_PAGES_INDEXER_URL (a fork, or before the setup) nothing is built: the job summary says so. Only refs/heads/master deploys
+# (the environment github-pages, created when Pages is enabled with the "GitHub Actions" source, also allows only the default branch).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/**"
+      - "crates/kob-wasm/**"
+      - "crates/kob-protocol/**"
+      - "vendor/**"
+      - "contracts/**"
+      - "registry/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "scripts/build-wasm.sh"
+      - "scripts/build-deploy.sh"
+      - "scripts/release-hashes.sh"
+      - "scripts/lib/**"
+      - ".github/workflows/deploy-gh-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# one deployment at a time; a run in progress is not cancelled (a Pages deployment cut off midway can leave the site on neither version)
+concurrency:
+  group: deploy-gh-pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: web
+    outputs:
+      ready: ${{ steps.gate.outputs.ready }}
+      index: ${{ steps.hashes.outputs.index }}
+      signer: ${{ steps.hashes.outputs.signer }}
+      config: ${{ steps.hashes.outputs.config }}
+    steps:
+      - name: The mirror is deployed only from master
+        if: github.ref != 'refs/heads/master'
+        working-directory: .
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error title=deploy-gh-pages::the mirror is deployed only from refs/heads/master, not from $REF"
+          exit 1
+      - name: Pages variables (missing = the deploy is skipped)
+        id: gate
+        working-directory: .
+        env:
+          INDEXER: ${{ vars.KOB_PAGES_INDEXER_URL }}
+        run: |
+          if [ -z "$INDEXER" ]; then
+            {
+              echo "## GitHub Pages mirror skipped"
+              echo
+              echo "The repository variable KOB_PAGES_INDEXER_URL is not set (Settings > Secrets and variables > Actions)."
+              echo "Nothing was built or deployed. Setup: docs/ops/web-hosting.md."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=deploy-gh-pages skipped::variable KOB_PAGES_INDEXER_URL is not set"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      # build and test: the steps of deploy-pages.yml (the web job of ci.yml)
+      - if: steps.gate.outputs.ready == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: The variables make a valid public config.json (before anything is built)
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          KOB_PAGES_NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
+          KOB_PAGES_INDEXER_URL: ${{ vars.KOB_PAGES_INDEXER_URL }}
+          KOB_PAGES_EXTRA_INDEXER_URLS: ${{ vars.KOB_PAGES_EXTRA_INDEXER_URLS }}
+          KOB_PAGES_NODE_URL: ${{ vars.KOB_PAGES_NODE_URL }}
+          KOB_PAGES_EXPLORER_URL: ${{ vars.KOB_PAGES_EXPLORER_URL }}
+          KOB_PAGES_TOKEN_NAMES_URL: ${{ vars.KOB_PAGES_TOKEN_NAMES_URL }}
+        run: node scripts/pages-config.mjs --check
+      - if: steps.gate.outputs.ready == 'true'
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+          targets: wasm32-unknown-unknown
+      - if: steps.gate.outputs.ready == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - if: steps.gate.outputs.ready == 'true'
+        run: npm ci
+      - if: steps.gate.outputs.ready == 'true'
+        run: npm run fetch-sdk
+      - name: kob-wasm bindings (installs wasm-bindgen-cli 0.2.100 under target/tools)
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: .
+        run: bash scripts/build-wasm.sh --install-bindgen --web --slim
+      - if: steps.gate.outputs.ready == 'true'
+        run: npm run build:wasm -- --copy
+      - if: steps.gate.outputs.ready == 'true'
+        run: npm run typecheck
+      - if: steps.gate.outputs.ready == 'true'
+        run: npm test
+      # the release bundle, built for the mirror (KOB_MIRROR); no KOB_PUBLIC_URL: og:url / og:image take an origin without a path, and the
+      # mirror lives under /kob/, so its head has neither
+      - name: Release bundle for the GitHub Pages mirror
+        if: steps.gate.outputs.ready == 'true'
+        run: npm run build:release
+        env:
+          KOB_MIRROR: github-pages
+          KOB_NETWORK: ${{ vars.KOB_PAGES_NETWORK || 'testnet-10' }}
+      - name: Release hashes (the deployment record reproduces, the bundle ships the registry the mainnet record pins)
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: .
+        run: |
+          bash scripts/release-hashes.sh > "$RUNNER_TEMP/release-hashes.md"
+          cat "$RUNNER_TEMP/release-hashes.md"
+      - if: steps.gate.outputs.ready == 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Mirror check (the build under /kob/ without headers, the mock stack)
+        if: steps.gate.outputs.ready == 'true'
+        run: npm run e2e:ghpages
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-ghpages-playwright-report
+          path: |
+            web/test-results
+            web/playwright-report
+
+      # the deployment: config.json (after the e2e run, which injects the mock stack's own configuration)
+      - name: config.json from the repository variables
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          KOB_PAGES_NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
+          KOB_PAGES_INDEXER_URL: ${{ vars.KOB_PAGES_INDEXER_URL }}
+          KOB_PAGES_EXTRA_INDEXER_URLS: ${{ vars.KOB_PAGES_EXTRA_INDEXER_URLS }}
+          KOB_PAGES_NODE_URL: ${{ vars.KOB_PAGES_NODE_URL }}
+          KOB_PAGES_EXPLORER_URL: ${{ vars.KOB_PAGES_EXPLORER_URL }}
+          KOB_PAGES_TOKEN_NAMES_URL: ${{ vars.KOB_PAGES_TOKEN_NAMES_URL }}
+        run: node scripts/pages-config.mjs --dist dist | tee "$RUNNER_TEMP/pages-config.txt"
+      - name: sha256 of every file deployed
+        id: hashes
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: .
+        run: |
+          find web/dist -type f | LC_ALL=C sort | xargs sha256sum > "$RUNNER_TEMP/deployed.sha256"
+          for f in index signer config; do
+            case $f in index) p=web/dist/index.html ;; signer) p=web/dist/signer.html ;; config) p=web/dist/config.json ;; esac
+            echo "$f=$(sha256sum "$p" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          done
+          {
+            echo "## GitHub Pages mirror build"
+            echo
+            echo "- commit: \`$GITHUB_SHA\`"
+            echo
+            echo "### config.json"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/pages-config.txt"
+            echo '```'
+            echo
+            echo "### Files (sha256)"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/deployed.sha256"
+            echo '```'
+            echo
+            echo "<details><summary>scripts/release-hashes.sh (the bundle as built, before config.json)</summary>"
+            echo
+            cat "$RUNNER_TEMP/release-hashes.md"
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: steps.gate.outputs.ready == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.ready == 'true' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      - name: Post-deploy check (index.html, signer.html and config.json as built)
+        env:
+          URL: ${{ steps.deployment.outputs.page_url }}
+          INDEX: ${{ needs.build.outputs.index }}
+          SIGNER: ${{ needs.build.outputs.signer }}
+          CONFIG: ${{ needs.build.outputs.config }}
+        run: |
+          case "$URL" in https://*/) ;; *) echo "::error::unexpected page URL \`$URL\`"; exit 1 ;; esac
+          check() {
+            # the CDN may serve the previous version for a moment after the deployment: retry for up to 3 minutes
+            for i in $(seq 1 36); do
+              got=$(curl -fsSL -H 'Cache-Control: no-cache' "$URL$1?v=$GITHUB_SHA" | sha256sum | cut -d' ' -f1 || true)
+              [ "$got" = "$2" ] && { echo "ok  $1  $got"; return 0; }
+              sleep 5
+            done
+            echo "::error::$URL$1 is not the file built (sha256 $got, expected $2)"
+            return 1
+          }
+          rc=0
+          check index.html "$INDEX" || rc=1
+          check signer.html "$SIGNER" || rc=1
+          check config.json "$CONFIG" || rc=1
+          { echo "## GitHub Pages mirror"; echo; echo "- deployment: $URL"; echo "- post-deploy check: $([ $rc = 0 ] && echo passed || echo FAILED)"; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
