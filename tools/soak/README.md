@@ -142,7 +142,7 @@ tools/soak/
   src/                  bots, bank, price feed, setup, checker (TypeScript)
   scripts/              keygen.mjs, supervisor.mjs, serve-ui.mjs, start.ps1, stop.ps1, status.ps1
   test/                 unit tests of the checker's pure logic (npm test)
-  screenshots/          UI screenshots on live TN10 data
+  screenshots/          (gitignored) UI screenshots on live TN10 data, written by scripts/screenshots.mjs
   run/                  (gitignored) keys, state, databases, logs, stats, reports
 ```
 

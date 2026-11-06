@@ -2,4 +2,4 @@ run/
 node_modules/
 dist/
 # full-page phone captures are large: kept locally only
-screenshots/*-phone-*.png
+screenshots/
