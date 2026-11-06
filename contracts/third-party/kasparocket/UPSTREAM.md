@@ -19,9 +19,16 @@ La-Gauffre/KaspaRocket-Silverscript-Contract `3966ab2` (2026-10-08) published as
 v1.0.0 it gives a 7,724-byte script (template hash `41a9ee0d...`, prefix 1 B), and the silverc its CI pins
 (`SILVERSCRIPT_COMMIT` `9aa70b0d0215e7395e2a95b78472eba0a5b103a5`, 2026-07-15, 61 commits before v1.0.0) cannot parse it
 (`entry` declarations); its CI compiled only the three other contracts (`86fe1e8` removed the CI). The launchpad's token UTXOs
-carry the public-mint actor at 10 / 10 (above). The repository's `LP_AMM.sil` reads a four-field KRON-style token state; the deployed pool
-(41,922-byte redeem script) is a later version: its state adds the reserves, and it validates the pool's token output against
-the Sil template `ff3ae732...` with the token's suffix embedded as data.
+carry the public-mint actor at 10 / 10 (above).
+
+The repository's other contracts at `86fe1e8` were compiled and compared with the chain on 2026-10-31:
+
+* Testnet-10: `LP_AMM.sil`, with the genesis state of the pool of ZKASB as constructor arguments, compiles byte for byte to the
+  deployed pool (41,922-byte redeem script). Its state holds the reserves, and it validates the pool's token output against the
+  Sil template `ff3ae732...` with the token's suffix embedded as data.
+* Mainnet: the pool (41,918 B), the sell escrow (156,649 B) and the buy escrow (81,563 B) match `LP_AMM.sil`,
+  `Escrow_sell_token.sil` and `Escrow_buy_token.sil` only after one change, `FEE_NUM` / `FEE_DEN` from 3 / 1000 to 1 / 100: the
+  published sources state a minimum fee of 0.3%, the constants of the mainnet programs give 1%.
 
 ## How the launch holds tokens
 
