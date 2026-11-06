@@ -142,9 +142,9 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
 7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6).
 
 It then writes `kob-executor.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
-testnet-10; the mainnet binary carries its pinned registry), prints the command line the file stands for, and asks
-`Start the executor now? [Y/n]`: Enter starts it, `n` leaves the files and ends the setup (`setup --no-start` does not ask).
-From then on, a double-click runs that configuration directly. If another kobd already runs from the same folder,
+testnet-10; the mainnet binary carries its pinned registry), prints the line that starts it (for example
+`C:\kob\kobd.exe --executor`, section 6), and asks `Start the executor now? [Y/n]`: Enter starts it, `n` leaves the files
+and ends the setup (`setup --no-start` does not ask). From then on, a double-click runs that configuration directly. If another kobd already runs from the same folder,
 the start is refused at once with a message naming it, before anything else is printed or logged.
 
 **Which tokens it lists.** Every order of a token program the binary supports, whatever the token. KOB makes no listing
@@ -220,12 +220,14 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   no questions, no start; it writes the same files as the dialogue (replacing the configuration, keeping an existing key
   file), and prints one JSON object with the `address` (`null` for the Indexer alone), the `roles` (`["executor"]`,
   `["indexer"]` or `["executor", "indexer"]`) and the paths. Without a role flag it fails with a clear error. Both flags
-  are the combined role: it needs a key like the Executor and writes a full store (`lean = false`, record log on). The
-  old `--role match|index|index,match` still works as a deprecated alias (it prints a note on stderr). `--network` is only for a
-  development build; a deployment build knows its own and refuses another.
+  are the combined role: it needs a key like the Executor and writes a full store (`lean = false`, record log on).
+  `--network` is only for a development build; a deployment build knows its own and refuses another.
 * **Start by role**: `kobd --executor`, `--indexer` or `--executor --indexer` starts the configuration in the folder, after
   checking that it was set up for exactly these roles (otherwise it says so and starts nothing; with no configuration it opens the
-  setup with the roles chosen, or, without a terminal, refuses). Plain `kobd` runs the configuration whatever its roles.
+  setup with the roles chosen, or, without a terminal, refuses). Plain `kobd` runs the configuration whatever its roles. Options
+  follow the flags and are added to the configuration's: `kobd --executor --dry-run` (builds and checks every transaction,
+  sends nothing), `kobd --executor --listen 127.0.0.1:8091`; `kobd --help` lists them. The Indexer takes the indexer's options
+  only.
 * **Withdraw**: stop the executor first, then, from the same folder (or with `--dir <folder>`, or `--config <file>` for a
   configuration elsewhere):
 
@@ -241,7 +243,7 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   without `--yes` and without a terminal it refuses to send. `--dry-run` shows the payment and sends nothing; `--fee-rate`
   (default 100, the relay floor) pays more per gram of mass. The address must belong to the binary's network (a mainnet
   binary refuses a `kaspatest:` address, and the node must report the same network). **A running executor makes it
-  refuse**: the command takes the data directory's writer lock, the one `run` holds ("in use by another kobd
+  refuse**: the command takes the data directory's writer lock, the one a running kobd holds ("in use by another kobd
   writer: stop it first"), so no matcher transaction is being built from the coins it spends and two withdrawals cannot
   overlap. A transaction the executor sent just before it stopped may still be on its way: if the node says a coin is
   already spent, nothing was lost, wait a minute and run it again. Only plain KAS moves; tokens the key holds stay where
@@ -266,20 +268,15 @@ from the node within seconds on a start with an empty data directory (fast start
 
 ## 6. Move to a service
 
-The setup printed the exact command line, for example:
-
-```
-cd /d C:\kob
-C:\kob\kobd.exe run --config kob-executor.toml --key-file kob-operator.key --pause-file kob-data/pause
-```
-
-Relative paths are relative to the folder of `kob-executor.toml`. To change options, edit `kob-executor.toml` (every key
-of `docs/ops/executor.md`, Part B 4; `[launch] args` takes further options of the role, e.g.
-`args = ["--sweep-own-strays"]`) or run the setup again (`kobd setup`).
+The setup printed the line that starts it, for example `C:\kob\kobd.exe --executor` (`--indexer` for the Indexer, both
+flags for both roles; it adds `--config <file>` when the configuration is not in the program's folder). The program reads
+`kob-executor.toml` from its own folder, and relative paths are relative to that file. To change options, edit
+`kob-executor.toml` (every key of `docs/ops/executor.md`, Part B 4; `[launch] args` takes further start options, e.g.
+`args = ["--sweep-own-strays"]`), add them after the flags, or run the setup again (`kobd setup`).
 
 **Windows**: a Task Scheduler task "At startup" (run whether the user is logged on or not, as the account that owns the
-key file) with program `C:\kob\kobd.exe`, arguments `run --config kob-executor.toml --key-file kob-operator.key
---pause-file kob-data/pause` and *Start in* `C:\kob`. Set "If the task fails, restart every 1 minute". A task has no
+key file) with program `C:\kob\kobd.exe`, arguments `--executor` and *Start in* `C:\kob`. Set "If the task fails, restart
+every 1 minute". A task has no
 console: its log is the file `kob-executor.log` the setup configured (see *Logs* below); read it with
 `Get-Content C:\kob\kob-executor.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
 while the executor runs: a mouse selection in the classic Windows console (Quick Edit mode) pauses the program's output
@@ -297,7 +294,8 @@ when it is not (a task, a service, a redirect): the file is then the log. The fi
 ANSI colour codes are written only to a console that is a terminal (and not when `NO_COLOR` is set); the file never has
 them. `RUST_LOG` (default `info`) sets the detail. Under systemd the journal already keeps the log (`journalctl -u kob -f`).
 
-**Linux (systemd)**: copy the folder to `/opt/kob`, then
+**Linux (systemd)**: copy the folder to `/opt/kob`, owned by the user `kob` (`chown -R kob: /opt/kob`; the key file keeps mode
+`0600`), then
 
 ```
 [Unit]
@@ -307,8 +305,7 @@ StartLimitIntervalSec=0
 
 [Service]
 WorkingDirectory=/opt/kob
-ExecStart=/opt/kob/kobd run --config kob-executor.toml --pause-file kob-data/pause
-LoadCredential=kob-operator-key:/opt/kob/kob-operator.key
+ExecStart=/opt/kob/kobd --executor
 User=kob
 Restart=always
 RestartSec=10
@@ -318,9 +315,9 @@ NoNewPrivileges=yes
 WantedBy=multi-user.target
 ```
 
-(`LoadCredential=` hands the key to the process without making the file readable by the service account; the user `kob`
-owns `/opt/kob/kob-data`. `RestartSec=10` and `StartLimitIntervalSec=0` make systemd keep retrying: without them it gives up after
-five starts in ten seconds, for example while the network is still coming up after a boot.) The hardened unit of the operations guide is `docs/ops/executor.md`, A.3.
+(`RestartSec=10` and `StartLimitIntervalSec=0` make systemd keep retrying: without them it gives up after five starts in ten
+seconds, for example while the network is still coming up after a boot.) The hardened unit of the operations guide, with the key
+as a systemd credential, is `docs/ops/executor.md`, A.3.
 
 **Docker (Linux)**: the repository's `Dockerfile` builds the executor of one network from the source (pinned base images, a
 non-root user, uid 10001). The volume `/data` holds the configuration, the key file and the data directory
@@ -345,7 +342,8 @@ the commit you verified.
 program changes. The program is not replaced while it runs, and it does not update itself.
 
 1. **Read the release notes.** They say whether the release changes the `KOB1` payload version (indexers must go first,
-   `docs/ops/release.md`, 7) or the database (brought up to date in place, migrated offline with `kobd index migrate`, or rebuilt: step 6).
+   `docs/ops/release.md`, 7) or the database (brought up to date in place, migrated offline with `kobd index --config
+   kob-executor.toml migrate`, or rebuilt: step 6).
 2. **Note what runs now:** `kobd --version` (the crate version, the release tag without the `v`) and
    `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback only unless you
    changed it). A build of a commit before the `0.1.0` release says `0.0.0`; tell builds of the same version apart by `commit`.
@@ -367,9 +365,10 @@ program changes. The program is not replaced while it runs, and it does not upda
 6. **When the release notes ask for a rebuild** (the database is refused as old): an Executor on lean storage has no record log to
    replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
    the fast start rebuilds the live book within seconds. Make sure the key file is not inside `kob-data` (setup puts it next
-   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive of schema 5, 6, 7 or 8 is brought to schema 9 (the current one) offline with `kobd index migrate` (stop it first; about 5 GB of free
-   disk; the old file stays as `index.sqlite3.before-migrate`; an older build refuses the migrated store; `docs/ops/executor.md`, 7.6a); any
-   other archive rebuilds with `kobd index
+   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive of schema 5, 6, 7 or 8 is brought
+   to schema 9 (the current one) offline with `kobd index --config kob-executor.toml migrate` in its folder (stop it first;
+   free disk about the size of the store; the old file stays as `index.sqlite3.before-migrate`; an older build refuses
+   the migrated store; `docs/ops/executor.md`, 7.6a); any other archive rebuilds with `kobd index --config kob-executor.toml
    replay` while offline; the public read server has a way without downtime (`docs/ops/chart-server.md`, section 6).
 7. **Rollback**: stop, put `kobd.old` back, restore the `kob-data` copy of step 4 if the database changed. An indexer must
    not go below the payload version in use (`docs/ops/release.md`, 7).

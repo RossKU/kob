@@ -20,7 +20,7 @@ git clone https://github.com/RossKU/kob.git && cd kob
 cargo build --release --locked -p kob-executor --features deploy-tn10
 mkdir ~/kob-tn10 && cp target/release/kobd ~/kob-tn10/ && cd ~/kob-tn10
 ./kobd setup --non-interactive --node resolver --indexer
-./kobd
+./kobd --indexer
 curl -s http://127.0.0.1:8090/v1/health
 ```
 

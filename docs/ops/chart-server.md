@@ -1,10 +1,10 @@
-# A public read server for the web app (`kobd index` behind Cloudflare Tunnel)
+# A public read server for the web app (`kobd --indexer` behind Cloudflare Tunnel)
 
 The hosted web app (`docs/ops/web-hosting.md`) reads the order books, charts, trades and orders from an indexer: the read API of
-`kobd index` (`docs/ops/executor.md`, Part B). This page runs one for the public on a home PC (or a VPS) and publishes
+`kobd --indexer` (`docs/ops/executor.md`, Part B). This page runs one for the public on a home PC (or a VPS) and publishes
 it through Cloudflare Tunnel (free), without opening a port on the router.
 
-**What this server is not.** It runs the Indexer role only (`kobd --indexer`, `kobd index`): it holds **no key**, has **no funds**, does **no matching**, keeps
+**What this server is not.** It runs the Indexer role only (`kobd --indexer`): it holds **no key**, has **no funds**, does **no matching**, keeps
 no keeper and no x402 facilitator. It follows the chain and answers read-only HTTP and WebSocket requests. It cannot place,
 fill, cancel or refund anything, and it cannot forge what the app signs (the app checks every order against the chain
 programs before it builds a transaction; `web/README.md`). Executors that match orders are run by third parties.
@@ -47,7 +47,7 @@ no redirect (HTTP or WebSocket): an older build, whose default was `https://kob.
 ## 1. The indexer
 
 Build the binary of the network from source, or download and check a release archive (testnet-10 for now):
-`docs/ops/executor-quickstart.md`, section 1 (the README, *Run `kobd` on testnet-10 (from source)*, has the commands).
+`docs/ops/executor-quickstart.md`, section 1 (`docs/ops/run-from-source.md` has the commands).
 
 **Node.** Either your own rusty-kaspa node on the same machine (recommended for a public server: faster, and nobody between
 you and the chain; `docs/ops/executor-quickstart.md`, section 2), or the public nodes the Kaspa resolvers name
@@ -89,9 +89,9 @@ cors_allow_origin = "*"
 metrics = false
 ```
 
-Start it with a double-click on `kobd` (or `kobd index --config kob-executor.toml`). Running the setup again
+Start it with a double-click on `kobd` (or `kobd --indexer`). Running the setup again
 replaces the file: add the `[api]` table again afterwards. Run it as a service as `docs/ops/executor-quickstart.md`,
-section 6 shows (the Indexer has no key file and no pause file: arguments `index --config kob-executor.toml`).
+section 6 shows (the Indexer has no key file and no pause file: arguments `--indexer`).
 
 **First start: the history and the fast route.** The first start reads everything the node retains, from its pruning point. The API
 answers from the start and the app shows the indexer as catching up until it is close to the tip. Over the public nodes of the
@@ -100,8 +100,8 @@ resolver that took about 2.4 hours for 36 hours of history (about 14.6 s of chai
 "`indexer catching up, ... behind the node (about 35 h), indexing 15x chain speed, caught up in about 2 h 24 min`" (`catch_up` in
 `/v1/health`: `rate_daa_per_sec`, `eta_seconds`).
 
-`fast_start` is for the Executor (`kobd run`, which trades on a second store while it indexes the history); the Indexer (`kobd index`)
-refuses it (`fast_start = true` or `--fast-start` stop the start with a message). The fast route of a read server is
+`fast_start` is for the Executor (`kobd --executor`, which trades on a second store while it indexes the history); the Indexer
+(`kobd --indexer`) refuses it (`fast_start = true` or `--fast-start` stop the start with a message). The fast route of a read server is
 `start = "sink"` (top level of `kob-executor.toml`, or `--start sink`; on a data directory that is still empty): it follows the chain
 within a second of the start and lists the orders created since. The orders older than the start are **not** in that store, for
 good: `/v1/health` reports `book_complete: false` and `history_from_daa` (where its history begins) and the status line says so, so
@@ -212,7 +212,7 @@ enabled = true
 
 The two routes (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`) then sit behind the same tunnel; the per-client limit uses the
 visitor address of this section, so keep `trusted_proxies` and `client_ip_header` right. You review with
-`kobd index logo-reports list | restore | hide` on this machine (`executor.md`, Part B). Set the GitHub repository variable
+`kobd index --config kob-executor.toml logo-reports list | restore | hide` in the server's folder (`executor.md`, Part B). Set the GitHub repository variable
 `KOB_LOGO_REPORT_URL` to `https://chart.example.org/v1/logo-reports` so the Issue form feeds the same list.
 
 **Abuse, in the API and at Cloudflare.** The API limits each client on its own: 20 requests per second with a burst of 60 per
@@ -314,7 +314,7 @@ database is brought up to date in place, migrated offline with `kobd index migra
       builds a new database from the log under the new program's rules and prints a summary at the end (rejected placements by
       reason). Faster, when the release does not change how the database is derived: put a `VACUUM INTO` copy of the running
       database (section 4) in as `B/kob-data/index.sqlite3` and run `index replay --onto-database` instead (`executor.md`, 8).
-   3. Start `B` (`kobd index --config kob-executor.toml`). It catches up the time since the last logged frame from the node.
+   3. Start `B` (`kobd --indexer` with `B`'s copy of the program). It catches up the time since the last logged frame from the node.
       Wait until `curl -s http://127.0.0.1:8091/v1/health` shows the new `version` and `commit`, `state = following` and
       `book_complete = true`, and compare a few answers with the running one (`/v1/tokens`, `/v1/orders?...`).
    4. **Switch.** Point the tunnel's service at `http://127.0.0.1:8091`: for a dashboard-managed tunnel edit the public hostname; with

@@ -15,7 +15,7 @@ numbers cited elsewhere as "api.md 3.19" and the like are the reference's sectio
 |---|---|
 | Read only | It cannot place, fill, cancel or refund anything. Transactions are built and signed elsewhere: [`kob`](../crates/kob-cli/README.md), the web app, `crates/kob-wasm`. |
 | Keyless | No account, no API key, no cookies. Every route is public to whoever can reach the server. |
-| Who runs it | Any operator: `kobd index` (or `kobd run` over a full store) serves it from its indexer database, on `127.0.0.1:8090` by default. Requests never reach the node. Setup: [ops/executor.md](ops/executor.md); a public server: [ops/chart-server.md](ops/chart-server.md). |
+| Who runs it | Any operator: `kobd --indexer` (or `kobd --executor`; with `--indexer` too over a full store) serves it from its indexer database, on `127.0.0.1:8090` by default. Requests never reach the node. Setup: [ops/executor.md](ops/executor.md); a public server: [ops/chart-server.md](ops/chart-server.md). |
 | Public server | `https://kob-api.kaspa.ag` (testnet-10). WebSocket: `wss://kob-api.kaspa.ag/v1/ws`. |
 | Freshness | The store follows the chain a few blocks behind the node; mempool transactions are not served. `GET /v1/health` says how far behind it is. |
 

@@ -2,7 +2,7 @@
 
 The web app (`web/`) is static files: HTML, JavaScript, CSS and two wasm modules. This page publishes it on Cloudflare Pages
 (free plan) from this repository with `.github/workflows/deploy-pages.yml`, or by hand from a PC. The data it shows comes from an
-indexer (`kobd index`; running one for the public: `docs/ops/chart-server.md`) and from Kaspa nodes.
+indexer (`kobd --indexer`; running one for the public: `docs/ops/chart-server.md`) and from Kaspa nodes.
 
 **First setup, in order.** The workflow needs the public address of an indexer, and that address needs a domain: the order of the
 whole first setup (domain, indexer, tunnel, then this page) is in `docs/ops/chart-server.md`, "Start here". Sections 1 to 3 below are

@@ -1,6 +1,6 @@
 # KOB executor: operations guide
 
-`kobd` (the KOB daemon, formerly `kob-executor`; its files keep their names: `kob-executor.toml`, `kob-executor.log`, `kob-operator.key`; the Cargo crate is still `kob-executor`) is one binary with two roles, the **Executor** and the **Indexer**, and role subcommands. It follows a Kaspa node's selected chain,
+`kobd` (the KOB daemon, formerly `kob-executor`; its files keep their names: `kob-executor.toml`, `kob-executor.log`, `kob-operator.key`; the Cargo crate is still `kob-executor`) is one binary with two roles, the **Executor** and the **Indexer**, started with role flags. It follows a Kaspa node's selected chain,
 indexes every KOB order into a reorg-safe database, serves a read API (REST +
 WebSocket), and, with the operator's hot key, matches crossing orders (arming and triggering stops inside its batches) and keeps them (refund,
 kill, close). The normative rules are `docs/spec/matcher.md`, `docs/spec/order-types.md` and
@@ -12,17 +12,19 @@ outputs of at most 1e9 units per transaction). The KRON order kinds (`KobAskKron
 indexed, listed, matched and kept like their KCC-20 twins; a book is one family's token. A pair order (`KobPair`, `KobCondPair`,
 `KobIfdPair`) names the family of each of its two tokens in its state.
 
-| Subcommand | Runs | Key | Reads its book from |
+| Start / command | Runs | Key | Reads its book from |
 |---|---|---|---|
-| `run` | indexer + read API + matcher + keepers, one process | operator hot key | the indexer's own store (in process) |
-| `index` | indexer + read API | none | the node |
+| `kobd --executor` | indexer + read API + matcher + keepers, one process, lean store | operator hot key | the indexer's own store (in process) |
+| `kobd --executor --indexer` | the same over a full store with the record log | operator hot key | the indexer's own store (in process) |
+| `kobd --indexer` | indexer + read API | none | the node |
+| `kobd index <tool>` | the Indexer's tools on a data directory (`migrate`, `replay`, `export-orders`, `export-book`, `import-orders`, `logo-reports`, `rebase`) | none | the data directory |
 | `match`, `keep` | matcher, keepers | operator hot key | a book snapshot file (`--book-file`) |
 | `x402` | x402 facilitator (verify, settle) | none | no book; finality from the node's UTXO set |
-| `setup` | the interactive first run: writes `kob-executor.toml` next to the binary, then starts `run` or `index` | makes or names the hot key | - |
+| `setup` | the interactive first run: writes `kob-executor.toml` next to the binary, then starts it | makes or names the hot key | - |
 
-`run --x402-config <file>` adds the x402 facilitator to the one process (A.6).
+`kobd --executor --x402-config <file>` adds the x402 facilitator to the one process (A.6).
 
-The guide has three parts: **A** runs everything in one process (`run`); **B** is the indexer
+The guide has three parts: **A** runs everything in one process (`kobd --executor`); **B** is the indexer
 (node, resources, storage, API, runbook); **C** is the Executor's matcher and keepers (economics, keys,
 flags, metrics). Section numbers in B and C are stable (B 7.4 is the gap runbook).
 
@@ -34,22 +36,21 @@ be measured during the TN10 soak, **[U]** unknown.
 Build `kobd` of your network from source (`cargo build --release --locked -p kob-executor --features deploy-tn10`, or
 `deploy-mainnet`) or download a release archive and check its hash, put it in a folder of its own and start it without
 arguments (a double click on Windows): the setup chooses the node (public nodes through the Kaspa resolvers by default, or a
-local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the roles. The commands of a source build are in the
-README, *Run `kobd` on testnet-10 (from source)*; the step-by-step page is `docs/ops/executor-quickstart.md`.
+local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the roles. The commands of a source build are in
+`docs/ops/run-from-source.md`; the step-by-step page is `docs/ops/executor-quickstart.md`.
 
 * **Without arguments** the binary looks for `kob-executor.toml` in its own directory. With one, it runs the file's
-  `[launch]` role exactly as `kobd <role> --config kob-executor.toml [--key-file ...] [--pause-file ...]
-  [--x402-config ...] [args ...]` in that directory, and prints that command line first. Without one, on a terminal, it
+  `[launch]` role exactly as `kobd --executor --config kob-executor.toml [--key-file ...] [--pause-file ...]
+  [--x402-config ...] [args ...]` (or `--indexer`) in that directory, and prints that command line first. Without one, on a terminal, it
   runs `kobd setup`; with no terminal (a service, a pipe) it refuses and says why. When a start without
   arguments fails on a terminal, the window waits for Enter before it closes.
-* **`kobd setup`** (`--dir` another directory, `--no-start` write only) asks, Enter taking the default: the roles
-  (the **Executor**; the **Indexer**; or **Executor and Indexer**, both in one process: the Indexer's full history, record log and read API, `lean = false`, plus the Executor with a key, with a warning that the public API and the signing key then live on the same machine, so a public server should prefer separate machines; `--executor`, `--indexer` or both skip the question); the node URL (default the local node of the build's network,
-  `ws://127.0.0.1:18110` mainnet / `ws://127.0.0.1:18210` testnet-10: rusty-kaspa v2.1.0
+* **`kobd setup`** (`--dir` another directory, `--no-start` write only) asks, Enter taking the default: the node (first choice, the default: the public Kaspa nodes, two cross-checked, `rpc_url = "resolver"`; for an own node it asks the URL, default `ws://127.0.0.1:18110` mainnet / `ws://127.0.0.1:18210` testnet-10: rusty-kaspa v2.1.0
   `--rpclisten-json=default`), checked at once (`getServerInfo`: network, sync, UTXO index, with the node command line on
-  a failure); the data directory (`kob-data`); the hot key (a new one from the OS CSPRNG into `kob-operator.key`, owner-only
+  a failure); the roles
+  (the **Executor**; the **Indexer**; or **Executor and Indexer**, both in one process: the Indexer's full history, record log and read API, `lean = false`, plus the Executor with a key, with a warning that the public API and the signing key then live on the same machine, so a public server should prefer separate machines; `--executor`, `--indexer` or both skip the question); the data directory (`kob-data`); the hot key (a new one from the OS CSPRNG into `kob-operator.key`, owner-only
   from creation: mode `0600`, on Windows one ACL entry for the current account checked like `KOB_KEY_ACL_STRICT=1`; an
   existing key file is offered again and never replaced; the secret is never printed); it shows the address, waits for at
-  least 100 KAS (Enter skips) and asks for the x402 facilitator (off by default). A build without a pinned registry
+  least 100 KAS (Enter skips) and asks for the x402 facilitator (off by default). It prints the line that starts it (`<program> --executor`, plus `--config <file>` when the folder is not the program's own). A build without a pinned registry
   (testnet-10) also gets `kob-tokens.json`: the embedded registry's programs for its network and no token entries, so every
   order of a supported program is listed by the API (B 4, *Token allowlist*; the web app's market list keeps the tokens with no ticker and no
   declared decimals behind "Show N token(s) without a name"). This is the no-curation policy, not a convenience: KOB lists
@@ -60,7 +61,7 @@ README, *Run `kobd` on testnet-10 (from source)*; the step-by-step page is `docs
   relative to the file.
 * **The roles** are the **Executor** (the matcher and the keepers, with a key; lean storage and the fast start) and the **Indexer**
   (the full history, the record log and the read API; no key). `kobd setup --executor`, `--indexer` or `--executor --indexer`
-  (also `setup --non-interactive`; the old `--role match|index|index,match` is a deprecated alias) chooses them, and the file
+  (also `setup --non-interactive`; the old `--role match|index|index,match` is gone and refused) chooses them, and the file
   records them in its header (`# Roles: ...`). **Executor and Indexer** is one process that serves the archive API and trades with
   a key: the configuration is the Executor's (`[launch] role = "run"`, `key_file`, `pause_file`, `fast_start = true`, `log_file`) with
   `lean = false` written out, so the store keeps the full history and the record log is on (the `[records]` default), with no lean cap;
@@ -68,11 +69,11 @@ README, *Run `kobd` on testnet-10 (from source)*; the step-by-step page is `docs
   the Executor trades within seconds on a tip store while the full history is indexed, and until the full store has caught up the API
   answers from the tip store (`book_complete: false`, A.1.1). The public API and the signing key live on the same machine: for a
   public server run an Indexer-only host for the API and an Executor on another machine instead. `kobd --executor`,
-  `--indexer` or both (no subcommand) starts the configuration after checking it was set up for exactly these roles; plain
-  `kobd` runs it whatever its roles. `/v1/health` names the roles of the process (`roles`: `["executor"]` for `run` over a
-  lean store, `["executor", "indexer"]` over a full one, `["indexer"]` for `index`) and the metrics carry
+  `--indexer` or both starts the configuration after checking it was set up for exactly these roles (mismatched flags are refused; options on the command line are added after the file's, a later option wins); plain
+  `kobd` runs it whatever its roles. `/v1/health` names the roles of the process (`roles`: `["executor"]` for the Executor (lean store),
+  `["executor", "indexer"]` for the Executor and Indexer, `["indexer"]` for the Indexer) and the metrics carry
   `kob_role{role="executor"|"indexer"}` (1 for each role that runs); `lean` tells whether the history is kept.
-* **Status line**: `run` and `index` log `status: ...` every `--status-secs` (60; 0 off): the indexer's state and lag,
+* **Status line**: both roles log `status: ...` every `--status-secs` (60; 0 off): the indexer's state and lag,
   the transactions sent and final, the profit of the final ones, the funds, and a `WARNING:` list (node not synced or
   unreachable, paused, waiting for the indexer, funds below `--low-funds-kas`, rejections).
 * **Nodes**: the setup offers public Kaspa nodes (the default, `rpc_url = "resolver"`: a cross-checked pair, Part C,
@@ -82,11 +83,11 @@ README, *Run `kobd` on testnet-10 (from source)*; the step-by-step page is `docs
 
 ---
 
-## Part A. One process: `kobd run`
+## Part A. One process: `kobd --executor`
 
 ```
 node (wRPC JSON)
-   |  VSPC v2 (High)                          kobd run
+   |  VSPC v2 (High)                          kobd --executor
    v
  follower -> extract -> ingest (SQLite, one atomic commit per batch) -> read API (REST + WS)
                             |
@@ -100,7 +101,7 @@ node (wRPC JSON)
 ```
 
 ```
-KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd run \
+KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd --executor \
   --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
   --data-dir /var/lib/kob-index --tokens /etc/kob/tokens.json --listen 127.0.0.1:8090 \
   --pause-file /var/lib/kob-index/pause --metrics-file /var/lib/node_exporter/kob.prom
@@ -181,7 +182,7 @@ KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd run \
 A first start on an empty data directory indexes the chain from the node's pruning point (about 30 h on testnet-10; over
 public nodes on a phone about 8 h) and the matcher plans nothing until that is done. With `fast_start = true` (the key
 `kobd setup` and the Android app write for the Executor; `--fast-start` for one start; `--no-fast-start` or
-`fast_start = false` turns it off) the first start of `run` runs two standard indexers in the one process, each with its
+`fast_start = false` turns it off) the first start of the Executor runs two standard indexers in the one process, each with its
 own database (two histories are never merged):
 
 * the **tip store**, `<data_dir>/tip/`: its cursor starts at the node's current sink (`start = sink`, no record log, its
@@ -208,7 +209,7 @@ holds); one that cannot be opened or moved is deleted and started afresh.
 The backfill does not starve the tip: the tip follower has a node client of its own, so a window of the backfill's parallel
 fetch that takes half a minute never holds a tip request back (it costs a few extra connections to the same public nodes).
 
-Not used: with `index` (it has no matcher: `kobd index` refuses `fast_start = true` and `--fast-start` with a message
+Not used: with the Indexer (`kobd --indexer`; it has no matcher and refuses `fast_start = true` and `--fast-start` with a message
 instead of ignoring them; an index-only host that must follow at once sets `start = "sink"`, see *Fresh database* in Part B 4, and
 the one that catches up reads the time to go from its status line and `/v1/health`'s `catch_up`), with the x402 facilitator in
 the same process (its acceptance tracking and book are bound to one store), and when `start` is not the pruning point. Not implemented: importing live orders from another
@@ -261,7 +262,7 @@ indexer. Default off; `kobd setup` and the Android app write it for the Executor
   `kob_indexer_lean`, `kob_indexer_lean_orders_pruned_total`, `kob_indexer_lean_rows_pruned_total`). Use an archive indexer
   (`lean = false`, record log on) for history, charts and recovery (`index replay` needs the log).
 
-Measured on testnet-10 (`kobd run --dry-run` over the public pair with a fast start, 5 minutes, which indexes about 1.7 h of
+Measured on testnet-10 (`kobd --executor --dry-run` over the public pair with a fast start, 5 minutes, which indexes about 1.7 h of
 the 30 h history): 28.3 MB database plus a 9.1 MB record log without lean; 26.7 MB database and no record log with lean. Nothing
 is pruned yet at that age: a closed order is final only once it is older than the reorg window at the cursor, so the first 12 h of
 a backfill are kept whole. Over a copy of that non-lean store, `index --lean --lean-retention-days 0 --reorg-window-hours 0` (the
@@ -274,16 +275,16 @@ kobd --test executor_e2e`).
 
 ### A.2 Flags
 
-`run` takes the indexer options (`--config`, `--network`, `--rpc-url`, `--data-dir`, `--tokens`,
+`kobd --executor` takes the indexer options (`--config`, `--network`, `--rpc-url`, `--data-dir`, `--tokens`,
 `--start`, `--fast-start`, `--lean`, `--listen`, `--no-api`, `--no-record-log`, `--reorg-window-hours`; B 4) and the
 matcher and keeper options (C, "Running"):
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--key-file` | `$KOB_OPERATOR_KEY_FILE` | operator key file (C, "Keys and funds") |
-| `--status-secs` | 60 | log a one-line status (indexer lag, transactions, profit, funds, warnings) this often; 0 = never (also on `index`) |
+| `--status-secs` | 60 | log a one-line status (indexer lag, transactions, profit, funds, warnings) this often; 0 = never (also on `--indexer`) |
 | `--log-file`, `--log-max-mb`, `--log-files` | none (console only), 10, 5 | every command: also write the log to this file (`log_file`, `log_max_mb`, `log_files` of the configuration; `$KOB_LOG_FILE`), rotated by size to `<file>.1`, `.2`, ... keeping that many; the console shows the log only while it is a terminal, and ANSI colour codes only there (never in the file, never with `NO_COLOR`). Quick start, *Logs* |
-| `--no-match`, `--no-keep` | off | switch a role off (not both: that is `index`) |
+| `--no-match`, `--no-keep` | off | switch a role off (not both: that is `kobd --indexer`) |
 | `--max-book-lag-daa` | `max_lag_secs` x 10 (300) | plan nothing while the book is this far behind the node; 0 = never wait |
 | `--tick-ms`, `--fee-rate`, `--dry-run`, `--pause-file`, `--metrics-file`, `--low-funds-kas` | as C | |
 | `--no-fee-estimate`, `--fee-max-rate`, `--fee-max-tx-kas`, `--fee-refresh-ms`, `--fee-max-age-ms` | off, 1000, 1, 10000, 60000 | the fee policy (C, "Fee policy"): each transaction pays its urgency's bucket of the node's fee estimate within these bounds, the x402 facilitator's intent executions and expiries included |
@@ -296,24 +297,24 @@ matcher and keeper options (C, "Running"):
 | `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 36000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (36,000 = one hour), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep` |
 | `--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`, `--select-min-share`, `--select-seed` | on, 1, 30, 0.1, OS randomness | the weighted selection among competing executors (C, "Competing executors"; `docs/spec/matcher.md` §3.6): off plans deterministically; the weight exponent; the starvation bound in DAA; the lowest share of the optional work per tick; a fixed seed for a reproducible run. Also on `match` and `keep` |
 
-Next to `run`: `kobd address-balance [--dir D]` (the key's address and plain balance as one JSON object, from the configured
+Next to `kobd --executor`: `kobd address-balance [--dir D]` (the key's address and plain balance as one JSON object, from the configured
 node; never the secret), `kobd setup --non-interactive --node resolver|URL --executor|--indexer|--executor --indexer [--new-key]` (the setup's files and one
 JSON object, for scripts and the Android app) and `kobd withdraw --to ADDRESS --amount KAS|all [--yes] [--dry-run]` (KAS out of the
 operator key over the configured node, public resolver pair included; it takes the data directory's writer lock, so it refuses while the
 executor runs; Quick start, section 5).
 
-`index` (with `replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
+`kobd --indexer` (with the tools `kobd index replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
 standalone modes. The database and the record log are the same files in every mode; never run two
 writers on one data directory.
 
 ### A.3 Deployment
 
-* **Single host, one operator:** `run`, one systemd unit, the node on loopback. The read API and the
+* **Single host, one operator:** `kobd --executor`, one systemd unit, the node on loopback. The read API and the
   hot key share a process: keep `--listen` on loopback behind your reverse proxy (with `trusted_proxies = ["127.0.0.1"]`
   in the config's `[api]`, B 4), fund the key with
   a few days of fees only, and keep `--pause-file` at hand.
-* **Public API and key apart:** `index` on the public host (no key); on a private host a second
-  `run --no-api` with its own data directory (its own follower and store). `match --keep
+* **Public API and key apart:** `kobd --indexer` on the public host (no key); on a private host a second
+  `kobd --executor --no-api` with its own data directory (its own follower and store). `match --keep
   --book-file` also works with a snapshot exported by an indexer, but that mode has no acceptance
   feed: it follows acceptance itself with a second VSPC follower (C, "Node").
 * The node: B 2 (`--utxoindex` for the operator's funding lookup and the recovery tools,
@@ -322,7 +323,7 @@ writers on one data directory.
 
 ```
 [Service]
-ExecStart=/usr/local/bin/kobd run --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
+ExecStart=/usr/local/bin/kobd --executor --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
   --data-dir /var/lib/kob-index --tokens /etc/kob/tokens.json --listen 127.0.0.1:8090 \
   --pause-file /var/lib/kob-index/pause --metrics-file /var/lib/node_exporter/kob.prom
 LoadCredential=kob-operator-key:/etc/kob/operator.key
@@ -365,7 +366,7 @@ tokens of that embedded registry (`registry.source` = `embedded:registry/tokens.
 ### A.4 Monitoring
 
 Both sets apply: `/v1/health` and its alarms (B 6), and the textfile metrics (C, "Monitoring").
-`run` adds `kob_matcher_book_stale` (1 while the book lags; alert if it stays 1 for minutes: the
+The Executor adds `kob_matcher_book_stale` (1 while the book lags; alert if it stays 1 for minutes: the
 follower is behind, in `gap`, or the node is down), `kob_matcher_waiting_for_indexer` (1 while the follower is
 neither caught up nor within `max_lag_secs`: same alert) and `kob_matcher_book_lag_daa`.
 
@@ -386,16 +387,16 @@ fills a crossing; acceptance, finality and a reorg rollback (back to pending, re
 re-accepted, the book reverted) are read from the indexer while the test node refuses
 `getVirtualChainFromBlockV2`.
 
-### A.6 The x402 facilitator in `run`
+### A.6 The x402 facilitator in the Executor (`kobd --executor`)
 
 `--x402-config <file>` (or `KOB_X402_CONFIG`; strict JSON, `crates/kob-executor/x402.example.json`)
 serves the facilitator (`GET /supported`, `POST /verify`, `POST /settle`, `GET /health`, `GET /metrics`, and with
 `invoices` the `/invoices` routes of A.7)
 in the same process, on the configuration's `listen` address (bound before anything else starts). It
 holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignored) and its `network`
-(`kaspa:testnet-10`, `kaspa:mainnet`; absent from the file: the indexer's) must be the one the indexer follows, or `run` refuses to start.
+(`kaspa:testnet-10`, `kaspa:mainnet`; absent from the file: the indexer's) must be the one the indexer follows, or the Executor refuses to start.
 
-* **Pausing.** `run`'s `--pause-file` disables the facilitator as its own `killSwitchFile` does: while either exists,
+* **Pausing.** The Executor's `--pause-file` disables the facilitator as its own `killSwitchFile` does: while either exists,
   `/verify` and `/settle` are refused (503, `/supported` empty) and no intent execution or expiry is broadcast (they wait
   and continue once both are gone). A relative `killSwitchFile` is resolved against the configuration file's directory
   (the example's `x402.kill` sits next to the file), not the working directory.
@@ -472,7 +473,7 @@ unless it comes from a loopback peer and carries no forwarding header (`X-Forwar
 same host (nginx `proxy_pass` without `proxy_set_header`, stunnel, socat, `ssh -R`, HAProxy in TCP mode) connects from the
 loopback address and need not add any header, so the facilitator cannot tell it from a local caller, and an open
 facilitator behind one serves everybody. Never put any relay in front of an open facilitator; behind a proxy use `required`
-with merchant keys. `kobd run` also refuses an open facilitator when its read API listens on a non-loopback address
+with merchant keys. `kobd --executor` also refuses an open facilitator when its read API listens on a non-loopback address
 or has `trusted_proxies` (that host serves the outside).
 
 **Ledger format.** The ledger (`ledger`, a JSONL log) is read only in the format of the running build. An intent
@@ -532,7 +533,7 @@ how it ended in `outcome`: `expired` (accepted), `spent` (the payer's cancel or 
 spending transaction), `never_created` or `unbuildable: <why>`. The payer does not depend on it: its cancel works
 at any time, and the SDK builds the same expiry for anyone to submit (`expireIntent`) when the facilitator is gone.
 
-* It needs the book: it is served only inside `kobd run` (`--x402-config`); the standalone
+* It needs the book: it is served only inside `kobd --executor` (`--x402-config`); the standalone
   `kobd x402` refuses `intents.enabled`.
 * It holds no key. Executions need no signature (every input is a covenant). `keeperPubkey` only receives
   what token intents leave to the keeper (the spread above the merchant's amount and the intent's unused KAS)
@@ -1038,10 +1039,10 @@ maintenance jobs plan nothing (`the book lags the node`) until the cursor is wit
 (`within_lag_tolerance`; they plan against that slightly old book) or reaches it. The window, the lag in blue
 score, the last batch (blocks, transactions, bytes, fetch time) and the timeouts are in `/v1/health`
 (`batch_window_blue`, `lag_blue`, `last_batch_blocks`, `last_batch_txs`, `last_batch_bytes`, `last_fetch_ms`,
-`vspc_timeouts_total`, `consecutive_failures`) and in `GET /v1/metrics` (Prometheus text; `kobd run` also
+`vspc_timeouts_total`, `consecutive_failures`) and in `GET /v1/metrics` (Prometheus text; `kobd --executor` also
 appends them to its `--metrics-file`). Every bounded batch, and every batch of 100 or more chain blocks, is logged with
 its bytes and window. A bounded request costs the node one block read per stripped chain block, which happens only
-while the follower is behind. The standalone matcher's acceptance follower (`match` without `run`) bounds its `Low`
+while the follower is behind. The standalone matcher's acceptance follower (`match` without the Executor) bounds its `Low`
 requests the same way.
 
 #### Parallel fetch: catching up over several connections
@@ -1257,14 +1258,14 @@ transaction (record log plus rows; non-KOB transactions write nothing but the pe
 ### 4. Running it
 
 ```
-kobd index \
+kobd --indexer \
   --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
   --data-dir /var/lib/kob-index --tokens /etc/kob/tokens.json \
   --listen 127.0.0.1:8090
 ```
 
 The network is never implied by the reference build of the executor: `--network` (or `network` in the file, or `$KOB_NETWORK`) is required
-there, for every executor command that talks to a node (`index`, `run`, `match`, `keep`, the facilitator's `network`). The command line `kob`
+there, for every executor command that talks to a node (`--indexer`, `--executor`, `match`, `keep`, the facilitator's `network`). The command line `kob`
 (`kob order`, `kob recover`, `kob token create`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, the
 views `kob book`, `orders`, `balances` and `kob watch`) defaults to mainnet like kaspad and takes `--testnet` / `--netsuffix=10` / `--network testnet-10`; its
 plans and confirmations name the network and the node must run it. A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
@@ -1274,7 +1275,7 @@ testnet endpoint on mainnet.
 
 **Secrets in URLs.** Command-line arguments are visible to every local user (`ps`, `/proc/<pid>/cmdline`), so a node URL
 that carries a password (`wss://user:pass@host/...`) or an API key (in its path or `?apikey=...`) never goes in a flag.
-Every flag that takes one has an alternative: `--rpc-url` of `index`, `run`, `match` and `keep` is also `$KOB_NODE_WRPC`
+Every flag that takes one has an alternative: `--rpc-url` of `--indexer`, `--executor`, `match` and `keep` is also `$KOB_NODE_WRPC`
 (and `rpc_url` in the indexer's `--config` file); the indexer's `--node` is also `$KOB_INDEX_NODES` (comma-separated) or
 `[[nodes]]` in that file; the facilitator's `--node` (`kobd x402`) is also `$KOB_NODE_WRPC` or `node` in its
 `--config` file (itself also `$KOB_X402_CONFIG`); `--node` of `kob recover`, `kob order`, `kob token create` and the trading
@@ -1293,7 +1294,7 @@ network = "testnet-10"
 rpc_url = "ws://127.0.0.1:18210"
 data_dir = "/var/lib/kob-index"
 start = "pruning_point"          # or "sink", or { hash = "<chain block hash>" }; the file takes pruning_point, --start takes pruning-point (or pruning_point)
-fast_start = false               # `kobd run`, empty data dir: trade at once on a tip store, index the history meanwhile; A.1.1
+fast_start = false               # `kobd --executor`, empty data dir: trade at once on a tip store, index the history meanwhile; A.1.1
 lean = false                     # keep the live book and lean_retention_days of closed orders, no record log, a shrinking file; A.1.2
 lean_retention_days = 30         # lean: days a closed order (and its fills and events) stays readable
 lean_max_db_mb = 500             # lean: above this size the oldest closed orders go first (0: no cap)
@@ -1303,8 +1304,8 @@ fetch_parallel = 4               # VSPC windows fetched at once while far behind
 primary_fetch = true             # with [[nodes]]: the primary (rpc_url) serves windows too; section 3, *Several nodes*
 verify_threads = 0               # threads of the pure per-batch work before the single database pass (0: cores, at most 4)
 prefetch_max_mb = 128            # memory budget (hard) of the windows held ahead of the cursor; the process holds ~3x at the peak
-max_lag_secs = 30                # `kobd run` plans while the store is caught up or at most this many seconds behind (0: only caught up); A.1
-verify_live_orders_min_lag_secs = 10  # `kobd run` asks the node which listed orders it still holds only while the store is this many seconds behind (0: every tick); A.1
+max_lag_secs = 30                # `kobd --executor` plans while the store is caught up or at most this many seconds behind (0: only caught up); A.1
+verify_live_orders_min_lag_secs = 10  # `kobd --executor` asks the node which listed orders it still holds only while the store is this many seconds behind (0: every tick); A.1
 settle_depth_daa = 100           # "settled" = accepted + N DAA (about 10 s at 10 BPS)
 reorg_window_hours = 12          # chain-block rows older than this are deleted (consensus finality)
 checkpoint_secs = 3600           # log an otherwise empty batch when the cursor moved this far
@@ -1354,9 +1355,9 @@ own programs connect and one shared set of limits is right; with a proxy in fron
 
 Flags of note: `--reorg-window-hours` (default 12, consensus finality), `--no-record-log` (disables
 the permanent record log: then a lost or outdated database can only be rebuilt from what the node
-still retains; not recommended). Subcommands: `run` (default; the indexer alone), `replay`, `export-orders`,
+still retains; not recommended). `kobd --indexer` follows and serves (the indexer alone); the tools are `kobd index replay`, `export-orders`,
 `export-book` (the matcher's `--book-file` snapshot), `import-orders`, `rebase`, `logo-reports`.
-`kobd run` (Part A) embeds this indexer together with the matcher and the keepers and takes
+`kobd --executor` (Part A) embeds this indexer together with the matcher and the keepers and takes
 the same options.
 
 **Token-logo reports (`[logo_reports]`, `logo-reports`).** KOB shows a token's logo straight from the address its creator gave, in
@@ -1368,7 +1369,7 @@ in 3.19 and 3.20). The first report of a token hides its logo at once; you revie
 kobd index --config kob-executor.toml logo-reports list        # hidden ones not yet reviewed first (add --json)
 kobd index --config kob-executor.toml logo-reports restore <covenant id>   # shown again; new reports only recorded for cooldown_secs
 kobd index --config kob-executor.toml logo-reports hide <covenant id>      # hidden for good (restore --force undoes it)
-kobd index --config kob-executor.toml logo-reports export > logo-reports.json   # before an `index replay` ...
+kobd index --config kob-executor.toml logo-reports export > logo-reports.json   # before a `kobd index replay` ...
 kobd index --config kob-executor.toml logo-reports import logo-reports.json     # ... and after it (an empty store only)
 ```
 
@@ -1379,7 +1380,7 @@ address of `POST /v1/logo-reports` of the public server.
 
 Fresh database: it starts at `start` (default: the node's pruning point, i.e. everything the node
 still retains). `--start sink` skips history (only new orders, plus imports): this is the **fast route** of an index-only host, which
-follows the chain within a second of the start (`kobd index` has no `fast_start`; A.1.1). Such a store (and one moved
+follows the chain within a second of the start (`kobd --indexer` has no `fast_start`; A.1.1). Such a store (and one moved
 past unread chain by a gap or a rebase) is not complete for good: `/v1/health` reports `book_complete: false` and
 `history_from_daa` (where its history begins, in DAA; 0 until the start block's score is known), the status line says "history begins
 about N ago: older orders are not in this store", and `kob_indexer_book_complete` is 0; a store rebuilt by `index replay` from
@@ -1388,8 +1389,8 @@ the record log does not carry the marker (the log holds what the store read). **
 last minute, the chain itself moves at 10; `eta_seconds`, absent while the lag does not shrink) and the status line adds
 "indexing 15x chain speed, caught up in about 2 h 24 min" (or "catch-up time: estimating" for the first seconds). Measured on
 testnet-10 over the Kaspa resolver nodes: 36 h of lag at the start, about 14.6 s of chain per second, about 2.4 h to follow, about
-54 MB of store per 1.4 h of history (about 1.4 GB for the 36 h). `kobd index` (follow and serve) also refuses, with a
-message, a configuration whose `[launch]` table sets `key_file`, `pause_file` or `x402_config` (options of role `run`), as the
+54 MB of store per 1.4 h of history (about 1.4 GB for the 36 h). The Indexer (`kobd --indexer`, follow and serve) also refuses, with a
+message, a configuration whose `[launch]` table sets `key_file`, `pause_file` or `x402_config` (options of the Executor), as the
 launcher does. Run it under systemd
 with `Restart=on-failure`; state is durable across restarts. The template versions are the ones
 `kob-protocol` pins (there is no template directory any more).
@@ -1418,8 +1419,8 @@ rejects the transaction. The matcher pre-executes every transaction in the rusty
 plan, the order it is attributed to (its custody input failed, or dropping it made the plan pass) is flagged in the store
 (`order_flags`, per order UTXO, so the flag lapses when the order moves), left out of the books, depth and counts, and
 returned with `possibly_frozen: true` and `frozen_reason` by the order endpoints. The matcher probes it again every 5
-minutes; a probe that passes clears the flag. The flag is raised by the co-located matcher (`kobd run`), not by a
-standalone `index`. Templates whose registry `capabilities` include `freeze`, `seize` or `blacklist` are labelled (`powers`).
+minutes; a probe that passes clears the flag. The flag is raised by the co-located matcher (`kobd --executor`), not by a
+standalone `kobd --indexer`. Templates whose registry `capabilities` include `freeze`, `seize` or `blacklist` are labelled (`powers`).
 
 **One scale per token: `scale = 10^decimals`, at most `10^9`** (`kob_protocol::defaults::default_scale`; `GET /v1/tokens`
 `scale`). An order is an amount of BASE UNITS at a price in sompi per WHOLE token, `scale` base units of its token; orders of
@@ -2027,7 +2028,7 @@ restart point yourself. Recovery, in order of preference:
                                                 # up at the script the state derives and the strays
                                                 # the node still holds; the rest of their token rows close
    kobd index import-orders orders.json # recovery hook, see below
-   kobd index run
+   kobd --indexer
    ```
    Orders that were created *and* still open at the gap, and are not in any export, stay invisible
    to the book until their maker imports them (7.5) or cancels them from the placement records: the
@@ -2063,12 +2064,12 @@ are written to the record log (a replay reproduces them), and are stamped block 
 The state span must be the *current* script: after a partial fill that changed the script (IFD
 entries) export a fresh state. Version 1 exports (no commitment) are still accepted.
 
-**One writer per data directory.** `import-orders` (like `rebase`, `replay`, `index` and `run`) writes the database and
-the record log, so it refuses a data directory another process is writing: stop `run` / `index` first, import, start it
+**One writer per data directory.** `import-orders` (like `rebase`, `replay`, `--indexer` and `--executor`) writes the database and
+the record log, so it refuses a data directory another process is writing: stop the Executor / Indexer first, import, start it
 again. Every writer holds an exclusive OS lock on `<data_dir>/kob-writer.lock` and `<records_dir>/kob-writer.lock` for as
 long as it runs (released by the OS when it exits, also after a crash; `kob-writer.owner` names the holder for the error
 message). `export-orders` and the read API open the database read-only and work next to a running writer. On the TN10
-soak (10-01) an import run next to `run` interleaved two writers and broke the record log's hash chain (`record log frame
+soak (10-01) an import run next to the Executor interleaved two writers and broke the record log's hash chain (`record log frame
 N is corrupt: chain hash mismatch`); the lock makes that impossible.
 
 **Without an indexer: `kob recover`.** The maker finds and cancels their orders from a node alone:
@@ -2119,7 +2120,7 @@ the node first and refuse a view whose order UTXO the node does not hold (stale 
 ```
 mv index.sqlite3 index.sqlite3.bad
 kobd index replay --data-dir /var/lib/kob-index     # builds a NEW database from the log
-kobd index run ...                                  # resumes from the logged cursor
+kobd --indexer ...                                  # resumes from the logged cursor
 ```
 
 Replay re-applies every logged batch (including reorgs and imports) through the same code as the
@@ -2355,7 +2356,7 @@ transaction ids (v0 and v1) verify, a tampered copy does not.
   trigger evidence, and its limit, below the market for a sell stop, read as a crossed book); use `/v1/orders`. A database
   written by an earlier build is corrected at start-up (`backfill_stop_entry_books`).
 * No mempool tier. The kill switch is the executor's `--pause-file` (Part C); it stops the matcher,
-  the keepers and (in `run`) the x402 facilitator, not the indexer.
+  the keepers and (in the Executor) the x402 facilitator, not the indexer.
 * A bid's remaining amount is an upper bound derived from its escrow (its buying power; its quantity is a budget).
 * After a gap adoption the order's custody is unknown until its next spend, so the order is not
   listed until then.
@@ -2377,7 +2378,7 @@ transaction ids (v0 and v1) verify, a tampered copy does not.
 ## Part C. The matcher and the keepers
 
 `kobd match` batch-matches crossing KOB orders and arms, ratchets and triggers stops inside its batches;
-`kobd keep` refunds, kills and closes them; `kobd run` does both in the indexer's process (Part A). All of it is
+`kobd keep` refunds, kills and closes them; `kobd --executor` does both in the indexer's process (Part A). All of it is
 permissionless: anyone may run it, it never holds user funds, and a matcher that misbehaves only
 produces invalid or unprofitable transactions (the covenants enforce every price, quantity and
 trigger rule).
@@ -2475,7 +2476,7 @@ larger than the surplus of a small crossing (a 20 USD order crossed by 1 % leave
 goes to the pair ask's delivery, the batch earns nothing, and the crossed book is not matched. The owner's decision
 (2026-10-06): an operator may take such a surplus into its own key and count it as income (`matcher.md` §3.5). The pair ask
 then receives exactly its floor `ceil(n × p / scale(A))`, all its covenant guarantees (`KobPair.sil`: `tOut >= ceil`).
-It is off by default. `--inventory-policy <file>` (on `run` and `match`) reads it, strict JSON:
+It is off by default. `--inventory-policy <file>` (on `kobd --executor` and `match`) reads it, strict JSON:
 
 ```json
 {
@@ -2499,7 +2500,7 @@ It is off by default. `--inventory-policy <file>` (on `run` and `match`) reads i
 | `tokens[].token` | (required) | an allowlisted token (covenant id); every other token's surplus goes to the pair ask as before |
 | `tokens[].refPrice` | none | `sompi` per `per` base units: the owner's own valuation (it sells the inventory off-matcher), used instead of the KAS bids |
 | `maxFee` | `1000000000` (10 KAS) | the most network fee (sompi) the batches that keep a surplus may pay per period; once spent, no surplus is kept until the period ends. Checked before each batch: the batches of one tick count against it in turn (the last batch may overshoot it by its own fee). Set a larger value for a larger budget |
-| `periodDaa` | `864000` (one day) | the budget period of `maxFee` and `tokens[].maxAmount`, DAA; it starts at the first tick of `run` and restarts when it ends. The period's use is kept in `inventory-use.json` in the data directory (next to the database), so a restart continues the period instead of starting its budgets again; delete the file to reset them |
+| `periodDaa` | `864000` (one day) | the budget period of `maxFee` and `tokens[].maxAmount`, DAA; it starts at the first tick of the Executor and restarts when it ends. The period's use is kept in `inventory-use.json` in the data directory (next to the database), so a restart continues the period instead of starting its budgets again; delete the file to reset them |
 | `tokens[].maxAmount` | none | the most base units of the token kept per period; a batch that would keep more than what is left of it keeps none (the surplus goes to the pair ask). Like `maxFee` it counts every batch of the tick, so batches of different pair markets that keep the same token share it. Without it a token's amount is bounded only by `maxFee`: set it for every listed token |
 | `tokens[].minAmount` | none | the least surplus worth keeping (base units). With `refPrice`: no bound unless set. Without it the bound is the dust rule, the smallest minimum fill of the bids that value the surplus (a sale of the kept amount alone could fill one), and `minAmount` only raises it (a value below the dust rule, `0` included, changes nothing) |
 
@@ -2615,7 +2616,7 @@ a tick, and no crossing waits longer than the bound (plus the tick at which a ne
 ### Fee policy
 
 Every transaction the executor builds (matcher batches, keeper jobs, maintenance jobs, and the x402 facilitator's intent
-executions and expiries inside `run`) pays a rate taken from the node's fee estimate (`getFeeEstimate`, rusty-kaspa v2.1.0;
+executions and expiries inside the Executor) pays a rate taken from the node's fee estimate (`getFeeEstimate`, rusty-kaspa v2.1.0;
 `crates/kob-executor/src/fee.rs`). The node answers three kinds of buckets in sompi per gram: a *priority* bucket
 (sub-second inclusion), *normal* buckets (the first: sub-minute) and *low* buckets (the first: sub-hour). Each job takes the
 bucket of its urgency:
@@ -2667,7 +2668,7 @@ bucket of its urgency:
 * Rate changes are logged (`fee rates (sompi per gram)` with high, normal, low and whether they are estimated); every
   `submitted` line carries the transaction's `fee` and `fee_rate`. Metrics: `kob_fee_rate_high`, `kob_fee_rate_normal`,
   `kob_fee_rate_low`, `kob_fee_estimated` (0: at the floor), `kob_fee_estimate_failures_total`.
-* The x402 facilitator of `run` prices with the runner's rates (inside the intent's own funds: an execution or expiry the
+* The x402 facilitator of the Executor prices with the runner's rates (inside the intent's own funds: an execution or expiry the
   intent cannot pay at the higher rate is built at the keeper's floor). The standalone `kobd x402` builds nothing at a
   rate of its own beyond the floor; it submits the payers' transactions as signed.
 * Why: under the TN10 flood of 10-02 the node estimated 140 to 194 sompi per gram for the normal buckets and 115 for the low
@@ -2771,7 +2772,7 @@ reads the same answers over either encoding. It checks the network id
 and the sync state every tick and does nothing while the node is not synced. Transactions go
 through `submitTransaction` (the REST API drops per-input compute budgets). Acceptance: accepted, then final after 100 DAA; a
 removed chain block moves its transactions back to pending and they are resent (idempotent). Under
-`run` the indexer's follower supplies acceptance (Part A); with `match` / `keep --book-file` the
+the Executor, the indexer's follower supplies acceptance (Part A); with `match` / `keep --book-file` the
 process follows it itself with `getVirtualChainFromBlockV2` at `Low` verbosity (a second follower
 that only knows the ids it submitted).
 
@@ -2818,7 +2819,7 @@ pre-Toccata standard mass cap refuse transactions above ~25 kB: pass `--max-tx-b
 ### The book
 
 The matcher plans against an `OrderBookView` (validated orders with their custody and placement
-record data). In `run` it is the indexer's own store
+record data). In the Executor it is the indexer's own store
 (`indexer::book::StoreBook`, Part A); standalone it
 reads a JSON snapshot (`--book-file`, the `MemoryBook` format of
 `kob_executor::matcher::book`), re-read whenever the file changes. An indexer writes it with `kobd index export-book
@@ -2827,7 +2828,7 @@ reads a JSON snapshot (`--book-file`, the `MemoryBook` format of
 snapshot must contain only orders the indexer validated (§1.1, §1.2) and must report strays per order (an old snapshot's
 `receipts` key is ignored). Its `keeperOnly` array holds the live orders the indexer proves but does not list
 (a token outside the allowlist, an order value below the listing minimum, an exit of an unlisted entry, ...): the matcher
-never sees them, the keepers kill, refund and close them exactly as they do under `run`. An indexer's snapshot
+never sees them, the keepers kill, refund and close them exactly as they do in the Executor. An indexer's snapshot
 (`indexer::book::snapshot`, what `index export-book` writes) carries them; a file without the key has none, and its
 keepers then serve the listed orders only. `--offline` prints one JSON line per planned transaction: its fills (each with
 `evidence`, the leg index of a triggered fill's evidence, else null) and `updates` (`order`, `update` `arm` / `trail`,
@@ -2844,7 +2845,7 @@ KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd match --book-file book.json \
   --network testnet-10 --rpc-url ws://127.0.0.1:18210 --dry-run
 
 # Indexer, matcher and keepers in one process, one store (Part A):
-KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd run --network testnet-10 --data-dir /var/lib/kob-index \
+KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd --executor --network testnet-10 --data-dir /var/lib/kob-index \
   --tokens /etc/kob/tokens.json --metrics-file /var/lib/node_exporter/kob.prom
 
 # Matcher and keepers in one process, book from a snapshot file:

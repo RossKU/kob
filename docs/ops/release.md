@@ -124,7 +124,7 @@ payer entry point); its defaults are `network: mainnet` and `./registry/tokens.j
 ships in `dist/registry/` (the pinned file; a plain `npm run build` leaves the registry to the host). A hosting
 operator may set `config.json` next to the app (`indexerUrl`, `nodeUrl`, ...). The project's own hosting (Cloudflare Pages from
 `.github/workflows/deploy-pages.yml`, config from repository variables, post-deploy header and hash check, rollback) is
-`docs/ops/web-hosting.md`; its public read server (`kobd index` behind Cloudflare Tunnel) is `docs/ops/chart-server.md`.
+`docs/ops/web-hosting.md`; its public read server (`kobd --indexer` behind Cloudflare Tunnel) is `docs/ops/chart-server.md`.
 
 The private-key signer frame pins the SHA-256 of the token table (covenant id, ticker, decimals) of `registry/tokens.json` at build time
 (`web/src/signer/table.ts`, audit 2026-10-30 G7). A deployment that serves another registry builds with `KOB_SIGNER_REGISTRY=<path to that file>`;
@@ -262,7 +262,7 @@ wallets is safe, a rollback of an indexer below the payload version in use is no
 | CPU | 3 to 10 us of one core per accepted transaction of a realistic mix, plus 0.25 to 0.3 ms per KOB transaction (single-threaded database pass: about 3,500 KOB tx/s per core at the tip); 3 to 4 % of one core at 3,000 tx/s with the default mix | B 3 "Processing capacity" |
 | Memory | 0.3 to 1 GB typical, budget up to 4 GB for full-size batches while catching up | B 3 |
 | Disk (indexer) | plan on about 10 KB per order in the full index (soak: 5.4 to 5.7 KB of database and 3.9 KB of record log per order; the synthetic 2.6 KB + 1 KB is the lower bound), plus a 42 MB constant block window; a lean Executor store is capped at 500 MB and keeps no log; the record log is the asset to back up off site | B 3, B 8, A.1.2 |
-| Keys and funds | an operator hot key for the Executor (`run`: matcher, keepers, facilitator) with a small working balance; the Indexer (`index`) alone is keyless | Part C "Keys and funds" |
+| Keys and funds | an operator hot key for the Executor (`kobd --executor`: matcher, keepers, facilitator) with a small working balance; the Indexer (`kobd --indexer`) alone is keyless | Part C "Keys and funds" |
 | Monitoring | `/v1/health`, textfile metrics, alerts on `gap`, lag and node version | B 6, A.4 |
 
 An operator should also keep a standby node and the TN10 drill current (B 7.8), and upgrade nodes
