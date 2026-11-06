@@ -652,7 +652,7 @@ An intent program is a covenant whose UTXO the payer funds once and which has tw
   expiry, not the clock, is what ends an intent nobody executed (section 17.7).
 - **(I3) Positional anti-aliasing.** The outputs the program counts as the merchant's and the payer's are
   outputs no other input of the transaction can claim (KOB: the intent is the last input `j` and owns
-  outputs `j` and `j + 1`, see `docs/argent.md`, "Positional anti-aliasing rule"). This is the intent
+  outputs `j` and `j + 1`, see `docs/argent/argent.md`, "Positional anti-aliasing rule"). This is the intent
   counterpart of section 8.2: a merchant who is also a maker can never be "paid" by its own order.
 
 Because the program checks the payment itself, a facilitator that builds the execution cannot redirect it,
@@ -1184,6 +1184,6 @@ The conformance cases of intent mode and invoices are listed in sections 17.11 a
 - KOB `crates/kob-x402`: `wire.rs` (`RoutePayload`, `BINDING_SWAP`), `common.rs`
   (`PayloadCommit.route_pay_asset`), `error.rs` (`Diag::OrderConflict`, `Diag::RouteAliasing`).
 - KIP-9 (extended mass), KIP-20 (covenant ids).
-- KOB `docs/argent.md` (the router), `crates/kob-protocol/src/router.rs` and `src/build/intent.rs` (intent builders),
+- KOB `docs/argent/argent.md` (the router), `crates/kob-protocol/src/router.rs` and `src/build/intent.rs` (intent builders),
   `crates/kob-x402/src/intent.rs`, `src/invoice.rs`, `src/client/intent.rs`, `crates/kob-executor/src/x402/facilitator/`
   (`intent.rs`, `invoice.rs`).

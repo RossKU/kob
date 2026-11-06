@@ -77,7 +77,7 @@ PIN=$(sed -n 's/^import "[^"]*KOBOrders\/artifact\.json" id "\([0-9a-f]\{64\}\)"
 KOB_ORDERS_ID=$(sed -n 's/^  "id": "\([0-9a-f]\{64\}\)",$/\1/p' "$STAGE/src/KOBOrders/artifact.json" | head -n1)
 if [ "$KOB_ORDERS_ID" != "$PIN" ]; then
   echo "KOBOrders is $KOB_ORDERS_ID but the router pins $PIN: review the order change, then update the pin in" >&2
-  echo "tools/router-gen/router_head.ag and contracts/argent/examples/*.ag (and docs/argent.md)" >&2
+  echo "tools/router-gen/router_head.ag and contracts/argent/examples/*.ag (and docs/argent/argent.md)" >&2
   exit 1
 fi
 "$S2A" verify "$STAGE/src/KOBOrders/artifact.json" --id "$PIN" "${actors[@]}" >/dev/null
@@ -98,7 +98,7 @@ KPIN=$(sed -n 's/^import "[^"]*KOBOrdersKron\/artifact\.json" id "\([0-9a-f]\{64
 KOB_ORDERS_KRON_ID=$(sed -n 's/^  "id": "\([0-9a-f]\{64\}\)",$/\1/p' "$STAGE/src/KOBOrdersKron/artifact.json" | head -n1)
 if [ "$KOB_ORDERS_KRON_ID" != "$KPIN" ]; then
   echo "KOBOrdersKron is $KOB_ORDERS_KRON_ID but the router pins $KPIN: review the order change, then update the pin in" >&2
-  echo "tools/router-gen/router_head.ag (and docs/argent.md)" >&2
+  echo "tools/router-gen/router_head.ag (and docs/argent/argent.md)" >&2
   exit 1
 fi
 "$S2A" verify "$STAGE/src/KOBOrdersKron/artifact.json" --id "$KPIN" "${kron_actors[@]}" >/dev/null
@@ -130,7 +130,7 @@ fi
 # The dependency copies under apps/ are the two artifacts above; do not publish them twice.
 rm -rf "$STAGE/out/router/apps"
 
-# 5. Third-party examples (docs/argent.md): compiled so they cannot rot. Only their generated SilverScript is
+# 5. Third-party examples (docs/argent/argent.md): compiled so they cannot rot. Only their generated SilverScript is
 #    published (contracts/argent/examples-out/<example>/, for the engine tests of argent_router_tests.rs).
 mkdir -p "$STAGE/src/examples"
 cp contracts/argent/examples/*.ag "$STAGE/src/examples/"
@@ -139,7 +139,7 @@ for f in contracts/argent/examples/*.ag; do
   (cd "$STAGE/src/examples" && "$ARGENTC" build "$n.ag" --out "../../out/examples/$n" >/dev/null)
 done
 
-# 6. The 1:1 Argent port of KobAsk (contracts/research/argent/port/, docs/argent-feedback.md item 10): a measurement, not a KOB
+# 6. The 1:1 Argent port of KobAsk (contracts/research/argent/port/, docs/argent/argent-feedback.md item 10): a measurement, not a KOB
 #    contract. Only its generated SilverScript is published (contracts/research/argent/port-out/, compared with the hand-written
 #    KobAsk by crates/kob-tests/tests/argent/argent_port_tests.rs).
 mkdir -p "$STAGE/src/port"

@@ -1,5 +1,5 @@
 // Measurement, NOT a KOB contract: KobAsk (contracts/orders/KobAsk.sil) ported 1:1 to Argent, to measure what
-// Argent adds to a hand-written order (docs/argent-feedback.md, item 10). KOB publishes the hand-written
+// Argent adds to a hand-written order (docs/argent/argent-feedback.md, item 10). KOB publishes the hand-written
 // order; this file is not part of the KOBOrders artifact.
 //
 // The body is the hand-written one verbatim: same state fields in the same order, same entries and

@@ -1,7 +1,7 @@
 # Argent upstream
 
 KOB's order contracts are hand-written SilverScript; Argent is used to publish them to other apps
-(`docs/argent.md`) and to write KOB's own composition layer, the router. This directory pins the
+(`docs/argent/argent.md`) and to write KOB's own composition layer, the router. This directory pins the
 Argent compiler (`argentc`) used for that, holds our two patches to it and builds it reproducibly.
 
 | | |
@@ -63,7 +63,7 @@ Both patches are needed at `b312ded`:
    patch.
 
 Evidence: the v2 contracts, the KOBOrders artifact and the router
-(`crates/kob-tests/tests/argent_router_tests.rs`, `argent_import_pin_tests.rs`).
+(`crates/kob-tests/tests/argent/argent_router_tests.rs`, `argent_import_pin_tests.rs`).
 
 ## Vendored crate
 
@@ -85,7 +85,7 @@ checkout. `build-argentc.sh --verify` fails if it drifts from the pin.
    example when argentc lists the states of an imported module in another order).
 5. If the router changed (its artifact id or a template hash): update `ROUTER_ARTIFACT_ID` and
    `ROUTER_PINNED` in `crates/kob-protocol/src/router.rs`, `ROUTER_ARTIFACT_ID` in
-   `packages/kob-x402/src/types.ts` and the id in `docs/argent.md`, and refresh the embedded ABI
+   `packages/kob-x402/src/types.ts` and the id in `docs/argent/argent.md`, and refresh the embedded ABI
    (`KOB_WRITE_ROUTER_ABI=1 cargo test -p kob-protocol --lib embedded_abi_is_the_committed_artifact`);
    the web build embeds it through `kob-wasm`.
 6. `cargo test --workspace`.

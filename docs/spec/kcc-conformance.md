@@ -141,7 +141,7 @@ Template hashes (all `prefix 1`, state 112):
 | `KCC20Opt` (prototype, disabled instance) | `77e25134...`, 3,105 B | `1de86404b89e381471e7ff2088b41f097e47c4d746a91300d9c8322a52654619`, 2,930 B |
 
 `KCC20Batch` is unchanged (`98caa910...`: it names the holder template in its state). The `KOBToken` artifact id is now
-`364f6518...` (`docs/argent.md`). Regenerated with the repository's generators: the slot variants, `KCC20P2` and `KCC20Opt`
+`364f6518...` (`docs/argent/argent.md`). Regenerated with the repository's generators: the slot variants, `KCC20P2` and `KCC20Opt`
 (`KOB_REGEN=1` on their generator tests), `KOBToken` and the artifacts (`scripts/build-contracts.sh`), the wallet-gate copy and
 its artifacts, the compute-budget table, the keeper tips, the protocol and x402 golden vectors, the mainnet deployment
 record (it pins the registry); the registry, the Rust / TS pins and the web and soak fixtures name the new templates.

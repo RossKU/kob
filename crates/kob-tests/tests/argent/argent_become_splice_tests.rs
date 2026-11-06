@@ -1,4 +1,4 @@
-//! `become` as a splice (docs/argent-feedback.md, item 10): the hand-written order, the Argent ports and a prototype of
+//! `become` as a splice (docs/argent/argent-feedback.md, item 10): the hand-written order, the Argent ports and a prototype of
 //! a splice lowering of `become`, run side by side in the rusty-kaspa v2.1.0 script engine.
 //!
 //! Variants of `KobAsk`, all compiled with the same constructor arguments (`contracts/orders/KobAsk.ctor.json`):

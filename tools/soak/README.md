@@ -296,7 +296,7 @@ launchpad programs; no order cancelled, databases and chart history kept. exec-b
 `bin/kob-executor-dadd20e.exe`, then bundle, bindings and UI; config `testPrograms` (`KForgeToken1785`,
 `KaspaRocketToken11458`) lists those programs' templates on the soak registry so the executors list KOB orders of their
 tokens (TN10 test only; KOB's profiles stay pending-review). Fixes of the live test deployed 14:46 and 15:02 UTC. Backups in
-`run/backup-pre-dadd20e/`. Live test report: `docs/testing/TN10-TEST-2026-10-15.md`.
+`run/backup-pre-dadd20e/`. Live test report: `docs/reports/TN10-TEST-2026-10-15.md`.
 
 **Chart history, 2026-10-14 13:13 to 13:40 UTC.** The founder saw the TUSD chart begin on 10-11. No data was lost: every
 fill since 10-06 was in both databases (carried to the re-issued ids on 10-10), but the indexer read only the newest 20 000 fill
@@ -316,11 +316,11 @@ token program changed, so no order was cancelled; databases kept (`order_amends.
 unchanged. exec-b, then exec-a on `bin/kob-executor-cf90250.exe` (never both down), then bindings, bundle (the new
 scenarios run with their default weights), UI (`UI_OUT` staging; `build-ui.sh` now copies `signer.html` and `serve-ui.mjs`
 sends the signer's headers) and the public 8491 instance; miner and cloudflared untouched. Backups in
-`run/backup-pre-cf90250/`. Live test report: `docs/testing/TN10-TEST-2026-10-14.md`.
+`run/backup-pre-cf90250/`. Live test report: `docs/reports/TN10-TEST-2026-10-14.md`.
 
 **Redeploy on main 8c1606c, 2026-10-13 UTC.** Token-program profiles, the A1-2 / A1-3 fixes and the keeper fee-subsidy
 budget; templates unchanged (no order cancelled, chart history and databases kept); one child at a time. Live test report:
-`docs/testing/TN10-TEST-2026-10.md`.
+`docs/reports/TN10-TEST-2026-10.md`.
 
 **Redeploy on main b937ebf, 2026-10-12 16:21:57 to 16:37:20 UTC (2026-10-13 01:21 to 01:37 JST).** The pre-audit covenant fixes
 changed 10 of the 15 order templates (`KobCondAsk`, `KobCondBid`, `KobIfdAsk`, `KobIfdBid`, `KobCondPair`, `KobIfdPair` and the

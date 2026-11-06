@@ -237,7 +237,7 @@ record log of 1.2 GB for 306,000 orders (3.9 KB per order). Plan on **about 10 K
 of chain blocks, and keep the drive at least half empty (the disk alarm of `executor.md` Part B 6 fires above 70 %). How many
 orders a day mainnet will bring is not known yet: read the growth of `kob-data` after a week and extrapolate.
 
-**Time to restore** (testnet-10 drill of 2026-10-20, `docs/testing/TN10-TEST-2026-10.md` section 14): `VACUUM INTO` of the running
+**Time to restore** (testnet-10 drill of 2026-10-20, `docs/reports/TN10-TEST-2026-10.md` section 14): `VACUUM INTO` of the running
 2.85 GB database took 84 seconds; restoring that copy next to the record log and bringing it forward (`replay --onto-database`)
 took minutes; a full `kobd db replay` of a 1.2 GB log (367,916 frames, 306,552 orders) took 2,634 seconds (about 44 minutes) and
 prints nothing until it is done. The chart is dark that long if you rebuild in place; section 6 shows how to avoid that.

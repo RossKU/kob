@@ -108,7 +108,7 @@
 // is one binding over the limit with argentc b312ded / SilverScript v1.0.0, measured before the lock pin: 245 of 244 live bindings;
 // the ask pin alone fits every shape, the bid pin alone is one combined stack item over in `swap2`. It
 // would also add a state copy and a template check to each resting script for a rule the order
-// already enforces, so it stays out. docs/argent.md, "Fill shapes".)
+// already enforces, so it stays out. docs/argent/argent.md, "Fill shapes".)
 //
 // Reading guide. The 30 actors are one pattern at different widths: one order leg per observed
 // order (ask_leg / ask_fits / bid_fits: the order's own fields against the intent's terms), the
@@ -116,7 +116,7 @@
 // the repetition is written out by tools/router-gen/gen-router.sh (this file is its output; the
 // build fails if it is edited by hand); `KasToToken_buy`, `_buy_out`, `_buy3`, `TokenToKas_sell2`,
 // `TokenSwap_swap` and `_swap2_out` show every ingredient. Sizes of the compiled scripts: 2.6-7.3 kB
-// per buy or sell shape, 5.7-10.0 kB for the swaps (docs/argent.md).
+// per buy or sell shape, 5.7-10.0 kB for the swaps (docs/argent/argent.md).
 //
 // POSITIONAL ANTI-ALIASING RULE (hand-written, reviewed; Argent generates none). The intent
 // spent at input j owns exactly two outputs, j and j + 1, and everything it owes goes there:

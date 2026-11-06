@@ -4,7 +4,7 @@
 //! the creation transaction) and can always cancel it (`cancel`, SIGHASH_ALL); any keeper may
 //! execute it against the current book in the fill shape the actor was chosen for, without the
 //! payer; from its `deadline` (unix ms) on, anyone may `expire` it, which returns its KAS (less at
-//! most [`EXPIRE_MAX_FEE`]) and its locked tokens to the payer (`docs/argent.md`, "The router"):
+//! most [`EXPIRE_MAX_FEE`]) and its locked tokens to the payer (`docs/argent/argent.md`, "The router"):
 //!
 //! | Intent | Payer locks | Merchant receives |
 //! |---|---|---|

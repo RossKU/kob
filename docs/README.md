@@ -46,24 +46,24 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 |---|---|
 | [security/AUDIT-2026-10.md](security/AUDIT-2026-10.md) | The internal pre-mainnet security audit (canary gate): invariants, findings, ablation, fuzzing, live testnet-10 attacks, residual risks |
 
-## Test reports (`docs/testing/`)
+## Test reports (`docs/reports/`)
 
 Dated testnet-10 runs, kept as evidence (their transaction ids are chain data, not build pins): what was exercised, on which commit, with
 what result.
 
 | Document | What it covers |
 |---|---|
-| [testing/TN10-TEST-2026-10.md](testing/TN10-TEST-2026-10.md) | The first live testnet-10 roll (commit `8c1606c`): every KAS-book order kind, x402, the registry checks, the live attacks on the pair orders (section 13) and the recovery drills of 2026-10-20 (section 14) |
-| [testing/TN10-TEST-2026-10-14.md](testing/TN10-TEST-2026-10-14.md) | The roll onto `cf90250` |
-| [testing/TN10-TEST-2026-10-15.md](testing/TN10-TEST-2026-10-15.md) | The roll onto `dadd20e` |
+| [reports/TN10-TEST-2026-10.md](reports/TN10-TEST-2026-10.md) | The first live testnet-10 roll (commit `8c1606c`): every KAS-book order kind, x402, the registry checks, the live attacks on the pair orders (section 13) and the recovery drills of 2026-10-20 (section 14) |
+| [reports/TN10-TEST-2026-10-14.md](reports/TN10-TEST-2026-10-14.md) | The roll onto `cf90250` |
+| [reports/TN10-TEST-2026-10-15.md](reports/TN10-TEST-2026-10-15.md) | The roll onto `dadd20e` |
 
 ## Argent
 
 | Document | What it covers |
 |---|---|
-| [argent.md](argent.md) | KOB as an Argent app: published artifacts, importing KOB orders from another Argent app, the swap-and-pay router |
-| [argent-feedback.md](argent-feedback.md) | Questions and findings for the Argent team, each with its status and where it can be reproduced |
-| [argent-port-compare.md](argent-port-compare.md) | `KobAsk` hand-written versus its Argent port: where the size difference comes from |
+| [argent/argent.md](argent/argent.md) | KOB as an Argent app: published artifacts, importing KOB orders from another Argent app, the swap-and-pay router |
+| [argent/argent-feedback.md](argent/argent-feedback.md) | Questions and findings for the Argent team, each with its status and where it can be reproduced |
+| [argent/argent-port-compare.md](argent/argent-port-compare.md) | `KobAsk` hand-written versus its Argent port: where the size difference comes from |
 | [../vendor/argent-upstream/UPSTREAM.md](../vendor/argent-upstream/UPSTREAM.md) | The pinned Argent commit, our two patches, how to rebuild `argentc` and update the pin |
 
 ## Component documentation

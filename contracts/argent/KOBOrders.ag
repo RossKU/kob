@@ -11,7 +11,7 @@
 // skeleton artifact; tools/sil2argent refuses it if a state or entry ABI differs from the .sil, then
 // replaces every generated contract by the silverc output and recomputes template receipts,
 // actor-type handles, interface fingerprints and the artifact id. Result:
-// contracts/argent/KOBOrders/artifact.json (generated; see docs/argent.md, vendor/argent-upstream/UPSTREAM.md).
+// contracts/argent/KOBOrders/artifact.json (generated; see docs/argent/argent.md, vendor/argent-upstream/UPSTREAM.md).
 //
 // The 8/8 KCC-20 token prototype is the separate single-actor app KOBToken (kcc20_8x8.ag; KOB issues the
 // standard 3/3 reference, built the same way from kcc20.ag): an actor in a multi-actor app gets

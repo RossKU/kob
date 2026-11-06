@@ -1,5 +1,5 @@
 // Third-party example, CLOSED ICC (inter-covenant composition): an app that imports the published
-// KOBOrders artifact (docs/argent.md, "Importing KOBOrders").
+// KOBOrders artifact (docs/argent/argent.md, "Importing KOBOrders").
 //
 // `PriceGate` is a KAS lock that can be spent only in a transaction where a KOB ask is partially
 // filled and quotes at most `max_price` sompi per whole token. A partial fill continues with

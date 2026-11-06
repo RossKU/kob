@@ -2,7 +2,7 @@
 //! execute (any keeper, no signature), cancel (the payer) and expire (anyone, from the deadline on,
 //! no signature).
 //!
-//! Layouts follow the router's positional anti-aliasing rule (`docs/argent.md`, "Positional
+//! Layouts follow the router's positional anti-aliasing rule (`docs/argent/argent.md`, "Positional
 //! anti-aliasing rule"): the intent is the LAST input `j` and owns outputs `j` and `j + 1`; every
 //! order spent at input `i` pays, delivers or refunds at output `i`.
 //!

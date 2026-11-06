@@ -199,18 +199,18 @@ fn verify_refuses_a_tampered_handle_or_id() {
 
 #[test]
 fn docs_pin_the_published_artifacts() {
-    // docs/argent.md quotes the artifact ids and handles; they must be the committed ones.
-    let doc = std::fs::read_to_string(root().join("docs/argent.md")).expect("docs/argent.md");
+    // docs/argent/argent.md quotes the artifact ids and handles; they must be the committed ones.
+    let doc = std::fs::read_to_string(root().join("docs/argent/argent.md")).expect("docs/argent/argent.md");
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
     let router: Artifact = read("contracts/argent/router/artifact.json");
     let token: Artifact = read("contracts/argent/KOBToken/artifact.json");
     for art in [orders(), orders_kron(), token, router] {
-        assert!(doc.contains(&art.id), "docs/argent.md does not pin {} {}", art.app, art.id);
+        assert!(doc.contains(&art.id), "docs/argent/argent.md does not pin {} {}", art.app, art.id);
         if art.app != "KobRouter" {
             for t in &art.argent.template_plan.templates {
                 assert!(
                     doc.contains(&hex(&t.actor_type_handle.template.hash)),
-                    "docs/argent.md does not list the handle of {}",
+                    "docs/argent/argent.md does not list the handle of {}",
                     t.actor
                 );
             }
@@ -220,9 +220,9 @@ fn docs_pin_the_published_artifacts() {
 
 #[test]
 fn docs_list_every_router_entry() {
-    // docs/argent.md documents the fill shapes as entries; a shape added to (or dropped from)
+    // docs/argent/argent.md documents the fill shapes as entries; a shape added to (or dropped from)
     // kob_router.ag without the page is caught here.
-    let doc = std::fs::read_to_string(root().join("docs/argent.md")).expect("docs/argent.md");
+    let doc = std::fs::read_to_string(root().join("docs/argent/argent.md")).expect("docs/argent/argent.md");
     let manifest: serde_json::Value = read("contracts/argent/router/manifest.json");
     let mut n = 0;
     for actor in manifest["actors"].as_array().expect("actors") {
@@ -230,11 +230,11 @@ fn docs_list_every_router_entry() {
         // one actor per fill shape: `<Intent>_<shape>` (`TokenToKasKron_sell`: the KRON twin); the page names the intent and
         // `_<shape>`
         let (intent, shape) = name.split_once('_').expect("actor name <Intent>_<shape>");
-        assert!(doc.contains(&format!("`{intent}`")), "docs/argent.md does not mention the intent {intent}");
-        assert!(doc.contains(&format!("`_{shape}`")), "docs/argent.md does not list the actor {name}");
+        assert!(doc.contains(&format!("`{intent}`")), "docs/argent/argent.md does not mention the intent {intent}");
+        assert!(doc.contains(&format!("`_{shape}`")), "docs/argent/argent.md does not list the actor {name}");
         for entry in actor["entries"].as_array().expect("entries") {
             let e = entry["name"].as_str().expect("entry name");
-            assert!(doc.contains(&format!("`{e}(")), "docs/argent.md does not list {name}::{e}");
+            assert!(doc.contains(&format!("`{e}(")), "docs/argent/argent.md does not list {name}::{e}");
             n += 1;
         }
     }

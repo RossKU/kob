@@ -50,7 +50,7 @@ is a prototype or third-party.
 ## Documentation
 
 * [docs/README.md](docs/README.md): the index of every document
-* [docs/spec/](docs/spec/): order types, the matcher, the payload, token programs
+* [docs/spec/](docs/spec): order types, the matcher, the payload, token programs
 * [docs/development.md](docs/development.md): build the contracts, run the tests, the web UI in mock mode;
   [docs/repository-map.md](docs/repository-map.md): what lives where
 

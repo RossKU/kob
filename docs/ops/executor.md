@@ -513,7 +513,7 @@ default and switched on in the x402 configuration file:
 ```
 
 **Intent payments** (`extra.route.binding = kob-intent-v1`). The payer signs one transaction, the creation of
-a KOB router intent (`contracts/argent/kob_router.ag`, `docs/argent.md` "The router") that locks its funds
+a KOB router intent (`contracts/argent/kob_router.ag`, `docs/argent/argent.md` "The router") that locks its funds
 with its worst case as terms. The facilitator verifies it, dry-runs an execution against the indexer's book
 (none builds: `intent_not_executable`, retryable, nothing broadcast), consumes the creation's inputs and the
 intent outpoint in its ledger, broadcasts the creation and then executes the intent itself, as a keeper: it
@@ -2146,7 +2146,7 @@ the build no longer pins (`placement:payload: unknown token program`); a bid on 
 become non-closing `cancel` events. The replay prints its rejects by reason. Before a build stops pinning a token program, end
 every order on it with the old build and keep a `VACUUM INTO` snapshot taken before the switch: a replay cannot rebuild that
 history (in the TN10 soak, the 26,348 orders of 2026-10-07 to 10-10 on the retired 8x8 program `40fef59a`, all ended before
-the switch, are such a case: drill of 2026-10-20, `docs/testing/TN10-TEST-2026-10.md`). A frame that carries a KCC-23 declaration section (a candidate preparation, or a genesis with the preparations it
+the switch, are such a case: drill of 2026-10-20, `docs/reports/TN10-TEST-2026-10.md`). A frame that carries a KCC-23 declaration section (a candidate preparation, or a genesis with the preparations it
 binds: `indexer::kcc23::DeclSection`, flagged by bit 30 of a record's `pos`) is written as record-log format 3 (marker `0x00
 0x03`); every other frame stays format 2 byte for byte. This build reads both; an older build skips format-3 frames with its
 "newer format" warning (KOB records in such a frame are skipped by it too). Declarations made before this build were never
@@ -2260,7 +2260,7 @@ Each frame is applied in one transaction together with the database position aft
 (Ctrl-C, a full disk, a frame that fails) is simply run again and continues from the first frame it did not commit. The
 first frame applied must continue the database's cursor; a log of another history is refused and nothing is applied.
 
-**How long it takes** (TN10 drill of 2026-10-20, `docs/testing/TN10-TEST-2026-10.md` section 14): `VACUUM INTO` of the running
+**How long it takes** (TN10 drill of 2026-10-20, `docs/reports/TN10-TEST-2026-10.md` section 14): `VACUUM INTO` of the running
 2.85 GB database 84 seconds; `replay --onto-database` of the frames since the copy a few minutes in all; a full `replay` of a
 1.2 GB log (367,916 frames, 306,552 orders) 2,634 seconds (about 44 minutes), offline, with no output until it prints its summary.
 To keep a public read server up during a rebuild, build the new store beside the running one and switch the tunnel

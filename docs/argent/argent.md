@@ -3,7 +3,7 @@
 KOB is an Argent app on the outside and hand-written SilverScript on the inside. This document
 says what is published, how another Argent app imports it, and what the KOB router on top of it
 does. Nothing here is audited. Problems met while doing this, each with a minimal reproduction,
-are in [argent-feedback.md](argent-feedback.md). Compiler pin and patches: [../vendor/argent-upstream/UPSTREAM.md](../vendor/argent-upstream/UPSTREAM.md).
+are in [argent-feedback.md](argent-feedback.md). Compiler pin and patches: [vendor/argent-upstream/UPSTREAM.md](../../vendor/argent-upstream/UPSTREAM.md).
 
 | Layer | What | Where |
 |---|---|---|
@@ -75,7 +75,7 @@ importer uses) does not change this: in a multi-actor app (checked on argentc `b
 gets a template context field (state 1 + 145 instead of 1 + 112 bytes) and a 9,394 B program instead
 of 6,350 B, and its handle correctly describes THAT program (template `680b901a...`), not the
 deployed `KCC20Ref_8x8` (`666da060...`) that token UTXOs carry and orders pin
-(`docs/argent-feedback.md`, item 8). The same holds for the upstream reference: since its merge
+(`docs/argent/argent-feedback.md`, item 8). The same holds for the upstream reference: since its merge
 (argent-lang/kcc20-reference `c8a0871`) it is published only as an actor of its `KCC20PublicMint` app,
 with that template context; KOB builds the merged `kcc20.ag` as a single-actor app
 (`contracts/third-party/kcc20-reference/UPSTREAM.md`). For tokens of that published build the handle is
@@ -331,7 +331,7 @@ SIGHASH_ALL). The redeem sizes include both. For scale: the standard 3/3 token p
 and every observed order state is 20 or 21 fields read by the script. A payer who wants a sweep of
 one order per leg pays the 6.3-6.6 kB of the single-order swap. `swap2` is the tightest script (214
 live bindings and 221 combined stack items of the 244 allowed, measured on 2026-10-10 with the lock pin, the B pin and
-the ask's `extensionCommitment`; `docs/argent-feedback.md` item 6): its body keeps no local an expression can stand for
+the ask's `extensionCommitment`; `docs/argent/argent-feedback.md` item 6): its body keeps no local an expression can stand for
 (the input index, the sum of the base units sold into the bids and the take of a resting last ask are written out where
 they are used), which makes room for the two token handles. argentc refuses an entry over the limit, so every shape
 compiling is the check.
@@ -358,7 +358,7 @@ costs 21 (ask) or 23 (bid) more live stack bindings per resting order in the com
 244 per entry): measured on 2026-10-10 (argentc `b312ded` with SilverScript v1.0.0), `TokenSwap_swap2` peaks at
 236 bindings / 247 combined stack items with the ask pin, 237 / 250 with the bid pin and 259 / 270 with both, so no
 continuation pin fits that shape (`PIN=1 tools/router-gen/gen-router.sh FILE` writes the pinned variant, `PIN=ask` /
-`PIN=bid` one side only; `docs/argent-feedback.md` item 6). It would also add a state copy and a template check to each
+`PIN=bid` one side only; `docs/argent/argent-feedback.md` item 6). It would also add a state copy and a template check to each
 resting script for a rule the order already enforces, so it stays out.
 
 What the router relies on in the orders:

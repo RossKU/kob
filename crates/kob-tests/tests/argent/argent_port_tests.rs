@@ -1,4 +1,4 @@
-//! The size of a 1:1 Argent port of a hand-written order (docs/argent-feedback.md, item 10).
+//! The size of a 1:1 Argent port of a hand-written order (docs/argent/argent-feedback.md, item 10).
 //!
 //! `contracts/research/argent/port/kob_ask_port.ag` is `contracts/orders/KobAsk.sil` ported 1:1 to Argent (the body verbatim, plus
 //! the `emits next: KobAsk[0..=1]` / `become` Argent requires); `scripts/build-argent.sh` publishes its generated

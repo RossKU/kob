@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generator of contracts/argent/kob_router.ag (docs/argent.md, "The router generator").
+# Generator of contracts/argent/kob_router.ag (docs/argent/argent.md, "The router generator").
 #
 #   tools/router-gen/gen-router.sh            write contracts/argent/kob_router.ag
 #   tools/router-gen/gen-router.sh --check    fail (exit 1) if the committed file differs; writes nothing
@@ -13,7 +13,7 @@
 #
 # PIN=1 (or PIN=ask / PIN=bid) adds the continuation pin of every resting order (both sides, or only
 # resting asks / only resting KCC-20 bids) for measurements; the shipped router has none
-# (docs/argent-feedback.md, item 6).
+# (docs/argent/argent-feedback.md, item 6).
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)

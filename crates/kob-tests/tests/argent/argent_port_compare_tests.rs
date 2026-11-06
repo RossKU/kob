@@ -1,5 +1,5 @@
-//! Opcode-level comparison of the hand-written `KobAsk` and its idiomatic Argent port (docs/argent-port-compare.md,
-//! docs/argent-feedback.md item 10).
+//! Opcode-level comparison of the hand-written `KobAsk` and its idiomatic Argent port (docs/argent/argent-port-compare.md,
+//! docs/argent/argent-feedback.md item 10).
 //!
 //! Three variants, compiled with the same constructor arguments (`contracts/orders/KobAsk.ctor.json`):
 //!   hand       `contracts/orders/KobAsk.sil` (hand-written SilverScript);

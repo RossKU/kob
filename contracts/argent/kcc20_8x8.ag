@@ -14,7 +14,7 @@
 // is the silverc template of contracts/artifacts/KCC20Ref_8x8.json. Output: contracts/argent/KOBToken/
 // (generated). It is a single-actor app of its own, not an actor of KOBOrders: an actor in a
 // multi-actor app gets compiler-owned template fields, which would change the token program
-// (docs/argent.md).
+// (docs/argent/argent.md).
 
 const byte OWNER_P2PK_SCHNORR = 0x00;
 const byte OWNER_P2PKH_SCHNORR = 0x01;

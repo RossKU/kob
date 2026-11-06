@@ -1,4 +1,4 @@
-// Measurement, NOT a KOB contract: the idiomatic variant of kob_ask_port.ag (docs/argent-feedback.md, item 10).
+// Measurement, NOT a KOB contract: the idiomatic variant of kob_ask_port.ag (docs/argent/argent-feedback.md, item 10).
 // It is kob_ask_port.ag without the body checks that the code Argent generates repeats: the order's own
 // output-count checks (OpCovOutputCount(selfId) == 1 / == 0; the generated count bound and
 // `cont.length == count` check them) and its continuation SPK check (== contSpk(amountLeft - n); the generated

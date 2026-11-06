@@ -7,7 +7,7 @@
 // compiles it with argentc into a skeleton artifact; tools/sil2argent refuses it if a state or entry ABI
 // differs from the .sil, then replaces every generated contract by the silverc output and recomputes
 // template receipts, actor-type handles, interface fingerprints and the artifact id. Result:
-// contracts/argent/KOBOrdersKron/artifact.json (generated; docs/argent.md).
+// contracts/argent/KOBOrdersKron/artifact.json (generated; docs/argent/argent.md).
 //
 // A separate app from KOBOrders so that the published KOBOrders artifact (and every import that pins its
 // id) stays as it is. The router (kob_router.ag) imports it by pinned id and observes KobBidKron by closed

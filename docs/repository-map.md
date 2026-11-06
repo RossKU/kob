@@ -17,4 +17,4 @@
 | `tools/` | `ablation`, `sil2argent`, `router-gen`, `soak`, `wallet-gate`: role of each and whether CI uses it in [tools/README.md](../tools/README.md) |
 | `android/` | The testnet-10 Android app: `kobd` in a foreground service with a setup and status screen (`docs/ops/executor-quickstart.md`, section 9) |
 | `scripts/` | Builds (`build-contracts.sh`, `build-argent.sh`, `build-wasm.sh`, `build-deploy.sh`, `build-state-dicts.mjs`; `lib/`, their shared helpers), checks (`check-pins.mjs`, `check-wallet-gate.mjs`) and release tooling (`release-hashes.sh`, `package-release.mjs`, `make-android-keystore.mjs`; `docs/ops/release.md`) |
-| `docs/` | Specifications and operator guides, see [README.md](README.md) |
+| `docs/` | By audience, see [README.md](README.md): guides at the top, `spec/`, `ops/`, `security/`, `argent/` and the dated `reports/` |

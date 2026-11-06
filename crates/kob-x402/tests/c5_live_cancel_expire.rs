@@ -8,7 +8,7 @@
 //!    The wasm / TS handle (`IntentHandle.lock?: ... | null`) makes the omission easy.
 //! 2. An intent whose own KAS is below the fee of its cancel / expiry can be neither cancelled nor expired:
 //!    `CancelIntent` has no funding input, the fee is taken from the intent UTXO only, and nothing in the SDK or
-//!    the verifier bounds `keeperValue` from below. (`docs/argent.md`: the expiry of a token intent costs about
+//!    the verifier bounds `keeperValue` from below. (`docs/argent/argent.md`: the expiry of a token intent costs about
 //!    0.022-0.033 KAS.)
 //! 3. The router's `expire` is permissionless, but it pins only output j (the payer's KAS, at most EXPIRE_MAX_FEE
 //!    less) and the token output's SCRIPT; the VALUE of the token output (the lock carrier, default 1 KAS = ten
