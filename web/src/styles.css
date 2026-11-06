@@ -200,6 +200,11 @@ small, .small { font-size: 0.85em; }
    texts are wider than the row (a long translation, wide fonts) wraps the tools to a second line instead of overlapping them */
 .header-inner { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-height: calc(var(--frame-h) - 1px); padding-top: 4px; padding-bottom: 4px; min-width: 0; }
 .header .brand { flex: 0 0 auto; }
+/* the app's wide row shows the brand's name only where the row has room for it (data-brand, narrow.ts useHeaderLayout; a connected wallet's chip on a
+   wide font leaves none), so the row never wraps to a second line */
+@media (min-width: 720px) {
+  .header[data-context='app']:not([data-brand='name']) .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+}
 /* the app's wide row: the brand left, the tools right, the tabs between them; where the row has room (data-centred, narrow.ts useHeaderLayout) in the
    true centre of the row, else (a wide wallet chip) in the middle of the room between the brand and the tools */
 .header[data-context='app'][data-layout='wide'] .nav { margin: 0 auto; }
@@ -207,7 +212,7 @@ small, .small { font-size: 0.85em; }
 .header[data-centred] .header-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
 .header[data-centred] .brand { justify-self: start; }
 .header[data-centred] .nav { justify-self: center; }
-.header[data-centred] .header-tools { justify-self: end; margin-left: 0; }
+.header[data-centred] .header-tools { justify-self: end; margin-left: 0; width: max-content; }
 /* the brand lockup (header and footer): the logo with its thin ring, the name in the system font */
 .brand { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font); font-weight: 800; font-size: 18px; line-height: 1; letter-spacing: -0.01em; color: var(--text); text-decoration: none; }
 .brand-mark { width: var(--logo); height: var(--logo); flex: none; }
@@ -529,10 +534,9 @@ body.modal-open { overflow: hidden; }
 @media (max-width: 359px) {
   .header[data-context='landing'] .net-chip { display: none; }
 }
-/* a desktop that is not wide: the brand shrinks to the logo unless the row has room for its name (data-brand, narrow.ts useHeaderLayout), the chip, the tabs and
+/* a desktop that is not wide: the chip, the tabs and
    the buttons tighten (so the whole row fits down to about 900 px even on wide fonts) */
 @media (min-width: 720px) and (max-width: 1199px) {
-  .header[data-context='app']:not([data-brand='name']) .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .nav { gap: 0; }
   .nav a { padding: 0 5px; font-size: 13px; }
   .header-inner { gap: 6px; }

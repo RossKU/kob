@@ -310,6 +310,16 @@ export const test = base.extend<AppOptions & TestFixtures, WorkerFixtures>({
     await page.route(/^https:\/\/kascov\.io\//, (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ network: 'testnet-10', generated_at_ms: 1, tokens: [] }) }),
     );
+    // KOB_WIDE_FONTS=1: every page in a font as wide as the CI runner's (DejaVu Sans; Verdana is close), to reproduce its layouts on a desktop
+    if (process.env.KOB_WIDE_FONTS === '1') {
+      await page.addInitScript(() => {
+        document.addEventListener('DOMContentLoaded', () => {
+          const s = document.createElement('style');
+          s.textContent = 'html, body, button, input, select, textarea, a, span, h1, h2, h3, p { font-family: Verdana, "DejaVu Sans", sans-serif !important; }';
+          document.head.append(s);
+        });
+      });
+    }
     const cfg = appConfigFor(mock.url, appConfig);
     await page.addInitScript((c) => {
       (window as any).__KOB_CONFIG__ = c;

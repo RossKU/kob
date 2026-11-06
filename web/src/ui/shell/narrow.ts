@@ -98,9 +98,6 @@ function brandNameWidth(brand: HTMLElement): number {
   return name.getBoundingClientRect().width + px(getComputedStyle(brand).columnGap);
 }
 
-/** From this width styles.css always shows the brand's name beside the logo (below it only where `useHeaderLayout` finds room for it). */
-const NAME_QUERY = '(min-width: 1200px)';
-
 /**
  * The widths of the wide row (pure): `packed` = the brand, the tabs and the tools side by side; `centred` = the tabs in the true centre of the row, so
  * each side takes the wider of the brand and the tools. `withName` adds the brand's name beside the logo.
@@ -111,19 +108,19 @@ export function rowWidths(m: { logo: number; name: number; nav: number; tools: n
 }
 
 /**
- * The wide row's arrangement (pure): the tabs centred when the row has room for that (with the name where styles.css always shows it, `nameForced`),
- * else packed after the brand; the brand's name shown on a desktop that is not wide whenever the chosen arrangement still has room for it.
+ * The wide row's arrangement (pure): the tabs centred when the row has room for that (without the brand's name), else packed after the brand; the brand's
+ * name shown beside the logo whenever the chosen arrangement still has room for it.
  */
-export function headerLayout(m: { logo: number; name: number; nav: number; tools: number; gap: number; room: number }, nameForced: boolean): { centred: boolean; brandName: boolean } {
+export function headerLayout(m: { logo: number; name: number; nav: number; tools: number; gap: number; room: number }): { centred: boolean; brandName: boolean } {
   const fits = (w: number) => w + SPARE_PX <= m.room;
-  const centred = fits(rowWidths(m, nameForced).centred);
+  const centred = fits(rowWidths(m, false).centred);
   const withName = rowWidths(m, true);
   return { centred, brandName: centred ? fits(withName.centred) : fits(withName.packed) };
 }
 
 /**
- * For the header's wide row: whether its tabs sit in the true centre of the row (brand left, tools right) and, on a desktop that is not wide (720-1199 px,
- * where styles.css hides the brand's name by default), whether the name fits beside the logo. Measured after every layout change of the row's parts (the
+ * For the header's wide row: whether its tabs sit in the true centre of the row (brand left, tools right) and whether the brand's name fits beside the logo
+ * (styles.css hides it otherwise). Measured after every layout change of the row's parts (the
  * wallet's buttons, the fonts loading, a resize); the narrow layout (`useSqueezeCheck`) takes over only when even the packed row does not fit.
  */
 export function useHeaderLayout(root: { current: HTMLElement | null }, narrow: boolean): { centred: boolean; brandName: boolean } {
@@ -141,7 +138,6 @@ export function useHeaderLayout(root: { current: HTMLElement | null }, narrow: b
       const nameWidth = name.scrollWidth + px(getComputedStyle(brand).columnGap);
       const next = headerLayout(
         { logo: brand.getBoundingClientRect().width - brandNameWidth(brand), name: nameWidth, nav: nav.getBoundingClientRect().width, tools: toolsWidth(tools), gap: px(getComputedStyle(el).columnGap), room: roomOf(el) },
-        typeof matchMedia === 'function' && matchMedia(NAME_QUERY).matches,
       );
       setLayout((l) => (l.centred === next.centred && l.brandName === next.brandName ? l : next));
     };

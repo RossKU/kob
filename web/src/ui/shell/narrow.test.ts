@@ -10,14 +10,14 @@ describe('header row layout', () => {
     expect(rowWidths({ ...m, tools: 20 }, true)).toEqual({ packed: 82 + 420 + 20 + 24, centred: 420 + 164 + 24 });
   });
 
-  it('centres the tabs only where the centred row fits (with the name where it is always shown), else packs them; the name follows the chosen row', () => {
-    expect(headerLayout({ ...m, room: 1100 }, true)).toEqual({ centred: true, brandName: true });
+  it('centres the tabs only where the centred row fits, else packs them; the name is shown where the chosen row still has room for it', () => {
+    expect(headerLayout({ ...m, room: 1100 })).toEqual({ centred: true, brandName: true });
     // room for the packed row with the name, not for the centred row
-    expect(headerLayout({ ...m, room: 900 }, true)).toEqual({ centred: false, brandName: true });
-    expect(headerLayout({ ...m, room: 830 }, false)).toEqual({ centred: false, brandName: true });
-    expect(headerLayout({ ...m, room: 829 }, false)).toEqual({ centred: false, brandName: false });
+    expect(headerLayout({ ...m, room: 900 })).toEqual({ centred: false, brandName: true });
+    expect(headerLayout({ ...m, room: 830 })).toEqual({ centred: false, brandName: true });
+    expect(headerLayout({ ...m, room: 829 })).toEqual({ centred: false, brandName: false });
     // a narrow tools side: the brand with its name is the wider side
-    expect(headerLayout({ ...m, tools: 40, room: 700 }, false)).toEqual({ centred: true, brandName: true });
-    expect(headerLayout({ ...m, tools: 40, room: 560 }, false)).toEqual({ centred: true, brandName: false });
+    expect(headerLayout({ ...m, tools: 40, room: 700 })).toEqual({ centred: true, brandName: true });
+    expect(headerLayout({ ...m, tools: 40, room: 560 })).toEqual({ centred: true, brandName: false });
   });
 });
