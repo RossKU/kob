@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+: allowBackup="false" stops the cloud backup but not a device-to-device transfer. The folder of the operator key,
+     the configuration and the database (files/kob) is excluded from both: a copy of the key on a second phone would run a
+     second executor on the same funds. The key moves only by the user's own export. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="kob" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="kob" />
+    </device-transfer>
+</data-extraction-rules>

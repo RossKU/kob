@@ -8,7 +8,7 @@ object Kob {
     /** The executor's read API (its default listen address, `[api]` of kob-executor.toml). */
     const val API = "http://127.0.0.1:8090"
 
-    /** The Executor's low-funds threshold (`MIN_FUNDS_KAS` of the kob-executor crate). */
+    /** The funds below which the Executor warns "funds low" (`--low-funds-kas`, default 100; an alert, it keeps trading). */
     const val MIN_FUNDS_KAS = 100.0
 
     /** The operator key file in [dir] (64 hex characters; `kobd setup` writes it). Its contents never leave the app except by the user's own export. */
@@ -30,6 +30,8 @@ object Kob {
             put("HOME", ctx.filesDir.path)
             put("TMPDIR", tmp.path)
             put("NO_COLOR", "1")
+            // the app reads the log from stdout: with a log file kobd stops writing it there (stdout is not a terminal)
+            remove("KOB_LOG_FILE")
         }
         return pb
     }

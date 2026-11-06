@@ -93,6 +93,14 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
+    override fun onDestroy() {
+        // a rotation recreates the screen: the threads of this one end once their task is done
+        work.shutdown()
+        funds.shutdown()
+        net.shutdown()
+        super.onDestroy()
+    }
+
     // ---- UI ----
 
     private fun radio(s: String) = RadioButton(this).apply {
@@ -131,7 +139,7 @@ class MainActivity : Activity() {
             addView(indexRadio)
         }
         add(roleGroup)
-        saveButton = button("Save and generate key") { saveSettings() }
+        saveButton = button("Save the setup") { saveSettings() }
         add(saveButton)
         setupNote = label("", 12f)
         add(setupNote)
@@ -332,7 +340,7 @@ class MainActivity : Activity() {
         if (running && h != null) {
             val lag = if (h.isNull("lag_seconds")) null else h.optLong("lag_seconds")
             val caught = h.optBoolean("caught_up")
-            s.append("Indexer: ${h.optString("state")}, ")
+            s.append("Indexer: ${h.optString("state").replace('_', ' ')}, ")
             s.append(if (caught) "caught up" else if (lag != null) "${human(lag)} behind the chain" else "node position unknown")
             if (lag != null && caught) s.append(" (${human(lag)} behind)")
             s.append(", ${h.optLong("orders_total")} orders indexed\n")
@@ -367,7 +375,7 @@ class MainActivity : Activity() {
             for (part in line.split(" | ")) if (!part.startsWith("indexer ") && !part.startsWith("nodes: ") && !part.startsWith("fast start: ")) s.append(part).append('\n')
         }
         val kas = balanceKas
-        if (ok && !index && kas != null && kas < Kob.MIN_FUNDS_KAS) warnings += "funds below ${Kob.MIN_FUNDS_KAS.toInt()} KAS: the Executor waits for more"
+        if (ok && !index && kas != null && kas < Kob.MIN_FUNDS_KAS) warnings += "funds below ${Kob.MIN_FUNDS_KAS.toInt()} KAS: send more to the funding address (it trades while the coins last)"
         s.append(if (warnings.isEmpty()) "Warnings: none" else "Warnings:\n" + warnings.joinToString("\n") { " - $it" })
         setLive(statusText, s.toString())
         val log = ExecutorService.lastLines(200).joinToString("\n") { it.take(300) }

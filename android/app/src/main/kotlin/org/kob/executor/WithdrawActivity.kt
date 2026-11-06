@@ -14,6 +14,8 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import java.util.concurrent.Executors
 
 /**
@@ -35,6 +37,10 @@ class WithdrawActivity : Activity() {
 
     @Volatile private var busy = false
     private var wasRunning = false
+    // Back while a withdrawal runs: Android 16 no longer calls onBackPressed for an app that targets it, but this callback, which
+    // does nothing (registered from Android 13, used where predictive back is on); typed Any so that older Android never loads it
+    private val ignoreBack: Any? = if (Build.VERSION.SDK_INT >= 33) OnBackInvokedCallback { } else null
+    private var backBlocked = false
 
     private companion object {
         val AMOUNT = Regex("""[0-9]+(\.[0-9]{1,8})?""")
@@ -63,7 +69,7 @@ class WithdrawActivity : Activity() {
                     label(
                         "The executor is stopped first, because it uses the funds. The transaction is final within seconds and " +
                             "cannot be taken back: check the address. The network fee is taken from the amount for \"all\" and " +
-                            "added to it otherwise. The Executor waits for funds again when fewer than ${Kob.MIN_FUNDS_KAS.toInt()} KAS remain.",
+                            "added to it otherwise. Below ${Kob.MIN_FUNDS_KAS.toInt()} KAS the Executor warns \"funds low\" (it trades while the coins last).",
                         12f,
                     )
                 )
@@ -79,8 +85,23 @@ class WithdrawActivity : Activity() {
         if (address.isEmpty() || !Kob.binary(this).isFile) sendButton.isEnabled = false
     }
 
+    override fun onDestroy() {
+        work.shutdown() // a withdrawal that runs still ends
+        super.onDestroy()
+    }
+
+    @Deprecated("Android 15 and older; Android 16 uses ignoreBack")
+    @Suppress("DEPRECATION")
     override fun onBackPressed() {
         if (!busy) super.onBackPressed() // a withdrawal in progress is not interrupted
+    }
+
+    private fun blockBack(on: Boolean) {
+        if (Build.VERSION.SDK_INT < 33 || on == backBlocked) return
+        val cb = ignoreBack as OnBackInvokedCallback
+        if (on) onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, cb)
+        else onBackInvokedDispatcher.unregisterOnBackInvokedCallback(cb)
+        backBlocked = on
     }
 
     private fun review() {
@@ -107,6 +128,7 @@ class WithdrawActivity : Activity() {
 
     private fun setBusy(on: Boolean) {
         busy = on
+        blockBack(on)
         for (v in listOf<View>(toEdit, amountEdit, allButton, sendButton, restartButton)) v.isEnabled = !on
     }
 
