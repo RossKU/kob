@@ -326,6 +326,12 @@ record is created for you; elsewhere add a `CNAME kob.example.org -> kob-web.pag
 is issued automatically (minutes). `_headers` applies to the custom domain as to `*.pages.dev`. Check it (section 7) with the
 custom domain as the URL.
 
+`web/public/_redirects` sends `/indexer` and `/indexer/*` to `https://kob-api.kaspa.ag` (308): `kob.kaspa.ag/indexer` was the
+canary's indexer relay before the app moved to Pages, and the default indexer of older `kob` builds. Pages reads `_redirects` from the
+upload (the post-deploy check skips it, like `_headers`). The redirect serves bookmarks and clients that follow redirects; WebSocket
+clients never do, and `kob` follows none at all, so an older `kob` needs `--indexer https://kob-api.kaspa.ag` (or `KOB_INDEXER_URL`).
+Change or drop these lines for a deployment of your own.
+
 ## 6. Deploying by hand from a PC
 
 The same result without GitHub Actions (Node 22, the Rust toolchain of `rust-toolchain.toml`, Git Bash on Windows):
