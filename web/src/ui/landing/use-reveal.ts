@@ -49,15 +49,3 @@ export function useHeroGo(): boolean {
   }, []);
   return go;
 }
-
-/** True once the page is scrolled more than `px` (the nav gets its backdrop). */
-export function useScrolled(px = 20): boolean {
-  const [scrolled, setScrolled] = useState(() => typeof window !== 'undefined' && window.scrollY > px);
-  useEffect(() => {
-    const on = () => setScrolled(window.scrollY > px);
-    window.addEventListener('scroll', on, { passive: true });
-    on();
-    return () => window.removeEventListener('scroll', on);
-  }, [px]);
-  return scrolled;
-}

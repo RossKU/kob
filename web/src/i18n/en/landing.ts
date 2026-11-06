@@ -19,7 +19,9 @@ export default {
 
   'landing.bleed.label': 'The KOB mark: sell orders above buy orders',
   'landing.bleed.title': 'Real orders only.',
-  'landing.bleed.body': 'Every bar is an order with its funds locked on Kaspa — no indicative quotes, and anyone can check it on-chain.',
+  // two lines on a tablet or a desktop (one string each), one flowing paragraph on a phone
+  'landing.bleed.body.l1': 'Every bar is an order with its funds locked on Kaspa —',
+  'landing.bleed.body.l2': 'no indicative quotes, and anyone can check it on-chain.',
 
   'landing.how.label': 'How it works',
   'landing.how.l1': 'Wallet. Covenant.',
@@ -95,7 +97,6 @@ export default {
   'landing.final.l1': 'The book',
   'landing.final.l2': 'is open.',
 
-  'landing.footer.name': 'Kaspa Order Book',
   'landing.footer.nav': 'Links',
   'landing.footer.app': 'App',
   'landing.footer.executor': 'Run an executor',

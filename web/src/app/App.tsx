@@ -11,7 +11,7 @@ import { homeTargetOf, showsLanding } from '../ui/landing/landing-model';
 import { OrdersView } from '../ui/orders/OrdersView';
 import { SettingsView } from '../ui/settings/SettingsView';
 import { GlobalBanners } from '../ui/shell/Banners';
-import { Footer } from '../ui/shell/Footer';
+import { SiteFooter, SkipLink } from '../ui/shell/Frame';
 import { Header } from '../ui/shell/Header';
 import { PreAuditBanner } from '../ui/shell/PreAuditBanner';
 import { StatusProvider } from '../ui/shell/StatusProvider';
@@ -161,8 +161,8 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
     return () => feed.close();
   }, [services.feed, manualStandalone]);
 
-  // the empty hash with the default config `home`: the landing page, a full page with its own nav, in place of the whole shell (header, banners,
-  // footer); every other route shows the shell
+  // the empty hash with the default config `home`: the landing page, a full page in the shared frame (Frame.tsx: its own header row, the same
+  // footer) in place of the whole shell (tabs, banners, views); every other route shows the shell
   const landing = showsLanding(route, services.config, services.registry.tokens);
 
   return (
@@ -188,18 +188,8 @@ function AppShell(props: { route: Route; routeKey: string; warnings: ConfigWarni
   const { route, routeKey } = props;
   return (
     <>
-      {/* keyboard users jump past the header; a hash link would be a route here, so it moves the focus itself */}
-      <a
-        class="skip-link"
-        href="#/"
-        data-testid="skip-link"
-        onClick={(e) => {
-          e.preventDefault();
-          document.getElementById('main')?.focus();
-        }}
-      >
-        {t('shell.skip')}
-      </a>
+      {/* keyboard users jump past the header */}
+      <SkipLink />
       <NotifyProvider>
         <StatusProvider>
           {/* the shell has boundaries too: a render error escaping to the root would leave every component queued behind it in that render
@@ -217,7 +207,7 @@ function AppShell(props: { route: Route; routeKey: string; warnings: ConfigWarni
             </ViewBoundary>
           </main>
           <ViewBoundary resetKey={routeKey}>
-            <Footer />
+            <SiteFooter context="app" />
           </ViewBoundary>
         </StatusProvider>
       </NotifyProvider>

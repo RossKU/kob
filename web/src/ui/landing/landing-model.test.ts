@@ -49,7 +49,7 @@ describe('landing routing', () => {
   it('the header logo links to the empty hash (the landing page), the Market tab to #/market', () => {
     expect(routeToHash({ name: 'home' })).toBe('#/');
     const header = src('ui/shell/Header.tsx');
-    expect(header).toContain(`href={routeToHash({ name: 'home' })} data-testid="brand"`);
+    expect(header).toContain(`<Brand href={routeToHash({ name: 'home' })} testid="brand" />`);
     expect(header).toContain(`{ name: 'market', href: '#/market'`);
     // an operator's chart at the empty hash is a market view: its tab is Market
     expect(navOf({ name: 'home' })).toBe('market');

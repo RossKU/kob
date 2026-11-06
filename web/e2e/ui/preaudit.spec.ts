@@ -1,4 +1,4 @@
-// The pre-audit notice (no external security review): a header badge and the footer line on every page, and a one-time dismissible banner whose
+// The pre-audit notice (no external security audit): a header badge and the footer's disclaimer on every page, and a one-time dismissible banner whose
 // dismissal survives a reload. Nothing blocks trading.
 import { expect, test } from '../fixtures';
 
@@ -8,8 +8,11 @@ test.describe('pre-audit notice', () => {
   test('footer line, header badge and first-visit banner; the dismissal is remembered across a reload', async ({ appPage: page }) => {
     const footer = page.getByTestId('footer-preaudit');
     await expect(footer).toBeVisible();
-    await expect(footer).toContainText('no external security review');
-    await expect(footer).toContainText('Use at your own risk');
+    // the shared footer's disclaimer (the landing page's wording, for the configured network) and the app's non-custodial statement
+    await expect(footer).toContainText('Testnet · pre-audit.');
+    await expect(footer).toContainText('has not had an external security audit');
+    await expect(footer).toContainText('publishes software and information only');
+    await expect(footer).toContainText('non-custodial');
     await expect(footer.getByRole('link', { name: 'Security policy' })).toHaveAttribute('href', /SECURITY\.md$/);
     await expect(page.getByTestId('preaudit-badge')).toHaveText('pre-audit');
 

@@ -1,41 +1,52 @@
 /* KOB web app styles: CSS variables (light + dark: `data-theme` on <html>, the OS preference before the app runs), layout, and the classes of the UI kit (src/ui/kit).
+   The palette is the landing page's (ui/landing/landing.css): its backgrounds, lines, text, the logo's green and Kaspa's #70C7BA for links (a darker shade
+   on light); buy / sell keep their own colours, a shade darker on light so that every text passes WCAG AA on the warmer surfaces.
    No framework. Mobile first: 16 px gutters, no horizontal page scroll (wide tables scroll inside their own wrapper). */
 
 :root {
   color-scheme: light dark;
-  --bg: #f5f6f8;
+  --bg: #f2f1ec;
   --surface: #ffffff;
-  --surface-2: #eef0f4;
-  --surface-3: #e3e6ec;
-  --border: #d5d9e0;
-  --grid: rgba(23, 26, 33, 0.07);
-  --skeleton: rgba(23, 26, 33, 0.07);
-  --text: #171a21;
-  --muted: #5b6474;
-  --primary: #0f766e;
-  --primary-hover: #0b5f58;
+  --surface-2: #ebeae4;
+  --surface-3: #e2e1d9;
+  --border: #d0cfc6;
+  --grid: rgba(10, 20, 19, 0.07);
+  --skeleton: rgba(10, 20, 19, 0.07);
+  --text: #0a1312;
+  --muted: #465350;
+  --primary: #1a7457;
+  --primary-hover: #135c45;
   --primary-contrast: #ffffff;
-  --link: #0b6b8a;
-  --focus: #1d6fe0;
-  --buy: #0a8554;
+  --link: #196a60;
+  --focus: #1a7457;
+  --buy: #06704a;
   --buy-bg: rgba(10, 150, 95, 0.12);
-  --sell: #cc2f45;
+  --sell: #b8283e;
   --sell-bg: rgba(220, 50, 75, 0.11);
-  --ok: #0b7a4b;
+  --ok: #0a6e44;
   --ok-bg: #e2f5ea;
-  --warn: #8a5a00;
+  --warn: #7e5200;
   --warn-bg: #fdf1d6;
   --bad: #b42323;
   --bad-bg: #fde6e6;
   --info: #1a5fb4;
   --info-bg: #e4eefb;
-  --overlay: rgba(10, 14, 22, 0.55);
-  --shadow: 0 6px 24px rgba(10, 14, 22, 0.18);
+  --overlay: rgba(5, 8, 8, 0.55);
+  --shadow: 0 6px 24px rgba(5, 8, 8, 0.18);
   --radius: 8px;
   --radius-sm: 5px;
   /* the thin ring around a token icon (picture or letter): contrast against the page in either theme, outside the icon so its size does not change */
   --tk-outline: rgba(0, 0, 0, 0.12);
   --gutter: 16px;
+  /* the frame (Frame.tsx: the header and the footer of the landing page and of the app): one row height, one column, one control size, so nothing
+     moves between the two pages. The 1 px bottom border is inside the header's height. */
+  --frame-h: 56px;
+  --frame-max: 1240px;
+  --frame-gut: 16px;
+  --ctl-h: 32px;
+  --ctl-r: 6px;
+  --chip-h: 22px;
+  --logo: 28px;
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic UI', Meiryo, sans-serif;
   --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
 }
@@ -43,70 +54,72 @@
 /* Dark palette: the `data-theme` attribute set by src/ui/shell/theme.ts (header toggle, remembered), or the OS preference before the app runs. */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0b0e13;
-  --surface: #12161d;
-  --surface-2: #181d26;
-  --surface-3: #212835;
-  --border: #252c38;
-  --grid: rgba(139, 148, 163, 0.1);
-  --text: #e8ebf0;
-  --muted: #8b94a3;
-  --primary: #2dd4bf;
-  --primary-hover: #5eead4;
-  --primary-contrast: #06201d;
-  --link: #6cc4e6;
-  --focus: #6aa8ff;
+  --bg: #050808;
+  --surface: #0d1515;
+  --surface-2: #132020;
+  --surface-3: #162322;
+  --border: #223231;
+  --grid: rgba(167, 181, 179, 0.1);
+  --text: #f1f5f4;
+  --muted: #a7b5b3;
+  --primary: #4bb990;
+  --primary-hover: #77d0ad;
+  --primary-contrast: #03211d;
+  --link: #70c7ba;
+  --focus: #70c7ba;
   --buy: #2ebd85;
   --buy-bg: rgba(46, 189, 133, 0.14);
   --sell: #f6465d;
   --sell-bg: rgba(246, 70, 93, 0.14);
   --ok: #2ebd85;
   --ok-bg: rgba(46, 189, 133, 0.14);
-  --warn: #f5c451;
-  --warn-bg: rgba(245, 196, 81, 0.14);
+  --warn: #f2b350;
+  --warn-bg: rgba(242, 179, 80, 0.14);
   --bad: #f6465d;
   --bad-bg: rgba(246, 70, 93, 0.14);
   --info: #79b4ff;
   --info-bg: rgba(121, 180, 255, 0.14);
   --overlay: rgba(0, 0, 0, 0.65);
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-  --skeleton: rgba(139, 148, 163, 0.12);
+  --skeleton: rgba(167, 181, 179, 0.12);
   --tk-outline: rgba(255, 255, 255, 0.22);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #0b0e13;
-    --surface: #12161d;
-    --surface-2: #181d26;
-    --surface-3: #212835;
-    --border: #252c38;
-    --grid: rgba(139, 148, 163, 0.1);
-    --text: #e8ebf0;
-    --muted: #8b94a3;
-    --primary: #2dd4bf;
-    --primary-hover: #5eead4;
-    --primary-contrast: #06201d;
-    --link: #6cc4e6;
-    --focus: #6aa8ff;
+    --bg: #050808;
+    --surface: #0d1515;
+    --surface-2: #132020;
+    --surface-3: #162322;
+    --border: #223231;
+    --grid: rgba(167, 181, 179, 0.1);
+    --text: #f1f5f4;
+    --muted: #a7b5b3;
+    --primary: #4bb990;
+    --primary-hover: #77d0ad;
+    --primary-contrast: #03211d;
+    --link: #70c7ba;
+    --focus: #70c7ba;
     --buy: #2ebd85;
     --buy-bg: rgba(46, 189, 133, 0.14);
     --sell: #f6465d;
     --sell-bg: rgba(246, 70, 93, 0.14);
     --ok: #2ebd85;
     --ok-bg: rgba(46, 189, 133, 0.14);
-    --warn: #f5c451;
-    --warn-bg: rgba(245, 196, 81, 0.14);
+    --warn: #f2b350;
+    --warn-bg: rgba(242, 179, 80, 0.14);
     --bad: #f6465d;
     --bad-bg: rgba(246, 70, 93, 0.14);
     --info: #79b4ff;
     --info-bg: rgba(121, 180, 255, 0.14);
     --overlay: rgba(0, 0, 0, 0.65);
     --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-    --skeleton: rgba(139, 148, 163, 0.12);
+    --skeleton: rgba(167, 181, 179, 0.12);
     --tk-outline: rgba(255, 255, 255, 0.22);
   }
 }
 :root[data-theme='light'] { color-scheme: light; }
+@media (min-width: 760px) { :root { --frame-gut: 24px; } }
+@media (max-width: 719px) { :root { --frame-h: 52px; } }
 
 *, *::before, *::after { box-sizing: border-box; }
 
@@ -152,7 +165,7 @@ small, .small { font-size: 0.85em; }
 /* ------------------------------------------------------------------ layout */
 
 .app { min-height: 100vh; display: flex; flex-direction: column; }
-.container { width: 100%; max-width: 1240px; margin: 0 auto; padding: 0 var(--gutter); }
+.container { width: 100%; max-width: var(--frame-max); margin: 0 auto; padding: 0 var(--frame-gut); }
 .main { flex: 1; padding-top: 16px; padding-bottom: 32px; }
 .stack { display: flex; flex-direction: column; gap: 16px; }
 .stack-sm { display: flex; flex-direction: column; gap: 8px; }
@@ -166,36 +179,55 @@ small, .small { font-size: 0.85em; }
   .grid-market { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
 }
 
-.header {
-  position: sticky; top: 0; z-index: 20;
-  background: var(--surface); border-bottom: 1px solid var(--border);
+/* ------------------------------------------------------------------ frame: the header (Frame.tsx SiteHeader; the app's tools: Header.tsx) */
+
+/* sticky on every page and see-through at the top of the page (the landing page's look: the page's background runs under it); once the page is
+   scrolled (data-scrolled, Frame.tsx) a blurred bar of the page's background with a line under it, so the text scrolling beneath stays out of the way.
+   The bar and its blur are on a layer of their own: a backdrop-filter on the header itself would make it the containing block of the dialogs opened
+   from it (fixed-position, no portal). The 1 px line is always there (transparent at the top), so the row's height never changes. */
+.header { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid transparent; transition: border-color 0.3s; }
+.header::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; opacity: 0; transition: opacity 0.3s;
+  background: color-mix(in srgb, var(--bg) 84%, transparent); -webkit-backdrop-filter: blur(16px) saturate(1.2); backdrop-filter: blur(16px) saturate(1.2);
+}
+.header[data-scrolled] { border-bottom-color: var(--border); }
+.header[data-scrolled]::before { opacity: 1; }
+@media (prefers-reduced-motion: reduce), (prefers-reduced-transparency: reduce) {
+  .header, .header::before { transition: none; }
+  .header::before { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 /* ONE row on every width: the brand, (a desktop) the tabs, then the tools at the end; the menu of a phone is a popover under the header. A desktop whose
    texts are wider than the row (a long translation, wide fonts) wraps the tools to a second line instead of overlapping them */
-.header-inner { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding-top: 8px; padding-bottom: 8px; min-width: 0; }
+.header-inner { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-height: calc(var(--frame-h) - 1px); padding-top: 4px; padding-bottom: 4px; min-width: 0; }
 .header .brand { flex: 0 0 auto; }
-.brand { font-weight: 700; font-size: 1.2rem; letter-spacing: 0.02em; color: var(--text); text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
-.brand-mark { width: 26px; height: 26px; flex: none; }
+/* the brand lockup (header and footer): the logo with its thin ring, the name in the system font */
+.brand { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font); font-weight: 800; font-size: 18px; line-height: 1; letter-spacing: -0.01em; color: var(--text); text-decoration: none; }
+.brand-mark { width: var(--logo); height: var(--logo); flex: none; }
 .nav { display: flex; flex-wrap: nowrap; gap: 2px; min-width: 0; }
 .nav a {
-  padding: 6px 10px; white-space: nowrap; border-radius: var(--radius-sm); text-decoration: none; color: var(--muted); font-weight: 600;
+  display: inline-flex; align-items: center; height: var(--ctl-h); padding: 0 10px; white-space: nowrap; border-radius: var(--ctl-r); text-decoration: none; color: var(--muted);
+  font-size: 14px; font-weight: 600;
 }
 .nav a:hover { background: var(--surface-2); color: var(--text); }
 .nav a[aria-current='page'] { background: var(--surface-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--primary); }
+/* every header control is one height (the buttons, the tabs, the wallet chip); an icon button is square */
+.header .btn-sm { min-height: var(--ctl-h); padding: 0 12px; border-radius: var(--ctl-r); font-size: 14px; }
+.header .header-tools .btn-icon, .header .header-tools .notify-bell, .header .header-tools .menu-button { min-width: var(--ctl-h); padding: 0 7px; }
 .header-tools { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin-left: auto; min-width: 0; }
 .header-wallet { display: flex; align-items: center; min-width: 0; }
 /* the connected wallet: one chip (name, address, a network badge only when it differs from the app's, disconnect) */
-.wallet-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
+.wallet-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: var(--ctl-h); padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
 .wallet-chip .copy { white-space: nowrap; }
 .wallet-disconnect { display: inline-flex; align-items: center; gap: 4px; }
 /* not connected: the two buttons, one line, the same size */
 .wallet-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .wallet-actions .btn { flex: 0 0 auto; white-space: nowrap; }
+.header .wallet-chip .btn-sm { min-height: 26px; padding: 0 8px; border-radius: 999px; font-size: 13px; }
 .btn-off { opacity: 0.6; }
 .wallet-kind { display: inline-flex; align-items: center; cursor: help; }
 
 /* the combined network chip ("testnet-10 · pre-audit") */
-.net-chip { display: inline-flex; align-items: center; white-space: pre; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; cursor: default; }
+.net-chip { display: inline-flex; align-items: center; white-space: pre; min-height: var(--chip-h); padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1; cursor: default; }
 .net-chip-warn { background: var(--warn-bg); color: var(--warn); }
 .net-chip-info { background: var(--info-bg); color: var(--info); }
 /* the header's popovers (status dot, phone menu) */
@@ -222,8 +254,30 @@ small, .small { font-size: 0.85em; }
 .dot.warn { background: var(--warn); }
 .dot.bad { background: var(--bad); }
 
-.footer { border-top: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 0.85rem; padding: 16px 0; }
-.footer-inner { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
+/* ------------------------------------------------------------------ frame: the footer (Frame.tsx SiteFooter), the same on the landing page and in the app */
+
+/* text in --muted on --surface (AA in both themes), links in --text */
+.footer { border-top: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 13px; line-height: 1.6; padding: 24px 0 28px; }
+.footer p { margin: 0; }
+.ff-top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
+.footer .brand { font-size: 15px; gap: 8px; }
+.footer .brand-mark { width: 22px; height: 22px; }
+.ff-links { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-left: auto; font-weight: 500; }
+/* at least 24 px tall targets (WCAG 2.5.8) */
+.ff-links a { color: var(--text); opacity: 0.82; text-decoration: none; padding-block: 4px; }
+.ff-links a:hover { opacity: 1; text-decoration: underline; }
+.ff-sep { width: 1px; background: var(--border); align-self: stretch; }
+.footer .ff-disc { margin-top: 16px; max-width: 72em; }
+.ff-disc strong { color: var(--warn); }
+.footer .ff-meta { margin-top: 10px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 0; }
+.ff-meta > span + span::before { content: '\00b7'; margin: 0 8px; opacity: 0.6; }
+@media (max-width: 719px) {
+  .footer { padding: 20px 0 24px; }
+  .ff-links { margin-left: 0; width: 100%; }
+  .ff-sep { flex-basis: 100%; width: auto; height: 0; background: none; }
+  .ff-meta { flex-direction: column; }
+  .ff-meta > span + span::before { content: none; }
+}
 
 .boot { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: var(--gutter); text-align: center; }
 .boot-card { max-width: 640px; width: 100%; text-align: left; }
@@ -437,9 +491,11 @@ body.modal-open { overflow: hidden; }
 /* a phone or a small tablet (below 900 px): the logo alone (the name stays for screen readers), the menu, the chip, one Connect button, the bell */
 @media (max-width: 719px) {
   .header-inner { gap: 6px; flex-wrap: nowrap; }
-  .header .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .header[data-context='app'] .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .header-tools { gap: 6px; }
-  .net-chip { font-size: 0.7rem; padding: 2px 6px; }
+  .net-chip { padding: 0 8px; }
+  /* the landing page's phone row: the brand, the chip and "Open the app" (GitHub is in the hero and the footer) */
+  .header[data-context='landing'] .fh-wide { display: none; }
   .header-tools { min-width: 0; }
   .wallet-kind, .wallet-disconnect-text, .wallet-chip .copy-btn { display: none; }
   .wallet-chip { padding-left: 8px; }
@@ -447,19 +503,28 @@ body.modal-open { overflow: hidden; }
 }
 /* a small phone: the chip keeps the dot and the network; "pre-audit" is in its tooltip, the menu and the banner (so a connected row fits on any font) */
 @media (max-width: 430px) {
-  .net-chip .net-pre { display: none; }
+  .header[data-context='app'] .net-chip .net-pre { display: none; }
+}
+/* a narrow phone: the landing page's row (brand, chip, Open the app, theme toggle) shows the logo alone, as the app's does (the name stays for screen readers) */
+@media (max-width: 389px) {
+  .header[data-context='landing'] .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+}
+/* a very small phone: the landing page's chip moves to the hero, beside the kicker (landing.css) */
+@media (max-width: 359px) {
+  .header[data-context='landing'] .net-chip { display: none; }
 }
 /* a desktop that is not wide: the brand shrinks to the logo unless the row has room for its name (data-brand, narrow.ts useBrandName), the chip, the tabs and
    the buttons tighten (so the whole row fits down to about 900 px even on wide fonts) */
 @media (min-width: 720px) and (max-width: 1199px) {
-  .header:not([data-brand='name']) .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .header[data-context='app']:not([data-brand='name']) .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .nav { gap: 0; }
-  .nav a { padding: 6px 5px; font-size: 0.88rem; }
+  .nav a { padding: 0 5px; font-size: 13px; }
   .header-inner { gap: 6px; }
   .header-tools { gap: 4px; }
-  .header-tools .btn-sm { padding: 2px 7px; font-size: 0.8rem; }
+  .header-tools .btn-sm { padding: 0 8px; font-size: 13px; }
   .wallet-actions { gap: 4px; }
-  .net-chip { font-size: 0.66rem; padding: 2px 5px; }
+  .net-chip { font-size: 11px; padding: 0 7px; }
+  .header .wallet-chip .btn-sm { gap: 4px; font-size: 12px; }
 }
 .raw-details { margin-top: 2px; }
 .raw-details summary { cursor: pointer; }

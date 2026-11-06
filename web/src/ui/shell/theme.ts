@@ -38,7 +38,7 @@ function apply(t: Theme): void {
   const el = document.documentElement;
   el.dataset.theme = t;
   el.style.colorScheme = t;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'dark' ? '#0b0e13' : '#f5f6f8');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'dark' ? '#050808' : '#f2f1ec');
 }
 
 /** Applies the stored / preferred theme (call once before the first render, so the page never flashes the other palette). */
