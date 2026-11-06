@@ -21,9 +21,9 @@ import {
 } from '../src/history-carry.ts';
 
 const SCHEMAS = {
-  v9: readFileSync(new URL('../../../crates/kob-executor/src/indexer/schema.sql', import.meta.url), 'utf8'),
-  v8: readFileSync(new URL('../../../crates/kob-executor/tests/fixtures/schema8.sql', import.meta.url), 'utf8'),
-  v7: readFileSync(new URL('../../../crates/kob-executor/tests/fixtures/schema7.sql', import.meta.url), 'utf8'),
+  v9: readFileSync(new URL('../../../crates/kobd/src/indexer/schema.sql', import.meta.url), 'utf8'),
+  v8: readFileSync(new URL('../../../crates/kobd/tests/fixtures/schema8.sql', import.meta.url), 'utf8'),
+  v7: readFileSync(new URL('../../../crates/kobd/tests/fixtures/schema7.sql', import.meta.url), 'utf8'),
 };
 type Layout = keyof typeof SCHEMAS;
 const empty = (layout: Layout = 'v9'): DatabaseSync => {

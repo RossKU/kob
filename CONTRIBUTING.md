@@ -11,7 +11,7 @@ Rust 1.94.0 is pinned by `rust-toolchain.toml` (rustfmt, clippy and the
 
 ```
 cargo fmt --all --check
-cargo clippy --locked --all-targets -p kob-protocol -p kob-wasm -p kob-executor -p kob-cli -p kob-tests -p sil2argent -- -D warnings
+cargo clippy --locked --all-targets -p kob-protocol -p kob-wasm -p kobd -p kob-cli -p kob-tests -p sil2argent -- -D warnings
 KOB_SKIP_NETWORK_TESTS=1 cargo test --workspace --locked      # the live TN10 tests need a testnet node
 scripts/build-contracts.sh --check                              # committed artifacts reproduce
 scripts/build-wasm.sh --install-bindgen --test                  # wasm bindings + node golden-vector tests

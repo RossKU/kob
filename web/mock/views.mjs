@@ -1,4 +1,4 @@
-// REST views of the mock indexer: the exact JSON shapes of crates/kob-executor/src/indexer/reads.rs (snake_case, string sompi and base units,
+// REST views of the mock indexer: the exact JSON shapes of crates/kobd/src/indexer/reads.rs (snake_case, string sompi and base units,
 // numeric DAA / counts / scales, `confirmations` + `settled` on every chain-derived view) built from the MockChain state.
 import { KINDS, auctionOf, baseKind, bidBudgetRate, custodiesOf, custodyAmount, ifdBudgetRate, isPairKind, pairTokensOf, refundDue, repeatOf, termsOf } from './model.mjs';
 import { HEX64, badRequest } from './util.mjs';
@@ -115,7 +115,7 @@ export function readyView(chain) {
 }
 
 /**
- * A token without decimals: the scale of its earliest order, open or ended, listed orders first (kob-executor reads.rs `market_scale`): the scale
+ * A token without decimals: the scale of its earliest order, open or ended, listed orders first (kobd reads.rs `market_scale`): the scale
  * its first order set, which stays the market's. Null with decimals and before any order.
  */
 function marketScale(chain, t) {
@@ -452,7 +452,7 @@ export function bookView(chain, tokenId, q) {
     }
     const levels = new Map();
     for (const o of orders) {
-      // levels group by (price, scale): orders of another scale quote another whole token (kob-executor reads.rs `book_side_levels`)
+      // levels group by (price, scale): orders of another scale quote another whole token (kobd reads.rs `book_side_levels`)
       const t = termsOf(o.state);
       const scale = t.scale > 0n ? t.scale : 1n;
       const key = `${t.price}:${scale}`;

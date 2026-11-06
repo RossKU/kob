@@ -1,7 +1,7 @@
 // The market data of standalone mode (data/standalone.ts): trades, candles, 24 h figures and depth built from what the browser saw since the mode
 // started: the fills of KOB orders in the node's new blocks (kob/stream-orders.ts `fillOf`, each counted once the node shows one of its
 // transaction's outputs) and the partial book (data/stream-book.ts). The views have the indexer's response shapes (`/v1/trades`, `/v1/candles`,
-// `/v1/stats`, `/v1/depth`) and its rules (crates/kob-executor/src/indexer/market.rs, the mock's mock/market.mjs): every price is sompi per
+// `/v1/stats`, `/v1/depth`) and its rules (crates/kobd/src/indexer/market.rs, the mock's mock/market.mjs): every price is sompi per
 // `price_basis` base units (the token's standard scale when the registry knows its decimals, else the scale of the first order seen of it), a trade
 // groups the fills of one transaction on one token, priced at the resting side's amount-weighted price, its side the aggressor's, its amount and
 // quote the asks' (the bids' when no ask filled). Nothing older than the mode is in them: the views that show them say "since HH:MM".

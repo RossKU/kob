@@ -26,7 +26,7 @@ Build the binary of one network from the commit you mean to run:
 ```
 git clone https://github.com/RossKU/kob.git
 cd kob
-cargo build --release --locked -p kob-executor --features deploy-tn10      # testnet-10; deploy-mainnet for mainnet
+cargo build --release --locked -p kobd --features deploy-tn10      # testnet-10; deploy-mainnet for mainnet
 ```
 
 Then copy `target/release/kobd` (`target\release\kobd.exe` on Windows) into a folder of its own, as below, and go on with
@@ -69,7 +69,7 @@ sha256sum -c --ignore-missing SHA256SUMS
 The hash must equal the line of the release's `SHA256SUMS` for that file. The release notes also carry the hashes of
 `scripts/release-hashes.sh` (`docs/ops/release.md`, 6): the order templates, the token registry and the binaries built
 from the tagged commit. Anyone can rebuild the binary from that commit with the pinned toolchain
-(`cargo build --release --locked -p kob-executor --features deploy-mainnet`) and compare. The archives are neither signed nor
+(`cargo build --release --locked -p kobd --features deploy-mainnet`) and compare. The archives are neither signed nor
 attested, and the `SHA256SUMS` sits on the same release page as the archives, so a matching hash proves that the download is intact, not
 that the release is genuine: compare the hashes with the copy in the release announcement, and, for an executor that will hold
 funds, rebuild it from the tagged commit.
@@ -319,13 +319,13 @@ WantedBy=multi-user.target
 seconds, for example while the network is still coming up after a boot.) The hardened unit of the operations guide, with the key
 as a systemd credential, is `docs/ops/executor.md`, A.3.
 
-**Docker (Linux)**: `crates/kob-executor/Dockerfile` builds the executor of one network from the source (pinned base images, a
+**Docker (Linux)**: `crates/kobd/Dockerfile` builds the executor of one network from the source (pinned base images, a
 non-root user, uid 10001). The volume `/data` holds the configuration, the key file and the data directory
 (`KOB_EXECUTOR_DIR=/data` in the image: the directory of the setup and of a start without arguments); the setup runs in the
 container once, then the container runs what it wrote:
 
 ```
-docker build -f crates/kob-executor/Dockerfile --build-arg NETWORK=mainnet -t kobd:mainnet .      # or NETWORK=testnet-10
+docker build -f crates/kobd/Dockerfile --build-arg NETWORK=mainnet -t kobd:mainnet .      # or NETWORK=testnet-10
 sudo install -d -o 10001 -g 10001 -m 0700 /srv/kob
 docker run -it --rm --network host -v /srv/kob:/data kobd:mainnet setup --no-start
 docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kobd:mainnet
@@ -444,7 +444,7 @@ telemetry, no fee, no project server. It is **testnet-10 only** and is not in an
 1. **Download the APK** from the [GitHub release](https://github.com/RossKU/kob/releases): `kobd-<version>-testnet-10-android.apk`
    (v0.1.0 named it `kob-executor-0.1.0-testnet-10-android.apk`). Check its SHA-256 against the release's `SHA256SUMS`. A build of
    `master` is the artifact of the **android** workflow (a zip with the APK; GitHub login needed, kept for a limited time; the
-   run's summary prints the SHA-256). The workflow runs on pushes that touch `android/`, `crates/kob-executor/` or the workflow.
+   run's summary prints the SHA-256). The workflow runs on pushes that touch `android/`, `crates/kobd/` or the workflow.
 2. **Install it**: open the APK on the phone and allow *Install unknown apps* for the file manager or browser when Android asks.
 3. A name ending in `-debug-signed.apk` cannot be updated later (see **Updates**): put only test coins on it.
 

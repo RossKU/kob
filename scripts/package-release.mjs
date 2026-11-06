@@ -4,7 +4,7 @@
 //   node scripts/package-release.mjs --version 1.2.3 --network mainnet --target x86_64-pc-windows-msvc \
 //        --bin-dir target/x86_64-pc-windows-msvc/release [--out dist]
 //   node scripts/package-release.mjs --sums dist          write dist/SHA256SUMS over every archive and APK in dist
-//   node scripts/package-release.mjs --check-tag v1.2.3   fail unless the tag is `v` + the workspace version that kob-executor (the crate of kobd) and
+//   node scripts/package-release.mjs --check-tag v1.2.3   fail unless the tag is `v` + the workspace version that kobd and
 //                                                         kob-cli (the `kob` binary) carry (Cargo.toml [workspace.package] and Cargo.lock): the
 //                                                         binaries' --version is the tag (docs/ops/release.md 6)
 //
@@ -185,14 +185,14 @@ function packageOne(o) {
   ]);
 }
 
-/** The tag is `v` + the version the binaries report: [workspace.package] version, inherited by kob-executor (the crate of kobd) and kob-cli, and
+/** The tag is `v` + the version the binaries report: [workspace.package] version, inherited by kobd and kob-cli, and
  * the version Cargo.lock records for both (a --locked build refuses a stale lock anyway; this says why in one line). */
 function checkTag(tag) {
   const read = (p) => fs.readFileSync(path.join(root, p), 'utf8').replace(/\r\n/g, '\n');
   const ws = /^\[workspace\.package\]\n(?:(?!\[)[^\n]*\n)*?version\s*=\s*"([^"]+)"/m.exec(read('Cargo.toml'));
   if (!ws) throw new Error('Cargo.toml has no [workspace.package] version');
   const version = ws[1];
-  for (const c of ['kob-executor', 'kob-cli']) {
+  for (const c of ['kobd', 'kob-cli']) {
     if (!/^version\.workspace\s*=\s*true\s*$/m.test(read(`crates/${c}/Cargo.toml`))) {
       throw new Error(`crates/${c}/Cargo.toml does not take the workspace version (version.workspace = true)`);
     }

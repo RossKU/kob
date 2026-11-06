@@ -1,6 +1,6 @@
 //! `kob replace`, `kob cancel`, `kob refund`, `kob take` and `kob send`: actions on live orders and plain transfers, built
 //! like the web wallet does (`web/src/kob/cancel.ts`, `web/src/ui/orders/amend.ts`) and like the keepers refund
-//! (`kob-executor` keepers).
+//! (`kobd` keepers).
 
 use kob_protocol::build::{
     build, Action, AmendOrder, Batch, CancelOrder, Leg, RefundOrder, Replacement, SendTokens, TokenRecipient, TokenRef,

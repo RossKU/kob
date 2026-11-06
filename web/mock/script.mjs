@@ -1,5 +1,5 @@
 // What a chain observer (the real indexer, here the mock) reads out of signature scripts. This is observation of on-chain data, not
-// protocol logic: the indexer does the same in crates/kob-executor/src/indexer/record.rs (`parse_reveal`, `leader_next_states`).
+// protocol logic: the indexer does the same in crates/kobd/src/indexer/record.rs (`parse_reveal`, `leader_next_states`).
 import { fromHex } from './util.mjs';
 
 /** Data pushes of a signature script (`script.rs::parse_pushes`), or null when it holds anything but pushes. */

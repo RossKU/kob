@@ -19,7 +19,7 @@
 //! | [`testkit`] | in-memory chain and fixtures for tests |
 //!
 //! This crate does no I/O: chain facts come through [`chain::ChainView`], time through
-//! [`chain::Clock`]. The facilitator service lives in `kob-executor` (`x402` module).
+//! [`chain::Clock`]. The facilitator service lives in `kobd` (`x402` module).
 
 pub mod canonical;
 pub mod chain;

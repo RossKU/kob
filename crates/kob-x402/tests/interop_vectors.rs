@@ -759,7 +759,7 @@ fn negative_vectors_accepted_not_offered_and_payment_identifier() {
 
     // payment-identifier-conflict: same id, different request fingerprint. The verifier only validates and extracts the
     // id; binding it to one requestHash is the facilitator ledger's job (Diag::KaspaPaymentIdentifierConflict, tested in
-    // kob-executor). What the SDK guarantees is that every new payment takes a fresh random id (one payment keeps its id
+    // kobd). What the SDK guarantees is that every new payment takes a fresh random id (one payment keeps its id
     // only by re-sending the same payload), so a payer never collides on its own and nobody else can name its id.
     let n = negative("payment-identifier-conflict");
     assert_eq!(n["expectedError"], "kaspa_payment_identifier_conflict");

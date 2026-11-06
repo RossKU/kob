@@ -171,7 +171,7 @@ Set `KOB_PAGES_INDEXER_URL` to `https://chart.example.org` (`docs/ops/web-hostin
 
 **Client addresses.** Every request arrives from `cloudflared` on this machine, i.e. from 127.0.0.1. Without
 `trusted_proxies` all visitors would share one client's rate limits and connection caps (20 requests per second, 20
-WebSockets, ...). The API believes a forwarding header only from a peer in `api.trusted_proxies` (`crates/kob-executor/src/api/client_ip.rs`):
+WebSockets, ...). The API believes a forwarding header only from a peer in `api.trusted_proxies` (`crates/kobd/src/api/client_ip.rs`):
 
 * `trusted_proxies = ["127.0.0.1", "::1"]`: cloudflared's address; requests from any other peer are keyed by their own address
   and their headers ignored.

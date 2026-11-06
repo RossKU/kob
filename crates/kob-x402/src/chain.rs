@@ -1,7 +1,7 @@
 //! The trusted chain view the verifiers and the facilitator work against.
 //!
 //! Nothing a payer supplies (UTXO hints, ids, finality claims) is authoritative; every fact comes
-//! through [`ChainView`]. The facilitator implements it over node RPC (`kob-executor`), tests over
+//! through [`ChainView`]. The facilitator implements it over node RPC (`kobd`), tests over
 //! [`crate::testkit::MockChain`].
 
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, UtxoEntry};

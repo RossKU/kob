@@ -24,7 +24,7 @@
 //!   evidence, and if it reaches the chain anyway it is reported, so a refund can be made.
 //!
 //! This module holds the types, the id, validation and the fallback `kaspa:` URI; the store and the
-//! endpoints live in `kob-executor` (`x402::invoices`).
+//! endpoints live in `kobd` (`x402::invoices`).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

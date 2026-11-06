@@ -1,4 +1,4 @@
-// Client of the KOB indexer read API (crates/kob-executor, `/v1`): typed REST access (`HttpIndexer`) and the WebSocket feed
+// Client of the KOB indexer read API (crates/kobd, `/v1`): typed REST access (`HttpIndexer`) and the WebSocket feed
 // (`IndexerFeed`, `/v1/ws`). The indexer is a CONVENIENCE and an aggregator, never an authority for anything the wallet signs: the
 // pre-sign screen re-derives everything from the transaction itself. So every failure here is a typed, recoverable error.
 //

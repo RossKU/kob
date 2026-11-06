@@ -139,7 +139,7 @@ export function pagesConfig(env) {
 
 /**
  * The token-program list of a network without a pinned registry: the shipped registry's programs (templates) with `network` set and
- * no token entries (kob-executor `setup::program_registry`). The app then lists every token of a supported program and names none.
+ * no token entries (kobd `setup::program_registry`). The app then lists every token of a supported program and names none.
  */
 export function programRegistry(registryText, network) {
   const doc = JSON.parse(registryText);

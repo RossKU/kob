@@ -1,7 +1,7 @@
 // The partial order book of standalone mode (data/standalone.ts): the orders the browser saw placed (or followed) in the node's new blocks since the
 // stream started, and the wallet's own orders resolved from its receipts, each CONFIRMED on the node before it is listed. Pure: no timers, no node.
 //
-// What is listed, per token (the indexer's `/v1/books` rules as far as the browser can apply them, crates/kob-executor/src/indexer/reads.rs and
+// What is listed, per token (the indexer's `/v1/books` rules as far as the browser can apply them, crates/kobd/src/indexer/reads.rs and
 // tokens.rs `ListingRules`): a plain ask or bid (kob/stream-orders.ts `STREAM_KINDS`) that the node confirmed, good till cancelled (no IOC / FOK: they
 // do not rest), without an auction (its price is its limit), active and not expired at the newest block's DAA score, before its day-order deadline,
 // worth at least MIN_ORDER_VALUE_SOMPI (the executor's default `min_order_value_sompi`), an ask with its custody; an order of a registry token only

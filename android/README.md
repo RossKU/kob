@@ -33,10 +33,10 @@ The app is plain framework views (no AndroidX, no layout files). Its files are i
 ## Build
 
 The **android** workflow (`.github/workflows/android.yml`) builds the APK on every push to `master` that touches `android/`,
-`crates/kob-executor/` or the workflow, on a manual run, and for a release (`release.yml`). It:
+`crates/kobd/` or the workflow, on a manual run, and for a release (`release.yml`). It:
 
 1. builds `kobd` for `aarch64-linux-android` with the runner's NDK (clang for API 24, 16 KB page alignment):
-   `cargo build --release --locked --target aarch64-linux-android -p kob-executor --features kob-executor/deploy-tn10`;
+   `cargo build --release --locked --target aarch64-linux-android -p kobd --features kobd/deploy-tn10`;
 2. copies it to `app/src/main/jniLibs/arm64-v8a/libkobexecutor.so` (never committed): Android runs it from the app's
    native library folder;
 3. runs `./gradlew assembleRelease` with JDK 17 and Android SDK platform 36, and checks the APK (the binary is in it, the

@@ -21,7 +21,7 @@ rusty-kaspa `v2.1.0` and takes some minutes.
 ```
 git clone https://github.com/RossKU/kob.git
 cd kob
-cargo build --release --locked -p kob-executor --features deploy-tn10
+cargo build --release --locked -p kobd --features deploy-tn10
 ```
 
 The binary is `target/release/kobd` (`target\release\kobd.exe` on Windows); `kobd --version` prints `kobd 0.1.0`. Give it a

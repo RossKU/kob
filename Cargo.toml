@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/kob-protocol",
     "crates/kob-wasm",
-    "crates/kob-executor",
+    "crates/kobd",
     "crates/kob-x402",
     "crates/kob-cli",
     "crates/kob-tests",
@@ -31,7 +31,7 @@ kaspa-muhash = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0"
 kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 kaspa-txscript-errors = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 kaspa-txscript-zk-sdk = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
-# the node's RPC types: Borsh wRPC bodies of the indexer (kob-executor rpc::borsh)
+# the node's RPC types: Borsh wRPC bodies of the indexer (kobd rpc::borsh)
 kaspa-rpc-core = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 
 # vendored SilverScript v1.0.0 (see vendor/silverscript/UPSTREAM.md)

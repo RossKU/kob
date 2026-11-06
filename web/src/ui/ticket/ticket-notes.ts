@@ -39,7 +39,7 @@ export function ticketNotes(issues: readonly PlanIssue[]): PlanIssue[] {
 // ------------------------------------------------------------------------------------------------ minimum order value
 
 /**
- * The executor's default minimum order value, in sompi (1 KAS): `ListingRules::min_order_value_sompi` in crates/kob-executor/src/tokens.rs. An order
+ * The executor's default minimum order value, in sompi (1 KAS): `ListingRules::min_order_value_sompi` in crates/kobd/src/tokens.rs. An order
  * worth less is indexed (status, cancel) but never listed (`unlisted_reason: "order_value_below_minimum"`), so it is in no book and never fills.
  * Each operator can set another value under `[rules]` of the executor config; `/v1/health` reports the executor's own (`min_order_value_sompi`,
  * docs/api.md section 3.1) and the web app follows it, assuming this default only for an executor that does not (see {@link minOrderValueOf}).
@@ -66,7 +66,7 @@ const bigOrNull = (v: unknown): bigint | null => {
 };
 
 /**
- * The value the executor's listing rule measures for a plain KAS order (kob-executor `ListingRules::evaluate`): a sell's amount at its quote,
+ * The value the executor's listing rule measures for a plain KAS order (kobd `ListingRules::evaluate`): a sell's amount at its quote,
  * `quoteOf(amountLeft, price, scale)` rounded down (kob-protocol `quote_exact`); a bid's KAS escrow (`carrier`: the whole value of its order UTXO).
  * `null` when the rule does not measure it here (a conditional, stop, if-done or pair order) or the state is not readable.
  */

@@ -1,5 +1,5 @@
 //! Blocking TLS for the indexer client (`https://` REST, `wss://` for `kob watch`): rustls with the ring provider and the
-//! webpki roots compiled in (the same set `kob-executor` uses): no system OpenSSL, no system certificate store, the same trust
+//! webpki roots compiled in (the same set `kobd` uses): no system OpenSSL, no system certificate store, the same trust
 //! on every platform. The node's wRPC stays plain `ws://` (a local node).
 
 use std::io::{Read, Write};

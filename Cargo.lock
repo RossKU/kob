@@ -2606,50 +2606,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kob-executor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "blake3",
- "borsh",
- "clap",
- "faster-hex 0.10.1",
- "flate2",
- "futures-util",
- "http-body-util",
- "hyper",
- "hyper-util",
- "kaspa-addresses",
- "kaspa-consensus-core",
- "kaspa-hashes",
- "kaspa-rpc-core",
- "kaspa-txscript",
- "kob-protocol",
- "kob-x402",
- "libc",
- "rand 0.8.8",
- "rusqlite",
- "rustls",
- "secp256k1",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-tungstenite 0.28.0",
- "toml",
- "tower",
- "tracing",
- "tracing-subscriber 0.3.23",
- "tungstenite 0.24.0",
- "webpki-roots 1.0.10",
- "workflow-serializer",
-]
-
-[[package]]
 name = "kob-protocol"
 version = "0.1.0"
 dependencies = [
@@ -2716,6 +2672,50 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "kobd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "blake3",
+ "borsh",
+ "clap",
+ "faster-hex 0.10.1",
+ "flate2",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-rpc-core",
+ "kaspa-txscript",
+ "kob-protocol",
+ "kob-x402",
+ "libc",
+ "rand 0.8.8",
+ "rusqlite",
+ "rustls",
+ "secp256k1",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "toml",
+ "tower",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+ "tungstenite 0.24.0",
+ "webpki-roots 1.0.10",
+ "workflow-serializer",
 ]
 
 [[package]]

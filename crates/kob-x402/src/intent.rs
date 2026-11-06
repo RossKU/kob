@@ -34,7 +34,7 @@
 //!
 //! This module verifies a creation ([`verify_intent`]) and plans and builds executions
 //! ([`plan_executions`], [`build_execution`]); it does no I/O. The facilitator's settlement loop lives in
-//! `kob-executor` (`x402::facilitator`).
+//! `kobd` (`x402::facilitator`).
 
 use std::collections::BTreeSet;
 

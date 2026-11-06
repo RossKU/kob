@@ -1,6 +1,6 @@
 // An intent payment is paid by the facilitator's execution of the intent the request's transaction creates: the
 // settlement names the execution in `transaction` and the creation in `extensions.kob.intent.creation` (the shape of
-// kob-executor's intent settlement). The paywall binds the request to the creation.
+// kobd's intent settlement). The paywall binds the request to the creation.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decodePaymentResponse, encodePaymentSignature } from '../src/headers.ts';

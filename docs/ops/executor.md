@@ -1,6 +1,6 @@
 # KOB executor: operations guide
 
-`kobd` (the KOB daemon, formerly `kob-executor`; its files keep their names: `kob-executor.toml`, `kob-executor.log`, `kob-operator.key`; the Cargo crate is still `kob-executor`) is one binary with two roles, the **Executor** and the **Indexer**, started with role flags. It follows a Kaspa node's selected chain,
+`kobd` (the KOB daemon, formerly `kob-executor`; its files keep their names: `kob-executor.toml`, `kob-executor.log`, `kob-operator.key`; the Cargo package is `kobd`, in `crates/kobd`) is one binary with two roles, the **Executor** and the **Indexer**, started with role flags. It follows a Kaspa node's selected chain,
 indexes every KOB order into a reorg-safe database, serves a read API (REST +
 WebSocket), and, with the operator's hot key, matches crossing orders (arming and triggering stops inside its batches) and keeps them (refund,
 kill, close). The normative rules are `docs/spec/matcher.md`, `docs/spec/order-types.md` and
@@ -34,7 +34,7 @@ be measured during the TN10 soak, **[U]** unknown.
 
 ## Quick start (operators)
 
-Build `kobd` of your network from source (`cargo build --release --locked -p kob-executor --features deploy-tn10`, or
+Build `kobd` of your network from source (`cargo build --release --locked -p kobd --features deploy-tn10`, or
 `deploy-mainnet`) or download a release archive and check its hash, put it in a folder of its own and start it without
 arguments (a double click on Windows): the setup chooses the node (public nodes through the Kaspa resolvers by default, or a
 local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the roles. The commands of a source build are in
@@ -79,7 +79,7 @@ local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the role
   unreachable, paused, waiting for the indexer, funds below `--low-funds-kas`, rejections).
 * **Nodes**: the setup offers public Kaspa nodes (the default, `rpc_url = "resolver"`: a cross-checked pair, Part C,
   *Node*) or the operator's own node (recommended; required for Miner Mode).
-* `KOB_EXECUTOR_DIR` names another directory than the executable's for both (`crates/kob-executor/Dockerfile` sets `/data`, its volume).
+* `KOB_EXECUTOR_DIR` names another directory than the executable's for both (`crates/kobd/Dockerfile` sets `/data`, its volume).
 * Nothing connects anywhere but to the configured node: no telemetry, no fee, no project server, no auto-update.
 
 ---
@@ -351,14 +351,14 @@ conditional orders arm in every build). The deployment variant only records its 
 and refuses any network other than `testnet-10`:
 
 ```
-cargo build --release --locked -p kob-executor --features deploy-tn10
+cargo build --release --locked -p kobd --features deploy-tn10
 scripts/build-wasm.sh --tn10 [--web]     # web/bot bindings: crates/kob-wasm/pkg-node-tn10, pkg-tn10
 ```
 
 The templates are the same in both builds, so clients (web app, bots, `kob`) place orders the indexer lists with
 either variant; the variant is a guard against running a testnet binary on another network.
 
-**Mainnet release build** (`docs/ops/release.md`): `cargo build --release --locked -p kob-executor --features
+**Mainnet release build** (`docs/ops/release.md`): `cargo build --release --locked -p kobd --features
 deploy-mainnet` embeds `contracts/deploy/mainnet/deployment.json`, refuses any network other than `mainnet` and pins
 the token registry of the release (`registry/tokens.json`, sha256 in the record). Without `--tokens` it lists the
 tokens of that embedded registry (`registry.source` = `embedded:registry/tokens.json` in `GET /v1/tokens`); with
@@ -373,12 +373,12 @@ neither caught up nor within `max_lag_secs`: same alert) and `kob_matcher_book_l
 
 ### A.5 Verification
 
-`cargo test -p kob-executor --test x402_indexed`: the facilitator's finality from the indexer (A.6):
+`cargo test -p kobd --test x402_indexed`: the facilitator's finality from the indexer (A.6):
 a settlement is accepted by the chain block the follower saw although the merchant spent the output at
 once, reconcile does not call that a reorg, and a real reorg of the accepting block marks the entry
 `ambiguous`; the matcher never drops the facilitator's watches; swap quotes from a book.
 
-`cargo test -p kob-executor --test executor_e2e`: synthetic chain data built with the `kob-protocol`
+`cargo test -p kobd --test executor_e2e`: synthetic chain data built with the `kob-protocol`
 builders goes through the follower into the store, and the matcher and keepers plan against it, every
 transaction re-validated in the v2.1.0 engine. The listed book equals the chain's orders for every
 kind; strays are reported and never spent; the matcher arms a stop with an update next to the plain fill
@@ -390,7 +390,7 @@ re-accepted, the book reverted) are read from the indexer while the test node re
 
 ### A.6 The x402 facilitator in the Executor (`kobd --executor`)
 
-`--x402-config <file>` (or `KOB_X402_CONFIG`; strict JSON, `crates/kob-executor/x402.example.json`)
+`--x402-config <file>` (or `KOB_X402_CONFIG`; strict JSON, `crates/kobd/x402.example.json`)
 serves the facilitator (`GET /supported`, `POST /verify`, `POST /settle`, `GET /health`, `GET /metrics`, and with
 `invoices` the `/invoices` routes of A.7)
 in the same process, on the configuration's `listen` address (bound before anything else starts). It
@@ -457,7 +457,7 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   (`stale_broadcast` in the reconcile report) it becomes `ambiguous` and the ambiguous rules of A.7 apply.
 * **Watches are per consumer.** The matcher's acceptance bookkeeping drops only its own watches.
 * **Swap-and-pay quotes** are the payer's job (`docs/spec/x402-swap-and-pay.md` §12; the facilitator
-  exposes no quote endpoint). `kob_executor::x402::quote` builds a `Quote` from any indexer book
+  exposes no quote endpoint). `kobd::x402::quote` builds a `Quote` from any indexer book
   (`GET /v1/orders`, a snapshot file, or the store in process): plain KCC-20 GTC asks and bids with a
   constant price, best price first, skipping the orders an `order_conflict` named.
 
@@ -651,7 +651,7 @@ node (wRPC JSON)  ->  follower  ->  extract  ->  ingest (one atomic SQLite commi
   created or spent the order (the first such output; an exit's custody is the delivery of the fill that created it). Any other token
   UTXO owned by an order id is a **stray** (`matcher.md` 1.2). The ask covenants only guard token INPUTS, never outputs, so a taker can
   add extra outputs owned by an order id in an ordinary fill; the classification by amount keeps the order listed, the extra units
-  are reported as strays and never count as liquidity (regression test `crates/kob-executor/tests/custody_exactness.rs`). `GET /v1/orders/{id}` returns `custody { expected_amount, utxo, ok }` and
+  are reported as strays and never count as liquidity (regression test `crates/kobd/tests/custody_exactness.rs`). `GET /v1/orders/{id}` returns `custody { expected_amount, utxo, ok }` and
   `strays`, each token UTXO with its proven `state` (the JSON the builders take; absent for a token the indexer does not track), and
   the order's `extension_commitment` (an if-done exit stores its entry's: the entry covenant writes it into the exit's custody), so a
   client can build the cancel, cancel-replace or refund of every kind from the view alone; the books list an ask only while exactly one live custody UTXO holds the expected
@@ -762,7 +762,7 @@ The history is an archive indexer's job (`lean = false`).
 
 The database is a *derived view* of the record log: `kobd db replay` rebuilds it from the
 records and the follower re-syncs the tail from the node (section 7.6). Measured numbers are in
-section 3; they come from `cargo test -p kob-executor --test storage -- --nocapture`.
+section 3; they come from `cargo test -p kobd --test storage -- --nocapture`.
 
 **Compact layout (schemas 7 to 9, 2026-11).** After two weeks of heavy bot trading one executor held an 8.5 GB `index.sqlite3` (7.1 KB per
 fill and 7.4 KB per order, counting the whole file by the 1.19 million fills and 1.14 million orders in it) and a 3.1 GB record log. Most of
@@ -1768,7 +1768,7 @@ release build, warm cache, best of three; every answer compared byte for byte wi
 **Candles** were a read of the window's fills (0.55 to 0.8 s for 500 hourly candles at 65,000 fills, 1 to 3 s at the soak's 980,000
 fills, a 504 on a slow executor). They are now rows of the maintained table `candles` (5.3): the cost of a chart does not grow with the
 history, and the aggregates are checked against the fills by `indexer::candles` tests (random histories, reverts, unaligned windows, a
-million fills: `KOB_CANDLE_FILLS=1000000 cargo test -p kob-executor --lib candles::tests::a_large -- --nocapture`).
+million fills: `KOB_CANDLE_FILLS=1000000 cargo test -p kobd --lib candles::tests::a_large -- --nocapture`).
 
 **Response cache.** `/v1/stats`, `/v1/books`, `/v1/depth`, `/v1/tokens` and `/v1/candles` answers are kept per **data
 generation** of the store (`api::cache`): the generation moves after every committed batch, revert, operator import and
@@ -1813,7 +1813,7 @@ answers: **10 s on a synthetic store of 1.1 million holdings of one token with 7
 count on a minute or two on a 6 GB store on a slow disk, and do not kill the process meanwhile (a killed build starts the index over; no
 data is at risk). `proven_programs`, which took 18 s per call on the soak, is a skip-scan of the first (0.1 ms). An earlier build opens
 the upgraded database and re-creates `token_holdings_token` (a few seconds); nothing else changes under it. The test
-`reads_scale_tests` builds such a store and times every read (`KOB_SCALE_ROWS=1100000 cargo test -p kob-executor --lib reads_scale -- --nocapture`).
+`reads_scale_tests` builds such a store and times every read (`KOB_SCALE_ROWS=1100000 cargo test -p kobd --lib reads_scale -- --nocapture`).
 
 #### Hostile input: what one order, payload or request can and cannot do
 
@@ -2195,7 +2195,7 @@ Measured on a copy of the TN10 soak executor (8.48 GB database of schema 5, 2.3 
 million events, 3.1 GB log), in one run: copy 400 s, indexes 35 s, verification 588 s, check 60 s, log 32 s, **1,118 s in all** (a store of schema 8 of the same data: 1,015 s); the store 8.48 -> **3.11 GB**, the sealed log
 segments 2.95 -> **0.90 GB** (3.3x). Every one of 1,010 read-API calls (books, orders, events, fills, holdings, candles, trades, stats, depth, pairs,
 snapshots, exports) and the logical content of all 19 tables returned the same JSON / digest on the migrated copy as on the store of schema 5
-(`cargo run --release -p kob-executor --example read_digest -- <index.sqlite3> <tokens.json>`, run with the build before and the build
+(`cargo run --release -p kobd --example read_digest -- <index.sqlite3> <tokens.json>`, run with the build before and the build
 after; the harness reads every layout). Their times are the same as on the same data in schema 8 (alternating runs: an order's page about 0.5 ms and a token's 24 h stats about 15 ms on a warm cache, the books and the market reads equal, none slower beyond noise; the first design of schema 9, which also dropped the covenant id from the order-list indexes, made every
 price basis of a token with imported orders 5 to 12 ms slower and was not kept). The write path costs nothing measurable: `kobd db replay` of the first 222,836 frames of that log (a
 store of 57,642 orders and 335,000 holdings) took 1,056 s with the build before (schema 5) and 940 s with this one (the stores: 536 and 225 MB), and the two stores are table for table the same with their
@@ -2319,13 +2319,13 @@ no signature scripts, token programs, template code or unrelated transactions [F
 ### 10. Testing
 
 ```
-cargo test -p kob-executor                      # unit + flow + recovery + e2e (no network)
-KOB_SKIP_NETWORK_TESTS=1 cargo test -p kob-executor
-cargo test -p kob-executor --test tn10_follow -- --nocapture   # live TN10 node, read only
-cargo test -p kob-executor --test storage -- --nocapture       # prints the storage numbers above
-cargo test -p kob-executor --test capacity -- --nocapture      # processing smoke (20 blocks of 300 tx), prints the numbers
-cargo test --release -p kob-executor --test capacity -- --ignored --nocapture full_capacity   # 3,000 tx/s benchmark (section 3)
-KOB_TN10_WRPC=ws://... cargo test --release -p kob-executor --test tn10_capacity -- --ignored --nocapture  # live catch-up by fetch_parallel
+cargo test -p kobd                      # unit + flow + recovery + e2e (no network)
+KOB_SKIP_NETWORK_TESTS=1 cargo test -p kobd
+cargo test -p kobd --test tn10_follow -- --nocapture   # live TN10 node, read only
+cargo test -p kobd --test storage -- --nocapture       # prints the storage numbers above
+cargo test -p kobd --test capacity -- --nocapture      # processing smoke (20 blocks of 300 tx), prints the numbers
+cargo test --release -p kobd --test capacity -- --ignored --nocapture full_capacity   # 3,000 tx/s benchmark (section 3)
+KOB_TN10_WRPC=ws://... cargo test --release -p kobd --test tn10_capacity -- --ignored --nocapture  # live catch-up by fetch_parallel
 ```
 
 The flow tests build real transactions with the `kob-protocol` builders (real artifacts, real
@@ -2612,7 +2612,7 @@ a job due for the bound is built by every keeper. `--no-weighted-select` turns i
 Keep several funding UTXOs while competing (`--funding-target-utxos` at least the number of units a tick usually takes): the
 transactions of a tick spend them in turn, and one funded only by the change of another unit's transaction is lost with it.
 
-On a simulated race (`crates/kob-executor/tests/matcher_select.rs`; six token books, 200 one-second ticks) the share of
+On a simulated race (`crates/kobd/tests/matcher_select.rs`; six token books, 200 one-second ticks) the share of
 transactions lost to races falls from 50 % to 15 % with two executors, from 67 % to 25 % with three and from 80 % to 41 %
 with five; the fills inside lost transactions by about four fifths; the mean time to a fill rises by a quarter to a half of
 a tick, and no crossing waits longer than the bound (plus the tick at which a new order is listed but not yet fillable).
@@ -2621,7 +2621,7 @@ a tick, and no crossing waits longer than the bound (plus the tick at which a ne
 
 Every transaction the executor builds (matcher batches, keeper jobs, maintenance jobs, and the x402 facilitator's intent
 executions and expiries inside the Executor) pays a rate taken from the node's fee estimate (`getFeeEstimate`, rusty-kaspa v2.1.0;
-`crates/kob-executor/src/fee.rs`). The node answers three kinds of buckets in sompi per gram: a *priority* bucket
+`crates/kobd/src/fee.rs`). The node answers three kinds of buckets in sompi per gram: a *priority* bucket
 (sub-second inclusion), *normal* buckets (the first: sub-minute) and *low* buckets (the first: sub-hour). Each job takes the
 bucket of its urgency:
 
@@ -2732,7 +2732,7 @@ bids) unless the opt-in surplus-inventory policy keeps it (above), but tokens ca
 a token output with its own carrier (`EngineConfig.token_carrier`, 10 KAS). Left alone they lock KAS: in an early TN10 soak
 each executor held 22 to 28 such UTXOs after 51 minutes (220 to 280 KAS of carriers for a few cents of tokens). With the
 matcher enabled (the Executor's default), the runner runs the maintenance jobs
-(`kob_executor::maintenance`) after the tick's matcher and keeper transactions, over the operator's own key-owned token UTXOs
+(`kobd::maintenance`) after the tick's matcher and keeper transactions, over the operator's own key-owned token UTXOs
 (the indexer's `token_holdings`, owner = the operator key, live; never an order's custody or stray), per token:
 
 | Job | When | Transaction |
@@ -2826,7 +2826,7 @@ The matcher plans against an `OrderBookView` (validated orders with their custod
 record data). In the Executor it is the indexer's own store
 (`indexer::book::StoreBook`, Part A); standalone it
 reads a JSON snapshot (`--book-file`, the `MemoryBook` format of
-`kob_executor::matcher::book`), re-read whenever the file changes. An indexer writes it with `kobd db export-book
+`kobd::matcher::book`), re-read whenever the file changes. An indexer writes it with `kobd db export-book
 --out FILE` (read-only next to the running writer; the file is replaced atomically): run it periodically, and keep
 `--max-book-lag-daa` (default 300) so that a snapshot no longer refreshed plans nothing (`kob_matcher_book_stale`). The
 snapshot must contain only orders the indexer validated (§1.1, §1.2) and must report strays per order (an old snapshot's
@@ -2940,7 +2940,7 @@ arms stops` with the number of triggered fills and updates.
 KCC-20 books (reference 3/3, 4/5, 8/8, 16/16, P2) are matched with the `kob-protocol` builders.
 KRON books (4 token inputs / 5 outputs per transaction, outputs of 1 to 1e9 units) are planned with the same
 planner under their own limits and lowered with the KRON builders through `KronAdapter`
-(`kob_executor::matcher::family`). What differs is inside the builders: key-owned KRON tokens (the operator's
+(`kobd::matcher::family`). What differs is inside the builders: key-owned KRON tokens (the operator's
 own, taker deliveries) are authorised by **address presence** (a P2PK input of the key in the same
 transaction, which the operator's funding input provides), every KRON token input carries the next-state
 columns of the whole group. The global batch may fill KCC-20 and KRON books, and trigger or arm stops of either, in one
@@ -2962,16 +2962,16 @@ asserts the count stays 0.
 ### Testing
 
 ```
-cargo test -p kob-executor                                   # scenarios (triggers and updates in batches), keepers, loop, fuzz (60 books)
-cargo test -p kob-executor --test executor_e2e            # matcher + keepers on the indexed book, stops armed / triggered in batches, acceptance, reorgs
-cargo test -p kob-executor --test flow_kron               # the KRON family through the indexer (every kind, merges, strays, reorgs)
-cargo test -p kob-executor --test flow_pair               # pair orders end to end through the indexer: custodies, fills, exits, merges, price rule
-cargo test -p kob-executor --test matcher_pair            # pair orders in the batch: routes of both sides, netting 1x1 / 2x2 / 3x1 + route, surplus, FOK / IOC, evidence modes, if-done cycles, random books
-cargo test -p kob-executor --test matcher_pair_route      # pair routes: slot limits (3/3, 8/8, KRON), FOK / IOC, exact amounts received, price priority, auctions
-cargo test -p kob-executor --test matcher_batch           # the global batch: several books + a route + an IOC in one transaction, determinism, splitting, mixed fuzz
-cargo test -p kob-executor --test matcher_batch -- --ignored --nocapture   # 10 000 orders per side, timed
-KOB_FUZZ_ITERS=5000 cargo test -p kob-executor --test matcher_fuzz -- --nocapture
-KOB_TN10_WRPC=ws://HOST:18210 cargo test -p kob-executor --test tn10_node -- --ignored --nocapture
+cargo test -p kobd                                   # scenarios (triggers and updates in batches), keepers, loop, fuzz (60 books)
+cargo test -p kobd --test executor_e2e            # matcher + keepers on the indexed book, stops armed / triggered in batches, acceptance, reorgs
+cargo test -p kobd --test flow_kron               # the KRON family through the indexer (every kind, merges, strays, reorgs)
+cargo test -p kobd --test flow_pair               # pair orders end to end through the indexer: custodies, fills, exits, merges, price rule
+cargo test -p kobd --test matcher_pair            # pair orders in the batch: routes of both sides, netting 1x1 / 2x2 / 3x1 + route, surplus, FOK / IOC, evidence modes, if-done cycles, random books
+cargo test -p kobd --test matcher_pair_route      # pair routes: slot limits (3/3, 8/8, KRON), FOK / IOC, exact amounts received, price priority, auctions
+cargo test -p kobd --test matcher_batch           # the global batch: several books + a route + an IOC in one transaction, determinism, splitting, mixed fuzz
+cargo test -p kobd --test matcher_batch -- --ignored --nocapture   # 10 000 orders per side, timed
+KOB_FUZZ_ITERS=5000 cargo test -p kobd --test matcher_fuzz -- --nocapture
+KOB_TN10_WRPC=ws://HOST:18210 cargo test -p kobd --test tn10_node -- --ignored --nocapture
 ```
 
 Every transaction the tests build is signed and validated in the v2.1.0 engine; the fuzzer asserts

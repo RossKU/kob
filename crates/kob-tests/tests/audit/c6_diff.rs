@@ -1582,7 +1582,7 @@ fn c6_differential_rust_vs_covenant() {
 
 // ------------------------------------------------------------------------------------------------ budget coverage
 
-/// The matcher's fallback for a role the committed table has not measured (`kob_executor::matcher::lower::budgets`):
+/// The matcher's fallback for a role the committed table has not measured (`kobd::matcher::lower::budgets`):
 /// the largest budget of the same template entry and token program, plus one unit.
 fn matcher_fallback(role: &str) -> kob_protocol::Result<u16> {
     if let Ok(b) = kob_protocol::budget::lookup(role) {

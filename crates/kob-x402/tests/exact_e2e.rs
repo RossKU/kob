@@ -4,7 +4,7 @@
 //! (`common::check_economics_and_scripts` inside `verify_native`).
 //!
 //! Replay (same transaction / same identifier twice) is a facilitator ledger concern and is tested in
-//! `kob-executor`; the verifier here is pure.
+//! `kobd`; the verifier here is pure.
 
 mod exact_support;
 

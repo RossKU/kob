@@ -1,7 +1,7 @@
 // Market-data views of the mock indexer: trades, candles, 24 h stats and depth, all derived from the fill events and the listed
 // book of the MockChain. Contract: the indexer market-data API (trades = all fill events of ONE transaction on ONE token; every price is
 // sompi per `price_basis` token base units = the token's standard scale, i.e. sompi per whole token; every view also carries `decimals`;
-// bigint arithmetic, floor division, as crates/kob-executor/src/indexer/market.rs).
+// bigint arithmetic, floor division, as crates/kobd/src/indexer/market.rs).
 import { termsOf } from './model.mjs';
 import { badRequest, notFound } from './util.mjs';
 import { MAX_PAGE_SIZE, bookView, ctxOf, intParam, limitParam, parseHash, tokensView } from './views.mjs';

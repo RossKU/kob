@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Builds the frozen compression dictionaries of crates/kob-executor/src/indexer/packed_dicts.rs from a KOB indexer database.
+// Builds the frozen compression dictionaries of crates/kobd/src/indexer/packed_dicts.rs from a KOB indexer database.
 //
-//   node scripts/build-state-dicts.mjs <index.sqlite3> [--out crates/kob-executor/src/indexer/packed_dicts.rs] [--first-id N]
+//   node scripts/build-state-dicts.mjs <index.sqlite3> [--out crates/kobd/src/indexer/packed_dicts.rs] [--first-id N]
 //
 // What they are for (indexer/packed.rs): the genesis state of an order (`orders.genesis_state`, about 380 bytes) and the detail JSON of
 // an event (`order_events.detail`, about 110 bytes) are stored deflated against a dictionary: a representative of the same kind, then,
@@ -22,7 +22,7 @@ const args = process.argv.slice(2);
 const dbPath = args.find((a) => !a.startsWith('--'));
 const opt = (k, d) => { const i = args.indexOf(`--${k}`); return i >= 0 ? args[i + 1] : d; };
 if (!dbPath) { console.error('usage: build-state-dicts.mjs <index.sqlite3> [--out file] [--first-id N]'); process.exit(2); }
-const out = opt('out', 'crates/kob-executor/src/indexer/packed_dicts.rs');
+const out = opt('out', 'crates/kobd/src/indexer/packed_dicts.rs');
 let nextId = Number(opt('first-id', '1'));
 const db = new DatabaseSync(dbPath, { readOnly: true });
 const buf = (x) => (x == null ? Buffer.alloc(0) : Buffer.from(x));

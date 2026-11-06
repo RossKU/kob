@@ -39,7 +39,7 @@ jobs:
       # vendor/silverscript is third-party code and is not linted.
       - run: >
           cargo clippy --locked --all-targets
-          -p kob-protocol -p kob-wasm -p kob-executor -p kob-cli -p kob-tests -p sil2argent
+          -p kob-protocol -p kob-wasm -p kobd -p kob-cli -p kob-tests -p sil2argent
           -- -D warnings
 
   test:
@@ -62,7 +62,7 @@ jobs:
           KOB_SKIP_NETWORK_TESTS: "1"
         run: cargo test --workspace --locked
       - name: "Mainnet deployment build (feature deploy-mainnet: the embedded record, the pinned registry, the network checks; docs/ops/release.md 5)"
-        run: cargo test --locked -p kob-protocol -p kob-executor --lib --features deploy-mainnet
+        run: cargo test --locked -p kob-protocol -p kobd --lib --features deploy-mainnet
       - name: Engine harness, carrier sensitivity (1 KAS = the wallet default order carrier)
         shell: bash
         run: |
@@ -245,7 +245,7 @@ jobs:
             echo "== $side"
             (cd "$side" && bash scripts/build-wasm.sh --web --slim)
             (cd "$side/web" && npm ci && npm run fetch-sdk && npm run build:wasm -- --copy && npm run build)
-            (cd "$side" && cargo build --locked --release -p kob-executor)
+            (cd "$side" && cargo build --locked --release -p kobd)
           done
       - name: Every file of web/dist and the kobd binary are identical
         run: |

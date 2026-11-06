@@ -20,7 +20,7 @@ scripts/build-wasm.sh --install-bindgen --test               # wasm bindings + n
 node tools/ablation/ablate.mjs --list --suite all            # contract mutation catalogue (see tools/ablation/README.md)
 ```
 
-Without `KOB_SKIP_NETWORK_TESTS=1` some `kob-executor` tests contact a testnet-10 node and mine
+Without `KOB_SKIP_NETWORK_TESTS=1` some `kobd` tests contact a testnet-10 node and mine
 their own funds. Do that only on purpose. `CONTRIBUTING.md` lists the lint and the other checks CI runs.
 
 **Run the web UI in mock mode** (no node, no wallet, no network):

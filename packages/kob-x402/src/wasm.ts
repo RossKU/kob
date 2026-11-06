@@ -106,7 +106,7 @@ export interface PayRequest {
   /**
    * Fee rate of the payment transaction in sompi per gram (every profile; default: the relay floor, 100). Pass the node's
    * estimate for the urgency of the payment (`feeRateFromEstimate`: a merchant's HTTP request waits, so the priority bucket),
-   * the same dynamic policy as the executor's (`crates/kob-executor/src/fee.rs`).
+   * the same dynamic policy as the executor's (`crates/kobd/src/fee.rs`).
    */
   feeRate?: number;
   /** Authorization lifetime in seconds (native and kcc20; default: the offer's `maxTimeoutSeconds`). The client passes a short one. */

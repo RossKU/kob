@@ -1,6 +1,6 @@
 // Positions: an if-done / if-one-cancels entry or a repeat entry grouped with its exits, one logical position for the UI (matcher.md 6, 6.1, 10.8, 10.9).
 //
-// How the indexer links orders (crates/kob-executor/src/indexer/reads.rs): an exit's `parent` is its entry's covenant id; the detail view of an
+// How the indexer links orders (crates/kobd/src/indexer/reads.rs): an exit's `parent` is its entry's covenant id; the detail view of an
 // entry lists `children` (exit ids); `repeat` is `{role:'entry', rpt_amount, rearm_amount = rpt_amount - 1}` on a repeating entry and
 // `{role:'exit', parent}` on a booked exit. We use all three, so grouping works on list views (no `children`) and detail views alike.
 // A pair position (a `KobIfdPair` entry and its `KobCondPair` exits) is one pair: amounts are base units of A, `quote` names B.

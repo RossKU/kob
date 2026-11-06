@@ -10,7 +10,7 @@
 //
 // Layouts: the destination of every write here is a schema-9 store (what this build writes: 32-byte ids interned as integers, an
 // order is `orders.id`; a token, a maker, a template and an extension commitment are `ids.id`; see
-// crates/kob-executor/src/indexer/schema.sql). A database that is only READ (the chart check, the source of an import) may be of
+// crates/kobd/src/indexer/schema.sql). A database that is only READ (the chart check, the source of an import) may be of
 // any layout: schema 9; schema 8 (the child tables hold integers, but `orders` still holds the blobs `template_hash`, `maker`,
 // `token_cov_id`, `token_tpl_hash`, `ext_commit`, `quote_cov_id`); or an older store (schema 5 to 7: blobs everywhere, `covenant_id` /
 // `token_cov_id` in `order_events` and `order_state`). `storeSchema` tells them apart: `orders.maker_id` is schema 9, `orders.id`

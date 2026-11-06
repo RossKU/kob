@@ -2,7 +2,7 @@
 //!
 //! The node answers three kinds of buckets in sompi per gram: a *priority* bucket (sub-second inclusion), *normal* buckets (the
 //! first: sub-minute) and *low* buckets (the first: sub-hour). The executor prices its transactions from them
-//! (`kob-executor`, `fee`); the command line and the web app use the same reading to tell a person that blocks are contended
+//! (`kobd`, `fee`); the command line and the web app use the same reading to tell a person that blocks are contended
 //! ([`FeeEstimate::contended`]).
 
 use serde::{Deserialize, Serialize};

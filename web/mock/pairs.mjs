@@ -1,6 +1,6 @@
 // Token/token pairs of the MOCK indexer: the pair orders (KobPair, KobCondPair, KobIfdPair; token A for token B at B base units per whole A,
 // one template each for both sides and both token families), their state builder and seed, and the four pair endpoints of
-// docs/ops/executor.md 5.4 (crates/kob-executor/src/indexer/pairs.rs):
+// docs/ops/executor.md 5.4 (crates/kobd/src/indexer/pairs.rs):
 //   GET /v1/pairs/{base}/{quote}/book?depth=     direct (KobPair), entry (KobIfdPair resting at its limit / armed stop entry) and route levels
 //                                                (implied through the two KAS books); price = price_num / price_den QUOTE base units per
 //                                                BASE base unit (reduced), amount in BASE base units

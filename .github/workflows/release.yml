@@ -10,7 +10,7 @@ name: release
 # release key when the ANDROID_* repository secrets exist (a new APK then updates the old one in place and keeps the key);
 # without them it is debug-signed, named ...-android-debug-signed.apk, and the release notes say it cannot be updated.
 #
-# * A pushed tag must be v<version> of the workspace (Cargo.toml [workspace.package], which kob-executor and kob-cli (binary kob) inherit):
+# * A pushed tag must be v<version> of the workspace (Cargo.toml [workspace.package], which kobd and kob-cli (binary kob) inherit):
 #   the version is bumped in the commit that is tagged, so --version of every binary is the tag. Any other tag fails here,
 #   before anything is built (job version, scripts/package-release.mjs --check-tag).
 # * A pushed tag v* builds every archive and attaches them, with a SHA256SUMS of the archives, to a DRAFT release of the tag:
@@ -116,8 +116,8 @@ jobs:
             mainnet) f=deploy-mainnet ;;
             testnet-10) f=deploy-tn10 ;;
           esac
-          cargo build --release --locked --target "$TARGET" -p kob-executor -p kob-cli \
-            --features "kob-executor/$f,kob-cli/$f"
+          cargo build --release --locked --target "$TARGET" -p kobd -p kob-cli \
+            --features "kobd/$f,kob-cli/$f"
       - name: The Android binaries are arm64 ELF (they cannot run on this x86_64 runner, so the next step does not apply to them)
         if: matrix.platform.target == 'aarch64-linux-android'
         env:

@@ -39,7 +39,7 @@ Please report suspected vulnerabilities **privately**, not in public issues:
   channel.
 
 Helpful details: the affected file or contract (`contracts/orders/*.sil`, `crates/kob-protocol`,
-`crates/kob-executor`, ...), a transaction or test that reproduces it (the harness in
+`crates/kobd`, ...), a transaction or test that reproduces it (the harness in
 `crates/kob-tests` runs contracts in the rusty-kaspa v2.1.0 script engine, which makes small
 reproductions easy), and what an attacker gains.
 

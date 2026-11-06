@@ -176,7 +176,7 @@ pub fn actions(wide: bool) -> Vec<(String, Action)> {
 
 /// Builds every seed; returns the valid ones and the names that did not build or validate (with why).
 /// Extra seed actions: every `*.json` file (a builder `Action`) of the directory `KOB_C6_EXTRA_SEEDS` (e.g. the requests
-/// the planner property tests of `kob-executor` dump with `KOB_C6_DUMP`: planner-shaped global batches).
+/// the planner property tests of `kobd` dump with `KOB_C6_DUMP`: planner-shaped global batches).
 pub fn extra_actions() -> Vec<(String, Action)> {
     let Some(dir) = std::env::var_os("KOB_C6_EXTRA_SEEDS") else { return vec![] };
     let mut files: Vec<_> = std::fs::read_dir(dir).map(|d| d.filter_map(Result::ok).map(|e| e.path()).collect()).unwrap_or_default();

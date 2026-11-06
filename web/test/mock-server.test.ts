@@ -1,5 +1,5 @@
 // The mock server (mock/server.mjs) is test infrastructure for every e2e run: these tests pin its behaviour. REST shapes follow
-// crates/kob-executor/src/indexer/reads.rs; the mock node validates submitted transactions with the real script engine (kob-wasm), so the
+// crates/kobd/src/indexer/reads.rs; the mock node validates submitted transactions with the real script engine (kob-wasm), so the
 // round trips below use kob.build + local signatures + kob.finalize and are consensus-checked twice (locally and by the mock node).
 import { createRequire } from 'node:module';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';

@@ -1,5 +1,5 @@
 // Fee rates of the payer's transactions (src/fee.ts): the node estimate's bucket by urgency, clamped like the executor's
-// policy (crates/kob-executor/src/fee.rs), and the client passing it to every builder, retried once at the floor.
+// policy (crates/kobd/src/fee.rs), and the client passing it to every builder, retried once at the floor.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

@@ -25,7 +25,7 @@ batch lifecycle, `single-without-output` and mixed top-up cases are batch-settle
 v1.0.0's `exact/consensus-profiles.json` (standard-native) paid 200000 sompi, below the relay floor of a rusty-kaspa
 v2.1.0 node for that transaction (1 P2PK input, 2 outputs: 100 sompi per gram of `max(compute mass, normalized transient
 mass)` = 100 x 2036 = 203600 sompi; storage mass is not part of the floor), so a node refused to relay it (reported
-upstream; the live TN10 probe of `crates/kob-executor/tests/x402_tn10.rs` showed 200000 refused and the floor accepted).
+upstream; the live TN10 probe of `crates/kobd/tests/x402_tn10.rs` showed 200000 refused and the floor accepted).
 v1.0.1 pays 300000 sompi and regenerates the dependent ids and signatures (`exact/interop-v1.json`,
 `sighash/consensus.json`, `x402-http/exact-transaction.json`; hash-chain and tx-v1 too, which are not vendored).
 `tests/interop_vectors.rs` asserts that the vector's fee is at least the floor and that it passes the whole engine path.

@@ -63,7 +63,7 @@ pub const MIN_REST_DAA: i64 = 50;
 /// the opt-in priority fee rises by at most 0.3077 KAS; the only refused shapes measured on a 10/10 program are KaspaRocket
 /// partial buys from 7-8 asks. At 0.5 KAS 75 of the shapes are refused. The builders refuse a transaction over the limit
 /// (a message that names the storage mass) and the matcher plans fewer fills
-/// (`kob-executor/tests/matcher_default_carrier.rs`). 1 KAS is the market norm (KaspaCom and KRON 0.5, KaspaRocket buyer cell
+/// (`kobd/tests/matcher_default_carrier.rs`). 1 KAS is the market norm (KaspaCom and KRON 0.5, KaspaRocket buyer cell
 /// 1.0, KForge 0.8-0.9) and halves the KAS a maker locks per fill.
 pub const DEFAULT_ORDER_CARRIER: u64 = 100_000_000;
 /// Default minimum fill, in sompi of quote value: 10 KAS of notional, independent of the carrier. The wallet's `minFill`

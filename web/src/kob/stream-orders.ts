@@ -1,6 +1,6 @@
 // What a block's transaction does to the order book, read from the chain alone (standalone mode, data/standalone.ts). Nothing here is protocol logic
 // of its own:
-//   * placements are re-derived with kob-wasm `recoverOrders`, record by record as the indexer does (crates/kob-executor/src/indexer/processor.rs:
+//   * placements are re-derived with kob-wasm `recoverOrders`, record by record as the indexer does (crates/kobd/src/indexer/processor.rs:
 //     each ORDER record of a payload alone, so one bad record does not hide the others);
 //   * a spend of an order is read from its input's signature script as a chain observer reads it (the indexer's `parse_reveal`): the redeem script
 //     (the last push) is accepted as an order of a template this build pins only when kob-wasm re-derives exactly that script from the state span it

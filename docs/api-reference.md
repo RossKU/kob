@@ -1,7 +1,7 @@
 # KOB read API reference
 
 The details behind [api.md](api.md): every route, query parameter, response field and WebSocket frame, the errors and
-limits, and the `[api]` configuration. It matches the code of `crates/kob-executor/src/api/`, `config.rs` and the response
+limits, and the `[api]` configuration. It matches the code of `crates/kobd/src/api/`, `config.rs` and the response
 types in `indexer/` (`reads.rs`, `market.rs`, `pairs.rs`, `status.rs`) at the time of writing.
 
 KOB is **pre-audit** (no external audit). Paths, field names and shapes are a pre-release interface and can still change.

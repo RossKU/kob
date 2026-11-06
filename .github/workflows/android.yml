@@ -47,7 +47,7 @@ on:
     branches: [master]
     paths:
       - "android/**"
-      - "crates/kob-executor/**"
+      - "crates/kobd/**"
       - ".github/workflows/android.yml"
 
 permissions:
@@ -109,7 +109,7 @@ jobs:
         env:
           # the commit /v1/health reports (docs/ops/release.md, 7)
           KOB_GIT_COMMIT: ${{ github.sha }}
-        run: cargo build --release --locked --target aarch64-linux-android -p kob-executor --features kob-executor/deploy-tn10
+        run: cargo build --release --locked --target aarch64-linux-android -p kobd --features kobd/deploy-tn10
       - name: The binary is arm64 ELF, and goes into the app as libkobexecutor.so
         run: |
           bin=target/aarch64-linux-android/release/kobd

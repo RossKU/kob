@@ -66,7 +66,7 @@ conserves the amount on its own (the difference goes to a second output), so the
 | # | Where | What | Impact | Fix |
 |---|---|---|---|---|
 | a | `kob-x402` `token::leader_next_states` | Decoded the `State[]` amounts as two's complement (KCC-1 `int` is 8-byte signed magnitude) and gave up when a one-element field group was pushed as `OP_1`..`OP_16` (the KCC-1 `PushMinimal` form of a single successor with `owner_scheme` `0x01`-`0x04` or `borrow_scheme` `0x01`-`0x03`) | Diagnostics only (acceptance is by recomputation): a less precise rejection reason | Decodes with the strict KCC-1 decoder (`kob_protocol::kcc20::transfer_next_states`) |
-| b | `kob-executor` indexer `kcc20_leader_next_states` | Same two's-complement amount decoding | None in practice (accepted transactions only, the programs require amounts >= 0) | Same shared decoder |
+| b | `kobd` indexer `kcc20_leader_next_states` | Same two's-complement amount decoding | None in practice (accepted transactions only, the programs require amounts >= 0) | Same shared decoder |
 | c | Router (`crates/kob-protocol/data/router_sil_abi.json`) | The Argent router's intent states declare `deadline` as SilverScript `temporal`, which is not a KCC-1 type name | State bytes are identical to KCC-1 `int`; it is a state field only (no entrypoint, so no dispatch tag) | Recorded and allowlisted in the sweep; the type comes from SilverScript/Argent upstream |
 | d | Router `IntentState::decode` | Used silverscript-abi's state decoder alone, which accepts non-canonical bytes (negative zero, an over-long push prefix); KCC-1 3.7.1 requires the consumed bytes to equal the canonical encoding | A malformed intent state could decode | Re-encodes and compares (as the order and token state codecs already did) |
 | e | Issuance (`issue.rs`) | Owner schemes checked as `<= 0x04`; correct, but not tied to the registry | None | Constants are the `kcc2` bytes; the refusal names the KCC-2 range (reserved or custom) |
@@ -268,7 +268,7 @@ limit and the scan reads every token input such a transaction has. `crates/kob-t
 a stray of the settling ask at token-input slot 1 or 2 is refused by the ask; four token inputs (the custody and three
 fillers, no stray) are refused by the 3 / 3 leader while the ask's scan passes; the 8 / 8 prototype takes the same four.
 The builders enforce each program's slots, and the matcher clears a book that needs more custodies than 3 over chained
-transactions of the same tick (`crates/kob-executor/tests/matcher_scenarios.rs`,
+transactions of the same tick (`crates/kobd/tests/matcher_scenarios.rs`,
 `a_crossing_beyond_the_standard_programs_three_slots_is_chained`).
 
 ### 4.5 On testnet-10

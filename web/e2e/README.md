@@ -23,7 +23,7 @@ worker its own in-process server (and enables parallel runs). Ports: `KOB_MOCK_P
 
 ## Mock server (`mock/server.mjs`, `startMockServer({port})`)
 
-* Indexer REST, shapes of `crates/kob-executor/src/indexer/reads.rs`: `/v1/health`, `/v1/health/ready`, `/v1/tokens`, `/v1/books/{token}`,
+* Indexer REST, shapes of `crates/kobd/src/indexer/reads.rs`: `/v1/health`, `/v1/health/ready`, `/v1/tokens`, `/v1/books/{token}`,
   `/v1/orders` (keyset cursor), `/v1/orders/{id}` (`state`, `custody`, `strays`, `children`, `auction`, `repeat`, `refund_due_daa`),
   `/v1/orders/{id}/events`, `/v1/fills`, `/v1/strays`, `/v1/token-events`, and `/v1/token-utxos?owner=&token=&role=&spent=`
   (paged `{items, next_cursor}` with the decoded KCC-20 `state`; the real endpoint is documented in `docs/ops/executor.md` 5.1). Errors: `{error:{code,message}}`. CORS is open.

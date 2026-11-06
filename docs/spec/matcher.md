@@ -280,7 +280,7 @@ the next transaction on the book the previous one leaves (§7).
 
 **Normative status.** The covenants enforce only each order's own terms (price, quantity rules, custody, time in force,
 triggers); any transaction they accept is a valid fill. The selection rules of this section (priority classes, ranking,
-netting and routing of pair orders, the greedy objective) are the reference algorithm of `kob-executor`, not consensus.
+netting and routing of pair orders, the greedy objective) are the reference algorithm of `kobd`, not consensus.
 Matchers compete, and an operator is free to plan differently; two honest matchers running this algorithm on the same
 view build the same batch. Which work units an executor takes in a tick when several executors compete for them (§3.6,
 weighted selection) is a choice of the same kind: random per executor, not consensus, and invisible to the covenants;
@@ -484,7 +484,7 @@ goes to the batch's taker (`kob_protocol::build`, pair legs).
 
 **Implied quotes.** A routed pair order competes for the liquidity of the two KAS books with the orders of its class,
 ranked by price → tip → age at its implied KAS quotes. With the best plain all-in quotes at `t` (sompi per whole token)
-`askA`, `bidA` of A and `askB`, `bidB` of B (reference: `kob-executor`):
+`askA`, `bidA` of A and `askB`, `bidB` of B (reference: `kobd`):
 
 - a pair **ask** (sells A for B at `p(t)`) is an ask of A at `⌈p(t)·askB/scale(B)⌉ − tip` (the KAS its B costs, less
   its KAS tip, per whole A) and a bid of B at `⌊bidA·scale(B)/p(t)⌋` (the KAS one whole A fetches, per whole B); it
@@ -500,7 +500,7 @@ covered: the lower of what both legs reached; caps only decrease), and the margi
 whose `Σ bid all-in − Σ ask all-in` does not pay its bytes. Ties: price → tip (sompi per whole A) → UTXO age → covenant
 id.
 
-**Reference planner** (`kob-executor`; pure functions of the view, none changes what a valid transaction is):
+**Reference planner** (`kobd`; pure functions of the view, none changes what a valid transaction is):
 
 - **net first.** Before the walks, in every pair book, the planner fills the crossing pair asks (lowest price first,
   then tip, then age) against the crossing pair bids (highest first) at exact amounts, any number of orders per side in
@@ -534,7 +534,7 @@ id.
   units) and its storage mass is `4 × 10^12 / carrier` grams. The relay fee (`rate × max(compute, 2 × bytes)`) does not price
   storage mass, so the fee is the same at every carrier the block storage limit allows (above 0.08 KAS); the
   storage-inclusive priority mass is unchanged while the storage mass stays below the batch's fee mass. Measured
-  (`crates/kob-executor/tests/matcher_crossmatch.rs`, `the_kept_output_carrier_adds_no_fee`), 10 KAS against 2 KAS: the
+  (`crates/kobd/tests/matcher_crossmatch.rs`, `the_kept_output_carrier_adds_no_fee`), 10 KAS against 2 KAS: the
   zero-tip TBTC/TUSD (8/8) keep batch 20,823 bytes, fee 0.041646 KAS both, storage mass 4,259 → 20,217 below its fee
   mass 41,646; the smallest keep batch, a KRON / KRON 1 × 1 netting, 11,773 bytes, fee mass 23,546, storage 20,217 at
   2 KAS but 26,881 at 1.5 KAS (above the fee mass: a higher priority fee). 2 KAS is therefore the smallest round carrier
@@ -616,7 +616,7 @@ carry different transactions; when the frontier fits one block it takes everythi
 `mining/src/mempool/model/frontier.rs:379-390` `Frontier::build_selector`: `TakeAllSelector`, else `sample_inplace` or the
 `MutatingTreeSelector` of `frontier/selectors.rs:284-376`, which draws `rng.gen::<f64>() · total_weight` and removes the drawn
 key, `:349-350`; the weight `(fee / mass)^ALPHA` at `frontier/feerate_key.rs:31`, `ALPHA = 3` at `frontier/selectors.rs:18`).
-The reference executor mirrors it (`crates/kob-executor/src/matcher/select.rs`):
+The reference executor mirrors it (`crates/kobd/src/matcher/select.rs`):
 
 - **Work units.** The components of the view (§3.1: the books of one token, joined by the pair orders between tokens).
   Each is planned by the reference planner on its own, with no byte budget (the allocation that orders the components
@@ -653,7 +653,7 @@ The reference executor mirrors it (`crates/kob-executor/src/matcher/select.rs`):
   x402 intent execution is not sampled: its keeper is the facilitator the payer chose and its order choice is the payer's
   best price (`x402-swap-and-pay.md`).
 
-Measured on a simulated race (`crates/kob-executor/tests/matcher_select.rs`, `weighted_selection_cuts_the_races_between_executors`:
+Measured on a simulated race (`crates/kobd/tests/matcher_select.rs`, `weighted_selection_cuts_the_races_between_executors`:
 six token books, a new crossing on each with probability 35 % per one-second tick, 200 ticks, every executor planning the
 same view and the node taking the first transaction that spends an input):
 
@@ -1053,7 +1053,7 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
   counterparts).
   The token slots split a book the same way: with KOB's standard 3/3 program a bid that crosses seven asks takes at
   most three custodies per transaction, and the tick clears the book over chained transactions, each within the program's
-  slots and validated on its own (`crates/kob-executor/tests/matcher_scenarios.rs`,
+  slots and validated on its own (`crates/kobd/tests/matcher_scenarios.rs`,
   `a_crossing_beyond_the_standard_programs_three_slots_is_chained`).
   An order takes part in at most `max_chain` (default 4) transactions of one tick; with chaining off
   (`--no-chain`) a continuation waits for the next tick while untouched orders still go into the tick's next
@@ -1132,7 +1132,7 @@ amends up to 200 sompi less (`crates/kob-protocol/tests/carrier_fees.rs`).
 
 Rows are the golden vectors named in the row (`crates/kob-protocol/vectors/golden.json`: bytes = `built.fee.mass.size`,
 fee floor = `built.fee.minFee`), the 8/8 cancel-replace is `crates/kob-protocol/tests/cost_table.rs` (KCC20Ref_8x8), and
-the global batch rows are `crates/kob-executor/tests/matcher_batch.rs`. A fraction such as 4/10 is the part of an order's
+the global batch rows are `crates/kobd/tests/matcher_batch.rs`. A fraction such as 4/10 is the part of an order's
 amount a fill takes. The pair rows use the reference token programs of the vector's prefix (`pair.`: KCC-20 A and B;
 `pair.kcc20-kron.`, `pair.kron-kcc20.`, `pair.kron-kron.`: the families of A and B).
 
@@ -1184,7 +1184,7 @@ accepts fewer), so every spend of a pair order pays for them; a larger route or 
 
 **Batches without caps.** The planner has no size cap and no candidate cap; a batch is filled up to the physical
 limit (§3.2, 250,000 bytes; the next transaction of the tick chained on its change). Planning one batch
-(`crates/kob-executor/tests/matcher_batch.rs`, debug build with `opt-level = 1`, KAS books): 1,000 bids × 1,000 asks
+(`crates/kobd/tests/matcher_batch.rs`, debug build with `opt-level = 1`, KAS books): 1,000 bids × 1,000 asks
 of one token 4.8 ms; 10,000 × 10,000 of one token 60.6 ms (the 8/8 slots bound the batch to 12 fills); ten tokens of
 1,000 × 1,000 each 142.7 ms (36 fills, bounded by size); 10,000 × 10,000 all crossing at a loss 74.6 ms (nothing
 built). A whole tick over the 10,000 × 10,000 book (plan, build, sign and engine-validate every transaction) runs to its
@@ -1385,4 +1385,4 @@ tick. Planning time with pair books is not measured.
 - Weighted selection (§3.6, reference executor only): units with class 1 or 2 work and units with an order crossable for
   `max_defer_daa` planned by every executor; a planned unit filled exactly as the reference planner fills it alone; a
   share of one is the reference planner; a tick reproducible from its seed; keeper jobs due for `max_defer_daa` built by
-  every keeper (`crates/kob-executor/tests/matcher_select.rs`).
+  every keeper (`crates/kobd/tests/matcher_select.rs`).

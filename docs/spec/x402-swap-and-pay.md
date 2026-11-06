@@ -483,7 +483,7 @@ orders (their outpoints, redeem scripts and states come from the placement recor
 transactions). The server and the facilitator provide no quote endpoint and MUST NOT expose an
 unauthenticated endpoint that reserves or awaits state. The facilitator's only involvement in this mode is
 `/verify` and `/settle`. Any quoting or planning service is separate from this binding; the reference
-quoter is `kob_executor::x402::quote` (best price first, plain orders only, skipping orders named in an
+quoter is `kobd::x402::quote` (best price first, plain orders only, skipping orders named in an
 `order_conflict`). In intent mode (section 17) the facilitator chooses the orders itself, from its own
 book, at execution time.
 
@@ -877,7 +877,7 @@ its deadline, rejected 1 ms before it and with its KAS or tokens redirected),
 borrow-enabled or minter lock, each with its ablation),
 `crates/kob-x402/tests/intent.rs` (payer SDK, verifier and keeper over the in-memory chain; `intent-neg-hashtype`
 in `intent_creation_payer_signatures_must_use_sighash_all`) and
-`crates/kob-executor/tests/x402_intents.rs` (the facilitator end to end). The router's own covenant rules
+`crates/kobd/tests/x402_intents.rs` (the facilitator end to end). The router's own covenant rules
 are covered by `crates/kob-tests/tests/argent/argent_router_tests.rs` (positive, negative and ablation cases).
 
 | Id | Case | Expected |
@@ -1109,7 +1109,7 @@ and public reason for negatives). The cases below are engine-validated scenarios
 engine-validated chain; the KRON and KaspaCom-template cases; `swap-neg-hashtype` in
 `swap_payer_token_witness_must_use_sighash_all`, `swap_payer_token_delegator_witness_must_use_sighash_all`,
 `swap_funding_input_signature_must_use_sighash_all` and `every_family_signs_with_sighash_all_only`), and through the facilitator in
-`crates/kob-executor/tests/x402_swap_families.rs`.
+`crates/kobd/tests/x402_swap_families.rs`.
 
 | Id | Case | Expected |
 |---|---|---|
@@ -1185,5 +1185,5 @@ The conformance cases of intent mode and invoices are listed in sections 17.11 a
   (`PayloadCommit.route_pay_asset`), `error.rs` (`Diag::OrderConflict`, `Diag::RouteAliasing`).
 - KIP-9 (extended mass), KIP-20 (covenant ids).
 - KOB `docs/argent/argent.md` (the router), `crates/kob-protocol/src/router.rs` and `src/build/intent.rs` (intent builders),
-  `crates/kob-x402/src/intent.rs`, `src/invoice.rs`, `src/client/intent.rs`, `crates/kob-executor/src/x402/facilitator/`
+  `crates/kob-x402/src/intent.rs`, `src/invoice.rs`, `src/client/intent.rs`, `crates/kobd/src/x402/facilitator/`
   (`intent.rs`, `invoice.rs`).

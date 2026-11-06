@@ -22,7 +22,7 @@ secp256k1.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 ctrlc = "3.5"
-# https:// indexers and wss:// feeds: rustls with the ring provider and the webpki roots, as kob-executor uses them
+# https:// indexers and wss:// feeds: rustls with the ring provider and the webpki roots, as kobd uses them
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
 # public nodes serve the Borsh wRPC only (nodelink, the executor's rpc::bridge): the node's own RPC types and workflow-rpc framing

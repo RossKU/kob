@@ -1,4 +1,4 @@
-// Fee rates of the payer's transactions: the same dynamic policy as the executor's (crates/kob-executor/src/fee.rs, docs/ops/
+// Fee rates of the payer's transactions: the same dynamic policy as the executor's (crates/kobd/src/fee.rs, docs/ops/
 // executor.md "Fee policy"). The node (rusty-kaspa `getFeeEstimate`) answers sompi-per-gram buckets: a priority bucket
 // (sub-second inclusion), normal buckets (the first: sub-minute) and low buckets (the first: sub-hour). A payment pays the
 // bucket of its urgency, `ceil(bucket)` clamped to `[floor, maxRate]` (the floor wins over a lower maxRate); without an

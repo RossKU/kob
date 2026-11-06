@@ -264,7 +264,7 @@ testnet-10 launch: genesis, the supply's move into the launch's pool, the pool's
   (`kob_ifd_pair_tests` NIS8 / NIS9 on the program). The pair suites (`pair_harness::mixed_pairs_kr`, `KKKR`) and the pre-mainnet
   pair attacks (`audit_pair_sec_tests`) run on it; the ablation of the KCC-20 and pair suites
   (`KOB_KCC20_PROGRAM=KaspaRocketToken11458`, `tools/ablation/README.md`) confirms every mutation with its tokens; the executor's flow
-  (`crates/kob-executor/tests/flow_kasparocket.rs`) follows an ask, a bid, their match and fill, and a 10 / 10 transfer.
+  (`crates/kobd/tests/flow_kasparocket.rs`) follows an ask, a bid, their match and fill, and a 10 / 10 transfer.
 * On testnet-10 (`contracts/third-party/kasparocket/UPSTREAM.md`): a token of the program issued with
   `kob token create --program kasparocket-testnet` (testnet-10 only, the plan says it is a third-party program), a plain
   transfer, a `KobAsk` placed, partly taken by another key and cancelled with the CLI; its token inputs carry the launchpad's

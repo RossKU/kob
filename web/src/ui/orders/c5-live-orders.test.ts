@@ -43,7 +43,7 @@ const place = (name: string) => {
 
 describe('C5-L1: a killed IOC / FOK / market order is a terminal status, not "unknown"', () => {
   // The indexer closes an IOC whose unfilled rest is returned (and every IOC / FOK kill) with status `killed`
-  // (crates/kob-executor/src/indexer/processor.rs: `(None, Some("kill")) => "killed"`); the web knows only
+  // (crates/kobd/src/indexer/processor.rs: `(None, Some("kill")) => "killed"`); the web knows only
   // open / partial / filled / cancelled / refunded / closed, so every partly filled market order reads "unknown".
   // C5: expected to fail until orders-model.ts ORDER_STATUSES / statusOf and positions.ts TERMINAL learn `killed`.
   it('describeEntry maps killed to a done status and counts it as done', () => {

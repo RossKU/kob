@@ -1,4 +1,4 @@
-// Why the indexer does not list a live order, in plain words. The executor's listing rules (crates/kob-executor/src/tokens.rs `ListingRules::evaluate`,
+// Why the indexer does not list a live order, in plain words. The executor's listing rules (crates/kobd/src/tokens.rs `ListingRules::evaluate`,
 // docs/api.md OrderView `unlisted_reason`) refuse an order with a short machine code; an unlisted order is indexed (status, cancel) but is in no book
 // and never fills. Pure: the codes map to i18n keys, the texts live in i18n/en/orders.ts.
 import { t } from '../../i18n';

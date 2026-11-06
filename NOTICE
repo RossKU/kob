@@ -59,7 +59,7 @@ Dependencies that are not stored here
   Hogrefe, https://github.com/mhogrefe/malachite) -- GNU Lesser General Public License v3.0 only
   (LGPL-3.0-only). It is not a dependency of KOB's own code: kaspa-math (rusty-kaspa v2.1.0)
   uses it, and Cargo links it statically into every binary built from this workspace that
-  depends on kaspa-math (the native programs such as kob-executor and kob-cli, and
+  depends on kaspa-math (the native programs such as kobd and kob-cli, and
   kob_wasm_bg.wasm, which the web app serves to browsers). The rest of KOB stays under the ISC
   License; the LGPL applies to Malachite itself.
 

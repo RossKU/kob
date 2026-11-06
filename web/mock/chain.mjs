@@ -74,7 +74,7 @@ export class MockChain {
     this.txs = new Set();
     this.submissions = [];
     this.failNext = { remaining: 0, message: 'mock: injected submit failure' };
-    // the executor's `min_order_value_sompi` (crates/kob-executor/src/tokens.rs ListingRules; the real default is 1 KAS = 100000000). OFF (0) by default so the
+    // the executor's `min_order_value_sompi` (crates/kobd/src/tokens.rs ListingRules; the real default is 1 KAS = 100000000). OFF (0) by default so the
     // seeded books and the specs' small orders stay listed; `POST /mock/min-order-value` turns the rule on
     this.minOrderValue = 0n;
     // KCC-23 (the executor's indexer::kcc23): candidate preparations by txid (their id-relevant fields), and the verified launch proof of every
@@ -772,7 +772,7 @@ export class MockChain {
       !tk ? 'token_not_allowlisted'
         : tk.template_hash && hash && tk.template_hash !== hash ? 'template_mismatch'
           : scale <= 0n ? 'bad_state:scale:not positive'
-            // every listed order of a token quotes the same whole token (kob-executor tokens.rs ListingRules)
+            // every listed order of a token quotes the same whole token (kobd tokens.rs ListingRules)
             : tk.scale != null && scale !== BigInt(tk.scale) ? 'non_standard_scale' : null;
     let reason = listing(tok, tplHash, t.scale);
     if (!reason && pt) {

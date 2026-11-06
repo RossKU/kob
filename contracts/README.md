@@ -262,8 +262,8 @@ network it runs for. Needs node.
 Binaries that embed the record (cargo features `deploy-tn10` / `deploy-mainnet`, exclusive, off by default):
 
 ```
-cargo build --release -p kob-executor --features deploy-tn10      # also kob-cli, kob-x402
-cargo build --release -p kob-executor --features deploy-mainnet   # the mainnet release build (docs/ops/release.md)
+cargo build --release -p kobd --features deploy-tn10      # also kob-cli, kob-x402
+cargo build --release -p kobd --features deploy-mainnet   # the mainnet release build (docs/ops/release.md)
 scripts/build-wasm.sh --tn10 [--web]     # crates/kob-wasm/pkg-node-tn10 (and pkg-tn10); default pkg-node untouched
 scripts/build-wasm.sh --mainnet [--web]  # crates/kob-wasm/pkg-node-mainnet (and pkg-mainnet)
 ```

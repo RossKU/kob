@@ -3,7 +3,7 @@
 //! every submitted transaction through the rusty-kaspa engine.
 //!
 //! Included with `#[path]` by `kob-x402/tests/swap_families.rs` and by the facilitator's end-to-end
-//! test in `kob-executor`; the includer must also declare `mod common;` (the protocol's fixtures,
+//! test in `kobd`; the includer must also declare `mod common;` (the protocol's fixtures,
 //! `kob-protocol/tests/common/mod.rs`) at its crate root.
 #![allow(dead_code)]
 

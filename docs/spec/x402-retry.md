@@ -140,11 +140,11 @@ it on chain.
   intent creations re-sent, never re-signed. `test/intent-client.test.ts`: the client's intent payments (one creation,
   re-sent while it may execute, a dead one stops with its handle). `test/retry-wasm.test.ts`: the TS and Rust tables agree.
 - `crates/kob-x402/src/client/retry.rs`: the drivers (`pay_with_retry`, `pay_intent_with_retry`) and the table.
-- `crates/kob-executor/tests/x402_intents.rs`: the Rust payer's intent retry against the facilitator (the creation re-sent
+- `crates/kobd/tests/x402_intents.rs`: the Rust payer's intent retry against the facilitator (the creation re-sent
   until the keeper can execute it, one ledger entry; stopped with `NoRebuild`, nothing broadcast, when an input is gone).
-- `crates/kob-executor/tests/x402_retry.rs`: the Rust driver against the facilitator over the mock chain, the same failures
+- `crates/kobd/tests/x402_retry.rs`: the Rust driver against the facilitator over the mock chain, the same failures
   injected, and two retries of one payment racing (one pays, the other is refused or finds the anchor spent).
-- `crates/kob-executor/src/x402/facilitator_tests.rs`: re-submission after an unreachable node, a refused repeat of a
-  transaction that went through, re-broadcast after an eviction. `crates/kob-executor/tests/x402_intents.rs`: the keeper
+- `crates/kobd/src/x402/facilitator_tests.rs`: re-submission after an unreachable node, a refused repeat of a
+  transaction that went through, re-broadcast after an eviction. `crates/kobd/tests/x402_intents.rs`: the keeper
   re-plans against the book of the moment after losing an order; an execution with an unknown submit outcome is never
   executed twice.

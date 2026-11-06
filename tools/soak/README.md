@@ -154,7 +154,7 @@ From the repository root (Git Bash), `CARGO_BUILD_JOBS=4` on a 16 GB machine:
 
 ```
 cargo build --release --features gpu --manifest-path tools/wallet-gate/miner/Cargo.toml --target-dir target/miner   # GPU + CPU backends
-cargo build --release --locked -p kob-executor --features deploy-tn10     # the TN10 deployment build
+cargo build --release --locked -p kobd --features deploy-tn10     # the TN10 deployment build
 scripts/build-wasm.sh --tn10 --web                                         # kob-wasm node + web bindings of the TN10 build (pkg-node-tn10, pkg-tn10)
 cd web && npm ci && npm run fetch-sdk && cd ..
 cd tools/soak && npm run build && npm run typecheck && npm test     # typecheck reads web/wasm: run `npm run build:wasm` in web/ once
