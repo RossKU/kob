@@ -34,6 +34,15 @@ const FLASH_MS = 1200;
 
 const root = document.getElementById('signer') as HTMLElement;
 
+/** The app's theme, from the fragment of this page's URL (the app changes it without a reload): colours only, two fixed palettes (signer.css), else the OS's. */
+function applyTheme(): void {
+  const m = /^#theme=(dark|light)$/.exec(location.hash);
+  if (m) document.documentElement.dataset.theme = m[1]!;
+  else delete document.documentElement.dataset.theme;
+}
+applyTheme();
+window.addEventListener('hashchange', applyTheme);
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);

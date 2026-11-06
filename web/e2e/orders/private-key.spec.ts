@@ -198,6 +198,25 @@ test('the frame is an opaque origin: the app cannot read it, cannot sign through
   expect(await mock.submitted(false)).toHaveLength(0);
 });
 
+test('the frame has the palette and theme of the app; a change reaches it without a reload, so the key stays and the next order signs', async ({ appPage: page, mock }) => {
+  await fund(mock);
+  await openMarket(page, mock, { connect: false });
+  await connectKey(page);
+  await expect(page.getByTestId('signer-overlay')).toBeHidden();
+  const look = () => signerFrame(page).evaluate(() => ({ theme: document.documentElement.dataset.theme ?? null, bg: getComputedStyle(document.body).backgroundColor }));
+  const appTheme = () => page.evaluate(() => document.documentElement.dataset.theme ?? null);
+  const CARD = { dark: 'rgb(13, 21, 21)', light: 'rgb(255, 255, 255)' };
+  for (let i = 0; i < 2; i++) {
+    await page.getByTestId('theme-toggle').click();
+    const theme = (await appTheme()) as 'dark' | 'light';
+    await expect.poll(look).toEqual({ theme, bg: CARD[theme] });
+  }
+  await sellTicket(page);
+  await clickPlace(page);
+  await approveInFrame(page, { title: 'Place order', lines: { 'Locked in orders': '2 KAS' }, orderTitles: ['Sell limit order'] });
+  await waitSubmitted(page);
+});
+
 test('reload and disconnect forget the key; a key that does not parse is refused in the frame', async ({ appPage: page, mock }) => {
   await openMarket(page, mock, { connect: false });
   await connectKey(page, 'not-a-key');

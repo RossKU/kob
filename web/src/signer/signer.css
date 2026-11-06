@@ -1,26 +1,40 @@
 /* The private-key signer page (signer.html): its own small stylesheet, no inline styles (its CSP has no 'unsafe-inline'). */
+/* the app's palette (src/styles.css): the frame's page is the app's card. The theme is the app's when it says one (`#theme=` of the frame's URL, main.ts), else the OS's. */
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
-  --fg: #0f172a;
-  --muted: #64748b;
-  --border: #cbd5e1;
-  --accent: #0f766e;
+  --fg: #0a1312;
+  --muted: #465350;
+  --border: #d0cfc6;
+  --accent: #1a7457;
   --accent-fg: #ffffff;
-  --bad: #b91c1c;
-  --ok: #047857;
+  --bad: #b42323;
+  --ok: #0a6e44;
   --flash: #fde68a;
 }
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0d1515;
+  --fg: #f1f5f4;
+  --muted: #a7b5b3;
+  --border: #223231;
+  --accent: #4bb990;
+  --accent-fg: #03211d;
+  --bad: #f6465d;
+  --ok: #2ebd85;
+  --flash: #713f12;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f172a;
-    --fg: #e2e8f0;
-    --muted: #94a3b8;
-    --border: #334155;
-    --accent: #14b8a6;
-    --accent-fg: #042f2e;
-    --bad: #f87171;
-    --ok: #34d399;
+  :root:not([data-theme]) {
+    --bg: #0d1515;
+    --fg: #f1f5f4;
+    --muted: #a7b5b3;
+    --border: #223231;
+    --accent: #4bb990;
+    --accent-fg: #03211d;
+    --bad: #f6465d;
+    --ok: #2ebd85;
     --flash: #713f12;
   }
 }

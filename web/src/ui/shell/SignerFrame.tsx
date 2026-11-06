@@ -22,6 +22,12 @@ export interface SignerFrameProps {
 
 export const SIGNER_URL = `${import.meta.env.BASE_URL}signer.html`;
 
+/** The app's theme for the frame's URL: a change of the fragment reaches the frame without a reload (a reload would forget the key). */
+const themeFragment = (): string => {
+  const theme = document.documentElement.dataset.theme;
+  return theme === 'dark' || theme === 'light' ? `#theme=${theme}` : '';
+};
+
 /** What the panel takes of the viewport below the frame (the layer's bottom padding and the box's border). */
 const SIGNER_BOTTOM_PX = 14;
 
@@ -35,6 +41,12 @@ function SignerPanel(props: SignerFrameProps) {
   const events = useRef(props.events);
   events.current = props.events;
   const [content, setContent] = useState<number | null>(null);
+  const [theme, setTheme] = useState(themeFragment);
+  useEffect(() => {
+    const watch = new MutationObserver(() => setTheme(themeFragment()));
+    watch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => watch.disconnect();
+  }, []);
   // where the frame starts in the viewport (the layer's top padding and the panel's head; measured, as fonts and widths vary)
   const frameTop = (): number => Math.ceil(frame.current?.getBoundingClientRect().top ?? 72);
   const [viewport, setViewport] = useState(() => window.innerHeight);
@@ -76,7 +88,7 @@ function SignerPanel(props: SignerFrameProps) {
         <iframe
           ref={frame}
           class={`signer-frame signer-frame-${props.mode}`}
-          src={SIGNER_URL}
+          src={`${SIGNER_URL}${theme}`}
           sandbox="allow-scripts"
           referrerpolicy="no-referrer"
           title={t('signer.frameTitle')}
