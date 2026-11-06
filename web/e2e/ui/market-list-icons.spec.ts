@@ -4,7 +4,8 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '../fixtures';
 
-test.use({ autoOpen: false });
+// the rows are measured in their final places: no rise-in
+test.use({ autoOpen: false, contextOptions: { reducedMotion: 'reduce' } });
 
 for (const [width, iconMin, iconMax] of [[1280, 46, 48], [880, 40, 48], [390, 38, 42]] as const) {
   test(`${width} px: the icon fills the text block without growing the row`, async ({ appPage: page }) => {

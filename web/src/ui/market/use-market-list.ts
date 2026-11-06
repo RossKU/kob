@@ -1,7 +1,44 @@
 // The market list's figures as component state: one slot per key (a token's `/v1/stats`, a pair's 24 h volume), fetched a few at a time.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { isAbort } from '../kit/hooks';
-import { LOADING, NONE, runPool, type Slot } from './market-list';
+import { listPageSizeOf, LOADING, NONE, runPool, type ListPageSize, type Slot } from './market-list';
+
+const PAGE_SIZE_KEY = 'kob.market.rows';
+
+/** How long the list waits for its first figures before it shows what it has (a slow indexer never leaves it empty). */
+export const LIST_HOLD_MS = 1500;
+
+/** True once `ready` was true or LIST_HOLD_MS passed; it stays true. */
+export function useHeldUntil(ready: boolean): boolean {
+  const [over, setOver] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setOver(true), LIST_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  const done = useRef(false);
+  if (ready || over) done.current = true;
+  return done.current;
+}
+
+/** The viewer's page size, kept in this browser (a blocked storage keeps it for the visit). */
+export function useListPageSize(): [ListPageSize, (n: ListPageSize) => void] {
+  const [size, setSize] = useState<ListPageSize>(() => {
+    try {
+      return listPageSizeOf(localStorage.getItem(PAGE_SIZE_KEY));
+    } catch {
+      return listPageSizeOf(null);
+    }
+  });
+  const set = (n: ListPageSize) => {
+    setSize(n);
+    try {
+      localStorage.setItem(PAGE_SIZE_KEY, String(n));
+    } catch {
+      /* blocked storage */
+    }
+  };
+  return [size, set];
+}
 
 /** Calls in flight per list (the indexer rate-limits its heavy routes per client). */
 export const LIST_FETCH_LIMIT = 4;

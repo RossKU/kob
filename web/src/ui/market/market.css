@@ -207,6 +207,19 @@ body:has(.market-page) .container { max-width: 1520px; }
 .tf-compact > summary::-webkit-details-marker { display: none; }
 .tf-more { text-decoration: underline dotted; text-underline-offset: 2px; }
 .ml-pairs { margin-top: 16px; }
+/* the search and the page size on one line */
+.ml-tools { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 16px; margin-bottom: 12px; }
+.ml-search { flex: 1 1 260px; max-width: 420px; min-width: 0; }
+.ml-size { display: inline-flex; align-items: center; gap: 8px; }
+/* the rows rise in one after the other, as the blocks of the landing page do. Backwards only: a finished animation leaves the row, whose popovers are fixed to the viewport, alone */
+.ml-tokens tbody tr.ml-in { animation: ml-rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 34ms); }
+@keyframes ml-rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .ml-tokens tbody tr.ml-in { animation: none; } }
+.ml-skel-row .ml-name { min-height: 72px; }
+.ml-skel-icon { flex: none; width: 56px; height: 56px; border-radius: 50%; }
+.ml-skel-text { flex: 1 1 auto; max-width: 160px; }
+.ml-skel-text .skeleton-line { display: block; margin: 4px 0; }
+.ml-more { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px 0 4px; }
 .ml-subtitle { font-size: 0.95rem; font-weight: 700; margin: 0 0 6px; }
 @media (max-width: 759px) { .ml-table .ml-md { display: none; } }
 
@@ -232,6 +245,10 @@ body:has(.market-page) .container { max-width: 1520px; }
   box-shadow: 0 0 0 1px var(--tk-outline);
 }
 .tk-icon img { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--surface, #fff); }
+/* a picture comes in softly over its letter, not at once */
+.tk-icon img:not(.tk-creator) { animation: tk-fade 0.35s ease-out backwards; }
+@keyframes tk-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .tk-icon img:not(.tk-creator) { animation: none; } }
 /* a picture straight from the creator's site (not checked): the letter shows under it until it has loaded, then the picture covers it */
 .tk-icon { position: relative; }
 .tk-icon img.tk-creator { position: absolute; inset: 0; background: transparent; }

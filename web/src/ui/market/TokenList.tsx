@@ -5,7 +5,7 @@ import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import type { IndexerTokenView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
-import { Banner, Button, ErrorBanner, Field, Loading, Section, Table, TableMessage, toError, useAsync } from '../kit';
+import { Banner, Button, ErrorBanner, Field, Section, Segmented, Table, TableMessage, toError, useAsync } from '../kit';
 import { StatusBadges } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { IdCopy } from './IdCopy';
@@ -16,13 +16,13 @@ import { TokenIcon } from './TokenIcon';
 import { TokenNote } from './TokenNote';
 import './market.css';
 import {
-  ariaSort, DEFAULT_SORT, filterPairs, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, sortEntries, tokenEntry,
-  type Cell, type ListedPair, type ListEntry, type Slot, type SortKey, type SortState,
+  ariaSort, DEFAULT_SORT, filterPairs, kascovEntry, keepOrder, LIST_PAGE_SIZES, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, sortEntries, tokenEntry,
+  type Cell, type ListedPair, type ListEntry, type ListPageSize, type Slot, type SortKey, type SortState,
 } from './market-list';
 import { PAIR_DEPTH_LEVELS, pairDepthOf, pairVolumeOf, type PairDepth, type PairVolume } from './pair-market';
 import { buildTokenRows, filterTokens, isNameless, parseCovenantId, tradableHere, tradableRows, type TokenRow } from './token-model';
 import { useKascov } from './use-kascov';
-import { usePooledSlots } from './use-market-list';
+import { useHeldUntil, useListPageSize, usePooledSlots } from './use-market-list';
 import { isAbort } from '../kit/hooks';
 import { clockText, useStandalone } from '../shell/standalone';
 
@@ -143,13 +143,62 @@ function SortHeader(props: { k: SortKey; label: string; hint?: string | undefine
 
 const rowState = (e: ListEntry): string => (e.loading ? 'loading' : e.unavailable ? 'unavailable' : 'ready');
 
-function TokenTableRow({ row, entry }: { row: TokenRow; entry: ListEntry }) {
+/** The most rows of a batch that wait for the one above: a long batch is not slower than a short one. */
+const REVEAL_STEPS = 14;
+/** The placeholder rows while the list is held (the first figures are not in yet). */
+const SKELETON_ROWS = 8;
+
+/** A row's place while the list is held: as tall as a token's row, so nothing moves when the rows come. */
+function SkeletonRow() {
+  return (
+    <tr class="ml-skel-row" data-testid="token-row-skeleton" aria-hidden="true">
+      <td>
+        <div class="ml-name">
+          <span class="skeleton ml-skel-icon" />
+          <div class="ml-name-text ml-skel-text">
+            <span class="skeleton skeleton-line" />
+            <span class="skeleton skeleton-line" />
+          </div>
+        </div>
+      </td>
+      {TOKEN_FIGURES.map((f) => (
+        <td key={f.key} class={`right${f.cls ? ` ${f.cls}` : ''}`}>
+          <span class="skeleton skeleton-line ml-skel" />
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+/** More rows follow when this comes into view (a little before); the button is the same step by hand. A new observer per step: a tall window goes on. */
+function MoreRows(props: { shown: number; total: number; onMore: () => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const more = useRef(props.onMore);
+  more.current = props.onMore;
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) more.current();
+    }, { rootMargin: '240px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [props.shown]);
+  return (
+    <div class="ml-more" ref={box} data-testid="token-list-more">
+      <span class="small muted" data-testid="token-list-showing">{t('market.list.showing', { shown: props.shown, total: props.total })}</span>
+      <Button small onClick={props.onMore} data-testid="token-list-more-button">{t('market.list.more')}</Button>
+    </div>
+  );
+}
+
+function TokenTableRow({ row, entry, step }: { row: TokenRow; entry: ListEntry; step: number }) {
   // every row has the same three lines, so every row is as tall and the icons keep one pitch: line 1 the ticker (bold) and the name (one line, an ellipsis, the
   // whole name in its title); line 2 the covenant id fragment with its copy button; line 3 the badges (one line, never wrapped). A token without a ticker is led by its name
   const headline = row.ticker || row.name || t('market.list.unnamed');
   const sub = row.ticker ? row.name : '';
   return (
-    <tr data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
+    <tr class="ml-in" style={`--i:${step}`} data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
       <td>
         <div class="ml-name">
           <IdentityBlock row={row} />
@@ -215,6 +264,10 @@ const pairToken = (r: TokenRow): PairToken => ({ covenantId: r.covenantId, ticke
  * Market list: every token this build can trade as its KAS market (TOKEN/KAS: last price, 24 h change, 24 h KAS volume, market cap, spread, depth within
  * 2 % of the mid; the token's badges and its full token hash), and the token pairs with live pair orders (BASE/QUOTE, the same columns without the market cap);
  * sortable by every column (24 h volume first), searchable, add by covenant id. A phone shows the name, the price and the change.
+ *
+ * The rows arrive together: the list is held on placeholders until the first figures are in (at most LIST_HOLD_MS), then the first rows rise in, sorted, and
+ * stay in their places while later figures arrive; a sort, a search or the end of the hold's late figures places them anew. The viewer picks how many rows
+ * come at a time; the next ones (and their icons) come when the end of the list comes into view.
  */
 export function TokenList(props: { invalidToken?: string }) {
   const { registry, indexer, kob, config, standalone } = useServices();
@@ -279,6 +332,10 @@ export function TokenList(props: { invalidToken?: string }) {
   const volumes = useMemo(() => sliceOf(pairFigures, (f) => f.volume), [pairFigures]);
   const depths = useMemo(() => sliceOf(pairFigures, (f) => f.depth), [pairFigures]);
 
+  // the first rows wait for the figures they are sorted by: the indexer's list, its stats and kascov's names, each at its own pace, would move them
+  const figuresIn = ready && statKeys !== null && statKeys.every((k) => (stats.get(k) ?? LOADING).state !== 'loading') && kascov.status !== 'loading';
+  const open = useHeldUntil(figuresIn);
+
   const shownRows = useMemo(() => {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);
     const byId = new Map(rows.map((r) => [r.covenantId, r]));
@@ -297,6 +354,20 @@ export function TokenList(props: { invalidToken?: string }) {
     return sortEntries(entries, sort).map((e) => ({ entry: e, pair: byKey.get(e.key)! }));
   }, [listed, query, sort, stats, volumes, depths, indexer]);
 
+  // the rows' places: taken from the sort when something the viewer sees as a new list happens, kept while figures arrive
+  const [pageSize, setPageSize] = useListPageSize();
+  const [limit, setLimit] = useState<number>(pageSize);
+  const viewKey = `${sort.key}:${sort.dir}|${query}|${showNameless ? 1 : 0}`;
+  const placedBy = `${viewKey}|${generation}|${figuresIn ? 1 : 0}|${open ? 1 : 0}`;
+  const placed = useRef<{ by: string; ids: string[] }>({ by: '', ids: [] });
+  const sortedIds = shownRows.map((r) => r.row.covenantId);
+  placed.current = { by: placedBy, ids: placed.current.by === placedBy ? keepOrder(placed.current.ids, sortedIds) : sortedIds };
+  const rowOf = new Map(shownRows.map((r) => [r.row.covenantId, r]));
+  const windowRows = placed.current.ids.slice(0, limit).map((id) => rowOf.get(id)!);
+  useEffect(() => setLimit(pageSize), [viewKey, pageSize]);
+  // the placeholders are as tall as a page of rows: a page left scrolled down would otherwise open the list in its middle
+  useEffect(() => window.scrollTo(0, 0), []);
+
   const onSort = (k: SortKey) => setSort((s) => nextSort(s, k));
   const refresh = () => {
     tokens.reload();
@@ -313,8 +384,20 @@ export function TokenList(props: { invalidToken?: string }) {
         actions={<Button small onClick={refresh} loading={tokens.loading && !!tokens.data}>{t('common.refresh')}</Button>}
         data-testid="token-list"
       >
-        <div style="max-width:420px;margin-bottom:12px">
-          <Field label={t('market.search.label')} type="search" value={query} onValue={setQuery} placeholder={t('market.search.placeholder')} data-testid="token-search" />
+        <div class="ml-tools">
+          <div class="ml-search">
+            <Field label={t('market.search.label')} type="search" value={query} onValue={setQuery} placeholder={t('market.search.placeholder')} data-testid="token-search" />
+          </div>
+          <div class="ml-size">
+            <span class="small muted" aria-hidden="true">{t('market.list.rows')}</span>
+            <Segmented<string>
+              aria-label={t('market.list.rowsLabel')}
+              value={String(pageSize)}
+              onChange={(v) => setPageSize(Number(v) as ListPageSize)}
+              options={LIST_PAGE_SIZES.map((n) => ({ value: String(n), label: String(n), 'data-testid': `token-list-rows-${n}` }))}
+              data-testid="token-list-rows"
+            />
+          </div>
         </div>
         <ListLegend names={kascov.status} />
         {sa?.active && sa.sinceMs !== null ? <p class="small muted" data-testid="token-list-standalone">{t('market.list.standalone', { time: clockText(sa.sinceMs) })}</p> : null}
@@ -327,15 +410,16 @@ export function TokenList(props: { invalidToken?: string }) {
             </tr>
           </thead>
           <tbody>
-            {tokens.loading && !tokens.data && indexer && rows.length === 0 ? (
-              <TableMessage colSpan={cols}><Loading /></TableMessage>
+            {!open ? (
+              Array.from({ length: SKELETON_ROWS }, (_, i) => <SkeletonRow key={i} />)
             ) : shownRows.length === 0 ? (
               <TableMessage colSpan={cols} data-testid="token-list-empty">{query ? t('market.list.noMatch') : t('market.list.empty')}</TableMessage>
             ) : (
-              shownRows.map(({ row, entry }) => <TokenTableRow key={row.covenantId} row={row} entry={entry} />)
+              windowRows.map(({ row, entry }, i) => <TokenTableRow key={row.covenantId} row={row} entry={entry} step={Math.min(i % pageSize, REVEAL_STEPS)} />)
             )}
           </tbody>
         </Table>
+        {open && windowRows.length < shownRows.length ? <MoreRows shown={windowRows.length} total={shownRows.length} onMore={() => setLimit((l) => l + pageSize)} /> : null}
         {namelessCount > 0 && !query.trim() ? (
           <p class="small muted">
             <Button small onClick={() => setShowNameless((v) => !v)} data-testid="token-list-nameless">

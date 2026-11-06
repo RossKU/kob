@@ -50,6 +50,24 @@ export async function runPool<T>(items: readonly T[], limit: number, fn: (item: 
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
 }
 
+// ------------------------------------------------------------------------------------------------ the list's rows
+
+/** The rows the list adds at a time (the viewer's choice): the first ones at once, the next when the end of the list comes into view. */
+export const LIST_PAGE_SIZES = [20, 50, 100] as const;
+export type ListPageSize = (typeof LIST_PAGE_SIZES)[number];
+export const DEFAULT_LIST_PAGE_SIZE: ListPageSize = 20;
+
+/** A stored page size, or the default for anything else. */
+export const listPageSizeOf = (raw: string | null | undefined): ListPageSize => LIST_PAGE_SIZES.find((n) => String(n) === raw) ?? DEFAULT_LIST_PAGE_SIZE;
+
+/** The keys in their place of `kept` (a key that left is dropped); keys `kept` does not have follow, in the order of `keys`. A figure that arrives moves no row. */
+export function keepOrder(kept: readonly string[], keys: readonly string[]): string[] {
+  const now = new Set(keys);
+  const out = kept.filter((k) => now.has(k));
+  const had = new Set(out);
+  return [...out, ...keys.filter((k) => !had.has(k))];
+}
+
 // ------------------------------------------------------------------------------------------------ cells
 
 /** A figure as a cell shows it: `text` null = no figure (a skeleton while the row loads, else `—`). */

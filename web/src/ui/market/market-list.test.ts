@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PairSummaryView, StatsView } from '../../data/indexer-types';
 import type { TokenInfo } from '../../kob/registry';
 import {
+  DEFAULT_LIST_PAGE_SIZE, keepOrder, listPageSizeOf,
   ariaSort, changeCell, DEFAULT_SORT, filterPairs, firstDir, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, priceCell, runPool, sortEntries,
   depthCell, marketCapCell, pairDepthCell, supplyOf, tokenEntry, volumeCell, type ListEntry, type Slot,
 } from './market-list';
@@ -27,6 +28,20 @@ function stats(token: string, over: Partial<StatsView> = {}): StatsView {
   };
 }
 const ok = <T,>(value: T): Slot<T> => ({ state: 'ok', value });
+
+describe('the list\'s rows', () => {
+  it('a figure that arrives moves no row; a row that leaves goes; a new row follows', () => {
+    expect(keepOrder(['a', 'b', 'c'], ['c', 'b', 'a'])).toEqual(['a', 'b', 'c']);
+    expect(keepOrder(['a', 'b', 'c'], ['c', 'a'])).toEqual(['a', 'c']);
+    expect(keepOrder(['a', 'b'], ['d', 'b', 'c', 'a'])).toEqual(['a', 'b', 'd', 'c']);
+    expect(keepOrder([], ['b', 'a'])).toEqual(['b', 'a']);
+  });
+  it('a stored page size is one of the choices, else the default', () => {
+    expect(listPageSizeOf('50')).toBe(50);
+    expect(listPageSizeOf('100')).toBe(100);
+    for (const raw of [null, undefined, '', '7', '20px']) expect(listPageSizeOf(raw)).toBe(DEFAULT_LIST_PAGE_SIZE);
+  });
+});
 
 describe('market list cells', () => {
   it('a token row: last price in KAS at the tick decimals with the exact price and KAS per TOKEN unit in the tooltip, change, KAS volume, spread, depth within 2 % (with the order counts in its tooltip); no supply, no market cap', () => {
