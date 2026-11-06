@@ -31,6 +31,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # the NDK that links the Android archive, pinned as in android.yml (installed with sdkmanager when the image lacks it)
+  NDK_VERSION: "30.0.16248370"
 
 jobs:
   version:
@@ -39,10 +41,10 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - name: The tag is v + the workspace version (a dry run is dev-<commit>)
@@ -74,25 +76,34 @@ jobs:
       # the Windows binary carries the C runtime, so a fresh Windows needs no Visual C++ redistributable for a double click
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
         with:
           toolchain: "1.94.0"
           targets: ${{ matrix.platform.target }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - name: Android NDK toolchain (the NDK preinstalled on the runner image; clang for API 24, Android 7.0 and later)
+      - name: Android NDK toolchain (NDK_VERSION; clang for API 24, Android 7.0 and later)
         if: matrix.platform.target == 'aarch64-linux-android'
         run: |
-          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ndk="$ANDROID_HOME/ndk/$NDK_VERSION"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -x "$bin/aarch64-linux-android24-clang" ]; then
+            echo "NDK $NDK_VERSION is not on the runner image: installing it"
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION"
+          fi
           test -x "$bin/aarch64-linux-android24-clang" || { echo "no NDK clang under $bin" >&2; exit 1; }
+          grep -q "^Pkg.Revision *= *$NDK_VERSION" "$ndk/source.properties" || { echo "$ndk is not NDK $NDK_VERSION" >&2; exit 1; }
           {
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang"
             echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang"
             echo "AR_aarch64_linux_android=$bin/llvm-ar"
+            # phones with 16 KB memory pages (Android 15+) refuse to load an executable aligned to 4 KB (as android.yml)
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384"
           } >> "$GITHUB_ENV"
       - name: Build kobd and kob (${{ matrix.network }} deployment build, --locked)
         env:
@@ -142,7 +153,7 @@ jobs:
           NETWORK: ${{ matrix.network }}
           TARGET: ${{ matrix.platform.target }}
         run: node scripts/package-release.mjs --version "$VERSION" --network "$NETWORK" --target "$TARGET" --bin-dir "target/$TARGET/release" --out dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kobd-${{ needs.version.outputs.version }}-${{ matrix.network }}-${{ matrix.platform.target }}
           path: dist/*
@@ -164,13 +175,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: kobd-*
           path: dist
