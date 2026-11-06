@@ -43,7 +43,7 @@ pub enum DbError {
     )]
     PreV3(String),
     #[error(
-        "database {0} is of schema {1}: this build reads schema {SCHEMA_VERSION} only. Stop every writer of the data directory and run `kobd index migrate` on it (offline; it          builds the new store beside the old one and keeps the old file as `index.sqlite3.before-migrate`)"
+        "database {0} is of schema {1}: this build reads schema {SCHEMA_VERSION} only. Stop every writer of the data directory and run `kobd index migrate` on it (offline; it builds the new store beside the old one and keeps the old file as `index.sqlite3.before-migrate`)"
     )]
     OldLayout(String, i64),
     #[error("{0}")]
