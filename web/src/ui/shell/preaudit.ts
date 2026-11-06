@@ -5,7 +5,7 @@ import { useState } from 'preact/hooks';
 
 export const PREAUDIT_KEY = 'kob.preAudit.dismissed.v1';
 /** The security policy (SECURITY.md), linked from the footer notice. */
-export const SECURITY_POLICY_URL = 'https://github.com/RossKU/KOB/blob/main/SECURITY.md';
+export const SECURITY_POLICY_URL = 'https://github.com/RossKU/KOB/blob/master/SECURITY.md';
 
 type Store = Pick<Storage, 'getItem' | 'setItem'>;
 
