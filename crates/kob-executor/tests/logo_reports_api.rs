@@ -90,9 +90,9 @@ async fn a_report_hides_and_the_administrators_subcommand_restores_next_to_the_r
 
     // the administrator: a separate process, the same database file, while the indexer holds it
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_kobd"))
-        .args(["index", "--network", network(), "--data-dir"])
+        .args(["logo-reports", "--network", network(), "--data-dir"])
         .arg(dir.path().join("data"))
-        .args(["logo-reports", "restore", ID])
+        .args(["restore", ID])
         .env_remove("KOB_NETWORK")
         .env_remove("KOB_INDEX_CONFIG")
         .env("RUST_LOG", "error")

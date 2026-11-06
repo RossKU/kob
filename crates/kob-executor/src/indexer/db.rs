@@ -13,14 +13,14 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
-/// 3 (protocol v2.6): the `receipts` table is gone (the trade receipt is retired; `index migrate` does not carry it over). 5 (protocol v3): quantities
+/// 3 (protocol v2.6): the `receipts` table is gone (the trade receipt is retired; `kobd db migrate` does not carry it over). 5 (protocol v3): quantities
 /// in token base units and prices per whole token (`orders.scale`, `min_fill`, `tip`, `budget_rate`, `initial_amount`, ...). A
-/// database of schema 4 or older cannot be migrated ([`refuse_pre_v3`]): `index replay` rebuilds it from the record log.
+/// database of schema 4 or older cannot be migrated ([`refuse_pre_v3`]): `kobd db replay` rebuilds it from the record log.
 /// 6 (2026-11): the state spans of `order_utxos` and `token_holdings` are stored packed ([`super::packed`]): a build of schema 5
 /// misreads them, so it refuses a schema 6 store. 7: `orders.genesis_state` and `order_events.detail` are stored deflated against frozen
 /// dictionaries, and `holding_programs` replaces the `(token, program)` index of the holdings: a build of schema 6 misreads the former.
 /// 8: the 32-byte ids the big tables repeated are integers (`orders.id`, `ids`; [`super::ids`]): the tables have other columns, so no
-/// build reads a store of another schema than its own, and this one refuses a store of schema 8 or older until `index migrate` has rebuilt
+/// build reads a store of another schema than its own, and this one refuses a store of schema 8 or older until `kobd db migrate` has rebuilt
 /// it ([`refuse_old_layout`]). 9: an order names its maker, template hashes, extension commitment and quote token by id too, the page indexes
 /// of the orders and holdings end at the block ([`super::ids`], schema.sql).
 pub const SCHEMA_VERSION: i64 = 9;
@@ -38,12 +38,12 @@ pub enum DbError {
     NetworkMismatch { found: String, expected: String },
     #[error(
         "database {0} was written by a build before protocol v3 (schema 4 or older: its orders are of templates this build does not \
-         pin and its quantities are not base units) and cannot be migrated: move it aside (or delete it) and run `kobd index replay`, \
+         pin and its quantities are not base units) and cannot be migrated: move it aside (or delete it) and run `kobd db replay`, \
          which rebuilds it from the record log"
     )]
     PreV3(String),
     #[error(
-        "database {0} is of schema {1}: this build reads schema {SCHEMA_VERSION} only. Stop every writer of the data directory and run `kobd index migrate` on it (offline; it builds the new store beside the old one and keeps the old file as `index.sqlite3.before-migrate`)"
+        "database {0} is of schema {1}: this build reads schema {SCHEMA_VERSION} only. Stop every writer of the data directory and run `kobd db migrate` on it (offline; it builds the new store beside the old one and keeps the old file as `index.sqlite3.before-migrate`)"
     )]
     OldLayout(String, i64),
     #[error("{0}")]
@@ -118,7 +118,7 @@ pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Conn
 }
 
 /// A store of schema 8 or older has the tables of the earlier layout (covenant ids and token ids in every row): opening it with this build
-/// would build the new indexes on columns that are not there. Refused untouched, with the way out (`index migrate`); checked before the schema is applied.
+/// would build the new indexes on columns that are not there. Refused untouched, with the way out (`kobd db migrate`); checked before the schema is applied.
 pub fn refuse_old_layout(conn: &Connection, path: &Path) -> DbResult<()> {
     let has_meta: bool = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'")?.exists([])?;
     if !has_meta {
@@ -134,7 +134,7 @@ pub fn refuse_old_layout(conn: &Connection, path: &Path) -> DbResult<()> {
 
 /// A database written by a build before protocol v3 (schema 4 or older) has the column `orders.lot_units` of the older
 /// templates' layouts. It cannot be migrated: every order in it is of a template this build does not pin (never listed)
-/// and every stored quantity counts in the old layouts. The record log rebuilds the database (`index replay`: reveals of
+/// and every stored quantity counts in the old layouts. The record log rebuilds the database (`kobd db replay`: reveals of
 /// templates this build does not pin are dropped, frames it cannot decode skipped). Checked BEFORE the schema is applied,
 /// so the refused file is left exactly as it was.
 pub fn refuse_pre_v3(conn: &Connection, path: &Path) -> DbResult<()> {
@@ -254,7 +254,7 @@ type Naming = (Option<Vec<u8>>, i64, i64, bool);
 /// zero `seen` row from the orders: a row no order of its transaction names the zero commitment for becomes the identity
 /// without a commitment (dropped when that one is already recorded), and the first order that does name the zero commitment
 /// gets the zero row the processor skipped (the identity looked seen). Idempotent and a no-op on a database written by this
-/// build; `index replay` records the same identities. Returns the rows changed.
+/// build; `kobd db replay` records the same identities. Returns the rows changed.
 pub fn backfill_unknown_pair_extensions(conn: &Connection) -> DbResult<usize> {
     let zero = [0u8; 32];
     let rows: Vec<ZeroRow> = conn
@@ -336,7 +336,7 @@ pub fn backfill_stop_entry_books(conn: &Connection) -> DbResult<usize> {
 /// their views could not rebuild the custody token state (cancel, cancel-replace and refund failed) and the matcher rebuilt it
 /// with a zero commitment. An exit's commitment is its entry's (the entry covenant writes it into the exit's custody; a
 /// `KobCondBid` exit also carries it in its state), which the database already holds: copy it. Idempotent and a no-op on a
-/// database written by this build; `index replay` gives the same rows. Also drops the `seen` token registry events those exits
+/// database written by this build; `kobd db replay` gives the same rows. Also drops the `seen` token registry events those exits
 /// recorded for the bogus (token, program, no commitment) identity, which a replay does not record (the entry saw the identity
 /// first), unless some order of that token still has no commitment. Returns (exits fixed, events dropped).
 pub fn backfill_exit_extensions(conn: &Connection) -> DbResult<(usize, usize)> {
@@ -361,7 +361,7 @@ pub fn backfill_exit_extensions(conn: &Connection) -> DbResult<(usize, usize)> {
 }
 
 /// In-memory database for tests.
-/// Open an existing database read-only (no schema change, no lock: works next to the writer, e.g. `index export-orders`
+/// Open an existing database read-only (no schema change, no lock: works next to the writer, e.g. `kobd db export-orders`
 /// while `run` is running). Refuses a database of another network or of another schema version (a writer of this build
 /// migrates it first).
 pub fn open_reader(path: &Path, network: &str) -> DbResult<Connection> {
@@ -641,7 +641,7 @@ mod tests {
     }
 
     /// A database of a build before protocol v3 (its `orders` table has the `lot_units` column of the older layouts) is
-    /// refused by the writer and the reader before anything touches it, with the way out (`index replay`).
+    /// refused by the writer and the reader before anything touches it, with the way out (`kobd db replay`).
     #[test]
     fn a_pre_v3_database_is_refused_untouched() {
         let dir = tempfile::tempdir().unwrap();
@@ -659,7 +659,7 @@ mod tests {
         for e in [open_writer(&p, "testnet-10").unwrap_err(), open_reader(&p, "testnet-10").unwrap_err()] {
             assert!(matches!(e, DbError::PreV3(_)), "{e}");
             let m = e.to_string();
-            assert!(m.contains("index replay") && m.contains("move it aside"), "{m}");
+            assert!(m.contains("kobd db replay") && m.contains("move it aside"), "{m}");
         }
         // nothing was created or altered: no other table, the old version
         let c = Connection::open(&p).unwrap();
@@ -685,7 +685,7 @@ mod tests {
         }
         let has_receipts =
             |c: &Connection| c.prepare("SELECT 1 FROM sqlite_master WHERE name LIKE 'receipts%'").unwrap().exists([]).unwrap();
-        // since schema 9 a store of an older schema is refused untouched (`index migrate` rebuilds it): nothing is dropped from it
+        // since schema 9 a store of an older schema is refused untouched (`kobd db migrate` rebuilds it): nothing is dropped from it
         assert!(matches!(open_writer(&p, "testnet-10"), Err(DbError::OldLayout(_, 2))));
         assert!(has_receipts(&Connection::open(&p).unwrap()), "the refused store is left as it was");
     }

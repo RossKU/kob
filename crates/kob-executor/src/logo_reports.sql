@@ -1,7 +1,7 @@
 -- Token-logo reports and the blocklist they feed (`crate::logo_reports`; docs/api.md, *Logo reports*). KOB keeps no image: a logo is loaded
 -- by each viewer's browser from the address its creator gave, and a token listed here as hidden shows its letter instead.
 --
--- Not derived from the chain: a database rebuilt by `index replay` starts without these tables' rows (`kobd index logo-reports export`
+-- Not derived from the chain: a database rebuilt by `kobd db replay` starts without these tables' rows (`kobd logo-reports export`
 -- before, `import` after).
 --
 -- state: 'hidden'   hidden by a report; the operator may restore it

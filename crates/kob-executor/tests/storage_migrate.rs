@@ -1,4 +1,4 @@
-//! `index migrate`: a store written by an earlier build (schema 5: states whole, no counters, the indexes of that time; schema 7: packed
+//! `kobd db migrate`: a store written by an earlier build (schema 5: states whole, no counters, the indexes of that time; schema 7: packed
 //! states, 32-byte ids in every row; schema 8: integer ids in the child tables, blobs in the orders) is rebuilt as schema 9 (integer ids in
 //! the orders too) in one run, and no read changes: every table digests the same
 //! with its ids joined back and its states decoded, the API reads return the same JSON, the event ids and sequences are kept, a
@@ -540,7 +540,7 @@ async fn an_old_layout_store_is_refused_untouched_and_a_row_the_integers_cannot_
     // this build opens no store of an older layout, for writing or for reading, and says what to run
     for e in [db::open_writer(&path, "testnet-10").err().unwrap(), db::open_reader(&path, "testnet-10").err().unwrap()] {
         let msg = e.to_string();
-        assert!(msg.contains("index migrate") && msg.contains("schema 7"), "{msg}");
+        assert!(msg.contains("kobd db migrate") && msg.contains("schema 7"), "{msg}");
     }
 
     // an event of an order that has no row: the integer layout cannot hold it, so nothing is migrated and nothing is changed

@@ -5,7 +5,7 @@
 //! transaction that touched a KOB covenant, token custody / stray outputs) grouped by chain
 //! block, plus the reorg and operator operations that changed the derived state. It never holds
 //! a raw node response. The database (`index.sqlite3`) is a derived view of it: any schema change or
-//! lost database is repaired with `kobd index replay`, which re-applies the records and then
+//! lost database is repaired with `kobd db replay`, which re-applies the records and then
 //! re-syncs the tail from the node.
 //!
 //! Frame layout, one per committed batch:
@@ -23,7 +23,7 @@
 //! (`open` checks the chain only and never decodes a body).
 //!
 //! A sealed segment (every one but the newest) is kept as `seg-<n>.kobrec.gz`, the gzip of the segment file: the writer compresses
-//! the segment it has just rotated away from ([`compress_sealed`]; `kobd index migrate` does the ones an older run left
+//! the segment it has just rotated away from ([`compress_sealed`]; `kobd db migrate` does the ones an older run left
 //! whole), after reading the copy back and comparing it with the segment. The frames, their chain hashes and everything that reads
 //! the log are the same; only the bytes on disk are a third of the size.
 //!
@@ -34,7 +34,7 @@
 //! ([`RecordLogError::AheadOfDatabase`]) and keeps it. `Indexer::open` applies one such frame itself when it continues the
 //! database's cursor (its `start` is the database's cursor hash: the commit it records is what the database lacks) and
 //! refuses one of another history ([`RecordLogError::Lineage`]). More frames past the database position mean the database is
-//! older than the log (a restored backup): they are kept for `index replay --onto-database`, which checks the same lineage. The reverse (database ahead of the log) means the log was lost and is
+//! older than the log (a restored backup): they are kept for `kobd db replay --onto-database`, which checks the same lineage. The reverse (database ahead of the log) means the log was lost and is
 //! reported as an error. A failed append (full disk, I/O error) is rolled back to the last complete frame before the
 //! error is returned, so nothing is ever appended after a partial frame; an incomplete frame with complete frames after
 //! it is corruption (refused), only an incomplete last frame is a torn tail (removed).
@@ -438,8 +438,8 @@ pub enum RecordLogError {
     #[error(
         "record log holds frames {db_next}..{log_next} that the database has not committed; an unclean shutdown leaves at \
          most one, which the indexer applies itself when it continues the database's cursor, so the database is older than \
-         the log (restored from a backup?). The log is left as it is: apply the missing frames with `kobd index \
-         replay --onto-database`, or move the database aside and rebuild it with `kobd index replay` \
+         the log (restored from a backup?). The log is left as it is: apply the missing frames with `kobd db \
+         replay --onto-database`, or move the database aside and rebuild it with `kobd db replay` \
          (docs/ops/executor.md, Part B, 8)"
     )]
     AheadOfDatabase { log_next: u64, db_next: u64 },
@@ -448,7 +448,7 @@ pub enum RecordLogError {
     #[error(
         "record log frame {n} starts at block {frame_start}, but the database's cursor is {db_cursor}: the log and the \
          database do not belong together (another instance's log, or a database of another history). Nothing was changed; \
-         rebuild the database from this log with `kobd index replay` into a fresh data directory"
+         rebuild the database from this log with `kobd db replay` into a fresh data directory"
     )]
     Lineage { n: u64, frame_start: Hash32, db_cursor: String },
     /// An append or a truncation failed and the segment could not be put back to its last complete frame: nothing more is
@@ -923,7 +923,7 @@ fn compress_one(plain: &Path) -> std::io::Result<u64> {
 }
 
 /// Compress every sealed segment of the log directory that is still whole: all but the newest, which the writer appends to.
-/// Idempotent. The caller holds the writer lock (`run`, `index migrate`).
+/// Idempotent. The caller holds the writer lock (`run`, `kobd db migrate`).
 pub fn compress_sealed(dir: &Path) -> Result<CompressReport, RecordLogError> {
     let segs = list_segments(dir)?;
     let mut rep = CompressReport::default();

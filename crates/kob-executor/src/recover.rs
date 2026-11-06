@@ -415,16 +415,16 @@ fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result
 }
 
 /// Bring the tracked order outputs in line with the node's UTXO set and move the cursor to
-/// `new_cursor`. Used by `index rebase` after a gap: outputs the node no longer has are closed with
+/// `new_cursor`. Used by `kobd db rebase` after a gap: outputs the node no longer has are closed with
 /// reason `gap`, and outputs that continued under the same script are adopted.
-/// What `index rebase` did: the cursor it set and, unless it only moved the cursor, the reconciliation of the tracked orders.
+/// What `kobd db rebase` did: the cursor it set and, unless it only moved the cursor, the reconciliation of the tracked orders.
 #[derive(Debug, Clone)]
 pub struct RebaseReport {
     pub cursor: Cursor,
     pub reconciled: Option<OpReport>,
 }
 
-/// `index rebase`: after a gap, move the cursor to `to` (the node's sink, its pruning point or a chain block) and, with
+/// `kobd db rebase`: after a gap, move the cursor to `to` (the node's sink, its pruning point or a chain block) and, with
 /// `reconcile`, reconcile the tracked orders with the node's UTXO set ([`reconcile_open_orders`]). The cursor carries the
 /// DAA score of that block (its header's), not the node's virtual DAA score: the store's DAA (`cursor_daa`, what the book,
 /// the API's `expired` and the refund keepers read) must be the chain block's the store is synced to.

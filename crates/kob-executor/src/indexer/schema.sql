@@ -1,7 +1,7 @@
 -- KOB indexer schema (SQLite, WAL). Version recorded in meta.schema_version.
 --
 -- The database is a DERIVED view: the permanent source is the record log (`recordlog.rs`), and
--- `kobd index replay` rebuilds every table below from it.
+-- `kobd db replay` rebuilds every table below from it.
 --
 -- Identities (schemas 8 and 9): the 32-byte ids that the big tables repeat are stored once and referred to by integer. An order is
 -- `orders.id` (AUTOINCREMENT: never reused, so no reverted order's id can name a later one); its covenant id stays in `orders` (the order of
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS order_events (
 CREATE INDEX IF NOT EXISTS order_events_cov ON order_events (order_id, id);
 CREATE INDEX IF NOT EXISTS order_events_block ON order_events (block_seq);
 -- The fills only (about a third of the events): `kind = 'fill'` is in every read that wants them, so the planner takes this index for exactly those
--- (a store built before 2026-11 had them as `(kind, token_cov_id, id)` over every event; `index migrate` builds the store anew).
+-- (a store built before 2026-11 had them as `(kind, token_cov_id, id)` over every event; `kobd db migrate` builds the store anew).
 CREATE INDEX IF NOT EXISTS order_events_fills ON order_events (token_id, id) WHERE kind = 'fill';
 -- The in-place amends of an order (a few per order, if any): the price rule of the trades reads the latest one before a fill (`market::FILL_SELECT`),
 -- so a fill of an order with a long history of fills does not walk that history back to the amend.
@@ -252,7 +252,7 @@ CREATE TABLE IF NOT EXISTS token_holdings (
 -- asked once per inserted holding (`processor::insert_holding`: has the token a holding under this program yet). `holding_programs` is that
 -- set with a count, kept by the triggers below in the transaction of every insert and delete of a holding (a batch, a revert, a replay,
 -- the lean pruning): a few rows per token instead of the 190 MB `(token_cov_id, program)` index over every holding that served the same
--- two reads. `index migrate` counts it once (`db::backfill_holding_programs`) for a store that did not have it.
+-- two reads. `kobd db migrate` counts it once (`db::backfill_holding_programs`) for a store that did not have it.
 CREATE TABLE IF NOT EXISTS holding_programs (
     token_id     INTEGER NOT NULL,        -- ids.id of the token covenant id
     program      TEXT NOT NULL,
@@ -276,7 +276,7 @@ CREATE TRIGGER IF NOT EXISTS holding_programs_update AFTER UPDATE OF token_id, p
 END;
 -- The holdings of a token or of an owner in page order, spent ones included (`GET /v1/token-utxos?spent=true`): no sort of the lot.
 -- (The token's page index replaces the `(token_cov_id, owner)` one, which no read used. An earlier store also had `(owner, token_cov_id)`:
--- the owner's page index serves the pair, in page order and without the sort; `index migrate` does not build it.)
+-- the owner's page index serves the pair, in page order and without the sort; `kobd db migrate` does not build it.)
 CREATE INDEX IF NOT EXISTS token_holdings_token_page ON token_holdings (token_id, created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_owner_page ON token_holdings (owner_id, created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_created ON token_holdings (created_block);
@@ -315,7 +315,7 @@ CREATE TABLE IF NOT EXISTS candle_dirty (
 -- "Possibly frozen" annotations (an operational flag, not chain data: the co-located matcher writes it when the engine
 -- pre-simulation of the order's next fill is rejected by the token program, e.g. a frozen or blacklisted balance). A flag names the
 -- order UTXO it was raised for and lapses the moment the order moves (fill, cancel, refund): only a flag on the CURRENT outpoint
--- counts. `index replay` does not need it; a lost row only means the matcher probes again.
+-- counts. `kobd db replay` does not need it; a lost row only means the matcher probes again.
 CREATE TABLE IF NOT EXISTS order_flags (
     covenant_id BLOB PRIMARY KEY,
     txid        BLOB NOT NULL,

@@ -107,7 +107,7 @@ pub trait ChainSource: Send + Sync + 'static {
     /// Blue score of a block the node knows (`None`: the node does not know it).
     fn block_blue_score(&self, hash: Hash32) -> impl Future<Output = Result<Option<u64>, RpcError>> + Send;
     /// DAA score of a block the node knows (its header's `daaScore`; `None`: the node does not know it): the DAA of a cursor
-    /// set to that block (`index rebase --to`).
+    /// set to that block (`kobd db rebase --to`).
     fn block_daa_score(&self, hash: Hash32) -> impl Future<Output = Result<Option<u64>, RpcError>> + Send {
         async move {
             let _ = hash;

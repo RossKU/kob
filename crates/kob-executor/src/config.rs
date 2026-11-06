@@ -194,7 +194,7 @@ impl Default for ApiConfig {
 
 /// The token-logo blocklist (`[logo_reports]`; docs/api-reference.md, 3.19 and 3.20). KOB shows a token logo straight from its creator's address in the
 /// viewer's browser and keeps no image. A report (the web app's button, or a GitHub Issue form) hides the logo at once, the operator reviews
-/// it (`kobd index logo-reports`), and the web app reads the list of hidden tokens from `GET /v1/logo-blocklist`.
+/// it (`kobd logo-reports`), and the web app reads the list of hidden tokens from `GET /v1/logo-blocklist`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogoReportsConfig {

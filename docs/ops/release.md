@@ -218,8 +218,8 @@ before the wallets: an indexer refuses a payload version it does not know (`payl
 would list none of the orders the new wallets place.
 
 1. Operators upgrade their **executors / indexers** first. A database schema change says in the release notes whether
-   the database is brought up to date in place, migrated offline with `kobd index migrate` (schema 5, 6 or 7 to 8: about 5 GB of free disk,
-   the old file kept as `index.sqlite3.before-migrate`, and an older build refuses the schema-8 store) or rebuilt with `kobd index replay`
+   the database is brought up to date in place, migrated offline with `kobd db migrate` (schema 5, 6 or 7 to 8: about 5 GB of free disk,
+   the old file kept as `index.sqlite3.before-migrate`, and an older build refuses the schema-8 store) or rebuilt with `kobd db replay`
    (`docs/ops/executor.md` 7.6 and 7.6a).
    Check `GET /v1/health` and that a placement made with `kob` is listed.
    `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git

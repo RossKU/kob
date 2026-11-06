@@ -1,4 +1,4 @@
-//! `kobd index migrate`: brings a data directory written by an earlier build (schema 5, 6, 7 or 8) to the compact layout of
+//! `kobd db migrate`: brings a data directory written by an earlier build (schema 5, 6, 7 or 8) to the compact layout of
 //! schema 9 in ONE offline run, and gives the space back.
 //!
 //! The store is not altered in place. A new file is built beside it and replaces it only when it has been verified; the old file
@@ -857,7 +857,7 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
         say(&format!("the store is of schema {} already: nothing to rebuild", db::SCHEMA_VERSION));
     } else if rep.from_schema < 5 {
         return Err(IndexerError::Config(format!(
-            "{}: schema {}: open it once with the previous build (`run` or `index`) so that it is brought to schema 5 or later, or rebuild it with `index replay`",
+            "{}: schema {}: open it once with the previous build (`run` or `index`) so that it is brought to schema 5 or later, or rebuild it with `kobd db replay`",
             path.display(),
             rep.from_schema
         )));

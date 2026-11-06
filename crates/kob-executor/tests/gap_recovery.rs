@@ -81,7 +81,7 @@ fn node_utxo(spk: &[u8], cov: Hash32, tx: &SignedTx) -> (String, AddressUtxo) {
 }
 
 /// The store follows the chain, stops, and the node prunes past its cursor before the next start. The follower used to halt
-/// there for good (state `gap`, nothing indexed, the operator's `index rebase`); it now continues from the node's pruning point:
+/// there for good (state `gap`, nothing indexed, the operator's `kobd db rebase`); it now continues from the node's pruning point:
 /// the order the node still holds stays open, the one it no longer holds is closed with reason `gap`, an order created after
 /// the pruning point is indexed, and the health says that a stretch of chain was skipped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

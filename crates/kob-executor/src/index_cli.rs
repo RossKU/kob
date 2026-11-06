@@ -1,5 +1,6 @@
-//! The indexer's command line: the options of a start (`kobd --indexer`, and the set `kobd --executor` shares) and the
-//! Indexer's tools, `kobd index <tool>` (migrate, replay, export-orders, export-book, import-orders, logo-reports, rebase).
+//! The indexer's command line: the options of a start (`kobd --indexer`, and the set `kobd --executor` shares), the
+//! database tools, `kobd db <tool>` (migrate, replay, export-orders, export-book, import-orders, rebase), and the token-logo
+//! reports, `kobd logo-reports <command>`.
 
 use crate::config::NodeConfig;
 use crate::config::{IndexerConfig, StartMode};
@@ -12,16 +13,26 @@ use clap::{Args, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// `kobd index <tool>`.
+/// `kobd db <tool>`.
 #[derive(Args)]
-pub struct IndexArgs {
+pub struct DbArgs {
     #[command(flatten)]
     pub opts: IndexOpts,
     #[command(subcommand)]
-    pub sub: Option<IndexSub>,
+    pub sub: DbSub,
 }
 
-/// The indexer options every start takes (`kobd --indexer`, `kobd --executor`) and the tools of `kobd index`.
+/// `kobd logo-reports <command>`.
+#[derive(Args)]
+pub struct LogoReportsArgs {
+    #[command(flatten)]
+    pub opts: IndexOpts,
+    #[command(subcommand)]
+    pub cmd: LogoCmd,
+}
+
+/// The indexer options every start takes (`kobd --indexer`, `kobd --executor`), and the tools of `kobd db` and
+/// `kobd logo-reports`.
 #[derive(Args, Clone, Debug)]
 pub struct IndexOpts {
     /// TOML configuration file (all keys optional); flags override it.
@@ -110,10 +121,7 @@ impl IndexOpts {
 }
 
 #[derive(Subcommand)]
-pub enum IndexSub {
-    /// Removed: the Indexer starts as `kobd --indexer` (refused with a message that says so).
-    #[command(hide = true)]
-    Run,
+pub enum DbSub {
     /// Rebuild a NEW database from the record log (the log is not modified), then follow the node from its cursor.
     Replay {
         /// Bring the EXISTING database forward instead: apply the record-log frames it has not committed (a database
@@ -151,12 +159,6 @@ pub enum IndexSub {
     },
     /// Recovery hook: import orders from a maker export or archive dump, verified against the node's UTXO set.
     ImportOrders { file: PathBuf },
-    /// Token-logo reports (`[logo_reports]`): review what was reported, restore a logo, hide one for good. Works next to a running
-    /// executor of the same data directory (a short write to its database); there is no administrative route on the network.
-    LogoReports {
-        #[command(subcommand)]
-        cmd: LogoCmd,
-    },
     /// After a gap: move the cursor to a fresh start point and reconcile the tracked orders with the node.
     Rebase {
         /// `sink` or a chain block hash.
@@ -168,7 +170,7 @@ pub enum IndexSub {
     },
 }
 
-/// `kobd index logo-reports`.
+/// `kobd logo-reports`.
 #[derive(Subcommand)]
 pub enum LogoCmd {
     /// The listed tokens, the hidden and not yet reviewed ones first, with the reports about each.
@@ -190,9 +192,9 @@ pub enum LogoCmd {
         /// Covenant id (64 hex characters).
         covenant_id: String,
     },
-    /// Print the whole report state as JSON (reports are not derived from the chain: export before `index replay` rebuilds the database).
+    /// Print the whole report state as JSON (reports are not derived from the chain: export before `kobd db replay` rebuilds the database).
     Export,
-    /// Load an export into an empty report store (after `index replay`).
+    /// Load an export into an empty report store (after `kobd db replay`).
     Import { file: PathBuf },
 }
 
@@ -386,10 +388,24 @@ pub fn refuse_run_only_options(cfg: &IndexerConfig, file: Option<&std::path::Pat
     Ok(())
 }
 
-/// What `kobd index` without a tool, and the removed `kobd index run`, answer: the Indexer starts with the role flag.
-pub const INDEX_START_MOVED: &str = "`kobd index` no longer starts the Indexer: start it with `kobd --indexer` and the same \
-     options (for example `kobd --indexer --config kob-executor.toml`), or plain `kobd` for the configuration the setup wrote; \
-     `kobd index` keeps the Indexer's tools (migrate, replay, export-orders, export-book, import-orders, logo-reports, rebase)";
+/// The tools of `kobd db`, as named on the command line.
+const DB_TOOLS: [&str; 6] = ["migrate", "replay", "export-orders", "export-book", "import-orders", "rebase"];
+
+/// What the removed `kobd index ...` answers (`rest`: the words after `index`): the command that replaced the tool it names
+/// (`kobd db <tool>` or `kobd logo-reports <command>`, with the same options), or the Indexer's start when it names none.
+pub fn index_moved(rest: &[String]) -> String {
+    if let Some(tool) = rest.iter().find(|w| DB_TOOLS.contains(&w.as_str())) {
+        format!("`kobd index {tool}` is now `kobd db {tool}`, with the same options: `kobd db {}`", rest.join(" "))
+    } else if rest.iter().any(|w| w == "logo-reports") {
+        let words: Vec<&str> = rest.iter().map(String::as_str).filter(|w| *w != "logo-reports").collect();
+        format!("`kobd index logo-reports` is now `kobd logo-reports`, with the same options: `kobd logo-reports {}`", words.join(" "))
+    } else {
+        "`kobd index` is gone: the Indexer starts with `kobd --indexer` (for example `kobd --indexer --config kob-executor.toml`); \
+         the database tools are `kobd db <migrate|replay|export-orders|export-book|import-orders|rebase>` and the token-logo \
+         reports `kobd logo-reports`"
+            .into()
+    }
+}
 
 /// The Indexer: follow the node and serve the read API (`kobd --indexer`).
 pub async fn follow_and_serve(opts: IndexOpts) -> Result<()> {
@@ -418,16 +434,11 @@ pub async fn follow_and_serve(opts: IndexOpts) -> Result<()> {
     Ok(())
 }
 
-/// Runs a tool of `kobd index`.
-pub async fn run_index(a: IndexArgs) -> Result<()> {
-    let sub = match a.sub {
-        None | Some(IndexSub::Run) => anyhow::bail!(INDEX_START_MOVED),
-        Some(sub) => sub,
-    };
+/// Runs a tool of `kobd db`.
+pub async fn run_db(a: DbArgs) -> Result<()> {
     let cfg = build_config(&a.opts)?;
-    match sub {
-        IndexSub::Run => unreachable!("refused above"),
-        IndexSub::Replay { onto_database: true } => {
+    match a.sub {
+        DbSub::Replay { onto_database: true } => {
             let f = indexer::replay_onto_database(&cfg)?;
             let r = &f.replay;
             println!(
@@ -446,7 +457,7 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
                 );
             }
         }
-        IndexSub::Replay { onto_database: false } => {
+        DbSub::Replay { onto_database: false } => {
             let r = indexer::replay_from_log(&cfg)?;
             println!(
                 "replayed {} record-log frames ({} relevant transactions) into {}: {} orders",
@@ -477,7 +488,7 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
                 }
             }
         }
-        IndexSub::Migrate { no_compress_log } => {
+        DbSub::Migrate { no_compress_log } => {
             let opts = indexer::storage::Options { compress_log: !no_compress_log };
             let r = indexer::storage::migrate(&cfg, opts, |line| println!("{line}"))?;
             println!(
@@ -495,7 +506,7 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
                 println!("the previous store file is kept as {}: delete it once the executor has run on the new one", old.display());
             }
         }
-        IndexSub::ExportOrders { maker, live_only } => {
+        DbSub::ExportOrders { maker, live_only } => {
             // read-only: allowed next to a running writer of the same data directory (nothing indexed yet: an empty export)
             let conn = if cfg.db_path().exists() {
                 indexer::db::open_reader(&cfg.db_path(), &cfg.network)?
@@ -506,7 +517,7 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
             let export = recover::export_orders(&conn, maker.as_deref(), live_only)?;
             println!("{}", serde_json::to_string_pretty(&export)?);
         }
-        IndexSub::ExportBook { out } => {
+        DbSub::ExportBook { out } => {
             // read-only, like export-orders (nothing indexed yet: an empty book)
             let conn = if cfg.db_path().exists() {
                 indexer::db::open_reader(&cfg.db_path(), &cfg.network)?
@@ -525,7 +536,7 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
                 }
             }
         }
-        IndexSub::ImportOrders { file } => {
+        DbSub::ImportOrders { file } => {
             let export: MakerExport =
                 serde_json::from_str(&std::fs::read_to_string(&file).with_context(|| file.display().to_string())?)?;
             let idx = Indexer::open(cfg.clone())?;
@@ -537,8 +548,7 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
             let report = recover::import_orders(&idx.ingest, client.as_ref(), &cfg.network, &export).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        IndexSub::LogoReports { cmd } => logo_reports_cmd(&cfg, cmd)?,
-        IndexSub::Rebase { to, no_reconcile } => {
+        DbSub::Rebase { to, no_reconcile } => {
             let idx = Indexer::open(cfg.clone())?;
             let client = node_client(&cfg);
             let rep = recover::rebase(&idx.ingest, client.as_ref(), &cfg.network, &to, !no_reconcile).await?;
@@ -560,10 +570,11 @@ fn ms_text(ms: i64) -> String {
     format!("{}", ms / 1000)
 }
 
-/// The `logo-reports` subcommands: the administrator's side of the blocklist (`crate::logo_reports`).
-fn logo_reports_cmd(cfg: &IndexerConfig, cmd: LogoCmd) -> Result<()> {
+/// `kobd logo-reports`: the administrator's side of the blocklist (`crate::logo_reports`).
+pub fn run_logo_reports(a: LogoReportsArgs) -> Result<()> {
     use crate::hex::Hash32;
     use crate::logo_reports as lr;
+    let (cfg, cmd) = (build_config(&a.opts)?, a.cmd);
     let mut conn = lr::open(&cfg.db_path(), &cfg.network)?;
     let now = lr::system_now_ms();
     let id = |s: &str| Hash32::parse(s.trim()).map_err(|e| anyhow!("covenant id: {e}"));

@@ -10,15 +10,16 @@
 //!   keyless role).
 //! * `setup`: the interactive first run (`kob_executor::setup`), which writes `kob-executor.toml` next to the binary;
 //!   `setup --non-interactive` and `address-balance` are its JSON forms for a wrapper (the Android app, `kob_executor::app`);
-//! * `index <tool>`: the Indexer's tools on a data directory (migrate, replay, export-orders, export-book, import-orders,
-//!   logo-reports, rebase);
+//! * `db <tool>`: the tools of a data directory's database (migrate, replay, export-orders, export-book, import-orders, rebase);
+//! * `logo-reports`: the administrator's side of the token-logo reports (list, restore, hide, export, import);
 //! * `match`, `keep`: the matcher and the keepers alone, planning against a book snapshot file that an indexer exports
 //!   (`--book-file`), for deployments that keep the key away from the public API;
 //! * `x402`: the x402 facilitator alone (keyless; finality from the node's UTXO set);
 //! * `withdraw`: sends KAS out of the operator key over the configured node, the public resolver pair included
 //!   (`kob_executor::withdraw`).
 //!
-//! The removed starts `kobd run ...` and `kobd index` without a tool fail with a message that names the role flags.
+//! The removed starts `kobd run ...` and `kobd index` fail with a message that names the role flags, and the removed tools
+//! `kobd index <tool>` with one that names the command that replaced them (`kobd db <tool>`, `kobd logo-reports`).
 //!
 //! Roles that hold keys hold only the operator's hot key; the facilitator holds none.
 
@@ -31,7 +32,7 @@ use anyhow::{anyhow, bail};
 
 use crate::app::{self, AddressBalanceArgs, AppRole, AppSetup, RoleFlags};
 use crate::executor::{self, RunArgs};
-use crate::index_cli::{run_index, IndexArgs, IndexOpts};
+use crate::index_cli::{index_moved, run_db, run_logo_reports, DbArgs, IndexOpts, LogoReportsArgs};
 use crate::logging::{self, LogOptions};
 use crate::matcher::cli::{run_keep, run_match, KeepArgs, MatchArgs};
 use crate::setup::{self, NoArgs, SetupArgs, SetupOptions, StdConsole, WrpcSetupNode};
@@ -46,8 +47,8 @@ setup when there is none. `kobd --executor`, `kobd --indexer` or both start thos
 exactly these roles), with --config <file>, or from the options alone; the options above follow the flags. The Indexer takes the \
 indexer's options only (no --key-file, --dry-run, ...).
 
-Commands: kobd setup, kobd address-balance, kobd withdraw, kobd index <migrate|replay|export-orders|export-book|import-orders|\
-logo-reports|rebase>, kobd match, kobd keep, kobd x402 (kobd help <command>).";
+Commands: kobd setup, kobd address-balance, kobd withdraw, kobd db <migrate|replay|export-orders|export-book|import-orders|\
+rebase>, kobd logo-reports, kobd match, kobd keep, kobd x402 (kobd help <command>).";
 
 /// What `kobd --executor`, removed, answers.
 const RUN_MOVED: &str = "`kobd run` no longer starts the Executor: start it with `kobd --executor` and the same options (for \
@@ -69,7 +70,7 @@ struct LogArgs {
     log_files: Option<usize>,
 }
 
-/// A command (`kobd setup`, `kobd index migrate`, ...).
+/// A command (`kobd setup`, `kobd db migrate`, ...).
 #[derive(Parser)]
 #[command(
     name = "kobd",
@@ -118,9 +119,19 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
     },
-    /// The Indexer's tools on a data directory: migrate, replay, export-orders, export-book, import-orders, logo-reports, rebase
-    /// (the Indexer itself starts as `kobd --indexer`).
-    Index(IndexArgs),
+    /// Removed: the database tools are `kobd db <tool>`, the logo reports `kobd logo-reports`, the Indexer starts as
+    /// `kobd --indexer` (refused with a message that names the new command).
+    #[command(hide = true, disable_help_flag = true)]
+    Index {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
+    },
+    /// The database of a data directory: migrate (bring an earlier build's store to this build's layout), replay (rebuild it
+    /// from the record log), export-orders, export-book, import-orders, rebase.
+    Db(DbArgs),
+    /// Token-logo reports (`[logo_reports]`): review what was reported, restore a logo, hide one for good. Works next to a
+    /// running executor of the same data directory (a short write to its database); there is no administrative route on the network.
+    LogoReports(LogoReportsArgs),
     /// Batch-match crossing orders (spread + tips), trigger and arm stops in the batches, chain oversize crossings, from a
     /// book snapshot file.
     Match(MatchArgs),
@@ -228,13 +239,15 @@ fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow:
     logging::init(json_out);
     if !json_out {
         let config = match &cli.cmd {
-            Cmd::Index(a) => a.opts.config.as_deref(),
+            Cmd::Db(a) => a.opts.config.as_deref(),
+            Cmd::LogoReports(a) => a.opts.config.as_deref(),
             _ => None,
         };
         attach_log(&cli.log, config)?;
     }
     match cli.cmd {
         Cmd::Run { .. } => bail!(RUN_MOVED),
+        Cmd::Index { rest } => bail!(index_moved(&rest)),
         Cmd::Setup(a) => {
             if a.role.is_some() {
                 bail!("--role is gone: name the roles with --executor, --indexer or both (`kobd setup --executor`)");
@@ -257,7 +270,8 @@ fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow:
             Ok(())
         }
         Cmd::Withdraw(a) => withdraw_cmd(rt, &a),
-        Cmd::Index(a) => rt.block_on(run_index(a)),
+        Cmd::Db(a) => rt.block_on(run_db(a)),
+        Cmd::LogoReports(a) => run_logo_reports(a),
         Cmd::Match(a) => rt.block_on(run_match(a)),
         Cmd::Keep(a) => rt.block_on(run_keep(a)),
         Cmd::X402(a) => rt.block_on(x402::run(a)),
@@ -540,7 +554,7 @@ mod tests {
     #[test]
     fn a_command_is_told_from_a_start() {
         assert!(names_a_command(&words(&["setup", "--executor"])));
-        assert!(names_a_command(&words(&["--log-file", "x.log", "index", "migrate"])));
+        assert!(names_a_command(&words(&["--log-file", "x.log", "db", "migrate"])));
         assert!(names_a_command(&words(&["--log-files=3", "withdraw"])));
         assert!(!names_a_command(&words(&[])));
         assert!(!names_a_command(&words(&["--executor", "--dry-run"])));

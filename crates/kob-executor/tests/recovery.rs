@@ -659,7 +659,7 @@ async fn kron_maker_export_import_is_verified_against_the_node_utxo_set() {
     assert!(cv.ok, "the KRON custody UTXO was verified against the node: {cv:?}");
 }
 
-/// TN10 soak 10-01: `index import-orders` run next to a running `run` interleaved two writers of one record log and broke
+/// TN10 soak 10-01: `kobd db import-orders` run next to a running `run` interleaved two writers of one record log and broke
 /// its hash chain. Every writer of a data directory now holds an exclusive OS lock; readers do not need it.
 #[tokio::test]
 async fn a_data_directory_has_one_writer_and_readers_work_next_to_it() {
@@ -704,7 +704,7 @@ async fn a_data_directory_has_one_writer_and_readers_work_next_to_it() {
     assert_eq!(order_status(&idx, &w.cov(&create, 0)), "partial");
 }
 
-/// `index rebase --to`: the cursor carries the DAA score of the block it is set to (its header's), not the node's virtual DAA
+/// `kobd db rebase --to`: the cursor carries the DAA score of the block it is set to (its header's), not the node's virtual DAA
 /// score (the store's `cursor_daa` is what the book view, the API's `expired` and the refund keepers read). Both with and
 /// without the reconciliation, to a chain block, the pruning point and the sink; a block the node does not know sets nothing.
 #[tokio::test]

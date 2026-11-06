@@ -186,7 +186,7 @@ page fills it from a file the creator picks, `docs/spec/token-metadata.md` 2). S
   address; the last list is cached in localStorage; it **fails open**: an indexer that cannot be reached or has no such route leaves logos visible). A token on
   the list shows its letter and, in its details, "Logo hidden after a report". "Report logo" in the token's details posts `{covenant_id, reason}` to
   `POST <indexer>/v1/logo-reports` (reasons: illegal, impersonation, other; no free text). The first report hides the logo for everyone at once; the operator
-  reviews it with `kobd index logo-reports` (`docs/ops/executor.md`) and may restore it; reports of a restored token are only recorded for `cooldown_secs`
+  reviews it with `kobd logo-reports` (`docs/ops/executor.md`) and may restore it; reports of a restored token are only recorded for `cooldown_secs`
   (default 6 hours). The same list is fed by the GitHub Issue form `.github/ISSUE_TEMPLATE/logo-report.yml` through the workflow `.github/workflows/logo-report.yml`,
   which posts to the repository variable `KOB_LOGO_REPORT_URL` (the public indexer's `/v1/logo-reports` address; unset: the workflow only comments that the report
   waits for manual review). The indexer needs `[logo_reports] enabled = true` (`docs/ops/chart-server.md`, `docs/api-reference.md` 3.19 and 3.20).

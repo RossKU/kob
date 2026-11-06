@@ -831,7 +831,7 @@ Reports the logo of a token. KOB keeps and serves no third-party image: the web 
 from the address its creator gave. A report is how that image is taken down: **the first report of a token hides its logo at once**
 (the web app shows the letter avatar instead), the operator reviews it, and the token can be restored. Present only with
 `[logo_reports] enabled = true` (section 6; otherwise `404`, "no such route"). The only write route of the API; there is no
-administrative route on the network (the operator restores and hides with `kobd index logo-reports`,
+administrative route on the network (the operator restores and hides with `kobd logo-reports`,
 [ops/executor.md](ops/executor.md)).
 
 Body (JSON, at most 1024 bytes; `content-type` is not checked; unknown fields are refused, so no free text is taken or stored):
@@ -1137,7 +1137,7 @@ Top-level table of the same file (section 3.19). Unknown keys are refused.
 | `max_per_day` | `200` | Reports accepted from all clients together per 24 hours; 0 = none. |
 
 The state lives in the indexer's database (`logo_blocklist`, `logo_reports`), is not derived from the chain, and is not rebuilt by
-`index replay` (use `kobd index logo-reports export` before and `import` after).
+`kobd db replay` (use `kobd logo-reports export` before and `import` after).
 
 Related top-level keys that shape what the API reports: `settle_depth_daa` (100), `daa_per_second` (10), `lag_alarm_hours`
 (`[1, 6, 12, 24]`), `max_lag_secs` (30).

@@ -1,4 +1,4 @@
-//! `kobd index logo-reports`: the administrator's side of the token-logo blocklist, run as the binary against a database file
+//! `kobd logo-reports`: the administrator's side of the token-logo blocklist, run as the binary against a database file
 //! (next to a running executor it is a short write to the same file).
 
 use kob_executor::hex::Hash32;
@@ -13,7 +13,7 @@ fn network() -> &'static str {
 
 fn run(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_kobd"))
-        .args(["index", "--network", network(), "--data-dir", dir.to_str().unwrap(), "logo-reports"])
+        .args(["logo-reports", "--network", network(), "--data-dir", dir.to_str().unwrap()])
         .args(args)
         .env_remove("KOB_NETWORK")
         .env_remove("KOB_NODE_WRPC")

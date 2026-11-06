@@ -29,7 +29,7 @@ pub struct CommonArgs {
     /// with a password or an API key belongs in `KOB_NODE_WRPC`; logs show it redacted.
     #[arg(long, env = "KOB_NODE_WRPC")]
     pub rpc_url: Option<String>,
-    /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by `kobd index export-book --out FILE`.
+    /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by `kobd db export-book --out FILE`.
     #[arg(long, env = "KOB_BOOK_FILE")]
     pub book_file: PathBuf,
     /// File holding the operator's secret key (64 hex, mode 0600). Not the key itself.

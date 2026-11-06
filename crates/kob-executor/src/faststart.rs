@@ -18,7 +18,7 @@
 //! switches to it ([`FastSource`], between two ticks of the runner, so the matcher and the keepers never plan against both),
 //! the read API restarts over it, and `<data_dir>/tip/` is deleted. A later start finds only the full store and uses it
 //! directly. A start that finds a leftover tip store (the process stopped before the switch) resumes the fast start: a tip
-//! store more than ten minutes behind the node is moved to the sink first (`index rebase --to sink`, which also closes the
+//! store more than ten minutes behind the node is moved to the sink first (`kobd db rebase --to sink`, which also closes the
 //! orders the node no longer holds).
 //!
 //! A node that prunes its oldest data while the full store is still near its start (the pruning point it began at moves past

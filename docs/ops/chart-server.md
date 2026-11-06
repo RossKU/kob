@@ -212,7 +212,7 @@ enabled = true
 
 The two routes (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`) then sit behind the same tunnel; the per-client limit uses the
 visitor address of this section, so keep `trusted_proxies` and `client_ip_header` right. You review with
-`kobd index --config kob-executor.toml logo-reports list | restore | hide` in the server's folder (`executor.md`, Part B). Set the GitHub repository variable
+`kobd logo-reports --config kob-executor.toml list | restore | hide` in the server's folder (`executor.md`, Part B). Set the GitHub repository variable
 `KOB_LOGO_REPORT_URL` to `https://chart.example.org/v1/logo-reports` so the Issue form feeds the same list.
 
 **Abuse, in the API and at Cloudflare.** The API limits each client on its own: 20 requests per second with a burst of 60 per
@@ -228,7 +228,7 @@ front of the tunnel instead of raising the limits: a rate-limiting rule for the 
 
 `kob-data` holds the SQLite database (`index.sqlite3`) and the record log (`records/`). The record log is the asset to back
 up: it is append-only, all but the newest segment never change, and it is the only source of the history once the node has
-pruned it. The database can always be rebuilt from it (`kobd index replay`). Details, a consistent database copy while
+pruned it. The database can always be rebuilt from it (`kobd db replay`). Details, a consistent database copy while
 the indexer runs, and restoring: `docs/ops/executor.md`, Part B, section 8.
 
 **Size.** The design estimate was 2.6 KB of database and 1 KB of log per order. The testnet-10 soak measured more, because an order
@@ -239,7 +239,7 @@ orders a day mainnet will bring is not known yet: read the growth of `kob-data` 
 
 **Time to restore** (testnet-10 drill of 2026-10-20, `docs/testing/TN10-TEST-2026-10.md` section 14): `VACUUM INTO` of the running
 2.85 GB database took 84 seconds; restoring that copy next to the record log and bringing it forward (`replay --onto-database`)
-took minutes; a full `index replay` of a 1.2 GB log (367,916 frames, 306,552 orders) took 2,634 seconds (about 44 minutes) and
+took minutes; a full `kobd db replay` of a 1.2 GB log (367,916 frames, 306,552 orders) took 2,634 seconds (about 44 minutes) and
 prints nothing until it is done. The chart is dark that long if you rebuild in place; section 6 shows how to avoid that.
 
 **Backups on a Windows home PC.** The recipe of `executor.md` 8 uses the `sqlite3` command line for `VACUUM INTO`, which Windows
@@ -294,7 +294,7 @@ third-party indexers in the deployment helps them.
 ## 6. Upgrading, and rebuilding without chart downtime
 
 **A new release of the program.** Read the release notes (`docs/ops/release.md`, 7) for the payload version and for whether the
-database is brought up to date in place, migrated offline with `kobd index migrate` (`executor.md`, 7.6a) or rebuilt. Then:
+database is brought up to date in place, migrated offline with `kobd db migrate` (`executor.md`, 7.6a) or rebuilt. Then:
 
 1. `kobd --version` and `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`) say what runs now.
 2. Download the new archive, check its hash (`executor-quickstart.md`, 1) and unzip it into a new folder next to the old one.
@@ -303,17 +303,17 @@ database is brought up to date in place, migrated offline with `kobd index migra
    start it. The chart is dark for the stop and the start only: in the soak test the API answered 3 seconds after a start and the
    store was following again 35 seconds after a 6-minute outage. A database the release brings up to date in place does it at
    that start (7 seconds on a 1.6 GB copy). Check `/v1/health` again: `version`, `commit`, `payload_version`, `state = following`.
-4. **Rebuild beside the running one, then switch.** When the release needs a rebuild (`index replay`: 44 minutes per 1.2 GB of log
+4. **Rebuild beside the running one, then switch.** When the release needs a rebuild (`kobd db replay`: 44 minutes per 1.2 GB of log
    here, offline, no API), or you want to see the new version work before the public does:
    1. Make a second folder `B` (for example `C:\kob-b`) from the new archive. Copy the running folder's `kob-executor.toml` into it and
       change only the port: `listen = "127.0.0.1:8091"`. `data_dir = "kob-data"` is relative to the file, so `B` has its own data.
-   2. Logo reports (only with `[logo_reports]` on): they are not in the record log. Run `kobd index --config kob-executor.toml
-      logo-reports export > logo-reports.json` in the running folder, and `logo-reports import logo-reports.json` in `B` after the
+   2. Logo reports (only with `[logo_reports]` on): they are not in the record log. Run `kobd logo-reports --config kob-executor.toml
+      export > logo-reports.json` in the running folder, and `kobd logo-reports import logo-reports.json` in `B` after the
       replay (`--onto-database` keeps them). Copy the record log: the whole `kob-data/records/` folder of the running indexer into `B/kob-data/records/` (a half-written last
-      frame in the copy is dropped when the log is opened). Then run `kobd index replay --config kob-executor.toml` in `B`: it
+      frame in the copy is dropped when the log is opened). Then run `kobd db replay --config kob-executor.toml` in `B`: it
       builds a new database from the log under the new program's rules and prints a summary at the end (rejected placements by
       reason). Faster, when the release does not change how the database is derived: put a `VACUUM INTO` copy of the running
-      database (section 4) in as `B/kob-data/index.sqlite3` and run `index replay --onto-database` instead (`executor.md`, 8).
+      database (section 4) in as `B/kob-data/index.sqlite3` and run `kobd db replay --onto-database` instead (`executor.md`, 8).
    3. Start `B` (`kobd --indexer` with `B`'s copy of the program). It catches up the time since the last logged frame from the node.
       Wait until `curl -s http://127.0.0.1:8091/v1/health` shows the new `version` and `commit`, `state = following` and
       `book_complete = true`, and compare a few answers with the running one (`/v1/tokens`, `/v1/orders?...`).

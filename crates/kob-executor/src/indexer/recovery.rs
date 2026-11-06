@@ -3,7 +3,7 @@
 //! A store whose cursor the node has pruned (a downtime longer than the node's retention, or a store that began at the
 //! node's pruning point and was slow enough for the node to move it past the cursor) gets the node's answer `the queried
 //! hash does not have retention root on its chain`, and a plain follower halts at that gap for good ([`Follower::run`],
-//! docs/ops/executor.md Part B 7.4). The recovering follower does what the operator would do by hand (`index rebase`) and
+//! docs/ops/executor.md Part B 7.4). The recovering follower does what the operator would do by hand (`kobd db rebase`) and
 //! carries on: it moves the store to the node's pruning point (to the sink for a store configured to start there), with the
 //! tracked orders reconciled with the node's UTXO set ([`crate::recover::rebase`]: outputs the node no longer has are closed
 //! with reason `gap`, continuations under the same script are adopted; nothing the store has is deleted), and follows from

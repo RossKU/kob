@@ -1,7 +1,7 @@
 //! C5 liveness audit, recovery: an order the gap reconciliation closed can be re-imported by its maker (fixed; the finding
 //! as reported follows).
 //!
-//! `index rebase` (`recover::reconcile_open_orders`) closes every tracked order UTXO the node no longer has at the SAME
+//! `kobd db rebase` (`recover::reconcile_open_orders`) closes every tracked order UTXO the node no longer has at the SAME
 //! script (`LogOp::CloseGap`, status `closed`, its custody rows marked spent) and only adopts a successor with the same script
 //! (practically only bids: every ask-side fill changes `amountLeft` and so the script). An ask that was partially filled inside
 //! the gap is therefore closed although it lives on under a new script. `docs/ops/executor.md` 7.4 / 7.5 then send the maker
@@ -63,7 +63,7 @@ async fn an_ask_partially_filled_in_the_gap_can_be_imported_by_its_maker_after_t
         node_utxo(&custody_spk, Hash32(TOKEN_COV), Hash32(fill.tx.id), ci as u32, fill.tx.outputs[ci].value),
     ]);
 
-    // `index rebase`: the old script has no UTXO any more and no successor with the same script: closed by the gap
+    // `kobd db rebase`: the old script has no UTXO any more and no successor with the same script: closed by the gap
     let cursor = Cursor { hash: c.hs.node.tip(), daa: c.daa() };
     let rep = reconcile_open_orders(&c.hs.ingest, c.hs.node.as_ref(), "testnet-10", cursor).await.unwrap();
     assert_eq!((rep.closed, rep.adopted), (1, 0), "{rep:?}");

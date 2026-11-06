@@ -11,7 +11,7 @@
 //! * a token's covenant id and a holding's owner are rows of `ids` (`id`, `h`), added when first seen and never deleted:
 //!   `order_events.token_id`, `token_utxos.token_id`, `token_holdings.token_id` / `owner_id`, `holding_programs.token_id`;
 //! * (schema 9) the same for the columns of `orders` itself: `maker_id`, `template_id`, `token_id`, `token_tpl_id`, `ext_id`, `quote_id`.
-//!   The few values the orders name are the first rows of `ids` (`index migrate` assigns them first), and a new order interns its
+//!   The few values the orders name are the first rows of `ids` (`kobd db migrate` assigns them first), and a new order interns its
 //!   values before it is inserted ([`intern`]).
 //!
 //! Rust keeps speaking [`Hash32`]. A statement that filters or inserts by one of them resolves it in the statement

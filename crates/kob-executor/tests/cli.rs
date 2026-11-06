@@ -69,7 +69,7 @@ fn exe_fails(args: &[&str]) -> String {
 }
 
 #[test]
-fn the_executor_needs_a_role_and_a_key_and_index_keeps_its_tools() {
+fn the_executor_needs_a_role_and_a_key_and_db_has_the_tools() {
     let dir = std::env::temp_dir().join(format!("kob-cli-run-{}", std::process::id()));
     let data = dir.to_str().unwrap();
     // both roles off is the Indexer
@@ -94,22 +94,31 @@ fn the_executor_needs_a_role_and_a_key_and_index_keeps_its_tools() {
         (vec!["run", "--help"], "`kobd run` no longer starts the Executor: start it with `kobd --executor`"),
         (
             vec!["index", "--data-dir", data, "--network", "testnet-10"],
-            "`kobd index` no longer starts the Indexer: start it with `kobd --indexer`",
+            "`kobd index` is gone: the Indexer starts with `kobd --indexer`",
         ),
+        (vec!["index", "run", "--data-dir", data], "`kobd index` is gone: the Indexer starts with `kobd --indexer`"),
+        (vec!["index", "--help"], "the database tools are `kobd db <migrate|"),
+        // the removed tools name the command that replaced them, with the words given (no alias: nothing runs)
         (
-            vec!["index", "run", "--data-dir", data, "--network", "testnet-10"],
-            "`kobd index` no longer starts the Indexer: start it with `kobd --indexer`",
+            vec!["index", "--config", "kob-executor.toml", "migrate"],
+            "`kobd index migrate` is now `kobd db migrate`, with the same options: `kobd db --config kob-executor.toml migrate`",
+        ),
+        (vec!["index", "replay", "--onto-database"], "`kobd db replay --onto-database`"),
+        (vec!["index", "export-orders", "--data-dir", data, "--network", "testnet-10"], "is now `kobd db export-orders`"),
+        (
+            vec!["index", "--config", "k.toml", "logo-reports", "list"],
+            "`kobd index logo-reports` is now `kobd logo-reports`, with the same options: `kobd logo-reports --config k.toml list`",
         ),
     ] {
         let err = exe_fails(&args);
         assert!(err.contains(new), "{args:?}: {err}");
     }
     assert!(!dir.exists());
-    // the reference build implies no network: the Executor, `index`, `match` and `keep` refuse to guess one (never testnet-10)
+    // the reference build implies no network: the Executor, `db`, `match` and `keep` refuse to guess one (never testnet-10)
     if kob_protocol::artifacts::deployment_network().is_none() {
         for args in [
             vec!["--executor", "--data-dir", data],
-            vec!["index", "export-orders", "--data-dir", data],
+            vec!["db", "export-orders", "--data-dir", data],
             vec!["match", "--book-file", "book.json"],
             vec!["keep", "--book-file", "book.json"],
         ] {
@@ -119,27 +128,27 @@ fn the_executor_needs_a_role_and_a_key_and_index_keeps_its_tools() {
         assert!(!dir.exists());
     }
     // the indexer's own subcommands and global options still parse after the refactor
-    let (out, _) = exe(&["index", "export-orders", "--data-dir", data, "--network", "testnet-10", "--live-only"]);
+    let (out, _) = exe(&["db", "export-orders", "--data-dir", data, "--network", "testnet-10", "--live-only"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert!(v.is_object(), "{out}");
     // a read-only tool: it creates nothing (and takes no writer lock)
     assert!(!dir.exists());
     // the matcher's book snapshot of an empty store: a MemoryBook `match --book-file` reads, to stdout or atomically to a file
-    let (out, _) = exe(&["index", "export-book", "--data-dir", data, "--network", "testnet-10"]);
+    let (out, _) = exe(&["db", "export-book", "--data-dir", data, "--network", "testnet-10"]);
     let b: MemoryBook = serde_json::from_str(out.trim()).unwrap();
     assert!(b.orders.is_empty(), "{out}");
     let file = std::env::temp_dir().join(format!("kob-cli-book-{}.json", std::process::id()));
-    exe(&["index", "export-book", "--data-dir", data, "--network", "testnet-10", "--out", file.to_str().unwrap()]);
+    exe(&["db", "export-book", "--data-dir", data, "--network", "testnet-10", "--out", file.to_str().unwrap()]);
     assert_eq!(serde_json::from_str::<MemoryBook>(&std::fs::read_to_string(&file).unwrap()).unwrap(), b);
     let _ = std::fs::remove_file(&file);
     assert!(!dir.exists());
     let (help, _) = exe(&["match", "--help"]);
     assert!(help.contains("--max-book-lag-daa"), "{help}");
     let (help, _) = exe(&["--help"]);
-    for cmd in ["kobd setup", "kobd index <migrate", "kobd match", "kobd keep", "--executor", "--indexer"] {
+    for cmd in ["kobd setup", "kobd db <migrate", "kobd logo-reports", "kobd match", "kobd keep", "--executor", "--indexer"] {
         assert!(help.contains(cmd), "{help}");
     }
-    assert!(!help.contains("kobd run"), "{help}");
+    assert!(!help.contains("kobd run") && !help.contains("kobd index"), "{help}");
     for flag in [
         "--dry-run",
         "--config",
@@ -157,6 +166,9 @@ fn the_executor_needs_a_role_and_a_key_and_index_keeps_its_tools() {
     ] {
         assert!(help.contains(flag), "{help}");
     }
+    // the command list: db and logo-reports, no index
+    let (cmds, _) = exe(&["help"]);
+    assert!(cmds.contains("db ") && cmds.contains("logo-reports") && !cmds.contains("index "), "{cmds}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

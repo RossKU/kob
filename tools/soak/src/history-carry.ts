@@ -16,7 +16,7 @@
 // `token_cov_id` in `order_events` and `order_state`). `storeSchema` tells them apart: `orders.maker_id` is schema 9, `orders.id`
 // without it schema 8, neither schema 7 (standing for 5 to 7).
 //
-// The executor must be stopped (the database is its derived view; the lock is not checked here). `kobd index replay` rebuilds
+// The executor must be stopped (the database is its derived view; the lock is not checked here). `kobd db replay` rebuilds
 // the tables from the record log and undoes the carry: run it again after a replay (it is idempotent). Each carried id is recorded in
 // `meta` (`carried_history:<old id>`), so a second run reports `already` and an attempt to carry the same id elsewhere is refused.
 
@@ -262,7 +262,7 @@ export function chartProblems(market: string, firstTrade: number | null, firstCa
 // A database of the lot layouts (protocol v2, schema 4 or older: `orders.lot_units`) is converted exactly: a fill's amount is
 // `lots * lot_units * unit` base units and its price stays sompi per `unit` base units, which is the imported order's `scale`.
 // One transaction; the import is recorded in `meta` (`history_import:<label>`), so a re-run is a no-op. The executor must be
-// stopped. `kobd index replay` rebuilds the tables from the record log and drops the import: import again after a replay.
+// stopped. `kobd db replay` rebuilds the tables from the record log and drops the import: import again after a replay.
 // Undo: delete the `order_events` / `order_state` rows (by `order_id`) and the `orders` rows of the orders whose `unlisted_reason` is
 // the label's, and the meta row (the interned `ids` rows may stay).
 

@@ -17,7 +17,8 @@ indexed, listed, matched and kept like their KCC-20 twins; a book is one family'
 | `kobd --executor` | indexer + read API + matcher + keepers, one process, lean store | operator hot key | the indexer's own store (in process) |
 | `kobd --executor --indexer` | the same over a full store with the record log | operator hot key | the indexer's own store (in process) |
 | `kobd --indexer` | indexer + read API | none | the node |
-| `kobd index <tool>` | the Indexer's tools on a data directory (`migrate`, `replay`, `export-orders`, `export-book`, `import-orders`, `logo-reports`, `rebase`) | none | the data directory |
+| `kobd db <tool>` | the database tools of a data directory (`migrate`, `replay`, `export-orders`, `export-book`, `import-orders`, `rebase`) | none | the data directory |
+| `kobd logo-reports` | the token-logo reports of a data directory (`list`, `restore`, `hide`, `export`, `import`) | none | the data directory |
 | `match`, `keep` | matcher, keepers | operator hot key | a book snapshot file (`--book-file`) |
 | `x402` | x402 facilitator (verify, settle) | none | no book; finality from the node's UTXO set |
 | `setup` | the interactive first run: writes `kob-executor.toml` next to the binary, then starts it | makes or names the hot key | - |
@@ -203,7 +204,7 @@ block that accepted every transaction the runner tracks (so none is submitted tw
 two ticks: the matcher, the keepers and the status move to the full store, the read API restarts over it (open connections
 are closed once; clients reconnect), and `<data_dir>/tip/` is deleted. A later start finds only the full store and uses it
 directly. A start that finds a leftover `tip/` (stopped before the switch) resumes: a tip store more than ten minutes behind
-the node is first moved to the sink (the `index rebase --to sink` step, which also closes the orders the node no longer
+the node is first moved to the sink (the `kobd db rebase --to sink` step, which also closes the orders the node no longer
 holds); one that cannot be opened or moved is deleted and started afresh.
 
 The backfill does not starve the tip: the tip follower has a node client of its own, so a window of the backfill's parallel
@@ -213,7 +214,7 @@ Not used: with the Indexer (`kobd --indexer`; it has no matcher and refuses `fas
 instead of ignoring them; an index-only host that must follow at once sets `start = "sink"`, see *Fresh database* in Part B 4, and
 the one that catches up reads the time to go from its status line and `/v1/health`'s `catch_up`), with the x402 facilitator in
 the same process (its acceptance tracking and book are bound to one store), and when `start` is not the pruning point. Not implemented: importing live orders from another
-indexer into the tip store at the start (`fast_start_import`); a verified import (`index import-orders`) is the tool for that.
+indexer into the tip store at the start (`fast_start_import`); a verified import (`kobd db import-orders`) is the tool for that.
 
 ### A.1.2 Lean storage: the live book, 30 days of closed orders, a size cap, a file that shrinks
 
@@ -247,7 +248,7 @@ indexer. Default off; `kobd setup` and the Android app write it for the Executor
   shrinks: a new store is created with `auto_vacuum = INCREMENTAL` (an older one is rewritten once with `VACUUM` at the first
   lean start, which needs the free space of its own size), and each batch hands up to 2,000 freed pages back (in steps of 64, while its
   time lasts).
-* **Converting a big store.** The soak's executor B after `index migrate` (3.2 GB, 1.19 million orders, a 500 MB cap): the first lean
+* **Converting a big store.** The soak's executor B after `kobd db migrate` (3.2 GB, 1.19 million orders, a 500 MB cap): the first lean
   start rewrites the file once (about a minute) and builds the pruning indexes (seconds); the follower then catches up at the
   speed of a store that is not lean (about 110 DAA/s over the public pair on this store; the same build without `--lean` 108, the
   build before schema 9 on the schema-5 store 101) and prunes from the moment it is within a minute of the node, 21,840 batches of
@@ -260,7 +261,7 @@ indexer. Default off; `kobd setup` and the Android app write it for the Executor
   deleted by the cap) is 404,
   candles, statistics and trades cover the window, `GET /v1/health` has `lean: true` (and the metrics
   `kob_indexer_lean`, `kob_indexer_lean_orders_pruned_total`, `kob_indexer_lean_rows_pruned_total`). Use an archive indexer
-  (`lean = false`, record log on) for history, charts and recovery (`index replay` needs the log).
+  (`lean = false`, record log on) for history, charts and recovery (`kobd db replay` needs the log).
 
 Measured on testnet-10 (`kobd --executor --dry-run` over the public pair with a fast start, 5 minutes, which indexes about 1.7 h of
 the 30 h history): 28.3 MB database plus a 9.1 MB record log without lean; 26.7 MB database and no record log with lean. Nothing
@@ -303,7 +304,7 @@ JSON object, for scripts and the Android app) and `kobd withdraw --to ADDRESS --
 operator key over the configured node, public resolver pair included; it takes the data directory's writer lock, so it refuses while the
 executor runs; Quick start, section 5).
 
-`kobd --indexer` (with the tools `kobd index replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
+`kobd --indexer` (with the database tools `kobd db replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
 standalone modes. The database and the record log are the same files in every mode; never run two
 writers on one data directory.
 
@@ -757,7 +758,7 @@ maintenance jobs and the live book of the read API read, the reorg window, and `
 (`lean_max_db_mb`, 500) deletes the oldest closed orders first, but only while the store is larger. The record log is off.
 The history is an archive indexer's job (`lean = false`).
 
-The database is a *derived view* of the record log: `kobd index replay` rebuilds it from the
+The database is a *derived view* of the record log: `kobd db replay` rebuilds it from the
 records and the follower re-syncs the tail from the node (section 7.6). Measured numbers are in
 section 3; they come from `cargo test -p kob-executor --test storage -- --nocapture`.
 
@@ -777,7 +778,7 @@ it was the same bytes stored again, and none of it is lost now:
   60 and 27 bytes on average. A CRC-32 of the value is stored with it, so a dictionary column that ever changed is an error and never another
   state; a value no dictionary shortens is kept as it is.
 * **Four pairs of SQL functions**, registered on every connection (`kob_pack` / `kob_ustate`, `kob_hpack` / `kob_hstate`, `kob_gpack` /
-  `kob_gstate`, `kob_dpack` / `kob_dtext`), are how the queries read and write those columns. `index migrate` (7.6a) checks, batch by batch,
+  `kob_gstate`, `kob_dpack` / `kob_dtext`), are how the queries read and write those columns. `kobd db migrate` (7.6a) checks, batch by batch,
   that every value it rewrites reads back the same.
 * **Indexes.** `order_events_fills` and `order_events_fill_ts` hold the fills only (a third of the events); `token_holdings_owner` is
   dropped (the owner's page index served every read it served: the query plans are unchanged); the `(token, program)` index over every
@@ -801,7 +802,7 @@ it was the same bytes stored again, and none of it is lost now:
   sorts the holdings of the block it ends in (52 at most on the soak store) instead of every entry carrying the 32-byte transaction id. Two reads
   keep their results but not their cut-offs: past its scan cap the open token list keeps the first-seen listed (token, program) rows, not the lowest
   hashes, and `claimed_programs` reads at most 1,024 programs of a token's orders (both only matter beyond the caps, far above what a store holds).
-  **This build refuses a store of schema 8 or older** (`OldLayout`, the file untouched) until `index migrate` (7.6a) has rebuilt it, and an older
+  **This build refuses a store of schema 8 or older** (`OldLayout`, the file untouched) until `kobd db migrate` (7.6a) has rebuilt it, and an older
   build refuses a schema-9 store.
 * **The sealed segments of the record log are kept gzip-compressed** (7.6a, 9).
 
@@ -823,7 +824,7 @@ Measured on a copy of the TN10 soak executor (8.48 GB, 2.32 million order UTXOs,
 With the soak's recent rate of 46,000 orders and 51,000
 fills a day, the file grows by about 0.13 GB a day instead of 0.34 GB (schema 7: 0.20 GB, schema 8: 0.16 GB; scaled by the file sizes), and the log by 0.04 GB instead of 0.13 GB. **The `sqlite3` shell no
 longer shows the packed columns as they were** (it lacks the functions): use the API (`/v1/orders`, `/v1/orders/{id}/events`,
-`/v1/token-utxos`), `index export-orders`, or a client that registers this build's functions.
+`/v1/token-utxos`), `kobd db export-orders`, or a client that registers this build's functions.
 
 **Token registry events.** The first sighting of a `(token covenant id, token program, extension
 commitment)` identity is recorded as a `seen` event (`GET /v1/token-events`). It is derived from
@@ -1355,8 +1356,8 @@ own programs connect and one shared set of limits is right; with a proxy in fron
 
 Flags of note: `--reorg-window-hours` (default 12, consensus finality), `--no-record-log` (disables
 the permanent record log: then a lost or outdated database can only be rebuilt from what the node
-still retains; not recommended). `kobd --indexer` follows and serves (the indexer alone); the tools are `kobd index replay`, `export-orders`,
-`export-book` (the matcher's `--book-file` snapshot), `import-orders`, `rebase`, `logo-reports`.
+still retains; not recommended). `kobd --indexer` follows and serves (the indexer alone); the database tools are `kobd db replay`, `export-orders`,
+`export-book` (the matcher's `--book-file` snapshot), `import-orders`, `rebase`, `migrate`; the logo reports are `kobd logo-reports`.
 `kobd --executor` (Part A) embeds this indexer together with the matcher and the keepers and takes
 the same options.
 
@@ -1366,15 +1367,15 @@ serves the list of hidden ones (`POST /v1/logo-reports`, `GET /v1/logo-blocklist
 in 3.19 and 3.20). The first report of a token hides its logo at once; you review it:
 
 ```
-kobd index --config kob-executor.toml logo-reports list        # hidden ones not yet reviewed first (add --json)
-kobd index --config kob-executor.toml logo-reports restore <covenant id>   # shown again; new reports only recorded for cooldown_secs
-kobd index --config kob-executor.toml logo-reports hide <covenant id>      # hidden for good (restore --force undoes it)
-kobd index --config kob-executor.toml logo-reports export > logo-reports.json   # before a `kobd index replay` ...
-kobd index --config kob-executor.toml logo-reports import logo-reports.json     # ... and after it (an empty store only)
+kobd logo-reports --config kob-executor.toml list              # hidden ones not yet reviewed first (add --json)
+kobd logo-reports --config kob-executor.toml restore <covenant id>         # shown again; new reports only recorded for cooldown_secs
+kobd logo-reports --config kob-executor.toml hide <covenant id>            # hidden for good (restore --force undoes it)
+kobd logo-reports --config kob-executor.toml export > logo-reports.json         # before a `kobd db replay` ...
+kobd logo-reports --config kob-executor.toml import logo-reports.json           # ... and after it (an empty store only)
 ```
 
 These open the database next to a running executor (a short write, like the API's own; no lock, and there is no administrative route
-on the network). The reports and the list live in the indexer's database but are not derived from the chain: `index replay` builds a
+on the network). The reports and the list live in the indexer's database but are not derived from the chain: `kobd db replay` builds a
 new database without them. GitHub Issue reports reach the same list when the repository variable `KOB_LOGO_REPORT_URL` is the
 address of `POST /v1/logo-reports` of the public server.
 
@@ -1383,7 +1384,7 @@ still retains). `--start sink` skips history (only new orders, plus imports): th
 follows the chain within a second of the start (`kobd --indexer` has no `fast_start`; A.1.1). Such a store (and one moved
 past unread chain by a gap or a rebase) is not complete for good: `/v1/health` reports `book_complete: false` and
 `history_from_daa` (where its history begins, in DAA; 0 until the start block's score is known), the status line says "history begins
-about N ago: older orders are not in this store", and `kob_indexer_book_complete` is 0; a store rebuilt by `index replay` from
+about N ago: older orders are not in this store", and `kob_indexer_book_complete` is 0; a store rebuilt by `kobd db replay` from
 the record log does not carry the marker (the log holds what the store read). **Catching up**: while the state is
 `catching_up`, `/v1/health` carries `catch_up` (`rate_daa_per_sec`, the DAA of chain indexed per second of wall time over the
 last minute, the chain itself moves at 10; `eta_seconds`, absent while the lag does not shrink) and the status line adds
@@ -1682,7 +1683,7 @@ program is tracked, listed or not and traded by an order or not (tokens received
 bridge): the allowlist decides what is listed, not what a wallet holds. An output of a program this build does not pin,
 or of a look-alike template, proves nothing and is not kept; `program` says which pinned program it is (a consumer marks
 the programs whose profile is not `reviewed`). A transaction that creates such an output, or spends a tracked one, is a relevant transaction
-and is written to the record log; a rebuild by `index replay` reproduces the holdings. Reorgs revert them like every
+and is written to the record log; a rebuild by `kobd db replay` reproduces the holdings. Reorgs revert them like every
 other row (created rows deleted, spent rows live again).
 
 **Limits (answers are never guessed):**
@@ -1701,7 +1702,7 @@ other row (created rows deleted, spent rows live again).
   confirms the output); the tracker's export is the backup, see `docs/spec/token-metadata.md` section 3, *What the issuer must keep*.
 * Tokens sent before the indexer started (`--start sink`, or blocks older than its start) are unknown until they move; so
   are holdings created while an older build tracked only allowlisted / traded tokens (they are not in the record log, so
-  `index replay` cannot add them; a fresh sync from an earlier `--start` on a node that still has those blocks can). The
+  `kobd db replay` cannot add them; a fresh sync from an earlier `--start` on a node that still has those blocks can). The
   holder makes them visible by sending them to themselves. The UTXO set cannot be scanned for them: the address commits to
   the whole state, amount included, so neither the node nor the indexer can read a holding from the output alone.
 * A holding is listed once its transaction is in a chain block the indexer applied (`confirmations` and `settled` say how
@@ -1798,7 +1799,7 @@ about 2 s on it (it took 13 s before: a start-up backfill, `backfill_unknown_pai
 token once per token identity it checks, 25 on the copy; it now decodes the orders of the identity's own transaction first, and the
 whole token only for an identity it corrects). An earlier build still opens the database: it re-creates the two indexes
 this build drops (`orders_maker`, `orders_quote`, about 1 s each), and the triggers keep the counters right under it.
-`index replay` builds the new indexes, the counters and their triggers with the schema, before the first frame. The
+`kobd db replay` builds the new indexes, the counters and their triggers with the schema, before the first frame. The
 indexes and triggers cost the write path nothing measurable: the KOB-only capacity mix (*Processing capacity*, 10 s of
 chain) ran at 2,778 tx/s at the tip and 3,460 catching up, against 2,773 and 3,135 for the earlier build on the same PC
 under the same load.
@@ -2000,7 +2001,7 @@ in the record log, but orders created inside the gap cannot be rediscovered from
 
 **The executor and `index run` carry on by themselves** (every store, also the fast start's): the follower moves the store
 to the node's current pruning point (to its sink for a store configured with `start = sink`, the fast start's tip store),
-with the orders the store holds reconciled with the node's UTXO set exactly as `index rebase` does below (nothing is
+with the orders the store holds reconciled with the node's UTXO set exactly as `kobd db rebase` does below (nothing is
 deleted: an output the node no longer has is closed with reason `gap`, a continuation under the same script is adopted),
 and follows from there with a new follower. A store the node prunes from under it again is moved again, at most 10 times
 in one run; after that it stays halted at the gap (`state = gap`, the status line says `STOPPED at a gap`) and a restart
@@ -2019,7 +2020,7 @@ restart point yourself. Recovery, in order of preference:
 2. **Second site.** Copy the standby's database (`VACUUM INTO`, section 8) and record log over, start.
 3. **Rebase and import** (data loss limited to what nobody can supply):
    ```
-   kobd index rebase --to sink          # moves the cursor to the node's sink (at that block's
+   kobd db rebase --to sink             # moves the cursor to the node's sink (at that block's
                                                 # own DAA score, from its header: not the virtual one) and
                                                 # reconciles tracked orders with the node's UTXO set:
                                                 # spent outputs are closed with reason "gap", outputs
@@ -2027,7 +2028,7 @@ restart point yourself. Recovery, in order of preference:
                                                 # at the node's UTXO DAA, with their custody looked
                                                 # up at the script the state derives and the strays
                                                 # the node still holds; the rest of their token rows close
-   kobd index import-orders orders.json # recovery hook, see below
+   kobd db import-orders orders.json    # recovery hook, see below
    kobd --indexer
    ```
    Orders that were created *and* still open at the gap, and are not in any export, stay invisible
@@ -2044,7 +2045,7 @@ restart point yourself. Recovery, in order of preference:
 The export format is the maker's *order receipt*: one entry per order with the template hash, the
 current state span, the extension commitment of the custody token (ask side) and the covenant id. The
 UI/CLI that places an order stores it (it is the placement record); a healthy indexer can produce it
-(`kobd index export-orders --maker <pubkey> --live-only`), and archive dumps (api.kaspa.org,
+(`kobd db export-orders --maker <pubkey> --live-only`), and archive dumps (api.kaspa.org,
 kascov) can be converted to it.
 
 ```json
@@ -2119,7 +2120,7 @@ the node first and refuse a view whose order UTXO the node does not hold (stale 
 
 ```
 mv index.sqlite3 index.sqlite3.bad
-kobd index replay --data-dir /var/lib/kob-index     # builds a NEW database from the log
+kobd db replay --data-dir /var/lib/kob-index        # builds a NEW database from the log
 kobd --indexer ...                                  # resumes from the logged cursor
 ```
 
@@ -2152,17 +2153,17 @@ logged and are not recovered by a replay.
 dictionary-packed genesis states and event details; schema 8: integer ids in the child tables; schema 9: integer ids in the orders too and shorter
 page indexes, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
 writer and reader: move it aside and replay (above). **A database of schema 5, 6, 7 or 8 is refused untouched as well** (`database ... is of schema N: this build reads
-schema 9 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd index migrate` (7.6a) rebuilds it as schema 9 in one offline run, and
+schema 9 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) rebuilds it as schema 9 in one offline run, and
 **from then on a build of an older schema refuses the store** (a newer schema is refused by every build), so the way back to the older build is the
-`index.sqlite3.before-migrate` file `index migrate` keeps (or a backup taken before). An old configuration's `[receipts]` table is ignored. Roll indexers out before
+`index.sqlite3.before-migrate` file `kobd db migrate` keeps (or a backup taken before). An old configuration's `[receipts]` table is ignored. Roll indexers out before
 wallets whenever the KOB1 payload version changes: an indexer refuses a payload version it does not know, so it would list
 none of the orders the new wallets place (`docs/ops/release.md`, section 7).
 
-#### 7.6a Compact storage: `index migrate`
+#### 7.6a Compact storage: `kobd db migrate`
 
 ```
 systemctl stop kob-index                                           # the writer lock: nothing else may write the directory
-kobd index migrate --data-dir /var/lib/kob-index                   # 19 minutes on the 8.5 GB soak store (below)
+kobd db migrate --data-dir /var/lib/kob-index                      # 19 minutes on the 8.5 GB soak store (below)
 systemctl start kob-index
 rm /var/lib/kob-index/index.sqlite3.before-migrate                 # once the executor has run on the new store
 ```
@@ -2193,7 +2194,7 @@ segments 2.95 -> **0.90 GB** (3.3x). Every one of 1,010 read-API calls (books, o
 snapshots, exports) and the logical content of all 19 tables returned the same JSON / digest on the migrated copy as on the store of schema 5
 (`cargo run --release -p kob-executor --example read_digest -- <index.sqlite3> <tokens.json>`, run with the build before and the build
 after; the harness reads every layout). Their times are the same as on the same data in schema 8 (alternating runs: an order's page about 0.5 ms and a token's 24 h stats about 15 ms on a warm cache, the books and the market reads equal, none slower beyond noise; the first design of schema 9, which also dropped the covenant id from the order-list indexes, made every
-price basis of a token with imported orders 5 to 12 ms slower and was not kept). The write path costs nothing measurable: `index replay` of the first 222,836 frames of that log (a
+price basis of a token with imported orders 5 to 12 ms slower and was not kept). The write path costs nothing measurable: `kobd db replay` of the first 222,836 frames of that log (a
 store of 57,642 orders and 335,000 holdings) took 1,056 s with the build before (schema 5) and 940 s with this one (the stores: 536 and 225 MB), and the two stores are table for table the same with their
 ids joined back and their columns decoded. Reading the compressed log (the chain check at every start,
 `replay`) costs about half a second per 256 MiB segment.
@@ -2248,7 +2249,7 @@ Bring the restored database forward from the log (the log is read, never modifie
 ```
 systemctl stop kob-index
 cp /backup/index-2026-10-01.sqlite3 /var/lib/kob-index/index.sqlite3      # remove index.sqlite3-wal / -shm first
-kobd index replay --onto-database --data-dir /var/lib/kob-index   # applies frames 10..500 to the backup
+kobd db replay --onto-database --data-dir /var/lib/kob-index      # applies frames 10..500 to the backup
 systemctl start kob-index                                                 # re-syncs the tail from the node
 ```
 
@@ -2822,14 +2823,14 @@ The matcher plans against an `OrderBookView` (validated orders with their custod
 record data). In the Executor it is the indexer's own store
 (`indexer::book::StoreBook`, Part A); standalone it
 reads a JSON snapshot (`--book-file`, the `MemoryBook` format of
-`kob_executor::matcher::book`), re-read whenever the file changes. An indexer writes it with `kobd index export-book
+`kob_executor::matcher::book`), re-read whenever the file changes. An indexer writes it with `kobd db export-book
 --out FILE` (read-only next to the running writer; the file is replaced atomically): run it periodically, and keep
 `--max-book-lag-daa` (default 300) so that a snapshot no longer refreshed plans nothing (`kob_matcher_book_stale`). The
 snapshot must contain only orders the indexer validated (§1.1, §1.2) and must report strays per order (an old snapshot's
 `receipts` key is ignored). Its `keeperOnly` array holds the live orders the indexer proves but does not list
 (a token outside the allowlist, an order value below the listing minimum, an exit of an unlisted entry, ...): the matcher
 never sees them, the keepers kill, refund and close them exactly as they do in the Executor. An indexer's snapshot
-(`indexer::book::snapshot`, what `index export-book` writes) carries them; a file without the key has none, and its
+(`indexer::book::snapshot`, what `kobd db export-book` writes) carries them; a file without the key has none, and its
 keepers then serve the listed orders only. `--offline` prints one JSON line per planned transaction: its fills (each with
 `evidence`, the leg index of a triggered fill's evidence, else null) and `updates` (`order`, `update` `arm` / `trail`,
 `steps`, `evidence`, `take`).

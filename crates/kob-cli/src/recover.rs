@@ -39,7 +39,7 @@ USAGE
 
 INPUT
   --from        repeatable. The web wallet's backup ({\"format\":\"kob-backup\",..}), the indexer recovery / export file
-                ({\"version\":1|2,\"orders\":[..]}, `kobd index export-orders`, the web's indexer export), or an
+                ({\"version\":1|2,\"orders\":[..]}, `kobd db export-orders`, the web's indexer export), or an
                 indexer order view (GET /v1/orders/{id}) or page of views ({\"items\":[..]}). Orders are deduplicated by
                 covenant id; every state a file names is a search candidate, nothing in a file is trusted.
   --node        the node: a JSON wRPC endpoint (18110 mainnet, 18210 testnet-10), a Borsh one (ws://HOST:17110, wss://.../borsh) or `resolver`; default $KOB_NODE_WRPC, else the public nodes the Kaspa resolvers name (a pair on two hosts that must agree on what a transaction is planned from)
