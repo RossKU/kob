@@ -76,8 +76,8 @@ holders: `kcc20_public_mint_tests.rs`, `audit_pair_sec_tests.rs`, the pair suite
 
 ## KOB on testnet-10 with this program (2026-10-14)
 
-A token of KOB's own issued with this program and traded with KOB's CLI (`kob-cli` of this branch, node
-`ws://65.108.107.30:18210`, a local indexer from `--start sink`, a local testnet-10 registry that lists the token and,
+A token of KOB's own issued with this program and traded with KOB's CLI (`kob-cli` of this branch, an own testnet-10 node,
+a local indexer from `--start sink`, a local testnet-10 registry that lists the token and,
 for that test only, marks the template `reviewed` so that the trading commands take it; the profile stays `pending-review`).
 The token input of every transaction below carries the same 34-byte prefix (context `ff3ae732...`) and the same 11,312-byte
 suffix as the launchpad's own tokens: template hash `3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1`.

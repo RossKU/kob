@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn borsh_urls() {
-        assert_eq!(borsh_url_for("ws://65.108.107.30:18210").as_deref(), Some("ws://65.108.107.30:17210"));
+        assert_eq!(borsh_url_for("ws://10.0.0.5:18210").as_deref(), Some("ws://10.0.0.5:17210"));
         assert_eq!(borsh_url_for("ws://127.0.0.1:18110/").as_deref(), Some("ws://127.0.0.1:17110"));
         assert_eq!(
             borsh_url_for("wss://boson-10.kaspa.red/kaspa/testnet-10/wrpc/json").as_deref(),
