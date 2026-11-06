@@ -20,7 +20,8 @@ import java.util.concurrent.TimeUnit
  * Runs `kobd` (the roles of kob-executor.toml) as a foreground service: a persistent notification and a wake lock
  * while it runs. If the process exits it is started again after a growing pause; the user stops it with ACTION_STOP.
  * Before the first start of a service run, a database of an earlier build is brought to the current schema
- * (`kobd index migrate`); if that fails, the service stops and says why instead of restarting.
+ * (`kobd db migrate`); if that fails, the service stops and says why instead of restarting. The previous store the update
+ * keeps beside the new one is deleted once kobd has run on the new one ([dropOldStoreOnceProven]).
  */
 class ExecutorService : Service() {
     companion object {
@@ -33,6 +34,9 @@ class ExecutorService : Service() {
         private const val LOG_LINES = 300
         private const val BACKOFF_MIN_MS = 5_000L
         private const val BACKOFF_MAX_MS = 300_000L
+        /** How long kobd must have run on a migrated store, its read API reporting the store followed, before the old one goes. */
+        private const val PROVEN_AFTER_MS = 10 * 60_000L
+        private const val PROVE_POLL_MS = 30_000L
 
         /** stopped, updating (the database update before the start), running or restarting (waiting to start again after an exit). */
         @Volatile var state = "stopped"
@@ -141,6 +145,9 @@ class ExecutorService : Service() {
                 startedAtMs = System.currentTimeMillis()
                 state = "running"
                 notify("Running")
+                if (oldStore().any { it.exists() }) {
+                    Thread({ dropOldStoreOnceProven(p, began, latch) }, "kob-old-store").apply { isDaemon = true }.start()
+                }
                 p.inputStream.bufferedReader().forEachLine { push(it) }
                 lastExit = "exit code ${p.waitFor()}"
             } catch (e: Exception) {
@@ -160,12 +167,47 @@ class ExecutorService : Service() {
         state = "stopped"
     }
 
+    /** The previous store a database update keeps (`index.sqlite3.before-migrate`), with the -wal and -shm files that belong to it. */
+    private fun oldStore(): List<File> {
+        val old = File(Kob.dir(this), "kob-data/index.sqlite3.before-migrate")
+        return listOf(old, File(old.path + "-wal"), File(old.path + "-shm"))
+    }
+
+    /**
+     * Deletes the previous store once the migrated one has proven itself in the kobd process [p] (started at [began],
+     * elapsedRealtime): its read API has reported the indexer following the chain on the full store (state following or
+     * catching_up, book_complete not false: the store opened, is read and written) and the same process has then run for
+     * [PROVEN_AFTER_MS]. An exit, a restart or a stop before that keeps the old file, and the next start watches again: the old
+     * store is never deleted while the new one has not run. (`kobd db migrate` also refuses a later update while it is there.)
+     */
+    private fun dropOldStoreOnceProven(p: Process, began: Long, latch: CountDownLatch) {
+        var followed = false
+        while (wanted && p.isAlive && process === p) {
+            if (!followed) {
+                followed = runCatching {
+                    val h = Kob.health()
+                    h.optString("state") in setOf("following", "catching_up") && h.optBoolean("book_complete", true)
+                }.getOrDefault(false)
+            }
+            if (followed && SystemClock.elapsedRealtime() - began >= PROVEN_AFTER_MS) {
+                if (!p.isAlive || process !== p) return
+                val gone = oldStore().filter { it.exists() }.all { it.delete() }
+                push(
+                    if (gone) "the previous database (index.sqlite3.before-migrate) is deleted: the updated one has run for ${PROVEN_AFTER_MS / 60_000} min"
+                    else "the previous database (index.sqlite3.before-migrate) could not be deleted; it is tried again at the next start"
+                )
+                return
+            }
+            if (latch.await(PROVE_POLL_MS, TimeUnit.MILLISECONDS)) return
+        }
+    }
+
     /**
      * Brings a database written by an earlier build (the v0.1.0 app wrote schema 5) to the schema this kobd reads:
-     * `kobd index --config <dir>/kob-executor.toml migrate`. It builds the new store beside the old one, verifies it row by row
-     * and only then swaps it in (the old file stays as index.sqlite3.before-migrate); the key file is not touched. A store of the
-     * current schema is left as it is (a moment); without a store (a first start) nothing runs. Returns null when the start may
-     * go on, else what failed and what to do.
+     * `kobd db --config <dir>/kob-executor.toml migrate`. It builds the new store beside the old one, verifies it row by row
+     * and only then swaps it in (the old file stays as index.sqlite3.before-migrate until [dropOldStoreOnceProven] deletes it);
+     * the key file is not touched. A store of the current schema is left as it is (a moment); without a store (a first start)
+     * nothing runs. Returns null when the start may go on, else what failed and what to do.
      */
     private fun updateDatabase(): String? {
         val db = File(Kob.dir(this), "kob-data/index.sqlite3")
@@ -181,12 +223,12 @@ class ExecutorService : Service() {
         updatingSinceMs = System.currentTimeMillis()
         state = "updating"
         notify("Updating the database")
-        push("checking the database (kobd index migrate) ...")
+        push("checking the database (kobd db migrate) ...")
         var error: String? = null
         var last = ""
         val code = try {
             val cfg = File(Kob.dir(this), "kob-executor.toml").path
-            val p = Kob.command(this, "index", "--config", cfg, "migrate").redirectErrorStream(true).start()
+            val p = Kob.command(this, "db", "--config", cfg, "migrate").redirectErrorStream(true).start()
             process = p
             p.outputStream.close()
             p.inputStream.bufferedReader().forEachLine {

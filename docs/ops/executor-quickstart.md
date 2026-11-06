@@ -342,7 +342,7 @@ the commit you verified.
 program changes. The program is not replaced while it runs, and it does not update itself.
 
 1. **Read the release notes.** They say whether the release changes the `KOB1` payload version (indexers must go first,
-   `docs/ops/release.md`, 7) or the database (brought up to date in place, migrated offline with `kobd index --config
+   `docs/ops/release.md`, 7) or the database (brought up to date in place, migrated offline with `kobd db --config
    kob-executor.toml migrate`, or rebuilt: step 6).
 2. **Note what runs now:** `kobd --version` (the crate version, the release tag without the `v`) and
    `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback only unless you
@@ -366,9 +366,9 @@ program changes. The program is not replaced while it runs, and it does not upda
    replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
    the fast start rebuilds the live book within seconds. Make sure the key file is not inside `kob-data` (setup puts it next
    to the program), and create `kob-data/pause` again if you use it. An Indexer's archive of schema 5, 6, 7 or 8 is brought
-   to schema 9 (the current one) offline with `kobd index --config kob-executor.toml migrate` in its folder (stop it first;
-   free disk about the size of the store; the old file stays as `index.sqlite3.before-migrate`; an older build refuses
-   the migrated store; `docs/ops/executor.md`, 7.6a); any other archive rebuilds with `kobd index --config kob-executor.toml
+   to schema 9 (the current one) offline with `kobd db --config kob-executor.toml migrate` in its folder (stop it first;
+   free disk about the size of the store; the old file stays as `index.sqlite3.before-migrate` until you delete it; an older build refuses
+   the migrated store; `docs/ops/executor.md`, 7.6a); any other archive rebuilds with `kobd db --config kob-executor.toml
    replay` while offline; the public read server has a way without downtime (`docs/ops/chart-server.md`, section 6).
 7. **Rollback**: stop, put `kobd.old` back, restore the `kob-data` copy of step 4 if the database changed. An indexer must
    not go below the payload version in use (`docs/ops/release.md`, 7).
@@ -514,12 +514,14 @@ certificate's SHA-256 is in the workflow summary) update each other in place; `v
 Android refuses a downgrade. A `-debug-signed` APK has a throwaway key: Android answers "App not installed", and the only way
 to a newer build is uninstalling, which deletes the key. Withdraw first.
 
-**Database update.** Each time you switch the executor on, the app first runs `kobd index migrate` on its database (the
+**Database update.** Each time you switch the executor on, the app first runs `kobd db migrate` on its database (the
 status says `updating the database`). On a current database this takes a moment and changes nothing. A database of an
 earlier version (v0.1.0 wrote schema 5; this build reads schema 9) is rebuilt beside the old one, checked row by row and
 only then swapped in; the key file is not touched and the orders are kept. It needs free storage about the size of the
 database (the Executor's is at most 500 MB) and can take some minutes. The old file stays in the app's storage as
-`index.sqlite3.before-migrate`. If the update fails (for example, not enough storage), the app does not start the
+`index.sqlite3.before-migrate` until the executor has run on the new database: the app deletes it by itself once the
+executor, started after the update, has reported its indexer following the chain and has then run for 10 minutes (a stop
+or an exit before that keeps it, and the next start waits again). If the update fails (for example, not enough storage), the app does not start the
 executor and does not retry: the status says why, and switching it on again starts the update over. The old database is
 unchanged until an update succeeds. No withdrawal is needed before updating from v0.1.0 (it is release-signed like later
 builds).

@@ -1,12 +1,27 @@
 package org.kob.executor
 
 import android.content.Context
+import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 /** Where the executor binary and its files are, and how to run it. */
 object Kob {
     /** The executor's read API (its default listen address, `[api]` of kob-executor.toml). */
     const val API = "http://127.0.0.1:8090"
+
+    /** `/v1/health` of the running executor; throws while it does not answer. Never call it on the UI thread. */
+    fun health(): JSONObject {
+        val c = URL("$API/v1/health").openConnection() as HttpURLConnection
+        try {
+            c.connectTimeout = 1_500
+            c.readTimeout = 3_000
+            return JSONObject(c.inputStream.bufferedReader().readText())
+        } finally {
+            c.disconnect()
+        }
+    }
 
     /** The funds below which the Executor warns "funds low" (`--low-funds-kas`, default 100; an alert, it keeps trading). */
     const val MIN_FUNDS_KAS = 100.0

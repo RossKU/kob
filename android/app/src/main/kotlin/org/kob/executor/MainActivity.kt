@@ -27,8 +27,6 @@ import android.widget.Switch
 import android.widget.TextView
 import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.Executors
 
 /** Three sections on one screen: setup (node, role, key, funding address), the start / stop switch, and the status. */
@@ -415,19 +413,13 @@ class MainActivity : Activity() {
     private fun fetchHealth() {
         healthBusy = true
         net.execute {
-            var c: HttpURLConnection? = null
             try {
-                c = URL(Kob.API + "/v1/health").openConnection() as HttpURLConnection
-                c.connectTimeout = 1_500
-                c.readTimeout = 3_000
-                val body = c.inputStream.bufferedReader().readText()
-                health = JSONObject(body)
+                health = Kob.health()
                 healthError = null
             } catch (e: Exception) {
                 health = null
                 healthError = "not reachable yet (${e.javaClass.simpleName})"
             } finally {
-                c?.disconnect()
                 healthBusy = false
             }
         }
