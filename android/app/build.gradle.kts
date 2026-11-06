@@ -17,7 +17,7 @@ val kobVersionCode: Int = (providers.gradleProperty("kobVersionCode").orNull ?: 
     ?.toIntOrNull()?.takeIf { it in 1..2_100_000_000 }
     ?: 1
 
-// The release key, from the environment (the workflows decode the repository secrets into these; docs/ops/executor-quickstart.md 9).
+// The release key, from the environment (the workflows decode the repository secrets into these; android/README.md).
 // All four set: the release build is signed with it, and a newer APK installs over an older one and keeps its data (the operator key).
 // Otherwise it falls back to the debug key, which is different on every machine and every CI run: such an APK cannot update one
 // signed with another key (the workflow names it "debug-signed" and warns).

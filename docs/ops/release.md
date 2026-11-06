@@ -204,7 +204,7 @@ listed in the release's `SHA256SUMS` like the archives. `versionName` is the wor
 `versionCode` is the commit time in minutes, so every later commit, and so every later release, is an update of the earlier
 ones. It is signed with the Android release key when the repository secrets `ANDROID_KEYSTORE_B64`,
 `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` exist (made once with
-`node scripts/make-android-keystore.mjs`, stored as secrets, backed up; quickstart 9, "Release signing"): a new APK then
+`node scripts/make-android-keystore.mjs`, stored as secrets, backed up; `android/README.md`, "Release signing"): a new APK then
 installs over the old one and keeps the app's data, the operator key included. **Check before publishing the draft** that the
 APK file name has no `-debug-signed` (the run warns and the draft's notes say so when the secrets were missing: such an APK
 cannot be updated in place, and the fix is to set the secrets, delete the draft and re-run the tag's `release` workflow, not to publish it).

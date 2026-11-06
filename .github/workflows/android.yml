@@ -4,7 +4,7 @@ name: android
 # aarch64-linux-android (bionic, NDK, as release.yml does), copies it into the app as libkobexecutor.so (it is executable
 # from the app's nativeLibraryDir; never committed) and builds the release APK with Gradle (not debuggable).
 #
-# Signing (docs/ops/executor-quickstart.md 9, "Release signing"):
+# Signing (android/README.md, "Release signing"):
 # * With the repository secrets ANDROID_KEYSTORE_B64 (the keystore file, base64), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and
 #   ANDROID_KEY_PASSWORD the APK is signed with that release key: every build carries the same signature, so a newer APK installs
 #   over an older one and keeps the app's data, the operator key included. scripts/make-android-keystore.mjs makes the keystore and
@@ -133,7 +133,7 @@ jobs:
             echo "Signing with the release key."
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=Android APK is debug-signed::Repository secrets missing:$missing. The APK is signed with a throwaway debug key and CANNOT be updated in place (a later build is refused by Android; uninstalling deletes the operator key and its funds). Create the keystore with scripts/make-android-keystore.mjs and store the secrets (docs/ops/executor-quickstart.md 9)."
+            echo "::warning title=Android APK is debug-signed::Repository secrets missing:$missing. The APK is signed with a throwaway debug key and CANNOT be updated in place (a later build is refused by Android; uninstalling deletes the operator key and its funds). Create the keystore with scripts/make-android-keystore.mjs and store the secrets (android/README.md, Release signing)."
           fi
       - name: Build the release APK (not debuggable)
         working-directory: android
