@@ -136,6 +136,8 @@ describe('the notes of the final confirmation', () => {
 
   it('says nothing for an order that is worth the minimum with a price near the market', () => {
     expect(confirmNotes(withIssues([]), o())).toEqual([]);
+    expect(confirmNotes(withIssues([]), { ...o(), contended: true, busy: () => 'busy' })).toEqual(['busy']);
+    expect(confirmNotes(withIssues([]), { ...o(), contended: false, busy: () => 'busy' })).toEqual([]);
     expect(confirmNotes(null, o())).toEqual([]);
   });
 
@@ -163,6 +165,7 @@ describe('the notes of the final confirmation as codes for the signer frame', ()
 
   it('codes and numbers only: the value and the minimum in sompi (strings), the percentage in basis points', () => {
     expect(confirmSignerNotes(withIssues([], true), { plain: true, min })).toEqual([{ kind: 'belowMin', value: '98800', min: '100000000', source: 'default' }]);
+    expect(confirmSignerNotes(withIssues([]), { plain: true, min, contended: true })).toEqual([{ kind: 'congestion' }]);
     expect(confirmSignerNotes(withIssues([far('PRICE_AGGRESSIVE_VS_MARKET', '12.3')]), { plain: true, min })).toEqual([{ kind: 'farThrough', bps: 1230 }]);
     expect(confirmSignerNotes(withIssues([far('PAIR_PRICE_AGGRESSIVE_VS_MARKET', '1,000.5')], true), { plain: false, min: { sompi: 1n, source: 'indexer' } })).toEqual([{ kind: 'farThrough', bps: 100050 }]);
   });

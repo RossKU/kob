@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { RELAY_FEE_FLOOR, isContended, parseFeeEstimate, type FeeEstimate } from '../../kob/fee-policy';
-import { CONGESTION_POLL_MS, CongestionProbe, congestionDismissed, dismissCongestion, resetCongestionDismissal } from './congestion';
+import { CONGESTION_POLL_MS, CongestionProbe } from './congestion';
 
 const est = (normal: number, priority = normal + 5, low = 100): FeeEstimate => ({ priority, normal, low });
 
@@ -100,14 +100,5 @@ describe('CongestionProbe', () => {
     expect(await s.probe.probe()).toBe(true);
     s.advance(CONGESTION_POLL_MS);
     expect(await s.probe.probe()).toBe(false);
-  });
-});
-
-describe('dismissal', () => {
-  beforeEach(resetCongestionDismissal);
-  it('lasts for the page load', () => {
-    expect(congestionDismissed()).toBe(false);
-    dismissCongestion();
-    expect(congestionDismissed()).toBe(true);
   });
 });

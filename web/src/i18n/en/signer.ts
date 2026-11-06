@@ -66,6 +66,7 @@ export default {
   'signer.hint.label': 'The app adds (not verified by this signer):',
   'signer.hint.minValue.default': 'Worth {value} KAS, under the usual {min} KAS minimum order value: it will not be listed, so it will not fill. Cancel it in My orders.',
   'signer.hint.minValue.indexer': 'Worth {value} KAS, under the indexer minimum of {min} KAS: it will not be listed, so it will not fill. Cancel it in My orders.',
+  'signer.hint.congestion': 'Blocks are contended, so this transaction may wait. The priority fee is in Settings.',
   'signer.hint.farThrough': 'Your price is {percent}% through the market. Check for a typing error.',
   'signer.updated': 'Updated: some figures changed since this request was first shown.',
   'signer.rel.now': 'now',

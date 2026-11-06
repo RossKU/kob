@@ -1,5 +1,5 @@
-// The congestion notice of the order ticket (pure part): whether blocks are contended, read from the node's fee estimate at most once per CONGESTION_POLL_MS.
-// The rule is `isContended` (kob/fee-policy.ts: the executor's reading of `getFeeEstimate`). The notice only informs: it never changes a rate, never switches
+// The congestion note of the final confirmation (pure part): whether blocks are contended, read from the node's fee estimate at most once per CONGESTION_POLL_MS.
+// The rule is `isContended` (kob/fee-policy.ts: the executor's reading of `getFeeEstimate`). The note only informs: it never changes a rate, never switches
 // the Settings toggle ("Pay the priority fee") and is never asked per transaction. A node without an estimate, or one that errors, says nothing.
 import { isContended, type FeeEstimate } from '../../kob/fee-policy';
 
@@ -44,14 +44,3 @@ export class CongestionProbe {
     return this.inflight;
   }
 }
-
-// dismissed for this page load (a reload shows it again if blocks are still contended)
-let dismissed = false;
-export const congestionDismissed = (): boolean => dismissed;
-export const dismissCongestion = (): void => {
-  dismissed = true;
-};
-/** Tests only. */
-export const resetCongestionDismissal = (): void => {
-  dismissed = false;
-};

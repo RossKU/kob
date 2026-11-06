@@ -175,6 +175,8 @@ describe("signer protocol: the app's notes (codes and numbers, never text)", () 
     expect(sanitizeNotes([{ ...below, source: 'Trust me' }])).toEqual([]);
     expect(sanitizeNotes([{ ...below, value: '1 KAS <b>' }, { ...below, min: undefined }])).toEqual([]);
     expect(sanitizeNotes([null, 'farThrough', 7, [], { bps: 5 }])).toEqual([]);
+    expect(sanitizeNotes([{ kind: 'congestion' }])).toEqual([{ kind: 'congestion' }]);
+    expect(sanitizeNotes([{ kind: 'congestion', text: 'words of the app' }])).toEqual([]);
     expect(sanitizeNotes('Approve now')).toEqual([]);
     expect(sanitizeNotes({ kind: 'farThrough', bps: 1 })).toEqual([]);
     expect(sign([{ kind: 'shout', text: 'x' }, good])?.notes).toEqual([good]);

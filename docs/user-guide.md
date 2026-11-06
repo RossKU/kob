@@ -177,7 +177,7 @@ icon for a token's KAS book, two for a pair), the transaction id, the wallet of 
 owners, `A ⇄ B`, when it crossed two KOB orders), the amount and its KAS value, the price in KAS, the confirmations (a pie that fills up to
 100 DAA, then ✓) and the time. A click opens the transaction on the network's explorer (kaspa.stream, tn10.kaspa.stream on testnet-10) in
 a new tab. The same log sits under every token and pair page, set to that market; its filter can be widened there, and "All activity →"
-opens the Activity tab with the same filter (`#/activity?market=<covenant id>` or `?market=<A>/<B>`, a link you can share).
+opens the Activity tab, which shows every market.
 
 * **Vis** chooses what is listed: placed orders and fills; All / Orders (signed by the order owner) / Executions (sent by an executor);
   "mine only" with a wallet connected. The choice is remembered in this browser.
@@ -376,8 +376,8 @@ Matchers pay the network fee of the fill transaction themselves; they earn the s
 change what your own transactions pay: "Pay the priority fee" (also counts the storage mass, KIP-9; by default a transaction pays
 exactly the node's relay minimum) and "Dynamic network fee" (pay the rate the node currently estimates, capped, instead of the
 minimum). Neither is the "Priority tip" of the ticket, which goes to the matcher. When the node's fee estimate shows contended blocks
-(the normal rate at least 10 percent above the relay minimum), the ticket shows a small notice under the order button (KOB transactions are ranked by their storage mass, which the normal fee does not cover, so they
-may wait), with a link to "Pay the priority fee" in Settings; it only informs, it never changes a fee or a setting, and it is not shown when that switch is on.
+(the normal rate at least 10 percent above the relay minimum), the order's final confirmation adds a note (KOB transactions are ranked by their storage mass, which the normal fee does not cover, so this one
+may wait; the priority fee is in Settings); it only informs, it never changes a fee or a setting, and it is not shown when that switch is on.
 The command-line tool has the first switch as `--priority-fee` (its notice under contention names the flag).
 
 ## 11. Private-key guidance

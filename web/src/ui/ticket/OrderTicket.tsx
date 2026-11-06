@@ -25,7 +25,7 @@ import { readPairReferences, readReferences, type References } from '../../data/
 import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { useFailoverState } from '../shell/failover';
-import { CongestionNotice } from './CongestionNotice';
+import { useCongestion } from './use-congestion';
 import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
 import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, retimeLead } from '../confirm/signing-time';
@@ -123,6 +123,7 @@ export function OrderTicket(props: OrderTicketProps) {
   /** the ticker the prices are in: KAS, or the pair's quote token B */
   const quoteTicker = quote ? quote.ticker : 'KAS';
   const services = useServices();
+  const contended = useCongestion();
   const wallet = useWallet();
   const { indexer: indexerStatus } = useSystemStatus();
   const tradable = token.tradable && token.program !== null && (!quote || (quote.tradable && quote.program !== null));
@@ -541,13 +542,14 @@ export function OrderTicket(props: OrderTicketProps) {
       const settled = toRead.length === 0;
       const label = orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name);
       const openToken = token.openList ? token : undefined;
-      // the lines the final confirmation adds (an order below the minimum value, a price far through the market): worked out here, once, from this plan
+      // the lines the final confirmation adds (an order below the minimum value, a price far through the market, contended blocks): worked out here, once, from this plan
       const notes = confirmNotes(planned, {
-        plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health), issue: (i) => issueText(i, issueCtx),
+        plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health), contended, issue: (i) => issueText(i, issueCtx),
         low: (n, source) => t(`ticket.minValue.${source}`, { value: formatKas(n.value, { group: ',' }), min: formatKas(n.min, { group: ',' }) }),
+        busy: () => t('ticket.congestion'),
       });
       // the same notes as codes and numbers for the private-key signer's confirmation, which words them itself
-      const signerNotes = confirmSignerNotes(planned, { plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health) });
+      const signerNotes = confirmSignerNotes(planned, { plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health), contended });
       return {
         built: planned.built!, expected: expectedFromPlan(planned), label, openToken, notes, signerNotes,
         gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openToken, shift) : undefined,
@@ -829,8 +831,6 @@ export function OrderTicket(props: OrderTicketProps) {
         <span key={enterText ?? `${sideName}|${typeName}`} data-state={enterText ? 'enter' : undefined}>{enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
       <SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" />
-      {/* below the button, so it never moves it: contended blocks, and where the priority fee is switched on (congestion.ts) */}
-      <CongestionNotice active />
       {/* what the token's records say (facts, the genesis check): below the button, so a late answer of the check never moves it */}
       {props.facts}
       {ladderNote ? (

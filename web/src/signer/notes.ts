@@ -10,6 +10,8 @@ export function noteSentences(notes: readonly SignerNote[]): string[] {
   return notes.map((n) =>
     n.kind === 'belowMin'
       ? t(`signer.hint.minValue.${n.source}`, { value: formatKas(BigInt(n.value), { group: ',' }), min: formatKas(BigInt(n.min), { group: ',' }) })
-      : t('signer.hint.farThrough', { percent: formatUnits(BigInt(n.bps), 2, { maxFraction: 1 }) }),
+      : n.kind === 'congestion'
+        ? t('signer.hint.congestion')
+        : t('signer.hint.farThrough', { percent: formatUnits(BigInt(n.bps), 2, { maxFraction: 1 }) }),
   );
 }

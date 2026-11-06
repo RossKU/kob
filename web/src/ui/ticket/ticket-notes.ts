@@ -105,12 +105,13 @@ const PRICE_FAR_CODES: ReadonlySet<string> = new Set(['PRICE_AGGRESSIVE_VS_MARKE
 
 /**
  * The notes the final confirmation shows (SendStatus.tsx), one short line each and only when they apply, computed once from the plan of the click:
- * an order worth less than the minimum order value (the indexer never lists it, so it never fills; a plain order only) and a price far through the
- * market. They never stop the order. The ticket itself shows neither (7510c498: nothing there appears or changes on a tick).
+ * an order worth less than the minimum order value (the indexer never lists it, so it never fills; a plain order only), a price far through the
+ * market, and contended blocks while the priority fee is off (congestion.ts). They never stop the order. The ticket itself shows none of them (7510c498:
+ * nothing there appears or changes on a tick).
  */
 export function confirmNotes(
   plan: Pick<OrderPlan, 'states' | 'request' | 'issues'> | null,
-  o: { plain: boolean; min: { sompi: bigint; source: 'indexer' | 'default' }; issue(i: PlanIssue): string; low(n: MinValueNote, source: 'indexer' | 'default'): string },
+  o: { plain: boolean; min: { sompi: bigint; source: 'indexer' | 'default' }; contended?: boolean; issue(i: PlanIssue): string; low(n: MinValueNote, source: 'indexer' | 'default'): string; busy?(): string },
 ): string[] {
   if (!plan) return [];
   const out: string[] = [];
@@ -118,6 +119,7 @@ export function confirmNotes(
   if (low) out.push(o.low(low, o.min.source));
   const far = (plan.issues ?? []).find((i) => i.severity === 'warning' && PRICE_FAR_CODES.has(i.code));
   if (far) out.push(o.issue(far));
+  if (o.contended && o.busy) out.push(o.busy());
   return out;
 }
 
@@ -128,7 +130,7 @@ export function confirmNotes(
  */
 export function confirmSignerNotes(
   plan: Pick<OrderPlan, 'states' | 'request' | 'issues'> | null,
-  o: { plain: boolean; min: { sompi: bigint; source: 'indexer' | 'default' } },
+  o: { plain: boolean; min: { sompi: bigint; source: 'indexer' | 'default' }; contended?: boolean },
 ): SignerNote[] {
   if (!plan) return [];
   const out: SignerNote[] = [];
@@ -137,5 +139,6 @@ export function confirmSignerNotes(
   const far = (plan.issues ?? []).find((i) => i.severity === 'warning' && PRICE_FAR_CODES.has(i.code));
   const pct = far ? Number(String(far.params?.percent ?? '').replace(/,/g, '')) : NaN;
   if (far && Number.isFinite(pct) && pct >= 0) out.push({ kind: 'farThrough', bps: Math.round(pct * 100) });
+  if (o.contended) out.push({ kind: 'congestion' });
   return out;
 }

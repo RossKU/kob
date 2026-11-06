@@ -56,7 +56,9 @@ export type SignerNote =
   /** the order is worth `value` sompi, under the executor's minimum `min` (`source`: its own, or the assumed default): it will not be listed */
   | { kind: 'belowMin'; value: string; min: string; source: 'indexer' | 'default' }
   /** the price is `bps` basis points through the market (probably a typing error) */
-  | { kind: 'farThrough'; bps: number };
+  | { kind: 'farThrough'; bps: number }
+  /** blocks are contended and the priority fee is off: this transaction may wait */
+  | { kind: 'congestion' };
 
 /** the most notes of a request (more is not a request of the app) */
 export const MAX_NOTES = 4;
@@ -178,6 +180,8 @@ export function sanitizeNotes(v: unknown): SignerNote[] {
       if (value !== null && min !== null) out.push({ kind: 'belowMin', value, min, source: n.source });
     } else if (n.kind === 'farThrough' && hasKeys(n, ['kind', 'bps']) && typeof n.bps === 'number' && Number.isSafeInteger(n.bps) && n.bps >= 0 && n.bps <= MAX_NOTE_BPS) {
       out.push({ kind: 'farThrough', bps: n.bps });
+    } else if (n.kind === 'congestion' && hasKeys(n, ['kind'])) {
+      out.push({ kind: 'congestion' });
     }
   }
   return out;
