@@ -58,7 +58,7 @@ identified by its **covenant id**, a 64-character hex string; the ticker is only
   token uses this ticker — check the covenant id". The list marks nothing: each row has its own fingerprint and shows the start and end of the id, and the token page the full id with a
   copy button. Compare it with the id the token's own project gave you.
 * **Tokens without a name.** A token that has no ticker and declared no decimals is hidden behind "Show N token(s) without a name".
-  A search or a pasted covenant id finds it anyway. A token the list does not know can be added with "Add an unknown token" (paste
+  A search or a pasted covenant id finds it anyway. A token the list does not show can be added with "Add a token by its covenant id" (paste
   its covenant id, "Look up"); the indexer lists a token only after its first order was placed.
 * **Declared by its creator.** A name that is not in the page's registry comes from the token's own on-chain record (KCC-23). The
   page shows it like any other token (no mark: this is the normal case of a token the registry does not list); the token page's "Status and checks" section says it is "declared, bound by ancestry": a declaration recorded on chain with the token (whoever funded the coin its creation spent chose it), which nobody has checked. KOB keeps no list of good tokens and
@@ -345,7 +345,7 @@ What it shows, and its limits:
   the fills seen since standalone mode started (a fill counts once your node shows its transaction) and from the partial book. Each is marked
   "Since hh:mm only (standalone mode)": earlier trades are not included, so "24 h" means "since hh:mm" when that is shorter.
 - **Needs the indexer, so unavailable here:** pair markets, holders and token holdings the indexer lists (the token UTXOs known to this
-  browser still work), the order history and fills under My orders, and notifications of your orders. A token without a registry entry, a
+  browser still work), the order history and fills under My orders, and notifications of your orders. A token without a
   known declaration of its decimals or its program's default decimals cannot be traded in this mode (its scale cannot be checked without the indexer).
 - **Trading goes to the node as always**: you sign in your wallet and the page sends the transaction to the node.
 - **Back to the indexer**: when the indexer answers again, the page switches back by itself and its book is used again (the indexer's

@@ -108,7 +108,7 @@ export interface TokenRef {
   covenantId: Hex;
   ticker: string | null;
   decimals: number | null;
-  /** `TICKER (abcd...1234)` for registry tokens, `unknown token (abcd...1234)` otherwise: never a bare name */
+  /** `TICKER (abcd...1234)` where a ticker is known, else its covenant id (8 + 8 hex): never a bare name */
   display: string;
   inRegistry: boolean;
   tradable: boolean;
@@ -381,7 +381,7 @@ export const p2pkOwner = (spk: string): Hex | null => P2PK_RE.exec(spk)?.[1] ?? 
 
 function tokenRef(reg: TokenRegistry | null | undefined, covenantId: Hex): TokenRef {
   const t = reg?.byCovenantId.get(covenantId);
-  if (!t) return { covenantId, ticker: null, decimals: null, display: `unknown token (${longId(covenantId)})`, inRegistry: false, tradable: false };
+  if (!t) return { covenantId, ticker: null, decimals: null, display: longId(covenantId), inRegistry: false, tradable: false };
   return { covenantId, ticker: t.ticker, decimals: t.decimals, display: displayName(t), inRegistry: true, tradable: t.tradable };
 }
 

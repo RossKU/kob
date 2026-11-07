@@ -3,6 +3,7 @@ import { displayToken } from '../../app/token-display';
 import type { StrayView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import { Amount, Badge, Button, CopyText, Section, Table, unitsFraction } from '../kit';
+import { tokenLabel } from '../market/token-model';
 
 /**
  * Stray tokens: token UTXOs someone sent to one of your orders from outside the protocol. They are inert (never liquidity) and only a spend of that
@@ -42,7 +43,6 @@ export function StraysPanel(props: {
         </thead>
         <tbody>
           {list.map((s) => {
-            const info = registry.byCovenantId.get(s.token);
             const amount = BigInt(s.state?.amount ?? s.amount);
             const tokens = props.orderTokens?.get(s.owner);
             // a stray of another token than the order trades (a pair order: neither of its two): foreign. A sweep or cancel returns it when its
@@ -55,13 +55,7 @@ export function StraysPanel(props: {
             return (
               <tr key={`${s.txid}:${s.index}`} data-testid="stray-row" data-lost={s.lost || unproven ? '1' : '0'} data-foreign={foreign ? '1' : '0'} data-owner={s.owner}>
                 <td>
-                  {info ? info.ticker : shown(s.token).ticker}
-                  {!info ? (
-                    <>
-                      {' '}
-                      <Badge tone="warn" title={t('orders.strays.unknownTokenHint')} data-testid="stray-unknown-token">{t('orders.strays.unknownToken')}</Badge>
-                    </>
-                  ) : null}
+                  {tokenLabel(shown(s.token))}
                 </td>
                 <td class="right"><Amount kind="token" value={amount} decimals={shown(s.token).decimals} unit={false} fraction={qtyFraction} group /></td>
                 <td><CopyText value={s.owner} head={8} tail={6} /></td>

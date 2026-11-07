@@ -47,8 +47,6 @@ export default {
   'confirm.spend.kas': 'KAS from your wallet',
 
   'confirm.token.label': '{ticker} ({id})',
-  'confirm.token.unknown': 'unknown token ({id})',
-  'confirm.token.labelOpen': '{id}',
 
   'confirm.locked.total': 'Total locked',
   'confirm.locked.carriersHint': 'returned when the order ends',
@@ -235,7 +233,6 @@ export default {
   'confirm.f.pairPair': 'Pair',
   'confirm.f.pairSells': 'sells {base} for {quote} (prices in {quote} per {base})',
   'confirm.f.pairBuys': 'buys {base} with {quote} (prices in {quote} per {base})',
-  'confirm.f.pairUnknownQuote': 'the quote token ({id}) is not in this app\'s registry: check its covenant id yourself',
   'confirm.f.pairEscrowA': 'Base tokens locked in the order',
   'confirm.f.pairEscrowB': 'Quote tokens locked in the order',
   'confirm.f.pairPrefundB': 'Quote tokens set aside for the buy-backs (prefund)',

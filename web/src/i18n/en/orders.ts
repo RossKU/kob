@@ -84,7 +84,6 @@ export default {
   'orders.source.recordHint': 'Only your saved record describes it; its state is unconfirmed.',
   'orders.source.none': 'state unknown',
   'orders.source.noneHint': 'Neither the indexer nor a record describes this order.',
-  'orders.unknownToken': 'unregistered token ({id})',
   'orders.cancelBlocked.no-extension': 'Cannot cancel yet: the token\'s extension commitment is unknown (old recovery file). Import a backup or a version 2 recovery file, or wait for the indexer.',
   'orders.cancelBlocked.custody-missing': 'Cannot cancel yet: its token custody was not found. Refresh or wait for the indexer.',
   'orders.cancelBlocked.old-template': 'Placed with an older contract version this app cannot build for.',
@@ -364,7 +363,7 @@ export default {
   'orders.replace.unsupported.booked': 'An exit of a position is not amended on its own: cancel the position instead.',
   'orders.replace.unsupported.kind': 'This order type has no amend form.',
   'orders.replace.unsupported.state': 'The order\'s terms could not be read back into the ticket. Cancel it and place a new one.',
-  'orders.replace.noToken': 'Token not in this app\'s registry: cancel the order and place a new one.',
+  'orders.replace.noToken': 'This order cannot be replaced from here: cancel the order and place a new one.',
 
   'orders.balances.kasOnTokens': 'KAS on your token UTXOs',
 
@@ -393,8 +392,6 @@ export default {
   'orders.strays.lostHint': 'The order is closed: nothing can move this stray any more.',
   'orders.strays.unproven': 'cannot be moved',
   'orders.strays.unprovenHint': 'The indexer has not proven its state: it cannot be moved.',
-  'orders.strays.unknownToken': 'unknown token',
-  'orders.strays.unknownTokenHint': 'Not in this app\'s token registry. Check its covenant id yourself.',
 
   'orders.recover.title': 'Recover and back up',
   'orders.recover.why': 'An order\'s terms exist only in its placement transaction. This browser keeps a record of each order so you can cancel it without the indexer: export a backup and keep it.',

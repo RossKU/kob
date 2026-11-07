@@ -2,8 +2,9 @@
 // base units", taken for a wrong supply). Its amounts read in whole tokens: its decimals come from its declaration, its program's default, the scale of its
 // order or market, else the issuing browser's issuance record (its ticker too, marked unverified), with a small marker by its name.
 import { test, expect } from '../fixtures';
-import { connectWallet } from '../helpers/env';
+import { connectWallet, fund } from '../helpers/env';
 import { openOrders } from '../helpers/orders';
+import { cancelReceipt, clickPlaceOnly, fillFields, pickType, readReceipt, waitReviewable } from '../helpers/ticket';
 
 const ID = '83'.repeat(32);
 const SHORT = '83838383…83838383';
@@ -53,8 +54,40 @@ test('its market page names it everywhere (title, stats, book, chart, hints) and
   await expect(page.getByTestId('order-book')).toContainText(`Price (KAS per ${SHORT})`);
   await expect(page.getByTestId('order-book')).toContainText(`Size (${SHORT})`);
   await expect(page.getByTestId('chart-unit')).toHaveText(`KAS per ${SHORT}`);
-  await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /amounts are whole tokens of 8 decimals/);
+  await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /Amounts are whole tokens of 8 decimals/);
   const body = (await page.locator('main').textContent()) ?? '';
   expect(body).not.toMatch(/base units/);
   expect(body).not.toMatch(/KAS per \)|KAS per $|\(\)| of ,|\/ KAS/);
+});
+
+const OTHER = '84'.repeat(32);
+const OTHER_SHORT = '84848484…84848484';
+const tokenSpec = { ticker: '', covenant_id: OTHER, program: 'KCC20Ref', template_id: 'KCC20Ref', extension_commitment: 'ee'.repeat(32), powers: [], decimals: null };
+
+test('a market of 6 decimals with nothing on chain stating them: the final confirmation reads the order as the ticket did, never on invented decimals', async ({ appPage: page, mock }) => {
+  await mock.seed({ tokens: [{ ...tokenSpec, order_scale: 1_000_000 }], orders: [{ token: OTHER, side: 'ask', maker: 'maker', amount: '4000000', price: 900_000_000 }] });
+  await fund(mock, 'alice', { tokens: 0n });
+  await mock.giveTokens('alice', 5_000_000n, { token: OTHER });
+  await page.goto(`/#/market/${OTHER}`);
+  await connectWallet(page);
+  await pickType(page, 'limit', 'sell');
+  await fillFields(page, { price: '10', amount: '2' });
+  await waitReviewable(page);
+  await clickPlaceOnly(page);
+  const receipt = await readReceipt(page);
+  expect(receipt.orders[0]!.token).toBe(`${OTHER_SHORT} (6 decimals, from its price scale)`);
+  expect(receipt.orders[0]!.rows).toMatchObject({ Amount: `2 ${OTHER_SHORT}`, 'Limit price': `10 KAS per ${OTHER_SHORT}` });
+  await cancelReceipt(page);
+});
+
+test('a token nothing states the decimals of (no declaration, no program default, no order): its balance is its raw amount, said so; no decimals are invented', async ({ appPage: page, mock }) => {
+  await mock.seed({ tokens: [{ ...tokenSpec, order_scale: null }] });
+  await fund(mock, 'alice', { tokens: 0n });
+  await mock.giveTokens('alice', 1_234_567n, { token: OTHER });
+  await openOrders(page, mock);
+  const row = page.getByTestId(`balance-row-${OTHER}`);
+  await expect(row).toContainText(OTHER_SHORT);
+  await expect(row).toContainText('1,234,567');
+  await expect(row.getByTestId('token-decimals-note')).toHaveText('(raw amount)');
+  await expect(page.getByTestId('orders-view')).not.toContainText(/decimals assumed|base units/);
 });

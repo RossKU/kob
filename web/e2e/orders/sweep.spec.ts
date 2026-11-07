@@ -27,7 +27,7 @@ test.describe('sweep strays in place', () => {
     await expect(panel.getByTestId('stray-row')).toHaveCount(3);
     const foreignRow = panel.locator('[data-testid="stray-row"][data-foreign="1"]');
     await expect(foreignRow).toHaveCount(1);
-    await expect(foreignRow.getByTestId('stray-unknown-token')).toHaveText('unknown token');
+    await expect(foreignRow).not.toContainText(/unknown|unregistered/i);
     await expect(foreignRow.getByTestId('stray-foreign')).toHaveText('other token');
     await expect(foreignRow).toHaveAttribute('data-lost', '0');
     await expect(panel.getByTestId(`stray-sweep-${id}`)).toBeVisible();

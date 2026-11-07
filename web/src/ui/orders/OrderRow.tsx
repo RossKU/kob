@@ -178,7 +178,7 @@ export function OrderRow(props: OrderRowProps) {
               <TokenNote token={tk} />
             </>
           ) : row.token ? (
-            <span>{t('orders.unknownToken', { id: longId(row.token) })}</span>
+            <span>{longId(row.token)}</span>
           ) : null}
         </div>
       </div>

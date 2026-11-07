@@ -29,7 +29,7 @@ The landing screen and the USD reference token: `quoteTokens` (config.json / `__
 reference (the TN10 soak's TUSD, 1 TUSD = 1 USD worth of KAS). It only decides the landing screen; its market opens as TUSD/KAS like every other market (the token on the left, amounts
 in the token) and the flip shows KAS/TUSD (amounts in KAS); tickers are never renamed. There is ONE market page with one layout (title bar, 24 h strip, then order book | chart + depth + trades | ticket): `#/market/<id>` is the token's KAS market
 (TOKEN/KAS, with a flip control) and `#/market/<base>/<quote>` a token pair (BASE/QUOTE through the two KAS books, e.g. TBTC/TUSD; the old `#/pair/<base>/<quote>`
-is an alias). The title shows the pair as `BASE / QUOTE`, each side a drop-down of KAS and the tokens this build can trade (registered or not; a token pair needs no registry entry): choosing
+is an alias). The title shows the pair as `BASE / QUOTE`, each side a drop-down of KAS and the tokens this build can trade: choosing
 another asset changes the market in place, the URL follows (browser back works), nothing else moves. Both are tradable. Old `#/usd/kas` and `#/usd/<token>` links are redirected (history entry replaced) to the USD token's market and the pair
 `<token>/<USD token>` (the market list without a USD token). The pair chart converts candles bucket by bucket on one time grid, so each bucket uses the
 time-aligned price of both legs (method in `src/ui/market/usd-model.ts`). `home` picks the landing screen (empty hash): `landing` (default: the landing page, `src/ui/landing/`, a full page in the app's header and footer (`src/ui/shell/Frame.tsx`) in place of the app shell, "Open the app" -> `#/market`; the installed PWA starts at `#/market`), `auto` (the USD token's market, shown KAS/<ticker>, else the
@@ -162,8 +162,10 @@ that cannot be read now is named. In standalone mode either open-list token need
   extension commitment is shown in the final confirmation, and one known without the indexer that differs stops it) and a new order's terms against kob-wasm (what returns of
   A and of B, custodies and strays of both tokens, and the evidence of a pair stop armed or trailed by the transaction) before the wallet is asked.
 * **My orders** lists a pair order under the type of the KAS kind it mirrors, with the pair (link to the pair view), its prices
-  in B, filled / left and status; cancel, sweep and refund work as for the KAS kinds, for a token without a registry entry too. An amend is always a cancel-replace from
-  the full ticket form, which needs both registry entries: an order of an open-list token says so, and is cancelled and placed again.
+  in B, filled / left and status; cancel, sweep and refund work as for the KAS kinds. An amend is always a cancel-replace from the full ticket form, which needs both
+  pinned entries: an order of an open-list token says it cannot be replaced from here, and is cancelled and placed again. A token's amounts read as the ticket read them,
+  in one order of sources: its declaration, its program's default, the scale of its order or market (`app/token-display.ts`; the confirmation reads the transaction's own
+  scale, `withOrderScales`), this browser's issuance record; with none, no decimals are invented: its raw amount with its id, said so.
 * **Mock.** `npm run mock -- --pair` (or `POST /mock/seed {pair: true}`) adds EXUSD (6 decimals) with a KAS book and resting pair
   orders of every kind on EXKCC/EXUSD; `mock/pairs.mjs` serves the pair endpoints. The e2e registry patch lists EXUSD
   (`e2e/ui/pair.spec.ts`); `e2e/ui/pair-open.spec.ts` serves the two tokens as open-list tokens instead.

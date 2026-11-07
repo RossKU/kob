@@ -149,7 +149,7 @@ export default {
   'issues.foreign-input': 'Input {input} spends KAS of another key that this wallet cannot sign.',
   'issues.payload-unknown': 'The transaction carries a payload that is not a KOB record.',
   'issues.payload-invalid': 'The payload of this transaction cannot be decoded.',
-  'issues.token-unlisted': 'The token {covenantId} is not tradable in this app\'s registry: check its covenant id yourself.',
+  'issues.token-unlisted': 'Check the covenant id of the token {covenantId} yourself.',
   'issues.no-order-records': 'Creates orders, but the payload has no KOB placement records.',
   // info
   'issues.payment-expected': 'Output {output}: a payment to another key, as you requested.',
@@ -274,7 +274,7 @@ export default {
   'issues.decimals': 'The decimals of a registry token are out of range ({path}).',
   'issues.slot-limit-mismatch': 'The input and output limits of a registry token differ from its token program ({path}).',
   'issues.genesis': "A registry token's genesis facts are inconsistent ({path}).",
-  'issues.untradable.unregistered': 'The token is not in the registry, so it cannot be traded from here.',
+  'issues.untradable.unregistered': 'The token has no open orders to read its price scale from, so it cannot be traded from here.',
   'issues.untradable.template-pending-review': 'This build does not support trading this token program yet (its engineering review is not done), so this token cannot be traded here.',
   'issues.untradable.template-unsupported': 'This build of KOB does not support the token program of this token.',
   'issues.untradable.template-mismatch': 'The registry lists a token program that differs from the one built into this app, so the token cannot be traded.',

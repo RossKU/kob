@@ -115,7 +115,7 @@ describe('planSweep: the order continues under the same script, its strays retur
     expect(tokenAmountText(own, sp.strays)).toBe('0.012 TST');
     expect(sp.otherStrays).toHaveLength(1);
     expect(sp.otherStrays[0]).toMatchObject({ foreign: true, amount: 42n });
-    expect(tokenLabel(sp.otherStrays[0]!.ref, tr, registry)).toBe('unknown token (81818181…81818181)');
+    expect(tokenLabel(sp.otherStrays[0]!.ref, tr, registry)).toBe('81818181…81818181');
     expect(sp.otherStrays[0]!.ref.covenantId).toBe(ALIEN.covenantId);
     // 3 stray UTXOs and their 25 KAS return to the maker; the order continues at output 0
     expect(sp.sweptTo).toEqual({ output: 0, utxos: 3, kas: 25n * KAS });

@@ -210,10 +210,11 @@ describe('decoded spends and verdicts', () => {
 });
 
 describe('token labels and order types', () => {
-  it('never shows a bare ticker: registry tokens carry their id, others are "unknown token"', () => {
+  it('never shows a bare ticker, and no word about a registry: a ticker carries its id, a token without one is its id', () => {
     const ref = { covenantId: '70'.repeat(32), ticker: 'TST', decimals: 3, display: '', inRegistry: true, tradable: true };
     expect(tokenLabel(ref, (k, p) => t(k, p), registry)).toBe('TST (7070...7070)');
-    expect(tokenLabel({ ...ref, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe('unknown token (abababab…abababab)');
+    expect(tokenLabel({ ...ref, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe('TST (abababab…abababab)');
+    expect(tokenLabel({ ...ref, ticker: null, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe('abababab…abababab');
     // no decimals known to the caller: the scale the order names, the whole token the ticket used
     const { summary, rows } = created('create.ask', null);
     expect(rowOf(rows, 'amount').value).toBe('10 70707070…70707070');

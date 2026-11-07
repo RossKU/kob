@@ -154,13 +154,14 @@ export function openTokenIdentity(summary: SigningSummary, registry: TokenRegist
 
 // ------------------------------------------------------------------------------------------------ token labels
 
-/** The identity line of a token: `TICKER (abcd...1234)` for registry tokens, `unknown token (abcd...1234)` otherwise. Never the ticker alone. */
+/** The identity line of a token: `TICKER (abcd...1234)` where it has a ticker, else its covenant id. Never the ticker alone, always the id. */
 export function tokenLabel(ref: TokenRef, tr: Translate = t, registry?: TokenRegistry | null): string {
   const info = registry?.byCovenantId.get(ref.covenantId);
-  // a token outside the registry is identified by its id alone: 8 + 8 hex, not the 4 + 4 fragment
-  if (!info) return tr('confirm.token.unknown', { id: longId(ref.covenantId) });
-  if (info.openList) return tr('confirm.token.labelOpen', { id: longId(info.covenantId) });
-  return tr('confirm.token.label', { ticker: info.ticker, id: short(info.covenantId) });
+  // a token no pinned entry names shows 8 + 8 hex of its id, not the 4 + 4 fragment; a ticker that is only its id is said once
+  if (info && !info.openList) return tr('confirm.token.label', { ticker: info.ticker, id: short(info.covenantId) });
+  const id = longId(ref.covenantId);
+  const ticker = info?.ticker ?? ref.ticker;
+  return ticker && ticker !== id ? tr('confirm.token.label', { ticker, id }) : id;
 }
 
 /** A token amount in whole tokens: of its decimals when known (a hint, the scale of its order), else its raw amount, said so. */
@@ -288,7 +289,7 @@ function pairRows(d: OrderDescription, f: Fmt): Row[] {
   const aName = f.ref.ticker ?? longId(f.ref.covenantId);
   const bName = bRef.ticker ?? longId(x.quote.covId);
   const rows: Row[] = [];
-  rows.push(row('pairPair', tr('confirm.f.pairPair'), tr(d.side === 'sell' ? 'confirm.f.pairSells' : 'confirm.f.pairBuys', { base: aName, quote: bName }), bRef.inRegistry ? 'normal' : 'warn', bRef.inRegistry ? undefined : tr('confirm.f.pairUnknownQuote', { id: longId(x.quote.covId) })));
+  rows.push(row('pairPair', tr('confirm.f.pairPair'), tr(d.side === 'sell' ? 'confirm.f.pairSells' : 'confirm.f.pairBuys', { base: aName, quote: bName })));
   if (x.escrowA > 0n) rows.push(row('pairEscrowA', tr('confirm.f.pairEscrowA'), tokenAmountText(f.ref, x.escrowA, tr)));
   if (x.escrowB > 0n) rows.push(row('pairEscrowB', tr(x.kind === 'KobIfdPair' && d.side === 'sell' ? 'confirm.f.pairPrefundB' : 'confirm.f.pairEscrowB'), tokenAmountText(bRef, x.escrowB, tr)));
   // the whole amount at the order's own bound: a resting / auction pair order (KobPair); a conditional or an entry is described by its legs

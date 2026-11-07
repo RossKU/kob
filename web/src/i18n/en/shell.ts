@@ -84,7 +84,7 @@ export default {
   'shell.banner.nodeTitle': 'No connection to a Kaspa node',
   'shell.banner.nodeNoAnswer': 'no answer',
   'shell.banner.nodeDownResolver': 'The Kaspa node cannot be reached ({reason}). No node URL is set, so this page asks the Kaspa SDK public resolver for a node, and none it named worked. Set a node URL in Settings (a wss:// wRPC node of {network} with its path, for example wss://<host>/kaspa/{network}/wrpc/json), or ask whoever hosts this page to set one. Balances, DAA time and sending transactions are unavailable until then.',
-  'shell.banner.registry': 'The token registry could not be loaded ({message}). Only tokens found through the indexer are shown, as unlisted tokens named by their covenant id: check the id before trading.',
+  'shell.banner.registry': 'The token registry could not be loaded ({message}). Tokens are shown from what the chain and the indexer say, named by their covenant id: check the id before trading.',
   'shell.reorg.deep': 'Deep chain reorganisation',
   'shell.reorg.deepTip': 'The chain replaced its last {blocks} blocks, far more than a normal reorganisation. Displayed data was refreshed; recent confirmations may have changed.',
   'shell.banner.configWarnings': 'Some settings were ignored',
