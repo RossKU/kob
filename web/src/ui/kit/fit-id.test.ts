@@ -12,12 +12,14 @@ describe('fitForms', () => {
     expect(Math.min(...FIT_FORMS.covenant)).toBeGreaterThanOrEqual(8);
   });
 
-  it('an id in the log: whole, 8 + 8, then 4 + 4', () => {
-    expect(fitForms(ID, 'log')).toEqual([ID, '01234567…89abcdef', '0123…cdef']);
+  it('an id in the log gives way in steps: whole, 20 + 20, 14 + 14, 8 + 8, then 4 + 4', () => {
+    const forms = fitForms(ID, 'log');
+    expect(forms.map((f) => f.length)).toEqual([64, 41, 29, 17, 9]);
+    expect(forms.slice(3)).toEqual(['01234567…89abcdef', '0123…cdef']);
   });
 
   it('an id shorter than a form stays as it is', () => {
-    expect(fitForms('abcdef', 'log')).toEqual(['abcdef', 'abcdef', 'abcdef']);
+    expect(fitForms('abcdef', 'log')).toEqual(Array(5).fill('abcdef'));
     expect(fitForms('01234567…89abcdef', 'log')[1]).toBe('01234567…89abcdef');
   });
 });
@@ -26,9 +28,12 @@ describe('the stylesheet', () => {
   const css = readFileSync(new URL('../../styles.css', import.meta.url), 'utf8');
   const limitOf = (rule: RegExp) => Number(rule.exec(css)?.[1]);
 
-  it('a box takes the whole id only with room for its 64 characters, and 8 + 8 only with room for its 17', () => {
+  it('a box takes each form only with room for its characters', () => {
     expect(limitOf(/@container fit-box \(max-width: ([\d.]+)ch\) \{\s*\.fit-in-box > span:first-child/)).toBeGreaterThanOrEqual(64);
-    expect(limitOf(/@container fit-box \(max-width: ([\d.]+)ch\) \{\s*\.fit-log\.fit-in-box/)).toBeGreaterThanOrEqual(17);
+    // the limit that hides a form is at least that form's length
+    for (const [nth, length] of [[2, 41], [3, 29], [4, 17]] as const) {
+      expect(limitOf(new RegExp(`@container fit-box \\(max-width: ([\\d.]+)ch\\) \\{\\s*\\.fit-log\\.fit-in-box > span:nth-child\\(${nth}\\)`))).toBeGreaterThanOrEqual(length);
+    }
   });
 
   it('every form but the first starts hidden, so an id is never on screen twice', () => {

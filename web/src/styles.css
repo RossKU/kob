@@ -502,9 +502,17 @@ body.modal-open { overflow: hidden; }
   .fit-in-box > span:first-child { display: none; }
   .fit-in-box > span:nth-child(2) { display: inline; }
 }
-@container fit-box (max-width: 18ch) {
+@container fit-box (max-width: 42ch) {
   .fit-log.fit-in-box > span:nth-child(2) { display: none; }
   .fit-log.fit-in-box > span:nth-child(3) { display: inline; }
+}
+@container fit-box (max-width: 30ch) {
+  .fit-log.fit-in-box > span:nth-child(3) { display: none; }
+  .fit-log.fit-in-box > span:nth-child(4) { display: inline; }
+}
+@container fit-box (max-width: 18ch) {
+  .fit-log.fit-in-box > span:nth-child(4) { display: none; }
+  .fit-log.fit-in-box > span:nth-child(5) { display: inline; }
 }
 @container fit-line (max-width: 56rem) {
   .fit-in-line > span:first-child { display: none; }

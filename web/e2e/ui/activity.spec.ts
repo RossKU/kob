@@ -87,7 +87,7 @@ test.describe('activity page', () => {
     const fill = rows(page).and(page.locator('[data-kind="fill"]')).first();
     // the two ends of the id, where the column has no room for it; whole in its title and in what a selection of it copies
     const tx = fill.locator('.act-c-tx .fit-id');
-    await expect(tx).toHaveText(/^[0-9a-f]{8}…[0-9a-f]{8}$/, { useInnerText: true });
+    await expect(tx).toHaveText(/^[0-9a-f]{8,20}…[0-9a-f]{8,20}$/, { useInnerText: true });
     await expect(tx).toHaveAttribute('title', /^[0-9a-f]{64}$/);
     expect(await tx.evaluate((e) => {
       getSelection()!.selectAllChildren(e);
@@ -101,7 +101,7 @@ test.describe('activity page', () => {
     await expect(fill.locator('.act-c-px')).toHaveText(/^0\.0\d+$/);
     await expect(fill.locator('.act-c-time')).toHaveText(/^\d{2}(:\d{2}:\d{2}|-\d{2} \d{2}:\d{2})$/);
     // the owners of the filled orders are looked up: a short address (the full one in the title)
-    await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{7}…[0-9a-z]{8}/, { timeout: 15_000, useInnerText: true });
+    await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{7,19}…[0-9a-z]{8,20}/, { timeout: 15_000, useInnerText: true });
     await expect(fill.getByTestId('activity-wallet')).toHaveAttribute('title', /kaspatest:/);
     // the legend under the table: phase 1 kinds and the confirmation marks
     await expect(page.getByTestId('activity-legend')).toContainText('fill, taker bought');

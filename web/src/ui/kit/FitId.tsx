@@ -3,15 +3,12 @@ import { shortId } from './format';
 /**
  * How an id gives way, longest first, each with its middle taken out:
  *  - `covenant`: 12 + 12 hex is what the market list shows (96 bits, audit 2026-10-29 F4), 8 + 8 the floor of a token's id (`longId`), for a line too narrow for that;
- *  - `log`: a transaction or an address in a column of the activity log; the link and the title have it whole, so 4 + 4 serves a very narrow column.
+ *  - `log`: a transaction or an address in a column of the activity log, as much of it as the column has room for; the link and the title have it whole, so 4 + 4 serves a very narrow column.
  */
-export const FIT_FORMS = { covenant: [12, 8], log: [8, 4] } as const;
+export const FIT_FORMS = { covenant: [12, 8], log: [20, 14, 8, 4] } as const;
 
 /** The forms of `value`, in the order `FitId` puts them. */
-export const fitForms = (value: string, kind: keyof typeof FIT_FORMS): [string, string, string] => {
-  const [long, short] = FIT_FORMS[kind];
-  return [value, shortId(value, long, long), shortId(value, short, short)];
-};
+export const fitForms = (value: string, kind: keyof typeof FIT_FORMS): string[] => [value, ...FIT_FORMS[kind].map((n) => shortId(value, n, n))];
 
 /** A selection inside the id copies the whole id, whichever form is on screen; a selection that goes past it is left alone. */
 function copyWhole(e: ClipboardEvent, value: string): void {
