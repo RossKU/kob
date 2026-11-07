@@ -212,8 +212,23 @@ export function marketDecimalsOf(network: string, covenantId: Hex): number | nul
   return marketDecimals.get(k(network, covenantId)) ?? null;
 }
 
+/** The ticker the indexer lists a token under: a label for what is shown with no list at hand (an activity row, an order row); the id stays the identity. */
+const listedTickers = new Map<string, string>();
+
+/** Remembers the listed tickers and tells the views: `rows` as `GET /v1/tokens` gives them. */
+export function noteListedTickers(network: string, rows: readonly { covenant_id: Hex; ticker?: string | null }[]): void {
+  for (const r of rows) if (r.ticker) listedTickers.set(k(network, r.covenant_id), r.ticker);
+  for (const f of listeners) f();
+}
+
+/** The listed ticker of a token, else null. */
+export function listedTickerOf(network: string, covenantId: Hex): string | null {
+  return listedTickers.get(k(network, covenantId)) ?? null;
+}
+
 /** Tests only: forget everything. */
 export function resetDeclarationsForTests(): void {
+  listedTickers.clear();
   memo.clear();
   inflight.clear();
   programs.clear();

@@ -10,6 +10,7 @@ import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
+import { useDeclarationLookup } from '../../app/use-declaration';
 import { explorerTxUrl } from '../../config';
 import { pubkeyToAddress } from '../../data/kaspa-sdk';
 import type { PairFillsView } from '../../data/indexer-types';
@@ -77,12 +78,14 @@ function ActivityLogView(props: ActivityLogProps) {
   }, []);
   const data = useActivity({ market: props.market, kinds, pairFills: props.pairFills ?? null, onScreen });
 
+  // the names and decimals of tokens the registry does not have arrive with the token list: rows read them again then
+  const declared = useDeclarationLookup();
   const { nameOf, decimalsOf } = useMemo(
     () => ({
       nameOf: (token: Hex): string => displayToken(registry, config.network, token)?.ticker || longId(token),
       decimalsOf: (token: Hex): number => displayToken(registry, config.network, token)?.decimals ?? 8,
     }),
-    [registry, config.network],
+    [registry, config.network, declared],
   );
   const addressOf = (pk: Hex): string | null => {
     const k = `${config.network}:${pk}`;
@@ -186,7 +189,7 @@ function ActivityLogView(props: ActivityLogProps) {
       explorerHost,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [registry, config]);
+  }, [registry, config, declared]);
   const today = new Date().toDateString();
   const liveKind = data.mode === 'standalone' ? 'standalone' : data.mode === 'off' ? 'off' : held ? 'held' : data.mode;
 

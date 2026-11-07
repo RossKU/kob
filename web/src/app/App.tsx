@@ -23,7 +23,7 @@ import { StandaloneReceipts } from '../ui/shell/StandaloneReceipts';
 import { useStandalone } from '../ui/shell/standalone';
 import { useServices } from './context';
 import { useDeclarationsVersion } from './use-declaration';
-import { loadDeclaration, noteMarketDecimals, noteTokenProgram, restoreDeclarations } from '../data/token-declarations';
+import { loadDeclaration, noteListedTickers, noteMarketDecimals, noteTokenProgram, restoreDeclarations } from '../data/token-declarations';
 import { exponentOf } from '../kob/open-token';
 import { logoBlocklist, logoBlocklistUrlOf } from '../data/logo-blocklist';
 import { routeToHash, useRoute, usdMarketHash, type Route } from './router';
@@ -146,10 +146,12 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
         for (const r of rows) {
           if (!alive) break;
           if (r.template_hash) noteTokenProgram(config.network, r.covenant_id, tpls.find((t) => t.hash === r.template_hash && t.tokenSlots)?.name);
-          // the scale its first order set: what its amounts are read on where neither a declaration nor a program states its decimals
-          if (typeof r.market_scale === 'number') noteMarketDecimals(config.network, r.covenant_id, exponentOf(r.market_scale));
+          // the token's scale, else the one its first order set: what its amounts are read on where neither a declaration nor a program states its decimals
+          const scale = r.scale ?? r.market_scale;
+          if (typeof scale === 'number') noteMarketDecimals(config.network, r.covenant_id, exponentOf(scale));
           if (r.declaration) void loadDeclaration(kob, indexer, config.network, r.covenant_id);
         }
+        if (alive) noteListedTickers(config.network, rows);
       })
       .catch(() => undefined);
     return () => {

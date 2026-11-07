@@ -12,10 +12,10 @@
 // states them none are invented: `decimalsSource: 'assumed'` with 0 decimals shows the chain's integer amount, said so. A token shown on any of these carries
 // `decimalsSource`, and the places that name it add a small marker (`decimalsNote`); its name is the declared ticker, else the issued one, else its covenant id (8 + 8 hex).
 import { issuedToken } from '../data/issued-decimals';
-import { declarationConflicts, declaredToken, marketDecimalsOf, tokenProgramOf } from '../data/token-declarations';
+import { declarationConflicts, declaredToken, listedTickerOf, marketDecimalsOf, tokenProgramOf } from '../data/token-declarations';
 import { programDefaultDecimals } from '../kob/programs.generated';
 import type { StorageLike } from '../config';
-import { longId, type TokenInfo, type TokenRegistry } from '../kob/registry';
+import { longId, sanitizeUntrusted, type TokenInfo, type TokenRegistry } from '../kob/registry';
 import type { Hex } from '../kob/types';
 import { RAW_TOKEN_DECIMALS, setTokenAmountFormatter, t } from '../i18n';
 import { formatTokenAmount } from '../kob/units';
@@ -59,7 +59,7 @@ export function displayToken(
       ...(conflicts.length ? { declarationConflicts: [...conflicts] } : {}),
     };
   }
-  const name = declared?.symbol ?? (issued?.ticker || longId(id));
+  const name = declared?.symbol ?? (issued?.ticker || (sanitizeUntrusted(listedTickerOf(network, id) ?? '', 24) || longId(id)));
   // a token of a program with default decimals (KaspaRocket: 3, its convention), shown with them and their source
   const convention = programDefaultDecimals(program ?? tokenProgramOf(network, id));
   if (convention) {
