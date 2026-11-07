@@ -14,6 +14,8 @@ test.describe('shell and token list', () => {
   test.use({ appPath: '/#/market' });
 
   test('lists the registry token as its ticker over its shortened covenant id (copyable) with no verification wording', async ({ appPage, mock }) => {
+    // a row rises in: its parts are measured at rest
+    await appPage.emulateMedia({ reducedMotion: 'reduce' });
     const { id } = await seeded(mock);
     await expect(appPage.getByTestId(TESTID.navMarket)).toHaveAttribute('aria-current', 'page');
     const row = appPage.getByTestId(`token-row-${id}`);

@@ -1,4 +1,5 @@
 /* notification centre: header bell, dialog list */
+.notify-bell-item { display: inline-flex; }
 .notify-bell { position: relative; display: inline-flex; align-items: center; gap: 4px; }
 .notify-bell .badge { padding: 0 6px; font-size: 0.7rem; }
 .notify-bell[data-status-tone='warn'] { color: var(--warn); background: var(--warn-bg); }

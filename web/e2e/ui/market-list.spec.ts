@@ -172,6 +172,8 @@ test('while the figures load, each row shows placeholders and the names are alre
 });
 
 test('a token icon has a thin ring from the theme token (light: black 12 %, dark: white 22 %) that does not change its size', async ({ appPage: page, mock }) => {
+  // a row rises in: its size is measured at rest
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   const id = (await mock.token()).covenant_id;
   await page.goto('/#/market');
   const icon = page.getByTestId(`token-icon-${id}`);

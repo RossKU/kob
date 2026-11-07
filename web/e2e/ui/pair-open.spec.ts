@@ -4,7 +4,7 @@
 // each, a commitment known without the indexer that differs stops it, and My orders cancels it. A token the page cannot trade yet says why.
 import type { Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { test, expect, TEST_KEYS, type MockClient } from '../fixtures';
+import { closeBell, test, expect, statusEntry, TEST_KEYS, type MockClient } from '../fixtures';
 import { connectWallet, fund, listExkcc, pickAsset, seedFavorites, TOKEN } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, clickPlaceOnly, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
@@ -301,7 +301,8 @@ test('standalone mode: an open-list pair has no ticket (its decimals cannot be c
   await openListed(page, [base, QUOTE]);
   await openPage(page, base);
   await mock.post('/mock/indexer', { down: true });
-  await expect(page.getByTestId('banner-standalone')).toBeVisible({ timeout: 90_000 });
+  await expect(await statusEntry(page, 'banner-standalone')).toBeVisible({ timeout: 90_000 });
+  await closeBell(page);
   await expect(page.getByTestId('order-ticket')).toHaveCount(0, { timeout: 30_000 });
   await mock.post('/mock/indexer', { down: false });
 });

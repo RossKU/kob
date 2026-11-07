@@ -136,22 +136,25 @@ export function NotifyBell(props: { warnings: ConfigWarning[]; storedOverrides: 
   const label = current ? `${notifications}. ${current}` : notifications;
   return (
     <>
-      <Button
-        small
-        variant="ghost"
-        class="notify-bell"
-        data-testid="notify-bell"
-        data-status-tone={worstTone(status) ?? 'none'}
-        data-status-count={status.length}
-        aria-label={label}
-        title={label}
-        onClick={() => setOpen(true)}
-      >
-        <BellIcon />
-        {n.unread > 0 ? <Badge tone="info" data-testid="notify-unread">{n.unread > 99 ? '99+' : n.unread}</Badge> : null}
-      </Button>
-      {/* a banner on the page was announced when it appeared: the count is, now that the entries are behind the bell */}
-      <span class="sr-only" role="status" data-testid="notify-status-live">{current}</span>
+      {/* one item of the header's tools: the row's measured width (narrow.ts) sums them, so the live region must not count as one */}
+      <span class="notify-bell-item">
+        <Button
+          small
+          variant="ghost"
+          class="notify-bell"
+          data-testid="notify-bell"
+          data-status-tone={worstTone(status) ?? 'none'}
+          data-status-count={status.length}
+          aria-label={label}
+          title={label}
+          onClick={() => setOpen(true)}
+        >
+          <BellIcon />
+          {n.unread > 0 ? <Badge tone="info" data-testid="notify-unread">{n.unread > 99 ? '99+' : n.unread}</Badge> : null}
+        </Button>
+        {/* a banner on the page was announced when it appeared: the count is, now that the entries are behind the bell */}
+        <span class="sr-only" role="status" data-testid="notify-status-live">{current}</span>
+      </span>
       {open ? <NotificationPanel status={status} onClose={() => setOpen(false)} /> : null}
     </>
   );
