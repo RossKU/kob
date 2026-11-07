@@ -2,7 +2,7 @@
 // and the footer carries its NOTICE with a link to TradingView). The library is loaded on demand (its own chunk) so the rest of the app
 // does not pay for it; the panel keeps its size while it loads (skeleton) and when there is nothing to draw (empty state).
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, MouseEventParams, Time, UTCTimestamp } from 'lightweight-charts';
+import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, MouseEventParams, Time, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
 import type { CandleInterval } from '../../data/indexer-types';
 import type { IndexerApi } from '../../data/indexer';
 import { CANDLE_INTERVALS } from '../../data/indexer';
@@ -259,8 +259,13 @@ export function PriceChart(props: PriceChartProps) {
       upColor: pal.up, downColor: pal.down, wickUpColor: pal.up, wickDownColor: pal.down, priceFormat: { type: 'price', precision: props.dp, minMove },
     });
     const muted = alpha(pal.text.startsWith('#') ? pal.text : '#8b94a3', 0.35);
-    const bars: CandlestickData<Time>[] = series.bars.map(({ filled, ...b }) =>
-      filled ? { ...b, time: b.time as UTCTimestamp, color: muted, wickColor: muted, borderColor: muted } : { ...b, time: b.time as UTCTimestamp },
+    // a token pair draws no candle for a bucket where neither token traded: a pair has no price of its own to carry; a token's market carries its close, muted
+    const bars: (CandlestickData<Time> | WhitespaceData<Time>)[] = series.bars.map(({ filled, ...b }) =>
+      filled
+        ? props.usd
+          ? { time: b.time as UTCTimestamp }
+          : { ...b, time: b.time as UTCTimestamp, color: muted, wickColor: muted, borderColor: muted }
+        : { ...b, time: b.time as UTCTimestamp },
     );
     const vols: HistogramData<Time>[] = series.volumes.map((v) => ({ time: v.time as UTCTimestamp, value: v.value, color: alpha(v.up ? pal.up : pal.down, 0.45) }));
     c.candles.setData(bars);
