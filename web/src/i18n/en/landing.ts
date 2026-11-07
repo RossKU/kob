@@ -14,7 +14,7 @@ export default {
   'landing.h1.l2': 'order book',
   'landing.h1.l3': 'on Kaspa.',
   'landing.tagline': 'No admin keys · No oracle · No custody',
-  'landing.hero.lead': 'Limit orders for KCC-20 tokens, straight from your wallet.',
+  'landing.hero.lead': 'Permissionless, real-time limit orders for KCC-20 tokens, straight from your wallet.',
   'landing.hero.body': 'Every order is its own covenant UTXO on L1. KOB is open-source software — your keys never leave your wallet.',
 
   'landing.bleed.label': 'The KOB mark: sell orders above buy orders',
@@ -32,7 +32,7 @@ export default {
   'landing.how.s2.title': 'The order is a covenant.',
   'landing.how.s2.body': 'Each order is its own UTXO on Kaspa L1, locked by covenant rules. Limit, ladders, stop and exit orders; GTC for 90 days or a day order.',
   'landing.how.s3.title': 'Anyone can match.',
-  'landing.how.s3.body': 'Executors that anyone can run from the open-source code match resting orders. The covenant binds them — they cannot change the price or the amount.',
+  'landing.how.s3.body': 'Permissionless executors, run by anyone from the open-source code, match resting orders. The covenant binds them — they cannot change the price or the amount.',
   'landing.how.s3.link': 'Run an executor →',
   'landing.how.s4.title': 'Kaspa settles.',
   'landing.how.s4.body': 'A fill is an ordinary Kaspa transaction. Nothing to withdraw — your funds were never anywhere else.',
