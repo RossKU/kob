@@ -16,7 +16,7 @@ export interface FooterLink {
 }
 
 /**
- * The footer's one row of links: App, GitHub, Run an executor and, when the deployment has an indexer, its Public API; the app adds Settings and data,
+ * The footer's one row of links: App, GitHub, Run an executor, when the deployment has an indexer its Public API, and the Disclaimer; the app adds Settings and data,
  * Recover orders and kaspa.org.
  */
 export function footerLinks(context: FrameContext, indexerUrl: string | null | undefined): FooterLink[] {
@@ -26,6 +26,7 @@ export function footerLinks(context: FrameContext, indexerUrl: string | null | u
     { key: 'landing.github', href: REPO_URL, group: 'site' },
     { key: 'landing.footer.executor', href: REPO_URL, group: 'site' },
     ...(api ? [{ key: 'landing.footer.api', href: api, testid: context === 'app' ? 'footer-api' : 'landing-api', group: 'site' } as const] : []),
+    { key: 'landing.footer.disclaimer', href: '#/disclaimer', testid: 'footer-disclaimer', group: 'site' },
   ];
   if (context !== 'app') return site;
   return [

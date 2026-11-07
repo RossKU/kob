@@ -39,7 +39,7 @@ export function landingNetworkText(network: NetworkName, site: string): LandingN
     txNote: t(`landing.tx.note.${net}`),
     auditBody: t(`landing.trust.audit.body.${net}`),
     discLead: t(`landing.disc.lead.${net}`),
-    discBody: `${t('landing.disc.body', { network: net, site })} ${t(`landing.disc.tail.${net}`)}`,
+    discBody: `${t('landing.disc.body', { site })} ${t(`landing.disc.tail.${net}`)}`,
   };
 }
 

@@ -20,7 +20,7 @@ describe('the shared footer', () => {
 
   it('one row of links: App, GitHub, Run an executor, then the Public API only when an indexer is configured', () => {
     const keys = (ctx: 'app' | 'landing', url: string | null) => footerLinks(ctx, url).map((l) => l.key);
-    expect(keys('landing', null)).toEqual(['landing.footer.app', 'landing.github', 'landing.footer.executor']);
+    expect(keys('landing', null)).toEqual(['landing.footer.app', 'landing.github', 'landing.footer.executor', 'landing.footer.disclaimer']);
     expect(keys('landing', 'not a url')).not.toContain('landing.footer.api');
     const api = footerLinks('landing', 'https://idx.example/').find((l) => l.key === 'landing.footer.api');
     expect(api).toMatchObject({ href: 'https://idx.example/v1/health', testid: 'landing-api' });
@@ -29,7 +29,7 @@ describe('the shared footer', () => {
 
   it("the app adds its own links after the site's: Settings and data, Recover orders, kaspa.org (a new tab)", () => {
     const app = footerLinks('app', null);
-    expect(app.filter((l) => l.group === 'site').map((l) => l.key)).toEqual(['landing.footer.app', 'landing.github', 'landing.footer.executor']);
+    expect(app.filter((l) => l.group === 'site').map((l) => l.key)).toEqual(['landing.footer.app', 'landing.github', 'landing.footer.executor', 'landing.footer.disclaimer']);
     expect(app.filter((l) => l.group === 'app').map((l) => [l.key, l.href, !!l.external])).toEqual([
       ['shell.footer.settings', '#/settings', false],
       ['shell.footer.recover', '#/orders', false],

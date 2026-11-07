@@ -12,6 +12,7 @@ import { homeTargetOf, showsLanding } from '../ui/landing/landing-model';
 import { OrdersView } from '../ui/orders/OrdersView';
 import { SettingsView } from '../ui/settings/SettingsView';
 import { NetworkMismatchBanner } from '../ui/shell/Banners';
+import { DisclaimerPage } from '../ui/shell/DisclaimerPage';
 import { SiteFooter, SkipLink } from '../ui/shell/Frame';
 import { Header } from '../ui/shell/Header';
 import { StatusProvider } from '../ui/shell/StatusProvider';
@@ -98,6 +99,12 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
       return (
         <Titled page="settings">
           <SettingsView warnings={props.warnings} />
+        </Titled>
+      );
+    case 'disclaimer':
+      return (
+        <Titled page="disclaimer">
+          <DisclaimerPage />
         </Titled>
       );
   }

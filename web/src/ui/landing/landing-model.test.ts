@@ -69,7 +69,7 @@ describe('landing network text', () => {
     expect(n.chip).toBe('testnet-10 · pre-audit');
     expect(n.auditBody).toContain('testnet-10 with test tokens');
     expect(n.discLead).toBe('Testnet · pre-audit.');
-    expect(n.discBody).toContain('Kaspa testnet-10');
+    expect(n.discBody).toContain('Test tokens have no value');
     expect(n.discBody).toContain('kob.kaspa.ag publishes software and information only');
     expect(n.discBody).toContain('Test tokens have no value');
   });

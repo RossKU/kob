@@ -6,6 +6,7 @@ export default {
   'shell.nav.orders': 'My orders',
   'shell.nav.create': 'Create token',
   'shell.nav.settings': 'Settings',
+  'shell.nav.disclaimer': 'Disclaimer',
   'shell.theme.toLight': 'Switch to the light theme',
   'shell.theme.toDark': 'Switch to the dark theme',
   'shell.network.label': 'Network: {network}',

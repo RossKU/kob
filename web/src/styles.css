@@ -578,3 +578,8 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 .frame-guard { max-width: 34rem; margin: 12vh auto 0; padding: 0 16px; }
 .frame-guard h1 { font-size: 1.25rem; margin: 0 0 8px; }
 .frame-guard-url { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+
+/* the disclaimer page */
+.legal { max-width: 720px; margin: 0 auto; }
+.legal h2 { margin: 24px 0 6px; font-size: 1.05rem; }
+.legal p { margin: 0 0 10px; line-height: 1.6; }

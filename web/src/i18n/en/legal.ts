@@ -1,0 +1,25 @@
+// The disclaimer page (#/disclaimer, src/ui/shell/DisclaimerPage.tsx). Written for mainnet; `legal.network.*` is the one line that depends on the network.
+export default {
+  'legal.title': 'Disclaimer',
+  'legal.updated': 'Last updated 2026-11-07',
+  'legal.intro': 'What KOB is and what it is not. Please read this before you use it.',
+  'legal.network.mainnet': 'This site runs on Kaspa mainnet. Real funds are at risk.',
+  'legal.network.testnet-10': 'This site runs on Kaspa testnet-10. Test tokens have no value.',
+
+  'legal.audit.title': 'Pre-audit software',
+  'legal.audit.body': 'The contracts have had no external security audit. They may contain bugs that lose funds, and a deployed contract cannot be paused, upgraded or repaired. Use KOB at your own risk and only with funds you can afford to lose.',
+  'legal.custody.title': 'No custody, no operator',
+  'legal.custody.body': '{site} publishes software and information only. It never holds funds or orders, does not trade and does not operate executors, and it cannot reverse, cancel or recover a transaction. Your wallet signs and you alone control your keys: nobody can restore a lost key.',
+  'legal.tokens.title': 'Tokens',
+  'legal.tokens.body': 'Anyone can issue a token. Names, tickers and icons are claims of their creators, and two tokens can share a ticker: a token is identified by its covenant id, so check it yourself. KOB does not endorse any token. A token may be worthless, impossible to sell, or a scam.',
+  'legal.market.title': 'Prices and execution',
+  'legal.market.body': 'Prices come from orders and fills on Kaspa, not from an oracle. An order may not fill, may fill in part, or may expire; network congestion, chain reorganisations and independent executors affect when and whether it does. Book and chart data may be late or wrong. The app decodes each transaction before you sign it: what you sign is what counts.',
+  'legal.services.title': 'Third-party services',
+  'legal.services.body': 'The app connects to services KOB does not control, such as Kaspa nodes, indexers, token-data sources, image hosts and its web host. They can be slow, wrong or unavailable, and they see the requests your browser makes to them.',
+  'legal.advice.title': 'Not advice',
+  'legal.advice.body': 'Nothing here is financial, investment, legal or tax advice, and nothing here is an offer or a recommendation to buy or sell any token.',
+  'legal.duty.title': 'Your responsibility',
+  'legal.duty.body': 'You are responsible for deciding whether you may use this software where you live, and for complying with your laws, including tax.',
+  'legal.warranty.title': 'No warranty',
+  'legal.warranty.body': 'The software is provided "as is" under the ISC License, without warranty of any kind. To the extent the law allows, its authors and publishers are not liable for any loss arising from its use.',
+} as Record<string, string>;

@@ -24,7 +24,7 @@ export type Route =
    * that can be shared)
    */
   | { name: 'activity'; market?: ActivityMarket; covenantId?: undefined }
-  | { name: 'orders' | 'create' | 'settings'; covenantId?: undefined };
+  | { name: 'orders' | 'create' | 'settings' | 'disclaimer'; covenantId?: undefined };
 
 /** The market an activity link names: one token's KAS book or one token/token pair. */
 export type ActivityMarket = { kind: 'token'; token: string } | { kind: 'pair'; base: string; quote: string };
@@ -39,7 +39,7 @@ const takesAmount = (p: TicketPreset | undefined): boolean => p !== undefined &&
 export type TicketPreset = (typeof TICKET_PRESETS)[number];
 
 const HEX64 = /^[0-9a-f]{64}$/i;
-const PAGES = ['orders', 'create', 'settings'] as const;
+const PAGES = ['orders', 'create', 'settings', 'disclaimer'] as const;
 
 /** Parses a `location.hash` value (with or without the leading `#`). Never throws. */
 export function parseHash(hash: string): Route {
@@ -130,7 +130,7 @@ export const activityMarketParam = (m: ActivityMarket): string => (m.kind === 't
 export const activityRoute = (market?: ActivityMarket | null): Route => (market ? { name: 'activity', market } : { name: 'activity' });
 
 /** Which top-level nav entry a route belongs to. */
-export const navOf = (route: Route): 'market' | 'activity' | 'orders' | 'create' | 'settings' =>
+export const navOf = (route: Route): 'market' | 'activity' | 'orders' | 'create' | 'settings' | 'disclaimer' =>
   route.name === 'token' || route.name === 'pair' || route.name === 'usd' || route.name === 'home' ? 'market' : route.name;
 
 export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint): Route => ({

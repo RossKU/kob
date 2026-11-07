@@ -5,12 +5,22 @@ import { closeBell, expect, statusEntry, test } from '../fixtures';
 test.describe('pre-audit notice', () => {
   test.use({ appPath: '/#/market' });
 
+  test('the footer leads to the disclaimer: every section, and the line of this network', async ({ appPage: page }) => {
+    await page.getByTestId('footer-disclaimer').click();
+    await expect(page.getByTestId('disclaimer-page')).toBeVisible();
+    await expect(page).toHaveTitle(/^Disclaimer - /);
+    await expect(page.getByTestId('disclaimer-network')).toHaveText('This site runs on Kaspa testnet-10. Test tokens have no value.');
+    for (const k of ['audit', 'custody', 'tokens', 'market', 'services', 'advice', 'duty', 'warranty']) await expect(page.getByTestId(`disclaimer-${k}`)).toBeVisible();
+    await expect(page.getByTestId('disclaimer-warranty')).toContainText('ISC License');
+  });
+
   test('footer line, header badge and the entry of the bell; the dismissal is remembered across a reload', async ({ appPage: page }) => {
     const footer = page.getByTestId('footer-preaudit');
     await expect(footer).toBeVisible();
     // the shared footer's disclaimer (the landing page's wording, for the configured network) and the app's non-custodial statement
     await expect(footer).toContainText('Testnet · pre-audit.');
-    await expect(footer).toContainText('has not had an external security audit');
+    await expect(footer).toContainText('no external security review');
+    await expect(footer).toContainText('Not financial advice');
     await expect(footer).toContainText('publishes software and information only');
     await expect(footer).toContainText('non-custodial');
     await expect(footer.getByRole('link', { name: 'Security policy' })).toHaveAttribute('href', /SECURITY\.md$/);
