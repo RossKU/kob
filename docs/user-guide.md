@@ -3,7 +3,7 @@
 KOB is a non-custodial order book for Kaspa tokens. You trade from your own wallet in a web page; nobody holds your coins. This
 guide walks through the web app as it is today. The labels in quotation marks are the ones on the screen.
 
-**Read this first.** KOB is **pre-audit software**. Its contracts have had no external security review (`SECURITY.md`,
+**Read this first.** KOB is in **open review**: the specification is not final and its contracts have had no external security review (`SECURITY.md`,
 `docs/security/AUDIT-2026-10.md`). Trade only funds you can afford to lose. Testnet-10 coins have no value; use them to learn.
 
 Contents: [1 What you need](#1-what-you-need) | [2 Connect a wallet](#2-connect-a-wallet) |
@@ -305,11 +305,11 @@ first (My orders, Balances)."
 
 ## 9. Current status: node and indexer
 
-The header is one row: the logo, the tabs (Market, My orders, Create token, Settings), a status dot, the chip "testnet-10 · pre-audit", the **Connect** button (**Disconnect** and the address once connected), the theme toggle and the bell. On a phone the tabs, the theme toggle and the status are behind the menu button (it closes when you open a page),
-the chip reads "tn10 · pre-audit" and the one **Connect** button does what it does on a desktop. The status dot is green, amber or red for the
+The header is one row: the logo, the tabs (Market, My orders, Create token, Settings), a status dot, the chip "testnet-10 · open review", the **Connect** button (**Disconnect** and the address once connected), the theme toggle and the bell. On a phone the tabs, the theme toggle and the status are behind the menu button (it closes when you open a page),
+the chip reads "tn10 · open review" and the one **Connect** button does what it does on a desktop. The status dot is green, amber or red for the
 worse of the **Node** ("reachable", "unreachable", "checking...", with the DAA score) and the **Indexer**; press it (or hover it) to read both. A
 problem is never only a dot: the bell turns amber for a warning and red for an error, and its dialog lists under "Current status" what holds now, as listed
-below (with the other conditions: settings that were ignored, test mode, the token registry, wallet changes and errors, and the pre-audit notice until you
+below (with the other conditions: settings that were ignored, test mode, the token registry, wallet changes and errors, and the open review notice until you
 dismiss it). An entry leaves by itself when its condition ends; Clear does not touch it, and it is there with the notifications off or no wallet connected.
 Only a wallet on another network than the app stays at the top of the page, as one line: press it for the whole text.
 The indexer is the server that lists the book, trades and order status; the node is a Kaspa node that gives balances and takes

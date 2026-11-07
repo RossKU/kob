@@ -268,7 +268,7 @@ After connect the adapters listen for account and network changes (`WalletAdapte
 * **Stored settings.** A node, indexer or `extraIndexerUrls` list, or `allowQueryOverrides: true`, saved in this browser's settings is named in the bell's
   current status on every page.
 * **Current status.** The conditions that hold now (`src/ui/shell/status-entries.ts`: settings that were ignored, test mode, stored settings, registry failure,
-  wallet notices and errors, node and indexer health, standalone mode, the pre-audit notice) are listed at the top of the bell's dialog. Live state, not
+  wallet notices and errors, node and indexer health, standalone mode, the open review notice) are listed at the top of the bell's dialog. Live state, not
   notifications: an entry comes and goes with its condition, is not stored and Clear does not touch it, and it is there with the notifications off or no
   wallet connected. The worst tone colours the bell (red for an error, amber for a warning, none for info) and the count is in its accessible name. The one
   banner of the shell stays at the top of the page: a wallet on another network than the app, one line that a press unfolds. Banners inside a view are the view's own.

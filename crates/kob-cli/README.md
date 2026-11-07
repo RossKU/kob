@@ -3,7 +3,7 @@
 `kob` is the KOB command line: read order books, trade, create tokens and follow the live feed. It builds the same
 transactions as the web wallet.
 
-> **Pre-audit.** KOB has had no external audit. Interfaces, option names and JSON shapes can still change. Try things on
+> **Open review.** KOB has had no external audit. Interfaces, option names and JSON shapes can still change. Try things on
 > testnet-10 first, and run every signing command with `--dry-run` before you sign.
 
 Details (planner defaults, units, every option, the `--json` shapes, all exit codes): [REFERENCE.md](REFERENCE.md).

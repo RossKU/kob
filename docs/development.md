@@ -36,7 +36,7 @@ npm run dev                                # then Settings: indexer URL and node
 ```
 
 The web app defaults to mainnet, no indexer and the SDK's public resolver. A real run needs
-your own settings and a browser wallet; see `web/README.md`. On mainnet it is a pre-audit canary:
+your own settings and a browser wallet; see `web/README.md`. On mainnet it is a canary with no external audit:
 use only funds you can afford to lose.
 
 **Builds of `kobd`.** `--features deploy-tn10` ([ops/run-from-source.md](ops/run-from-source.md)) records the network of `contracts/deploy/testnet-10` and refuses any

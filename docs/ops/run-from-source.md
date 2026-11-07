@@ -64,7 +64,7 @@ fast start: the Executor trades within seconds on the orders seen from its start
 background (`"book_complete":false` until then). Send the address at least 100 testnet KAS (200 recommended; mine them or ask
 a faucet), as a few transfers of 10 KAS or more; `./kobd address-balance` shows the balance. Below 100 KAS it warns and keeps
 trading. Let the dry run go until its status line says `indexer following` and `/v1/health` says `"roles":["executor"]`, stop
-it, then start it live. The key is a hot key and KOB is pre-audit: keep only working capital on it, never more than you can
+it, then start it live. The key is a hot key and KOB has had no external audit: keep only working capital on it, never more than you can
 afford to lose, and back the file up where only you can read it.
 
 **What runs where.**
@@ -80,5 +80,5 @@ afford to lose, and back the file up where only you can read it.
 
 Next: services (Task Scheduler, systemd), Docker, upgrades and withdrawals in `docs/ops/executor-quickstart.md`; every flag,
 the configuration keys, the economics and the runbook in `docs/ops/executor.md`. `kobd --help` lists the start options and
-the commands, `kobd help <command>` a command's. The mainnet build is `--features deploy-mainnet`; mainnet is a pre-audit
-canary (`docs/ops/release.md`).
+the commands, `kobd help <command>` a command's. The mainnet build is `--features deploy-mainnet`; mainnet is a canary
+with no external audit (`docs/ops/release.md`).

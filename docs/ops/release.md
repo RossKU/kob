@@ -4,8 +4,8 @@ What a release manager does to cut a mainnet release, and what an operator needs
 software only (ISC): the release is a commit, its reproducible artifacts and the hashes below; the
 mainnet services (node, Indexer, Executor with its matcher and keepers, x402 facilitator) are run by community operators.
 
-Nothing in KOB has been independently audited, and no external audit precedes the launch (maintainer decision
-2026-10-12): mainnet launches as a canary, with a visible pre-audit notice in the web app (`SECURITY.md`). The order
+Nothing in KOB has been independently audited, and the launch has no external audit (maintainer decision
+2026-10-12): mainnet launches as a canary, with a visible open review notice in the web app (`SECURITY.md`). The order
 contracts and the token programs this build supports were reviewed internally only, and nothing on chain can pause or
 rescue an order. The launch therefore runs with a strict program allowlist (section 3).
 
@@ -233,7 +233,7 @@ would list none of the orders the new wallets place.
 
    **`version` is the workspace version.** It is `[workspace.package] version` in the root `Cargo.toml`, which every crate
    inherits. The release manager sets it in the commit that is tagged (the release commit; the bump is the release manager's
-   decision and is not made on a feature branch): `0.1.0` is the first release (testnet-10 only, pre-audit). A binary built from a
+   decision and is not made on a feature branch): `0.1.0` is the first release (testnet-10 only, no external audit). A binary built from a
    commit before that bump reports `"version": "0.0.0"`, which is not a defect of the build: tell builds of one version apart by
    `commit` (it is the git commit the build was made from) and compare that with the commit you mean. Between two releases
    `master` keeps the last release's version, so `version` equals the release only for the build of the tagged commit; `commit`

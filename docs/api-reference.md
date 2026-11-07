@@ -4,7 +4,7 @@ The details behind [api.md](api.md): every route, query parameter, response fiel
 limits, and the `[api]` configuration. It matches the code of `crates/kobd/src/api/`, `config.rs` and the response
 types in `indexer/` (`reads.rs`, `market.rs`, `pairs.rs`, `status.rs`) at the time of writing.
 
-KOB is **pre-audit** (no external audit). Paths, field names and shapes are a pre-release interface and can still change.
+KOB is in **open review** (no external audit). Paths, field names and shapes are a pre-release interface and can still change.
 
 Related: running an indexer, sizing and runbooks are in [ops/executor.md](ops/executor.md) (Part B, section 5 for the read
 API); a public read server behind Cloudflare Tunnel is [ops/chart-server.md](ops/chart-server.md). The `KOB1` payload that
@@ -1159,7 +1159,7 @@ metrics = false
 
 What the code and the docs support, and no more:
 
-* **Status.** The project is pre-audit and its README says "Interfaces, encodings and artifact ids can still change". No
+* **Status.** The project is in open review (no external audit) and its README says "Interfaces, encodings and artifact ids can still change". No
   deprecation policy, version negotiation or release-by-release API changelog is documented. The path prefix is `/v1`.
 * **Conventions the code names as its contract.** `indexer/reads.rs` labels these "stable API contract": ids, hashes and keys are
   lowercase hex; every sompi amount and token base-unit quantity is a decimal string; prices and tips are sompi per whole token;

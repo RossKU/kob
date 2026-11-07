@@ -3,7 +3,7 @@
 The read API answers order books, orders, fills, trades, candles, token holdings and the indexer's own health, as JSON over
 HTTP and a WebSocket feed. It is for bots, dashboards and integrations.
 
-> **Pre-audit.** KOB has had no external audit. Paths, field names and shapes can still change. The public server below runs
+> **Open review.** KOB has had no external audit. Paths, field names and shapes can still change. The public server below runs
 > on testnet-10.
 
 Every field, parameter and frame, the limits and the `[api]` configuration: [api-reference.md](api-reference.md). Section

@@ -2,14 +2,14 @@
 
 ## Status
 
-KOB is **pre-audit software**, and there is **no external security audit before launch** (a
-maintainer decision, 2026-10-12). What exists: internal review passes by the author, the engine
-test suites in `crates/kob-tests` (the contracts run in the real rusty-kaspa script engine), the
-ablation (mutation) suites that show which check rejects which attack (`tools/ablation/README.md`)
-and fuzz/soak tests. None of that is an independent audit, and a passing test suite is not one
-either.
+KOB is in **open review**: the code is public, the specification is not final and reports are
+welcome. There is **no external security audit** (a maintainer decision, 2026-10-12). What
+exists: internal review passes by the author, the engine test suites in `crates/kob-tests` (the
+contracts run in the real rusty-kaspa script engine), the ablation (mutation) suites that show
+which check rejects which attack (`tools/ablation/README.md`) and fuzz/soak tests. None of that
+is an independent audit, and a passing test suite is not one either.
 
-Mainnet launches as a **canary**, with a visible pre-audit notice in the app (a header badge and a
+Mainnet launches as a **canary**, with a visible open review notice in the app (a header badge and a
 footer line on every page, and an entry of the bell's current status until it is dismissed). **Use it
 at your own risk, and only with funds you can afford to lose.**
 
@@ -32,8 +32,8 @@ with a live `PublicMint` can still grow up to its genesis allowance. The other K
 
 Please report suspected vulnerabilities **privately**, not in public issues:
 
-* Use GitHub's private vulnerability reporting for this repository (Security tab, "Report a
-  vulnerability").
+* Use GitHub's private vulnerability reporting, which is on for this repository (Security tab,
+  "Report a vulnerability", or [the form](https://github.com/RossKU/kob/security/advisories/new)).
 * If that is unavailable, open a public issue that only says you have a security report and how
   to reach you, without any detail, and the maintainer will move the conversation to a private
   channel.

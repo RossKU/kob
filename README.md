@@ -4,8 +4,9 @@ A permissionless limit order book for KCC-20 tokens on Kaspa layer 1. Every orde
 enforces price, amount, custody and time in force on chain, and only the maker can cancel. Anyone can match crossing orders
 and earn the spread. No bridge, no sequencer, no admin key, no oracle, no protocol fee.
 
-> **Pre-audit.** KOB has had no external security audit. Testnet-10 is the network for testing; on mainnet use only funds
-> you can afford to lose. See [SECURITY.md](SECURITY.md).
+> **Open review.** KOB has had no external security audit. The code is public, the specification is not final and reports
+> are welcome. Testnet-10 is the network for testing; on mainnet use only funds you can afford to lose. See
+> [SECURITY.md](SECURITY.md).
 
 ## Quick start
 
@@ -42,9 +43,9 @@ kob watch fills --token TUSD --network testnet-10 --json        # NDJSON, one ev
 Every command and kind: [crates/kob-cli](crates/kob-cli/README.md). The read API (HTTP and WebSocket, no key):
 [docs/api.md](docs/api.md).
 
-## Audit scope
+## Review scope
 
-The live contracts are `contracts/orders/`; [contracts/README.md](contracts/README.md) states what is deployed, what to audit, and what
+The live contracts are `contracts/orders/`; [contracts/README.md](contracts/README.md) states what is deployed, what to review, and what
 is a prototype or third-party.
 
 ## Documentation

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking. KOB is pre-audit and moves quickly; small, focused changes with tests are
+Thanks for looking. KOB is in open review and moves quickly; small, focused changes with tests are
 the easiest to review. For anything that changes a contract, the protocol encoding or a
 specification, please open an issue first (the repository's issue tracker at https://github.com/RossKU/kob/issues).
 

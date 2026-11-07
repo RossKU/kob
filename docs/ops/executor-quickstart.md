@@ -9,7 +9,7 @@ crossing orders and refunds expired ones, earning the spreads and the makers' ti
 The executor talks to nothing but the Kaspa node you point it at (public nodes found through the Kaspa resolvers by default,
 or your own). It sends no telemetry, charges no fee, does not update itself and connects to no server of the KOB project.
 
-**Risk.** KOB is pre-audit software: its contracts have had no external security review and mainnet launches as a canary
+**Risk.** KOB is in open review: its contracts have had no external security review and mainnet launches as a canary
 (`SECURITY.md`, `docs/security/AUDIT-2026-10.md`). The executor signs unattended with a **hot key**, so it holds working
 capital only (section 3). What one of its transactions can pay in fees is capped by `--fee-max-tx-kas` (default 1 KAS) and
 `--fee-max-rate` (default 1,000 sompi per gram, the relay floor being 100; `docs/ops/executor.md`, Part C, *Fee policy*). The

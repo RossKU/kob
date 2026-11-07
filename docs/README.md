@@ -1,6 +1,6 @@
 # KOB documentation
 
-Everything here describes a **pre-audit** system (no external audit; mainnet launches as a canary, testnet-10 is the test network). Where a document
+Everything here describes a system in **open review** (no external audit, the specification is not final; mainnet launches as a canary, testnet-10 is the test network). Where a document
 says "normative", it is normative for this repository's code, not for the Kaspa network.
 
 ## Guides

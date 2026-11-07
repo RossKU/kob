@@ -322,7 +322,7 @@ sends the signer's headers) and the public 8491 instance; miner and cloudflared 
 budget; templates unchanged (no order cancelled, chart history and databases kept); one child at a time. Live test report:
 `docs/reports/TN10-TEST-2026-10.md`.
 
-**Redeploy on main b937ebf, 2026-10-12 16:21:57 to 16:37:20 UTC (2026-10-13 01:21 to 01:37 JST).** The pre-audit covenant fixes
+**Redeploy on main b937ebf, 2026-10-12 16:21:57 to 16:37:20 UTC (2026-10-13 01:21 to 01:37 JST).** The covenant fixes made before the internal audit of 2026-10
 changed 10 of the 15 order templates (`KobCondAsk`, `KobCondBid`, `KobIfdAsk`, `KobIfdBid`, `KobCondPair`, `KobIfdPair` and the
 four KRON conditional / if-done ones); `KobAsk`, `KobBid`, `KobPair`, their KRON twins and the router did not. The 75 live orders
 on changed templates were cancelled at 16:22 to 16:24 UTC (anything that probes soak orders should re-read the books after that

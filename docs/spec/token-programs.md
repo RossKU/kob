@@ -133,7 +133,7 @@ kob registry add-program <ARTIFACT.json | REDEEM.bin | REDEEM.hex | HEX> --name 
    and `scripts/build-deploy.sh mainnet` (the deployment record pins the registry).
 6. Run the full suite: `cargo test --workspace`, `cd web && npm run gen:programs && npx vitest run`.
 
-**How a launchpad or program author asks for support.** There is no intake desk and no promised turnaround: KOB is pre-audit
+**How a launchpad or program author asks for support.** There is no intake desk and no promised turnaround: KOB is in open review
 and support for a program is a change to this repository like any other (`CONTRIBUTING.md`). Open an issue on the repository
 first, then (or instead) a pull request that follows the steps above, with: the program's source or artifact and its licence, its
 KCC-20 (or KRON) conformance results, the genesis shapes it produces (section 3) with a real example on the network, its owner and

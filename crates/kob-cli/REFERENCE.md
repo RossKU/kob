@@ -4,7 +4,7 @@ The details behind [README.md](README.md): planner defaults, units, token resolu
 shapes, the exit codes, and the fine print of `kob watch`, `kob tokens` and the token commands. `kob <command> --help` is the
 authority for options; this file matches the code at the time of writing.
 
-KOB is **pre-audit** (no external audit). The option names and the JSON shapes below are a pre-release interface: they can
+KOB is in **open review** (no external audit). The option names and the JSON shapes below are a pre-release interface: they can
 still change until a release says otherwise.
 
 ## Contents
