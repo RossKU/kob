@@ -1,12 +1,13 @@
 // The activity log's rows, built to stay still while the list is live: each row is a keyed, memoized component whose cells render again only when
 // what they show changed (ActivityStore keeps an unchanged row's object); rows sit at fixed heights and move by a transform when a row arrives above
 // them (no layout shift); the confirmation cell follows the chain on its own, from one shared one-second clock, and renders only when its value changes.
+import { navigate, pairRoute, tokenRoute } from '../../app/router';
 import { memo } from 'preact/compat';
 import { useEffect, useState } from 'preact/hooks';
 import { formatDateTime, t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { pow10 } from '../../kob/units';
-import { fitAmountColumn, unitsFraction } from '../kit';
+import { compactZeros, fitAmountColumn, unitsFraction } from '../kit';
 import { priceDecimals, priceText } from '../market/market-model';
 import { TokenIcon } from '../market/TokenIcon';
 import { SETTLE_DAA, confirmationsAt, daaNow, marketKeyOf, rowTime, type ActivityRow, type MarketRef } from './activity-model';
@@ -158,7 +159,7 @@ const RowCells = memo(
           <KindIcon kind={r.kind} side={r.side} />
         </span>
         <span class="act-c-mk" role="cell" title={fmt.marketText(r.market)}>
-          <MarketIcons market={r.market} nameOf={fmt.nameOf} />
+          <MarketIcons market={r.market} nameOf={fmt.nameOf} label={fmt.marketText(r.market)} />
           {r.moreMarkets > 0 ? <span class="act-more" title={t('activity.moreMarketsTitle', { n: r.moreMarkets })}>{t('activity.moreMarkets', { n: r.moreMarkets })}</span> : null}
           <span class="act-txm">{r.txid}</span>
         </span>
@@ -177,11 +178,11 @@ const RowCells = memo(
           {r.placed > 1 ? <i class="act-tag" title={t('activity.wallet.ladderTitle', { n: r.placed })}>{t('activity.wallet.ladder', { n: r.placed })}</i> : null}
           {r.counterparty ? <i class="act-tag">{t(`activity.cp.${r.counterparty}`)}</i> : null}
         </span>
-        <span class={`act-c-amt act-num${r.side ? ` act-${r.side}` : ''}`} role="cell" title={amount.exact ?? undefined}>
-          <b>{amount.text}</b>
-          {amount.sub ? <span class="act-sub">{amount.sub}</span> : null}
+        <span class={`act-c-amt act-num${r.side ? ` act-${r.side}` : ''}`} role="cell" title={amount.exact ?? amount.text}>
+          <b>{compactZeros(amount.text)}</b>
+          {amount.sub ? <span class="act-sub" title={amount.sub}>{compactZeros(amount.sub)}</span> : null}
         </span>
-        <span class="act-c-px act-num" role="cell" title={price}>{price}</span>
+        <span class="act-c-px act-num" role="cell" title={price}>{compactZeros(price)}</span>
         <ConfCell daa={r.daa} confirmations={r.confirmations} settled={r.settled} chainDaa={props.chainDaa} chainAt={props.chainAt} />
         <span class="act-c-time act-num" role="cell" title={props.fullTime}>{rowTime(r.timeMs, Date.parse(props.today))}</span>
       </>
@@ -205,17 +206,34 @@ function amountOf(r: ActivityRow, fmt: RowFormat): { text: string; sub: string; 
   return { text, sub, exact: a?.exact && token ? `${a.exact} ${fmt.nameOf(token)}` : null };
 }
 
-/** One token icon for a KAS book, `A / B` for a pair (the tickers in the cell's title and the row's label). */
-function MarketIcons(props: { market: MarketRef; nameOf: (t: Hex) => string }) {
+/** One token icon for a KAS book, `A / B` for a pair (the tickers in the cell's title and the row's label). It leads to that market; the rest of the row to the transaction. */
+function MarketIcons(props: { market: MarketRef; nameOf: (t: Hex) => string; label: string }) {
   const m = props.market;
   const icon = (id: Hex) => <TokenIcon row={{ covenantId: id, ticker: props.nameOf(id), kascov: null }} size={22} anonymous />;
-  return m.kind === 'token' ? (
-    <span class="act-mk">{icon(m.token)}</span>
-  ) : (
-    <span class="act-mk">
-      {icon(m.base)}
-      <span class="act-sl" aria-hidden="true">/</span>
-      {icon(m.quote)}
+  const open = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigate(m.kind === 'token' ? tokenRoute(m.token) : pairRoute(m.base, m.quote));
+  };
+  return (
+    <span
+      class="act-mk act-mk-link"
+      role="link"
+      tabIndex={0}
+      aria-label={props.label}
+      data-testid="activity-market-link"
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') open(e);
+      }}
+    >
+      {m.kind === 'token' ? icon(m.token) : (
+        <>
+          {icon(m.base)}
+          <span class="act-sl" aria-hidden="true">/</span>
+          {icon(m.quote)}
+        </>
+      )}
     </span>
   );
 }

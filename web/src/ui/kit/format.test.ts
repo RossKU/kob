@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { amountText, CELL_CHARS, columnFraction, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction } from './format';
+import { amountText, CELL_CHARS, columnFraction, compactZeros, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction } from './format';
 
 describe('kit format', () => {
   it('shortens ids without touching short strings', () => {
@@ -170,5 +170,21 @@ describe('amount columns never cut a digit', () => {
       expect(cells.map((c) => c.text).every((s) => !s.includes('…'))).toBe(true);
     }
     expect(texts(fitAmountColumn([null, 5n], 0))).toEqual(['—', '5']);
+  });
+});
+
+describe('compactZeros', () => {
+  it('counts four or more zeros after the point; fewer stay as they are', () => {
+    expect(compactZeros('0.00002547')).toBe('0.0₄2547');
+    expect(compactZeros('0.0000000000012')).toBe('0.0₁₁12');
+    expect(compactZeros('0.000123')).toBe('0.000123');
+    expect(compactZeros('1.00002')).toBe('1.00002');
+    expect(compactZeros('10.00002')).toBe('10.00002');
+  });
+  it('leaves what is around the number, and a range keeps both ends', () => {
+    expect(compactZeros('0.00002547 TBTC')).toBe('0.0₄2547 TBTC');
+    expect(compactZeros('-0.00002547')).toBe('-0.0₄2547');
+    expect(compactZeros('0.00001–0.00002')).toBe('0.0₄1–0.0₄2');
+    expect(compactZeros('0.00000000')).toBe('0.00000000');
   });
 });

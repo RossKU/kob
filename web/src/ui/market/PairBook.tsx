@@ -64,7 +64,17 @@ export function PairBook(props: PairBookProps) {
         ))}
       </div>
       <div class="ob-mid book-mid small muted" data-testid="pair-spread">
-        {t(line.key, line.params)}
+        {line.key === 'pair.book.spread' ? (
+          <span>
+            <span class="ob-mid-price">{`${t('market.book.mid')} ${line.params.mid} · `}</span>
+            {`${t('market.book.spread')} `}
+            <span class="ob-spread-abs">{`${line.params.spread} (`}</span>
+            {`${line.params.pct}%`}
+            <span class="ob-spread-abs">)</span>
+          </span>
+        ) : (
+          t(line.key, line.params)
+        )}
       </div>
       <div class="book-side book-bids" data-testid="pair-book-bids">
         {m.bids.map((r, i) => (

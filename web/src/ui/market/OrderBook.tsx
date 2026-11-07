@@ -115,13 +115,24 @@ export function OrderBook(props: OrderBookProps) {
           {props.last ? props.last.text : '—'}
         </span>
         <span class="small muted">
-          {t('market.book.mid')}{' '}
-          <strong class="num" data-testid="book-mid" data-value={m.mid?.value ?? ''}>
-            {m.mid ? m.mid.text : '—'}
-          </strong>
-          {' · '}
-          {t('market.book.spread')} <strong class="num">{m.spread ? m.spread.text : '—'}</strong>
-          {m.spread?.pct ? <span class="num">{` (${m.spread.pct}%)`}</span> : null}
+          <span class="ob-mid-price">
+            {t('market.book.mid')}{' '}
+            <strong class="num" data-testid="book-mid" data-value={m.mid?.value ?? ''}>
+              {m.mid ? m.mid.text : '—'}
+            </strong>
+            {' · '}
+          </span>
+          {t('market.book.spread')}{' '}
+          {/* a narrow book keeps the percentage: it reads the same at every price */}
+          {m.spread?.pct ? (
+            <>
+              <span class="ob-spread-abs"><strong class="num">{m.spread.text}</strong>{' ('}</span>
+              <strong class="num">{`${m.spread.pct}%`}</strong>
+              <span class="ob-spread-abs">)</span>
+            </>
+          ) : (
+            <strong class="num">{m.spread ? m.spread.text : '—'}</strong>
+          )}
         </span>
       </div>
       <div class="book-side" data-testid="book-bids" role="list" aria-label={t('market.book.bids')}>

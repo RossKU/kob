@@ -5,7 +5,7 @@ import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import type { IndexerTokenView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
-import { Banner, Button, ErrorBanner, Field, Section, Table, TableMessage, toError, useAsync } from '../kit';
+import { Banner, Button, compactZeros, ErrorBanner, Field, Section, Table, TableMessage, toError, useAsync } from '../kit';
 import { FavoriteStar } from './FavoriteStar';
 import { isFavoritePair, isFavoriteToken, togglePair, toggleToken, useFavorites } from './favorites';
 import { ListPager, RowsControl, showListStart } from './ListPaging';
@@ -104,9 +104,9 @@ function Figure(props: { cell: Cell; entry: ListEntry; testid: string; cls?: str
   const c = props.cell;
   const title = c.title ?? (c.text === null && props.entry.unavailable ? t('market.list.unavailable') : null);
   return (
-    <td class={`right num nowrap${props.cls ? ` ${props.cls}` : ''}`} data-testid={props.testid} title={title ?? undefined}>
+    <td class={`right num nowrap${props.cls ? ` ${props.cls}` : ''}`} data-testid={props.testid} title={title ?? c.text ?? undefined}>
       {c.text !== null ? (
-        <span class={c.tone ? `tone-${c.tone}` : undefined}>{c.text}</span>
+        <span class={c.tone ? `tone-${c.tone}` : undefined}>{compactZeros(c.text)}</span>
       ) : props.entry.loading ? (
         <span class="skeleton skeleton-line ml-skel" role="status" aria-label={t('common.loading')} />
       ) : (

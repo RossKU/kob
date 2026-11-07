@@ -162,6 +162,10 @@ body:has(.market-page) .container { max-width: 1520px; }
 }
 .ob-last { font-size: 1.1rem; font-weight: 700; }
 .ob-mid .small { font-size: 0.76rem; }
+/* one line that never hides the spread: a narrow book drops the spread in price, then the mid; the percentage stays */
+.ob-mid { container: ob-mid / inline-size; white-space: nowrap; }
+@container ob-mid (max-width: 340px) { .ob-spread-abs { display: none; } }
+@container ob-mid (max-width: 250px) { .ob-mid-price { display: none; } }
 /* the book while it is held: its rows' places, its columns' titles over them */
 .ob .ob-skel { justify-self: end; width: 70%; height: 9px; margin: 0; }
 .ob-foot { margin: 6px 0 0; font-size: 0.74rem; color: var(--muted); height: 3.1em; overflow: hidden; } /* two lines: the note on estimated sizes comes and goes with the book */

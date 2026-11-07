@@ -1,3 +1,4 @@
+import { compactZeros } from '../kit';
 import { t } from '../../i18n';
 import type { StatsModel } from './market-model';
 
@@ -5,8 +6,8 @@ function Stat(props: { label: string; value: string | null; title?: string | nul
   return (
     <div class="mkt-stat" data-testid={props.testid}>
       <span class="mkt-stat-label">{props.label}</span>
-      <span class={`mkt-stat-value${props.tone ? ` tone-${props.tone}` : ''}`} title={props.title ?? undefined}>
-        {props.value ?? (props.loading ? <span class="skeleton skeleton-line" style="display:inline-block;width:64px;margin:0" /> : '—')}
+      <span class={`mkt-stat-value${props.tone ? ` tone-${props.tone}` : ''}`} title={props.title ?? props.value ?? undefined}>
+        {(props.value && compactZeros(props.value)) ?? (props.loading ? <span class="skeleton skeleton-line" style="display:inline-block;width:64px;margin:0" /> : '—')}
       </span>
     </div>
   );
@@ -41,8 +42,8 @@ export function MarketStats(props: {
       data-state={props.unsupported ? 'unsupported' : props.loading && !m.last ? 'loading' : 'ready'}>
       <div class="mkt-stat mkt-stat-last" data-testid="stat-last">
         <span class="mkt-stat-label">{t('market.stats.last')}</span>
-        <span class={`mkt-stat-value${lastTone ? ` tone-${lastTone}` : ''}`} translate={false}>
-          {m.last ?? (props.loading ? <span class="skeleton skeleton-line" style="display:inline-block;width:120px;height:22px;margin:0" /> : '—')}
+        <span class={`mkt-stat-value${lastTone ? ` tone-${lastTone}` : ''}`} translate={false} title={m.last ?? undefined}>
+          {(m.last && compactZeros(m.last)) ?? (props.loading ? <span class="skeleton skeleton-line" style="display:inline-block;width:120px;height:22px;margin:0" /> : '—')}
           <span class="mkt-stat-unit">{t('market.stats.unitOf', { quote, base })}</span>
         </span>
       </div>

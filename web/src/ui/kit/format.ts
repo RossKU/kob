@@ -248,3 +248,12 @@ export function fitDecimalTexts(texts: readonly string[], o: { width?: number; u
   const cells = fitAmountColumn(values, dp, { fraction: dp, width, minFraction: 0 });
   return cells.map((c, i) => (values[i] === null ? { text: texts[i]!, exact: null } : { text: c.text, exact: c.exact === null ? null : `${texts[i]}${o.unit ? ` ${o.unit}` : ''}` }));
 }
+
+const SUBSCRIPT = '₀₁₂₃₄₅₆₇₈₉';
+
+/**
+ * A number with four or more zeros after its point, for a row that is read on its own: `0.00002547` reads `0.0₄2547` (the subscript counts the zeros). For display only: the
+ * book keeps its digits, as its rows are compared by eye, and the ticket and the final confirmation keep theirs. Text around the number stays as it is.
+ */
+export const compactZeros = (text: string): string =>
+  text.replace(/(^|[^\d.,])0\.(0{4,})(?=[1-9])/g, (_m, before: string, zeros: string) => `${before}0.0${[...String(zeros.length)].map((d) => SUBSCRIPT[Number(d)]).join('')}`);

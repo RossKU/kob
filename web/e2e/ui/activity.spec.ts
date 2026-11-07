@@ -382,3 +382,12 @@ test('20 live updates: no layout shift (CLS 0), rows kept (not re-created), the 
   const toolsAfter = await tools();
   expect(Math.abs(toolsAfter.x - toolsBefore.x) + Math.abs(toolsAfter.y - toolsBefore.y)).toBeLessThan(1);
 });
+
+test('the market icon of a row leads to its book, not to the explorer', async ({ appPage: page, mock }) => {
+  await seedPair(page, mock);
+  await page.goto('/#/activity');
+  await showActivity(page);
+  await rows(page).first().getByTestId('activity-market-link').click();
+  await expect(page).toHaveURL(/#\/market\//);
+  expect(page.context().pages()).toHaveLength(1);
+});

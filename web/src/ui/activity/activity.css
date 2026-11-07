@@ -78,6 +78,8 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 
 .act-c-mk { display: flex; align-items: center; gap: 2px; overflow: hidden; }
 .act-mk { display: inline-flex; align-items: center; flex: none; }
+.act-mk-link { cursor: pointer; border-radius: 12px; }
+.act-mk-link:hover { box-shadow: 0 0 0 2px var(--border); }
 .act-mk .tk-icon { --tk-size: 22px; }
 .act-sl { color: var(--muted); margin: 0 1px; font-size: 0.8rem; }
 .act-more { color: var(--muted); font-size: 0.72rem; margin-left: 3px; flex: none; }
