@@ -1,11 +1,9 @@
 import type { ComponentChildren } from 'preact';
 import { useId } from 'preact/hooks';
+import { Dropdown } from './Dropdown';
+import type { DropdownOption } from './dropdown-model';
 
-export interface SelectOption {
-  value: string;
-  label: string;
-  disabled?: boolean;
-}
+export type SelectOption = DropdownOption;
 
 export interface FieldShellProps {
   label?: ComponentChildren;
@@ -17,8 +15,8 @@ export interface FieldShellProps {
   /** id of the control (generated when missing) */
   id?: string;
   class?: string;
-  /** render prop: put `id`, `aria-describedby` and `aria-invalid` on the control */
-  children: (a: { id: string; describedBy: string | undefined; invalid: boolean }) => ComponentChildren;
+  /** render prop: put `id`, `aria-describedby` and `aria-invalid` on the control; `labelId` is for a control that names itself by its label and more */
+  children: (a: { id: string; labelId: string | undefined; describedBy: string | undefined; invalid: boolean }) => ComponentChildren;
 }
 
 /** Label + control + hint + error scaffolding for controls the kit does not render itself (checkboxes, custom pickers). */
@@ -31,6 +29,7 @@ const keyed = (c: ComponentChildren): ComponentChildren => (typeof c === 'string
 export function FieldShell(props: FieldShellProps) {
   const auto = useId();
   const id = props.id ?? `f${auto}`;
+  const labelId = props.label ? `${id}-label` : undefined;
   const hintId = props.hint ? `${id}-hint` : undefined;
   const errId = props.error ? `${id}-err` : undefined;
   const describedBy = [hintId, errId].filter(Boolean).join(' ') || undefined;
@@ -38,11 +37,11 @@ export function FieldShell(props: FieldShellProps) {
     <div class={`field${props.class ? ` ${props.class}` : ''}`}>
       {props.label && props.labelAside ? (
         <div class="field-label-row">
-          <label for={id}>{keyed(props.label)}</label>
+          <label id={labelId} for={id}>{keyed(props.label)}</label>
           {props.labelAside}
         </div>
-      ) : props.label ? <label for={id}>{keyed(props.label)}</label> : null}
-      {props.children({ id, describedBy, invalid: !!props.error })}
+      ) : props.label ? <label id={labelId} for={id}>{keyed(props.label)}</label> : null}
+      {props.children({ id, labelId, describedBy, invalid: !!props.error })}
       {props.hint ? <div class="field-hint" id={hintId}>{keyed(props.hint)}</div> : null}
       {props.error ? <div class="field-error" id={errId} role="alert">{keyed(props.error)}</div> : null}
     </div>
@@ -54,12 +53,12 @@ export interface FieldProps {
   labelAside?: ComponentChildren;
   hint?: ComponentChildren;
   error?: ComponentChildren | null;
-  /** control kind (default `input`) */
+  /** control kind (default `input`); `select` is the kit's Dropdown, which takes `value`, `onValue` and `disabled` */
   as?: 'input' | 'textarea' | 'select';
   /** `select` only */
   options?: SelectOption[];
   value?: string | number;
-  /** convenience: called with the new string value on `input` (and `change` for selects) */
+  /** convenience: called with the new string value on `input`, and on a choice in a select */
   onValue?: (value: string) => void;
   onInput?: (e: Event) => void;
   onChange?: (e: Event) => void;
@@ -95,7 +94,7 @@ export function Field(props: FieldProps) {
   const { label, labelAside, hint, error, as = 'input', options, onValue, onInput, onChange, suffix, class: cls, id, 'data-testid': testId, ...rest } = props;
   return (
     <FieldShell label={label} labelAside={labelAside} hint={hint} error={error} id={id} class={cls}>
-      {({ id: cid, describedBy, invalid }) => {
+      {({ id: cid, labelId, describedBy, invalid }) => {
         const common = {
           id: cid,
           'aria-describedby': describedBy,
@@ -105,24 +104,17 @@ export function Field(props: FieldProps) {
         let control: ComponentChildren;
         if (as === 'select') {
           control = (
-            <select
-              {...common}
-              class="select"
-              name={rest.name}
-              value={rest.value}
+            <Dropdown
+              id={cid}
+              labelledBy={labelId}
+              describedBy={describedBy}
+              invalid={invalid}
+              value={String(rest.value ?? '')}
+              options={options ?? []}
               disabled={rest.disabled}
-              required={rest.required}
-              onChange={(e) => {
-                onChange?.(e);
-                onValue?.((e.currentTarget as HTMLSelectElement).value);
-              }}
-            >
-              {(options ?? []).map((o) => (
-                <option key={o.value} value={o.value} disabled={o.disabled}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => onValue?.(v)}
+              data-testid={testId}
+            />
           );
         } else if (as === 'textarea') {
           control = (

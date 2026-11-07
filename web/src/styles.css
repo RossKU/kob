@@ -363,6 +363,24 @@ small, .small { font-size: 0.85em; }
 .input:focus-visible, .select:focus-visible, .textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
 .input[aria-invalid='true'], .select[aria-invalid='true'], .textarea[aria-invalid='true'] { border-color: var(--bad); }
 .input:disabled, .select:disabled, .textarea:disabled { opacity: 0.6; }
+/* every drop-down of the app: the face (the box of a field in a form, a word in a title in AssetPicker.tsx), a panel fixed to the window and its rows (kit/Dropdown.tsx) */
+.picker-face { appearance: none; cursor: pointer; }
+.picker-face:disabled { cursor: default; }
+.picker-face:hover:not(:disabled), .picker-face[aria-expanded='true'] { background: var(--surface-2); }
+.picker-face:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.select.picker-face { display: flex; align-items: center; gap: 8px; text-align: left; }
+.picker-face-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-caret { flex: none; font-style: normal; font-size: 0.7em; color: var(--muted); }
+.picker-panel { position: fixed; z-index: 60; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; padding: 8px; font-size: 0.9rem; text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.picker-list { flex: 0 1 auto; max-height: 22rem; min-height: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; overscroll-behavior: contain; }
+.picker-list:focus-visible { outline: none; } /* the focus is on the row that stands out */
+.picker-group { padding: 6px 8px 4px; color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+.picker-option { display: flex; flex-direction: column; justify-content: center; min-height: 44px; box-sizing: border-box; padding: 4px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.picker-option-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
+.picker-option.is-active { background: var(--surface-3); }
+.picker-option[aria-disabled='true'] { color: var(--muted); cursor: default; }
+.picker-label { font-weight: 600; overflow-wrap: anywhere; }
+.picker-check { flex: none; font-style: normal; }
 .field-hint { color: var(--muted); font-size: 0.85rem; }
 .field-error { color: var(--bad); font-size: 0.85rem; font-weight: 600; }
 .checkbox-row { display: flex; gap: 8px; align-items: flex-start; }

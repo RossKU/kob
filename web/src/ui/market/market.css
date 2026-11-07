@@ -139,7 +139,7 @@ body:has(.market-page) .container { max-width: 1520px; }
 
 .ob { display: flex; flex-direction: column; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 .ob-tools { display: flex; gap: 6px; align-items: center; }
-.ob-tools .select { min-height: 26px; padding: 1px 6px; font-size: 0.8rem; width: 7.5rem; text-overflow: ellipsis; } /* a fixed width: the tick step it shows changes with the book and must not move the header */
+.ob-tools .select { min-height: 26px; padding: 1px 6px; font-size: 0.8rem; width: 7.5rem; } /* a fixed width: the tick step it shows changes with the book and must not move the header */
 .ob-head, .ob .book-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
 .ob-head { padding: 2px 8px 4px; color: var(--muted); font-size: 0.74rem; height: 2.9em; overflow: hidden; } /* two lines of the column titles, whatever their text */
 /* the column titles carry their units ("Price (TICKER / KAS)"): they wrap instead of losing the unit to an ellipsis */
@@ -182,18 +182,13 @@ body:has(.market-page) .container { max-width: 1520px; }
 /* ---- the pair selector of the title bar and the pair picker of the list: `BASE / QUOTE`, each side a searchable choice (AssetPicker.tsx) */
 .pair-select { display: inline-flex; align-items: baseline; gap: 4px; }
 .asset-select { position: relative; display: inline-flex; }
-.asset-select-face { appearance: none; display: inline-flex; align-items: baseline; gap: 4px; margin: 0; padding: 0 4px; border: 0; border-radius: var(--radius-sm); border-bottom: 2px dotted var(--border); background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
-.asset-select-face:hover, .asset-select-face[aria-expanded='true'] { background: var(--surface-2); }
-.asset-select-face:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
-.asset-select-caret { font-style: normal; font-size: 0.7em; color: var(--muted); }
+.asset-select-face { display: inline-flex; align-items: baseline; gap: 4px; margin: 0; padding: 0 4px; border: 0; border-radius: var(--radius-sm); border-bottom: 2px dotted var(--border); background: none; color: inherit; font: inherit; letter-spacing: inherit; }
 .pair-sep { color: var(--muted); }
-.picker-panel { position: fixed; z-index: 60; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; padding: 8px; font-size: 0.9rem; text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .picker-search { flex: none; width: 100%; box-sizing: border-box; }
-.picker-list { flex: 0 1 auto; max-height: 22rem; min-height: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; overscroll-behavior: contain; }
-.picker-option { display: flex; flex-direction: column; justify-content: center; min-height: 44px; box-sizing: border-box; padding: 4px 8px; border-radius: var(--radius-sm); cursor: pointer; }
-.picker-option[aria-selected='true'] { background: var(--surface-3); }
-.picker-label { font-weight: 600; overflow-wrap: anywhere; }
-.picker-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* every row of an asset has the height of two lines, with or without a name: the second line keeps its place empty, a long first line ends in an ellipsis (the whole text is the row's title) */
+.picker-option-asset { flex: none; height: 3rem; }
+.picker-option-asset .picker-label, .picker-name { display: block; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.picker-name { min-height: 1.3em; }
 .picker-note { margin: 0; padding: 4px 8px; }
 
 /* ---- the star of a favourite (FavoriteStar.tsx). A phone's target is 44 px; the negative margin keeps the line it sits on as low as before */

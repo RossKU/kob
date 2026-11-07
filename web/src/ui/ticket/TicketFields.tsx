@@ -6,7 +6,7 @@ import { formatUnits, safeRounding } from '../../kob/units';
 import { formatLocalTime, nextUtcMidnight } from '../../kob/daa';
 import { kasWords, tokenWords } from '../../signer/words';
 import { invertedToNativePriceText, nativeToInvertedPriceText } from '../market/orientation';
-import { Checkbox, Field, FieldShell, Segmented } from '../kit';
+import { Checkbox, Dropdown, Field, FieldShell, Segmented } from '../kit';
 import { AmountSlider, type AmountSliderProps } from './AmountSlider';
 import {
   BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, baseToKas, kasTextOf, parseTouch, priceInfo,
@@ -131,23 +131,18 @@ export function TicketFields(props: TicketFieldsProps) {
         if (spec.kind === 'select') {
           return (
             <FieldShell key={id} label={label} hint={helpOf(help)} error={common.error}>
-              {({ id: cid, describedBy, invalid }) => (
-                <select
+              {({ id: cid, labelId, describedBy, invalid }) => (
+                <Dropdown
                   id={cid}
-                  class="select"
-                  value={value || FIELD_DEFAULTS[id] || spec.options?.[0]}
-                  aria-describedby={describedBy}
-                  aria-invalid={invalid ? 'true' : undefined}
-                  data-testid={spec.testid}
+                  labelledBy={labelId}
+                  describedBy={describedBy}
+                  invalid={invalid}
+                  value={value || FIELD_DEFAULTS[id] || spec.options?.[0] || ''}
+                  options={(spec.options ?? []).map((o) => ({ value: o, label: t(`ticket.opt.${id}.${o}`) }))}
                   disabled={props.disabled}
-                  onChange={(ev) => props.onChange(id, (ev.currentTarget as HTMLSelectElement).value)}
-                >
-                  {(spec.options ?? []).map((o) => (
-                    <option key={o} value={o}>
-                      {t(`ticket.opt.${id}.${o}`)}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => props.onChange(id, v)}
+                  data-testid={spec.testid}
+                />
               )}
             </FieldShell>
           );

@@ -19,7 +19,7 @@ import type { TokenInfo } from '../../kob/registry';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { costLine, costPreview } from './cost-preview';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
-import { Banner, Button, Loading, RawDetails, Segmented, useAsync } from '../kit';
+import { Banner, Button, Dropdown, Loading, RawDetails, Segmented, useAsync } from '../kit';
 import { bookFromIndexer, readClock } from '../../app/env';
 import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
 import type { PlanEnv } from '../../kob/plan-types';
@@ -746,18 +746,15 @@ export function OrderTicket(props: OrderTicketProps) {
         />
 
         <div class="field">
-          <label for="order-type">{t('ticket.type.label')}</label>
-          <select id="order-type" class="select" value={form.type} data-testid="order-type" onChange={(e) => onType((e.currentTarget as HTMLSelectElement).value as OrderTypeId)}>
-            {TYPE_GROUPS.map((g) => (
-              <optgroup key={g.group} label={t(`ticket.group.${g.group}`)}>
-                {g.types.map((id) => (
-                  <option key={id} value={id}>
-                    {t(typeKey(id, 'name'), { name })}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+          <label id="order-type-label" for="order-type">{t('ticket.type.label')}</label>
+          <Dropdown
+            id="order-type"
+            labelledBy="order-type-label"
+            value={form.type}
+            options={TYPE_GROUPS.map((g) => ({ group: t(`ticket.group.${g.group}`), options: g.types.map((id) => ({ value: id, label: t(typeKey(id, 'name'), { name }) })) }))}
+            onChange={(v) => onType(v as OrderTypeId)}
+            data-testid="order-type"
+          />
           <div class="field-hint tk-help" title={typeHelp} data-testid="order-type-help">
             {typeHelp}
           </div>

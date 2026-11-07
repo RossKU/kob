@@ -1,11 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { pairRoute, tokenRoute } from '../../app/router';
-import { KAS, assetChoices, changePair, displayedPair, filterChoices, marketFor } from './market-select';
+import { KAS, assetChoices, changePair, displayedPair, filterChoices, marketFor, pickerName } from './market-select';
 import { idOnlyRow, type TokenRow } from './token-model';
 
 const A = 'aa'.repeat(32);
 const B = 'bb'.repeat(32);
 const C = 'cc'.repeat(32);
+
+describe('pickerName', () => {
+  it('is the name of a token, and says nothing where the name only repeats the ticker, in any case', () => {
+    expect(pickerName('Test Bitcoin', 'TBTC')).toBe('Test Bitcoin');
+    expect(pickerName('KASPERO', 'KASPERO')).toBe('');
+    expect(pickerName('Kaspero', 'KASPERO')).toBe('');
+    expect(pickerName(' kaspero ', 'KASPERO')).toBe('');
+  });
+
+  it('invents nothing for a token without a name', () => {
+    expect(pickerName(null, 'KRON')).toBe('');
+    expect(pickerName(undefined, 'KAS')).toBe('');
+    expect(pickerName('', 'KRON')).toBe('');
+  });
+});
 
 describe('filterChoices', () => {
   const row = (id: string, ticker: string, name: string | null): TokenRow => ({ ...idOnlyRow(id), ticker, name });

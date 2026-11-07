@@ -8,7 +8,6 @@
 .tk h3 { margin: 0 0 6px; font-size: 1.05rem; }
 .tk h4 { margin: 12px 0 4px; font-size: 0.95rem; }
 .tk-form { display: flex; flex-direction: column; gap: 12px; }
-.tk-form select.select { width: 100%; }
 /* the unit of every input row is one fixed-width column at the right end of the row, right-aligned: the eye reads the boxes down one edge and the units down another */
 .tk-suffix { display: inline-flex; align-items: center; justify-content: flex-end; flex: 0 0 var(--tk-unit-w); width: var(--tk-unit-w); min-width: 0; gap: 8px; text-align: right; white-space: normal; overflow-wrap: anywhere; }
 .tk { --tk-unit-w: 7.25rem; }

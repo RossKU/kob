@@ -1,4 +1,5 @@
 import { t } from '../../i18n';
+import { Dropdown } from '../kit';
 import { tapeTime } from './market-model';
 import type { BookRowView, BookView } from './orientation';
 
@@ -139,22 +140,8 @@ export function OrderBook(props: OrderBookProps) {
 /** The grouping selector of the book header: `options` are the steps of the shown orientation (native: KAS per token; inverted: tokens per KAS). */
 export function BookGrouping(props: { options: { value: string; label: string }[]; value: string; onChange: (value: string) => void }) {
   return (
-    <label class="ob-tools">
-      <span class="sr-only">{t('market.book.groupLabel')}</span>
-      <select
-        class="select"
-        data-testid="book-group"
-        aria-label={t('market.book.groupLabel')}
-        title={t('market.book.groupLabel')}
-        value={props.value}
-        onChange={(e) => props.onChange((e.currentTarget as HTMLSelectElement).value)}
-      >
-        {props.options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div class="ob-tools">
+      <Dropdown label={t('market.book.groupLabel')} title={t('market.book.groupLabel')} value={props.value} options={props.options} onChange={props.onChange} data-testid="book-group" />
+    </div>
   );
 }

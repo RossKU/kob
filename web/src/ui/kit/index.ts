@@ -6,8 +6,9 @@
 //   Field         label + input/textarea/select + hint + error.  { label, hint, error, as: 'input'|'textarea'|'select', options, value, onValue(string),
 //                 onInput(event), type, inputMode, placeholder, disabled, readOnly, suffix, 'data-testid' (on the CONTROL) }
 //   Select        Field as="select" with { options: SelectOption[] }
+//   Dropdown      the drop-down behind Select, for a control with its own label: { value, options (options and { group, options }), onChange, labelledBy or label }
 //   Checkbox      { checked, onChange(boolean), label, hint }
-//   FieldShell    render-prop wrapper for custom controls: children({ id, describedBy, invalid })
+//   FieldShell    render-prop wrapper for custom controls: children({ id, labelId, describedBy, invalid })
 //   Segmented     radio-group toggle { options: [{ value, label, tone: 'buy'|'sell', 'data-testid' }], value, onChange, 'aria-label' }
 //   Table         scrollable <table> wrapper { caption, dense, children }; TableMessage { colSpan } for empty / loading rows
 //   Badge         { tone: 'ok'|'warn'|'bad'|'info'|'neutral', title }
@@ -33,6 +34,8 @@ export { Banner, ErrorBanner, type BannerProps, type BannerTone } from './Banner
 export { Button, type ButtonProps, type ButtonVariant } from './Button';
 export { CopyText, copyToClipboard, type CopyTextProps } from './CopyText';
 export { FitId, fitForms } from './FitId';
+export { Dropdown, usePickerPanel, type DropdownProps } from './Dropdown';
+export type { DropdownEntry, DropdownGroup, DropdownOption } from './dropdown-model';
 export { Checkbox, Field, FieldShell, Select, type FieldProps, type FieldShellProps, type SelectOption, type SelectProps } from './Field';
 export { KeyValueList, type KeyValueItem } from './KeyValueList';
 export { Dialog, Modal, type ModalProps } from './Modal';

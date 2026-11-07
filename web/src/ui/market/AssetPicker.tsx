@@ -1,12 +1,13 @@
 // A searchable choice of one asset: a plain drop-down does not scale past a few dozen tokens and has no search. The face is a button; the panel holds a search by
 // ticker, name or covenant id and the matching tokens, each with its short id (tickers are not unique, the id is the identity). The value is always a covenant id (or
-// `kas`). Keyboard: arrows and Enter in the search, Escape closes and puts the focus back on the face. The panel is fixed to the viewport and lives in the body, so a card
-// or a row that cuts what overflows it cannot cut it and it never widens the page.
+// `kas`). Keyboard: arrows and Enter in the search, Escape closes and puts the focus back on the face. The panel and its rows are the kit's drop-down (kit/Dropdown.tsx):
+// fixed to the viewport and in the body, so a card or a row that cuts what overflows it cannot cut it and it never widens the page.
 import type { ComponentChildren } from 'preact';
 import { createPortal } from 'preact/compat';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
-import { filterChoices, PICKER_ROWS, type AssetChoice } from './market-select';
+import { usePickerPanel } from '../kit';
+import { filterChoices, PICKER_ROWS, pickerName, type AssetChoice } from './market-select';
 import type { TokenRow } from './token-model';
 
 export interface AssetPickerProps {
@@ -24,16 +25,11 @@ export interface AssetPickerProps {
   'data-testid': string;
 }
 
-const place = (el: HTMLElement) => {
-  const b = el.getBoundingClientRect();
-  const width = Math.min(352, window.innerWidth - 24);
-  const top = b.bottom + 6;
-  return { left: Math.max(12, Math.min(b.left, window.innerWidth - width - 12)), top, width, maxHeight: Math.max(180, window.innerHeight - top - 12) };
-};
+/** The width the panel takes, and the height of the search and a full list. */
+const PANEL = { width: 352, height: 420 };
 
 export function AssetPicker(props: AssetPickerProps) {
   const id = props['data-testid'];
-  const [pos, setPos] = useState<ReturnType<typeof place> | null>(null);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const listId = `ap-${useId()}`;
@@ -41,7 +37,8 @@ export function AssetPicker(props: AssetPickerProps) {
   const panel = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
-  const open = pos !== null;
+  const pane = usePickerPanel(face, panel, () => PANEL);
+  const { open, close } = pane;
 
   const names = useMemo(() => new Map(props.rows.map((r) => [r.covenantId.toLowerCase(), r.name])), [props.rows]);
   const found = useMemo(() => (open ? filterChoices(props.choices, props.rows, query) : []), [open, props.choices, props.rows, query]);
@@ -51,11 +48,7 @@ export function AssetPicker(props: AssetPickerProps) {
   const show = () => {
     setQuery('');
     setActive(0);
-    setPos(place(face.current!));
-  };
-  const close = (refocus: boolean) => {
-    setPos(null);
-    if (refocus) face.current?.focus();
+    pane.show();
   };
   const pick = (c: AssetChoice | undefined) => {
     if (!c) return;
@@ -68,26 +61,9 @@ export function AssetPicker(props: AssetPickerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.openKey]);
 
-  // a layout effect: the listeners and the focus are there in the frame the panel appears. A scroll of the page moves the panel along with its face.
+  // a layout effect: the focus is there in the frame the panel appears
   useLayoutEffect(() => {
-    if (!open) return;
-    search.current?.focus({ preventScroll: true });
-    const onDown = (e: Event) => {
-      const el = e.target as Node;
-      if (!panel.current?.contains(el) && !face.current?.contains(el)) close(false);
-    };
-    const follow = () => face.current && setPos(place(face.current));
-    const onHash = () => close(false);
-    document.addEventListener('pointerdown', onDown);
-    window.addEventListener('scroll', follow);
-    window.addEventListener('resize', follow);
-    window.addEventListener('hashchange', onHash);
-    return () => {
-      document.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('scroll', follow);
-      window.removeEventListener('resize', follow);
-      window.removeEventListener('hashchange', onHash);
-    };
+    if (open) search.current?.focus({ preventScroll: true });
   }, [open]);
 
   useLayoutEffect(() => {
@@ -115,7 +91,7 @@ export function AssetPicker(props: AssetPickerProps) {
       <button
         ref={face}
         type="button"
-        class="asset-select-face"
+        class="picker-face asset-select-face"
         translate={false}
         aria-label={props.label}
         title={current?.label ?? props.label}
@@ -126,11 +102,11 @@ export function AssetPicker(props: AssetPickerProps) {
         onClick={() => (open ? close(false) : show())}
       >
         {current?.short || current?.label || props.placeholder}
-        <i class="asset-select-caret" aria-hidden="true">{'▾'}</i>
+        <i class="picker-caret" aria-hidden="true">{'▾'}</i>
       </button>
-      {pos
+      {open
         ? createPortal(
-            <div ref={panel} class="picker-panel" style={{ left: `${pos.left}px`, top: `${pos.top}px`, width: `${pos.width}px`, maxHeight: `${pos.maxHeight}px` }} data-testid={`${id}-panel`}>
+            <div ref={panel} class="picker-panel" style={pane.style} data-testid={`${id}-panel`}>
               <input
                 ref={search}
                 class="input picker-search"
@@ -157,7 +133,8 @@ export function AssetPicker(props: AssetPickerProps) {
                   <li
                     key={c.value}
                     id={`${listId}-${i}`}
-                    class="picker-option"
+                    class={`picker-option picker-option-asset${i === active ? ' is-active' : ''}`}
+                    title={c.label}
                     role="option"
                     aria-selected={i === active ? 'true' : 'false'}
                     data-value={c.value}
@@ -168,14 +145,14 @@ export function AssetPicker(props: AssetPickerProps) {
                     onClick={() => pick(c)}
                   >
                     <span class="picker-label">{c.label}</span>
-                    {names.get(c.value) ? <span class="small muted picker-name">{names.get(c.value)}</span> : null}
+                    <span class="small muted picker-name">{pickerName(names.get(c.value), c.short)}</span>
                   </li>
                 ))}
               </ul>
               {shown.length === 0 ? <p class="small muted picker-note" data-testid={`${id}-empty`}>{t('market.list.noMatch')}</p> : null}
               {found.length > shown.length ? <p class="small muted picker-note" data-testid={`${id}-more`}>{t('market.pick.more', { n: found.length - shown.length })}</p> : null}
             </div>,
-            document.body,
+            pane.host(),
           )
         : null}
     </span>

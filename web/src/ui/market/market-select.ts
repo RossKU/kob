@@ -65,6 +65,9 @@ export function assetChoices<T extends { covenantId: string; ticker: string }>(
   return out;
 }
 
+/** The second line of a picker's row: the token's name, nothing when there is none or it only repeats the ticker (KASPERO / Kaspero). */
+export const pickerName = (name: string | null | undefined, ticker: string): string => (name && name.trim().toLowerCase() !== ticker.trim().toLowerCase() ? name : '');
+
 /** The most choices a picker lists at once: the search narrows the rest. */
 export const PICKER_ROWS = 50;
 
