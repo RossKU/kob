@@ -276,7 +276,7 @@ On a push to `master` that changes `web/` or an input of the app (kob-wasm, kob-
 on *Actions* > *deploy-pages* > *Run workflow*:
 
 1. builds and tests the app exactly as the `web` job of `ci.yml` (kob-wasm slim bindings, the pinned kaspa-wasm SDK,
-   typecheck, unit tests, `npm run build:release`, `scripts/release-hashes.sh`, the mock e2e suite);
+   typecheck, unit tests, the mock e2e suite, then `npm run build:release` and `scripts/release-hashes.sh`, so the upload is the release bundle);
 2. writes `web/dist/config.json` from the variables; on `testnet-10` also `web/dist/registry/tokens.json` as the supported
    token programs with no token entries (the shipped registry names mainnet tokens; it is the same list `kobd setup`
    writes as `kob-tokens.json`), on `mainnet` the pinned registry of `build:release` stays. With no token entries the app names no

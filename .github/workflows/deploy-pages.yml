@@ -158,6 +158,19 @@ jobs:
       - run: npm run build:wasm -- --copy
       - run: npm run typecheck
       - run: npm test
+      - run: npx playwright install --with-deps chromium
+      # the e2e run builds dist/ for the mock stack, without the variables below: the release bundle comes after it, or the upload is that build
+      - run: npm run e2e
+        env:
+          KOB_E2E_TARGET: app
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-playwright-report
+          path: |
+            web/test-results
+            web/playwright-report
+
       # the release bundle (vite build plus dist/registry/tokens.json, docs/ops/release.md 4); the link-preview head (web/head-meta.mjs) takes the
       # network and, when set, the public origin the deployment is served from (og:url, og:image)
       - run: npm run build:release
@@ -169,17 +182,8 @@ jobs:
         run: |
           bash scripts/release-hashes.sh > "$RUNNER_TEMP/release-hashes.md"
           cat "$RUNNER_TEMP/release-hashes.md"
-      - run: npx playwright install --with-deps chromium
-      - run: npm run e2e
-      - if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-playwright-report
-          path: |
-            web/test-results
-            web/playwright-report
 
-      # the deployment: config.json (after the e2e run, which serves dist/ with the mock stack's own configuration)
+      # the deployment: config.json from the repository variables
       - name: config.json from the repository variables
         env:
           KOB_PAGES_NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
