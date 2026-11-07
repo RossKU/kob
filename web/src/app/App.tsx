@@ -20,6 +20,8 @@ import { NotifyProvider } from '../ui/notify/NotifyProvider';
 import { ViewBoundary } from '../ui/shell/ViewBoundary';
 import { AutoRefundRunner } from '../ui/orders/AutoRefund';
 import { StandaloneReceipts } from '../ui/shell/StandaloneReceipts';
+import { SupportPage } from '../ui/support/SupportPage';
+import { routeWithSupport, supportAddressOf } from '../ui/support/support-model';
 import { useStandalone } from '../ui/shell/standalone';
 import { useServices } from './context';
 import { useDeclarationsVersion } from './use-declaration';
@@ -107,12 +109,18 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
           <DisclaimerPage />
         </Titled>
       );
+    case 'support':
+      return (
+        <Titled page="support">
+          <SupportPage />
+        </Titled>
+      );
   }
 }
 
 export function App(props: { warnings: ConfigWarning[]; storedOverrides?: StoredOverride[] }) {
   const services = useServices();
-  const route = useRoute();
+  const route = routeWithSupport(useRoute(), supportAddressOf(services.config.features));
 
   // the tab's title names the page: each view sets its own (app/page-title.ts); only the legacy redirect, which shows no view, is left to the shell
   useDocumentTitle(route.name === 'usd' ? appTitle() : null);

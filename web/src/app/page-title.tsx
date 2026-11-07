@@ -12,7 +12,7 @@ export const pageTitle = (page: string): string => `${page} - ${t('common.appNam
 export const appTitle = (): string => `${t('common.appName')} - ${t('common.tagline')}`;
 
 /** A view of a page that has no title logic of its own: sets the title of the page `page` names (a key of `shell.nav.*`) and shows `children`. */
-export function Titled(props: { page: 'market' | 'activity' | 'orders' | 'create' | 'settings' | 'disclaimer'; children?: ComponentChildren }) {
+export function Titled(props: { page: 'market' | 'activity' | 'orders' | 'create' | 'settings' | 'disclaimer' | 'support'; children?: ComponentChildren }) {
   useDocumentTitle(pageTitle(t(`shell.nav.${props.page}`)));
   return <>{props.children}</>;
 }

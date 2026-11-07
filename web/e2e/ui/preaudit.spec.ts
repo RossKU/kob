@@ -10,7 +10,7 @@ test.describe('pre-audit notice', () => {
     await expect(page.getByTestId('disclaimer-page')).toBeVisible();
     await expect(page).toHaveTitle(/^Disclaimer - /);
     await expect(page.getByTestId('disclaimer-network')).toHaveText('This site runs on Kaspa testnet-10. Test tokens have no value.');
-    for (const k of ['audit', 'custody', 'tokens', 'market', 'services', 'advice', 'duty', 'warranty']) await expect(page.getByTestId(`disclaimer-${k}`)).toBeVisible();
+    for (const k of ['audit', 'custody', 'tokens', 'market', 'services', 'advice', 'duty', 'donations', 'warranty']) await expect(page.getByTestId(`disclaimer-${k}`)).toBeVisible();
     await expect(page.getByTestId('disclaimer-warranty')).toContainText('ISC License');
   });
 

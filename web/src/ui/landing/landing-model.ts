@@ -7,6 +7,10 @@ import { t } from '../../i18n';
 
 /** The project's source repository (GitHub links of the landing page). */
 export const REPO_URL = 'https://github.com/RossKU/kob';
+/** Where "Run an executor" leads (the footer, the Support page). */
+export const EXECUTOR_URL = REPO_URL;
+/** The project's README on GitHub, where the donation address is published too. */
+export const README_URL = `${REPO_URL}#readme`;
 /** The market list: "Open the app" and the footer's "App" (an in-app link, so a self-hosted copy stays on its own host). */
 export const APP_HASH = '#/market';
 

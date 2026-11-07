@@ -1,5 +1,5 @@
 // The footer's facts (pure, tested in frame-model.test.ts): which links it shows on which page, and whether it carries the chart library's attribution.
-import { APP_HASH, publicApiUrl, REPO_URL } from '../landing/landing-model';
+import { APP_HASH, EXECUTOR_URL, publicApiUrl, REPO_URL } from '../landing/landing-model';
 
 /** Which page the frame is on: the landing page (no charts, no app links) or the app shell. */
 export type FrameContext = 'landing' | 'app';
@@ -16,16 +16,17 @@ export interface FooterLink {
 }
 
 /**
- * The footer's one row of links: App, GitHub, Run an executor, when the deployment has an indexer its Public API, and the Disclaimer; the app adds Settings and data,
- * Recover orders and kaspa.org.
+ * The footer's one row of links: App, GitHub, Run an executor, when the deployment has an indexer its Public API, when there is a donation address Support (`support`),
+ * and the Disclaimer; the app adds Settings and data, Recover orders and kaspa.org.
  */
-export function footerLinks(context: FrameContext, indexerUrl: string | null | undefined): FooterLink[] {
+export function footerLinks(context: FrameContext, indexerUrl: string | null | undefined, support = false): FooterLink[] {
   const api = publicApiUrl(indexerUrl);
   const site: FooterLink[] = [
     { key: 'landing.footer.app', href: APP_HASH, group: 'site' },
     { key: 'landing.github', href: REPO_URL, group: 'site' },
-    { key: 'landing.footer.executor', href: REPO_URL, group: 'site' },
+    { key: 'landing.footer.executor', href: EXECUTOR_URL, group: 'site' },
     ...(api ? [{ key: 'landing.footer.api', href: api, testid: context === 'app' ? 'footer-api' : 'landing-api', group: 'site' } as const] : []),
+    ...(support ? [{ key: 'landing.footer.support', href: '#/support', testid: 'footer-support', group: 'site' } as const] : []),
     { key: 'landing.footer.disclaimer', href: '#/disclaimer', testid: 'footer-disclaimer', group: 'site' },
   ];
   if (context !== 'app') return site;

@@ -604,3 +604,8 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 .legal { max-width: 720px; margin: 0 auto; }
 .legal h2 { margin: 24px 0 6px; font-size: 1.05rem; }
 .legal p { margin: 0 0 10px; line-height: 1.6; }
+
+/* the support page: the QR code keeps its own white ground in both themes (ui/support/SupportPage.tsx) */
+.support-pay { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 0 0 12px; }
+.support-qr { display: block; flex: none; max-width: 100%; height: auto; border-radius: 6px; }
+.support-address { flex: 1 1 220px; min-width: 0; }

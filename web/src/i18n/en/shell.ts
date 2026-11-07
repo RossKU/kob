@@ -7,6 +7,7 @@ export default {
   'shell.nav.create': 'Create token',
   'shell.nav.settings': 'Settings',
   'shell.nav.disclaimer': 'Disclaimer',
+  'shell.nav.support': 'Support',
   'shell.theme.toLight': 'Switch to the light theme',
   'shell.theme.toDark': 'Switch to the dark theme',
   'shell.network.label': 'Network: {network}',

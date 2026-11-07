@@ -20,6 +20,8 @@ export default {
   'legal.advice.body': 'Nothing here is financial, investment, legal or tax advice, and nothing here is an offer or a recommendation to buy or sell any token.',
   'legal.duty.title': 'Your responsibility',
   'legal.duty.body': 'You are responsible for deciding whether you may use this software where you live, and for complying with your laws, including tax.',
+  'legal.donations.title': 'Donations',
+  'legal.donations.body': 'A donation to the project is a voluntary gift. It gives no return and no rights, it cannot be refunded, and it buys nothing in the app.',
   'legal.warranty.title': 'No warranty',
   'legal.warranty.body': 'The software is provided "as is" under the ISC License, without warranty of any kind. To the extent the law allows, its authors and publishers are not liable for any loss arising from its use.',
 } as Record<string, string>;

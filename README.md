@@ -60,3 +60,6 @@ is a prototype or third-party.
 experimental software that handles funds, provided as is, without warranty; the project operates no production service.
 
 ISC, see [LICENSE](LICENSE). Third-party code keeps its own licence: [NOTICE](NOTICE).
+
+KOB is built and run by volunteers. The donation address on the app's Support page is published here too, so you can check it: `kaspa:qq85cdj959gx33su28luhaymtq3yczx0jj40eufxwyxs77mk4vnpqd3m0nqqc` (real KAS on Kaspa
+mainnet; a voluntary gift, with no return, no rights and no refund).

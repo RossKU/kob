@@ -4,7 +4,7 @@ import { t } from '../../i18n';
 import { siteName } from '../landing/landing-model';
 
 /** The sections of the page, in order: `legal.<key>.title` and `legal.<key>.body`. */
-export const LEGAL_SECTIONS = ['audit', 'custody', 'tokens', 'market', 'services', 'advice', 'duty', 'warranty'] as const;
+export const LEGAL_SECTIONS = ['audit', 'custody', 'tokens', 'market', 'services', 'advice', 'duty', 'donations', 'warranty'] as const;
 
 export function DisclaimerPage() {
   const { config } = useServices();

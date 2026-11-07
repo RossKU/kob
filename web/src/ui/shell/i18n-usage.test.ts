@@ -14,7 +14,7 @@ import { KNOWN_POWERS } from '../market/token-model';
 import { LANDING_NETWORKS } from '../landing/landing-model';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
-const AREAS = ['ui/kit', 'ui/shell', 'ui/market', 'ui/orders', 'ui/settings', 'ui/landing', 'app'];
+const AREAS = ['ui/kit', 'ui/shell', 'ui/market', 'ui/orders', 'ui/settings', 'ui/landing', 'ui/support', 'app'];
 
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((f) => {

@@ -40,7 +40,16 @@ describe('the shared footer', () => {
     expect(app[0]!.href).toBe('#/market');
   });
 
+  it('Support stands before the Disclaimer on every page, only when there is a donation address', () => {
+    for (const ctx of ['landing', 'app'] as const) {
+      const site = footerLinks(ctx, null, true).filter((l) => l.group === 'site');
+      expect(site.slice(-2).map((l) => l.key)).toEqual(['landing.footer.support', 'landing.footer.disclaimer']);
+      expect(site.at(-2)).toMatchObject({ href: '#/support', testid: 'footer-support' });
+      expect(footerLinks(ctx, null).some((l) => l.key === 'landing.footer.support')).toBe(false);
+    }
+  });
+
   it('every link text exists in the dictionary', () => {
-    for (const l of footerLinks('app', 'https://idx.example')) expect(has(l.key), l.key).toBe(true);
+    for (const l of footerLinks('app', 'https://idx.example', true)) expect(has(l.key), l.key).toBe(true);
   });
 });

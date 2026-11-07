@@ -9,6 +9,7 @@ import { version as appVersion } from '../../../package.json';
 import { indexerTrust } from '../../data/indexer-crosscheck';
 import { Button } from '../kit';
 import { landingNetworkText, siteName } from '../landing/landing-model';
+import { supportAddressOf } from '../support/support-model';
 import { footerLinks, showsChartNotice, type FrameContext } from './frame-model';
 import { useFailoverState } from './failover';
 import { SECURITY_POLICY_URL } from './preaudit';
@@ -172,7 +173,7 @@ export function SiteFooter(props: { context: FrameContext; brandOnClick?: (e: Ev
   useFailoverState(services.failover); // re-render on a switch: the verifiers are those of the indexer in use
   const app = props.context === 'app';
   const net = landingNetworkText(config.network, siteName(typeof location === 'undefined' ? '' : location.hostname));
-  const links = footerLinks(props.context, config.indexerUrl);
+  const links = footerLinks(props.context, config.indexerUrl, !!supportAddressOf(config.features));
   const link = (l: (typeof links)[number]) => (
     <a key={l.key} href={l.href} data-testid={l.testid} {...(l.external ? EXTERNAL : {})}>
       {t(l.key)}

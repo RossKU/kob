@@ -26,7 +26,8 @@
   },
   "dependencies": {
     "lightweight-charts": "^5.2.1",
-    "preact": "^10.29.0"
+    "preact": "^10.29.0",
+    "qrcode-generator": "2.0.4"
   },
   "devDependencies": {
     "@noble/curves": "^2.0.0",

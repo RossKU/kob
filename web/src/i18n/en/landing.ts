@@ -101,6 +101,7 @@ export default {
   'landing.footer.app': 'App',
   'landing.footer.executor': 'Run an executor',
   'landing.footer.api': 'Public API',
+  'landing.footer.support': 'Support',
   'landing.footer.disclaimer': 'Disclaimer',
   'landing.disc.lead.testnet-10': 'Testnet · pre-audit.',
   'landing.disc.lead.mainnet': 'Mainnet · pre-audit.',

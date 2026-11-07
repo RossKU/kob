@@ -222,6 +222,20 @@ https://api.kaspa.org/addresses/<script address>/full-transactions?limit=50&offs
   the page is otherwise unchanged.
 * **Privacy.** The explorers see the visitor's IP address and the genesis transaction of the token opened (kascov.io sees the token's covenant id).
 
+### The Support page: one more external source (`#/support` only)
+
+The page reads who has paid `SUPPORT_ADDRESS` (`web/src/ui/support/support-model.ts`) in the visitor's browser (`web/src/data/contributors.ts`). The address is a mainnet one, so
+the source is the mainnet explorer on every deployment, a testnet-10 site included:
+
+```
+https://api.kaspa.org/addresses/<address>/full-transactions-page?limit=500&resolve_previous_outpoints=light&acceptance=accepted&fields=transaction_id,block_time,is_accepted,inputs,outputs[&before=<X-Next-Page-Before>]
+                                                                   at most 10 pages, one after the other (CORS *, the paging header is exposed)
+```
+
+* **CSP.** Nothing changes: `connect-src` allows `https:`, and the QR code is drawn as SVG elements. A deployment that **pins `connect-src`** adds `https://api.kaspa.org` for this page even on testnet-10; without it
+  the table is replaced by one line and the rest of the page stays.
+* **Privacy.** The explorer sees the visitor's IP address and that the page was opened.
+
 **Refresh policy** (one constant, `KASCOV_REFRESH_MS` = 120 s in `web/src/data/kascov.ts`; kascov rebuilds the file about every 2 minutes):
 
 * fetched when a view that needs names or icons is shown (the market list, a token page); while that view stays visible, again at most every
