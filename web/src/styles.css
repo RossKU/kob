@@ -235,7 +235,10 @@ small, .small { font-size: 0.85em; }
 /* the connected wallet: one chip (address, a network badge only when it differs from the app's, disconnect as an icon: its word would cost the wide row more than its tabs' gaps) */
 .wallet-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: var(--ctl-h); padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
 .wallet-chip .copy { white-space: nowrap; }
-.wallet-disconnect { display: inline-flex; align-items: center; }
+.wallet-disconnect { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+/* the word beside the icon only where the row has room for it (data-disconnect, narrow.ts); clipped, not removed, so its width can be measured */
+.wallet-disconnect-text { position: absolute; width: 1px; height: 1px; overflow: hidden; white-space: nowrap; clip-path: inset(50%); }
+.header[data-disconnect='text'] .wallet-disconnect-text { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
 /* not connected: the two buttons, one line, the same size */
 .wallet-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .wallet-actions .btn { flex: 0 0 auto; white-space: nowrap; }

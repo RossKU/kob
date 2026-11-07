@@ -130,6 +130,8 @@ export function SiteHeader(props: {
   innerRef?: Ref<HTMLDivElement>;
   layout?: 'narrow' | 'wide';
   brandName?: boolean;
+  /** the wide row has room for the word beside the wallet's disconnect icon (narrow.ts) */
+  disconnectText?: boolean;
   /** the app's wide row with its tabs in the true centre (narrow.ts useHeaderLayout) */
   centred?: boolean;
   testid?: string;
@@ -142,6 +144,7 @@ export function SiteHeader(props: {
       data-scrolled={scrolled ? '' : undefined}
       data-layout={props.layout}
       data-brand={props.brandName ? 'name' : undefined}
+      data-disconnect={props.disconnectText ? 'text' : undefined}
       data-centred={props.centred ? '' : undefined}
       data-testid={props.testid}
     >

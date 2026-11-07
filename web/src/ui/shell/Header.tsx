@@ -94,13 +94,14 @@ export function Header(props: { route: Route; warnings: ConfigWarning[]; storedO
   const level = useStatusLevel();
   const inner = useRef<HTMLDivElement>(null);
   useSqueezeCheck(inner, narrow);
-  const { brandName, centred } = useHeaderLayout(inner, narrow);
+  const { brandName, centred, disconnectText } = useHeaderLayout(inner, narrow);
   const active = navOf(props.route);
   return (
     <SiteHeader
       context="app"
       layout={narrow ? 'narrow' : 'wide'}
       brandName={brandName}
+      disconnectText={disconnectText}
       centred={centred}
       innerRef={inner}
       brand={<Brand href={routeToHash({ name: 'home' })} testid="brand" />}

@@ -84,11 +84,20 @@ function wideWidth(el: HTMLElement): number | null {
   return rowWidths({ logo: brand.getBoundingClientRect().width - brandNameWidth(brand), name: 0, nav: nav.getBoundingClientRect().width, tools: toolsWidth(tools), gap }, false).packed;
 }
 
-/** The tools' natural width: their items and the gaps between them (not their box, which a centred row may stretch). */
+/** The word beside the wallet's disconnect icon and the gap before it: its full width, and what it takes now (0 while it is hidden). */
+function disconnectWord(tools: HTMLElement): { full: number; shown: number } {
+  const word = tools.querySelector<HTMLElement>('.wallet-disconnect-text');
+  if (!word) return { full: 0, shown: 0 };
+  const gap = word.parentElement ? px(getComputedStyle(word.parentElement).columnGap) : 0;
+  const width = word.getBoundingClientRect().width;
+  return { full: word.scrollWidth + gap, shown: width <= 1 ? 0 : width + gap };
+}
+
+/** The tools' natural width: their items and the gaps between them (not their box, which a centred row may stretch). The disconnect word is extra: it is shown only where the row has room. */
 function toolsWidth(tools: HTMLElement): number {
   const toolGap = px(getComputedStyle(tools).columnGap);
   const items = Array.from(tools.children) as HTMLElement[];
-  return items.reduce((s, c) => s + c.getBoundingClientRect().width, 0) + toolGap * Math.max(0, items.length - 1);
+  return items.reduce((s, c) => s + c.getBoundingClientRect().width, 0) + toolGap * Math.max(0, items.length - 1) - disconnectWord(tools).shown;
 }
 
 /** The width the brand's name takes beside the logo (its text and the gap before it), 0 while it is hidden. */
@@ -118,13 +127,20 @@ export function headerLayout(m: { logo: number; name: number; nav: number; tools
   return { centred, brandName: centred ? fits(withName.centred) : fits(withName.packed) };
 }
 
+/** Whether the row, as `headerLayout` arranged it, still has room for the disconnect word (`word`: its width with the gap before it; 0: no wallet). */
+export function disconnectFits(m: { logo: number; name: number; nav: number; tools: number; gap: number; room: number }, layout: { centred: boolean; brandName: boolean }, word: number): boolean {
+  if (word <= 0) return false;
+  const row = rowWidths({ ...m, tools: m.tools + word }, layout.brandName);
+  return (layout.centred ? row.centred : row.packed) + SPARE_PX <= m.room;
+}
+
 /**
  * For the header's wide row: whether its tabs sit in the true centre of the row (brand left, tools right) and whether the brand's name fits beside the logo
  * (styles.css hides it otherwise). Measured after every layout change of the row's parts (the
  * wallet's buttons, the fonts loading, a resize); the narrow layout (`useSqueezeCheck`) takes over only when even the packed row does not fit.
  */
-export function useHeaderLayout(root: { current: HTMLElement | null }, narrow: boolean): { centred: boolean; brandName: boolean } {
-  const [layout, setLayout] = useState({ centred: false, brandName: false });
+export function useHeaderLayout(root: { current: HTMLElement | null }, narrow: boolean): { centred: boolean; brandName: boolean; disconnectText: boolean } {
+  const [layout, setLayout] = useState({ centred: false, brandName: false, disconnectText: false });
   useLayoutEffect(() => {
     const el = root.current;
     if (!el || narrow || typeof ResizeObserver !== 'function') return;
@@ -136,10 +152,10 @@ export function useHeaderLayout(root: { current: HTMLElement | null }, narrow: b
       if (!brand || !name || !nav || !tools) return;
       // the name's own width, also while it is clipped to 1 px (scrollWidth is its text's width)
       const nameWidth = name.scrollWidth + px(getComputedStyle(brand).columnGap);
-      const next = headerLayout(
-        { logo: brand.getBoundingClientRect().width - brandNameWidth(brand), name: nameWidth, nav: nav.getBoundingClientRect().width, tools: toolsWidth(tools), gap: px(getComputedStyle(el).columnGap), room: roomOf(el) },
-      );
-      setLayout((l) => (l.centred === next.centred && l.brandName === next.brandName ? l : next));
+      const row = { logo: brand.getBoundingClientRect().width - brandNameWidth(brand), name: nameWidth, nav: nav.getBoundingClientRect().width, tools: toolsWidth(tools), gap: px(getComputedStyle(el).columnGap), room: roomOf(el) };
+      const next = headerLayout(row);
+      const disconnectText = disconnectFits(row, next, disconnectWord(tools).full);
+      setLayout((l) => (l.centred === next.centred && l.brandName === next.brandName && l.disconnectText === disconnectText ? l : { ...next, disconnectText }));
     };
     check();
     const ro = new ResizeObserver(check);
@@ -148,7 +164,7 @@ export function useHeaderLayout(root: { current: HTMLElement | null }, narrow: b
     void document.fonts?.ready.then(check);
     return () => ro.disconnect();
   }, [narrow]);
-  return narrow ? { centred: false, brandName: false } : layout;
+  return narrow ? { centred: false, brandName: false, disconnectText: false } : layout;
 }
 
 
