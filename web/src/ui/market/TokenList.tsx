@@ -5,7 +5,8 @@ import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import type { IndexerTokenView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
-import { Banner, Button, ErrorBanner, Field, Section, Segmented, Table, TableMessage, toError, useAsync } from '../kit';
+import { Banner, Button, ErrorBanner, Field, Section, Table, TableMessage, toError, useAsync } from '../kit';
+import { ListPager, RowsControl, showListStart } from './ListPaging';
 import { StatusBadges } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { IdCopy } from './IdCopy';
@@ -16,13 +17,13 @@ import { TokenIcon } from './TokenIcon';
 import { TokenNote } from './TokenNote';
 import './market.css';
 import {
-  ariaSort, DEFAULT_SORT, filterPairs, kascovEntry, keepOrder, LIST_PAGE_SIZES, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, sortEntries, tokenEntry,
-  type Cell, type ListedPair, type ListEntry, type ListPageSize, type Slot, type SortKey, type SortState,
+  ariaSort, DEFAULT_SORT, filterPairs, kascovEntry, keepOrder, listedPairs, LOADING, nextSort, NONE, pageWindow, pairEntry, pairLabelOf, sortEntries, tokenEntry,
+  type Cell, type ListedPair, type ListEntry, type Slot, type SortKey, type SortState,
 } from './market-list';
 import { PAIR_DEPTH_LEVELS, pairDepthOf, pairVolumeOf, type PairDepth, type PairVolume } from './pair-market';
 import { buildTokenRows, filterTokens, isNameless, parseCovenantId, tradableHere, tradableRows, type TokenRow } from './token-model';
 import { useKascov } from './use-kascov';
-import { useHeldUntil, useListPageSize, usePooledSlots } from './use-market-list';
+import { useHeldUntil, useListPage, useListPageSize, usePooledSlots } from './use-market-list';
 import { isAbort } from '../kit/hooks';
 import { clockText, useStandalone } from '../shell/standalone';
 
@@ -170,28 +171,6 @@ function SkeletonRow() {
   );
 }
 
-/** More rows follow when this comes into view (a little before); the button is the same step by hand. A new observer per step: a tall window goes on. */
-function MoreRows(props: { shown: number; total: number; onMore: () => void }) {
-  const box = useRef<HTMLDivElement>(null);
-  const more = useRef(props.onMore);
-  more.current = props.onMore;
-  useEffect(() => {
-    const el = box.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return;
-    const io = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) more.current();
-    }, { rootMargin: '240px 0px' });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [props.shown]);
-  return (
-    <div class="ml-more" ref={box} data-testid="token-list-more">
-      <span class="small muted" data-testid="token-list-showing">{t('market.list.showing', { shown: props.shown, total: props.total })}</span>
-      <Button small onClick={props.onMore} data-testid="token-list-more-button">{t('market.list.more')}</Button>
-    </div>
-  );
-}
-
 function TokenTableRow({ row, entry, step }: { row: TokenRow; entry: ListEntry; step: number }) {
   // every row has the same three lines, so every row is as tall and the icons keep one pitch: line 1 the ticker (bold) and the name (one line, an ellipsis, the
   // whole name in its title); line 2 the covenant id fragment with its copy button; line 3 the badges (one line, never wrapped). A token without a ticker is led by its name
@@ -266,8 +245,8 @@ const pairToken = (r: TokenRow): PairToken => ({ covenantId: r.covenantId, ticke
  * sortable by every column (24 h volume first), searchable, add by covenant id. A phone shows the name, the price and the change.
  *
  * The rows arrive together: the list is held on placeholders until the first figures are in (at most LIST_HOLD_MS), then the first rows rise in, sorted, and
- * stay in their places while later figures arrive; a sort, a search or the end of the hold's late figures places them anew. The viewer picks how many rows
- * come at a time; the next ones (and their icons) come when the end of the list comes into view.
+ * stay in their places while later figures arrive; a sort, a search or the end of the hold's late figures places them anew. One page shows the number of rows the
+ * viewer picked, so only those rows load their icons; the search looks through every page, and a new sort, search or size starts at the first page.
  */
 export function TokenList(props: { invalidToken?: string }) {
   const { registry, indexer, kob, config, standalone } = useServices();
@@ -356,19 +335,25 @@ export function TokenList(props: { invalidToken?: string }) {
 
   // the rows' places: taken from the sort when something the viewer sees as a new list happens, kept while figures arrive
   const [pageSize, setPageSize] = useListPageSize();
-  const [limit, setLimit] = useState<number>(pageSize);
   const viewKey = `${sort.key}:${sort.dir}|${query}|${showNameless ? 1 : 0}`;
   const placedBy = `${viewKey}|${generation}|${figuresIn ? 1 : 0}|${open ? 1 : 0}`;
   const placed = useRef<{ by: string; ids: string[] }>({ by: '', ids: [] });
   const sortedIds = shownRows.map((r) => r.row.covenantId);
   placed.current = { by: placedBy, ids: placed.current.by === placedBy ? keepOrder(placed.current.ids, sortedIds) : sortedIds };
   const rowOf = new Map(shownRows.map((r) => [r.row.covenantId, r]));
-  const windowRows = placed.current.ids.slice(0, limit).map((id) => rowOf.get(id)!);
-  useEffect(() => setLimit(pageSize), [viewKey, pageSize]);
+  // another sort, search or size starts at the first page
+  const [turned, setTurned] = useListPage(`${viewKey}|${pageSize}`);
+  const pager = pageWindow(placed.current.ids.length, pageSize, turned);
+  const windowRows = placed.current.ids.slice(pager.from, pager.to).map((id) => rowOf.get(id)!);
+  const listTop = useRef<HTMLDivElement>(null);
   // the placeholders are as tall as a page of rows: a page left scrolled down would otherwise open the list in its middle
   useEffect(() => window.scrollTo(0, 0), []);
 
   const onSort = (k: SortKey) => setSort((s) => nextSort(s, k));
+  const turnTo = (page: number) => {
+    setTurned(page);
+    showListStart(listTop.current);
+  };
   const refresh = () => {
     tokens.reload();
     pairs.reload();
@@ -384,20 +369,11 @@ export function TokenList(props: { invalidToken?: string }) {
         actions={<Button small onClick={refresh} loading={tokens.loading && !!tokens.data}>{t('common.refresh')}</Button>}
         data-testid="token-list"
       >
-        <div class="ml-tools">
+        <div class="ml-tools" ref={listTop}>
           <div class="ml-search">
             <Field label={t('market.search.label')} type="search" value={query} onValue={setQuery} placeholder={t('market.search.placeholder')} data-testid="token-search" />
           </div>
-          <div class="ml-size">
-            <span class="small muted" aria-hidden="true">{t('market.list.rows')}</span>
-            <Segmented<string>
-              aria-label={t('market.list.rowsLabel')}
-              value={String(pageSize)}
-              onChange={(v) => setPageSize(Number(v) as ListPageSize)}
-              options={LIST_PAGE_SIZES.map((n) => ({ value: String(n), label: String(n), 'data-testid': `token-list-rows-${n}` }))}
-              data-testid="token-list-rows"
-            />
-          </div>
+          <RowsControl id="token-list" size={pageSize} onSize={setPageSize} />
         </div>
         <ListLegend names={kascov.status} />
         {sa?.active && sa.sinceMs !== null ? <p class="small muted" data-testid="token-list-standalone">{t('market.list.standalone', { time: clockText(sa.sinceMs) })}</p> : null}
@@ -415,11 +391,11 @@ export function TokenList(props: { invalidToken?: string }) {
             ) : shownRows.length === 0 ? (
               <TableMessage colSpan={cols} data-testid="token-list-empty">{query ? t('market.list.noMatch') : t('market.list.empty')}</TableMessage>
             ) : (
-              windowRows.map(({ row, entry }, i) => <TokenTableRow key={row.covenantId} row={row} entry={entry} step={Math.min(i % pageSize, REVEAL_STEPS)} />)
+              windowRows.map(({ row, entry }, i) => <TokenTableRow key={row.covenantId} row={row} entry={entry} step={Math.min(i, REVEAL_STEPS)} />)
             )}
           </tbody>
         </Table>
-        {open && windowRows.length < shownRows.length ? <MoreRows shown={windowRows.length} total={shownRows.length} onMore={() => setLimit((l) => l + pageSize)} /> : null}
+        {open ? <ListPager id="token-list" window={pager} total={shownRows.length} hasNext={pager.page + 1 < pager.pages} onPage={turnTo} /> : null}
         {namelessCount > 0 && !query.trim() ? (
           <p class="small muted">
             <Button small onClick={() => setShowNameless((v) => !v)} data-testid="token-list-nameless">

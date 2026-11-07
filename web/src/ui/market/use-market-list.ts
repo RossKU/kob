@@ -20,24 +20,36 @@ export function useHeldUntil(ready: boolean): boolean {
   return done.current;
 }
 
-/** The viewer's page size, kept in this browser (a blocked storage keeps it for the visit). */
-export function useListPageSize(): [ListPageSize, (n: ListPageSize) => void] {
+/** The viewer's page size of the list stored under `key`, kept in this browser (a blocked storage keeps it for the visit). */
+export function useListPageSize(key: string = PAGE_SIZE_KEY, fallback?: ListPageSize): [ListPageSize, (n: ListPageSize) => void] {
   const [size, setSize] = useState<ListPageSize>(() => {
     try {
-      return listPageSizeOf(localStorage.getItem(PAGE_SIZE_KEY));
+      return listPageSizeOf(localStorage.getItem(key), fallback);
     } catch {
-      return listPageSizeOf(null);
+      return listPageSizeOf(null, fallback);
     }
   });
   const set = (n: ListPageSize) => {
     setSize(n);
     try {
-      localStorage.setItem(PAGE_SIZE_KEY, String(n));
+      localStorage.setItem(key, String(n));
     } catch {
       /* blocked storage */
     }
   };
   return [size, set];
+}
+
+/** The page of a list turned to: it belongs to one view of the list (`key`), and any other view, also one seen before, starts at the first page. */
+export function useListPage(key: string): [number, (page: number) => void] {
+  const [, render] = useState(0);
+  const at = useRef({ key, page: 0 });
+  if (at.current.key !== key) at.current = { key, page: 0 };
+  const set = (page: number) => {
+    at.current = { key, page };
+    render((n) => n + 1);
+  };
+  return [at.current.page, set];
 }
 
 /** Calls in flight per list (the indexer rate-limits its heavy routes per client). */

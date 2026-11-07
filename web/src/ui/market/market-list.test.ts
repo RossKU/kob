@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PairSummaryView, StatsView } from '../../data/indexer-types';
 import type { TokenInfo } from '../../kob/registry';
 import {
-  DEFAULT_LIST_PAGE_SIZE, keepOrder, listPageSizeOf,
+  DEFAULT_LIST_PAGE_SIZE, keepOrder, listPageSizeOf, pageWindow,
   ariaSort, changeCell, DEFAULT_SORT, filterPairs, firstDir, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, priceCell, runPool, sortEntries,
   depthCell, marketCapCell, pairDepthCell, supplyOf, tokenEntry, volumeCell, type ListEntry, type Slot,
 } from './market-list';
@@ -40,6 +40,20 @@ describe('the list\'s rows', () => {
     expect(listPageSizeOf('50')).toBe(50);
     expect(listPageSizeOf('100')).toBe(100);
     for (const raw of [null, undefined, '', '7', '20px']) expect(listPageSizeOf(raw)).toBe(DEFAULT_LIST_PAGE_SIZE);
+    expect(listPageSizeOf(null, 50)).toBe(50);
+    expect(listPageSizeOf('100', 50)).toBe(100);
+  });
+  it('a page holds exactly its rows; the last one what is left', () => {
+    expect(pageWindow(48, 20, 0)).toEqual({ page: 0, pages: 3, from: 0, to: 20 });
+    expect(pageWindow(48, 20, 1)).toEqual({ page: 1, pages: 3, from: 20, to: 40 });
+    expect(pageWindow(48, 20, 2)).toEqual({ page: 2, pages: 3, from: 40, to: 48 });
+    expect(pageWindow(100, 50, 1)).toEqual({ page: 1, pages: 2, from: 50, to: 100 });
+    expect(pageWindow(100, 100, 0)).toEqual({ page: 0, pages: 1, from: 0, to: 100 });
+  });
+  it('a list that got shorter shows its last page; an empty list has one page; no page before the first', () => {
+    expect(pageWindow(30, 20, 4)).toEqual({ page: 1, pages: 2, from: 20, to: 30 });
+    expect(pageWindow(0, 20, 3)).toEqual({ page: 0, pages: 1, from: 0, to: 0 });
+    expect(pageWindow(30, 20, -1)).toEqual({ page: 0, pages: 2, from: 0, to: 20 });
   });
 });
 

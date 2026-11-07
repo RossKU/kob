@@ -53,13 +53,23 @@ export async function runPool<T>(items: readonly T[], limit: number, fn: (item: 
 
 // ------------------------------------------------------------------------------------------------ the list's rows
 
-/** The rows the list adds at a time (the viewer's choice): the first ones at once, the next when the end of the list comes into view. */
+/** The rows of one page of a list (the viewer's choice). */
 export const LIST_PAGE_SIZES = [20, 50, 100] as const;
 export type ListPageSize = (typeof LIST_PAGE_SIZES)[number];
 export const DEFAULT_LIST_PAGE_SIZE: ListPageSize = 20;
 
-/** A stored page size, or the default for anything else. */
-export const listPageSizeOf = (raw: string | null | undefined): ListPageSize => LIST_PAGE_SIZES.find((n) => String(n) === raw) ?? DEFAULT_LIST_PAGE_SIZE;
+/** A stored page size, or `fallback` for anything else. */
+export const listPageSizeOf = (raw: string | null | undefined, fallback: ListPageSize = DEFAULT_LIST_PAGE_SIZE): ListPageSize => LIST_PAGE_SIZES.find((n) => String(n) === raw) ?? fallback;
+
+/** One page of a list: its number (from 0, never past the last page), how many there are, and the rows `from` (included) `to` (not included). */
+export interface PageWindow { page: number; pages: number; from: number; to: number }
+
+/** The page `page` of `total` rows, `size` rows each. A list that got shorter shows its last page. */
+export function pageWindow(total: number, size: number, page: number): PageWindow {
+  const pages = Math.max(1, Math.ceil(total / size));
+  const p = Math.min(Math.max(0, page), pages - 1);
+  return { page: p, pages, from: p * size, to: Math.min(total, (p + 1) * size) };
+}
 
 /** The keys in their place of `kept` (a key that left is dropped); keys `kept` does not have follow, in the order of `keys`. A figure that arrives moves no row. */
 export function keepOrder(kept: readonly string[], keys: readonly string[]): string[] {

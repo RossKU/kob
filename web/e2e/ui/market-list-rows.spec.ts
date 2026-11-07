@@ -1,5 +1,5 @@
-// How the market list arrives: placeholders until the first figures are in, then the rows in their sorted places, a page at a time (the viewer picks how many);
-// the next page when the end of the list comes into view; a figure that arrives moves no row. Mock stack with a mocked kascov (many tokens that only it names).
+// How the market list arrives: placeholders until the first figures are in, then the rows in their sorted places, one page at a time (the viewer picks how many);
+// a figure that arrives moves no row. Mock stack with a mocked kascov (many tokens that only it names).
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { mockKascov, programHash, type MockKascovToken } from '../helpers/kascov';
@@ -11,16 +11,13 @@ const MINT = programHash('KCC20PublicMint');
 const tokens: MockKascovToken[] = Array.from({ length: 130 }, (_, i) => ({ covenant_id: ID(0x1000 + i), claimed_ticker: `T${String(i).padStart(3, '0')}`, claimed_name: `Token ${i}`, program: MINT }));
 const rows = (page: Page) => page.locator('[data-testid^="token-row-"]:not([data-testid="token-row-skeleton"])');
 
-test('a page of rows, the next one on scrolling, and the page size is kept', async ({ appPage: page }) => {
+test('a page of rows, and the page size is kept', async ({ appPage: page }) => {
   await mockKascov(page, { tokens });
   await page.goto('/#/market');
   await expect(page.getByTestId('token-list-rows-20')).toHaveAttribute('aria-checked', 'true');
   await expect(rows(page)).toHaveCount(20);
   await expect(page.getByTestId('token-row-skeleton')).toHaveCount(0);
-  await expect(page.getByTestId('token-list-showing')).toContainText('20 of');
-  // only the rows on the page exist, so only their icons can load
-  await page.getByTestId('token-list-more').scrollIntoViewIfNeeded();
-  await expect.poll(async () => rows(page).count()).toBeGreaterThanOrEqual(40);
+  await expect(page.getByTestId('token-list-showing')).toContainText('1–20 of');
 
   await page.getByTestId('token-list-rows-50').click();
   await expect(rows(page)).toHaveCount(50);
@@ -35,7 +32,7 @@ test('a search looks through every token, not only the rows on the page', async 
   await expect(rows(page)).toHaveCount(20);
   await page.getByTestId('token-search').fill('T129');
   await expect(rows(page)).toHaveCount(1);
-  await expect(page.getByTestId('token-list-more')).toHaveCount(0);
+  await expect(page.getByTestId('token-list-pager')).toHaveCount(0);
 });
 
 test('figures that come late move no row', async ({ appPage: page, mock }) => {
