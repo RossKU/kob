@@ -7,13 +7,13 @@ import { formatDateTime, t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
 import type { Hex } from '../../kob/types';
-import { Banner, Button, ErrorBanner, Loading, Modal, RawDetails, Section, Tabs, showToast, toError, useAsync } from '../kit';
+import { Banner, Button, ErrorBanner, Modal, RawDetails, Section, Tabs, showToast, toError, useAsync } from '../kit';
 import { useLiveRefresh } from '../market/live';
 import { useSystemStatus } from '../shell/StatusProvider';
 import { AmendDialog } from './AmendDialog';
 import { ReplaceDialog } from './ReplaceDialog';
 import { AutoRefundToggle } from './AutoRefund';
-import { BalancesPanel } from './BalancesPanel';
+import { BalancesFrame, BalancesPanel } from './BalancesPanel';
 import { OrderRow, type OrderRowActions } from './OrderRow';
 import { PositionCard } from './PositionCard';
 import { RecoverPanel } from './RecoverPanel';
@@ -32,6 +32,7 @@ import {
 import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
 import { buildListItems, cancellableIds, filterItems, tabCounts, type ListTab } from './list-model';
 import { loadOrderEvents, loadOrders, type OrdersData } from './orders-data';
+import '../market/market.css';
 
 interface Flow {
   key: number;
@@ -42,6 +43,9 @@ interface Flow {
 }
 
 const REFRESH_MS = 15_000;
+
+/** The placeholder rows until the list is in. */
+const SKELETON_ROWS = 3;
 
 /**
  * `#/orders`: the wallet's orders (indexer + placement records resolved on the node), positions with their exits, balances the wallet does not show,
@@ -445,6 +449,8 @@ export function OrdersView() {
           busy={busy}
           onMergeToken={mergeToken}
         />
+      ) : data.loading ? (
+        <BalancesFrame />
       ) : null}
 
       <Section
@@ -475,8 +481,13 @@ export function OrdersView() {
             { id: 'all', label: t('orders.tab.all', { count: counts.all }), 'data-testid': 'orders-tab-all' },
           ]}
         />
-        <div role="tabpanel" class="stack-sm" data-testid="orders-list" data-live={stats.live}>
-          {data.loading && !d ? <Loading /> : null}
+        {/* the rows come together, as soon as the indexer's answer is in: a trader acts on them, so they wait for nothing else (the balances, the node's answers) */}
+        <div role="tabpanel" class={`stack-sm${d ? ' ml-in' : ''}`} data-testid="orders-list" data-live={stats.live}>
+          {data.loading && !d ? (
+            <div class="stack-sm" role="status" aria-label={t('common.loading')} data-testid="orders-loading">
+              {Array.from({ length: SKELETON_ROWS }, (_, i) => <div key={i} class="skeleton orders-skel" />)}
+            </div>
+          ) : null}
           {d && shown.length === 0 ? <p class="muted center" data-testid="orders-empty">{t(tab === 'history' ? 'orders.emptyHistory' : 'orders.empty')}</p> : null}
           {shown.map((item) =>
             item.type === 'single' ? (

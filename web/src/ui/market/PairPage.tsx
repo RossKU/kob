@@ -18,7 +18,7 @@ import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { PairToken } from '../../kob/pair';
 import { longId, type TokenInfo } from '../../kob/registry';
-import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, useAsync } from '../kit';
+import { Badge, Banner, Button, ErrorBanner, scaleOfDecimals, Section, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { requestPairFlip } from '../ticket/pair-flip';
 import { DepthChart } from './DepthChart';
@@ -26,15 +26,16 @@ import { FavoriteStar } from './FavoriteStar';
 import { isFavoritePair, togglePair, useFavorites } from './favorites';
 import { PriceChart, type UsdChartSpec } from './PriceChart';
 import { useLiveRefresh } from './live';
-import { FlipButton, MarketShell, PairSelector } from './MarketBar';
+import { FlipButton, MarketFrame, MarketShell, PairSelector } from './MarketBar';
+import { settled } from './market-list';
 import { openPair } from './market-nav';
 import { displayedPair } from './market-select';
 import { MarketStats } from './MarketStats';
-import { basisOf, INTERVAL_MS, parseCandles } from './market-model';
+import { basisOf, INTERVAL_MS, parseCandles, statsModel as noStats } from './market-model';
 import { PairBook } from './PairBook';
 import { useStaleSince } from './book-stale';
 import { loadCandles, type ChartView } from './candle-feed';
-import { StaleSince } from './OrderBook';
+import { BookFrame, StaleSince } from './OrderBook';
 import { buildPairBook, pairSideOf, pickOf, type PairLevelRow } from './pair-model';
 import { pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
 import { MarketActivity } from '../activity/ActivityPage';
@@ -43,6 +44,7 @@ import { IdentityBlock } from './Fingerprint';
 import { PairDetails, TokenLine } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
 import { buildTokenRows, scaleNeedsIndexer, sharedTickerIds, tokenLabel, tradableRows, withShownRows } from './token-model';
+import { useHeldUntil } from './use-market-list';
 import { useMarketToken } from './use-market-token';
 import { useStandalone } from '../shell/standalone';
 import { ratioCandles, usdDp, usdStats } from './usd-model';
@@ -147,6 +149,10 @@ export function PairPage(props: { base: string; quote: string }) {
     refreshKey: liveKey,
   });
 
+  // the book and the 24 h strip show together, once for the page (TokenPage); the ticket waits for none of this. Their reads wait for the two tokens
+  const tokensIn = !!base && !!quote;
+  const panelsOpen = useHeldUntil(tokensIn && settled(book) && settled(stats) && settled(fills), tokensIn);
+
   // a result of the other orientation (right after a flip) is never used
   const cur = stats.data && stats.data.key === key ? stats.data : undefined;
   const cc = candles.data && candles.data.key === key ? candles.data : undefined;
@@ -171,14 +177,15 @@ export function PairPage(props: { base: string; quote: string }) {
         : null,
     [base, quote, last, change, dp, cc, cur, fills.data],
   );
-  // the activity log reads this pair's fills from here (the route is heavy: never read twice)
-  const pairFillsSrc = useMemo(() => ({ base: props.base, quote: props.quote, view: fills.data }), [props.base, props.quote, fills.data]);
+  // the activity log reads this pair's fills from here (the route is heavy: never read twice); a read that ended without an answer is `null`, so the log does not wait for it
+  const fillsView = settled(fills) ? (fills.data ?? null) : undefined;
+  const pairFillsSrc = useMemo(() => ({ base: props.base, quote: props.quote, view: fillsView }), [props.base, props.quote, fillsView]);
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
 
   const sides = [baseSide, quoteSide];
   const blocked = sides.find((s) => s.state === 'blocked');
   if (blocked) return <NotTradablePage ticker={blocked.row.ticker} covenantId={blocked.row.covenantId} reason={blocked.reason ? t(blocked.reason) : null} />;
-  if (sides.some((s) => s.state === 'loading')) return <div data-testid="pair-loading"><Loading /></div>;
+  if (sides.some((s) => s.state === 'loading')) return <MarketFrame bookTitle={t('pair.book.title')} data-testid="pair-loading" />;
   const back = <div><a href="#/market">{t('market.token.back')}</a></div>;
   if (sides.some((s) => s.state === 'unknown')) {
     return (
@@ -213,7 +220,7 @@ export function PairPage(props: { base: string; quote: string }) {
       </div>
     );
   }
-  if (!baseInfo || !quoteInfo || !base || !quote || !pairStats) return <div data-testid="pair-loading"><Loading /></div>;
+  if (!baseInfo || !quoteInfo || !base || !quote || !pairStats) return <MarketFrame bookTitle={t('pair.book.title')} data-testid="pair-loading" />;
   const spec: UsdChartSpec = { base: { token: props.base, decimals: baseInfo.decimals }, quote: { token: props.quote, decimals: quoteInfo.decimals }, pairCandles: true };
   const statsModel = pairStats.model;
   const src = pairStats.source;
@@ -267,10 +274,11 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       stats={
         <MarketStats
-          model={statsModel}
+          open={panelsOpen}
+          model={panelsOpen ? statsModel : noStats(null, 0)}
           ticker={baseInfo.ticker}
           quoteTicker={quoteInfo.ticker}
-          loading={statsLoading}
+          loading={!panelsOpen || statsLoading}
           unsupported={false}
           volumeSource={src}
           titles={{ high: rangeNote, low: rangeNote, volume: volumeNote, quoteVolume: volumeNote, trades: volumeNote }}
@@ -292,9 +300,11 @@ export function PairPage(props: { base: string; quote: string }) {
           <StaleSince since={bookStaleSince} data-testid="pair-book-stale-since" />
           {unavailable ? <Banner tone="warn" data-testid="pair-book-unavailable" title={t('pair.book.unavailable')}>{t('pair.book.unavailableBody')}</Banner> : null}
           {book.data && !model ? <Banner tone="warn" data-testid="pair-book-mismatch">{t('pair.book.mismatch')}</Banner> : null}
-          {indexer && book.loading && !book.data ? <div data-testid="pair-book-loading">{Array.from({ length: 8 }, (_, i) => <div key={i} class="skeleton skeleton-line" />)}</div> : null}
-          {model && model.empty ? <p class="muted center" data-testid="pair-book-empty">{t('pair.book.empty')}</p> : null}
-          {model && !model.empty ? <PairBook model={model} base={baseInfo.ticker} quote={quoteInfo.ticker} onPick={onPick} /> : null}
+          {indexer && (model ? !panelsOpen : book.loading && !book.data) ? (
+            <BookFrame head={{ price: t('pair.book.price', { base: baseInfo.ticker, quote: quoteInfo.ticker }), size: t('pair.book.amount', { base: baseInfo.ticker }), total: t('pair.book.source') }} rows={12} data-testid="pair-book-loading" />
+          ) : null}
+          {panelsOpen && model && model.empty ? <p class="muted center" data-testid="pair-book-empty">{t('pair.book.empty')}</p> : null}
+          {panelsOpen && model && !model.empty ? <PairBook model={model} base={baseInfo.ticker} quote={quoteInfo.ticker} onPick={onPick} /> : null}
           <div class="pair-legend">
             <span>{t('pair.book.legendDirect')}</span>
             <span>{t('pair.book.legendEntry')}</span>

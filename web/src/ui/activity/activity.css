@@ -102,6 +102,13 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-ok { color: var(--ok); font-weight: 700; }
 .act-c-time { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-empty { padding: 18px 8px; text-align: center; }
+.act-skel { height: var(--act-row-h); }
+.act-skel .skeleton { display: block; }
+.act-skel .skeleton-line { margin: 0; }
+.act-skel-ty { width: 28px; height: 28px; border-radius: 7px; }
+.act-skel-mk { width: 22px; height: 22px; border-radius: 50%; }
+.act-skel .act-c-conf .skeleton-line { width: 28px; }
+.act-skel .act-c-amt, .act-skel .act-c-time { min-width: 48px; }
 
 /* a medium card: no pie (the count, or ✓), tighter columns */
 @container actlog (max-width: 899px) {

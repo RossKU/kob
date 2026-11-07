@@ -4,8 +4,9 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { unregisteredId } from './token-model';
-import { Button } from '../kit';
+import { Button, Section } from '../kit';
 import { AssetPicker } from './AssetPicker';
+import { BookFrame } from './OrderBook';
 import { openPair } from './market-nav';
 import { KAS, assetChoices, type DisplayedPair } from './market-select';
 import { tokenTitle } from './TokenBadges';
@@ -100,6 +101,26 @@ export function FlipButton(props: { pair: string; pressed?: boolean; onClick: ()
         <path d="M9 12l-4 4 4 4" />
       </svg>
     </Button>
+  );
+}
+
+/** A market's frame while its token is looked up: the cards and their headings in their places. The ticket comes as soon as the token is known; it waits for nothing else. */
+export function MarketFrame(props: { 'data-testid'?: string; bookTitle: string }) {
+  return (
+    <div class="market-page" data-testid={props['data-testid']}>
+      <div class="skeleton mkt-frame-head" />
+      <div class="skeleton mkt-frame-stats" />
+      <div class="mkt-grid">
+        <Section title={props.bookTitle} class="mkt-area-book mkt-card"><BookFrame rows={12} /></Section>
+        <Section title={t('market.chart.title')} class="mkt-area-chart mkt-card"><div class="skeleton chart-box" /></Section>
+        <Section title={t('market.depth.title')} class="mkt-area-depth mkt-card"><div class="skeleton mkt-frame-depth" /></Section>
+        <div class="mkt-side">
+          <div class="stack mkt-area-ticket">
+            <Section title={t('market.ticket.title')} class="mkt-card"><div class="skeleton mkt-frame-ticket" /></Section>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

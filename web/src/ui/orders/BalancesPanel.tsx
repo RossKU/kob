@@ -5,7 +5,7 @@ import { TokenNote } from '../market/TokenNote';
 import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { Hex } from '../../kob/types';
-import { Amount, Banner, Button, ErrorBanner, KeyValueList, Loading, Section, Table, TableMessage, unitsFraction, useAsync } from '../kit';
+import { Amount, Banner, Button, ErrorBanner, KeyValueList, Section, Table, TableMessage, unitsFraction, useAsync } from '../kit';
 import { formatKas, formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
 import { combineFreeBalances, loadFreeBalances } from './balances-data';
@@ -13,6 +13,19 @@ import { balanceColumnFractions, unreviewedProgram } from './balances-model';
 import { mergeableCounts, nextMergeFrees } from './merge-model';
 import type { OrdersData } from './orders-data';
 import './balances.css';
+
+function BalancesSkeleton() {
+  return (
+    <div role="status" aria-label={t('common.loading')} data-testid="balances-loading">
+      {Array.from({ length: 3 }, (_, i) => <div key={i} class="skeleton skeleton-line" />)}
+    </div>
+  );
+}
+
+/** The panel until the list it is read with is in: its card and its heading, in their place. */
+export function BalancesFrame() {
+  return <Section title={t('orders.balances.title')} data-testid="balances-panel"><BalancesSkeleton /></Section>;
+}
 
 /**
  * The balances wallets do not show: tokens inside the wallet's sell orders (0x04 custody), stray tokens, KAS locked in orders, next to the free
@@ -63,13 +76,13 @@ export function BalancesPanel(props: {
 
   return (
     <Section title={t('orders.balances.title')} data-testid="balances-panel" actions={<Button small onClick={free.reload} loading={free.loading && !!free.data}>{t('common.refresh')}</Button>}>
-      {free.loading && !free.data ? <Loading /> : null}
+      {free.loading && !free.data ? <BalancesSkeleton /> : null}
       <ErrorBanner error={free.error} onRetry={free.reload} />
       {free.data && free.data.errors.length ? (
         <Banner tone="warn" data-testid="balances-partial">{t('market.balances.partial', { sources: free.data.errors.map((e) => e.source).join(', ') })}</Banner>
       ) : null}
       {combined && free.data ? (
-        <>
+        <div class="tk-in">
           <KeyValueList
             compact
             flow
@@ -167,7 +180,7 @@ export function BalancesPanel(props: {
           {combined.tokens.some((b) => b.strays > 0n) ? <p class="small" data-testid="strays-note">{t('orders.balances.straysNote')}</p> : null}
           <p class="small muted" data-testid="balances-old-holdings">{t('orders.balances.oldHoldings')}</p>
           {combined.lostStrayTokens > 0n ? <Banner tone="warn" data-testid="strays-lost">{t('orders.balances.straysLost')}</Banner> : null}
-        </>
+        </div>
       ) : null}
     </Section>
   );

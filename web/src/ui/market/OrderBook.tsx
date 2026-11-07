@@ -65,6 +65,30 @@ function Blank(props: { kind: 'ask' | 'bid' }) {
   return <div class={`book-row book-blank book-${props.kind}`} aria-hidden="true" data-testid={`ob-blank-${props.kind}`} />;
 }
 
+/** The book's frame while its rows are held: the column titles (none until the token is known) and the rows' places, as high as the book, so nothing moves when the rows come. */
+export function BookFrame(props: { head?: { price: string; size: string; total: string }; rows: number; 'data-testid'?: string }) {
+  const side = Array.from({ length: props.rows }, (_, i) => (
+    <div key={i} class="book-row book-blank" aria-hidden="true">
+      <span class="skeleton ob-skel" />
+      <span class="skeleton ob-skel" />
+      <span class="skeleton ob-skel" />
+    </div>
+  ));
+  return (
+    <div class="book ob" role="status" aria-label={t('common.loading')} data-testid={props['data-testid']} style={{ '--ob-rows': String(props.rows) }}>
+      <div class="ob-head" aria-hidden="true">
+        <span>{props.head?.price}</span>
+        <span>{props.head?.size}</span>
+        <span>{props.head?.total}</span>
+      </div>
+      <div class="book-side">{side}</div>
+      <div class="ob-mid book-mid" />
+      <div class="book-side">{side}</div>
+      <p class="ob-foot" />
+    </div>
+  );
+}
+
 /**
  * Aggregated order book: asks above (best at the bottom), the spread row with the last price, bids below; cumulative depth bars; price grouping. Each side
  * is exactly `rows` slots (levels, then blank slots: the asks are bottom-anchored, the bids top-anchored), the header, the spread row and the foot have
@@ -74,7 +98,7 @@ export function OrderBook(props: OrderBookProps) {
   const m = props.view;
   const blanksOf = (n: number) => Math.max(0, props.rows - n);
   return (
-    <div class="book ob" data-testid="order-book" style={{ '--ob-rows': String(props.rows) }}>
+    <div class="book ob tk-in" data-testid="order-book" style={{ '--ob-rows': String(props.rows) }}>
       <div class="ob-head" aria-hidden="true">
         <span>{m.head.price}</span>
         <span>{m.head.size}</span>

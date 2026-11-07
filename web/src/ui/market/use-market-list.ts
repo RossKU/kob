@@ -5,19 +5,34 @@ import { listPageSizeOf, LOADING, NONE, runPool, type ListPageSize, type Slot } 
 
 const PAGE_SIZE_KEY = 'kob.market.rows';
 
-/** How long the list waits for its first figures before it shows what it has (a slow indexer never leaves it empty). */
+/** How long a list or a panel waits for its first figures before it shows what it has (a slow indexer never leaves it empty). */
 export const LIST_HOLD_MS = 1500;
 
-/** True once `ready` was true or LIST_HOLD_MS passed; it stays true. */
-export function useHeldUntil(ready: boolean): boolean {
+/** How long rows take to rise in: `ml-in` in market.css (0.8 s, and 14 rows that wait 34 ms each), rounded up. */
+export const RISE_MS = 1300;
+
+/** True once `ready` was true or LIST_HOLD_MS passed since `armed` (a list off screen reads nothing: its time starts when it is shown); it stays true. */
+export function useHeldUntil(ready: boolean, armed = true): boolean {
   const [over, setOver] = useState(false);
   useEffect(() => {
+    if (!armed) return;
     const timer = setTimeout(() => setOver(true), LIST_HOLD_MS);
     return () => clearTimeout(timer);
-  }, []);
+  }, [armed]);
   const done = useRef(false);
   if (ready || over) done.current = true;
   return done.current;
+}
+
+/** True while the rows `open` let in are rising: a row that comes after that is live and comes as it is. */
+export function useRising(open: boolean): boolean {
+  const [over, setOver] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => setOver(true), RISE_MS);
+    return () => clearTimeout(timer);
+  }, [open]);
+  return open && !over;
 }
 
 /** The viewer's page size of the list stored under `key`, kept in this browser (a blocked storage keeps it for the visit). */

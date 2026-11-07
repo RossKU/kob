@@ -5,7 +5,7 @@ import { useServices, useWallet } from '../../app/context';
 import type { TicketPreset } from '../../app/router';
 import { longId } from '../../kob/registry';
 import { t } from '../../i18n';
-import { Badge, Banner, Button, ErrorBanner, Loading, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
+import { Badge, Banner, Button, ErrorBanner, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
 import { useSystemStatus } from '../shell/StatusProvider';
@@ -25,10 +25,12 @@ import {
 } from './orientation';
 import { useInverted } from './use-orientation';
 import { MarketStats } from './MarketStats';
-import { BookGrouping, OrderBook, StaleSince } from './OrderBook';
+import { BookFrame, BookGrouping, OrderBook, StaleSince } from './OrderBook';
 import { FavoriteStar } from './FavoriteStar';
 import { isFavoriteToken, toggleToken, useFavorites } from './favorites';
-import { FlipButton, MarketShell, PairSelector } from './MarketBar';
+import { FlipButton, MarketFrame, MarketShell, PairSelector } from './MarketBar';
+import { settled } from './market-list';
+import { useHeldUntil } from './use-market-list';
 import { openPair } from './market-nav';
 import { displayedPair, marketFor, type DisplayedPair } from './market-select';
 import { PriceChart } from './PriceChart';
@@ -119,6 +121,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   );
   const stats = useAsync((signal) => (indexer ? indexer.stats(id, { signal, priority: 'low' }) : Promise.resolve(null)), [indexer, id]);
   const depth = useAsync((signal) => (indexer ? indexer.depth(id, { levels: 60 }, { signal, priority: 'low' }) : Promise.resolve(null)), [indexer, id]);
+  // the book and the 24 h strip show together, once for the page: the price precision and the last price of both come from the stats and the trades (the ticket waits for none
+  // of this, and a refresh or a notice after that is shown as it comes)
+  const panelsOpen = useHeldUntil(settled(book) && settled(trades) && settled(stats));
 
   // a live notice or a poll never aborts a pull in flight: it is folded into one pull right after it (`refresh`), so a slow indexer still gets its
   // answers through and is never asked twice for the same thing; only the manual button aborts and restarts
@@ -257,7 +262,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   );
 
   if (!row) {
-    if (tokens.loading || held.loading || pub.loading) return <Loading />;
+    if (tokens.loading || held.loading || pub.loading) return <MarketFrame bookTitle={t('market.book.title')} data-testid="token-loading" />;
     return (
       <div class="stack" data-testid="token-not-found">
         <Banner tone="warn" title={t('market.token.notFound')}>
@@ -331,7 +336,13 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           {since !== null ? <div class="row"><SinceBadge since={since} area="stats" /></div> : null}
         </>
       }
-      stats={<MarketStats model={statsForView} ticker={name} inverted={inverted} loading={!!indexer && stats.data === undefined && stats.loading} unsupported={stats.data === null && !!indexer} />}
+      stats={
+        panelsOpen ? (
+          <MarketStats open model={statsForView} ticker={name} inverted={inverted} loading={!!indexer && stats.data === undefined && stats.loading} unsupported={stats.data === null && !!indexer} />
+        ) : (
+          <MarketStats model={statsModel(null, decimals, dp)} ticker={name} inverted={inverted} loading unsupported={false} />
+        )
+      }
       book={
         <Section
           title={t('market.book.title')}
@@ -341,7 +352,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             <>
               {stale ? <Badge tone={health.assessment.level === 'bad' ? 'bad' : 'warn'} data-testid="book-stale">{t('market.book.stale')}</Badge> : null}
               {/* the steps come from the book's tick: no book on screen yet (loading, indexer unreachable), no grouping to offer */}
-              {book.data ? <BookGrouping options={groupOptions} value={String(groupIdx)} onChange={(v) => (inverted ? setGroupIdxInv : setGroupIdxNative)(Math.max(0, Number(v) || 0))} /> : null}
+              {book.data && panelsOpen ? <BookGrouping options={groupOptions} value={String(groupIdx)} onChange={(v) => (inverted ? setGroupIdxInv : setGroupIdxNative)(Math.max(0, Number(v) || 0))} /> : null}
               {/* the glyph itself spins while the book is pulled: no spinner is added to the header, so the grouping box beside it never moves */}
               <Button small variant="ghost" onClick={() => refreshAll(true)} title={t('common.refresh')} aria-label={t('common.refresh')} aria-busy={book.loading && !!book.data ? 'true' : undefined} data-testid="book-refresh">
                 <span class={`refresh-glyph${book.loading && !!book.data ? ' is-spinning' : ''}`} aria-hidden="true">{'↻'}</span>
@@ -356,13 +367,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           {/* with a book on screen a failed pull is only the subtle marker below; the banner is for a page that has no book to show */}
           <ErrorBanner error={book.data ? null : book.error} title={t('market.book.error')} onRetry={book.reload} data-testid="book-error" />
           <StaleSince since={bookStaleSince} />
-          {indexer && !model && book.loading ? (
-            <div data-testid="book-loading">
-              {Array.from({ length: BOOK_DEPTH * 2 + 2 }, (_, i) => <div key={i} class="skeleton skeleton-line" />)}
-            </div>
-          ) : null}
-          {model && model.empty ? <p class="muted center" data-testid="book-empty">{t('market.book.empty')}</p> : null}
-          {bookView ? <OrderBook view={bookView} rows={BOOK_DEPTH} last={last} inverted={inverted} token={name} onPick={(side, price) => setPrefill({ side, price })} /> : null}
+          {indexer && (model ? !panelsOpen : book.loading) ? <BookFrame head={bookCtx.labels} rows={BOOK_DEPTH} data-testid="book-loading" /> : null}
+          {panelsOpen && model && model.empty ? <p class="muted center" data-testid="book-empty">{t('market.book.empty')}</p> : null}
+          {panelsOpen && bookView ? <OrderBook view={bookView} rows={BOOK_DEPTH} last={last} inverted={inverted} token={name} onPick={(side, price) => setPrefill({ side, price })} /> : null}
         </Section>
       }
       chart={

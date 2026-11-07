@@ -1,5 +1,6 @@
 /* My orders > balances: a table on a desktop, one compact card per token on a phone. Same markup (every data-testid stays); each figure cell carries
    its column title in data-label, shown as the label of a label : value line. CSS variables of src/styles.css (light + dark). */
+.orders-skel { height: 64px; }
 .balances-cards .bal-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 
 @media (max-width: 640px) {

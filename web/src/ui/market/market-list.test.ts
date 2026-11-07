@@ -3,7 +3,7 @@ import type { PairSummaryView, StatsView } from '../../data/indexer-types';
 import type { TokenInfo } from '../../kob/registry';
 import {
   DEFAULT_LIST_PAGE_SIZE, keepOrder, listPageSizeOf, pageWindow, pairHasDecimals,
-  ariaSort, changeCell, DEFAULT_SORT, filterPairs, firstDir, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, priceCell, runPool, sortEntries,
+  ariaSort, changeCell, DEFAULT_SORT, filterPairs, firstDir, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, priceCell, runPool, settled, sortEntries,
   depthCell, marketCapCell, pairDepthCell, supplyOf, tokenEntry, volumeCell, type ListEntry, type Slot,
 } from './market-list';
 import type { KascovMeta, TokenRow } from './token-model';
@@ -28,6 +28,16 @@ function stats(token: string, over: Partial<StatsView> = {}): StatsView {
   };
 }
 const ok = <T,>(value: T): Slot<T> => ({ state: 'ok', value });
+
+describe('settled', () => {
+  it('a read in flight without an answer is not settled; one with an answer, or one that ended without any, is', () => {
+    expect(settled({ data: undefined, loading: true })).toBe(false);
+    expect(settled({ data: null, loading: true })).toBe(false);
+    expect(settled({ data: { a: 1 }, loading: true })).toBe(true);
+    expect(settled({ data: null, loading: false })).toBe(true);
+    expect(settled({ data: undefined, loading: false })).toBe(true);
+  });
+});
 
 describe('the list\'s rows', () => {
   it('a figure that arrives moves no row; a row that leaves goes; a new row follows', () => {

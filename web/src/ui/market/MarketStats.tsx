@@ -21,6 +21,8 @@ export function MarketStats(props: {
   inverted?: boolean;
   loading: boolean;
   unsupported: boolean;
+  /** the figures are let in: they fade in together */
+  open?: boolean;
   /** a token pair BASE/QUOTE (`ticker` = BASE): the same tiles; `titles` say where each figure comes from */
   quoteTicker?: string;
   /** tooltips of a pair's tiles by where their figure comes from (the exact figure of a volume is added in front) */
@@ -35,7 +37,7 @@ export function MarketStats(props: {
   const na = props.quoteTicker ? t('pair.stats.na') : null;
   const lastTone = m.lastSide === 'buy' ? 'up' : m.lastSide === 'sell' ? 'down' : null;
   return (
-    <div class="mkt-stats" data-testid="market-stats" data-volume-source={props.volumeSource}
+    <div class={`mkt-stats${props.open ? ' mkt-stats-in' : ''}`} data-testid="market-stats" data-volume-source={props.volumeSource}
       data-state={props.unsupported ? 'unsupported' : props.loading && !m.last ? 'loading' : 'ready'}>
       <div class="mkt-stat mkt-stat-last" data-testid="stat-last">
         <span class="mkt-stat-label">{t('market.stats.last')}</span>

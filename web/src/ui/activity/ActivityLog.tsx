@@ -19,7 +19,7 @@ import type { Hex } from '../../kob/types';
 import { Badge, ErrorBanner, Section } from '../kit';
 import { ListPager, RowsControl, showListStart } from '../market/ListPaging';
 import type { ListPageSize } from '../market/market-list';
-import { useListPage, useListPageSize } from '../market/use-market-list';
+import { useHeldUntil, useListPage, useListPageSize, useRising } from '../market/use-market-list';
 import { Popover } from '../shell/Popover';
 import { clockText } from '../shell/standalone';
 import {
@@ -27,7 +27,7 @@ import {
   type ActivityKind, type ActivityPrefs, type ActivityRow, type ActorFilter, type MarketFilter, type MarketRef, type PrefsScope,
 } from './activity-model';
 import { KindGlyph, KindIcon } from './ActivityIcons';
-import { ActivityRowView, type RowFormat } from './ActivityRows';
+import { ActivityRowView, RowsSkeleton, type RowFormat } from './ActivityRows';
 import { FIRST_LIMIT } from './activity-store';
 import { useActivity } from './use-activity';
 import '../market/market.css';
@@ -37,6 +37,9 @@ const addressCache = new Map<string, string | null>();
 
 /** Reads further back for one page at most: rows the filters hide must not read the whole history. */
 const OLDER_READS = 4;
+
+/** The placeholder rows while the first rows are held. */
+const SKELETON_ROWS = 8;
 
 export interface ActivityLogProps {
   /** the market shown: every market on the Activity page, the page's own on a token or pair page */
@@ -159,6 +162,14 @@ function ActivityLogView(props: ActivityLogProps) {
     if (wanted) data.want(wanted.split(',') as Hex[]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wanted]);
+
+  // the first rows come together, with their owners: the first read (a pair: the page's fills too) and the lookups of the page, at most LIST_HOLD_MS after the list is on
+  // screen. From then on a row is live and comes at once
+  const pairPending = !!props.pairFills && props.pairFills.view === undefined;
+  const firstIn = !data.firstRead && !pairPending && shown.every((r) => r.orders.every((id) => data.order(id) !== undefined));
+  const open = useHeldUntil(firstIn, onScreen);
+  const rising = useRising(open);
+  const rowsShown = open && shown.length > 0;
 
   // how the rows name things: one object per registry and network, so the memoized rows see equal props between renders
   const fmt = useMemo<RowFormat>(() => {
@@ -302,7 +313,7 @@ function ActivityLogView(props: ActivityLogProps) {
   return (
     <Section title={title} actions={tools} class="act" data-testid={props['data-testid'] ?? 'activity'}>
       <ErrorBanner error={data.rows.length ? null : data.error} title={t('activity.error')} onRetry={data.retry} data-testid="activity-error" />
-      <div class="act-log" ref={listRef} role="table" aria-label={t('activity.tableLabel')} data-testid="activity-list" data-count={shown.length} data-held={held ? 'true' : 'false'}>
+      <div class="act-log" ref={listRef} role="table" aria-label={t('activity.tableLabel')} data-testid="activity-list" data-count={rowsShown ? shown.length : 0} data-held={held ? 'true' : 'false'}>
         <div class="act-head" role="row">
           <span role="columnheader" aria-label={t('activity.col.kind')} />
           <span role="columnheader">{t('activity.col.market')}</span>
@@ -314,11 +325,11 @@ function ActivityLogView(props: ActivityLogProps) {
           <span role="columnheader" class="act-num">{t('activity.col.time')}</span>
         </div>
         <div
-          class={`act-body${shown.length ? ' act-rows' : ''}`}
-          style={shown.length ? `--n:${shown.length}` : undefined}
+          class={`act-body${rowsShown ? ' act-rows' : ''}`}
+          style={rowsShown ? `--n:${shown.length}` : undefined}
           role="rowgroup"
           // a pointer that MOVES in the list holds it (a list that slid under a resting pointer does not)
-          onPointerMove={(e) => !hover && (e as PointerEvent).pointerType !== 'touch' && setHover(true)}
+          onPointerMove={(e) => rowsShown && !hover && (e as PointerEvent).pointerType !== 'touch' && setHover(true)}
           onPointerLeave={() => setHover(false)}
           onFocusIn={() => setFocusIn(true)}
           onFocusOut={(e) => {
@@ -326,7 +337,7 @@ function ActivityLogView(props: ActivityLogProps) {
             if (!next || !(e.currentTarget as HTMLElement).contains(next)) setFocusIn(false);
           }}
         >
-          {shown.length ? (
+          {rowsShown ? (
             shown.map((r, i) => {
               const makers = rowMakers(r, data);
               return (
@@ -335,6 +346,7 @@ function ActivityLogView(props: ActivityLogProps) {
                   row={r}
                   i={i}
                   fresh={fresh.has(r.key)}
+                  rise={rising && !fresh.has(r.key)}
                   href={rowHref(config, r)}
                   addrs={makers.map((pk) => addressOf(pk) ?? longId(pk)).join('\n')}
                   pending={r.orders.some((id) => data.order(id) === undefined)}
@@ -345,17 +357,15 @@ function ActivityLogView(props: ActivityLogProps) {
                 />
               );
             })
-          ) : data.loading ? (
-            <div class="act-empty" data-testid="activity-loading">
-              {Array.from({ length: 6 }, (_, i) => <div key={i} class="skeleton skeleton-line" style={`margin:12px 8px;opacity:${1 - i * 0.12}`} />)}
-            </div>
+          ) : !open || data.loading || pairPending ? (
+            <RowsSkeleton rows={SKELETON_ROWS} />
           ) : data.error ? null : (
             <div class="act-empty muted" data-testid="activity-empty">{data.rows.length ? t('activity.emptyFiltered') : t('activity.empty')}</div>
           )}
         </div>
       </div>
       <div class="act-foot">
-        <ListPager id="activity" window={pager} total={kept.length} hasNext={logHasNext(pager, size, asked, data.hasOlder)} loading={data.loadingOlder} onPage={turnTo} />
+        {open ? <ListPager id="activity" window={pager} total={kept.length} hasNext={logHasNext(pager, size, asked, data.hasOlder)} loading={data.loadingOlder} onPage={turnTo} /> : null}
         <span class="act-foot-r">
           {props.allLink ? (
             <a href="#/activity" class="small" title={t('activity.allActivityTitle')} data-testid="activity-all-link">

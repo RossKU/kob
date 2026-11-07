@@ -87,6 +87,10 @@ body:has(.market-page) .container { max-width: 1520px; }
 @keyframes shimmer { to { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .skeleton::after { animation: none; } }
 .skeleton-line { height: 12px; margin: 7px 0; }
+.mkt-frame-head { height: 64px; max-width: 420px; }
+.mkt-frame-stats { height: 48px; }
+.mkt-frame-depth { height: 240px; }
+.mkt-frame-ticket { height: 360px; }
 .mkt-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--muted); text-align: center; font-size: 0.9rem; padding: 16px; }
 .mkt-empty svg { opacity: 0.55; }
 
@@ -158,6 +162,8 @@ body:has(.market-page) .container { max-width: 1520px; }
 }
 .ob-last { font-size: 1.1rem; font-weight: 700; }
 .ob-mid .small { font-size: 0.76rem; }
+/* the book while it is held: its rows' places, its columns' titles over them */
+.ob .ob-skel { justify-self: end; width: 70%; height: 9px; margin: 0; }
 .ob-foot { margin: 6px 0 0; font-size: 0.74rem; color: var(--muted); height: 3.1em; overflow: hidden; } /* two lines: the note on estimated sizes comes and goes with the book */
 
 /* ---- pair view (token/token pair orders) */
@@ -230,10 +236,12 @@ body:has(.market-page) .container { max-width: 1520px; }
 .ml-pair { display: inline-flex; align-items: baseline; gap: 6px; min-height: 36px; line-height: 36px; }
 .ml-pair .asset-select-face { font-weight: 600; line-height: 1.6; }
 .ml-size { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
-/* the rows rise in one after the other, as the blocks of the landing page do. Backwards only: a finished animation leaves the row, whose popovers are fixed to the viewport, alone */
-.ml-tokens tbody tr.ml-in { animation: ml-rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 34ms); }
-@keyframes ml-rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .ml-tokens tbody tr.ml-in { animation: none; } }
+/* the rows of a list rise in one after the other (--i: their place), as the blocks of the landing page do; a panel whose figures must not move fades in. Backwards only: a
+   finished animation leaves the row, whose popovers are fixed to the viewport, alone. `translate`, not `transform`: the activity log's rows stand at their place by a transform */
+.ml-in { animation: ml-rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(min(var(--i, 0), 14) * 34ms); }
+@keyframes ml-rise { from { opacity: 0; translate: 0 16px; } to { opacity: 1; translate: none; } }
+.tk-in, .mkt-stats-in .mkt-stat-value { animation: tk-fade 0.35s ease-out backwards; }
+@media (prefers-reduced-motion: reduce) { .ml-in, .tk-in, .mkt-stats-in .mkt-stat-value { animation: none; } }
 .ml-skel-row .ml-name { min-height: 72px; }
 .ml-skel-icon { flex: none; width: 56px; height: 56px; border-radius: 50%; }
 .ml-skel-text { flex: 1 1 auto; max-width: 160px; }

@@ -74,11 +74,33 @@ const ConfCell = memo(function ConfCell(props: { daa: number; confirmations: num
 
 // ------------------------------------------------------------------------------------------------ rows
 
+/** The rows' places while the first rows are held: as tall as a row, with its columns. */
+export function RowsSkeleton(props: { rows: number }) {
+  return (
+    <div role="status" aria-label={t('common.loading')} data-testid="activity-loading">
+      {Array.from({ length: props.rows }, (_, i) => (
+        <div key={i} class="act-row act-skel" aria-hidden="true">
+          <span class="act-c-ty"><i class="skeleton act-skel-ty" /></span>
+          <span class="act-c-mk"><i class="skeleton act-skel-mk" /></span>
+          <span class="act-c-tx"><i class="skeleton skeleton-line" /></span>
+          <span class="act-c-who"><i class="skeleton skeleton-line" /></span>
+          <span class="act-c-amt act-num"><i class="skeleton skeleton-line" /></span>
+          <span class="act-c-px act-num"><i class="skeleton skeleton-line" /></span>
+          <span class="act-c-conf act-num"><i class="skeleton skeleton-line" /></span>
+          <span class="act-c-time act-num"><i class="skeleton skeleton-line" /></span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export interface RowProps {
   row: ActivityRow;
   /** the row's place in the list: its offset (a transform, never a layout change) */
   i: number;
   fresh: boolean;
+  /** one of the first rows, on their way in */
+  rise: boolean;
   href: string | null;
   /** the order owners' addresses, newline-separated ('' while none is known) */
   addrs: string;
@@ -102,7 +124,7 @@ export const ActivityRowView = memo(function ActivityRowView(props: RowProps) {
   });
   const attrs = {
     role: 'row' as const,
-    class: `act-row${props.fresh ? ' fresh' : ''}`,
+    class: `act-row${props.fresh ? ' fresh' : ''}${props.rise ? ' ml-in' : ''}`,
     style: `--i:${props.i}`,
     'data-testid': 'activity-row',
     'data-kind': r.kind,

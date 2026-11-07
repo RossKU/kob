@@ -27,6 +27,9 @@ import { usdStats } from './usd-model';
 
 // ------------------------------------------------------------------------------------------------ async slots
 
+/** A read has given what it will for now: an answer, or no read under way (a failed or an empty one). */
+export const settled = (read: { data: unknown; loading: boolean }): boolean => !read.loading || (read.data !== undefined && read.data !== null);
+
 /** One fetched figure: still loading, there (`value`), or unavailable (no indexer, a route it does not serve, an error). */
 export type Slot<T> = { state: 'loading' } | { state: 'ok'; value: T } | { state: 'none' };
 

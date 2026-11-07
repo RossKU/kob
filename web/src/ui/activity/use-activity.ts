@@ -22,8 +22,10 @@ export const POLL_MS = 10_000;
 export interface ActivityData {
   rows: ActivityRow[];
   order: (id: Hex) => OrderFacts | null | undefined;
-  /** the first read is running */
+  /** the first read is running and nothing is in yet */
   loading: boolean;
+  /** the first read is running, whatever is in */
+  firstRead: boolean;
   /** the first read failed (later failures keep the rows and try again on the next notice or poll) */
   error: Error | null;
   retry(): void;
@@ -181,6 +183,7 @@ export function useActivity(o: {
     rows,
     order: (id) => (store.facts.has(id) ? store.facts.get(id)! : undefined),
     loading: loading && rows.length === 0,
+    firstRead: loading,
     error,
     retry: () => setResetKey((k) => k + 1),
     mode: standalone ? 'standalone' : mode,
