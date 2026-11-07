@@ -11,6 +11,14 @@ export const REPO_URL = 'https://github.com/RossKU/kob';
 export const EXECUTOR_URL = REPO_URL;
 /** The project's README on GitHub, where the donation address is published too. */
 export const README_URL = `${REPO_URL}#readme`;
+/**
+ * The feedback section's private security report. GitHub's private vulnerability reporting is off on the repository for now, so this is SECURITY.md's section on
+ * reporting, which also says what to do without it; once it is on, `${REPO_URL}/security/advisories/new` is the form itself.
+ */
+export const SECURITY_REPORT_URL = `${REPO_URL}/blob/master/SECURITY.md#reporting-a-vulnerability`;
+export const ISSUES_URL = `${REPO_URL}/issues`;
+/** Where "Send a message on X" leads. Empty: the action is not shown. */
+export const FEEDBACK_CONTACT_URL: string = 'https://x.com/kaspaorderbook';
 /** The market list: "Open the app" and the footer's "App" (an in-app link, so a self-hosted copy stays on its own host). */
 export const APP_HASH = '#/market';
 
@@ -45,6 +53,15 @@ export function landingNetworkText(network: NetworkName, site: string): LandingN
     discLead: t(`landing.disc.lead.${net}`),
     discBody: `${t('landing.disc.body', { site })} ${t(`landing.disc.tail.${net}`)}`,
   };
+}
+
+/** The feedback section's actions: a security report, an issue and, once there is a channel, a message. */
+export function feedbackActions(contactUrl: string = FEEDBACK_CONTACT_URL): { key: string; href: string; testid: string }[] {
+  return [
+    { key: 'landing.feedback.security', href: SECURITY_REPORT_URL, testid: 'landing-feedback-security' },
+    { key: 'landing.feedback.issue', href: ISSUES_URL, testid: 'landing-feedback-issue' },
+    ...(contactUrl ? [{ key: 'landing.feedback.message', href: contactUrl, testid: 'landing-feedback-message' }] : []),
+  ];
 }
 
 /** The indexer's public health route ("Public API" in the footer), or null when the deployment has no indexer (the link is then not shown). */

@@ -94,6 +94,14 @@ export default {
   'landing.trust.audit.body.mainnet': 'KOB runs on Kaspa mainnet and has not had an external security audit yet.',
   'landing.trust.audit.v': 'Not yet.',
 
+  'landing.feedback.label': 'Feedback',
+  'landing.feedback.l1': 'Please try',
+  'landing.feedback.l2': 'to break it.',
+  'landing.feedback.intro': 'KOB is pre-audit and it will have mistakes nobody has found yet. If something fails, looks wrong or is unclear, we would like to hear about it. Please test only with your own funds and orders. There is no bug bounty.',
+  'landing.feedback.security': 'Report a security issue privately →',
+  'landing.feedback.issue': 'Open an issue →',
+  'landing.feedback.message': 'Send a message on X →',
+
   'landing.final.l1': 'The book',
   'landing.final.l2': 'is open.',
 

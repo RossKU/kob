@@ -113,6 +113,20 @@ test.describe("an operator's explicit home", () => {
   });
 });
 
+test.describe('the landing page invites feedback', () => {
+  test('a report, an issue, a message on X, and no bug bounty', async ({ appPage: page }) => {
+    await page.goto('/');
+    const section = page.getByTestId('landing-feedback');
+    await section.scrollIntoViewIfNeeded();
+    await expect(section).toContainText('pre-audit');
+    await expect(section).toContainText('There is no bug bounty.');
+    await expect(page.getByTestId('landing-feedback-security')).toHaveAttribute('href', /SECURITY\.md#reporting-a-vulnerability$/);
+    await expect(page.getByTestId('landing-feedback-issue')).toHaveAttribute('href', 'https://github.com/RossKU/kob/issues');
+    await expect(page.getByTestId('landing-feedback-message')).toHaveAttribute('href', 'https://x.com/kaspaorderbook');
+    await expect(page.getByTestId('landing-feedback-message')).toHaveText('Send a message on X →');
+  });
+});
+
 test.describe('mainnet build', () => {
   test.use({ appConfig: { network: 'mainnet' } });
   test('the chip, the audit row and the disclaimer name mainnet, never testnet', async ({ appPage: page }) => {

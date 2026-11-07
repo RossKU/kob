@@ -11,7 +11,7 @@ import { t } from '../../i18n';
 import { Brand, GitHubIcon, Logo, SiteFooter, SiteHeader, SkipLink, ThemeToggle } from '../shell/Frame';
 import { NetworkChip } from '../shell/NetworkBadge';
 import { TIGHT_QUERY, useMedia } from '../shell/narrow';
-import { APP_HASH, landingNetworkText, REPO_URL, siteName } from './landing-model';
+import { APP_HASH, feedbackActions, landingNetworkText, REPO_URL, siteName } from './landing-model';
 import { useHeroGo, useReveal } from './use-reveal';
 import './landing.css';
 
@@ -312,6 +312,26 @@ export function LandingPage() {
                   <span data-testid="landing-audit">{net.auditBody}</span>
                 </Row>
               </div>
+            </div>
+          </section>
+
+          <section class="lp-sec lp-sec-flush" data-testid="landing-feedback">
+            <div class="lp-wrap">
+              <div class="lp-label lp-rv">{t('landing.feedback.label')}</div>
+              <h2 class="lp-big">
+                <Ln>{t('landing.feedback.l1')}</Ln>
+                <Ln d={1} class="lp-dim">
+                  {t('landing.feedback.l2')}
+                </Ln>
+              </h2>
+              <p class="lp-intro lp-rv">{t('landing.feedback.intro')}</p>
+              <p class="lp-intro lp-rv lp-links">
+                {feedbackActions().map((a) => (
+                  <a key={a.key} href={a.href} data-testid={a.testid}>
+                    {t(a.key)}
+                  </a>
+                ))}
+              </p>
             </div>
           </section>
 

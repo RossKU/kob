@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { resolveConfig } from '../../config';
 import { navOf, parseHash, routeToHash } from '../../app/router';
-import { APP_HASH, homeTargetOf, LANDING_NETWORKS, landingNetworkText, publicApiUrl, showsLanding, siteName } from './landing-model';
+import { has, t } from '../../i18n';
+import { APP_HASH, FEEDBACK_CONTACT_URL, feedbackActions, homeTargetOf, LANDING_NETWORKS, landingNetworkText, publicApiUrl, showsLanding, siteName } from './landing-model';
 
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
@@ -101,6 +102,20 @@ describe('landing network text', () => {
     expect(publicApiUrl('')).toBeNull();
     expect(publicApiUrl(undefined)).toBeNull();
     expect(publicApiUrl('javascript:alert(1)')).toBeNull();
+  });
+});
+
+describe('landing feedback', () => {
+  it('a security report, an issue and a message on X; no message action without a channel', () => {
+    expect(FEEDBACK_CONTACT_URL).toBe('https://x.com/kaspaorderbook');
+    expect(feedbackActions().map((a) => a.href)).toEqual(['https://github.com/RossKU/kob/blob/master/SECURITY.md#reporting-a-vulnerability', 'https://github.com/RossKU/kob/issues', 'https://x.com/kaspaorderbook']);
+    expect(feedbackActions('').map((a) => a.key)).toEqual(['landing.feedback.security', 'landing.feedback.issue']);
+    for (const a of feedbackActions()) expect(has(a.key), a.key).toBe(true);
+  });
+
+  it('says there is no bug bounty, as SECURITY.md does', () => {
+    expect(t('landing.feedback.intro')).toContain('There is no bug bounty.');
+    expect(src('../../SECURITY.md')).toContain('There is no bug bounty.');
   });
 });
 
