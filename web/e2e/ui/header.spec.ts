@@ -1,8 +1,8 @@
 // The header is ONE row, on a desktop (900 px and wider) and on a phone alike. Desktop: the logo, the tabs, a status dot, the chip "testnet-10 · pre-audit",
 // "Connect wallet" and "Private key", the theme toggle and the bell. Phone: the logo, a menu button (the tabs, the theme toggle, the network and status
-// explanation), the shortened chip, one "Connect" button (a sheet with Wallet and Private key) and the bell. A problem is also a banner, never only the dot.
+// explanation), the shortened chip, one "Connect" button (a sheet with Wallet and Private key) and the bell. A problem also colours the bell and is listed in its dialog, never only the dot.
 import type { Page } from '@playwright/test';
-import { test, expect } from '../fixtures';
+import { test, expect, closeBell, statusEntry } from '../fixtures';
 
 test.use({ autoOpen: false });
 
@@ -235,11 +235,13 @@ test.describe('phone', () => {
     await page.getByTestId('wallet-disconnect').click({ trial: true });
   });
 
-  test('a problem is a full-width banner under the header and the menu button shows it as a dot', async ({ appPage: page }) => {
+  test('a problem colours the bell, is listed in its dialog, and the network chip shows it as a dot', async ({ appPage: page }) => {
     await page.setViewportSize({ width: 375, height: 800 });
     await page.route('**/node/**', (route) => route.abort());
     await page.goto('/#/market');
-    await expect(page.getByTestId('banner-node')).toBeVisible();
+    await expect(page.getByTestId('notify-bell')).toHaveAttribute('data-status-tone', 'error');
+    await expect(await statusEntry(page, 'banner-node')).toBeVisible();
+    await closeBell(page);
     await expect(page.getByTestId('network-chip')).toHaveAttribute('data-level', 'bad');
     await expect(page.getByTestId('chip-dot')).toBeVisible();
   });

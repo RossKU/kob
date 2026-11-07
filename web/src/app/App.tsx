@@ -1,4 +1,4 @@
-// Application shell: header, status bar, global banners, the routed view, footer, toasts; or, at the empty hash by default, the landing page in its place.
+// Application shell: header, status bar, the wrong-network banner, the routed view, footer, toasts; or, at the empty hash by default, the landing page in its place.
 import { useEffect, useRef } from 'preact/hooks';
 import type { ConfigWarning, StoredOverride } from '../config';
 import { t } from '../i18n';
@@ -11,10 +11,9 @@ import { LandingPage } from '../ui/landing/LandingPage';
 import { homeTargetOf, showsLanding } from '../ui/landing/landing-model';
 import { OrdersView } from '../ui/orders/OrdersView';
 import { SettingsView } from '../ui/settings/SettingsView';
-import { GlobalBanners } from '../ui/shell/Banners';
+import { NetworkMismatchBanner } from '../ui/shell/Banners';
 import { SiteFooter, SkipLink } from '../ui/shell/Frame';
 import { Header } from '../ui/shell/Header';
-import { PreAuditBanner } from '../ui/shell/PreAuditBanner';
 import { StatusProvider } from '../ui/shell/StatusProvider';
 import { NotifyProvider } from '../ui/notify/NotifyProvider';
 import { ViewBoundary } from '../ui/shell/ViewBoundary';
@@ -172,7 +171,7 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
   }, [services.feed, manualStandalone]);
 
   // the empty hash with the default config `home`: the landing page, a full page in the shared frame (Frame.tsx: its own header row, the same
-  // footer) in place of the whole shell (tabs, banners, views); every other route shows the shell
+  // footer) in place of the whole shell (tabs, bell, views); every other route shows the shell
   const landing = showsLanding(route, services.config, services.registry.tokens);
 
   return (
@@ -193,7 +192,7 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
   );
 }
 
-/** The shell around every routed view: the skip link, the header, the global banners, the view and the footer. */
+/** The shell around every routed view: the skip link, the header (its bell lists the current status), the wrong-network banner, the view and the footer. */
 function AppShell(props: { route: Route; routeKey: string; warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
   const { route, routeKey } = props;
   return (
@@ -205,12 +204,11 @@ function AppShell(props: { route: Route; routeKey: string; warnings: ConfigWarni
           {/* the shell has boundaries too: a render error escaping to the root would leave every component queued behind it in that render
               unable to re-render ever again (Preact drops the rest of its queue), e.g. a button whose click changes nothing */}
           <ViewBoundary resetKey={routeKey}>
-            <Header route={route} />
+            <Header route={route} warnings={props.warnings} storedOverrides={props.storedOverrides} />
           </ViewBoundary>
           <main class="container main" id="main" tabIndex={-1} data-testid="main" data-route={routeKey}>
             <ViewBoundary resetKey={routeKey}>
-              <PreAuditBanner />
-              <GlobalBanners warnings={props.warnings} storedOverrides={props.storedOverrides} />
+              <NetworkMismatchBanner />
             </ViewBoundary>
             <ViewBoundary resetKey={routeKey}>
               <RoutedView route={route} warnings={props.warnings} />

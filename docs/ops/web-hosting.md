@@ -82,9 +82,9 @@ network; each is a `kobd` read API (`docs/api.md`).
    These are a second opinion on prices. They do not replace the node check: whatever indexers are configured, the top of the book a market or close
    order starts from is confirmed on the user's node before signing (`web/README.md`, *Book against the node*).
 2. **Failover for reads**: when the primary (`KOB_PAGES_INDEXER_URL`) is unreachable, failing or not ready, the app reads the book, charts, tokens and
-   orders from a healthy further indexer, shows the banner "Using backup indexer <host>", and goes back to the primary, dropping the banner, once the
+   orders from a healthy further indexer, says "Using backup indexer <host>" in the bell's current status, and goes back to the primary, dropping that entry, once the
    primary has answered well twice in a row. Nothing is built from the node: a node alone would give a partial book, so with no healthy backup the
-   app shows the primary's own "indexer cannot be reached" / "behind the chain" banners as before.
+   bell shows the primary's own "indexer cannot be reached" / "behind the chain" entries as before.
 
 How a backup is chosen (`web/src/data/indexer-failover.ts`):
 
@@ -93,7 +93,7 @@ How a backup is chosen (`web/src/data/indexer-failover.ts`):
   writes (4); an older executor without the field is not used. A backup on another network, of another payload version, lagging, catching up or
   starting is never used.
 * **Preference**: a backup whose health says `book_complete: true` comes first, then one that does not report it, then one whose store started late
-  (`book_complete: false`, `history_from_daa`). A late store can serve the live book, but charts, trades and older orders may be partial: the banner
+  (`book_complete: false`, `history_from_daa`). A late store can serve the live book, but charts, trades and older orders may be partial: the entry
   adds "History may be incomplete". Within a rank the list order decides, and the backup in use is kept (two equal backups do not take turns).
 * **Retries are bounded**: a failing primary is re-read after 2 s and 4 s before it is given up (not when it has not answered well since the page
   opened: the page has nothing to show meanwhile); then every indexer is probed once. With nothing healthy it looks again after 5 s, 10 s, 20 s and so
@@ -103,8 +103,8 @@ How a backup is chosen (`web/src/data/indexer-failover.ts`):
   behind or on another network is left out until a probe shows it fit again, and the footer says "single indexer, not cross-checked" when none is left.
 * **One indexer at a time**: a read goes to one indexer; the order environment (book, own orders, trades) of one ticket is read from the same one; when
   the indexer changes, the live feed reconnects to the new one and every open view reads again.
-* **Which URLs**: only the primary and `extraIndexerUrls` of the merged configuration: the deployment's, or what the user saved in Settings (a banner
-  names a saved list on every page; a link can never add one). A backup is never taken from a link or from an indexer's own answer.
+* **Which URLs**: only the primary and `extraIndexerUrls` of the merged configuration: the deployment's, or what the user saved in Settings (the bell's
+  current status names a saved list on every page; a link can never add one). A backup is never taken from a link or from an indexer's own answer.
 
 Each backup serves the whole read load while the primary is down: give it the capacity of the primary (`docs/ops/chart-server.md`).
 
@@ -124,7 +124,7 @@ mainnet-specific path and no other fallback. Two things to know:
   testnet-10 that is `wss://<host>/kaspa/testnet-10/wrpc/json`; a bare `wss://<host>` answers 404 at the WebSocket handshake, and the page
   shows "Node: unreachable". `web/scripts/pages-config.mjs` prints a note when the URL has no `/wrpc/` path.
 
-A node that does not answer is never "checking..." for ever: after about 25 seconds the header's status dot turns red ("Node: unreachable" when pressed) and a red banner says
+A node that does not answer is never "checking..." for ever: after about 25 seconds the header's status dot turns red ("Node: unreachable" when pressed), the bell turns red and its dialog says
 whether no node URL is set (use Settings > Node URL, or ask whoever hosts the page) or the URL set did not answer.
 
 ### Token names and icons: an external dependency (kascov.io)
@@ -355,7 +355,7 @@ Deploy only from a clean checkout of a pushed commit (`git status` clean), so th
 **Both networks.** One workflow run serves one network (one `KOB_PAGES_PROJECT`, one set of variables). To publish the testnet-10 and the
 mainnet app side by side, deploy the second network by hand to a second Pages project (`wrangler pages project create` with another
 name, then the commands above with its `KOB_PAGES_NETWORK`, `KOB_PAGES_INDEXER_URL` and `--project-name`) or fork the workflow; each needs its
-own indexer (`docs/ops/chart-server.md`, section 7). Users who saved a network or indexer in Settings keep it; the app shows a banner for it.
+own indexer (`docs/ops/chart-server.md`, section 7). Users who saved a network or indexer in Settings keep it; the bell's current status names it.
 
 ## 7. Checking a deployment
 
@@ -368,7 +368,7 @@ own indexer (`docs/ops/chart-server.md`, section 7). Users who saved a network o
   URLs): after every deploy, and after every change of `KOB_PAGES_INDEXER_URL`, open the app and look at the status strip (it must say
   "following"), or by hand `curl -si -H "Origin: https://kob-web.pages.dev" https://chart.example.org/v1/health` must answer `200`, carry
   `access-control-allow-origin`, and show `"network"` equal to `KOB_PAGES_NETWORK`. A wrong host, a server without CORS or a down tunnel
-  deploys green; the app then shows its "no indexer" or wrong-network banner.
+  deploys green; the bell then shows its "no indexer" or wrong-network entry.
 * Token names: the page's request to the names source, in the browser's network tab, is `<tokenNamesUrl>/<network>/tokens.json` and answers
   `200` with `access-control-allow-origin`; `curl -s https://kob-web.pages.dev/config.json` shows `tokenNamesUrl` (absent = kascov.io). If you
   pinned `connect-src`, the origin must be in it (section 3). The app works without it, so a wrong source deploys green and the list simply

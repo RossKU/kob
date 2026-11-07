@@ -555,6 +555,9 @@ body.modal-open { overflow: hidden; }
 .raw-details code { display: block; white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
 
 .banner-compact { padding: 4px 12px; align-items: center; font-size: 0.85rem; }
+/* one line, cut with an ellipsis; a press unfolds the whole text */
+.banner-line summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; list-style-position: inside; cursor: pointer; }
+.banner-line details[open] summary { white-space: normal; }
 
 /* transaction ids that link to the block explorer (CopyText with `href`) */
 a.explorer-link { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }

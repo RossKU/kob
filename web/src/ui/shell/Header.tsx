@@ -1,5 +1,6 @@
 import { useServices } from '../../app/context';
 import { navOf, routeToHash, type Route } from '../../app/router';
+import type { ConfigWarning, StoredOverride } from '../../config';
 import { t } from '../../i18n';
 import { Badge } from '../kit';
 import { Brand, SiteHeader, ThemeToggle } from './Frame';
@@ -86,7 +87,7 @@ function Menu(props: { active: ReturnType<typeof navOf>; network: string }) {
  * the bell. The narrow row (a phone, or a row that does not fit): the logo, the shortened network chip with the status as a dot in it, one "Connect" button (or
  * the connected address), the bell and, last, a menu button (the tabs, the theme toggle, the network and status explanation).
  */
-export function Header(props: { route: Route }) {
+export function Header(props: { route: Route; warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
   const { config } = useServices();
   const narrow = useNarrow();
   const tight = useMedia(TIGHT_QUERY);
@@ -117,7 +118,7 @@ export function Header(props: { route: Route }) {
           <WalletButton />
         </div>
         {narrow ? null : <ThemeToggle />}
-        <NotifyBell />
+        <NotifyBell warnings={props.warnings} storedOverrides={props.storedOverrides} />
         {narrow ? <Menu active={active} network={config.network} /> : null}
       </div>
     </SiteHeader>

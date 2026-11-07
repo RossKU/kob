@@ -3,7 +3,7 @@
 // cross-checking. The backups here are further mock servers (the same mock as the primary, started in-process on their own ports).
 import type { Page, Request } from '@playwright/test';
 import { startMockServer } from '../../mock/server.mjs';
-import { expect, MockClient, test } from '../fixtures';
+import { closeBell, expect, MockClient, openBell, statusEntry, test } from '../fixtures';
 import { listExkcc } from '../helpers/env';
 
 test.use({ autoOpen: false });
@@ -46,7 +46,7 @@ function bookReads(page: Page): { origins: () => string[]; clear: () => void } {
 }
 
 test.describe('indexer failover', () => {
-  test('the primary becomes not ready: the book comes from the backup (banner), and from the primary again once it recovered', async ({ appPage: page, mock }) => {
+  test('the primary becomes not ready: the book comes from the backup (the bell says so), and from the primary again once it recovered', async ({ appPage: page, mock }) => {
     test.setTimeout(150_000);
     const b = await backup({ liftBestAsks: true });
     await withExtras(page, [b.url]);
@@ -57,26 +57,28 @@ test.describe('indexer failover', () => {
     await expect(page.getByTestId('book-asks').locator('.book-row:not(.book-blank)')).toHaveCount(10);
     const primaryMid = await midOf(page);
     const primaryHost = new URL(mock.url).host;
-    await expect(page.getByTestId('banner-backup-indexer')).toHaveCount(0);
+    const banner = await statusEntry(page, 'banner-backup-indexer');
+    await expect(banner).toHaveCount(0);
 
-    // the primary loses its node: not ready. The page fails over by itself
+    // the primary loses its node: not ready. The page fails over by itself, and the open dialog follows
     await mock.setHealth('node_unavailable');
-    const banner = page.getByTestId('banner-backup-indexer');
     await expect(banner).toBeVisible({ timeout: 60_000 });
     await expect(banner).toContainText(`Using backup indexer ${b.host}`);
     await expect(banner).not.toContainText('History may be incomplete');
+    await closeBell(page);
     // the book on screen is the backup's (its best ask level was lifted): same token, other prices
     await expect.poll(() => midOf(page), { timeout: 30_000 }).not.toBe(primaryMid);
     reads.clear();
     await page.getByTestId('book-refresh').click();
     await expect.poll(() => reads.origins().length).toBeGreaterThan(0);
     expect(new Set(reads.origins())).toEqual(new Set([b.host]));
-    // the status bar and the live indicator speak for the indexer in use: no "indexer cannot be reached" banner
-    await expect(page.getByTestId('banner-indexer')).toHaveCount(0);
+    // the status bar and the live indicator speak for the indexer in use: no "indexer cannot be reached" entry
+    await expect(await statusEntry(page, 'banner-indexer')).toHaveCount(0);
 
-    // the primary recovers: back to it, banner gone
+    // the primary recovers: back to it, the entry leaves by itself
     await mock.setHealth('following');
     await expect(banner).toHaveCount(0, { timeout: 90_000 });
+    await closeBell(page);
     await expect.poll(() => midOf(page), { timeout: 30_000 }).toBe(primaryMid);
     reads.clear();
     await page.getByTestId('book-refresh').click();
@@ -93,7 +95,7 @@ test.describe('indexer failover', () => {
     await mock.setHealth('node_unavailable');
     await listExkcc(page);
     await page.goto('/#/market');
-    const banner = page.getByTestId('banner-backup-indexer');
+    const banner = await statusEntry(page, 'banner-backup-indexer');
     await expect(banner).toBeVisible({ timeout: 60_000 });
     await expect(banner).toContainText(`Using backup indexer ${b.host}`);
     await expect(banner).toContainText('History may be incomplete');
@@ -107,10 +109,10 @@ test.describe('indexer failover', () => {
     await withExtras(page, [wrongNet.url, wrongPayload.url]);
     await mock.setHealth('node_unavailable');
     await page.goto('/#/market');
-    // the primary's own banner says what is wrong; no backup banner appears
-    await expect(page.getByTestId('banner-indexer')).toBeVisible({ timeout: 60_000 });
+    // the primary's own entry says what is wrong; no backup entry appears
+    await expect(await statusEntry(page, 'banner-indexer')).toBeVisible({ timeout: 60_000 });
     await page.waitForTimeout(8_000);
-    await expect(page.getByTestId('banner-backup-indexer')).toHaveCount(0);
+    await expect(await statusEntry(page, 'banner-backup-indexer')).toHaveCount(0);
   });
 
   test('on a backup the other indexers still cross-check: a disagreeing one is shown', async ({ appPage: page, mock }) => {
@@ -122,7 +124,8 @@ test.describe('indexer failover', () => {
     const id = (await mock.token()).covenant_id as string;
     await mock.setHealth('node_unavailable');
     await page.goto(`/#/market/${id}`);
-    await expect(page.getByTestId('banner-backup-indexer')).toContainText(`Using backup indexer ${b1.host}`, { timeout: 60_000 });
+    await expect(await statusEntry(page, 'banner-backup-indexer')).toContainText(`Using backup indexer ${b1.host}`, { timeout: 60_000 });
+    await closeBell(page);
     const finding = page.getByTestId('indexer-disagreement');
     await expect(finding).toBeVisible({ timeout: 30_000 });
     await expect(finding).toContainText(b2.host);
@@ -130,7 +133,7 @@ test.describe('indexer failover', () => {
     await expect(finding).not.toContainText(new URL(mock.url).host);
   });
 
-  test('the banner fits a 375 px phone, a long host included', async ({ appPage: page, mock }) => {
+  test('the entry fits a 375 px phone, a long host included', async ({ appPage: page, mock }) => {
     test.setTimeout(90_000);
     const b = await backup();
     // the backup behind a long host name (the mock itself, reached through this address)
@@ -144,7 +147,7 @@ test.describe('indexer failover', () => {
     await b.client.setHealth('following', 0, { book_complete: false, history_from_daa: 990 });
     await mock.setHealth('node_unavailable');
     await page.goto('/#/market');
-    const banner = page.getByTestId('banner-backup-indexer');
+    const banner = await statusEntry(page, 'banner-backup-indexer');
     await expect(banner).toBeVisible({ timeout: 60_000 });
     await expect(banner).toContainText(`Using backup indexer ${longHost}`);
     await expect(banner).toContainText('History may be incomplete');

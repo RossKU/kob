@@ -20,7 +20,7 @@ export interface AppConfig {
   indexerUrl: string;
   /**
    * further indexers the key facts of a token (powers, market price scale, best prices) are cross-checked against (config.json / `__KOB_CONFIG__`, or a
-   * stored setting, which every page then names in a banner; a link must not add verifiers). Empty = a single indexer, unverified.
+   * stored setting, which the bell then names on every page; a link must not add verifiers). Empty = a single indexer, unverified.
    */
   extraIndexerUrls: string[];
   /** wRPC (`ws://` / `wss://`) node, '' = the SDK's public Resolver; a mock-server base (`http://` / `https://`) only in test / dev builds */
@@ -83,7 +83,7 @@ export interface AppConfig {
   /**
    * Standalone mode (data/standalone.ts: the market from the node's blocks, no indexer): `manual` on from the start (the indexer is not asked for the
    * market), `auto` fall back to it when the indexer cannot be used (default on), `autoReturn` go back to the indexer once it answers again (default on;
-   * off: a banner offers to). Any layer, the Settings screen included.
+   * off: the bell offers to). Any layer, the Settings screen included.
    */
   standalone: StandaloneSettings;
 }

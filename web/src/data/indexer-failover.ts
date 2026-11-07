@@ -4,7 +4,7 @@
 //
 // What counts as healthy is what the app already uses for the primary: `assessIndexerHealth` (ui/shell/health.ts) over `/v1/health` (level "ok": following
 // or within the lag tolerance, same network). A backup must also report the KOB1 payload version this build writes. A backup whose store started late
-// (`book_complete: false`) can serve the live book but its history may be partial: it ranks after the complete ones and the banner says so.
+// (`book_complete: false`) can serve the live book but its history may be partial: it ranks after the complete ones and the bell's entry says so.
 //
 // The controller is fed by the status poll (`report`: the health read of the ACTIVE indexer, ui/shell/status.ts) and probes the others only when it
 // has to: a failing active indexer is re-checked a few times with a growing delay, then every indexer is probed once and one is chosen; while on a backup
@@ -63,7 +63,7 @@ const rank = (h: History): number => (h === 'complete' ? 0 : h === 'unknown' ? 1
 
 /**
  * The member to read from (pure; `v[0]` is the primary). The primary whenever it is usable; else the best usable backup (complete history before unknown
- * before partial, host order within a rank, the one in use kept on a tie so two equal backups do not take turns); none usable: the primary (the banners
+ * before partial, host order within a rank, the one in use kept on a tie so two equal backups do not take turns); none usable: the primary (the entries
  * of its own state apply).
  */
 export function selectMember(v: readonly Verdict[], current: number): number {
@@ -79,7 +79,7 @@ export function selectMember(v: readonly Verdict[], current: number): number {
 export interface FailoverState {
   /** index into the members (0 = the primary) */
   readonly active: number;
-  /** the active indexer's base URL, and its host for the banner */
+  /** the active indexer's base URL, and its host for the bell's entry */
   readonly label: string;
   readonly host: string;
   readonly onBackup: boolean;

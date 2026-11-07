@@ -2,171 +2,77 @@ import { useServices, useWallet } from '../../app/context';
 import type { ConfigWarning, StoredOverride } from '../../config';
 import { t } from '../../i18n';
 import { Banner, Button } from '../kit';
-import { shortAddress } from '../kit/format';
 import { useFailoverState } from './failover';
-import { formatLag } from './health';
+import { usePreAuditBanner } from './preaudit';
 import { useSystemStatus } from './StatusProvider';
-import { clockText, useStandalone } from './standalone';
+import { useStandalone } from './standalone';
+import { statusEntries, type StatusEntry } from './status-entries';
 
-/**
- * Global banners under the status bar: settings that were ignored, test mode, registry failure, wallet trouble, node / indexer health.
- * There is deliberately none for chain re-organisations: shallow ones are routine (the indexer handles them), what one does to the user's own orders is
- * a notification, and a deep one is a header indicator (ReorgIndicator).
- * Each has a `data-testid` starting with `banner-`.
- */
-export function GlobalBanners(props: { warnings: ConfigWarning[]; storedOverrides?: StoredOverride[] }) {
+/** The one banner of the shell: a wallet on another network than the app's stops the user from signing, so it stays on the page as one line (a press unfolds it). */
+export function NetworkMismatchBanner() {
+  const { config } = useServices();
+  const wallet = useWallet();
+  if (!wallet.networkMismatch || !wallet.info) return null;
+  return (
+    <div style="margin-bottom:16px">
+      <Banner tone="error" class="banner-compact banner-line" data-testid="banner-network-mismatch">
+        <details>
+          <summary>
+            <strong>{t('shell.wallet.mismatchTitle')}</strong>{' '}
+            <span>{t('shell.wallet.mismatch', { walletNetwork: wallet.info.network, appNetwork: config.network })}</span>
+          </summary>
+        </details>
+      </Banner>
+    </div>
+  );
+}
+
+/** What holds now (status-entries.ts), kept current: the entries of the bell's dialog. */
+export function useStatusEntries(warnings: readonly ConfigWarning[], storedOverrides: readonly StoredOverride[]): StatusEntry[] {
   const { config, registryError, failover, standalone } = useServices();
   const backup = useFailoverState(failover);
   const sa = useStandalone(standalone);
   const wallet = useWallet();
   const { node, indexer } = useSystemStatus();
-  const a = indexer.assessment;
+  const [preAudit, dismissPreAudit] = usePreAuditBanner();
+  return statusEntries({
+    warnings, storedOverrides, registryError, node, backup, preAudit, dismissPreAudit,
+    testMode: !!config.features.test, network: config.network, nodeUrl: config.nodeUrl,
+    notice: wallet.notice, dismissNotice: wallet.dismissNotice, walletError: wallet.error, standalone: sa, indexer: indexer.assessment,
+  });
+}
 
-  const banners = [];
-  if (props.warnings.length) {
-    banners.push(
-      <Banner key="config" tone="warn" title={t('shell.banner.configWarnings')} data-testid="banner-config">
+/** One entry of the current status. `onNavigate`: a link to a page of the app was followed. */
+export function StatusBanner(props: { entry: StatusEntry; onNavigate: () => void }) {
+  const { standalone } = useServices();
+  const e = props.entry;
+  return (
+    <Banner tone={e.tone} title={e.title} class={e.class} onDismiss={e.onDismiss} data-testid={e.testid}>
+      {e.warnings ? (
         <ul>
-          {props.warnings.map((w, i) => (
+          {e.warnings.map((w, i) => (
             <li key={i}>
               <code>{w.layer}.{w.field}</code>: {w.message}
             </li>
           ))}
         </ul>
-      </Banner>,
-    );
-  }
-  if (config.features.test) banners.push(<Banner key="test" tone="warn" data-testid="banner-test-mode">{t('shell.banner.testMode')}</Banner>);
-  // a node / indexer saved in this browser's settings applies to every visit: said on every page
-  const shown = (o: StoredOverride, url: string): string => url || t(o.field === 'nodeUrl' ? 'settings.nodeUrl.resolver' : 'shell.banner.storedNone');
-  for (const o of props.storedOverrides ?? []) {
-    if (o.field === 'extraIndexerUrls' || o.field === 'allowQueryOverrides') {
-      const extra = o.field === 'extraIndexerUrls';
-      banners.push(
-        <Banner key={`stored-${o.field}`} tone="warn" class="banner-compact" data-testid={extra ? 'banner-stored-extra-indexers' : 'banner-stored-query-overrides'}>
-          {extra
-            ? t('shell.banner.storedExtraIndexers', { urls: o.value || t('shell.banner.storedNone'), deployment: o.deployment || t('shell.banner.storedNone') })
-            : t('shell.banner.storedQueryOverrides')}{' '}
-          <a href="#/settings">{t('shell.banner.storedSettings')}</a>
-        </Banner>,
-      );
-      continue;
-    }
-    banners.push(
-      <Banner key={`stored-${o.field}`} tone="warn" class="banner-compact" data-testid={`banner-stored-${o.field === 'nodeUrl' ? 'node' : 'indexer'}`}>
-        {t(o.field === 'nodeUrl' ? 'shell.banner.storedNode' : 'shell.banner.storedIndexer', { url: shown(o, o.value), deployment: shown(o, o.deployment) })}{' '}
-        <a href="#/settings">{t('shell.banner.storedSettings')}</a>
-      </Banner>,
-    );
-  }
-  if (registryError) {
-    banners.push(
-      <Banner key="registry" tone="warn" data-testid="banner-registry">
-        {t('shell.banner.registry', { message: registryError })}
-      </Banner>,
-    );
-  }
-  if (wallet.networkMismatch && wallet.info) {
-    banners.push(
-      <Banner key="mismatch" tone="error" title={t('shell.wallet.mismatchTitle')} data-testid="banner-network-mismatch">
-        {t('shell.wallet.mismatch', { walletNetwork: wallet.info.network, appNetwork: config.network })}
-      </Banner>,
-    );
-  }
-  // the network-changed case needs no banner of its own: the mismatch banner above says it
-  const notice = wallet.notice;
-  if (notice?.kind === 'account-changed' && notice.to) {
-    banners.push(
-      <Banner key="acct" tone="warn" title={t('shell.wallet.noticeAccountTitle', { wallet: notice.wallet })} onDismiss={wallet.dismissNotice} data-testid="banner-wallet-account-changed">
-        {t('shell.wallet.noticeAccount', { address: shortAddress(notice.to.address) })}
-      </Banner>,
-    );
-  } else if (notice?.kind === 'network-restored' && notice.to) {
-    banners.push(
-      <Banner key="restored" tone="info" title={t('shell.wallet.noticeRestoredTitle', { wallet: notice.wallet, network: notice.to.network })} onDismiss={wallet.dismissNotice} data-testid="banner-wallet-network-restored">
-        {t('shell.wallet.noticeRestored')}
-      </Banner>,
-    );
-  } else if (notice?.kind === 'wallet-lost') {
-    banners.push(
-      <Banner key="lost" tone="error" title={t('shell.wallet.noticeLostTitle', { wallet: notice.wallet })} onDismiss={wallet.dismissNotice} data-testid="banner-wallet-lost">
-        {t('shell.wallet.noticeLost')}
-      </Banner>,
-    );
-  }
-  if (wallet.error) {
-    banners.push(
-      <Banner key="wallet" tone="error" data-testid="banner-wallet-error">
-        {t('shell.wallet.error', { message: wallet.error })}
-      </Banner>,
-    );
-  }
-  if (node.reachable === false) {
-    // no node URL: the SDK's public resolver is asked for one (it does not work in a browser on testnet-10); a URL: that node did not answer
-    const reason = node.error?.message || t('shell.banner.nodeNoAnswer');
-    banners.push(
-      <Banner key="node" tone="error" title={t('shell.banner.nodeTitle')} data-testid="banner-node">
-        {config.nodeUrl
-          ? t('shell.banner.nodeDown', { url: config.nodeUrl, reason, network: config.network })
-          : t('shell.banner.nodeDownResolver', { reason, network: config.network })}
-      </Banner>,
-    );
-  }
-  // the book, charts and orders come from a backup indexer of the host's list while the main one is down, not ready or on another network
-  if (backup?.onBackup) {
-    banners.push(
-      <Banner
-        key="backup"
-        tone={backup.historyPartial ? 'warn' : 'info'}
-        title={t('shell.banner.backupTitle', { host: backup.host })}
-        class="wrap-anywhere"
-        data-testid="banner-backup-indexer"
-      >
-        {t('shell.banner.backupBody')}
-        {backup.historyPartial ? <> {t('shell.banner.backupPartial')}</> : null}
-      </Banner>,
-    );
-  }
-  // standalone mode (data/standalone.ts): what the page shows comes from the node since the mode started
-  if (sa?.active) {
-    const time = clockText(sa.sinceMs ?? Date.now());
-    banners.push(
-      <Banner
-        key="standalone"
-        tone={sa.reason === 'manual' ? 'info' : 'warn'}
-        title={t('shell.banner.standaloneTitle', { time })}
-        data-testid="banner-standalone"
-      >
-        {t(sa.reason === 'manual' ? 'shell.banner.standalone' : 'shell.banner.standaloneAuto', { time })}
-        {sa.phase === 'connecting' ? <div class="small muted" data-testid="standalone-connecting">{t('shell.banner.standaloneConnecting')}</div> : null}
-        {sa.indexerBack ? (
-          <div class="row" style="margin-top:6px" data-testid="standalone-back">
-            <span>{t('shell.banner.standaloneBack')}</span>
-            <Button small variant="primary" onClick={() => standalone?.returnToIndexer()} data-testid="standalone-return">{t('shell.banner.standaloneReturn')}</Button>
-          </div>
-        ) : null}{' '}
-        <a href="#/settings">{t('shell.banner.standaloneSettings')}</a>
-      </Banner>,
-    );
-  }
-  if (sa?.active) {
-    // the standalone banner says what the indexer's state means for the page (or, on by the setting, the indexer is not asked at all)
-  } else if (a.code === 'not-configured') {
-    banners.push(<Banner key="noidx" tone="info" data-testid="banner-no-indexer">{t('shell.banner.noIndexer')}</Banner>);
-  } else if (a.code === 'unreachable') {
-    banners.push(
-      <Banner key="idx" tone="error" title={t('shell.banner.indexerTitle')} data-testid="banner-indexer" actions={undefined}>
-        {t('shell.banner.unreachable')}
-      </Banner>,
-    );
-  } else if (a.level === 'warn' || a.level === 'bad') {
-    banners.push(
-      <Banner key="idx" tone={a.level === 'bad' ? 'error' : 'warn'} title={t('shell.banner.indexerTitle')} data-testid="banner-indexer">
-        {t(`shell.banner.${a.code}`, { lag: formatLag(a.lagSeconds), network: config.network })}
-      </Banner>,
-    );
-  }
-
-  if (!banners.length) return null;
-  return <div class="stack-sm" style="margin-bottom:16px" data-testid="global-banners">{banners}</div>;
+      ) : null}
+      {e.text ? <span>{e.text}</span> : null}
+      {e.standalone?.connecting ? <div class="small muted" data-testid="standalone-connecting">{t('shell.banner.standaloneConnecting')}</div> : null}
+      {e.standalone?.back ? (
+        <div class="row" style="margin-top:6px" data-testid="standalone-back">
+          <span>{t('shell.banner.standaloneBack')}</span>
+          <Button small variant="primary" onClick={() => standalone?.returnToIndexer()} data-testid="standalone-return">{t('shell.banner.standaloneReturn')}</Button>
+        </div>
+      ) : null}
+      {e.link ? (
+        <>
+          {' '}
+          {e.link.external
+            ? <a href={e.link.href} target="_blank" rel="noopener noreferrer">{e.link.text}</a>
+            : <a href={e.link.href} onClick={props.onNavigate}>{e.link.text}</a>}
+        </>
+      ) : null}
+    </Banner>
+  );
 }

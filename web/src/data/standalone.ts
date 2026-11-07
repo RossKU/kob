@@ -14,7 +14,7 @@
 //     the report is about the active indexer: a usable backup keeps the app on the indexers;
 //   * `autoReturn` (default on): the first report that the indexer is usable again (`ok`, or `warn`: reachable, minutes behind) ends an automatic
 //     standalone mode and the indexer's book is read again (its book wins). Off: the mode stays and `indexerBack` says it may end
-//     (`returnToIndexer`, the banner's button).
+//     (`returnToIndexer`, the button of the bell's entry).
 //
 // While active, the app's indexer (`modeIndexer`) answers the book, the orders of the book, the token list and the market data from here; what
 // needs the indexer's records (pair books, holders and token UTXOs, the order lists of My orders and the notifications) fails as it does with the

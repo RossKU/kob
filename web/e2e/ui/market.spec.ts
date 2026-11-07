@@ -1,6 +1,6 @@
 // Smoke specs of the shell and the market views against the mock stack (seeded book: token EXKCC, 10 levels per side, 8 fills).
-// Per-order-type specs belong to the ticket work; here: the list, the token page, live status, wallet, the shared-ticker note, health banners.
-import { expect, test, TEST_KEYS } from '../fixtures';
+// Per-order-type specs belong to the ticket work; here: the list, the token page, live status, wallet, the shared-ticker note, health entries of the bell.
+import { expect, test, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
 import { TESTID } from '../testids';
 
 /** The seeded token as the mock indexer reports it (prices: sompi per whole token, i.e. per 1e8 base units). */
@@ -327,14 +327,15 @@ test.describe('wallet', () => {
   });
 });
 
-test.describe('health banners', () => {
-  // the indexer's own banners and marks: the automatic standalone fallback (e2e/ui/standalone.spec.ts) would replace them once a bad state persists
+test.describe('health status', () => {
+  // the indexer's own entries and marks: the automatic standalone fallback (e2e/ui/standalone.spec.ts) would replace them once a bad state persists
   test.use({ autoOpen: false, appConfig: { standalone: { auto: false } } });
 
   test('a lagging or stale indexer is announced and the book is marked as possibly out of date', async ({ appPage, mock }) => {
     await mock.setHealth('following', 20_000); // 2000 s behind
     await appPage.goto('/#/market');
-    await expect(appPage.getByTestId('banner-indexer')).toContainText('behind');
+    await expect(await statusEntry(appPage, 'banner-indexer')).toContainText('behind');
+    await closeBell(appPage);
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-level', 'bad');
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-level', 'bad');
     const { id } = await seeded(mock);
@@ -348,15 +349,15 @@ test.describe('health banners', () => {
     await mock.setHealth('catching_up', 400); // 40 s behind: nothing to announce
     await appPage.goto(`/#/market/${id}`);
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-level', 'ok');
-    await expect(appPage.getByTestId('banner-indexer')).toHaveCount(0);
+    await expect(await statusEntry(appPage, 'banner-indexer')).toHaveCount(0);
     await expect(appPage.getByTestId('book-stale')).toHaveCount(0);
     await mock.setHealth('following', 1190); // 119 s
     await appPage.reload();
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-level', 'ok');
-    await expect(appPage.getByTestId('banner-indexer')).toHaveCount(0);
+    await expect(await statusEntry(appPage, 'banner-indexer')).toHaveCount(0);
     await mock.setHealth('following', 1300); // 130 s: announced
     await appPage.reload();
-    await expect(appPage.getByTestId('banner-indexer')).toContainText('behind');
+    await expect(await statusEntry(appPage, 'banner-indexer')).toContainText('behind');
     await expect(appPage.getByTestId('book-stale')).toBeVisible();
   });
 
@@ -366,8 +367,8 @@ test.describe('health banners', () => {
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-node-level', 'bad');
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-level', 'bad');
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('title', /Node: unreachable/);
-    // a node URL is set (the mock): the banner names it and sends the user to Settings
-    const banner = appPage.getByTestId('banner-node');
+    // a node URL is set (the mock): the entry names it and sends the user to Settings
+    const banner = await statusEntry(appPage, 'banner-node');
     await expect(banner).toContainText('cannot be reached');
     await expect(banner).toContainText('Check the node URL in Settings');
     await expect(appPage.getByTestId('token-list-view')).toBeVisible();
@@ -376,7 +377,8 @@ test.describe('health banners', () => {
   test('an unreachable indexer degrades the page instead of blanking it', async ({ appPage }) => {
     await appPage.route('**/v1/**', (route) => route.abort());
     await appPage.goto('/#/market');
-    await expect(appPage.getByTestId('banner-indexer')).toContainText('cannot be reached');
+    await expect(await statusEntry(appPage, 'banner-indexer')).toContainText('cannot be reached');
+    await closeBell(appPage);
     await expect(appPage.getByTestId('token-list-view')).toBeVisible();
     await expect(appPage.getByTestId('token-list-error')).toBeVisible();
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-code', 'unreachable');

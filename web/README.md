@@ -59,7 +59,7 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
 * **Book.** Aggregated levels with depth bars, the spread row with the last price, price grouping 1x / 10x / 100x / 1000x the tick (asks round up,
   bids down; a click on a grouped row prefills the worst price of the group).
 * **Live.** The WebSocket channels `book:<token>` / `fills:<token>` trigger a refetch of every panel (debounced 1 s); 5 s polling while the socket is down.
-* **The book never disappears.** A failed or late book pull keeps the last good book on screen with a subtle `stale since hh:mm:ss` marker (the time of that book); only the next good response replaces it. A crossed book (matchers a moment behind) is the live book like any other: it is drawn as it is, with a negative spread (`Mid 0.043173 · Spread -0.000052 (-0.11%)`), and is not marked stale. A pull in flight is never aborted by the next refresh (a live notice or a poll that arrives meanwhile runs once right after it). The indexer-lag banner and the book's "possibly out of date" badge show only when the indexer is more than 30 s behind the chain.
+* **The book never disappears.** A failed or late book pull keeps the last good book on screen with a subtle `stale since hh:mm:ss` marker (the time of that book); only the next good response replaces it. A crossed book (matchers a moment behind) is the live book like any other: it is drawn as it is, with a negative spread (`Mid 0.043173 · Spread -0.000052 (-0.11%)`), and is not marked stale. A pull in flight is never aborted by the next refresh (a live notice or a poll that arrives meanwhile runs once right after it). The indexer-lag entry of the bell and the book's "possibly out of date" badge show only when the indexer is more than 30 s behind the chain.
 * **Order button.** The ticket holds only the inputs (the amount box shows the balance it spends, "Available 988.41 KAS", a tap is Max; on
   the KAS/TOKEN view one line converts the KAS) and one button ("Buy Limit", "Sell Market order" ...). The button plans the order again from
   the state at the click with the node clock (read every 2 s in the background, projected to the click) and runs the pre-sign checks silently
@@ -237,8 +237,8 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   compared and any disagreement is shown. With one indexer the footer and Settings say "single indexer, not cross-checked".
 * **Indexer failover.** The same list is the failover set (`src/data/indexer-failover.ts`, `docs/ops/web-hosting.md`): when the primary is unreachable, failing or not
   ready (the header status dot's own health judgement) the book, charts, tokens and orders are read from a healthy further indexer on the same network that reports the
-  payload version of this build (`book_complete: true` first; a store that began late is used last and the banner says "History may be incomplete"), under the
-  banner "Using backup indexer <host>"; the app switches back after two good probes of the primary. The feed reconnects to the indexer in use, one ticket's
+  payload version of this build (`book_complete: true` first; a store that began late is used last and the entry says "History may be incomplete"), under the
+  bell's entry "Using backup indexer <host>"; the app switches back after two good probes of the primary. The feed reconnects to the indexer in use, one ticket's
   environment is read from one indexer, and the cross-check continues against the others (the primary only while it answers well). The indexers' book is never
   mixed with one built from the node; with no usable indexer, standalone mode takes over (next).
 * **Standalone mode** (`src/data/standalone.ts`, user guide 9). When the indexer in use stays bad (`assessIndexerHealth` level `bad`, asked once more after 5 s,
@@ -250,7 +250,7 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   join the book (`StandaloneReceipts`). `services.indexer` then answers the book, order views, token list, trades, candles, stats and depth from that
   (`src/data/stream-market.ts`: fills counted once the node holds an output of their transaction), labelled "since hh:mm"; everything else fails as with the
   indexer down. The ticket, the book check and the signing are unchanged; an open-list token is traded only with declared or program-default decimals. The
-  first usable report ends an automatic mode (`standalone.autoReturn`; off: a banner button). Settings / any config layer: `standalone: { manual, auto, autoReturn }`.
+  first usable report ends an automatic mode (`standalone.autoReturn`; off: a button in the bell's entry). Settings / any config layer: `standalone: { manual, auto, autoReturn }`.
 * **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the order cannot be placed: one error line
   ("Could not read the token's guard data; try again in a moment") until the ticket's background refresh reads them, then it clears by itself.
 * **Book against the node.** Every read of the order book for a KAS market (`readMarketPart`, `src/app/book-verify.ts`) checks the first orders of each
@@ -265,8 +265,13 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   `marketStartToleranceBps` (config.json / `__KOB_CONFIG__`, 10 to 5000, default 1000 = 10 %) on the costly side of one is an error: the order
   cannot be placed at that start. The last fill comes from the same indexer as the book, so it is no independent reference: without a further
   indexer (none is configured by default) the start rests on the node check above.
-* **Stored settings.** A node, indexer or `extraIndexerUrls` list, or `allowQueryOverrides: true`, saved in this browser's settings is named in a banner
-  on every page.
+* **Stored settings.** A node, indexer or `extraIndexerUrls` list, or `allowQueryOverrides: true`, saved in this browser's settings is named in the bell's
+  current status on every page.
+* **Current status.** The conditions that hold now (`src/ui/shell/status-entries.ts`: settings that were ignored, test mode, stored settings, registry failure,
+  wallet notices and errors, node and indexer health, standalone mode, the pre-audit notice) are listed at the top of the bell's dialog. Live state, not
+  notifications: an entry comes and goes with its condition, is not stored and Clear does not touch it, and it is there with the notifications off or no
+  wallet connected. The worst tone colours the bell (red for an error, amber for a warning, none for info) and the count is in its accessible name. The one
+  banner of the shell stays at the top of the page: a wallet on another network than the app, one line that a press unfolds. Banners inside a view are the view's own.
 
 ## Deployment headers
 

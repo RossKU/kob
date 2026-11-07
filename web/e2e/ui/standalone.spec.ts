@@ -6,7 +6,7 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
-import { expect, test, type MockClient } from '../fixtures';
+import { closeBell, expect, openBell, test, type MockClient } from '../fixtures';
 import { TOKEN, fund, listExkcc, openMarket } from '../helpers/env';
 import { clickPlace, fillFields, onChainTerms, pickType, placeOrder, waitSubmitted, type Placed } from '../helpers/ticket';
 
@@ -44,11 +44,13 @@ test.describe('standalone mode', () => {
     const id = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${id}`);
     await expect(asks(page)).toHaveCount(10);
+    await openBell(page);
     await expect(banner(page)).toHaveCount(0);
 
     await indexerDown(mock);
     await expect(banner(page)).toBeVisible({ timeout: 60_000 });
     await expect(banner(page)).toContainText(/Standalone mode: the market from the node since \d\d:\d\d/);
+    await closeBell(page);
     const label = page.getByTestId('book-standalone');
     await expect(label).toHaveText(/^Orders seen since \d\d:\d\d \(indexer unavailable; older orders are not shown\)$/);
     // the seeded orders were never in a block this page saw: not shown
@@ -71,7 +73,9 @@ test.describe('standalone mode', () => {
 
     // the indexer is back: its book wins (the seeded levels and the new ask), the labels go
     await indexerDown(mock, false);
+    await openBell(page);
     await expect(banner(page)).toHaveCount(0, { timeout: 60_000 });
+    await closeBell(page);
     await expect(asks(page)).toHaveCount(11, { timeout: 20_000 });
     await expect(label).toHaveCount(0);
     await expect(page.getByTestId('chart-standalone')).toHaveCount(0);
@@ -88,7 +92,9 @@ test.describe('standalone mode', () => {
     expect(own.txid).toMatch(/^[0-9a-f]{64}$/);
 
     await indexerDown(mock);
+    await openBell(page);
     await expect(banner(page)).toBeVisible({ timeout: 60_000 });
+    await closeBell(page);
     // the seeded book is not shown; alice's own order is, resolved on the node from its receipt
     await expect(asks(page)).toHaveCount(1, { timeout: 30_000 });
     await expect(page.getByTestId('book-ask-row').first()).toContainText('0.05');
@@ -119,14 +125,16 @@ test.describe('standalone mode', () => {
     await expect(page.getByTestId('book-ask-row').filter({ hasText: '40' })).toHaveCount(1);
   });
 
-  test('a phone (390 px) shows the banner, the label and the partial book', async ({ appPage: page, mock }) => {
+  test('a phone (390 px) shows the entry, the label and the partial book', async ({ appPage: page, mock }) => {
     test.setTimeout(150_000);
     await page.setViewportSize({ width: 390, height: 844 });
     await listExkcc(page);
     const id = (await mock.token()).covenant_id;
     await indexerDown(mock);
     await page.goto(`/#/market/${id}`);
+    await openBell(page);
     await expect(banner(page)).toBeVisible({ timeout: 60_000 });
+    await closeBell(page);
     await placeOnChain(mock, 'carol', HIGH_ASK, 50n);
     await placeOnChain(mock, 'bob', HIGH_ASK + 100_000n, 40n);
     await expect(asks(page)).toHaveCount(2, { timeout: 20_000 });
@@ -151,7 +159,9 @@ test.describe('standalone mode', () => {
       await listExkcc(page);
       const id = (await mock.token()).covenant_id;
       await page.goto(`/#/market/${id}`);
+      await openBell(page);
       await expect(banner(page)).toBeVisible({ timeout: 20_000 });
+      await closeBell(page);
       await expect(page.getByTestId('book-standalone')).toHaveText(/^Orders seen since \d\d:\d\d \(standalone mode; older orders are not shown\)$/);
       await expect(page.getByTestId('status-dot')).toHaveAttribute('data-indexer-code', 'standalone');
       await placeOnChain(mock, 'carol', HIGH_ASK, 50n);
@@ -166,18 +176,20 @@ test.describe('standalone mode', () => {
   test.describe('without returning by itself', () => {
     test.use({ appConfig: { standalone: { autoReturn: false } } });
 
-    test('the indexer answers again: a banner offers to switch back, the button does', async ({ appPage: page, mock }) => {
+    test('the indexer answers again: the bell offers to switch back, the button does', async ({ appPage: page, mock }) => {
       test.setTimeout(150_000);
       await listExkcc(page);
       const id = (await mock.token()).covenant_id;
       await indexerDown(mock);
       await page.goto(`/#/market/${id}`);
+      await openBell(page);
       await expect(banner(page)).toBeVisible({ timeout: 60_000 });
       await indexerDown(mock, false);
       await expect(page.getByTestId('standalone-back')).toBeVisible({ timeout: 40_000 });
       await expect(banner(page)).toBeVisible();
       await page.getByTestId('standalone-return').click();
       await expect(banner(page)).toHaveCount(0);
+      await closeBell(page);
       await expect(asks(page)).toHaveCount(10, { timeout: 20_000 });
     });
   });
@@ -192,6 +204,7 @@ test.describe('standalone mode', () => {
     await page.getByTestId('settings-standalone').check();
     await page.getByTestId('settings-save').click();
     await expect(page.getByTestId('settings-saved')).toBeVisible();
+    await openBell(page);
     await expect(banner(page)).toBeVisible({ timeout: 10_000 });
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('kob.settings') ?? '{}'));
     expect(stored.standalone).toEqual({ manual: true });

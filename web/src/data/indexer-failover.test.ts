@@ -81,7 +81,7 @@ describe('selectMember', () => {
     // ... but not over a better one
     expect(selectMember([v(false), v(true, 'partial'), v(true)], 1)).toBe(2);
   });
-  it('nothing usable: the primary (its own banners apply)', () => {
+  it('nothing usable: the primary (its own entries apply)', () => {
     expect(selectMember([v(false), v(false), v(false)], 0)).toBe(0);
     expect(selectMember([v(false), v(false), v(false)], 2)).toBe(0);
   });

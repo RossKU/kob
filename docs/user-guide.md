@@ -10,7 +10,7 @@ Contents: [1 What you need](#1-what-you-need) | [2 Connect a wallet](#2-connect-
 [3 Find a token](#3-find-a-token-and-read-its-facts) | [4 Buy and sell](#4-buy-and-sell) | [4a Activity](#4a-activity) |
 [5 Limit and market orders](#5-limit-and-market-orders) | [6 Partial fills](#6-partial-fills-and-you-may-receive-up-to) |
 [7 Your orders: cancel, refund, renew](#7-your-orders-cancel-refund-renew) | [8 Merge token UTXOs](#8-merge-token-utxos) |
-[9 Status banners](#9-status-banners-node-and-indexer) | [10 Fees: what goes where](#10-fees-what-goes-where) |
+[9 Current status: node and indexer](#9-current-status-node-and-indexer) | [10 Fees: what goes where](#10-fees-what-goes-where) |
 [11 Private-key guidance](#11-private-key-guidance) | [12 Create a token, and find one you created earlier](#12-create-a-token-and-find-one-you-created-earlier) |
 [13 Backups and local data](#13-backups-and-local-data) | [14 Words you will meet](#14-words-you-will-meet)
 
@@ -303,12 +303,15 @@ first (My orders, Balances)."
 * The same applies to KAS: if "Your KAS is in too many small coins (UTXOs)", KOB cannot merge KAS. Send your KAS to your own address
   from your wallet to merge it, or place a smaller order.
 
-## 9. Status banners: node and indexer
+## 9. Current status: node and indexer
 
 The header is one row: the logo, the tabs (Market, My orders, Create token, Settings), a status dot, the chip "testnet-10 · pre-audit", the **Connect** button (**Disconnect** and the address once connected), the theme toggle and the bell. On a phone the tabs, the theme toggle and the status are behind the menu button (it closes when you open a page),
 the chip reads "tn10 · pre-audit" and the one **Connect** button does what it does on a desktop. The status dot is green, amber or red for the
 worse of the **Node** ("reachable", "unreachable", "checking...", with the DAA score) and the **Indexer**; press it (or hover it) to read both. A
-problem is never only a dot: it is also a full-width banner under the header, as listed below.
+problem is never only a dot: the bell turns amber for a warning and red for an error, and its dialog lists under "Current status" what holds now, as listed
+below (with the other conditions: settings that were ignored, test mode, the token registry, wallet changes and errors, and the pre-audit notice until you
+dismiss it). An entry leaves by itself when its condition ends; Clear does not touch it, and it is there with the notifications off or no wallet connected.
+Only a wallet on another network than the app stays at the top of the page, as one line: press it for the whole text.
 The indexer is the server that lists the book, trades and order status; the node is a Kaspa node that gives balances and takes
 your transactions.
 
@@ -324,7 +327,7 @@ your transactions.
 | "The indexer serves another network than this app" | Its data is ignored for trading. Fix the indexer URL in Settings. |
 | "No indexer is configured" | No book and no order history. Set an indexer URL in Settings. |
 | "No connection to a Kaspa node" | Balances, DAA time and sending are unavailable. Check the node URL in Settings (a `wss://` node of the right network, with its path). With no node URL the page asks the Kaspa SDK's public resolver; if none works it says so. After about 25 seconds the status says "unreachable". |
-| "Using backup indexer <host>" | The site's main indexer is down, not ready or on another network, so the book, prices and orders come from another indexer the site lists. The banner goes away by itself within a minute or two of the main one coming back. If it adds "History may be incomplete", that indexer started late: the live book is right, but charts and older orders can be missing. Other indexers keep cross-checking prices where there are any; with none left, the footer says "single indexer". |
+| "Using backup indexer <host>" | The site's main indexer is down, not ready or on another network, so the book, prices and orders come from another indexer the site lists. The entry goes away by itself within a minute or two of the main one coming back. If it adds "History may be incomplete", that indexer started late: the live book is right, but charts and older orders can be missing. Other indexers keep cross-checking prices where there are any; with none left, the footer says "single indexer". |
 | "Single indexer, not cross-checked" | Only one indexer is configured. With two or more, token powers, price scales and best prices are cross-checked and a disagreement is shown ("Indexers disagree": check the covenant id and price yourself). Independently of this, the top of the book is always checked against your node before a market or close order is signed (section 5), so even one indexer cannot invent the price such an order starts from. |
 | "Deep chain reorganisation" badge | The chain replaced many blocks; the data was refreshed and recent confirmations may have changed. |
 | "Node saved in this browser ..." / "Indexer saved in this browser ..." | A node or indexer chosen in Settings overrides the site's default. If you did not set it, reset it ("Use the site's servers"). |
@@ -362,7 +365,7 @@ What it shows, and its limits:
 Settings has three switches for it: **"Standalone mode (use the node only)"** keeps the page in standalone mode whatever the indexer does,
 and then the page sends the indexer no request for the market (the token-logo blocklist is still read from it); **"Fall back to standalone
 mode automatically when the indexer is down"** (on by default); and **"Return to the indexer (book and charts) automatically when it is
-back"** (on by default; off, a banner says "The indexer answers again" with a button "Use the indexer again"). They apply at once and are
+back"** (on by default; off, the bell's current status says "The indexer answers again" with a button "Use the indexer again"). They apply at once and are
 kept in this browser like the other settings.
 
 ## 10. Fees: what goes where

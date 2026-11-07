@@ -5,7 +5,7 @@ import type { WalletAdapter, WalletInfo } from '../wallet/types';
 export type WalletNoticeKind =
   /** the wallet switched to another account (another key): everything bound to the old key is stale */
   | 'account-changed'
-  /** the wallet moved to a network other than the app's (trading is blocked by the mismatch banner) */
+  /** the wallet moved to a network other than the app's (the views block trading on `networkMismatch`; the mismatch banner says so) */
   | 'network-changed'
   /** the wallet is back on the app's network */
   | 'network-restored'

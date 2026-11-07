@@ -1,6 +1,6 @@
-// The pre-audit notice: the contracts have had no external security review, so the app says so on every page (footer, header badge) and once, on the
-// first visit, in a dismissible banner. A dismissal is remembered in localStorage; blocked storage never breaks the page (the banner then shows again
-// on the next visit, which is the safe direction).
+// The pre-audit notice: the contracts have had no external security review, so the app says so on every page (footer, header badge) and, until dismissed,
+// in the current status of the bell. A dismissal is remembered in localStorage; blocked storage never breaks the page (the notice then shows again on the
+// next visit, which is the safe direction).
 import { useState } from 'preact/hooks';
 
 export const PREAUDIT_KEY = 'kob.preAudit.dismissed.v1';
@@ -17,7 +17,7 @@ function defaultStore(): Store | null {
   }
 }
 
-/** True when the visitor dismissed the first-visit banner before. Any storage failure counts as "not dismissed". */
+/** True when the visitor dismissed the notice before. Any storage failure counts as "not dismissed". */
 export function isPreAuditDismissed(store: Store | null = defaultStore()): boolean {
   try {
     return store?.getItem(PREAUDIT_KEY) === '1';
@@ -26,7 +26,7 @@ export function isPreAuditDismissed(store: Store | null = defaultStore()): boole
   }
 }
 
-/** Remembers the dismissal; returns false when the storage refused (the banner is still hidden for this page view). */
+/** Remembers the dismissal; returns false when the storage refused (the notice is still hidden for this page view). */
 export function dismissPreAudit(store: Store | null = defaultStore()): boolean {
   try {
     if (!store) return false;
@@ -37,7 +37,7 @@ export function dismissPreAudit(store: Store | null = defaultStore()): boolean {
   }
 }
 
-/** `[visible, dismiss]` of the first-visit banner. */
+/** `[visible, dismiss]` of the notice in the bell's current status. */
 export function usePreAuditBanner(): [boolean, () => void] {
   const [visible, setVisible] = useState(() => !isPreAuditDismissed());
   return [

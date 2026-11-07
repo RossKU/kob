@@ -38,7 +38,7 @@ export interface WalletSession {
   error: string | null;
   /** counts every change of the wallet's key or network after connect: state bound to an older value is stale */
   epoch: number;
-  /** the last account / network change the wallet reported (shown as a banner until dismissed or the next connect) */
+  /** the last account / network change the wallet reported (in the bell's current status until dismissed or the next connect) */
   notice: WalletNotice | null;
   dismissNotice(): void;
   connect(id: WalletId): Promise<void>;

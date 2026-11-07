@@ -48,7 +48,7 @@ describe('references from further indexers', () => {
   });
 });
 
-describe('stored settings beyond the node and the indexer are named in the banner', () => {
+describe('stored settings beyond the node and the indexer are named in the bell', () => {
   it('stored extraIndexerUrls', () => {
     const r = resolveConfig({ file: { indexerUrl: 'https://idx.example' }, settings: { extraIndexerUrls: ['https://other.example'] } });
     expect(r.config.extraIndexerUrls).toEqual(['https://other.example']);

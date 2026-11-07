@@ -39,7 +39,7 @@ export function StatusLines() {
   );
 }
 
-/** The status dot of the header's one row: the worse of the node and the indexer; a press opens the lines. A problem is also a full-width banner (Banners.tsx). */
+/** The status dot of the header's one row: the worse of the node and the indexer; a press opens the lines. A problem is also an entry of the bell's current status (status-entries.ts), and it colours the bell. */
 export function StatusDot() {
   const { node, indexer } = useSystemStatus();
   const a = indexer.assessment;

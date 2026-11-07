@@ -9,9 +9,9 @@ ablation (mutation) suites that show which check rejects which attack (`tools/ab
 and fuzz/soak tests. None of that is an independent audit, and a passing test suite is not one
 either.
 
-Mainnet launches as a **canary**, with a visible pre-audit notice in the app (a header badge, a
-first-visit banner and a footer line on every page). **Use it at your own risk, and only with funds
-you can afford to lose.**
+Mainnet launches as a **canary**, with a visible pre-audit notice in the app (a header badge and a
+footer line on every page, and an entry of the bell's current status until it is dismissed). **Use it
+at your own risk, and only with funds you can afford to lose.**
 
 Token programs (`registry/tokens.json`): the two KRON programs are `reviewed` after an internal
 review whose per-token conditions (a genesis check, no live minter) are reported as the derived

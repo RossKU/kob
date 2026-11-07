@@ -36,7 +36,7 @@ export default {
   'settings.standalone.auto': 'Fall back to standalone mode automatically when the indexer is down',
   'settings.standalone.auto.hint': 'When the indexer cannot be reached, is stale or serves another network, the page switches to the node by itself instead of showing an empty market.',
   'settings.standalone.autoReturn': 'Return to the indexer (book and charts) automatically when it is back',
-  'settings.standalone.autoReturn.hint': 'Off: the page stays in standalone mode and a banner offers to switch back.',
+  'settings.standalone.autoReturn.hint': 'Off: the page stays in standalone mode and the bell offers to switch back.',
   'settings.error.network': 'Use mainnet or testnet-10.',
   'settings.error.url': 'Not a valid URL for this field (no credentials, allowed schemes only).',
   'settings.error.registry': 'Use a relative path or an http(s) URL.',

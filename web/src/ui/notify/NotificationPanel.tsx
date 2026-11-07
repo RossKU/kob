@@ -1,16 +1,21 @@
-// The notification centre: the bell of the header and the dialog it opens (newest first, mark all read, clear, the x402 invoice watch box, a link to Settings).
+// The notification centre: the bell of the header and the dialog it opens: the current status (what holds now, ui/shell/status-entries.ts), then the
+// notifications (newest first, mark all read, clear, the x402 invoice watch box, a link to Settings). The current status does not depend on the notifications:
+// it is there with them off or no wallet connected, and Clear does not touch it; its worst tone colours the bell.
 // The dialog always lists what the bell counts (TN10 2026-10-17: a badge "5" opened a dialog that only said the notifications were off); whether
 // new ones are collected is one line above the list, with its switch.
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import type { ConfigWarning, StoredOverride } from '../../config';
 import { formatDateTime, t } from '../../i18n';
 import type { NotificationEvent } from '../../kob/notifications';
 import { Badge, Button, Field, Modal, shortId } from '../kit';
+import { StatusBanner, useStatusEntries } from '../shell/Banners';
+import { worstTone, type StatusEntry } from '../shell/status-entries';
 import { describeEvent } from './describe';
 import { useNotify } from './NotifyProvider';
 import './notify.css';
 
-/** The bell is shown even while the notifications are off (the dialog then offers "Turn on"): set false to hide it until the user enables them in Settings. */
+/** The bell is shown even while the notifications are off (the dialog then offers "Turn on"): set false to hide it until the user enables them in Settings, unless there is a current status to read. */
 export const SHOW_BELL_WHEN_OFF = true;
 
 function BellIcon() {
@@ -69,12 +74,24 @@ function InvoiceWatch() {
   );
 }
 
-export function NotificationPanel(props: { onClose: () => void }) {
+export function NotificationPanel(props: { status: readonly StatusEntry[]; onClose: () => void }) {
   const n = useNotify();
   const close = props.onClose;
+  const body = useRef<HTMLDivElement>(null);
+  // an entry that left took the focus with it (its dismiss button, "Use the indexer again"): it stays in the dialog, or Escape and Tab would stop working here
+  const count = props.status.length;
+  useEffect(() => {
+    if (document.activeElement === document.body) body.current?.closest<HTMLElement>('.modal-body')?.focus({ preventScroll: true });
+  }, [count]);
   return (
     <Modal title={t('notify.title')} onClose={close} data-testid="notify-panel">
-      <div class="stack">
+      <div class="stack" ref={body}>
+        {count ? (
+          <section class="stack-sm notify-status" data-testid="notify-status">
+            <h3>{t('notify.current.title')}</h3>
+            {props.status.map((e) => <StatusBanner key={e.key} entry={e} onNavigate={close} />)}
+          </section>
+        ) : null}
         {!n.settings.enabled ? (
           // off: nothing new is collected; what was collected before is still listed below
           <div class="row notify-off" data-testid="notify-disabled">
@@ -108,19 +125,34 @@ export function NotificationPanel(props: { onClose: () => void }) {
   );
 }
 
-/** Header bell with the unread badge; opens the panel. */
-export function NotifyBell() {
+/** Header bell with the unread badge, coloured by the worst of the current status; opens the panel. */
+export function NotifyBell(props: { warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
   const n = useNotify();
+  const status = useStatusEntries(props.warnings, props.storedOverrides);
   const [open, setOpen] = useState(false);
-  if (!SHOW_BELL_WHEN_OFF && !n.settings.enabled) return null;
-  const label = n.unread > 0 ? t('notify.bell.unread', { count: n.unread }) : t('notify.bell');
+  if (!SHOW_BELL_WHEN_OFF && !n.settings.enabled && !status.length) return null;
+  const current = status.length ? t('notify.current.count', { count: status.length }) : '';
+  const notifications = n.unread > 0 ? t('notify.bell.unread', { count: n.unread }) : t('notify.bell');
+  const label = current ? `${notifications}. ${current}` : notifications;
   return (
     <>
-      <Button small variant="ghost" class="notify-bell" data-testid="notify-bell" aria-label={label} title={label} onClick={() => setOpen(true)}>
+      <Button
+        small
+        variant="ghost"
+        class="notify-bell"
+        data-testid="notify-bell"
+        data-status-tone={worstTone(status) ?? 'none'}
+        data-status-count={status.length}
+        aria-label={label}
+        title={label}
+        onClick={() => setOpen(true)}
+      >
         <BellIcon />
         {n.unread > 0 ? <Badge tone="info" data-testid="notify-unread">{n.unread > 99 ? '99+' : n.unread}</Badge> : null}
       </Button>
-      {open ? <NotificationPanel onClose={() => setOpen(false)} /> : null}
+      {/* a banner on the page was announced when it appeared: the count is, now that the entries are behind the bell */}
+      <span class="sr-only" role="status" data-testid="notify-status-live">{current}</span>
+      {open ? <NotificationPanel status={status} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }

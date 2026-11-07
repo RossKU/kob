@@ -3,7 +3,7 @@
 // indexer is down, the settings that pin servers and their reset, the skip link, a token of 18 decimals, the depth legend, the issue summary.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
-import { test, expect, TEST_KEYS } from '../fixtures';
+import { test, expect, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
 import { connectWallet, fund, listExkcc, openMarket, gotoNav, openSettingsAdvanced } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { fillFields, peekReceipt, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
@@ -134,15 +134,17 @@ test.describe('settings', () => {
     await page.getByTestId('settings-servers-ack').check();
     await page.getByTestId('settings-save').click();
     await page.reload();
-    await expect(page.getByTestId('banner-stored-indexer')).toBeVisible();
-    // the banner says "reset it": Settings has the button
+    await expect(await statusEntry(page, 'banner-stored-indexer')).toBeVisible();
+    await closeBell(page);
+    // the entry says "reset it": Settings has the button
     await openSettingsAdvanced(page);
     await page.getByTestId('settings-reset-servers').click();
     await expect(page.getByTestId('settings-saved')).toBeVisible();
     expect(JSON.parse((await page.evaluate(() => localStorage.getItem('kob.settings')))!)).toEqual({ features: { priorityFee: true } });
     await page.reload();
     await expect(page.getByTestId('settings-view')).toBeVisible();
-    await expect(page.getByTestId('banner-stored-indexer')).toHaveCount(0);
+    await expect(await statusEntry(page, 'banner-stored-indexer')).toHaveCount(0);
+    await closeBell(page);
     await openSettingsAdvanced(page);
     await expect(page.getByTestId('settings-indexer-url')).toHaveValue(mock.url);
   });
@@ -225,12 +227,14 @@ test('on a phone the auto-refund checkbox keeps its text beside it', async ({ ap
   await expect.poll(where).toEqual({ beside: true, sameLine: true });
 });
 
-test('without the registry the banner matches what the page does: indexer tokens trade as unlisted tokens', async ({ appPage: page, mock }) => {
+test('without the registry the bell\'s entry matches what the page does: indexer tokens trade as unlisted tokens', async ({ appPage: page, mock }) => {
   await page.route('**/registry/tokens.json', (r) => r.fulfill({ status: 500, body: 'down' }));
   const tok = await mock.token();
   await page.goto(`/#/market/${tok.covenant_id}`);
-  await expect(page.getByTestId('banner-registry')).toContainText('named by their covenant id');
-  await expect(page.getByTestId('banner-registry')).not.toContainText('not tradable');
+  const banner = await statusEntry(page, 'banner-registry');
+  await expect(banner).toContainText('named by their covenant id');
+  await expect(banner).not.toContainText('not tradable');
+  await closeBell(page);
   await expect(page.getByTestId('order-ticket')).not.toHaveAttribute('data-state', 'untradable');
   // the decimals of an unlisted token are no box in the page: they are the tooltip of the token-family chip
   await expect(page.getByTestId('token-open-caution')).toHaveCount(0);

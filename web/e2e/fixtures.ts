@@ -214,6 +214,27 @@ export class MockClient {
   }
 }
 
+// ------------------------------------------------------------------------------------------------ the bell's current status
+
+/** Opens the bell's dialog (it may be open already). The conditions that hold now (`banner-*`) are listed in it, live; a gone one has left it. */
+export async function openBell(page: Page): Promise<void> {
+  const panel = page.getByTestId('notify-panel');
+  if (!(await panel.isVisible())) await page.getByTestId('notify-bell').click();
+  await expect(panel).toBeVisible();
+}
+
+/** Closes the bell's dialog, which covers the page. */
+export async function closeBell(page: Page): Promise<void> {
+  await page.getByTestId('notify-panel').getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(page.getByTestId('notify-panel')).toHaveCount(0);
+}
+
+/** An entry of the current status, with the dialog open: so `toHaveCount(0)` on it says the condition is gone, not that the dialog is closed. */
+export async function statusEntry(page: Page, testid: string) {
+  await openBell(page);
+  return page.getByTestId('notify-status').getByTestId(testid);
+}
+
 // ------------------------------------------------------------------------------------------------ app configuration
 
 /** The `window.__KOB_CONFIG__` the app boots with in e2e runs. */

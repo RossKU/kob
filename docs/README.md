@@ -7,7 +7,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 
 | Document | What it covers |
 |---|---|
-| [user-guide.md](user-guide.md) | Trading in the web app: connecting KasWare / Kaspire or the private-key option, buying and selling, limit and market orders, partial fills, cancel and refund, merging token UTXOs, the token fact badges, where token names and icons come from (kascov.io) and the icon switch, the node and indexer banners, fees, recovering a token you created |
+| [user-guide.md](user-guide.md) | Trading in the web app: connecting KasWare / Kaspire or the private-key option, buying and selling, limit and market orders, partial fills, cancel and refund, merging token UTXOs, the token fact badges, where token names and icons come from (kascov.io) and the icon switch, the bell's current status (node and indexer), fees, recovering a token you created |
 | [faq.md](faq.md) | Questions people asked: custodial or not, who signs what, front-running, settlement atomicity (and Miner Mode), and how market and limit orders work for a USD stablecoin when KAS moves |
 | [api.md](api.md) | The read API (HTTP and WebSocket, no key): conventions, the endpoint table, examples against the public testnet-10 server, the WebSocket, health; [api-reference.md](api-reference.md) has every field, parameter and frame, the errors and limits, and the `[api]` configuration |
 | [../crates/kob-cli/README.md](../crates/kob-cli/README.md) | The `kob` command line: trading, token issuance, recovery, scripts and bots; [REFERENCE.md](../crates/kob-cli/REFERENCE.md) has every option, the `--json` output and the exit codes |

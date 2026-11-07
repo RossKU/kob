@@ -1,4 +1,4 @@
-// The indexer failover state for the views (data/indexer-failover.ts): a component that shows what depends on WHICH indexer is in use (the banner, the
+// The indexer failover state for the views (data/indexer-failover.ts): a component that shows what depends on WHICH indexer is in use (the bell's entry, the
 // trust line, the cross-check) reads it here and re-renders on a switch.
 import { useEffect, useState } from 'preact/hooks';
 import type { FailoverState, IndexerFailover } from '../../data/indexer-failover';

@@ -1,11 +1,11 @@
-// The pre-audit notice (no external security audit): a header badge and the footer's disclaimer on every page, and a one-time dismissible banner whose
-// dismissal survives a reload. Nothing blocks trading.
-import { expect, test } from '../fixtures';
+// The pre-audit notice (no external security audit): a header badge and the footer's disclaimer on every page, and an entry of the bell's current status
+// whose dismissal survives a reload. Info: it colours nothing. Nothing blocks trading.
+import { closeBell, expect, statusEntry, test } from '../fixtures';
 
 test.describe('pre-audit notice', () => {
   test.use({ appPath: '/#/market' });
 
-  test('footer line, header badge and first-visit banner; the dismissal is remembered across a reload', async ({ appPage: page }) => {
+  test('footer line, header badge and the entry of the bell; the dismissal is remembered across a reload', async ({ appPage: page }) => {
     const footer = page.getByTestId('footer-preaudit');
     await expect(footer).toBeVisible();
     // the shared footer's disclaimer (the landing page's wording, for the configured network) and the app's non-custodial statement
@@ -16,15 +16,19 @@ test.describe('pre-audit notice', () => {
     await expect(footer.getByRole('link', { name: 'Security policy' })).toHaveAttribute('href', /SECURITY\.md$/);
     await expect(page.getByTestId('preaudit-badge')).toHaveText('pre-audit');
 
-    const banner = page.getByTestId('banner-preaudit');
+    const banner = await statusEntry(page, 'banner-preaudit');
     await expect(banner).toBeVisible();
     await expect(banner).toContainText('Canary launch');
+    await expect(banner.getByRole('link', { name: 'Security policy' })).toHaveAttribute('href', /SECURITY\.md$/);
     await banner.getByRole('button', { name: 'Dismiss' }).click();
     await expect(banner).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('kob.preAudit.dismissed.v1'))).toBe('1');
+    await closeBell(page);
 
     await page.reload();
     await expect(page.getByTestId('main')).toBeVisible();
-    await expect(page.getByTestId('banner-preaudit')).toHaveCount(0);
+    await expect(await statusEntry(page, 'banner-preaudit')).toHaveCount(0);
+    await closeBell(page);
     // the permanent parts stay
     await expect(page.getByTestId('footer-preaudit')).toBeVisible();
     await expect(page.getByTestId('preaudit-badge')).toBeVisible();

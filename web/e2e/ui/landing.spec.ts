@@ -22,10 +22,11 @@ for (const [width, height] of [
     // the h1's real text for screen readers (its three visual lines are hidden from them)
     await expect(page.getByRole('heading', { level: 1, name: 'Decentralized order book on Kaspa.' })).toBeVisible();
     await expect(page.getByTestId('landing-chip')).toHaveText('testnet-10 · pre-audit');
-    // no app shell: no app header (tabs, wallet), banners or app links; the shared frame instead: one header, one footer
+    // no app shell: no app header (tabs, wallet, bell) or app links; the shared frame instead: one header, one footer
     await expect(page.getByTestId('brand')).toHaveCount(0);
     await expect(page.getByTestId('nav-market')).toHaveCount(0);
     await expect(page.getByTestId('wallet-connect-list')).toHaveCount(0);
+    await expect(page.getByTestId('notify-bell')).toHaveCount(0);
     await expect(page.getByTestId('banner-preaudit')).toHaveCount(0);
     await expect(page.getByTestId('landing-nav')).toBeVisible();
     await expect(page.locator('header')).toHaveCount(1);

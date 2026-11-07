@@ -2,6 +2,8 @@ export default {
   'notify.bell': 'Notifications',
   'notify.bell.unread': 'Notifications, {count} unread',
   'notify.title': 'Notifications',
+  'notify.current.title': 'Current status',
+  'notify.current.count': 'Current status: {count}',
   'notify.empty': 'No notifications yet.',
   'notify.connect': 'Connect a wallet to receive notifications for its orders and payments.',
   'notify.turnOn': 'Turn on',
