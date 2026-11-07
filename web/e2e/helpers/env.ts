@@ -151,6 +151,20 @@ export async function openSettingsAdvanced(page: Page): Promise<void> {
   await expect(page.getByTestId('settings-servers')).toBeVisible();
 }
 
+/** Chooses `value` (a covenant id or `kas`) in a searchable picker (ui/market/AssetPicker.tsx). */
+export async function pickAsset(page: Page, testid: string, value: string): Promise<void> {
+  await page.getByTestId(testid).click();
+  await page.getByTestId(`${testid}-option-${value}`).click();
+}
+
+/** The values a picker offers (its panel is left closed). */
+export async function pickerValues(page: Page, testid: string): Promise<string[]> {
+  await page.getByTestId(testid).click();
+  const values = await page.getByTestId(`${testid}-panel`).locator('[role=option]').evaluateAll((els) => els.map((e) => e.getAttribute('data-value') ?? ''));
+  await page.keyboard.press('Escape');
+  return values;
+}
+
 /** The favourites this browser starts every page with (ui/market/favorites.ts). */
 export async function seedFavorites(page: Page, f: { tokens?: string[]; pairs?: { base: string; quote: string }[] }): Promise<void> {
   await page.addInitScript(([k, v]) => localStorage.setItem(k!, v!), ['kob.favorites.v1:testnet-10', JSON.stringify({ tokens: f.tokens ?? [], pairs: f.pairs ?? [] })]);

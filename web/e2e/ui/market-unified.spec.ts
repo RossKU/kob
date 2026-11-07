@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
-import { connectWallet, fund, listExkcc } from '../helpers/env';
+import { connectWallet, fund, listExkcc, pickAsset, pickerValues } from '../helpers/env';
 import { fillFields } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -38,13 +38,13 @@ test.describe('one market page, a pair selector', () => {
     await expect(page.getByText('Choose a quote token...')).toHaveCount(0);
     await expect(page.getByTestId('pair-quote-select')).toHaveCount(0);
     const quote = page.getByTestId('market-quote-select');
-    await expect(quote).toHaveValue('kas');
-    const values = await quote.locator('option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    await expect(quote).toHaveAttribute('data-value', 'kas');
+    const values = await pickerValues(page, 'market-quote-select');
     expect(values[0]).toBe('kas');
     expect(values).toContain(QUOTE);
     expect(values).not.toContain(base);
     // the base side lists the tokens (never the quote)
-    const baseValues = await page.getByTestId('market-base-select').locator('option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    const baseValues = await pickerValues(page, 'market-base-select');
     expect(baseValues).toContain(base);
     expect(baseValues).toContain(QUOTE);
     expect(baseValues).not.toContain('kas');
@@ -64,7 +64,7 @@ test.describe('one market page, a pair selector', () => {
     const title0 = await box(page, 'market-pair');
     const stats0 = await box(page, 'market-stats');
 
-    await page.getByTestId('market-quote-select').selectOption(QUOTE);
+    await pickAsset(page, 'market-quote-select', QUOTE);
     await expect(page).toHaveURL(new RegExp(`#/market/${base}/${QUOTE}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
     await expect(page.getByTestId('pair-book')).toBeVisible();
@@ -108,7 +108,7 @@ test.describe('one market page, a pair selector', () => {
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
 
     // picking KAS on the quote side goes back to the token's KAS market, in the same place
-    await page.getByTestId('market-quote-select').selectOption('kas');
+    await pickAsset(page, 'market-quote-select', 'kas');
     await expect(page).toHaveURL(new RegExp(`#/market/${base}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/KAS');
     const chart2 = await box(page, 'chart-section');
@@ -123,19 +123,19 @@ test.describe('one market page, a pair selector', () => {
     await page.goto(`/#/market/${base}`);
     await page.getByTestId('market-flip').click();
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'KAS/EXKCC');
-    await expect(page.getByTestId('market-base-select')).toHaveValue('kas');
-    await expect(page.getByTestId('market-quote-select')).toHaveValue(base);
+    await expect(page.getByTestId('market-base-select')).toHaveAttribute('data-value', 'kas');
+    await expect(page.getByTestId('market-quote-select')).toHaveAttribute('data-value', base);
     // the other token on the quote side: KAS/EXUSD = the EXUSD market, inverted
-    await page.getByTestId('market-quote-select').selectOption(QUOTE);
+    await pickAsset(page, 'market-quote-select', QUOTE);
     await expect(page).toHaveURL(new RegExp(`#/market/${QUOTE}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'KAS/EXUSD');
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '1');
     // a token on the left with the other token on the right: the pair
-    await page.getByTestId('market-base-select').selectOption(base);
+    await pickAsset(page, 'market-base-select', base);
     await expect(page).toHaveURL(new RegExp(`#/market/${base}/${QUOTE}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
     // KAS on the quote side: the native KAS market of the base token
-    await page.getByTestId('market-quote-select').selectOption('kas');
+    await pickAsset(page, 'market-quote-select', 'kas');
     await expect(page).toHaveURL(new RegExp(`#/market/${base}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/KAS');
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '0');

@@ -1,39 +1,18 @@
 // The common top of every market page: the pair as `BASE / QUOTE` where each side is a drop-down (KAS and the tokens), and the flip control. The same
 // markup for a token's KAS market and for a token pair, so the page keeps its layout whichever quote is chosen.
 import type { ComponentChildren } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { unregisteredId } from './token-model';
 import { Button } from '../kit';
-import { KAS, assetChoices, type AssetChoice, type DisplayedPair } from './market-select';
+import { AssetPicker } from './AssetPicker';
+import { openPair } from './market-nav';
+import { KAS, assetChoices, type DisplayedPair } from './market-select';
 import { tokenTitle } from './TokenBadges';
 import type { TokenRow } from './token-model';
 
 /** A token as an option of the selector. */
 const choiceRow = (r: TokenRow) => ({ covenantId: r.covenantId, ticker: r.ticker, row: r });
-
-/** One side of the pair: the ticker with a caret; the native drop-down lies invisibly over it (keyboard, screen readers and `select` semantics intact). */
-function AssetSelect(props: { value: string; choices: AssetChoice[]; label: string; onChange: (v: string) => void; 'data-testid': string }) {
-  const cur = props.choices.find((c) => c.value === props.value);
-  const unknown = props.value === KAS ? 'KAS' : props.value.slice(0, 8);
-  const options = cur ? props.choices : [{ value: props.value, label: unknown, short: unknown }, ...props.choices];
-  const face = (cur ?? options[0]!).short;
-  return (
-    <span class="asset-select" data-value={props.value}>
-      <span class="asset-select-face" aria-hidden="true" translate={false}>
-        {face}
-        <i class="asset-select-caret">{'▾'}</i>
-      </span>
-      <select class="asset-select-native" aria-label={props.label} title={props.label} value={props.value} data-testid={props['data-testid']} onChange={(e) => props.onChange((e.currentTarget as HTMLSelectElement).value)}>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </span>
-  );
-}
 
 /** `BASE / QUOTE`, both sides selectable. `onChange` gets the new displayed pair (market-select.ts decides where it leads). */
 export function PairSelector(props: { pair: DisplayedPair; rows: readonly TokenRow[]; onChange: (next: DisplayedPair) => void }) {
@@ -42,12 +21,58 @@ export function PairSelector(props: { pair: DisplayedPair; rows: readonly TokenR
   // a token without a ticker (the indexer's "") is named by its covenant id, like a token the list does not have
   const tickerOf = (id: string): string => (id === KAS ? 'KAS' : props.rows.find((r) => r.covenantId.toLowerCase() === id)?.ticker || unregisteredId(id));
   const { left, right } = props.pair;
+  /** a side the list does not have (yet): its stand-in on the face */
+  const stand = (v: string) => (v === KAS ? 'KAS' : v.slice(0, 8));
   return (
     <span class="pair-name pair-select" data-testid="market-pair" data-pair={`${tickerOf(left)}/${tickerOf(right)}`} data-left={left} data-right={right} role="group" aria-label={t('market.pair.label')}>
-      <AssetSelect value={left} choices={assetChoices(rows, right, label)} label={t('market.pair.base')} onChange={(v) => props.onChange({ left: v, right })} data-testid="market-base-select" />
+      <AssetPicker value={left} choices={assetChoices(rows, right, label)} rows={props.rows} label={t('market.pair.base')} placeholder={stand(left)} onChange={(v) => props.onChange({ left: v, right })} data-testid="market-base-select" />
       <span class="pair-sep" aria-hidden="true">{'/'}</span>
-      <AssetSelect value={right} choices={assetChoices(rows, left, label)} label={t('market.pair.quote')} onChange={(v) => props.onChange({ left, right: v })} data-testid="market-quote-select" />
+      <AssetPicker value={right} choices={assetChoices(rows, left, label)} rows={props.rows} label={t('market.pair.quote')} placeholder={stand(right)} onChange={(v) => props.onChange({ left, right: v })} data-testid="market-quote-select" />
     </span>
+  );
+}
+
+/** The market list's way to a token pair: two tokens (no KAS: a token's KAS market is its row), and the second choice opens the pair. The choices are covenant ids. */
+export function PairPicker(props: { rows: readonly TokenRow[] }) {
+  const [base, setBase] = useState<string | null>(null);
+  const [quote, setQuote] = useState<string | null>(null);
+  const [openQuote, setOpenQuote] = useState(0);
+  const all = useMemo(() => props.rows.map(choiceRow), [props.rows]);
+  const choices = (other: string | null) => assetChoices(all, other ?? KAS, (r) => tokenTitle(r.row)).filter((c) => c.value !== KAS);
+  const go = (left: string | null, right: string | null) => {
+    if (left && right) openPair({ left, right });
+  };
+  return (
+    <div class="ml-pair" role="group" aria-label={t('market.pick.label')} data-testid="pair-picker">
+      <span class="small muted" aria-hidden="true">{t('market.pick.label')}</span>
+      <AssetPicker
+        value={base}
+        choices={choices(quote)}
+        rows={props.rows}
+        label={t('market.pair.base')}
+        placeholder={t('market.pick.base')}
+        onChange={(v) => {
+          setBase(v);
+          if (quote) go(v, quote);
+          else setOpenQuote((n) => n + 1);
+        }}
+        data-testid="pair-pick-base"
+      />
+      <span class="pair-sep" aria-hidden="true">{'/'}</span>
+      <AssetPicker
+        value={quote}
+        choices={choices(base)}
+        rows={props.rows}
+        label={t('market.pair.quote')}
+        placeholder={t('market.pick.quote')}
+        openKey={openQuote}
+        onChange={(v) => {
+          setQuote(v);
+          go(base, v);
+        }}
+        data-testid="pair-pick-quote"
+      />
+    </div>
   );
 }
 

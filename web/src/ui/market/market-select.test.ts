@@ -1,10 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { pairRoute, tokenRoute } from '../../app/router';
-import { KAS, assetChoices, changePair, displayedPair, marketFor } from './market-select';
+import { KAS, assetChoices, changePair, displayedPair, filterChoices, marketFor } from './market-select';
+import { idOnlyRow, type TokenRow } from './token-model';
 
 const A = 'aa'.repeat(32);
 const B = 'bb'.repeat(32);
 const C = 'cc'.repeat(32);
+
+describe('filterChoices', () => {
+  const row = (id: string, ticker: string, name: string | null): TokenRow => ({ ...idOnlyRow(id), ticker, name });
+  const rows = [row(A, 'TBTC', 'Test Bitcoin'), row(B, 'TBTC', 'Another token'), row(C, 'KRON', null)];
+  const choices = assetChoices(rows, 'none', (r) => r.ticker || r.covenantId);
+  const found = (q: string) => filterChoices(choices, rows, q).map((c) => c.value);
+
+  it('finds a token by ticker, name or covenant id, look-alike letters too; two tokens with one ticker are both found', () => {
+    expect(found('tbtc')).toEqual([A, B]);
+    expect(found('kr0n')).toEqual([C]);
+    expect(found('another')).toEqual([B]);
+    expect(found(C.slice(10, 40))).toEqual([C]);
+    expect(found(C.toUpperCase())).toEqual([C]);
+  });
+
+  it('an empty search leaves all; KAS only by its name', () => {
+    expect(found('  ')).toEqual([KAS, A, B, C]);
+    expect(found('ka')).toEqual([KAS]);
+    expect(found('zzz')).toEqual([]);
+  });
+});
 
 describe('displayedPair', () => {
   it('TOKEN/KAS natively, KAS/TOKEN inverted, a token pair as routed', () => {

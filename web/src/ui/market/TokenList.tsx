@@ -9,6 +9,7 @@ import { Banner, Button, ErrorBanner, Field, Section, Table, TableMessage, toErr
 import { FavoriteStar } from './FavoriteStar';
 import { isFavoritePair, isFavoriteToken, togglePair, toggleToken, useFavorites } from './favorites';
 import { ListPager, RowsControl, showListStart } from './ListPaging';
+import { PairPicker } from './MarketBar';
 import { StatusBadges } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { IdCopy } from './IdCopy';
@@ -403,6 +404,7 @@ export function TokenList(props: { invalidToken?: string }) {
           <Button small variant="secondary" class="ml-fav-toggle" aria-pressed={favoritesOnly ? 'true' : 'false'} onClick={() => setFavoritesOnly((v) => !v)} data-testid="token-list-favorites">
             {t('market.favorites')}
           </Button>
+          <PairPicker rows={rows} />
           <RowsControl id="token-list" size={pageSize} onSize={setPageSize} />
         </div>
         <ListLegend names={kascov.status} />

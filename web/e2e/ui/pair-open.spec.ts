@@ -5,7 +5,7 @@
 import type { Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { test, expect, TEST_KEYS, type MockClient } from '../fixtures';
-import { connectWallet, fund, listExkcc, seedFavorites, TOKEN } from '../helpers/env';
+import { connectWallet, fund, listExkcc, pickAsset, seedFavorites, TOKEN } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, clickPlaceOnly, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -266,7 +266,7 @@ test('the selectors: an unregistered token is offered next to a token, and a pai
   await listExkcc(page);
   await openListed(page, [QUOTE]);
   await page.goto(`/#/market/${base}`);
-  await page.getByTestId('market-quote-select').selectOption(QUOTE);
+  await pickAsset(page, 'market-quote-select', QUOTE);
   await expect(page).toHaveURL(new RegExp(`#/market/${base}/${QUOTE}$`));
   await expect(page.getByTestId('pair-page')).toBeVisible();
 
@@ -275,7 +275,7 @@ test('the selectors: an unregistered token is offered next to a token, and a pai
   await openListed(page, [QUOTE], { [QUOTE]: null });
   await page.reload();
   await expect(page.getByTestId('pair-page')).toBeVisible();
-  await expect(page.getByTestId('market-quote-select')).toHaveValue(QUOTE);
+  await expect(page.getByTestId('market-quote-select')).toHaveAttribute('data-value', QUOTE);
   await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', `EXKCC/${long(QUOTE)}`);
 });
 

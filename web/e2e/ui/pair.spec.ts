@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
-import { TOKEN, connectWallet, fund } from '../helpers/env';
+import { TOKEN, connectWallet, fund, pickAsset } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { fillFields, peekReceipt, pickType, placeOrderAndRead, waitReviewable, type ReceiptRead } from '../helpers/ticket';
 
@@ -42,7 +42,7 @@ async function openPair(page: Page, mock: MockClient, o: { usd?: bigint } = {}):
   await page.goto(`/#/market/${base}`);
   await connectWallet(page);
   // the token page's quote picker leads to the pair view
-  await page.getByTestId('market-quote-select').selectOption(QUOTE);
+  await pickAsset(page, 'market-quote-select', QUOTE);
   await expect(page).toHaveURL(new RegExp(`#/market/${base}/${QUOTE}$`));
   await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
   await expect(page.getByTestId('order-ticket')).toBeVisible();
@@ -314,7 +314,7 @@ test('picking a quote token keeps the layout: the chart stays in the same place 
   await expect(page.getByTestId('price-chart')).toBeVisible();
   const before = (await page.getByTestId('chart-section').boundingBox())!;
   const beforeBox = (await page.getByTestId('price-chart').locator('.chart-box').boundingBox())!;
-  await page.getByTestId('market-quote-select').selectOption(QUOTE);
+  await pickAsset(page, 'market-quote-select', QUOTE);
   await expect(page).toHaveURL(new RegExp(`#/market/${base}/${QUOTE}$`));
   await expect(page.getByTestId('chart-section')).toBeVisible();
   await expect(page.getByTestId('price-chart')).toBeVisible();

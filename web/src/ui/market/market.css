@@ -173,15 +173,22 @@ body:has(.market-page) .container { max-width: 1520px; }
 .pair-book .pair-entry .book-price { text-decoration: underline dotted; text-underline-offset: 3px; }
 .pair-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
 
-/* ---- the pair selector of the title bar: `BASE / QUOTE`, each side a drop-down laid invisibly over its label */
+/* ---- the pair selector of the title bar and the pair picker of the list: `BASE / QUOTE`, each side a searchable choice (AssetPicker.tsx) */
 .pair-select { display: inline-flex; align-items: baseline; gap: 4px; }
 .asset-select { position: relative; display: inline-flex; }
-.asset-select-face { display: inline-flex; align-items: baseline; gap: 4px; padding: 0 4px; border-radius: var(--radius-sm); border-bottom: 2px dotted var(--border); cursor: pointer; }
-.asset-select:hover .asset-select-face, .asset-select:focus-within .asset-select-face { background: var(--surface-2); }
-.asset-select:focus-within .asset-select-face { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+.asset-select-face { appearance: none; display: inline-flex; align-items: baseline; gap: 4px; margin: 0; padding: 0 4px; border: 0; border-radius: var(--radius-sm); border-bottom: 2px dotted var(--border); background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
+.asset-select-face:hover, .asset-select-face[aria-expanded='true'] { background: var(--surface-2); }
+.asset-select-face:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
 .asset-select-caret { font-style: normal; font-size: 0.7em; color: var(--muted); }
-.asset-select-native { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font: inherit; }
 .pair-sep { color: var(--muted); }
+.picker-panel { position: fixed; z-index: 60; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; padding: 8px; font-size: 0.9rem; text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.picker-search { flex: none; width: 100%; box-sizing: border-box; }
+.picker-list { flex: 0 1 auto; max-height: 22rem; min-height: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; overscroll-behavior: contain; }
+.picker-option { display: flex; flex-direction: column; justify-content: center; min-height: 44px; box-sizing: border-box; padding: 4px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.picker-option[aria-selected='true'] { background: var(--surface-3); }
+.picker-label { font-weight: 600; overflow-wrap: anywhere; }
+.picker-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.picker-note { margin: 0; padding: 4px 8px; }
 
 /* ---- the star of a favourite (FavoriteStar.tsx). A phone's target is 44 px; the negative margin keeps the line it sits on as low as before */
 .fav-star { appearance: none; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); cursor: pointer; }
@@ -215,11 +222,13 @@ body:has(.market-page) .container { max-width: 1520px; }
 .tf-more { text-decoration: underline dotted; text-underline-offset: 2px; }
 .ml-pairs { margin-top: 16px; }
 .ml-pair-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
-/* the search, the favourites and the page size on one line; a phone wraps them. The start of the list comes back under the sticky header */
+/* the search, the favourites, the pair picker and the page size on one line; a phone wraps them. The start of the list comes back under the sticky header */
 .ml-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin-bottom: 12px; scroll-margin-top: 120px; }
 .ml-search { flex: 1 1 260px; max-width: 420px; min-width: 0; }
 .ml-fav-toggle { min-height: 36px; }
 .ml-fav-toggle[aria-pressed='true'] { border-color: var(--warn); color: var(--text); }
+.ml-pair { display: inline-flex; align-items: baseline; gap: 6px; min-height: 36px; line-height: 36px; }
+.ml-pair .asset-select-face { font-weight: 600; line-height: 1.6; }
 .ml-size { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
 /* the rows rise in one after the other, as the blocks of the landing page do. Backwards only: a finished animation leaves the row, whose popovers are fixed to the viewport, alone */
 .ml-tokens tbody tr.ml-in { animation: ml-rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 34ms); }

@@ -2,6 +2,7 @@
 // pure part: which pair a market route displays, what a changed selector leads to, and which assets a side may offer. Display only: the market routes
 // are the same as before (`#/market/<token>` = the token's KAS book, shown TOKEN/KAS or flipped KAS/TOKEN; `#/market/<base>/<quote>` = a token pair).
 import { pairRoute, tokenRoute, type Route } from '../../app/router';
+import { filterTokens, type TokenRow } from './token-model';
 
 export const KAS = 'kas';
 /** `kas` or a token's covenant id (lower case). */
@@ -62,4 +63,15 @@ export function assetChoices<T extends { covenantId: string; ticker: string }>(
     out.push({ value: id, label: label(r), short: r.ticker });
   }
   return out;
+}
+
+/** The most choices a picker lists at once: the search narrows the rest. */
+export const PICKER_ROWS = 50;
+
+/** The choices a picker's search leaves: the tokens by ticker, name or covenant id (`filterTokens`, over `rows`), KAS by its name. An empty search leaves all. */
+export function filterChoices(choices: readonly AssetChoice[], rows: readonly TokenRow[], query: string): AssetChoice[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...choices];
+  const hits = new Set(filterTokens(rows, q).map((r) => r.covenantId.toLowerCase()));
+  return choices.filter((c) => (c.value === KAS ? KAS.includes(q) : hits.has(c.value)));
 }
