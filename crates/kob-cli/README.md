@@ -55,8 +55,7 @@ Every signing command prints the plan and the decoded transaction first. It sign
 
 - **Network.** Every plan and prompt names the network. The node must run it, or nothing is planned or signed.
   The default indexer comes from `contracts/deploy/<network>/deployment.json` (`indexer_url`). Builds from before the web app moved to
-  Cloudflare Pages default to `https://kob.kaspa.ag/indexer` on testnet-10, which now answers a 308 redirect to
-  `https://kob-api.kaspa.ag`. `kob` follows no redirect (HTTP or WebSocket), so such a build fails with `HTTP 308`: pass
+  Cloudflare Pages default to `https://kob.kaspa.ag/indexer` on testnet-10, which is gone: such a build fails. Pass
   `--indexer https://kob-api.kaspa.ag` or set `KOB_INDEXER_URL=https://kob-api.kaspa.ag`, or install a current build.
 - **Own node.** JSON wRPC `ws://host:18110` (mainnet) or `:18210` (testnet-10); Borsh `ws://host:17110` / `:17210`. Put a URL
   with a password in `KOB_NODE_WRPC`, not on the command line. `KOB_RESOLVERS` replaces the resolver list.

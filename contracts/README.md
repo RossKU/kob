@@ -251,7 +251,7 @@ it, so a registry change makes the record stale too.
 The record also carries `indexer_url`: the default indexer of the network, the official index-only server whose API
 `kob` (the command line) reads when neither `--indexer` nor `$KOB_INDEXER_URL` names one. The testnet-10 record names
 the public canary indexer (`https://kob-api.kaspa.ag`, the canary's keyless index-only server; older builds named
-`https://kob.kaspa.ag/indexer`, which now redirects there, see `crates/kob-cli/README.md`); the mainnet record is
+`https://kob.kaspa.ag/indexer`, which is gone, see `crates/kob-cli/README.md`); the mainnet record is
 `null` until mainnet launches and its address is decided. A value is an `https://` URL on mainnet (`http://` or
 `https://` elsewhere) with a host and no credentials, query or fragment (checked by `scripts/lib/deploy.mjs` and by
 `kob_protocol::artifacts::check_indexer_url`). Edit it in `deployment.json` and run `scripts/build-deploy.sh

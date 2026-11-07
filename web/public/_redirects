@@ -1,6 +1,0 @@
-# Cloudflare Pages redirects (docs/ops/web-hosting.md). kob.kaspa.ag/indexer was the canary's indexer relay (and the default
-# indexer of older `kob` builds); the same keyless indexer is now https://kob-api.kaspa.ag. 308 keeps the method and body.
-# For bookmarks and clients that follow redirects: WebSocket clients and `kob` itself do not, so an older `kob` needs
-# --indexer https://kob-api.kaspa.ag (or KOB_INDEXER_URL).
-/indexer    https://kob-api.kaspa.ag/        308
-/indexer/*  https://kob-api.kaspa.ag/:splat  308
