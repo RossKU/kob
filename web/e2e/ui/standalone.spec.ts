@@ -3,6 +3,8 @@
 // order placed meanwhile with a real transaction is (POST /mock/place), once the node holds it; the wallet's own orders come from its receipts.
 // Trading still goes to the node directly: a market order starts at the best ask the node confirms. A fill in a block (POST /mock/take, a real
 // batch) becomes a trade of the tape and the figures, all marked "since HH:MM". When the indexer is back, its book is used again.
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { TOKEN, fund, listExkcc, openMarket } from '../helpers/env';
@@ -10,7 +12,8 @@ import { clickPlace, fillFields, onChainTerms, pickType, placeOrder, waitSubmitt
 
 test.use({ autoOpen: false });
 
-const SHOTS = 'C:/Users/momot/AppData/Local/Temp/claude/C--Users-momot/7a592281-b954-49d7-9841-0ba23d934ae0/scratchpad/streaming';
+/** where the screenshots of the layouts go: `SHOTS` of the environment, else a temporary folder */
+const SHOTS = process.env.SHOTS ?? join(tmpdir(), 'kob-standalone-shots');
 /** 0.03 KAS per EXKCC: above every seeded ask (0.0251 .. 0.026), so it is the best ask only where the seeded book is not shown */
 const HIGH_ASK = 3_000_000n;
 
