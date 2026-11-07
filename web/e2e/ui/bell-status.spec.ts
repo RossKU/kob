@@ -70,6 +70,7 @@ test.describe('without a wallet, notifications off (the defaults)', () => {
     await entry.getByRole('button', { name: 'Dismiss' }).click();
     await expect(entry).toHaveCount(0);
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications. Current status: 1');
+    await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[data-testid="notify-panel"]'))).toBe(true);
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('notify-panel')).toHaveCount(0);
     // the tones without an alarm (the mock stack always has the test-mode warning): the bell keeps its plain colour
