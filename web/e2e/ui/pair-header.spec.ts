@@ -65,7 +65,7 @@ for (const width of [1280, 880, 390, 360]) {
       const line = lines.nth(i);
       await expect(line.getByTestId('token-line-ticker')).toHaveText(ticker);
       await expect(line.getByTestId('pair-token-short-id')).toHaveAttribute('data-value', id);
-      await expect(line.getByTestId('pair-token-short-id')).toHaveText(id);
+      await expect(line.getByTestId('pair-token-short-id')).toHaveText(width >= 600 ? id : `${id.slice(0, 12)}…${id.slice(-12)}`);
       await expect(line.getByTestId('pair-token-short-id-copy')).toBeVisible();
       if (name) await expect(line.getByTestId('token-name')).toHaveText(name);
       await expect(line.getByTestId('badge-family')).toBeVisible();

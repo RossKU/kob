@@ -1,12 +1,32 @@
 // A covenant id, shortened (12 + 12 hex, 96 bits: the picture beside it carries about 35 bits and the name and ticker are free to copy, so this is the identity) with an icon-only copy
-// button; `fit`: the whole id, ending in an ellipsis where its line has not the room. The full id is the tooltip, the `data-value` and what the button copies.
-import { useEffect, useRef, useState } from 'preact/hooks';
+// button; `fit`: the whole id where its line (`.mkt-meta`) has the room, else that same short form. The full id is the tooltip, the `data-value` and what the button copies.
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { copyToClipboard } from '../kit/CopyText';
 import { wideId } from '../../kob/registry';
 
+/** The copy button and the gap before it, beside the id on its line. */
+const COPY_ROOM_PX = 34;
+
 export function IdCopy(props: { value: string; fit?: boolean; 'data-testid'?: string }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const code = useRef<HTMLElement>(null);
+  const [short, setShort] = useState(false);
+  useLayoutEffect(() => {
+    const el = code.current;
+    const line = el?.closest('.mkt-meta');
+    const ctx = props.fit ? document.createElement('canvas').getContext('2d') : null;
+    if (!el || !line || !ctx || typeof ResizeObserver !== 'function') return;
+    const check = () => {
+      const cs = getComputedStyle(el);
+      ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+      setShort(ctx.measureText(props.value).width + COPY_ROOM_PX > line.clientWidth);
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(line);
+    return () => ro.disconnect();
+  }, [props.fit, props.value]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
   const onCopy = async () => {
@@ -17,7 +37,7 @@ export function IdCopy(props: { value: string; fit?: boolean; 'data-testid'?: st
   const label = state === 'copied' ? t('common.copied') : state === 'failed' ? t('common.copyFailed') : t('market.id.copy');
   return (
     <span class={props.fit ? 'ml-id ml-id-fit' : 'ml-id'}>
-      <code class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{props.fit ? props.value : wideId(props.value)}</code>
+      <code ref={code} class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{props.fit && !short ? props.value : wideId(props.value)}</code>
       <button type="button" class="copy-btn ml-copy" onClick={onCopy} aria-label={label} title={label} data-state={state} data-testid={props['data-testid'] ? `${props['data-testid']}-copy` : undefined}>
         {state === 'copied' ? (
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>

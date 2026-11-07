@@ -318,7 +318,7 @@ body:has(.market-page) .container { max-width: 1520px; }
 .ml-via { margin-left: 4px; font-size: 0.72rem; border-bottom: 1px dotted var(--muted); cursor: help; white-space: nowrap; }
 .ml-id { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .ml-id code { font-size: 0.8rem; color: var(--muted); }
-/* a token's line: the whole id, cut by an ellipsis at the end of a narrow line */
+/* a token's line: the whole id where it fits (IdCopy measures), never past the line */
 .ml-id-fit { display: flex; max-width: 100%; min-width: 0; }
 .ml-id-fit code { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* the 12 + 12 hex fragment keeps its length on a phone: its type follows the width instead (the text column of a card there is the viewport less the icon and the price) */

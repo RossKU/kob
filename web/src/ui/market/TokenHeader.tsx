@@ -117,7 +117,7 @@ export function TokenHeader(props: {
 }
 
 /**
- * One token's compact info line: the covenant id, whole where the line has room, with its copy button, the name (and where its facts come from), the link to kascov.io, whatever
+ * One token's compact info line: the covenant id, whole where the line has room, else its two ends, with its copy button, the name (and where its facts come from), the link to kascov.io, whatever
  * `badges` the page adds (the live state) and the chips (the token family, whose tooltip names the program and the decimals, and the facts: KCC-20, the
  * genesis status ...). They flow on one wrapping line; `ticker` names the token first when two of these lines are read together (a pair).
  */
