@@ -170,7 +170,7 @@ for (const theme of THEMES) {
       await expect(page.getByTestId('landing')).toBeVisible();
       await still(page);
       await checkStates(page, c, page.getByTestId('landing-open-app'), 'Open the app (header)');
-      await checkStates(page, c, page.getByTestId('landing-cta'), 'Open the app (hero)');
+      await checkStates(page, c, page.getByTestId('landing-hero').getByTestId('landing-cta'), 'Open the app (hero)');
       expect(c.low).toEqual([]);
     });
   });

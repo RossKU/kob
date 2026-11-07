@@ -133,6 +133,8 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
   .act-row > .act-c-mk { grid-area: top; }
   .act-row > .act-c-tx, .act-row > .act-c-px { display: none; }
   .act-row > .act-c-who { display: flex; grid-area: bot; }
+  /* two lines per row leave room for one address: the others are in the cell's title */
+  .act-c-who .act-sep, .act-c-who .act-w ~ .act-w { display: none; }
   .act-row > .act-c-amt { grid-area: amt; max-width: 46vw; }
   .act-row > .act-c-conf { grid-area: conf; font-size: 0.72rem; }
   .act-row .act-pie { display: inline-block; }

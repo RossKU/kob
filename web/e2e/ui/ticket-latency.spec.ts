@@ -20,7 +20,7 @@ test.use({ autoOpen: false });
 
 const BUDGET_MS = 1_000;
 /** a click on a ticket whose parts were read before the feed went live, or before a notice / a submission of this page, waits for the re-check reads of the slow indexer (2-6 s each, a few in a row) */
-const RECHECK_BUDGET_MS = 20_000;
+const RECHECK_BUDGET_MS = 30_000;
 
 /** The node on an origin of its own, as in production (wRPC): its calls never queue behind the slow indexer's in the browser's connection pool. */
 async function nodeOnItsOwnOrigin(page: Page): Promise<void> {

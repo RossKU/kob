@@ -68,6 +68,7 @@ async function openPage(page: Page, base: string): Promise<void> {
 /** The identity rows of the open final confirmation by row id. */
 async function identityRows(page: Page): Promise<Record<string, { tone: string; text: string }>> {
   const rows = page.getByTestId('confirm-order-identity-row');
+  await expect(rows.first()).toBeVisible();
   const out: Record<string, { tone: string; text: string }> = {};
   for (const r of await rows.all()) out[(await r.getAttribute('data-row'))!] = { tone: (await r.getAttribute('data-tone'))!, text: await r.innerText() };
   return out;
