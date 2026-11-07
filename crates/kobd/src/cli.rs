@@ -50,7 +50,7 @@ indexer's options only (no --key-file, --dry-run, ...).
 Commands: kobd setup, kobd address-balance, kobd withdraw, kobd db <migrate|replay|export-orders|export-book|import-orders|\
 rebase>, kobd logo-reports, kobd match, kobd keep, kobd x402 (kobd help <command>).";
 
-/// What `kobd --executor`, removed, answers.
+/// What `kobd run`, removed, answers.
 const RUN_MOVED: &str = "`kobd run` no longer starts the Executor: start it with `kobd --executor` and the same options (for \
 example `kobd --executor --config kob-executor.toml --dry-run`; with --indexer too for a full store with the history), or plain \
 `kobd` for the configuration the setup wrote";
@@ -101,7 +101,7 @@ struct StartCli {
 
 /// A start of the Indexer alone: the indexer's options only.
 #[derive(Parser)]
-#[command(name = "kobd", args_override_self = true)]
+#[command(name = "kobd", version = kob_protocol::VERSION, about = ABOUT, after_help = START_HELP, args_override_self = true)]
 struct StartIndexCli {
     #[command(flatten)]
     log: LogArgs,
