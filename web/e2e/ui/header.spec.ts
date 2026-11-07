@@ -3,6 +3,7 @@
 // explanation), the shortened chip, one "Connect" button (a sheet with Wallet and Private key) and the bell. A problem also colours the bell and is listed in its dialog, never only the dot.
 import type { Page } from '@playwright/test';
 import { test, expect, closeBell, statusEntry } from '../fixtures';
+import { connectWallet } from '../helpers/env';
 
 test.use({ autoOpen: false });
 
@@ -45,6 +46,32 @@ for (const width of [1280, 1024, 900, 880]) {
     expect(right).toBeLessThanOrEqual(width);
     expect((await page.locator('header.header').boundingBox())!.height).toBeLessThan(64);
     expect(await noScroll(page)).toBe(true);
+  });
+}
+
+// the row's room stops growing at 1240 px (--frame-max), so 1280 px is any wider window too; 1200 px is the tightest width with the full chip and the wide tabs
+for (const [width, spare] of [[1280, 40], [1200, 0]] as const) {
+  test(`${width} px with a connected wallet on a wide font: the tabs stand 12 px apart and the wide row fits with ${spare} px to spare`, async ({ appPage: page }) => {
+    await wideFonts(page);
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/#/market');
+    await connectWallet(page);
+    await expect(page.getByTestId('nav-market')).toBeVisible();
+    await expect(page.getByTestId('menu-button')).toHaveCount(0);
+    const [market, activity] = await Promise.all(['nav-market', 'nav-activity'].map((id) => page.getByTestId(id).boundingBox()));
+    expect(activity!.x - market!.x - market!.width).toBeCloseTo(12, 0);
+    // what `wideWidth` (narrow.ts) sums, against what `roomOf` gives it
+    const left = await page.evaluate(() => {
+      const px = (v: string) => Number.parseFloat(v) || 0;
+      const row = document.querySelector<HTMLElement>('.header-inner')!;
+      const cs = getComputedStyle(row);
+      const width = (s: string) => row.querySelector(s)!.getBoundingClientRect().width;
+      const tools = row.querySelector<HTMLElement>('.header-tools')!;
+      const items = [...tools.children].reduce((n, c) => n + c.getBoundingClientRect().width, 0) + px(getComputedStyle(tools).columnGap) * (tools.children.length - 1);
+      const brand = row.querySelector('.brand-mark')!.getBoundingClientRect().width;
+      return row.clientWidth - px(cs.paddingLeft) - px(cs.paddingRight) - (brand + width('.nav') + items + 2 * px(cs.columnGap));
+    });
+    expect(left).toBeGreaterThanOrEqual(spare);
   });
 }
 

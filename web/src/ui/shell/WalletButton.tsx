@@ -24,7 +24,7 @@ const connectedWith = (id: string, label: string): string => t('shell.wallet.con
 /**
  * Wallet area of the header. Not connected: one "Connect" button (ConnectBar). Connected: one compact chip with the address
  * (shortened, copyable) as its text, a small wallet icon whose tooltip says how it is connected, the wallet's network ONLY when it differs from the app's
- * (the header's network badge already names the app's), and a disconnect button (an icon on a phone).
+ * (the header's network badge already names the app's), and a disconnect button (an icon; its name is its tooltip).
  */
 export function WalletButton() {
   const w = useWallet();
@@ -50,7 +50,6 @@ export function WalletButton() {
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" />
           </svg>
-          <span class="wallet-disconnect-text">{t('shell.wallet.disconnect')}</span>
         </Button>
       </div>
     );
