@@ -94,7 +94,7 @@ export function useMarketToken(id: string, o: MarketTokenOptions): MarketToken {
   const ticketInfo = useMemo(() => {
     const i = row?.info ?? null;
     return i && i.openList && headerRow && headerRow.ticker && headerRow.ticker !== i.ticker ? { ...i, ticker: headerRow.ticker } : i;
-  }, [row?.info, headerRow]);
+  }, [row?.info, headerRow?.ticker]);
   // the token outputs are asked for last and always answer (a row or a reason): until then a token in neither list, or a listed row with no program, is undecided
   const undecided = (!listedRow || ambiguous) && !held.row && !pub.row && pub.reason === null;
   const resolving = rowsLoading || held.loading || pub.loading || undecided || (!baseRow && kascov.status === 'loading');
