@@ -108,7 +108,7 @@ describe('landing network text', () => {
 describe('landing feedback', () => {
   it('a security report, an issue and a message on X; no message action without a channel', () => {
     expect(FEEDBACK_CONTACT_URL).toBe('https://x.com/kaspaorderbook');
-    expect(feedbackActions().map((a) => a.href)).toEqual(['https://github.com/RossKU/kob/blob/master/SECURITY.md#reporting-a-vulnerability', 'https://github.com/RossKU/kob/issues', 'https://x.com/kaspaorderbook']);
+    expect(feedbackActions().map((a) => a.href)).toEqual(['https://github.com/RossKU/kob/security/advisories/new', 'https://github.com/RossKU/kob/issues', 'https://x.com/kaspaorderbook']);
     expect(feedbackActions('').map((a) => a.key)).toEqual(['landing.feedback.security', 'landing.feedback.issue']);
     for (const a of feedbackActions()) expect(has(a.key), a.key).toBe(true);
   });

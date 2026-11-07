@@ -11,11 +11,8 @@ export const REPO_URL = 'https://github.com/RossKU/kob';
 export const EXECUTOR_URL = REPO_URL;
 /** The project's README on GitHub, where the donation address is published too. */
 export const README_URL = `${REPO_URL}#readme`;
-/**
- * The feedback section's private security report. GitHub's private vulnerability reporting is off on the repository for now, so this is SECURITY.md's section on
- * reporting, which also says what to do without it; once it is on, `${REPO_URL}/security/advisories/new` is the form itself.
- */
-export const SECURITY_REPORT_URL = `${REPO_URL}/blob/master/SECURITY.md#reporting-a-vulnerability`;
+/** The feedback section's private security report: GitHub's private vulnerability reporting form. */
+export const SECURITY_REPORT_URL = `${REPO_URL}/security/advisories/new`;
 export const ISSUES_URL = `${REPO_URL}/issues`;
 /** Where "Send a message on X" leads. Empty: the action is not shown. */
 export const FEEDBACK_CONTACT_URL: string = 'https://x.com/kaspaorderbook';

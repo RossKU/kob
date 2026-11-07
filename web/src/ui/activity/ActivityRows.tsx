@@ -7,7 +7,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { formatDateTime, t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { pow10 } from '../../kob/units';
-import { compactZeros, fitAmountColumn, unitsFraction } from '../kit';
+import { compactZeros, fitAmountColumn, unitsFraction, zerosTitle } from '../kit';
 import { priceDecimals, priceText } from '../market/market-model';
 import { TokenIcon } from '../market/TokenIcon';
 import { SETTLE_DAA, confirmationsAt, daaNow, marketKeyOf, rowTime, type ActivityRow, type MarketRef } from './activity-model';
@@ -178,9 +178,9 @@ const RowCells = memo(
           {r.placed > 1 ? <i class="act-tag" title={t('activity.wallet.ladderTitle', { n: r.placed })}>{t('activity.wallet.ladder', { n: r.placed })}</i> : null}
           {r.counterparty ? <i class="act-tag">{t(`activity.cp.${r.counterparty}`)}</i> : null}
         </span>
-        <span class={`act-c-amt act-num${r.side ? ` act-${r.side}` : ''}`} role="cell" title={amount.exact ?? amount.text}>
+        <span class={`act-c-amt act-num${r.side ? ` act-${r.side}` : ''}`} role="cell" title={amount.exact ?? zerosTitle(amount.text)}>
           <b>{compactZeros(amount.text)}</b>
-          {amount.sub ? <span class="act-sub" title={amount.sub}>{compactZeros(amount.sub)}</span> : null}
+          {amount.sub ? <span class="act-sub" title={zerosTitle(amount.sub)}>{compactZeros(amount.sub)}</span> : null}
         </span>
         <span class="act-c-px act-num" role="cell" title={price}>{compactZeros(price)}</span>
         <ConfCell daa={r.daa} confirmations={r.confirmations} settled={r.settled} chainDaa={props.chainDaa} chainAt={props.chainAt} />
