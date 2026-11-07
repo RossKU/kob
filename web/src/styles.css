@@ -370,7 +370,8 @@ small, .small { font-size: 0.85em; }
   flex: 1 1 0; min-height: 36px; padding: 6px 16px; border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer;
 }
 .segmented button + button { border-left: 1px solid var(--border); }
-.segmented button:hover:not(:disabled) { background: var(--surface-3); }
+/* an unchecked segment only: a hover rule on every segment outranks the checked background below, and the pointer stays on the segment it has just pressed */
+.segmented button:not([aria-checked='true']):hover:not(:disabled) { background: var(--surface-3); }
 .segmented button[aria-checked='true'] { background: var(--primary); color: var(--primary-contrast); }
 .segmented button[aria-checked='true'].tone-buy { background: var(--buy); color: var(--surface); }
 .segmented button[aria-checked='true'].tone-sell { background: var(--sell); color: var(--surface); }
