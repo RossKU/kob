@@ -133,7 +133,7 @@ function ActivityLogView(props: ActivityLogProps) {
     const r = olderReads.current;
     if (r.want !== want) olderReads.current = { want, n: 0 };
     // a market page's first page shows what the first read gave: its ticket's reads come first, older rows wait until more rows are asked for
-    if (props.pageMarket && want <= FIRST_LIMIT) return;
+    if (props.prefsScope === 'market' && want <= FIRST_LIMIT) return;
     if (!onScreen || !data.hasOlder || data.loading || data.loadingOlder || view.rows.length >= want || olderReads.current.n >= OLDER_READS) return;
     olderReads.current.n++;
     data.loadOlder();
