@@ -206,14 +206,14 @@ test.describe('activity page', () => {
 test.describe('the log on the token and pair pages', () => {
   test.use({ viewport: { width: 1440, height: 1000 } });
 
-  test('token page: the same log, preset to the token, full width under the exchange grid; the depth chart has the freed cell', async ({ appPage: page, mock }) => {
+  test('token page: the same log, showing the token, full width under the exchange grid; the depth chart has the freed cell', async ({ appPage: page, mock }) => {
     const base = await seedPair(page, mock);
     await page.goto(`/#/market/${base}`);
     const log = page.getByTestId('token-page').getByTestId('activity');
     // under the token page the log reads nothing until it is on screen
     await showActivity(page);
     await expect(log.getByTestId('activity-row').first()).toBeVisible();
-    await expect(log.getByTestId('activity-market')).toHaveValue(base);
+    await expect(log.getByTestId('activity-market')).toHaveCount(0);
     await expect.poll(async () => [...new Set(await attrs(page, 'data-market'))]).toEqual([base]);
     await expect(log.getByTestId('activity-all-link')).toHaveAttribute('href', '#/activity');
     // layout: under the chart, the depth chart and the book, above the facts; as wide as the grid; the depth chart spans the two middle columns
@@ -223,12 +223,6 @@ test.describe('the log on the token and pair pages', () => {
     expect(details.y).toBeGreaterThan(act.y + act.height - 1);
     expect(Math.abs(act.width - grid.width)).toBeLessThan(2);
     expect(Math.abs(depth.width - chart.width)).toBeLessThan(2);
-    // the viewer can widen the filter: every market (the pair's fills appear), and back
-    await log.getByTestId('activity-market').selectOption('all');
-    await expect.poll(async () => new Set(await attrs(page, 'data-market')).has(`${base}/${QUOTE}`)).toBe(true);
-    await expect(log.getByTestId('activity-all-link')).toHaveAttribute('href', '#/activity');
-    await log.getByTestId('activity-market').selectOption(base);
-    await expect.poll(async () => [...new Set(await attrs(page, 'data-market'))]).toEqual([base]);
     await shot(page, 'token-1440', 'dark');
     await shot(page, 'token-1440', 'light');
     // the link opens the Activity page
@@ -242,7 +236,8 @@ test.describe('the log on the token and pair pages', () => {
     await page.goto(`/#/market/${base}/${QUOTE}`);
     const log = page.getByTestId('pair-page').getByTestId('activity');
     await showActivity(page);
-    await expect(log.getByTestId('activity-market')).toHaveValue(`${base}/${QUOTE}`);
+    await expect(log.getByTestId('activity-market')).toHaveCount(0);
+    await expect(log.locator('.act-scope')).toHaveText('EXKCC/EXUSD');
     const fills = log.locator('[data-testid="activity-row"][data-kind="fill"]');
     await expect(fills).toHaveCount(2);
     expect([...(await fills.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.side)))].sort()).toEqual(['buy', 'sell']);

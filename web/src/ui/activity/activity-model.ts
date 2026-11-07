@@ -11,6 +11,7 @@
 import { explorerTxUrl, type AppConfig } from '../../config';
 import type { EventView, OrderView, PairFillView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
+import { pageWindow, type ListPageSize, type PageWindow } from '../market/market-list';
 
 // ------------------------------------------------------------------------------------------------ kinds
 
@@ -30,8 +31,10 @@ const STRENGTH: Record<ActivityKind, number> = { fill: 5, cancel: 4, refund: 3, 
 export const SETTLE_DAA = 100;
 /** Rows kept in memory; older ones are dropped. */
 export const ROW_CAP = 500;
-/** Rows shown at first and added by each "Load older". */
-export const PAGE_ROWS = 50;
+/** The rows of a page on the Activity page until the viewer picks another size. */
+export const PAGE_ROWS: ListPageSize = 50;
+/** The log reaches this many rows back, whatever the page size: new rows push the oldest off. */
+export const ACTIVITY_DEPTH = 100;
 /** Milliseconds per DAA score (10 blocks per second on mainnet and testnet-10). */
 export const MS_PER_DAA = 100;
 
@@ -44,7 +47,6 @@ export type MarketRef = { kind: 'token'; token: Hex } | { kind: 'pair'; base: He
 export type MarketFilter = { kind: 'all' } | MarketRef;
 
 export const marketKeyOf = (m: MarketFilter): string => (m.kind === 'all' ? 'all' : m.kind === 'token' ? m.token : `${m.base}/${m.quote}`);
-export const sameMarket = (a: MarketFilter, b: MarketFilter): boolean => marketKeyOf(a) === marketKeyOf(b);
 
 /** Whether a row's market is the filter's (a pair matches in both orientations; a pair row never matches a token's KAS book). */
 export function inMarket(row: Pick<ActivityRow, 'market'>, f: MarketFilter): boolean {
@@ -466,12 +468,29 @@ export function writePrefs(scope: PrefsScope, prefs: ActivityPrefs, store: Store
   }
 }
 
+// ------------------------------------------------------------------------------------------------ pages
+
+/** One page of the log: the rows within reach (`kept`, at most ACTIVITY_DEPTH) and the ones on the page (`shown`, at most `size`). */
+export function logPage<R>(rows: readonly R[], size: number, page: number): PageWindow & { kept: R[]; shown: R[] } {
+  const kept = rows.slice(0, ACTIVITY_DEPTH);
+  const w = pageWindow(kept.length, size, page);
+  return { ...w, kept, shown: kept.slice(w.from, w.to) };
+}
+
+/**
+ * Whether the log can turn on from `w`: the rows are there, or older ones may be and the depth is not reached. `asked`: the page the viewer asked for. A page asked
+ * for and not there yet waits for its rows, so a second press is not offered.
+ */
+export function logHasNext(w: PageWindow, size: number, asked: number, hasOlder: boolean): boolean {
+  return w.page + 1 < w.pages || (hasOlder && asked === w.page && (w.page + 1) * size < ACTIVITY_DEPTH);
+}
+
 // ------------------------------------------------------------------------------------------------ hold
 
 /**
  * What the list shows while it is HELD (paused, or the pointer or the focus is in it): the rows it showed when the hold began stay where they are and
  * keep updating (confirmations); a row that would be inserted among or above them is held back and counted (`+N new`). Rows older than every shown
- * one (Load older) are appended, which moves nothing. Without a hold (`snapshot` null) every row shows.
+ * one (a read further back) are appended, which moves nothing. Without a hold (`snapshot` null) every row shows.
  */
 export function heldView<R extends { key: string }>(rows: readonly R[], snapshot: ReadonlySet<string> | null): { rows: R[]; held: number } {
   if (!snapshot) return { rows: [...rows], held: 0 };

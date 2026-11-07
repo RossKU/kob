@@ -19,14 +19,16 @@
 .act-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .act-seg button { border: 0; background: transparent; color: var(--muted); padding: 4px 10px; font: inherit; font-size: 0.8rem; cursor: pointer; min-height: 28px; }
 .act-seg button[aria-pressed='true'] { background: var(--surface-3); color: var(--text); font-weight: 600; }
-.act-seg button:focus-visible, .act-ib:focus-visible, .act-new:focus-visible, .act-sel:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+.act-seg button:focus-visible, .act-ib:focus-visible, .act-new:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
 .act-kinds { display: inline-flex; gap: 6px; }
 .act-ib { width: 30px; height: 28px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; display: inline-grid; place-items: center; padding: 0; }
 .act-ib[aria-pressed='true'] { color: var(--primary); border-color: var(--primary); }
 .act-ib-placed[aria-pressed='true'] { color: var(--act-placed); border-color: var(--act-placed); }
 .act-ib-fill[aria-pressed='true'] { color: var(--buy); border-color: var(--buy); }
 .act-ib:disabled { opacity: 0.45; cursor: not-allowed; }
-.act-sel { border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 0.8rem; color: var(--text); background: var(--surface-2); max-width: 15rem; min-height: 28px; }
+/* the rows of a page: the same control as the market list's, as low as the tools beside it */
+.act-tools .ml-size { gap: 6px; margin-left: 0; }
+.act-tools .segmented button { min-height: 26px; padding: 2px 9px; font-size: 0.8rem; }
 .act-vis { font-size: 0.8rem; }
 .act-vis-panel { min-width: 15rem; max-width: 20rem; font-size: 0.82rem; }
 .act-vis-panel h4 { margin: 4px 0 6px; font-size: 0.74rem; color: var(--muted); font-weight: 600; }
@@ -40,7 +42,7 @@
    token page). Every column but the icons has a floor and a share of the rest; the ids and addresses take what is left and end in an ellipsis. Narrower:
    the pie goes (the count or ✓ stays), then the Wallet column, then two lines per row. Rows have a fixed height and sit at their place by a transform
    (ActivityRows.tsx): a row arriving above them moves them without a layout shift. */
-.act-log { container: actlog / inline-size; font-size: 0.83rem; font-variant-numeric: tabular-nums; min-width: 0; }
+.act-log { container: actlog / inline-size; font-size: 0.83rem; font-variant-numeric: tabular-nums; min-width: 0; scroll-margin-top: 120px; }
 .act-head, .act-row {
   display: grid; align-items: center; column-gap: 10px; padding: 0 8px; box-sizing: border-box;
   grid-template-columns: 28px 56px minmax(80px, 1.2fr) minmax(90px, 1.8fr) minmax(110px, 0.8fr) minmax(84px, 0.6fr) 64px 84px;
@@ -144,5 +146,4 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 @media (max-width: 759px) {
   .act-tools { justify-content: flex-start; }
   .act .section-head > .row { justify-content: flex-start; }
-  .act-sel { max-width: 11rem; }
 }

@@ -6,7 +6,7 @@
 //   fills       all markets `/v1/fills`; a token `/v1/fills?token=`; a pair `/v1/pairs/{a}/{b}/fills` (or the pair page's own copy of it)
 //   placements  all markets `/v1/orders`; a token `/v1/orders?token=` (its KAS-book orders); a pair `/v1/orders?token=<A>` (its pair orders)
 // Paging back: `before=` (fills) and `cursor=` (orders). Each source is complete only down to the oldest record it read while it has more
-// (`horizon`): older rows wait for "Load older", so the two sources never interleave with a gap.
+// (`horizon`): older rows wait for the next read further back, so the two sources never interleave with a gap.
 import type { IndexerApi } from '../../data/indexer';
 import type { EventView, OrderView, PairFillsView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
@@ -15,7 +15,7 @@ import {
   type ActivityKind, type ActivityRow, type MarketFilter, type OrderFacts, type RowContext,
 } from './activity-model';
 
-/** Records read at first and per "Load older". */
+/** Records read at first and per read further back. */
 export const FIRST_LIMIT = 50;
 /** Placements read per poll (about 10 s of a busy testnet). */
 export const POLL_ORDERS_LIMIT = 20;
@@ -99,7 +99,7 @@ export class ActivityStore {
     };
   }
 
-  /** Every row of the market filter, newest first, capped; rows below a source's horizon wait for "Load older". */
+  /** Every row of the market filter, newest first, capped; rows below a source's horizon wait for the next read further back. */
   rows(kinds: ReadonlySet<ActivityKind>): ActivityRow[] {
     // built again only when the records changed (`version`) or the shown kinds did; a row whose content is unchanged keeps its object, so the list's
     // memoized rows are not rendered again (ActivityRows.tsx)
@@ -197,7 +197,7 @@ export class ActivityStore {
     return fresh;
   }
 
-  /** At most a few times ROW_CAP records per source: the oldest go (and their "Load older" cursor with them). */
+  /** At most a few times ROW_CAP records per source: the oldest go (and their cursor with them). */
   private trim(): void {
     const max = ROW_CAP * 4;
     if (this.fills.size > max) {
@@ -254,7 +254,7 @@ export class ActivityStore {
 
   /**
    * The newest records: fills (unless the pair page supplies them) and, with `placed`, placements; a newest page that does not reach what is already
-   * known reads on (GAP_PAGES at most), so a pause leaves no hole. The first read also sets the cursors for "Load older".
+   * known reads on (GAP_PAGES at most), so a pause leaves no hole. The first read also sets the cursors of the reads further back.
    */
   async readNewest(o: { fills: boolean; placed: boolean; ordersLimit?: number; replace?: boolean }): Promise<void> {
     const gen = this.gen;

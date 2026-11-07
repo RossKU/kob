@@ -37,9 +37,6 @@ export default {
   'activity.actor.executions': 'Executions',
   'activity.actor.executionsTitle': 'Rows sent by an executor (or anyone): fills',
 
-  'activity.market.label': 'Market filter',
-  'activity.market.all': 'All markets',
-  'activity.market.this': 'This market ({name})',
   'activity.market.kas': '{ticker}/KAS',
   'activity.market.pair': '{base}/{quote}',
 
@@ -61,7 +58,7 @@ export default {
   'activity.live.live': 'Live',
   'activity.live.liveHint': 'New rows arrive as the indexer reports them',
   'activity.live.held': 'Held',
-  'activity.live.heldHint': 'New rows wait while the list is paused, pointed at or focused',
+  'activity.live.heldHint': 'New rows wait while the list is paused, pointed at or focused, or on an older page',
   'activity.live.polling': 'Polling',
   'activity.live.pollingHint': 'The live connection is down: the list is read again every 10 seconds',
   'activity.live.off': 'Offline',
@@ -75,8 +72,6 @@ export default {
   'activity.empty': 'No activity yet.',
   'activity.emptyFiltered': 'Nothing matches the filters.',
   'activity.error': 'The activity could not be loaded',
-  'activity.showing': 'Showing {shown} of {kept} kept · newest first',
-  'activity.loadOlder': 'Load older',
   'activity.nothingBefore': 'Nothing before {time} (standalone mode)',
 
   'activity.wallet.pending': 'looking up…',

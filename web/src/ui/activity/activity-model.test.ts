@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EventView, OrderView, PairFillView } from '../../data/indexer-types';
 import {
-  AVAILABLE_KINDS, DEFAULT_PREFS, PREFS_KEY, SETTLE_DAA, confirmationsAt, daaNow, filterRows, fillRows, heldView, inMarket, mergeRows, pairFillEvent, parsePrefs,
+  ACTIVITY_DEPTH, AVAILABLE_KINDS, DEFAULT_PREFS, PREFS_KEY, SETTLE_DAA, confirmationsAt, daaNow, filterRows, fillRows, heldView, inMarket, logHasNext, logPage, mergeRows, pairFillEvent, parsePrefs,
   placedRows, readPrefs, rowHref, rowMakers, rowTime, shortWallet, shownKinds, writePrefs,
   type ActivityRow, type OrderFacts, type RowContext,
 } from './activity-model';
@@ -226,7 +226,7 @@ describe('the hold: rows never move under the pointer', () => {
     expect(heldView([r('c'), r('b'), r('a')], null)).toEqual({ rows: [r('c'), r('b'), r('a')], held: 0 });
   });
 
-  it('while held, rows that would land among or above the shown ones wait and are counted; older ones (Load older) are appended', () => {
+  it('while held, rows that would land among or above the shown ones wait and are counted; older ones (a read further back) are appended', () => {
     const snap = new Set(['b', 'a']);
     // `d` and `c` are new at the top, `x` lands between the shown ones, `z` is older than all of them
     const v = heldView([r('d'), r('c'), r('b'), r('x'), r('a'), r('z')], snap);
@@ -238,6 +238,55 @@ describe('the hold: rows never move under the pointer', () => {
     const v = heldView([r('n'), r('a')], new Set(['b', 'a']));
     expect(v.rows.map((x) => x.key)).toEqual(['a']);
     expect(v.held).toBe(1);
+  });
+});
+
+describe('the pages of the log', () => {
+  const rows = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ key: `r${from + i}` }));
+
+  it('a page never shows more than the chosen rows', () => {
+    for (const size of [20, 50, 100]) {
+      for (let page = 0; page < 8; page++) expect(logPage(rows(300), size, page).shown.length).toBeLessThanOrEqual(size);
+    }
+  });
+
+  it('the depth is the same whatever the size: 20 rows make 5 pages, 50 make 2, 100 make 1', () => {
+    expect(ACTIVITY_DEPTH).toBe(100);
+    expect(logPage(rows(300), 20, 0).pages).toBe(5);
+    expect(logPage(rows(300), 50, 0).pages).toBe(2);
+    expect(logPage(rows(300), 100, 0).pages).toBe(1);
+    expect(logPage(rows(300), 20, 99)).toMatchObject({ page: 4, from: 80, to: 100 });
+    expect(logPage(rows(300), 20, 4).shown.at(-1)).toEqual({ key: 'r99' });
+    expect(logPage(rows(300), 20, 0).kept).toHaveLength(100);
+  });
+
+  it('a new row pushes the oldest off', () => {
+    const before = logPage(rows(100, 1), 100, 0).shown;
+    const after = logPage([{ key: 'r0' }, ...rows(100, 1)], 100, 0).shown;
+    expect(after).toHaveLength(100);
+    expect(after[0]).toEqual({ key: 'r0' });
+    expect(after.at(-1)).toEqual(before.at(-2));
+  });
+
+  it('the hold of one older page counts no row of the other pages as new', () => {
+    const all = rows(100);
+    const snapshot = new Set(logPage(all, 20, 2).kept.map((r) => r.key));
+    const v = heldView([{ key: 'n2' }, { key: 'n1' }, ...all], snapshot);
+    expect(v.held).toBe(2);
+    expect(logPage(v.rows, 20, 2).shown).toEqual(all.slice(40, 60));
+  });
+
+  it('it turns on while the rows are there, or older ones may be and the depth is not reached', () => {
+    const w = (n: number, size: number, page: number) => logPage(rows(n), size, page);
+    expect(logHasNext(w(48, 20, 0), 20, 0, false)).toBe(true);
+    expect(logHasNext(w(48, 20, 2), 20, 2, false)).toBe(false);
+    expect(logHasNext(w(48, 20, 2), 20, 2, true)).toBe(true);
+    // the depth: page 5 of 20, page 2 of 50, the only page of 100
+    expect(logHasNext(w(300, 20, 4), 20, 4, true)).toBe(false);
+    expect(logHasNext(w(300, 50, 1), 50, 1, true)).toBe(false);
+    expect(logHasNext(w(300, 100, 0), 100, 0, true)).toBe(false);
+    // a page asked for and not there yet: no second press
+    expect(logHasNext(w(48, 20, 3), 20, 3, true)).toBe(false);
   });
 });
 

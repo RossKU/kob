@@ -1,5 +1,5 @@
 // The activity log's reads (ActivityStore) against a fake indexer: the sources per market filter, the horizon that keeps the two sources from
-// interleaving with a gap, "Load older", a gap read after a pause, the pair page's own copy of the pair fills, standalone mode and the owner lookups.
+// interleaving with a gap, the reads further back, a gap read after a pause, the pair page's own copy of the pair fills, standalone mode and the owner lookups.
 import { describe, expect, it, vi } from 'vitest';
 import type { IndexerApi } from '../../data/indexer';
 import type { EventView, OrderView, PairFillsView } from '../../data/indexer-types';
@@ -51,7 +51,7 @@ const storeOf = (ix: IndexerApi | null, market: ConstructorParameters<typeof Act
   new ActivityStore(market, { indexer: ix, standalone: null, ...extra }, () => 100n, () => undefined, () => 0);
 
 describe('activity store', () => {
-  it('the first read takes one page of each source; rows below the horizon of a source with more wait for "Load older"', async () => {
+  it('the first read takes one page of each source; rows below the horizon of a source with more wait for a read further back', async () => {
     // fills cover DAA 1000..951 in the first page (60 in all); placements 1000..990 step 1 (but only 50 fit); so the horizon is the higher of the two
     const fills = Array.from({ length: 60 }, (_, i) => ev(1000 - i, 1000 - i));
     const orders = Array.from({ length: 60 }, (_, i) => ord(i, 1000 - i * 2));

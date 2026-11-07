@@ -1,9 +1,11 @@
 // The activity log (kaspa.stream's transaction list, for KOB): one row per transaction, newest first, live. The SAME component on the Activity page
-// (#/activity, every market, no market filter) and on the token and pair pages (preset to that market; the viewer can widen it, and "All activity →"
-// opens the Activity page).
+// (#/activity, every market) and on the token and pair pages (that market; "All activity →" opens the Activity page).
 //
 // Every row is a real link to the transaction on the network's explorer (new tab, `noopener noreferrer`), so a row must never move under the pointer:
 // while the list is paused, pointed at or focused, new rows are held (`heldView`) and counted in a "+N new" pill that releases them.
+//
+// A page never shows more than the chosen number of rows, and the pages reach ACTIVITY_DEPTH rows back: a new row pushes the oldest off. An older page is held too, so
+// its rows do not slide into the next one; the pill leads back to the first page.
 import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
@@ -14,11 +16,14 @@ import type { PairFillsView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Badge, Button, ErrorBanner, Section } from '../kit';
+import { Badge, ErrorBanner, Section } from '../kit';
+import { ListPager, RowsControl, showListStart } from '../market/ListPaging';
+import type { ListPageSize } from '../market/market-list';
+import { useListPage, useListPageSize } from '../market/use-market-list';
 import { Popover } from '../shell/Popover';
 import { clockText } from '../shell/standalone';
 import {
-  ALL_KINDS, AVAILABLE_KINDS, PAGE_ROWS, rowHref, SETTLE_DAA, filterRows, heldView, marketKeyOf, readPrefs, rowMakers, sameMarket, shownKinds, writePrefs,
+  ACTIVITY_DEPTH, ALL_KINDS, AVAILABLE_KINDS, PAGE_ROWS, logHasNext, logPage, rowHref, SETTLE_DAA, filterRows, heldView, marketKeyOf, readPrefs, rowMakers, shownKinds, writePrefs,
   type ActivityKind, type ActivityPrefs, type ActivityRow, type ActorFilter, type MarketFilter, type MarketRef, type PrefsScope,
 } from './activity-model';
 import { KindGlyph, KindIcon } from './ActivityIcons';
@@ -29,20 +34,20 @@ import './activity.css';
 
 const addressCache = new Map<string, string | null>();
 
+/** Reads further back for one page at most: rows the filters hide must not read the whole history. */
+const OLDER_READS = 4;
+
 export interface ActivityLogProps {
-  /** the market filter now (the Activity page: from its URL) */
+  /** the market shown: every market on the Activity page, the page's own on a token or pair page */
   market: MarketFilter;
-  onMarketChange(m: MarketFilter): void;
-  /** the token or pair page this log sits on: offered as "This market" */
-  pageMarket?: MarketRef;
   /** which stored filters apply: the Activity page's, or the one record of the token and pair pages */
   prefsScope: PrefsScope;
   /** the pair page's own copy of the pair's fills */
   pairFills?: { base: Hex; quote: Hex; view: PairFillsView | null | undefined } | null;
   /** a link to the Activity page (on the token and pair pages) */
   allLink?: boolean;
-  /** rows shown at first and added by each "Load older" (default PAGE_ROWS) */
-  pageRows?: number;
+  /** the rows of a page until the viewer picks another size (default PAGE_ROWS) */
+  pageRows?: ListPageSize;
   'data-testid'?: string;
 }
 
@@ -93,32 +98,55 @@ function ActivityLogView(props: ActivityLogProps) {
   const [paused, setPaused] = useState(false);
   const [hover, setHover] = useState(false);
   const [focusIn, setFocusIn] = useState(false);
-  const held = paused || hover || focusIn;
-  const pageRows = props.pageRows ?? PAGE_ROWS;
-  const [limit, setLimit] = useState(pageRows);
-  const [, setReleased] = useState(0);
-  const snapshot = useRef<Set<string> | null>(null);
-  const shownBefore = useRef<ActivityRow[]>([]);
+  const [size, setSize] = useListPageSize(`kob.activity.rows.${props.prefsScope}`, props.pageRows ?? PAGE_ROWS);
   const filterKey = `${marketKeyOf(props.market)}|${[...kinds].join(',')}|${prefs.mine ? 'mine' : ''}`;
+  // other filters or another size start at the first page
+  const [asked, setAsked] = useListPage(`${filterKey}|${size}`);
+  const held = paused || hover || focusIn || asked > 0;
+  const [, setReleased] = useState(0);
+  // what the hold keeps in place is every row within reach, not one page: the rows of the other pages are no new rows
+  const snapshot = useRef<Set<string> | null>(null);
+  const keptBefore = useRef<ActivityRow[]>([]);
   const lastFilter = useRef(filterKey);
   if (!held) snapshot.current = null;
-  else if (snapshot.current === null || lastFilter.current !== filterKey) snapshot.current = new Set((lastFilter.current === filterKey ? shownBefore.current : all.slice(0, limit)).map((r) => r.key));
+  else if (snapshot.current === null || lastFilter.current !== filterKey) snapshot.current = new Set((lastFilter.current === filterKey ? keptBefore.current : all.slice(0, ACTIVITY_DEPTH)).map((r) => r.key));
   lastFilter.current = filterKey;
   const view = heldView(all, snapshot.current);
-  const shown = view.rows.slice(0, limit);
-  shownBefore.current = shown;
+  const { kept, shown, ...pager } = logPage(view.rows, size, asked);
+  keptBefore.current = kept;
   const release = () => {
     setPaused(false);
-    snapshot.current = hover || focusIn ? new Set(all.slice(0, limit).map((r) => r.key)) : null;
+    setAsked(0);
+    snapshot.current = hover || focusIn ? new Set(all.slice(0, ACTIVITY_DEPTH).map((r) => r.key)) : null;
     setReleased((n) => n + 1);
   };
+  const turnTo = (page: number) => {
+    setAsked(page);
+    showListStart(listRef.current);
+  };
 
-  // rows that arrive after the first rows flash once
+  // the rows the asked page needs, read further back while they are not there (the first read gives about 50)
+  const want = Math.min((asked + 1) * size, ACTIVITY_DEPTH);
+  const olderReads = useRef({ want, n: 0 });
+  useEffect(() => {
+    const r = olderReads.current;
+    if (r.want !== want) olderReads.current = { want, n: 0 };
+    if (!onScreen || !data.hasOlder || data.loading || data.loadingOlder || view.rows.length >= want || olderReads.current.n >= OLDER_READS) return;
+    olderReads.current.n++;
+    data.loadOlder();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [want, onScreen, data.hasOlder, data.loading, data.loadingOlder, view.rows.length]);
+
+  // rows that arrive after the first rows flash once; a page turned to, or older rows read in below the known ones, do not
   const seen = useRef<Set<string> | null>(null);
   const fresh = new Set<string>();
-  if (shown.length) {
-    if (seen.current) for (const r of shown) if (!seen.current.has(r.key)) fresh.add(r.key);
-    seen.current = new Set([...(seen.current ?? []), ...shown.map((r) => r.key)]);
+  if (kept.length) {
+    const had = seen.current;
+    if (had) {
+      const lastKnown = kept.reduce((last, r, i) => (had.has(r.key) ? i : last), -1);
+      for (const r of kept.slice(0, lastKnown)) if (!had.has(r.key)) fresh.add(r.key);
+    }
+    seen.current = new Set([...(had ?? []), ...kept.map((r) => r.key)]);
   }
 
   // the Wallet column: the owners of the rows' orders are looked up only while the list is on screen (one at a time: the order ticket's reads of
@@ -145,26 +173,12 @@ function ActivityLogView(props: ActivityLogProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registry, config]);
-  const marketText = fmt.marketText;
   const today = new Date().toDateString();
   const liveKind = data.mode === 'standalone' ? 'standalone' : data.mode === 'off' ? 'off' : held ? 'held' : data.mode;
 
   // ---- the header's tools
   const toggleKind = (k: ActivityKind) => setPrefs({ ...prefs, kinds: { ...prefs.kinds, [k]: !prefs.kinds[k] } });
   const setActor = (a: ActorFilter) => setPrefs({ ...prefs, actor: a });
-  const marketOptions = useMemo(() => {
-    const opts: { value: string; label: string; m: MarketFilter }[] = [{ value: 'all', label: t('activity.market.all'), m: { kind: 'all' } }];
-    const add = (m: MarketRef, label?: string) => {
-      const value = marketKeyOf(m);
-      if (!opts.some((o) => o.value === value)) opts.push({ value, label: label ?? marketText(m), m });
-    };
-    if (props.pageMarket) add(props.pageMarket, t('activity.market.this', { name: marketText(props.pageMarket) }));
-    if (props.market.kind !== 'all') add(props.market);
-    const tokens = [...registry.tokens].filter((x) => x.tradable).sort((a, b) => a.ticker.localeCompare(b.ticker));
-    for (const x of tokens) add({ kind: 'token', token: x.covenantId.toLowerCase() });
-    return opts;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [registry, props.pageMarket && marketKeyOf(props.pageMarket), marketKeyOf(props.market)]);
 
   const kindToggles = AVAILABLE_KINDS.map((k) => {
     const what = t(`activity.toggle.${k}`);
@@ -202,25 +216,6 @@ function ActivityLogView(props: ActivityLogProps) {
         ))}
       </div>
       <span class="act-kinds">{kindToggles}</span>
-      {/* the market filter belongs to the token and pair pages; the Activity page shows every market */}
-      {props.pageMarket ? (
-        <select
-          class="act-sel"
-          aria-label={t('activity.market.label')}
-          data-testid="activity-market"
-          value={marketKeyOf(props.market)}
-          onChange={(e) => {
-            const o = marketOptions.find((x) => x.value === (e.target as HTMLSelectElement).value);
-            if (o && !sameMarket(o.m, props.market)) props.onMarketChange(o.m);
-          }}
-        >
-          {marketOptions.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      ) : null}
       <button
         type="button"
         class="act-ib act-mine"
@@ -255,6 +250,7 @@ function ActivityLogView(props: ActivityLogProps) {
           <p class="small muted act-vis-note">{t('activity.vis.phase2')}</p>
         </div>
       </Popover>
+      <RowsControl id="activity" size={size} onSize={setSize} />
       {/* always in the row (hidden while nothing is held), so the tools never move when it comes and goes */}
       <button
         type="button"
@@ -290,7 +286,7 @@ function ActivityLogView(props: ActivityLogProps) {
     <span class="act-title">
       <span class={`act-dot act-dot-${liveKind}`} title={t(`activity.live.${liveKind}Hint`)} data-testid="activity-live" data-mode={liveKind} role="img" aria-label={t(`activity.live.${liveKind}`)} />
       {t('activity.title')}
-      <span class="act-scope muted">{props.market.kind === 'all' ? t('activity.allMarkets') : marketText(props.market)}</span>
+      <span class="act-scope muted">{props.market.kind === 'all' ? t('activity.allMarkets') : fmt.marketText(props.market)}</span>
       {data.sinceMs !== null ? (
         <Badge tone="info" title={t('activity.sinceHint')} data-testid="activity-since">
           {t('activity.since', { time: clockText(data.sinceMs) })}
@@ -356,7 +352,7 @@ function ActivityLogView(props: ActivityLogProps) {
         </div>
       </div>
       <div class="act-foot">
-        <span class="small muted" data-testid="activity-showing">{t('activity.showing', { shown: shown.length, kept: view.rows.length })}</span>
+        <ListPager id="activity" window={pager} total={kept.length} hasNext={logHasNext(pager, size, asked, data.hasOlder)} loading={data.loadingOlder} onPage={turnTo} />
         <span class="act-foot-r">
           {props.allLink ? (
             <a href="#/activity" class="small" title={t('activity.allActivityTitle')} data-testid="activity-all-link">
@@ -365,19 +361,6 @@ function ActivityLogView(props: ActivityLogProps) {
           ) : null}
           {data.sinceMs !== null ? (
             <span class="small muted" data-testid="activity-nothing-before">{t('activity.nothingBefore', { time: clockText(data.sinceMs) })}</span>
-          ) : view.rows.length > limit || data.hasOlder ? (
-            <Button
-              small
-              variant="secondary"
-              loading={data.loadingOlder}
-              data-testid="activity-older"
-              onClick={() => {
-                if (view.rows.length <= limit) data.loadOlder();
-                setLimit((l) => l + pageRows);
-              }}
-            >
-              {t('activity.loadOlder')}
-            </Button>
           ) : null}
         </span>
       </div>
@@ -405,8 +388,6 @@ export const ActivityLog = memo(
   ActivityLogView,
   (a, b) =>
     marketKeyOf(a.market) === marketKeyOf(b.market) &&
-    (a.pageMarket ? marketKeyOf(a.pageMarket) : '') === (b.pageMarket ? marketKeyOf(b.pageMarket) : '') &&
-    a.onMarketChange === b.onMarketChange &&
     a.prefsScope === b.prefsScope &&
     a.pairFills?.view === b.pairFills?.view &&
     a.allLink === b.allLink &&

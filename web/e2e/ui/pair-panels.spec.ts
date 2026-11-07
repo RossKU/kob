@@ -93,7 +93,7 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   // never makes a price)
   const trades = page.getByTestId('activity');
   await trades.scrollIntoViewIfNeeded();
-  await expect(trades.getByTestId('activity-market')).toHaveValue(`${base}/${QUOTE}`);
+  await expect(trades.locator('.act-scope')).toHaveText('EXKCC/EXUSD');
   const rows = trades.locator('[data-testid=activity-row][data-kind=fill]');
   await expect(rows).toHaveCount(2);
   const sides = await rows.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.side));
@@ -152,7 +152,7 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await expect(page.getByTestId('depth-chart')).toContainText('EXUSD');
   // the log follows the page: preset to the flipped pair, whose own fills are none
   await trades.scrollIntoViewIfNeeded();
-  await expect(trades.getByTestId('activity-market')).toHaveValue(`${QUOTE}/${base}`);
+  await expect(trades.locator('.act-scope')).toHaveText('EXUSD/EXKCC');
   await expect(trades.getByTestId('activity-loading')).toHaveCount(0);
   await expect(trades.locator('[data-testid=activity-row][data-kind=fill]')).toHaveCount(0);
   const flippedFacts = page.getByTestId('pair-token-details');
