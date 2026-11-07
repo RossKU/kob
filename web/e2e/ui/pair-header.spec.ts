@@ -26,6 +26,23 @@ async function listPair(page: Page): Promise<void> {
 
 const box = async (loc: ReturnType<Page['getByTestId']>) => (await loc.first().boundingBox())!;
 
+test('a covenant id gives way by the room of its line, not the window, and never below 8 + 8 hex', async ({ appPage: page, mock }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mock.seed({ pair: true });
+  await listPair(page);
+  const base = (await mock.token()).covenant_id;
+  await page.goto(`/#/market/${base}/${QUOTE}`);
+  const id = page.getByTestId('pair-token-short-id').first();
+  await expect(id).toHaveText(base, { useInnerText: true });
+  await page.addStyleTag({ content: '.mkt-pairhd-tokens { width: 640px; }' });
+  await expect(id).toHaveText(`${base.slice(0, 12)}…${base.slice(-12)}`, { useInnerText: true });
+  await page.addStyleTag({ content: '.mkt-pairhd-tokens { width: 200px; }' });
+  await expect(id).toHaveText(`${base.slice(0, 8)}…${base.slice(-8)}`, { useInnerText: true });
+  await expect(page.getByTestId('token-line-ticker').first()).toBeVisible();
+  await page.addStyleTag({ content: '.mkt-pairhd-tokens { width: 120px; }' });
+  await expect(id).toHaveText(`${base.slice(0, 8)}…${base.slice(-8)}`, { useInnerText: true });
+});
+
 for (const width of [1280, 880, 390, 360]) {
   test(`${width} px: the pair header is icons and fingerprints, the tickers and the swap on one line, then one info line per token`, async ({ appPage: page, mock }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -64,7 +81,11 @@ for (const width of [1280, 880, 390, 360]) {
     for (const [i, id, ticker, name] of [[0, base, 'EXKCC', null], [1, QUOTE, 'EXUSD', 'Example USD (fictional)']] as const) {
       const line = lines.nth(i);
       await expect(line.getByTestId('token-line-ticker')).toHaveText(ticker);
-      await expect(line.getByTestId('pair-token-short-id')).toHaveAttribute('data-value', id);
+      // the whole id where the line has room, its two ends where it has not; whole in the title and in what the button copies, whatever is shown
+      const shown = line.getByTestId('pair-token-short-id');
+      await expect(shown).toHaveAttribute('data-value', id);
+      await expect(shown).toHaveAttribute('title', id);
+      await expect(shown).toHaveText(width >= 1000 ? id : `${id.slice(0, 12)}…${id.slice(-12)}`, { useInnerText: true });
       await expect(line.getByTestId('pair-token-short-id-copy')).toBeVisible();
       if (name) await expect(line.getByTestId('token-name')).toHaveText(name);
       await expect(line.getByTestId('badge-family')).toBeVisible();

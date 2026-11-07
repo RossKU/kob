@@ -32,6 +32,7 @@ export { IssueLine, RawDetails } from './RawDetails';
 export { Banner, ErrorBanner, type BannerProps, type BannerTone } from './Banner';
 export { Button, type ButtonProps, type ButtonVariant } from './Button';
 export { CopyText, copyToClipboard, type CopyTextProps } from './CopyText';
+export { FitId, fitForms } from './FitId';
 export { Checkbox, Field, FieldShell, Select, type FieldProps, type FieldShellProps, type SelectOption, type SelectProps } from './Field';
 export { KeyValueList, type KeyValueItem } from './KeyValueList';
 export { Dialog, Modal, type ModalProps } from './Modal';

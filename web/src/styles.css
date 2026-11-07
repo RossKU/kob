@@ -470,6 +470,30 @@ body.modal-open { overflow: hidden; }
 }
 .copy-btn:hover { color: var(--text); background: var(--surface-3); }
 
+/* an id as long as the room allows (kit/FitId.tsx): its forms are all in the page, longest first, and one is shown. A column's id asks its own box, counted in its own
+   characters; a token's line asks the line, whose text is not the id's: room for the whole id (at 0.8rem in the widest mono font, 31rem) and for what stands beside it */
+.fit-id { white-space: nowrap; }
+.fit-id > span { display: none; }
+.fit-id > span:first-child { display: inline; }
+.fit-in-box { display: block; min-width: 0; overflow: hidden; container: fit-box / inline-size; }
+.fit-line { container: fit-line / inline-size; }
+@container fit-box (max-width: 65ch) {
+  .fit-in-box > span:first-child { display: none; }
+  .fit-in-box > span:nth-child(2) { display: inline; }
+}
+@container fit-box (max-width: 18ch) {
+  .fit-log.fit-in-box > span:nth-child(2) { display: none; }
+  .fit-log.fit-in-box > span:nth-child(3) { display: inline; }
+}
+@container fit-line (max-width: 56rem) {
+  .fit-in-line > span:first-child { display: none; }
+  .fit-in-line > span:nth-child(2) { display: inline; }
+}
+@container fit-line (max-width: 14rem) {
+  .fit-in-line > span:nth-child(2) { display: none; }
+  .fit-in-line > span:nth-child(3) { display: inline; }
+}
+
 /* ------------------------------------------------------------------ market */
 
 .token-name { font-weight: 700; }

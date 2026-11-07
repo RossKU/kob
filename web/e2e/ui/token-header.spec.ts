@@ -46,7 +46,8 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
       expect(Math.abs(fp!.height / icon!.height - 0.6)).toBeLessThan(0.03);
       expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
       // the covenant id is said once, short, with a copy button (the title for screen readers is not drawn)
-      await expect(header.getByTestId('token-short-id')).toHaveText(SHORT);
+      await expect(header.getByTestId('token-short-id')).toHaveText(size.width >= 1000 ? ID : SHORT, { useInnerText: true });
+      await expect(header.getByTestId('token-short-id')).toHaveAttribute('title', ID);
       await expect(header.getByTestId('token-short-id-copy')).toBeVisible();
       await expect(header.getByTestId('token-meta').getByText(SHORT)).toHaveCount(1);
       // a normal token shows no status: no fact chip at all (no "Genesis not verified", no "Public mint"), no High risk chip; the kind chip (KCC-20) stays

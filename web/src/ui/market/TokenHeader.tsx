@@ -117,16 +117,16 @@ export function TokenHeader(props: {
 }
 
 /**
- * One token's compact info line: the short covenant id with its copy button, the name (and where its facts come from), the link to kascov.io, whatever
+ * One token's compact info line: the covenant id, whole where the line has room, with its copy button, the name (and where its facts come from), the link to kascov.io, whatever
  * `badges` the page adds (the live state) and the chips (the token family, whose tooltip names the program and the decimals, and the facts: KCC-20, the
  * genesis status ...). They flow on one wrapping line; `ticker` names the token first when two of these lines are read together (a pair).
  */
 export function TokenLine(props: { row: TokenRow; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null | undefined; badges?: ComponentChildren; ticker?: boolean; 'data-testid'?: string }) {
   const r = props.row;
   return (
-    <div class="mkt-meta small" data-testid={props['data-testid'] ?? 'token-meta'} data-token={r.covenantId}>
+    <div class="mkt-meta fit-line small" data-testid={props['data-testid'] ?? 'token-meta'} data-token={r.covenantId}>
       {props.ticker ? <strong class="mkt-meta-ticker" data-testid="token-line-ticker">{r.ticker || longId(r.covenantId)}</strong> : null}
-      <IdCopy value={r.covenantId} data-testid={props.ticker ? 'pair-token-short-id' : 'token-short-id'} />
+      <IdCopy fit value={r.covenantId} data-testid={props.ticker ? 'pair-token-short-id' : 'token-short-id'} />
       {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
       <TokenNote token={props.note} />
       <KascovNote row={r} />

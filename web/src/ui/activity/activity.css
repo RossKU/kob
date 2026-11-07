@@ -40,7 +40,7 @@
 
 /* ---- the table */
 /* The table fits its card at every width (container queries on the log, not the window: the same log is full width on the Activity page and under a
-   token page). Every column but the icons has a floor and a share of the rest; the ids and addresses take what is left and end in an ellipsis. Narrower:
+   token page). Every column but the icons has a floor and a share of the rest; the ids and addresses take what is left, whole or by their two ends (kit/FitId.tsx). Narrower:
    the pie goes (the count or ✓ stays), then the Wallet column, then two lines per row. Rows have a fixed height and sit at their place by a transform
    (ActivityRows.tsx): a row arriving above them moves them without a layout shift. */
 .act-log { container: actlog / inline-size; font-size: 0.83rem; font-variant-numeric: tabular-nums; min-width: 0; scroll-margin-top: 120px; }
@@ -81,9 +81,9 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-mk .tk-icon { --tk-size: 22px; }
 .act-sl { color: var(--muted); margin: 0 1px; font-size: 0.8rem; }
 .act-more { color: var(--muted); font-size: 0.72rem; margin-left: 3px; flex: none; }
-.act-txm { display: none; min-width: 0; margin-left: 8px; font-family: var(--mono); color: var(--link); font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.act-c-tx { font-family: var(--mono); color: var(--link); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* the order owners: one address takes the cell, two ("A ⇄ B") share it, each ending in an ellipsis */
+.act-txm { display: none; flex: 1 1 0; min-width: 0; margin-left: 8px; font-family: var(--mono); color: var(--link); font-size: 0.78rem; }
+.act-c-tx { font-family: var(--mono); color: var(--link); font-size: 0.8rem; }
+/* the order owners: one address takes the cell, two ("A ⇄ B") share it */
 .act-c-who { display: flex; align-items: center; gap: 6px; font-family: var(--mono); color: var(--muted); font-size: 0.78rem; white-space: nowrap; overflow: hidden; }
 .act-w { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .act-sep, .act-tag { flex: none; font-style: normal; }
