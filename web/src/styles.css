@@ -562,7 +562,7 @@ body.modal-open { overflow: hidden; }
 /* a desktop that is not wide: the chip, the tabs and
    the buttons tighten (so the whole row fits down to about 900 px even on wide fonts) */
 @media (min-width: 720px) and (max-width: 1199px) {
-  .nav { gap: 0; }
+  .nav { gap: 8px; }
   .nav a { padding: 0 5px; font-size: 13px; }
   .header-inner { gap: 6px; }
   .header-tools { gap: 4px; }
