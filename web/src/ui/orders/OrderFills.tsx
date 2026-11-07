@@ -2,7 +2,7 @@
 import { useState } from 'preact/hooks';
 import type { EventView } from '../../data/indexer-types';
 import { useTxUrl } from '../../app/explorer';
-import { formatDateTime, has, t, ASSUMED_TOKEN_DECIMALS } from '../../i18n';
+import { formatDateTime, has, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatKas, formatPricePerToken, formatUnits } from '../../kob/units';
@@ -33,11 +33,11 @@ export function OrderFills(props: OrderFillsProps) {
   const data = useAsync(async (signal) => (open ? fillHistory(await props.loadEvents(row.id, signal), row.scale) : null), [open, row.id]);
   // prices are the order's state prices (sompi per whole token of `row.scale` base units)
   const price = (p: bigint) =>
-    `${formatPricePerToken(p, token?.decimals ?? ASSUMED_TOKEN_DECIMALS, row.scale)} ${t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })}`;
+    `${formatPricePerToken(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale)} ${t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })}`;
   // the price column: fixed decimals for every row (from the token's tick, else 8), the unit in the header (decimal points line up)
   const priceFraction = token ? (tickPriceFraction(token.tick, token.decimals, row.scale) ?? 8) : 8;
-  const priceCell = (p: bigint) => fixedPricePerToken(p, token?.decimals ?? ASSUMED_TOKEN_DECIMALS, row.scale, priceFraction);
-  const amountText = (a: bigint) => formatUnits(a, token?.decimals ?? ASSUMED_TOKEN_DECIMALS, { group: ',' });
+  const priceCell = (p: bigint) => fixedPricePerToken(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, priceFraction);
+  const amountText = (a: bigint) => formatUnits(a, token?.decimals ?? RAW_TOKEN_DECIMALS, { group: ',' });
   // a pair order: its fills are volume only (amounts of A and B, how it was filled), never a price
   const pairOrder = !!row.pair;
   const quote = props.quote;

@@ -45,11 +45,11 @@ describe('issueText: parameter formatting', () => {
     expect(issueText(issue('MARKETABLE_AUCTION', { touch: 2_490_000n }), { tokenDecimals: 12 })).toContain('(24.9 KAS)');
   });
 
-  it('formats token amounts with the token decimals and ticker when known, else in whole tokens on the assumed 8 decimals (never "base units")', () => {
+  it('formats token amounts with the token decimals and ticker when known, else as raw amounts, said so', () => {
     const i = issue('INSUFFICIENT_TOKENS', { needed: 12_500n, have: 3_000n, shortfall: 9_500n });
     expect(issueText(i, { tokenDecimals: 3, tokenTicker: 'TST3' })).toBe('Not enough tokens: needs 12.5 TST3, you hold 3 TST3 (short 9.5 TST3).');
     expect(issueText(i, { tokenDecimals: 3 })).toContain('needs 12.5, you hold 3 (short 9.5)');
-    expect(issueText(i, {})).toContain('needs 0.000125 tokens (decimals assumed 8), you hold 0.00003 tokens (decimals assumed 8)');
+    expect(issueText(i, {})).toContain('needs 12,500 (raw amount), you hold 3,000 (raw amount)');
   });
 
   it('formats the depth amounts of market and fill-or-kill findings in the token decimals', () => {

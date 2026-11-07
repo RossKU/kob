@@ -55,8 +55,8 @@ describe('G7 (b): the signer frame trusts a listed token only through the pinned
     const tampered = [{ ...rows()[0]!, decimals: 2 }, rows()[1]!];
     const out = trustedHints([hint({ ...rows()[0]!, decimals: 2 }), hint(rows()[1]!, { inverted: true })], tampered, pinned);
     expect(out).toEqual([
-      { covenantId: B, ticker: '', decimals: 8, source: 'assumed' },
-      { covenantId: A, ticker: '', decimals: 8, source: 'assumed', inverted: true },
+      { covenantId: B, ticker: '', decimals: 0, source: 'assumed' },
+      { covenantId: A, ticker: '', decimals: 0, source: 'assumed', inverted: true },
     ]);
   });
 
@@ -78,7 +78,7 @@ describe('G7 (b): the signer frame trusts a listed token only through the pinned
     expect(out).toEqual([
       { covenantId: B, ticker: 'BBB', decimals: 6 },
       { covenantId: A, ticker: 'AAA', decimals: 8 },
-      { covenantId: C, ticker: '', decimals: 8, source: 'assumed' },
+      { covenantId: C, ticker: '', decimals: 0, source: 'assumed' },
       { covenantId: A, ticker: 'AAA', decimals: 8 },
     ]);
   });

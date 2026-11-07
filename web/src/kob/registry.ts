@@ -200,7 +200,7 @@ export interface TokenInfo {
    * of it, `program` = the default decimals of its token program for a token that declares none (a launchpad's convention: KaspaRocket 3,
    * `decimalsConvention` names it), `assumed` = 8 decimals (the Kaspa convention) and its covenant id as the name. Never traded or verified.
    */
-  decimalsSource?: 'declared' | 'issued' | 'program' | 'assumed';
+  decimalsSource?: 'declared' | 'issued' | 'program' | 'scale' | 'assumed';
   /** the source of a program default's decimals as the app names it (`KaspaRocket convention`): with `decimalsSource` or `openScale` `program` */
   decimalsConvention?: string;
   /**

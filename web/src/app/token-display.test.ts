@@ -3,8 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import type { TokenInfo } from '../kob/registry';
 import { rememberIssuedToken } from '../data/issued-decimals';
-import { noteTokenProgram, resetDeclarationsForTests } from '../data/token-declarations';
-import { ASSUMED_DECIMALS, decimalsNote, decimalsOrigin, displayToken } from './token-display';
+import { noteMarketDecimals, noteTokenProgram, resetDeclarationsForTests } from '../data/token-declarations';
+import { decimalsNote, decimalsOrigin, displayToken } from './token-display';
 import { tokenLabel } from '../ui/market/token-model';
 
 const mem = () => {
@@ -36,11 +36,10 @@ describe('displayToken: three sources, in order', () => {
     expect(displayToken(registry, 'mainnet', ID, s)!.decimalsSource).toBe('assumed');
   });
 
-  it('else the assumed 8 decimals (the Kaspa convention), named by its covenant id: 1e8 base units read as 1 token', () => {
+  it('nothing states its decimals: none are invented, its raw amount is shown, named by its covenant id', () => {
     const tk = displayToken(registry, 'testnet-10', ID, mem())!;
-    expect(ASSUMED_DECIMALS).toBe(8);
-    expect(tk).toMatchObject({ ticker: '83478d88…6daacd64', decimals: 8, decimalsSource: 'assumed', tradable: false });
-    expect(decimalsNote(tk)).toMatchObject({ text: 'decimals assumed 8' });
+    expect(tk).toMatchObject({ ticker: '83478d88…6daacd64', decimals: 0, decimalsSource: 'assumed', tradable: false });
+    expect(decimalsNote(tk)).toMatchObject({ text: 'raw amount' });
     // the name is said once
     expect(tokenLabel(tk)).toBe('83478d88…6daacd64');
     expect(displayToken(registry, 'testnet-10', null, mem())).toBeUndefined();
@@ -54,17 +53,27 @@ describe('displayToken: three sources, in order', () => {
   });
 });
 
-describe('displayToken: the price scale of its orders before the assumed 8', () => {
-  it('a token without registry entry or issuance record takes the decimals its orders\' scale names (10^6: 6), marked assumed', () => {
+describe('displayToken: the price scale of its order or its market, the order of the ticket', () => {
+  it('a token with no declaration and no program default takes the decimals its order\'s scale names (10^6: 6), said to come from its market', () => {
     const tk = displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 1_000_000n)!;
-    expect(tk).toMatchObject({ decimals: 6, decimalsSource: 'assumed' });
-    expect(decimalsNote(tk)).toMatchObject({ text: 'decimals assumed 6' });
-    // an issuance record comes first; a scale of 1 (unknown) or not a power of ten says nothing
+    expect(tk).toMatchObject({ decimals: 6, decimalsSource: 'scale' });
+    expect(decimalsNote(tk)).toMatchObject({ text: '6 decimals, from its market' });
+    // the market's scale decides over this browser's issuance record, as on the ticket; the record keeps its name; a scale of 1 (unknown) or not a power of ten says nothing
     const s = mem();
     rememberIssuedToken('testnet-10', ID, { decimals: 2, ticker: 'XYZ' }, s);
-    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, s, 1_000_000n)!.decimals).toBe(2);
-    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 1n)!.decimals).toBe(8);
-    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 250n)!.decimals).toBe(8);
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, s, 1_000_000n)).toMatchObject({ decimals: 6, ticker: 'XYZ', decimalsSource: 'scale' });
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, s, 100n)).toMatchObject({ decimals: 2, decimalsSource: 'issued' });
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 1n)).toMatchObject({ decimals: 0, decimalsSource: 'assumed' });
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 250n)).toMatchObject({ decimals: 0, decimalsSource: 'assumed' });
+  });
+
+  it('with no order at hand, the scale its market trades with (the indexer\'s market scale, the token\'s page); a declaration and a program default come first', () => {
+    resetDeclarationsForTests();
+    noteMarketDecimals('testnet-10', ID, 6);
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem())).toMatchObject({ decimals: 6, decimalsSource: 'scale' });
+    expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem())!.decimalsSource).toBe('assumed');
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), null, 'KaspaRocketToken11458')).toMatchObject({ decimals: 3, decimalsSource: 'program' });
+    resetDeclarationsForTests();
   });
 });
 
@@ -86,7 +95,7 @@ describe('displayToken: a program with default decimals (KaspaRocket convention)
     // KForge's default is 0 (a falsy number is still a default)
     expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem(), null, 'KForgeToken7214')).toMatchObject({ decimals: 0, decimalsSource: 'program', decimalsConvention: 'KForge convention' });
     // a program without a default changes nothing; a registry entry comes first
-    expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem(), null, 'KCC20PublicMint')).toMatchObject({ decimals: 8, decimalsSource: 'assumed' });
+    expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem(), null, 'KCC20PublicMint')).toMatchObject({ decimals: 0, decimalsSource: 'assumed' });
     expect(displayToken(registry, 'mainnet', REG, mem(), null, 'KaspaRocketToken11458')).toMatchObject({ decimals: 6 });
     resetDeclarationsForTests();
   });

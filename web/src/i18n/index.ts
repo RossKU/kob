@@ -32,23 +32,25 @@ export function t(key: string, params?: Params): string {
   return raw.replace(/\{(\w+)\}/g, (m, name: string) => (name in params ? String(params[name]) : m));
 }
 
-/** The decimals assumed for a token nothing states the decimals of: the Kaspa convention (1e8 base units = 1 token, like KAS and sompi). */
+/** The decimals of a price in the market list when neither the token nor its market names any: only there, an older indexer reports no market scale. */
 export const ASSUMED_TOKEN_DECIMALS = 8;
+/** Where nothing states a token's decimals (no declaration, no program default, no scale of an order or a market): none are invented, the chain's integer amount is shown as it is, said so. */
+export const RAW_TOKEN_DECIMALS = 0;
 
 let tokenAmountFormatter: ((token: string | null, units: bigint) => string) | null = null;
 
-/** The app's words for an amount of a token (app/token-display.ts: its registry decimals, this browser's issuance of it, else 8 assumed). */
+/** The app's words for an amount of a token (app/token-display.ts: what states its decimals, else its raw amount, said so). */
 export function setTokenAmountFormatter(f: ((token: string | null, units: bigint) => string) | null): void {
   tokenAmountFormatter = f;
 }
 
 /**
- * An amount of token `token` (covenant id; null: not named) given in the chain's integer units, in whole tokens with its name: never "base
- * units" (founder decision 2026-10-17). Without the app's formatter (tests, a sentence about no particular token): 8 decimals assumed, said so.
+ * An amount of token `token` (covenant id; null: not named) given in the chain's integer units, in whole tokens with its name where something states
+ * its decimals. Without the app's formatter (tests, a sentence about no particular token): the raw amount, said so.
  */
 export function tokenAmountText(token: string | null | undefined, units: bigint): string {
   if (tokenAmountFormatter) return tokenAmountFormatter(token ?? null, units);
-  return t('token.amount.plain', { amount: formatTokenAmount(units, ASSUMED_TOKEN_DECIMALS, { group: ',' }), decimals: ASSUMED_TOKEN_DECIMALS });
+  return t('token.amount.plain', { amount: formatTokenAmount(units, RAW_TOKEN_DECIMALS, { group: ',' }) });
 }
 
 /** Findings whose params carry token amounts in the chain's integer units (said in whole tokens, of the `token` param when there is one). */

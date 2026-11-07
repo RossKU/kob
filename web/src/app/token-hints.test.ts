@@ -42,10 +42,10 @@ describe('signerTokenHints: a token the registry does not list (founder 2026-10-
     const ask = kob.build(goldenRequest('create.ask', MAKER_PK));
     m.clear();
     const assumed = signerTokenHints(kob, ask, MAKER_PK, empty, 'testnet-10');
-    expect(assumed).toEqual([{ covenantId: TOKEN_COV_ID, ticker: '', decimals: 8, source: 'assumed' }]);
-    // the frame names it by its covenant id, marked, and its amounts are whole tokens
+    expect(assumed).toEqual([{ covenantId: TOKEN_COV_ID, ticker: '', decimals: 0, source: 'assumed' }]);
+    // the frame names it by its covenant id, and reads its amounts on the scale the order names: the whole token the ticket used
     const a = summarize(kob, ask, MAKER_PK, assumed);
-    expect(a.orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(decimals assumed 8\)$/);
+    expect(a.orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(3 decimals, from its price scale\)$/);
     expect(a.orders[0]!.rows.map((r) => r.value).join(' ')).not.toMatch(/base units/);
     store({ [TOKEN_COV_ID]: { decimals: 3, ticker: 'XYZ', name: 'Xyz' } });
     const issued = signerTokenHints(kob, ask, MAKER_PK, empty, 'testnet-10');

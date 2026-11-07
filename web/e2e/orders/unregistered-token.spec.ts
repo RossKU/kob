@@ -1,7 +1,6 @@
 // A token the registry does not list (TN10 2026-10-17: the founder's own token read "13,500,000,000,000 base units" and "10 KAS per 100000000
-// base units", taken for a wrong supply). Founder decision: never "base units" in front of a user. Its decimals come from the registry, else the
-// issuing browser's issuance record (its ticker too, marked unverified), else the assumed 8 (the Kaspa convention: 1e8 base units = 1 token),
-// with a small marker by its name.
+// base units", taken for a wrong supply). Its amounts read in whole tokens: its decimals come from its declaration, its program's default, the scale of its
+// order or market, else the issuing browser's issuance record (its ticker too, marked unverified), with a small marker by its name.
 import { test, expect } from '../fixtures';
 import { connectWallet } from '../helpers/env';
 import { openOrders } from '../helpers/orders';
@@ -19,13 +18,13 @@ async function seedToken(mock: Parameters<typeof openOrders>[1]): Promise<string
   return mine.find((o: { token: string }) => o.token === ID)!.covenant_id;
 }
 
-test('no record: the amounts read in whole tokens on 8 assumed decimals, the token named by its covenant id and marked "decimals assumed 8"', async ({ appPage: page, mock }) => {
+test('no record: the amounts read in whole tokens on the scale of its order, the token named by its covenant id', async ({ appPage: page, mock }) => {
   const id = await seedToken(mock);
   await openOrders(page, mock);
   const row = page.getByTestId(`order-row-${id}`);
   await expect(row).toHaveAttribute('data-status', 'open');
   await expect(row.getByTestId('order-token')).toHaveText(SHORT);
-  await expect(row.getByTestId('token-decimals-note')).toHaveText('(decimals assumed 8)');
+  await expect(row.getByTestId('token-decimals-note')).toHaveText('(8 decimals, from its market)');
   await expect(row.getByTestId('order-amount')).toContainText(`45,000 / 45,000 ${SHORT}`);
   await expect(row.getByTestId('order-price')).toContainText(new RegExp(`^10\\s*KAS per ${SHORT}`));
   await expect(page.getByTestId('orders-view')).not.toContainText(/base units/);

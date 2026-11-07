@@ -13,8 +13,8 @@ import { baseKind, isMultiFillMarket, type OrderDescription } from '../../kob/or
 import type { Clock } from '../../kob/plan-types';
 import { longId, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { formatKas, formatPricePerToken, formatTokenAmount, quoteOf, statePriceToTokenPrice } from '../../kob/units';
-import { t, type Params, ASSUMED_TOKEN_DECIMALS } from '../../i18n';
+import { decimalsOfScale, formatKas, formatPricePerToken, formatTokenAmount, quoteOf, statePriceToTokenPrice } from '../../kob/units';
+import { t, type Params, RAW_TOKEN_DECIMALS } from '../../i18n';
 
 export type Translate = (key: string, params?: Params) => string;
 export type Tone = 'normal' | 'good' | 'warn' | 'bad' | 'muted';
@@ -163,15 +163,17 @@ export function tokenLabel(ref: TokenRef, tr: Translate = t, registry?: TokenReg
   return tr('confirm.token.label', { ticker: info.ticker, id: short(info.covenantId) });
 }
 
-/** A token amount in whole tokens: of its decimals when known (registry, a hint), else of the assumed 8, said so (never "base units"). */
+/** A token amount in whole tokens: of its decimals when known (a hint, the scale of its order), else its raw amount, said so. */
 export function tokenAmountText(ref: TokenRef, amount: bigint, tr: Translate = t): string {
   return ref.decimals === null
-    ? tr('token.amount.assumed', { amount: formatTokenAmount(amount, ASSUMED_TOKEN_DECIMALS, GROUP), token: ref.ticker ?? longId(ref.covenantId), decimals: ASSUMED_TOKEN_DECIMALS })
-    : `${formatTokenAmount(amount, ref.decimals, GROUP)} ${ref.ticker ?? ''}`.trim();
+    ? tr('token.amount.assumed', { amount: formatTokenAmount(amount, RAW_TOKEN_DECIMALS, GROUP), token: ref.ticker ?? longId(ref.covenantId) })
+    : `${formatTokenAmount(amount, ref.decimals, GROUP)} ${ref.ticker ?? longId(ref.covenantId)}`;
 }
 
-/** The decimals a price or an amount of `ref` is shown with: its own, else the assumed 8 (i18n ASSUMED_TOKEN_DECIMALS). */
-const decimalsOf = (ref: TokenRef): number => ref.decimals ?? ASSUMED_TOKEN_DECIMALS;
+/** The decimals a price or an amount of `ref` is shown with: its own, else none (i18n RAW_TOKEN_DECIMALS). */
+const decimalsOf = (ref: TokenRef): number => ref.decimals ?? RAW_TOKEN_DECIMALS;
+/** `ref` read on the scale its order names, where nothing else states its decimals: what the order quotes per. */
+const onScale = (ref: TokenRef, scale: bigint): TokenRef => (ref.decimals === null ? { ...ref, decimals: decimalsOfScale(scale) } : ref);
 
 function refOf(registry: TokenRegistry | null | undefined, covenantId: Hex): TokenRef {
   const t0 = registry?.byCovenantId.get(covenantId);
@@ -248,9 +250,8 @@ function kasPerToken(price: bigint, d: OrderDescription, f: Fmt): string {
 function priceText(price: bigint, d: OrderDescription, f: Fmt): { value: string; detail?: string } {
   if (d.scale <= 0n) return { value: `${formatKas(price, GROUP)} KAS` };
   return {
-    // "X KAS per TOKEN" (whole tokens; of the assumed 8 decimals when they are not known, said so), never the pair notation "X TOKEN / KAS"
+    // "X KAS per TOKEN" (whole tokens), never the pair notation "X TOKEN / KAS"
     value: f.tr('confirm.f.perUnit', { price: formatPricePerToken(price, decimalsOf(f.ref), d.scale, GROUP), unit: 'KAS', per: f.ref.ticker ?? longId(f.ref.covenantId) }),
-    ...(f.ref.decimals === null ? { detail: f.tr('token.note.assumed', { decimals: ASSUMED_TOKEN_DECIMALS }) } : {}),
   };
 }
 
@@ -261,17 +262,16 @@ const approxTime = (daa: bigint, f: Fmt): string | null => (f.clock ? f.time(daa
  * it is shown per WHOLE A (`price x 10^decimals(A) / scale`, the ticket's own conversion), in B when B's decimals are known, else raw base units of B.
  * Without A's decimals it stays per `scale` base units of A and the detail says so.
  */
-/** The bare amount of a pair price (the unit follows as "B per A"): whole B (of the assumed 8 decimals when B's are not known). */
+/** The bare amount of a pair price (the unit follows as "B per A"): whole B. */
 const pairNumber = (ref: TokenRef, amount: bigint): string => formatTokenAmount(amount, decimalsOf(ref), GROUP);
 const bUnit = (ref: TokenRef): string => ref.ticker ?? longId(ref.covenantId);
 
 function pairPriceText(price: bigint, d: OrderDescription, f: Fmt): { value: string; detail?: string } {
-  const bRef = refOf(f.registry, d.pair!.quote.covId);
+  const bRef = onScale(refOf(f.registry, d.pair!.quote.covId), d.pair!.quote.scale);
   const aName = f.ref.ticker ?? longId(f.ref.covenantId);
-  const assumed = f.ref.decimals === null || bRef.decimals === null ? { detail: f.tr('token.note.assumed', { decimals: ASSUMED_TOKEN_DECIMALS }) } : {};
-  if (d.scale <= 0n) return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, price), unit: bUnit(bRef), per: aName }), ...assumed };
+  if (d.scale <= 0n) return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, price), unit: bUnit(bRef), per: aName }) };
   const perWholeA = statePriceToTokenPrice(price, decimalsOf(f.ref), d.scale, 'nearest');
-  return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, perWholeA), unit: bUnit(bRef), per: aName }), ...assumed };
+  return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, perWholeA), unit: bUnit(bRef), per: aName }) };
 }
 
 /**
@@ -284,7 +284,7 @@ function pairPriceText(price: bigint, d: OrderDescription, f: Fmt): { value: str
 function pairRows(d: OrderDescription, f: Fmt): Row[] {
   const { tr } = f;
   const x = d.pair!;
-  const bRef = refOf(f.registry, x.quote.covId);
+  const bRef = onScale(refOf(f.registry, x.quote.covId), x.quote.scale);
   const aName = f.ref.ticker ?? longId(f.ref.covenantId);
   const bName = bRef.ticker ?? longId(x.quote.covId);
   const rows: Row[] = [];
@@ -335,7 +335,8 @@ export function auctionSeconds(d: OrderDescription): string | null {
 }
 
 /** Rows that describe one order state: quantity, prices (all-in), timing, auction, trigger, entry, repeat. */
-export function orderRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[] {
+export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[] {
+  const f: Fmt = { ...f0, ref: onScale(f0.ref, d.scale) };
   const { tr } = f;
   // a pair order: its prices are B per whole A, its tip KAS per whole A (never part of its B price)
   const pair = !!d.pair;

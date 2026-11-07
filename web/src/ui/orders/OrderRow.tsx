@@ -1,7 +1,7 @@
 import { pairRoute, routeToHash } from '../../app/router';
 import { useServices } from '../../app/context';
 import { useTxUrl } from '../../app/explorer';
-import { formatDateTime, formatNumber, t, ASSUMED_TOKEN_DECIMALS } from '../../i18n';
+import { formatDateTime, formatNumber, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import { unitsText } from '../../kob/pair';
 import { statePriceToTokenPrice } from '../../kob/units';
 import { formatLocal, formatUtc } from '../../kob/daa';
@@ -55,9 +55,9 @@ const shortId = longId;
 function pairPriceText(value: bigint, row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | undefined): string {
   const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
   // whole tokens; a token of unknown decimals on the assumed 8 (never "base units")
-  const perA = row.scale > 0n ? statePriceToTokenPrice(value, a?.decimals ?? ASSUMED_TOKEN_DECIMALS, row.scale, 'nearest') : value;
+  const perA = row.scale > 0n ? statePriceToTokenPrice(value, a?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, 'nearest') : value;
   // "X B per A", never the pair notation "A/B" (it reads as A per B)
-  if (!b) return `${unitsText(perA, ASSUMED_TOKEN_DECIMALS, ',')} ${shortId(row.pair!.quote)} per ${aName}`;
+  if (!b) return `${unitsText(perA, RAW_TOKEN_DECIMALS, ',')} ${shortId(row.pair!.quote)} per ${aName}`;
   return `${unitsText(perA, b.decimals, ',')} ${b.ticker} per ${aName}`;
 }
 
@@ -74,7 +74,7 @@ function PriceCell(p: { row: OrderRowModel; token: TokenInfo | undefined; quote?
       {tk ? (
         <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: tk.ticker })} {...fixed(tickPriceFraction(tk.tick, tk.decimals, p.row.scale))} group />
       ) : (
-        <Amount kind="price" value={p.value} decimals={ASSUMED_TOKEN_DECIMALS} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: p.row.token ? shortId(p.row.token) : '?' })} group />
+        <Amount kind="price" value={p.value} decimals={RAW_TOKEN_DECIMALS} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: p.row.token ? shortId(p.row.token) : '?' })} group />
       )}
     </span>
   );
@@ -98,8 +98,8 @@ function pairItems(row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | 
   const x = row.pair!;
   const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
   const bName = b?.ticker ?? shortId(x.quote);
-  const aText = (v: bigint): string => `${unitsText(v, a?.decimals ?? ASSUMED_TOKEN_DECIMALS, ',')} ${aName}`;
-  const bText = (v: bigint): string => `${unitsText(v, b?.decimals ?? ASSUMED_TOKEN_DECIMALS, ',')} ${bName}`;
+  const aText = (v: bigint): string => `${unitsText(v, a?.decimals ?? RAW_TOKEN_DECIMALS, ',')} ${aName}`;
+  const bText = (v: bigint): string => `${unitsText(v, b?.decimals ?? RAW_TOKEN_DECIMALS, ',')} ${bName}`;
   const r = x.trigger;
   return [
     {
@@ -249,8 +249,8 @@ export function OrderRow(props: OrderRowProps) {
                 {row.amountLeft !== null ? (
                   <>
                     {row.amountEstimated ? <span class="est" title={t('market.book.estimatedNote')}>~</span> : null}
-                    <Amount kind="token" value={row.amountLeft} decimals={tk?.decimals ?? ASSUMED_TOKEN_DECIMALS} group />
-                    {row.amountTotal !== null ? <> / <Amount kind="token" value={row.amountTotal} decimals={tk?.decimals ?? ASSUMED_TOKEN_DECIMALS} group /></> : null}{' '}
+                    <Amount kind="token" value={row.amountLeft} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} group />
+                    {row.amountTotal !== null ? <> / <Amount kind="token" value={row.amountTotal} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} group /></> : null}{' '}
                     {tk ? tk.ticker : row.token ? shortId(row.token) : ''}
                   </>
                 ) : (

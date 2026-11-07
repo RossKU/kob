@@ -118,7 +118,7 @@ describe('G7: the decimals the app gives are labelled, and an order that does no
 
   // G7 (b): through the frame the hint is not the app's word. With the table the bundle pins the frame reads the token from the table; without it
   // the token is shown on the assumed 8 decimals. Either way a lying decimals hint does not reach the screen.
-  it('through the frame a lying decimals hint is replaced by the pinned table\'s entry, or by the assumed decimals', () => {
+  it('through the frame a lying decimals hint is replaced by the pinned table\'s entry, or by the scale the order itself names', () => {
     const b = limitSell();
     const cov = tokenOf(b);
     const table = [{ covenantId: cov, ticker: 'GOLD', decimals: 8 }];
@@ -130,7 +130,7 @@ describe('G7: the decimals the app gives are labelled, and an order that does no
       expect(req.summary.problems).toBe(0);
       const bare = frame(MAKER_SK);
       const shown = bare.send({ type: 'sign', id: 'g7', built: b, tokens: lie, registry: table })!;
-      expect(shown.summary.orders[0]!.token, `decimals ${decimals}, no pin`).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(decimals assumed 8\)$/);
+      expect(shown.summary.orders[0]!.token, `decimals ${decimals}, no pin`).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(8 decimals, from its price scale\)$/);
     }
   });
 
@@ -147,8 +147,8 @@ describe('G7: the decimals the app gives are labelled, and an order that does no
   it('a token the app marks assumed, issued or from a program default keeps its own labels and is not held to the standard scale', () => {
     const b = limitSell();
     const cov = tokenOf(b);
-    const assumed = summarize(kob, b, MAKER_PK, [{ covenantId: cov, ticker: '', decimals: 8, source: 'assumed' }]);
-    expect(assumed.orders[0]!.token).toContain('decimals assumed 8');
+    const assumed = summarize(kob, b, MAKER_PK, [{ covenantId: cov, ticker: '', decimals: 0, source: 'assumed' }]);
+    expect(assumed.orders[0]!.token).toContain('8 decimals, from its price scale');
     expect(assumed.problemCodes).not.toContain('token-scale');
   });
 });

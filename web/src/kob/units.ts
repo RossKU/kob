@@ -147,6 +147,12 @@ export const formatKas = (sompi: bigint, opt?: FormatOptions): string => formatU
 
 export const parseTokenAmount = (text: string, decimals: number): bigint => parseUnits(text, decimals);
 export const tryParseTokenAmount = (text: string, decimals: number): bigint | null => tryParseUnits(text, decimals);
+/** The decimals a scale stands for (a power of ten up to 10^18: `scale` base units per whole token), null for any other scale. */
+export function decimalsOfScale(scale: bigint): number | null {
+  for (let d = 0, p = 1n; d <= 18; d++, p *= 10n) if (p === scale) return d;
+  return null;
+}
+
 export const formatTokenAmount = (base: bigint, decimals: number, opt?: FormatOptions): string => formatUnits(base, decimals, opt);
 
 // ------------------------------------------------------------------------------------------------ state price <-> price per whole token

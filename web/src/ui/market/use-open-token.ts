@@ -4,8 +4,8 @@
 // orders takes the decimals the user entered for its first order (`decimals`); a book that cannot be read never lets them stand in for the
 // scale of orders that may exist.
 import { issuedToken } from '../../data/issued-decimals';
-import { noteTokenProgram, type DeclaredToken } from '../../data/token-declarations';
-import { useMemo } from 'preact/hooks';
+import { noteMarketDecimals, noteTokenProgram, type DeclaredToken } from '../../data/token-declarations';
+import { useEffect, useMemo } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { extensionReferences, synthesizeOpenToken, type ScaleSample, type OpenTokenIssue } from '../../kob/open-token';
 import { familyOfProgram } from '../../kob/token-state';
@@ -51,7 +51,7 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
     [indexer, view?.covenant_id, view?.template_hash, pubkey, config.network],
     { refreshKey },
   );
-  return useMemo((): OpenTokenState => {
+  const state = useMemo((): OpenTokenState => {
     if (!view) return NONE;
     if (!facts.data) return { info: null, reason: facts.error ? 'book-unavailable' : null, loading: facts.loading };
     const refs = extensionReferences(view.covenant_id, registry, facts.data.holdings);
@@ -61,4 +61,10 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
     });
     return r.ok ? { info: r.info, reason: null, loading: false } : { info: null, reason: r.reason, loading: false };
   }, [view, facts.data, facts.error, facts.loading, kob, registry, decimals, config.network, row?.source, declared]);
+  // what is shown with no order at hand reads the token as this market trades it (app/token-display.ts)
+  const known = state.info;
+  useEffect(() => {
+    if (known) noteMarketDecimals(config.network, known.covenantId, known.decimals);
+  }, [config.network, known?.covenantId, known?.decimals]);
+  return state;
 }

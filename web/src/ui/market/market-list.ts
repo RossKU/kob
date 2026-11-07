@@ -212,10 +212,11 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
   };
   if (!v) return base;
   const basis = basisOf(v.price_basis);
-  // a token without registry entry or declaration: the indexer reports 0 decimals for "unknown", which would show its price per base unit (1e8 too low
-  // against its page); the page's rule applies, 8 assumed, never base units (token page `decimals`)
+  // nothing else states them: the scale of its market, as the token page reads it; an indexer that reports 0 decimals for "unknown" and no market scale
+  // would show its price per base unit (1e8 too low against its page)
   const reported = finiteInt(v.decimals);
-  const decimals = row.decimals ?? (reported !== null && reported > 0 ? reported : ASSUMED_TOKEN_DECIMALS);
+  const scaled = typeof row.index?.market_scale === 'number' ? exponentOf(row.index.market_scale) : null;
+  const decimals = row.decimals ?? scaled ?? (reported !== null && reported > 0 ? reported : ASSUMED_TOKEN_DECIMALS);
   const unit = t('market.stats.unitOf', { base: row.ticker || label, quote: 'KAS' });
   const last = bigOrNull(v.last);
   const bid = bigOrNull(v.best_bid);

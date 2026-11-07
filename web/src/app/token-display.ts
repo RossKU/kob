@@ -6,26 +6,23 @@
 // for the registry; trading such a token waits until they agree when the decimals differ (app/env.ts). Without a declaration (a token created
 // before KCC-23: its id cannot commit to one) the order is as before: the registry; else the default decimals of its token program (a launchpad's
 // convention for the tokens of its program that declare none, KaspaRocket 3: programs.generated.ts `defaultDecimals`; the program is the one the
-// indexer lists the token under or the wallet's holdings of it verified under, data/token-declarations.ts `tokenProgramOf`); else this browser's issuance of it (data/issued-decimals.ts:
-// decimals, ticker and name the issuer chose); else the exponent of the price scale its orders use (`scale`, 10^decimals: what the market page and
-// the ticket trade it with), else ASSUMED_DECIMALS, the Kaspa convention (1e8 base units = 1 token, like KAS and sompi). A token shown on its
-// declaration, its issuance record or assumed decimals carries `decimalsSource`, and the places that name it add a small marker (`decimalsNote`); its
-// name is the declared ticker, else the issued one, else its covenant id (8 + 8 hex).
+// indexer lists the token under or the wallet's holdings of it verified under, data/token-declarations.ts `tokenProgramOf`); else the exponent of the price
+// scale an order of it names or its market trades with (`scale`, `marketDecimalsOf`, 10^decimals: what the market page and the ticket trade it with); else
+// this browser's issuance of it (data/issued-decimals.ts: decimals, ticker and name the issuer chose). The order of the ticket (kob/open-token.ts). Where nothing
+// states them none are invented: `decimalsSource: 'assumed'` with 0 decimals shows the chain's integer amount, said so. A token shown on any of these carries
+// `decimalsSource`, and the places that name it add a small marker (`decimalsNote`); its name is the declared ticker, else the issued one, else its covenant id (8 + 8 hex).
 import { issuedToken } from '../data/issued-decimals';
-import { declarationConflicts, declaredToken, tokenProgramOf } from '../data/token-declarations';
+import { declarationConflicts, declaredToken, marketDecimalsOf, tokenProgramOf } from '../data/token-declarations';
 import { programDefaultDecimals } from '../kob/programs.generated';
 import type { StorageLike } from '../config';
 import { longId, type TokenInfo, type TokenRegistry } from '../kob/registry';
 import type { Hex } from '../kob/types';
-import { setTokenAmountFormatter, t } from '../i18n';
+import { RAW_TOKEN_DECIMALS, setTokenAmountFormatter, t } from '../i18n';
 import { formatTokenAmount } from '../kob/units';
-
-/** The decimals assumed for a token nothing names them for: the Kaspa convention (KAS has 8, a sompi is 1e-8 KAS). */
-export const ASSUMED_DECIMALS = 8;
 
 /**
  * The token for display: the registry's entry (with its declaration's facts where they disagree, flagged), else a display-only entry from the
- * token's declaration, its program's default decimals, this browser's issuance of it, or ASSUMED_DECIMALS. `decimalsSource` marks the display-only
+ * token's declaration, its program's default decimals, the scale of an order or its market, this browser's issuance of it, or none. `decimalsSource` marks the display-only
  * ones; they are not tradable and never stand in for a registry entry where a token is verified or planned. `program`: the token's program when the
  * caller knows it (else the one it was seen under, `tokenProgramOf`).
  */
@@ -68,8 +65,9 @@ export function displayToken(
   if (convention) {
     return { ...base(id, name, declared?.name ?? (issued?.name || name), convention.decimals), decimalsSource: 'program', decimalsConvention: convention.source };
   }
-  const decimals = issued?.decimals ?? fromScale ?? ASSUMED_DECIMALS;
-  return { ...base(id, name, declared?.name ?? (issued?.name || name), decimals), decimalsSource: issued ? 'issued' : 'assumed' };
+  const market = fromScale ?? marketDecimalsOf(network, id);
+  const decimals = market ?? issued?.decimals ?? RAW_TOKEN_DECIMALS;
+  return { ...base(id, name, declared?.name ?? (issued?.name || name), decimals), decimalsSource: issued && issued.decimals === decimals ? 'issued' : market !== null ? 'scale' : 'assumed' };
 }
 
 function base(id: Hex, ticker: string, name: string, decimals: number): TokenInfo {
@@ -89,7 +87,7 @@ function exponentOf(scale: bigint | null | undefined): number | null {
 }
 
 /**
- * The marker next to a token shown on its declaration, its issuance record or assumed decimals, or whose registry entry and declaration
+ * The marker next to a token shown on its declaration, its issuance record, the scale of its market or its raw amount, or whose registry entry and declaration
  * disagree (null for an agreeing registry token): its text and its tooltip. A disagreement takes precedence.
  */
 export function decimalsNote(
@@ -105,9 +103,10 @@ export function decimalsNote(
     const source = token.decimalsConvention ?? '';
     return { text: source, title: t('token.note.programTitle', { decimals: token.decimals, source }) };
   }
+  if (token.decimalsSource === 'scale') return { text: t('token.note.scale', { decimals: token.decimals }), title: t('token.note.scaleTitle', { decimals: token.decimals }) };
   return token.decimalsSource === 'issued'
     ? { text: t('token.note.issued'), title: t('token.note.issuedTitle', { decimals: token.decimals }) }
-    : { text: t('token.note.assumed', { decimals: token.decimals }), title: t('token.note.assumedTitle', { decimals: token.decimals }) };
+    : { text: t('token.note.assumed'), title: t('token.note.assumedTitle') };
 }
 
 /** Where the decimals a token is shown and traded with come from (`decimalsOrigin`). */
@@ -127,13 +126,13 @@ export function decimalsOrigin(token: Pick<TokenInfo, 'decimalsSource' | 'declar
 
 /**
  * Makes every sentence of the app that names an amount of a token (i18n `tokenAmountText`: the findings of the planners and the cancel) say it
- * as this module shows the token: whole tokens with its name, marked when its decimals are assumed. Called once with the app's registry.
+ * as this module shows the token: whole tokens with its name, or its raw amount where nothing states its decimals. Called once with the app's registry.
  */
 export function installTokenAmounts(registry: Pick<TokenRegistry, 'byCovenantId'>, network: string): void {
   setTokenAmountFormatter((token, units) => {
     const tk = token ? displayToken(registry, network, token) : undefined;
-    if (!tk) return t('token.amount.plain', { amount: formatTokenAmount(units, ASSUMED_DECIMALS, { group: ',' }), decimals: ASSUMED_DECIMALS });
+    if (!tk) return t('token.amount.plain', { amount: formatTokenAmount(units, RAW_TOKEN_DECIMALS, { group: ',' }) });
     const amount = formatTokenAmount(units, tk.decimals, { group: ',' });
-    return tk.decimalsSource === 'assumed' ? t('token.amount.assumed', { amount, token: tk.ticker, decimals: tk.decimals }) : tk.ticker ? `${amount} ${tk.ticker}` : amount;
+    return tk.decimalsSource === 'assumed' ? t('token.amount.assumed', { amount, token: tk.ticker }) : tk.ticker ? `${amount} ${tk.ticker}` : amount;
   });
 }

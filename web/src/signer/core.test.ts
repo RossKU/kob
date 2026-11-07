@@ -181,10 +181,10 @@ describe('signer summary: decoded in the frame, net effect, order terms and fee'
     expect(s.fee).toMatch(/ KAS$/);
   });
 
-  it('without a hint a token is named by its covenant id and counted in whole tokens on the assumed 8 decimals (never "base units")', () => {
+  it('without a hint a token movement with no order names no decimals: its covenant id and its raw amount, said so', () => {
     const d = decodeSigning({ kob, built: buildSend(), maker: MAKER_PK, registry: null });
     const s = summaryLines(d, []);
-    expect(s.lines.some((l) => l.label === '70707070…70707070 (decimals assumed 8)' && l.value === '−0.00009')).toBe(true);
+    expect(s.lines.some((l) => l.label === '70707070…70707070 (raw amount: nothing states its decimals)' && l.value === '−9000')).toBe(true);
   });
 
   it('a cancel', () => {
@@ -302,11 +302,11 @@ describe('G7 (b): a listed token is shown as listed only when the app sent the p
     expect(shown({})).toContain('EXKCC (70707070…70707070, 8 decimals as the app lists them)');
   });
 
-  it('a tampered table, no table, no pin, another pin: the token is shown as assumed, without the ticker', () => {
+  it('a tampered table, no table, no pin, another pin: a token movement with no order is its raw amount, without the ticker', () => {
     const tampered: RegistryRow[] = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 2 }];
     for (const over of [{ registry: tampered, tokens: [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 2 }] }, { registry: null }, { hash: undefined }, { hash: tableHash(tampered) }]) {
       const t = shown(over);
-      expect(t, JSON.stringify(over)).toContain('70707070…70707070 (decimals assumed 8)');
+      expect(t, JSON.stringify(over)).toContain('70707070…70707070 (raw amount: nothing states its decimals)');
       expect(t, JSON.stringify(over)).not.toContain('as the app lists them');
       expect(t, JSON.stringify(over)).not.toContain('EXKCC');
     }

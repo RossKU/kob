@@ -36,7 +36,7 @@ export interface TokenHint {
    * `convention` names it), or the decimals are the assumed 8 and the ticker is empty (`assumed`); the frame marks the token so
    * (app/token-display.ts)
    */
-  source?: 'declared' | 'issued' | 'program' | 'assumed';
+  source?: 'declared' | 'issued' | 'program' | 'scale' | 'assumed';
   /** with `source: 'program'`: the source of the decimals as the app names it (`KaspaRocket convention`; a label only) */
   convention?: string;
 }
@@ -138,11 +138,11 @@ export function isBuiltTx(v: unknown): v is BuiltTx {
 const isTokenHint = (v: unknown): v is TokenHint =>
   isObj(v) && hasKeys(v, ['covenantId', 'ticker', 'decimals', 'inverted', 'source', 'convention']) && HEX32.test(String(v.covenantId)) && typeof v.ticker === 'string' && isIndex(v.decimals, 19) &&
   (v.inverted === undefined || typeof v.inverted === 'boolean') &&
-  (v.source === undefined || v.source === 'declared' || v.source === 'issued' || v.source === 'program' || v.source === 'assumed') &&
+  (v.source === undefined || v.source === 'declared' || v.source === 'issued' || v.source === 'program' || v.source === 'scale' || v.source === 'assumed') &&
   // a program default's source: a short printable label, with that source only
   (v.source === 'program' ? typeof v.convention === 'string' && /^[\x20-\x7e]{1,40}$/.test(v.convention) : v.convention === undefined) &&
   // a registry or issued ticker; an assumed or program-default token has none (the frame names it by its covenant id)
-  (v.source === 'assumed' || v.source === 'program' ? v.ticker === '' : TICKER.test(v.ticker));
+  (v.source === 'assumed' || v.source === 'program' || v.source === 'scale' ? v.ticker === '' : TICKER.test(v.ticker));
 
 const isClaim = (v: unknown): v is GenesisClaim =>
   isObj(v) && hasKeys(v, ['program', 'extensionCommitment', 'outputs']) && typeof v.program === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(v.program) &&

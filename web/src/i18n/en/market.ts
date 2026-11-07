@@ -355,7 +355,7 @@ export default {
   'market.open.decimals.entered': 'The token declares no decimals on chain and no order of it exists yet: amounts and prices use the {decimals} decimals you entered, and the price step is 1 sompi.',
   'market.open.decimals.registry': 'Amounts are whole tokens of {decimals} decimals, as the token registry lists it.',
   'market.open.decimals.issued': "Not in the token registry: amounts are whole tokens of {decimals} decimals, from this browser's creation of it; the price step is 1 sompi.",
-  'market.open.decimals.assumed': 'Not in the token registry and nothing states its decimals: amounts are whole tokens of {decimals} decimals (assumed); the price step is 1 sompi.',
+  'market.open.decimals.assumed': "Nothing states its decimals: amounts are the chain's integer amounts; the price step is 1 sompi.",
   'market.open.loading': 'Reading the token from its open orders...',
   'market.open.program-unknown': 'this build does not contain the token program of this token',
   'market.open.program-ambiguous': 'orders name more than one token program for this token and only a token output on the chain can tell which one is its: it is not traded here until one is shown',

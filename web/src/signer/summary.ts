@@ -10,9 +10,9 @@ import { baseKind, isMultiFillMarket, type OrderDescription } from '../kob/order
 import { DEFAULT_BID_FILLS } from '../kob/orders/common';
 import { longId, type TokenInfo, type TokenRegistry } from '../kob/registry';
 import type { BuiltTx, Hex } from '../kob/types';
-import { formatKas, formatTokenAmount } from '../kob/units';
+import { decimalsOfScale, formatKas, formatTokenAmount } from '../kob/units';
 import type { KobWasm } from '../kob/wasm';
-import { ASSUMED_TOKEN_DECIMALS, formatDateTime, t } from '../i18n';
+import { RAW_TOKEN_DECIMALS, formatDateTime, t } from '../i18n';
 import { auctionSeconds, orderRows, orderTitle, orderTypeCode, type Fmt, type MarketFillsFacts } from '../ui/confirm/confirm-model';
 import type { GenesisClaim, TokenHint } from './protocol';
 import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './words';
@@ -75,10 +75,10 @@ const SHOWN_AS_LINES = new Set<string>(['payment-out', 'transfer-out']);
  * itself carries (a 4 + 4 fragment is 32 bits, which a token made to match it can copy).
  */
 const tokenName = (covenantId: Hex, hint: TokenHint | undefined, frame = false): string => {
-  // no label from the app: named by its covenant id, its amounts on the assumed 8 decimals (never "base units")
-  if (!hint) return t('signer.net.tokenAssumed', { id: longId(covenantId), decimals: ASSUMED_TOKEN_DECIMALS });
-  // a token the registry does not list (app/token-display.ts): its issued ticker, else its covenant id; marked
-  if (hint.source === 'assumed') return t('signer.net.tokenAssumed', { id: longId(covenantId), decimals: hint.decimals });
+  // nothing states its decimals: named by its covenant id, its raw amount, said so
+  if (!hint || hint.source === 'assumed') return t('signer.net.tokenAssumed', { id: longId(covenantId) });
+  // named as app/token-display.ts shows it: by its covenant id, and by the ticker its creator gave it where it has one; marked
+  if (hint.source === 'scale') return t('signer.net.tokenScale', { id: longId(covenantId), decimals: hint.decimals });
   if (hint.source === 'program') return t('signer.net.tokenProgram', { id: longId(covenantId), decimals: hint.decimals, source: hint.convention ?? '' });
   if (hint.source === 'issued') return t('signer.net.tokenIssued', { ticker: hint.ticker, id: longId(covenantId) });
   if (hint.source === 'declared') return t('signer.net.tokenDeclared', { ticker: hint.ticker, id: longId(covenantId) });
@@ -94,6 +94,30 @@ function refOfHint(covenantId: Hex, hints: TokenHint[], frame = false): TokenRef
   // an assumed token's amounts carry its covenant id as their unit
   const ticker = h ? (h.ticker || longId(covenantId)) : null;
   return { covenantId, ticker, decimals: h?.decimals ?? null, display: tokenName(covenantId, h, frame), inRegistry: false, tradable: false };
+}
+
+/**
+ * The hints with the scale the transaction's own orders name, for a token nothing else states the decimals of (no declaration, no program default, no table of
+ * this frame): the order quotes per that whole token, as the ticket that planned it did. Read from the decoded transaction, in the frame too, so it is no word of the app's.
+ */
+function withOrderScales(s: SigningSummary, hints: readonly TokenHint[]): TokenHint[] {
+  const scales = new Map<Hex, bigint>();
+  const add = (d: OrderDescription | null | undefined): void => {
+    if (!d) return;
+    if (d.pair) for (const x of [d.pair.base, d.pair.quote]) scales.set(x.covId, x.scale);
+    else if (d.tokenCovId) scales.set(d.tokenCovId, d.scale);
+    add(d.entry?.exit);
+  };
+  for (const o of s.orders) add(o.description);
+  for (const sp of s.spends) add(sp.description);
+  const out = hints.filter((h) => h.source !== 'assumed' || !scales.has(h.covenantId) || decimalsOfScale(scales.get(h.covenantId)!) === null);
+  for (const [covenantId, scale] of scales) {
+    const decimals = decimalsOfScale(scale);
+    if (decimals === null || out.some((h) => h.covenantId === covenantId)) continue;
+    const inverted = hints.find((h) => h.covenantId === covenantId)?.inverted ? { inverted: true } : {};
+    out.push({ covenantId, ticker: '', decimals, source: 'scale', ...inverted });
+  }
+  return out;
 }
 
 /** The hints as the confirmation model's registry lookup (a pair order's quote token B): ticker and decimals only. */
@@ -115,9 +139,7 @@ function orderSummary(d: OrderDescription, extra: Parameters<typeof orderRows>[1
   return {
     title: orderTitle(d, extra.deadline, f),
     token: f.ref.display,
-    // a price of a token whose decimals the frame does not know (no hint: an unlisted token's first order) is per `scale` base units:
-    // the frame keeps that detail, as amounts there are base units too (TN10 2026-10-15 B-13: "1000 base units" at "0.5 KAS")
-    rows: orderRows(d, extra, f).map((r) => ({ id: r.id, label: r.label, value: r.detail && ((f.ref.decimals === null && /^decimals assumed/.test(r.detail)) || (terms && SIGNED_TERM_DETAIL.has(r.id))) ? `${r.value} (${r.detail})` : r.value, ...timeOf(r, d) })),
+    rows: orderRows(d, extra, f).map((r) => ({ id: r.id, label: r.label, value: r.detail && terms && SIGNED_TERM_DETAIL.has(r.id) ? `${r.value} (${r.detail})` : r.value, ...timeOf(r, d) })),
     exit: exit ? { ...exit, title: t('confirm.exitOf', { title: exit.title }) } : null,
   };
 }
@@ -339,7 +361,8 @@ function scaleMismatches(s: SigningSummary, hints: TokenHint[]): { code: string 
 }
 
 /** Compact lines of a decoded request: KAS and every token, net for this key; KAS locked into orders and paid to other keys; the fee. */
-export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWasm, terms = false): SignerSummary {
+export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: KobWasm, terms = false): SignerSummary {
+  const hints = withOrderScales(s, appHints);
   const lines: SummaryLine[] = [];
   const k = s.net.kas;
   const kas = (v: bigint) => `${formatKas(v)} KAS`;
@@ -347,14 +370,14 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
   for (const tok of s.net.tokens) {
     const hint = hints.find((h) => h.covenantId === tok.ref.covenantId);
     const label = tokenName(tok.ref.covenantId, hint, terms);
-    const amount = (v: bigint) => formatTokenAmount(v, hint ? hint.decimals : ASSUMED_TOKEN_DECIMALS);
+    const amount = (v: bigint) => formatTokenAmount(v, hint ? hint.decimals : RAW_TOKEN_DECIMALS);
     if (tok.walletDelta !== 0n) lines.push({ label, value: signed(tok.walletDelta, amount), dir: tok.walletDelta < 0n ? 'out' : 'in' });
     if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: amount(tok.toOthers), dir: 'out' });
   }
   const merged = mergedTokens(s);
   for (const m of merged ?? []) {
     const hint = hints.find((h) => h.covenantId === m.ref.covenantId);
-    const amount = formatTokenAmount(m.amount, hint ? hint.decimals : ASSUMED_TOKEN_DECIMALS);
+    const amount = formatTokenAmount(m.amount, hint ? hint.decimals : RAW_TOKEN_DECIMALS);
     lines.push({ label: t('signer.net.merged', { token: tokenName(m.ref.covenantId, hint, terms) }), value: t('signer.net.mergedValue', { inCount: m.inCount, outCount: m.outCount, amount }), dir: null });
   }
   if (k.locked.total > 0n) lines.push({ label: t('signer.net.locked'), value: kas(k.locked.total), dir: null });

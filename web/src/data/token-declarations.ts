@@ -195,11 +195,29 @@ export function tokenProgramOf(network: string, covenantId: Hex | null | undefin
   return covenantId ? (programs.get(k(network, covenantId)) ?? null) : null;
 }
 
+/**
+ * The decimals the market of a token trades with where nothing on chain states them: the scale its first order set, as the indexer lists it or the token's
+ * page read it (kob/open-token.ts). Kept in memory per network, for what is shown with no order at hand (a balance, a token movement): the ticket's whole token.
+ */
+const marketDecimals = new Map<string, number>();
+
+/** Remembers a market's decimals (call it from an effect or an async callback, never while rendering). */
+export function noteMarketDecimals(network: string, covenantId: Hex | null | undefined, decimals: number | null | undefined): void {
+  if (!covenantId || decimals === null || decimals === undefined || !/^[0-9a-fA-F]{64}$/.test(covenantId)) return;
+  marketDecimals.set(k(network, covenantId), decimals);
+}
+
+/** The decimals noted for a token's market, else null. */
+export function marketDecimalsOf(network: string, covenantId: Hex): number | null {
+  return marketDecimals.get(k(network, covenantId)) ?? null;
+}
+
 /** Tests only: forget everything. */
 export function resetDeclarationsForTests(): void {
   memo.clear();
   inflight.clear();
   programs.clear();
+  marketDecimals.clear();
   loadedFrom = undefined;
 }
 

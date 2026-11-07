@@ -11,6 +11,7 @@ import { decodeSigning } from '../../kob/decode';
 import { longId, parseRegistry, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import type { ActionRequest, BuiltTx, Hex, TokenProgram } from '../../kob/types';
+import { decimalsOfScale, formatTokenAmount } from '../../kob/units';
 import { summarize } from '../../signer/summary';
 import { MAKER, goldenRequest, nodeFactsOf, tradableRegistryJson } from '../../testing/chain-fixtures';
 import { MockNode } from '../../testing/mock-node';
@@ -116,14 +117,16 @@ describe('the confirmation table of a pair whose tokens have no ticker', () => {
     expect(rowOf(hints, 'pairTotal').value).toContain(longId(B));
   });
 
-  it('reads each token on the decimals of the scale the order names, still marked: nothing on chain states them', () => {
-    // the vector's scales are not the assumed 10^8: the token would read 100 times off
-    const six = kob.build(goldenRequest<ActionRequest>('pair.create.ask', MAKER.pk));
-    const scale = (id: Hex) => (id === A ? pair.base.scale : pair.quote.scale);
-    for (const id of [A, B]) {
-      const hint = signerTokenHints(kob, six, MAKER.pk, empty, NET).find((h) => h.covenantId === id)!;
-      expect(10n ** BigInt(hint.decimals)).toBe(scale(id));
-      expect(hint).toMatchObject({ ticker: '', source: 'assumed' });
-    }
+  it('reads each token on the scale the order names: the whole token the ticket used', () => {
+    const s = summarize(kob, built, MAKER.pk, signerTokenHints(kob, built, MAKER.pk, empty, NET));
+    expect(s.orders[0]!.token).toBe(`${longId(A)} (${decimalsOfScale(pair.base.scale)} decimals, from its price scale)`);
+    const held = pair.custodies[0]!.amount;
+    expect(s.orders[0]!.rows.find((r) => r.id === 'pairEscrowA')!.value).toBe(`${formatTokenAmount(held, decimalsOfScale(pair.base.scale)!, { group: ',' })} ${longId(A)}`);
+  });
+
+  it('a declared or program-default decimals hint comes first, as on the ticket', () => {
+    const s = summarize(kob, built, MAKER.pk, [{ covenantId: A, ticker: 'AAA', decimals: decimalsOfScale(pair.base.scale)!, source: 'declared' }]);
+    expect(s.orders[0]!.token).toContain('AAA');
+    expect(s.orders[0]!.token).toContain('declared on chain, unverified');
   });
 });
