@@ -33,7 +33,7 @@ export interface MarketToken {
   row: TokenRow | null;
   /** the row with the creator's name, ticker and icon from kascov.io where KOB has none of its own (the facts stay KOB's) */
   headerRow: TokenRow | null;
-  /** what an order ticket trades: the creator's ticker (kascov.io) where KOB has no name of its own; a label, the id stays the identity */
+  /** what an order ticket trades, named as the page names it (the list's ticker, else the creator's on kascov.io): a label, the id stays the identity */
   ticketInfo: TokenInfo | null;
   open: OpenTokenState;
   held: HeldTokenState;
@@ -93,7 +93,7 @@ export function useMarketToken(id: string, o: MarketTokenOptions): MarketToken {
   const headerRow = useMemo(() => (row && kascov.status === 'ok' ? applyKascov(row, kascov.tokens, longId(row.covenantId)) : row), [row, kascov]);
   const ticketInfo = useMemo(() => {
     const i = row?.info ?? null;
-    return i && i.openList && headerRow && headerRow.ticker && headerRow.ticker !== i.ticker && headerRow.kascov?.usedTicker ? { ...i, ticker: headerRow.ticker } : i;
+    return i && i.openList && headerRow && headerRow.ticker && headerRow.ticker !== i.ticker ? { ...i, ticker: headerRow.ticker } : i;
   }, [row?.info, headerRow]);
   // the token outputs are asked for last and always answer (a row or a reason): until then a token in neither list, or a listed row with no program, is undecided
   const undecided = (!listedRow || ambiguous) && !held.row && !pub.row && pub.reason === null;
