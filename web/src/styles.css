@@ -286,6 +286,8 @@ small, .small { font-size: 0.85em; }
 /* at least 24 px tall targets (WCAG 2.5.8) */
 .ff-links a { color: var(--text); opacity: 0.82; text-decoration: none; padding-block: 4px; }
 .ff-links a:hover { opacity: 1; text-decoration: underline; }
+.ff-links .ff-support { display: inline-flex; align-items: center; gap: 5px; opacity: 1; }
+.ff-support svg { color: var(--sell); flex: none; }
 .ff-sep { width: 1px; background: var(--border); align-self: stretch; }
 .footer .ff-disc { margin-top: 16px; max-width: 72em; }
 .ff-disc strong { color: var(--warn); }
