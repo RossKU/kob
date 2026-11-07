@@ -1,9 +1,10 @@
 // The market list (`#/market`) against the mock stack: the 24 h figures of each token's KAS market (`/v1/stats`: last price, change, KAS volume,
-// spread, depth within 2 % of the mid, market cap), the token pairs with live pair orders (`/v1/pairs`, price implied through the two KAS markets, 24 h pair volume), sorting by
+// spread, depth within 2 % of the mid, market cap), a favourite pair (price implied through the two KAS markets, 24 h pair volume, `/v1/pairs` for its order counts), sorting by
 // every column (24 h volume first; mouse and keyboard), search over tokens and pairs, a row whose figures the indexer cannot give, and the phone layout.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
+import { seedFavorites } from '../helpers/env';
 
 // every test opens the list itself (after its registry / route stubs are in place)
 test.use({ autoOpen: false });
@@ -26,6 +27,7 @@ async function listBoth(page: Page): Promise<void> {
 
 /** Both tokens listed, the pair seed (EXUSD's KAS book, live EXKCC/EXUSD pair orders) and two EXUSD trades worth 75 KAS: EXUSD out-trades EXKCC. */
 async function twoMarkets(page: Page, mock: MockClient): Promise<string> {
+  await seedFavorites(page, { pairs: [{ base: EXKCC, quote: QUOTE }] });
   await mock.seed({ pair: true });
   await mock.seed({
     trades: [
@@ -69,11 +71,11 @@ test('a token row shows its last price in KAS, the 24 h change, KAS volume, spre
   await expect(row.getByTestId(`token-mcap-${id}`)).toHaveText('—');
   // the list opens by 24 h volume, most traded first
   await expect(page.getByTestId('sort-volume').locator('xpath=..')).toHaveAttribute('aria-sort', 'descending');
-  // no pair has live pair orders: no pair table
-  await expect(page.getByTestId('pair-list')).toHaveCount(0);
+  // pairs are reached by the picker and the favourites: no table of them
+  await expect(page.getByTestId('pair-table')).toHaveCount(0);
 });
 
-test('sorting: 24 h volume first, every header sorts (click and keyboard), search keeps the order; the pair table follows the same order', async ({ appPage: page, mock }) => {
+test('sorting: 24 h volume first, every header sorts (click and keyboard), search keeps the order; the table of favourite pairs follows the same order', async ({ appPage: page, mock }) => {
   const exkcc = await twoMarkets(page, mock);
   expect(await rowIds(page)).toEqual([QUOTE, exkcc]);
   await expect(page.getByTestId(`token-volume-${QUOTE}`)).toHaveText('75.10');
@@ -94,7 +96,8 @@ test('sorting: 24 h volume first, every header sorts (click and keyboard), searc
   expect(await rowIds(page)).toEqual([exkcc, QUOTE]);
   await expect(page.getByTestId('sort-volume').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'none');
 
-  // the pair EXKCC/EXUSD: its price implied through both KAS markets (EXKCC's ~0.025 EXUSD per KAS's 0.502 KAS), the depth near its mid (live pair orders in the tooltip), no spread
+  // the favourite pair EXKCC/EXUSD: its price implied through both KAS markets (EXKCC's ~0.025 EXUSD per KAS's 0.502 KAS), the depth near its mid (live pair orders in the tooltip), no spread
+  await page.getByTestId('token-list-favorites').click();
   const pairId = `${exkcc}-${QUOTE}`;
   const pair = page.getByTestId(`pair-row-${pairId}`);
   await expect(pair).toHaveAttribute('data-state', 'ready');
@@ -111,16 +114,16 @@ test('sorting: 24 h volume first, every header sorts (click and keyboard), searc
   // the pair table's headers carry the same sort state
   await expect(page.getByTestId('pair-table').getByTestId('sort-last').locator('xpath=..')).toHaveAttribute('aria-sort', 'ascending');
 
-  // search: a token matches its row and its pairs; BASE/QUOTE matches the pair; nothing else
+  // search: a token matches its pairs; BASE/QUOTE matches the pair; nothing else
   await page.getByTestId('token-search').fill('exusd');
-  expect(await rowIds(page)).toEqual([QUOTE]);
   await expect(pair).toBeVisible();
   await page.getByTestId('token-search').fill('exkcc/exusd');
   await expect(pair).toBeVisible();
   await page.getByTestId('token-search').fill('exusd/exkcc');
-  await expect(page.getByTestId('pair-list-empty')).toBeVisible();
+  await expect(pair).toHaveCount(0);
+  await expect(page.getByTestId('token-list-empty')).toBeVisible();
   await page.getByTestId('token-search').fill('');
-  expect(await rowIds(page)).toEqual([exkcc, QUOTE]);
+  await expect(pair).toBeVisible();
 
   // a pair link opens the pair page
   await page.getByTestId(`pair-link-${pairId}`).click();
@@ -131,6 +134,7 @@ test('a token whose 24 h figures the indexer cannot give shows — without break
   await mock.seed({ pair: true });
   await listBoth(page);
   const exkcc = (await mock.token()).covenant_id;
+  await seedFavorites(page, { pairs: [{ base: exkcc, quote: QUOTE }] });
   await page.route(`**/v1/stats/${QUOTE}`, (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":{"code":"internal","message":"boom"}}' }));
   await page.goto('/#/market');
   const bad = page.getByTestId(`token-row-${QUOTE}`);
@@ -145,6 +149,7 @@ test('a token whose 24 h figures the indexer cannot give shows — without break
   await page.getByTestId('sort-volume').first().click();
   expect(await rowIds(page)).toEqual([exkcc, QUOTE]);
   // the pair needs both legs for its price: — there too
+  await page.getByTestId('token-list-favorites').click();
   await expect(page.getByTestId(`pair-last-${exkcc}-${QUOTE}`)).toHaveText('—');
 });
 
@@ -205,7 +210,6 @@ test.describe('phone', () => {
     await expect(row.getByTestId(`identity-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-hash-${exkcc}`)).toBeVisible();
     await expect(page.getByTestId('sort-volume').first()).toBeHidden();
-    await expect(page.getByTestId('pair-table').getByTestId('sort-last')).toBeVisible();
     const overflow = await page.evaluate(() => {
       const wraps = [...document.querySelectorAll('.ml-table')].map((w) => w.scrollWidth - w.clientWidth);
       return { page: document.documentElement.scrollWidth - window.innerWidth, tables: Math.max(...wraps) };
@@ -215,5 +219,9 @@ test.describe('phone', () => {
     // sorting still works from the visible headers
     await page.getByTestId('sort-change').first().click();
     await expect(page.getByTestId('sort-change').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'descending');
+    // the favourite pair's table keeps its headers
+    await page.getByTestId('token-list-favorites').click();
+    await expect(page.getByTestId('pair-table').getByTestId('sort-last')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
   });
 });

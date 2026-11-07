@@ -151,6 +151,11 @@ export async function openSettingsAdvanced(page: Page): Promise<void> {
   await expect(page.getByTestId('settings-servers')).toBeVisible();
 }
 
+/** The favourites this browser starts every page with (ui/market/favorites.ts). */
+export async function seedFavorites(page: Page, f: { tokens?: string[]; pairs?: { base: string; quote: string }[] }): Promise<void> {
+  await page.addInitScript(([k, v]) => localStorage.setItem(k!, v!), ['kob.favorites.v1:testnet-10', JSON.stringify({ tokens: f.tokens ?? [], pairs: f.pairs ?? [] })]);
+}
+
 /** Scrolls the activity log into view: under a token or pair page it reads nothing while it is off screen (ui/activity/use-activity.ts). */
 export async function showActivity(page: Page): Promise<void> {
   await page.getByTestId('activity-list').first().scrollIntoViewIfNeeded();

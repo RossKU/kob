@@ -308,6 +308,12 @@ export function tradableHere(row: Pick<TokenRow, 'source' | 'info' | 'index'>, p
 /** The rows a market list, selector or pair choice offers: only tokens this build can trade (see `tradableHere`). */
 export const tradableRows = <R extends Pick<TokenRow, 'source' | 'info' | 'index'>>(rows: readonly R[], pinned: readonly TemplateInfo[]): R[] => rows.filter((r) => tradableHere(r, pinned));
 
+/** A favourite no list names now: its id is all the row has. Its page decides what can be done with it. */
+export const idOnlyRow = (covenantId: string): TokenRow => ({
+  covenantId, ticker: '', name: null, source: 'public', info: null, index: null, powers: [], issuerControl: false, facts: [], templateId: null, badges: [], tradable: false,
+  reason: 'unregistered', indexerProblems: [], openAsks: null, openBids: null, decimals: null, scale: null, tick: null,
+});
+
 /** The rows of a pair selector: each token on screen named as its page names it; one no list names has no row of its own and is added. */
 export function withShownRows(rows: readonly TokenRow[], shown: readonly (TokenRow | null | undefined)[]): TokenRow[] {
   let out = [...rows];

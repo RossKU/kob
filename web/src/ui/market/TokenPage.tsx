@@ -26,11 +26,13 @@ import {
 import { useInverted } from './use-orientation';
 import { MarketStats } from './MarketStats';
 import { BookGrouping, OrderBook, StaleSince } from './OrderBook';
+import { FavoriteStar } from './FavoriteStar';
+import { isFavoriteToken, toggleToken, useFavorites } from './favorites';
 import { FlipButton, MarketShell, PairSelector } from './MarketBar';
 import { openPair } from './market-nav';
 import { displayedPair, marketFor, type DisplayedPair } from './market-select';
 import { PriceChart } from './PriceChart';
-import { TokenFacts } from './TokenBadges';
+import { TokenFacts, tokenTitle } from './TokenBadges';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
 import { useGenesisCheck } from './use-genesis-check';
@@ -59,8 +61,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const services = useServices();
   const wallet = useWallet();
   const { indexer: health } = useSystemStatus();
-  const { registry, indexer, kob } = services;
+  const { registry, indexer, kob, config } = services;
   const id = props.covenantId;
+  const { favorites, change: changeFavorites } = useFavorites(config.network);
   // standalone mode: the book, the trades and the figures come from what this page saw on the node since `sa.sinceMs`
   const sa = useStandalone(services.standalone);
   const standalone = sa?.active ? sa : null;
@@ -314,6 +317,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
               {canFlip ? <FlipButton pair={pairLabel(name, !inverted)} pressed={inverted} onClick={toggleInverted} /> : null}
             </>
           }
+          tools={<FavoriteStar on={isFavoriteToken(favorites, id)} name={tokenTitle(checkedRow ?? row)} onToggle={() => changeFavorites((f) => toggleToken(f, id))} data-testid="token-page-favorite" />}
         />
       }
       notices={

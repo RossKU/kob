@@ -22,6 +22,8 @@ import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, 
 import { OrderTicket } from '../ticket/OrderTicket';
 import { requestPairFlip } from '../ticket/pair-flip';
 import { DepthChart } from './DepthChart';
+import { FavoriteStar } from './FavoriteStar';
+import { isFavoritePair, togglePair, useFavorites } from './favorites';
 import { PriceChart, type UsdChartSpec } from './PriceChart';
 import { useLiveRefresh } from './live';
 import { FlipButton, MarketShell, PairSelector } from './MarketBar';
@@ -55,7 +57,8 @@ const pairToken = (x: TokenInfo): PairToken => ({ covenantId: x.covenantId, tick
 
 export function PairPage(props: { base: string; quote: string }) {
   const services = useServices();
-  const { registry, indexer, kob } = services;
+  const { registry, indexer, kob, config } = services;
+  const { favorites, change: changeFavorites } = useFavorites(config.network);
   const standalone = useStandalone(services.standalone)?.active === true;
   const [liveKey, setLiveKey] = useState(0);
   // bumps on a reorg / resync: the chart reloads in full (TokenPage)
@@ -247,6 +250,12 @@ export function PairPage(props: { base: string; quote: string }) {
                 }}
               />
             </div>
+            <FavoriteStar
+              on={isFavoritePair(favorites, props.base, props.quote)}
+              name={`${baseRow ? tokenTitle(baseRow) : baseInfo.ticker} / ${quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker}`}
+              onToggle={() => changeFavorites((f) => togglePair(f, props.base, props.quote))}
+              data-testid="pair-favorite"
+            />
             <Badge tone={mode === 'live' ? 'ok' : mode === 'polling' ? 'info' : 'neutral'} data-testid="pair-live" title={t(`market.live.${mode}Hint`)}>
               {t(`market.live.${mode}`)}
             </Badge>

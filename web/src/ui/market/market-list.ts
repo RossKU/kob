@@ -1,14 +1,14 @@
-// View model of the market list (`#/market`): one row per tradable token's KAS market (TOKEN/KAS) and one per token pair with live pair orders
+// View model of the market list (`#/market`): one row per tradable token's KAS market (TOKEN/KAS) and, in the Favorites view, one per favourite token pair
 // (BASE/QUOTE), with the 24 h figures the indexer already serves:
 //
 //   * a token's KAS market: `GET /v1/stats/<token>` (one call per token): last price, 24 h change, 24 h KAS volume and trade count, best bid / ask
 //     and spread, the KAS the book offers within 2 % of its mid (`depth_2pct_quote`; an older indexer sends none: "—"); the open order counts of
 //     `GET /v1/tokens` (the depth tooltip). The MARKET CAP is the last trade price x the token's total supply (`supplyOf`: the registry's verified genesis record
 //     of a token with no way to mint more, else the supply kascov.io reports for a token it marks verified, labelled as kascov's); none without both.
-//   * a token pair (`GET /v1/pairs`, both tokens tradable and in the registry, as the pair page needs): last price and change implied through the two
-//     KAS markets (the same `usdStats` the pair page uses: prices come only from KAS-book fills), the 24 h pair volume of
-//     `GET /v1/pairs/<base>/<quote>/fills?limit=1` (`volume_24h`, in QUOTE), the depth within 2 % of the mid of `GET /v1/pairs/<base>/<quote>/book`
-//     (QUOTE, `pairDepthOf`), the live pair order counts of the summary (the depth tooltip). No bid / ask here (the pair book is on the pair page).
+//   * a favourite token pair: last price and change implied through the two KAS markets (the same `usdStats` the pair page uses: prices come only from
+//     KAS-book fills), the 24 h pair volume of `GET /v1/pairs/<base>/<quote>/fills?limit=1` (`volume_24h`, in QUOTE), the depth within 2 % of the mid of
+//     `GET /v1/pairs/<base>/<quote>/book` (QUOTE, `pairDepthOf`), the live pair order counts of `GET /v1/pairs` (the depth tooltip; a pair without live orders has
+//     none). No bid / ask here (the pair book is on the pair page).
 //
 // Each figure is a cell (text + tooltip): prices with about five significant digits (the market's tick when the registry has one), compact K / M / B
 // when a cell would be too wide, never a cut digit (the exact figure is in the tooltip). A row whose figures are still loading or unavailable shows
@@ -21,7 +21,8 @@ import { fitAmountColumn, fitDecimalTexts, tickPriceFraction } from '../kit/form
 import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, priceDecimals, toneOf, unitsToNumber, type Tone } from './market-model';
 import { kasPerToken } from './orientation';
 import type { PairDepth, PairVolume } from './pair-market';
-import { filterTokens, tokenLabel, type TokenRow } from './token-model';
+import type { FavoritePair } from './favorites';
+import { filterTokens, idOnlyRow, tokenLabel, type TokenRow } from './token-model';
 import { usdStats } from './usd-model';
 
 // ------------------------------------------------------------------------------------------------ async slots
@@ -266,33 +267,31 @@ export function pairDepthCell(d: PairDepth, decimals: number, unit: string, note
   return d.atLeast ? { text: c.text === null ? null : `≥${c.text}`, title: `${c.title ?? ''} · ${t('market.list.depthAtLeast')}` } : c;
 }
 
-/** A token pair with live pair orders whose two tokens the list offers. */
+/** A favourite token pair as the list shows it. */
 export interface ListedPair {
   key: string;
   base: TokenRow;
   quote: TokenRow;
-  summary: PairSummaryView;
+  /** its live order counts; null when `/v1/pairs` does not list it this way round */
+  summary: PairSummaryView | null;
 }
 
+/** A pair's figures are in whole tokens, never on assumed decimals: without both tokens' decimals it has no figures. */
+export const pairHasDecimals = (p: Pick<ListedPair, 'base' | 'quote'>): boolean => p.base.decimals !== null && p.quote.decimals !== null;
+
 /**
- * The pairs of `/v1/pairs` the list shows: both tokens among the tradable rows, each with known decimals (its own, else the scale its first order set:
- * a pair's figures are in whole tokens, never on assumed decimals); one entry per oriented pair.
+ * The rows of `wanted`, in that order: each token as the list has it (with the decimals the scale of its first order set when it has none of its own), else by
+ * its id alone. A favourite stays reachable whatever the lists say of it now.
  */
-export function listedPairs(summaries: readonly PairSummaryView[] | null | undefined, rows: readonly TokenRow[]): ListedPair[] {
-  const byId = new Map<string, TokenRow>();
-  for (const r of rows) {
-    const decimals = r.decimals ?? (typeof r.index?.market_scale === 'number' ? exponentOf(r.index.market_scale) : null);
-    if (decimals !== null) byId.set(r.covenantId, r.decimals === null ? { ...r, decimals } : r);
-  }
-  const out = new Map<string, ListedPair>();
-  for (const s of summaries ?? []) {
-    const base = byId.get(s.base);
-    const quote = byId.get(s.quote);
-    const key = `${s.base}/${s.quote}`;
-    if (!base || !quote || base === quote || out.has(key)) continue;
-    out.set(key, { key, base, quote, summary: s });
-  }
-  return [...out.values()];
+export function listedPairs(wanted: readonly FavoritePair[], rows: readonly TokenRow[], summaries?: readonly PairSummaryView[] | null): ListedPair[] {
+  const byId = new Map(rows.map((r) => [r.covenantId.toLowerCase(), r]));
+  const side = (id: string): TokenRow => {
+    const r = byId.get(id) ?? idOnlyRow(id);
+    return r.decimals === null && typeof r.index?.market_scale === 'number' ? { ...r, decimals: exponentOf(r.index.market_scale) } : r;
+  };
+  return wanted.map(({ base, quote }) => ({
+    key: `${base}/${quote}`, base: side(base), quote: side(quote), summary: summaries?.find((s) => s.base === base && s.quote === quote) ?? null,
+  }));
 }
 
 /** `BASE (id) / QUOTE (id)`: both tokens with their id fragments. */
@@ -304,12 +303,11 @@ export const pairLabelOf = (p: Pick<ListedPair, 'base' | 'quote'>): string => `$
  */
 export function pairEntry(p: ListedPair, baseStats: Slot<StatsView>, quoteStats: Slot<StatsView>, volume: Slot<PairVolume | null>, depth: Slot<PairDepth | null> = NONE): ListEntry {
   const s = p.summary;
-  const asks = s.direct_asks + s.entry_asks;
-  const bids = s.direct_bids + s.entry_bids;
+  const orders = s ? t('market.list.pairOrdersTitle', { asks: s.direct_asks + s.entry_asks, bids: s.direct_bids + s.entry_bids, conditionals: s.conditionals }) : null;
   const bd = p.base.decimals ?? 0;
   const qd = p.quote.decimals ?? 0;
   const stats =
-    baseStats.state === 'ok' && quoteStats.state === 'ok' ? usdStats({ stats: baseStats.value, decimals: bd }, { stats: quoteStats.value, decimals: qd }) : null;
+    pairHasDecimals(p) && baseStats.state === 'ok' && quoteStats.state === 'ok' ? usdStats({ stats: baseStats.value, decimals: bd }, { stats: quoteStats.value, decimals: qd }) : null;
   const last = stats?.last ?? null;
   const unit = t('market.stats.unitOf', { base: p.base.ticker, quote: p.quote.ticker });
   const vol = volume.state === 'ok' ? volume.value : null;
@@ -325,7 +323,7 @@ export function pairEntry(p: ListedPair, baseStats: Slot<StatsView>, quoteStats:
       volume: vol ? volumeCell(vol.b, qd, p.quote.ticker, t('market.list.pairFills', { n: vol.fills })) : EMPTY,
       mcap: EMPTY,
       spread: { text: null, title: t('market.list.pairSpread') },
-      depth: dep ? pairDepthCell(dep, qd, p.quote.ticker, t('market.list.pairOrdersTitle', { asks, bids, conditionals: s.conditionals })) : EMPTY,
+      depth: dep ? pairDepthCell(dep, qd, p.quote.ticker, orders) : EMPTY,
     },
   };
 }

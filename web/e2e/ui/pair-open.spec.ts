@@ -5,7 +5,7 @@
 import type { Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { test, expect, TEST_KEYS, type MockClient } from '../fixtures';
-import { connectWallet, fund, listExkcc, TOKEN } from '../helpers/env';
+import { connectWallet, fund, listExkcc, seedFavorites, TOKEN } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, clickPlaceOnly, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -306,11 +306,13 @@ test('standalone mode: an open-list pair has no ticket (its decimals cannot be c
   await mock.post('/mock/indexer', { down: false });
 });
 
-test('the list shows a pair of open-list tokens and leads to its page', async ({ appPage: page, mock }) => {
+test('a favourite pair of open-list tokens is on the list and leads to its page', async ({ appPage: page, mock }) => {
   const base = await seedPair(mock);
   await emptyRegistry(page);
   await openListed(page, [base, QUOTE], { [base]: { market_scale: 100_000_000 }, [QUOTE]: { market_scale: 1_000_000 } });
+  await seedFavorites(page, { pairs: [{ base, quote: QUOTE }] });
   await page.goto('/#/market');
+  await page.getByTestId('token-list-favorites').click();
   const link = page.getByTestId('pair-table').locator(`a[href="#/market/${base}/${QUOTE}"]`);
   await expect(link).toHaveText(`${long(base)} / ${long(QUOTE)}`, { timeout: 20_000 });
   await link.click();

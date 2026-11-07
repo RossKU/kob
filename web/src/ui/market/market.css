@@ -183,6 +183,13 @@ body:has(.market-page) .container { max-width: 1520px; }
 .asset-select-native { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font: inherit; }
 .pair-sep { color: var(--muted); }
 
+/* ---- the star of a favourite (FavoriteStar.tsx). A phone's target is 44 px; the negative margin keeps the line it sits on as low as before */
+.fav-star { appearance: none; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); cursor: pointer; }
+.fav-star:hover { color: var(--text); background: var(--surface-2); }
+.fav-star[aria-pressed='true'] { color: var(--warn); }
+.fav-star:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+@media (max-width: 759px), (pointer: coarse) { .fav-star { width: 44px; height: 44px; margin: -7px; } }
+
 /* ---- the flip control: an icon-only button just left of the pair title */
 .flip-btn { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; min-height: 32px; color: var(--muted); border-color: var(--border); }
 .flip-btn:hover:not(:disabled) { color: var(--text); }
@@ -207,9 +214,12 @@ body:has(.market-page) .container { max-width: 1520px; }
 .tf-compact > summary::-webkit-details-marker { display: none; }
 .tf-more { text-decoration: underline dotted; text-underline-offset: 2px; }
 .ml-pairs { margin-top: 16px; }
-/* the search and the page size on one line. The start of the list comes back under the sticky header */
+.ml-pair-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* the search, the favourites and the page size on one line; a phone wraps them. The start of the list comes back under the sticky header */
 .ml-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin-bottom: 12px; scroll-margin-top: 120px; }
 .ml-search { flex: 1 1 260px; max-width: 420px; min-width: 0; }
+.ml-fav-toggle { min-height: 36px; }
+.ml-fav-toggle[aria-pressed='true'] { border-color: var(--warn); color: var(--text); }
 .ml-size { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
 /* the rows rise in one after the other, as the blocks of the landing page do. Backwards only: a finished animation leaves the row, whose popovers are fixed to the viewport, alone */
 .ml-tokens tbody tr.ml-in { animation: ml-rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 34ms); }
@@ -224,7 +234,6 @@ body:has(.market-page) .container { max-width: 1520px; }
 .act-foot .ml-pager { padding: 0; }
 .ml-pager .btn { min-width: 36px; font-size: 1.1rem; line-height: 1; }
 @media (max-width: 759px), (pointer: coarse) { .ml-pager .btn { min-width: 44px; min-height: 44px; } }
-.ml-subtitle { font-size: 0.95rem; font-weight: 700; margin: 0 0 6px; }
 @media (max-width: 759px) { .ml-table .ml-md { display: none; } }
 
 /* a phone (one column): the ticket is below the book and the chart; a small "Trade" button stays at the bottom edge and jumps to it (MarketShell) */
@@ -356,11 +365,13 @@ body:has(.market-page) .container { max-width: 1520px; }
   .ml-tokens thead tr { display: flex; align-items: center; justify-content: flex-end; gap: 4px 12px; border-bottom: 1px solid var(--border); }
   .ml-tokens thead th { border: 0; }
   .ml-tokens thead th:first-child { margin-right: auto; }
-  .ml-tokens tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 1fr 1fr; align-items: center; column-gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .ml-tokens tbody tr { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto 1fr; align-items: center; column-gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--border); }
   .ml-tokens tbody td { border: 0; padding: 0 6px; }
-  .ml-tokens tbody td:first-child { grid-column: 1; grid-row: 1 / span 2; padding-left: 0; }
+  .ml-tokens tbody td:first-child { grid-column: 1; grid-row: 1 / span 3; padding-left: 0; }
   .ml-tokens tbody td.ml-last { grid-column: 2; grid-row: 1; align-self: end; }
   .ml-tokens tbody td.ml-change { grid-column: 2; grid-row: 2; align-self: start; font-size: 0.85rem; }
+  /* the star under the price and the change: the text beside the icon keeps its width */
+  .ml-tokens .ml-name .fav-star { position: absolute; right: 0; bottom: 0; width: 44px; height: 34px; margin: 0; }
   .ml-tokens tbody td[colspan] { grid-column: 1 / -1; grid-row: auto; }
 }
 

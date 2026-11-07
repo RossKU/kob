@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PairSummaryView, StatsView } from '../../data/indexer-types';
 import type { TokenInfo } from '../../kob/registry';
 import {
-  DEFAULT_LIST_PAGE_SIZE, keepOrder, listPageSizeOf, pageWindow,
+  DEFAULT_LIST_PAGE_SIZE, keepOrder, listPageSizeOf, pageWindow, pairHasDecimals,
   ariaSort, changeCell, DEFAULT_SORT, filterPairs, firstDir, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, priceCell, runPool, sortEntries,
   depthCell, marketCapCell, pairDepthCell, supplyOf, tokenEntry, volumeCell, type ListEntry, type Slot,
 } from './market-list';
@@ -138,25 +138,36 @@ describe('market list pairs', () => {
   const a = row('EXKCC', ID('a'));
   const u = row('EXUSD', ID('e'), { decimals: 6, scale: 1_000_000n });
   const summary = (base: string, quote: string): PairSummaryView => ({ base, quote, direct_asks: 3, direct_bids: 1, entry_asks: 0, entry_bids: 1, conditionals: 1 });
+  const pair = (base: TokenRow, quote: TokenRow) => ({ base: base.covenantId, quote: quote.covenantId });
 
-  it('lists a pair when both tokens are listed here with known decimals, in the registry or not, once per orientation', () => {
-    const unknown = row('', ID('f'), { info: null, source: 'indexer', decimals: null, scale: null });
-    const got = listedPairs([summary(a.covenantId, u.covenantId), summary(a.covenantId, u.covenantId), summary(u.covenantId, a.covenantId), summary(a.covenantId, unknown.covenantId), summary(a.covenantId, ID('b'))], [a, u, unknown]);
-    expect(got.map((p) => p.key)).toEqual([`${a.covenantId}/${u.covenantId}`, `${u.covenantId}/${a.covenantId}`]);
-    expect(pairLabelOf(got[0]!)).toBe('EXKCC (aaaa…aaaa) / EXUSD (eeee…eeee)');
-    expect(listedPairs(null, [a, u])).toEqual([]);
+  it('lists the favourite pairs in their order, each as it was favoured, with the order counts of the same orientation', () => {
+    const got = listedPairs([pair(u, a), pair(a, u)], [a, u], [summary(a.covenantId, u.covenantId)]);
+    expect(got.map((p) => p.key)).toEqual([`${u.covenantId}/${a.covenantId}`, `${a.covenantId}/${u.covenantId}`]);
+    expect(got.map((p) => p.summary === null)).toEqual([true, false]);
+    expect(pairLabelOf(got[1]!)).toBe('EXKCC (aaaa…aaaa) / EXUSD (eeee…eeee)');
+    expect(listedPairs([], [a, u], [summary(a.covenantId, u.covenantId)])).toEqual([]);
   });
 
-  it('an open-list token takes the decimals of the scale its first order set; a scale that is no power of ten lists nothing', () => {
+  it('a favourite no list names stays, by its id and with no figures: its star can be taken off', () => {
+    const [p] = listedPairs([{ base: a.covenantId, quote: ID('b') }], [a]);
+    expect(pairLabelOf(p!)).toBe(`EXKCC (aaaa…aaaa) / ${'b'.repeat(8)}…${'b'.repeat(8)}`);
+    expect(pairHasDecimals(p!)).toBe(false);
+    const e = pairEntry(p!, ok(stats(a.covenantId)), ok(stats(ID('b'))), NONE, NONE);
+    expect(e.loading).toBe(false);
+    expect(e.cells.last.text).toBeNull();
+    expect(e.cells.change.text).toBeNull();
+  });
+
+  it('an open-list token takes the decimals of the scale its first order set; a scale that is no power of ten leaves it without', () => {
     const view = (market_scale: number) => ({ market_scale }) as unknown as TokenRow['index'];
     const open = row('', ID('f'), { info: null, source: 'indexer', decimals: null, scale: null, index: view(1_000_000) });
-    const [p] = listedPairs([summary(a.covenantId, open.covenantId)], [a, open]);
+    const [p] = listedPairs([pair(a, open)], [a, open]);
     expect(p!.quote.decimals).toBe(6);
-    expect(listedPairs([summary(a.covenantId, open.covenantId)], [a, { ...open, index: view(3) }])).toEqual([]);
+    expect(pairHasDecimals(listedPairs([pair(a, open)], [a, { ...open, index: view(3) }])[0]!)).toBe(false);
   });
 
   it('a pair: price and change implied through the two KAS markets, the 24 h pair volume in QUOTE, its live order counts, no spread', () => {
-    const [p] = listedPairs([summary(a.covenantId, u.covenantId)], [a, u]);
+    const [p] = listedPairs([pair(a, u)], [a, u]);
     // EXKCC 0.0251 KAS (open 0.0250), EXUSD 0.5 KAS (open 0.5): 0.0502 EXUSD per EXKCC, +0.40 %
     const e = pairEntry(p!, ok(stats(a.covenantId)), ok(stats(u.covenantId, { last: '50000000', open_24h: '50000000', price_basis: '1000000', decimals: 6 })), ok({ a: 300_000_000n, b: 151_500n, fills: 2 }));
     // five significant digits, as the pair page shows it
@@ -172,7 +183,7 @@ describe('market list pairs', () => {
   });
 
   it('a pair is loading while a leg or its volume is, and unavailable when the indexer answered neither', () => {
-    const [p] = listedPairs([summary(a.covenantId, u.covenantId)], [a, u]);
+    const [p] = listedPairs([pair(a, u)], [a, u]);
     expect(pairEntry(p!, LOADING, ok(stats(u.covenantId)), NONE).loading).toBe(true);
     const none = pairEntry(p!, NONE, NONE, NONE);
     expect(none.unavailable).toBe(true);
@@ -182,7 +193,7 @@ describe('market list pairs', () => {
 
   it('search: either token, or BASE/QUOTE side by side (look-alike letters too)', () => {
     const k = row('KRON', ID('b'));
-    const pairs = listedPairs([summary(a.covenantId, u.covenantId), summary(k.covenantId, u.covenantId), summary(u.covenantId, a.covenantId)], [a, u, k]);
+    const pairs = listedPairs([pair(a, u), pair(k, u), pair(u, a)], [a, u, k]);
     const keys = (q: string) => filterPairs(pairs, q).map((p) => `${p.base.ticker}/${p.quote.ticker}`);
     expect(keys('')).toEqual(['EXKCC/EXUSD', 'KRON/EXUSD', 'EXUSD/EXKCC']);
     expect(keys('kr0n')).toEqual(['KRON/EXUSD']);
@@ -348,9 +359,12 @@ describe('depth within 2 %', () => {
   it('a pair: the QUOTE value from its book, a lower bound marked "≥"; the pair table has no market cap', () => {
     const a = row('EXKCC', ID('a'));
     const u = row('EXUSD', ID('e'), { decimals: 6, scale: 1_000_000n });
-    const [p] = listedPairs([{ base: a.covenantId, quote: u.covenantId, direct_asks: 3, direct_bids: 1, entry_asks: 0, entry_bids: 1, conditionals: 1 }], [a, u]);
+    const wanted = [{ base: a.covenantId, quote: u.covenantId }];
+    const [p] = listedPairs(wanted, [a, u], [{ ...wanted[0]!, direct_asks: 3, direct_bids: 1, entry_asks: 0, entry_bids: 1, conditionals: 1 }]);
     const e = pairEntry(p!, ok(stats(a.covenantId)), ok(stats(u.covenantId)), NONE, ok({ quote: 2_500_000n, atLeast: false }));
     expect(e.cells.depth).toEqual({ text: '2.50', title: '2.50 EXUSD · 3 asks · 2 bids · 1 conditional' });
+    // a pair without live orders: no counts to name
+    expect(pairEntry(listedPairs(wanted, [a, u])[0]!, ok(stats(a.covenantId)), ok(stats(u.covenantId)), NONE, ok({ quote: 2_500_000n, atLeast: false })).cells.depth.title).toBe('2.50 EXUSD');
     expect(e.sort.depth).toBeCloseTo(2.5);
     expect(e.cells.mcap.text).toBeNull();
     expect(pairDepthCell({ quote: 2_500_000n, atLeast: true }, 6, 'EXUSD', null)).toEqual({ text: '≥2.50', title: '2.50 EXUSD · at least: the book is deeper than the levels read' });
