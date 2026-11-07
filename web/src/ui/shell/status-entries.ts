@@ -1,5 +1,5 @@
 // The current status of the bell's dialog: the conditions that hold now (settings that were ignored, test mode, registry failure, wallet trouble, node / indexer
-// health, the pre-audit notice). Live state, not history: an entry is here while its condition holds, is never stored and has nothing to do with the
+// health, the open review notice). Live state, not history: an entry is here while its condition holds, is never stored and has nothing to do with the
 // notifications (kob/notifications.ts). Pure: the facts in, the entries out (Banners.tsx gathers the facts and draws the entries).
 // There is deliberately none for chain re-organisations: shallow ones are routine (the indexer handles them), what one does to the user's own orders is a
 // notification, and a deep one is a header indicator (ReorgIndicator). Nor for a wallet on another network: that one stays at the top of the page
@@ -47,7 +47,7 @@ export interface StatusFacts {
   backup: FailoverState | null;
   standalone: StandaloneState | null;
   indexer: HealthAssessment;
-  /** the pre-audit notice was not dismissed yet (preaudit.ts) */
+  /** the open review notice was not dismissed yet (preaudit.ts) */
   preAudit: boolean;
   dismissPreAudit: () => void;
 }

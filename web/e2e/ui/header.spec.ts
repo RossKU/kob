@@ -1,4 +1,4 @@
-// The header is ONE row, on a desktop (900 px and wider) and on a phone alike. Desktop: the logo, the tabs, a status dot, the chip "testnet-10 · pre-audit",
+// The header is ONE row, on a desktop (900 px and wider) and on a phone alike. Desktop: the logo, the tabs, a status dot, the chip "testnet-10 · open review",
 // "Connect wallet" and "Private key", the theme toggle and the bell. Phone: the logo, a menu button (the tabs, the theme toggle, the network and status
 // explanation), the shortened chip, one "Connect" button (a sheet with Wallet and Private key) and the bell. A problem also colours the bell and is listed in its dialog, never only the dot.
 import type { Page } from '@playwright/test';
@@ -32,7 +32,7 @@ for (const width of [1280, 1024, 900, 880]) {
     await page.goto('/#/market');
     await expect(page.getByTestId('wallet-connect-list')).toBeVisible();
     await expect(page.getByTestId('network-badge')).toHaveText(/^(testnet-10|tn10)$/);
-    await expect(page.getByTestId('preaudit-badge')).toHaveText('pre-audit');
+    await expect(page.getByTestId('preaudit-badge')).toHaveText('open review');
     await expect(page.getByTestId('status-bar')).toHaveCount(0);
     // the layout settles after the first measurement
     await expect.poll(async () => (await page.getByTestId('nav-market').count()) + (await page.getByTestId('menu-button').count())).toBe(1);
@@ -185,7 +185,7 @@ test.describe('phone', () => {
     await expect(button).toHaveAttribute('aria-expanded', 'true');
     for (const id of ['nav-market', 'nav-orders', 'nav-create', 'nav-settings', 'theme-toggle']) await expect(page.getByTestId('menu-panel').getByTestId(id)).toBeVisible();
     await expect(page.getByTestId('menu-network')).toContainText('Network: testnet-10');
-    await expect(page.getByTestId('menu-network')).toContainText('no external security review');
+    await expect(page.getByTestId('menu-network')).toContainText('no external audit');
     await expect(page.getByTestId('status-node')).toContainText('Node: reachable');
     await expect(page.getByTestId('status-indexer')).toContainText('following');
     // the panel is as wide as the screen and does not scroll the page sideways

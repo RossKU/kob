@@ -1,4 +1,4 @@
-// The pre-audit notice: the contracts have had no external security review, so the app says so on every page (footer, header badge) and, until dismissed,
+// The open review notice (its names here keep the older word, so a dismissal stays remembered): the contracts have had no external audit, so the app says so on every page (footer, header badge) and, until dismissed,
 // in the current status of the bell. A dismissal is remembered in localStorage; blocked storage never breaks the page (the notice then shows again on the
 // next visit, which is the safe direction).
 import { useState } from 'preact/hooks';

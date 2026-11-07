@@ -86,9 +86,9 @@ function Step(props: { n: string; title: string; children: ComponentChildren }) 
   );
 }
 
-function Row(props: { k: string; v: string; vClass: string; warn?: boolean; children: ComponentChildren }) {
+function Row(props: { k: string; v: string; vClass: string; children: ComponentChildren }) {
   return (
-    <div class={`lp-lr lp-rv${props.warn ? ' lp-warn' : ''}`}>
+    <div class="lp-lr lp-rv">
       <span class="lp-k">{props.k}</span>
       <p>{props.children}</p>
       <span class={`lp-v ${props.vClass}`}>{props.v}</span>
@@ -308,30 +308,20 @@ export function LandingPage() {
                 <Row k={t('landing.trust.source')} v={t('landing.trust.source.v')} vClass="lp-yes">
                   {t('landing.trust.source.body')} <a href={REPO_URL}>{t('landing.trust.source.link')}</a>
                 </Row>
-                <Row k={t('landing.trust.audit')} v={t('landing.trust.audit.v')} vClass="" warn>
+                <Row k={t('landing.trust.audit')} v={t('landing.trust.audit.v')} vClass="lp-yes">
                   <span data-testid="landing-audit">{net.auditBody}</span>
+                  <span class="lp-links lp-lr-links">
+                    {feedbackActions().map((a) => (
+                      <a key={a.key} href={a.href} data-testid={a.testid}>
+                        {t(a.key)}
+                      </a>
+                    ))}
+                  </span>
+                  <span class="lp-lr-note" data-testid="landing-audit-note">
+                    {t('landing.trust.audit.note')}
+                  </span>
                 </Row>
               </div>
-            </div>
-          </section>
-
-          <section class="lp-sec lp-sec-flush" data-testid="landing-feedback">
-            <div class="lp-wrap">
-              <div class="lp-label lp-rv">{t('landing.feedback.label')}</div>
-              <h2 class="lp-big">
-                <Ln>{t('landing.feedback.l1')}</Ln>
-                <Ln d={1} class="lp-dim">
-                  {t('landing.feedback.l2')}
-                </Ln>
-              </h2>
-              <p class="lp-intro lp-rv">{t('landing.feedback.intro')}</p>
-              <p class="lp-intro lp-rv lp-links">
-                {feedbackActions().map((a) => (
-                  <a key={a.key} href={a.href} data-testid={a.testid}>
-                    {t(a.key)}
-                  </a>
-                ))}
-              </p>
             </div>
           </section>
 

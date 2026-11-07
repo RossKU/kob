@@ -246,7 +246,7 @@ small, .small { font-size: 0.85em; }
 .btn-off { opacity: 0.6; }
 .wallet-kind { display: inline-flex; align-items: center; cursor: help; }
 
-/* the combined network chip ("testnet-10 · pre-audit") */
+/* the combined network chip ("testnet-10 · open review") */
 .net-chip { display: inline-flex; align-items: center; white-space: pre; min-height: var(--chip-h); padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1; cursor: default; }
 .net-chip-warn { background: var(--warn-bg); color: var(--warn); }
 .net-chip-info { background: var(--info-bg); color: var(--info); }
@@ -545,13 +545,13 @@ body.modal-open { overflow: hidden; }
   .wallet-chip { padding-left: 8px; }
   .toast-host { left: 12px; right: 12px; width: auto; }
 }
-/* a small phone: the chip keeps the dot and the network; "pre-audit" is in its tooltip, the menu and the banner (so a connected row fits on any font) */
+/* a small phone: the chip keeps the dot and the network; "open review" is in its tooltip, the menu and the banner (so a connected row fits on any font) */
 @media (max-width: 430px) {
   .header[data-context='app'] .net-chip .net-pre { display: none; }
   .header .btn.btn-pill { padding: 0 12px; }
 }
 /* a phone: the landing page's row (brand, chip, Open the app, theme toggle) keeps room to spare on wide fonts (a Linux font is wider than Windows'): the
-   logo alone (the name stays for screen readers), the chip's short form ("tn10"; "pre-audit" is in its tooltip, the hero and the footer), tighter gaps */
+   logo alone (the name stays for screen readers), the chip's short form ("tn10"; "open review" is in its tooltip, the hero and the footer), tighter gaps */
 @media (max-width: 430px) {
   .header[data-context='landing'] .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .header[data-context='landing'] .net-chip .net-pre { display: none; }

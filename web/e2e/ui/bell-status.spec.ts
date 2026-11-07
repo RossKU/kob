@@ -7,7 +7,7 @@ import { connectWallet } from '../helpers/env';
 
 const bell = (page: Page) => page.getByTestId('notify-bell');
 const shot = (name: string) => (process.env.KOB_SHOT_DIR ? `${process.env.KOB_SHOT_DIR}/${name}.png` : undefined);
-// (the mock stack needs `features.test`: test mode is a warning of its own, so without a problem the bell here is amber with the pre-audit notice beside it)
+// (the mock stack needs `features.test`: test mode is a warning of its own, so without a problem the bell here is amber with the open review notice beside it)
 const cssColor = (page: Page, variable: string) =>
   page.evaluate((v) => {
     const probe = document.createElement('i');

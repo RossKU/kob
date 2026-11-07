@@ -109,7 +109,7 @@ describe('statusEntries', () => {
     expect(ids({ indexer: { ...healthy, level: 'unknown', code: 'loading' } as HealthAssessment })).toEqual([]);
   });
 
-  it('the pre-audit notice: info (no alarm), with the policy link and its dismiss, only until dismissed', () => {
+  it('the open review notice: info (no alarm), with the policy link and its dismiss, only until dismissed', () => {
     const dismissPreAudit = vi.fn();
     const e = one({ preAudit: true, dismissPreAudit });
     expect(e).toMatchObject({ testid: 'banner-preaudit', tone: 'info', text: t('preaudit.banner'), link: { href: SECURITY_POLICY_URL, text: t('preaudit.policy'), external: true } });

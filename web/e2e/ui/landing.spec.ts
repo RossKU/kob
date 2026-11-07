@@ -21,7 +21,7 @@ for (const [width, height] of [
     await expect(landing).toHaveAttribute('data-network', 'testnet-10');
     // the h1's real text for screen readers (its three visual lines are hidden from them)
     await expect(page.getByRole('heading', { level: 1, name: 'Decentralized order book on Kaspa.' })).toBeVisible();
-    await expect(page.getByTestId('landing-chip')).toHaveText('testnet-10 · pre-audit');
+    await expect(page.getByTestId('landing-chip')).toHaveText('testnet-10 · open review');
     // no app shell: no app header (tabs, wallet, bell) or app links; the shared frame instead: one header, one footer
     await expect(page.getByTestId('brand')).toHaveCount(0);
     await expect(page.getByTestId('nav-market')).toHaveCount(0);
@@ -33,7 +33,7 @@ for (const [width, height] of [
     await expect(page.locator('footer')).toHaveCount(1);
     await expect(page.getByTestId('footer')).toHaveAttribute('data-context', 'landing');
     await expect(page.getByTestId('network-chip')).toBeVisible();
-    await expect(page.getByTestId('network-chip')).toHaveText(width < 1200 ? 'tn10 · pre-audit' : 'testnet-10 · pre-audit');
+    await expect(page.getByTestId('network-chip')).toHaveText(width < 1200 ? 'tn10 · open review' : 'testnet-10 · open review');
     await expect(page.getByTestId('theme-toggle')).toHaveCount(1);
     await expect(page.getByTestId('theme-toggle')).toBeVisible();
     // the header has the app's height; see-through at the top (the page's background runs under it), a blurred bar once the page is scrolled
@@ -55,7 +55,7 @@ for (const [width, height] of [
     await expect(page.getByTestId('landing-bigbook')).toHaveClass(/lp-seen/);
     await expect.poll(() => page.locator('.lp-bb').first().evaluate((e) => e.getBoundingClientRect().width)).toBeGreaterThan(width * 0.5);
     await page.getByTestId('footer').scrollIntoViewIfNeeded();
-    await expect(page.getByTestId('landing-disclaimer')).toContainText('Testnet · pre-audit.');
+    await expect(page.getByTestId('landing-disclaimer')).toContainText('Testnet · open review.');
     await expect(page.getByTestId('landing-disclaimer')).toContainText('never holds funds or orders, does not trade and does not operate executors');
     await expect(page.getByTestId('landing-disclaimer').getByRole('link', { name: 'Security policy' })).toHaveAttribute('href', /SECURITY.md$/);
     // no charts on this page: no chart attribution, no app-only links
@@ -113,14 +113,20 @@ test.describe("an operator's explicit home", () => {
   });
 });
 
-test.describe('the landing page invites feedback', () => {
-  test('a report, an issue, a message on X, and no bug bounty', async ({ appPage: page }) => {
+test.describe('the open review row', () => {
+  test('no external audit; a report, an issue, a message on X, and no bug bounty, in the row; no section of their own', async ({ appPage: page }) => {
     await page.goto('/');
-    const section = page.getByTestId('landing-feedback');
-    await section.scrollIntoViewIfNeeded();
-    await expect(section).toContainText('pre-audit');
-    await expect(section).toContainText('There is no bug bounty.');
-    await expect(page.getByTestId('landing-feedback-security')).toHaveAttribute('href', /SECURITY\.md#reporting-a-vulnerability$/);
+    const row = page.locator('.lp-lr').filter({ has: page.getByTestId('landing-audit') });
+    await row.scrollIntoViewIfNeeded();
+    await expect(row).toContainText('Open review');
+    await expect(row).toContainText('Welcome.');
+    await expect(page.getByTestId('landing-audit')).toContainText('The contracts have had no external audit');
+    await expect(page.getByTestId('landing-audit')).toContainText('test tokens');
+    await expect(page.getByTestId('landing-audit-note')).toHaveText('Please test only with your own funds and orders. There is no bug bounty.');
+    for (const id of ['landing-feedback-security', 'landing-feedback-issue', 'landing-feedback-message']) await expect(row.getByTestId(id)).toBeVisible();
+    await expect(page.getByTestId('landing-feedback')).toHaveCount(0);
+    await expect(page.getByTestId('landing')).not.toContainText('to break it');
+    await expect(page.getByTestId('landing-feedback-security')).toHaveAttribute('href', 'https://github.com/RossKU/kob/security/advisories/new');
     await expect(page.getByTestId('landing-feedback-issue')).toHaveAttribute('href', 'https://github.com/RossKU/kob/issues');
     await expect(page.getByTestId('landing-feedback-message')).toHaveAttribute('href', 'https://x.com/kaspaorderbook');
     await expect(page.getByTestId('landing-feedback-message')).toHaveText('Send a message on X →');
@@ -132,14 +138,15 @@ test.describe('mainnet build', () => {
   test('the chip, the audit row and the disclaimer name mainnet, never testnet', async ({ appPage: page }) => {
     await page.goto('/');
     await expect(page.getByTestId('landing')).toHaveAttribute('data-network', 'mainnet');
-    await expect(page.getByTestId('landing-chip')).toHaveText('mainnet · pre-audit');
-    await expect(page.getByTestId('landing-disclaimer')).toContainText('Mainnet · pre-audit.');
+    await expect(page.getByTestId('landing-chip')).toHaveText('mainnet · open review');
+    await expect(page.getByTestId('landing-disclaimer')).toContainText('Mainnet · open review.');
+    await expect(page.getByTestId('landing-audit')).toContainText('The contracts have had no external audit');
     await expect(page.getByTestId('landing')).not.toContainText(/testnet|test tokens/i);
     await expect(page.getByTestId('landing-nav')).not.toContainText(/testnet|tn10/i);
     await expect(page.getByTestId('footer')).not.toContainText(/testnet|test tokens/i);
     // the app's footer says the same
     await page.goto('/#/settings');
-    await expect(page.getByTestId('footer-preaudit')).toContainText('Mainnet · pre-audit.');
+    await expect(page.getByTestId('footer-preaudit')).toContainText('Mainnet · open review.');
     await expect(page.getByTestId('footer')).not.toContainText(/testnet|test tokens/i);
   });
 });

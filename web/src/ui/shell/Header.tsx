@@ -56,7 +56,7 @@ function NavLinks(props: { active: ReturnType<typeof navOf> }) {
   );
 }
 
-/** The phone menu: the four tabs, the theme toggle, what the network chip and the pre-audit word mean, and the status lines. It closes on every navigation. */
+/** The phone menu: the four tabs, the theme toggle, what the network chip and the words open review mean, and the status lines. It closes on every navigation. */
 function Menu(props: { active: ReturnType<typeof navOf>; network: string }) {
   return (
     <Popover

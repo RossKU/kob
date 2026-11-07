@@ -1,13 +1,13 @@
 // The disclaimer page (#/disclaimer, src/ui/shell/DisclaimerPage.tsx). Written for mainnet; `legal.network.*` is the one line that depends on the network.
 export default {
   'legal.title': 'Disclaimer',
-  'legal.updated': 'Last updated 2026-11-07',
+  'legal.updated': 'Last updated 2026-11-08',
   'legal.intro': 'What KOB is and what it is not. Please read this before you use it.',
   'legal.network.mainnet': 'This site runs on Kaspa mainnet. Real funds are at risk.',
   'legal.network.testnet-10': 'This site runs on Kaspa testnet-10. Test tokens have no value.',
 
-  'legal.audit.title': 'Pre-audit software',
-  'legal.audit.body': 'The contracts have had no external security audit. They may contain bugs that lose funds, and a deployed contract cannot be paused, upgraded or repaired. Use KOB at your own risk and only with funds you can afford to lose.',
+  'legal.audit.title': 'No external audit',
+  'legal.audit.body': 'The specification is not final and the contracts have had no external audit. They may contain bugs that lose funds, and a deployed contract cannot be paused, upgraded or repaired. Use KOB at your own risk and only with funds you can afford to lose.',
   'legal.custody.title': 'No custody, no operator',
   'legal.custody.body': '{site} publishes software and information only. It never holds funds or orders, does not trade and does not operate executors, and it cannot reverse, cancel or recover a transaction. Your wallet signs and you alone control your keys: nobody can restore a lost key.',
   'legal.tokens.title': 'Tokens',

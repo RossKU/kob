@@ -67,9 +67,11 @@ describe('landing routing', () => {
 describe('landing network text', () => {
   it('names the configured network: testnet-10 says testnet and test tokens', () => {
     const n = landingNetworkText('testnet-10', 'kob.kaspa.ag');
-    expect(n.chip).toBe('testnet-10 · pre-audit');
-    expect(n.auditBody).toContain('testnet-10 with test tokens');
-    expect(n.discLead).toBe('Testnet · pre-audit.');
+    expect(n.chip).toBe('testnet-10 · open review');
+    expect(n.chipTip).toBe('Kaspa testnet-10. No external audit.');
+    expect(n.auditBody).toBe('KOB runs on Kaspa testnet-10 with test tokens. The specification is not final. The contracts have had no external audit; the code is public, and red-team work and private reports are welcome.');
+    expect(n.discLead).toBe('Testnet · open review.');
+    expect(n.discBody).toContain('The specification is not final and the contracts have had no external audit. kob.kaspa.ag publishes');
     expect(n.discBody).toContain('Test tokens have no value');
     expect(n.discBody).toContain('kob.kaspa.ag publishes software and information only');
     expect(n.discBody).toContain('Test tokens have no value');
@@ -81,9 +83,18 @@ describe('landing network text', () => {
       expect(v).not.toMatch(/testnet|test token/i);
       expect(v).not.toMatch(/^[a-z]+\.[a-z.]+$/); // no untranslated key
     }
-    expect(n.chip).toBe('mainnet · pre-audit');
-    expect(n.discLead).toBe('Mainnet · pre-audit.');
+    expect(n.chip).toBe('mainnet · open review');
+    expect(n.auditBody).toBe('The specification is not final. The contracts have had no external audit; the code is public, and red-team work and private reports are welcome.');
+    expect(n.discLead).toBe('Mainnet · open review.');
     expect(n.discBody).toContain('Real funds are at risk');
+  });
+
+  it('no sentence of the page suggests an audit is coming, and each one says there was none', () => {
+    for (const net of LANDING_NETWORKS) {
+      const n = landingNetworkText(net, 'x');
+      for (const v of Object.values(n)) expect(v).not.toMatch(/pre-audit|audit yet|not yet/i);
+      for (const v of [n.chipTip, n.auditBody, n.discBody]) expect(v).toMatch(/no external audit/i);
+    }
   });
 
   it('has every sentence for every network', () => {
@@ -105,7 +116,7 @@ describe('landing network text', () => {
   });
 });
 
-describe('landing feedback', () => {
+describe('the open review row', () => {
   it('a security report, an issue and a message on X; no message action without a channel', () => {
     expect(FEEDBACK_CONTACT_URL).toBe('https://x.com/kaspaorderbook');
     expect(feedbackActions().map((a) => a.href)).toEqual(['https://github.com/RossKU/kob/security/advisories/new', 'https://github.com/RossKU/kob/issues', 'https://x.com/kaspaorderbook']);
@@ -113,8 +124,14 @@ describe('landing feedback', () => {
     for (const a of feedbackActions()) expect(has(a.key), a.key).toBe(true);
   });
 
+  it('has the label, the value and no section of its own', () => {
+    expect(t('landing.trust.audit')).toBe('Open review');
+    expect(t('landing.trust.audit.v')).toBe('Welcome.');
+    for (const k of ['label', 'l1', 'l2', 'intro']) expect(has(`landing.feedback.${k}`), k).toBe(false);
+  });
+
   it('says there is no bug bounty, as SECURITY.md does', () => {
-    expect(t('landing.feedback.intro')).toContain('There is no bug bounty.');
+    expect(t('landing.trust.audit.note')).toBe('Please test only with your own funds and orders. There is no bug bounty.');
     expect(src('../../SECURITY.md')).toContain('There is no bug bounty.');
   });
 });

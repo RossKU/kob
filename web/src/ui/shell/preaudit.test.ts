@@ -18,7 +18,7 @@ const broken = {
   },
 };
 
-describe('pre-audit banner dismissal', () => {
+describe('open review notice dismissal', () => {
   it('is shown on the first visit and stays dismissed once remembered', () => {
     const s = memory();
     expect(isPreAuditDismissed(s)).toBe(false);

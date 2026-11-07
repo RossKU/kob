@@ -1,8 +1,8 @@
 import { t, has } from '../../i18n';
 
 /**
- * The network and the pre-audit notice as ONE small chip of the header ("testnet-10 · pre-audit"; a narrow window shortens the network, "tn10"). The two
- * words keep their own test ids; the tooltip says both in full (the pre-audit banner and the footer say it again on the page).
+ * The network and the open review notice as ONE small chip of the header ("testnet-10 · open review"; a narrow window shortens the network, "tn10"). The two
+ * words keep their own test ids; the tooltip says both in full (the notice in the bell and the footer say it again on the page).
  */
 export function NetworkChip(props: { network: string; short?: boolean; /** the status as a dot in the chip (the phone layout: the menu has the lines) */ level?: 'ok' | 'warn' | 'bad' | 'unknown' }) {
   const mainnet = props.network === 'mainnet';

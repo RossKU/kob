@@ -181,8 +181,11 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 }
 .lp-lr .lp-v.lp-none { color: var(--fg); }
 .lp-lr .lp-v.lp-yes { color: var(--teal); }
-.lp-lr.lp-warn .lp-v, .lp-lr.lp-warn .lp-k { color: var(--warn); }
 .lp .lp-lr a { color: var(--teal); font-weight: 600; white-space: nowrap; }
+/* the open review row: its links under the sentence (they may wrap on a small phone), then one small line */
+.lp .lp-lr-links { margin-top: 12px; }
+.lp .lp-lr .lp-lr-links a { white-space: normal; }
+.lp-lr-note { display: block; margin-top: 10px; font-size: 13px; color: var(--fg-3); }
 
 /* final */
 .lp-final { padding: clamp(80px, 12vw, 180px) 0 clamp(64px, 8vw, 120px); text-align: left; position: relative; overflow: hidden; }
