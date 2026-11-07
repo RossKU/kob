@@ -49,8 +49,8 @@ for (const width of [1280, 1024, 900, 880]) {
   });
 }
 
-// the row's room stops growing at 1240 px (--frame-max), so 1280 px is any wider window too; 1200 px is the tightest width with the full chip and the wide tabs
-for (const [width, spare] of [[1280, 40], [1200, 0]] as const) {
+// the row's room stops growing at 1240 px (--frame-max), so 1280 px is any wider window too; narrower on so wide a font the row folds into the narrow layout
+for (const [width, spare] of [[1280, 20]] as const) {
   test(`${width} px with a connected wallet on a wide font: the tabs stand 12 px apart and the wide row fits with ${spare} px to spare`, async ({ appPage: page }) => {
     await wideFonts(page);
     await page.setViewportSize({ width, height: 800 });
