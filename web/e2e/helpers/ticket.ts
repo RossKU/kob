@@ -181,7 +181,8 @@ export async function confirmReceipt(page: Page): Promise<void> {
     await readSignerFrame(page);
     await expect(signerFrameOf(page).getByTestId('signer-approve')).toBeEnabled();
     await signerFrameOf(page).getByTestId('signer-approve').click();
-    await expect(page.getByTestId('signer-overlay')).toBeHidden();
+    // the frame signs and the page checks the clock before it closes: on a busy runner that passes 10 s
+    await expect(page.getByTestId('signer-overlay')).toBeHidden({ timeout: 30_000 });
   } else {
     await page.getByTestId('confirm-order-ok').click();
     await expect(page.getByTestId('confirm-order')).toHaveCount(0);
