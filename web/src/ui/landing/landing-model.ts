@@ -11,7 +11,7 @@ export const REPO_URL = 'https://github.com/RossKU/kob';
 export const EXECUTOR_URL = REPO_URL;
 /** The project's README on GitHub, where the donation address is published too. */
 export const README_URL = `${REPO_URL}#readme`;
-/** The open review row's private security report: GitHub's private vulnerability reporting form. */
+/** The trust us row's private security report: GitHub's private vulnerability reporting form. */
 export const SECURITY_REPORT_URL = `${REPO_URL}/security/advisories/new`;
 export const ISSUES_URL = `${REPO_URL}/issues`;
 /** Where "Send a message on X" leads. Empty: the action is not shown. */
@@ -52,7 +52,7 @@ export function landingNetworkText(network: NetworkName, site: string): LandingN
   };
 }
 
-/** The open review row's actions: a security report, an issue and, once there is a channel, a message. */
+/** The trust us row's actions: a security report, an issue and, once there is a channel, a message. */
 export function feedbackActions(contactUrl: string = FEEDBACK_CONTACT_URL): { key: string; href: string; testid: string }[] {
   return [
     { key: 'landing.feedback.security', href: SECURITY_REPORT_URL, testid: 'landing-feedback-security' },

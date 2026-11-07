@@ -113,13 +113,14 @@ test.describe("an operator's explicit home", () => {
   });
 });
 
-test.describe('the open review row', () => {
+test.describe('the trust us row', () => {
   test('no external audit; a report, an issue, a message on X, and no bug bounty, in the row; no section of their own', async ({ appPage: page }) => {
     await page.goto('/');
     const row = page.locator('.lp-lr').filter({ has: page.getByTestId('landing-audit') });
     await row.scrollIntoViewIfNeeded();
-    await expect(row).toContainText('Open review');
-    await expect(row).toContainText('Welcome.');
+    await expect(row).toContainText('Trust us');
+    await expect(row).toContainText('None.');
+    await expect(page.getByTestId('landing-audit')).toContainText('Verify it yourself');
     await expect(page.getByTestId('landing-audit')).toContainText('The contracts have had no external audit');
     await expect(page.getByTestId('landing-audit')).toContainText('test tokens');
     await expect(page.getByTestId('landing-audit-note')).toHaveText('Please test only with your own funds and orders. There is no bug bounty.');

@@ -144,7 +144,8 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 /* a desktop row: the number, the title and the text share one centre line (a phone stacks them) */
 @media (min-width: 900px) { .lp-st { grid-template-columns: 200px 1.25fr 1fr; align-items: center; } }
 .lp-st .lp-n { font: 800 clamp(56px, 7vw, 112px)/0.8 var(--display); letter-spacing: -0.06em; color: transparent; -webkit-text-stroke: 1.5px var(--fg-3); transition: -webkit-text-stroke-color 0.4s, color 0.4s; }
-.lp-st:hover .lp-n { color: var(--teal); -webkit-text-stroke-color: var(--teal); }
+/* a step's number fills with the accent once the step has scrolled into view (the same `lp-seen` as its rise), not on hover: a phone has none */
+.lp-st.lp-seen .lp-n { color: var(--teal); -webkit-text-stroke-color: var(--teal); transition-delay: 0.35s; }
 .lp-st h3 { font: 750 clamp(30px, 3.6vw, 58px)/1 var(--display); letter-spacing: -0.045em; }
 .lp-st p { color: var(--fg-2); font-size: 17px; max-width: 28em; text-wrap: pretty; }
 .lp-st p a { color: var(--fg); border-bottom: 1px solid var(--line-2); }
@@ -180,9 +181,8 @@ body.lp-body { background: #050808; overflow-x: hidden; }
   .lp-lr .lp-v { grid-column: 3; }
 }
 .lp-lr .lp-v.lp-none { color: var(--fg); }
-.lp-lr .lp-v.lp-yes { color: var(--teal); }
 .lp .lp-lr a { color: var(--teal); font-weight: 600; white-space: nowrap; }
-/* the open review row: its links under the sentence (they may wrap on a small phone), then one small line */
+/* the trust us row: its links under the sentence (they may wrap on a small phone), then one small line */
 .lp .lp-lr-links { margin-top: 12px; }
 .lp .lp-lr .lp-lr-links a { white-space: normal; }
 .lp-lr-note { display: block; margin-top: 10px; font-size: 13px; color: var(--fg-3); }

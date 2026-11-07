@@ -69,7 +69,7 @@ describe('landing network text', () => {
     const n = landingNetworkText('testnet-10', 'kob.kaspa.ag');
     expect(n.chip).toBe('testnet-10 · open review');
     expect(n.chipTip).toBe('Kaspa testnet-10. No external audit.');
-    expect(n.auditBody).toBe('KOB runs on Kaspa testnet-10 with test tokens. The specification is not final. The contracts have had no external audit; the code is public, and red-team work and private reports are welcome.');
+    expect(n.auditBody).toBe('Verify it yourself: the code is public. KOB runs on Kaspa testnet-10 with test tokens. The specification is not final and the contracts have had no external audit. Red-team work and private reports are welcome.');
     expect(n.discLead).toBe('Testnet · open review.');
     expect(n.discBody).toContain('The specification is not final and the contracts have had no external audit. kob.kaspa.ag publishes');
     expect(n.discBody).toContain('Test tokens have no value');
@@ -84,7 +84,7 @@ describe('landing network text', () => {
       expect(v).not.toMatch(/^[a-z]+\.[a-z.]+$/); // no untranslated key
     }
     expect(n.chip).toBe('mainnet · open review');
-    expect(n.auditBody).toBe('The specification is not final. The contracts have had no external audit; the code is public, and red-team work and private reports are welcome.');
+    expect(n.auditBody).toBe('Verify it yourself: the code is public. The specification is not final and the contracts have had no external audit. Red-team work and private reports are welcome.');
     expect(n.discLead).toBe('Mainnet · open review.');
     expect(n.discBody).toContain('Real funds are at risk');
   });
@@ -116,7 +116,7 @@ describe('landing network text', () => {
   });
 });
 
-describe('the open review row', () => {
+describe('the trust us row', () => {
   it('a security report, an issue and a message on X; no message action without a channel', () => {
     expect(FEEDBACK_CONTACT_URL).toBe('https://x.com/kaspaorderbook');
     expect(feedbackActions().map((a) => a.href)).toEqual(['https://github.com/RossKU/kob/security/advisories/new', 'https://github.com/RossKU/kob/issues', 'https://x.com/kaspaorderbook']);
@@ -125,8 +125,10 @@ describe('the open review row', () => {
   });
 
   it('has the label, the value and no section of its own', () => {
-    expect(t('landing.trust.audit')).toBe('Open review');
-    expect(t('landing.trust.audit.v')).toBe('Welcome.');
+    expect(t('landing.trust.audit')).toBe('Trust us');
+    expect(has('landing.trust.audit.v')).toBe(false);
+    expect(t('landing.trust.source')).toBe('Closed source');
+    expect(t('landing.trust.source.body')).toContain('SilverScript');
     for (const k of ['label', 'l1', 'l2', 'intro']) expect(has(`landing.feedback.${k}`), k).toBe(false);
   });
 

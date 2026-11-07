@@ -305,10 +305,10 @@ export function LandingPage() {
                 <Row k={t('landing.trust.operator')} v={t('landing.trust.none')} vClass="lp-none">
                   {t('landing.trust.operator.body', { site })}
                 </Row>
-                <Row k={t('landing.trust.source')} v={t('landing.trust.source.v')} vClass="lp-yes">
+                <Row k={t('landing.trust.source')} v={t('landing.trust.none')} vClass="lp-none">
                   {t('landing.trust.source.body')} <a href={REPO_URL}>{t('landing.trust.source.link')}</a>
                 </Row>
-                <Row k={t('landing.trust.audit')} v={t('landing.trust.audit.v')} vClass="lp-yes">
+                <Row k={t('landing.trust.audit')} v={t('landing.trust.none')} vClass="lp-none">
                   <span data-testid="landing-audit">{net.auditBody}</span>
                   <span class="lp-links lp-lr-links">
                     {feedbackActions().map((a) => (
