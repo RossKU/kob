@@ -9,8 +9,8 @@ import { KAS, assetChoices, type AssetChoice, type DisplayedPair } from './marke
 import { tokenTitle } from './TokenBadges';
 import type { TokenRow } from './token-model';
 
-/** A token as an option of the selector: pairable = in the registry (a pair needs both tokens' registry entries). */
-const choiceRow = (r: TokenRow) => ({ covenantId: r.covenantId, ticker: r.ticker, pairable: r.info !== null, row: r });
+/** A token as an option of the selector. */
+const choiceRow = (r: TokenRow) => ({ covenantId: r.covenantId, ticker: r.ticker, row: r });
 
 /** One side of the pair: the ticker with a caret; the native drop-down lies invisibly over it (keyboard, screen readers and `select` semantics intact). */
 function AssetSelect(props: { value: string; choices: AssetChoice[]; label: string; onChange: (v: string) => void; 'data-testid': string }) {

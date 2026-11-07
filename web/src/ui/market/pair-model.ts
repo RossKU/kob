@@ -6,7 +6,42 @@
 // from inventory, so a crossing of ANY sources is fillable. A crossed book is shown as it is (a negative spread). Pure and DOM-free.
 import type { PairBookView, PairLevelSource, PairLevelView } from '../../data/indexer-types';
 import { cmpRational, formatRational, ratToNumber, reduce, significantDp, wholePrice, type PairToken, type Rational } from '../../kob/pair';
+import type { OpenTokenIssue } from '../../kob/open-token';
+import type { TokenInfo } from '../../kob/registry';
 import { columnFraction, fitAmountColumn, fitDecimalTexts } from '../kit/format';
+import type { TokenRow } from './token-model';
+import type { MarketToken } from './use-market-token';
+
+/**
+ * One token of a pair page: `ready` to trade; `loading` while an answer that decides it is on its way; `blocked` where the token page has no market
+ * either (`reason`: the key of the sentence); `no-scale` while nothing tells its decimals (no order yet, none declared; never assumed); `unavailable`
+ * with the key of what is missing; `unknown` where nothing identifies the token (`reason`: the key of the fact that is missing, if one is known).
+ */
+export type PairSide =
+  | { state: 'ready'; info: TokenInfo }
+  | { state: 'loading' }
+  | { state: 'blocked'; row: TokenRow; reason: string | null }
+  | { state: 'no-scale'; row: TokenRow }
+  | { state: 'unavailable'; row: TokenRow; reason: string }
+  | { state: 'unknown'; reason: string | null };
+
+const PROGRAM_ISSUES: readonly (OpenTokenIssue | null)[] = ['program-unknown', 'program-ambiguous', 'program-unreviewed'];
+
+/** The state of one token of a pair: the rules of the token page, in its order. `hasIndexer`: an open-list token's orders can be read at all. */
+export function pairSideOf(m: Pick<MarketToken, 'row' | 'ticketInfo' | 'open' | 'pub' | 'resolving'>, hasIndexer: boolean): PairSide {
+  const { row, open, pub } = m;
+  if (!row) return m.resolving ? { state: 'loading' } : { state: 'unknown', reason: pub.reason ? `market.public.${pub.reason}` : null };
+  if (row.source === 'registry' && !row.tradable) return { state: 'blocked', row, reason: row.reason ? `market.reason.${row.reason}` : null };
+  if (m.ticketInfo && row.tradable) return { state: 'ready', info: m.ticketInfo };
+  // a listed row whose program is unclear, or a row only kascov.io names, is decided by what the node confirms
+  if (m.resolving) return { state: 'loading' };
+  if (PROGRAM_ISSUES.includes(open.reason)) return { state: 'blocked', row, reason: `market.open.${open.reason}` };
+  if (open.reason === 'no-scale') return { state: 'no-scale', row };
+  if (row.source === 'kascov' && pub.reason) return { state: 'unavailable', row, reason: `market.public.${pub.reason}` };
+  if (open.reason) return { state: 'unavailable', row, reason: `market.open.${open.reason}` };
+  // the token's orders are being read, or are read in the render after this one
+  return hasIndexer ? { state: 'loading' } : { state: 'unavailable', row, reason: 'market.open.book-unavailable' };
+}
 
 export interface PairLevelRow {
   side: 'ask' | 'bid';

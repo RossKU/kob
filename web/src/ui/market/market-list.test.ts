@@ -125,12 +125,20 @@ describe('market list pairs', () => {
   const u = row('EXUSD', ID('e'), { decimals: 6, scale: 1_000_000n });
   const summary = (base: string, quote: string): PairSummaryView => ({ base, quote, direct_asks: 3, direct_bids: 1, entry_asks: 0, entry_bids: 1, conditionals: 1 });
 
-  it('lists a pair only when both tokens are listed here and in the registry, once per orientation', () => {
-    const open = row('', ID('f'), { info: null, source: 'indexer' });
-    const got = listedPairs([summary(a.covenantId, u.covenantId), summary(a.covenantId, u.covenantId), summary(u.covenantId, a.covenantId), summary(a.covenantId, open.covenantId), summary(a.covenantId, ID('9'))], [a, u, open]);
+  it('lists a pair when both tokens are listed here with known decimals, in the registry or not, once per orientation', () => {
+    const unknown = row('', ID('f'), { info: null, source: 'indexer', decimals: null, scale: null });
+    const got = listedPairs([summary(a.covenantId, u.covenantId), summary(a.covenantId, u.covenantId), summary(u.covenantId, a.covenantId), summary(a.covenantId, unknown.covenantId), summary(a.covenantId, ID('b'))], [a, u, unknown]);
     expect(got.map((p) => p.key)).toEqual([`${a.covenantId}/${u.covenantId}`, `${u.covenantId}/${a.covenantId}`]);
     expect(pairLabelOf(got[0]!)).toBe('EXKCC (aaaa…aaaa) / EXUSD (eeee…eeee)');
     expect(listedPairs(null, [a, u])).toEqual([]);
+  });
+
+  it('an open-list token takes the decimals of the scale its first order set; a scale that is no power of ten lists nothing', () => {
+    const view = (market_scale: number) => ({ market_scale }) as unknown as TokenRow['index'];
+    const open = row('', ID('f'), { info: null, source: 'indexer', decimals: null, scale: null, index: view(1_000_000) });
+    const [p] = listedPairs([summary(a.covenantId, open.covenantId)], [a, open]);
+    expect(p!.quote.decimals).toBe(6);
+    expect(listedPairs([summary(a.covenantId, open.covenantId)], [a, { ...open, index: view(3) }])).toEqual([]);
   });
 
   it('a pair: price and change implied through the two KAS markets, the 24 h pair volume in QUOTE, its live order counts, no spread', () => {

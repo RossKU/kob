@@ -62,7 +62,7 @@ export function programAllowed(program: string, network: string | null | undefin
 export interface ScaleSample { scale?: number | null }
 
 /** Exponent of a power of ten in 1..=10^9, or null. */
-const exponentOf = (scale: number): number | null => {
+export const exponentOf = (scale: number): number | null => {
   for (let d = 0; d <= 9; d++) if (scale === 10 ** d) return d;
   return null;
 };

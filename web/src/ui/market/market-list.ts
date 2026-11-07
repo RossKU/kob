@@ -15,6 +15,7 @@
 // skeletons / `—`. Sorting by any column, missing figures always last; search over pairs by either token (or `BASE/QUOTE`). Pure.
 import type { PairSummaryView, StatsView } from '../../data/indexer-types';
 import { ASSUMED_TOKEN_DECIMALS, t } from '../../i18n';
+import { exponentOf } from '../../kob/open-token';
 import { cmpRational, formatRational, significantDp, type Rational } from '../../kob/pair';
 import { fitAmountColumn, fitDecimalTexts, tickPriceFraction } from '../kit/format';
 import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, priceDecimals, toneOf, unitsToNumber, type Tone } from './market-model';
@@ -263,11 +264,15 @@ export interface ListedPair {
 }
 
 /**
- * The pairs of `/v1/pairs` the list shows: both tokens among the tradable rows AND in the registry (a pair page needs both registry entries);
- * one entry per oriented pair.
+ * The pairs of `/v1/pairs` the list shows: both tokens among the tradable rows, each with known decimals (its own, else the scale its first order set:
+ * a pair's figures are in whole tokens, never on assumed decimals); one entry per oriented pair.
  */
 export function listedPairs(summaries: readonly PairSummaryView[] | null | undefined, rows: readonly TokenRow[]): ListedPair[] {
-  const byId = new Map(rows.filter((r) => r.info !== null).map((r) => [r.covenantId, r]));
+  const byId = new Map<string, TokenRow>();
+  for (const r of rows) {
+    const decimals = r.decimals ?? (typeof r.index?.market_scale === 'number' ? exponentOf(r.index.market_scale) : null);
+    if (decimals !== null) byId.set(r.covenantId, r.decimals === null ? { ...r, decimals } : r);
+  }
   const out = new Map<string, ListedPair>();
   for (const s of summaries ?? []) {
     const base = byId.get(s.base);

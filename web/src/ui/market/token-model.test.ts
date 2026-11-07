@@ -6,7 +6,7 @@ import { loadKobNode } from '../../kob/wasm.node';
 import { TOKEN_PROGRAMS } from '../../kob/programs.generated';
 import { tokenTitle } from './TokenBadges';
 import type { GenesisCheck } from '../../data/genesis-check';
-import { riskFactIds, tokenRiskCodes, applyGenesisCheck, buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
+import { riskFactIds, tokenRiskCodes, applyGenesisCheck, buildTokenRows, filterTokens, scaleNeedsIndexer, withShownRows, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
 
 const kob = await loadKobNode();
 const tpl = kob.templates().find((t) => t.name === 'KCC20Ref_8x8')!;
@@ -443,5 +443,29 @@ describe('status display: what shows by default and what is High risk', () => {
     expect(riskFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintUnbounded: true })))).toEqual(['mint_allowance']);
     expect(riskFactIds(r(['genesis_verified', 'mint_allowance'], [], verifiedCheck({ mintAllowance: 5n })))).toEqual([]);
     expect(riskFactIds(r(['genesis_unverified']))).toEqual([]);
+  });
+});
+
+describe('the rows of a pair selector', () => {
+  const r = (covenantId: string, ticker: string) => ({ covenantId, ticker }) as TokenRow;
+  it('names the shown tokens as their pages do, adds one no list names, keeps the rest', () => {
+    const rows = [r('a', ''), r('b', 'BBB')];
+    expect(withShownRows(rows, [r('a', 'AAA'), r('c', 'CCC'), null]).map((x) => [x.covenantId, x.ticker])).toEqual([['a', 'AAA'], ['b', 'BBB'], ['c', 'CCC']]);
+    expect(withShownRows(rows, [])).toEqual(rows);
+  });
+});
+
+describe('standalone mode: an open-list token needs decimals known without the indexer', () => {
+  const open = (openScale: TokenInfo['openScale']) => ({ source: 'indexer', info: { openList: true, openScale } as TokenInfo }) as const;
+  it('its declaration or its program decides; the scale of its orders, entered decimals or none do not', () => {
+    expect(scaleNeedsIndexer(open('declared'), null)).toBe(false);
+    expect(scaleNeedsIndexer(open('program'), null)).toBe(false);
+    expect(scaleNeedsIndexer(open('orders'), null)).toBe(true);
+    expect(scaleNeedsIndexer(open('entered'), null)).toBe(true);
+    expect(scaleNeedsIndexer({ source: 'indexer', info: null }, 'no-scale')).toBe(true);
+  });
+  it('a registry token is not concerned', () => {
+    expect(scaleNeedsIndexer({ source: 'registry', info: { openList: false } as TokenInfo }, null)).toBe(false);
+    expect(scaleNeedsIndexer({ source: 'registry', info: null }, 'no-scale')).toBe(false);
   });
 });

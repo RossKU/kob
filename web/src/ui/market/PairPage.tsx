@@ -2,7 +2,8 @@
 // `GET /v1/pairs/{base}/{quote}/book` (resting pair orders = direct levels, if-done pair entries resting at their limit = entry levels, quotes
 // through the two KAS books = route levels, "via KAS") and the unified order ticket with B as its quote (every order type of the KAS ticket, prices
 // in B per whole A, tips KAS), and the same panels as a token market in the same places: 24 h strip, chart, depth chart (of the pair book), the
-// pair's recent fills and the facts of both tokens (pair-market.ts).
+// pair's recent fills and the facts of both tokens (pair-market.ts). A token is resolved as on its own page (use-market-token.ts): no registry entry is needed,
+// and a token the page cannot trade yet says why (pair-model.ts `pairSideOf`).
 //
 // The founder price rule: prices come only from KAS-book fills. The chart is the indexer's pair candles (derived from the two KAS series) or the
 // client-side ratio of the two KAS candle series; last / change / high / low are KAS-derived; pair fills are VOLUME only (the volume tiles and the
@@ -13,11 +14,11 @@ import { useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { pageTitle, useDocumentTitle } from '../../app/page-title';
-import { navigate, pairRoute } from '../../app/router';
+import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { PairToken } from '../../kob/pair';
 import { longId, type TokenInfo } from '../../kob/registry';
-import { Badge, Banner, Button, ErrorBanner, scaleOfDecimals, Section, useAsync } from '../kit';
+import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { requestPairFlip } from '../ticket/pair-flip';
 import { DepthChart } from './DepthChart';
@@ -32,14 +33,16 @@ import { PairBook } from './PairBook';
 import { useStaleSince } from './book-stale';
 import { loadCandles, type ChartView } from './candle-feed';
 import { StaleSince } from './OrderBook';
-import { buildPairBook, pickOf, type PairLevelRow } from './pair-model';
+import { buildPairBook, pairSideOf, pickOf, type PairLevelRow } from './pair-model';
 import { pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
 import { MarketActivity } from '../activity/ActivityPage';
 import { TokenFacts, tokenTitle } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { PairDetails, TokenLine } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
-import { buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
+import { buildTokenRows, scaleNeedsIndexer, sharedTickerIds, tokenLabel, tradableRows, withShownRows } from './token-model';
+import { useMarketToken } from './use-market-token';
+import { useStandalone } from '../shell/standalone';
 import { ratioCandles, usdDp, usdStats } from './usd-model';
 import './market.css';
 import '../ticket/ticket.css';
@@ -53,20 +56,29 @@ const pairToken = (x: TokenInfo): PairToken => ({ covenantId: x.covenantId, tick
 export function PairPage(props: { base: string; quote: string }) {
   const services = useServices();
   const { registry, indexer, kob } = services;
-  const baseInfo = registry.byCovenantId.get(props.base) ?? null;
-  const quoteInfo = registry.byCovenantId.get(props.quote) ?? null;
+  const standalone = useStandalone(services.standalone)?.active === true;
   const [liveKey, setLiveKey] = useState(0);
   // bumps on a reorg / resync: the chart reloads in full (TokenPage)
   const [resyncKey, setResyncKey] = useState(0);
   const [prefill, setPrefill] = useState<{ side: 'buy' | 'sell'; price: bigint } | undefined>(undefined);
-  const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
+  const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, standalone]);
   const declared = useDeclarationLookup();
   const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, [], declared), [registry, tokenList.data, declared]);
   const choiceRows = useMemo(() => tradableRows(rows, kob.templates()), [rows, kob]);
   // listed tokens that share a ticker with another listed token: a short note at each token's facts and at the ticket
   const shared = useMemo(() => sharedTickerIds(choiceRows), [choiceRows]);
-  const baseRow = rows.find((r) => r.covenantId === props.base);
-  const quoteRow = rows.find((r) => r.covenantId === props.quote);
+  // each token as its own page resolves it; no decimals are entered here, a first order is placed on the token's page
+  const sideOptions = { rows, rowsLoading: tokenList.loading, refreshKey: liveKey, decimals: null, declared };
+  const baseToken = useMarketToken(props.base, sideOptions);
+  const quoteToken = useMarketToken(props.quote, sideOptions);
+  const baseSide = pairSideOf(baseToken, !!indexer);
+  const quoteSide = pairSideOf(quoteToken, !!indexer);
+  const baseInfo = baseSide.state === 'ready' ? baseSide.info : null;
+  const quoteInfo = quoteSide.state === 'ready' ? quoteSide.info : null;
+  const baseRow = baseToken.headerRow;
+  const quoteRow = quoteToken.headerRow;
+  // the two tokens are always among the choices, also when no list names them
+  const selectorRows = useMemo(() => withShownRows(choiceRows, [baseRow, quoteRow]), [choiceRows, baseRow, quoteRow]);
   // the tab: `BASE / QUOTE` by the tickers the page shows (a token without one: its short id)
   useDocumentTitle(pageTitle(`${baseRow?.ticker || longId(props.base)} / ${quoteRow?.ticker || longId(props.quote)}`));
 
@@ -82,8 +94,9 @@ export function PairPage(props: { base: string; quote: string }) {
       if (full) setResyncKey((k) => k + 1);
     },
   );
-  const base = useMemo(() => (baseInfo ? pairToken(baseInfo) : null), [baseInfo]);
-  const quote = useMemo(() => (quoteInfo ? pairToken(quoteInfo) : null), [quoteInfo]);
+  // keyed on what they read: an open-list token's TokenInfo is a new object after every live refresh, and the chart must not reload for that alone
+  const base = useMemo(() => (baseInfo ? pairToken(baseInfo) : null), [baseInfo?.covenantId, baseInfo?.ticker, baseInfo?.decimals]);
+  const quote = useMemo(() => (quoteInfo ? pairToken(quoteInfo) : null), [quoteInfo?.covenantId, quoteInfo?.ticker, quoteInfo?.decimals]);
   const model = useMemo(() => (book.data && base && quote ? buildPairBook(book.data, base, quote, DEPTH) : null), [book.data, base, quote]);
 
   // last price and 24 h change: the two tokens' KAS stats (the pair price is implied through the two KAS markets)
@@ -96,7 +109,7 @@ export function PairPage(props: { base: string; quote: string }) {
       const ts = Math.max(b?.ts ?? 0, q?.ts ?? 0);
       return { key, ...usdStats({ stats: b, decimals: baseInfo.decimals }, { stats: q, decimals: quoteInfo.decimals }), refMs: ts > 0 ? ts : Date.now() };
     },
-    [indexer, props.base, props.quote, baseInfo?.covenantId, quoteInfo?.covenantId],
+    [indexer, props.base, props.quote, baseInfo?.covenantId, quoteInfo?.covenantId, baseInfo?.decimals, quoteInfo?.decimals],
     { refreshKey: liveKey },
   );
   // 24 h high / low: the indexer's pair candles (derived from the two KAS series), else the client-side ratio of the two KAS candle series; a live
@@ -159,16 +172,45 @@ export function PairPage(props: { base: string; quote: string }) {
   const pairFillsSrc = useMemo(() => ({ base: props.base, quote: props.quote, view: fills.data }), [props.base, props.quote, fills.data]);
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
 
-  const blocked = [baseInfo, quoteInfo].find((x) => x && !x.tradable);
-  if (blocked) return <NotTradablePage ticker={blocked.ticker} covenantId={blocked.covenantId} reason={blocked.untradableReason ? t(`market.reason.${blocked.untradableReason}`) : null} />;
-  if (!baseInfo || !quoteInfo || !base || !quote || !pairStats) {
+  const sides = [baseSide, quoteSide];
+  const blocked = sides.find((s) => s.state === 'blocked');
+  if (blocked) return <NotTradablePage ticker={blocked.row.ticker} covenantId={blocked.row.covenantId} reason={blocked.reason ? t(blocked.reason) : null} />;
+  if (sides.some((s) => s.state === 'loading')) return <div data-testid="pair-loading"><Loading /></div>;
+  const back = <div><a href="#/market">{t('market.token.back')}</a></div>;
+  if (sides.some((s) => s.state === 'unknown')) {
     return (
       <div class="stack" data-testid="pair-not-found">
-        <Banner tone="warn" title={t('pair.notFound')}>{t('pair.notFoundBody')}</Banner>
-        <div><a href="#/market">{t('market.token.back')}</a></div>
+        <Banner tone="warn" title={t('pair.notFound')}>
+          {t('pair.notFoundBody')}
+          {sides.map((s, i) => (s.state === 'unknown' && s.reason ? <div key={i} data-testid="pair-public-reason">{t(s.reason)}</div> : null))}
+        </Banner>
+        {back}
       </div>
     );
   }
+  const noScale = sides.flatMap((s) => (s.state === 'no-scale' ? [s.row] : []));
+  if (noScale.length) {
+    return (
+      <div class="stack" data-testid="pair-no-scale">
+        <Banner tone="info" title={t('pair.noScale.title')}>{t('pair.noScale.body')}</Banner>
+        {noScale.map((r) => <div key={r.covenantId}><a href={routeToHash(tokenRoute(r.covenantId))} data-testid="pair-no-scale-link">{t('pair.openToken', { token: tokenLabel(r) })}</a></div>)}
+        {back}
+      </div>
+    );
+  }
+  const stopped = sides.flatMap((s) => (s.state === 'unavailable' ? [s] : []));
+  if (stopped.length) {
+    return (
+      <div class="stack" data-testid="pair-token-unavailable">
+        <Banner tone="warn" title={t('pair.unavailable')}>
+          {stopped.map((s) => <div key={s.row.covenantId} data-testid="pair-token-unavailable-reason" data-token={s.row.covenantId}>{`${tokenLabel(s.row)}: ${t(s.reason)}`}</div>)}
+        </Banner>
+        {stopped.map((s) => <div key={s.row.covenantId}><a href={routeToHash(tokenRoute(s.row.covenantId))}>{t('pair.openToken', { token: tokenLabel(s.row) })}</a></div>)}
+        {back}
+      </div>
+    );
+  }
+  if (!baseInfo || !quoteInfo || !base || !quote || !pairStats) return <div data-testid="pair-loading"><Loading /></div>;
   const spec: UsdChartSpec = { base: { token: props.base, decimals: baseInfo.decimals }, quote: { token: props.quote, decimals: quoteInfo.decimals }, pairCandles: true };
   const statsModel = pairStats.model;
   const src = pairStats.source;
@@ -193,7 +235,7 @@ export function PairPage(props: { base: string; quote: string }) {
                 <IdentityBlock row={quoteRow ?? { covenantId: props.quote, ticker: quoteInfo.ticker, kascov: null }} size="pair" data-testid="pair-quote-identity" />
               </span>
               <span class="mkt-pairhd-tickers">
-                <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={choiceRows} onChange={openPair} />
+                <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={selectorRows} onChange={openPair} />
                 <span class="sr-only" data-testid="pair-subtitle">{t('pair.subtitle', { base: baseRow ? tokenTitle(baseRow) : baseInfo.ticker, quote: quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker })}</span>
               </span>
               <FlipButton
@@ -273,7 +315,14 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       ticket={
         <div class="stack mkt-area-ticket">
-          <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} facts={<TokenFacts rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} compact data-testid="ticket-token-facts" />} />
+          {/* an open-list token in standalone mode: the rule of the token page, for either token */}
+          {standalone && [baseToken, quoteToken].some((m) => !!m.row && scaleNeedsIndexer(m.row, m.open.reason)) ? (
+            <Section title={t('market.ticket.title')} data-testid="ticket-unavailable" class="mkt-card">
+              <Banner tone="warn" data-testid="ticket-standalone-scale">{t('market.ticket.standaloneScale')}</Banner>
+            </Section>
+          ) : (
+            <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} facts={<TokenFacts rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} compact data-testid="ticket-token-facts" />} />
+          )}
           <p class="small muted">
             <a href="#/orders" data-testid="pair-my-orders">{t('pair.myOrders')}</a>
           </p>

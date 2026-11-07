@@ -47,10 +47,10 @@ export interface AssetChoice {
 }
 
 /**
- * The assets one side offers. Next to KAS every known token is offered (the token's KAS market); next to a token only KAS and tokens that can be paired
- * (in the registry: `pairable`). The asset on the other side is never offered (swap with the flip control).
+ * The assets one side offers: KAS and every token of `rows` (the tokens this build can trade: any two of them make a pair, registered or not). The asset
+ * on the other side is never offered (swap with the flip control).
  */
-export function assetChoices<T extends { covenantId: string; ticker: string; pairable: boolean }>(
+export function assetChoices<T extends { covenantId: string; ticker: string }>(
   rows: readonly T[], other: AssetId, label: (r: T) => string,
 ): AssetChoice[] {
   const o = other.toLowerCase();
@@ -59,7 +59,6 @@ export function assetChoices<T extends { covenantId: string; ticker: string; pai
   for (const r of rows) {
     const id = r.covenantId.toLowerCase();
     if (id === o) continue;
-    if (o !== KAS && !r.pairable) continue;
     out.push({ value: id, label: label(r), short: r.ticker });
   }
   return out;

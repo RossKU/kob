@@ -24,7 +24,7 @@ export function usePublicToken(covenantId: Hex, active: boolean): PublicTokenSta
   return useMemo((): PublicTokenState => {
     // `useAsync` keeps the last good answer while it reloads: an answer about another token is not one
     const r = found.data && (!found.data.ok || found.data.view.covenant_id === id) ? found.data : null;
-    if (!r) return { row: null, reason: null, loading: active && found.loading };
+    if (!r) return { row: null, reason: active && found.error && !found.loading ? 'node-unavailable' : null, loading: active && found.loading };
     return r.ok ? { row: unknownRow(registry, r.view, 'public'), reason: null, loading: false } : { row: null, reason: r.reason, loading: false };
-  }, [found.data, found.loading, registry, active, id]);
+  }, [found.data, found.error, found.loading, registry, active, id]);
 }

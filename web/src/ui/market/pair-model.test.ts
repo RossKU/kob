@@ -3,7 +3,10 @@ import type { PairBookView, PairLevelView } from '../../data/indexer-types';
 import { sanitizePairBook } from '../../data/indexer';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
-import { buildPairBook, pickOf, spreadLine } from './pair-model';
+import type { TokenInfo } from '../../kob/registry';
+import { buildPairBook, pairSideOf, pickOf, spreadLine } from './pair-model';
+import type { TokenRow } from './token-model';
+import type { MarketToken } from './use-market-token';
 
 // BASE: 8 decimals, scale 1e8; QUOTE: 6 decimals, scale 1e6. price_num / price_den = QUOTE base units per BASE base unit.
 const BASE: PairToken = { covenantId: 'aa'.repeat(32), ticker: 'BTC', decimals: 8, scale: 100_000_000n };
@@ -111,5 +114,55 @@ describe('a click on a level prefills the ticket with a state price (QUOTE base 
     const m = buildPairBook(view([lv('direct', '1', '3', '100')], [lv('route', '1', '3', '100')]), BASE, QUOTE)!;
     expect(pickOf(m.asks[0]!, BASE)).toEqual({ side: 'buy', price: 33_333_334n });
     expect(pickOf(m.bids[0]!, BASE)).toEqual({ side: 'sell', price: 33_333_333n });
+  });
+});
+
+describe('one token of a pair page', () => {
+  const info = { covenantId: 'aa'.repeat(32), ticker: 'AAA', decimals: 6, openList: true } as TokenInfo;
+  const row = (over: Partial<TokenRow> = {}) => ({ covenantId: 'aa'.repeat(32), ticker: '', source: 'indexer', info: null, tradable: false, reason: 'unregistered', ...over }) as TokenRow;
+  const side = (o: Partial<Pick<MarketToken, 'row' | 'ticketInfo' | 'resolving'>> & { reason?: MarketToken['open']['reason']; loading?: boolean; pub?: MarketToken['pub']['reason'] } = {}, indexer = true) =>
+    pairSideOf(
+      { row: o.row ?? null, ticketInfo: o.ticketInfo ?? null, resolving: o.resolving ?? false, open: { info: null, reason: o.reason ?? null, loading: o.loading ?? false }, pub: { row: null, reason: o.pub ?? null, loading: false } },
+      indexer,
+    );
+
+  it('a token still being resolved is never "not found"', () => {
+    expect(side({ resolving: true })).toEqual({ state: 'loading' });
+    expect(side({ row: row(), loading: true })).toEqual({ state: 'loading' });
+    // the render between a row and the first read of its orders
+    expect(side({ row: row() })).toEqual({ state: 'loading' });
+    // a listed row whose program is unclear waits for what the node confirms, a row only kascov.io names too
+    expect(side({ row: row(), reason: 'program-ambiguous', resolving: true })).toEqual({ state: 'loading' });
+    expect(side({ row: row({ source: 'kascov' }), reason: 'no-extension', resolving: true })).toEqual({ state: 'loading' });
+  });
+
+  it('nothing identifies the token: unknown, with the fact that is missing', () => {
+    expect(side({ pub: 'not-indexed' })).toEqual({ state: 'unknown', reason: 'market.public.not-indexed' });
+    expect(side({})).toEqual({ state: 'unknown', reason: null });
+  });
+
+  it('a tradable token is ready, whatever else is still loading', () => {
+    expect(side({ row: row({ tradable: true, info }), ticketInfo: info, resolving: true })).toEqual({ state: 'ready', info });
+    expect(side({ row: row({ source: 'registry', tradable: true, info }), ticketInfo: info })).toEqual({ state: 'ready', info });
+  });
+
+  it('where the token page has no market, the pair has none: the same sentences', () => {
+    for (const reason of ['program-unknown', 'program-ambiguous', 'program-unreviewed'] as const) {
+      expect(side({ row: row(), reason })).toMatchObject({ state: 'blocked', reason: `market.open.${reason}` });
+    }
+    expect(side({ row: row({ source: 'registry', reason: 'program-not-embedded' as TokenRow['reason'] }), resolving: true })).toMatchObject({ state: 'blocked', reason: 'market.reason.program-not-embedded' });
+  });
+
+  it('no order and no declared decimals: says so, decimals are never assumed', () => {
+    expect(side({ row: row(), reason: 'no-scale' })).toMatchObject({ state: 'no-scale' });
+  });
+
+  it('a token that cannot be read says which fact is missing', () => {
+    for (const reason of ['scale-conflict', 'no-extension', 'book-unavailable', 'scale-invalid'] as const) {
+      expect(side({ row: row(), reason })).toMatchObject({ state: 'unavailable', reason: `market.open.${reason}` });
+    }
+    expect(side({ row: row({ source: 'kascov' }), reason: 'no-extension', pub: 'not-confirmed' })).toMatchObject({ state: 'unavailable', reason: 'market.public.not-confirmed' });
+    // no indexer: nothing will ever read its orders
+    expect(side({ row: row() }, false)).toMatchObject({ state: 'unavailable', reason: 'market.open.book-unavailable' });
   });
 });

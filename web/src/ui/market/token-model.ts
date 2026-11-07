@@ -4,6 +4,7 @@
 // a token is verified, genuine or approved, and only technical facts (its program) decide whether this build trades it.
 // Pure.
 import type { IndexerTokenView } from '../../data/indexer-types';
+import type { OpenTokenIssue } from '../../kob/open-token';
 import type { GenesisCheck } from '../../data/genesis-check';
 import type { DeclaredToken } from '../../data/token-declarations';
 import {
@@ -306,6 +307,25 @@ export function tradableHere(row: Pick<TokenRow, 'source' | 'info' | 'index'>, p
 
 /** The rows a market list, selector or pair choice offers: only tokens this build can trade (see `tradableHere`). */
 export const tradableRows = <R extends Pick<TokenRow, 'source' | 'info' | 'index'>>(rows: readonly R[], pinned: readonly TemplateInfo[]): R[] => rows.filter((r) => tradableHere(r, pinned));
+
+/** The rows of a pair selector: each token on screen named as its page names it; one no list names has no row of its own and is added. */
+export function withShownRows(rows: readonly TokenRow[], shown: readonly (TokenRow | null | undefined)[]): TokenRow[] {
+  let out = [...rows];
+  for (const s of shown) {
+    if (!s) continue;
+    out = out.some((r) => r.covenantId === s.covenantId) ? out.map((r) => (r.covenantId === s.covenantId ? { ...r, ticker: s.ticker } : r)) : [...out, s];
+  }
+  return out;
+}
+
+/**
+ * Standalone mode: an open-list token is traded only with decimals known without the indexer (its declaration or its program's default): the scale its
+ * orders seen since the mode started use is no evidence of the market's.
+ */
+export function scaleNeedsIndexer(row: Pick<TokenRow, 'source' | 'info'>, reason: OpenTokenIssue | null): boolean {
+  const i = row.info;
+  return row.source !== 'registry' && (reason === 'no-scale' || (!!i?.openList && i.openScale !== 'declared' && i.openScale !== 'program'));
+}
 
 /**
  * Covenant ids of the listed tokens that share their ticker with another listed token (case, look-alike letters and homoglyphs ignored: `KR0N` is `KRON`).

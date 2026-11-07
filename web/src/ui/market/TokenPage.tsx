@@ -1,21 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { displayToken } from '../../app/token-display';
 import { pageTitle, useDocumentTitle } from '../../app/page-title';
-import { useDeclaration, useDeclarationLookup } from '../../app/use-declaration';
+import { useDeclarationLookup } from '../../app/use-declaration';
 import { useServices, useWallet } from '../../app/context';
 import type { TicketPreset } from '../../app/router';
-import { longId, sanitizeUntrusted } from '../../kob/registry';
+import { longId } from '../../kob/registry';
 import { t } from '../../i18n';
-import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
+import { Badge, Banner, Button, ErrorBanner, Loading, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
 import { useSystemStatus } from '../shell/StatusProvider';
 import { clockText, useStandalone } from '../shell/standalone';
 import { buildBookModel, groupSizesAt, inferTick, levelsFromView } from './book-model';
 import { useStaleSince } from './book-stale';
-import { useOpenToken } from './use-open-token';
-import { useHeldToken } from './use-held-token';
-import { usePublicToken } from './use-public-token';
+import { useMarketToken } from './use-market-token';
 import { FirstOrderDecimals } from './FirstOrderDecimals';
 import { issuedDecimals } from '../../data/issued-decimals';
 import { DepthChart } from './DepthChart';
@@ -36,10 +33,8 @@ import { PriceChart } from './PriceChart';
 import { TokenFacts } from './TokenBadges';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
-import { applyKascov, kascovRowOf } from './kascov-merge';
 import { useGenesisCheck } from './use-genesis-check';
-import { useKascov } from './use-kascov';
-import { applyGenesisCheck, buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
+import { applyGenesisCheck, buildTokenRows, scaleNeedsIndexer, sharedTickerIds, tradableRows, withShownRows } from './token-model';
 import { MarketActivity } from '../activity/ActivityPage';
 import { tradeRows } from './trades-model';
 import './market.css';
@@ -89,72 +84,23 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // a token the registry does not list is named by its verified KCC-23 declaration (the selector, the title, the name)
   const declaredOf = useDeclarationLookup();
   const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, [], declaredOf), [registry, tokens.data, declaredOf]);
-  const listedRow = useMemo(() => allRows.find((r) => r.covenantId === id) ?? null, [allRows, id]);
-  // the creator's name, ticker and icon from kascov.io, where KOB has none of its own (kascov-merge.ts; the facts stay KOB's)
-  const kascov = useKascov();
-  // a token in neither list (no order of it yet) that kascov.io names and whose program this build pins: the same row the market list shows for it
-  const kascovRow = useMemo(
-    () => (!listedRow && kascov.status === 'ok' ? kascovRowOf(id, kascov.tokens, { network: services.config.network, templates: kob.templates(), registry, declared: declaredOf }) : null),
-    [listedRow, kascov, id, services.config.network, kob, registry, declaredOf],
-  );
-  // a KCC-20 token in neither list (no order of it yet): its market opens from the wallet's node-verified holdings of it, else from token outputs of it
-  // the indexer names and the node confirms, whoever holds them (kob/open-token.ts); the kascov.io row is only what the page shows while it checks, or
-  // when nothing verifies (no ticket then: the page says which fact is missing)
-  // A listed row that names no program because several order placements claim different ones (`program_ambiguous`; anyone can place one) is
-  // resolved the same way: the program a token output of the wallet or of any holder shows, confirmed on the node, wins; with none the page says so
-  // (audit 2026-10-30 V1)
-  const ambiguous = listedRow?.index?.program_ambiguous === true;
-  const notListed = (!listedRow || ambiguous) && !tokens.loading;
-  const held = useHeldToken(id, notListed);
-  const pub = usePublicToken(id, notListed && !held.row && !held.loading);
-  const baseRow = ambiguous ? (held.row ?? pub.row ?? listedRow) : (listedRow ?? held.row ?? pub.row ?? kascovRow);
   // the pair selector offers only tokens this build can trade
   const choiceRows = useMemo(() => tradableRows(allRows, kob.templates()), [allRows, kob]);
   // another listed token uses this ticker: a short note at the title and the ticket
   const sharedTicker = useMemo(() => sharedTickerIds(choiceRows).has(id), [choiceRows, id]);
-  // an open-list token (program on the strict list, no registry entry) is tradable with a TokenInfo synthesised from its orders: its decimals taken
-  // from the scale its orders share
   // the decimals entered for the token's first order (used only while no order tells the scale); per token
   const [entered, setEntered] = useState<{ id: string; decimals: number } | null>(null);
   const enteredDecimals = entered && entered.id === id ? entered.decimals : null;
-  // the token's KCC-23 declaration (verified against its covenant id): its decimals decide an open-list token's scale, its facts are shown
-  // a token only the wallet's holdings show (the indexer lists it to its owner, not in its token list: no order names it yet) is asked for its declaration
-  // too, so a fresh browser of the issuing key names it and knows its decimals instead of asking for them
-  const declared = useDeclaration(id, listedRow?.index?.declaration === true || !!held.row || !!pub.row);
-  const open = useOpenToken(baseRow, liveKey, enteredDecimals, declared ?? null);
-  // a token the indexer lists without a ticker ("") is named like one without any (app/token-display.ts): the open-list token's name (this
-  // browser's issuance ticker, else its covenant id), else the display name; never an empty name in a title, a unit or a hint
-  const shown = useMemo(() => displayToken(registry, services.config.network, id), [registry, services.config.network, id, declared]);
-  // where the token's facts are its declaration's (no registry entry, or one that disagrees with the chain): its name as declared, and the marker
-  // the wallet views show ("declared, bound by ancestry", "facts disagree"); never one of this browser's issuance or of assumed decimals here, where the
-  // decimals are the market's (the banner under the title says where they come from)
-  const onChain = !!shown && (shown.decimalsSource === 'declared' || !!shown.declarationConflicts?.length);
-  const row = useMemo(() => {
-    if (!baseRow) return baseRow;
-    const named = { ...baseRow, ticker: baseRow.ticker || open.info?.ticker || shown?.ticker || '', name: onChain && shown!.name ? sanitizeUntrusted(shown!.name, 64) : baseRow.name };
-    return open.info
-      ? { ...named, info: open.info, decimals: open.info.decimals, scale: scaleOfDecimals(open.info.decimals), tick: 1n, tradable: true, reason: null }
-      : named;
-  }, [baseRow, open.info, shown, onChain]);
+  // the token however it is known, its synthesised TokenInfo where it has no registry entry, and how it is named (use-market-token.ts)
+  const { row, headerRow, ticketInfo, open, held, pub, shown, onChain } = useMarketToken(id, { rows: allRows, rowsLoading: tokens.loading, refreshKey: liveKey, decimals: enteredDecimals, declared: declaredOf });
 
-  // the title bar's row: the creator's name, ticker and icon from kascov.io where KOB has none of its own (the facts below stay KOB's)
-  const headerRow = useMemo(() => (row && kascov.status === 'ok' ? applyKascov(row, kascov.tokens, longId(row.covenantId)) : row), [row, kascov]);
   // KOB's own genesis check of the token (once per token and session, data/genesis-check.ts): "Genesis verified", "Genesis check failed", or "Genesis not verified" with the
   // reason, replacing kascov's remark; a token the registry verified is not checked. The result gates nothing.
   const genesisCheck = useGenesisCheck(headerRow ?? row ?? null);
   const checkedRow = useMemo(() => (headerRow ? applyGenesisCheck(headerRow, genesisCheck) : headerRow), [headerRow, genesisCheck]);
 
-  // the ticket names the token as the page does: the creator's ticker (kascov.io) where KOB has no name of its own; a label, the id stays the identity
   // the pair selector's rows: the tradable tokens, this token named as the page names it (a token no list names has no row of its own: it is added)
-  const selectorRows = useMemo(() => {
-    const shown = headerRow ?? row;
-    if (!shown) return choiceRows;
-    return choiceRows.some((r) => r.covenantId === id) ? choiceRows.map((r) => (r.covenantId === id ? { ...r, ticker: shown.ticker } : r)) : [...choiceRows, shown];
-  }, [choiceRows, headerRow, row, id]);
-  const ticketInfo = useMemo(() => {
-    const i = row?.info;
-    return i && i.openList && headerRow && headerRow.ticker && headerRow.ticker !== i.ticker && headerRow.kascov?.usedTicker ? { ...i, ticker: headerRow.ticker } : i;
-  }, [row?.info, headerRow]);
+  const selectorRows = useMemo(() => withShownRows(choiceRows, [headerRow ?? row]), [choiceRows, headerRow, row]);
 
   const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: 60, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
   // the latest trades (the last price and the page's price precision; the list of trades is the activity log below): `/v1/trades`, or the fill events of an indexer without it
@@ -341,7 +287,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const since = standalone?.sinceMs ?? null;
   // an open-list token is traded in standalone mode only with decimals known without the indexer (its declaration or its program's default): the
   // scale its orders seen since the mode started use is no evidence of the market's
-  const standaloneScaleBlocked = !!standalone && row.source !== 'registry' && (open.reason === 'no-scale' || (!!info?.openList && info.openScale !== 'declared' && info.openScale !== 'program'));
+  const standaloneScaleBlocked = !!standalone && scaleNeedsIndexer(row, open.reason);
   // the pair selector: a change of side leads to another market; the same token with the other order is only a flip
   const onPair = (next: DisplayedPair) => {
     const m = marketFor(next);

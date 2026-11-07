@@ -38,15 +38,15 @@ describe('marketFor', () => {
 
 describe('assetChoices', () => {
   const rows = [
-    { covenantId: A, ticker: 'AAA', pairable: true },
-    { covenantId: B, ticker: 'BBB', pairable: true },
-    { covenantId: C, ticker: 'CCC', pairable: false },
+    { covenantId: A, ticker: 'AAA' },
+    { covenantId: B, ticker: 'BBB' },
+    { covenantId: C, ticker: 'CCC' },
   ];
   const label = (r: { ticker: string }) => `${r.ticker} (full)`;
-  it('next to KAS: every token; next to a token: KAS and the pairable tokens, never the other side', () => {
+  it('next to KAS: every token; next to a token: KAS and every other token, registered or not, never the other side', () => {
     expect(assetChoices(rows, KAS, label).map((c) => c.value)).toEqual([A, B, C]);
-    expect(assetChoices(rows, A, label).map((c) => c.value)).toEqual([KAS, B]);
+    expect(assetChoices(rows, A, label).map((c) => c.value)).toEqual([KAS, B, C]);
     expect(assetChoices(rows, B, label)[0]).toEqual({ value: KAS, label: 'KAS', short: 'KAS' });
-    expect(assetChoices(rows, A, label).at(-1)).toEqual({ value: B, label: 'BBB (full)', short: 'BBB' });
+    expect(assetChoices(rows, A, label)[1]).toEqual({ value: B, label: 'BBB (full)', short: 'BBB' });
   });
 });
