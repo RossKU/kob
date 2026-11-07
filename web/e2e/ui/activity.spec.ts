@@ -155,16 +155,28 @@ test.describe('activity page', () => {
     await expect.poll(async () => new Set(await attrs(page, 'data-market')).has(`${base}/${QUOTE}`)).toBe(true);
   });
 
-  test('the Activity page shows the bare icons; the token page keeps their tiles', async ({ appPage: page, mock }) => {
+  test('the type icons are bare on every page, in the rows and the legend; the place icon is white-ish on dark and gray on light', async ({ appPage: page, mock }) => {
     const base = await seedPair(page, mock);
-    const tile = (root: string) => page.locator(`[data-testid="${root}"] .act-row .act-ty`).first().evaluate((e) => getComputedStyle(e).backgroundColor);
-    await page.goto('/#/activity');
-    await expect(rows(page).first()).toBeVisible();
-    expect(await tile('activity-page')).toBe('rgba(0, 0, 0, 0)');
-    await page.goto(`/#/market/${base}`);
-    await showActivity(page);
-    await expect(page.getByTestId('token-page').getByTestId('activity-row').first()).toBeVisible();
-    expect(await tile('token-page')).not.toBe('rgba(0, 0, 0, 0)');
+    const tiles = () => page.locator('[data-testid="activity"] .act-ty').evaluateAll((els) => [...new Set(els.map((e) => getComputedStyle(e).backgroundColor))]);
+    const token = (name: string) => page.evaluate((n) => {
+      const probe = document.createElement('i');
+      probe.style.color = `var(${n})`;
+      document.body.append(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    }, name);
+    for (const route of ['/#/activity', `/#/market/${base}`, `/#/market/${base}/${QUOTE}`]) {
+      await page.goto(route);
+      await showActivity(page);
+      await expect(page.getByTestId('activity').getByTestId('activity-row').first()).toBeVisible();
+      expect(await tiles(), route).toEqual(['rgba(0, 0, 0, 0)']);
+    }
+    const placed = page.locator('[data-testid="activity-legend"] .act-ty-placed');
+    for (const [theme, colour] of [['dark', '--text'], ['light', '--muted']] as const) {
+      await page.evaluate((th) => document.documentElement.setAttribute('data-theme', th), theme);
+      await expect(placed).toHaveCSS('color', await token(colour));
+    }
   });
 
   test('live: a new fill arrives at the top; paused or pointed at, it is held behind "+N new" until released', async ({ appPage: page, mock }) => {

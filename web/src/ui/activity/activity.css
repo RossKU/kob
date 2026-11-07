@@ -1,8 +1,9 @@
 /* The activity log (ActivityLog.tsx): kaspa.stream-style rows, one per transaction. Colours are the app's tokens (styles.css), both themes. */
 
-:root { --act-placed: #3a9c8f; }
-:root[data-theme='dark'] { --act-placed: #70c7ba; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme]) { --act-placed: #70c7ba; } }
+/* the place icon: white-ish on the dark theme, gray on the light one */
+:root { --act-placed: var(--muted); }
+:root[data-theme='dark'] { --act-placed: var(--text); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) { --act-placed: var(--text); } }
 
 .act .section-head { align-items: center; }
 .act .section-head > .row { flex: 1 1 auto; justify-content: flex-end; min-width: 0; }
@@ -69,13 +70,11 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 
 .act-ty { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; }
 .act-ty-sm { width: 20px; height: 20px; border-radius: 5px; }
-.act-ty-placed { color: var(--act-placed); background: color-mix(in srgb, var(--act-placed) 15%, transparent); }
-.act-ty-buy { color: var(--buy); background: var(--buy-bg); }
-.act-ty-sell { color: var(--sell); background: var(--sell-bg); }
-.act-ty-cancel { color: var(--muted); background: var(--surface-3); }
-.act-ty-refund, .act-ty-stop { color: var(--warn); background: var(--warn-bg); }
-/* the Activity tab: the icon alone (the token and pair pages keep the tile) */
-.act-page .act-ty { background: none; }
+.act-ty-placed { color: var(--act-placed); }
+.act-ty-buy { color: var(--buy); }
+.act-ty-sell { color: var(--sell); }
+.act-ty-cancel { color: var(--muted); }
+.act-ty-refund, .act-ty-stop { color: var(--warn); }
 
 .act-c-mk { display: flex; align-items: center; gap: 2px; overflow: hidden; }
 .act-mk { display: inline-flex; align-items: center; flex: none; }

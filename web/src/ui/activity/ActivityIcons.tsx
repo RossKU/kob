@@ -1,5 +1,5 @@
-// The activity log's type icons (KOB's own outline set: 24 viewBox, stroke 2, round caps and joins). Shape AND colour tell the kinds apart (never
-// colour alone): placed = a square with a plus (Kaspa teal), fill = two opposite arrows (green: the taker bought, red: the taker sold), cancel = a
+// The activity log's type icons (KOB's own outline set: 24 viewBox, stroke 2, round caps and joins), bare on every page. Shape AND colour tell the kinds apart (never
+// colour alone): placed = a square with a plus (white-ish on dark, gray on light), fill = two opposite arrows (green: the taker bought, red: the taker sold), cancel = a
 // circle with a cross (muted), refund / kill / expiry = an undo arrow (amber), stop armed / triggered = a target (amber). Each icon has an
 // accessible name; the colours are the `--act-*` variables of activity.css (both themes).
 import type { ComponentChildren } from 'preact';
@@ -58,7 +58,7 @@ export function KindGlyph(props: { kind: ActivityKind; size?: number; label?: st
   );
 }
 
-/** The icon on its tinted tile (rows and the legend). */
+/** The icon in its colour (rows and the legend). */
 export function KindIcon(props: { kind: ActivityKind; side?: 'buy' | 'sell' | null; small?: boolean }) {
   const tone = props.kind === 'fill' ? (props.side === 'sell' ? 'sell' : 'buy') : props.kind;
   return (
