@@ -124,7 +124,7 @@ export function TokenHeader(props: {
 export function TokenLine(props: { row: TokenRow; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null | undefined; badges?: ComponentChildren; ticker?: boolean; 'data-testid'?: string }) {
   const r = props.row;
   return (
-    <div class="mkt-meta fit-line small" data-testid={props['data-testid'] ?? 'token-meta'} data-token={r.covenantId}>
+    <div class="mkt-meta small" data-testid={props['data-testid'] ?? 'token-meta'} data-token={r.covenantId}>
       {props.ticker ? <strong class="mkt-meta-ticker" data-testid="token-line-ticker">{r.ticker || longId(r.covenantId)}</strong> : null}
       <IdCopy fit value={r.covenantId} data-testid={props.ticker ? 'pair-token-short-id' : 'token-short-id'} />
       {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}

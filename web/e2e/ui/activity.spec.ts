@@ -85,23 +85,15 @@ test.describe('activity page', () => {
     await expect(first).toHaveAttribute('aria-label', /opens tn10\.kaspa\.stream in a new tab/);
     // the columns: market icons, short tx, wallet, amount (+ KAS value), price, confirmations, time
     const fill = rows(page).and(page.locator('[data-kind="fill"]')).first();
-    // the two ends of the id, where the column has no room for it; whole in its title and in what a selection of it copies
-    const tx = fill.locator('.act-c-tx .fit-id');
-    await expect(tx).toHaveText(/^[0-9a-f]{8,20}…[0-9a-f]{8,20}$/, { useInnerText: true });
-    await expect(tx).toHaveAttribute('title', /^[0-9a-f]{64}$/);
-    expect(await tx.evaluate((e) => {
-      getSelection()!.selectAllChildren(e);
-      const copy = new ClipboardEvent('copy', { clipboardData: new DataTransfer(), bubbles: true, cancelable: true });
-      e.dispatchEvent(copy);
-      getSelection()!.removeAllRanges();
-      return copy.clipboardData!.getData('text/plain');
-    })).toBe(await tx.getAttribute('title'));
+    // the whole id (the column shows as much as fits, then an ellipsis), whole in its title too
+    await expect(fill.locator('.act-c-tx')).toHaveText(/^[0-9a-f]{64}$/);
+    await expect(fill.locator('.act-c-tx')).toHaveAttribute('title', /^[0-9a-f]{64}$/);
     await expect(fill.locator('.act-c-amt')).toContainText('EXKCC');
     await expect(fill.locator('.act-c-amt')).toContainText('KAS');
     await expect(fill.locator('.act-c-px')).toHaveText(/^0\.0\d+$/);
     await expect(fill.locator('.act-c-time')).toHaveText(/^\d{2}(:\d{2}:\d{2}|-\d{2} \d{2}:\d{2})$/);
     // the owners of the filled orders are looked up: a short address (the full one in the title)
-    await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{7,19}…[0-9a-z]{8,20}/, { timeout: 15_000, useInnerText: true });
+    await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{40,}/, { timeout: 15_000 });
     await expect(fill.getByTestId('activity-wallet')).toHaveAttribute('title', /kaspatest:/);
     // the legend under the table: phase 1 kinds and the confirmation marks
     await expect(page.getByTestId('activity-legend')).toContainText('fill, taker bought');
@@ -310,13 +302,6 @@ test.describe('activity on a phone', () => {
   });
 });
 
-// every id shown has its two ends in view: none is cut at its end, whatever the width of its column
-const cutIds = (page: Page) =>
-  page.evaluate(() => {
-    const ids = [...document.querySelectorAll<HTMLElement>('[data-testid="activity-row"] .fit-id')].filter((e) => e.getBoundingClientRect().width > 0);
-    return { shown: ids.length, cut: ids.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => `${e.clientWidth}/${e.scrollWidth} ${e.innerText}`).slice(0, 5) };
-  });
-
 // the table fits its card at every width: narrower cards drop the pie, then the Wallet column, then take two lines per row; never a sideways scroll
 const WIDTHS = [390, 760, 887, 1000, 1100, 1280, 1440, 1774];
 test('the log fits its card at every width, on the Activity page and under a token page (no element past the card, no page scroll sideways)', async ({ appPage: page, mock }) => {
@@ -340,7 +325,6 @@ test('the log fits its card at every width, on the Activity page and under a tok
       await showActivity(page);
       await expect(rows(page).first()).toBeVisible();
       await expect.poll(outside, { message: `${route} at ${width} px` }).toEqual({ bad: [], scrollX: 0 });
-      expect((await cutIds(page)).cut, `${route} at ${width} px`).toEqual([]);
     }
   }
 });

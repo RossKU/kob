@@ -6,7 +6,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { formatDateTime, t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { pow10 } from '../../kob/units';
-import { FitId, fitAmountColumn, unitsFraction } from '../kit';
+import { fitAmountColumn, unitsFraction } from '../kit';
 import { priceDecimals, priceText } from '../market/market-model';
 import { TokenIcon } from '../market/TokenIcon';
 import { SETTLE_DAA, confirmationsAt, daaNow, marketKeyOf, rowTime, type ActivityRow, type MarketRef } from './activity-model';
@@ -160,15 +160,15 @@ const RowCells = memo(
         <span class="act-c-mk" role="cell" title={fmt.marketText(r.market)}>
           <MarketIcons market={r.market} nameOf={fmt.nameOf} />
           {r.moreMarkets > 0 ? <span class="act-more" title={t('activity.moreMarketsTitle', { n: r.moreMarkets })}>{t('activity.moreMarkets', { n: r.moreMarkets })}</span> : null}
-          <span class="act-txm"><FitId kind="log" value={r.txid} /></span>
+          <span class="act-txm">{r.txid}</span>
         </span>
-        {/* the whole id where the column has room for it, else its two ends (the link and the title have it whole) */}
-        <span class="act-c-tx" role="cell"><FitId kind="log" value={r.txid} /></span>
+        {/* the whole id: as much of it as the column has room for, then an ellipsis (the link and the title have it whole) */}
+        <span class="act-c-tx" role="cell" title={r.txid}>{r.txid}</span>
         <span class="act-c-who" role="cell" title={addrs.length ? t('activity.wallet.title', { list: addrs.join(', ') }) : undefined} data-testid="activity-wallet">
           {addrs.length ? (
             addrs.slice(0, 2).flatMap((a, i) => [
               ...(i > 0 ? [<i key="s" class="act-sep" aria-hidden="true">{'⇄'}</i>] : []),
-              <span key={a} class="act-w"><FitId kind="log" value={walletBody(a)} /></span>,
+              <span key={a} class="act-w">{walletBody(a)}</span>,
             ])
           ) : (
             <span class="act-w muted">{props.pending ? t('activity.wallet.pending') : t('activity.wallet.unknown')}</span>
@@ -190,7 +190,7 @@ const RowCells = memo(
   (a, b) => a.row === b.row && a.addrs === b.addrs && a.pending === b.pending && a.chainDaa === b.chainDaa && a.chainAt === b.chainAt && a.today === b.today && a.fmt === b.fmt && a.fullTime === b.fullTime,
 );
 
-/** An address without its network prefix. */
+/** An address without its network prefix (the column shows as much of it as fits). */
 const walletBody = (a: string): string => (a.includes(':') ? a.slice(a.indexOf(':') + 1) : a);
 
 /** The amount cell's two lines: the token amount and its KAS value (a pair: the B amount; a pair placement: its side). */

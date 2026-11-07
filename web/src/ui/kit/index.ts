@@ -33,7 +33,6 @@ export { IssueLine, RawDetails } from './RawDetails';
 export { Banner, ErrorBanner, type BannerProps, type BannerTone } from './Banner';
 export { Button, type ButtonProps, type ButtonVariant } from './Button';
 export { CopyText, copyToClipboard, type CopyTextProps } from './CopyText';
-export { FitId, fitForms } from './FitId';
 export { Dropdown, usePickerPanel, type DropdownProps } from './Dropdown';
 export type { DropdownEntry, DropdownGroup, DropdownOption } from './dropdown-model';
 export { Checkbox, Field, FieldShell, Select, type FieldProps, type FieldShellProps, type SelectOption, type SelectProps } from './Field';

@@ -1,9 +1,8 @@
 // A covenant id, shortened (12 + 12 hex, 96 bits: the picture beside it carries about 35 bits and the name and ticker are free to copy, so this is the identity) with an icon-only copy
-// button; `fit`: as long as its line has room for, whole on a wide one (FitId). The full id is the tooltip, the `data-value` and what the button copies.
+// button; `fit`: the whole id, ending in an ellipsis where its line has not the room. The full id is the tooltip, the `data-value` and what the button copies.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { copyToClipboard } from '../kit/CopyText';
-import { FitId } from '../kit/FitId';
 import { wideId } from '../../kob/registry';
 
 export function IdCopy(props: { value: string; fit?: boolean; 'data-testid'?: string }) {
@@ -17,12 +16,8 @@ export function IdCopy(props: { value: string; fit?: boolean; 'data-testid'?: st
   };
   const label = state === 'copied' ? t('common.copied') : state === 'failed' ? t('common.copyFailed') : t('market.id.copy');
   return (
-    <span class="ml-id">
-      {props.fit ? (
-        <FitId as="code" class="mono" kind="covenant" room="line" value={props.value} data-testid={props['data-testid']} />
-      ) : (
-        <code class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{wideId(props.value)}</code>
-      )}
+    <span class={props.fit ? 'ml-id ml-id-fit' : 'ml-id'}>
+      <code class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{props.fit ? props.value : wideId(props.value)}</code>
       <button type="button" class="copy-btn ml-copy" onClick={onCopy} aria-label={label} title={label} data-state={state} data-testid={props['data-testid'] ? `${props['data-testid']}-copy` : undefined}>
         {state === 'copied' ? (
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
