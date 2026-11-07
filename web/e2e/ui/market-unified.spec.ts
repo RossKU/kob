@@ -5,6 +5,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
 import { connectWallet, fund, listExkcc, pickAsset, pickerValues } from '../helpers/env';
+import { chooseOption, optionLabel, optionLabels } from '../helpers/dropdown';
 import { fillFields } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -154,20 +155,20 @@ test.describe('the flip is complete: everything follows the displayed orientatio
       if (flipped) await page.getByTestId('market-flip').click();
       const group = page.getByTestId('book-group');
       await expect(group).toBeVisible();
-      await group.selectOption({ index: 0 });
+      await chooseOption(group, { index: 0 });
       await expect(rows('asks')).toHaveCount(10);
       const askAmount = await amounts('asks');
       const bidAmount = await amounts('bids');
-      await group.selectOption({ index: 3 });
+      await chooseOption(group, { index: 3 });
       await expect.poll(() => rows('asks').count()).toBeLessThan(10);
       expect(await rows('bids').count()).toBeLessThan(10);
       expect(await amounts('asks')).toBe(askAmount);
       expect(await amounts('bids')).toBe(bidAmount);
       // the option labels are steps of the shown price unit
-      const labels = await group.locator('option').allInnerTexts();
+      const labels = await optionLabels(group);
       expect(labels).toHaveLength(4);
       if (flipped) expect(Number(labels[3]!.replace(/,/g, ''))).toBeGreaterThanOrEqual(0.1);
-      await group.selectOption({ index: 0 });
+      await chooseOption(group, { index: 0 });
     }
   });
 
@@ -178,7 +179,7 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     await page.goto(`/#/market/${base}`);
     await connectWallet(page);
     await page.getByTestId('market-flip').click();
-    await page.getByTestId('book-group').selectOption({ index: 3 });
+    await chooseOption(page.getByTestId('book-group'), { index: 3 });
     const bid = page.getByTestId(TESTID.bookBids).getByTestId('book-bid-row').first();
     // displayed bids are the native asks (0.0251 ..): the grouped level's native price is at or above its highest ask
     const nativePrice = Number(await bid.getAttribute('data-native-price'));
@@ -213,11 +214,11 @@ test.describe('the flip is complete: everything follows the displayed orientatio
 
     // native: the wording of a token market
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).toContainText('KAS per EXKCC');
-    await page.getByTestId('order-type').selectOption('close');
+    await chooseOption(page.getByTestId('order-type'), 'close');
     await expect(help).toContainText('Sells your tokens at market');
-    await page.getByTestId('order-type').selectOption('twap');
-    await expect(page.getByTestId('order-type').locator('option[value="twap"]')).toHaveText('TWAP (sell in slices)');
-    await page.getByTestId('order-type').selectOption('limit');
+    await chooseOption(page.getByTestId('order-type'), 'twap');
+    await expect.poll(() => optionLabel(page.getByTestId('order-type'), 'twap')).toBe('TWAP (sell in slices)');
+    await chooseOption(page.getByTestId('order-type'), 'limit');
 
     // inverted
     await page.getByTestId('market-flip').click();
@@ -235,15 +236,15 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     await expect(page.getByTestId('order-tip-share')).toContainText('2.5%');
     await expect(page.getByTestId('order-available')).toBeVisible();
     // the helps
-    await page.getByTestId('order-type').selectOption('close');
+    await chooseOption(page.getByTestId('order-type'), 'close');
     await expect(help).toContainText('Buys KAS with all your EXKCC');
     await expect(help).not.toContainText('Sells your tokens');
-    await expect(page.getByTestId('order-type').locator('option[value="twap"]')).toHaveText('TWAP (buy KAS in slices)');
-    await expect(page.getByTestId('order-type').locator('option[value="dca"]')).toHaveText('DCA (sell KAS in slices)');
-    await page.getByTestId('order-type').selectOption('stopMarket');
+    await expect.poll(() => optionLabel(page.getByTestId('order-type'), 'twap')).toBe('TWAP (buy KAS in slices)');
+    await expect.poll(() => optionLabel(page.getByTestId('order-type'), 'dca')).toBe('DCA (sell KAS in slices)');
+    await chooseOption(page.getByTestId('order-type'), 'stopMarket');
     await expect(help).toContainText('Buy stop: at or above; Sell stop: at or below');
     await expect(help).not.toContainText('a sell order resting at or below your stop');
-    await page.getByTestId('order-type').selectOption('limit');
+    await chooseOption(page.getByTestId('order-type'), 'limit');
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') })).toContainText('a Buy receives the KAS minus the tip');
   });
 });

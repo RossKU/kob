@@ -4,6 +4,7 @@
 // the right end of the row, and the cost line under the amount is never an empty gap.
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
+import { optionValues } from '../helpers/dropdown';
 import { fillFields, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -16,7 +17,7 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     await openMarket(page, mock);
     const slot = page.getByTestId('order-issues');
     const button = page.getByTestId('order-place');
-    const types = await page.getByTestId('order-type').locator('option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    const types = await optionValues(page.getByTestId('order-type'));
     expect(types.length).toBeGreaterThan(12);
     let slotBox: { x: number; y: number; width: number; height: number } | null = null;
     let seenDisabled = 0;

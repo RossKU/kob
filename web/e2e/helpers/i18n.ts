@@ -1,6 +1,7 @@
 // Page-wide checks used by the dictionary and layout specs.
 import type { Page } from '@playwright/test';
 import { expect } from '../fixtures';
+import { readOptions } from './dropdown';
 
 /** The shape of a translation key that was rendered instead of its text: `ticket.type.limit.name`. */
 export const KEY_SHAPE = /^[a-z]+\.[a-zA-Z.]+$/;
@@ -9,7 +10,7 @@ export const KEY_NAMESPACED = /^(common|shell|market|ticket|confirm|orders|setti
 
 /** Texts (text nodes and the placeholder / title / aria-label / alt attributes) currently on the page that look like an untranslated key. */
 export async function leakedKeys(page: Page): Promise<string[]> {
-  return page.evaluate(
+  const found = await page.evaluate(
     ([shape, ns]) => {
       const a = new RegExp(shape);
       const b = new RegExp(ns);
@@ -27,11 +28,19 @@ export async function leakedKeys(page: Page): Promise<string[]> {
       for (const el of document.body.querySelectorAll('[placeholder],[title],[aria-label],[alt]')) {
         for (const attr of ['placeholder', 'title', 'aria-label', 'alt']) check(el.getAttribute(attr));
       }
-      // <option> text is part of the text nodes above; hidden <details> content too
+      // hidden <details> content is part of the text nodes above; the rows of a drop-down are not, they exist while it is open (below)
       return [...found];
     },
     [KEY_SHAPE.source, KEY_NAMESPACED.source],
   );
+  // the drop-downs a user can reach: those of an open dialog, else those of the page
+  const dialog = page.getByRole('dialog').last();
+  const scope = (await dialog.count()) ? dialog : page.locator('body');
+  const lists = scope.locator('.select[aria-haspopup="listbox"]:visible:not(:disabled)');
+  for (let i = 0, n = await lists.count(); i < n; i++) {
+    for (const o of await readOptions(lists.nth(i))) if (KEY_SHAPE.test(o.label) || KEY_NAMESPACED.test(o.label)) found.push(o.label);
+  }
+  return found;
 }
 
 export async function expectNoLeakedKeys(page: Page, where: string): Promise<void> {

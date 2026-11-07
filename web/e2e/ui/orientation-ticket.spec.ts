@@ -7,6 +7,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
 import { connectWallet, fund, openMarket } from '../helpers/env';
+import { chooseOption } from '../helpers/dropdown';
 import { expectWalletSigned, onChainTerms, placeOrder, placeOrderAndRead } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -97,7 +98,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await fund(mock, 'alice');
     await openMarket(page, mock);
     await page.getByTestId('market-flip').click();
-    await page.getByTestId('order-type').selectOption('market');
+    await chooseOption(page.getByTestId('order-type'), 'market');
     // shown Sell KAS = native buy of EXKCC: sized at the best ask (0.0251 KAS per EXKCC) moved by the 3 % slippage, 0.025853: the most its
     // auction can pay (TN10 2026-10-17: sized at the ask, 20 KAS typed became 20.60 KAS at the worst price)
     await page.getByTestId(TESTID.orderSideSell).click();

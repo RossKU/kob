@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { mockKascov, OTHER_PNG, PNG, programHash, sha256, type MockKascovToken } from '../helpers/kascov';
+import { chooseOption, optionLabels } from '../helpers/dropdown';
 
 test.use({ autoOpen: false });
 
@@ -383,8 +384,20 @@ test.describe('token logos from the creator\'s address: the Settings switch, the
     const dialog = page.getByTestId('logo-report-dialog');
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId('logo-report-github')).toHaveAttribute('href', new RegExp(`^https://github.com/RossKU/kob/issues/new\\?template=logo-report.yml&covenant_id=${NO_CORS}$`));
-    await expect(page.getByTestId('logo-report-reason').locator('option')).toHaveText(['Illegal content', 'Impersonates another project or person', 'Something else']);
-    await page.getByTestId('logo-report-reason').selectOption('illegal');
+    const reason = page.getByTestId('logo-report-reason');
+    expect(await optionLabels(reason)).toEqual(['Illegal content', 'Impersonates another project or person', 'Something else']);
+    // the list is in the dialog and above it; Escape and a press on the backdrop close the list, not the dialog
+    await reason.click();
+    await expect(dialog.getByTestId('logo-report-reason-panel')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('logo-report-reason-panel')).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+    await expect(reason).toBeFocused();
+    await reason.click();
+    await page.locator('.modal-backdrop').click({ position: { x: 4, y: 4 } });
+    await expect(page.getByTestId('logo-report-reason-panel')).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+    await chooseOption(page.getByTestId('logo-report-reason'), 'illegal');
     await page.getByTestId('logo-report-send').click();
     await expect(page.getByTestId('logo-report-result')).toContainText('now hidden for everyone');
     expect(posted).toEqual([{ covenant_id: NO_CORS, reason: 'illegal' }]);

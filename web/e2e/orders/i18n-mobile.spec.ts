@@ -2,6 +2,7 @@
 // English), and the same flow on a 390 px phone (no horizontal scroll, the key controls reachable, the status lines fit the screen).
 import { test, expect } from '../fixtures';
 import { fund, openMarket, gotoNav } from '../helpers/env';
+import { optionLabels, optionValues } from '../helpers/dropdown';
 import { expectNoLeakedKeys, horizontalOverflow } from '../helpers/i18n';
 import { runFlow } from '../helpers/orders';
 import { clickPlaceOnly, confirmReceipt, expectWalletSigned, fillFields, pickType, placedBy, placeOrder, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
@@ -13,12 +14,12 @@ test.describe('English text', () => {
     await fund(mock);
     await openMarket(page, mock);
     await expect(page.getByTestId('order-ticket')).toContainText('Order ticket');
-    const names = await page.getByTestId('order-type').locator('option').allTextContents();
+    const names = await optionLabels(page.getByTestId('order-type'));
     expect(names).toHaveLength(18);
     for (const term of ['Limit', 'Market', 'Stop (market)', 'Stop-limit', 'Trailing stop', 'Take-profit', 'OCO', 'IFD', 'IFO', 'Repeat', 'TWAP', 'DCA']) {
       expect(names.join('|'), `order type list has ${term}`).toContain(term);
     }
-    const types = await page.getByTestId('order-type').locator('option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    const types = await optionValues(page.getByTestId('order-type'));
     for (const type of types) {
       await pickType(page, type);
       await expect(page.getByTestId('order-type-help')).not.toBeEmpty();

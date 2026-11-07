@@ -177,7 +177,8 @@ async function walletShots() {
     await page.getByTestId('wallet-connect-kasware').click({ timeout: 30_000 }).catch(() => {});
     await page.getByTestId('wallet-address').waitFor({ timeout: 30_000 }).catch(() => {});
     await readyChart(page);
-    await page.getByTestId('order-type').selectOption('limit');
+    await page.getByTestId('order-type').click();
+    await page.getByTestId('order-type-option-limit').click();
     await page.getByTestId('order-side-buy').click();
     // about 20 KAS worth, 10 % under the best bid (TOKEN/KAS, the convention): rests far from the market, never crosses the trader's own asks
     // the displayed best bid (KAS per whole token)

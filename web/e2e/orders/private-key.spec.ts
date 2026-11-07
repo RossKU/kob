@@ -4,6 +4,7 @@
 import type { Frame, Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
 import { KAS, fund, mockClock, openConnect, openMarket, gotoNav } from '../helpers/env';
+import { chooseOption } from '../helpers/dropdown';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted, type ReceiptRead } from '../helpers/ticket';
 import { formatKas } from '../../src/kob/units';
@@ -359,7 +360,7 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
 
   // the flipped KAS/EXKCC view: Sell 20 KAS, Market (native: a market buy of EXKCC, an auction)
   await page.getByTestId('market-flip').click();
-  await page.getByTestId('order-type').selectOption('market');
+  await chooseOption(page.getByTestId('order-type'), 'market');
   await page.getByTestId('order-side-sell').click();
   await page.getByTestId('order-amount').fill('20');
   await waitReviewable(page);

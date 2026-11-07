@@ -14,6 +14,11 @@ import { goto, outputsOf, runFlow, signFromTicket, signOnConfirmScreen } from '.
 
 const tid = (h, id) => h.page.getByTestId(id);
 const short = (s) => (s ? `${s.slice(0, 10)}...` : '-');
+/** Chooses in one of the app's drop-downs (src/ui/kit/Dropdown.tsx; web/e2e/helpers/dropdown.ts): the button, then the row. */
+const chooseOption = async (h, id, value) => {
+  await tid(h, id).click();
+  await tid(h, `${id}-option-${value}`).click();
+};
 export const TOKEN = 100_000_000n; // base units per whole token (8 decimals)
 export const SUPPLY = 1_000_000n; // whole tokens issued per token
 
@@ -273,7 +278,7 @@ async function fillFields(h, values) {
       if ((await box.getAttribute('open')) === null) await box.locator('summary').click();
     }
     const tag = await loc.evaluate((el) => `${el.tagName}:${el.type ?? ''}`);
-    if (tag.startsWith('SELECT')) await loc.selectOption(String(value));
+    if (tag.startsWith('BUTTON')) await chooseOption(h, fieldTestId(id), String(value));
     else if (tag === 'INPUT:checkbox') {
       if (value) await loc.check();
       else await loc.uncheck();
@@ -323,7 +328,7 @@ async function fillTicket(rc, spec) {
   const { h } = rc;
   await openTicket(rc, { pair: !!spec.pair });
   const ticket = tid(h, 'order-ticket');
-  await tid(h, 'order-type').selectOption(spec.type);
+  await chooseOption(h, 'order-type', spec.type);
   if ((await ticket.getAttribute('data-type')) !== spec.type) throw new Error(`the ticket did not switch to ${spec.type}`);
   await tid(h, spec.side === 'buy' ? 'order-side-buy' : 'order-side-sell').click();
   if ((await ticket.getAttribute('data-side')) !== spec.side) throw new Error(`the ticket did not switch to the ${spec.side} side`);
@@ -704,7 +709,7 @@ export async function runMarket(rc) {
       const t0 = Date.now();
       for (;;) {
         await openTicket(rc);
-        await tid(rc.h, 'order-type').selectOption('market');
+        await chooseOption(rc.h, 'order-type', 'market');
         await tid(rc.h, 'order-side-sell').click();
         await fillFields(rc.h, { amount: 1 });
         await sleep(3000);

@@ -5,6 +5,7 @@
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
 import { listExkcc } from '../helpers/env';
+import { chooseOption } from '../helpers/dropdown';
 
 const SHOTS = process.env.KOB_SHOTS === '1';
 
@@ -91,14 +92,14 @@ test.describe('market data', () => {
     // protocol v3 has no registry tick: the step is the one the visible prices sit on (their gcd, 10,000 sompi per whole token in the mock book), and
     // 10 x it = 0.001 KAS per token: asks 0.0251 .. 0.026 round UP into one 0.026 row, bids 0.0249 .. 0.024 DOWN into 0.024
     const select = page.getByTestId('book-group');
-    await select.selectOption({ index: 1 });
+    await chooseOption(select, { index: 1 });
     await expect(asks).toHaveCount(1);
     await expect(bids).toHaveCount(1);
     await expect(asks.first()).toHaveAttribute('data-price', '2600000');
     await expect(bids.first()).toHaveAttribute('data-price', '2400000');
     expect(await amounts(asks)).toBe(askAmount);
     expect(await amounts(bids)).toBe(bidAmount);
-    await select.selectOption({ index: 0 });
+    await chooseOption(select, { index: 0 });
     await expect(asks).toHaveCount(10);
   });
 

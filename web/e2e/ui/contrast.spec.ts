@@ -134,6 +134,32 @@ for (const theme of THEMES) {
       expect(c.low).toEqual([]);
     });
 
+    test('a drop-down: its button, and the rows and headings of its list', async ({ appPage: page, mock }) => {
+      await listExkcc(page);
+      const token = await mock.token();
+      await open(page, theme, `/#/market/${token.covenant_id}`);
+      const face = page.getByTestId('order-type');
+      await expect(face).toBeVisible();
+      const c = checker(theme);
+      await checkStates(page, c, face, 'drop-down button');
+      await face.click();
+      await c.check(face, 'drop-down button', 'open');
+      const panel = page.getByTestId('order-type-panel');
+      await expect(panel).toBeVisible();
+      const label = (value: string) => page.getByTestId(`order-type-option-${value}`).locator('.picker-label');
+      await c.check(label('limit'), 'row', 'chosen, active');
+      await c.check(panel.locator('.picker-group').first(), 'heading', 'default');
+      await c.check(label('market'), 'row', 'default');
+      await page.getByTestId('order-type-option-market').hover();
+      await c.check(label('market'), 'row', 'hover');
+      await c.check(label('limit'), 'row', 'chosen');
+      // no list of the app has a disabled row yet: the state is the attribute's
+      await page.getByTestId('order-type-option-ioc').evaluate((e) => e.setAttribute('aria-disabled', 'true'));
+      await c.check(label('ioc'), 'row', 'disabled');
+      await page.keyboard.press('Escape');
+      expect(c.low).toEqual([]);
+    });
+
     test('the white pills: Connect, and Open the app in the header and the hero', async ({ appPage: page }) => {
       const c = checker(theme);
       await open(page, theme, '/#/market');

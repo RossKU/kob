@@ -445,6 +445,19 @@ test.describe('the pair picker', () => {
     await expect(page).toHaveURL(new RegExp(`#/market/${TWIN}/${base}$`));
   });
 
+  test('every row of a picker is as high as the next, with a name line or without', async ({ appPage: page, mock }) => {
+    const base = await seedPair(page, mock);
+    await page.goto(`/#/market/${base}/${QUOTE}`);
+    await expect(page.getByTestId('pair-page')).toBeVisible();
+    await page.getByTestId('market-base-select').click();
+    const rows = page.locator('[data-testid^="market-base-select-option-"]');
+    await expect.poll(() => rows.count()).toBeGreaterThan(1);
+    const heights = await rows.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
+    expect(new Set(heights).size).toBe(1);
+    expect(heights[0]).toBeGreaterThanOrEqual(44);
+    await page.keyboard.press('Escape');
+  });
+
   test('a press outside closes it; a long list is cut and the search reaches the rest', async ({ appPage: page }) => {
     await mockKascov(page, { tokens: many });
     await page.goto('/#/market');

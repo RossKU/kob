@@ -8,6 +8,7 @@ import { test, expect } from '../fixtures';
 import type { Page } from '@playwright/test';
 import { formatKas } from '../../src/kob/units';
 import { mockClock } from '../helpers/env';
+import { chooseOption, optionValues } from '../helpers/dropdown';
 import { clickPlace, clickPlaceOnly, expectStopped, expectWalletSigned, fillFields, peekReceipt, pickType, placedBy, placeOrder, placeOrderAndRead, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 const KAS = 100_000_000n;
@@ -51,7 +52,7 @@ test.describe('order ticket', () => {
     await openTicket(page, mock);
 
     await page.getByTestId('order-side-sell').click();
-    await expect(page.getByTestId('order-type')).toHaveValue('limit');
+    await expect(page.getByTestId('order-type')).toHaveAttribute('data-value', 'limit');
     await expect(page.getByTestId('order-place')).toBeDisabled();
     await page.getByTestId('order-amount').fill('3');
     await page.getByTestId('order-price').fill('2.6');
@@ -266,7 +267,7 @@ test.describe('order ticket', () => {
   test('every order type is reachable and shows its own fields', async ({ appPage: page, mock }) => {
     await fundAlice(mock);
     await openTicket(page, mock);
-    const types = await page.getByTestId('order-type').locator('option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    const types = await optionValues(page.getByTestId('order-type'));
     expect(types).toEqual(
       expect.arrayContaining(['limit', 'market', 'ioc', 'fok', 'streaming', 'close', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco', 'ifd', 'ifo', 'repeatIfd', 'repeatIfo', 'twap', 'dca', 'dutch']),
     );
@@ -292,7 +293,7 @@ test.describe('order ticket', () => {
       dutch: ['order-price', 'field-priceEnd', 'field-duration'],
     };
     for (const type of types) {
-      await page.getByTestId('order-type').selectOption(type);
+      await chooseOption(page.getByTestId('order-type'), type);
       await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-type', type);
       await expect(page.getByTestId('order-amount')).toBeVisible();
       await expect(page.getByTestId('order-type-help')).not.toBeEmpty();
@@ -303,9 +304,9 @@ test.describe('order ticket', () => {
       }
     }
     // the side follows the type: TWAP only sells, DCA only buys
-    await page.getByTestId('order-type').selectOption('twap');
+    await chooseOption(page.getByTestId('order-type'), 'twap');
     await expect(page.getByTestId('order-side-buy')).toBeDisabled();
-    await page.getByTestId('order-type').selectOption('dca');
+    await chooseOption(page.getByTestId('order-type'), 'dca');
     await expect(page.getByTestId('order-side-sell')).toBeDisabled();
   });
 
@@ -313,7 +314,7 @@ test.describe('order ticket', () => {
     await fundAlice(mock);
     await openTicket(page, mock);
     await page.getByTestId('order-side-sell').click();
-    await page.getByTestId('order-type').selectOption('stopMarket');
+    await chooseOption(page.getByTestId('order-type'), 'stopMarket');
     await page.getByTestId('order-amount').fill('2');
     await page.getByTestId('field-stop').fill('2.2');
     await waitReviewable(page);
@@ -347,7 +348,7 @@ test.describe('order ticket', () => {
     const asks = await best();
     const top = BigInt(asks[0]!.price);
     await page.getByTestId('order-side-buy').click();
-    await page.getByTestId('order-type').selectOption('streaming');
+    await chooseOption(page.getByTestId('order-type'), 'streaming');
     // a buy meets the best ask
     await expect(seen).toHaveValue(priceText(top));
     // a sell meets the best bid

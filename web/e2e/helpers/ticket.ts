@@ -3,6 +3,7 @@
 // confirmation in its own frame instead of an app popup. Everything waits on UI state (visible / enabled / call log), never on fixed sleeps.
 import type { Locator, Page } from '@playwright/test';
 import { expect, type MockClient, type MockWalletHandle, type SubmissionSummary } from '../fixtures';
+import { chooseOption } from './dropdown';
 
 export type Side = 'buy' | 'sell';
 export type FieldValue = string | boolean;
@@ -16,7 +17,7 @@ export const fieldTestId = (id: string): string => (id === 'amount' ? 'order-amo
 
 /** Chooses side and order type (the side follows the type: TWAP only sells, DCA only buys, close only sells). */
 export async function pickType(page: Page, type: string, side?: Side): Promise<void> {
-  await page.getByTestId('order-type').selectOption(type);
+  await chooseOption(page.getByTestId('order-type'), type);
   await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-type', type);
   if (side) {
     await page.getByTestId(`order-side-${side}`).click();
@@ -36,7 +37,7 @@ export async function fillFields(page: Page, values: FieldValues): Promise<void>
     await loc.waitFor({ state: 'attached' });
     if (!(await loc.isVisible())) await openAdvanced(page);
     const tag = await loc.evaluate((el) => `${el.tagName}:${(el as HTMLInputElement).type ?? ''}`);
-    if (tag.startsWith('SELECT')) await loc.selectOption(String(value));
+    if (tag.startsWith('BUTTON')) await chooseOption(loc, String(value));
     else if (tag === 'INPUT:checkbox') {
       if (value) await loc.check();
       else await loc.uncheck();

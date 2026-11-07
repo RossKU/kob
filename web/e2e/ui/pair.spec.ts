@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { TOKEN, connectWallet, fund, pickAsset } from '../helpers/env';
+import { optionValues } from '../helpers/dropdown';
 import { runFlow } from '../helpers/orders';
 import { fillFields, peekReceipt, pickType, placeOrderAndRead, waitReviewable, type ReceiptRead } from '../helpers/ticket';
 
@@ -215,7 +216,7 @@ test('an IFD pair (buy first): the exit it commits to in the final confirmation,
 
 test('the pair ticket offers every order type of the KAS ticket in the same layout (prices in EXUSD per EXKCC, tips in KAS)', async ({ appPage: page, mock }) => {
   const base = await openPair(page, mock, { usd: 10n });
-  const types = async () => page.getByTestId('order-type').locator('option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+  const types = async () => optionValues(page.getByTestId('order-type'));
   const pairTypes = await types();
   expect(pairTypes.length).toBeGreaterThan(15);
   const labels = async () => (await page.getByTestId('order-ticket').locator('.tk-form > .field > label').allTextContents());

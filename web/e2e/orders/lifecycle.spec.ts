@@ -42,7 +42,7 @@ test.describe('exit lifetime (R-10)', () => {
       await fillFields(page, c.fields);
       await waitReviewable(page);
       // default: good till cancelled, counted from each exit's creation
-      await expect(page.getByTestId('field-exit.lifetime')).toHaveValue('gtc');
+      await expect(page.getByTestId('field-exit.lifetime')).toHaveAttribute('data-value', 'gtc');
 
       // until a date 5 days ahead (the input has minute precision)
       const target = Math.floor((clock.unix + 5 * 86_400) / 60) * 60;
