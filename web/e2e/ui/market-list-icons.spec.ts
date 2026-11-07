@@ -11,7 +11,8 @@ for (const [width, iconMin, iconMax] of [[1280, 46, 48], [880, 40, 48], [390, 38
   test(`${width} px: the icon fills the text block without growing the row`, async ({ appPage: page }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/#/market');
-    await expect(page.getByTestId('token-table')).toBeVisible();
+    // the rows themselves, not the placeholders that hold their places
+    await expect(page.locator('[data-testid="token-table"] .tk-icon').first()).toBeVisible();
     const rows = await page.evaluate(() =>
       [...document.querySelectorAll('[data-testid^="token-row-"]')].map((tr) => {
         const box = (sel: string) => tr.querySelector(sel)!.getBoundingClientRect();

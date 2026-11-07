@@ -54,6 +54,12 @@ covenant inputs reliably yet).
 **Market** (the first page) lists the tokens. Search by ticker, name or covenant id ("Ticker, name or covenant id"). A token is
 identified by its **covenant id**, a 64-character hex string; the ticker is only a label that anyone can pick.
 
+* **Pages.** "Rows" sets how many rows a page shows (20, 50 or 100); ‹ and › turn the pages and the line between them says where you are ("1–20 of 48"). The search looks
+  through every page. A new sort, search or size starts at the first page.
+* **Pairs.** "Pair" opens a token pair: choose two tokens, searching by ticker, name or covenant id, and the pair's page opens. Each choice shows the short id, because
+  tickers are not unique.
+* **Favorites.** The star on a row, on a token's page and on a pair's page keeps it in your favourites; "Favorites" next to the search shows only those, tokens and pairs.
+  They are kept in this browser, per network, by covenant id. They change nothing else: nothing is sent anywhere.
 * **Same ticker, different token.** If two tokens the page shows share a ticker (look-alike letters count), a token's page says "Another
   token uses this ticker — check the covenant id". The list marks nothing: each row has its own fingerprint and shows the start and end of the id, and the token page the full id with a
   copy button. Compare it with the id the token's own project gave you.
@@ -79,7 +85,7 @@ identified by its **covenant id**, a 64-character hex string; the ticker is only
   site lets it read the file: a match is shown as checked, a different picture is not shown (a letter and the note "The picture at this address does not match the hash in the
   token's creation record" instead). On the **Create token** page you can pick the logo file: your browser computes the fingerprint (the file is not uploaded; no SVG) and it is
   written into the creation record, where it cannot be changed later. KOB stores no pictures. Otherwise, or if the picture cannot be fetched, you see a coloured circle with a letter.
-  Pictures load only for rows you scroll to. Settings > "Token names and icons": **"Load token icons"** (on by default) turns all of this off (letters only, no image
+  Pictures load only for the rows on the page. Settings > "Token names and icons": **"Load token icons"** (on by default) turns all of this off (letters only, no image
   host is contacted); **"Load token logos from creator sites"** (on by default) turns off only the creators' addresses.
 * **Report a logo.** In a token's details, **"Report logo"** asks for a reason (illegal content, impersonation, something else; no text) and hides the logo for everyone
   until the operator of the indexer has reviewed it ("Logo hidden after a report"); the dialog also links to a GitHub form that does the same. If the indexer cannot be
@@ -176,13 +182,15 @@ The **Activity** tab lists what happens on KOB, one row per transaction, newest 
 icon for a token's KAS book, two for a pair), the transaction id, the wallet of the order owner the row is about (a fill names both orders'
 owners, `A ⇄ B`, when it crossed two KOB orders), the amount and its KAS value, the price in KAS, the confirmations (a pie that fills up to
 100 DAA, then ✓) and the time. A click opens the transaction on the network's explorer (kaspa.stream, tn10.kaspa.stream on testnet-10) in
-a new tab. The same log sits under every token and pair page, set to that market; its filter can be widened there, and "All activity →"
-opens the Activity tab, which shows every market.
+a new tab. The same log sits under every token and pair page, showing that market; "All activity →" opens the Activity tab, which shows
+every market.
 
 * **Vis** chooses what is listed: placed orders and fills; All / Orders (signed by the order owner) / Executions (sent by an executor);
   "mine only" with a wallet connected. The choice is remembered in this browser.
-* While the list is paused (⏸), or the pointer or the keyboard focus is in it, new rows wait behind a "+N new" pill, so a row never
-  moves under a click.
+* "Rows" sets how many rows a page shows (20, 50 or 100; remembered separately for the Activity tab and for the token and pair pages). A new
+  row pushes the oldest one off, and ‹ and › reach the newest 100 rows: 5 pages of 20, 2 of 50, 1 of 100.
+* While the list is paused (⏸), or the pointer or the keyboard focus is in it, or an older page is open, new rows wait behind a "+N new"
+  pill, so a row never moves under a click. The pill leads back to the first page.
 * Not listed yet: cancels, amends, refunds, kills, expiries and stop arms. The indexer records them per order only; they join the log
   with an indexer update. Which executor sent a fill is not recorded on chain in a form the indexer keeps, so the log shows roles, not
   executors.
