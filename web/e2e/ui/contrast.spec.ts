@@ -127,6 +127,7 @@ for (const theme of THEMES) {
     test('Create token: the program', async ({ appPage: page }) => {
       await open(page, theme, '/#/create');
       await connectWallet(page);
+      await page.getByTestId('issue-advanced').getByRole('button').first().click();
       await expect(page.getByTestId('issue-program')).toBeVisible();
       const c = checker(theme);
       await checkSegments(page, c, 'create token', 2);
