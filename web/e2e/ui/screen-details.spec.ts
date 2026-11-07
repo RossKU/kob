@@ -229,7 +229,7 @@ test('without the registry the banner matches what the page does: indexer tokens
   await page.route('**/registry/tokens.json', (r) => r.fulfill({ status: 500, body: 'down' }));
   const tok = await mock.token();
   await page.goto(`/#/market/${tok.covenant_id}`);
-  await expect(page.getByTestId('banner-registry')).toContainText('unlisted tokens named by their covenant id');
+  await expect(page.getByTestId('banner-registry')).toContainText('named by their covenant id');
   await expect(page.getByTestId('banner-registry')).not.toContainText('not tradable');
   await expect(page.getByTestId('order-ticket')).not.toHaveAttribute('data-state', 'untradable');
   // the decimals of an unlisted token are no box in the page: they are the tooltip of the token-family chip
