@@ -98,7 +98,7 @@ function refOfHint(covenantId: Hex, hints: TokenHint[], frame = false): TokenRef
 
 /** The hints as the confirmation model's registry lookup (a pair order's quote token B): ticker and decimals only. */
 function hintRegistry(hints: TokenHint[]): TokenRegistry {
-  const byCovenantId = new Map(hints.map((h) => [h.covenantId, { covenantId: h.covenantId, ticker: h.ticker, decimals: h.decimals, tradable: false } as unknown as TokenInfo]));
+  const byCovenantId = new Map(hints.map((h) => [h.covenantId, { covenantId: h.covenantId, ticker: h.ticker || longId(h.covenantId), decimals: h.decimals, tradable: false } as unknown as TokenInfo]));
   return { network: '', templates: [], templateChecks: [], tokens: [], byCovenantId };
 }
 

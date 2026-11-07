@@ -17,7 +17,7 @@ import { decodeSigning, type ExpectedSigning, type SigningSummary } from '../../
 import { confirmInputsOnNode, outpointKey } from '../../kob/node-verify';
 import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
-import { withExtraToken, type TokenInfo } from '../../kob/registry';
+import { withExtraToken, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import type { BuiltTx } from '../../kob/types';
 import type { SignerNote } from '../../signer/protocol';
 import { shortId } from '../kit/format';
@@ -30,8 +30,8 @@ export interface SendJob {
   expected?: ExpectedSigning | undefined;
   /** plan label stored in the placement records */
   label?: string | undefined;
-  /** the order trades an open-list token (no registry entry): the transaction is decoded against the registry plus that token */
-  openToken?: TokenInfo | undefined;
+  /** the order's open-list tokens (no registry entry; on a pair either or both): the transaction is decoded against the registry plus these */
+  openTokens?: readonly TokenInfo[] | undefined;
   /**
    * a check of the caller that runs alongside the node read (the ticket's re-check of the order against the state at the click): null keeps the
    * transaction, `replace` puts another plan of the same order in its place (the state at the click planned it differently, within the user's
@@ -62,6 +62,9 @@ export interface SendJob {
   /** this job re-times the one the user confirmed just before (the private-key signer then signs it without asking again when nothing got worse) */
   retimed?: boolean | undefined;
 }
+
+/** The registry plus the job's open-list tokens: what its transaction is decoded against and its tokens' identities are checked with. */
+export const registryOfJob = (registry: TokenRegistry, job: Pick<SendJob, 'openTokens'>): TokenRegistry => (job.openTokens ?? []).reduce(withExtraToken, registry);
 
 /** Why a transaction is not sent: a finding code and its sentence. */
 export interface Blocked {
@@ -124,7 +127,7 @@ export async function checkBeforeSigning(services: Services, wallet: WalletFacts
   if (facts === null) return { blocked: { code: 'inputs-unavailable', text: t('send.inputsUnavailable') } };
   const { built } = final;
 
-  const registry = job.openToken ? withExtraToken(services.registry, job.openToken) : services.registry;
+  const registry = registryOfJob(services.registry, job);
   // a dynamic fee is several times the relay floor in a busy market: the decoder's sanity ceiling follows the policy's own per-transaction cap
   const feePolicy = services.fees?.policy;
   const summary = decodeSigning({ kob: services.kob, built, maker: wallet.info!.pubkey, registry, expected: final.expected, nodeInputs: facts, ...(feePolicy ? { feePolicy } : {}) });

@@ -298,6 +298,8 @@ export interface PairRowFacts {
   trigger: PairTriggerRule | null;
   /** KAS tip prefunded per whole A (sompi): never part of the B price */
   tipKas: bigint;
+  /** base units per whole B as the state names them (a token without a registry entry reads on it), when the state is known */
+  quoteScale?: bigint;
 }
 
 export interface DescribeContext {
@@ -460,7 +462,7 @@ function pairRowOf(
   if (p) {
     const held = state ? custodiesOf(state, kob ?? undefined) : p.custodies;
     const sum = (role: 'base' | 'quote') => held.filter((c) => c.role === role).reduce((a, c) => a + c.amount, 0n);
-    return { kind: p.kind, base: p.base.covId, quote: p.quote.covId, escrowA: sum('base'), escrowB: sum('quote'), prefund: p.prefund, quoteNow, trigger: p.triggerRule, tipKas: desc!.tip };
+    return { kind: p.kind, base: p.base.covId, quote: p.quote.covId, escrowA: sum('base'), escrowB: sum('quote'), prefund: p.prefund, quoteNow, trigger: p.triggerRule, tipKas: desc!.tip, quoteScale: p.quote.scale };
   }
   if (!pv || !v || !isPairKind(v.contract)) return null;
   const custody = (role: string) => pv.custodies.filter((c) => c.role === role).reduce((a, c) => a + (DEC.test(c.expected_amount) ? BigInt(c.expected_amount) : 0n), 0n);

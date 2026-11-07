@@ -22,6 +22,8 @@
 .send-token { margin: 0 0 4px; color: var(--muted); overflow-wrap: anywhere; }
 .send-order .send-order { margin-left: 10px; }
 .send-problems { color: var(--bad); font-weight: 600; }
+.send-identity { margin-top: 10px; padding-top: 6px; border-top: 2px solid var(--border); }
+.send-identity small { display: block; }
 .send-line dd .send-rel { display: block; }
 .send-line dd .send-daa { display: block; color: var(--muted); font-size: 0.8em; }
 /* a figure the last plan changed flashes (two names, so that the next change restarts the animation) */

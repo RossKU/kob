@@ -541,7 +541,7 @@ export function OrderTicket(props: OrderTicketProps) {
       const toRead = fromCache ? stale(clickAt) : [];
       const settled = toRead.length === 0;
       const label = orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name);
-      const openToken = token.openList ? token : undefined;
+      const openTokens = (quote ? [token, quote] : [token]).filter((x) => x.openList);
       // the lines the final confirmation adds (an order below the minimum value, a price far through the market, contended blocks): worked out here, once, from this plan
       const notes = confirmNotes(planned, {
         plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health), contended, issue: (i) => issueText(i, issueCtx),
@@ -551,10 +551,10 @@ export function OrderTicket(props: OrderTicketProps) {
       // the same notes as codes and numbers for the private-key signer's confirmation, which words them itself
       const signerNotes = confirmSignerNotes(planned, { plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health), contended });
       return {
-        built: planned.built!, expected: expectedFromPlan(planned), label, openToken, notes, signerNotes,
-        gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openToken, shift) : undefined,
+        built: planned.built!, expected: expectedFromPlan(planned), label, openTokens, notes, signerNotes,
+        gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openTokens, shift) : undefined,
         submitByDaa: auctionSubmitBy(planned.states, clock.daa),
-        retime: retimer(env0, refsNow, intent, null, label, openToken, shift + RETIME_LEAD_DAA),
+        retime: retimer(env0, refsNow, intent, null, label, openTokens, shift + RETIME_LEAD_DAA),
         // the open final confirmation follows the market and the clock: the same order planned again, as at a click now
         replan: async () => {
           const again = await prepareLevel(intent0, index, levels, shown);
@@ -576,7 +576,7 @@ export function OrderTicket(props: OrderTicketProps) {
    */
   const recheck = async (
     planned: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[], shown: OrderPlan | null,
-    label: string, openToken: SendJob['openToken'], shift: bigint,
+    label: string, openTokens: SendJob['openTokens'], shift: bigint,
   ): Promise<GateVerdict> => {
     const stop = (text: string, code = 'changed'): GateVerdict => ({ stop: { code, text } });
     try {
@@ -589,7 +589,7 @@ export function OrderTicket(props: OrderTicketProps) {
       if (planned.built && sameTransaction(planned.built, p.built)) return null;
       const kept = keepTerms(p, intent, plan, shown);
       if (!('p' in kept)) return stop(kept.text, kept.code);
-      return { replace: { built: kept.p.built!, expected: expectedFromPlan(kept.p), submitByDaa: auctionSubmitBy(kept.p.states, clock.daa), retime: retimer(fresh, refs, kept.intent, fees, label, openToken, shift + RETIME_LEAD_DAA) } };
+      return { replace: { built: kept.p.built!, expected: expectedFromPlan(kept.p), submitByDaa: auctionSubmitBy(kept.p.states, clock.daa), retime: retimer(fresh, refs, kept.intent, fees, label, openTokens, shift + RETIME_LEAD_DAA) } };
     } catch (e) {
       return stop(buildErrorText(e instanceof Error ? e.message : String(e)));
     }
@@ -602,7 +602,7 @@ export function OrderTicket(props: OrderTicketProps) {
    * confirm/signing-time.ts `retimeLead`) for its times. Only its times move, later: the signer and the app accept it without asking again
    * (signer/retime.ts). The first `lead` is the shift the plan of the click had (`shift`, a slow wallet's) plus RETIME_LEAD_DAA.
    */
-  const retimer = (env: PlanEnv, refs: References, intent: Intent, fees: PlanEnv['fees'] | null, label: string, openToken: SendJob['openToken'], lead = RETIME_LEAD_DAA): SendJob['retime'] =>
+  const retimer = (env: PlanEnv, refs: References, intent: Intent, fees: PlanEnv['fees'] | null, label: string, openTokens: SendJob['openTokens'], lead = RETIME_LEAD_DAA): SendJob['retime'] =>
     async (o) => {
       try {
         const now = liveClockAt(liveClock.current, Date.now()) ?? (await readClock(services));
@@ -611,7 +611,7 @@ export function OrderTicket(props: OrderTicketProps) {
         const p = planOrder(withRefs({ ...env, clock, ...(fees ? { fees } : {}) }, refs), intent);
         const firstError = errors(p)[0];
         if (!p.ok || !p.built || firstError) return { stop: { code: 'changed', text: firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged') } };
-        return { built: p.built, expected: expectedFromPlan(p), label, openToken, submitByDaa: auctionSubmitBy(p.states, clock.daa), retime: retimer(env, refs, intent, fees, label, openToken, used + RETIME_LEAD_DAA) };
+        return { built: p.built, expected: expectedFromPlan(p), label, openTokens, submitByDaa: auctionSubmitBy(p.states, clock.daa), retime: retimer(env, refs, intent, fees, label, openTokens, used + RETIME_LEAD_DAA) };
       } catch (e) {
         return { stop: { code: 'plan', text: buildErrorText(e instanceof Error ? e.message : String(e)) } };
       }

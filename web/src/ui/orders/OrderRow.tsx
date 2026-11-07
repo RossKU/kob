@@ -137,7 +137,7 @@ export function OrderRow(props: OrderRowProps) {
   const txUrl = useTxUrl();
   const placementUrl = txUrl(row.placementTx);
   // a token the registry does not list is shown on this browser's issuance of it, else on 8 assumed decimals (app/token-display.ts)
-  const bToken = row.pair ? displayToken(registry, config.network, row.pair.quote) : undefined;
+  const bToken = row.pair ? displayToken(registry, config.network, row.pair.quote, undefined, row.pair.quoteScale) : undefined;
   const tk = token;
 
   const disabledReason = !canSign ? t('orders.actions.needWallet') : undefined;

@@ -25,12 +25,13 @@ import type { SigningSummary } from '../../kob/decode';
 import type { PlacementRecord } from '../../kob/records';
 import { sameOrBetter } from '../../signer/retime';
 import { summaryLines, type SignerSummary, type SummaryOrder } from '../../signer/summary';
+import { openTokenIdentity, type Row } from './confirm-model';
 import { DAA_PER_SECOND, untilWords } from '../../signer/words';
 import { expectedOutputs, signAndSubmit, waitForAcceptance } from '../../wallet/sign';
 import type { LiveSigning } from '../../wallet/types';
 import { Button, CopyText, Modal, RawDetails, Spinner } from '../kit';
 import { classifyFailure } from './confirm-flow';
-import { checkBeforeSigning, recordAccepted, type SendJob } from './send';
+import { checkBeforeSigning, recordAccepted, registryOfJob, type SendJob } from './send';
 import { SigningTimer, rememberSigningMs } from './signing-time';
 import './send.css';
 
@@ -50,6 +51,8 @@ export interface SendStatus {
   confirmed?: 'waiting' | 'confirmed' | 'unconfirmed';
   /** confirming: the table the popup shows, and whether it is the updated one of a re-timed order */
   table?: SignerSummary;
+  /** confirming: the extension commitment of each open-list token of the order and where it came from (`openTokenIdentity`) */
+  identity?: Row[];
   /** confirming: the wallet the transaction goes to next (the popup's header) */
   walletLabel?: string;
   updated?: boolean;
@@ -140,6 +143,7 @@ export function useSend(): Sender {
   const answer = useRef<((ok: boolean) => void) | null>(null);
   const confirmedLast = useRef<SigningSummary | null>(null);
   useEffect(() => () => answer.current?.(false), []);
+  const identityOf = (j: SendJob, decoded: SigningSummary): Row[] => openTokenIdentity(decoded, registryOfJob(services.registry, j)).rows;
   const tableOf = (j: SendJob, decoded: SigningSummary): SignerSummary =>
     summaryLines(decoded, signerTokenHints(services.kob, j.built, session.current.info?.pubkey ?? null, services.registry, services.config.network), services.kob);
 
@@ -200,7 +204,7 @@ export function useSend(): Sender {
       let plannedAt = Date.now();
       let open = true;
       let baseline = shown;
-      let view: SendStatus = { phase: 'confirming', table: tableOf(current, shown), walletLabel: session.current.info?.label ?? '', updated, changed: [], rev: 0, holdUntil: 0, daa: null, notes: [...(job.notes ?? [])] };
+      let view: SendStatus = { phase: 'confirming', table: tableOf(current, shown), identity: identityOf(current, shown), walletLabel: session.current.info?.label ?? '', updated, changed: [], rev: 0, holdUntil: 0, daa: null, notes: [...(job.notes ?? [])] };
       const draw = () => open && set(id, view);
       follow(current, () => open, (j, d) => {
         const worse = !sameOrBetter(baseline, d);
@@ -212,7 +216,7 @@ export function useSend(): Sender {
         plannedAt = Date.now();
         // the table follows every plan (its times too); only the figures that changed flash
         view = {
-          ...view, table, changed, rev: (view.rev ?? 0) + (changed.length ? 1 : 0), updated: !!view.updated || worse,
+          ...view, table, identity: identityOf(j, d), changed, rev: (view.rev ?? 0) + (changed.length ? 1 : 0), updated: !!view.updated || worse,
           holdUntil: worse ? Date.now() + UPDATE_HOLD_MS : (view.holdUntil ?? 0),
         };
         draw();
@@ -495,6 +499,16 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
         {s.orders.map((o, i) => (
           <OrderTable order={o} testid={`confirm-order-order-${i}`} cell={`o:${i}`} live={live} key={i} />
         ))}
+        {st.identity?.length ? (
+          <dl class="send-lines send-identity" data-testid="confirm-order-identity">
+            {st.identity.map((r) => (
+              <div class="send-line" key={r.id} data-testid="confirm-order-identity-row" data-row={r.id} data-tone={r.tone}>
+                <dt><span>{r.label}</span></dt>
+                <dd><span>{r.value}</span>{r.detail ? <small class="muted">{r.detail}</small> : null}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
         {s.problems > 0 ? <p class="send-problems" data-testid="confirm-order-problems"><span>{t('signer.problems', { count: s.problems })}</span></p> : null}
       </div>
     </Modal>
