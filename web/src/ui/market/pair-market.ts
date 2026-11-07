@@ -195,3 +195,6 @@ export function pairDepthOf(view: PairBookView | null | undefined, base: PairTok
   const b = side(bids, below, view.bids.length);
   return { quote: a.value + b.value, atLeast: a.full || b.full };
 }
+
+/** A token of the pair whose last KAS-book fill is more than a day old, or that never traded: the chart only carries its last price. */
+export const idleLeg = (lastTs: number | null | undefined, nowMs: number): boolean => lastTs === null || lastTs === undefined || nowMs - lastTs > DAY_MS;

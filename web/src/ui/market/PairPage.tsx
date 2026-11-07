@@ -37,7 +37,7 @@ import { useStaleSince } from './book-stale';
 import { loadCandles, type ChartView } from './candle-feed';
 import { BookFrame, StaleSince } from './OrderBook';
 import { buildPairBook, pairSideOf, pickOf, type PairLevelRow } from './pair-model';
-import { pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
+import { idleLeg, pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
 import { MarketActivity } from '../activity/ActivityPage';
 import { TokenFacts, tokenTitle } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
@@ -112,7 +112,7 @@ export function PairPage(props: { base: string; quote: string }) {
       const [b, q] = await Promise.all([indexer.stats(props.base, { signal, priority: 'low' }), indexer.stats(props.quote, { signal, priority: 'low' })]);
       // the end of the 24 h window: the newest chain time the indexer reports (the wall clock when it reports none)
       const ts = Math.max(b?.ts ?? 0, q?.ts ?? 0);
-      return { key, ...usdStats({ stats: b, decimals: baseInfo.decimals }, { stats: q, decimals: quoteInfo.decimals }), refMs: ts > 0 ? ts : Date.now() };
+      return { key, ...usdStats({ stats: b, decimals: baseInfo.decimals }, { stats: q, decimals: quoteInfo.decimals }), refMs: ts > 0 ? ts : Date.now(), baseLastTs: b?.last_ts ?? null, quoteLastTs: q?.last_ts ?? null };
     },
     [indexer, props.base, props.quote, baseInfo?.covenantId, quoteInfo?.covenantId, baseInfo?.decimals, quoteInfo?.decimals],
     { refreshKey: liveKey },
@@ -221,6 +221,14 @@ export function PairPage(props: { base: string; quote: string }) {
     );
   }
   if (!baseInfo || !quoteInfo || !base || !quote || !pairStats) return <MarketFrame bookTitle={t('pair.book.title')} data-testid="pair-loading" />;
+  // a leg that has not traded for a day only carries its last price: the chart then shows the other leg's moves, which the page says
+  const idleBase = !!cur && idleLeg(cur.baseLastTs, cur.refMs);
+  const idleQuote = !!cur && idleLeg(cur.quoteLastTs, cur.refMs);
+  const idleNote = idleBase && idleQuote
+    ? t('pair.chart.idleBoth')
+    : idleBase || idleQuote
+      ? t('pair.chart.idle', { ticker: (idleBase ? baseInfo : quoteInfo).ticker, other: (idleBase ? quoteInfo : baseInfo).ticker })
+      : null;
   const spec: UsdChartSpec = { base: { token: props.base, decimals: baseInfo.decimals }, quote: { token: props.quote, decimals: quoteInfo.decimals }, pairCandles: true };
   const statsModel = pairStats.model;
   const src = pairStats.source;
@@ -316,6 +324,7 @@ export function PairPage(props: { base: string; quote: string }) {
         <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card">
           <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} />
           <p class="small muted" style="margin:6px 0 0" data-testid="pair-chart-note">{t('pair.chart.note', { base: baseInfo.ticker, quote: quoteInfo.ticker })}</p>
+          {idleNote ? <p class="small muted" style="margin:4px 0 0" data-testid="pair-chart-idle">{idleNote}</p> : null}
         </Section>
       }
       depth={

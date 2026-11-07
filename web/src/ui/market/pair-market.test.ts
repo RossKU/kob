@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PairBookView, PairCandleView, PairCandlesView, PairFillView, PairFillsView, PairLevelView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
-import { DAY_MS, pairDepthOf, pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
+import { DAY_MS, idleLeg, pairDepthOf, pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
 import type { RatioCandle } from './usd-model';
 
 // BASE: 8 decimals, scale 1e8; QUOTE: 6 decimals, scale 1e6.
@@ -145,5 +145,15 @@ describe('pair depth within 2 % of the mid (the market list)', () => {
     // the bids side is full but the last level it returned is outside the band: nothing beyond it can count
     const c = book([lv('direct', '51000', '100000000', '100000000')], [lv('direct', '50000', '100000000', '100000000'), lv('direct', '40000', '100000000', '100000000')]);
     expect(pairDepthOf(c, BASE, QUOTE, 2)).toEqual({ quote: 101_000n, atLeast: false });
+  });
+});
+
+describe('idleLeg', () => {
+  it('is idle after a day without a fill, or with none ever', () => {
+    const now = 10 * DAY_MS;
+    expect(idleLeg(now - DAY_MS, now)).toBe(false);
+    expect(idleLeg(now - DAY_MS - 1, now)).toBe(true);
+    expect(idleLeg(null, now)).toBe(true);
+    expect(idleLeg(undefined, now)).toBe(true);
   });
 });

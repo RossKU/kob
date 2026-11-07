@@ -22,6 +22,8 @@ export default {
   'pair.book.legendEntry': 'entry = if-done pair entries resting at their limit',
   'pair.book.legendRoute': 'via KAS = implied route through both KAS books (one transaction)',
   'pair.chart.note': 'Prices are derived from {base}/KAS and {quote}/KAS; pair fills count only as volume.',
+  'pair.chart.idle': '{ticker} has not traded for over a day: this chart moves with {other} only.',
+  'pair.chart.idleBoth': 'Neither token has traded for over a day.',
   'pair.stats.na': 'No trades on this pair or its two KAS markets in 24 h.',
   'pair.stats.srcRange': '24 h high and low from the two KAS markets (5 min buckets).',
   'pair.stats.srcFills': '{n} pair fill(s) in 24 h (volume only).',
