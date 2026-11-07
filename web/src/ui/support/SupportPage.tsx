@@ -5,7 +5,7 @@ import { readContributions, type Contributions } from '../../data/contributors';
 import { formatDateTime, t } from '../../i18n';
 import { formatKas } from '../../kob/units';
 import { CopyText, shortAddress, Table, TableMessage, useAsync } from '../kit';
-import { EXECUTOR_URL, README_URL } from '../landing/landing-model';
+import { README_URL } from '../landing/landing-model';
 import { qrPath } from './qr';
 import { supportAddressOf, titleOfRank } from './support-model';
 
@@ -96,12 +96,6 @@ export function SupportPage() {
         </p>
       </section>
       <Contributors address={address} />
-      <section data-testid="support-executors">
-        <h2>{t('support.executors.title')}</h2>
-        <p>
-          {t('support.executors.body')} <a href={EXECUTOR_URL}>{t('landing.footer.executor')}</a>
-        </p>
-      </section>
     </article>
   );
 }

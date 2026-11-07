@@ -21,7 +21,4 @@ export default {
   'support.contributors.empty': 'No contributions yet.',
   'support.contributors.failed': 'The contributors could not be read right now.',
   'support.contributors.partial': 'Not every transaction could be read, so some totals may be low.',
-
-  'support.executors.title': 'Executors',
-  'support.executors.body': 'Thank you to everyone running an Executor. Orders get matched because you keep one going.',
 } as Record<string, string>;

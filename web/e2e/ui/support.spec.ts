@@ -65,7 +65,7 @@ test.describe('the page', () => {
     await expect(rows.nth(0).locator('td').last()).toHaveText('7');
     await expect(rows.nth(1)).toContainText('Guardian');
     await expect(rows.nth(1).locator('td').last()).toHaveText('4');
-    await expect(page.getByTestId('support-executors')).toContainText('Thank you');
+    await expect(page.getByTestId('support-executors')).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no horizontal scroll').toBe(true);
   });
 
@@ -76,7 +76,6 @@ test.describe('the page', () => {
     await expect(page.getByTestId('support-contributors-table')).toHaveCount(0);
     await expect(page.getByTestId('support-address')).toBeVisible();
     await expect(page.getByTestId('support-qr')).toBeVisible();
-    await expect(page.getByTestId('support-executors')).toBeVisible();
   });
 
   test('nobody yet: the table says so', async ({ appPage: page }) => {
