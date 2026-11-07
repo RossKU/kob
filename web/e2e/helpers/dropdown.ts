@@ -13,8 +13,11 @@ const panelOf = async (control: Locator): Promise<Locator> => {
 export async function chooseOption(control: Locator, choice: string | { index: number }): Promise<void> {
   const panel = await panelOf(control);
   await control.click();
+  await expect(panel).toBeVisible();
   const rows = panel.getByRole('option');
-  const row = typeof choice === 'string' ? panel.locator(`[role="option"][data-value="${choice}"]`).or(rows.filter({ hasText: choice })).first() : rows.nth(choice.index);
+  // a value first: "day" must not find the "90 days" of another row's label
+  const exact = typeof choice === 'string' ? panel.locator(`[role="option"][data-value="${choice}"]`) : null;
+  const row = typeof choice !== 'string' ? rows.nth(choice.index) : (await exact!.count()) > 0 ? exact!.first() : rows.filter({ hasText: choice }).first();
   await row.click();
   await expect(panel).toHaveCount(0);
 }

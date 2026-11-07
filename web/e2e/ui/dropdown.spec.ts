@@ -138,7 +138,7 @@ test.describe('the order type', () => {
   });
 
   test('the panel is in the body and follows the button when the page scrolls or the window changes', async ({ appPage: page }) => {
-    await page.setViewportSize({ width: 1280, height: 500 });
+    await page.setViewportSize({ width: 1280, height: 900 });
     const face = page.getByTestId('order-type');
     const panel = page.getByTestId('order-type-panel');
     await face.click();
