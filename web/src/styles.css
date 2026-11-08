@@ -37,6 +37,13 @@
   --radius-sm: 5px;
   /* the thin ring around a token icon (picture or letter): contrast against the page in either theme, outside the icon so its size does not change */
   --tk-outline: rgba(0, 0, 0, 0.12);
+  /* the boot mark (ui/shell/BootMark.tsx): the Kaspa icon's published green and inner circle, the tokens orbiting it */
+  --boot-kaspa: #70c7ba;
+  --boot-kaspa-in: #ffffff;
+  --boot-planet: #5b7f79;
+  --boot-orbit: #e2e1d9;
+  --boot-trail: #3f9e90;
+  --boot-buy: #2c9e77;
   --gutter: 16px;
   /* the frame (Frame.tsx: the header and the footer of the landing page and of the app): one row height, one column, one control size, so nothing
      moves between the two pages. The 1 px bottom border is inside the header's height. */
@@ -83,6 +90,11 @@
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
   --skeleton: rgba(167, 181, 179, 0.12);
   --tk-outline: rgba(255, 255, 255, 0.22);
+  --boot-kaspa-in: #1a1a1a;
+  --boot-planet: #8fb3ad;
+  --boot-orbit: #182423;
+  --boot-trail: #70c7ba;
+  --boot-buy: #4bb990;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
@@ -115,6 +127,11 @@
     --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
     --skeleton: rgba(167, 181, 179, 0.12);
     --tk-outline: rgba(255, 255, 255, 0.22);
+    --boot-kaspa-in: #1a1a1a;
+    --boot-planet: #8fb3ad;
+    --boot-orbit: #182423;
+    --boot-trail: #70c7ba;
+    --boot-buy: #4bb990;
   }
 }
 :root[data-theme='light'] { color-scheme: light; }
@@ -302,6 +319,7 @@ small, .small { font-size: 0.85em; }
 }
 
 .boot { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: var(--gutter); text-align: center; }
+.boot-mark { width: 132px; height: 132px; display: block; }
 .boot-card { max-width: 640px; width: 100%; text-align: left; }
 .boot pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); padding: 10px; border-radius: var(--radius-sm); max-height: 240px; overflow: auto; }
 

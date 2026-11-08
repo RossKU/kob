@@ -1,6 +1,7 @@
 import { SETTINGS_KEY } from '../../config';
 import { t } from '../../i18n';
-import { Button, Spinner } from '../kit';
+import { Button } from '../kit';
+import { BootMark } from './BootMark';
 
 /** Shown while the configuration, the wasm engine, the SDK and the registry load. */
 export function BootScreen() {
@@ -8,7 +9,7 @@ export function BootScreen() {
     <div class="boot" data-testid="boot-screen" role="status">
       <h1>{t('common.appName')}</h1>
       <p class="muted">{t('common.tagline')}</p>
-      <Spinner large />
+      <BootMark />
       <p>{t('shell.boot.title')}</p>
     </div>
   );
