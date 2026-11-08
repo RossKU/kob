@@ -1,6 +1,6 @@
 export default {
   'common.appName': 'KOB',
-  'common.tagline': 'Non-custodial order book for Kaspa tokens',
+  'common.tagline': 'Decentralized order book on Kaspa',
   'common.loading': 'Loading...',
   'common.retry': 'Retry',
   'common.close': 'Close',
