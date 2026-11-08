@@ -72,6 +72,10 @@ name = "intent_builders"
 required-features = ["engine"]
 
 [[test]]
+name = "tx_dump"
+required-features = ["engine"]
+
+[[test]]
 name = "cost_table"
 required-features = ["engine"]
 

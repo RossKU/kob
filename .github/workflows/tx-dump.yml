@@ -1,0 +1,46 @@
+# The JSON dump of every KOB transaction shape the Rust tests build, for external replay and red-team tools: the builder shapes on every token
+# program and the pair shapes (crates/kob-protocol/tests/tx_dump.rs), the router intents' create and execute transactions (tests/intent_builders.rs,
+# dump_router_intents) and the throwaway fixture keys they are signed with. Every transaction is validated in the engine before it is written.
+# Synthetic fixture UTXOs, no network. Runs on demand (Actions > tx-dump > Run workflow) and when the dump's own files change; the files are the
+# run's artifact `kob-tx-dump`.
+name: tx-dump
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/tx-dump.yml
+      - crates/kob-protocol/tests/tx_dump.rs
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Dump the builder shapes, the router intents and the keys
+        shell: bash
+        run: |
+          export KOB_TX_DUMP_DIR="$RUNNER_TEMP/kob-tx-dump"
+          cargo test --locked -p kob-protocol --test tx_dump -- --ignored --nocapture
+          cargo test --locked -p kob-protocol --test intent_builders -- --ignored dump_router_intents --nocapture
+          git rev-parse HEAD > "$KOB_TX_DUMP_DIR/commit.txt"
+          ls -l "$KOB_TX_DUMP_DIR"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kob-tx-dump
+          path: ${{ runner.temp }}/kob-tx-dump
+          retention-days: 30

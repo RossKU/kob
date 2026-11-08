@@ -830,3 +830,53 @@ fn an_intent_takes_token_b_only_of_its_extension_commitment() {
     }
     assert!(runs >= 18, "every actor that buys token B ran ({runs} runs)");
 }
+
+/// The router intents as JSON, beside the builder shapes of `tests/tx_dump.rs`: for every actor on every program pair it
+/// runs on, the payer's create transaction (signed with the fixture keys, throwaway test keys) and the intent's execution,
+/// both validated in the engine. `#[ignore]`d:
+///
+/// ```text
+/// KOB_TX_DUMP_DIR=target/kob-tx-dump cargo test -p kob-protocol --test intent_builders -- --ignored dump_router_intents
+/// ```
+#[test]
+#[ignore = "writes the dump: KOB_TX_DUMP_DIR=<dir> cargo test -p kob-protocol --test intent_builders -- --ignored dump_router_intents"]
+fn dump_router_intents() {
+    let dir = std::path::PathBuf::from(std::env::var("KOB_TX_DUMP_DIR").expect("set KOB_TX_DUMP_DIR to the output directory"));
+    std::fs::create_dir_all(&dir).expect("create the output directory");
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let mut out = vec![];
+    for actor in &ACTORS {
+        for (p, fits) in runs_for(actor) {
+            if !fits {
+                continue;
+            }
+            let (asks, bids) = legs_for(actor, p);
+            let (state, value, lock, merchant_kas) = state_for(actor, p, &asks, &bids);
+            let built = build_create_intent(&create_req(actor, &state, p, value, lock), &intent_budgets).expect("create");
+            let sigs = sign_locally(&built, &keys()).expect("sign");
+            let created = finalize(&built, &sigs, FinalizeOptions { tighten_budgets: true }).expect("finalize");
+            let (ctx, centries) = created.tx.to_tx().expect("create tx");
+            validate(&ctx, &centries).unwrap_or_else(|e| panic!("{} {p:?}: create: {e}", actor.name));
+            // the same create again (deterministic signing: the same bytes), as the execution's intent input
+            let c = create(actor, state, p, value, lock);
+            let r = exec_req(&c, actor, asks, bids, merchant_kas);
+            let (executed, _) = execute_intent(&r).unwrap_or_else(|e| panic!("{} {p:?}: execute: {e}", actor.name));
+            let (etx, eentries) = executed.tx.to_tx().expect("execute tx");
+            validate(&etx, &eentries).unwrap_or_else(|e| panic!("{} {p:?}: execute: {e}", actor.name));
+            out.push(serde_json::json!({
+                "name": format!("router/{}/{}-{}", actor.name, p.a.name(), p.b.name()),
+                "create": { "signed": created, "consensus": { "transaction": ctx, "entries": centries }, "txid": hex(&ctx.id().as_bytes()) },
+                "execute": { "signed": executed, "consensus": { "transaction": etx, "entries": eentries }, "txid": hex(&etx.id().as_bytes()) },
+            }));
+        }
+    }
+    let n = out.len();
+    let doc = serde_json::json!({
+        "format": "kob-tx-dump/1",
+        "network": "none (synthetic fixture UTXOs; the keys are throwaway test keys, see keys.json)",
+        "intents": out,
+    });
+    std::fs::write(dir.join("router.json"), serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+    println!("{n} router intents (create + execute) in {}", dir.display());
+    assert!(n >= 30 + 12 + 6, "every actor ran on its programs ({n} runs)");
+}
