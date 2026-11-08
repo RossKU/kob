@@ -199,6 +199,11 @@ body:has(.market-page) .container { max-width: 1520px; }
 .fav-star { appearance: none; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); cursor: pointer; }
 .fav-star:hover { color: var(--text); background: var(--surface-2); }
 .fav-star[aria-pressed='true'] { color: var(--warn); }
+/* the eye that hides a token from the list: quieter than the star; pressed (in the Hidden view) it is the app's colour */
+.hide-btn { opacity: 0.7; }
+.hide-btn:hover, .hide-btn:focus-visible { opacity: 1; }
+.fav-star.hide-btn[aria-pressed='true'] { color: var(--primary); opacity: 1; }
+.ml-list-more { flex-wrap: wrap; gap: 6px; }
 .fav-star:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
 @media (max-width: 759px), (pointer: coarse) { .fav-star { width: 44px; height: 44px; margin: -7px; } }
 
@@ -391,6 +396,8 @@ body:has(.market-page) .container { max-width: 1520px; }
   .ml-tokens tbody td.ml-change { grid-column: 2; grid-row: 2; align-self: start; font-size: 0.85rem; }
   /* the star under the price and the change: the text beside the icon keeps its width */
   .ml-tokens .ml-name .fav-star { position: absolute; right: 0; bottom: 0; width: 44px; height: 34px; margin: 0; }
+  /* the eye to the left of the star */
+  .ml-tokens .ml-name .fav-star.hide-btn { right: 44px; }
   .ml-tokens tbody td[colspan] { grid-column: 1 / -1; grid-row: auto; }
 }
 

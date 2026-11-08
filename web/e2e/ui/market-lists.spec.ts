@@ -396,6 +396,37 @@ test.describe('favourite tokens', () => {
   });
 });
 
+test.describe('hidden tokens', () => {
+  test('the eye hides a token from the list in this browser; the search still finds it; the Hidden view shows it and brings it back', async ({ appPage: page, mock }) => {
+    const base = await seedPair(page, mock);
+    await page.goto('/#/market');
+    const row = page.getByTestId(`token-row-${base}`);
+    await expect(row).toBeVisible();
+    await expect(page.getByTestId('token-list-hidden')).toHaveCount(0);
+    await page.getByTestId(`token-hide-${base}`).click();
+    await expect(row).toHaveCount(0);
+    await expect(page.getByTestId('token-list-hidden')).toHaveText('Hidden (1)');
+    // a search still finds a hidden token
+    await page.getByTestId('token-search').fill('exkcc');
+    await expect(row).toBeVisible();
+    await page.getByTestId('token-search').fill('');
+    await expect(row).toHaveCount(0);
+    // kept by this browser
+    await page.reload();
+    await expect(page.getByTestId('token-list-hidden')).toHaveText('Hidden (1)');
+    await expect(page.getByTestId(`token-row-${base}`)).toHaveCount(0);
+    // the Hidden view lists it; its eye, pressed there, puts it back in the list
+    await page.getByTestId('token-list-hidden').click();
+    await expect(tokenRows(page)).toHaveCount(1);
+    await expect(page.getByTestId(`token-hide-${base}`)).toHaveAttribute('aria-pressed', 'true');
+    await page.getByTestId(`token-hide-${base}`).click();
+    await expect(page.getByTestId('token-list-empty')).toHaveText('No hidden tokens.');
+    await page.getByTestId('token-list-hidden').click();
+    await expect(page.getByTestId(`token-row-${base}`)).toBeVisible();
+    await expect(page.getByTestId('token-list-hidden')).toHaveCount(0);
+  });
+});
+
 test.describe('the pair picker', () => {
   test('two tokens by ticker, name or id lead straight to the pair; a ticker two tokens share shows both ids; no KAS', async ({ appPage: page, mock }) => {
     const base = await seedPair(page, mock);
