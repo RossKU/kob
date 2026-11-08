@@ -15,7 +15,7 @@ export function ActivityPage() {
   return (
     <div class="act-page" data-testid="activity-page">
       <ActivitySummary />
-      <ActivityLog market={EVERY_MARKET} prefsScope="page" data-testid="activity" />
+      <ActivityLog market={EVERY_MARKET} prefsScope="page" eager data-testid="activity" />
     </div>
   );
 }

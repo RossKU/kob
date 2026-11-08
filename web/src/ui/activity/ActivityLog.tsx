@@ -53,6 +53,8 @@ export interface ActivityLogProps {
   allLink?: boolean;
   /** the rows of a page until the viewer picks another size (default PAGE_ROWS) */
   pageRows?: ListPageSize;
+  /** read the first rows at once, also below the screen (the Activity page, whose summary can push the log below a phone's screen) */
+  eager?: boolean;
   'data-testid'?: string;
 }
 
@@ -76,7 +78,7 @@ function ActivityLogView(props: ActivityLogProps) {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  const data = useActivity({ market: props.market, kinds, pairFills: props.pairFills ?? null, onScreen });
+  const data = useActivity({ market: props.market, kinds, pairFills: props.pairFills ?? null, onScreen: onScreen || !!props.eager });
 
   // the names and decimals of tokens the registry does not have arrive with the token list: rows read them again then
   const declared = useDeclarationLookup();
