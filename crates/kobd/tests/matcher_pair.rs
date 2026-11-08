@@ -77,6 +77,26 @@ fn opposite_pair_orders_net_without_any_kas_book() {
     }
 }
 
+/// The same two tokens, opposite orientations: an A/B ASK (sells A for B) and a B/A ASK (sells B for A, its price in A per
+/// whole B) at crossing prices are one market for the matcher. No KAS book at all: they are netted against each other.
+#[test]
+fn pair_orders_of_the_two_orientations_of_one_pair_net_against_each_other() {
+    for (pa, pb) in [(T8, T8), (T3, T3), (K3, K3)] {
+        let x = pask(1, pa, pb, 4 * WHOLE, RATE, PTIP);
+        // the reversed order: its base is B and its quote A (the programs are the same, so only the tokens swap)
+        let mut y = pask(2, pa, pb, 4 * WHOLE, RATE, PTIP);
+        y.s_cov_id = token_b(pa, pb);
+        y.s_ext = ext_of(pb);
+        y.t_cov_id = token_a(pa);
+        y.t_ext = ext_of(pa);
+        let r = run_pair(vec![l_pair(1, pa, pb, x, 1_000), l_pair(2, pa, pb, y, 1_000)], &cfg());
+        assert_eq!(r.prepared.len(), 1, "{} / {}: one netting transaction", pa.name(), pb.name());
+        assert_eq!(amount_in(&r, cid(1)), 4 * WHOLE, "the A/B ask sold its A");
+        assert_eq!(amount_in(&r, cid(2)), 4 * WHOLE, "the B/A ask sold its B");
+        assert_eq!(r.prepared[0].plan.fills.len(), 2, "two pair legs, no KAS leg");
+    }
+}
+
 #[test]
 fn netting_without_tips_does_not_pay_its_fee() {
     let x = pask(1, T8, T8, 4 * WHOLE, RATE, 0);
