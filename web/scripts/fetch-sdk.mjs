@@ -46,9 +46,21 @@ if (existsSync(join(VENDOR, 'kaspa-node', 'kaspa.js')) && existsSync(join(VENDOR
   process.exit(0);
 }
 console.log('downloading', URL_);
-const res = await fetch(URL_, { redirect: 'follow' });
-if (!res.ok) throw new Error('download failed: HTTP ' + res.status);
-const buf = new Uint8Array(await res.arrayBuffer());
+// GitHub's release downloads answer 502 / 503 / 504 now and then: a few tries, a little apart (the bytes are held to the pin below either way)
+let buf = null;
+for (let attempt = 1; ; attempt++) {
+  try {
+    const res = await fetch(URL_, { redirect: 'follow' });
+    if (!res.ok) throw new Error('download failed: HTTP ' + res.status);
+    buf = new Uint8Array(await res.arrayBuffer());
+    break;
+  } catch (e) {
+    if (attempt >= 5) throw e;
+    const wait = 15_000 * attempt;
+    console.log(`${e instanceof Error ? e.message : e}; trying again in ${wait / 1000} s (attempt ${attempt + 1} of 5)`);
+    await new Promise((ok) => setTimeout(ok, wait));
+  }
+}
 const sha = createHash('sha256').update(buf).digest('hex');
 console.log('zip sha256', sha, 'bytes', buf.length);
 if (sha !== EXPECTED_SHA256) throw new Error(`SDK zip hash mismatch: got ${sha}, pinned ${EXPECTED_SHA256}. Refusing to unpack.`);
