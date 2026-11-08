@@ -328,6 +328,8 @@ describe('a pair market shows both orientations, turned to the page', () => {
     expect(m.items.map((f) => [f.id, f.base ?? null])).toEqual([[7, B], [5, null]]);
     expect(m.next_cursor).toBe('7');
     expect(mergePairFills(ab, null)).toBe(ab);
+    // one record is one id: the other view's copy of it is not taken again
+    expect(mergePairFills(ab, { ...ba, items: [fill(5, 'bid', '20', '10')] }).items.map((f) => [f.id, f.base ?? null])).toEqual([[5, null]]);
   });
 
   it('a row of QUOTE/BASE is turned round: the side swaps and so do the amounts', () => {

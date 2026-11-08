@@ -133,15 +133,15 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   expect((await box('activity')).y).toBeGreaterThan((await box('depth-section')).y + (await box('depth-section')).height - 1);
   expect((await box('pair-details')).y).toBeGreaterThan((await box('activity')).y + (await box('activity')).height - 1);
 
-  // flip: base and quote swap (another pair: EXUSD/EXKCC); every panel follows. The fills above are of EXKCC/EXUSD orders: an oriented pair view
-  // never lists them inverted, so the flipped pair has no fill and no volume, while its prices are the inverse range of the same KAS markets
+  // flip: base and quote swap (EXUSD/EXKCC); every panel follows. The page shows both orientations of the pair as one market, so the fills of the
+  // EXKCC/EXUSD orders are still counted, while the prices are the inverse range of the same KAS markets
   await page.getByTestId('market-flip').click();
   await expect(page).toHaveURL(new RegExp(`#/market/${QUOTE}/${base}$`));
   await expect(page.getByTestId('pair-page')).toHaveAttribute('data-base', QUOTE);
   await expect(page.getByTestId('stat-volume')).toContainText('24h volume (EXUSD)');
   await expect(page.getByTestId('stat-quote-volume')).toContainText('24h volume (EXKCC)');
   await expectFigures(page, PRICE_TILES);
-  await expect(tile(page, 'stat-trades')).toHaveText('0');
+  await expect(tile(page, 'stat-trades')).toHaveText('2');
   const flipHigh = num(await tile(page, 'stat-high').innerText());
   const flipLow = num(await tile(page, 'stat-low').innerText());
   expect(flipHigh).toBeGreaterThan(flipLow);
@@ -150,11 +150,13 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   expect(flipHigh * low).toBeLessThan(2);
   await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
   await expect(page.getByTestId('depth-chart')).toContainText('EXUSD');
-  // the log follows the page: preset to the flipped pair, whose own fills are none
+  // the log follows the page: the same two fills, turned round to EXUSD/EXKCC
   await trades.scrollIntoViewIfNeeded();
   await expect(trades.locator('.act-scope')).toHaveText('EXUSD/EXKCC');
   await expect(trades.getByTestId('activity-loading')).toHaveCount(0);
-  await expect(trades.locator('[data-testid=activity-row][data-kind=fill]')).toHaveCount(0);
+  const flipped = trades.locator('[data-testid=activity-row][data-kind=fill]');
+  await expect(flipped).toHaveCount(2);
+  for (const r of await flipped.all()) await expect(r).toHaveAttribute('data-market', `${QUOTE}/${base}`);
   const flippedFacts = page.getByTestId('pair-token-details');
   await expect(flippedFacts.nth(0)).toHaveAttribute('data-token', QUOTE);
   await expect(flippedFacts.nth(1)).toHaveAttribute('data-token', base);

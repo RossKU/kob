@@ -526,7 +526,9 @@ export function heldView<R extends { key: string }>(rows: readonly R[], snapshot
 export function mergePairFills(ab: PairFillsView, ba: PairFillsView | null | undefined): PairFillsView {
   if (!ba || ba.base !== ab.quote || ba.quote !== ab.base) return ab;
   const n = (s: string) => (/^\d+$/.test(s) ? BigInt(s) : 0n);
-  const turned = ba.items.map((f) => ({ ...f, base: ba.base, quote: ba.quote }));
+  // a record is one id: one BASE/QUOTE already lists is not taken again from the other view
+  const seen = new Set(ab.items.map((f) => f.id));
+  const turned = ba.items.filter((f) => !seen.has(f.id)).map((f) => ({ ...f, base: ba.base, quote: ba.quote }));
   const cursor = (a: string | null, b: string | null) => (a === null ? b : b === null ? a : /^\d+$/.test(a) && /^\d+$/.test(b) ? (BigInt(a) > BigInt(b) ? a : b) : a);
   return {
     ...ab,
