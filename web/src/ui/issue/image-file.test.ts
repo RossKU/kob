@@ -21,11 +21,21 @@ describe('hashImageFile', () => {
     ]) expect((await hashImageFile(file(bytes, 'x.bin', ''))).ok).toBe(true);
   });
 
-  it('refuses an SVG (by type, by name and by content), an empty file, a larger one and a file that is not a picture', async () => {
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg"/>';
-    expect(await hashImageFile(file(svg, 'a.svg', 'image/svg+xml'))).toEqual({ ok: false, reason: 'svg' });
-    expect(await hashImageFile(file(PNG, 'a.SVG', 'image/png'))).toEqual({ ok: false, reason: 'svg' });
-    expect(await hashImageFile(file(svg, 'a.png', 'image/png'))).toEqual({ ok: false, reason: 'type' });
+  it('accepts a plain SVG and the other formats the app draws; the hash is that of the file as picked', async () => {
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><circle cx="1" cy="1" r="1" fill="#0a6"/></svg>');
+    expect(await hashImageFile(file(svg, 'a.svg', 'image/svg+xml'))).toEqual({ ok: true, hash: createHash('sha256').update(svg).digest('hex'), bytes: svg.length });
+    const avif = new Uint8Array([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0, 0, 0, 0]);
+    expect((await hashImageFile(file(avif, 'a.avif', 'image/avif'))).ok).toBe(true);
+  });
+
+  it('refuses a picture that carries code: an SVG with a script or a link out, a raster file with HTML in it', async () => {
+    for (const s of ['<svg><script>alert(1)</script></svg>', '<svg onload="x()"/>', '<svg><image href="https://e.example/a.png"/></svg>', '<svg><a href="javascript:x()"/></svg>', '<!DOCTYPE svg [<!ENTITY a "b">]><svg/>']) {
+      expect(await hashImageFile(file(s, 'a.svg', 'image/svg+xml')), s).toEqual({ ok: false, reason: 'code' });
+    }
+    expect(await hashImageFile(file(new Uint8Array([...PNG, ...new TextEncoder().encode('<html><script>x</script>')])))).toEqual({ ok: false, reason: 'code' });
+  });
+
+  it('refuses an empty file, a larger one and a file that is not a picture', async () => {
     expect(await hashImageFile(file(new Uint8Array(), 'a.png'))).toEqual({ ok: false, reason: 'empty' });
     expect(await hashImageFile(file(new Uint8Array(1_500_001).fill(0x89)))).toEqual({ ok: false, reason: 'size' });
     expect(await hashImageFile(file('plain text', 'a.txt', 'text/plain'))).toEqual({ ok: false, reason: 'type' });

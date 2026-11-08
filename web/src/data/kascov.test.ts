@@ -339,7 +339,10 @@ describe('fetchVerifiedImage', () => {
 
   it('bytes that hash right but cannot be drawn (an SVG the browser cannot draw) are refused; one it draws is shown as that picture', async () => {
     expect(await fetchVerifiedImage([U1], sha(SVG), { fetch: (async () => bytesResponse(SVG)) as unknown as typeof globalThis.fetch, rasterize: async () => null })).toBeNull();
-    const png = await fetchVerifiedImage([U1], sha(SVG), { fetch: (async () => bytesResponse(SVG)) as unknown as typeof globalThis.fetch, rasterize: async () => ({ bytes: PNG, mime: 'image/png' }) });
+    // the SVG above carries a script: refused even where the browser could draw it; a plain one is shown as the picture drawn from it
+    expect(await fetchVerifiedImage([U1], sha(SVG), { fetch: (async () => bytesResponse(SVG)) as unknown as typeof globalThis.fetch, rasterize: async () => ({ bytes: PNG, mime: 'image/png' }) })).toBeNull();
+    const plain = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>');
+    const png = await fetchVerifiedImage([U1], sha(plain), { fetch: (async () => bytesResponse(plain)) as unknown as typeof globalThis.fetch, rasterize: async () => ({ bytes: PNG, mime: 'image/png' }) });
     expect(png).toEqual({ bytes: PNG, mime: 'image/png', url: U1 });
   });
 

@@ -1,5 +1,5 @@
 // The Create page's logo file and the declaration's `image` + `image_hash` (docs/spec/token-metadata.md 2), against the mock stack: the browser hashes
-// the picked file (SVG refused), the preparation declares `image` then `image_hash`, and the token's icon is shown as checked only while the picture at the
+// the picked file (one with code in it refused), the preparation declares `image` then `image_hash`, and the token's icon is shown as checked only while the picture at the
 // address still hashes to it (a different picture: the letter and a note; a host that sends no CORS header: the unchecked image, as before).
 import { createHash } from 'node:crypto';
 import { test, expect } from '../fixtures';
@@ -21,14 +21,14 @@ test('a logo file is hashed in the browser, declared as image + image_hash, and 
   await page.getByTestId('issue-supply').fill('1000');
   await page.getByTestId('issue-icon').fill(URL_);
 
-  // an SVG is refused with a reason and sets no hash; a PNG fills the hash (64 lowercase hex), shown in the advanced field too
-  await page.getByTestId('issue-image-file').setInputFiles({ name: 'logo.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') });
-  await expect(page.getByTestId('issue-form')).toContainText('SVG pictures are not accepted');
+  // an SVG with a script is refused with a reason and sets no hash; a PNG fills the hash (64 lowercase hex), shown in the advanced field too
+  await page.getByTestId('issue-image-file').setInputFiles({ name: 'logo.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>') });
+  await expect(page.getByTestId('issue-form')).toContainText('That picture carries code');
   await expect(page.getByTestId('issue-image-hash-note')).toHaveCount(0);
   const want = createHash('sha256').update(PNG).digest('hex');
   await page.getByTestId('issue-image-file').setInputFiles({ name: 'logo.png', mimeType: 'image/png', buffer: PNG });
   await expect(page.getByTestId('issue-image-hash-note')).toContainText(want.slice(0, 16));
-  await expect(page.getByTestId('issue-form')).not.toContainText('SVG pictures are not accepted');
+  await expect(page.getByTestId('issue-form')).not.toContainText('That picture carries code');
   await page.getByTestId('issue-image-hash-advanced').locator('summary').click();
   await expect(page.getByTestId('issue-image-hash')).toHaveValue(want);
   await expect(page.getByTestId('issue-form')).toContainText('cannot be changed later');

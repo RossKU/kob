@@ -372,7 +372,7 @@ export function IssueView() {
                     id={id}
                     class="input"
                     type="file"
-                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svgz,image/heic,image/jxl,image/bmp,image/x-icon,image/tiff"
                     aria-describedby={describedBy}
                     aria-invalid={invalid ? 'true' : undefined}
                     data-testid="issue-image-file"
