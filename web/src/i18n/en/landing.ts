@@ -32,7 +32,7 @@ export default {
   'landing.how.s2.title': 'The order is a covenant.',
   'landing.how.s2.body': 'Each order is its own UTXO on Kaspa L1, locked by covenant rules written in SilverScript. Limit, ladders, stop and exit orders; GTC for 90 days or a day order.',
   'landing.how.s3.title': 'Anyone can match.',
-  'landing.how.s3.body': 'Permissionless executors, run by anyone from the open-source code, match resting orders. The covenant binds them — they cannot change the price or the amount.',
+  'landing.how.s3.body': 'Permissionless executors, run by anyone from the open source code, match resting orders. The covenant binds them, so they cannot change the price or the amount. The executor in the repository is a reference: copy the code, change its strategy or write your own.',
   'landing.how.s3.link': 'Run an executor →',
   'landing.how.s4.title': 'Kaspa settles.',
   'landing.how.s4.body': 'A fill is an ordinary Kaspa transaction. Nothing to withdraw — your funds were never anywhere else.',
