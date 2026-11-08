@@ -8,7 +8,7 @@ export default {
 
   'landing.kicker': 'Kaspa Order Book',
   'landing.chip': '{network} · open review',
-  'landing.chipTip': 'Kaspa {network}. No external audit.',
+  'landing.chipTip': 'Kaspa {network}. Open review: the specification is not final, and no review can show the code is free of bugs.',
   'landing.h1': 'Decentralized order book on Kaspa.',
   'landing.h1.l1': 'Decentralized',
   'landing.h1.l2': 'order book',
@@ -89,8 +89,8 @@ export default {
   'landing.trust.source.body': 'App, covenants and executor are public. Orders are written in SilverScript; the router is built with Argent.',
   'landing.trust.source.link': 'github.com/RossKU/kob →',
   'landing.trust.audit': 'Trust us',
-  'landing.trust.audit.body.testnet-10': 'Verify it yourself: the code is public. KOB runs on Kaspa testnet-10 with test tokens. The specification is not final and the contracts have had no external audit. Red-team work and private reports are welcome.',
-  'landing.trust.audit.body.mainnet': 'Verify it yourself: the code is public. The specification is not final and the contracts have had no external audit. Red-team work and private reports are welcome.',
+  'landing.trust.audit.body.testnet-10': 'Verify it yourself: the code is public. KOB runs on Kaspa testnet-10 with test tokens. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.',
+  'landing.trust.audit.body.mainnet': 'Verify it yourself: the code is public. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.',
   'landing.trust.audit.note': 'Please test only with your own funds and orders. There is no bug bounty.',
 
   'landing.feedback.security': 'Report a security issue privately →',
@@ -110,7 +110,7 @@ export default {
   'landing.footer.disclaimer': 'Disclaimer',
   'landing.disc.lead.testnet-10': 'Testnet · open review.',
   'landing.disc.lead.mainnet': 'Mainnet · open review.',
-  'landing.disc.body': 'The specification is not final and the contracts have had no external audit. {site} publishes software and information only; it never holds funds or orders, does not trade and does not operate executors.',
+  'landing.disc.body': 'The specification is not final, and no review can show the code is free of bugs. {site} publishes software and information only; it never holds funds or orders, does not trade and does not operate executors.',
   'landing.disc.tail.testnet-10': 'Test tokens have no value. Not financial advice.',
   'landing.disc.tail.mainnet': 'Real funds are at risk: use only what you can afford to lose. Not financial advice.',
   'landing.site': 'This site',

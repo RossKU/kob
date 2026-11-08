@@ -185,7 +185,7 @@ test.describe('phone', () => {
     await expect(button).toHaveAttribute('aria-expanded', 'true');
     for (const id of ['nav-market', 'nav-orders', 'nav-create', 'nav-settings', 'theme-toggle']) await expect(page.getByTestId('menu-panel').getByTestId(id)).toBeVisible();
     await expect(page.getByTestId('menu-network')).toContainText('Network: testnet-10');
-    await expect(page.getByTestId('menu-network')).toContainText('no external audit');
+    await expect(page.getByTestId('menu-network')).toContainText('no review can show the code is free of bugs');
     await expect(page.getByTestId('status-node')).toContainText('Node: reachable');
     await expect(page.getByTestId('status-indexer')).toContainText('following');
     // the panel is as wide as the screen and does not scroll the page sideways

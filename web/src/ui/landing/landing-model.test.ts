@@ -68,10 +68,10 @@ describe('landing network text', () => {
   it('names the configured network: testnet-10 says testnet and test tokens', () => {
     const n = landingNetworkText('testnet-10', 'kob.kaspa.ag');
     expect(n.chip).toBe('testnet-10 · open review');
-    expect(n.chipTip).toBe('Kaspa testnet-10. No external audit.');
-    expect(n.auditBody).toBe('Verify it yourself: the code is public. KOB runs on Kaspa testnet-10 with test tokens. The specification is not final and the contracts have had no external audit. Red-team work and private reports are welcome.');
+    expect(n.chipTip).toBe('Kaspa testnet-10. Open review: the specification is not final, and no review can show the code is free of bugs.');
+    expect(n.auditBody).toBe('Verify it yourself: the code is public. KOB runs on Kaspa testnet-10 with test tokens. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.');
     expect(n.discLead).toBe('Testnet · open review.');
-    expect(n.discBody).toContain('The specification is not final and the contracts have had no external audit. kob.kaspa.ag publishes');
+    expect(n.discBody).toContain('The specification is not final, and no review can show the code is free of bugs. kob.kaspa.ag publishes');
     expect(n.discBody).toContain('Test tokens have no value');
     expect(n.discBody).toContain('kob.kaspa.ag publishes software and information only');
     expect(n.discBody).toContain('Test tokens have no value');
@@ -84,7 +84,7 @@ describe('landing network text', () => {
       expect(v).not.toMatch(/^[a-z]+\.[a-z.]+$/); // no untranslated key
     }
     expect(n.chip).toBe('mainnet · open review');
-    expect(n.auditBody).toBe('Verify it yourself: the code is public. The specification is not final and the contracts have had no external audit. Red-team work and private reports are welcome.');
+    expect(n.auditBody).toBe('Verify it yourself: the code is public. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.');
     expect(n.discLead).toBe('Mainnet · open review.');
     expect(n.discBody).toContain('Real funds are at risk');
   });
@@ -93,7 +93,7 @@ describe('landing network text', () => {
     for (const net of LANDING_NETWORKS) {
       const n = landingNetworkText(net, 'x');
       for (const v of Object.values(n)) expect(v).not.toMatch(/pre-audit|audit yet|not yet/i);
-      for (const v of [n.chipTip, n.auditBody, n.discBody]) expect(v).toMatch(/no external audit/i);
+      for (const v of [n.chipTip, n.auditBody, n.discBody]) expect(v).toMatch(/no review can show the code is free of bugs/i);
     }
   });
 

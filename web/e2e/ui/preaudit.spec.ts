@@ -1,4 +1,4 @@
-// The open review notice (no external audit): a header badge and the footer's disclaimer on every page, and an entry of the bell's current status
+// The open review notice (the specification is not final, no review shows the code is free of bugs): a header badge and the footer's disclaimer on every page, and an entry of the bell's current status
 // whose dismissal survives a reload. Info: it colours nothing. Nothing blocks trading.
 import { closeBell, expect, statusEntry, test } from '../fixtures';
 
@@ -12,7 +12,7 @@ test.describe('open review notice', () => {
     await expect(page.getByTestId('disclaimer-network')).toHaveText('This site runs on Kaspa testnet-10. Test tokens have no value.');
     for (const k of ['audit', 'custody', 'tokens', 'market', 'services', 'advice', 'duty', 'donations', 'warranty']) await expect(page.getByTestId(`disclaimer-${k}`)).toBeVisible();
     await expect(page.getByTestId('disclaimer-audit')).toContainText('Open review');
-    await expect(page.getByTestId('disclaimer-audit')).toContainText('no review can show that it is free of bugs');
+    await expect(page.getByTestId('disclaimer-audit')).toContainText('no review can show the code is free of bugs');
     await expect(page.getByTestId('disclaimer-audit')).not.toContainText('audit');
     await expect(page.getByTestId('disclaimer-warranty')).toContainText('ISC License');
   });
@@ -22,7 +22,7 @@ test.describe('open review notice', () => {
     await expect(footer).toBeVisible();
     // the shared footer's disclaimer (the landing page's wording, for the configured network) and the app's non-custodial statement
     await expect(footer).toContainText('Testnet · open review.');
-    await expect(footer).toContainText('The specification is not final and the contracts have had no external audit.');
+    await expect(footer).toContainText('The specification is not final, and no review can show the code is free of bugs.');
     await expect(footer).toContainText('Not financial advice');
     await expect(footer).toContainText('publishes software and information only');
     await expect(footer).toContainText('non-custodial');
@@ -31,7 +31,7 @@ test.describe('open review notice', () => {
 
     const banner = await statusEntry(page, 'banner-preaudit');
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText('Open review: the specification is not final and the contracts have had no external audit.');
+    await expect(banner).toContainText('Open review: the specification is not final, and no review can show the code is free of bugs.');
     await expect(banner.getByRole('link', { name: 'Security policy' })).toHaveAttribute('href', /SECURITY\.md$/);
     await banner.getByRole('button', { name: 'Dismiss' }).click();
     await expect(banner).toHaveCount(0);
