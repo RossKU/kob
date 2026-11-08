@@ -330,6 +330,9 @@ export function LandingPage() {
 
           <section class="lp-final">
             <div class="lp-wrap">
+              <p class="lp-final-lead lp-rv" data-testid="landing-not-business">
+                {t('landing.final.lead')}
+              </p>
               <div class="lp-final-head">
                 <h2>
                   <Ln>{t('landing.final.l1')}</Ln>

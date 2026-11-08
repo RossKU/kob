@@ -54,7 +54,7 @@ describe('i18n key usage', () => {
     family('market.chart', ['empty', 'unsupported', 'off']);
     family('market.live', ['live', 'polling', 'off', 'liveHint', 'pollingHint', 'offHint']);
     family('shell.theme', ['toLight', 'toDark']);
-    for (const net of LANDING_NETWORKS) for (const k of ['landing.tx.note', 'landing.trust.audit.body', 'landing.disc.lead', 'landing.disc.tail']) family(k, [net]);
+    for (const net of LANDING_NETWORKS) family('landing.disc.tail', [net]);
     family('orders.status', ORDER_STATUSES);
     family('orders.source', ['node', 'nodeHint', 'record', 'recordHint', 'none', 'noneHint']);
     family('orders.flow.state', ['pending', 'preparing', 'sending', 'submitted', 'cancelled', 'failed']);

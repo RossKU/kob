@@ -21,7 +21,7 @@ test.describe('open review notice', () => {
     const footer = page.getByTestId('footer-preaudit');
     await expect(footer).toBeVisible();
     // the shared footer's disclaimer (the landing page's wording, for the configured network) and the app's non-custodial statement
-    await expect(footer).toContainText('Testnet · open review.');
+    await expect(footer).toContainText('Open review.');
     await expect(footer).toContainText('The specification is not final, and no review can show the code is free of bugs.');
     await expect(footer).toContainText('Not financial advice');
     await expect(footer).toContainText('publishes software and information only');

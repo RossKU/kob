@@ -1,5 +1,5 @@
-// The landing page (src/ui/landing): what opens at the empty hash for a visitor arriving from outside. Network-dependent sentences have one key per
-// network (`.testnet-10` / `.mainnet`): the page never says "testnet" on mainnet (landing-model.ts picks them).
+// The landing page (src/ui/landing): what opens at the empty hash for a visitor arriving from outside. The page reads the same on every network: only the
+// chip names the network, and the disclaimer's tail has one key per network (`.testnet-10` / `.mainnet`; landing-model.ts picks it).
 export default {
   'landing.nav.label': 'Landing page',
   'landing.github': 'GitHub',
@@ -61,8 +61,7 @@ export default {
   'landing.tx.expires': 'Expires',
   'landing.tx.expires.v': 'in 90 d',
   'landing.tx.ok': 'Keys stay in your wallet',
-  'landing.tx.note.testnet-10': 'Illustrative example · testnet token',
-  'landing.tx.note.mainnet': 'Illustrative example · not a real order',
+  'landing.tx.note': 'Illustrative example · not a real order',
 
   'landing.bots.label': 'Bots and AI agents',
   'landing.bots.l1': 'Trade',
@@ -91,14 +90,14 @@ export default {
   'landing.trust.source.body': 'App, covenants and executor are public. Orders are written in SilverScript; the router is built with Argent.',
   'landing.trust.source.link': 'github.com/RossKU/kob →',
   'landing.trust.audit': 'Trust us',
-  'landing.trust.audit.body.testnet-10': 'Verify it yourself: the code is public. KOB runs on Kaspa testnet-10 with test tokens. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.',
-  'landing.trust.audit.body.mainnet': 'Verify it yourself: the code is public. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.',
+  'landing.trust.audit.body': 'Verify it yourself: the code is public. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.',
   'landing.trust.audit.note': 'Please test only with your own funds and orders. There is no bug bounty.',
 
   'landing.feedback.security': 'Report a security issue privately →',
   'landing.feedback.issue': 'Open an issue →',
   'landing.feedback.message': 'Send a message on X →',
 
+  'landing.final.lead': 'KOB is not a business. No fee goes to the project and no company stands in the middle. It is software for Kaspa, and it keeps working without us.',
   'landing.final.l1': 'The book',
   'landing.final.l2': 'is open.',
 
@@ -110,8 +109,7 @@ export default {
   'landing.footer.api': 'Public API',
   'landing.footer.support': 'Support',
   'landing.footer.disclaimer': 'Disclaimer',
-  'landing.disc.lead.testnet-10': 'Testnet · open review.',
-  'landing.disc.lead.mainnet': 'Mainnet · open review.',
+  'landing.disc.lead': 'Open review.',
   'landing.disc.body': 'The specification is not final, and no review can show the code is free of bugs. {site} publishes software and information only; it never holds funds or orders, does not trade and does not operate executors.',
   'landing.disc.tail.testnet-10': 'Test tokens have no value. Not financial advice.',
   'landing.disc.tail.mainnet': 'Real funds are at risk: use only what you can afford to lose. Not financial advice.',

@@ -65,12 +65,15 @@ describe('landing routing', () => {
 });
 
 describe('landing network text', () => {
-  it('names the configured network: testnet-10 says testnet and test tokens', () => {
+  it('names the configured network in the chip only; the rest of the page reads the same on every network', () => {
     const n = landingNetworkText('testnet-10', 'kob.kaspa.ag');
     expect(n.chip).toBe('testnet-10 · open review');
     expect(n.chipTip).toBe('Kaspa testnet-10. Open review: the specification is not final, and no review can show the code is free of bugs.');
-    expect(n.auditBody).toBe('Verify it yourself: the code is public. KOB runs on Kaspa testnet-10 with test tokens. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.');
-    expect(n.discLead).toBe('Testnet · open review.');
+    expect(n.auditBody).toBe('Verify it yourself: the code is public. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.');
+    expect(n.discLead).toBe('Open review.');
+    expect(n.txNote).toBe('Illustrative example · not a real order');
+    const m = landingNetworkText('mainnet', 'kob.kaspa.ag');
+    expect([m.txNote, m.auditBody, m.discLead]).toEqual([n.txNote, n.auditBody, n.discLead]);
     expect(n.discBody).toContain('The specification is not final, and no review can show the code is free of bugs. kob.kaspa.ag publishes');
     expect(n.discBody).toContain('Test tokens have no value');
     expect(n.discBody).toContain('kob.kaspa.ag publishes software and information only');
@@ -85,7 +88,7 @@ describe('landing network text', () => {
     }
     expect(n.chip).toBe('mainnet · open review');
     expect(n.auditBody).toBe('Verify it yourself: the code is public. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.');
-    expect(n.discLead).toBe('Mainnet · open review.');
+    expect(n.discLead).toBe('Open review.');
     expect(n.discBody).toContain('Real funds are at risk');
   });
 
