@@ -5,11 +5,11 @@ import { closeBell, expect, statusEntry, test } from '../fixtures';
 test.describe('open review notice', () => {
   test.use({ appPath: '/#/market' });
 
-  test('the footer leads to the disclaimer: every section, and the line of this network', async ({ appPage: page }) => {
+  test('the footer leads to the disclaimer: every section, and the line that it runs on Kaspa', async ({ appPage: page }) => {
     await page.getByTestId('footer-disclaimer').click();
     await expect(page.getByTestId('disclaimer-page')).toBeVisible();
     await expect(page).toHaveTitle(/^Disclaimer - /);
-    await expect(page.getByTestId('disclaimer-network')).toHaveText('This site runs on Kaspa testnet-10. Test tokens have no value.');
+    await expect(page.getByTestId('disclaimer-network')).toHaveText('This app runs on Kaspa.');
     for (const k of ['audit', 'custody', 'tokens', 'market', 'services', 'advice', 'duty', 'donations', 'warranty']) await expect(page.getByTestId(`disclaimer-${k}`)).toBeVisible();
     await expect(page.getByTestId('disclaimer-audit')).toContainText('Open review');
     await expect(page.getByTestId('disclaimer-audit')).toContainText('no review can show the code is free of bugs');
