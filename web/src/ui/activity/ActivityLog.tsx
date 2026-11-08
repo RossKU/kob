@@ -78,7 +78,9 @@ function ActivityLogView(props: ActivityLogProps) {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  const data = useActivity({ market: props.market, kinds, pairFills: props.pairFills ?? null, onScreen: onScreen || !!props.eager });
+  // the reads of the first rows and their owners: while the list is on screen, or at once with `eager`
+  const reading = onScreen || !!props.eager;
+  const data = useActivity({ market: props.market, kinds, pairFills: props.pairFills ?? null, onScreen: reading });
 
   // the names and decimals of tokens the registry does not have arrive with the token list: rows read them again then
   const declared = useDeclarationLookup();
@@ -160,9 +162,9 @@ function ActivityLogView(props: ActivityLogProps) {
     seen.current = new Set([...(had ?? []), ...kept.map((r) => r.key)]);
   }
 
-  // the Wallet column: the owners of the rows' orders are looked up only while the list is on screen (one at a time: the order ticket's reads of
+  // the Wallet column: the owners of the rows' orders are looked up only while the list is read (on screen, or `eager`; one at a time: the order ticket's reads of
   // a slow indexer must not queue behind them)
-  const wanted = onScreen ? shown.flatMap((r) => r.orders).join(',') : '';
+  const wanted = reading ? shown.flatMap((r) => r.orders).join(',') : '';
   useEffect(() => {
     if (wanted) data.want(wanted.split(',') as Hex[]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -172,7 +174,7 @@ function ActivityLogView(props: ActivityLogProps) {
   // screen. From then on a row is live and comes at once
   const pairPending = !!props.pairFills && props.pairFills.view === undefined;
   const firstIn = !data.firstRead && !pairPending && shown.every((r) => r.orders.every((id) => data.order(id) !== undefined));
-  const open = useHeldUntil(firstIn, onScreen);
+  const open = useHeldUntil(firstIn, reading);
   const rising = useRising(open);
   const rowsShown = open && shown.length > 0;
 
