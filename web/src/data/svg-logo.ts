@@ -1,26 +1,24 @@
-// SVG token logos (data/logos.ts, data/kascov.ts). Some real tokens declare an SVG picture. An SVG is accepted only on the CHECKED paths: its bytes were
-// read and compared with what the creator committed to (`image_hash`, or the IPFS CID), always the hash of the ORIGINAL SVG file. It is then drawn once
-// in an <img> (where an SVG runs no script and loads nothing else) onto a canvas and shown as a WEBP (PNG where the browser cannot encode WEBP), so the
-// page never shows the SVG document itself. An SVG behind an address that cannot be read (no CORS header) is never shown unchecked.
+// Token logos in formats other than the four the page shows as they are (PNG, JPEG, WEBP, GIF; data/kascov.ts `sniffImage`): SVG (also gzip-compressed),
+// AVIF, HEIC, JPEG XL, BMP, ICO and TIFF. Any of them is accepted only on the CHECKED paths (data/logos.ts, data/kascov.ts): its bytes were read and
+// compared with what the creator committed to (`image_hash`, the IPFS CID or kascov.io's copy), always the hash of the ORIGINAL file. It is then drawn
+// once in an <img> (where an SVG runs no script and loads nothing else) onto a canvas and shown as a WEBP (PNG where the browser cannot encode WEBP), so
+// the page shows only a raster picture it made itself. A format this browser cannot decode (HEIC outside Safari, say) gives no picture: the letter.
 import type { ImageMime } from './kascov';
+import { sniffImage } from './kascov';
 
-/** The side of the picture an SVG is drawn at (a logo is shown at most at 64 CSS px; twice that for a dense screen). */
-export const SVG_RASTER_PX = 128;
+/** The side of the picture a file is drawn at (a logo is shown at most at 64 CSS px; twice that for a dense screen). */
+export const RASTER_PX = 128;
+
+/** The largest SVG a gzip-compressed one may expand to (a compressed file must not unfold into an unbounded document). */
+export const MAX_SVG_BYTES = 1_500_000;
+
+/** Formats drawn to a raster picture before they are shown. */
+export type DrawnMime = 'image/svg+xml' | 'image/avif' | 'image/heic' | 'image/jxl' | 'image/bmp' | 'image/x-icon' | 'image/tiff';
 
 /** Whether `bytes` are an SVG document: UTF-8 text whose first element is `<svg` (after a BOM, an XML declaration, comments and a DOCTYPE). */
 export function isSvg(bytes: Uint8Array): boolean {
   if (bytes.length < 5) return false;
-  let s: string;
-  try {
-    s = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, Math.min(bytes.length, 4096)));
-  } catch {
-    // a multi-byte character cut at the 4 KiB boundary: decode a little less
-    try {
-      s = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, Math.min(bytes.length, 4096)));
-    } catch {
-      return false;
-    }
-  }
+  const s = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, Math.min(bytes.length, 4096)));
   let i = s.charCodeAt(0) === 0xfeff ? 1 : 0;
   for (let guard = 0; guard < 64; guard++) {
     while (i < s.length && /\s/.test(s[i]!)) i++;
@@ -43,15 +41,44 @@ export function isSvg(bytes: Uint8Array): boolean {
   return false;
 }
 
+const ascii = (b: Uint8Array, at: number, n: number): string => String.fromCharCode(...b.subarray(at, at + n));
+
+/** The ISO-BMFF brands of a file (`ftyp` box: the major brand and the compatible ones), lower case; empty for another file. */
+function ftypBrands(b: Uint8Array): string[] {
+  if (b.length < 16 || ascii(b, 4, 4) !== 'ftyp') return [];
+  const size = Math.min(b.length, ((b[0]! << 24) | (b[1]! << 16) | (b[2]! << 8) | b[3]!) >>> 0);
+  const out = [ascii(b, 8, 4)];
+  for (let i = 16; i + 4 <= size; i += 4) out.push(ascii(b, i, 4));
+  return out.map((x) => x.toLowerCase());
+}
+
+/** The format of a file the page draws before it shows it (magic bytes, never the address's extension), or null. `gzip`: maybe a compressed SVG. */
+export function sniffDrawn(b: Uint8Array): DrawnMime | 'gzip' | null {
+  if (isSvg(b)) return 'image/svg+xml';
+  const brands = ftypBrands(b);
+  if (brands.some((x) => x === 'avif' || x === 'avis')) return 'image/avif';
+  if (brands.some((x) => ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'].includes(x))) return 'image/heic';
+  if (b.length >= 2 && b[0] === 0xff && b[1] === 0x0a) return 'image/jxl';
+  if (b.length >= 12 && ascii(b, 4, 4) === 'JXL ' && b[0] === 0 && b[1] === 0 && b[2] === 0 && b[3] === 0x0c) return 'image/jxl';
+  if (b.length >= 14 && b[0] === 0x42 && b[1] === 0x4d) return 'image/bmp';
+  if (b.length >= 6 && b[0] === 0 && b[1] === 0 && (b[2] === 1 || b[2] === 2) && b[3] === 0 && (b[4]! | b[5]!) !== 0) return 'image/x-icon';
+  if (b.length >= 8 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2a && b[3] === 0) || (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0 && b[3] === 0x2a))) return 'image/tiff';
+  if (b.length >= 3 && b[0] === 0x1f && b[1] === 0x8b && b[2] === 8) return 'gzip';
+  return null;
+}
+
+/** Whether the page can show `bytes` at all (as they are, or drawn), from the magic bytes alone. */
+export const isPicture = (b: Uint8Array): boolean => sniffImage(b) !== null || sniffDrawn(b) !== null;
+
 export interface Raster {
   bytes: Uint8Array;
   mime: ImageMime;
 }
 
-/** Draws an SVG's bytes at `px` x `px` (keeping its aspect, centred) and encodes it as WEBP, else PNG. Null when the browser cannot draw or encode it. */
-export async function rasterizeSvg(bytes: Uint8Array, px = SVG_RASTER_PX): Promise<Raster | null> {
-  if (typeof document === 'undefined' || typeof Image === 'undefined') return null;
-  const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'image/svg+xml' }));
+/** Draws checked bytes of `mime` at `px` x `px` (keeping their aspect, centred), encoded as WEBP, else PNG. Null when the browser cannot decode or encode them. */
+export async function rasterize(bytes: Uint8Array, mime: DrawnMime, px = RASTER_PX): Promise<Raster | null> {
+  if (typeof document === 'undefined' || typeof Image === 'undefined' || typeof URL.createObjectURL !== 'function') return null;
+  const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mime }));
   try {
     const img = new Image(px, px);
     img.decoding = 'async';
@@ -68,15 +95,64 @@ export async function rasterizeSvg(bytes: Uint8Array, px = SVG_RASTER_PX): Promi
     const dw = w * scale;
     const dh = h * scale;
     ctx.drawImage(img, (px - dw) / 2, (px - dh) / 2, dw, dh);
-    for (const mime of ['image/webp', 'image/png'] as const) {
-      const blob = await new Promise<Blob | null>((ok) => canvas.toBlob(ok, mime));
-      if (blob && blob.type === mime) return { bytes: new Uint8Array(await blob.arrayBuffer()), mime };
+    for (const out of ['image/webp', 'image/png'] as const) {
+      const blob = await new Promise<Blob | null>((ok) => canvas.toBlob(ok, out));
+      if (blob && blob.type === out) return { bytes: new Uint8Array(await blob.arrayBuffer()), mime: out };
     }
     return null;
   } catch {
-    // an SVG the browser cannot draw, or a canvas it will not read back
+    // a file this browser cannot decode, or a canvas it will not read back
     return null;
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** Expands gzip bytes, at most `max` of output; null for anything else, a broken stream or more than `max`. */
+export async function gunzipCapped(bytes: Uint8Array, max = MAX_SVG_BYTES): Promise<Uint8Array | null> {
+  if (typeof DecompressionStream === 'undefined') return null;
+  try {
+    const reader = new Blob([bytes as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+    const parts: Uint8Array[] = [];
+    let n = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.length;
+      if (n > max) {
+        await reader.cancel();
+        return null;
+      }
+      parts.push(value);
+    }
+    const out = new Uint8Array(n);
+    let at = 0;
+    for (const p of parts) {
+      out.set(p, at);
+      at += p.length;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** Draws a checked file to a raster picture; injectable for tests. */
+export type Rasterize = (bytes: Uint8Array, mime: DrawnMime) => Promise<Raster | null>;
+
+/**
+ * What the page shows for CHECKED bytes (their hash was compared before): the bytes themselves for PNG, JPEG, WEBP and GIF (an animation stays one),
+ * else the picture drawn from them (SVG, a gzip-compressed SVG, AVIF, HEIC, JPEG XL, BMP, ICO, TIFF). Null for anything else or a file the browser
+ * cannot draw.
+ */
+export async function shownPicture(bytes: Uint8Array, draw: Rasterize = rasterize): Promise<Raster | null> {
+  const mime = sniffImage(bytes);
+  if (mime) return { bytes, mime };
+  const kind = sniffDrawn(bytes);
+  if (kind === null) return null;
+  if (kind === 'gzip') {
+    const svg = await gunzipCapped(bytes);
+    return svg && isSvg(svg) ? draw(svg, 'image/svg+xml') : null;
+  }
+  return draw(bytes, kind);
 }

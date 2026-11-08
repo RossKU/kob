@@ -18,10 +18,11 @@
 //      header, the usual case), it falls back to the unchecked <img> above. An `ipfs://` image with an `image_hash` is compared with it as well.
 //   4. The letter avatar.
 //
-// An SVG picture is shown only from checked bytes (its hash is that of the original SVG), drawn to a WEBP first (data/svg-logo.ts). For every source: no `data:` URL, no host that is an IP literal, `localhost` or a name without a dot (an address inside the viewer's network).
-import { readCapped, sha256Hex, sniffImage, type ImageMime } from './kascov';
+// SVG, AVIF, HEIC, JPEG XL, BMP, ICO and TIFF pictures are shown only from checked bytes (the hash is that of the original file), drawn to a WEBP first
+// (data/svg-logo.ts). For every source: no `data:` URL, no host that is an IP literal, `localhost` or a name without a dot (an address inside the viewer's network).
+import { readCapped, sha256Hex, type ImageMime } from './kascov';
 import { refusedHost, type LogoRef } from './logo-url';
-import { isSvg, rasterizeSvg, type Raster } from './svg-logo';
+import { isPicture, shownPicture, type Rasterize } from './svg-logo';
 
 export { parseLogoRef, refusedHost, safeHttpsLogo, type LogoRef } from './logo-url';
 
@@ -159,8 +160,8 @@ export interface IpfsFetchOptions {
   /** the creator's committed SHA-256 of the file (64 lowercase hex): the fetched bytes must equal it, else `hashMismatch` */
   imageHash?: string | null | undefined;
   onMismatch?: OnHashMismatch | undefined;
-  /** draws a checked SVG to a raster picture (default `rasterizeSvg`) */
-  rasterize?: (b: Uint8Array) => Promise<Raster | null>;
+  /** draws a checked file that is not PNG, JPEG, WEBP or GIF to a raster picture (default `rasterize` of data/svg-logo.ts) */
+  rasterize?: Rasterize;
 }
 
 export interface IpfsImage { bytes: Uint8Array; mime: ImageMime; checked: boolean; /** the bytes were compared with `imageHash` and are equal */ hashChecked?: boolean }
@@ -199,9 +200,7 @@ export async function fetchIpfsImage(gateway: string, ref: Extract<LogoRef, { ki
     if (!res.ok) return null;
     const bytes = await readCapped(res, o.maxBytes ?? 1_500_000);
     if (!bytes || bytes.length === 0) return null;
-    const mime = sniffImage(bytes);
-    const svg = !mime && isSvg(bytes);
-    if (!mime && !svg) return null;
+    if (!isPicture(bytes)) return null;
     const ok = await verifyIpfsBytes(ref.cid, ref.path, bytes, o.sha256);
     if (ok === false) return null;
     if (o.imageHash) {
@@ -212,7 +211,7 @@ export async function fetchIpfsImage(gateway: string, ref: Extract<LogoRef, { ki
         return null;
       }
     }
-    const shown = mime ? { bytes, mime } : await (o.rasterize ?? rasterizeSvg)(bytes);
+    const shown = await shownPicture(bytes, o.rasterize);
     if (!shown) return null;
     return { bytes: shown.bytes, mime: shown.mime, checked: ok === true, ...(o.imageHash ? { hashChecked: true } : {}) };
   } catch {
@@ -311,8 +310,8 @@ export interface HttpsCheckOptions {
   /** default MAX_LOGO_BYTES */
   maxBytes?: number;
   sha256?: (b: Uint8Array) => Promise<string | null>;
-  /** draws a checked SVG to a raster picture (default `rasterizeSvg`) */
-  rasterize?: (b: Uint8Array) => Promise<Raster | null>;
+  /** draws a checked file that is not PNG, JPEG, WEBP or GIF to a raster picture (default `rasterize` of data/svg-logo.ts) */
+  rasterize?: Rasterize;
 }
 
 /**
@@ -335,10 +334,8 @@ export async function checkHttpsImage(url: string, imageHash: string, o: HttpsCh
     const got = await (o.sha256 ?? sha256Hex)(bytes);
     if (got === null) return { kind: 'unreadable' };
     if (got !== imageHash) return { kind: 'mismatch' };
-    const mime = sniffImage(bytes);
-    if (mime) return { kind: 'match', bytes, mime };
-    // an SVG whose ORIGINAL bytes hash to the commitment: shown as a picture drawn from it
-    const r = isSvg(bytes) ? await (o.rasterize ?? rasterizeSvg)(bytes) : null;
+    // the ORIGINAL bytes hash to the commitment: shown as they are, or as the picture drawn from them (SVG, AVIF ...)
+    const r = await shownPicture(bytes, o.rasterize);
     return r ? { kind: 'match', bytes: r.bytes, mime: r.mime } : { kind: 'refused' };
   } catch {
     return { kind: 'unreadable' };
