@@ -113,6 +113,13 @@ test.describe("an operator's explicit home", () => {
   });
 });
 
+test('the trust model: no off switch but Kaspa itself, right after the operator row', async ({ appPage: page }) => {
+  await page.goto('/');
+  const keys = await page.locator('.lp-ledger .lp-lr .lp-k').allTextContents();
+  expect(keys).toEqual(['Admin keys', 'Oracle', 'Custody', 'Operator', 'Off switch', 'Closed source', 'Trust us']);
+  await expect(page.getByTestId('landing-offswitch')).toContainText('Only Kaspa itself could stop KOB');
+});
+
 test.describe('the trust us row', () => {
   test('open review, no review shows the code is free of bugs; a report, an issue, a message on X, and no bug bounty, in the row; no section of their own', async ({ appPage: page }) => {
     await page.goto('/');

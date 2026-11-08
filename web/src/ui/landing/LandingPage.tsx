@@ -305,6 +305,9 @@ export function LandingPage() {
                 <Row k={t('landing.trust.operator')} v={t('landing.trust.none')} vClass="lp-none">
                   {t('landing.trust.operator.body', { site })}
                 </Row>
+                <Row k={t('landing.trust.offswitch')} v={t('landing.trust.none')} vClass="lp-none">
+                  <span data-testid="landing-offswitch">{t('landing.trust.offswitch.body')}</span>
+                </Row>
                 <Row k={t('landing.trust.source')} v={t('landing.trust.none')} vClass="lp-none">
                   {t('landing.trust.source.body')} <a href={REPO_URL}>{t('landing.trust.source.link')}</a>
                 </Row>

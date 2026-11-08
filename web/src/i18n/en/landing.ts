@@ -85,6 +85,8 @@ export default {
   'landing.trust.custody.body': 'One order, one UTXO, under your covenant. Keys never leave your wallet.',
   'landing.trust.operator': 'Operator',
   'landing.trust.operator.body': '{site} only publishes software and information — the app, and book and chart data from a keyless indexer. It never holds funds or orders, does not trade, and does not run executors.',
+  'landing.trust.offswitch': 'Off switch',
+  'landing.trust.offswitch.body': 'Only Kaspa itself could stop KOB: a hard fork that changes the rules, or the network stopping. The orders live on Kaspa L1, not on a server. If this site and every indexer went away, anyone running the open source code could still fill, cancel or refund them.',
   'landing.trust.source': 'Closed source',
   'landing.trust.source.body': 'App, covenants and executor are public. Orders are written in SilverScript; the router is built with Argent.',
   'landing.trust.source.link': 'github.com/RossKU/kob →',
