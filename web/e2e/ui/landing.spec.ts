@@ -115,9 +115,8 @@ test.describe("an operator's explicit home", () => {
 
 test('the trust model: no off switch but Kaspa itself, right after the operator row', async ({ appPage: page }) => {
   await page.goto('/');
-  const keys = await page.locator('.lp-ledger .lp-lr .lp-k').allTextContents();
-  expect(keys).toEqual(['Admin keys', 'Oracle', 'Custody', 'Operator', 'Off switch', 'Closed source', 'Trust us']);
   await expect(page.getByTestId('landing-offswitch')).toContainText('Only Kaspa itself could stop KOB');
+  await expect(page.locator('.lp-ledger .lp-lr .lp-k')).toHaveText(['Admin keys', 'Oracle', 'Custody', 'Operator', 'Off switch', 'Closed source', 'Trust us']);
 });
 
 test.describe('the trust us row', () => {
