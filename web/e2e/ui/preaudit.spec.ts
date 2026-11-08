@@ -11,8 +11,9 @@ test.describe('open review notice', () => {
     await expect(page).toHaveTitle(/^Disclaimer - /);
     await expect(page.getByTestId('disclaimer-network')).toHaveText('This site runs on Kaspa testnet-10. Test tokens have no value.');
     for (const k of ['audit', 'custody', 'tokens', 'market', 'services', 'advice', 'duty', 'donations', 'warranty']) await expect(page.getByTestId(`disclaimer-${k}`)).toBeVisible();
-    await expect(page.getByTestId('disclaimer-audit')).toContainText('No external audit');
-    await expect(page.getByTestId('disclaimer-audit')).toContainText('The specification is not final and the contracts have had no external audit.');
+    await expect(page.getByTestId('disclaimer-audit')).toContainText('Open review');
+    await expect(page.getByTestId('disclaimer-audit')).toContainText('no third party has checked it');
+    await expect(page.getByTestId('disclaimer-audit')).not.toContainText('audit');
     await expect(page.getByTestId('disclaimer-warranty')).toContainText('ISC License');
   });
 
