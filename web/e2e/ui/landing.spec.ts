@@ -121,7 +121,7 @@ test.describe('the trust us row', () => {
     await expect(row).toContainText('Trust us');
     await expect(row).toContainText('None.');
     await expect(page.getByTestId('landing-audit')).toContainText('Verify it yourself');
-    await expect(page.getByTestId('landing-audit')).toContainText('The contracts have had no external audit');
+    await expect(page.getByTestId('landing-audit')).toContainText('the contracts have had no external audit');
     await expect(page.getByTestId('landing-audit')).toContainText('test tokens');
     await expect(page.getByTestId('landing-audit-note')).toHaveText('Please test only with your own funds and orders. There is no bug bounty.');
     for (const id of ['landing-feedback-security', 'landing-feedback-issue', 'landing-feedback-message']) await expect(row.getByTestId(id)).toBeVisible();
@@ -141,7 +141,7 @@ test.describe('mainnet build', () => {
     await expect(page.getByTestId('landing')).toHaveAttribute('data-network', 'mainnet');
     await expect(page.getByTestId('landing-chip')).toHaveText('mainnet · open review');
     await expect(page.getByTestId('landing-disclaimer')).toContainText('Mainnet · open review.');
-    await expect(page.getByTestId('landing-audit')).toContainText('The contracts have had no external audit');
+    await expect(page.getByTestId('landing-audit')).toContainText('the contracts have had no external audit');
     await expect(page.getByTestId('landing')).not.toContainText(/testnet|test tokens/i);
     await expect(page.getByTestId('landing-nav')).not.toContainText(/testnet|tn10/i);
     await expect(page.getByTestId('footer')).not.toContainText(/testnet|test tokens/i);
