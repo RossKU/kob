@@ -101,7 +101,8 @@ export type PairLevelSource = 'direct' | 'entry' | 'route';
  * One level of `GET /v1/pairs/{base}/{quote}/book`: price = price_num / price_den QUOTE base units per BASE base unit (exact rational),
  * `amount` in BASE base units (decimal strings).
  */
-export interface PairLevelView { source: PairLevelSource; price_num: string; price_den: string; amount: string; orders: number }
+/** `reversed`: added by the app (ui/market/pair-model.ts `mergeOrientations`): a level of the other orientation's book, its price inverted. */
+export interface PairLevelView { source: PairLevelSource; price_num: string; price_den: string; amount: string; orders: number; reversed?: true }
 /** `GET /v1/pairs/{base}/{quote}/book`: asks = buy BASE with QUOTE (ascending), bids = sell BASE for QUOTE (descending). */
 export interface PairBookView { base: Hex; quote: Hex; daa_score: number; asks: PairLevelView[]; bids: PairLevelView[] }
 /**

@@ -10,11 +10,11 @@
 // fills list, which has no price column). Flip = swap of base and quote (another pair): every panel follows. Live: `book:<base>` and `book:<quote>`
 // trigger a debounced refetch (5 s polling without the socket). An indexer without the pair routes (404 / 405 / 501) shows "pair book unavailable"
 // and still lets the user place orders.
-import { useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { pageTitle, useDocumentTitle } from '../../app/page-title';
-import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
+import { navigate, pairRoute, replaceRoute, routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { PairToken } from '../../kob/pair';
 import { longId, type TokenInfo } from '../../kob/registry';
@@ -36,7 +36,8 @@ import { PairBook } from './PairBook';
 import { useStaleSince } from './book-stale';
 import { loadCandles, type ChartView } from './candle-feed';
 import { BookFrame, StaleSince } from './OrderBook';
-import { buildPairBook, pairSideOf, pickOf, type PairLevelRow } from './pair-model';
+import { buildPairBook, bridgeQuoteFlip, mergeOrientations, pairSideOf, pickOf, type PairLevelRow } from './pair-model';
+import { useGenesisCheck } from './use-genesis-check';
 import { idleLeg, pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
 import { MarketActivity } from '../activity/ActivityPage';
 import { TokenFacts, tokenTitle } from './TokenBadges';
@@ -82,12 +83,29 @@ export function PairPage(props: { base: string; quote: string }) {
   const quoteInfo = quoteSide.state === 'ready' ? quoteSide.info : null;
   const baseRow = baseToken.headerRow;
   const quoteRow = quoteToken.headerRow;
+  // a token a federated bridge issues (its genesis holds the minter KOB pins, kUSDT's BridgeMint) is the quote: shown as the base, the page turns the
+  // pair round once its check says so (the book is the same either way, mergeOrientations); the history entry is replaced, so Back does not loop
+  const baseGenesis = useGenesisCheck(baseRow ?? null);
+  const quoteGenesis = useGenesisCheck(quoteRow ?? null);
+  useEffect(() => {
+    if (bridgeQuoteFlip(baseGenesis, quoteGenesis)) replaceRoute(pairRoute(props.quote, props.base));
+  }, [baseGenesis, quoteGenesis, props.base, props.quote]);
   // the two tokens are always among the choices, also when no list names them
   const selectorRows = useMemo(() => withShownRows(choiceRows, [baseRow, quoteRow]), [choiceRows, baseRow, quoteRow]);
   // the tab: `BASE / QUOTE` by the tickers the page shows (a token without one: its short id)
   useDocumentTitle(pageTitle(`${baseRow?.ticker || longId(props.base)} / ${quoteRow?.ticker || longId(props.quote)}`));
 
-  const book = useAsync((signal) => (indexer ? indexer.pairBook(props.base, props.quote, { depth: DEPTH * 2 }, { signal }) : Promise.resolve(null)), [indexer, props.base, props.quote]);
+  // the book of BASE/QUOTE with the resting orders of QUOTE/BASE turned round (pair-model.ts mergeOrientations): one book whichever way the pair is shown
+  const book = useAsync(
+    (signal) =>
+      indexer
+        ? Promise.all([
+            indexer.pairBook(props.base, props.quote, { depth: DEPTH * 2 }, { signal }),
+            indexer.pairBook(props.quote, props.base, { depth: DEPTH * 2 }, { signal }).catch(() => null),
+          ]).then(([ab, ba]) => (ab ? mergeOrientations(ab, ba) : ab))
+        : Promise.resolve(null),
+    [indexer, props.base, props.quote],
+  );
   const bookStaleSince = useStaleSince(book);
   const mode = useLiveRefresh(
     services,

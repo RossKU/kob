@@ -4,6 +4,7 @@
 // `direct` (resting KobPair orders), `entry` (if-done pair entries resting at their limit) and `route` (implied through the two KAS books).
 // A pair order enforces only its own price (founder option 2): a filler may net opposite pair orders, route them through the KAS books or fill them
 // from inventory, so a crossing of ANY sources is fillable. A crossed book is shown as it is (a negative spread). Pure and DOM-free.
+import type { GenesisCheck } from '../../data/genesis-check';
 import type { PairBookView, PairLevelSource, PairLevelView } from '../../data/indexer-types';
 import { cmpRational, formatRational, ratToNumber, reduce, significantDp, wholePrice, type PairToken, type Rational } from '../../kob/pair';
 import type { OpenTokenIssue } from '../../kob/open-token';
@@ -91,6 +92,45 @@ export interface PairBookModel {
 export function spreadLine(m: Pick<PairBookModel, 'spreadText' | 'spreadPct' | 'midText'>): { key: string; params: Record<string, string> } {
   if (m.spreadText === null || m.midText === null || m.spreadPct === null) return { key: 'pair.book.oneSided', params: {} };
   return { key: 'pair.book.spread', params: { mid: m.midText, spread: m.spreadText, pct: m.spreadPct } };
+}
+
+/**
+ * One book for the two orientations of a pair. A pair order is oriented (its base and its quote are in its covenant), and the indexer lists the
+ * orders of B/A in the B/A book only; the matcher nets both orientations alike (the order selling one token for the other is the counterparty,
+ * however it is oriented). So the page shows A/B with the resting orders of B/A turned round: a B/A ask (it sells B for A) is an A/B bid, a B/A bid
+ * (it sells A for B) an A/B ask; the price inverted exactly (B per A = the inverse of A per B, both per base unit) and the amount in A
+ * (rounded down). The route levels of B/A are left out: they are the same KAS-book quotes as A/B's, turned round.
+ */
+export function mergeOrientations(ab: PairBookView, ba: PairBookView | null | undefined): PairBookView {
+  if (!ba || ba.base !== ab.quote || ba.quote !== ab.base) return ab;
+  const flip = (l: PairLevelView): PairLevelView | null => {
+    const num = BigInt(l.price_num);
+    const den = BigInt(l.price_den);
+    if (num <= 0n || den <= 0n || l.source === 'route') return null;
+    // l: `amount` base units of B at num/den base units of A per base unit of B
+    const amountA = (BigInt(l.amount) * num) / den;
+    if (amountA <= 0n) return null;
+    return { source: l.source, price_num: den.toString(), price_den: num.toString(), amount: amountA.toString(), orders: l.orders, reversed: true };
+  };
+  const more = (ls: readonly PairLevelView[]) => ls.map(flip).filter((l): l is PairLevelView => l !== null);
+  const byPrice = (asc: boolean) => (a: PairLevelView, b: PairLevelView) => {
+    const c = cmpRational(toRat(a), toRat(b));
+    return asc ? c : -c;
+  };
+  return {
+    ...ab,
+    asks: [...ab.asks, ...more(ba.bids)].sort(byPrice(true)),
+    bids: [...ab.bids, ...more(ba.asks)].sort(byPrice(false)),
+  };
+}
+
+/**
+ * Whether a pair shown as BASE/QUOTE is to be turned round: its base is issued by a federated bridge (its genesis check found the bridge minter KOB
+ * pins, kUSDT's BridgeMint) and its quote is not. Only a check that ran says so: an open or failed check turns nothing.
+ */
+export function bridgeQuoteFlip(base: GenesisCheck | null | undefined, quote: GenesisCheck | null | undefined): boolean {
+  const bridged = (g: GenesisCheck | null | undefined) => g?.status === 'verified' && g.bridge === true;
+  return bridged(base) && !bridged(quote);
 }
 
 /** Order of the sources at one price: resting pair orders first (direct, then if-done entries), the implied route last. */

@@ -154,6 +154,13 @@ export function navigate(route: Route): void {
   if (window.location.hash !== h) window.location.hash = h;
 }
 
+/** As `navigate`, replacing the current history entry (a page that corrects its own address: Back does not return to it). */
+export function replaceRoute(route: Route): void {
+  if (typeof window === 'undefined') return;
+  const h = routeToHash(route);
+  if (window.location.hash !== h) window.location.replace(h);
+}
+
 /** Current route; re-renders on `hashchange`. */
 export function useRoute(): Route {
   const [route, setRoute] = useState<Route>(() => parseHash(currentHash()));

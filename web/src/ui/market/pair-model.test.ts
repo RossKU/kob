@@ -4,7 +4,7 @@ import { sanitizePairBook } from '../../data/indexer';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
 import type { TokenInfo } from '../../kob/registry';
-import { buildPairBook, pairSideOf, pickOf, spreadLine } from './pair-model';
+import { bridgeQuoteFlip, buildPairBook, mergeOrientations, pairSideOf, pickOf, spreadLine } from './pair-model';
 import type { TokenRow } from './token-model';
 import type { MarketToken } from './use-market-token';
 
@@ -164,5 +164,38 @@ describe('one token of a pair page', () => {
     expect(side({ row: row({ source: 'kascov' }), reason: 'no-extension', pub: 'not-confirmed' })).toMatchObject({ state: 'unavailable', reason: 'market.public.not-confirmed' });
     // no indexer: nothing will ever read its orders
     expect(side({ row: row() }, false)).toMatchObject({ state: 'unavailable', reason: 'market.open.book-unavailable' });
+  });
+});
+
+describe('one book for the two orientations of a pair', () => {
+  const A = 'a'.repeat(64);
+  const B = 'b'.repeat(64);
+  const lv = (source: 'direct' | 'entry' | 'route', num: number, den: number, amount: number, orders = 1) => ({ source, price_num: String(num), price_den: String(den), amount: String(amount), orders });
+
+  it('a B/A ask is an A/B bid and a B/A bid an A/B ask, price inverted exactly, amount in A; the B/A route is left out', () => {
+    const ab = { base: A, quote: B, daa_score: 1, asks: [lv('direct', 3, 1, 10)], bids: [lv('route', 1, 1, 50)] };
+    // a B/A ask: 20 B at 1/4 A per B (= 4 B per A: an A/B bid of 5 A at 4); a B/A bid: 9 B at 1/2 A per B (= an A/B ask of 4 A at 2)
+    const ba = { base: B, quote: A, daa_score: 1, asks: [lv('direct', 1, 4, 20)], bids: [lv('entry', 1, 2, 9, 2), lv('route', 1, 3, 99)] };
+    const m = mergeOrientations(ab, ba);
+    expect(m.asks).toEqual([{ ...lv('entry', 2, 1, 4, 2), reversed: true }, lv('direct', 3, 1, 10)]);
+    expect(m.bids).toEqual([{ ...lv('direct', 4, 1, 5), reversed: true }, lv('route', 1, 1, 50)]);
+  });
+
+  it('no other book, or a book of another pair: the book as it is', () => {
+    const ab = { base: A, quote: B, daa_score: 1, asks: [lv('direct', 3, 1, 10)], bids: [] };
+    expect(mergeOrientations(ab, null)).toBe(ab);
+    expect(mergeOrientations(ab, { ...ab })).toBe(ab);
+  });
+});
+
+describe('a bridge-issued token is the quote', () => {
+  const ok = (bridge: boolean) => ({ status: 'verified' as const, source: 'kascov' as never, txid: 'aa', program: 'KCC20PublicMint', supply: 1n, mintAllowance: null, mintersUnspent: null, ...(bridge ? { bridge: true } : {}) });
+  it('turns BASE/QUOTE round only when the base is bridge-issued and the quote is not', () => {
+    expect(bridgeQuoteFlip(ok(true), ok(false))).toBe(true);
+    expect(bridgeQuoteFlip(ok(true), null)).toBe(true);
+    expect(bridgeQuoteFlip(ok(false), ok(true))).toBe(false);
+    expect(bridgeQuoteFlip(ok(true), ok(true))).toBe(false);
+    expect(bridgeQuoteFlip(null, null)).toBe(false);
+    expect(bridgeQuoteFlip({ status: 'unavailable', reason: 'no-source' as never }, ok(false))).toBe(false);
   });
 });
