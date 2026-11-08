@@ -434,14 +434,16 @@ export function SettingsView(props: { warnings?: ConfigWarning[] }) {
           </ul>
         </Banner>
       ) : null}
+      {/* two columns of about the same height: how the app connects, signs and shows tokens; then what it tells you, what it runs
+          and what it keeps (the one destructive button last) */}
       <div class="grid-2">
         <div class="stack">
           <ConnectionSettings />
-          <TokenIconsSettings />
           <PrivateKeySettings />
-          <NotifySettingsSection />
+          <TokenIconsSettings />
         </div>
         <div class="stack">
+          <NotifySettingsSection />
           <Versions />
           <LocalData />
         </div>

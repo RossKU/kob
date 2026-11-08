@@ -175,7 +175,7 @@ export function SiteFooter(props: { context: FrameContext; brandOnClick?: (e: Ev
   const net = landingNetworkText(config.network, siteName(typeof location === 'undefined' ? '' : location.hostname));
   const links = footerLinks(props.context, config.indexerUrl, !!supportAddressOf(config.features));
   const link = (l: (typeof links)[number]) => (
-    <a key={l.key} href={l.href} data-testid={l.testid} class={l.href === '#/support' ? 'ff-support' : undefined} {...(l.external ? EXTERNAL : {})}>
+    <a key={l.key} href={l.href} data-testid={l.testid} title={l.title ? t(l.title) : undefined} class={l.href === '#/support' ? 'ff-support' : undefined} {...(l.external ? EXTERNAL : {})}>
       {l.href === '#/support' ? (
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false" fill="currentColor">
           <path d="M12 20.5s-7.5-4.6-9.6-9C.9 8.2 2.6 4.5 6.3 4.5c2.2 0 3.9 1.1 5.7 3.3 1.8-2.2 3.5-3.3 5.7-3.3 3.7 0 5.4 3.7 3.9 6.9-2.1 4.5-9.6 9.1-9.6 9.1z" />
