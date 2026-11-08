@@ -272,12 +272,20 @@ export function placedRows(orders: Iterable<OrderView>, ctx: RowContext): Activi
     const amountToken = market.kind === 'pair' ? market.base : market.token;
     let units: bigint | null = 0n;
     let sompi: bigint | null = market.kind === 'token' ? 0n : null;
+    // a pair placement's second line: the quote it asks or offers (base units of B = units x price_num / price_den, B per base unit of A)
+    let quoteUnits: bigint | null = market.kind === 'pair' ? 0n : null;
     let low: bigint | null = null;
     let high: bigint | null = null;
     const scale = market.kind === 'token' ? big(o.scale) ?? ctx.tokenScale(market.token) : null;
     for (const x of same) {
       const n = placedAmount(x);
       units = units === null || n === null ? null : units + n;
+      if (market.kind === 'pair') {
+        const num = big(x.pair?.price_num);
+        const den = big(x.pair?.price_den);
+        quoteUnits = quoteUnits === null || n === null || num === null || den === null || den <= 0n ? null : quoteUnits + (n * num) / den;
+        continue;
+      }
       if (market.kind !== 'token') continue;
       const p = big(x.price);
       const sc = big(x.scale) ?? scale;
@@ -294,7 +302,8 @@ export function placedRows(orders: Iterable<OrderView>, ctx: RowContext): Activi
     out.push({
       key: txid, txid, kind: 'placed', kinds: ['placed'], side: pair ? (pairSide === 'ask' ? 'sell' : 'buy') : o.side === 1 ? 'sell' : 'buy', market,
       moreMarkets: new Set(os.map((x) => { const m = orderMarket(x); return m ? marketKeyOf(m) : ''; })).size - 1, orders: os.map((x) => x.covenant_id.toLowerCase()), placed: os.length,
-      amount: units === null ? null : { token: amountToken, units }, value: sompi === null ? null : { kind: 'kas', sompi },
+      amount: units === null ? null : { token: amountToken, units },
+      value: sompi !== null ? { kind: 'kas', sompi } : quoteUnits !== null && market.kind === 'pair' ? { kind: 'token', token: market.quote, units: quoteUnits } : null,
       price: low !== null && high !== null && scale !== null ? { low, high, scale } : null, pairSide, counterparty: null,
       daa, timeMs: time, timeEstimated: time !== null, confirmations: confs.length ? Math.min(...confs) : null, settled: os.every((x) => x.genesis.settled), seq,
     });
@@ -534,13 +543,14 @@ export function mergePairFills(ab: PairFillsView, ba: PairFillsView | null | und
 /**
  * A row of a pair market as the page shows the pair: a row of the other orientation (the order's pair is QUOTE/BASE) is turned round, so a buy of
  * the page's base is a buy whatever way its order was placed: the side and the pair side swap, and a fill's two amounts swap (the amount is then in the
- * page's base, the second line in its quote). Any other row is unchanged.
+ * page's base, the second line in its quote; a placement's too, when its price gave its quote amount). Any other row is unchanged.
  */
 export function orientRow(row: ActivityRow, f: MarketFilter): ActivityRow {
   if (f.kind !== 'pair' || row.market.kind !== 'pair' || row.market.base !== f.quote || row.market.quote !== f.base) return row;
   const side = row.side === 'buy' ? 'sell' : row.side === 'sell' ? 'buy' : row.side;
   const pairSide = row.pairSide === 'ask' ? 'bid' : row.pairSide === 'bid' ? 'ask' : row.pairSide;
-  const swap = row.kind === 'fill' && row.amount && row.value?.kind === 'token';
+  // a fill's two amounts, or a placement's amount and the quote it asks or offers
+  const swap = !!row.amount && row.value?.kind === 'token';
   return {
     ...row,
     side,

@@ -200,7 +200,9 @@ function amountOf(r: ActivityRow, fmt: RowFormat): { text: string; sub: string; 
   const a = r.amount && token ? cellText(r.amount.units, fmt.decimalsOf(token)) : null;
   const text = a && token ? `${a.text} ${fmt.nameOf(token)}` : '—';
   let sub = '';
-  if (r.value?.kind === 'kas') sub = `${fitAmountColumn([r.value.sompi], 8, { fraction: 2, width: 16 })[0]!.text} KAS`;
+  // a pair placement keeps its side on the second line (its quote amount is there to turn the row round on the other orientation's page)
+  if (r.kind === 'placed' && r.pairSide) sub = t(r.pairSide === 'ask' ? 'activity.pairAsk' : 'activity.pairBid');
+  else if (r.value?.kind === 'kas') sub = `${fitAmountColumn([r.value.sompi], 8, { fraction: 2, width: 16 })[0]!.text} KAS`;
   else if (r.value?.kind === 'token') sub = `${cellText(r.value.units, fmt.decimalsOf(r.value.token)).text} ${fmt.nameOf(r.value.token)}`;
   else if (r.pairSide) sub = t(r.pairSide === 'ask' ? 'activity.pairAsk' : 'activity.pairBid');
   return { text, sub, exact: a?.exact && token ? `${a.exact} ${fmt.nameOf(token)}` : null };

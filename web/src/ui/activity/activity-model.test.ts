@@ -341,3 +341,21 @@ describe('a pair market shows both orientations, turned to the page', () => {
     expect(orientRow(row as never, { kind: 'pair', base: B, quote: A })).toBe(row);
   });
 });
+
+describe('a pair placement shows the quote it asks or offers', () => {
+  it('units x price_num / price_den, in the pair order own quote; turned round on the other orientation', () => {
+    const A = 'a'.repeat(64);
+    const B = 'b'.repeat(64);
+    const o = {
+      covenant_id: 'c'.repeat(64), contract: 'KobPair', side: 1, token: B, scale: 100, maker: 'd'.repeat(64), initial_amount: '20', amount_left: '20', price: null, status: 'open',
+      genesis: { txid: 'e'.repeat(64), out: 0, block_seq: 1, daa: 10, confirmations: 1, settled: true },
+      pair: { base: B, quote: A, side: 'ask', price_num: '1', price_den: '4', price: '25', amount_left: '20' },
+    };
+    const ctx = { tokenScale: () => 100n, order: () => undefined, timeOfDaa: () => null };
+    const [row] = placedRows([o as never], ctx as never);
+    expect(row!.amount).toEqual({ token: B, units: 20n });
+    expect(row!.value).toEqual({ kind: 'token', token: A, units: 5n });
+    const turned = orientRow(row!, { kind: 'pair', base: A, quote: B });
+    expect([turned.side, turned.amount, turned.value]).toEqual(['buy', { token: A, units: 5n }, { kind: 'token', token: B, units: 20n }]);
+  });
+});
