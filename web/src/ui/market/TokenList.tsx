@@ -175,13 +175,17 @@ function SkeletonRow() {
   );
 }
 
-function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide }: { row: TokenRow; entry: ListEntry; step: number; favorite: boolean; onFavorite: (id: string) => void; hidden: boolean; onHide: (id: string) => void }) {
+/** How long a hidden row takes to leave (`.ml-out` in market.css). */
+const ROW_LEAVE_MS = 360;
+const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide, leaving }: { row: TokenRow; entry: ListEntry; step: number; favorite: boolean; onFavorite: (id: string) => void; hidden: boolean; onHide: (id: string) => void; leaving: boolean }) {
   // every row has the same three lines, so every row is as tall and the icons keep one pitch: line 1 the ticker (bold) and the name (one line, an ellipsis, the
   // whole name in its title); line 2 the covenant id fragment with its copy button; line 3 the badges (one line, never wrapped). A token without a ticker is led by its name
   const headline = row.ticker || row.name || t('market.list.unnamed');
   const sub = row.ticker ? row.name : '';
   return (
-    <tr class="ml-in" style={`--i:${step}`} data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
+    <tr class={leaving ? 'ml-in ml-out' : 'ml-in'} style={`--i:${step}`} data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
       <td>
         <div class="ml-name">
           <FavoriteStar on={favorite} name={tokenLabel(row)} onToggle={() => onFavorite(row.covenantId)} data-testid={`token-favorite-${row.covenantId}`} />
@@ -270,6 +274,8 @@ export function TokenList(props: { invalidToken?: string }) {
   const { hidden, toggle: toggleHiddenToken } = useHiddenTokens(config.network);
   const [hiddenOnly, setHiddenOnly] = useState(false);
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
+  // a row the eye was pressed on leaves as it came in, reversed (`.ml-out`), then the list drops it
+  const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set());
   // the live order counts of the favourite pairs: nothing is read for a pair until they are shown
   const readPairs = favoritesOnly && favorites.pairs.length > 0;
   const pairs = useAsync((signal) => (indexer && readPairs ? indexer.pairs(undefined, { signal }) : Promise.resolve(null)), [indexer, !!sa?.active, readPairs]);
@@ -392,7 +398,18 @@ export function TokenList(props: { invalidToken?: string }) {
     showListStart(listTop.current);
   };
   const onFavoriteToken = (id: string) => changeFavorites((f) => toggleToken(f, id));
-  const onHideToken = (id: string) => toggleHiddenToken(id);
+  const onHideToken = (id: string) => {
+    if (leaving.has(id)) return;
+    setLeaving((s) => new Set(s).add(id));
+    window.setTimeout(() => {
+      toggleHiddenToken(id);
+      setLeaving((s) => {
+        const next = new Set(s);
+        next.delete(id);
+        return next;
+      });
+    }, reducedMotion() ? 0 : ROW_LEAVE_MS);
+  };
   const onFavoritePair = (p: ListedPair) => changeFavorites((f) => togglePair(f, p.base.covenantId, p.quote.covenantId));
   const refresh = () => {
     tokens.reload();
@@ -453,6 +470,7 @@ export function TokenList(props: { invalidToken?: string }) {
                     onFavorite={onFavoriteToken}
                     hidden={hiddenSet.has(row.covenantId.toLowerCase())}
                     onHide={onHideToken}
+                    leaving={leaving.has(row.covenantId)}
                   />
                 ))
               )}

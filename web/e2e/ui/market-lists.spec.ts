@@ -404,6 +404,9 @@ test.describe('hidden tokens', () => {
     await expect(row).toBeVisible();
     await expect(page.getByTestId('token-list-hidden')).toHaveCount(0);
     await page.getByTestId(`token-hide-${base}`).click();
+    // it leaves as rows come in, reversed: up and out, then the list drops it
+    await expect(row).toHaveClass(/ml-out/);
+    expect(await row.evaluate((e) => getComputedStyle(e).animationName)).toBe('ml-leave');
     await expect(row).toHaveCount(0);
     await expect(page.getByTestId('token-list-hidden')).toHaveText('Hidden (1)');
     // a search still finds a hidden token
