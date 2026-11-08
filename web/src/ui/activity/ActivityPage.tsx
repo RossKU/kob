@@ -4,6 +4,7 @@ import type { PairFillsView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { marketKeyOf, type MarketFilter, type MarketRef } from './activity-model';
 import { ActivityLog } from './ActivityLog';
+import { ActivitySummary } from './ActivitySummary';
 
 /** The rows of a page of the log on a token or pair page until the viewer picks another size (the page has more below it). */
 const MARKET_PAGE_ROWS = 20;
@@ -13,6 +14,7 @@ const EVERY_MARKET: MarketFilter = { kind: 'all' };
 export function ActivityPage() {
   return (
     <div class="act-page" data-testid="activity-page">
+      <ActivitySummary />
       <ActivityLog market={EVERY_MARKET} prefsScope="page" data-testid="activity" />
     </div>
   );

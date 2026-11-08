@@ -155,3 +155,64 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
   .act-tools { justify-content: flex-start; }
   .act .section-head > .row { justify-content: flex-start; }
 }
+
+/* ---- the summary above the log (ActivitySummary.tsx): all time, a time window with its chart, the books now. Compact: a desktop sees it whole above
+   the fold's first rows of the log; a phone stacks the strips into two columns. */
+.sum { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.sum-band { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-top: 6px; }
+.sum-band:first-child { margin-top: 0; }
+.sum-h { margin: 0; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.sum-hint { font-size: 0.8rem; color: var(--muted); }
+.sum-band .segmented button { min-height: 28px; padding: 2px 12px; font-size: 0.8rem; }
+.sum-strip { display: grid; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.sum-strip-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.sum-strip-now { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
+.sum-strip > .sum-stat { background: var(--surface); padding: 10px 14px; }
+.sum-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sum-k { font-size: 0.75rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sum-v { font-size: 1.25rem; font-weight: 650; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 1.45em; }
+.sum-v-big { font-size: 1.75rem; }
+.sum-unit { font-size: 0.75rem; font-weight: 600; color: var(--muted); margin-left: 4px; }
+.sum-s { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.2em; }
+.sum-up { color: var(--buy); }
+.sum-down { color: var(--sell); }
+.sum-win { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 340px); gap: 10px; }
+.sum-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; min-width: 0; }
+.sum-chart-card { display: flex; flex-direction: column; gap: 8px; }
+.sum-chart-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 4px 16px; }
+.sum-readout { margin: 0; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.2em; }
+.sum-readout strong { color: var(--text); font-weight: 600; margin-right: 4px; }
+.sum-chart { display: flex; gap: 8px; height: 120px; }
+.sum-y { flex: none; width: 40px; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; font-size: 0.7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sum-y span:first-child { transform: translateY(-6px); }
+.sum-y span:last-child { transform: translateY(6px); }
+.sum-plot { position: relative; flex: 1 1 auto; min-width: 0; }
+.sum-grid { position: absolute; inset: 0; border-top: 1px dashed var(--grid); }
+.sum-grid::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed var(--grid); }
+.sum-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 3px; border-bottom: 1px solid var(--border); }
+.sum-bar { flex: 1 1 0; min-width: 0; height: 100%; padding: 0; margin: 0; border: 0; background: transparent; cursor: pointer; display: flex; align-items: flex-end; }
+.sum-bar span { display: block; width: 100%; min-height: 1px; background: var(--primary); opacity: 0.55; border-radius: 2px 2px 0 0; }
+.sum-bar[aria-pressed='true'] span, .sum-bar:hover span { opacity: 1; }
+.sum-bar:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+.sum-x { display: flex; justify-content: space-between; padding-left: 48px; font-size: 0.7rem; color: var(--muted); }
+.sum-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.sum-tiles > .sum-stat { background: var(--surface); padding: 10px 14px; }
+.sum-split { display: flex; gap: 2px; height: 6px; border-radius: 999px; overflow: hidden; margin: 4px 0 2px; background: var(--surface-2); }
+.sum-split i { flex-basis: 0; }
+.sum-bid { background: var(--buy); }
+.sum-ask { background: var(--sell); }
+.sum-pair { background: var(--info); }
+.sum-note { margin: 0; font-size: 0.75rem; color: var(--muted); }
+.sum-loading .sum-v:empty, .sum-loading .sum-v-big { color: transparent; background: var(--skeleton); border-radius: 4px; }
+@media (max-width: 899px) {
+  .sum-win { grid-template-columns: minmax(0, 1fr); }
+  .sum-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sum-strip-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .sum-tiles, .sum-strip-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sum-strip-now { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sum-strip-now > .sum-orders { grid-column: 1 / -1; }
+  .sum-chart { height: 100px; }
+  .sum-bars { gap: 2px; }
+}
