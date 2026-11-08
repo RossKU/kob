@@ -11,7 +11,7 @@ import type { IndexerApi } from '../../data/indexer';
 import type { EventView, OrderView, PairFillsView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import {
-  fillRows, inMarket, mergeRows, MS_PER_DAA, orderMarket, pairFillEvent, placedRows, ROW_CAP,
+  fillRows, inMarket, mergePairFills, mergeRows, MS_PER_DAA, orderMarket, orientRow, pairFillEvent, placedRows, ROW_CAP,
   type ActivityKind, type ActivityRow, type MarketFilter, type OrderFacts, type RowContext,
 } from './activity-model';
 
@@ -36,6 +36,13 @@ export interface StoreSources {
 export const rowSignature = (r: ActivityRow): string =>
   [r.kind, r.kinds.join('+'), r.side, r.daa, r.seq, r.orders.join(','), r.placed, r.amount ? `${r.amount.token}:${r.amount.units}` : '', r.value ? `${r.value.kind}:${'sompi' in r.value ? r.value.sompi : `${r.value.token}:${r.value.units}`}` : '',
     r.price ? `${r.price.low}-${r.price.high}/${r.price.scale}` : '', r.pairSide, r.counterparty, r.moreMarkets, r.timeMs, r.timeEstimated, r.confirmations, r.settled].join('|');
+
+/** Of two order-list cursors (`<block_seq>:<covenant id>`, newest first), the one nearer the top; null only when both lists ended. */
+export function newerOrderCursor(a: string | null, b: string | null): string | null {
+  if (a === null || b === null) return a ?? b;
+  const seq = (c: string) => Number(c.split(':')[0]);
+  return seq(a) >= seq(b) ? a : b;
+}
 
 export class ActivityStore {
   readonly fills = new Map<string, EventView>();
@@ -106,7 +113,9 @@ export class ActivityStore {
     const memoKey = `${this.version}|${[...kinds].sort().join(',')}`;
     if (this.rowsMemo?.key === memoKey) return this.rowsMemo.rows;
     const ctx = this.ctx();
-    const merged = mergeRows([fillRows(this.fills.values(), ctx), placedRows(this.orders.values(), ctx)], Number.MAX_SAFE_INTEGER).filter((r) => inMarket(r, this.market));
+    const merged = mergeRows([fillRows(this.fills.values(), ctx), placedRows(this.orders.values(), ctx)], Number.MAX_SAFE_INTEGER)
+      .filter((r) => inMarket(r, this.market))
+      .map((r) => orientRow(r, this.market));
     const h = this.horizon(kinds);
     const fresh = (h === null ? merged : merged.filter((r) => r.daa >= h)).slice(0, ROW_CAP);
     const next = new Map<string, { sig: string; row: ActivityRow }>();
@@ -227,7 +236,10 @@ export class ActivityStore {
     if (!ix) return { items: [], next: null };
     const o = { signal: this.signal(), priority: 'low' as const };
     if (m.kind === 'pair') {
-      const v = await ix.pairFills(m.base, m.quote, { limit: FIRST_LIMIT, ...(before ? { before } : {}) }, o);
+      // both orientations: an order of QUOTE/BASE is in this market too (activity-model.ts mergePairFills)
+      const q = { limit: FIRST_LIMIT, ...(before ? { before } : {}) };
+      const [ab, ba] = await Promise.all([ix.pairFills(m.base, m.quote, q, o), ix.pairFills(m.quote, m.base, q, o).catch(() => null)]);
+      const v = ab ? mergePairFills(ab, ba) : ba;
       return v ? { items: [], next: v.next_cursor, pair: v } : { items: [], next: null };
     }
     const p = await ix.fills({ limit: FIRST_LIMIT, ...(m.kind === 'token' ? { token: m.token } : {}), ...(before ? { before } : {}) }, o);
@@ -238,8 +250,15 @@ export class ActivityStore {
     const m = this.market;
     const ix = this.src.indexer;
     if (!ix) return { items: [], next: null };
-    const token = m.kind === 'token' ? m.token : m.kind === 'pair' ? m.base : undefined;
-    const p = await ix.orders({ limit, ...(token ? { token } : {}), ...(cursor ? { cursor } : {}) }, { signal: this.signal(), priority: 'low' });
+    const o = { signal: this.signal(), priority: 'low' as const };
+    if (m.kind === 'pair') {
+      // the pair orders of either orientation are listed under their own base: both tokens are read, from the same place (the cursor is a block
+      // position, common to every token), and the next page starts below the newer of the two ends so neither list skips a row
+      const [a, b] = await Promise.all([m.base, m.quote].map((token) => ix.orders({ limit, token, ...(cursor ? { cursor } : {}) }, o)));
+      return { items: [...a!.items, ...b!.items], next: newerOrderCursor(a!.next_cursor, b!.next_cursor) };
+    }
+    const token = m.kind === 'token' ? m.token : undefined;
+    const p = await ix.orders({ limit, ...(token ? { token } : {}), ...(cursor ? { cursor } : {}) }, o);
     return { items: p.items, next: p.next_cursor };
   }
 

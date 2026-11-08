@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EventView, OrderView, PairFillView } from '../../data/indexer-types';
 import {
-  ACTIVITY_DEPTH, AVAILABLE_KINDS, DEFAULT_PREFS, PREFS_KEY, SETTLE_DAA, confirmationsAt, daaNow, filterRows, fillRows, heldView, inMarket, logHasNext, logPage, mergeRows, pairFillEvent, parsePrefs,
+  ACTIVITY_DEPTH, AVAILABLE_KINDS, DEFAULT_PREFS, PREFS_KEY, SETTLE_DAA, confirmationsAt, daaNow, filterRows, fillRows, heldView, inMarket, logHasNext, logPage, mergePairFills, mergeRows, orientRow, pairFillEvent, parsePrefs,
   placedRows, readPrefs, rowHref, rowMakers, rowTime, shortWallet, shownKinds, writePrefs,
   type ActivityRow, type OrderFacts, type RowContext,
 } from './activity-model';
@@ -312,5 +312,32 @@ describe('confirmations and time', () => {
     expect(rowTime(null, now)).toBe('--:--:--');
     expect(shortWallet('kaspatest:qz7vabcdefghk3f2')).toBe('qz7v…k3f2');
     expect(shortWallet('qq9d0hxa')).toBe('qq9d0hxa');
+  });
+});
+
+describe('a pair market shows both orientations, turned to the page', () => {
+  const A = 'a'.repeat(64);
+  const B = 'b'.repeat(64);
+  const fill = (id: number, side: 'ask' | 'bid', a: string, b: string) => ({ id, txid: id.toString(16).padStart(64, '0'), ts: 1000 + id, daa: id, order: 'c'.repeat(64), contract: 'KobPair', side, amount_a: a, amount_b: b, price: null, price_num: null, price_den: null, a_scale: 1, tip_kas: null, counterparty: 'netting', price_source: 'none', confirmations: 1, settled: true });
+
+  it('merges the two views: the other orientation keeps its pair, the volume adds it swapped, newest first, the newer cursor', () => {
+    const ab = { base: A, quote: B, volume_24h: { amount_a: '10', amount_b: '20', fills: 1 }, items: [fill(5, 'ask', '10', '20')], next_cursor: '5' };
+    const ba = { base: B, quote: A, volume_24h: { amount_a: '6', amount_b: '3', fills: 1 }, items: [fill(7, 'ask', '6', '3')], next_cursor: '7' };
+    const m = mergePairFills(ab, ba);
+    expect(m.volume_24h).toEqual({ amount_a: '13', amount_b: '26', fills: 2 });
+    expect(m.items.map((f) => [f.id, f.base ?? null])).toEqual([[7, B], [5, null]]);
+    expect(m.next_cursor).toBe('7');
+    expect(mergePairFills(ab, null)).toBe(ab);
+  });
+
+  it('a row of QUOTE/BASE is turned round: the side swaps and so do the amounts', () => {
+    const row = {
+      key: 'k', txid: 'aa', kind: 'fill' as const, kinds: ['fill' as const], daa: 1, seq: 1, timeMs: null, timeEstimated: false, confirmations: 1, settled: true, placed: 0,
+      side: 'buy' as const, market: { kind: 'pair' as const, base: B, quote: A }, moreMarkets: 0, orders: [],
+      amount: { token: B, units: 6n }, value: { kind: 'token' as const, token: A, units: 3n }, price: null, pairSide: null, counterparty: 'netting',
+    };
+    const r = orientRow(row as never, { kind: 'pair', base: A, quote: B });
+    expect([r.side, r.market, r.amount, r.value]).toEqual(['sell', { kind: 'pair', base: A, quote: B }, { token: A, units: 3n }, { kind: 'token', token: B, units: 6n }]);
+    expect(orientRow(row as never, { kind: 'pair', base: B, quote: A })).toBe(row);
   });
 });

@@ -137,6 +137,8 @@ export type PairCounterparty = 'route' | 'netting' | 'inventory';
 /** One pair-order fill (volume only: `price_source` is always `none`, a pair fill never sets a price). */
 export interface PairFillView {
   id: number; txid: Hex; ts: number; daa: number;
+  /** added by the app (activity-model.ts `mergePairFills`): the pair of the filled order when it is not the view's (the other orientation) */
+  base?: Hex; quote?: Hex;
   /** the filled pair order and its kind */
   order: Hex; contract: string;
   /** `ask` (the order sold A) or `bid` (it bought A) */

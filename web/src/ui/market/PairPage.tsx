@@ -39,6 +39,7 @@ import { BookFrame, StaleSince } from './OrderBook';
 import { buildPairBook, bridgeQuoteFlip, mergeOrientations, pairSideOf, pickOf, type PairLevelRow } from './pair-model';
 import { useGenesisCheck } from './use-genesis-check';
 import { idleLeg, pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
+import { mergePairFills } from '../activity/activity-model';
 import { MarketActivity } from '../activity/ActivityPage';
 import { TokenFacts, tokenTitle } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
@@ -163,7 +164,17 @@ export function PairPage(props: { base: string; quote: string }) {
     { refreshKey: liveKey },
   );
   // the pair's fills (volume only: amounts of A and B, counterparty, time) and the indexer's 24 h pair volume
-  const fills = useAsync((signal) => (indexer ? indexer.pairFills(props.base, props.quote, { limit: FILLS }, { signal, priority: 'low' }) : Promise.resolve(null)), [indexer, props.base, props.quote], {
+  // both orientations (activity-model.ts mergePairFills): the volume and the log count the orders of QUOTE/BASE too
+  const fills = useAsync(
+    (signal) =>
+      indexer
+        ? Promise.all([
+            indexer.pairFills(props.base, props.quote, { limit: FILLS }, { signal, priority: 'low' }),
+            indexer.pairFills(props.quote, props.base, { limit: FILLS }, { signal, priority: 'low' }).catch(() => null),
+          ]).then(([ab, ba]) => (ab ? mergePairFills(ab, ba) : ab))
+        : Promise.resolve(null),
+    [indexer, props.base, props.quote],
+    {
     refreshKey: liveKey,
   });
 

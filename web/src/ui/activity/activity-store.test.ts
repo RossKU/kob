@@ -82,7 +82,8 @@ describe('activity store', () => {
     calls.length = 0;
     const pair = storeOf(ix, { kind: 'pair', base: U, quote: T });
     await pair.readNewest({ fills: true, placed: true });
-    expect(calls).toEqual(['pairFills', `orders ${U} -`]);
+    // both orientations: the pair fills of U/T and T/U, and the orders listed under either token
+    expect([...calls].sort()).toEqual(['pairFills', 'pairFills', `orders ${T} -`, `orders ${U} -`].sort());
   });
 
   it('the pair page\'s copy of the pair fills is used, never read again', async () => {

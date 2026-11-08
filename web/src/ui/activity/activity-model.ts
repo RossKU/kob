@@ -9,7 +9,7 @@
 // Who: a fill names the order that was filled (its maker is looked up once per order, `/v1/orders/{id}`); the executor that sent the transaction is
 // not recorded by the indexer, so the log shows ROLES (maker-signed orders vs executions), never an executor's identity.
 import { explorerTxUrl, type AppConfig } from '../../config';
-import type { EventView, OrderView, PairFillView } from '../../data/indexer-types';
+import type { EventView, OrderView, PairFillsView, PairFillView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { pageWindow, type ListPageSize, type PageWindow } from '../market/market-list';
 
@@ -129,7 +129,9 @@ function pairDetail(e: EventView): { base: Hex; quote: Hex; side: 'ask' | 'bid';
 }
 
 /** A pair fill of `/v1/pairs/{a}/{b}/fills` as the fill event the feed would list (so both build the same rows). */
-export function pairFillEvent(f: PairFillView, base: Hex, quote: Hex): EventView {
+export function pairFillEvent(f: PairFillView, viewBase: Hex, viewQuote: Hex): EventView {
+  const base = (f.base ?? viewBase).toLowerCase();
+  const quote = (f.quote ?? viewQuote).toLowerCase();
   return {
     id: f.id, covenant_id: f.order, block_seq: 0, daa: f.daa, ts: f.ts, txid: f.txid, tx_pos: 0, kind: 'fill', token: base, side: f.side === 'ask' ? 1 : 2, amount: f.amount_a,
     price: null, payout: null, closes: false, confirmations: f.confirmations, settled: f.settled,
@@ -505,4 +507,45 @@ export function heldView<R extends { key: string }>(rows: readonly R[], snapshot
     else held++;
   });
   return { rows: out, held };
+}
+
+/**
+ * The fills of the two orientations of a pair as one view of BASE/QUOTE (`ab`): the fills of QUOTE/BASE orders keep their own pair (`base`, `quote`), so
+ * their rows say what those orders did; the 24 h volume adds QUOTE/BASE's with its two amounts swapped; the page goes on below the newer of the two
+ * cursors (a fill both lists, a netting, is one row: the rows are per transaction). Newest first.
+ */
+export function mergePairFills(ab: PairFillsView, ba: PairFillsView | null | undefined): PairFillsView {
+  if (!ba || ba.base !== ab.quote || ba.quote !== ab.base) return ab;
+  const n = (s: string) => (/^\d+$/.test(s) ? BigInt(s) : 0n);
+  const turned = ba.items.map((f) => ({ ...f, base: ba.base, quote: ba.quote }));
+  const cursor = (a: string | null, b: string | null) => (a === null ? b : b === null ? a : /^\d+$/.test(a) && /^\d+$/.test(b) ? (BigInt(a) > BigInt(b) ? a : b) : a);
+  return {
+    ...ab,
+    volume_24h: {
+      amount_a: (n(ab.volume_24h.amount_a) + n(ba.volume_24h.amount_b)).toString(),
+      amount_b: (n(ab.volume_24h.amount_b) + n(ba.volume_24h.amount_a)).toString(),
+      fills: ab.volume_24h.fills + ba.volume_24h.fills,
+    },
+    items: [...ab.items, ...turned].sort((x, y) => y.id - x.id),
+    next_cursor: cursor(ab.next_cursor, ba.next_cursor),
+  };
+}
+
+/**
+ * A row of a pair market as the page shows the pair: a row of the other orientation (the order's pair is QUOTE/BASE) is turned round, so a buy of
+ * the page's base is a buy whatever way its order was placed: the side and the pair side swap, and a fill's two amounts swap (the amount is then in the
+ * page's base, the second line in its quote). Any other row is unchanged.
+ */
+export function orientRow(row: ActivityRow, f: MarketFilter): ActivityRow {
+  if (f.kind !== 'pair' || row.market.kind !== 'pair' || row.market.base !== f.quote || row.market.quote !== f.base) return row;
+  const side = row.side === 'buy' ? 'sell' : row.side === 'sell' ? 'buy' : row.side;
+  const pairSide = row.pairSide === 'ask' ? 'bid' : row.pairSide === 'bid' ? 'ask' : row.pairSide;
+  const swap = row.kind === 'fill' && row.amount && row.value?.kind === 'token';
+  return {
+    ...row,
+    side,
+    pairSide,
+    market: { kind: 'pair', base: f.base, quote: f.quote },
+    ...(swap ? { amount: { token: (row.value as { token: Hex }).token, units: (row.value as { units: bigint }).units }, value: { kind: 'token' as const, token: row.amount!.token, units: row.amount!.units } } : {}),
+  };
 }
