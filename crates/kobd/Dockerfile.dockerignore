@@ -13,5 +13,5 @@ vendor/argent-upstream/upstream
 **/*.pem
 **/.env
 **/.env.*
-**/kob-executor.toml
+**/kobd.toml
 **/kob-data

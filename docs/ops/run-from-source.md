@@ -38,7 +38,7 @@ cd ~/kob-tn10                                   cd C:\kob-tn10
 **3. An Indexer (no key, no funds).**
 
 ```
-./kobd setup --non-interactive --node resolver --indexer     # writes kob-executor.toml and kob-tokens.json
+./kobd setup --non-interactive --node resolver --indexer     # writes kobd.toml and kob-tokens.json
 ./kobd --indexer                                               # runs it in the foreground (plain ./kobd does the same)
 curl -s http://127.0.0.1:8090/v1/health                        # in a second terminal (Windows: curl.exe -s ...)
 ```
@@ -47,7 +47,7 @@ curl -s http://127.0.0.1:8090/v1/health                        # in a second ter
 instead (Enter takes each default). The health answer names `"network":"testnet-10"`, `"roles":["indexer"]` and a `state`
 that goes `starting`, `catching_up`, `following`: the first start reads everything the node retains (about 36 hours of
 chain, roughly 2.4 hours over public nodes) and `ok` turns `true` once the lag alarms clear. For the fast route (the books
-from now on only), put `start = "sink"` at the top of `kob-executor.toml` (above `[launch]`) before the first start. A
+from now on only), put `start = "sink"` at the top of `kobd.toml` (above `[launch]`) before the first start. A
 public read server behind a tunnel: `docs/ops/chart-server.md`.
 
 **4. An Executor (a funded hot key).** Give it a second folder with its own copy of `kobd` (for example `~/kob-tn10-exec`;
@@ -74,8 +74,8 @@ afford to lose, and back the file up where only you can read it.
 | Node | `rpc_url = "resolver"`: two public testnet-10 nodes found through the Kaspa resolvers (outbound HTTPS and WSS, port 443), one cross-checking the other. Your own node instead: `kaspad --testnet --netsuffix=10 --utxoindex --rpclisten-json=default` and `--node ws://127.0.0.1:18210` in the setup (required for Miner Mode; `docs/ops/executor-quickstart.md`, section 2) |
 | Ports | the read API on `127.0.0.1:8090` (loopback; `--listen <addr>` or `[api] listen`). Nothing listens publicly and no inbound port is needed |
 | Health | `GET /v1/health` (`ok`, `state`, `roles`, `network`, `book_complete`, lag), `GET /v1/health/ready` (200 / 503 for a probe); fields in `docs/api-reference.md` |
-| Files | `kob-executor.toml` (the configuration; its relative paths are taken from its folder), `kob-tokens.json` (the supported token programs), `kob-operator.key` (Executor only), `kob-data/` (the SQLite store and, for the Indexer, the record log) |
-| Logs | the console, with a status line every minute; `--log-file kob-executor.log` (or `log_file = "kob-executor.log"` in the configuration) also writes a rotated file. `RUST_LOG=debug` for more |
+| Files | `kobd.toml` (the configuration; its relative paths are taken from its folder), `kob-tokens.json` (the supported token programs), `kob-operator.key` (Executor only), `kob-data/` (the SQLite store and, for the Indexer, the record log) |
+| Logs | the console, with a status line every 10 seconds (`--status-secs`); `--log-file kobd.log` (or `log_file = "kobd.log"` in the configuration) also writes a rotated file. `RUST_LOG=debug` for more |
 | Pause, stop | the file `kob-data/pause` pauses an Executor's trading; Ctrl+C stops either role cleanly; the next start continues where it stopped |
 
 Next: services (Task Scheduler, systemd), Docker, upgrades and withdrawals in `docs/ops/executor-quickstart.md`; every flag,

@@ -1326,7 +1326,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         tokio::pin!(shutdown);
         // the first status line comes after the first tick, then one every `status_every`
         let mut status_at: Option<std::time::Instant> = None;
-        // when and at what balance the low-funds warning was last logged (the status line shows the funds every minute)
+        // when and at what balance the low-funds warning was last logged (the status line shows the funds every `--status-secs`)
         let mut low_funds_logged: Option<(std::time::Instant, u64)> = None;
         loop {
             let res = {
@@ -1465,7 +1465,7 @@ pub fn kas_text(sompi: i64) -> String {
     }
 }
 
-/// The one-line status an operator watching the console reads (`kobd --executor --status-secs`, every 60 s by default):
+/// The one-line status an operator watching the console reads (`kobd --executor --status-secs`, every 10 s by default, as kaspad's):
 /// where the book is, what the executor sent and earned since the start, its funds, and what needs attention. The metrics
 /// file (`--metrics-file`) carries the same facts for monitoring.
 pub fn status_line(f: &StatusFacts) -> String {

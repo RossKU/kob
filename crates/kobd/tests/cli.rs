@@ -85,34 +85,12 @@ fn the_executor_needs_a_role_and_a_key_and_db_has_the_tools() {
     // the Indexer takes the indexer's options only
     let err = exe_fails(&["--indexer", "--dry-run", "--data-dir", data, "--network", "testnet-10"]);
     assert!(err.contains("the Indexer takes the indexer's options only"), "{err}");
-    // the removed starts say what replaced them, and start nothing
-    for (args, new) in [
-        (
-            vec!["run", "--data-dir", data, "--network", "testnet-10"],
-            "`kobd run` no longer starts the Executor: start it with `kobd --executor`",
-        ),
-        (vec!["run", "--help"], "`kobd run` no longer starts the Executor: start it with `kobd --executor`"),
-        (
-            vec!["index", "--data-dir", data, "--network", "testnet-10"],
-            "`kobd index` is gone: the Indexer starts with `kobd --indexer`",
-        ),
-        (vec!["index", "run", "--data-dir", data], "`kobd index` is gone: the Indexer starts with `kobd --indexer`"),
-        (vec!["index", "--help"], "the database tools are `kobd db <migrate|"),
-        // the removed tools name the command that replaced them, with the words given (no alias: nothing runs)
-        (
-            vec!["index", "--config", "kob-executor.toml", "migrate"],
-            "`kobd index migrate` is now `kobd db migrate`, with the same options: `kobd db --config kob-executor.toml migrate`",
-        ),
-        (vec!["index", "replay", "--onto-database"], "`kobd db replay --onto-database`"),
-        (vec!["index", "export-orders", "--data-dir", data, "--network", "testnet-10"], "is now `kobd db export-orders`"),
-        (
-            vec!["index", "--config", "k.toml", "logo-reports", "list"],
-            "`kobd index logo-reports` is now `kobd logo-reports`, with the same options: `kobd logo-reports --config k.toml list`",
-        ),
-    ] {
+    // the commands of earlier builds are gone, with no alias and no hint: an unknown command, and nothing starts
+    for args in [vec!["run", "--data-dir", data, "--network", "testnet-10"], vec!["index", "--config", "kobd.toml", "migrate"]] {
         let err = exe_fails(&args);
-        assert!(err.contains(new), "{args:?}: {err}");
+        assert!(err.contains("unrecognized subcommand"), "{args:?}: {err}");
     }
+    assert!(!dir.exists());
     assert!(!dir.exists());
     // the reference build implies no network: the Executor, `db`, `match` and `keep` refuse to guess one (never testnet-10)
     if kob_protocol::artifacts::deployment_network().is_none() {

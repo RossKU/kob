@@ -7,7 +7,7 @@ use std::process::{Command, Output};
 fn run(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_kobd"))
         .args(args)
-        .env("KOB_EXECUTOR_DIR", dir)
+        .env("KOBD_DIR", dir)
         .env_remove("KOB_OPERATOR_KEY")
         .env_remove("KOB_OPERATOR_KEY_FILE")
         .env_remove("KOB_NETWORK")
@@ -36,7 +36,7 @@ fn setup(dir: &Path, extra: &[&str]) -> (serde_json::Value, String) {
 }
 
 fn config(dir: &Path) -> String {
-    std::fs::read_to_string(dir.join("kob-executor.toml")).unwrap()
+    std::fs::read_to_string(dir.join("kobd.toml")).unwrap()
 }
 
 #[test]
@@ -69,16 +69,16 @@ fn setup_takes_the_role_flags_and_writes_each_roles_configuration() {
 }
 
 #[test]
-fn the_removed_role_option_is_refused_with_the_role_flags_named() {
+fn the_role_option_of_earlier_builds_is_an_unknown_option() {
     let d = tempfile::tempdir().unwrap();
     for role in ["match", "index", "index,match"] {
         let out =
             run(d.path(), &["setup", "--non-interactive", "--node", "resolver", "--new-key", "--network", network(), "--role", role]);
         assert!(!out.status.success(), "--role {role}");
         let err = text(&out.stderr);
-        assert!(err.contains("--role is gone") && err.contains("--executor, --indexer or both"), "{err}");
+        assert!(err.contains("unexpected argument '--role'"), "{err}");
     }
-    assert!(!d.path().join("kob-executor.toml").exists() && !d.path().join("kob-operator.key").exists());
+    assert!(!d.path().join("kobd.toml").exists() && !d.path().join("kob-operator.key").exists());
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn a_non_interactive_setup_without_a_role_is_an_error_and_writes_nothing() {
     assert!(!out.status.success());
     let err = text(&out.stderr);
     assert!(err.contains("needs a role: --executor, --indexer or both"), "{err}");
-    assert!(!d.path().join("kob-executor.toml").exists() && !d.path().join("kob-operator.key").exists());
+    assert!(!d.path().join("kobd.toml").exists() && !d.path().join("kob-operator.key").exists());
     // an unknown or empty old-style role, and the old and the new spelling together
     for role in ["", "keep", "index,", "executor"] {
         let out = run(d.path(), &["setup", "--non-interactive", "--node", "resolver", "--role", role]);
@@ -96,7 +96,7 @@ fn a_non_interactive_setup_without_a_role_is_an_error_and_writes_nothing() {
     }
     let out = run(d.path(), &["setup", "--non-interactive", "--node", "resolver", "--role", "match", "--executor"]);
     assert!(!out.status.success());
-    assert!(!d.path().join("kob-executor.toml").exists());
+    assert!(!d.path().join("kobd.toml").exists());
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn a_start_with_role_flags_needs_a_configuration_of_exactly_those_roles() {
     let out = run(d.path(), &["--executor"]);
     assert!(!out.status.success());
     let err = text(&out.stderr);
-    assert!(err.contains("no kob-executor.toml") && err.contains("no terminal"), "{err}");
+    assert!(err.contains("no kobd.toml") && err.contains("no terminal"), "{err}");
     // a configuration of the Executor does not start as the Indexer, nor as both
     setup(d.path(), &["--executor"]);
     for flags in [&["--indexer"][..], &["--executor", "--indexer"][..]] {
@@ -124,7 +124,7 @@ fn a_start_with_role_flags_needs_a_configuration_of_exactly_those_roles() {
     assert!(err.contains("is set up for the Indexer but the command line asks for the Executor and Indexer"), "{err}");
     // the same check for a configuration named with --config, from another directory
     let other = tempfile::tempdir().unwrap();
-    let cfg = d.path().join("kob-executor.toml");
+    let cfg = d.path().join("kobd.toml");
     let err = text(&run(other.path(), &["--executor", "--config", cfg.to_str().unwrap()]).stderr);
     assert!(err.contains("is set up for the Indexer but the command line asks for the Executor"), "{err}");
     // the Indexer's configuration takes no option of the Executor
@@ -146,5 +146,5 @@ fn the_help_names_the_roles() {
         assert!(out.status.success() && help.contains("--executor") && help.contains("--indexer"), "{args:?}: {help}");
     }
     let help = text(&run(d.path(), &["setup", "--help"]).stdout);
-    assert!(!help.contains("--role"), "the removed spelling is hidden: {help}");
+    assert!(!help.contains("--role"), "no --role: {help}");
 }

@@ -15,17 +15,17 @@ How to install and use it: `docs/ops/executor-quickstart.md`, section 9.
 | `app/src/main/AndroidManifest.xml` | Permissions, the service (`specialUse` on Android 15+, `dataSync` on 10 to 14), no backup |
 
 The app is plain framework views (no AndroidX, no layout files). Its files are in the app's private storage, `files/kob`:
-`kob-executor.toml`, `kob-operator.key` and `kob-data/`. The app talks to `kobd` through:
+`kobd.toml`, `kob-operator.key` and `kob-data/`. The app talks to `kobd` through:
 
 * `kobd setup --non-interactive --node resolver|<url> --executor|--indexer --dir <files/kob> --new-key`: writes the
   configuration and, for the Executor, the key; prints one JSON object (`address`, `roles`, ...).
-* `kobd db --config <files/kob>/kob-executor.toml migrate`, before each start when `kob-data/index.sqlite3` exists: brings
+* `kobd db --config <files/kob>/kobd.toml migrate`, before each start when `kob-data/index.sqlite3` exists: brings
   a store of an earlier build to the current schema (a moment on a current one). If it fails, the service stops and shows why.
   The previous store it keeps (`kob-data/index.sqlite3.before-migrate`, with its -wal / -shm) is deleted by the service once
   a `kobd` started after it has reported, on `/v1/health`, the indexer following the chain on the full store (`state`
   `following` or `catching_up`, `book_complete` not false) and that same process has run for 10 minutes; an exit, a restart
   or a stop before that keeps the file, and the next start watches again.
-* `kobd` with no arguments and `KOB_EXECUTOR_DIR=<files/kob>`: runs the configuration. The app reads its stdout for the log
+* `kobd` with no arguments and `KOBD_DIR=<files/kob>`: runs the configuration. The app reads its stdout for the log
   and the status line, and `http://127.0.0.1:8090/v1/health` for the status screen.
 * `kobd address-balance --dir <files/kob>`: the funding address and its balance (one JSON object).
 * `kobd withdraw --to <address> --amount <KAS|all> --yes --dir <files/kob>`.

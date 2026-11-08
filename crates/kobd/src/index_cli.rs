@@ -108,8 +108,8 @@ pub struct IndexOpts {
     #[arg(long, global = true)]
     pub reorg_window_hours: Option<u64>,
     /// Log a one-line status (the indexer's lag; with the Executor also the transactions sent, the profit, the funds and the
-    /// warnings) every this many seconds; 0: never.
-    #[arg(long, global = true, default_value_t = 60)]
+    /// warnings) every this many seconds, as kaspad logs one every 10 s; 0: never.
+    #[arg(long, global = true, default_value_t = 10)]
     pub status_secs: u64,
 }
 
@@ -199,8 +199,8 @@ pub enum LogoCmd {
 }
 
 /// The relative paths of a configuration file (`data_dir`, `tokens_path`, `[records] dir`) are relative to the file's
-/// directory, as `log_file` is (`crate::cli`), so `--config <dir>/kob-executor.toml` started from any directory reads the
-/// same files as a start in `<dir>`. A file named without a directory (the launcher's `--config kob-executor.toml`, run in
+/// directory, as `log_file` is (`crate::cli`), so `--config <dir>/kobd.toml` started from any directory reads the
+/// same files as a start in `<dir>`. A file named without a directory (the launcher's `--config kobd.toml`, run in
 /// the file's directory) keeps its paths as written. Paths given as flags stay relative to the working directory.
 fn relative_to_config(cfg: &mut IndexerConfig, file: &std::path::Path) {
     let Some(base) = file.parent().filter(|d| !d.as_os_str().is_empty()) else { return };
@@ -389,24 +389,6 @@ pub fn refuse_run_only_options(cfg: &IndexerConfig, file: Option<&std::path::Pat
 }
 
 /// The tools of `kobd db`, as named on the command line.
-const DB_TOOLS: [&str; 6] = ["migrate", "replay", "export-orders", "export-book", "import-orders", "rebase"];
-
-/// What the removed `kobd index ...` answers (`rest`: the words after `index`): the command that replaced the tool it names
-/// (`kobd db <tool>` or `kobd logo-reports <command>`, with the same options), or the Indexer's start when it names none.
-pub fn index_moved(rest: &[String]) -> String {
-    if let Some(tool) = rest.iter().find(|w| DB_TOOLS.contains(&w.as_str())) {
-        format!("`kobd index {tool}` is now `kobd db {tool}`, with the same options: `kobd db {}`", rest.join(" "))
-    } else if rest.iter().any(|w| w == "logo-reports") {
-        let words: Vec<&str> = rest.iter().map(String::as_str).filter(|w| *w != "logo-reports").collect();
-        format!("`kobd index logo-reports` is now `kobd logo-reports`, with the same options: `kobd logo-reports {}`", words.join(" "))
-    } else {
-        "`kobd index` is gone: the Indexer starts with `kobd --indexer` (for example `kobd --indexer --config kob-executor.toml`); \
-         the database tools are `kobd db <migrate|replay|export-orders|export-book|import-orders|rebase>` and the token-logo \
-         reports `kobd logo-reports`"
-            .into()
-    }
-}
-
 /// The Indexer: follow the node and serve the read API (`kobd --indexer`).
 pub async fn follow_and_serve(opts: IndexOpts) -> Result<()> {
     let cfg = build_config(&opts)?;
@@ -667,7 +649,7 @@ mod tests {
         assert!(c.nodes.is_empty() && c.rpc_url == own, "an own node by default on the command line");
     }
 
-    /// `--config <dir>/kob-executor.toml` from another directory reads the files next to the configuration (the setup's
+    /// `--config <dir>/kobd.toml` from another directory reads the files next to the configuration (the setup's
     /// relative `data_dir`, `tokens_path`, `[records] dir`); absolute paths, a bare file name (the launcher, run in the
     /// file's directory) and paths given as flags are left as they are.
     #[test]
@@ -675,7 +657,7 @@ mod tests {
         let _g = crate::rpc::resolver::tests::serial();
         let d = tempfile::tempdir().unwrap();
         let abs = d.path().join("elsewhere").join("tokens.json");
-        let file = d.path().join("kob-executor.toml");
+        let file = d.path().join("kobd.toml");
         let toml = |tokens: &std::path::Path| {
             format!("data_dir = \"kob-data\"\ntokens_path = {:?}\n[records]\ndir = \"logs/records\"\n", tokens.to_string_lossy())
         };
@@ -693,7 +675,7 @@ mod tests {
         assert_eq!(cfg(&["--config", &path]).tokens_path, Some(abs));
         // a bare file name: the paths as written (the launcher changes to the file's directory first)
         let mut c: IndexerConfig = toml::from_str("data_dir = \"kob-data\"\ntokens_path = \"kob-tokens.json\"").unwrap();
-        relative_to_config(&mut c, std::path::Path::new("kob-executor.toml"));
+        relative_to_config(&mut c, std::path::Path::new("kobd.toml"));
         assert_eq!((c.data_dir, c.tokens_path), (PathBuf::from("kob-data"), Some(PathBuf::from("kob-tokens.json"))));
     }
 
@@ -704,7 +686,7 @@ mod tests {
         // build_config sets the resolver state's network: not while the resolver tests use it
         let _g = crate::rpc::resolver::tests::serial();
         let parse = |toml: &str| toml::from_str::<IndexerConfig>(toml).unwrap();
-        let file = std::path::Path::new("kob-executor.toml");
+        let file = std::path::Path::new("kobd.toml");
         // a keyless index configuration is fine, with or without a [launch] table
         assert!(refuse_run_only_options(&parse(""), Some(file)).is_ok());
         let keyless = "[launch]\nrole = \"index\"\nargs = [\"--status-secs\", \"30\"]";
@@ -713,10 +695,7 @@ mod tests {
         for key in ["key_file", "pause_file", "x402_config"] {
             let c = parse(&format!("[launch]\nrole = \"index\"\n{key} = \"some-file\""));
             let e = refuse_run_only_options(&c, Some(file)).unwrap_err().to_string();
-            assert!(
-                e.starts_with("kob-executor.toml: ") && e.contains(&format!("[launch] {key} is an option of role \"run\"")),
-                "{e}"
-            );
+            assert!(e.starts_with("kobd.toml: ") && e.contains(&format!("[launch] {key} is an option of role \"run\"")), "{e}");
         }
         // fast start: refused with the way out (the sink start) named
         let e = refuse_run_only_options(&parse("fast_start = true"), Some(file)).unwrap_err().to_string();

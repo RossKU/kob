@@ -357,7 +357,7 @@ pub struct IndexerConfig {
     /// The token-logo blocklist the web app reads and reports to (`[logo_reports]`, [`crate::logo_reports`]).
     pub logo_reports: LogoReportsConfig,
     /// What the binary started without arguments runs with this file (`crate::setup`; `kobd setup` writes it into
-    /// `kob-executor.toml` next to the executable). Every command given the file as `--config` ignores the table.
+    /// `kobd.toml` next to the executable). Every command given the file as `--config` ignores the table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch: Option<LaunchConfig>,
     /// The `[receipts]` table of a v2.4 configuration (the trade receipt is retired): accepted and ignored. Every other

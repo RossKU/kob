@@ -1,14 +1,14 @@
 //! `kobd`: the KOB daemon, one binary with two roles, the **Executor** and the **Indexer**.
 //!
-//! * A **start** names no command: `kobd` runs the configuration the setup wrote (`kob-executor.toml` next to the binary, or in
-//!   `$KOB_EXECUTOR_DIR`), or the interactive setup when there is none; `kobd --executor`, `kobd --indexer` and `kobd --executor
+//! * A **start** names no command: `kobd` runs the configuration the setup wrote (`kobd.toml` next to the binary, or in
+//!   `$KOBD_DIR`), or the interactive setup when there is none; `kobd --executor`, `kobd --indexer` and `kobd --executor
 //!   --indexer` start those roles: with that configuration (which must have been set up for exactly these roles), with
 //!   `--config <file>`, or from the options alone. Every option of the roles follows the flags (`kobd --executor --dry-run`,
 //!   `kobd --indexer --listen 127.0.0.1:8091`; `kobd --help`). The Executor is the indexer, the matcher and the keepers in one
 //!   process over one store (plus the x402 facilitator with `--x402-config`; docs/ops/executor.md), on lean storage; with
 //!   `--indexer` too, over a full store with the history; the Indexer alone is the indexer and its read API (the public,
 //!   keyless role).
-//! * `setup`: the interactive first run (`kobd::setup`), which writes `kob-executor.toml` next to the binary;
+//! * `setup`: the interactive first run (`kobd::setup`), which writes `kobd.toml` next to the binary;
 //!   `setup --non-interactive` and `address-balance` are its JSON forms for a wrapper (the Android app, `kobd::app`);
 //! * `db <tool>`: the tools of a data directory's database (migrate, replay, export-orders, export-book, import-orders, rebase);
 //! * `logo-reports`: the administrator's side of the token-logo reports (list, restore, hide, export, import);
@@ -17,9 +17,6 @@
 //! * `x402`: the x402 facilitator alone (keyless; finality from the node's UTXO set);
 //! * `withdraw`: sends KAS out of the operator key over the configured node, the public resolver pair included
 //!   (`kobd::withdraw`).
-//!
-//! The removed starts `kobd run ...` and `kobd index` fail with a message that names the role flags, and the removed tools
-//! `kobd index <tool>` with one that names the command that replaced them (`kobd db <tool>`, `kobd logo-reports`).
 //!
 //! Roles that hold keys hold only the operator's hot key; the facilitator holds none.
 
@@ -32,7 +29,7 @@ use anyhow::{anyhow, bail};
 
 use crate::app::{self, AddressBalanceArgs, AppRole, AppSetup, RoleFlags};
 use crate::executor::{self, RunArgs};
-use crate::index_cli::{index_moved, run_db, run_logo_reports, DbArgs, IndexOpts, LogoReportsArgs};
+use crate::index_cli::{run_db, run_logo_reports, DbArgs, IndexOpts, LogoReportsArgs};
 use crate::logging::{self, LogOptions};
 use crate::matcher::cli::{run_keep, run_match, KeepArgs, MatchArgs};
 use crate::setup::{self, NoArgs, SetupArgs, SetupOptions, StdConsole, WrpcSetupNode};
@@ -42,18 +39,13 @@ use clap::{Parser, Subcommand};
 
 const ABOUT: &str = "kobd, the KOB daemon: the Executor (matcher, keepers, x402 facilitator) and the Indexer (full history, read API)";
 
-const START_HELP: &str = "Start: `kobd` runs kob-executor.toml of the executable's directory ($KOB_EXECUTOR_DIR when set), or the \
+const START_HELP: &str = "Start: `kobd` runs kobd.toml of the executable's directory ($KOBD_DIR when set), or the \
 setup when there is none. `kobd --executor`, `kobd --indexer` or both start those roles: with that configuration (set up for \
 exactly these roles), with --config <file>, or from the options alone; the options above follow the flags. The Indexer takes the \
 indexer's options only (no --key-file, --dry-run, ...).
 
 Commands: kobd setup, kobd address-balance, kobd withdraw, kobd db <migrate|replay|export-orders|export-book|import-orders|\
 rebase>, kobd logo-reports, kobd match, kobd keep, kobd x402 (kobd help <command>).";
-
-/// What `kobd run`, removed, answers.
-const RUN_MOVED: &str = "`kobd run` no longer starts the Executor: start it with `kobd --executor` and the same options (for \
-example `kobd --executor --config kob-executor.toml --dry-run`; with --indexer too for a full store with the history), or plain \
-`kobd` for the configuration the setup wrote";
 
 /// The log options of every start and command.
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -113,19 +105,6 @@ struct StartIndexCli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Removed: the Executor starts as `kobd --executor` (refused with a message that says so).
-    #[command(hide = true, disable_help_flag = true)]
-    Run {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        rest: Vec<String>,
-    },
-    /// Removed: the database tools are `kobd db <tool>`, the logo reports `kobd logo-reports`, the Indexer starts as
-    /// `kobd --indexer` (refused with a message that names the new command).
-    #[command(hide = true, disable_help_flag = true)]
-    Index {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        rest: Vec<String>,
-    },
     /// The database of a data directory: migrate (bring an earlier build's store to this build's layout), replay (rebuild it
     /// from the record log), export-orders, export-book, import-orders, rebase.
     Db(DbArgs),
@@ -140,7 +119,7 @@ enum Cmd {
     /// The x402 facilitator alone: GET /supported, POST /verify, POST /settle, GET /health, GET /metrics.
     X402(X402Args),
     /// First run: choose the roles (Executor, Indexer, or both), check the node, make the operator key, wait for funds, write
-    /// kob-executor.toml next to the binary, start.
+    /// kobd.toml next to the binary, start.
     Setup(SetupArgs),
     /// The operator's address and its plain balance from the configured node, as one JSON object (never the secret).
     AddressBalance(AddressBalanceArgs),
@@ -246,12 +225,7 @@ fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow:
         attach_log(&cli.log, config)?;
     }
     match cli.cmd {
-        Cmd::Run { .. } => bail!(RUN_MOVED),
-        Cmd::Index { rest } => bail!(index_moved(&rest)),
         Cmd::Setup(a) => {
-            if a.role.is_some() {
-                bail!("--role is gone: name the roles with --executor, --indexer or both (`kobd setup --executor`)");
-            }
             let dir = match &a.dir {
                 Some(d) => d.clone(),
                 None => setup::home_dir()?,
@@ -278,7 +252,7 @@ fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow:
     }
 }
 
-/// A start: the configuration (`--config`, else `kob-executor.toml` of the folder) or the options alone. `args` are the words of
+/// A start: the configuration (`--config`, else `kobd.toml` of the folder) or the options alone. `args` are the words of
 /// the command line without the program name, `cli` their parse.
 fn start_roles(rt: &tokio::runtime::Runtime, program: OsString, args: &[OsString], cli: &StartCli) -> anyhow::Result<()> {
     let want = cli.roles.role();
@@ -487,7 +461,10 @@ fn launch(rt: &tokio::runtime::Runtime, program: OsString, cfg: &Path, args: &[O
             println!("Read API: http://{}/v1/health", c.api.listen);
         }
     }
-    println!("Stop it with Ctrl+C. A status line follows every minute.");
+    match start.opts().status_every() {
+        Some(every) => println!("Stop it with Ctrl+C. A status line follows every {} s.", every.as_secs()),
+        None => println!("Stop it with Ctrl+C."),
+    }
     println!();
     attach_log(&log, start.opts().config.as_deref())?;
     rt.block_on(dispatch(start))

@@ -52,12 +52,12 @@ you and the chain; `docs/ops/executor-quickstart.md`, section 2), or the public 
 (`rpc_url = "resolver"`: always a cross-checked pair on two hosts; `docs/ops/executor.md`, Part C, *Node*).
 
 **Setup.** Run `kobd setup` in the folder of the binary and answer: the node (public nodes, or your own), **role:
-Indexer**, the data directory (`kob-data`). There is no key question for this role. It writes `kob-executor.toml` (and on
+Indexer**, the data directory (`kob-data`). There is no key question for this role. It writes `kobd.toml` (and on
 testnet-10 `kob-tokens.json`, the supported token programs with no token entries: every token of a supported program is indexed
 and listed by the API, and none is named; the web app's market list shows the tokens that have a ticker or declared decimals and keeps the
 others behind "Show N token(s) without a name"). **The setup starts the executor when it finishes, with the default `[api]`** (loopback
 `127.0.0.1:8090`, no trusted proxy, no CORS): stop it (close its window, or Ctrl+C) before you edit the file, and start it again afterwards,
-or the settings below are not read. Then add the read API settings for the tunnel at the end of `kob-executor.toml`:
+or the settings below are not read. Then add the read API settings for the tunnel at the end of `kobd.toml`:
 
 ```toml
 [api]
@@ -100,7 +100,7 @@ resolver that took about 2.4 hours for 36 hours of history (about 14.6 s of chai
 
 `fast_start` is for the Executor (`kobd --executor`, which trades on a second store while it indexes the history); the Indexer
 (`kobd --indexer`) refuses it (`fast_start = true` or `--fast-start` stop the start with a message). The fast route of a read server is
-`start = "sink"` (top level of `kob-executor.toml`, or `--start sink`; on a data directory that is still empty): it follows the chain
+`start = "sink"` (top level of `kobd.toml`, or `--start sink`; on a data directory that is still empty): it follows the chain
 within a second of the start and lists the orders created since. The orders older than the start are **not** in that store, for
 good: `/v1/health` reports `book_complete: false` and `history_from_daa` (where its history begins) and the status line says so, so
 a chart server that starts at the sink has only the books and trades from its start on. A public server that should show the whole
@@ -198,7 +198,7 @@ change makes a short TTL possible: cache only those two paths, keep the query st
 `limit`), and a TTL of a few seconds.
 
 **Token-logo reports.** The web app shows each token's logo from the address its creator gave, in the visitor's browser; KOB stores
-no image. To let visitors report a logo (the first report hides it for everyone until you restore it) add to `kob-executor.toml`:
+no image. To let visitors report a logo (the first report hides it for everyone until you restore it) add to `kobd.toml`:
 
 ```toml
 [logo_reports]
@@ -210,7 +210,7 @@ enabled = true
 
 The two routes (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`) then sit behind the same tunnel; the per-client limit uses the
 visitor address of this section, so keep `trusted_proxies` and `client_ip_header` right. You review with
-`kobd logo-reports --config kob-executor.toml list | restore | hide` in the server's folder (`executor.md`, Part B). Set the GitHub repository variable
+`kobd logo-reports --config kobd.toml list | restore | hide` in the server's folder (`executor.md`, Part B). Set the GitHub repository variable
 `KOB_LOGO_REPORT_URL` to `https://chart.example.org/v1/logo-reports` so the Issue form feeds the same list.
 
 **Abuse, in the API and at Cloudflare.** The API limits each client on its own: 20 requests per second with a burst of 60 per
@@ -264,7 +264,7 @@ stretch stay invisible (Part B, 7.4). To keep the history whole after a long out
 
 ## 5. What to watch
 
-* The status line in the log every minute: `status: indexer following, caught up (N DAA behind the node), ...`; with public
+* The status line in the log every 10 seconds (`--status-secs`): `status: indexer following, caught up (N DAA behind the node), ...`; with public
   nodes it ends with both hosts and their state. `WARNING:` names what needs you.
 * `GET /v1/health` (locally `http://127.0.0.1:8090/v1/health`, publicly through the tunnel): `state` (`following`,
   `catching_up`, `node_unavailable`, `gap`), `lag_seconds`, `alarms`, `book_complete`, and while catching up `catch_up` (pace and ETA).
@@ -303,12 +303,12 @@ database is brought up to date in place, migrated offline with `kobd db migrate`
    that start (7 seconds on a 1.6 GB copy). Check `/v1/health` again: `version`, `commit`, `payload_version`, `state = following`.
 4. **Rebuild beside the running one, then switch.** When the release needs a rebuild (`kobd db replay`: 44 minutes per 1.2 GB of log
    here, offline, no API), or you want to see the new version work before the public does:
-   1. Make a second folder `B` (for example `C:\kob-b`) from the new archive. Copy the running folder's `kob-executor.toml` into it and
+   1. Make a second folder `B` (for example `C:\kob-b`) from the new archive. Copy the running folder's `kobd.toml` into it and
       change only the port: `listen = "127.0.0.1:8091"`. `data_dir = "kob-data"` is relative to the file, so `B` has its own data.
-   2. Logo reports (only with `[logo_reports]` on): they are not in the record log. Run `kobd logo-reports --config kob-executor.toml
+   2. Logo reports (only with `[logo_reports]` on): they are not in the record log. Run `kobd logo-reports --config kobd.toml
       export > logo-reports.json` in the running folder, and `kobd logo-reports import logo-reports.json` in `B` after the
       replay (`--onto-database` keeps them). Copy the record log: the whole `kob-data/records/` folder of the running indexer into `B/kob-data/records/` (a half-written last
-      frame in the copy is dropped when the log is opened). Then run `kobd db replay --config kob-executor.toml` in `B`: it
+      frame in the copy is dropped when the log is opened). Then run `kobd db replay --config kobd.toml` in `B`: it
       builds a new database from the log under the new program's rules and prints a summary at the end (rejected placements by
       reason). Faster, when the release does not change how the database is derived: put a `VACUUM INTO` copy of the running
       database (section 4) in as `B/kob-data/index.sqlite3` and run `kobd db replay --onto-database` instead (`executor.md`, 8).

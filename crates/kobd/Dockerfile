@@ -10,7 +10,7 @@
 # be a secret out of it; it needs BuildKit (the default builder since Docker 23.0).
 #
 # The volume /data holds the configuration, the operator's key file (mode 0600, owned by uid 10001) and the data directory.
-# KOB_EXECUTOR_DIR=/data makes it the directory of `setup` and of the start without arguments (the default command), which
+# KOBD_DIR=/data makes it the directory of `setup` and of the start without arguments (the default command), which
 # runs the configuration `setup` wrote there, whatever role it chose. `--network host` reaches the node's loopback wRPC
 # (127.0.0.1:18110 / 18210) and keeps the read API on the host's loopback. No image is published: build it from the commit you
 # verified. Base images are pinned by exact version tag.
@@ -44,7 +44,7 @@ LABEL org.opencontainers.image.title="kobd" \
 RUN useradd --system --uid 10001 --user-group --home-dir /data --no-create-home --shell /usr/sbin/nologin kob \
  && install -d -o kob -g kob -m 0700 /data
 COPY --from=build /usr/local/bin/kobd /usr/local/bin/kobd
-ENV KOB_EXECUTOR_DIR=/data
+ENV KOBD_DIR=/data
 USER 10001:10001
 WORKDIR /data
 VOLUME ["/data"]

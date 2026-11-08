@@ -3,7 +3,7 @@
 //!
 //! Started without arguments (or with role flags only), the binary looks for [`CONFIG_FILE`] in its own directory
 //! ([`no_args_start`]). With one, it starts what the file's `[launch]` table says ([`launch_args`]): exactly `kobd --executor
-//! --config kob-executor.toml ...` (or `--indexer`) in the file's directory, printed before it starts. Without one, and on a
+//! --config kobd.toml ...` (or `--indexer`) in the file's directory, printed before it starts. Without one, and on a
 //! terminal, it runs the interactive setup ([`run_setup`]), which writes the file and then starts the same way; a service
 //! starts it with the one line the setup prints ([`service_line`]).
 //!
@@ -29,11 +29,11 @@ use crate::matcher::run::kas_text;
 use crate::matcher::wallet::HotKey;
 
 /// The configuration a start without arguments reads, next to the executable.
-pub const CONFIG_FILE: &str = "kob-executor.toml";
+pub const CONFIG_FILE: &str = "kobd.toml";
 /// The operator key file the setup generates, next to the configuration.
 pub const KEY_FILE: &str = "kob-operator.key";
 /// The log file the interactive setup configures, relative to the configuration.
-pub const LOG_FILE: &str = "kob-executor.log";
+pub const LOG_FILE: &str = "kobd.log";
 /// The default data directory (database and record log), relative to the configuration.
 pub const DATA_DIR: &str = "kob-data";
 /// The token-program list a build without a pinned registry gets (testnet-10, [`program_registry`]).
@@ -47,7 +47,7 @@ pub const RECOMMENDED_FUNDS_KAS: u64 = 200;
 #[derive(clap::Args, Debug, Clone)]
 pub struct SetupArgs {
     /// Directory of the configuration, the key file and the data directory. Default: the one a start without arguments
-    /// reads, `$KOB_EXECUTOR_DIR` or else the executable's own directory.
+    /// reads, `$KOBD_DIR` or else the executable's own directory.
     #[arg(long)]
     pub dir: Option<PathBuf>,
     /// Write the configuration and exit instead of starting the executor.
@@ -65,9 +65,6 @@ pub struct SetupArgs {
     /// API; no key) or both in one process. Without a flag the interactive setup asks.
     #[command(flatten)]
     pub roles: crate::app::RoleFlags,
-    /// The removed spelling of the role flags (`--role match|index|index,match`): refused with a message naming the role flags.
-    #[arg(long, hide = true)]
-    pub role: Option<String>,
     /// Non-interactive: make the operator key when the directory has none (an existing key file is never replaced).
     #[arg(long, requires = "non_interactive")]
     pub new_key: bool,
@@ -106,9 +103,9 @@ pub fn no_args_start(dir: &Path, interactive: bool) -> NoArgs {
 
 /// Environment variable naming the directory a start without arguments and `setup` use instead of the executable's own (a
 /// container's volume, where the executable's directory is part of the read-only image).
-pub const DIR_ENV: &str = "KOB_EXECUTOR_DIR";
+pub const DIR_ENV: &str = "KOBD_DIR";
 
-/// The directory of the configuration: `$KOB_EXECUTOR_DIR` when set, else the executable's directory.
+/// The directory of the configuration: `$KOBD_DIR` when set, else the executable's directory.
 pub fn home_dir() -> Result<PathBuf> {
     home_dir_from(std::env::var_os(DIR_ENV))
 }
@@ -199,7 +196,7 @@ pub fn command_line(launch: &Launch, program: &str) -> String {
 }
 
 /// The one line a service (or a terminal anywhere) starts the configuration of `dir` with: the program and the role flags, plus
-/// `--config <file>` when `dir` is not the directory the program reads by itself (`$KOB_EXECUTOR_DIR`, else its own).
+/// `--config <file>` when `dir` is not the directory the program reads by itself (`$KOBD_DIR`, else its own).
 pub fn service_line(dir: &Path, roles: AppRole, program: &str) -> String {
     let mut words = vec![shell_word(program)];
     words.extend(roles.flags().iter().map(|f| f.to_string()));
@@ -1005,7 +1002,7 @@ mod tests {
         let cl = command_line(&l, "kobd.exe");
         assert!(
             cl.ends_with(
-                "\nkobd.exe --executor --config kob-executor.toml --key-file kob-operator.key --pause-file kob-data/pause \
+                "\nkobd.exe --executor --config kobd.toml --key-file kob-operator.key --pause-file kob-data/pause \
                  --sweep-own-strays"
             ),
             "{cl}"
@@ -1140,23 +1137,20 @@ mod tests {
             let (head, body) = t.split_once("\n\n").unwrap();
             let flags = role.flags().join(" ");
             assert!(head.contains(&format!("# Roles: {}.", role.display())), "{head}");
-            assert!(head.contains(&format!("(`kobd {flags} --config kob-executor.toml")), "{head}");
+            assert!(head.contains(&format!("(`kobd {flags} --config kobd.toml")), "{head}");
             body.to_string()
         };
         let head = "network = \"testnet-10\"\nrpc_url = \"resolver\"\ndata_dir = \"kob-data\"\ntokens_path = \"kob-tokens.json\"\n";
         let run_launch = "\n[launch]\nrole = \"run\"\nkey_file = \"kob-operator.key\"\npause_file = \"kob-data/pause\"\nargs = []\n";
         // the Executor: lean storage (no record log), fast start
-        assert_eq!(
-            keys(AppRole::Executor),
-            format!("{head}fast_start = true\nlean = true\nlog_file = \"kob-executor.log\"\n{run_launch}")
-        );
+        assert_eq!(keys(AppRole::Executor), format!("{head}fast_start = true\nlean = true\nlog_file = \"kobd.log\"\n{run_launch}"));
         // the Indexer: nothing of the Executor
         assert_eq!(keys(AppRole::Indexer), format!("{head}\n[launch]\nrole = \"index\"\nargs = []\n"));
         // Executor and Indexer: the Executor's launch (run, key, pause file, fast start, log file) over an archive store (lean = false;
         // the record log is on by default)
         assert_eq!(
             keys(AppRole::ExecutorIndexer),
-            format!("{head}fast_start = true\nlean = false\nlog_file = \"kob-executor.log\"\n{run_launch}")
+            format!("{head}fast_start = true\nlean = false\nlog_file = \"kobd.log\"\n{run_launch}")
         );
     }
 
@@ -1191,18 +1185,6 @@ mod tests {
         let (l, i) = built(AppRole::Indexer);
         assert_eq!(l.args, ["--config", CONFIG_FILE]);
         assert!(!i.lean && i.records.enabled && !i.fast_start);
-    }
-
-    #[test]
-    fn the_removed_role_option_is_still_parsed_to_be_refused() {
-        use clap::Parser as _;
-        #[derive(clap::Parser)]
-        struct Cli {
-            #[command(flatten)]
-            setup: SetupArgs,
-        }
-        let c = Cli::try_parse_from(["x", "--non-interactive", "--node", "resolver", "--role", "index"]).unwrap();
-        assert_eq!(c.setup.role.as_deref(), Some("index"), "the caller refuses it with the role flags named");
     }
 
     /// The third choice of the dialogue: the warning is shown, the key and the funding come as for the matcher, and the file

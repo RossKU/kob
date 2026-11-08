@@ -219,7 +219,7 @@ pub fn operator_address(cfg_path: &Path) -> Option<String> {
 /// `kobd address-balance`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct AddressBalanceArgs {
-    /// Directory of `kob-executor.toml` and the key file. Default: `$KOB_EXECUTOR_DIR` or the executable's own directory.
+    /// Directory of `kobd.toml` and the key file. Default: `$KOBD_DIR` or the executable's own directory.
     #[arg(long)]
     pub dir: Option<PathBuf>,
 }

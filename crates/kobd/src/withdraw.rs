@@ -45,7 +45,7 @@ pub struct WithdrawArgs {
     /// KAS to send (`2.5`, `2.5KAS`), or `all`: everything the key holds, minus the fee.
     #[arg(long)]
     pub amount: String,
-    /// Directory of `kob-executor.toml` and the key file. Default: `$KOB_EXECUTOR_DIR` or the executable's own directory.
+    /// Directory of `kobd.toml` and the key file. Default: `$KOBD_DIR` or the executable's own directory.
     #[arg(long, conflicts_with = "config")]
     pub dir: Option<PathBuf>,
     /// The configuration file, instead of `--dir` (its directory is the base of its relative paths).

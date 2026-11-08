@@ -1,6 +1,6 @@
 # KOB executor: operations guide
 
-`kobd` (the KOB daemon, formerly `kob-executor`; its files keep their names: `kob-executor.toml`, `kob-executor.log`, `kob-operator.key`; the Cargo package is `kobd`, in `crates/kobd`) is one binary with two roles, the **Executor** and the **Indexer**, started with role flags. It follows a Kaspa node's selected chain,
+`kobd` (the KOB daemon; its files are `kobd.toml`, `kobd.log` and `kob-operator.key`, in its own folder or `$KOBD_DIR`; an older build's `kob-executor.toml` and `kob-executor.log` are not read, rename them; the Cargo package is `kobd`, in `crates/kobd`) is one binary with two roles, the **Executor** and the **Indexer**, started with role flags. It follows a Kaspa node's selected chain,
 indexes every KOB order into a reorg-safe database, serves a read API (REST +
 WebSocket), and, with the operator's hot key, matches crossing orders (arming and triggering stops inside its batches) and keeps them (refund,
 kill, close). The normative rules are `docs/spec/matcher.md`, `docs/spec/order-types.md` and
@@ -21,7 +21,7 @@ indexed, listed, matched and kept like their KCC-20 twins; a book is one family'
 | `kobd logo-reports` | the token-logo reports of a data directory (`list`, `restore`, `hide`, `export`, `import`) | none | the data directory |
 | `match`, `keep` | matcher, keepers | operator hot key | a book snapshot file (`--book-file`) |
 | `x402` | x402 facilitator (verify, settle) | none | no book; finality from the node's UTXO set |
-| `setup` | the interactive first run: writes `kob-executor.toml` next to the binary, then starts it | makes or names the hot key | - |
+| `setup` | the interactive first run: writes `kobd.toml` next to the binary, then starts it | makes or names the hot key | - |
 
 `kobd --executor --x402-config <file>` adds the x402 facilitator to the one process (A.6).
 
@@ -40,8 +40,8 @@ arguments (a double click on Windows): the setup chooses the node (public nodes 
 local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the roles. The commands of a source build are in
 `docs/ops/run-from-source.md`; the step-by-step page is `docs/ops/executor-quickstart.md`.
 
-* **Without arguments** the binary looks for `kob-executor.toml` in its own directory. With one, it runs the file's
-  `[launch]` role exactly as `kobd --executor --config kob-executor.toml [--key-file ...] [--pause-file ...]
+* **Without arguments** the binary looks for `kobd.toml` in its own directory. With one, it runs the file's
+  `[launch]` role exactly as `kobd --executor --config kobd.toml [--key-file ...] [--pause-file ...]
   [--x402-config ...] [args ...]` (or `--indexer`) in that directory, and prints that command line first. Without one, on a terminal, it
   runs `kobd setup`; with no terminal (a service, a pipe) it refuses and says why. When a start without
   arguments fails on a terminal, the window waits for Enter before it closes.
@@ -57,7 +57,7 @@ local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the role
   declared decimals behind "Show N token(s) without a name"). This is the no-curation policy, not a convenience: KOB lists
   no token by name and refuses none for what it is, exactly as the mainnet build lists with its pinned registry; the mainnet
   token entries are left out because they name mainnet covenant ids (facts that do not exist on testnet-10).
-* **`kob-executor.toml`** is an ordinary `--config` file (B 4) plus the `[launch]` table (`role = "run" | "index"`,
+* **`kobd.toml`** is an ordinary `--config` file (B 4) plus the `[launch]` table (`role = "run" | "index"`,
   `key_file`, `pause_file`, `x402_config`, `args`); other commands given it as `--config` ignore `[launch]`. Paths are
   relative to the file.
 * **The roles** are the **Executor** (the matcher and the keepers, with a key; lean storage and the fast start) and the **Indexer**
@@ -74,12 +74,12 @@ local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the role
   `kobd` runs it whatever its roles. `/v1/health` names the roles of the process (`roles`: `["executor"]` for the Executor (lean store),
   `["executor", "indexer"]` for the Executor and Indexer, `["indexer"]` for the Indexer) and the metrics carry
   `kob_role{role="executor"|"indexer"}` (1 for each role that runs); `lean` tells whether the history is kept.
-* **Status line**: both roles log `status: ...` every `--status-secs` (60; 0 off): the indexer's state and lag,
+* **Status line**: both roles log `status: ...` every `--status-secs` (10, as kaspad; 0 off): the indexer's state and lag,
   the transactions sent and final, the profit of the final ones, the funds, and a `WARNING:` list (node not synced or
   unreachable, paused, waiting for the indexer, funds below `--low-funds-kas`, rejections).
 * **Nodes**: the setup offers public Kaspa nodes (the default, `rpc_url = "resolver"`: a cross-checked pair, Part C,
   *Node*) or the operator's own node (recommended; required for Miner Mode).
-* `KOB_EXECUTOR_DIR` names another directory than the executable's for both (`crates/kobd/Dockerfile` sets `/data`, its volume).
+* `KOBD_DIR` names another directory than the executable's for both (`crates/kobd/Dockerfile` sets `/data`, its volume).
 * Nothing connects anywhere but to the configured node: no telemetry, no fee, no project server, no auto-update.
 
 ---
@@ -283,7 +283,7 @@ matcher and keeper options (C, "Running"):
 | Flag | Default | Meaning |
 |---|---|---|
 | `--key-file` | `$KOB_OPERATOR_KEY_FILE` | operator key file (C, "Keys and funds") |
-| `--status-secs` | 60 | log a one-line status (indexer lag, transactions, profit, funds, warnings) this often; 0 = never (also on `--indexer`) |
+| `--status-secs` | 10 | log a one-line status (indexer lag, transactions, profit, funds, warnings) this often; 0 = never (also on `--indexer`) |
 | `--log-file`, `--log-max-mb`, `--log-files` | none (console only), 10, 5 | every command: also write the log to this file (`log_file`, `log_max_mb`, `log_files` of the configuration; `$KOB_LOG_FILE`), rotated by size to `<file>.1`, `.2`, ... keeping that many; the console shows the log only while it is a terminal, and ANSI colour codes only there (never in the file, never with `NO_COLOR`). Quick start, *Logs* |
 | `--no-match`, `--no-keep` | off | switch a role off (not both: that is `kobd --indexer`) |
 | `--max-book-lag-daa` | `max_lag_secs` x 10 (300) | plan nothing while the book is this far behind the node; 0 = never wait |
@@ -1369,11 +1369,11 @@ serves the list of hidden ones (`POST /v1/logo-reports`, `GET /v1/logo-blocklist
 in 3.19 and 3.20). The first report of a token hides its logo at once; you review it:
 
 ```
-kobd logo-reports --config kob-executor.toml list              # hidden ones not yet reviewed first (add --json)
-kobd logo-reports --config kob-executor.toml restore <covenant id>         # shown again; new reports only recorded for cooldown_secs
-kobd logo-reports --config kob-executor.toml hide <covenant id>            # hidden for good (restore --force undoes it)
-kobd logo-reports --config kob-executor.toml export > logo-reports.json         # before a `kobd db replay` ...
-kobd logo-reports --config kob-executor.toml import logo-reports.json           # ... and after it (an empty store only)
+kobd logo-reports --config kobd.toml list              # hidden ones not yet reviewed first (add --json)
+kobd logo-reports --config kobd.toml restore <covenant id>         # shown again; new reports only recorded for cooldown_secs
+kobd logo-reports --config kobd.toml hide <covenant id>            # hidden for good (restore --force undoes it)
+kobd logo-reports --config kobd.toml export > logo-reports.json         # before a `kobd db replay` ...
+kobd logo-reports --config kobd.toml import logo-reports.json           # ... and after it (an empty store only)
 ```
 
 These open the database next to a running executor (a short write, like the API's own; no lock, and there is no administrative route

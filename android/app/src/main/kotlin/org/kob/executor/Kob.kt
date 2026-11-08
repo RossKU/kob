@@ -8,7 +8,7 @@ import java.net.URL
 
 /** Where the executor binary and its files are, and how to run it. */
 object Kob {
-    /** The executor's read API (its default listen address, `[api]` of kob-executor.toml). */
+    /** The executor's read API (its default listen address, `[api]` of kobd.toml). */
     const val API = "http://127.0.0.1:8090"
 
     /** `/v1/health` of the running executor; throws while it does not answer. Never call it on the UI thread. */
@@ -35,13 +35,13 @@ object Kob {
     /** The binary is shipped as a native library so that it is executable (W^X: not from the data directory). */
     fun binary(ctx: Context): File = File(ctx.applicationInfo.nativeLibraryDir, "libkobexecutor.so")
 
-    /** The executor with `args`; without arguments it runs kob-executor.toml of [dir] (what the service does). */
+    /** The executor with `args`; without arguments it runs kobd.toml of [dir] (what the service does). */
     fun command(ctx: Context, vararg args: String): ProcessBuilder {
         val tmp = File(ctx.cacheDir, "tmp").also { it.mkdirs() }
         val pb = ProcessBuilder(listOf(binary(ctx).path) + args)
         pb.directory(dir(ctx))
         pb.environment().apply {
-            put("KOB_EXECUTOR_DIR", dir(ctx).path)
+            put("KOBD_DIR", dir(ctx).path)
             put("HOME", ctx.filesDir.path)
             put("TMPDIR", tmp.path)
             put("NO_COLOR", "1")

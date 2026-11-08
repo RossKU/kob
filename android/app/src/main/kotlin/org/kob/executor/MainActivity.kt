@@ -200,7 +200,7 @@ class MainActivity : Activity() {
 
     // ---- settings and setup ----
 
-    private fun configured() = File(Kob.dir(this), "kob-executor.toml").isFile
+    private fun configured() = File(Kob.dir(this), "kobd.toml").isFile
 
     private fun role() = prefs.getString("role", "match") ?: "match"
 

@@ -1088,7 +1088,7 @@ held. This is invisible to clients except as lower latency: it adds no header an
 
 ## 6. The `[api]` configuration
 
-The `[api]` table of the executor's configuration file (`kob-executor.toml`; `kobd --indexer --config ...`), with the nested
+The `[api]` table of the executor's configuration file (`kobd.toml`; `kobd --indexer --config ...`), with the nested
 `[api.rate_limit]` table. All keys are optional; an unknown key in either table is refused at start. `--listen` and `--no-api`
 override `listen` and `enabled`. Defaults are those of `config.rs`.
 

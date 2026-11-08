@@ -17,7 +17,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * Runs `kobd` (the roles of kob-executor.toml) as a foreground service: a persistent notification and a wake lock
+ * Runs `kobd` (the roles of kobd.toml) as a foreground service: a persistent notification and a wake lock
  * while it runs. If the process exits it is started again after a growing pause; the user stops it with ACTION_STOP.
  * Before the first start of a service run, a database of an earlier build is brought to the current schema
  * (`kobd db migrate`); if that fails, the service stops and says why instead of restarting. The previous store the update
@@ -138,7 +138,7 @@ class ExecutorService : Service() {
             Kob.killStale(this)
             val began = SystemClock.elapsedRealtime()
             try {
-                // no arguments: kob-executor.toml of KOB_EXECUTOR_DIR, the same as `kobd --executor|--indexer --config ...`
+                // no arguments: kobd.toml of KOBD_DIR, the same as `kobd --executor|--indexer --config ...`
                 val p = Kob.command(this).redirectErrorStream(true).start()
                 process = p
                 p.outputStream.close()
@@ -204,7 +204,7 @@ class ExecutorService : Service() {
 
     /**
      * Brings a database written by an earlier build (the v0.1.0 app wrote schema 5) to the schema this kobd reads:
-     * `kobd db --config <dir>/kob-executor.toml migrate`. It builds the new store beside the old one, verifies it row by row
+     * `kobd db --config <dir>/kobd.toml migrate`. It builds the new store beside the old one, verifies it row by row
      * and only then swaps it in (the old file stays as index.sqlite3.before-migrate until [dropOldStoreOnceProven] deletes it);
      * the key file is not touched. A store of the current schema is left as it is (a moment); without a store (a first start)
      * nothing runs. Returns null when the start may go on, else what failed and what to do.
@@ -227,7 +227,7 @@ class ExecutorService : Service() {
         var error: String? = null
         var last = ""
         val code = try {
-            val cfg = File(Kob.dir(this), "kob-executor.toml").path
+            val cfg = File(Kob.dir(this), "kobd.toml").path
             val p = Kob.command(this, "db", "--config", cfg, "migrate").redirectErrorStream(true).start()
             process = p
             p.outputStream.close()

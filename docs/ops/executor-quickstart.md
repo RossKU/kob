@@ -53,7 +53,7 @@ mainnet release exists:
 A binary serves exactly one network (the deployment build, `docs/ops/release.md`): the mainnet binary refuses a testnet
 node and the other way round. Start on testnet-10 if you have never run one.
 
-The program is called `kobd` (the KOB daemon; before it was `kob-executor`). Its files keep their names: `kob-executor.toml`, `kob-executor.log`, `kob-operator.key`.
+The program is called `kobd` (the KOB daemon). Its files are `kobd.toml` (the configuration), `kobd.log` (the log) and `kob-operator.key` (the hot key); the folder is the program's own, or `$KOBD_DIR`. A folder of an older build, whose files were named `kob-executor.toml` and `kob-executor.log`, is not read: rename the two files (and `KOB_EXECUTOR_DIR` to `KOBD_DIR`).
 
 Each `kobd-...` archive holds `kobd` (the daemon: the Executor and the Indexer roles), `kob` (the command-line client), this page, `LICENSE` and a
 `SHA256SUMS` of its files; the release also lists a `SHA256SUMS` of every archive and of the APK. The command line alone is also published as `kob-<version>-<network>-<target>` (the `kob` binary, its README, `LICENSE` and `NOTICE`). Check the archive you downloaded against
@@ -141,7 +141,7 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
    with the balance (section 5).
 7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6).
 
-It then writes `kob-executor.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
+It then writes `kobd.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
 testnet-10; the mainnet binary carries its pinned registry), prints the line that starts it (for example
 `C:\kob\kobd.exe --executor`, section 6), and asks `Start the executor now? [Y/n]`: Enter starts it, `n` leaves the files
 and ends the setup (`setup --no-start` does not ask). From then on, a double-click runs that configuration directly. If another kobd already runs from the same folder,
@@ -151,7 +151,7 @@ the start is refused at once with a message naming it, before anything else is p
 decision: the registry is a pinned snapshot of facts and of the supported programs, no token is listed by name and none is
 refused for what it is (curation belongs to the community token lists a user chooses). `kob-tokens.json` is that program
 list for testnet-10 (with no token entries: the registry's entries name mainnet tokens); the mainnet binary lists the same way
-from the registry it embeds. A list of your own (`tokens_path` in `kob-executor.toml`) is your policy, not KOB's.
+from the registry it embeds. A list of your own (`tokens_path` in `kobd.toml`) is your policy, not KOB's.
 
 **The key is a hot key.** The executor signs with it unattended. Keep only working capital on it (a few days of fees and
 carriers), never savings. Back up `kob-operator.key` somewhere only you can read: whoever has the file has the funds, and
@@ -179,7 +179,7 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
   keepers plan nothing until it is close to the tip. The banner at the start says which of the two applies.
 * `WARNING:` names what needs you: the node not synced or unreachable, funds below 100 KAS (`--low-funds-kas`; the warning
   names the address to send KAS to; it is logged at the start, then at most every 10 minutes or when the balance changes by a
-  quarter, and the status line shows the funds every minute; the executor trades with less than 100 KAS, the number is an alert
+  quarter, and the status line shows the funds every 10 seconds; the executor trades with less than 100 KAS, the number is an alert
   threshold), the pause file present, transactions the node rejected.
 * The read API answers on `http://127.0.0.1:8090/v1/health` (loopback only).
 * For real monitoring use the metrics file (`--metrics-file`, `docs/ops/executor.md`, Part C *Monitoring*).
@@ -188,7 +188,7 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
   with a wrong clock. The executor does not check the clock.
 * **Port 8090 busy.** The read API listens on `127.0.0.1:8090` by default. If another program (or a second KOB executor for
   another network) holds the port, the executor still runs but logs `API server stopped: ...` and serves no API, although the
-  start banner printed the address. Change `[api] listen` in `kob-executor.toml` (or `--listen`) and restart.
+  start banner printed the address. Change `[api] listen` in `kobd.toml` (or `--listen`) and restart.
 
 **What it costs to run.** Measured and estimated figures for sizing a machine or a metered line (`docs/ops/executor.md`, Part B 3 and A.1.2):
 
@@ -212,7 +212,7 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   time to exit at once. The database survives either way; the next start continues where it stopped. A start after more
   than the node's retention (7 days with the flags above) continues from the node's pruning point on its own and says so
   (`gaps` in `/v1/health`, the log; `docs/ops/executor.md`, Part B 7.4).
-* **Address and balance**: `kobd address-balance` (in the folder of `kob-executor.toml`, or with `--dir <folder>`)
+* **Address and balance**: `kobd address-balance` (in the folder of `kobd.toml`, or with `--dir <folder>`)
   prints one JSON object: the key's address, the network and its plain balance read from the configured node
   (`balance_sompi`, `balance_kas`; when the node cannot be read, `balance_sompi` is `null` and `error` says why). It never
   prints the secret and can run while the executor runs. Its sibling for scripts and the Android app is `kobd setup
@@ -235,7 +235,7 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   kobd withdraw --to <address> --amount 25.5        # or --amount all
   ```
 
-  It uses the executor's own node connection from `kob-executor.toml`, so it works with the default public nodes (wss,
+  It uses the executor's own node connection from `kobd.toml`, so it works with the default public nodes (wss,
   through the resolvers) as well as with your own node, and needs no other tool. It lists the key's plain KAS coins at that
   node and builds one payment from the largest coins first (at most 50 inputs). `--amount all` sends everything those coins
   hold minus the fee; if more coins are left it says so, and you run it again once the first is accepted. It shows the
@@ -254,13 +254,13 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
 
 **Back up, and move to another computer.** The only thing you cannot rebuild is the key: back up `kob-operator.key` (a plain
 64-hex-character private key; there is no seed phrase) where only you can read it. The configuration is a text file
-(`kob-executor.toml`) that setup writes again in a minute. The database is not precious: an Executor on lean storage rebuilds it
+(`kobd.toml`) that setup writes again in a minute. The database is not precious: an Executor on lean storage rebuilds it
 from the node within seconds on a start with an empty data directory (fast start). To move an executor:
 
 1. **Stop the old one first** (section 7 shows how). Two executors on one key spend each other's coins and waste fees; the writer
    lock protects one data directory, not a key.
 2. Copy the program folder without `kob-data` (or run the setup on the new machine and name the copied key file when it asks).
-   The paths in `kob-executor.toml` are relative to the file; check `rpc_url` (an own node's address differs per machine).
+   The paths in `kobd.toml` are relative to the file; check `rpc_url` (an own node's address differs per machine).
 3. On Linux the key file must be readable by its owner only (`chmod 600 kob-operator.key`): the executor refuses a key file that
    group or others can read. On Windows a copy takes the permissions of the folder it lands in: check that only your account can read the
    key (the setup made it so).
@@ -270,22 +270,22 @@ from the node within seconds on a start with an empty data directory (fast start
 
 The setup printed the line that starts it, for example `C:\kob\kobd.exe --executor` (`--indexer` for the Indexer, both
 flags for both roles; it adds `--config <file>` when the configuration is not in the program's folder). The program reads
-`kob-executor.toml` from its own folder, and relative paths are relative to that file. To change options, edit
-`kob-executor.toml` (every key of `docs/ops/executor.md`, Part B 4; `[launch] args` takes further start options, e.g.
+`kobd.toml` from its own folder, and relative paths are relative to that file. To change options, edit
+`kobd.toml` (every key of `docs/ops/executor.md`, Part B 4; `[launch] args` takes further start options, e.g.
 `args = ["--sweep-own-strays"]`), add them after the flags, or run the setup again (`kobd setup`).
 
 **Windows**: a Task Scheduler task "At startup" (run whether the user is logged on or not, as the account that owns the
 key file) with program `C:\kob\kobd.exe`, arguments `--executor` and *Start in* `C:\kob`. Set "If the task fails, restart
 every 1 minute". A task has no
-console: its log is the file `kob-executor.log` the setup configured (see *Logs* below); read it with
-`Get-Content C:\kob\kob-executor.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
+console: its log is the file `kobd.log` the setup configured (see *Logs* below); read it with
+`Get-Content C:\kob\kobd.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
 while the executor runs: a mouse selection in the classic Windows console (Quick Edit mode) pauses the program's output
 and with it the executor until you press Enter or Esc. That freeze is standard Windows behaviour that we have not been able
 to reproduce on the executor, so treat it as a precaution (console window Properties, Options, untick *QuickEdit Mode*, if
 you keep a window open); a scheduled task has no console to click in.
 
-**Logs.** The log goes to the console. The interactive setup also writes `log_file = "kob-executor.log"` into
-`kob-executor.toml` (a path relative to that file; not for the Indexer alone, and not for the Android app's
+**Logs.** The log goes to the console. The interactive setup also writes `log_file = "kobd.log"` into
+`kobd.toml` (a path relative to that file; not for the Indexer alone, and not for the Android app's
 non-interactive setup), and any start can set one with `--log-file <path>` (or `KOB_LOG_FILE`) or `log_file` in the
 configuration. With a log file the console still shows the log while it is a terminal (a double click) and shows nothing
 when it is not (a task, a service, a redirect): the file is then the log. The file is rotated by size: at `log_max_mb`
@@ -321,7 +321,7 @@ as a systemd credential, is `docs/ops/executor.md`, A.3.
 
 **Docker (Linux)**: `crates/kobd/Dockerfile` builds the executor of one network from the source (pinned base images, a
 non-root user, uid 10001). The volume `/data` holds the configuration, the key file and the data directory
-(`KOB_EXECUTOR_DIR=/data` in the image: the directory of the setup and of a start without arguments); the setup runs in the
+(`KOBD_DIR=/data` in the image: the directory of the setup and of a start without arguments); the setup runs in the
 container once, then the container runs what it wrote:
 
 ```
@@ -343,7 +343,7 @@ program changes. The program is not replaced while it runs, and it does not upda
 
 1. **Read the release notes.** They say whether the release changes the `KOB1` payload version (indexers must go first,
    `docs/ops/release.md`, 7) or the database (brought up to date in place, migrated offline with `kobd db --config
-   kob-executor.toml migrate`, or rebuilt: step 6).
+   kobd.toml migrate`, or rebuilt: step 6).
 2. **Note what runs now:** `kobd --version` (the crate version, the release tag without the `v`) and
    `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback only unless you
    changed it). A build of a commit before the `0.1.0` release says `0.0.0`; tell builds of the same version apart by `commit`.
@@ -366,9 +366,9 @@ program changes. The program is not replaced while it runs, and it does not upda
    replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
    the fast start rebuilds the live book within seconds. Make sure the key file is not inside `kob-data` (setup puts it next
    to the program), and create `kob-data/pause` again if you use it. An Indexer's archive of schema 5, 6, 7 or 8 is brought
-   to schema 9 (the current one) offline with `kobd db --config kob-executor.toml migrate` in its folder (stop it first;
+   to schema 9 (the current one) offline with `kobd db --config kobd.toml migrate` in its folder (stop it first;
    free disk about the size of the store; the old file stays as `index.sqlite3.before-migrate` until you delete it; an older build refuses
-   the migrated store; `docs/ops/executor.md`, 7.6a); any other archive rebuilds with `kobd db --config kob-executor.toml
+   the migrated store; `docs/ops/executor.md`, 7.6a); any other archive rebuilds with `kobd db --config kobd.toml
    replay` while offline; the public read server has a way without downtime (`docs/ops/chart-server.md`, section 6).
 7. **Rollback**: stop, put `kobd.old` back, restore the `kob-data` copy of step 4 if the database changed. An indexer must
    not go below the payload version in use (`docs/ops/release.md`, 7).
@@ -385,7 +385,7 @@ only plain KAS: tokens the key holds stay where they are. Check with `kobd addre
 
 **Logs and rotation.** The flags are `--log-file <path>` (or `KOB_LOG_FILE`), `--log-max-mb` (default 10; 0: never rotate) and
 `--log-files` (rotated files kept, default 5; 0: the file starts over when full), or the keys `log_file`, `log_max_mb`,
-`log_files` in `kob-executor.toml` (section 6, *Logs*). They are global: they work on every subcommand.
+`log_files` in `kobd.toml` (section 6, *Logs*). They are global: they work on every subcommand.
 
 ## 8. Run on an Android phone (Termux)
 

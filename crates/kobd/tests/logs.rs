@@ -133,7 +133,7 @@ fn withdraw_without_a_configuration_or_with_a_bad_amount_sends_nothing() {
         .output()
         .unwrap();
     assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("kob-executor.toml"), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("kobd.toml"), "{}", String::from_utf8_lossy(&o.stderr));
     let o = Command::new(bin)
         .args(["withdraw", "--to", &to, "--amount", "lots", "--yes", "--dir"])
         .arg(dir.path())
