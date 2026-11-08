@@ -33,6 +33,7 @@
 // Only https URLs are used. Raster formats only (PNG, JPEG, WebP, GIF, by their magic bytes, never by the server's Content-Type): no SVG, no HTML.
 import { DEFAULT_TOKEN_NAMES_URL, defaultStorage, type StorageLike } from '../config';
 import { sanitizeUntrusted } from '../kob/registry';
+import { isSvg, rasterizeSvg, type Raster } from './svg-logo';
 
 /** The data set's base (`AppConfig.tokenNamesUrl`, default https://kascov.io/data). '' = the feature is off. */
 export const DEFAULT_BASE = DEFAULT_TOKEN_NAMES_URL;
@@ -362,12 +363,14 @@ export interface IconFetchOptions {
   sha256?: (b: Uint8Array) => Promise<string | null>;
   /** called with the URL of a source that answered 404 (it holds no copy) */
   onMissing?: (url: string) => void;
+  /** draws a checked SVG to a raster picture (default `rasterizeSvg`) */
+  rasterize?: (b: Uint8Array) => Promise<Raster | null>;
 }
 
 export interface VerifiedImage { bytes: Uint8Array; mime: ImageMime; url: string }
 
 /**
- * The first of `urls` (https only, tried in order) whose bytes hash to `hash` and are a raster image; null when none does. A fetch that fails (CORS, 404,
+ * The first of `urls` (https only, tried in order) whose bytes hash to `hash` and are a raster image or an SVG (drawn to a raster one); null when none does. A fetch that fails (CORS, 404,
  * timeout, too large), bytes that hash otherwise, and a format that is not raster are all skipped alike: the caller shows a letter avatar.
  */
 export async function fetchVerifiedImage(urls: readonly string[], hash: string, o: IconFetchOptions = {}): Promise<VerifiedImage | null> {
@@ -392,9 +395,13 @@ export async function fetchVerifiedImage(urls: readonly string[], hash: string, 
       const bytes = await readCapped(res, o.maxBytes ?? 1_500_000);
       if (!bytes || bytes.length === 0) continue;
       const mime = sniffImage(bytes);
-      if (!mime) continue;
+      const svg = !mime && isSvg(bytes);
+      if (!mime && !svg) continue;
       if ((await digest(bytes)) !== want) continue;
-      return { bytes, mime, url };
+      if (mime) return { bytes, mime, url };
+      // an SVG copy whose original bytes hash to the commitment: shown as a picture drawn from it (data/svg-logo.ts)
+      const r = await (o.rasterize ?? rasterizeSvg)(bytes);
+      if (r) return { bytes: r.bytes, mime: r.mime, url };
     } catch {
       /* CORS, offline, aborted, a bad body: this source gave nothing */
     } finally {

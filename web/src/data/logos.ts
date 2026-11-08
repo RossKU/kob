@@ -18,9 +18,10 @@
 //      header, the usual case), it falls back to the unchecked <img> above. An `ipfs://` image with an `image_hash` is compared with it as well.
 //   4. The letter avatar.
 //
-// For every source: no SVG, no `data:` URL, no host that is an IP literal, `localhost` or a name without a dot (an address inside the viewer's network).
+// An SVG picture is shown only from checked bytes (its hash is that of the original SVG), drawn to a WEBP first (data/svg-logo.ts). For every source: no `data:` URL, no host that is an IP literal, `localhost` or a name without a dot (an address inside the viewer's network).
 import { readCapped, sha256Hex, sniffImage, type ImageMime } from './kascov';
 import { refusedHost, type LogoRef } from './logo-url';
+import { isSvg, rasterizeSvg, type Raster } from './svg-logo';
 
 export { parseLogoRef, refusedHost, safeHttpsLogo, type LogoRef } from './logo-url';
 
@@ -158,6 +159,8 @@ export interface IpfsFetchOptions {
   /** the creator's committed SHA-256 of the file (64 lowercase hex): the fetched bytes must equal it, else `hashMismatch` */
   imageHash?: string | null | undefined;
   onMismatch?: OnHashMismatch | undefined;
+  /** draws a checked SVG to a raster picture (default `rasterizeSvg`) */
+  rasterize?: (b: Uint8Array) => Promise<Raster | null>;
 }
 
 export interface IpfsImage { bytes: Uint8Array; mime: ImageMime; checked: boolean; /** the bytes were compared with `imageHash` and are equal */ hashChecked?: boolean }
@@ -197,7 +200,8 @@ export async function fetchIpfsImage(gateway: string, ref: Extract<LogoRef, { ki
     const bytes = await readCapped(res, o.maxBytes ?? 1_500_000);
     if (!bytes || bytes.length === 0) return null;
     const mime = sniffImage(bytes);
-    if (!mime) return null;
+    const svg = !mime && isSvg(bytes);
+    if (!mime && !svg) return null;
     const ok = await verifyIpfsBytes(ref.cid, ref.path, bytes, o.sha256);
     if (ok === false) return null;
     if (o.imageHash) {
@@ -208,7 +212,9 @@ export async function fetchIpfsImage(gateway: string, ref: Extract<LogoRef, { ki
         return null;
       }
     }
-    return { bytes, mime, checked: ok === true, ...(o.imageHash ? { hashChecked: true } : {}) };
+    const shown = mime ? { bytes, mime } : await (o.rasterize ?? rasterizeSvg)(bytes);
+    if (!shown) return null;
+    return { bytes: shown.bytes, mime: shown.mime, checked: ok === true, ...(o.imageHash ? { hashChecked: true } : {}) };
   } catch {
     return null;
   } finally {
@@ -291,7 +297,7 @@ export const ipfsLoader: IpfsLoader = createIpfsLoader();
  * What reading an `https://` logo and comparing it with the creator's `image_hash` gave:
  *   `match`      the bytes were readable (the host allows it with a CORS header) and hash to `image_hash`: shown from a blob URL as checked;
  *   `mismatch`   readable and a different file: the picture at the address is not the one the creation record names, nothing is shown;
- *   `refused`    readable and equal to the hash but not a raster picture (an SVG, HTML ...): never shown;
+ *   `refused`    readable and equal to the hash but not a picture (HTML ..., or an SVG the browser cannot draw): never shown;
  *   `unreadable` the page could not read it (no CORS header, offline, an error status, too large, no `crypto.subtle`): nothing could be checked,
  *                the caller falls back to the unchecked <img>.
  */
@@ -305,6 +311,8 @@ export interface HttpsCheckOptions {
   /** default MAX_LOGO_BYTES */
   maxBytes?: number;
   sha256?: (b: Uint8Array) => Promise<string | null>;
+  /** draws a checked SVG to a raster picture (default `rasterizeSvg`) */
+  rasterize?: (b: Uint8Array) => Promise<Raster | null>;
 }
 
 /**
@@ -328,7 +336,10 @@ export async function checkHttpsImage(url: string, imageHash: string, o: HttpsCh
     if (got === null) return { kind: 'unreadable' };
     if (got !== imageHash) return { kind: 'mismatch' };
     const mime = sniffImage(bytes);
-    return mime ? { kind: 'match', bytes, mime } : { kind: 'refused' };
+    if (mime) return { kind: 'match', bytes, mime };
+    // an SVG whose ORIGINAL bytes hash to the commitment: shown as a picture drawn from it
+    const r = isSvg(bytes) ? await (o.rasterize ?? rasterizeSvg)(bytes) : null;
+    return r ? { kind: 'match', bytes: r.bytes, mime: r.mime } : { kind: 'refused' };
   } catch {
     return { kind: 'unreadable' };
   } finally {

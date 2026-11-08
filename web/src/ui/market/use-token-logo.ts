@@ -92,10 +92,12 @@ export function useTokenLogo(row: LogoSubject, active: boolean): { logo: TokenLo
     const out: LogoRef[] = [];
     for (const raw of [declared, claimed]) {
       const r = parseLogoRef(raw);
+      // an https SVG is shown only from checked bytes: without a committed hash it is skipped
+      if (r && r.kind === 'https' && r.svg && committed === null) continue;
       if (r && !out.some((x) => refKey(x) === refKey(r))) out.push(r);
     }
     return out;
-  }, [declared, claimed]);
+  }, [declared, claimed, committed]);
   const candKey = `${covenantId}|${candidates.map(refKey).join('|')}|${committed ?? ''}`;
   const [tried, setTried] = useState<{ key: string; n: number }>({ key: candKey, n: 0 });
   const n = tried.key === candKey ? tried.n : 0;
@@ -132,7 +134,8 @@ export function useTokenLogo(row: LogoSubject, active: boolean): { logo: TokenLo
     void httpsChecker.check(cur.url, committed).then((out) => {
       if (!live) return;
       setHttps({ key: httpsKey, out });
-      if (out.kind === 'refused') advance();
+      // an SVG that cannot be read is never shown unchecked
+      if (out.kind === 'refused' || (out.kind === 'unreadable' && cur.svg)) advance();
     });
     return () => {
       live = false;
@@ -148,7 +151,8 @@ export function useTokenLogo(row: LogoSubject, active: boolean): { logo: TokenLo
   else if (!active || checkedHere === null) logo = { state: 'pending' };
   else if (!creatorOn || !cur) logo = { state: 'none' };
   else if (cur.kind === 'https') {
-    if (httpsKey === null || httpsHere?.kind === 'unreadable') logo = { state: 'creator', src: cur.url, host: hostOf(cur, gateway) };
+    if (cur.svg && (httpsKey === null || httpsHere?.kind === 'unreadable')) logo = { state: 'none' };
+    else if (httpsKey === null || httpsHere?.kind === 'unreadable') logo = { state: 'creator', src: cur.url, host: hostOf(cur, gateway) };
     else if (httpsHere === null) logo = { state: 'pending' };
     else if (httpsHere.kind === 'match') logo = { state: 'verified', src: httpsHere.src };
     else if (httpsHere.kind === 'mismatch') logo = { state: 'mismatch', host: hostOf(cur, gateway) };

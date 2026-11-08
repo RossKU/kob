@@ -83,7 +83,10 @@ describe('parseLogoRef', () => {
     expect(parseLogoRef(' https://kasperolabs.com/kaspero-logo.jpg ')).toEqual({ kind: 'https', url: 'https://kasperolabs.com/kaspero-logo.jpg' });
     expect(parseLogoRef(`ipfs://${HELLO_CID_V0}`)).toEqual({ kind: 'ipfs', cid: HELLO_CID_V0, path: '' });
     expect(parseLogoRef(`ipfs://${V1}/logo.png`)).toEqual({ kind: 'ipfs', cid: V1, path: '/logo.png' });
-    for (const bad of ['ipfs://', 'ipfs://notacid', `ipfs://${V1}/../x`, `ipfs://${V1}/a.svg`, `ipfs://${V1}?x=1`, `ipfs://${V1}#f`, `ipfs://${V1}/a b`, 'ipfs:/' + HELLO_CID_V0, 'ftp://x.example/a.png', 'data:image/png;base64,AA', '', '   ', 5, undefined]) {
+    // an SVG address is kept, marked: it is shown only from checked bytes (data/svg-logo.ts); a compressed .svgz never
+    expect(parseLogoRef(`ipfs://${V1}/a.svg`)).toEqual({ kind: 'ipfs', cid: V1, path: '/a.svg', svg: true });
+    expect(parseLogoRef('https://example.org/logo.SVG')).toEqual({ kind: 'https', url: 'https://example.org/logo.SVG', svg: true });
+    for (const bad of ['ipfs://', 'ipfs://notacid', `ipfs://${V1}/../x`, `ipfs://${V1}/a.svgz`, 'https://example.org/logo.svgz', 'https://127.0.0.1/a.svg', `ipfs://${V1}?x=1`, `ipfs://${V1}#f`, `ipfs://${V1}/a b`, 'ipfs:/' + HELLO_CID_V0, 'ftp://x.example/a.png', 'data:image/png;base64,AA', '', '   ', 5, undefined]) {
       expect(parseLogoRef(bad), String(bad)).toBeNull();
     }
   });
@@ -236,6 +239,21 @@ describe('the creator\'s image_hash', () => {
     const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>');
     const svgHash = createHash('sha256').update(svg).digest('hex');
     expect(await checkHttpsImage('https://e.example/a.svg', svgHash, { fetch: ok(svg) as unknown as typeof fetch, sha256: sha })).toEqual({ kind: 'refused' });
+  });
+
+  it('an SVG whose ORIGINAL bytes hash to the commitment is shown as the picture drawn from it; one that hashes otherwise is a mismatch', async () => {
+    const svg = new TextEncoder().encode('<?xml version="1.0"?>\n<!-- logo -->\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>');
+    const svgHash = createHash('sha256').update(svg).digest('hex');
+    const webp = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]);
+    const rasterize = vi.fn(async () => ({ bytes: webp, mime: 'image/webp' as const }));
+    expect(await checkHttpsImage('https://e.example/a.svg', svgHash, { fetch: ok(svg) as unknown as typeof fetch, sha256: sha, rasterize })).toEqual({ kind: 'match', bytes: webp, mime: 'image/webp' });
+    expect(rasterize).toHaveBeenCalledWith(svg);
+    // the hash of the drawn picture is not the commitment: the original's is
+    const webpHash = createHash('sha256').update(webp).digest('hex');
+    expect(await checkHttpsImage('https://e.example/a.svg', webpHash, { fetch: ok(svg) as unknown as typeof fetch, sha256: sha, rasterize })).toEqual({ kind: 'mismatch' });
+    // through IPFS: the CID names the original SVG
+    const ref = { kind: 'ipfs' as const, cid: cidV1Raw(svg), path: '', svg: true as const };
+    expect(await fetchIpfsImage('https://dweb.link/ipfs', ref, { fetch: ok(svg) as unknown as typeof fetch, sha256: sha, rasterize })).toEqual({ bytes: webp, mime: 'image/webp', checked: true });
   });
 
   it('the checker asks once per address and hash, hands out one blob URL, and asks an unreadable one again after the failure window', async () => {

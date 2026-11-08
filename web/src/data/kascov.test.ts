@@ -337,8 +337,10 @@ describe('fetchVerifiedImage', () => {
     expect(await fetchVerifiedImage([U1], sha(PNG), { fetch: (async () => bytesResponse(PNG)) as unknown as typeof globalThis.fetch, maxBytes: 10 })).toBeNull();
   });
 
-  it('bytes that hash right but are not a raster image (an SVG with a script) are refused', async () => {
-    expect(await fetchVerifiedImage([U1], sha(SVG), { fetch: (async () => bytesResponse(SVG)) as unknown as typeof globalThis.fetch })).toBeNull();
+  it('bytes that hash right but cannot be drawn (an SVG the browser cannot draw) are refused; one it draws is shown as that picture', async () => {
+    expect(await fetchVerifiedImage([U1], sha(SVG), { fetch: (async () => bytesResponse(SVG)) as unknown as typeof globalThis.fetch, rasterize: async () => null })).toBeNull();
+    const png = await fetchVerifiedImage([U1], sha(SVG), { fetch: (async () => bytesResponse(SVG)) as unknown as typeof globalThis.fetch, rasterize: async () => ({ bytes: PNG, mime: 'image/png' }) });
+    expect(png).toEqual({ bytes: PNG, mime: 'image/png', url: U1 });
   });
 
   it('only https URLs are fetched; a bad hash fetches nothing; no crypto means no icon', async () => {

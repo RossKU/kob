@@ -16,8 +16,8 @@
 //   * img-src 'self' data: blob: https:: token icons and logos (data/kascov.ts, data/logos.ts). Checked pictures (kascov.io's saved copy, hash-verified) and IPFS
 //     pictures (fetched as bytes through a gateway) are shown from a blob: URL the app made itself. A token whose creator gave an https:// logo address shows it as a
 //     plain <img> from that host, labelled "not checked" (founder decision 2026-11-03: KOB stores no third-party image, each viewer's browser loads it from its
-//     source), so img-src allows https: and no host list is possible (the creators' hosts are not known in advance). An image cannot run script, SVG is never
-//     shown, and connect-src, script-src and Trusted Types are unchanged. The viewer can turn creator sites off in Settings; a deployment that never wants
+//     source), so img-src allows https: and no host list is possible (the creators' hosts are not known in advance). An image cannot run script, an SVG is shown
+//     only as a picture drawn from its checked bytes (data/svg-logo.ts), and connect-src, script-src and Trusted Types are unchanged. The viewer can turn creator sites off in Settings; a deployment that never wants
 //     them may set img-src to 'self' data: blob: itself (docs/ops/web-hosting.md). A production deployment that pins connect-src (README, "Deployment headers")
 //     adds `https://kascov.io` to it for the token names and icons, and the IPFS gateway for ipfs:// logos; without them those simply show no picture.
 //   * frame-src 'self': the only frame is the app's own private-key signer (signer.html, sandboxed without allow-same-origin).

@@ -1,9 +1,10 @@
 // The rules for the address of a token logo (data/logos.ts, data/kascov.ts): which addresses the app will ever load an image from. Pure, no dependencies.
 //
-// For every source: https only (or `ipfs://`), no credentials, no SVG, no `data:` URL, and no host that is an IP literal, `localhost` or a name without a dot
+// For every source: https only (or `ipfs://`), no credentials, no compressed SVG, no `data:` URL, and no host that is an IP literal, `localhost` or a name without a dot
 // (an address inside the viewer's own network).
 
-export type LogoRef = { kind: 'https'; url: string } | { kind: 'ipfs'; cid: string; path: string };
+/** `svg`: the address names an SVG file, which is shown only once its bytes were read and checked (data/svg-logo.ts), never as an unchecked <img>. */
+export type LogoRef = { kind: 'https'; url: string; svg?: true } | { kind: 'ipfs'; cid: string; path: string; svg?: true };
 
 const MAX_URL = 2048;
 
@@ -19,6 +20,7 @@ export function refusedHost(hostname: string): boolean {
 }
 
 const SVG_PATH = /\.svgz?$/i;
+const SVGZ_PATH = /\.svgz$/i;
 
 /** An `https://` logo address, or null (not https, credentials, too long, SVG, a refused host). */
 export function safeHttpsLogo(v: unknown): string | null {
@@ -28,6 +30,18 @@ export function safeHttpsLogo(v: unknown): string | null {
     if (u.protocol !== 'https:' || u.username !== '' || u.password !== '' || refusedHost(u.hostname)) return null;
     if (SVG_PATH.test(u.pathname)) return null;
     return u.href;
+  } catch {
+    return null;
+  }
+}
+
+/** An `https://` address of an SVG logo (not a compressed `.svgz`), with the other rules of `safeHttpsLogo`; null otherwise. */
+function httpsSvgLogo(v: string): string | null {
+  if (v.length > MAX_URL || /[\u0000- \u007f]/.test(v)) return null;
+  try {
+    const u = new URL(v);
+    if (u.protocol !== 'https:' || u.username !== '' || u.password !== '' || refusedHost(u.hostname)) return null;
+    return SVG_PATH.test(u.pathname) && !SVGZ_PATH.test(u.pathname) ? u.href : null;
   } catch {
     return null;
   }
@@ -44,9 +58,11 @@ export function parseLogoRef(raw: unknown): LogoRef | null {
   if (v.length === 0 || v.length > MAX_URL) return null;
   const https = safeHttpsLogo(v);
   if (https) return { kind: 'https', url: https };
+  const svg = httpsSvgLogo(v);
+  if (svg) return { kind: 'https', url: svg, svg: true };
   const m = IPFS_RE.exec(v);
   if (!m || !CID_RE.test(m[1]!)) return null;
   const path = m[2] ?? '';
-  if (path.split('/').some((s) => s === '.' || s === '..') || SVG_PATH.test(path) || path.length > 512) return null;
-  return { kind: 'ipfs', cid: m[1]!, path };
+  if (path.split('/').some((s) => s === '.' || s === '..') || SVGZ_PATH.test(path) || path.length > 512) return null;
+  return SVG_PATH.test(path) ? { kind: 'ipfs', cid: m[1]!, path, svg: true } : { kind: 'ipfs', cid: m[1]!, path };
 }
