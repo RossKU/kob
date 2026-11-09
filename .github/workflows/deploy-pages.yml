@@ -251,7 +251,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.152.0"
           packageManager: npm
-          command: pages project create ${{ matrix.project }}--production-branch=${{ needs.config.outputs.branch }}
+          command: pages project create ${{ matrix.project }} --production-branch=${{ needs.config.outputs.branch }}
       - name: Upload web/dist to Cloudflare Pages
         id: deploy
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
@@ -260,7 +260,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.152.0"
           packageManager: npm
-          command: pages deploy web/dist --project-name=${{ matrix.project }}--branch=${{ needs.config.outputs.branch }} --commit-hash=${{ github.sha }} --commit-dirty=true
+          command: pages deploy web/dist --project-name=${{ matrix.project }} --branch=${{ needs.config.outputs.branch }} --commit-hash=${{ github.sha }} --commit-dirty=true
       - name: Summary (deployment URL, config.json, sha256 of every deployed file)
         working-directory: .
         env:

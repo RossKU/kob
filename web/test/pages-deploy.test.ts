@@ -332,6 +332,9 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     expect(job('config')).toContain('if [ -n "$MAIN_PROJECT$MAIN_INDEXER" ]');
     expect(job('config')).toContain('(if $mp != "" then [{site: "mainnet", project: $mp, network: "mainnet"');
     for (const name of ['KOB_PAGES_MAINNET_PROJECT', 'KOB_PAGES_MAINNET_INDEXER_URL', 'KOB_PAGES_MAINNET_PUBLIC_URL']) expect(wf).toContain(`vars.${name}`);
+    // the wrangler commands keep their options apart (an earlier edit glued the project name to `--branch`)
+    expect(wf).toMatch(/pages project create \$\{\{ matrix\.project \}\} --production-branch=/);
+    expect(wf).toMatch(/--project-name=\$\{\{ matrix\.project \}\} --branch=/);
     // no deploy step reads a site's value from a variable directly: the matrix carries it
     expect(job('deploy')).not.toContain('vars.');
   });
