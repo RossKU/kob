@@ -34,6 +34,7 @@ ignore = [
   # Unmaintained crates without a known defect, all transitive.
   { id = "RUSTSEC-2025-0052", reason = "async-std unmaintained; transitive via workflow-core <- rusty-kaspa v2.1.0" },
   { id = "RUSTSEC-2026-0441", reason = "pin-utils unmaintained; transitive via async-std <- workflow-core <- rusty-kaspa v2.1.0" },
+  { id = "RUSTSEC-2026-0459", reason = "bundled SQLite < 3.54 (rusqlite 0.37 <- kobd): exposed only when opening a database and -wal written by a less trusted party; kobd opens only its own data dir; upgrade to rusqlite 0.41 pending" },
   { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; transitive via workflow-core <- rusty-kaspa v2.1.0" },
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained (build-time proc macro); via kaspa-rpc-macros and workflow-core-macros <- rusty-kaspa v2.1.0" },
   { id = "RUSTSEC-2024-0388", reason = "derivative unmaintained (build-time proc macro); via ark 0.5 <- risc0-groth16 <- kaspa-txscript-zk-sdk" },
