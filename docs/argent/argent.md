@@ -239,8 +239,9 @@ names that commitment). Intents created from the previous templates keep their o
 
 The spread between what an order releases and what the payer authorised (crossing spread, tips,
 auction decay) belongs to the keeper. For `TokenToKas` and `TokenSwap` the intent's own KAS carrier
-is the keeper's; for `KasToToken` the payer's `max_extra` bounds what carriers and the network fee
-may take.
+is the keeper's; for `KasToToken` the payer's `max_extra` bounds what carriers, fillers and the network fee
+may take. It is a single cap: whoever executes the intent may keep up to `max_extra` of the payer's KAS (the router only
+checks the payer's change), so wallets should set it tight (`kob_protocol::build::default_max_extra`).
 
 ### Deadline
 

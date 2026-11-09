@@ -191,7 +191,9 @@ export interface KobX402ClientOptions {
    * expiry). The intent program lets the executor keep what the orders release beyond the merchant's amount, so the worst case
    * is what the payer may really pay: give terms close to the book's price. Without this hook (or when it returns `undefined`)
    * intent offers are not paid; the worst case must also be within the `maxPay` bound of the pay asset (checked after the
-   * build, and by the preflight), and the fee rate is the client's (`feeRate`).
+   * build, and by the preflight), and the fee rate is the client's (`feeRate`). `maxExtra` is a single cap: whoever executes the
+   * intent may keep up to `maxExtra` of the payer's KAS, so set it tight; left out it defaults to what the actor's shape needs (the
+   * merchant's carrier, the shape's fillers, the execution's fee at 5 times `feeRate`) plus 0.02 KAS.
    */
   intentTerms?: (request: IntentTermsRequest) => IntentPayTerms | undefined | Promise<IntentPayTerms | undefined>;
   /**

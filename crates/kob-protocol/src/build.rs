@@ -51,9 +51,10 @@ mod pair;
 #[cfg(feature = "engine")]
 pub use intent::execute_intent;
 pub use intent::{
-    build_cancel_intent, build_create_intent, build_execute_intent, build_expire_intent, intent_budgets, router_role, CancelIntent,
-    CreateIntent, ExecuteIntent, ExecutionFacts, ExpireIntent, IntentAsk, IntentBid, INTENT_OUTPUT, LOCK_OUTPUT, ROUTER_CANCEL_BUDGET,
-    ROUTER_EXPIRE_BUDGET, ROUTER_FILL_BUDGET_FALLBACK,
+    build_cancel_intent, build_create_intent, build_execute_intent, build_expire_intent, default_max_extra, execution_fee_mass_bound,
+    intent_budgets, kas_to_token_extra_needed, kas_to_token_fillers, router_role, CancelIntent, CreateIntent, ExecuteIntent,
+    ExecutionFacts, ExpireIntent, IntentAsk, IntentBid, INTENT_OUTPUT, LOCK_OUTPUT, MAX_EXTRA_MARGIN, MAX_EXTRA_RATE_FACTOR,
+    REFERENCE_FILLER, ROUTER_CANCEL_BUDGET, ROUTER_EXPIRE_BUDGET, ROUTER_FILL_BUDGET_FALLBACK,
 };
 pub use pair::{pair_programs, pair_suffix};
 

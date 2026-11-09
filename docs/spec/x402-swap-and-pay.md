@@ -666,7 +666,7 @@ the intent:
 
 | Pay asset | Merchant receives | Intent | Terms (the actor's state) |
 |---|---|---|---|
-| KAS | token B (`kcc20`) | `KasToToken_<shape>` (1 to 3 `KobAsk`s of B) | payer, merchant, B, exact `amount`, `max_pay` (sompi at the asks' quotes: `ceil(take × price / scale)` per ask), `max_extra` (carriers and fee), `b_extension` (the B pin), `deadline` |
+| KAS | token B (`kcc20`) | `KasToToken_<shape>` (1 to 3 `KobAsk`s of B) | payer, merchant, B, exact `amount`, `max_pay` (sompi at the asks' quotes: `ceil(take × price / scale)` per ask), `max_extra` (carriers, fillers and fee: one cap, see section 17.8), `b_extension` (the B pin), `deadline` |
 | token A | KAS (`standard-native`) | `TokenToKas_<shape>` (1 to 3 `KobBid`s of A) | payer, merchant, A, `merchant_kas` (at least), `max_sell` (base units of A), `lock_amount` and `lock_extension` (the lock pin), `deadline` |
 | token A | token B (`kcc20`) | `TokenSwap_<shape>` (1 or 2 bids of A and asks of B) | payer, merchant, A, B, `max_sell_a`, exact `amount_b`, `lock_amount` and `lock_extension` (the lock pin), `b_extension` (the B pin), `deadline` |
 | KRON token A | KAS / token B | `TokenToKasKron_<shape>` / `TokenSwapKron_<shape>` (`KobBidKron`s of A) | as `TokenToKas` / `TokenSwap` (the lock pin is `lock_amount` only: a KRON token has no extension commitment) |
@@ -827,7 +827,18 @@ The payer's worst case is in the intent's terms and is enforced by the intent pr
 max_extra` sompi (KAS pay asset; the rest of the intent's KAS returns to the payer at execution), or at
 most `max_sell` units of A plus the intent's own KAS (token pay asset). A client MUST show this worst case,
 not `amount`, as the cost. Within it, the executor keeps what the orders release beyond the merchant's
-amount; a payer that wants a tighter price sets tighter terms. As in section 9, the extension discovers
+amount; a payer that wants a tighter price sets tighter terms. `max_extra` is a single cap: whoever executes the intent may keep up to
+`max_extra` of the payer's KAS, so wallets should set it tight. The router does not earmark it: it only requires the payer's
+change to reach `value − pay − max_extra`, so the executor may shrink the merchant's carrier, the filler outputs (outputs that
+hold an index open, paid to the payer) or the fee as it likes within the cap. What an honest execution needs is the merchant's
+carrier, the fillers of the shape (`asks − 1` when the last ask rests, `asks` otherwise, 0.2 KAS each: none for the one-ask
+resting shape `KasToToken_buy`) and the network fee of the execution, so a wallet sets `max_extra` to that at the fee rate it
+expects plus a small margin. The KOB payer SDK does this when the caller gives no `maxExtra`: the merchant's carrier, the fillers of
+the actor's shape and the fee mass of the shape on the merchant token's program at 5 times the payer's fee rate (the relay floor
+when it gives none), plus 0.02 KAS; for the one-ask shape on an 8/8 token about the carrier + 0.14 KAS, not the carrier + 1 KAS it
+once was. A token pay asset has the same property without a `max_extra`: the intent's own KAS (`keeperValue`, 1 KAS by
+default) and the KAS carrier of the payer's token change (`lockCarrier`), which the router does not pin on an execution, belong
+to whoever executes, and both are part of the worst case the payer SDK shows. As in section 9, the extension discovers
 nothing: the price guarantee is the terms. The router counts what a `KasToToken` execution may take per ask
 at the ask's quote, `ceil(take × price / scale)` sompi for `take` base units (the covenants' maker-favour
 rounding, exact split multiplication), so a decaying ask, a tip or a crossing spread only lowers what the

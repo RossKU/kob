@@ -228,7 +228,11 @@ export interface IntentOptions {
   actor?: string;
   /** KasToToken (pay asset KAS): most sompi the asks may demand at their quotes. Required. */
   maxPay?: string;
-  /** KasToToken: most sompi for the merchant's carrier, fillers and the network fee (default carrier + 1 KAS). */
+  /**
+   * KasToToken: most sompi for the merchant's carrier, fillers and the network fee. A single cap: whoever executes the intent may keep
+   * up to `maxExtra` of the payer's KAS, so set it tight. Default: what the actor's shape needs at 5 times `feeRate` plus 0.02 KAS
+   * (about the carrier + 0.14 KAS for the default one-ask shape on an 8/8 token).
+   */
   maxExtra?: string;
   /** TokenToKas / TokenSwap (pay asset a token): most units sold. Required. */
   maxSell?: string;
