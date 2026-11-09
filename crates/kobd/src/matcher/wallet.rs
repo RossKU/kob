@@ -361,8 +361,12 @@ fn check_permissions(path: &Path) -> Result<(), KeyError> {
 /// The SDDL of a file, from `icacls <file> /save <tmp>` (SDDL is locale-independent, unlike icacls' account names).
 #[cfg(not(unix))]
 fn windows_acl_sddl(path: &Path) -> Option<String> {
+    // one name per call: two threads of one process reading ACLs at the same time (the tests do) must not share the file
+    // icacls writes, where one's removal or write would make the other's read fail
+    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!("kob-acl-{}-{nanos}.txt", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("kob-acl-{}-{n}-{nanos}.txt", std::process::id()));
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name()?;
     // `icacls` saves paths relative to the working directory of the call, so run it in the file's directory
