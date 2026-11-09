@@ -409,6 +409,17 @@ pub async fn stats(State(app): State<Arc<App>>, Path(token): Path<String>) -> Ap
     .await
 }
 
+/// `GET /v1/stats?since=<unix ms>`: the activity totals (orders placed, traders, fees paid to fillers, the KAS locked in live orders) of
+/// the range from `since` (rounded down to the minute) to the newest block, or of all time.
+pub async fn activity(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
+    let since = match opt_i64(&q, "since")? {
+        None => None,
+        Some(s) if s >= 0 => Some(s - s % 60_000),
+        Some(_) => return Err(ApiError::bad_request("since must be a unix time in milliseconds")),
+    };
+    cached(&app, format!("activity {since:?}"), move |c| crate::indexer::activity::activity(c, since)).await
+}
+
 /// `GET /v1/depth/{token}?levels=`: cumulative depth of the listed book, levels merged by per-basis price.
 pub async fn depth(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
     let token = parse_hash("token", &token)?;

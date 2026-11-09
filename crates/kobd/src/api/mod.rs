@@ -17,6 +17,7 @@
 //!   `/v1/pairs/{base}/{quote}/fills?limit=&before=` (pair-order fills: volume, counterparty, never a price)
 //! - `/v1/orders?maker=&token=&status=&limit=&cursor=`, `/v1/orders/{covenant_id}`, `/v1/orders/{covenant_id}/events`
 //! - `/v1/fills?token=&side=&limit=&before=`
+//! - `/v1/stats?since=` (the activity totals: orders placed, traders, fees paid to fillers, KAS locked), `/v1/stats/{token}` (24 h statistics)
 //! - `/v1/ws` (WebSocket, see [`ws`])
 //! - with `[logo_reports] enabled`: `POST /v1/logo-reports` and `GET /v1/logo-blocklist` ([`crate::logo_reports`])
 
@@ -192,6 +193,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .route("/v1/token-utxos", get(rest::token_utxos))
         .route("/v1/trades/{token}", get(rest::trades))
         .route("/v1/candles/{token}", get(rest::candles))
+        .route("/v1/stats", get(rest::activity))
         .route("/v1/stats/{token}", get(rest::stats))
         .route("/v1/depth/{token}", get(rest::depth))
         .route("/v1/ws", get(ws::handler));
@@ -215,7 +217,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
 /// tokens, everything else one.
 fn route_cost(path: &str, heavy: u32) -> u32 {
     const HEAVY: [&str; 8] =
-        ["/v1/candles/", "/v1/stats/", "/v1/depth/", "/v1/trades/", "/v1/books/", "/v1/token-utxos", "/v1/strays", "/v1/pairs"];
+        ["/v1/candles/", "/v1/stats", "/v1/depth/", "/v1/trades/", "/v1/books/", "/v1/token-utxos", "/v1/strays", "/v1/pairs"];
     if HEAVY.iter().any(|p| path.starts_with(p)) {
         heavy.max(1)
     } else {
@@ -315,6 +317,7 @@ mod cost_tests {
     fn scanning_routes_cost_the_heavy_weight() {
         for p in [
             "/v1/candles/ab",
+            "/v1/stats",
             "/v1/stats/ab",
             "/v1/depth/ab",
             "/v1/trades/ab",

@@ -1032,6 +1032,82 @@ async fn market_data_trades_candles_stats_depth() {
     assert!(v["items"].as_array().unwrap().is_empty());
 }
 
+/// `GET /v1/stats?since=`: the activity totals over a range of the store, all time without `since`.
+#[tokio::test]
+async fn activity_totals_over_a_range() {
+    let e = env(|_| {});
+    let c = &e.w;
+    // blocks 1 and 2 are old, 3 and 4 recent: makers MAKER (orders 1, 3), 0xbb (order 2), 0xcc (order 4)
+    seed_order(c, 1, 1, 300_000, 1, "open", Some(10 * W), Some(10 * W), true, MAKER);
+    seed_order(c, 2, 1, 250_000, 2, "partial", Some(10 * W), Some(4 * W), true, 0xbb);
+    seed_order(c, 3, 1, 250_000, 3, "open", Some(5 * W), Some(5 * W), true, MAKER);
+    seed_order(c, 4, 2, 240_000, 4, "open", None, Some(3 * W), true, 0xcc);
+    // tips: order 1 and 3 pay 2 000 sompi per whole token, order 2 pays 500, order 4 none
+    c.execute("UPDATE orders SET tip = 2000 WHERE covenant_id IN (?1, ?2)", params![cid(1), cid(3)]).unwrap();
+    c.execute("UPDATE orders SET tip = 500 WHERE covenant_id = ?1", params![cid(2)]).unwrap();
+    let t0 = 1_700_000_000_000i64;
+    for (cov, block, ts, kind, amount) in [
+        (1u8, 1i64, t0 - 10 * 86_400_000, "create", 0),
+        (2, 2, t0 - 9 * 86_400_000, "create", 0),
+        (3, 3, t0 - 60_000, "create", 0),
+        (4, 4, t0, "create", 0),
+        (2, 2, t0 - 9 * 86_400_000, "fill", 2 * W),
+        (1, 3, t0 - 30_000, "fill", W),
+        (3, 4, t0, "fill", 3 * W / 2),
+    ] {
+        c.execute(
+            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes)              VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), ?2, ?3, ?4, ?5, 0, ?6, (SELECT id FROM ids WHERE h = ?7), 1, ?8, 250000, 0)",
+            params![cid(cov), block, block * 100, ts, cid(block as u8 + 60), kind, cid(TOKEN), amount],
+        )
+        .unwrap();
+    }
+    // live order UTXOs: two unspent (1 000 000 each) and one spent
+    c.execute("INSERT INTO order_utxos (txid, idx, order_id, value, spk, created_block, created_daa, spent_block) VALUES (?1, 0, (SELECT id FROM orders WHERE covenant_id = ?2), 7, x'00', 1, 100, 1)", params![cid(0x90), cid(1)]).unwrap();
+    for (n, cov) in [(0x91u8, 1u8), (0x92, 4)] {
+        c.execute("INSERT INTO order_utxos (txid, idx, order_id, value, spk, created_block, created_daa) VALUES (?1, 0, (SELECT id FROM orders WHERE covenant_id = ?2), 1000000, x'00', 1, 100)", params![cid(n), cid(cov)]).unwrap();
+    }
+    let app = router(e.state.clone());
+
+    // all time: 4 orders, 3 makers; fees 2 whole x 500 + 1 whole x 2000 + 1.5 whole x 2000 = 6 000; locked 2 000 000
+    let (s, v) = get(&app, "/v1/stats").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["since"].is_null());
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64()), (Some(4), Some(3)));
+    assert_eq!((v["fees_paid"].as_str(), v["kas_locked"].as_str()), (Some("6000"), Some("2000000")));
+    assert!(v["executors"].is_null(), "the store keeps no filler key");
+    assert_eq!(v["ts"].as_i64(), Some(t0));
+
+    // the last day: orders 3 and 4 (makers MAKER and 0xcc), the fills of blocks 3 and 4 (1 whole and 1.5 whole at 2 000)
+    let (s, v) = get(&app, &format!("/v1/stats?since={}", t0 - 86_400_000 + 17)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["since"].as_i64(), Some((t0 - 86_400_000 + 17) / 60_000 * 60_000), "rounded down to the minute");
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64()), (Some(2), Some(2)));
+    assert_eq!(v["fees_paid"], "5000");
+    assert_eq!(v["kas_locked"], "2000000", "locked is the state now, whatever the range");
+
+    // a range with nothing in it
+    let (_, v) = get(&app, &format!("/v1/stats?since={}", t0 + 3_600_000)).await;
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fees_paid"].as_str()), (Some(0), Some(0), Some("0")));
+
+    let (s, _) = get(&app, "/v1/stats?since=-5").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = get(&app, "/v1/stats?since=yesterday").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+/// An empty store answers zeros, never an error.
+#[tokio::test]
+async fn activity_totals_of_an_empty_store() {
+    let e = env(|_| {});
+    let (s, v) = get(&router(e.state.clone()), "/v1/stats").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        (v["orders"].as_i64(), v["traders"].as_i64(), v["fees_paid"].as_str(), v["kas_locked"].as_str()),
+        (Some(0), Some(0), Some("0"), Some("0"))
+    );
+    assert!(v["ts"].is_null());
+}
+
 // ------------------------------------------------------------------------------------------------ pair books (pair orders)
 
 /// A live, listed order with a real state (the pair book decodes it): its current UTXO, `order_state` (`remaining` base units)

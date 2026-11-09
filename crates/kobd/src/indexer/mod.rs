@@ -6,6 +6,7 @@
 //! [`processor`] (order/token state machine over [`record::TxRecord`]s) -> `reads`
 //! (queries) -> `api` (REST + WebSocket). Raw node responses are never stored.
 
+pub mod activity;
 pub mod book;
 pub mod candles;
 pub mod db;

@@ -1467,6 +1467,7 @@ should default to settled. The mempool tier is not served by the indexer.
 | `GET /v1/strays?maker=&limit=` | live stray token UTXOs with the order they are stuck on |
 | `GET /v1/trades/{token}?limit=&before=` | trades (the fills of one transaction on one token), newest first (section 5.3) |
 | `GET /v1/candles/{token}?interval=&from=&to=&limit=` | OHLCV candles (`interval` 1m, 5m, 1h or 1d), ascending, empty buckets omitted (5.3) |
+| `GET /v1/stats?since=` | activity totals of the store: orders placed, traders, fees paid to fillers, KAS locked in live orders; indexed, scans capped (api-reference 3.21) |
 | `GET /v1/stats/{token}` | 24 h last / open / high / low / change, volume, trade count, best bid / ask, spread, open orders (5.3) |
 | `GET /v1/depth/{token}?levels=` | cumulative depth snapshot of the listed book, levels merged by price (5.3) |
 | `GET /v1/ws` | WebSocket: subscribe to `health`, `reorg`, `fills`, `fills:<token>`, `book:<token>`, `order:<id>` (a pair order's change is a `book` notice for both its tokens); `kob watch` (crates/kob-cli/README.md) follows it from a terminal |

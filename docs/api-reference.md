@@ -41,8 +41,8 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 
 ### Routes
 
-The list below is the router (`api/mod.rs`, `build()`), in registration order: 21 routes, plus `GET /v1/metrics` as the 22nd
-only when `[api] metrics = true` (the default), and the two logo routes (23, 24) only when `[logo_reports] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
+The list below is the router (`api/mod.rs`, `build()`), in registration order: 22 routes, plus `GET /v1/metrics` as the 23rd
+only when `[api] metrics = true` (the default), and the two logo routes (24, 25) only when `[logo_reports] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
 (`heavy_route_cost`, default 5). "Cached" marks the reads kept in the response cache (section 5.6).
 
 | # | Route | Section | Cost | Cached |
@@ -65,12 +65,13 @@ only when `[api] metrics = true` (the default), and the two logo routes (23, 24)
 | 16 | `GET /v1/token-utxos` | [3.14](#314-get-v1token-utxos) | H | no |
 | 17 | `GET /v1/trades/{token}` | [3.15](#315-get-v1tradestoken) | H | no |
 | 18 | `GET /v1/candles/{token}` | [3.16](#316-get-v1candlestoken) | H | yes |
-| 19 | `GET /v1/stats/{token}` | [3.17](#317-get-v1statstoken) | H | yes |
-| 20 | `GET /v1/depth/{token}` | [3.18](#318-get-v1depthtoken) | H | yes |
-| 21 | `GET /v1/ws` | [4](#4-websocket) | 1 (upgrade) | no |
-| 22 | `GET /v1/metrics` (only with `metrics = true`) | [3.3](#33-get-v1metrics) | 1 | no |
-| 23 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
-| 24 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
+| 19 | `GET /v1/stats` | [3.21](#321-get-v1stats) | H | yes |
+| 20 | `GET /v1/stats/{token}` | [3.17](#317-get-v1statstoken) | H | yes |
+| 21 | `GET /v1/depth/{token}` | [3.18](#318-get-v1depthtoken) | H | yes |
+| 22 | `GET /v1/ws` | [4](#4-websocket) | 1 (upgrade) | no |
+| 23 | `GET /v1/metrics` (only with `metrics = true`) | [3.3](#33-get-v1metrics) | 1 | no |
+| 24 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
+| 25 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
 
 ## 2. Conventions
 
@@ -81,7 +82,7 @@ token base-unit quantity is a decimal string**. Counts, scales, DAA scores, ids 
 
 | Spelled as a decimal string | Fields (wherever they appear) |
 |---|---|
-| sompi | `value`, `cur_value`, `payout`, `price`, `quote`, `tip`, `budget_rate`, `reserve`, `start_price`, `end_price`, `current_price`, `quote_volume`, `quote_volume_24h`, `cum_quote`, `tip_kas`, `prefund`, `delivery_carrier`, the prices of candles/stats/depth/trades (`o`, `h`, `l`, `c`, `last`, `open_24h`, `high_24h`, `low_24h`, `best_bid`, `best_ask`, `mid`), `depth_2pct_quote` |
+| sompi | `value`, `cur_value`, `payout`, `price`, `quote`, `tip`, `budget_rate`, `reserve`, `start_price`, `end_price`, `current_price`, `quote_volume`, `quote_volume_24h`, `cum_quote`, `tip_kas`, `prefund`, `delivery_carrier`, the prices of candles/stats/depth/trades (`o`, `h`, `l`, `c`, `last`, `open_24h`, `high_24h`, `low_24h`, `best_bid`, `best_ask`, `mid`), `depth_2pct_quote`, `fees_paid`, `kas_locked` |
 | token base units | `amount`, `amount_left`, `filled_amount`, `initial_amount`, `min_fill`, `volume`, `volume_24h`, `cum_amount`, `amount_a`, `amount_b`, `expected_amount`, `rpt_amount`, `rearm_amount`, `price_basis`, `quote_price_basis` (a count of base units) |
 | pair price fractions | `price_num`, `price_den`, and `value`/`num`/`den` of a pair candle rate |
 | order state | the 64-bit fields inside `state` / `placed_state` (the contract's own field names, e.g. `minFill`, `amountLeft`, `price`) |
@@ -888,6 +889,31 @@ curl -s $API/v1/logo-blocklist
 
 `hidden` is sorted; `updated_ms` is when the set last changed (0 while it never has).
 
+### 3.21 `GET /v1/stats`
+
+The activity totals of the whole store, not of one token: what the web app's Activity summary shows beside the candles. Heavy; cached
+(per data generation, keyed by `since`). Every read is on an index and every scan is capped, so the cost follows the range, not the size of the store.
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `since` | integer | all time | Start of the range, unix milliseconds, rounded down to the minute; the range runs to the newest block. Negative or not a number: 400. |
+
+```json
+{ "since": 1790000000000, "ts": 1790086000000, "orders": 42, "traders": 9, "executors": null,
+  "fees_paid": "1250000", "kas_locked": "880000000000" }
+```
+
+* `orders`: orders placed in the range, of every kind, listed or not (the chain's placements, not the book's listings). The range begins at the
+  first block with an event at `since`; all time is the store's order counter.
+* `traders`: distinct makers (order keys, not persons) of those orders. `null` when the store holds more than 200,000 makers.
+* `executors`: always `null`. The record log keeps no key of whoever submitted a fill, so the number does not exist for this store.
+* `fees_paid` (sompi, string): what the range's fills released to their fillers, `amount x tip / scale` summed per fill event, with the tip an
+  order carries (an order amended in place counts at its current tip). `null` when the range holds more than 200,000 fills.
+* `kas_locked` (sompi, string): the KAS in the live order UTXOs now, whatever `since` is.
+* `ts` (number or null): the newest event time; `since` is the minute used (`null` for all time).
+
+A store that keeps part of its history (`lean = true`) counts what it keeps. An empty store answers zeros.
+
 ## 4. WebSocket
 
 **URL** `ws://<host>/v1/ws` (`wss://` behind a TLS-terminating proxy). The route is an ordinary `GET` with the upgrade headers;
@@ -1078,7 +1104,7 @@ connection over a cap gets the bare `503` of section 5.1 and is closed. These ca
 
 ### 5.6 Response cache
 
-`/v1/tokens`, `/v1/books/{token}`, `/v1/pairs`, `/v1/pairs/{base}/{quote}/book`, `/v1/candles/{token}`, `/v1/stats/{token}`
+`/v1/tokens`, `/v1/books/{token}`, `/v1/pairs`, `/v1/pairs/{base}/{quote}/book`, `/v1/candles/{token}`, `/v1/stats`, `/v1/stats/{token}`
 and `/v1/depth/{token}` are kept in a response cache per **data generation** of the store (the generation moves after every
 committed batch, revert, operator import and possibly-frozen flag). The key is the request's parameters plus, for the reads that
 depend on the clock (books, pairs, pair books, stats, depth), the node's DAA score and the wall-clock second, so a cached body is
