@@ -9,7 +9,7 @@ import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { TOKEN, connectWallet, fund, pickAsset } from '../helpers/env';
 import { optionValues } from '../helpers/dropdown';
-import { runFlow } from '../helpers/orders';
+import { runFlow, openOrderRow } from '../helpers/orders';
 import { fillFields, peekReceipt, pickType, placeOrderAndRead, waitReviewable, type ReceiptRead } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -170,6 +170,7 @@ test('a pair stop discloses the trigger rule (two KAS books or a resting pair or
   await expect(row.getByTestId('order-stop')).toContainText('0.046 EXUSD per EXKCC');
   await expect(row.getByTestId('order-pair-trigger')).toContainText('arms on fills implying a rate at or below 0.046 EXUSD per EXKCC');
   // pair orders are replaced from the full pair ticket (no in-place amend in the protocol)
+  await openOrderRow(page, id);
   await expect(row.getByTestId(`order-replace-${id}`)).toBeVisible();
   await page.getByTestId(`order-cancel-${id}`).click();
   const [step] = await runFlow(page, mock, null, { steps: 1 });

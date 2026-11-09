@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN, connectWallet, fund, openMarket, gotoNav, gotoOrders, openOrdersSettings } from '../helpers/env';
-import { openOrders, runFlow, seedOrders, statusesOf } from '../helpers/orders';
+import { openOrders, runFlow, seedOrders, statusesOf, openOrderRow } from '../helpers/orders';
 import { fillFields, pickType, placeOrder, type Placed } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -65,6 +65,7 @@ test.describe('cancel', () => {
     await mock.giveKas('alice', 50n * KAS); // the replacement needs a fresh carrier
     const [id] = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 3 }]);
     await openOrders(page, mock);
+    await openOrderRow(page, id);
     await page.getByTestId(`order-replace-${id}`).click();
     await page.getByTestId('amend-price').fill('0.0272');
     await expect(page.getByTestId('amend-preview')).toContainText('0.0272');
@@ -88,6 +89,7 @@ test.describe('cancel', () => {
   test('amend the price of a bid: amended IN PLACE, the order keeps its id, the escrow pays the fee', async ({ appPage: page, mock, wallet }) => {
     const [id] = await seedOrders(mock, [{ side: 'bid', price: 2_400_000, tokens: 2 }]);
     await openOrders(page, mock);
+    await openOrderRow(page, id);
     await page.getByTestId(`order-replace-${id}`).click();
     await page.getByTestId('amend-price').fill('0.0235');
     await page.getByTestId('amend-review').click();
@@ -112,6 +114,7 @@ test.describe('cancel', () => {
     await gotoOrders(page);
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toHaveAttribute('data-type', 'twap');
+    await openOrderRow(page, id);
     await row.getByTestId(`order-replace-${id}`).click();
     const dialog = page.getByTestId('replace-dialog');
     await expect(dialog.getByTestId('replace-form')).toHaveAttribute('data-type', 'twap');

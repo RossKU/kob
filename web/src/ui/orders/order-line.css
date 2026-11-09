@@ -1,0 +1,66 @@
+/* One order on one line (OrderRow.tsx), its details under it on demand. A wide screen reads the lines down the column titles (OrdersView.tsx
+   .or-head, the same grid); a phone reads two lines per order: side, market, type and status, then time, price and the filled part. */
+.or-card { padding: 0; overflow: hidden; }
+.or-line, .or-head {
+  display: grid;
+  grid-template-columns: 76px minmax(150px, 1.1fr) 92px 44px minmax(90px, 0.9fr) minmax(90px, 0.8fr) minmax(150px, 1.3fr) 96px minmax(120px, 0.9fr) 72px 32px;
+  column-gap: 10px;
+  align-items: center;
+  padding: 6px 12px;
+  min-height: 44px;
+  box-sizing: border-box;
+  font-size: 0.86rem;
+}
+.or-head { min-height: 0; padding-top: 0; padding-bottom: 4px; font-size: 0.74rem; color: var(--muted); }
+.or-head .right, .or-price, .or-value, .or-filled { text-align: right; }
+.or-line > * { min-width: 0; }
+.or-time { color: var(--muted); white-space: nowrap; font-size: 0.8rem; }
+.or-market { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; }
+.or-market-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.or-type, .or-trigger { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.or-trigger { color: var(--muted); font-size: 0.8rem; }
+.or-side { font-weight: 600; }
+.or-side-buy { color: var(--buy); }
+.or-side-sell { color: var(--sell); }
+.or-price, .or-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.or-filled { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.or-bar { display: block; width: 100%; max-width: 140px; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.or-bar > span { display: block; height: 100%; background: var(--primary); }
+.or-status { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.or-warn { display: inline-flex; color: var(--warn); flex: none; }
+.or-act { display: flex; justify-content: flex-end; }
+.or-toggle { width: 32px; height: 32px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.or-toggle:hover { background: var(--surface-3); color: var(--text); }
+.or-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.or-toggle svg { transition: transform 0.15s; }
+.or-open .or-toggle svg { transform: rotate(90deg); }
+.or-details { padding: 10px 12px 12px; border-top: 1px solid var(--border); background: var(--surface-2); }
+.or-details[hidden] { display: none; }
+.order-card.nested .or-market { padding-left: 14px; }
+@media (prefers-reduced-motion: reduce) { .or-toggle svg { transition: none; } }
+
+/* below a wide screen: two lines per order; the column titles go */
+@media (max-width: 1279px) {
+  .or-head { display: none; }
+  .or-line {
+    grid-template-columns: auto minmax(0, 1fr) auto auto 32px;
+    grid-template-areas: 'side market status act toggle' 'time price filled filled toggle';
+    row-gap: 4px;
+    column-gap: 8px;
+  }
+  .or-side { grid-area: side; }
+  .or-market { grid-area: market; }
+  .or-status { grid-area: status; justify-content: flex-end; }
+  .or-act { grid-area: act; }
+  .or-toggle { grid-area: toggle; }
+  .or-time { grid-area: time; }
+  .or-price { grid-area: price; text-align: left; }
+  .or-filled { grid-area: filled; }
+  .or-type, .or-trigger, .or-value { display: none; }
+}
+@media (max-width: 479px) {
+  .or-line { grid-template-columns: auto minmax(0, 1fr) auto 32px; grid-template-areas: 'side market status toggle' 'time price filled toggle' 'act act act act'; }
+  .or-act:empty { display: none; }
+  .or-act { justify-content: stretch; }
+  .or-act .btn { width: 100%; }
+}

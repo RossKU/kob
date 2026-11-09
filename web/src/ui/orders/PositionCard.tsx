@@ -101,13 +101,13 @@ export function PositionCard(props: PositionCardProps) {
       <div class="pc-members stack-sm">
         {p.orphanExits ? <p class="small muted pc-note">{t('orders.position.orphan')}</p> : null}
         {entryRow ? (
-          <OrderRow row={entryRow} token={props.tokenOf(entryRow.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === entryRow.id} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
+          <OrderRow row={entryRow} token={props.tokenOf(entryRow.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === entryRow.id} clock={props.clock ?? null} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
         ) : null}
         {exitRows.length ? (
           <div class="position-exits stack-sm" data-testid="position-exits">
             <div class="pc-section-label">{t('orders.position.exits')}</div>
             {exitRows.map((r) => (
-              <OrderRow key={r.id} row={r} token={props.tokenOf(r.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === r.id} nested {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
+              <OrderRow key={r.id} row={r} token={props.tokenOf(r.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === r.id} nested clock={props.clock ?? null} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
             ))}
           </div>
         ) : null}

@@ -5,7 +5,7 @@ import { expect, test, TEST_KEYS, type MockClient } from '../fixtures';
 import { TESTID, orderCancel, orderReplace, orderRow } from '../testids';
 import { loadKobNode } from '../../src/kob/wasm.node';
 import { listExkcc, openConnect, openOrdersSettings } from '../helpers/env';
-import { runFlow } from '../helpers/orders';
+import { runFlow, openOrderRow } from '../helpers/orders';
 
 /** an ask of `tokens` whole EXKCC at `price` sompi per whole token (2_505_000 = 0.02505 EXKCC per KAS) */
 async function seedAsk(mock: MockClient, price = 2_505_000, tokens = 3) {
@@ -102,6 +102,7 @@ test.describe('my orders', () => {
     await mock.giveKas('alice', 50n * 10n ** 8n); // the replacement needs a fresh carrier: a wallet without KAS gets a clear refusal instead
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
     await appPage.goto('/#/portfolio/open');
+    await openOrderRow(appPage, order.covenant_id);
     await appPage.getByTestId(orderReplace(order.covenant_id)).click();
     const dialog = appPage.getByTestId('amend-dialog');
     await expect(dialog).toBeVisible();
@@ -122,6 +123,7 @@ test.describe('my orders', () => {
     await mock.giveKas('alice', 50n * 10n ** 8n);
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
     await appPage.goto('/#/portfolio/open');
+    await openOrderRow(appPage, order.covenant_id);
     await appPage.getByTestId(orderReplace(order.covenant_id)).click();
     await appPage.getByTestId('amend-price').fill('0.0251');
     await appPage.getByTestId('amend-review').click();
@@ -135,6 +137,7 @@ test.describe('my orders', () => {
     const { order } = await seedAsk(mock);
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
     await appPage.goto('/#/portfolio/open');
+    await openOrderRow(appPage, order.covenant_id);
     await appPage.getByTestId(orderReplace(order.covenant_id)).click();
     await appPage.getByTestId('amend-price').fill('0.0251');
     await appPage.getByTestId('amend-review').click();

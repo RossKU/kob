@@ -25,6 +25,19 @@ test('Balances first; Open orders, Order history and Fills each have their addre
   await expect(page.getByTestId(`order-row-${open}`)).toBeVisible();
   await expect(page.getByTestId(`order-row-${filled}`)).toHaveCount(0);
   await expect(page.getByTestId('balances-panel')).toHaveCount(0);
+  // one line per order: market with its fingerprint, side, filled part, status and Cancel; the details open under it on demand
+  const line = page.getByTestId(`order-line-${open}`);
+  await expect(line).toContainText('EXKCC/KAS');
+  await expect(line).toContainText('Sell');
+  await expect(line).toContainText('0 / 1');
+  await expect(line.locator('.fp')).toHaveCount(1);
+  await expect(page.getByTestId(`order-cancel-${open}`)).toBeVisible();
+  await expect(page.getByTestId(`order-details-${open}`)).toBeHidden();
+  await page.getByTestId(`order-toggle-${open}`).click();
+  await expect(page.getByTestId(`order-details-${open}`)).toBeVisible();
+  await expect(page.getByTestId(`order-toggle-${open}`)).toHaveAttribute('aria-expanded', 'true');
+  await page.getByTestId(`order-toggle-${open}`).click();
+  await expect(page.getByTestId(`order-details-${open}`)).toBeHidden();
 
   await page.getByTestId('orders-tab-history').click();
   await expect(page).toHaveURL(/#\/portfolio\/history$/);

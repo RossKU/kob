@@ -4,7 +4,7 @@
 // registers a verified sweep as a continuation (the order stays live at the new outpoint, its strays are spent, the tokens go to the maker).
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN } from '../helpers/env';
-import { openOrders, runFlow, seedOrders } from '../helpers/orders';
+import { openOrders, runFlow, seedOrders, openOrderRow } from '../helpers/orders';
 import { confirmAfterClick } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -32,6 +32,7 @@ test.describe('sweep strays in place', () => {
     await expect(foreignRow).toHaveAttribute('data-lost', '0');
     await expect(panel.getByTestId(`stray-sweep-${id}`)).toBeVisible();
 
+    await openOrderRow(page, id);
     await page.getByTestId(`order-sweep-${id}`).click();
     const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
     // the transaction: the 3 strays are spent, the order continues (nothing closed or created), and what the strays held goes to the maker only
@@ -77,6 +78,7 @@ test.describe('sweep strays in place', () => {
     await mock.stray(id!, 4n * TOKEN);
     const before = await mock.order(id!);
     await openOrders(page, mock);
+    await openOrderRow(page, id);
     await page.getByTestId(`order-sweep-${id}`).click();
     const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(placed!.submission.records.map((r) => r.type)).toContain('sweep');

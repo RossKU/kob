@@ -1,20 +1,24 @@
+import { useEffect, useState } from 'preact/hooks';
 import { pairRoute, routeToHash } from '../../app/router';
 import { useServices } from '../../app/context';
 import { useTxUrl } from '../../app/explorer';
 import { formatDateTime, formatNumber, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import { unitsText } from '../../kob/pair';
-import { statePriceToTokenPrice } from '../../kob/units';
-import { formatLocal, formatUtc } from '../../kob/daa';
+import { formatKas, formatPricePerToken, formatUnits, quoteOf, statePriceToTokenPrice } from '../../kob/units';
+import { daaToUnix, formatLocal, formatUtc } from '../../kob/daa';
+import type { Clock } from '../../kob/plan-types';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, tickPriceFraction, type Tone } from '../kit';
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
+import { IdentityBlock } from '../market/Fingerprint';
 import { displayToken } from '../../app/token-display';
 import type { EventView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { OrderFills, filledAmountOf } from './OrderFills';
 import { GTC_RULE, type OrderRowModel, type OrderStatusUi } from './orders-model';
 import { unlistedHint, unlistedText } from './unlisted';
+import './order-line.css';
 
 const STATUS_TONE: Record<OrderStatusUi, Tone> = { open: 'ok', partial: 'info', filled: 'neutral', cancelled: 'neutral', refunded: 'neutral', killed: 'neutral', closed: 'neutral', unknown: 'warn' };
 
@@ -38,6 +42,37 @@ export interface OrderRowProps {
   nested?: boolean;
   /** loads the order's events (fill history on demand); absent (no indexer): no fill history */
   loadEvents?: (id: Hex, signal: AbortSignal) => Promise<EventView[]>;
+  /** wall-clock mapping of DAA scores: the line's placement time (none: no time) */
+  clock?: Clock | null;
+}
+
+/** An order that needs the reader: its details open by themselves (a warning, a renewal, an expiry, a source other than the indexer). */
+export function needsAttention(row: OrderRowModel): boolean {
+  return (
+    row.unfundable || row.possiblyFrozen || !!row.unlisted || (!!row.cancelBlocked && row.cancelBlocked !== 'old-template') || row.custodyOk === false ||
+    row.renewalDue || (row.expired && row.live) || row.status === 'unknown' || row.source !== 'indexer' || row.oldTemplate
+  );
+}
+
+/** What the one line of an order says (OrderRow), from its model: the time, the price, the trigger, the filled part and the value in KAS. */
+function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo | undefined, clock: Clock | null | undefined) {
+  const decimals = tk?.decimals ?? RAW_TOKEN_DECIMALS;
+  const genesis = row.entry.view ? BigInt(row.entry.view.genesis.daa) : null;
+  const placedRecord = row.entry.record?.placedAtUnix ? BigInt(row.entry.record.placedAtUnix) : 0n;
+  const unix = placedRecord > 0n ? placedRecord : genesis !== null && clock ? daaToUnix(clock, genesis) : null;
+  const time = unix !== null ? formatDateTime(Number(unix), { dateStyle: 'short', timeStyle: 'short' }) : '—';
+  const priceOf = (v: bigint | null): string => (v === null ? '—' : row.pair ? pairPriceText(v, row, tk, b) : formatPricePerToken(v, decimals, row.scale, { group: ',' }));
+  const price = priceOf(row.price);
+  const trigger = row.stopPrice !== null ? t('orders.line.stop', { price: priceOf(row.stopPrice) }) : row.armed === false && row.live ? t('orders.waitingTrigger') : '—';
+  const total = row.amountTotal;
+  const left = row.amountLeft;
+  const filled = total !== null && left !== null ? (total > left ? total - left : 0n) : null;
+  const pct = total !== null && total > 0n && filled !== null ? Number((filled * 100n) / total) : null;
+  const unit = tk ? tk.ticker : row.token ? longId(row.token) : '';
+  const amountText = (v: bigint) => formatUnits(v, decimals, { group: ',' });
+  const filledText = total !== null && filled !== null ? `${amountText(filled)} / ${amountText(total)}` : t('orders.budgetOrder');
+  const value = !row.pair && total !== null && row.price !== null ? formatKas(quoteOf(total, row.price, row.scale, 'down'), { group: ',' }) : '—';
+  return { time, price, trigger, filledText, pct, unit, value };
 }
 
 const localDate = (unix: bigint): string => formatDateTime(Number(unix));
@@ -145,9 +180,81 @@ export function OrderRow(props: OrderRowProps) {
   // strays of a live order the wallet can spend: the maker's sweep returns them while the order lives on
   // (an order under an older contract version is only cancelled: no sweep)
   const canSweep = row.live && row.canCancel && row.strayCount > 0 && !row.cancelOnly;
+  const attention = needsAttention(row);
+  const [open, setOpen] = useState(attention);
+  // an order that comes to need the reader later (a renewal due, an expiry, a warning after a refresh) opens its details then
+  useEffect(() => {
+    if (attention) setOpen(true);
+  }, [attention]);
+  const line = lineFacts(row, tk, bToken, props.clock);
+  const marketText = tk && row.pair ? `${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}` : tk ? `${tk.ticker}/KAS` : row.token ? longId(row.token) : '—';
+  const cancellable = !row.oldTemplate && (row.live || row.status === 'unknown');
 
   return (
-    <div class={`order-card${props.nested ? ' nested' : ''}`} data-testid={`order-row-${row.id}`} data-status={row.status} data-type={row.typeKey} data-side={row.side} data-live={row.live ? '1' : '0'}>
+    <div class={`order-card or-card${props.nested ? ' nested' : ''}${open ? ' or-open' : ''}`} data-testid={`order-row-${row.id}`} data-status={row.status} data-type={row.typeKey} data-side={row.side} data-live={row.live ? '1' : '0'}>
+      <div class="or-line" data-testid={`order-line-${row.id}`}>
+        <span class="or-time num">{line.time}</span>
+        <span class="or-market">
+          {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
+          <span class="or-market-name">{marketText}</span>
+        </span>
+        <span class="or-type">{t(`orders.type.${row.typeKey}`)}</span>
+        <span class={`or-side or-side-${row.side}`}>{t(`common.side.${row.side}`)}</span>
+        <span class="or-price num">{line.price}</span>
+        <span class="or-trigger">{line.trigger}</span>
+        <span class="or-filled">
+          <span class="num">
+            {line.filledText} <span class="muted small">{line.unit}</span>
+            {line.pct !== null ? <span class="muted small"> {line.pct}%</span> : null}
+          </span>
+          {line.pct !== null ? (
+            <span class="or-bar" aria-hidden="true">
+              <span style={{ width: `${Math.min(100, line.pct)}%` }} />
+            </span>
+          ) : null}
+        </span>
+        <span class="or-value num">{line.value}</span>
+        <span class="or-status">
+          <Badge tone={STATUS_TONE[row.status]}>{t(`orders.status.${row.status}`)}</Badge>
+          {attention ? (
+            <span class="or-warn" title={t('orders.line.attention')} aria-label={t('orders.line.attention')} role="img">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3l9.5 17h-19z" />
+                <path d="M12 10v4" />
+                <path d="M12 17.5v.5" />
+              </svg>
+            </span>
+          ) : null}
+        </span>
+        <span class="or-act">
+          {cancellable ? (
+            <Button
+              small
+              variant="danger"
+              disabled={!canSign || !row.canCancel || props.busy}
+              title={disabledReason ?? cancelHint}
+              onClick={() => actions.onCancel(row)}
+              data-testid={`order-cancel-${row.id}`}
+            >
+              {t('orders.cancel')}
+            </Button>
+          ) : null}
+        </span>
+        <button
+          type="button"
+          class="or-toggle"
+          aria-expanded={open ? 'true' : 'false'}
+          aria-controls={`order-details-${row.id}`}
+          aria-label={t(open ? 'orders.line.hide' : 'orders.line.show')}
+          onClick={() => setOpen((o) => !o)}
+          data-testid={`order-toggle-${row.id}`}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        </button>
+      </div>
+      <div class="or-details" id={`order-details-${row.id}`} hidden={!open} data-testid={`order-details-${row.id}`}>
       <div class="row-between">
         <div class="row" style="gap:6px">
           <strong data-testid={`order-type-${row.id}`}>{t(`orders.type.${row.typeKey}`)}</strong>
@@ -296,16 +403,6 @@ export function OrderRow(props: OrderRowProps) {
         <p class="small muted" style="margin-top:8px" data-testid={`order-old-template-why-${row.id}`}>{t('orders.oldTemplate.noCancel')}</p>
       ) : row.live || row.status === 'unknown' ? (
         <div class="order-actions" style="margin-top:8px">
-          <Button
-            small
-            variant="danger"
-            disabled={!canSign || !row.canCancel || props.busy}
-            title={disabledReason ?? cancelHint}
-            onClick={() => actions.onCancel(row)}
-            data-testid={`order-cancel-${row.id}`}
-          >
-            {t('orders.cancel')}
-          </Button>
           {canSweep ? (
             <Button small disabled={!canSign || props.busy} title={disabledReason ?? t('orders.sweep.hint')} onClick={() => actions.onSweep(row)} data-testid={`order-sweep-${row.id}`}>
               {t('orders.sweep.action')}
@@ -328,6 +425,7 @@ export function OrderRow(props: OrderRowProps) {
           ) : null}
         </div>
       ) : null}
+      </div>
     </div>
   );
 }

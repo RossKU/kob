@@ -6,7 +6,7 @@ import type { Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { closeBell, test, expect, statusEntry, TEST_KEYS, type MockClient } from '../fixtures';
 import { connectWallet, fund, listExkcc, pickAsset, seedFavorites, TOKEN } from '../helpers/env';
-import { runFlow } from '../helpers/orders';
+import { runFlow, openOrderRow } from '../helpers/orders';
 import { clickPlace, clickPlaceOnly, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -128,6 +128,7 @@ test('both tokens unregistered, no token in the registry: the pair opens, an ord
   await page.getByTestId('orders-tab-active').click();
 
   // the amend needs both registry entries: refused in a sentence
+  await openOrderRow(page, id);
   await page.getByTestId(`order-replace-${id}`).click();
   await expect(page.getByTestId('replace-no-token')).toContainText('cancel the order and place a new one');
   await page.getByTestId('replace-no-token').getByRole('button').first().click();
@@ -137,6 +138,7 @@ test('both tokens unregistered, no token in the registry: the pair opens, an ord
   await mock.stray(id, TOKEN);
   await page.getByTestId('orders-refresh').click();
   await expect(page.getByTestId('orders-strays').getByTestId('stray-row')).toHaveCount(1);
+  await openOrderRow(page, id);
   await page.getByTestId(`order-sweep-${id}`).click();
   const [swept] = await runFlow(page, mock, wallet, { steps: 1 });
   expect(swept!.submission.closed ?? []).toEqual([]);

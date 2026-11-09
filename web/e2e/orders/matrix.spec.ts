@@ -13,6 +13,7 @@ import { formatKas } from '../../src/kob/units';
 import { browserTzOffset, fund, mockClock, openMarket, gotoOrders } from '../helpers/env';
 import { clickPlaceAndRead, expectWalletSigned, fillFields, pickType, placedBy, waitReviewable, waitSubmitted } from '../helpers/ticket';
 import { CASES, type Ctx, type Timing } from './cases';
+import { openOrderRow } from '../helpers/orders';
 
 test.use({ autoOpen: false });
 
@@ -180,6 +181,7 @@ for (const c of CASES) {
     await expect(row).toHaveAttribute('data-status', 'open');
     await expect(page.getByTestId(`order-type-${view.covenant_id}`)).toHaveText(c.listLabel);
     await expect(row.getByTestId('order-status')).toHaveText(/^open$/i);
+    await openOrderRow(page, view.covenant_id);
     await expect(row.getByTestId(`order-tx-${view.covenant_id}`)).toBeVisible();
     // the placement note the app stored with the record, in the ticket's words ("Sell · Limit"), never the form's ids
     const typeName = (ticketText as Record<string, string>)[`ticket.type.${c.type}.name`]!.replace('{name}', 'EXKCC');

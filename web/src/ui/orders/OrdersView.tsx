@@ -517,6 +517,21 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
             >
               {tab === 'open' ? <p class="small muted" data-testid="orders-race-note">{t('orders.raceNote')}</p> : null}
               {/* the rows come together, as soon as the indexer's answer is in: a trader acts on them, so they wait for nothing else (the balances, the node's answers) */}
+              {d && shown.length > 0 ? (
+                <div class="or-head" aria-hidden="true" data-testid="orders-head">
+                  <span>{t('orders.col.time')}</span>
+                  <span>{t('orders.col.market')}</span>
+                  <span>{t('orders.col.type')}</span>
+                  <span>{t('orders.col.side')}</span>
+                  <span class="right">{t('orders.col.priceLine')}</span>
+                  <span>{t('orders.col.trigger')}</span>
+                  <span class="right">{t('orders.col.filled')}</span>
+                  <span class="right">{t('orders.col.valueKas')}</span>
+                  <span>{t('orders.col.status')}</span>
+                  <span />
+                  <span />
+                </div>
+              ) : null}
               <div class={`stack-sm${d ? ' ml-in' : ''}`} data-testid="orders-list" data-live={stats.live}>
                 {data.loading && !d ? (
                   <div class="stack-sm" role="status" aria-label={t('common.loading')} data-testid="orders-loading">
@@ -527,7 +542,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
                 {shown.map((item) =>
                   item.type === 'single' ? (
                     rowById.get(item.id) ? (
-                      <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} {...(loadEvents ? { loadEvents } : {})} />
+                      <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} clock={d?.clock ?? null} {...(loadEvents ? { loadEvents } : {})} />
                     ) : null
                   ) : (
                     <PositionCard

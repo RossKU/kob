@@ -299,6 +299,7 @@ body:has(.market-page) .container { max-width: 1520px; }
 /* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, the icon is --idb tall, the fingerprint 60 % of it */
 .idb { --idb: 40px; flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .idb-lg, .idb-pair { --idb: 64px; gap: 8px; }
+.idb-sm { --idb: 26px; gap: 4px; }
 .idb .tk-icon { --tk-size: var(--idb); }
 /* the fingerprint is 60 % of the icon and centred on it (the block aligns its items in the middle) */
 .idb .fp { flex: none; display: block; height: calc(var(--idb) * 0.6); width: calc(var(--idb) * 0.6 * 100 / 132); border-radius: calc(var(--idb) * 0.08); }

@@ -23,7 +23,14 @@ export async function seedOrders(mock: MockClient, specs: SeedAsk[]): Promise<st
   return after.filter((o) => !before.has(o.covenant_id)).map((o) => o.covenant_id);
 }
 
-/** Opens "My orders" with the mock wallet connected and waits for the list. */
+/** Opens the details under an order's line (its actions other than Cancel, its facts, its fills) unless they are open already. */
+export async function openOrderRow(page: Page, id: string): Promise<void> {
+  const toggle = page.getByTestId(`order-toggle-${id}`);
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(page.getByTestId(`order-details-${id}`)).toBeVisible();
+}
+
+/** Opens the Portfolio page's Open orders tab with the mock wallet connected and waits for the list. */
 export async function openOrders(page: Page, mock: MockClient, wallet: WalletName = 'kasware'): Promise<void> {
   await openMarket(page, mock, { route: '/portfolio/open', wallet });
   await expect(page.getByTestId('orders-list')).toBeVisible();

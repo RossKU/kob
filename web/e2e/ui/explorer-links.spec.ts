@@ -4,6 +4,7 @@ import type { BrowserContext, Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { fund, listExkcc, openMarket, gotoOrders, showActivity } from '../helpers/env';
 import { fillFields, pickType, placeOrder } from '../helpers/ticket';
+import { openOrderRow } from '../helpers/orders';
 
 test.use({ autoOpen: false });
 
@@ -54,6 +55,7 @@ test('My orders: the placement transaction and every fill row link to the explor
   const placement = card.getByTestId(`order-tx-${id}-link`);
   await expect(placement).toHaveAttribute('href', TN10);
   await expect(placement).toHaveAttribute('target', '_blank');
+  await openOrderRow(page, id);
   const txid = (await card.getByTestId(`order-tx-${id}`).getAttribute('data-value'))!;
   await expect(card.getByTestId(`order-explorer-${id}`)).toHaveAttribute('href', `https://tn10.kaspa.stream/transactions/${txid}`);
   // fills: the row (anywhere) and the id open the fill's transaction
