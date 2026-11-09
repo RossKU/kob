@@ -509,16 +509,16 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       <div class="pf-strip" data-testid="portfolio-summary">
         <div class="pf-stat">
           <span class="pf-k">{t('orders.summary.total')}</span>
-          <span class="pf-v num" data-testid="portfolio-total">{balances.summary ? `≈ ${formatKas(balances.summary.total, { group: ',' })}` : '—'}<span class="pf-unit">KAS</span></span>
+          <span class="pf-v num" data-testid="portfolio-total"><span>{balances.summary ? `≈ ${formatKas(balances.summary.total, { group: ',' })}` : '—'}</span><span class="pf-unit">KAS</span></span>
           {balances.summary && balances.summary.unpriced > 0 ? <span class="pf-s" data-testid="portfolio-unpriced">{t('orders.summary.unpriced', { n: balances.summary.unpriced })}</span> : null}
         </div>
         <div class="pf-stat">
           <span class="pf-k">{t('orders.summary.available')}</span>
-          <span class="pf-v num" data-testid="portfolio-available">{balances.summary ? formatKas(balances.summary.kasFree, { group: ',' }) : '—'}<span class="pf-unit">KAS</span></span>
+          <span class="pf-v num" data-testid="portfolio-available"><span>{balances.summary ? formatKas(balances.summary.kasFree, { group: ',' }) : '—'}</span><span class="pf-unit">KAS</span></span>
         </div>
         <div class="pf-stat">
           <span class="pf-k">{t('orders.summary.inOrders')}</span>
-          <span class="pf-v num" data-testid="portfolio-in-orders">{balances.summary ? formatKas(balances.summary.kasLocked, { group: ',' }) : '—'}<span class="pf-unit">KAS</span></span>
+          <span class="pf-v num" data-testid="portfolio-in-orders"><span>{balances.summary ? formatKas(balances.summary.kasLocked, { group: ',' }) : '—'}</span><span class="pf-unit">KAS</span></span>
         </div>
         <div class="pf-stat">
           <span class="pf-k">{t('orders.summary.open')}</span>
