@@ -16,6 +16,7 @@ import type { Hex } from '../../kob/types';
 import { Banner, Button, ErrorBanner, Modal, RawDetails, Section, Tabs, showToast, toError, useAsync } from '../kit';
 import { useLiveRefresh } from '../market/live';
 import { RowsControl } from '../market/ListPaging';
+import { PHONE_QUERY, useMedia } from '../shell/narrow';
 import { useListPage } from '../market/use-market-list';
 import { useKascov } from '../market/use-kascov';
 import { kascovIconOf } from '../market/kascov-merge';
@@ -118,6 +119,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const listTab = tab === 'history' ? 'history' : 'active';
   // rows per page and the page turned to (the lists are read whole: a page is a slice); another tab, size or market filter starts at the first page
   const [rowsPer, setRows] = usePortfolioRows();
+  // the four tabs stand on one line on a phone: the short words, the full ones as their accessible names
+  const phone = useMedia(PHONE_QUERY);
   const [pageNo, setPageNo] = useListPage(`${tab}|${rowsPer}|${embed && onlyHere ? 'here' : 'all'}`);
   // Strays, automatic refunds and recovery: one folded section; it opens by itself while strays are waiting
   const [settingsOpen, setSettingsOpen] = useState<boolean | null>(props.recover ? true : null);
@@ -558,8 +561,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
           onChange={setTab}
           tabs={[
             { id: 'balances', label: t('orders.tab.balances'), 'data-testid': 'orders-tab-balances' },
-            { id: 'open', label: t('orders.tab.open', { count: counts.active }), 'data-testid': 'orders-tab-active' },
-            { id: 'history', label: t('orders.tab.history', { count: counts.history }), 'data-testid': 'orders-tab-history' },
+            { id: 'open', label: t(phone ? 'orders.tab.openShort' : 'orders.tab.open', { count: counts.active }), 'data-testid': 'orders-tab-active', ...(phone ? { 'aria-label': t('orders.tab.open', { count: counts.active }) } : {}) },
+            { id: 'history', label: t(phone ? 'orders.tab.historyShort' : 'orders.tab.history', { count: counts.history }), 'data-testid': 'orders-tab-history', ...(phone ? { 'aria-label': t('orders.tab.history', { count: counts.history }) } : {}) },
             { id: 'fills', label: t('orders.tab.fills', { count: filledRows.length }), 'data-testid': 'orders-tab-fills' },
           ]}
         />

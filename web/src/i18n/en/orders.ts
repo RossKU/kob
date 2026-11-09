@@ -13,6 +13,9 @@ export default {
   'orders.tab.open': 'Open orders ({count})',
   'orders.tab.history': 'Order history ({count})',
   'orders.tab.fills': 'Fills ({count})',
+  // the same tabs on a phone, where the four must stand on one line (the full words stay their accessible names)
+  'orders.tab.openShort': 'Open ({count})',
+  'orders.tab.historyShort': 'History ({count})',
   'orders.settings.title': 'Strays, automatic refunds and recovery',
   'orders.straysNotice.body': '{count} stray outputs of your orders can be returned to your wallet.',
   'orders.straysNotice.open': 'Show',

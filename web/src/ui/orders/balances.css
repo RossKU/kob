@@ -31,6 +31,12 @@
 /* the tab row: the tabs, and at the right end of the same line the rows per page of the lists (under the tabs, right-aligned, where the line is too short for both) */
 .pf-tabbar { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
 .pf-tabbar > .tabs { flex: 1 1 auto; border-bottom: 0; margin-bottom: 0; }
+/* a phone: the tabs on one line of their own, tighter; where they still do not fit (a wide font) the strip scrolls sideways, without a scrollbar, the active tab in view */
+@media (max-width: 759px) {
+  .pf-tabbar > .tabs { flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; position: relative; }
+  .pf-tabbar > .tabs::-webkit-scrollbar { display: none; }
+  .pf-tabbar > .tabs button { flex: none; padding: 8px 10px; white-space: nowrap; }
+}
 .pf-rows { margin-left: auto; padding: 4px 0; }
 .pf-rows .ml-size { margin-left: 0; }
 .pf-rows-off { visibility: hidden; }

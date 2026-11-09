@@ -60,6 +60,18 @@ for (const width of [360, 390, 430]) {
       const cols = await strip.evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length);
       expect.soft(cols, 'summary columns').toBe(2);
 
+      // the four tabs stand on one line (one offsetTop), short on a phone, their full words kept as the accessible names; the Rows control takes no room on Balances
+      const tops = await page.locator('.portfolio [role="tab"]').evaluateAll((els) => els.map((e) => (e as HTMLElement).offsetTop));
+      expect.soft(new Set(tops).size, `the tabs' offsetTop: ${tops}`).toBe(1);
+      expect.soft(tops).toHaveLength(4);
+      await expect(page.getByTestId('orders-tab-active')).toHaveAttribute('aria-label', /^Open orders [(][0-9]+[)]$/);
+      await expect(page.getByTestId('orders-tab-history')).toHaveAttribute('aria-label', /^Order history [(][0-9]+[)]$/);
+      await expect(page.getByTestId('orders-tab-history')).toHaveText(/^History [(][0-9]+[)]$/);
+      expect.soft(await page.getByTestId('portfolio-rows-box').isVisible(), 'no Rows control on Balances').toBe(false);
+      const tabsBottom = (await page.locator('.pf-tabbar').boundingBox())!.y + (await page.locator('.pf-tabbar').boundingBox())!.height;
+      const cardTop = (await page.getByTestId('balances-panel').boundingBox())!.y;
+      expect.soft(cardTop - tabsBottom, 'no empty band between the tabs and the card').toBeLessThan(20);
+
       // Balances
       await expect(page.getByTestId('token-balances-table')).toBeVisible();
       await expect(page.getByTestId(`balance-row-${ID}`)).toBeVisible();
