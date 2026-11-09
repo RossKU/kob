@@ -170,17 +170,17 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .sum-strip > .sum-stat { background: var(--surface); padding: 10px 14px; }
 .sum-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .sum-k { font-size: 0.75rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sum-v { font-size: 1.25rem; font-weight: 650; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 1.45em; }
+.sum-v { font-size: 1.25rem; font-weight: 650; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 1.5em; }
 .sum-v-big { font-size: 1.75rem; }
 .sum-unit { font-size: 0.75rem; font-weight: 600; color: var(--muted); margin-left: 4px; }
-.sum-s { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.2em; }
+.sum-s { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.5em; }
 .sum-up { color: var(--buy); }
 .sum-down { color: var(--sell); }
 .sum-win { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 340px); gap: 10px; }
 .sum-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; min-width: 0; }
 .sum-chart-card { display: flex; flex-direction: column; gap: 8px; }
 .sum-chart-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 4px 16px; }
-.sum-readout { margin: 0; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.2em; }
+.sum-readout { margin: 0; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.5em; }
 .sum-readout strong { color: var(--text); font-weight: 600; margin-right: 4px; }
 .sum-chart { display: flex; gap: 8px; height: 120px; }
 .sum-y { flex: none; width: 40px; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; font-size: 0.7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -206,6 +206,11 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .sum-loading .sum-v:empty, .sum-loading .sum-v-big { color: transparent; background: var(--skeleton); border-radius: 4px; }
 @media (max-width: 899px) {
   .sum-win { grid-template-columns: minmax(0, 1fr); }
+  /* the lines that come with the figures wrap to two lines on a narrow screen: they hold both while the figures load; the chart readout sits under the
+     figure (side by side while it is empty, it would drop to a row of its own when text arrives) and holds two lines too */
+  .sum-tiles .sum-s { min-height: 3em; }
+  .sum-chart-head { flex-direction: column; align-items: stretch; }
+  .sum-readout { min-height: 3em; }
   .sum-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .sum-strip-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
