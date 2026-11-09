@@ -179,13 +179,13 @@ function SkeletonRow() {
 const ROW_LEAVE_MS = 360;
 const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide, leaving }: { row: TokenRow; entry: ListEntry; step: number; favorite: boolean; onFavorite: (id: string) => void; hidden: boolean; onHide: (id: string) => void; leaving: boolean }) {
+function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide, leaving, again }: { row: TokenRow; entry: ListEntry; step: number; favorite: boolean; onFavorite: (id: string) => void; hidden: boolean; onHide: (id: string) => void; leaving: boolean; again: '' | 'a' | 'b' }) {
   // every row has the same three lines, so every row is as tall and the icons keep one pitch: line 1 the ticker (bold) and the name (one line, an ellipsis, the
   // whole name in its title); line 2 the covenant id fragment with its copy button; line 3 the badges (one line, never wrapped). A token without a ticker is led by its name
   const headline = row.ticker || row.name || t('market.list.unnamed');
   const sub = row.ticker ? row.name : '';
   return (
-    <tr class={leaving ? 'ml-in ml-out' : 'ml-in'} style={`--i:${step}`} data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
+    <tr class={`ml-in${again ? ` ml-again-${again}` : ''}${leaving ? ' ml-out' : ''}`} style={`--i:${step}`} data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
       <td>
         <div class="ml-name">
           <FavoriteStar on={favorite} name={tokenLabel(row)} onToggle={() => onFavorite(row.covenantId)} data-testid={`token-favorite-${row.covenantId}`} />
@@ -276,6 +276,9 @@ export function TokenList(props: { invalidToken?: string }) {
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
   // a row the eye was pressed on leaves as it came in, reversed (`.ml-out`), then the list drops it
   const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set());
+  // once it is gone, the rows that stood below it rise in again from its place, one after the other, as the page's rows first did (`.ml-again-a` / `-b` in
+  // market.css: another animation name restarts the animation without remounting the row), instead of jumping up a place
+  const [again, setAgain] = useState<{ from: number; n: number }>({ from: Number.POSITIVE_INFINITY, n: 0 });
   // the live order counts of the favourite pairs: nothing is read for a pair until they are shown
   const readPairs = favoritesOnly && favorites.pairs.length > 0;
   const pairs = useAsync((signal) => (indexer && readPairs ? indexer.pairs(undefined, { signal }) : Promise.resolve(null)), [indexer, !!sa?.active, readPairs]);
@@ -400,9 +403,11 @@ export function TokenList(props: { invalidToken?: string }) {
   const onFavoriteToken = (id: string) => changeFavorites((f) => toggleToken(f, id));
   const onHideToken = (id: string) => {
     if (leaving.has(id)) return;
+    const at = windowRows.findIndex((r) => r.row.covenantId === id);
     setLeaving((s) => new Set(s).add(id));
     window.setTimeout(() => {
       toggleHiddenToken(id);
+      if (at >= 0) setAgain((a) => ({ from: at, n: a.n + 1 }));
       setLeaving((s) => {
         const next = new Set(s);
         next.delete(id);
@@ -465,12 +470,13 @@ export function TokenList(props: { invalidToken?: string }) {
                     key={row.covenantId}
                     row={row}
                     entry={entry}
-                    step={Math.min(i, REVEAL_STEPS)}
+                    step={Math.min(i >= again.from ? i - again.from : i, REVEAL_STEPS)}
                     favorite={isFavoriteToken(favorites, row.covenantId)}
                     onFavorite={onFavoriteToken}
                     hidden={hiddenSet.has(row.covenantId.toLowerCase())}
                     onHide={onHideToken}
                     leaving={leaving.has(row.covenantId)}
+                    again={i >= again.from ? (again.n % 2 ? 'a' : 'b') : ''}
                   />
                 ))
               )}

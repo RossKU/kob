@@ -244,11 +244,16 @@ body:has(.market-page) .container { max-width: 1520px; }
    finished animation leaves the row, whose popovers are fixed to the viewport, alone. `translate`, not `transform`: the activity log's rows stand at their place by a transform */
 .ml-in { animation: ml-rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(min(var(--i, 0), 14) * 34ms); }
 @keyframes ml-rise { from { opacity: 0; translate: 0 16px; } to { opacity: 1; translate: none; } }
+/* the rows below a row hidden with its eye rise in again from its place (TokenList.tsx): the same rise under another name restarts it; two names, so a second hide restarts it too */
+.ml-in.ml-again-a { animation-name: ml-rise-a; }
+.ml-in.ml-again-b { animation-name: ml-rise-b; }
+@keyframes ml-rise-a { from { opacity: 0; translate: 0 16px; } to { opacity: 1; translate: none; } }
+@keyframes ml-rise-b { from { opacity: 0; translate: 0 16px; } to { opacity: 1; translate: none; } }
 .tk-in, .mkt-stats-in .mkt-stat-value { animation: tk-fade 0.35s ease-out backwards; }
 /* a row hidden with its eye: the rise in reversed, up and out, then the list drops it (TokenList.tsx ROW_LEAVE_MS) */
 .ml-tokens tr.ml-out { animation: ml-leave 0.36s cubic-bezier(0.7, 0, 0.84, 0) forwards; pointer-events: none; }
 @keyframes ml-leave { from { opacity: 1; translate: none; } to { opacity: 0; translate: 0 -16px; } }
-@media (prefers-reduced-motion: reduce) { .ml-in, .tk-in, .mkt-stats-in .mkt-stat-value, .ml-tokens tr.ml-out { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ml-in, .ml-in.ml-again-a, .ml-in.ml-again-b, .tk-in, .mkt-stats-in .mkt-stat-value, .ml-tokens tr.ml-out { animation: none; } }
 .ml-skel-row .ml-name { min-height: 72px; }
 .ml-skel-icon { flex: none; width: 56px; height: 56px; border-radius: 50%; }
 .ml-skel-text { flex: 1 1 auto; max-width: 160px; }

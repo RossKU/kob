@@ -196,6 +196,8 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 .lp-final-lead { max-width: 46ch; margin: 0 0 clamp(28px, 4vw, 56px); font-size: clamp(17px, 1.6vw, 22px); line-height: 1.55; color: var(--fg-2); text-wrap: pretty; }
 .lp-final-head { display: flex; align-items: center; justify-content: space-between; gap: clamp(16px, 4vw, 64px); }
 .lp-final-head h2 { flex: 1 1 auto; min-width: 0; }
+/* each line stays one line, whatever the system's font: LandingPage.tsx useFitLines shrinks the type where the widest line does not fit */
+.lp-final-head h2 .lp-ln { white-space: nowrap; }
 .lp-final .lp-mini { flex: none; width: clamp(67px, 16.8vw, 288px); display: flex; align-items: center; }
 .lp-final .lp-mini .brand-mark { display: block; width: 100%; height: auto; }
 

@@ -97,6 +97,33 @@ function Row(props: { k: string; v: string; vClass: string; children: ComponentC
 }
 
 /** The bots section's terminal for `network`: commands only (a dry run), the shape of a script's or an agent's loop. */
+/**
+ * The closing heading keeps its two lines ("The book" / "is open."), whatever font the viewer's system gives it: the page brings no font of its own, and a
+ * wider fallback than Inter Display used to break each line in two. Each line is unwrapped (landing.css); where the widest one does not fit beside the
+ * mark, the heading's type shrinks until it does.
+ */
+function useFitLines(head: { current: HTMLDivElement | null }) {
+  useEffect(() => {
+    const el = head.current;
+    const h2 = el?.querySelector('h2');
+    if (!el || !h2) return;
+    let width = -1;
+    const fit = (force: boolean) => {
+      if (!force && el.clientWidth === width) return;
+      width = el.clientWidth;
+      h2.style.removeProperty('font-size');
+      const room = h2.clientWidth;
+      const need = Math.max(0, ...Array.from(h2.querySelectorAll<HTMLElement>('.lp-ln > span'), (s) => s.scrollWidth));
+      if (room > 0 && need > room) h2.style.fontSize = `${Math.floor((parseFloat(getComputedStyle(h2).fontSize) * room) / need)}px`;
+    };
+    fit(true);
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => fit(false)) : null;
+    ro?.observe(el);
+    void document.fonts?.ready.then(() => fit(true));
+    return () => ro?.disconnect();
+  }, []);
+}
+
 function botExample(network: string): string {
   return [
     `$ kob book TUSD --network ${network} --json`,
@@ -115,6 +142,8 @@ export function LandingPage() {
   const root = useRef<HTMLDivElement>(null);
   useReveal(root);
   const go = useHeroGo();
+  const finalHead = useRef<HTMLDivElement>(null);
+  useFitLines(finalHead);
   const site = siteName(typeof location === 'undefined' ? '' : location.hostname);
   const net = landingNetworkText(config.network, site);
 
@@ -333,7 +362,7 @@ export function LandingPage() {
               <p class="lp-final-lead lp-rv" data-testid="landing-not-business">
                 {t('landing.final.lead')}
               </p>
-              <div class="lp-final-head">
+              <div class="lp-final-head" ref={finalHead} data-testid="landing-final-head">
                 <h2>
                   <Ln>{t('landing.final.l1')}</Ln>
                   <Ln d={1} class="lp-accent">

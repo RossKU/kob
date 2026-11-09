@@ -403,11 +403,21 @@ test.describe('hidden tokens', () => {
     const row = page.getByTestId(`token-row-${base}`);
     await expect(row).toBeVisible();
     await expect(page.getByTestId('token-list-hidden')).toHaveCount(0);
+    // the table scrolls sideways only: a row rising in never gives it a vertical scrollbar
+    expect(await page.locator('.ml-tokens').evaluate((e) => getComputedStyle(e).overflowY)).toBe('hidden');
+    const before = await tokenRows(page).evaluateAll((rs) => rs.map((r) => r.getAttribute('data-testid')!));
+    const below = before.slice(before.indexOf(`token-row-${base}`) + 1);
     await page.getByTestId(`token-hide-${base}`).click();
     // it leaves as rows come in, reversed: up and out, then the list drops it
     await expect(row).toHaveClass(/ml-out/);
     expect(await row.evaluate((e) => getComputedStyle(e).animationName)).toBe('ml-leave');
     await expect(row).toHaveCount(0);
+    // the rows that stood below it rise in again from its place, the first of them at once
+    for (const [k, id] of below.entries()) {
+      await expect(page.getByTestId(id)).toHaveClass(/ml-again-a/);
+      expect(await page.getByTestId(id).evaluate((e) => getComputedStyle(e).animationName)).toBe('ml-rise-a');
+      if (k === 0) expect(await page.getByTestId(id).evaluate((e) => getComputedStyle(e).getPropertyValue('--i').trim())).toBe('0');
+    }
     await expect(page.getByTestId('token-list-hidden')).toHaveText('Hidden (1)');
     // a search still finds a hidden token
     await page.getByTestId('token-search').fill('exkcc');

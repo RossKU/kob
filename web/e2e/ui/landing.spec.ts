@@ -293,3 +293,27 @@ for (const width of [360, 390]) {
     expect(await noScroll(page)).toBe(true);
   });
 }
+
+test.describe('the closing heading', () => {
+  // the page brings no font of its own: a system without Inter Display falls back to a wider one, which used to break "The book" and "is open." in two
+  test('keeps its two lines beside the mark, in any font and at any width', async ({ appPage: page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/');
+    const head = page.getByTestId('landing-final-head');
+    await head.scrollIntoViewIfNeeded();
+    const oneLineEach = () =>
+      head.evaluate((el) => {
+        const h2 = el.querySelector('h2')!;
+        const fs = parseFloat(getComputedStyle(h2).fontSize);
+        const lines = Array.from(el.querySelectorAll<HTMLElement>('.lp-ln > span'));
+        return lines.length === 2 && lines.every((s) => s.offsetHeight < fs * 1.2 && s.scrollWidth <= h2.clientWidth + 1);
+      });
+    expect(await oneLineEach()).toBe(true);
+    // a much wider font than Inter Display
+    await page.addStyleTag({ content: ".lp-final h2 { font-family: 'Courier New', monospace !important; letter-spacing: 0 !important; }" });
+    for (const width of [1100, 1440, 1920, 900]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect.poll(oneLineEach).toBe(true);
+    }
+  });
+});

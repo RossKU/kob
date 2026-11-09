@@ -428,7 +428,9 @@ small, .small { font-size: 0.85em; }
 
 /* ------------------------------------------------------------------ table */
 
-.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* sideways only: `overflow-x: auto` alone makes the vertical overflow auto too, so a row rising in from 16px below (.ml-in) briefly gave the table its own
+   vertical scrollbar, which took its width from the columns until the rise ended (Chrome on Windows) */
+.table-wrap { width: 100%; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
 .table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .table th, .table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .table th { font-weight: 600; color: var(--muted); font-size: 0.82rem; white-space: nowrap; background: var(--surface); }
