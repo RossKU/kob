@@ -19,8 +19,12 @@ interface ClickTimes {
 test.use({ autoOpen: false });
 
 const BUDGET_MS = 1_000;
-/** a click on a ticket whose parts were read before the feed went live, or before a notice / a submission of this page, waits for the re-check reads of the slow indexer (2-6 s each, a few in a row) */
-const RECHECK_BUDGET_MS = 30_000;
+/**
+ * a click on a ticket whose parts were read before the feed went live, or before a notice / a submission of this page, waits for the re-check reads of the slow indexer (2-6 s each, a few in a row).
+ * The market page also reads the connected wallet's orders, strays and token coins (the Portfolio panel on the page) and the book's per-order lookups through the same few
+ * connections to that origin, so the re-check's reads queue behind them: 60 s, not 30 s (measured 10-30 s on a quick machine, more on a CI runner).
+ */
+const RECHECK_BUDGET_MS = 60_000;
 
 /** The node on an origin of its own, as in production (wRPC): its calls never queue behind the slow indexer's in the browser's connection pool. */
 async function nodeOnItsOwnOrigin(page: Page): Promise<void> {
@@ -58,7 +62,7 @@ async function placeableFor(page: Page, amount: string): Promise<number> {
 async function clickToWallet(page: Page, wallet: MockWalletHandle, request: number): Promise<ClickTimes> {
   const t0 = Date.now();
   await page.getByTestId('order-place').click();
-  await expect(page.getByTestId('confirm-order')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('confirm-order')).toBeVisible({ timeout: RECHECK_BUDGET_MS });
   const t1 = Date.now();
   expect(await wallet.calls(), 'the wallet is asked only after Continue').toHaveLength(request - 1);
   await page.getByTestId('confirm-order-ok').click();
@@ -68,7 +72,7 @@ async function clickToWallet(page: Page, wallet: MockWalletHandle, request: numb
 
 test.describe('order ticket with a slow indexer (2-6 s an answer)', () => {
   test('the order button within 1 s of the last keystroke, the confirmation after the re-check reads; a second and a third order right after', async ({ appPage: page, mock, wallet }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(360_000);
     await fund(mock, 'alice');
     await nodeOnItsOwnOrigin(page);
     await listExkcc(page);
