@@ -16,7 +16,7 @@ numbers cited elsewhere as "api.md 3.19" and the like are the reference's sectio
 | Read only | It cannot place, fill, cancel or refund anything. Transactions are built and signed elsewhere: [`kob`](../crates/kob-cli/README.md), the web app, `crates/kob-wasm`. |
 | Keyless | No account, no API key, no cookies. Every route is public to whoever can reach the server. |
 | Who runs it | Any operator: `kobd --indexer` (or `kobd --executor`; with `--indexer` too over a full store) serves it from its indexer database, on `127.0.0.1:8090` by default. Requests never reach the node. Setup: [ops/executor.md](ops/executor.md); a public server: [ops/chart-server.md](ops/chart-server.md). |
-| Public server | `https://kob-api.kaspa.ag` (testnet-10). WebSocket: `wss://kob-api.kaspa.ag/v1/ws`. |
+| Public servers | `https://kob-api.kaspa.ag` (mainnet), `https://kob-api-tn10.kaspa.ag` (testnet-10). WebSocket: `wss://kob-api.kaspa.ag/v1/ws`, `wss://kob-api-tn10.kaspa.ag/v1/ws`. |
 | Freshness | The store follows the chain a few blocks behind the node; mempool transactions are not served. `GET /v1/health` says how far behind it is. |
 
 ## Conventions
@@ -79,7 +79,7 @@ The responses below are from the public server, trimmed (`...`); hex ids are sho
 so `price_basis` and `scale` are `100000000`.
 
 ```sh
-API=https://kob-api.kaspa.ag
+API=https://kob-api-tn10.kaspa.ag
 T=$(curl -s $API/v1/tokens | jq -r '.tokens[] | select(.ticker == "TBTC") | .covenant_id')   # c064d410...
 ```
 

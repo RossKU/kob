@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "kob-executor-android"
+rootProject.name = "kobd-android"
 include(":app")

@@ -47,7 +47,7 @@ Every signing command prints the plan and the decoded transaction first. It sign
 |---|---|---|---|
 | Network | `--network mainnet\|testnet-10`, `--testnet`, `--netsuffix=10` | | mainnet (a deployment build is bound to its own network) |
 | Node (wRPC) | `--node URL` | `KOB_NODE_WRPC` | the public nodes named by the Kaspa resolvers (two hosts that must agree) |
-| Indexer | `--indexer URL` (`http://` or `https://`) | `KOB_INDEXER_URL` | testnet-10: `https://kob-api.kaspa.ag`; mainnet: none yet |
+| Indexer | `--indexer URL` (`http://` or `https://`) | `KOB_INDEXER_URL` | testnet-10: `https://kob-api-tn10.kaspa.ag`; mainnet: `https://kob-api.kaspa.ag` |
 | Signing key | `--key-file PATH`, `--key-env NAME` | `KOB_KEY` | none |
 | Token registry | `--registry FILE` | | the registry embedded for the network |
 | Fee | `--fee-rate N`, `--priority-fee` | | 100 sompi per gram, relay minimum |
@@ -55,8 +55,9 @@ Every signing command prints the plan and the decoded transaction first. It sign
 
 - **Network.** Every plan and prompt names the network. The node must run it, or nothing is planned or signed.
   The default indexer comes from `contracts/deploy/<network>/deployment.json` (`indexer_url`). Builds from before the web app moved to
-  Cloudflare Pages default to `https://kob.kaspa.ag/indexer` on testnet-10, which is gone: such a build fails. Pass
-  `--indexer https://kob-api.kaspa.ag` or set `KOB_INDEXER_URL=https://kob-api.kaspa.ag`, or install a current build.
+  Cloudflare Pages default to `https://kob.kaspa.ag/indexer` on testnet-10, which is gone, and builds from before the production domains
+  default to `https://kob-api.kaspa.ag`, which is the mainnet indexer now: such a build fails on testnet-10. Pass
+  `--indexer https://kob-api-tn10.kaspa.ag` or set `KOB_INDEXER_URL=https://kob-api-tn10.kaspa.ag`, or install a current build.
 - **Own node.** JSON wRPC `ws://host:18110` (mainnet) or `:18210` (testnet-10); Borsh `ws://host:17110` / `:17210`. Put a URL
   with a password in `KOB_NODE_WRPC`, not on the command line. `KOB_RESOLVERS` replaces the resolver list.
 - **Fees.** `--priority-fee` also pays for the storage mass (the web app's "Pay the priority fee"). Use it when blocks are

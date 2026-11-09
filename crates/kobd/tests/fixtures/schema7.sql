@@ -1,7 +1,7 @@
 -- KOB indexer schema (SQLite, WAL). Version recorded in meta.schema_version.
 --
 -- The database is a DERIVED view: the permanent source is the record log (`recordlog.rs`), and
--- `kob-executor index replay` rebuilds every table below from it.
+-- `kobd db replay` rebuilds every table below from it.
 --
 -- Reorg model: every mutable row is stamped with the chain block (`seq`) that created or spent it.
 -- Reverting a chain block deletes what it created, un-spends what it spent, and re-derives

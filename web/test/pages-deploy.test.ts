@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pagesConfig, programRegistry, writeDeployment } from '../scripts/pages-config.mjs';
 import { checkPages } from '../scripts/check-pages.mjs';
+import { ensureDomain, hostOf, zoneCandidates } from '../scripts/pages-domain.mjs';
 import { DEFAULT_REGISTRY_PATH } from '../registry-pin.mjs';
 import { sanitizeLayer, type ConfigWarning } from '../src/config';
 import { parseRegistry } from '../src/kob/registry';
@@ -172,6 +173,77 @@ function pagesHost(dist: string, headers: string, o: { detach?: boolean; tamper?
   });
 }
 
+describe('pages-domain: the custom domain of a Pages site', () => {
+  type Route = { status?: number; body: unknown };
+  /** A fake Cloudflare API: `routes` maps "METHOD path" to the answer; `calls` records what was asked. */
+  const api = (routes: Record<string, Route>) => {
+    const calls: string[] = [];
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      const key = `${init?.method ?? 'GET'} ${String(url).replace('https://api.cloudflare.com/client/v4', '')}`;
+      calls.push(key);
+      const r = routes[key] ?? { status: 403, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] } };
+      return { ok: (r.status ?? 200) < 400, status: r.status ?? 200, json: async () => r.body };
+    }) as unknown as typeof fetch;
+    return { fetchFn, calls };
+  };
+  const opts = { token: 't', account: 'acc', project: 'kob-web', host: 'kob-tn10.kaspa.ag' };
+  const domains = '/accounts/acc/pages/projects/kob-web/domains';
+
+  it('reads the host of the public URL (https only) and the candidate zones, longest first', () => {
+    expect(hostOf('https://kob-tn10.kaspa.ag/')).toBe('kob-tn10.kaspa.ag');
+    expect(hostOf('http://kob-tn10.kaspa.ag')).toBeNull();
+    expect(hostOf('nonsense')).toBeNull();
+    expect(zoneCandidates('a.b.kaspa.ag')).toEqual(['a.b.kaspa.ag', 'b.kaspa.ag', 'kaspa.ag']);
+  });
+
+  it('a domain that is attached with its CNAME needs nothing', async () => {
+    const { fetchFn, calls } = api({
+      [`GET ${domains}`]: { body: { success: true, result: [{ name: 'kob-tn10.kaspa.ag', status: 'active' }] } },
+      'GET /zones?name=kob-tn10.kaspa.ag&account.id=acc': { body: { success: true, result: [] } },
+      'GET /zones?name=kaspa.ag&account.id=acc': { body: { success: true, result: [{ id: 'z1', name: 'kaspa.ag' }] } },
+      'GET /zones/z1/dns_records?name=kob-tn10.kaspa.ag': { body: { success: true, result: [{ type: 'CNAME', content: 'kob-web.pages.dev' }] } },
+    });
+    const r = await ensureDomain({ ...opts, fetchFn });
+    expect(r.ok).toBe(true);
+    expect(calls.some((c) => c.startsWith('POST'))).toBe(false);
+  });
+
+  it('attaches a missing domain and, with a token that may edit DNS, creates the proxied CNAME', async () => {
+    const { fetchFn, calls } = api({
+      [`GET ${domains}`]: { body: { success: true, result: [] } },
+      [`POST ${domains}`]: { body: { success: true, result: { status: 'pending' } } },
+      'GET /zones?name=kob-tn10.kaspa.ag&account.id=acc': { body: { success: true, result: [{ id: 'z1', name: 'kob-tn10.kaspa.ag' }] } },
+      'GET /zones/z1/dns_records?name=kob-tn10.kaspa.ag': { body: { success: true, result: [] } },
+      'POST /zones/z1/dns_records': { body: { success: true, result: {} } },
+    });
+    const r = await ensureDomain({ ...opts, fetchFn });
+    expect(r.ok).toBe(true);
+    expect(calls).toContain(`POST ${domains}`);
+    expect(calls).toContain('POST /zones/z1/dns_records');
+  });
+
+  it('a token limited to Pages: the domain is attached and the step says which CNAME to add (still a success)', async () => {
+    const { fetchFn } = api({
+      [`GET ${domains}`]: { body: { success: true, result: [] } },
+      [`POST ${domains}`]: { body: { success: true, result: { status: 'pending' } } },
+    });
+    const r = await ensureDomain({ ...opts, fetchFn });
+    expect(r.ok).toBe(true);
+    expect(r.lines.join('\n')).toContain('`CNAME kob-tn10.kaspa.ag -> kob-web.pages.dev`');
+  });
+
+  it('a domain held by another project is not moved: the step fails and says to remove it there first', async () => {
+    const { fetchFn, calls } = api({
+      [`GET ${domains}`]: { body: { success: true, result: [] } },
+      [`POST ${domains}`]: { status: 409, body: { success: false, errors: [{ code: 8000018, message: 'domain already in use' }] } },
+    });
+    const r = await ensureDomain({ ...opts, fetchFn });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join('\n')).toContain('remove it there first');
+    expect(calls.some((c) => c.startsWith('DELETE'))).toBe(false);
+  });
+});
+
 describe('check-pages: the deployed headers and files', () => {
   const HEADERS = readFileSync(fileURLToPath(new URL('../public/_headers', import.meta.url)), 'utf8');
   let dist: string;
@@ -253,5 +325,17 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     expect(job('config')).not.toContain('environment:');
     for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) expect(wf).toContain(`secrets.${name}`);
     for (const name of ['KOB_PAGES_PROJECT', 'KOB_PAGES_INDEXER_URL', 'KOB_PAGES_BRANCH', 'KOB_PAGES_NETWORK', 'KOB_PAGES_EXTRA_INDEXER_URLS', 'KOB_PAGES_NODE_URL', 'KOB_PAGES_EXPLORER_URL', 'KOB_PAGES_TOKEN_NAMES_URL']) expect(wf).toContain(`vars.${name}`);
+  });
+
+  it('the mainnet site is a matrix entry only when its project and indexer variables are set, and is always built with network mainnet', () => {
+    expect(job('deploy')).toContain('matrix: ${{ fromJSON(needs.config.outputs.matrix) }}');
+    expect(job('config')).toContain('if [ -n "$MAIN_PROJECT$MAIN_INDEXER" ]');
+    expect(job('config')).toContain('(if $mp != "" then [{site: "mainnet", project: $mp, network: "mainnet"');
+    for (const name of ['KOB_PAGES_MAINNET_PROJECT', 'KOB_PAGES_MAINNET_INDEXER_URL', 'KOB_PAGES_MAINNET_PUBLIC_URL']) expect(wf).toContain(`vars.${name}`);
+    // the wrangler commands keep their options apart (an earlier edit glued the project name to `--branch`)
+    expect(wf).toMatch(/pages project create \$\{\{ matrix\.project \}\} --production-branch=/);
+    expect(wf).toMatch(/--project-name=\$\{\{ matrix\.project \}\} --branch=/);
+    // no deploy step reads a site's value from a variable directly: the matrix carries it
+    expect(job('deploy')).not.toContain('vars.');
   });
 });
