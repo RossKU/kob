@@ -3,16 +3,17 @@ import { t } from '../../i18n';
 import { Button, Segmented } from '../kit';
 import { LIST_PAGE_SIZES, type ListPageSize, type PageWindow } from './market-list';
 
-/** `Rows 20 / 50 / 100`. `id`: the prefix of its test ids. */
-export function RowsControl(props: { id: string; size: ListPageSize; onSize: (n: ListPageSize) => void }) {
+/** `Rows 20 / 50 / 100` (or the `sizes` given: the Portfolio's lists offer 10 / 20 / 50). `id`: the prefix of its test ids. */
+export function RowsControl<N extends number = ListPageSize>(props: { id: string; size: N; onSize: (n: N) => void; sizes?: readonly N[] }) {
+  const sizes = props.sizes ?? (LIST_PAGE_SIZES as readonly number[] as readonly N[]);
   return (
     <div class="ml-size">
       <span class="small muted" aria-hidden="true">{t('market.list.rows')}</span>
       <Segmented<string>
         aria-label={t('market.list.rowsLabel')}
         value={String(props.size)}
-        onChange={(v) => props.onSize(Number(v) as ListPageSize)}
-        options={LIST_PAGE_SIZES.map((n) => ({ value: String(n), label: String(n), 'data-testid': `${props.id}-rows-${n}` }))}
+        onChange={(v) => props.onSize(Number(v) as N)}
+        options={sizes.map((n) => ({ value: String(n), label: String(n), 'data-testid': `${props.id}-rows-${n}` }))}
         data-testid={`${props.id}-rows`}
       />
     </div>

@@ -75,9 +75,11 @@ function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo |
   const pct = total !== null && total > 0n && filled !== null ? Number((filled * 100n) / total) : null;
   const unit = tk ? tk.ticker : row.token ? longId(row.token) : '';
   const amountText = (v: bigint) => formatUnits(v, decimals, { group: ',' });
-  const filledText = total !== null && filled !== null ? `${amountText(filled)} / ${amountText(total)}` : t('orders.budgetOrder');
+  const filledText = total !== null && filled !== null ? `${amountText(filled)} / ${amountText(total)}` : t('orders.budgetShort');
+  // a buy order that holds a KAS budget has no amount to show: the line says so in two words (the amount follows from the price; the details say it in full)
+  const budget = !(total !== null && filled !== null);
   const value = !row.pair && total !== null && row.price !== null ? formatKas(quoteOf(total, row.price, row.scale, 'down'), { group: ',' }) : '—';
-  return { time, price, trigger, filledText, pct, unit, value };
+  return { time, price, trigger, filledText, pct, unit, value, budget };
 }
 
 const localDate = (unix: bigint): string => formatDateTime(Number(unix));
@@ -208,8 +210,8 @@ export function OrderRow(props: OrderRowProps) {
         <span class="or-price num">{line.price}</span>
         <span class="or-trigger">{line.trigger}</span>
         <span class="or-filled">
-          <span class="num">
-            {line.filledText} <span class="muted small">{line.unit}</span>
+          <span class="num" title={line.budget ? t('orders.budgetOrder') : undefined}>
+            {line.filledText}{line.budget ? null : <> <span class="muted small">{line.unit}</span></>}
             {line.pct !== null ? <span class="muted small"> {line.pct}%</span> : null}
           </span>
           {line.pct !== null ? (

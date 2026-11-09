@@ -5,6 +5,7 @@ import { TokenNote } from '../market/TokenNote';
 import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { Hex } from '../../kob/types';
+import { KasIcon } from '../kit/KasIcon';
 import { Amount, Banner, Button, ErrorBanner, Section, Table, TableMessage, unitsFraction } from '../kit';
 import { formatKas, formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
@@ -103,15 +104,15 @@ export function BalancesPanel(props: {
               <tr data-testid="kas-balance" class="bal-kas">
                 <td class="bal-token">
                   <span class="bal-asset">
-                    <span class="bal-kas-icon" aria-hidden="true">K</span>
+                    <KasIcon />
                     <span class="bal-name">KAS</span>
                   </span>
                 </td>
-                <td class="right" data-label={t('orders.balances.available')}>
+                <td class={`right${combined.kas.onTokens > 0n ? ' bal-wide' : ''}`} data-label={t('orders.balances.available')}>
                   <span data-testid="kas-free">{free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.free} group /> : t('common.unavailable')}</span>
                   {combined.kas.onTokens > 0n ? (
                     <div class="small muted" title={t('orders.balances.kasOnTokensHint')}>
-                      {t('orders.balances.kasOnTokensPlus')} <span data-testid="kas-on-tokens"><Amount kind="kas" value={combined.kas.onTokens} group /></span>
+                      {t('orders.balances.kasOnTokensPlus')} <span class="bal-nw" data-testid="kas-on-tokens"><Amount kind="kas" value={combined.kas.onTokens} group /></span>
                     </div>
                   ) : null}
                 </td>
@@ -150,7 +151,7 @@ export function BalancesPanel(props: {
                           <span class="small muted" title={t('orders.balances.unreviewedHint', { program: program ?? '?' })} data-testid="balance-unreviewed">{' '}({t('orders.balances.unreviewed')})</span>
                         ) : null}
                       </td>
-                      <td class="right" data-label={t('market.balances.free')}>
+                      <td class={`right${b.notSpendable > 0n ? ' bal-wide' : ''}`} data-label={t('market.balances.free')}>
                         <Amount kind="token" value={b.free} decimals={d} unit={false} fraction={fr(cols.free)} group />
                         {baseUnits}
                         {b.notSpendable > 0n ? (

@@ -9,6 +9,8 @@ import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
 export const NARROW_QUERY = '(max-width: 719px)';
 /** A desktop row that is not wide: the chip is shortened (styles.css has the matching spacing). */
 export const TIGHT_QUERY = '(max-width: 1199px)';
+/** A phone: the Portfolio page draws its fills as cards below this (orders/balances.css has the matching breakpoint for the strip and the balances). */
+export const PHONE_QUERY = '(max-width: 639px)';
 /** Spare room asked for before the wide row is tried again after it did not fit. */
 const SPARE_PX = 4;
 const RETRY_PX = 8;

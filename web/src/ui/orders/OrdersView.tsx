@@ -15,6 +15,8 @@ import type { Position } from '../../kob/positions';
 import type { Hex } from '../../kob/types';
 import { Banner, Button, ErrorBanner, Modal, RawDetails, Section, Tabs, showToast, toError, useAsync } from '../kit';
 import { useLiveRefresh } from '../market/live';
+import { RowsControl } from '../market/ListPaging';
+import { useListPage } from '../market/use-market-list';
 import { useKascov } from '../market/use-kascov';
 import { kascovIconOf } from '../market/kascov-merge';
 import { useSystemStatus } from '../shell/StatusProvider';
@@ -27,6 +29,7 @@ import { PositionCard } from './PositionCard';
 import { RecoverPanel } from './RecoverPanel';
 import { StraysPanel } from './StraysPanel';
 import { WalletFills } from './WalletFills';
+import { PORTFOLIO_PAGE_SIZES, PortfolioPager, pageOf, usePortfolioRows } from './portfolio-paging';
 import { useWalletBalances } from './use-balances';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
 import { mergeFailure, mergeStep, mergeSummary, reservedOutpoints } from './merge-model';
@@ -54,6 +57,12 @@ interface Flow {
 
 const REFRESH_MS = 15_000;
 
+/**
+ * A market page's panel keeps its tab and its "this market only" choice for the visit, per market: the panel can be drawn anew (the page behind it re-reads its
+ * market) and must not fall back to Open orders under the viewer's finger.
+ */
+const embedMemory = new Map<string, { tab: PortfolioTab; onlyHere: boolean }>();
+
 /** The placeholder rows until the list is in. */
 const SKELETON_ROWS = 3;
 
@@ -65,8 +74,18 @@ const SKELETON_ROWS = 3;
 export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed?: MarketOf } = {}) {
   // on a market page (`embed`): the same tabs, Open orders first, its tab kept here (not in the address), this market only by default
   const embed = props.embed ?? null;
-  const [embedTab, setEmbedTab] = useState<PortfolioTab>('open');
-  const [onlyHere, setOnlyHere] = useState(true);
+  const memoryKey = embed ? `${embed.base}/${embed.quote ?? 'KAS'}` : '';
+  const [embedTab, setEmbedTabState] = useState<PortfolioTab>(() => embedMemory.get(memoryKey)?.tab ?? 'open');
+  const [onlyHere, setOnlyHereState] = useState(() => embedMemory.get(memoryKey)?.onlyHere ?? true);
+  const remember = (tab: PortfolioTab, only: boolean) => embedMemory.set(memoryKey, { tab, onlyHere: only });
+  const setEmbedTab = (next: PortfolioTab) => {
+    remember(next, onlyHere);
+    setEmbedTabState(next);
+  };
+  const setOnlyHere = (next: boolean) => {
+    remember(embedTab, next);
+    setOnlyHereState(next);
+  };
   const services = useServices();
   const wallet = useWallet();
   const { indexer: health } = useSystemStatus();
@@ -97,6 +116,9 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const setTab = (next: PortfolioTab) => (embed ? setEmbedTab(next) : navigate({ name: 'portfolio', tab: next }));
   // the order list of the Open orders and Order history tabs
   const listTab = tab === 'history' ? 'history' : 'active';
+  // rows per page and the page turned to (the lists are read whole: a page is a slice); another tab, size or market filter starts at the first page
+  const [rowsPer, setRows] = usePortfolioRows();
+  const [pageNo, setPageNo] = useListPage(`${tab}|${rowsPer}|${embed && onlyHere ? 'here' : 'all'}`);
   // Strays, automatic refunds and recovery: one folded section; it opens by itself while strays are waiting
   const [settingsOpen, setSettingsOpen] = useState<boolean | null>(props.recover ? true : null);
   useEffect(() => {
@@ -139,7 +161,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     [allItems, rowById, embed?.base, embed?.quote, onlyHere],
   );
   const counts = useMemo(() => tabCounts(items, rowById), [items, rowById]);
-  const shown = useMemo(() => filterItems(items, rowById, listTab), [items, rowById, listTab]);
+  const shownAll = useMemo(() => filterItems(items, rowById, listTab), [items, rowById, listTab]);
+  const { rows: shown, window: shownWindow } = pageOf(shownAll, rowsPer, pageNo);
   const stats = useMemo(() => countByStatus(rows), [rows]);
   // the tokens of each order (its own and a pair order's B): a stray of any other token is foreign
   const sweepable = useMemo(() => new Map(rows.filter((r) => r.token).map((r) => [r.id, [r.token!, ...(r.pair ? [r.pair.quote] : [])]])), [rows]);
@@ -380,7 +403,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       <div class="row-between" style={embed ? 'display:none' : undefined}>
         <h1 style="margin:0">{t('orders.title')}</h1>
         <div class="row">
-          {d?.clock ? <span class="small muted">{t('common.updated', { time: formatDateTime(Number(d.clock.unixSeconds), { dateStyle: undefined, timeStyle: 'medium' }) })}</span> : null}
+          {d?.clock ? <span class="small muted num" data-testid="orders-updated">{t('common.updated', { time: formatDateTime(Number(d.clock.unixSeconds), { dateStyle: undefined, timeStyle: 'medium' }) })}</span> : null}
           <Button small onClick={data.reload} loading={data.loading && !!d} data-testid="orders-refresh">{t('common.refresh')}</Button>
         </div>
       </div>
@@ -509,7 +532,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       <div class="pf-strip" data-testid="portfolio-summary">
         <div class="pf-stat">
           <span class="pf-k">{t('orders.summary.total')}</span>
-          <span class="pf-v num" data-testid="portfolio-total"><span>{balances.summary ? `≈ ${formatKas(balances.summary.total, { group: ',' })}` : '—'}</span><span class="pf-unit">KAS</span></span>
+          <span class="pf-v num" data-testid="portfolio-total"><span>{balances.summary ? `≈ ${formatKas(balances.summary.total, { group: ',' })}` : '—'}</span><span class="pf-unit">KAS</span></span>
           {balances.summary && balances.summary.unpriced > 0 ? <span class="pf-s" data-testid="portfolio-unpriced">{t('orders.summary.unpriced', { n: balances.summary.unpriced })}</span> : null}
         </div>
         <div class="pf-stat">
@@ -528,6 +551,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       )}
 
       <div class="portfolio" data-testid="portfolio">
+        <div class="pf-tabbar">
         <Tabs
           aria-label={t('orders.title')}
           active={tab}
@@ -539,6 +563,11 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
             { id: 'fills', label: t('orders.tab.fills', { count: filledRows.length }), 'data-testid': 'orders-tab-fills' },
           ]}
         />
+        {/* the rows per page of the lists: right of the tabs (under them on a phone); inert and unseen on Balances, which keeps the row's height */}
+        <div class={`pf-rows${tab === 'balances' ? ' pf-rows-off' : ''}`} aria-hidden={tab === 'balances' ? 'true' : undefined} {...(tab === 'balances' ? { inert: true } : {})} data-testid="portfolio-rows-box">
+          <RowsControl id="portfolio" size={rowsPer} onSize={(n) => setRows(n)} sizes={PORTFOLIO_PAGE_SIZES} />
+        </div>
+        </div>
         <div role="tabpanel" aria-labelledby={`tab-${tab}`} class="portfolio-panel stack" data-testid={`portfolio-panel-${tab}`}>
           {tab === 'balances' ? (
             // tokens inside the wallet's orders and KAS locked in them, next to the free amounts
@@ -603,7 +632,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                     {Array.from({ length: SKELETON_ROWS }, (_, i) => <div key={i} class="skeleton orders-skel" />)}
                   </div>
                 ) : null}
-                {d && shown.length === 0 ? <p class="muted center" data-testid="orders-empty">{t(tab === 'history' ? 'orders.emptyHistory' : 'orders.empty')}</p> : null}
+                {d && shownAll.length === 0 ? <p class="muted center" data-testid="orders-empty">{t(tab === 'history' ? 'orders.emptyHistory' : 'orders.empty')}</p> : null}
                 {shown.map((item) =>
                   item.type === 'single' ? (
                     rowById.get(item.id) ? (
@@ -628,6 +657,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                   ),
                 )}
               </div>
+              {d ? <PortfolioPager id="portfolio" window={shownWindow} total={shownAll.length} onPage={setPageNo} /> : null}
             </Section>
           ) : null}
 
@@ -641,7 +671,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 ) : undefined
               }
             >
-              <WalletFills rows={filledRows} tokenOf={shownToken} loadEvents={loadEvents} iconOf={iconOf} />
+              <WalletFills rows={filledRows} tokenOf={shownToken} loadEvents={loadEvents} iconOf={iconOf} size={rowsPer} page={pageNo} onPage={setPageNo} />
             </Section>
           ) : null}
         </div>

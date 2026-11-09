@@ -58,11 +58,29 @@
   .or-filled { grid-area: filled; }
   .or-type, .or-trigger, .or-value { display: none; }
 }
+/* a phone: a card of up to four lines on one fixed grid, so the side, the icon and market and the status of every order sit at the same x
+   1: side, icon and market (whole: it wraps rather than being cut), the toggle   2: time, price, status at the right edge   3: the filled part with its bar
+   4: Cancel, tap-sized */
 @media (max-width: 479px) {
-  .or-line { grid-template-columns: auto minmax(0, 1fr) auto 32px; grid-template-areas: 'side market status toggle' 'time price filled toggle' 'act act act act'; }
+  .or-line {
+    grid-template-columns: 2.6em minmax(0, 1fr) auto auto 36px;
+    grid-template-areas: 'side market market market toggle' 'time time price status status' 'filled filled filled filled filled' 'act act act act act';
+    row-gap: 6px;
+    padding: 8px 10px;
+  }
+  .or-side { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .or-market { align-items: flex-start; }
+  .or-market > :not(.or-market-name) { flex: none; }
+  .or-market-name { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
+  .or-status { justify-content: flex-end; white-space: nowrap; }
+  .or-toggle { width: 36px; height: 36px; margin: -6px 0; justify-self: end; }
+  .or-price { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; text-align: right; }
+  .or-filled { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; text-align: left; white-space: normal; }
+  .or-filled > .num { min-width: 0; overflow-wrap: anywhere; }
+  .or-bar { flex: none; width: 72px; }
   .or-act:empty { display: none; }
   .or-act { justify-content: stretch; }
-  .or-act .btn { width: 100%; }
+  .or-act .btn { width: 100%; min-height: 40px; }
 }
 
 /* a position (PositionCard.tsx): one head line (the toggle, the icon and fingerprint, title, side, phase, its buttons), its summary under it on demand,

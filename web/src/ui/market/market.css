@@ -424,16 +424,22 @@ body:has(.market-page) .container { max-width: 1520px; }
 .ml-line3-wrap { height: auto; min-height: 1.25rem; flex-wrap: wrap; gap: 2px 8px; }
 .ml-line3-wrap .ml-badges { flex-wrap: wrap; }
 
-/* the wallet's panel on a market page (MarketShell `mine`, OrdersView embedded): after the ticket on a phone, the full width under the two columns on two,
-   under the book and the depth chart beside the ticket on three */
+/* the wallet's panel on a market page (MarketShell `mine`, OrdersView embedded): after the ticket on a phone, then the full width of the page under the
+   chart, the book and the ticket (like the activity log under it) on two columns and on three */
 .mkt-area-mine { grid-area: mine; min-width: 0; }
+/* above the panels beside and over it: the depth chart's drawing (overflow: visible, in a positioned box) paints over a later plain block and would take the taps meant for
+   the panel's tabs */
+.mkt-area-mine { position: relative; z-index: 1; }
 .mkt-grid.mkt-has-mine { grid-template-areas: 'chart' 'book' 'ticket' 'mine' 'depth'; }
 @media (min-width: 760px) {
   .mkt-grid.mkt-has-mine { grid-template-areas: 'chart chart' 'book side' 'depth side' '. side' 'mine mine'; grid-template-rows: auto auto auto 1fr auto; }
   .mkt-has-mine .mkt-area-mine { margin-bottom: 12px; }
 }
 @media (min-width: 1200px) {
-  .mkt-grid.mkt-has-mine { grid-template-areas: 'book chart chart ticket' 'book depth depth ticket' 'mine mine mine ticket'; grid-template-rows: auto auto 1fr; }
+  /* the ticket keeps its column and its rows; the panel takes the row under all of them, so the column below the ticket is not left empty. The empty row
+     under the depth chart takes whatever height the ticket still has over the book and the depth chart */
+  .mkt-grid.mkt-has-mine { grid-template-areas: 'book chart chart ticket' 'book depth depth ticket' '. . . ticket' 'mine mine mine mine'; grid-template-rows: auto auto 1fr auto; }
+  .mkt-has-mine .mkt-area-ticket { margin-bottom: 0; }
 }
 .market-orders { padding: 12px 14px; }
 .market-orders-head { flex-wrap: wrap; gap: 6px 12px; }
