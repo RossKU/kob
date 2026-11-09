@@ -7,7 +7,7 @@ import type { Hex } from '../../kob/types';
 import { quoteOf } from '../../kob/units';
 import { useAsync } from '../kit';
 import { combineFreeBalances, loadFreeBalances } from './balances-data';
-import type { TokenBalance } from './balances-model';
+import type { TokenBalance } from '../../kob/balances';
 import type { OrdersData } from './orders-data';
 
 export function useWalletBalances(data: OrdersData | null, pubkey: Hex | undefined, version: unknown) {
