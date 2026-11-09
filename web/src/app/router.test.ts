@@ -33,13 +33,14 @@ describe('router', () => {
   });
 
   it('parses the pages', () => {
-    expect(parseHash('#/orders')).toEqual({ name: 'orders' });
+    expect(parseHash('#/portfolio')).toEqual({ name: 'portfolio' });
+    expect(parseHash('#/orders')).toEqual({ name: 'market' }); // the old address is gone
     expect(parseHash('#/create')).toEqual({ name: 'create' });
     // the page's old address leads to it
     expect(parseHash('#/issue')).toEqual({ name: 'create' });
     expect(parseHash('#/settings')).toEqual({ name: 'settings' });
-    expect(parseHash('/orders')).toEqual({ name: 'orders' });
-    expect(parseHash('#/ORDERS/')).toEqual({ name: 'orders' });
+    expect(parseHash('/portfolio')).toEqual({ name: 'portfolio' });
+    expect(parseHash('#/PORTFOLIO/')).toEqual({ name: 'portfolio' });
   });
 
   it('parses a token page and normalises the id to lower case', () => {
@@ -55,14 +56,14 @@ describe('router', () => {
   });
 
   it('ignores a query string', () => {
-    expect(parseHash('#/orders?x=1')).toEqual({ name: 'orders' });
+    expect(parseHash('#/portfolio?x=1')).toEqual({ name: 'portfolio' });
     // the Portfolio page's tabs: one of the four, any other segment is the page itself
-    expect(parseHash('#/orders/open')).toEqual({ name: 'orders', tab: 'open' });
-    expect(parseHash('#/orders/Fills')).toEqual({ name: 'orders', tab: 'fills' });
-    expect(parseHash('#/orders/nope')).toEqual({ name: 'orders' });
-    expect(parseHash('#/orders/recover')).toEqual({ name: 'orders', recover: true });
-    expect(routeToHash({ name: 'orders', recover: true })).toBe('#/orders/recover');
-    for (const tab of PORTFOLIO_TABS) expect(parseHash(routeToHash({ name: 'orders', tab }))).toEqual({ name: 'orders', tab });
+    expect(parseHash('#/portfolio/open')).toEqual({ name: 'portfolio', tab: 'open' });
+    expect(parseHash('#/portfolio/Fills')).toEqual({ name: 'portfolio', tab: 'fills' });
+    expect(parseHash('#/portfolio/nope')).toEqual({ name: 'portfolio' });
+    expect(parseHash('#/portfolio/recover')).toEqual({ name: 'portfolio', recover: true });
+    expect(routeToHash({ name: 'portfolio', recover: true })).toBe('#/portfolio/recover');
+    for (const tab of PORTFOLIO_TABS) expect(parseHash(routeToHash({ name: 'portfolio', tab }))).toEqual({ name: 'portfolio', tab });
     expect(parseHash(`#/market/${ID}?side=buy`)).toEqual({ name: 'token', covenantId: ID });
   });
 
@@ -93,14 +94,14 @@ describe('router', () => {
   });
 
   it('round-trips every route', () => {
-    const routes: Route[] = [{ name: 'market' }, tokenRoute(ID.toUpperCase()), { name: 'orders' }, { name: 'create' }, { name: 'settings' }];
+    const routes: Route[] = [{ name: 'market' }, tokenRoute(ID.toUpperCase()), { name: 'portfolio' }, { name: 'create' }, { name: 'settings' }];
     for (const r of routes) expect(parseHash(routeToHash(r))).toEqual(r.name === 'token' ? tokenRoute(ID) : r);
     expect(routeToHash(tokenRoute(ID))).toBe(`#/market/${ID}`);
   });
 
   it('highlights the market nav on a token page', () => {
     expect(navOf(tokenRoute(ID))).toBe('market');
-    expect(navOf({ name: 'orders' })).toBe('orders');
+    expect(navOf({ name: 'portfolio' })).toBe('portfolio');
   });
 
   it('parses a pair route (two different 64-hex ids), round-trips it and highlights the market nav', () => {

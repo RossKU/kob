@@ -25,7 +25,7 @@ export async function seedOrders(mock: MockClient, specs: SeedAsk[]): Promise<st
 
 /** Opens "My orders" with the mock wallet connected and waits for the list. */
 export async function openOrders(page: Page, mock: MockClient, wallet: WalletName = 'kasware'): Promise<void> {
-  await openMarket(page, mock, { route: '/orders/open', wallet });
+  await openMarket(page, mock, { route: '/portfolio/open', wallet });
   await expect(page.getByTestId('orders-list')).toBeVisible();
 }
 

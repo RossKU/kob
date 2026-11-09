@@ -87,7 +87,7 @@ test.describe('English text', () => {
   test('every page of the app is free of leaked keys', async ({ appPage: page, mock }) => {
     await fund(mock);
     await openMarket(page, mock);
-    for (const route of ['/market', '/orders', '/create', '/settings']) {
+    for (const route of ['/market', '/portfolio', '/create', '/settings']) {
       await page.goto(`/#${route}`);
       await expect(page.locator('main, [data-testid$="-view"], .container').first()).toBeVisible();
       await expectNoLeakedKeys(page, route);
@@ -147,7 +147,7 @@ test.describe('phone, 390 px wide', () => {
   test('every page of the app has no horizontal scroll on a phone', async ({ appPage: page, mock }) => {
     await fund(mock);
     const tokenId = await openMarket(page, mock);
-    for (const route of ['/market', '/orders', '/create', '/settings']) {
+    for (const route of ['/market', '/portfolio', '/create', '/settings']) {
       await page.goto(`/#${route}`);
       await expect(page.getByTestId('brand')).toBeVisible();
       expect(await horizontalOverflow(page), route).toBe(0);

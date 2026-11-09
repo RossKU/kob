@@ -3,7 +3,7 @@ export default {
   'shell.nav.label': 'Main navigation',
   'shell.nav.market': 'Market',
   'shell.nav.activity': 'Activity',
-  'shell.nav.orders': 'Portfolio',
+  'shell.nav.portfolio': 'Portfolio',
   'shell.nav.create': 'Create token',
   'shell.nav.settings': 'Settings',
   'shell.nav.disclaimer': 'Disclaimer',

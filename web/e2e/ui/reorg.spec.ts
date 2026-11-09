@@ -30,7 +30,7 @@ test.describe('chain re-organisations', () => {
   test('a routine re-org is silent: no banner, no indicator, no notification, and the page keeps working', async ({ appPage, mock }) => {
     const { order } = await seedAsk(mock);
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
-    await appPage.goto('/#/orders/open');
+    await appPage.goto('/#/portfolio/open');
     await expect(appPage.getByTestId(orderRow(order.covenant_id))).toHaveAttribute('data-status', 'open');
     await enableNotifications(appPage);
     for (const blocks of [1, 2, 5, 30]) await mock.reorg(blocks);
@@ -58,7 +58,7 @@ test.describe('chain re-organisations', () => {
     const { order } = await seedAsk(mock);
     await mock.fill(order.covenant_id, 2n * 100_000_000n, { taker: 'bob' });
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
-    await appPage.goto('/#/orders/open');
+    await appPage.goto('/#/portfolio/open');
     const row = appPage.getByTestId(orderRow(order.covenant_id));
     await expect(row).toHaveAttribute('data-status', 'partial');
     await enableNotifications(appPage); // the baseline already holds the 2 filled EXKCC

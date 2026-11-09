@@ -114,7 +114,7 @@ for (const vp of VIEWPORTS) {
       expect(await mock.order(lowId)).toMatchObject({ listed: false, unlisted_reason: 'order_value_below_minimum', status: 'open' });
       expect(await mock.order(okId)).toMatchObject({ listed: true, unlisted_reason: null, status: 'open' });
 
-      await page.goto('/#/orders/open');
+      await page.goto('/#/portfolio/open');
       await expect(page.getByTestId('orders-list')).toBeVisible();
       const lowRow = page.getByTestId(orderRow(lowId));
       await expect(lowRow).toBeVisible();
@@ -147,7 +147,7 @@ for (const vp of VIEWPORTS) {
       expect(orders.filter((o) => o.listed === false && o.unlisted_reason === 'order_value_below_minimum')).toHaveLength(2);
       const live = orders.find((o) => o.status === 'open')!;
       const ended = orders.find((o) => o.status === 'cancelled')!;
-      await openMarket(page, mock, { route: '/orders/open' });
+      await openMarket(page, mock, { route: '/portfolio/open' });
       await expect(page.getByTestId(orderRow(live.covenant_id)).getByTestId('order-unlisted')).toBeVisible();
       await page.getByTestId('orders-tab-history').click();
       await expect(page.getByTestId(orderRow(ended.covenant_id))).toBeVisible();

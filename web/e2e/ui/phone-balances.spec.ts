@@ -19,7 +19,7 @@ test.describe('phone, 390 px wide', () => {
     await fund(mock);
     await openMarket(page, mock);
     const tok = await seedAsk(mock);
-    await page.goto('/#/orders');
+    await page.goto('/#/portfolio');
     const row = page.getByTestId(TESTID.balancesPanel).getByTestId(`balance-row-${tok.covenant_id}`);
     await expect(row).toBeVisible();
     expect(await row.evaluate((el) => getComputedStyle(el).display)).toBe('flex'); // a card, not a table row
@@ -51,7 +51,7 @@ test.describe('desktop, 1280 px wide', () => {
     await fund(mock);
     const tokenId = await openMarket(page, mock);
     await seedAsk(mock);
-    await page.goto('/#/orders');
+    await page.goto('/#/portfolio');
     const row = page.getByTestId(TESTID.balancesPanel).getByTestId(`balance-row-${tokenId}`);
     await expect(row).toBeVisible();
     expect(await row.evaluate((el) => getComputedStyle(el).display)).toBe('table-row');

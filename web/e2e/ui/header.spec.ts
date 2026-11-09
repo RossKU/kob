@@ -143,7 +143,7 @@ test('desktop: the status popover is keyboard accessible and closes on Escape an
 });
 
 test('the brand leads to the landing screen (the empty hash), not to the market list', async ({ appPage: page }) => {
-  await page.goto('/#/orders');
+  await page.goto('/#/portfolio');
   await expect(page.getByTestId('brand')).toHaveAttribute('href', '#/');
 });
 
@@ -183,7 +183,7 @@ test.describe('phone', () => {
     await expect(button).toHaveAttribute('aria-expanded', 'false');
     await button.click();
     await expect(button).toHaveAttribute('aria-expanded', 'true');
-    for (const id of ['nav-market', 'nav-orders', 'nav-create', 'nav-settings', 'theme-toggle']) await expect(page.getByTestId('menu-panel').getByTestId(id)).toBeVisible();
+    for (const id of ['nav-market', 'nav-portfolio', 'nav-create', 'nav-settings', 'theme-toggle']) await expect(page.getByTestId('menu-panel').getByTestId(id)).toBeVisible();
     await expect(page.getByTestId('menu-network')).toContainText('Network: testnet-10');
     await expect(page.getByTestId('menu-network')).toContainText('no review can show the code is free of bugs');
     await expect(page.getByTestId('status-node')).toContainText('Node: reachable');
@@ -227,9 +227,9 @@ test.describe('phone', () => {
     await expect(page.getByTestId('menu-panel')).toHaveCount(0);
     // another tab: navigation and closing
     await button.click();
-    await page.getByTestId('nav-orders').click();
+    await page.getByTestId('nav-portfolio').click();
     await expect(page.getByTestId('menu-panel')).toHaveCount(0);
-    await expect(page).toHaveURL(/#\/orders/);
+    await expect(page).toHaveURL(/#\/portfolio/);
     // Escape
     await button.click();
     await page.keyboard.press('Escape');

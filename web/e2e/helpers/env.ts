@@ -59,7 +59,7 @@ export async function openConnect(page: Page, optionTestId: string): Promise<voi
   await page.getByTestId('wallet-connect').click();
 }
 
-/** Follows a tab of the header (`nav-orders` ...): on a phone the tabs are in the menu, which is opened first. */
+/** Follows a tab of the header (`nav-portfolio` ...): on a phone the tabs are in the menu, which is opened first. */
 export async function gotoNav(page: Page, testid: string): Promise<void> {
   const link = page.getByTestId(testid);
   await expect(async () => {
@@ -73,7 +73,7 @@ export async function gotoNav(page: Page, testid: string): Promise<void> {
  * section of strays, automatic refunds and recovery under the tabs instead.
  */
 export async function gotoOrders(page: Page, tab: 'open' | 'history' | 'fills' | 'balances' | 'settings' = 'open'): Promise<void> {
-  await gotoNav(page, 'nav-orders');
+  await gotoNav(page, 'nav-portfolio');
   if (tab === 'settings') return openOrdersSettings(page);
   const id = tab === 'open' ? 'orders-tab-active' : `orders-tab-${tab}`;
   await page.getByTestId(id).click();

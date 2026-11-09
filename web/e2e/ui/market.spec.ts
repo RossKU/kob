@@ -295,7 +295,7 @@ test.describe('wallet', () => {
       const banner = appPage.getByTestId('banner-network-mismatch');
       await expect(banner).toContainText('testnet-10');
       await expect(banner).toContainText('Switch the network in your wallet settings');
-      await appPage.goto('/#/orders');
+      await appPage.goto('/#/portfolio');
       await expect(appPage.getByTestId('orders-network-blocked')).toBeVisible();
     });
   });

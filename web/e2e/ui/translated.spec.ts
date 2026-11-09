@@ -135,7 +135,7 @@ test('a machine-translated page shows every changed text afresh: status bar, tic
   // flipped again after the order (balances, book and ticket all changed)
   await page.getByTestId('market-flip').click();
   await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '1');
-  await gotoNav(page, 'nav-orders');
+  await gotoNav(page, 'nav-portfolio');
   await expect(page.getByTestId('orders-view')).toBeVisible();
   await page.goBack();
   await expect(page.getByTestId('order-ticket')).toBeVisible();
@@ -149,7 +149,7 @@ test('a machine-translated My orders keeps its tab counts current (TN10 2026-10-
   await page.addInitScript(installTranslator);
   await fund(mock, 'alice');
   const ids = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 1 }, { side: 'ask', price: 2_710_000, tokens: 1 }]);
-  await openMarket(page, mock, { route: '/orders/open', connect: false });
+  await openMarket(page, mock, { route: '/portfolio/open', connect: false });
   await expect(page.locator('html')).toHaveClass(/translated-ltr/);
   await connectKey(page);
   for (const id of ids) await expect(page.getByTestId(`order-row-${id}`)).toHaveAttribute('data-status', 'open');

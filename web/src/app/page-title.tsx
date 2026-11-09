@@ -1,4 +1,4 @@
-// The browser tab's title per page: the page's name (`Market`, `My orders`, ...) or, on a market, the token's name or the pair's, then the app's name.
+// The browser tab's title per page: the page's name (`Market`, `Portfolio`, ...) or, on a market, the token's name or the pair's, then the app's name.
 // Every view sets its own with `useDocumentTitle` while it is mounted (a view that knows more than the route, such as a token's ticker, says it), so the
 // shell never overwrites what a view set: effects of children run before the parent's.
 import type { ComponentChildren } from 'preact';
@@ -12,7 +12,7 @@ export const pageTitle = (page: string): string => `${page} - ${t('common.appNam
 export const appTitle = (): string => `${t('common.appName')} - ${t('common.tagline')}`;
 
 /** A view of a page that has no title logic of its own: sets the title of the page `page` names (a key of `shell.nav.*`) and shows `children`. */
-export function Titled(props: { page: 'market' | 'activity' | 'orders' | 'create' | 'settings' | 'disclaimer' | 'support'; children?: ComponentChildren }) {
+export function Titled(props: { page: 'market' | 'activity' | 'portfolio' | 'create' | 'settings' | 'disclaimer' | 'support'; children?: ComponentChildren }) {
   useDocumentTitle(pageTitle(t(`shell.nav.${props.page}`)));
   return <>{props.children}</>;
 }

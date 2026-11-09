@@ -26,7 +26,7 @@ describe('landing routing', () => {
   it('every app route shows the app shell: the market list stays at #/market, deep links unchanged', () => {
     const { config } = resolveConfig({});
     expect(parseHash(APP_HASH)).toEqual({ name: 'market' });
-    for (const h of ['#/market', `#/market/${A}`, `#/market/${A}/${B}`, `#/pair/${A}/${B}`, '#/orders', '#/create', '#/settings', '#/issue', '#/nope']) {
+    for (const h of ['#/market', `#/market/${A}`, `#/market/${A}/${B}`, `#/pair/${A}/${B}`, '#/portfolio', '#/create', '#/settings', '#/issue', '#/nope']) {
       expect(showsLanding(parseHash(h), config, tokens), h).toBe(false);
     }
     expect(parseHash(`#/market/${A}`)).toEqual({ name: 'token', covenantId: A });

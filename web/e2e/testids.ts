@@ -4,7 +4,7 @@ export const TESTID = {
   // navigation
   navMarket: 'nav-market',
   navActivity: 'nav-activity',
-  navOrders: 'nav-orders',
+  navOrders: 'nav-portfolio',
   navCreate: 'nav-create',
   navSettings: 'nav-settings',
   // wallet

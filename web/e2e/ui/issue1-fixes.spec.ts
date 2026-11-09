@@ -21,7 +21,7 @@ test('My orders: the KAS on token coins has a one-line muted explanation', async
   await page.route('**/registry/tokens.json', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }),
   );
-  await page.goto('/#/orders');
+  await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId('kas-on-tokens')).toBeVisible({ timeout: 20_000 });
   const note = page.getByTestId('kas-on-tokens-note');

@@ -20,7 +20,7 @@ test('ended orders of the browser\'s records do not hold My orders back: the lis
   await page.goto('/#/market');
   await expect(page.getByTestId('wallet-address')).toBeVisible();
   const t0 = Date.now();
-  await page.goto('/#/orders/open');
+  await page.goto('/#/portfolio/open');
   await page.getByTestId('orders-tab-history').click();
   for (const id of ids) await expect(page.getByTestId(`order-row-${id}`)).toHaveAttribute('data-status', 'filled', { timeout: 30_000 });
   const shownMs = Date.now() - t0;

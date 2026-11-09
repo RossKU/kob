@@ -85,9 +85,9 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
           <ActivityPage />
         </Titled>
       );
-    case 'orders':
+    case 'portfolio':
       return (
-        <Titled page="orders">
+        <Titled page="portfolio">
           <OrdersView {...(r.tab ? { tab: r.tab } : {})} {...(r.recover ? { recover: true } : {})} />
         </Titled>
       );

@@ -55,8 +55,8 @@ test.describe('market panels when the indexer cannot be reached', () => {
 
 test('a new page takes the keyboard focus to its content', async ({ appPage: page, mock }) => {
   await openMarket(page, mock, { connect: false });
-  await gotoNav(page, 'nav-orders');
-  await expect(page).toHaveURL(/#\/orders/);
+  await gotoNav(page, 'nav-portfolio');
+  await expect(page).toHaveURL(/#\/portfolio/);
   await expect(page.getByTestId('main')).toBeFocused();
   await page.getByTestId('nav-settings').focus();
   await page.keyboard.press('Enter');
@@ -217,7 +217,7 @@ test('closing a buy-first position that bought nothing yet does not offer to sel
 
 test('on a phone the auto-refund checkbox keeps its text beside it', async ({ appPage: page, mock }) => {
   await page.setViewportSize({ width: 375, height: 812 });
-  await openMarket(page, mock, { route: '/orders' });
+  await openMarket(page, mock, { route: '/portfolio' });
   await openOrdersSettings(page);
   // both read in one frame (the list and the balances above it arrive while the page settles and move the line down between two reads)
   const where = () => page.evaluate(() => {

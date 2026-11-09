@@ -378,7 +378,7 @@ async function place(rc, r, label, spec) {
 async function openOrders(rc, wantIds = [], { timeoutMs = 90_000 } = {}) {
   const { h } = rc;
   await goto(h, '#/settings');
-  await goto(h, '#/orders');
+  await goto(h, '#/portfolio');
   await tid(h, 'orders-view').waitFor({ timeout: 60_000 });
   await tid(h, 'orders-list').waitFor({ timeout: 60_000 });
   // the "All" tab: an order that ended (cancelled, or killed / filled by someone else) stays listed with its status instead of leaving the

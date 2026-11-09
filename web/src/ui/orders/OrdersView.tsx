@@ -49,8 +49,8 @@ const REFRESH_MS = 15_000;
 const SKELETON_ROWS = 3;
 
 /**
- * `#/orders`, the Portfolio page: the wallet's balances, orders (indexer + placement records resolved on the node), positions with their exits and
- * fills, one tab each (`#/orders/<tab>`, Balances first); strays, automatic refunds and recovery in one section under them, folded. Cancel / amend /
+ * `#/portfolio`, the Portfolio page: the wallet's balances, orders (indexer + placement records resolved on the node), positions with their exits and
+ * fills, one tab each (`#/portfolio/<tab>`, Balances first); strays, automatic refunds and recovery in one section under them, folded. Cancel / amend /
  * refund / cancel-all as before. Nothing here signs: every transaction goes through <TxFlow> (ui/confirm/send.ts).
  */
 export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}) {
@@ -81,7 +81,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
   useLiveRefresh(services, ['fills'], () => true, data.refresh, REFRESH_MS);
 
   const tab: PortfolioTab = props.tab ?? 'balances';
-  const setTab = (next: PortfolioTab) => navigate({ name: 'orders', tab: next });
+  const setTab = (next: PortfolioTab) => navigate({ name: 'portfolio', tab: next });
   // the order list of the Open orders and Order history tabs
   const listTab = tab === 'history' ? 'history' : 'active';
   // Strays, automatic refunds and recovery: one folded section; it opens by itself while strays are waiting

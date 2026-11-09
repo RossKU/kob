@@ -126,7 +126,7 @@ test('My orders: the cards and tabs at once; the rows together, as soon as the i
   await page.goto('/#/market');
   await connectWallet(page);
   await mock.latency(600, { scope: 'indexer' });
-  await page.goto('/#/orders/open');
+  await page.goto('/#/portfolio/open');
   await expect(page.getByTestId('wallet-address')).toBeVisible();
   await expect(page.getByTestId('orders-section')).toBeVisible();
   await expect(page.getByTestId('orders-tab-active')).toBeVisible();

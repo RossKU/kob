@@ -1,4 +1,4 @@
-// Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair; the old `#/pair/<base>/<quote>` is an alias), `#/usd/kas` + `#/usd/<covenantId>` (legacy: redirected to the tradable USD pages), `#/activity` (`?market=<id>` or `?market=<base>/<quote>`: one market), `#/orders`, `#/create` (the old `#/issue` leads there),
+// Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair; the old `#/pair/<base>/<quote>` is an alias), `#/usd/kas` + `#/usd/<covenantId>` (legacy: redirected to the tradable USD pages), `#/activity` (`?market=<id>` or `?market=<base>/<quote>`: one market), `#/portfolio` (`/<tab>`, `/recover`), `#/create` (the old `#/issue` leads there),
 // `#/settings`, `#/disclaimer`, `#/support` (the market list while there is no donation address: ui/support/support-model.ts). An empty hash is the landing screen (`home`: config `home`, by default the landing page, src/ui/landing; an operator may set a chart or the list); an unknown one is the market list.
 // The parsing / formatting is pure (tested in router.test.ts); only `useRoute` / `navigate` touch `window`.
 import { useEffect, useState } from 'preact/hooks';
@@ -25,10 +25,10 @@ export type Route =
    */
   | { name: 'activity'; market?: ActivityMarket; covenantId?: undefined }
   /**
-   * `#/orders` (the Portfolio page): `#/orders/<tab>` opens one of its tabs (balances, open orders, order history, fills); none: its first, Balances.
-   * `#/orders/recover`: the page with its folded section of strays, automatic refunds and recovery open
+   * `#/portfolio` (the Portfolio page): `#/portfolio/<tab>` opens one of its tabs (balances, open orders, order history, fills); none: its first, Balances.
+   * `#/portfolio/recover`: the page with its folded section of strays, automatic refunds and recovery open
    */
-  | { name: 'orders'; tab?: PortfolioTab; recover?: true; covenantId?: undefined }
+  | { name: 'portfolio'; tab?: PortfolioTab; recover?: true; covenantId?: undefined }
   | { name: 'create' | 'settings' | 'disclaimer' | 'support'; covenantId?: undefined };
 
 /** The Portfolio page's tabs, in their order (ui/orders/OrdersView.tsx). */
@@ -48,7 +48,7 @@ const takesAmount = (p: TicketPreset | undefined): boolean => p !== undefined &&
 export type TicketPreset = (typeof TICKET_PRESETS)[number];
 
 const HEX64 = /^[0-9a-f]{64}$/i;
-const PAGES = ['orders', 'create', 'settings', 'disclaimer', 'support'] as const;
+const PAGES = ['create', 'settings', 'disclaimer', 'support'] as const;
 
 /** Parses a `location.hash` value (with or without the leading `#`). Never throws. */
 export function parseHash(hash: string): Route {
@@ -102,12 +102,12 @@ export function parseHash(hash: string): Route {
     const market = activityMarketOf(query?.get('market') ?? '');
     return market ? { name: 'activity', market } : { name: 'activity' };
   }
-  if (page === 'orders') {
+  if (page === 'portfolio') {
     const tab = (second ?? '').toLowerCase();
-    if (tab === 'recover') return { name: 'orders', recover: true };
-    return (PORTFOLIO_TABS as readonly string[]).includes(tab) ? { name: 'orders', tab: tab as PortfolioTab } : { name: 'orders' };
+    if (tab === 'recover') return { name: 'portfolio', recover: true };
+    return (PORTFOLIO_TABS as readonly string[]).includes(tab) ? { name: 'portfolio', tab: tab as PortfolioTab } : { name: 'portfolio' };
   }
-  if ((PAGES as readonly string[]).includes(page)) return { name: page as Exclude<(typeof PAGES)[number], 'orders'> };
+  if ((PAGES as readonly string[]).includes(page)) return { name: page as (typeof PAGES)[number] };
   // the token creation page was `#/issue` before it was named "Create token": the old address still leads there
   if (page === 'issue') return { name: 'create' };
   return { name: 'market' };
@@ -128,8 +128,8 @@ export function routeToHash(route: Route): string {
       return '#/';
     case 'activity':
       return route.market ? `#/activity?market=${activityMarketParam(route.market)}` : '#/activity';
-    case 'orders':
-      return route.recover ? '#/orders/recover' : route.tab ? `#/orders/${route.tab}` : '#/orders';
+    case 'portfolio':
+      return route.recover ? '#/portfolio/recover' : route.tab ? `#/portfolio/${route.tab}` : '#/portfolio';
     default:
       return `#/${route.name}`;
   }
@@ -146,7 +146,7 @@ export const activityMarketParam = (m: ActivityMarket): string => (m.kind === 't
 export const activityRoute = (market?: ActivityMarket | null): Route => (market ? { name: 'activity', market } : { name: 'activity' });
 
 /** Which top-level nav entry a route belongs to. */
-export const navOf = (route: Route): 'market' | 'activity' | 'orders' | 'create' | 'settings' | 'disclaimer' | 'support' =>
+export const navOf = (route: Route): 'market' | 'activity' | 'portfolio' | 'create' | 'settings' | 'disclaimer' | 'support' =>
   route.name === 'token' || route.name === 'pair' || route.name === 'usd' || route.name === 'home' ? 'market' : route.name;
 
 export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint): Route => ({

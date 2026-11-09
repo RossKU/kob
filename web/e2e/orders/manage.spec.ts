@@ -326,10 +326,10 @@ test.describe('recovery', () => {
     await expect(page.getByTestId('local-data-list')).toContainText('Placement record');
     await page.getByTestId('settings-clear').click();
     await page.getByTestId('clear-confirm-yes').click(); // reloads the page
-    await page.getByTestId('nav-orders').waitFor();
+    await page.getByTestId('nav-portfolio').waitFor();
     // now the indexer disappears: nothing knows about the order any more
     await page.route('**/v1/**', (r) => r.abort());
-    await page.goto('/#/orders');
+    await page.goto('/#/portfolio');
     await page.reload();
     await connectWallet(page);
     await expect(page.getByTestId('orders-indexer-down')).toBeVisible();

@@ -25,7 +25,7 @@ test('notifications off: the bell still lists what its badge counts, newest firs
   // newest first, each with its time and a link to My orders
   const times = await listed.locator('time').evaluateAll((ts) => ts.map((x) => Date.parse(x.getAttribute('datetime') ?? '')));
   expect(times).toEqual([...times].sort((a, b) => b - a));
-  await expect(listed.first().locator('a')).toHaveAttribute('href', '#/orders/open');
+  await expect(listed.first().locator('a')).toHaveAttribute('href', '#/portfolio/open');
   await expect(listed.first()).toContainText('Order filled');
   // read: the badge goes
   await panel.getByTestId('notify-mark-read').click();

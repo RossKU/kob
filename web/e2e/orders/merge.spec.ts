@@ -74,7 +74,7 @@ test('merge seven UTXOs of a 3 / 3 token: one 3 -> 1 transaction per click, the 
   expect(await ownedOf(mock, alice)).toHaveLength(7);
 
   await registryWithStd(page);
-  await page.goto('/#/orders');
+  await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId('balances-panel')).toBeVisible();
 
@@ -133,7 +133,7 @@ test('a merge the wallet rejects sends nothing: the UTXOs stay as they were', as
   const alice = (await mock.balance('alice')).pubkey;
   for (let k = 1; k <= 5; k++) await mock.giveTokens('alice', TOKEN, { token: STD, carrier: 2n * KAS });
   await registryWithStd(page);
-  await page.goto('/#/orders');
+  await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge \(5\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
   await recordShownAs(page);

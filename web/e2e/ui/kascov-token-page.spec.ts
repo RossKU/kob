@@ -162,7 +162,7 @@ for (const vp of VIEWPORTS) {
       expect(await page.title()).toBe('Token not found - KOB');
       expect(await horizontalOverflow(page)).toBe(0);
       // the same for every page that prints a full id or a long typed one
-      for (const route of [`/market/${'f'.repeat(300)}`, `/market/${NOBODY_ID}/${GHOST_ID}`, `/market/${NOBODY_ID}/kas`, '/orders', '/create', '/settings']) {
+      for (const route of [`/market/${'f'.repeat(300)}`, `/market/${NOBODY_ID}/${GHOST_ID}`, `/market/${NOBODY_ID}/kas`, '/portfolio', '/create', '/settings']) {
         await page.goto(`/#${route}`);
         await page.waitForTimeout(300);
         expect(await horizontalOverflow(page), `overflow on #${route.slice(0, 40)}`).toBe(0);
@@ -175,7 +175,7 @@ for (const vp of VIEWPORTS) {
       const exkcc = (await mock.token()).covenant_id;
       const titles: Record<string, string> = {
         '/market': 'Market - KOB',
-        '/orders': 'Portfolio - KOB',
+        '/portfolio': 'Portfolio - KOB',
         '/create': 'Create token - KOB',
         '/settings': 'Settings - KOB',
         [`/market/${exkcc}`]: 'EXKCC - KOB',
