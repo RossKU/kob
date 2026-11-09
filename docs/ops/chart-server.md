@@ -188,15 +188,42 @@ credentials, and one value cannot name both the `pages.dev` address and a custom
 the app, a user's own build and third-party tools read it, which is what a neutral indexer should allow. The WebSocket is not
 subject to CORS (the API checks no `Origin`).
 
-**Caching.** The API sends no `Cache-Control` header (except `public, max-age=5` on `/v1/logo-blocklist`) and its paths have no file extension, so Cloudflare caches nothing by
-default (`cf-cache-status: DYNAMIC`): every answer is live. That is required for the books, orders, depth, stats, trades,
-fills, health, tokens and holdings, and for the WebSocket, which must never be cached. The API already keeps the hot reads
-(candles, stats, books) in a response cache per data generation of its store, so repeated chart loads cost the database little.
-Edge caching of the chart endpoints (`/v1/candles/{token}`, `/v1/pairs/{base}/{quote}/candles`) is optional and **not
-recommended on the free plan**: a Cache Rule that overrides the TTL cannot go below 2 hours there (2 hours of stale candles), and
-a shorter TTL would need the API to send `Cache-Control` on those answers, which it does not. If a paid plan or a later API
-change makes a short TTL possible: cache only those two paths, keep the query string in the cache key (`interval`, `from`,
-`limit`), and a TTL of a few seconds.
+**Caching.** The API sends `Cache-Control` on every successful answer by route class (`docs/api-reference.md` 5.7): `public, max-age=N, s-maxage=N` with N = 1 s for the books, orders, fills and
+trades, 2 to 3 s for the 24 h stats and the open candles, 5 s (+ `stale-while-revalidate=5`) for the token and pair lists, 10 s for `/v1/stats`, 1 h for candles whose range ended an hour ago;
+`no-store` for health, metrics, the WebSocket, errors and any request carrying `_nc=` (the web app adds it right after the user's own order action). Its paths have no file extension, so Cloudflare
+caches **nothing** until a Cache Rule makes them eligible; with the rule below the home PC behind the tunnel serves each distinct read about once per TTL, whatever the number of visitors.
+(The API also keeps the hot reads in its own response cache per data generation of its store.)
+
+*Cloudflare and short TTLs.* Cloudflare documents that it follows the origin's `s-maxage` / `max-age` / `no-store` ("Origin Cache Control", on by default for Free, Pro and Business) and that the
+**2 hours (Free) / 1 hour (Pro)** minimum belongs to the *Edge Cache TTL override* ("ignore the Cache-Control header and use this TTL"). Its documentation does not say outright whether an origin
+`s-maxage` of 1 second is honoured on the Free plan, and reports from the field differ: **check it once the rule is on** (below). Use "use cache-control header", never the override, or the 2 hours apply.
+
+*The Cache Rule* (dashboard, in the zone `kaspa.ag`; one rule covers both hostnames):
+
+1. Cloudflare dashboard > the zone `kaspa.ag` > **Caching** > **Cache Rules** > **Create rule**. Name: `kob-api edge cache`.
+2. **When incoming requests match**: *Custom filter expression* > *Edit expression* and paste
+
+   ```
+   (http.host in {"kob-api.kaspa.ag" "kob-api-tn10.kaspa.ag"} and starts_with(http.request.uri.path, "/v1/") and not http.request.uri.path in {"/v1/ws" "/v1/metrics" "/v1/health" "/v1/health/ready"})
+   ```
+
+   (in the field editor: *Hostname* is in `kob-api.kaspa.ag`, `kob-api-tn10.kaspa.ag`; AND *URI Path* starts with `/v1/`; AND *URI Path* is not in `/v1/ws`, `/v1/metrics`, `/v1/health`, `/v1/health/ready`).
+3. **Cache eligibility**: *Eligible for cache*.
+4. **Edge TTL**: *Use cache-control header if present, bypass cache if not* (never *Ignore cache-control header and use this TTL*).
+5. **Browser TTL**: *Respect origin TTL*.
+6. Leave the cache key at its default (the whole URL with its query string: `interval`, `from`, `to`, `limit`, `maker`, `_nc` are all part of it) and *Serve stale content while revalidating* at its default. Do not enable *Ignore query string*.
+7. **Deploy**. Put the rule first if another rule matches `/v1/`.
+
+*Check* (`cf-cache-status` shows what Cloudflare did):
+
+```
+curl -sI https://kob-api.kaspa.ag/v1/tokens | grep -i -E "cache-control|cf-cache-status|^age"     # MISS (or EXPIRED), then, within 5 s:
+curl -sI https://kob-api.kaspa.ag/v1/tokens | grep -i -E "cache-control|cf-cache-status|^age"     # HIT with age 0..5
+curl -sI "https://kob-api.kaspa.ag/v1/tokens?_nc=1" | grep -i cf-cache-status                      # DYNAMIC or BYPASS: never kept
+```
+
+If a short TTL never shows `HIT` on your plan, Cloudflare is not honouring it there: remove the rule (nothing breaks, the answers are live again) rather than raise the TTL. A cached `/v1/health`
+would hide an outage, which is why health and metrics are excluded in the expression above and also say `no-store`.
 
 **Token-logo reports.** The web app shows each token's logo from the address its creator gave, in the visitor's browser; KOB stores
 no image. To let visitors report a logo (the first report hides it for everyone until you restore it) add to `kobd.toml`:

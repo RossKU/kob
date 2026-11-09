@@ -1086,6 +1086,51 @@ async fn json_answers_are_gzip_only_for_a_client_that_accepts_it() {
     assert!(hr.get("content-encoding").is_none());
 }
 
+/// The `Cache-Control` each class of route sends through the whole router (the policy table itself is tested in `edge_cache`).
+#[tokio::test]
+async fn cache_control_by_route_class() {
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let app = router(e.state.clone());
+    let cc = |h: &HeaderMap| h.get("cache-control").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let t0 = 1_700_000_000_000i64;
+    for (uri, want) in [
+        (format!("/v1/books/{}", h(TOKEN)), "public, max-age=1, s-maxage=1"),
+        ("/v1/orders".to_string(), "public, max-age=1, s-maxage=1"),
+        (format!("/v1/orders?maker={}", h(MAKER)), "public, max-age=1, s-maxage=1"),
+        ("/v1/fills".to_string(), "public, max-age=1, s-maxage=1"),
+        (format!("/v1/trades/{}", h(TOKEN)), "public, max-age=1, s-maxage=1"),
+        ("/v1/tokens".to_string(), "public, max-age=5, s-maxage=5, stale-while-revalidate=5"),
+        ("/v1/pairs".to_string(), "public, max-age=5, s-maxage=5, stale-while-revalidate=5"),
+        ("/v1/stats".to_string(), "public, max-age=10, s-maxage=10, stale-while-revalidate=10"),
+        (format!("/v1/stats/{}", h(TOKEN)), "public, max-age=2, s-maxage=2"),
+        (format!("/v1/candles/{}?interval=1h", h(TOKEN)), "public, max-age=3, s-maxage=3"),
+        (format!("/v1/candles/{}?interval=1h&to={}", h(TOKEN), t0), "public, max-age=3600, s-maxage=3600"),
+        ("/v1/health".to_string(), "no-store"),
+        ("/v1/health/ready".to_string(), "no-store"),
+        ("/v1/metrics".to_string(), "no-store"),
+        (format!("/v1/books/{}?_nc=123", h(TOKEN)), "no-store"),
+        // an error is never kept: a bad token, an unknown route, a bad range
+        ("/v1/books/zz".to_string(), "no-store"),
+        ("/v1/nothing".to_string(), "no-store"),
+        (format!("/v1/candles/{}?interval=2m", h(TOKEN)), "no-store"),
+    ] {
+        let (_, hd, _) = get_from(&app, &uri, "127.0.0.1", &[]).await;
+        assert_eq!(cc(&hd).as_deref(), Some(want), "{uri}");
+    }
+    // a compressed answer carries it too, and the bypass parameter changes nothing else
+    let (_, hz, _) = raw(&app, "/v1/orders", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(cc(&hz).as_deref(), Some("public, max-age=1, s-maxage=1"));
+    let (s, _, v) = get_from(&app, &format!("/v1/books/{}?_nc=9", h(TOKEN)), "127.0.0.1", &[]).await;
+    let (s0, _, v0) = get_from(&app, &format!("/v1/books/{}", h(TOKEN)), "127.0.0.1", &[]).await;
+    assert_eq!((s, v), (s0, v0), "the server ignores the bypass parameter");
+    // a POST is never kept
+    let mut req = Request::builder().method("POST").uri("/v1/orders").body(Body::empty()).unwrap();
+    req.extensions_mut().insert(peer("127.0.0.1"));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(cc(resp.headers()).as_deref(), Some("no-store"));
+}
+
 /// `GET /v1/stats?since=`: the activity totals over a range of the store, all time without `since`.
 #[tokio::test]
 async fn activity_totals_over_a_range() {

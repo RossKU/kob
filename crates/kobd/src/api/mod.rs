@@ -24,6 +24,7 @@
 pub mod cache;
 pub mod client_ip;
 pub mod conn;
+pub mod edge_cache;
 pub mod ratelimit;
 pub mod rest;
 pub mod ws;
@@ -274,7 +275,9 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
     req.extensions_mut().insert(ClientIp(ip));
     let cors = app.state.cfg.cors_allow_origin.clone();
 
-    let cost = route_cost(req.uri().path(), app.state.cfg.rate_limit.heavy_route_cost);
+    let (method, path, query) =
+        (req.method().clone(), req.uri().path().to_string(), req.uri().query().unwrap_or_default().to_string());
+    let cost = route_cost(&path, app.state.cfg.rate_limit.heavy_route_cost);
     let mut resp = if let Err(wait) = app.limiter.check_cost(ip, cost) {
         let mut e = ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "rate limit exceeded");
         e.retry_after = Some(retry_after_secs(wait));
@@ -297,6 +300,11 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
             }
         }
     };
+    // what a CDN may keep of the answer, and for how long (`edge_cache`)
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    edge_cache::apply(&mut resp, &method, &path, &query, now_ms);
     if let Some(origin) = cors {
         if let Ok(v) = HeaderValue::from_str(&origin) {
             let h = resp.headers_mut();

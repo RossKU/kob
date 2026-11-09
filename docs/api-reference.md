@@ -35,8 +35,9 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
   `204` preflight) carries `Access-Control-Allow-Origin: <that value>`, `Access-Control-Allow-Methods: GET, POST, OPTIONS` and
   `Access-Control-Allow-Headers: content-type` and `Access-Control-Expose-Headers: retry-after`. The value is sent as configured (use `*` for a public server). The WebSocket
   upgrade checks no `Origin`.
-* **No `Cache-Control`** except on `GET /v1/logo-blocklist` (`public, max-age=5`). The API sets none on any other route (it keeps its own server-side response cache for a few
-  hot reads, section 5.6). The headers it adds itself are `Content-Type`, `Content-Encoding` and `Vary` on a compressed answer, `Retry-After` on some errors, and the CORS headers
+* **`Cache-Control` by route class** (section 5.7): a successful read says how long a CDN or a browser may keep it (1 s for the books, orders and fills up to 1 h for a closed
+  range of candles); health, metrics, the WebSocket, every error and every request with the `_nc` parameter say `no-store`. The API also keeps its own server-side response cache for a few
+  hot reads (section 5.6). The headers it adds itself are `Content-Type`, `Cache-Control`, `Content-Encoding` and `Vary` on a compressed answer, `Retry-After` on some errors, and the CORS headers
   when configured.
 * **Staleness.** Answers reflect the indexer's store, which follows the chain a few blocks behind the node (`GET /v1/health`
   says how far). The mempool is not served: an order or fill appears once its transaction is in a chain block the indexer
@@ -1114,6 +1115,25 @@ depend on the clock (books, pairs, pair books, stats, depth), the node's DAA sco
 byte for byte what the request would have computed.
 Concurrent requests of one key wait for one read; a failed read is not kept. At most 1,024 bodies and 32 MiB per generation are
 held. This is invisible to clients except as lower latency: it adds no header and no staleness beyond the store's own.
+
+### 5.7 Cache-Control
+
+Every **successful** (200) answer to a GET carries a `Cache-Control` by the route and the question, so a CDN in front of a public indexer
+(`ops/chart-server.md`, section 3) keeps repeated reads and the origin serves each distinct one about once per TTL. `max-age` and `s-maxage` are always equal.
+
+| Class | Routes | `Cache-Control` |
+|---|---|---|
+| live | `/v1/books/{token}`, `/v1/depth/{token}`, `/v1/orders` (every filter, `maker=` lists included: public chain data keyed by the URL), `/v1/orders/{id}`, `/v1/orders/{id}/events`, `/v1/fills`, `/v1/trades/{token}`, `/v1/strays`, `/v1/token-utxos`, `/v1/token-events`, `/v1/pairs/{base}/{quote}/book` and `/fills` | `public, max-age=1, s-maxage=1` |
+| open candles, token stats | `/v1/candles/{token}` and `/v1/pairs/{base}/{quote}/candles` unless closed (below); `/v1/stats/{token}` | candles `public, max-age=3, s-maxage=3`; stats `max-age=2, s-maxage=2` |
+| lists | `/v1/tokens`, `/v1/pairs`; `/v1/stats` | `public, max-age=5, s-maxage=5, stale-while-revalidate=5`; the totals 10 and 10 |
+| declarations | `/v1/tokens/{id}/declaration` | `public, max-age=60, s-maxage=60` |
+| closed candles | a candles query with a `to` at least one hour in the past: no bucket in it can change | `public, max-age=3600, s-maxage=3600` |
+| never | `/v1/health`, `/v1/health/ready`, `/v1/metrics`, `/v1/ws`, `POST`, every non-200 answer (errors, 429, 503), and any request that has the query parameter `_nc` | `no-store` |
+
+`GET /v1/logo-blocklist` keeps its own `public, max-age=5`. **Bypass:** a client that has just changed something itself (placed, cancelled, amended or refunded an order)
+asks for what it affects with `_nc=<anything unique>`: the server ignores the parameter, a CDN keys its cache on the whole query so a new value is a miss, and the answer is
+`no-store`, so nothing piles up under such keys. A closed range is only claimed for a `to` an hour back because a fill reaches the store minutes after its block at most; a
+reorg deeper than that is not expected on the chain these routes read.
 
 ## 6. The `[api]` configuration
 
