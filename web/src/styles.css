@@ -421,11 +421,12 @@ small, .small { font-size: 0.85em; }
 .checkbox-row { display: flex; gap: 8px; align-items: flex-start; }
 .checkbox-row input { margin-top: 4px; }
 
-.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-2); }
+/* a segmented control is a pill: the group and every segment (the selected one's highlight) are fully rounded; the segments keep their boxes, so the heights and the hit areas stay, and the 1px divider keeps its width, now clear */
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; background: var(--surface-2); }
 .segmented button {
-  flex: 1 1 0; min-height: 36px; padding: 6px 16px; border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer;
+  flex: 1 1 0; min-height: 36px; padding: 6px 16px; border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; border-radius: 999px;
 }
-.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button + button { border-left: 1px solid transparent; }
 /* an unchecked segment only: a hover rule on every segment outranks the checked background below, and the pointer stays on the segment it has just pressed */
 .segmented button:not([aria-checked='true']):hover:not(:disabled) { background: var(--surface-3); }
 .segmented button[aria-checked='true'] { background: var(--primary); color: var(--primary-contrast); }

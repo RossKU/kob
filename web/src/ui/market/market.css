@@ -97,9 +97,9 @@ body:has(.market-page) .container { max-width: 1520px; }
 /* ------------------------------------------------------------------ price chart */
 
 .chart-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.chart-intervals { display: inline-flex; gap: 2px; background: var(--surface-2); border-radius: var(--radius-sm); padding: 2px; }
+.chart-intervals { display: inline-flex; gap: 2px; background: var(--surface-2); border-radius: 999px; padding: 2px; }
 .chart-intervals button {
-  border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 0.82rem; font-weight: 600; padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 0.82rem; font-weight: 600; padding: 3px 10px; border-radius: 999px; cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
 .chart-intervals button:hover { color: var(--text); }

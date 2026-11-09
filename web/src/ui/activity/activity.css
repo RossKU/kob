@@ -17,12 +17,12 @@
 
 /* ---- header tools */
 .act-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
-.act-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-.act-seg button { border: 0; background: transparent; color: var(--muted); padding: 4px 10px; font: inherit; font-size: 0.8rem; cursor: pointer; min-height: 28px; }
+.act-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.act-seg button { border: 0; background: transparent; color: var(--muted); padding: 4px 10px; font: inherit; font-size: 0.8rem; cursor: pointer; min-height: 28px; border-radius: 999px; }
 .act-seg button[aria-pressed='true'] { background: var(--surface-3); color: var(--text); font-weight: 600; }
 .act-seg button:focus-visible, .act-ib:focus-visible, .act-new:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
 .act-kinds { display: inline-flex; gap: 6px; }
-.act-ib { width: 30px; height: 28px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; display: inline-grid; place-items: center; padding: 0; }
+.act-ib { width: 30px; height: 28px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; display: inline-grid; place-items: center; padding: 0; }
 .act-ib[aria-pressed='true'] { color: var(--primary); border-color: var(--primary); }
 .act-ib-placed[aria-pressed='true'] { color: var(--act-placed); border-color: var(--act-placed); }
 .act-ib-fill[aria-pressed='true'] { color: var(--buy); border-color: var(--buy); }
