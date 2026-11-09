@@ -50,6 +50,65 @@ pub(crate) fn tips_of(env: &Env, pair: &PairPart) -> Result<Tips, Issue> {
     pair_tips(env.market.program, pair.quote.program).map_err(|e| error("BUILD_REJECTED", e.to_string()))
 }
 
+/// The priority tip (KAS sompi per whole A) a pair order carries when the user sets none (`defaultPairTip` of
+/// `web/src/kob/orders/pair-common.ts`, which these numbers must equal): the pair's keeper tip (`pair_keeper_tips.json`,
+/// the measured fee of one update, doubled) over the whole amount, rounded up. The executor nets two crossing pair orders
+/// only when their tips pay the netting's network fee (a netting moves no KAS), so an untipped crossing pair order would
+/// wait for a route through the KAS books. No amount (or no table row for the pair): no default.
+pub fn default_pair_tip(env: &Env, amount: i64) -> i64 {
+    let Some(pair) = &env.pair else { return 0 };
+    if amount <= 0 {
+        return 0;
+    }
+    let Ok(t) = tips_of(env, pair) else { return 0 };
+    i64::try_from(ceil_div(t.keeper_tip as i128 * env.market.scale as i128, amount as i128)).unwrap_or(i64::MAX)
+}
+
+/// A tip typed for a pair order whose total over `amount` is below the default's (`pairTipBelowDefault`): a crossing pair
+/// order may then wait for a route through the KAS books.
+pub fn pair_tip_below_default(env: &Env, amount: i64, tip: i64) -> bool {
+    let Some(pair) = &env.pair else { return false };
+    if amount <= 0 {
+        return false;
+    }
+    let Ok(t) = tips_of(env, pair) else { return false };
+    amount as i128 * tip as i128 / (env.market.scale as i128) < t.keeper_tip as i128
+}
+
+/// The note of an explicit tip below the default (one line on stderr).
+pub const PAIR_TIP_NOTE: &str = "With no tip, a crossing pair order may wait for a route through the KAS books.";
+
+/// The tip defaults of a pair order (`kob place` with `--quote`): a tip not typed (`tip_typed` / `exit_tip_typed` false)
+/// becomes the pair's default over the order's amount (a close: the held amount), a typed one stays as typed (zero
+/// included). Returns whether a typed tip is below the default: the caller says so in one line. A KAS-book order (no
+/// pair) is untouched.
+pub fn apply_pair_tip_defaults(env: &Env, intent: &mut Intent, tip_typed: bool, exit_tip_typed: bool) -> bool {
+    if env.pair.is_none() {
+        return false;
+    }
+    let (amount, tip, exit_tip): (i64, &mut i64, Option<&mut i64>) = match intent {
+        Intent::Limit(i) => (i.amount, &mut i.tip, None),
+        Intent::Immediate(i) => (i.amount, &mut i.tip, None),
+        Intent::Market(i) => (i.amount, &mut i.tip, None),
+        Intent::Streaming(i) => (i.amount, &mut i.tip, None),
+        Intent::Close(i) => (i.amount.unwrap_or_else(|| held_amount(env)), &mut i.tip, None),
+        Intent::Schedule(i) => (i.amount, &mut i.tip, None),
+        Intent::Dutch(i) => (i.amount, &mut i.tip, None),
+        Intent::Cond(i) => (i.amount, &mut i.tip, None),
+        Intent::Ifd(i) => (i.amount, &mut i.tip, Some(&mut i.exit_tip)),
+    };
+    let mut below = false;
+    for (typed, t) in [(tip_typed, Some(tip)), (exit_tip_typed, exit_tip)] {
+        let Some(t) = t else { continue };
+        if typed {
+            below |= pair_tip_below_default(env, amount, *t);
+        } else {
+            *t = default_pair_tip(env, amount);
+        }
+    }
+    below
+}
+
 /// The environment the shared leg / expiry helpers run in for a pair (`legEnvOf`): prices are B per whole A, so the KAS
 /// tick does not apply, and the default keeper / refund tips are the pair's.
 fn leg_env(env: &Env, t: &Tips) -> Env {

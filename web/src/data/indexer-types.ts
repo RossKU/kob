@@ -440,8 +440,9 @@ export interface CandlesView {
 
 /**
  * `GET /v1/stats?since=`: the store's activity totals over the range from `since` (unix ms, rounded down to the minute by the server; null: all time)
- * to the newest block (docs/api-reference.md 3.21). `traders` and `fees_paid` are null beyond the server's scan caps, `executors` always (the store
- * records no filler key); `kas_locked` (sompi) is the live order UTXOs now, whatever the range.
+ * to the newest block (docs/api-reference.md 3.21). An indexer of schema 10 answers every figure (`executors`: the distinct scripts that funded the
+ * range's fills, those it recorded); an earlier one has `traders` and `fees_paid` null beyond its scan caps and `executors` always null. `kas_locked`
+ * (sompi) is the live order UTXOs now, whatever the range.
  */
 export interface ActivityStatsView {
   since: number | null;

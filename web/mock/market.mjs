@@ -300,7 +300,7 @@ export function depthView(chain, tokenId, q) {
 /**
  * `GET /v1/stats?since=`: the store's activity totals over the range from `since` (unix ms, rounded down to the minute; all time without it):
  * orders placed (create events), their distinct makers, what the fills released to their fillers (amount x tip / scale per fill, the order's tip)
- * and the KAS in the live order UTXOs now. `executors` is always null (the indexer records no filler key).
+ * and the KAS in the live order UTXOs now. `executors` is null: the mock chain records no fill's funder (an indexer of schema 10 counts them).
  */
 export function activityView(chain, q) {
   const raw = intParam(q, 'since');

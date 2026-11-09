@@ -123,7 +123,13 @@ CREATE TABLE IF NOT EXISTS order_events (
     price       INTEGER,                  -- sompi per whole token
     payout      INTEGER,                  -- sell side: value of the maker payout output (positional rule)
     closes      INTEGER NOT NULL DEFAULT 0,
-    detail      TEXT
+    detail      TEXT,
+    -- (schema 10) a fill: sompi it released to the filler, floor(amount x tip / scale) at the tip the order had at the fill
+    -- (`activity::fill_fee`; NULL: a term unknown). NULL for every other kind.
+    fee         INTEGER,
+    -- (schema 10) a fill: scripts.id of the script that funded its transaction (the record log's payer section: an Executor's
+    -- funding key). NULL: not recorded (a frame written before 2026-11-09, or no plain input funded it). NULL for every other kind.
+    executor_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS order_events_cov ON order_events (order_id, id);
 CREATE INDEX IF NOT EXISTS order_events_block ON order_events (block_seq);
@@ -455,4 +461,106 @@ END;
 CREATE TRIGGER IF NOT EXISTS counters_fills_update AFTER UPDATE OF kind ON order_events WHEN (OLD.kind = 'fill') != (NEW.kind = 'fill') BEGIN
     INSERT INTO counters (name, n) VALUES ('fills', (NEW.kind = 'fill') - (OLD.kind = 'fill'))
         ON CONFLICT (name) DO UPDATE SET n = n + excluded.n;
+END;
+
+-- Schema 10: the activity totals (`GET /v1/stats`, `indexer::activity`), kept by the triggers below in the transaction of every write
+-- (a batch, a revert, a replay, the lean pruning), so the totals of all time or of any window cost a few hundred bucket rows instead of
+-- a scan of the history. A revert deletes the events and orders of its block, and the delete triggers take back exactly what the
+-- insert triggers added (the fee is the event's own column). A store without them gets them counted once (`db::backfill_activity`).
+
+-- The script public keys (version + script) that funded fill transactions, by integer; never deleted (like `ids`).
+CREATE TABLE IF NOT EXISTS scripts (
+    id  INTEGER PRIMARY KEY,
+    spk BLOB NOT NULL UNIQUE
+);
+
+-- Per bucket of block time: the fill events, the fees they released, and the `create` events (orders placed). Two bucket sizes,
+-- so a window from any minute reads the minutes up to its first whole hour and the hours after it.
+CREATE TABLE IF NOT EXISTS activity (
+    iv     INTEGER NOT NULL,              -- 60000 | 3600000 (ms)
+    t      INTEGER NOT NULL,              -- bucket start (ms)
+    fills  INTEGER NOT NULL,
+    fees   INTEGER NOT NULL,              -- sompi
+    orders INTEGER NOT NULL,
+    PRIMARY KEY (iv, t)
+) WITHOUT ROWID;
+
+-- Per maker (kind 1, ids.id of the key) and per executor (kind 2, scripts.id): the newest block (blocks.seq) of an order it placed or
+-- of a fill it funded, so the distinct ones of a window are one index range. A delete takes it back to the newest one left (one seek
+-- of `orders_maker_genesis` or `order_events_executor`), and drops it with its last order or fill.
+CREATE TABLE IF NOT EXISTS actors (
+    kind       INTEGER NOT NULL,
+    actor_id   INTEGER NOT NULL,
+    last_block INTEGER NOT NULL,
+    PRIMARY KEY (kind, actor_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS actors_last ON actors (kind, last_block);
+CREATE INDEX IF NOT EXISTS order_events_executor ON order_events (executor_id, block_seq) WHERE kind = 'fill' AND executor_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS activity_insert AFTER INSERT ON order_events WHEN NEW.kind IN ('fill', 'create') BEGIN
+    INSERT INTO activity (iv, t, fills, fees, orders)
+        SELECT v.iv, NEW.ts - NEW.ts % v.iv, NEW.kind = 'fill', CASE WHEN NEW.kind = 'fill' THEN COALESCE(NEW.fee, 0) ELSE 0 END,
+               NEW.kind = 'create'
+        FROM (SELECT 60000 AS iv UNION ALL SELECT 3600000) v WHERE true
+        ON CONFLICT (iv, t) DO UPDATE SET fills = fills + excluded.fills, fees = fees + excluded.fees, orders = orders + excluded.orders;
+END;
+CREATE TRIGGER IF NOT EXISTS activity_delete AFTER DELETE ON order_events WHEN OLD.kind IN ('fill', 'create') BEGIN
+    UPDATE activity SET fills = fills - (OLD.kind = 'fill'), fees = fees - CASE WHEN OLD.kind = 'fill' THEN COALESCE(OLD.fee, 0) ELSE 0 END,
+                        orders = orders - (OLD.kind = 'create')
+        WHERE (iv = 60000 AND t = OLD.ts - OLD.ts % 60000) OR (iv = 3600000 AND t = OLD.ts - OLD.ts % 3600000);
+    DELETE FROM activity WHERE ((iv = 60000 AND t = OLD.ts - OLD.ts % 60000) OR (iv = 3600000 AND t = OLD.ts - OLD.ts % 3600000))
+        AND fills <= 0 AND orders <= 0;
+END;
+CREATE TRIGGER IF NOT EXISTS activity_update AFTER UPDATE OF kind, ts, fee ON order_events
+    WHEN (OLD.kind IN ('fill', 'create') OR NEW.kind IN ('fill', 'create'))
+     AND (OLD.kind IS NOT NEW.kind OR OLD.ts IS NOT NEW.ts OR OLD.fee IS NOT NEW.fee) BEGIN
+    UPDATE activity SET fills = fills - (OLD.kind = 'fill'), fees = fees - CASE WHEN OLD.kind = 'fill' THEN COALESCE(OLD.fee, 0) ELSE 0 END,
+                        orders = orders - (OLD.kind = 'create')
+        WHERE OLD.kind IN ('fill', 'create')
+          AND ((iv = 60000 AND t = OLD.ts - OLD.ts % 60000) OR (iv = 3600000 AND t = OLD.ts - OLD.ts % 3600000));
+    DELETE FROM activity WHERE ((iv = 60000 AND t = OLD.ts - OLD.ts % 60000) OR (iv = 3600000 AND t = OLD.ts - OLD.ts % 3600000))
+        AND fills <= 0 AND orders <= 0;
+    INSERT INTO activity (iv, t, fills, fees, orders)
+        SELECT v.iv, NEW.ts - NEW.ts % v.iv, NEW.kind = 'fill', CASE WHEN NEW.kind = 'fill' THEN COALESCE(NEW.fee, 0) ELSE 0 END,
+               NEW.kind = 'create'
+        FROM (SELECT 60000 AS iv UNION ALL SELECT 3600000) v WHERE NEW.kind IN ('fill', 'create')
+        ON CONFLICT (iv, t) DO UPDATE SET fills = fills + excluded.fills, fees = fees + excluded.fees, orders = orders + excluded.orders;
+END;
+
+CREATE TRIGGER IF NOT EXISTS actors_order_insert AFTER INSERT ON orders WHEN NEW.maker_id IS NOT NULL BEGIN
+    INSERT INTO actors (kind, actor_id, last_block) VALUES (1, NEW.maker_id, NEW.genesis_block)
+        ON CONFLICT (kind, actor_id) DO UPDATE SET last_block = MAX(last_block, excluded.last_block);
+END;
+CREATE TRIGGER IF NOT EXISTS actors_order_delete AFTER DELETE ON orders WHEN OLD.maker_id IS NOT NULL BEGIN
+    DELETE FROM actors WHERE kind = 1 AND actor_id = OLD.maker_id AND NOT EXISTS (SELECT 1 FROM orders WHERE maker_id = OLD.maker_id);
+    UPDATE actors SET last_block = (SELECT MAX(genesis_block) FROM orders WHERE maker_id = OLD.maker_id)
+        WHERE kind = 1 AND actor_id = OLD.maker_id;
+END;
+CREATE TRIGGER IF NOT EXISTS actors_order_update AFTER UPDATE OF maker_id, genesis_block ON orders
+    WHEN OLD.maker_id IS NOT NEW.maker_id OR OLD.genesis_block IS NOT NEW.genesis_block BEGIN
+    DELETE FROM actors WHERE kind = 1 AND actor_id = OLD.maker_id AND NOT EXISTS (SELECT 1 FROM orders WHERE maker_id = OLD.maker_id);
+    UPDATE actors SET last_block = (SELECT MAX(genesis_block) FROM orders WHERE maker_id = OLD.maker_id)
+        WHERE kind = 1 AND actor_id = OLD.maker_id;
+    INSERT INTO actors (kind, actor_id, last_block) SELECT 1, NEW.maker_id, NEW.genesis_block WHERE NEW.maker_id IS NOT NULL
+        ON CONFLICT (kind, actor_id) DO UPDATE SET last_block = MAX(last_block, excluded.last_block);
+END;
+CREATE TRIGGER IF NOT EXISTS actors_fill_insert AFTER INSERT ON order_events WHEN NEW.kind = 'fill' AND NEW.executor_id IS NOT NULL BEGIN
+    INSERT INTO actors (kind, actor_id, last_block) VALUES (2, NEW.executor_id, NEW.block_seq)
+        ON CONFLICT (kind, actor_id) DO UPDATE SET last_block = MAX(last_block, excluded.last_block);
+END;
+CREATE TRIGGER IF NOT EXISTS actors_fill_delete AFTER DELETE ON order_events WHEN OLD.kind = 'fill' AND OLD.executor_id IS NOT NULL BEGIN
+    DELETE FROM actors WHERE kind = 2 AND actor_id = OLD.executor_id
+        AND NOT EXISTS (SELECT 1 FROM order_events WHERE kind = 'fill' AND executor_id = OLD.executor_id);
+    UPDATE actors SET last_block = (SELECT MAX(block_seq) FROM order_events WHERE kind = 'fill' AND executor_id = OLD.executor_id)
+        WHERE kind = 2 AND actor_id = OLD.executor_id;
+END;
+CREATE TRIGGER IF NOT EXISTS actors_fill_update AFTER UPDATE OF kind, executor_id, block_seq ON order_events
+    WHEN (OLD.kind = 'fill' AND OLD.executor_id IS NOT NULL) OR (NEW.kind = 'fill' AND NEW.executor_id IS NOT NULL) BEGIN
+    DELETE FROM actors WHERE kind = 2 AND actor_id = OLD.executor_id
+        AND NOT EXISTS (SELECT 1 FROM order_events WHERE kind = 'fill' AND executor_id = OLD.executor_id);
+    UPDATE actors SET last_block = (SELECT MAX(block_seq) FROM order_events WHERE kind = 'fill' AND executor_id = OLD.executor_id)
+        WHERE kind = 2 AND actor_id = OLD.executor_id;
+    INSERT INTO actors (kind, actor_id, last_block) SELECT 2, NEW.executor_id, NEW.block_seq
+        WHERE NEW.kind = 'fill' AND NEW.executor_id IS NOT NULL
+        ON CONFLICT (kind, actor_id) DO UPDATE SET last_block = MAX(last_block, excluded.last_block);
 END;

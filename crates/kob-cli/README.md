@@ -140,7 +140,7 @@ Prices are all-in: a sell receives `price - tip`, a buy pays `price + tip`.
 | `repeat-ifd`, `repeat-ifo` | as `ifd` / `ifo` | re-enters after every take-profit (`--repeat-count K`) |
 | `pair-limit` | `--quote`, `--price` | a limit on a pair (price in B per whole A) |
 
-Defaults match the web wallet: minimum fill worth 10 KAS, 1 KAS carrier per covenant UTXO, tip 0. Every option per kind:
+Defaults match the web wallet: minimum fill worth 10 KAS, 1 KAS carrier per covenant UTXO, tip 0 (a pair order, `--quote`, with no `--tip` carries the pair's keeper tip over its amount). Every option per kind:
 [REFERENCE.md](REFERENCE.md#order-kinds-every-option).
 
 **Market sells need an extra flag.** The auction starts at the indexer's best price, which nothing independent checks. A

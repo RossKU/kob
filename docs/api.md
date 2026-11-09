@@ -60,7 +60,7 @@ H = heavy (rate-limit cost 5). `{token}`, `{covenant_id}`, `{base}` and `{quote}
 | `GET /v1/fills?token=&side=&limit=&before=` | Fill events, newest first | `before=` | 1 |
 | `GET /v1/trades/{token}?limit=&before=` | KAS trades (fills grouped per transaction), newest first | `before=` | H |
 | `GET /v1/candles/{token}?interval=&from=&to=&limit=` | OHLCV candles, ascending; `interval` `1m`, `5m` (default), `1h`, `1d` | | H |
-| `GET /v1/stats?since=` | Activity totals of the store: orders placed, traders, fees paid to fillers, KAS locked (`since` in unix ms; all time without it) | | H |
+| `GET /v1/stats?since=` | Activity totals of the store: orders placed, fills, traders, executors, fees paid to fillers, KAS locked (`since` in unix ms; all time without it) | | H |
 | `GET /v1/stats/{token}` | 24 h stats and the top of the book | | H |
 | `GET /v1/depth/{token}?levels=` | Cumulative depth per price level | | H |
 | `GET /v1/token-utxos?owner=&token=&spent=&limit=&cursor=` | Token holdings with proven states (`owner` or `token` required) | `cursor=` | H |

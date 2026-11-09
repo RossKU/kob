@@ -1145,18 +1145,23 @@ async fn activity_totals_over_a_range() {
     c.execute("UPDATE orders SET tip = 2000 WHERE covenant_id IN (?1, ?2)", params![cid(1), cid(3)]).unwrap();
     c.execute("UPDATE orders SET tip = 500 WHERE covenant_id = ?1", params![cid(2)]).unwrap();
     let t0 = 1_700_000_000_000i64;
-    for (cov, block, ts, kind, amount) in [
-        (1u8, 1i64, t0 - 10 * 86_400_000, "create", 0),
-        (2, 2, t0 - 9 * 86_400_000, "create", 0),
-        (3, 3, t0 - 60_000, "create", 0),
-        (4, 4, t0, "create", 0),
-        (2, 2, t0 - 9 * 86_400_000, "fill", 2 * W),
-        (1, 3, t0 - 30_000, "fill", W),
-        (3, 4, t0, "fill", 3 * W / 2),
+    // the scripts that funded the fills: A the old one (block 2), B the one of block 3; block 4's is not recorded
+    let a = crate::indexer::activity::intern_script(c, &[0, 0, 0x20, 0xa1, 0xac]).unwrap();
+    let b = crate::indexer::activity::intern_script(c, &[0, 0, 0x20, 0xb1, 0xac]).unwrap();
+    assert_eq!(crate::indexer::activity::intern_script(c, &[0, 0, 0x20, 0xa1, 0xac]).unwrap(), a, "once per script");
+    for (cov, block, ts, kind, amount, tip, executor) in [
+        (1u8, 1i64, t0 - 10 * 86_400_000, "create", 0, 0, None),
+        (2, 2, t0 - 9 * 86_400_000, "create", 0, 0, None),
+        (3, 3, t0 - 60_000, "create", 0, 0, None),
+        (4, 4, t0, "create", 0, 0, None),
+        (2, 2, t0 - 9 * 86_400_000, "fill", 2 * W, 500, Some(a)),
+        (1, 3, t0 - 30_000, "fill", W, 2000, Some(b)),
+        (3, 4, t0, "fill", 3 * W / 2, 2000, None),
     ] {
+        let fee = (kind == "fill").then(|| crate::indexer::activity::fill_fee(Some(amount), Some(tip), Some(W)).unwrap());
         c.execute(
-            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes)              VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), ?2, ?3, ?4, ?5, 0, ?6, (SELECT id FROM ids WHERE h = ?7), 1, ?8, 250000, 0)",
-            params![cid(cov), block, block * 100, ts, cid(block as u8 + 60), kind, cid(TOKEN), amount],
+            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, fee, executor_id)              VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), ?2, ?3, ?4, ?5, 0, ?6, (SELECT id FROM ids WHERE h = ?7), 1, ?8, 250000, 0, ?9, ?10)",
+            params![cid(cov), block, block * 100, ts, cid(block as u8 + 60), kind, cid(TOKEN), amount, fee, executor],
         )
         .unwrap();
     }
@@ -1171,22 +1176,43 @@ async fn activity_totals_over_a_range() {
     let (s, v) = get(&app, "/v1/stats").await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert!(v["since"].is_null());
-    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64()), (Some(4), Some(3)));
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fills"].as_i64()), (Some(4), Some(3), Some(3)));
     assert_eq!((v["fees_paid"].as_str(), v["kas_locked"].as_str()), (Some("6000"), Some("2000000")));
-    assert!(v["executors"].is_null(), "the store keeps no filler key");
+    assert_eq!(v["executors"].as_i64(), Some(2), "A and B; the fill without a recorded script is not counted");
     assert_eq!(v["ts"].as_i64(), Some(t0));
 
     // the last day: orders 3 and 4 (makers MAKER and 0xcc), the fills of blocks 3 and 4 (1 whole and 1.5 whole at 2 000)
     let (s, v) = get(&app, &format!("/v1/stats?since={}", t0 - 86_400_000 + 17)).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["since"].as_i64(), Some((t0 - 86_400_000 + 17) / 60_000 * 60_000), "rounded down to the minute");
-    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64()), (Some(2), Some(2)));
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fills"].as_i64()), (Some(2), Some(2), Some(2)));
     assert_eq!(v["fees_paid"], "5000");
+    assert_eq!(v["executors"].as_i64(), Some(1), "B");
+    // from a minute inside an hour: the minutes up to the hour and the hours after it, every bucket once
+    let (_, v) = get(&app, &format!("/v1/stats?since={}", t0 - 30_000)).await;
+    assert_eq!((v["fills"].as_i64(), v["fees_paid"].as_str()), (Some(2), Some("5000")));
+    let (_, v) = get(&app, &format!("/v1/stats?since={}", t0 - 10_000)).await;
+    assert_eq!((v["fills"].as_i64(), v["fees_paid"].as_str(), v["orders"].as_i64()), (Some(1), Some("3000"), Some(1)));
     assert_eq!(v["kas_locked"], "2000000", "locked is the state now, whatever the range");
 
     // a range with nothing in it
     let (_, v) = get(&app, &format!("/v1/stats?since={}", t0 + 3_600_000)).await;
     assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fees_paid"].as_str()), (Some(0), Some(0), Some("0")));
+    assert_eq!((v["fills"].as_i64(), v["executors"].as_i64()), (Some(0), Some(0)));
+
+    // the aggregates follow a delete as a revert does it: the fills and orders of block 4 go, and the totals are those of blocks 1 to 3
+    c.execute_batch("DELETE FROM order_events WHERE block_seq = 4; DELETE FROM orders WHERE genesis_block = 4;").unwrap();
+    e.state.generation.bump();
+    let (_, v) = get(&app, "/v1/stats").await;
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fills"].as_i64()), (Some(3), Some(2), Some(2)));
+    assert_eq!((v["fees_paid"].as_str(), v["executors"].as_i64()), (Some("3000"), Some(2)));
+    c.execute_batch("DELETE FROM order_events WHERE block_seq = 3; DELETE FROM orders WHERE genesis_block = 3;").unwrap();
+    e.state.generation.bump();
+    let (_, v) = get(&app, "/v1/stats").await;
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fills"].as_i64()), (Some(2), Some(2), Some(1)));
+    assert_eq!((v["fees_paid"].as_str(), v["executors"].as_i64()), (Some("1000"), Some(1)));
+    let left: i64 = c.query_row("SELECT COUNT(*) FROM activity WHERE t >= ?1", [t0 - 3_600_000], |r| r.get(0)).unwrap();
+    assert_eq!(left, 0, "an emptied bucket is no row");
 
     let (s, _) = get(&app, "/v1/stats?since=-5").await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
@@ -1204,6 +1230,7 @@ async fn activity_totals_of_an_empty_store() {
         (v["orders"].as_i64(), v["traders"].as_i64(), v["fees_paid"].as_str(), v["kas_locked"].as_str()),
         (Some(0), Some(0), Some("0"), Some("0"))
     );
+    assert_eq!((v["fills"].as_i64(), v["executors"].as_i64()), (Some(0), Some(0)));
     assert!(v["ts"].is_null());
 }
 

@@ -2,7 +2,8 @@
 // in summary-model.test.ts. Built from what the indexer serves: the KAS candles of every token (`/v1/candles`), the token list's open orders and the
 // pairs' live orders, and the store's activity totals (`/v1/stats?since=`: orders placed, traders, fees paid to executors, the KAS locked in orders).
 // Volume and trades are the KAS markets' (exact, sompi): a pair fill carries no KAS price, and most go through the KAS books, whose fills these already
-// count. What an indexer does not report (an older one has no `/v1/stats`; executors are recorded by none) is null: the page shows "—".
+// count. What an indexer does not report (an older one has no `/v1/stats`, or null executors: one before schema 10 recorded no fill's funder) is null:
+// the page shows "—".
 import { unorderedPairKey } from '../market/pair-model';
 import type { ActivityStatsView, CandleView, IndexerTokenView, PairSummaryView } from '../../data/indexer-types';
 

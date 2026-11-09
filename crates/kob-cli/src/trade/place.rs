@@ -60,8 +60,10 @@ KINDS
 AMOUNTS (always with a unit; never rounded)
   AMOUNT         12.5TUSD or 12.5tok (whole tokens, up to the token's decimals), 1250000000base (base units)
   P              KAS per whole token: 0.25KAS or 25000000sompi; a pair: B per whole A, e.g. 2500TUSD or 2500tok
-  --tip T        priority tip, KAS per whole token (default 0): a sell receives price - tip, a buy pays price + tip
-  --exit-tip T   the if-done exit's tip
+  --tip T        priority tip, KAS per whole token (default 0): a sell receives price - tip, a buy pays price + tip.
+                 A pair order (--quote) with no --tip carries the pair's keeper tip over the order's amount (the one the web
+                 ticket fills in): crossing pair orders net only when their tips pay the netting. A typed --tip 0 stays 0
+  --exit-tip T   the if-done exit's tip (a pair if-done: the same default as --tip when not typed)
   --min-fill A   smallest fill (default: worth 10 KAS at the limit; IOC / FOK / market 1 base unit; if-done ceil(amount/4))
   --min-touch A  stop trigger threshold (default: max(min fill, 25% of the amount))
   --carrier KAS  KAS on every covenant UTXO of the order (default 1KAS; at least 0.08KAS and the token program's floor)
@@ -809,7 +811,11 @@ pub fn run(args: &[String]) -> i32 {
         check_flags(&kind, &p).map_err(|e| (2, e))?;
         super::flow::check_network_first(&c).map_err(|e| (1, e))?;
         let (env, a, b, notes) = env_for(&c, &p, &kind, signer.pubkey).map_err(|e| (1, e))?;
-        let intent = intent_of(&kind, &p, &a, b.as_ref()).map_err(|e| (2, e))?;
+        let mut intent = intent_of(&kind, &p, &a, b.as_ref()).map_err(|e| (2, e))?;
+        // a pair order with no tip carries the pair's default (the web ticket's); a typed tip stays, zero included
+        if super::plan_pair::apply_pair_tip_defaults(&env, &mut intent, p.get("--tip").is_some(), p.get("--exit-tip").is_some()) {
+            eprintln!("note: {}", super::plan_pair::PAIR_TIP_NOTE);
+        }
         let mut plan = plan_order(&env, &intent);
         plan.issues.extend(notes);
         // a registry token that is not tradable is refused, an unlisted one flagged (`web/src/kob/decode.ts` token-unlisted)

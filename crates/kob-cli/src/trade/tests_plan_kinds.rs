@@ -10,6 +10,7 @@ use kob_protocol::state::{AnyState, AskState, BidState, CondAskState, CondBidSta
 
 use super::market::TokenMarket;
 use super::plan::*;
+use super::plan_pair::{apply_pair_tip_defaults, default_pair_tip, pair_tip_below_default};
 use super::tests_plan::*;
 
 const P: i64 = 250_000_000;
@@ -891,4 +892,151 @@ fn replace_intents_round_trip() {
     // refused: a repeating entry
     let r = valid(&e, Intent::Ifd(rep(Side::Buy, 240_000_000, 300_000_000, Some(2))));
     assert!(intent_from_order(&r.states[0], Lifetime::Gtc, CLOCK.daa, &Changes::default()).unwrap_err().contains("repeating"));
+}
+
+// ------------------------------------------------------------------------------------------------ the pair tip default
+
+/// `kob place` of a pair order with no `--tip` carries the pair's keeper tip over the order's amount, as the web ticket does
+/// (`defaultPairTip` / `pairTipBelowDefault` of `web/src/kob/orders/pair-common.ts`). The numbers are pinned for one KCC-20 pair
+/// (keeper tip 3_800_000 sompi in `pair_keeper_tips.json`, A with 3 decimals): they must equal what pair-common.ts computes
+/// for the same pair and amounts, `ceil(keeperTip * scale / amount)` and `floor(amount * tip / scale) < keeperTip`.
+#[test]
+fn a_pair_order_with_no_tip_carries_the_pairs_keeper_tip() {
+    let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
+    let e = pair_env(&a, &b);
+    assert_eq!((pair_tips(a.program, b.program).unwrap().keeper_tip, a.scale), (3_800_000, 1000));
+    // pinned: the whole token (1000 base units) pays the whole keeper tip, 10_007 base units round up
+    assert_eq!(default_pair_tip(&e, 1000), 3_800_000);
+    assert_eq!(default_pair_tip(&e, 10_007), 379_735);
+    assert_eq!(default_pair_tip(&e, 0), 0);
+    assert!(!pair_tip_below_default(&e, 10_007, 379_735));
+    assert!(pair_tip_below_default(&e, 10_007, 379_734));
+    assert!(pair_tip_below_default(&e, 10_007, 0));
+    assert!(!pair_tip_below_default(&e, 0, 0));
+    // a KAS-book order (no pair) has no default and says nothing
+    let kas = env(&a);
+    assert_eq!(default_pair_tip(&kas, 10_007), 0);
+    let mut intent = Intent::Limit(limit(Side::Sell, 10_007, 1_550));
+    assert!(!apply_pair_tip_defaults(&kas, &mut intent, false, false));
+    assert!(matches!(intent, Intent::Limit(LimitIntent { tip: 0, .. })));
+
+    // no tip typed: the default, through the planner into the state (all in KAS sompi per whole A)
+    let mut intent = Intent::Limit(limit(Side::Sell, 10_007, 1_550));
+    assert!(!apply_pair_tip_defaults(&e, &mut intent, false, false));
+    let p = valid(&e, intent);
+    let AnyState::KobPair(s) = &p.states[0] else { panic!("{:?}", p.states[0]) };
+    assert_eq!(s.tip, 379_735);
+    // a typed tip, zero included, is kept; below the default it asks for the note, at or above it does not
+    for (typed, below) in [(0, true), (379_734, true), (379_735, false), (1_000_000, false)] {
+        let mut intent = Intent::Limit(LimitIntent { tip: typed, ..limit(Side::Sell, 10_007, 1_550) });
+        assert_eq!(apply_pair_tip_defaults(&e, &mut intent, true, false), below, "typed {typed}");
+        let p = valid(&e, intent);
+        let AnyState::KobPair(s) = &p.states[0] else { panic!() };
+        assert_eq!(s.tip, typed);
+    }
+}
+
+#[test]
+fn every_pair_kind_gets_the_default_tip_and_an_explicit_zero_stays() {
+    let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
+    let e = pair_env(&a, &b);
+    let amount = 10_007;
+    let d = 379_735;
+    let tips = |i: &Intent| -> (i64, Option<i64>) {
+        match i {
+            Intent::Limit(x) => (x.tip, None),
+            Intent::Immediate(x) => (x.tip, None),
+            Intent::Market(x) => (x.tip, None),
+            Intent::Streaming(x) => (x.tip, None),
+            Intent::Close(x) => (x.tip, None),
+            Intent::Schedule(x) => (x.tip, None),
+            Intent::Dutch(x) => (x.tip, None),
+            Intent::Cond(x) => (x.tip, None),
+            Intent::Ifd(x) => (x.tip, Some(x.exit_tip)),
+        }
+    };
+    let kinds = || -> Vec<(&'static str, Intent, i64)> {
+        vec![
+            ("limit", Intent::Limit(limit(Side::Sell, amount, 1_550)), amount),
+            (
+                "ioc",
+                Intent::Immediate(ImmediateIntent {
+                    fok: false,
+                    side: Side::Sell,
+                    amount,
+                    price: 1_550,
+                    tip: 0,
+                    min_fill: None,
+                    life_daa: None,
+                    active_from: None,
+                }),
+                amount,
+            ),
+            (
+                "market",
+                Intent::Market(MarketIntent {
+                    side: Side::Sell,
+                    amount,
+                    tip: 0,
+                    min_fill: None,
+                    slippage_bps: None,
+                    all_or_nothing: false,
+                    floor: None,
+                }),
+                amount,
+            ),
+            (
+                "close",
+                Intent::Close(CloseIntent { amount: None, tip: 0, slippage_bps: None, all_or_nothing: false, floor: None }),
+                100 * a.scale,
+            ),
+            (
+                "twap",
+                Intent::Schedule(ScheduleIntent {
+                    dca: false,
+                    amount,
+                    tip: 0,
+                    min_fill: None,
+                    slice: 2_000,
+                    interval_daa: 100,
+                    price: 1_550,
+                    price_end: None,
+                    slice_auction_daa: None,
+                    lifetime: Lifetime::Gtc,
+                    active_from: None,
+                    max_fills: None,
+                }),
+                amount,
+            ),
+            ("dutch", Intent::Dutch(dutch(Side::Sell, amount, 1_700, 1_500, 2_000)), amount),
+            ("stop", Intent::Cond(CondIntent { stop: Some(1_401), ..cond(CondKind::StopMarket, Side::Sell, amount) }), amount),
+            ("ifd", Intent::Ifd(IfdIntent { amount, ..ifd(Side::Buy, 1_401, Some(1_601), None) }), amount),
+        ]
+    };
+    for (name, mut intent, held_or_amount) in kinds() {
+        assert!(!apply_pair_tip_defaults(&e, &mut intent, false, false), "{name}");
+        let want = default_pair_tip(&e, held_or_amount);
+        assert!(want > 0, "{name}");
+        let (tip, exit) = tips(&intent);
+        assert_eq!((tip, exit.unwrap_or(want)), (want, want), "{name}");
+        if name == "limit" {
+            assert_eq!(want, d);
+        }
+    }
+    // an explicit 0 (the exit's too) stays 0 and says the note is due
+    for (name, mut intent, _) in kinds() {
+        assert!(apply_pair_tip_defaults(&e, &mut intent, true, name == "ifd"), "{name}");
+        assert_eq!(tips(&intent), (0, (name == "ifd").then_some(0)), "{name}");
+    }
+    // an if-done order types one of the two: the other still defaults
+    let mut intent = Intent::Ifd(IfdIntent { amount, ..ifd(Side::Buy, 1_401, Some(1_601), None) });
+    assert!(apply_pair_tip_defaults(&e, &mut intent, false, true));
+    assert_eq!(tips(&intent), (d, Some(0)));
+    let mut intent = Intent::Ifd(IfdIntent { amount, ..ifd(Side::Buy, 1_401, Some(1_601), None) });
+    assert!(apply_pair_tip_defaults(&e, &mut intent, true, false));
+    assert_eq!(tips(&intent), (0, Some(d)));
+    // the defaulted pair if-done order plans
+    let mut intent = Intent::Ifd(IfdIntent { amount, ..ifd(Side::Buy, 1_401, Some(1_601), None) });
+    apply_pair_tip_defaults(&e, &mut intent, false, false);
+    assert_eq!(ipair(&valid(&e, intent)).tip, d);
 }

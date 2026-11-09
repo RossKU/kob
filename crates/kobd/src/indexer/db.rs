@@ -22,8 +22,10 @@ use tokio::sync::Semaphore;
 /// 8: the 32-byte ids the big tables repeated are integers (`orders.id`, `ids`; [`super::ids`]): the tables have other columns, so no
 /// build reads a store of another schema than its own, and this one refuses a store of schema 8 or older until `kobd db migrate` has rebuilt
 /// it ([`refuse_old_layout`]). 9: an order names its maker, template hashes, extension commitment and quote token by id too, the page indexes
-/// of the orders and holdings end at the block ([`super::ids`], schema.sql).
-pub const SCHEMA_VERSION: i64 = 9;
+/// of the orders and holdings end at the block ([`super::ids`], schema.sql). 10: a fill event keeps its fee and the script that funded
+/// it (`order_events.fee`, `executor_id`, `scripts`), and the activity totals are kept by triggers (`activity`, `actors`;
+/// [`super::activity`]): `kobd db migrate` computes the fees of the fills a store holds (their executors are unknown).
+pub const SCHEMA_VERSION: i64 = 10;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]
@@ -177,6 +179,9 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if compacted > 0 {
         tracing::info!(compacted, "KCC-23 declarations: the proofs are stored once per transaction instead of once per covenant id");
     }
+    if backfill_activity(conn)? {
+        tracing::info!("counted the activity totals once (kept by triggers from now on)");
+    }
     let unknown = backfill_unknown_pair_extensions(conn)?;
     if unknown > 0 {
         tracing::info!(unknown, "token events: an unknown pair-token commitment an earlier build recorded as zero is now none");
@@ -201,6 +206,22 @@ pub fn backfill_counters(conn: &Connection) -> DbResult<bool> {
          INSERT INTO counters (name, n) SELECT 'status:' || status, COUNT(*) FROM order_state GROUP BY status;",
     )?;
     meta_set(&tx, "counters", "1")?;
+    tx.commit()?;
+    Ok(true)
+}
+
+/// The activity totals (`activity`, `actors`, schema.sql) of a database that has not had them: counted from the events and orders once,
+/// in one transaction, after which the triggers keep them. A no-op (false) once done (`meta.activity`); a fresh database counts its empty
+/// tables. The minute buckets are counted from the events (one pass), the hour buckets from the minutes.
+pub fn backfill_activity(conn: &Connection) -> DbResult<bool> {
+    if meta_get(conn, "activity")?.is_some() {
+        return Ok(false);
+    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "DELETE FROM activity; DELETE FROM actors;          INSERT INTO activity (iv, t, fills, fees, orders)            SELECT 60000, ts - ts % 60000, SUM(kind = 'fill'), SUM(CASE WHEN kind = 'fill' THEN COALESCE(fee, 0) ELSE 0 END), SUM(kind = 'create')            FROM order_events WHERE kind IN ('fill', 'create') GROUP BY ts - ts % 60000;          INSERT INTO activity (iv, t, fills, fees, orders)            SELECT 3600000, t - t % 3600000, SUM(fills), SUM(fees), SUM(orders) FROM activity WHERE iv = 60000 GROUP BY t - t % 3600000;          INSERT INTO actors (kind, actor_id, last_block)            SELECT 1, maker_id, MAX(genesis_block) FROM orders WHERE maker_id IS NOT NULL GROUP BY maker_id;          INSERT INTO actors (kind, actor_id, last_block)            SELECT 2, executor_id, MAX(block_seq) FROM order_events WHERE kind = 'fill' AND executor_id IS NOT NULL GROUP BY executor_id;",
+    )?;
+    meta_set(&tx, "activity", "1")?;
     tx.commit()?;
     Ok(true)
 }

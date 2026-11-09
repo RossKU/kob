@@ -1467,7 +1467,7 @@ should default to settled. The mempool tier is not served by the indexer.
 | `GET /v1/strays?maker=&limit=` | live stray token UTXOs with the order they are stuck on |
 | `GET /v1/trades/{token}?limit=&before=` | trades (the fills of one transaction on one token), newest first (section 5.3) |
 | `GET /v1/candles/{token}?interval=&from=&to=&limit=` | OHLCV candles (`interval` 1m, 5m, 1h or 1d), ascending, empty buckets omitted (5.3) |
-| `GET /v1/stats?since=` | activity totals of the store: orders placed, traders, fees paid to fillers, KAS locked in live orders; indexed, scans capped (api-reference 3.21) |
+| `GET /v1/stats?since=` | activity totals of the store: orders placed, fills, traders, executors, fees paid to fillers, KAS locked in live orders; kept by triggers (schema 10), a few hundred bucket rows per read (api-reference 3.21) |
 | `GET /v1/stats/{token}` | 24 h last / open / high / low / change, volume, trade count, best bid / ask, spread, open orders (5.3) |
 | `GET /v1/depth/{token}?levels=` | cumulative depth snapshot of the listed book, levels merged by price (5.3) |
 | `GET /v1/ws` | WebSocket: subscribe to `health`, `reorg`, `fills`, `fills:<token>`, `book:<token>`, `order:<id>` (a pair order's change is a `book` notice for both its tokens); `kob watch` (crates/kob-cli/README.md) follows it from a terminal |
@@ -2151,19 +2151,26 @@ the switch, are such a case: drill of 2026-10-20, `docs/reports/TN10-TEST-2026-1
 binds: `indexer::kcc23::DeclSection`, flagged by bit 30 of a record's `pos`) is written as record-log format 3 (marker `0x00
 0x03`); every other frame stays format 2 byte for byte. This build reads both; an older build skips format-3 frames with its
 "newer format" warning (KOB records in such a frame are skipped by it too). Declarations made before this build were never
-logged and are not recovered by a replay.
+logged and are not recovered by a replay. Since 2026-11-09 a record of a transaction that spends a tracked order (a fill, a cancel, a
+keeper's call) also keeps its **payer**: the script public key of the output its first input that spends no covenant output spent (the
+submitter's own funds, an Executor's P2PK funding; `record::TxRecord::payer`, flagged by bit 29 of `pos`, at most 64 bytes). A frame that
+holds one is written as format 4 (marker `0x00 0x04`, which may hold declaration sections too); every other frame stays format 2 or 3. The
+payer is the executor `GET /v1/stats` counts; a record of an earlier frame has none, so its fills have no executor (and a replay of an older
+log counts no executor for them). **An older build skips every format-4 frame** (nearly every frame with a fill): roll an indexer back past this
+build only together with the store and the log it had before (7.6a, *Cut-over*).
 
-**Schema.** The database is schema 9 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
+**Schema.** The database is schema 10 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
 dictionary-packed genesis states and event details; schema 8: integer ids in the child tables; schema 9: integer ids in the orders too and shorter
-page indexes, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
-writer and reader: move it aside and replay (above). **A database of schema 5, 6, 7 or 8 is refused untouched as well** (`database ... is of schema N: this build reads
-schema 9 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) rebuilds it as schema 9 in one offline run, and
+page indexes; schema 10: a fill event's fee and executor, `order_events.fee` and `executor_id` (`scripts`), and the activity totals the
+triggers keep, `activity` and `actors`, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
+writer and reader: move it aside and replay (above). **A database of schema 5 to 9 is refused untouched as well** (`database ... is of schema N: this build reads
+schema 10 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) brings it to schema 10 in one offline run, and
 **from then on a build of an older schema refuses the store** (a newer schema is refused by every build), so the way back to the older build is the
 `index.sqlite3.before-migrate` file `kobd db migrate` keeps (or a backup taken before). An old configuration's `[receipts]` table is ignored. Roll indexers out before
 wallets whenever the KOB1 payload version changes: an indexer refuses a payload version it does not know, so it would list
 none of the orders the new wallets place (`docs/ops/release.md`, section 7).
 
-#### 7.6a Compact storage: `kobd db migrate`
+#### 7.6a Compact storage and schema upgrades: `kobd db migrate`
 
 ```
 systemctl stop kob-index                                           # the writer lock: nothing else may write the directory
@@ -2172,7 +2179,7 @@ systemctl start kob-index
 rm /var/lib/kob-index/index.sqlite3.before-migrate                 # once the executor has run on the new store
 ```
 
-One run takes a store of schema 5, 6, 7 or 8 to schema 9. **The old store is not altered**: a new file, `index.sqlite3.migrating`, is built beside it and
+One run takes a store of schema 5 to 9 to schema 10 (a store of schema 9 by the short way below, *Schema 9 to 10*). **The old store is not altered**: a new file, `index.sqlite3.migrating`, is built beside it and
 replaces it only when it has been verified, so a run that fails or is stopped leaves the old store as it was (the next run deletes the partial file). In order:
 (1) **copy**: the tables are created from `schema.sql` (and the token-logo tables of `logo_reports.sql`, whose rows no chain gives back, are carried over) without
 their indexes and triggers and filled from the old store in bulk (`INSERT ... SELECT`, about 7 minutes) through views that give every layout the shape of schema 7: the values the
@@ -2186,7 +2193,10 @@ table the rows of the old store (states decoded, ids as the 32 bytes) and the ro
 row that does not come back identical, a row whose order or token does not exist (the integer layout cannot hold it) or a count that differs stops the migration with the old store untouched; the new
 file must also pass `PRAGMA quick_check` and open as a store of this build (75 s); (4) **swap**: the old file becomes `index.sqlite3.before-migrate`, the rollback, and the new file takes
 its place; (5) the sealed record-log segments are gzip-compressed (the newest stays whole; a rotation compresses the segment it just sealed from now on,
-which holds the writer for about 3 seconds per 256 MiB segment). `--no-compress-log` leaves step 5 out. A store that is of schema 9 already is left as it is.
+which holds the writer for about 3 seconds per 256 MiB segment). `--no-compress-log` leaves step 5 out. A store that is of schema 10 already is left as it is. In step 1 a fill event also gets its fee
+(schema 10): `floor(amount x tip / scale)` at the tip the order had at the fill, the tip the next in-place amend of the order replaced
+(`detail.previous.tip` of its `amend` event) or else the order's own, which is what the processor writes; its executor stays unknown. Step 2
+also counts the activity totals once and checks that the minute and hour buckets add up to the events.
 
 **Disk.** The old store (kept), the new store (3.11 GB for the 8.48 GB store) and the temporary files of the index builds (the sort of the largest index goes
 to the system temporary directory; `SQLITE_TMPDIR` moves it) exist at the same time: **the free space fell by 3.1 GB at most beyond the old store, so plan 4 GB free for the soak store**
@@ -2202,6 +2212,43 @@ price basis of a token with imported orders 5 to 12 ms slower and was not kept).
 store of 57,642 orders and 335,000 holdings) took 1,056 s with the build before (schema 5) and 940 s with this one (the stores: 536 and 225 MB), and the two stores are table for table the same with their
 ids joined back and their columns decoded. Reading the compressed log (the chain check at every start,
 `replay`) costs about half a second per 256 MiB segment.
+
+**Schema 9 to 10.** A store of schema 9 keeps every table as it is: it is copied with `VACUUM INTO` into `index.sqlite3.migrating` (from a
+read-only connection; the old store is not touched), the fill events get their two new columns and their fees (`floor(amount x tip / scale)` at
+the tip in force at the fill, as above), `schema.sql` adds `scripts`, `activity`, `actors`, their indexes and triggers, the totals are counted
+once and checked against the events, every table of the old store must hold as many rows in the new one, and the new file must open as a store of
+this build and pass `quick_check`; then the swap and the log step as above. Only the fills' rows are rewritten. The executors of the fills it
+already holds stay unknown (the record log of the past has no payer sections, see the record log above): `GET /v1/stats` counts the executors of
+the fills indexed from then on. Measured on a copy of the TN10 soak index (index-a, 2026-11-09: 3.98 GB, 1.43 million orders, 4.45 million
+events of which 1.51 million fills and 0.79 million amends, 5.09 million holdings): **82 s in all** (copy 22 s, fees 22 s, totals 4 s, row counts
+1 s, open and `quick_check` 33 s), a peak working set of 440 MB, free disk the size of the new store beside the old one (the data directory
+peaked at 9.3 GB with the 1.24 GB log; no temporary files), the store 3.98 -> **4.05 GB** (+1.8 %: 55,685 minute and 962 hour buckets, 42 makers,
+the fee column). The fees it computed equal `amount x tip / scale` at the orders' current tips for every one of those fills (their amends did not
+change a tip after a fill), 10,130,330,868 sompi in all; the 75,962 fills an import tool wrote without their orders' tips count 0, as before.
+Started as an indexer on the public nodes, the migrated copy caught up the 30,000 DAA (50 minutes of chain) its snapshot was behind in under
+4 minutes and served `GET /v1/stats` in 2 to 4 ms for all time, 1D, 7D and 1M, 21 ms for 1Y or `since=0` (the seek for the range's first block
+passes the 75,962 imported events without a block), cold or warm, where the schema-9 index-a took 8.8 s for all time (fees `null` past the cap) and
+1.8 s for 1D; the 1D figures of the two were the same.
+
+**Cut-over of a public indexer.** The migration of a copy takes about a minute and a half for a 4 GB store, so the read API stays up while it
+runs and is down only for the swap:
+
+1. Copy the live store while it serves: `VACUUM INTO` from a read-only connection (`sqlite3 -readonly index.sqlite3 "VACUUM INTO
+   '/elsewhere/data/index.sqlite3'"`, or `node:sqlite` with `readOnly: true`): a consistent snapshot, no lock held against the writer.
+2. Run the new build's `kobd db migrate` on the copy (a configuration whose `data_dir` is the copy's directory). The copy's record log is not
+   needed: copy none, or start with an empty `records` directory there (the migration only compresses sealed segments).
+3. Stop the live indexer (on the soak: create `run/HOLD-index-a`; the wrapper stops its child and keeps it down). Keep a copy of the live
+   `records` directory's newest segment (sealed ones never change): the way back (7.) needs the log as it was.
+4. Move the live `index.sqlite3` (with its `-wal` / `-shm`) aside and put the migrated `index.sqlite3` in its place. Its `records_next_n` is
+   the snapshot's: the live log holds the frames the old build wrote since.
+5. Bring the store forward from the live log without the node: `kobd db replay --onto-database` with the new build and the live
+   configuration (the same `--tokens` allowlist, or the listing decisions of those frames differ): 15 frames in 9 s on the soak copy. Their fills
+   have no executor (an old frame has no payer).
+6. Start the new build as before (on the soak: point the wrapper's `BIN` at it, delete `HOLD-index-a`). It follows the node from the store's
+   cursor; the soak copy caught up 50 minutes of chain in under 4 minutes, and its `/v1/health` says `following` once it has.
+7. Back: the older build refuses a store of schema 10 and skips the format-4 frames the new build writes. Stop, put the moved-aside store and the
+   saved newest segment back (deleting the newer segments), and start the older build: it re-syncs the blocks since the cut-over from the node
+   (within the node's pruning window).
 
 **What is not done, and why.** Folding `token_utxos` into `token_holdings` (they overlap for the custody UTXOs whose state was proven; there is no constraint that makes that
 true for every row, and a strayed or unproven UTXO is only in `token_utxos`), deriving the `create` events from the orders (1.09 million events, about 0.17 GB net or 4 % of the file; the create item of an order would need an id of its own

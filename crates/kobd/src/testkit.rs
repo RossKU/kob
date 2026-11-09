@@ -1265,8 +1265,8 @@ pub fn snapshot(conn: &Connection) -> String {
         &[6, 8],
     );
     dump(
-        "SELECT o.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, t.h, e.side, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail) FROM order_events e JOIN orders o ON o.id = e.order_id LEFT JOIN ids t ON t.id = e.token_id ORDER BY e.id",
-        14,
+        "SELECT o.covenant_id, e.block_seq, e.daa, e.ts, e.txid, e.tx_pos, e.kind, t.h, e.side, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail), e.fee, x.spk FROM order_events e JOIN orders o ON o.id = e.order_id LEFT JOIN ids t ON t.id = e.token_id LEFT JOIN scripts x ON x.id = e.executor_id ORDER BY e.id",
+        16,
         &mut out,
         "event",
         &[1],
@@ -1318,6 +1318,8 @@ pub fn snapshot(conn: &Connection) -> String {
     );
     // a status whose last order changed status keeps a zero row (incremental), which a rebuild never writes
     dump("SELECT name, n FROM counters WHERE n != 0 ORDER BY name", 2, &mut out, "counter", &[]);
+    dump("SELECT iv, t, fills, fees, orders FROM activity ORDER BY iv, t", 5, &mut out, "activity", &[]);
+    dump(ACTORS_KEPT, 3, &mut out, "actor", &[2]);
     assert_read_invariants(conn);
     out
 }
@@ -1337,7 +1339,30 @@ pub fn assert_read_invariants(conn: &Connection) {
         .query_row("SELECT COUNT(*) FROM order_state WHERE (cur_txid IS NOT NULL) != (status IN ('open','partial'))", [], |r| r.get(0))
         .unwrap();
     assert_eq!(off, 0, "an order's current UTXO and its live status disagree");
+    // the activity totals the triggers keep (`GET /v1/stats`) are the ones the events and orders give
+    let rows = |sql: &str| -> Vec<Vec<rusqlite::types::Value>> {
+        let mut st = conn.prepare(sql).unwrap();
+        let n = st.column_count();
+        st.query_map([], |r| (0..n).map(|i| r.get(i)).collect()).unwrap().map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(
+        rows("SELECT iv, t, fills, fees, orders FROM activity ORDER BY iv, t"),
+        rows(
+            "SELECT v.iv, e.ts - e.ts % v.iv AS t, SUM(e.kind = 'fill'), SUM(CASE WHEN e.kind = 'fill' THEN COALESCE(e.fee, 0) ELSE 0 END),              SUM(e.kind = 'create') FROM order_events e, (SELECT 60000 AS iv UNION ALL SELECT 3600000) v WHERE e.kind IN ('fill', 'create')              GROUP BY 1, 2 ORDER BY 1, 2"
+        ),
+        "the kept activity buckets differ from the counted ones"
+    );
+    assert_eq!(
+        rows(ACTORS_KEPT),
+        rows(
+            "SELECT 1, (SELECT h FROM ids WHERE id = maker_id), MAX(genesis_block) FROM orders WHERE maker_id IS NOT NULL GROUP BY maker_id              UNION ALL SELECT 2, (SELECT spk FROM scripts WHERE id = executor_id), MAX(block_seq) FROM order_events              WHERE kind = 'fill' AND executor_id IS NOT NULL GROUP BY executor_id ORDER BY 1, 2"
+        ),
+        "the kept makers and executors differ from the counted ones"
+    );
 }
+
+/// The makers (their keys) and executors (their scripts) the activity totals keep, with the newest block of each.
+const ACTORS_KEPT: &str = "SELECT a.kind, CASE a.kind WHEN 1 THEN (SELECT h FROM ids WHERE id = a.actor_id) ELSE (SELECT spk FROM scripts WHERE id = a.actor_id) END,      a.last_block FROM actors a ORDER BY 1, 2";
 
 // ---------------------------------------------------------------------------------------------
 // harness

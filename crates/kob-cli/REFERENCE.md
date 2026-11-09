@@ -36,7 +36,7 @@ Defaults (the wallet's, `docs/spec/matcher.md` §10):
 | minimum fill (`--min-fill`) | worth 10 KAS at the limit; 1 base unit for IOC / FOK / market; `ceil(amount / 4)` for an if-done entry |
 | stop trigger threshold (`--min-touch`) | max(minimum fill, 25 % of the amount) |
 | carrier (`--carrier`) | 1 KAS on every covenant UTXO; at least 0.08 KAS and the token program's floor |
-| tip (`--tip`) | 0 |
+| tip (`--tip`, `--exit-tip`) | 0 on the KAS books; a pair order (`--quote`) with no tip carries the pair's keeper tip (`pair_keeper_tips.json`, the measured fee of one update, doubled) over its amount, rounded up, as the web ticket does (a crossing pair net pays its fee from the tips). A typed tip, `--tip 0` included, is kept and, below that default, prints a note that a crossing pair order may wait for a route through the KAS books |
 | GTC lifetime | 90 days idle (renew with `kob replace <id> --renew`) |
 | IOC / FOK life (`--life`) | 300 DAA; allowed 1..600 DAA |
 | market order | an IOC auction from the best price over 200 DAA to a 3 % bound (`--slippage` changes the bound) |
@@ -175,7 +175,7 @@ If-done options: `--side` is the entry's side (buy = buy first and sell the exit
 `--trail-wait`, `--trail-updates`.
 
 Pairs: every kind takes `--quote TOKEN_B` (a `KobPair`, `KobCondPair` or `KobIfdPair` order). Prices are B per whole A; tips
-stay in KAS. Taking pair orders and stop legs is not offered by `kob take` (an Executor fills them).
+stay in KAS (the default tip: see Defaults above). Taking pair orders and stop legs is not offered by `kob take` (an Executor fills them).
 
 `kob replace` changes: plain limits take `--price`, `--tip`, `--amount`, `--add-kas`, `--renew` (in place when a sell keeps
 its amount, or for a buy; otherwise a cancel-replace). Conditionals take `--price` (the take-profit), `--stop`,

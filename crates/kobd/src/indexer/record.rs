@@ -130,6 +130,12 @@ pub struct TxRecord {
     /// The KCC-23 declaration section (`super::kcc23`): a candidate preparation, or a genesis with the preparations it binds.
     /// Flagged by bit 30 of the encoded `pos`; a frame holding one is written as record-log format 3 (`recordlog::FORMAT_KCC23`).
     pub kcc23: Option<DeclSection>,
+    /// Who funded the transaction: the script public key (version + script) of the output its first input that spends no
+    /// covenant output spent (the submitter's own funds: an Executor's P2PK funding). Kept for a transaction that spends a
+    /// tracked order and has such an input, `None` otherwise and in every record written before 2026-11-09 (the submitter is
+    /// then unknown). Flagged by bit 29 of the encoded `pos`; a frame holding one is written as record-log format 4
+    /// (`recordlog::FORMAT_PAYER`).
+    pub payer: Option<Vec<u8>>,
 }
 
 /// Stand-in stored for a KOB1 payload that did not decode (`KOB1` and a version byte no reader supports): the record keeps the
@@ -140,6 +146,10 @@ pub const UNDECODABLE_PAYLOAD: &[u8] = b"KOB1\xff";
 const HOLDS_FLAG: u64 = 1 << 31;
 /// Set in the encoded `pos` when the record has a KCC-23 declaration section.
 const KCC23_FLAG: u64 = 1 << 30;
+/// Set in the encoded `pos` when the record has a payer section ([`TxRecord::payer`]).
+const PAYER_FLAG: u64 = 1 << 29;
+/// The longest payer script kept (a standard script public key is at most 37 bytes with its version; a longer one is not kept).
+pub const MAX_PAYER_SPK: usize = 64;
 
 fn code_of(t: TemplateId) -> u8 {
     model::wire_code(t)
@@ -266,7 +276,10 @@ impl TxRecord {
     pub fn encode(&self, w: &mut Writer) {
         w.hash(&self.txid);
         w.var(
-            self.pos as u64 | if self.holds.is_empty() { 0 } else { HOLDS_FLAG } | if self.kcc23.is_none() { 0 } else { KCC23_FLAG },
+            self.pos as u64
+                | if self.holds.is_empty() { 0 } else { HOLDS_FLAG }
+                | if self.kcc23.is_none() { 0 } else { KCC23_FLAG }
+                | if self.payer.is_none() { 0 } else { PAYER_FLAG },
         );
         w.bytes(&self.payload);
         w.var(self.inputs.len() as u64);
@@ -316,6 +329,9 @@ impl TxRecord {
         if let Some(d) = &self.kcc23 {
             d.encode(w);
         }
+        if let Some(p) = &self.payer {
+            w.bytes(p);
+        }
     }
 
     /// Adds the templates the record refers to (order reveals, holding programs) to a frame's tables.
@@ -338,7 +354,8 @@ impl TxRecord {
         let raw_pos = r.var()?;
         let has_holds = raw_pos & HOLDS_FLAG != 0;
         let has_kcc23 = raw_pos & KCC23_FLAG != 0;
-        let pos = (raw_pos & !(HOLDS_FLAG | KCC23_FLAG)) as u32;
+        let has_payer = raw_pos & PAYER_FLAG != 0;
+        let pos = (raw_pos & !(HOLDS_FLAG | KCC23_FLAG | PAYER_FLAG)) as u32;
         let payload = r.bytes()?.to_vec();
         let n_in = r.count(34)?;
         let mut inputs = Vec::with_capacity(n_in);
@@ -379,13 +396,32 @@ impl TxRecord {
             }
         }
         let kcc23 = if has_kcc23 { Some(DeclSection::decode(r)?) } else { None };
-        Ok(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23 })
+        let payer = if has_payer {
+            let spk = r.bytes()?;
+            if spk.len() > MAX_PAYER_SPK {
+                return Err(WireError("payer script too long"));
+            }
+            Some(spk.to_vec())
+        } else {
+            None
+        };
+        Ok(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer })
     }
 
     /// The record of a transaction relevant only for its KCC-23 declaration section: nothing of KOB, so no payload, inputs or
     /// outputs (the section carries the transaction's fields).
     pub fn declaration_only(txid: Hash32, pos: u32, d: DeclSection) -> TxRecord {
-        TxRecord { txid, pos, payload: vec![], inputs: vec![], outputs: vec![], tok_outs: vec![], holds: vec![], kcc23: Some(d) }
+        TxRecord {
+            txid,
+            pos,
+            payload: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            tok_outs: vec![],
+            holds: vec![],
+            kcc23: Some(d),
+            payer: None,
+        }
     }
 
     /// The record has nothing of KOB in it: only a declaration section.
@@ -604,6 +640,7 @@ fn raw_record(tx: &Tx) -> TxRecord {
         tok_outs: vec![],
         holds: vec![],
         kcc23: None,
+        payer: None,
     }
 }
 
@@ -692,6 +729,14 @@ fn kcc20_leader_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<Kcc20St
     }
     let tpl = kob_protocol::artifacts::try_template(id)?;
     Some((id, kob_protocol::kcc20::transfer_next_states(tpl, sigscript)?))
+}
+
+/// The script public key the first input of `tx` that spends no covenant output spent (the submitter's own funds), when the node
+/// reported it and it is of a standard length ([`MAX_PAYER_SPK`]).
+pub fn payer_of(tx: &Tx) -> Option<Vec<u8>> {
+    let u = tx.inputs.iter().filter_map(spent_of).find(|u| u.covenant_id.is_none())?;
+    let spk = &u.script_public_key.0;
+    (!spk.is_empty() && spk.len() <= MAX_PAYER_SPK).then(|| spk.clone())
 }
 
 /// Turns accepted transactions into records, consulting the database for relevance.
@@ -880,7 +925,10 @@ impl Extractor<'_> {
         } else {
             payload::encode(&kept).unwrap_or_else(|_| UNDECODABLE_PAYLOAD.to_vec())
         };
-        Ok(Some(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23 }))
+        // who funded it, when it spends a tracked order (a fill, a cancel, a keeper's call): the first input that spends no covenant
+        // output (an Executor's funding), its script as the node reports it
+        let payer = if inputs.iter().any(|i| i.daa > 0 || i.reveal.is_some()) { payer_of(tx) } else { None };
+        Ok(Some(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer }))
     }
 }
 
@@ -916,6 +964,7 @@ mod tests {
                 HeldOut { out: 0, program: TemplateId::KronToken2433, state: TokenState::Kron(KronState::addr(9, [5; 32])) },
             ],
             kcc23: None,
+            payer: Some([&[0u8, 0, 0x20][..], &[7u8; 32], &[0xac]].concat()),
         };
         let mut w = Writer::new();
         rec.encode(&mut w);
@@ -956,6 +1005,7 @@ mod tests {
             tok_outs: vec![],
             holds: vec![],
             kcc23: None,
+            payer: None,
         };
         let mut w = Writer::new();
         rec.encode(&mut w);

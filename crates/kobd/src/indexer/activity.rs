@@ -1,26 +1,61 @@
 //! The activity totals (`GET /v1/stats`): what the Activity page's summary shows beside the candles' volume and trades, read from the
-//! tables the indexer already keeps, every query on an index and every scan capped.
+//! small aggregates the store keeps by triggers in the transaction of every write (a batch, a revert, a replay, the lean pruning;
+//! schema.sql, `activity` and `actors`), so every figure costs the same whatever the size of the history.
 //!
-//! * **orders** placed in the range: the orders whose placement block is at or after the first block with an event at `since`
-//!   (`orders_genesis_page`, a covering range count; all time: the `orders` counter). Block time is monotone to within seconds, which
-//!   the day-sized windows do not see.
-//! * **traders**: the distinct makers of those orders (`orders_maker_genesis`: the next maker is one seek, whether it placed one in
-//!   the range another). A maker is the key of an order, not a person.
-//! * **fees paid**: what the fills of the range released to the filler, as the orders' tip terms say: `amount x tip / scale` per
-//!   fill event (`order_events_fill_ts` per token). An order amended in place counts at its current tip. `null` when the range holds
-//!   more fills than [`FILL_SCAN_MAX`].
+//! * **orders** placed in the range: the `create` events at or after `since`, summed from the per-minute and per-hour buckets of
+//!   `activity` (the minutes up to the first whole hour, the hours after it); all time: the `orders` counter.
+//! * **fills** and **fees paid** likewise: the fill events, and what they released to the filler, `amount x tip / scale` at the
+//!   tip the order had at the fill (`order_events.fee`, written with the event: a later amend does not change it).
+//! * **traders**: the makers (order keys, not persons) with an order placed in the range: `actors` keeps the newest placement
+//!   block of each, so the range is one index range (`actors_last`) from the first block with an event at `since`.
+//! * **executors**: the scripts that funded the fill transactions of the range (`order_events.executor_id`, from the record log's
+//!   payer section: an Executor's funding key), likewise. A fill recorded without one (indexed from a record-log frame written
+//!   before payers were recorded, 2026-11-09, or a transaction no plain input funded) is not counted.
 //! * **locked**: the KAS in the live order UTXOs now (`order_utxos_spent`: the unspent ones), whatever the range.
 //!
-//! Executors are not counted: the record log keeps no key of whoever submitted a fill, so the figure does not exist for this store.
+//! The buckets are of block time, the newest blocks' time stamps monotone to within seconds, which the day-sized windows do not see.
 
 use super::db::DbResult;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
-/// Most fill events one request reads for the fees; a longer range answers `null`.
-pub const FILL_SCAN_MAX: usize = 200_000;
-/// Most makers one request walks for the traders; a larger set answers `null`.
-pub const MAKER_SCAN_MAX: usize = 200_000;
+/// The bucket sizes of `activity` (ms): minutes, and hours.
+pub const MINUTE: i64 = 60_000;
+pub const HOUR: i64 = 3_600_000;
+
+/// The most a fee may be: the KAS supply in sompi (29 billion KAS). A fee the terms put above it is not a fee any transaction
+/// can pay (and the sums stay in 64 bits): unknown.
+pub const MAX_FEE: i64 = 29_000_000_000 * 100_000_000;
+
+/// What a fill of `amount` base units released to its filler at `tip` sompi per whole token of `scale` base units: `floor(amount x
+/// tip / scale)` (the covenants' rounding). `None` when a term is missing or out of range.
+pub fn fill_fee(amount: Option<i64>, tip: Option<i64>, scale: Option<i64>) -> Option<i64> {
+    let (amount, tip, scale) = (amount?, tip?, scale?);
+    if amount < 0 || tip < 0 || scale <= 0 {
+        return None;
+    }
+    let fee = i128::from(amount) * i128::from(tip) / i128::from(scale);
+    i64::try_from(fee).ok().filter(|f| *f <= MAX_FEE)
+}
+
+/// The id of a script public key in `scripts` (added on first sight; never deleted, like `ids`).
+pub fn intern_script(conn: &Connection, spk: &[u8]) -> DbResult<i64> {
+    if let Some(id) =
+        conn.prepare_cached("SELECT id FROM scripts WHERE spk = ?1")?.query_row([spk], |r| r.get::<_, i64>(0)).optional()?
+    {
+        return Ok(id);
+    }
+    conn.prepare_cached("INSERT INTO scripts (spk) VALUES (?1)")?.execute([spk])?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// `kob_fill_fee(amount, tip, scale)`: [`fill_fee`] in SQL (the migration computes the fees of the fills a store already holds).
+pub fn register(conn: &Connection) -> rusqlite::Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function("kob_fill_fee", 3, FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC, |ctx| {
+        Ok(fill_fee(ctx.get(0)?, ctx.get(1)?, ctx.get(2)?))
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActivityView {
@@ -30,12 +65,14 @@ pub struct ActivityView {
     pub ts: Option<i64>,
     /// Orders placed in the range.
     pub orders: i64,
-    /// Distinct makers of those orders (`null` beyond [`MAKER_SCAN_MAX`] makers).
-    pub traders: Option<i64>,
-    /// Always `null`: the store does not record who submitted a fill.
-    pub executors: Option<i64>,
-    /// Sompi the fills of the range released to their fillers (a string; `null` beyond [`FILL_SCAN_MAX`] fills).
-    pub fees_paid: Option<String>,
+    /// Fill events in the range.
+    pub fills: i64,
+    /// Distinct makers of the orders placed in the range.
+    pub traders: i64,
+    /// Distinct scripts that funded the fill transactions of the range (fills recorded without one are not counted).
+    pub executors: i64,
+    /// Sompi the fills of the range released to their fillers (a string).
+    pub fees_paid: String,
     /// Sompi in the live order UTXOs now (a string).
     pub kas_locked: String,
 }
@@ -43,7 +80,9 @@ pub struct ActivityView {
 /// The totals of the range from `since` (unix ms) to the newest block, or of all time.
 pub fn activity(conn: &Connection, since: Option<i64>) -> DbResult<ActivityView> {
     let ts = conn.query_row("SELECT MAX(ts) FROM order_events", [], |r| r.get::<_, Option<i64>>(0))?;
-    // the first block of the range: none means nothing happened since
+    let from = since.unwrap_or(0).max(0);
+    let (fills, fees, mut orders) = buckets_from(conn, from)?;
+    // the first block of the range (`traders`, `executors`): none means nothing happened since
     let first_seq = match since {
         None => Some(0),
         Some(s) => conn
@@ -52,81 +91,52 @@ pub fn activity(conn: &Connection, since: Option<i64>) -> DbResult<ActivityView>
             })
             .optional()?,
     };
-    let (orders, traders) = match first_seq {
-        None => (0, Some(0)),
-        Some(0) => (
-            conn.query_row("SELECT COALESCE((SELECT n FROM counters WHERE name = 'orders'), 0)", [], |r| r.get(0))?,
-            makers_from(conn, 0)?,
-        ),
-        Some(seq) => {
-            (conn.query_row("SELECT COUNT(*) FROM orders WHERE genesis_block >= ?1", [seq], |r| r.get(0))?, makers_from(conn, seq)?)
-        }
+    let (traders, executors) = match first_seq {
+        None => (0, 0),
+        Some(seq) => (actors_from(conn, 1, seq)?, actors_from(conn, 2, seq)?),
     };
-    let fees = fees_since(conn, since.unwrap_or(0))?;
+    if since.is_none() {
+        // every order, imported ones too (an order a tool wrote without its `create` event)
+        orders = conn.query_row("SELECT COALESCE((SELECT n FROM counters WHERE name = 'orders'), 0)", [], |r| r.get(0))?;
+    }
     let locked: i64 = conn.query_row("SELECT COALESCE(SUM(value), 0) FROM order_utxos WHERE spent_block IS NULL", [], |r| r.get(0))?;
-    Ok(ActivityView {
-        since,
-        ts,
-        orders,
-        traders,
-        executors: None,
-        fees_paid: fees.map(|f| f.to_string()),
-        kas_locked: locked.to_string(),
-    })
+    Ok(ActivityView { since, ts, orders, fills, traders, executors, fees_paid: fees.to_string(), kas_locked: locked.to_string() })
 }
 
-/// The distinct makers with an order placed at block `seq` or later: one seek for the next maker, one for its newest order.
-fn makers_from(conn: &Connection, seq: i64) -> DbResult<Option<i64>> {
-    let mut next = conn.prepare_cached("SELECT MIN(maker_id) FROM orders WHERE maker_id > ?1")?;
-    let mut placed = conn.prepare_cached("SELECT 1 FROM orders WHERE maker_id = ?1 AND genesis_block >= ?2 LIMIT 1")?;
-    let (mut maker, mut n, mut walked) = (i64::MIN, 0i64, 0usize);
-    while let Some(m) = next.query_row([maker], |r| r.get::<_, Option<i64>>(0))? {
-        walked += 1;
-        if walked > MAKER_SCAN_MAX {
-            return Ok(None);
-        }
-        if placed.query_row(params![m, seq], |_| Ok(())).optional()?.is_some() {
-            n += 1;
-        }
-        maker = m;
+/// (fills, fees, orders) of the buckets from `from` on: the minutes up to the first whole hour at or after it, then the hours.
+fn buckets_from(conn: &Connection, from: i64) -> DbResult<(i64, i128, i64)> {
+    let hour = from.saturating_add(HOUR - 1) / HOUR * HOUR;
+    let mut st = conn.prepare_cached(
+        "SELECT fills, fees, orders FROM activity WHERE iv = ?1 AND t >= ?2 AND t < ?3 \
+         UNION ALL SELECT fills, fees, orders FROM activity WHERE iv = ?4 AND t >= ?3",
+    )?;
+    let mut rows = st.query(params![MINUTE, from, hour, HOUR])?;
+    let (mut fills, mut fees, mut orders) = (0i64, 0i128, 0i64);
+    while let Some(r) = rows.next()? {
+        fills += r.get::<_, i64>(0)?;
+        // a sum that left 64 bits (it cannot with real fees, [`MAX_FEE`]) reads as a float rather than failing the read
+        fees += match r.get_ref(1)? {
+            rusqlite::types::ValueRef::Integer(v) => i128::from(v),
+            rusqlite::types::ValueRef::Real(v) => v as i128,
+            _ => 0,
+        };
+        orders += r.get::<_, i64>(2)?;
     }
-    Ok(Some(n))
+    Ok((fills, fees, orders))
 }
 
-/// The fill events at or after `since`, token by token (the partial index `order_events_fill_ts`), each with its order's tip and scale.
-fn fees_since(conn: &Connection, since: i64) -> DbResult<Option<i128>> {
-    let mut next = conn.prepare_cached("SELECT MIN(token_id) FROM order_events WHERE kind = 'fill' AND token_id > ?1")?;
-    let mut fills = conn.prepare_cached(&format!("{FILLS_SQL} LIMIT ?3"))?;
-    let (mut token, mut total, mut left) = (i64::MIN, 0i128, FILL_SCAN_MAX);
-    while let Some(t) = next.query_row([token], |r| r.get::<_, Option<i64>>(0))? {
-        token = t;
-        let rows = fills.query_map(params![t, since, left as i64 + 1], |r| {
-            Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<i64>>(2)?))
-        })?;
-        for row in rows {
-            if left == 0 {
-                return Ok(None);
-            }
-            left -= 1;
-            if let (Some(amount), Some(tip), Some(scale)) = row? {
-                if scale > 0 && tip > 0 {
-                    total += i128::from(amount) * i128::from(tip) / i128::from(scale);
-                }
-            }
-        }
-    }
-    Ok(Some(total))
+/// The actors of `kind` (1 makers, 2 executors) active at block `seq` or later.
+fn actors_from(conn: &Connection, kind: i64, seq: i64) -> DbResult<i64> {
+    Ok(conn
+        .prepare_cached("SELECT COUNT(*) FROM actors WHERE kind = ?1 AND last_block >= ?2")?
+        .query_row(params![kind, seq], |r| r.get(0))?)
 }
-
-/// One token's fill events from a time: amount, the order's tip and scale.
-const FILLS_SQL: &str = "SELECT e.amount, o.tip, o.scale FROM order_events e JOIN orders o ON o.id = e.order_id \
-     WHERE e.kind = 'fill' AND e.token_id = ?1 AND e.ts >= ?2";
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Every read of the totals is on an index, so the cost follows the range and not the size of the store.
+    /// Every read of the totals is on an index, so the cost follows the buckets and not the size of the store.
     #[test]
     fn the_reads_use_their_indexes() {
         let dir = tempfile::tempdir().unwrap();
@@ -138,17 +148,30 @@ mod tests {
         };
         let p = plan("SELECT block_seq FROM order_events WHERE ts >= 5 AND block_seq > 0 ORDER BY ts LIMIT 1");
         assert!(p.contains("order_events_ts"), "{p}");
-        let p = plan("SELECT COUNT(*) FROM orders WHERE genesis_block >= 5");
-        assert!(p.contains("orders_genesis_page"), "{p}");
-        let p = plan("SELECT MIN(maker_id) FROM orders WHERE maker_id > 5");
-        assert!(p.contains("orders_maker_genesis"), "{p}");
-        let p = plan("SELECT 1 FROM orders WHERE maker_id = 5 AND genesis_block >= 5 LIMIT 1");
-        assert!(p.contains("orders_maker_genesis"), "{p}");
-        let p = plan("SELECT MIN(token_id) FROM order_events WHERE kind = 'fill' AND token_id > 5");
-        assert!(p.contains("order_events_fills") || p.contains("order_events_fill_ts"), "{p}");
-        let p = plan(&format!("{FILLS_SQL} LIMIT 9").replace("?1", "5").replace("?2", "5"));
-        assert!(p.contains("order_events_fill_ts"), "{p}");
+        let p = plan("SELECT fills, fees, orders FROM activity WHERE iv = 60000 AND t >= 5 AND t < 9");
+        assert!(p.contains("PRIMARY KEY") && p.contains("t>?"), "{p}");
+        let p = plan("SELECT COUNT(*) FROM actors WHERE kind = 1 AND last_block >= 5");
+        assert!(p.contains("actors_last"), "{p}");
         let p = plan("SELECT COALESCE(SUM(value), 0) FROM order_utxos WHERE spent_block IS NULL");
         assert!(p.contains("order_utxos_spent"), "{p}");
+        // the triggers' recounts on a revert: one seek each
+        let p = plan("SELECT MAX(block_seq) FROM order_events WHERE kind = 'fill' AND executor_id = 5");
+        assert!(p.contains("order_events_executor"), "{p}");
+        let p = plan("SELECT MAX(genesis_block) FROM orders WHERE maker_id = 5");
+        assert!(p.contains("orders_maker_genesis"), "{p}");
+    }
+
+    #[test]
+    fn a_fee_is_the_covenants_floor_and_nothing_out_of_range() {
+        assert_eq!(fill_fee(Some(150), Some(1_000), Some(100)), Some(1_500));
+        assert_eq!(fill_fee(Some(7), Some(10), Some(3)), Some(23));
+        assert_eq!(fill_fee(Some(7), Some(0), Some(3)), Some(0));
+        assert_eq!(fill_fee(None, Some(10), Some(3)), None);
+        assert_eq!(fill_fee(Some(7), None, Some(3)), None);
+        assert_eq!(fill_fee(Some(7), Some(10), Some(0)), None);
+        assert_eq!(fill_fee(Some(-7), Some(10), Some(1)), None);
+        assert_eq!(fill_fee(Some(i64::MAX), Some(i64::MAX), Some(1)), None);
+        assert_eq!(fill_fee(Some(MAX_FEE), Some(1), Some(1)), Some(MAX_FEE));
+        assert_eq!(fill_fee(Some(MAX_FEE), Some(2), Some(1)), None);
     }
 }
