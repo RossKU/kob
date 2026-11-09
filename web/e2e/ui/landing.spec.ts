@@ -90,7 +90,7 @@ for (const [width, height] of [
     await page.addInitScript(() => localStorage.getItem('kob.theme') ?? localStorage.setItem('kob.theme', 'dark'));
     await page.goto('/');
     await expect(page.getByTestId('landing')).toBeVisible();
-    expect(await bg()).toBe('rgb(5, 8, 8)');
+    expect(await bg()).toBe('rgb(7, 7, 7)');
     if (shots) {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.screenshot({ path: `${shots}/app-${width}-dark.png`, fullPage: true });
@@ -195,7 +195,7 @@ test('the landing page has the app theme toggle: one stored preference for both 
   expect(await theme()).toBe(before);
 });
 
-test('1440 px: one frame on both pages, the logo does not move when "Open the app" is clicked and the hero text starts under it', async ({ appPage: page }) => {
+test('1440 px: one frame on both pages, the logo does not move when "Open the app" is clicked and the hero text starts in the content column', async ({ appPage: page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
   await expect(page.getByTestId('landing-hero')).toHaveClass(/lp-go/);
@@ -203,7 +203,9 @@ test('1440 px: one frame on both pages, the logo does not move when "Open the ap
   const lpLogo = await box('landing-brand');
   const lpHeader = (await page.locator('header').boundingBox())!;
   const kicker = (await page.locator('.lp-kicker').boundingBox())!;
-  expect(Math.abs(kicker.x - lpLogo.x), 'the hero text starts under the logo').toBeLessThan(1);
+  // the header and the footer run the full width (the logo at the window's gutter); the content keeps the frame's 1240 px column
+  expect(lpLogo.x, 'the logo sits at the window gutter').toBeCloseTo(32, 0);
+  expect(kicker.x, 'the hero text starts in the content column').toBeCloseTo((1440 - 1240) / 2 + 24, 0);
   await page.getByTestId('footer').scrollIntoViewIfNeeded();
   const lpFooterLogo = await box('landing-footer-brand');
 
@@ -216,9 +218,9 @@ test('1440 px: one frame on both pages, the logo does not move when "Open the ap
   expect(appLogo.width).toBeCloseTo(lpLogo.width, 1);
   expect(appHeader.height).toBe(lpHeader.height);
   expect(appHeader.height).toBe(56);
-  // the content column is the frame's: the app's content starts under the logo too
+  // the app's content is in the same column as the landing page's
   const mainLeft = await page.getByTestId('main').evaluate((e) => e.getBoundingClientRect().left + parseFloat(getComputedStyle(e).paddingLeft));
-  expect(mainLeft).toBeCloseTo(appLogo.x, 1);
+  expect(mainLeft).toBeCloseTo(kicker.x, 1);
   await page.getByTestId('footer').scrollIntoViewIfNeeded();
   expect((await box('footer-brand')).x).toBeCloseTo(lpFooterLogo.x, 1);
   expect(lpFooterLogo.x).toBeCloseTo(lpLogo.x, 1);

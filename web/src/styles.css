@@ -50,6 +50,8 @@
   --frame-h: 56px;
   --frame-max: 1240px;
   --frame-gut: 16px;
+  /* the header and the footer run the full width of the window (their background and line always did): brand at the left edge, tools at the right edge, a gutter that grows with the window; the page's content keeps --frame-max */
+  --frame-edge: clamp(16px, 2.5vw, 32px);
   --ctl-h: 32px;
   --ctl-r: 6px;
   --chip-h: 22px;
@@ -216,6 +218,7 @@ small, .small { font-size: 0.85em; }
 /* ONE row on every width: the brand, (a desktop) the tabs, then the tools at the end; the menu of a phone is a popover under the header. A desktop whose
    texts are wider than the row (a long translation, wide fonts) wraps the tools to a second line instead of overlapping them */
 .header-inner { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-height: calc(var(--frame-h) - 1px); padding-top: 4px; padding-bottom: 4px; min-width: 0; }
+.header .header-inner.container, .footer .container { max-width: none; padding-left: var(--frame-edge); padding-right: var(--frame-edge); }
 .header .brand { flex: 0 0 auto; }
 /* the app's wide row shows the brand's name only where the row has room for it (data-brand, narrow.ts useHeaderLayout; a connected wallet's chip on a
    wide font leaves none), so the row never wraps to a second line */
