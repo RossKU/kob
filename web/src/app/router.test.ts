@@ -80,8 +80,8 @@ describe('router', () => {
     expect(routeToHash(tokenRoute(ID))).toBe(`#/market/${ID}`);
   });
 
-  it('highlights the market nav on a token page', () => {
-    expect(navOf(tokenRoute(ID))).toBe('market');
+  it('highlights the Trade nav on a token page (and on a pair page), the Market nav on the list', () => {
+    expect(navOf(tokenRoute(ID))).toBe('trade');
     expect(navOf({ name: 'portfolio' })).toBe('portfolio');
   });
 
@@ -94,7 +94,7 @@ describe('router', () => {
     expect(parseHash(`#/market/${ID}/zz`)).toEqual(tokenRoute(ID)); // not a quote: ignored, as any extra segment
     expect(parseHash(`#/market/${ID}/${'ab'.repeat(31)}`)).toEqual(tokenRoute(ID));
     expect(parseHash(routeToHash(pairRoute(ID, Q)))).toEqual(pairRoute(ID, Q));
-    expect(navOf(pairRoute(ID, Q))).toBe('market');
+    expect(navOf(pairRoute(ID, Q))).toBe('trade');
     expect(parseHash(`#/market/xyz/${Q}`)).toMatchObject({ name: 'market', invalidToken: `xyz/${Q}` });
   });
 

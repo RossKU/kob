@@ -4,6 +4,8 @@
 body:has(.market-page) .container { max-width: 1520px; }
 
 .market-page { display: flex; flex-direction: column; gap: 12px; }
+.market-page > .mkt-all { align-self: flex-start; margin-bottom: -4px; padding-block: 2px; color: var(--muted); text-decoration: none; }
+.market-page > .mkt-all:hover { color: var(--text); text-decoration: underline; }
 .market-page .section { padding: 12px 14px; }
 .market-page .section-head { margin-bottom: 8px; }
 .market-page .section-head h2 { font-size: 0.95rem; letter-spacing: 0.01em; }

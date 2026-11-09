@@ -28,6 +28,7 @@ import { isFavoritePair, togglePair, useFavorites } from './favorites';
 import { PriceChart, type UsdChartSpec } from './PriceChart';
 import { useLiveRefresh } from './live';
 import { FlipButton, MarketFrame, MarketShell, PairSelector } from './MarketBar';
+import { ForgetMarket } from './ForgetMarket';
 import { settled } from './market-list';
 import { openPair } from './market-nav';
 import { displayedPair } from './market-select';
@@ -221,6 +222,7 @@ export function PairPage(props: { base: string; quote: string }) {
   if (sides.some((s) => s.state === 'unknown')) {
     return (
       <div class="stack" data-testid="pair-not-found">
+        <ForgetMarket />
         <Banner tone="warn" title={t('pair.notFound')}>
           {t('pair.notFoundBody')}
           {sides.map((s, i) => (s.state === 'unknown' && s.reason ? <div key={i} data-testid="pair-public-reason">{t(s.reason)}</div> : null))}

@@ -30,6 +30,7 @@ import { BookFrame, BookGrouping, OrderBook, StaleSince } from './OrderBook';
 import { FavoriteStar } from './FavoriteStar';
 import { isFavoriteToken, toggleToken, useFavorites } from './favorites';
 import { FlipButton, MarketFrame, MarketShell, PairSelector } from './MarketBar';
+import { ForgetMarket } from './ForgetMarket';
 import { settled } from './market-list';
 import { useHeldUntil } from './use-market-list';
 import { openPair } from './market-nav';
@@ -266,6 +267,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     if (tokens.loading || held.loading || pub.loading) return <MarketFrame bookTitle={t('market.book.title')} data-testid="token-loading" />;
     return (
       <div class="stack" data-testid="token-not-found">
+        <ForgetMarket />
         <Banner tone="warn" title={t('market.token.notFound')}>
           {t('market.token.notFoundBody', { id })}
           {pub.reason ? <div data-testid="token-public-reason">{t(`market.public.${pub.reason}`)}</div> : null}

@@ -164,6 +164,8 @@ export function MarketShell(props: {
   };
   return (
     <div class="market-page" data-testid={props['data-testid']} ref={root} {...props.attrs}>
+      {/* the way back to the list (the header's Market tab is the list; its Trade tab is this market) */}
+      <a class="mkt-all small" href="#/market" data-testid="market-all">{'‹ '}{t('market.all')}</a>
       {props.header}
       {props.notices}
       {props.stats}

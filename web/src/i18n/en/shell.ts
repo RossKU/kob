@@ -2,6 +2,7 @@ export default {
   'shell.skip': 'Skip to content',
   'shell.nav.label': 'Main navigation',
   'shell.nav.market': 'Market',
+  'shell.nav.trade': 'Trade',
   'shell.nav.activity': 'Activity',
   'shell.nav.portfolio': 'Portfolio',
   'shell.nav.create': 'Create token',

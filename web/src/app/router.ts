@@ -131,9 +131,9 @@ export function activityMarketOf(m: string): ActivityMarket | null {
 export const activityMarketParam = (m: ActivityMarket): string => (m.kind === 'token' ? m.token.toLowerCase() : `${m.base.toLowerCase()}/${m.quote.toLowerCase()}`);
 export const activityRoute = (market?: ActivityMarket | null): Route => (market ? { name: 'activity', market } : { name: 'activity' });
 
-/** Which top-level nav entry a route belongs to. */
-export const navOf = (route: Route): 'market' | 'activity' | 'portfolio' | 'create' | 'settings' | 'disclaimer' | 'support' =>
-  route.name === 'token' || route.name === 'pair' || route.name === 'home' ? 'market' : route.name;
+/** Which top-level nav entry a route belongs to: the market list is Market, a token's or a pair's market is Trade. */
+export const navOf = (route: Route): 'market' | 'trade' | 'activity' | 'portfolio' | 'create' | 'settings' | 'disclaimer' | 'support' =>
+  route.name === 'token' || route.name === 'pair' ? 'trade' : route.name === 'home' ? 'market' : route.name;
 
 export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint): Route => ({
   name: 'token', covenantId: covenantId.toLowerCase(), ...(ticket ? { ticket } : {}), ...(takesAmount(ticket) && amount !== undefined && BigInt(amount) > 0n ? { amount: BigInt(amount).toString() } : {}),

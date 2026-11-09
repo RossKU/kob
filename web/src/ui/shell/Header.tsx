@@ -1,5 +1,6 @@
 import { useServices } from '../../app/context';
 import { navOf, routeToHash, type Route } from '../../app/router';
+import { useLastMarket } from '../../app/last-market';
 import type { ConfigWarning, StoredOverride } from '../../config';
 import { t } from '../../i18n';
 import { Badge } from '../kit';
@@ -16,6 +17,8 @@ import { useSystemStatus } from './StatusProvider';
 
 const NAV = [
   { name: 'market', href: '#/market', key: 'shell.nav.market', testid: 'nav-market' },
+  // only once a market has been opened; its address is the last market's own (NavLinks)
+  { name: 'trade', href: '#/market', key: 'shell.nav.trade', testid: 'nav-trade' },
   { name: 'activity', href: '#/activity', key: 'shell.nav.activity', testid: 'nav-activity' },
   { name: 'portfolio', href: '#/portfolio', key: 'shell.nav.portfolio', testid: 'nav-portfolio' },
   { name: 'create', href: '#/create', key: 'shell.nav.create', testid: 'nav-create' },
@@ -44,11 +47,12 @@ function MenuIcon() {
   );
 }
 
-function NavLinks(props: { active: ReturnType<typeof navOf> }) {
+/** `trade`: the hash of the last market opened (the Trade tab is left out until there is one). */
+function NavLinks(props: { active: ReturnType<typeof navOf>; trade: string | null }) {
   return (
     <>
-      {NAV.map((n) => (
-        <a key={n.name} href={n.href} data-testid={n.testid} aria-current={props.active === n.name ? 'page' : undefined}>
+      {NAV.filter((n) => n.name !== 'trade' || props.trade !== null).map((n) => (
+        <a key={n.name} href={n.name === 'trade' ? props.trade! : n.href} data-testid={n.testid} aria-current={props.active === n.name ? 'page' : undefined}>
           {t(n.key)}
         </a>
       ))}
@@ -57,7 +61,7 @@ function NavLinks(props: { active: ReturnType<typeof navOf> }) {
 }
 
 /** The phone menu: the four tabs, the theme toggle, what the network chip and the words open review mean, and the status lines. It closes on every navigation. */
-function Menu(props: { active: ReturnType<typeof navOf>; network: string }) {
+function Menu(props: { active: ReturnType<typeof navOf>; network: string; trade: string | null }) {
   return (
     <Popover
       label={t('shell.menu')}
@@ -69,7 +73,7 @@ function Menu(props: { active: ReturnType<typeof navOf>; network: string }) {
       panelTestId="menu-panel"
     >
       <nav class="menu-nav" aria-label={t('shell.nav.label')}>
-        <NavLinks active={props.active} />
+        <NavLinks active={props.active} trade={props.trade} />
       </nav>
       <div class="menu-row">
         <ThemeToggle withLabel />
@@ -96,6 +100,7 @@ export function Header(props: { route: Route; warnings: ConfigWarning[]; storedO
   useSqueezeCheck(inner, narrow);
   const { brandName, centred, disconnectText } = useHeaderLayout(inner, narrow);
   const active = navOf(props.route);
+  const trade = useLastMarket(config.network, props.route);
   return (
     <SiteHeader
       context="app"
@@ -108,7 +113,7 @@ export function Header(props: { route: Route; warnings: ConfigWarning[]; storedO
     >
       {narrow ? null : (
         <nav class="nav" aria-label={t('shell.nav.label')}>
-          <NavLinks active={active} />
+          <NavLinks active={active} trade={trade} />
         </nav>
       )}
       <div class="header-tools">
@@ -120,7 +125,7 @@ export function Header(props: { route: Route; warnings: ConfigWarning[]; storedO
         </div>
         {narrow ? null : <ThemeToggle />}
         <NotifyBell warnings={props.warnings} storedOverrides={props.storedOverrides} />
-        {narrow ? <Menu active={active} network={config.network} /> : null}
+        {narrow ? <Menu active={active} network={config.network} trade={trade} /> : null}
       </div>
     </SiteHeader>
   );

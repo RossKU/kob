@@ -132,6 +132,7 @@ export default {
   'market.add.noIndexer': 'No indexer is configured, so a token cannot be looked up by its covenant id.',
 
   'market.token.back': 'All tokens',
+  'market.all': 'All markets',
   'market.pair.label': 'Market pair',
   'market.pair.base': 'Base asset of the pair',
   'market.pair.quote': 'Quote asset of the pair',
