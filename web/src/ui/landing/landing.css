@@ -5,9 +5,9 @@
    tokens (styles.css) are this palette: change a colour in both. */
 
 .lp {
-  --bg: #050808; --bg-2: #0a1010; --surface: #0d1515; --tile: #0f1d1c;
-  --line: rgba(225, 240, 237, 0.09); --line-2: rgba(225, 240, 237, 0.18);
-  --fg: #f1f5f4; --fg-2: #a7b5b3; --fg-3: #5f6f6d; --fg-ghost: rgba(241, 245, 244, 0.1);
+  --bg: #070707; --bg-2: #0f0f0f; --surface: #141414; --tile: #1a1a1a;
+  --line: rgba(237, 237, 237, 0.09); --line-2: rgba(237, 237, 237, 0.18);
+  --fg: #f4f4f4; --fg-2: #b2b2b2; --fg-3: #6c6c6c; --fg-ghost: rgba(244, 244, 244, 0.1);
   --teal: #4bb990; --teal-ink: #03211d; --kaspa: #70c7ba;
   --buy: #2ebd85; --sell: #f6465d; --warn: #f2b350;
   --r1: #d9434b; --r2: #e3646a; --r3: #ec8a8e; --r4: #f4b4b6; --g1: #a6e3c9; --g2: #77d0ad; --g3: #4bb990; --g4: #2c9e77;
@@ -44,7 +44,7 @@
   }
 }
 /* the page's background behind overscroll (LandingPage sets the class while it is shown) */
-body.lp-body { background: #050808; overflow-x: hidden; }
+body.lp-body { background: #070707; overflow-x: hidden; }
 :root[data-theme='light'] body.lp-body { background: #f2f1ec; }
 
 .lp *, .lp *::before, .lp *::after { box-sizing: border-box; }

@@ -61,14 +61,14 @@
 /* Dark palette: the `data-theme` attribute set by src/ui/shell/theme.ts (header toggle, remembered), or the OS preference before the app runs. */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #050808;
-  --surface: #0d1515;
-  --surface-2: #132020;
-  --surface-3: #162322;
-  --border: #223231;
-  --grid: rgba(167, 181, 179, 0.1);
-  --text: #f1f5f4;
-  --muted: #a7b5b3;
+  --bg: #070707;
+  --surface: #141414;
+  --surface-2: #1e1e1e;
+  --surface-3: #212121;
+  --border: #2f2f2f;
+  --grid: rgba(178, 178, 178, 0.1);
+  --text: #f4f4f4;
+  --muted: #b2b2b2;
   --primary: #4bb990;
   --primary-hover: #77d0ad;
   --primary-contrast: #03211d;
@@ -88,24 +88,24 @@
   --info-bg: rgba(121, 180, 255, 0.14);
   --overlay: rgba(0, 0, 0, 0.65);
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-  --skeleton: rgba(167, 181, 179, 0.12);
+  --skeleton: rgba(178, 178, 178, 0.12);
   --tk-outline: rgba(255, 255, 255, 0.22);
   --boot-kaspa-in: #1a1a1a;
   --boot-planet: #8fb3ad;
-  --boot-orbit: #182423;
+  --boot-orbit: #222222;
   --boot-trail: #70c7ba;
   --boot-buy: #4bb990;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #050808;
-    --surface: #0d1515;
-    --surface-2: #132020;
-    --surface-3: #162322;
-    --border: #223231;
-    --grid: rgba(167, 181, 179, 0.1);
-    --text: #f1f5f4;
-    --muted: #a7b5b3;
+    --bg: #070707;
+    --surface: #141414;
+    --surface-2: #1e1e1e;
+    --surface-3: #212121;
+    --border: #2f2f2f;
+    --grid: rgba(178, 178, 178, 0.1);
+    --text: #f4f4f4;
+    --muted: #b2b2b2;
     --primary: #4bb990;
     --primary-hover: #77d0ad;
     --primary-contrast: #03211d;
@@ -125,11 +125,11 @@
     --info-bg: rgba(121, 180, 255, 0.14);
     --overlay: rgba(0, 0, 0, 0.65);
     --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-    --skeleton: rgba(167, 181, 179, 0.12);
+    --skeleton: rgba(178, 178, 178, 0.12);
     --tk-outline: rgba(255, 255, 255, 0.22);
     --boot-kaspa-in: #1a1a1a;
     --boot-planet: #8fb3ad;
-    --boot-orbit: #182423;
+    --boot-orbit: #222222;
     --boot-trail: #70c7ba;
     --boot-buy: #4bb990;
   }

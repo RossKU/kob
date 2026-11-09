@@ -47,10 +47,10 @@ function alpha(color: string, a: number): string {
 
 function palette() {
   return {
-    bg: cssVar('--surface', '#0d1515'),
-    text: cssVar('--muted', '#a7b5b3'),
+    bg: cssVar('--surface', '#141414'),
+    text: cssVar('--muted', '#b2b2b2'),
     grid: cssVar('--grid', 'rgba(139,148,163,0.1)'),
-    border: cssVar('--border', '#223231'),
+    border: cssVar('--border', '#2f2f2f'),
     up: cssVar('--buy', '#2ebd85'),
     down: cssVar('--sell', '#f6465d'),
     font: cssVar('--font', 'system-ui, sans-serif'),
