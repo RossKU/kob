@@ -57,6 +57,6 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
     const status = t(`notify.status.${String(p.status)}`);
     params = { status, reference: p.reference ? String(p.reference) : shortId(String(p.invoice ?? ''), 6, 4) };
   }
-  const href = e.kind === 'payment' && e.token ? routeToHash({ name: 'token', covenantId: e.token }) : e.kind === 'invoice' ? '#/settings' : '#/orders';
+  const href = e.kind === 'payment' && e.token ? routeToHash({ name: 'token', covenantId: e.token }) : e.kind === 'invoice' ? '#/settings' : '#/orders/open';
   return { title: t(`notify.ev.${e.kind}.title`, params), body: t(bodyKey, params), href };
 }

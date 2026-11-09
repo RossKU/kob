@@ -35,7 +35,7 @@ export function footerLinks(context: FrameContext, indexerUrl: string | null | u
   return [
     ...site,
     { key: 'shell.footer.settings', href: '#/settings', group: 'app' },
-    { key: 'shell.footer.recover', href: '#/orders', group: 'app' },
+    { key: 'shell.footer.recover', href: '#/orders/recover', group: 'app' },
     { key: 'shell.footer.kaspa', href: 'https://kaspa.org', external: true, group: 'app' },
   ];
 }

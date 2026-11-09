@@ -1,7 +1,7 @@
 // Dictionary leaks and layout: the whole ticket + inline status + My orders flow with no untranslated dictionary key anywhere (and the trading terms in
 // English), and the same flow on a 390 px phone (no horizontal scroll, the key controls reachable, the status lines fit the screen).
 import { test, expect } from '../fixtures';
-import { fund, openMarket, gotoNav } from '../helpers/env';
+import { fund, openMarket, gotoOrders } from '../helpers/env';
 import { optionLabels, optionValues } from '../helpers/dropdown';
 import { expectNoLeakedKeys, horizontalOverflow } from '../helpers/i18n';
 import { runFlow } from '../helpers/orders';
@@ -65,8 +65,8 @@ test.describe('English text', () => {
     const id = placed.views[0].covenant_id;
 
     // My orders
-    await gotoNav(page, 'nav-orders');
-    await expect(page.locator('h1')).toHaveText('My orders');
+    await gotoOrders(page);
+    await expect(page.locator('h1')).toHaveText('Portfolio');
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toBeVisible();
     await expect(page.getByTestId(`order-type-${id}`)).toHaveText('Limit (GTC)');
@@ -131,7 +131,7 @@ test.describe('phone, 390 px wide', () => {
     expect(await wallet!.calls()).toHaveLength(1);
 
     // My orders and its cancel action: the flow starts at once
-    await gotoNav(page, 'nav-orders');
+    await gotoOrders(page);
     const id = placed.views[0].covenant_id;
     await expect(page.getByTestId(`order-row-${id}`)).toBeVisible();
     expect(await horizontalOverflow(page), 'My orders').toBe(0);

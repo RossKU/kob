@@ -24,3 +24,8 @@
   .balances-cards .bal-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; margin-top: 4px; }
   .balances-cards .bal-actions-none { display: none; }
 }
+
+/* the Portfolio page (OrdersView.tsx): its tabs over one panel, then the folded section of strays, automatic refunds and recovery */
+.portfolio > .tabs { margin-bottom: 12px; }
+.portfolio-settings > summary { cursor: pointer; font-weight: 600; }
+.portfolio-settings > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }

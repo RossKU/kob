@@ -4,7 +4,7 @@
 // decodes as "Cancel an order under an older contract version (cancel only)" with what returns to the wallet; the node accepts it (engine-validated).
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { fund, gotoNav, openMarket } from '../helpers/env';
+import { fund, gotoOrders, openMarket } from '../helpers/env';
 import { confirmReceipt, readReceipt } from '../helpers/ticket';
 
 test.use({ walletId: null, autoOpen: false });
@@ -33,7 +33,7 @@ test('an order under an older contract version: shown cancel-only, counted by Ca
   }, [`kob.records.v1:testnet-10:${TEST_KEYS.alice.pubkey}`, JSON.stringify({ [id]: seeded.record })] as const);
   await openMarket(page, mock, { connect: false });
   await connectKey(page);
-  await gotoNav(page, 'nav-orders');
+  await gotoOrders(page);
 
   const row = page.getByTestId(`order-row-${id}`);
   await expect(row).toBeVisible({ timeout: 30_000 });

@@ -120,10 +120,12 @@ test('both tokens unregistered, no token in the registry: the pair opens, an ord
   await page.getByTestId('pair-my-orders').click();
   const row = page.getByTestId(`order-row-${id}`);
   await expect(row.getByTestId('order-pair')).toContainText(long(QUOTE));
+  await page.getByTestId('orders-tab-balances').click();
   await expect(page.getByTestId('balances-panel')).toBeVisible();
   // a token without a registry entry offers no merge (as in its KAS market)
   await expect(page.getByTestId(`balance-row-${base}`)).toBeVisible();
   await expect(page.getByTestId(`orders-merge-token-${base}`)).toHaveCount(0);
+  await page.getByTestId('orders-tab-active').click();
 
   // the amend needs both registry entries: refused in a sentence
   await page.getByTestId(`order-replace-${id}`).click();

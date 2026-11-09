@@ -76,7 +76,7 @@ test('merge seven UTXOs of a 3 / 3 token: one 3 -> 1 transaction per click, the 
   await registryWithStd(page);
   await page.goto('/#/orders');
   await connectWallet(page, 'kasware');
-  await expect(page.getByTestId('orders-list')).toBeVisible();
+  await expect(page.getByTestId('balances-panel')).toBeVisible();
 
   const merge = page.getByTestId(`orders-merge-token-${STD}`);
   await expect(merge).toHaveText(/^Merge \(7\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });

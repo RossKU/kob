@@ -32,7 +32,7 @@ describe('the shared footer', () => {
     expect(app.filter((l) => l.group === 'site').map((l) => l.key)).toEqual(['landing.footer.app', 'landing.github', 'landing.footer.executor', 'landing.footer.disclaimer']);
     expect(app.filter((l) => l.group === 'app').map((l) => [l.key, l.href, !!l.external])).toEqual([
       ['shell.footer.settings', '#/settings', false],
-      ['shell.footer.recover', '#/orders', false],
+      ['shell.footer.recover', '#/orders/recover', false],
       ['shell.footer.kaspa', 'https://kaspa.org', true],
     ]);
     expect(footerLinks('landing', 'https://idx.example').some((l) => l.group === 'app')).toBe(false);

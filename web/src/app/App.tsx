@@ -88,7 +88,7 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
     case 'orders':
       return (
         <Titled page="orders">
-          <OrdersView />
+          <OrdersView {...(r.tab ? { tab: r.tab } : {})} {...(r.recover ? { recover: true } : {})} />
         </Titled>
       );
     case 'create':

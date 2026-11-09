@@ -149,11 +149,11 @@ test('a machine-translated My orders keeps its tab counts current (TN10 2026-10-
   await page.addInitScript(installTranslator);
   await fund(mock, 'alice');
   const ids = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 1 }, { side: 'ask', price: 2_710_000, tokens: 1 }]);
-  await openMarket(page, mock, { route: '/orders', connect: false });
+  await openMarket(page, mock, { route: '/orders/open', connect: false });
   await expect(page.locator('html')).toHaveClass(/translated-ltr/);
   await connectKey(page);
   for (const id of ids) await expect(page.getByTestId(`order-row-${id}`)).toHaveAttribute('data-status', 'open');
-  await expect.poll(() => seen(page, 'orders-tab-active')).toBe('Active (2)');
+  await expect.poll(() => seen(page, 'orders-tab-active')).toBe('Open orders (2)');
   // one fills: the counts change while the page is translated
   await mock.fill(ids[0]!);
   await page.getByTestId('orders-refresh').click();

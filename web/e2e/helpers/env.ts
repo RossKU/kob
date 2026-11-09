@@ -69,6 +69,26 @@ export async function gotoNav(page: Page, testid: string): Promise<void> {
 }
 
 /**
+ * Opens the Portfolio page from the header, then one of its tabs (`open`: Open orders, `history`, `fills`, `balances`); `settings` opens the folded
+ * section of strays, automatic refunds and recovery under the tabs instead.
+ */
+export async function gotoOrders(page: Page, tab: 'open' | 'history' | 'fills' | 'balances' | 'settings' = 'open'): Promise<void> {
+  await gotoNav(page, 'nav-orders');
+  if (tab === 'settings') return openOrdersSettings(page);
+  const id = tab === 'open' ? 'orders-tab-active' : `orders-tab-${tab}`;
+  await page.getByTestId(id).click();
+  await expect(page.getByTestId(id)).toHaveAttribute('aria-selected', 'true');
+}
+
+/** Opens the Portfolio page's folded section (strays, automatic refunds, recovery) unless it is open already (it opens by itself while strays wait). */
+export async function openOrdersSettings(page: Page): Promise<void> {
+  const box = page.getByTestId('orders-settings');
+  await expect(box).toBeVisible();
+  if (!(await box.evaluate((e) => (e as HTMLDetailsElement).open))) await page.getByTestId('orders-settings-toggle').click();
+  await expect.poll(() => box.evaluate((e) => (e as HTMLDetailsElement).open)).toBe(true);
+}
+
+/**
  * Clicks a connect option wherever the header has it right now, retried as a whole: a header row that does not fit (long translations, wide fonts) takes
  * the phone layout, possibly just after the page was first measured, and the option then moves behind `wallet-connect`.
  */

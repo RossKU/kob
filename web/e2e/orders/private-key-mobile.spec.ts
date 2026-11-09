@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { fund, openMarket, gotoNav, openConnect } from '../helpers/env';
+import { fund, openMarket, gotoOrders, openConnect } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -115,7 +115,7 @@ for (const p of PROFILES) {
       await mock.until(() => mock.ordersOf('alice'), (o) => o.length === 1);
       const id = placed.views[0].covenant_id as string;
 
-      await gotoNav(page, 'nav-orders');
+      await gotoOrders(page);
       await page.getByTestId(`order-cancel-${id}`).click();
       await approveAndroid(page, `${p.name} cancel`);
       const [cancelled] = await runFlow(page, mock, null, { steps: 1 });

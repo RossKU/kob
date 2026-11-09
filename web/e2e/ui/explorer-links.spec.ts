@@ -2,7 +2,7 @@
 // transaction and its fill rows in My orders open the transaction in a NEW tab. The explorer itself is stubbed (no network access in the mock stack).
 import type { BrowserContext, Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
-import { fund, listExkcc, openMarket, gotoNav, showActivity } from '../helpers/env';
+import { fund, listExkcc, openMarket, gotoOrders, showActivity } from '../helpers/env';
 import { fillFields, pickType, placeOrder } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -48,7 +48,7 @@ async function placeAndPartlyFill(page: Page, mock: MockClient): Promise<string>
 test('My orders: the placement transaction and every fill row link to the explorer', async ({ appPage: page, mock }) => {
   await stubExplorer(page.context());
   const id = await placeAndPartlyFill(page, mock);
-  await gotoNav(page, 'nav-orders');
+  await gotoOrders(page);
   const card = page.getByTestId(`order-row-${id}`);
   await expect(card).toBeVisible();
   const placement = card.getByTestId(`order-tx-${id}-link`);

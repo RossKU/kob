@@ -3,7 +3,7 @@
 // token; the app shows no popup of its own for this wallet) and signs only after a click on its own Confirm button.
 import type { Frame, Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { KAS, fund, mockClock, openConnect, openMarket, gotoNav } from '../helpers/env';
+import { KAS, fund, mockClock, openConnect, openMarket, gotoOrders } from '../helpers/env';
 import { chooseOption } from '../helpers/dropdown';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted, type ReceiptRead } from '../helpers/ticket';
@@ -112,7 +112,7 @@ test('connect with a private key in the signer frame, place and cancel an order 
   const id = placed.views[0].covenant_id as string;
 
   // cancel: the action asks the wallet at once (the frame is the confirmation)
-  await gotoNav(page, 'nav-orders');
+  await gotoOrders(page);
   await page.getByTestId(`order-cancel-${id}`).click();
   const cancelShown = await approveInFrame(page, { title: 'Cancel order' });
   const [cancelled] = await runFlow(page, mock, null, { steps: 1 });
@@ -449,7 +449,7 @@ test.describe('the app\'s hints in the signer frame (a phone, 390 px)', () => {
     await expect(hints).toBeVisible();
     await expect(hints).toContainText('The app adds (not verified by this signer):');
     await expect(f.getByTestId('signer-app-hint')).toHaveCount(1);
-    await expect(f.getByTestId('signer-app-hint')).toHaveText('Worth 0.988 KAS, under the usual 1 KAS minimum order value: it will not be listed, so it will not fill. Cancel it in My orders.');
+    await expect(f.getByTestId('signer-app-hint')).toHaveText('Worth 0.988 KAS, under the usual 1 KAS minimum order value: it will not be listed, so it will not fill. Cancel it in Portfolio.');
     await expect(f.getByTestId('signer-fee')).toBeVisible();
     await expect(f.getByTestId('signer-summary')).toBeVisible();
     expect(await f.locator('body').evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);

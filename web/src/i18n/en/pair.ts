@@ -44,5 +44,5 @@ export default {
   'pair.openToken': 'Open {token}',
   'pair.subtitle': '{base} priced in {quote}',
   'pair.explainer': 'Priced in {quote} per {base}; tips and fees in KAS. Filled against opposite pair orders, through the {base}/KAS and {quote}/KAS books, or from a matcher\'s own tokens.',
-  'pair.myOrders': 'My orders',
+  'pair.myOrders': 'Your open orders',
 } as Record<string, string>;

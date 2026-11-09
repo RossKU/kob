@@ -24,7 +24,16 @@ export type Route =
    * that can be shared)
    */
   | { name: 'activity'; market?: ActivityMarket; covenantId?: undefined }
-  | { name: 'orders' | 'create' | 'settings' | 'disclaimer' | 'support'; covenantId?: undefined };
+  /**
+   * `#/orders` (the Portfolio page): `#/orders/<tab>` opens one of its tabs (balances, open orders, order history, fills); none: its first, Balances.
+   * `#/orders/recover`: the page with its folded section of strays, automatic refunds and recovery open
+   */
+  | { name: 'orders'; tab?: PortfolioTab; recover?: true; covenantId?: undefined }
+  | { name: 'create' | 'settings' | 'disclaimer' | 'support'; covenantId?: undefined };
+
+/** The Portfolio page's tabs, in their order (ui/orders/OrdersView.tsx). */
+export const PORTFOLIO_TABS = ['balances', 'open', 'history', 'fills'] as const;
+export type PortfolioTab = (typeof PORTFOLIO_TABS)[number];
 
 /** The market an activity link names: one token's KAS book or one token/token pair. */
 export type ActivityMarket = { kind: 'token'; token: string } | { kind: 'pair'; base: string; quote: string };
@@ -93,7 +102,12 @@ export function parseHash(hash: string): Route {
     const market = activityMarketOf(query?.get('market') ?? '');
     return market ? { name: 'activity', market } : { name: 'activity' };
   }
-  if ((PAGES as readonly string[]).includes(page)) return { name: page as (typeof PAGES)[number] };
+  if (page === 'orders') {
+    const tab = (second ?? '').toLowerCase();
+    if (tab === 'recover') return { name: 'orders', recover: true };
+    return (PORTFOLIO_TABS as readonly string[]).includes(tab) ? { name: 'orders', tab: tab as PortfolioTab } : { name: 'orders' };
+  }
+  if ((PAGES as readonly string[]).includes(page)) return { name: page as Exclude<(typeof PAGES)[number], 'orders'> };
   // the token creation page was `#/issue` before it was named "Create token": the old address still leads there
   if (page === 'issue') return { name: 'create' };
   return { name: 'market' };
@@ -114,6 +128,8 @@ export function routeToHash(route: Route): string {
       return '#/';
     case 'activity':
       return route.market ? `#/activity?market=${activityMarketParam(route.market)}` : '#/activity';
+    case 'orders':
+      return route.recover ? '#/orders/recover' : route.tab ? `#/orders/${route.tab}` : '#/orders';
     default:
       return `#/${route.name}`;
   }

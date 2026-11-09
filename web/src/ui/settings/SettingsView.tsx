@@ -393,7 +393,7 @@ function LocalData() {
           ))}
         {keys.length === 0 ? <li>{t('settings.local.nothing')}</li> : null}
       </ul>
-      <Banner tone="warn">{t('settings.local.backupFirst')} <a href="#/orders">{t('shell.footer.recover')}</a></Banner>
+      <Banner tone="warn">{t('settings.local.backupFirst')} <a href="#/orders/recover">{t('shell.footer.recover')}</a></Banner>
       <div class="row" style="margin-top:8px">
         <Button variant="danger" disabled={keys.length === 0} onClick={() => setConfirming(true)} data-testid="settings-clear">
           {t('settings.local.clear')}

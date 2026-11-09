@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityRoute, navOf, parseHash, routeToHash, tokenRoute, type Route, pairRoute, usdMarketHash, usdMarketRoute } from './router';
+import { activityRoute, navOf, parseHash, PORTFOLIO_TABS, routeToHash, tokenRoute, type Route, pairRoute, usdMarketHash, usdMarketRoute } from './router';
 
 const ID = 'ab'.repeat(32);
 
@@ -56,6 +56,13 @@ describe('router', () => {
 
   it('ignores a query string', () => {
     expect(parseHash('#/orders?x=1')).toEqual({ name: 'orders' });
+    // the Portfolio page's tabs: one of the four, any other segment is the page itself
+    expect(parseHash('#/orders/open')).toEqual({ name: 'orders', tab: 'open' });
+    expect(parseHash('#/orders/Fills')).toEqual({ name: 'orders', tab: 'fills' });
+    expect(parseHash('#/orders/nope')).toEqual({ name: 'orders' });
+    expect(parseHash('#/orders/recover')).toEqual({ name: 'orders', recover: true });
+    expect(routeToHash({ name: 'orders', recover: true })).toBe('#/orders/recover');
+    for (const tab of PORTFOLIO_TABS) expect(parseHash(routeToHash({ name: 'orders', tab }))).toEqual({ name: 'orders', tab });
     expect(parseHash(`#/market/${ID}?side=buy`)).toEqual({ name: 'token', covenantId: ID });
   });
 

@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
-import { connectWallet, fund, listExkcc, openMarket, gotoNav, openSettingsAdvanced } from '../helpers/env';
+import { connectWallet, fund, listExkcc, openMarket, gotoNav, gotoOrders, openOrdersSettings, openSettingsAdvanced } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { fillFields, peekReceipt, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
 
@@ -207,7 +207,7 @@ test('closing a buy-first position that bought nothing yet does not offer to sel
   await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
   const placed = await placeOrder(page, mock);
   const entryId = placed.views[0].covenant_id as string;
-  await gotoNav(page, 'nav-orders');
+  await gotoOrders(page);
   await page.getByTestId(`position-close-${entryId}`).click();
   await runFlow(page, mock, wallet, { steps: 1 });
   const banner = page.getByTestId('orders-close-followup');
@@ -218,6 +218,7 @@ test('closing a buy-first position that bought nothing yet does not offer to sel
 test('on a phone the auto-refund checkbox keeps its text beside it', async ({ appPage: page, mock }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await openMarket(page, mock, { route: '/orders' });
+  await openOrdersSettings(page);
   // both read in one frame (the list and the balances above it arrive while the page settles and move the line down between two reads)
   const where = () => page.evaluate(() => {
     const b = document.querySelector('[data-testid="orders-auto-refund"]')!.getBoundingClientRect();

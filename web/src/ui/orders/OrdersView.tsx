@@ -1,8 +1,8 @@
 import { formatUnits } from '../../kob/units';
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
-import { routeToHash, tokenRoute } from '../../app/router';
+import { navigate, routeToHash, tokenRoute, type PortfolioTab } from '../../app/router';
 import { formatDateTime, t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
@@ -18,6 +18,7 @@ import { OrderRow, type OrderRowActions } from './OrderRow';
 import { PositionCard } from './PositionCard';
 import { RecoverPanel } from './RecoverPanel';
 import { StraysPanel } from './StraysPanel';
+import { WalletFills } from './WalletFills';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
 import { mergeFailure, mergeStep, mergeSummary, reservedOutpoints } from './merge-model';
 import { unwindAmount } from './position-model';
@@ -30,7 +31,7 @@ import {
   planRefundFor, planSweepFor, planSweepMany, warnEntryOnly,
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
-import { buildListItems, cancellableIds, filterItems, tabCounts, type ListTab } from './list-model';
+import { buildListItems, cancellableIds, filterItems, tabCounts } from './list-model';
 import { loadOrderEvents, loadOrders, type OrdersData } from './orders-data';
 import '../market/market.css';
 
@@ -48,10 +49,11 @@ const REFRESH_MS = 15_000;
 const SKELETON_ROWS = 3;
 
 /**
- * `#/orders`: the wallet's orders (indexer + placement records resolved on the node), positions with their exits, balances the wallet does not show,
- * strays, cancel / amend / refund / cancel-all, and recovery. Nothing here signs: every transaction goes through <TxFlow> (ui/confirm/send.ts).
+ * `#/orders`, the Portfolio page: the wallet's balances, orders (indexer + placement records resolved on the node), positions with their exits and
+ * fills, one tab each (`#/orders/<tab>`, Balances first); strays, automatic refunds and recovery in one section under them, folded. Cancel / amend /
+ * refund / cancel-all as before. Nothing here signs: every transaction goes through <TxFlow> (ui/confirm/send.ts).
  */
-export function OrdersView() {
+export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}) {
   const services = useServices();
   const wallet = useWallet();
   const { indexer: health } = useSystemStatus();
@@ -78,7 +80,15 @@ export function OrdersView() {
   );
   useLiveRefresh(services, ['fills'], () => true, data.refresh, REFRESH_MS);
 
-  const [tab, setTab] = useState<ListTab>('active');
+  const tab: PortfolioTab = props.tab ?? 'balances';
+  const setTab = (next: PortfolioTab) => navigate({ name: 'orders', tab: next });
+  // the order list of the Open orders and Order history tabs
+  const listTab = tab === 'history' ? 'history' : 'active';
+  // Strays, automatic refunds and recovery: one folded section; it opens by itself while strays are waiting
+  const [settingsOpen, setSettingsOpen] = useState<boolean | null>(props.recover ? true : null);
+  useEffect(() => {
+    if (props.recover) document.getElementById('portfolio-settings')?.scrollIntoView({ block: 'start' });
+  }, [props.recover, !!data.data]);
   const [flow, setFlow] = useState<Flow | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -103,7 +113,7 @@ export function OrdersView() {
   const entryById = useMemo(() => new Map((d?.entries ?? []).map((e) => [e.id, e])), [d]);
   const items = useMemo(() => (d ? buildListItems(d.entries, d.positions) : []), [d]);
   const counts = useMemo(() => tabCounts(items, rowById), [items, rowById]);
-  const shown = useMemo(() => filterItems(items, rowById, tab), [items, rowById, tab]);
+  const shown = useMemo(() => filterItems(items, rowById, listTab), [items, rowById, listTab]);
   const stats = useMemo(() => countByStatus(rows), [rows]);
   // the tokens of each order (its own and a pair order's B): a stray of any other token is foreign
   const sweepable = useMemo(() => new Map(rows.filter((r) => r.token).map((r) => [r.id, [r.token!, ...(r.pair ? [r.pair.quote] : [])]])), [rows]);
@@ -307,6 +317,13 @@ export function OrdersView() {
       downloadText(fillsFileName(services.config.network), fillsCsv(out), 'text/csv');
       showToast(t('orders.fills.exported', { orders: out.length }), 'ok');
     });
+  // strays the wallet can still move: the folded section opens by itself while there are any (its notice says so on top)
+  const liveStrays = strays.filter((x) => !x.spent && !x.lost).length;
+  const settingsShown = settingsOpen ?? liveStrays > 0;
+  const showSettings = () => {
+    setSettingsOpen(true);
+    setTimeout(() => document.getElementById('portfolio-settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
   // orders placed with an older contract version (C5-02): this build cannot derive their scripts, so it can neither find nor cancel them
   const oldTemplate = rows.filter((r) => r.oldTemplate).length;
   const amendState = amend ? entryState(amend.entry, services.kob) : null;
@@ -324,9 +341,6 @@ export function OrdersView() {
         <h1 style="margin:0">{t('orders.title')}</h1>
         <div class="row">
           {d?.clock ? <span class="small muted">{t('common.updated', { time: formatDateTime(Number(d.clock.unixSeconds), { dateStyle: undefined, timeStyle: 'medium' }) })}</span> : null}
-          {loadEvents && filledRows.length > 0 ? (
-            <Button small onClick={exportFills} loading={busy === 'export-fills'} data-testid="orders-export-fills">{t('orders.fills.exportAll')}</Button>
-          ) : null}
           <Button small onClick={data.reload} loading={data.loading && !!d} data-testid="orders-refresh">{t('common.refresh')}</Button>
         </div>
       </div>
@@ -437,99 +451,149 @@ export function OrdersView() {
         />
       ) : null}
 
-      {/* tokens inside the wallet's orders and KAS locked in them: first, before the orders they belong to */}
-      {d ? (
-        <BalancesPanel
-          data={d}
-          version={data.data ?? null}
-          pubkey={wallet.info.pubkey}
-          canSign={canSign}
-          onCancelToken={(token) => setConfirmAll({ token, ids: cancellableIds(rows, token) })}
-          reserved={reserved}
-          busy={busy}
-          onMergeToken={mergeToken}
-        />
-      ) : data.loading ? (
-        <BalancesFrame />
+      {liveStrays > 0 ? (
+        <Banner
+          tone="info"
+          data-testid="orders-strays-notice"
+          actions={
+            <Button small onClick={() => showSettings()} data-testid="orders-strays-notice-open">
+              {t('orders.straysNotice.open')}
+            </Button>
+          }
+        >
+          {t('orders.straysNotice.body', { count: liveStrays })}
+        </Banner>
       ) : null}
 
-      <Section
-        title={t('orders.list.title')}
-        data-testid="orders-section"
-        actions={
-          <Button
-            small
-            variant="danger"
-            disabled={!canSign || cancellable.length === 0 || !!busy}
-            title={canSign ? undefined : t('orders.actions.needWallet')}
-            onClick={() => setConfirmAll({ token: null, ids: cancellable })}
-            data-testid="orders-cancel-all"
-          >
-            {t('orders.cancelAll', { count: cancellable.length })}
-          </Button>
-        }
-      >
-        <p class="small muted" data-testid="orders-race-note">{t('orders.raceNote')}</p>
-        <AutoRefundToggle />
+      <div class="portfolio" data-testid="portfolio">
         <Tabs
-          aria-label={t('orders.list.title')}
+          aria-label={t('orders.title')}
           active={tab}
           onChange={setTab}
           tabs={[
-            { id: 'active', label: t('orders.tab.active', { count: counts.active }), 'data-testid': 'orders-tab-active' },
+            { id: 'balances', label: t('orders.tab.balances'), 'data-testid': 'orders-tab-balances' },
+            { id: 'open', label: t('orders.tab.open', { count: counts.active }), 'data-testid': 'orders-tab-active' },
             { id: 'history', label: t('orders.tab.history', { count: counts.history }), 'data-testid': 'orders-tab-history' },
-            { id: 'all', label: t('orders.tab.all', { count: counts.all }), 'data-testid': 'orders-tab-all' },
+            { id: 'fills', label: t('orders.tab.fills', { count: filledRows.length }), 'data-testid': 'orders-tab-fills' },
           ]}
         />
-        {/* the rows come together, as soon as the indexer's answer is in: a trader acts on them, so they wait for nothing else (the balances, the node's answers) */}
-        <div role="tabpanel" class={`stack-sm${d ? ' ml-in' : ''}`} data-testid="orders-list" data-live={stats.live}>
-          {data.loading && !d ? (
-            <div class="stack-sm" role="status" aria-label={t('common.loading')} data-testid="orders-loading">
-              {Array.from({ length: SKELETON_ROWS }, (_, i) => <div key={i} class="skeleton orders-skel" />)}
-            </div>
-          ) : null}
-          {d && shown.length === 0 ? <p class="muted center" data-testid="orders-empty">{t(tab === 'history' ? 'orders.emptyHistory' : 'orders.empty')}</p> : null}
-          {shown.map((item) =>
-            item.type === 'single' ? (
-              rowById.get(item.id) ? (
-                <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} {...(loadEvents ? { loadEvents } : {})} />
-              ) : null
-            ) : (
-              <PositionCard
-                key={item.id}
-                position={item.position}
-                rows={rowById}
-                tokenOf={shownToken}
+        <div role="tabpanel" aria-labelledby={`tab-${tab}`} class="portfolio-panel stack" data-testid={`portfolio-panel-${tab}`}>
+          {tab === 'balances' ? (
+            // tokens inside the wallet's orders and KAS locked in them, next to the free amounts
+            d ? (
+              <BalancesPanel
+                data={d}
+                version={data.data ?? null}
+                pubkey={wallet.info.pubkey}
                 canSign={canSign}
-                actions={actions}
-                onCancelPosition={onCancelPosition}
-                onClosePosition={onClosePosition}
+                onCancelToken={(token) => setConfirmAll({ token, ids: cancellableIds(rows, token) })}
+                reserved={reserved}
                 busy={busy}
-                clock={d?.clock ?? null}
-                {...(loadEvents ? { loadEvents } : {})}
+                onMergeToken={mergeToken}
               />
-            ),
-          )}
-        </div>
-      </Section>
+            ) : data.loading ? (
+              <BalancesFrame />
+            ) : null
+          ) : null}
 
-      <StraysPanel
-        strays={strays}
-        orderTokens={sweepable}
-        canSign={canSign}
-        busy={busy}
-        onSweep={(id) => {
-          const row = rowById.get(id);
-          if (row) actions.onSweep(row);
-        }}
-        sweepableOrders={sweepableOrders}
-      />
-      <RecoverPanel
-        onCancel={(id) => {
-          const row = rowById.get(id);
-          if (row) actions.onCancel(row);
-        }}
-        records={d?.records ?? []} pubkey={wallet.info.pubkey} store={wallet.records} onChanged={data.reload} />
+          {tab === 'open' || tab === 'history' ? (
+            <Section
+              title={t(tab === 'history' ? 'orders.list.titleHistory' : 'orders.list.title')}
+              data-testid="orders-section"
+              actions={
+                tab === 'open' ? (
+                  <Button
+                    small
+                    variant="danger"
+                    disabled={!canSign || cancellable.length === 0 || !!busy}
+                    title={canSign ? undefined : t('orders.actions.needWallet')}
+                    onClick={() => setConfirmAll({ token: null, ids: cancellable })}
+                    data-testid="orders-cancel-all"
+                  >
+                    {t('orders.cancelAll', { count: cancellable.length })}
+                  </Button>
+                ) : undefined
+              }
+            >
+              {tab === 'open' ? <p class="small muted" data-testid="orders-race-note">{t('orders.raceNote')}</p> : null}
+              {/* the rows come together, as soon as the indexer's answer is in: a trader acts on them, so they wait for nothing else (the balances, the node's answers) */}
+              <div class={`stack-sm${d ? ' ml-in' : ''}`} data-testid="orders-list" data-live={stats.live}>
+                {data.loading && !d ? (
+                  <div class="stack-sm" role="status" aria-label={t('common.loading')} data-testid="orders-loading">
+                    {Array.from({ length: SKELETON_ROWS }, (_, i) => <div key={i} class="skeleton orders-skel" />)}
+                  </div>
+                ) : null}
+                {d && shown.length === 0 ? <p class="muted center" data-testid="orders-empty">{t(tab === 'history' ? 'orders.emptyHistory' : 'orders.empty')}</p> : null}
+                {shown.map((item) =>
+                  item.type === 'single' ? (
+                    rowById.get(item.id) ? (
+                      <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} {...(loadEvents ? { loadEvents } : {})} />
+                    ) : null
+                  ) : (
+                    <PositionCard
+                      key={item.id}
+                      position={item.position}
+                      rows={rowById}
+                      tokenOf={shownToken}
+                      canSign={canSign}
+                      actions={actions}
+                      onCancelPosition={onCancelPosition}
+                      onClosePosition={onClosePosition}
+                      busy={busy}
+                      clock={d?.clock ?? null}
+                      {...(loadEvents ? { loadEvents } : {})}
+                    />
+                  ),
+                )}
+              </div>
+            </Section>
+          ) : null}
+
+          {tab === 'fills' ? (
+            <Section
+              title={t('orders.fills.title')}
+              data-testid="orders-fills-section"
+              actions={
+                loadEvents && filledRows.length > 0 ? (
+                  <Button small onClick={exportFills} loading={busy === 'export-fills'} data-testid="orders-export-fills">{t('orders.fills.exportAll')}</Button>
+                ) : undefined
+              }
+            >
+              <WalletFills rows={filledRows} tokenOf={shownToken} loadEvents={loadEvents} />
+            </Section>
+          ) : null}
+        </div>
+      </div>
+
+      <details
+        class="section portfolio-settings"
+        id="portfolio-settings"
+        open={settingsShown}
+        onToggle={(e) => setSettingsOpen((e.currentTarget as HTMLDetailsElement).open)}
+        data-testid="orders-settings"
+      >
+        <summary data-testid="orders-settings-toggle">{t('orders.settings.title')}</summary>
+        <div class="stack" style="margin-top:12px">
+          <AutoRefundToggle />
+          <StraysPanel
+            strays={strays}
+            orderTokens={sweepable}
+            canSign={canSign}
+            busy={busy}
+            onSweep={(id) => {
+              const row = rowById.get(id);
+              if (row) actions.onSweep(row);
+            }}
+            sweepableOrders={sweepableOrders}
+          />
+          <RecoverPanel
+            onCancel={(id) => {
+              const row = rowById.get(id);
+              if (row) actions.onCancel(row);
+            }}
+            records={d?.records ?? []} pubkey={wallet.info.pubkey} store={wallet.records} onChanged={data.reload} />
+        </div>
+      </details>
 
       {amend && amendState && amendK && amendK !== 'replace' ? (
         <AmendDialog

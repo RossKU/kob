@@ -175,7 +175,7 @@ for (const vp of VIEWPORTS) {
       const exkcc = (await mock.token()).covenant_id;
       const titles: Record<string, string> = {
         '/market': 'Market - KOB',
-        '/orders': 'My orders - KOB',
+        '/orders': 'Portfolio - KOB',
         '/create': 'Create token - KOB',
         '/settings': 'Settings - KOB',
         [`/market/${exkcc}`]: 'EXKCC - KOB',

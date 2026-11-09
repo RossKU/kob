@@ -3,7 +3,7 @@
 // local data, import; My orders with the indexer down from placement records + the node).
 import { readFileSync } from 'node:fs';
 import { test, expect, type MockClient } from '../fixtures';
-import { KAS, TOKEN, connectWallet, fund, openMarket, gotoNav } from '../helpers/env';
+import { KAS, TOKEN, connectWallet, fund, openMarket, gotoNav, gotoOrders, openOrdersSettings } from '../helpers/env';
 import { openOrders, runFlow, seedOrders, statusesOf } from '../helpers/orders';
 import { fillFields, pickType, placeOrder, type Placed } from '../helpers/ticket';
 
@@ -109,7 +109,7 @@ test.describe('cancel', () => {
     const placed = await placeOrder(page, mock);
     const id = placed.views[0].covenant_id as string;
     const before = (await mock.order(id)).state.state;
-    await gotoNav(page, 'nav-orders');
+    await gotoOrders(page);
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toHaveAttribute('data-type', 'twap');
     await row.getByTestId(`order-replace-${id}`).click();
@@ -140,7 +140,7 @@ test.describe('cancel', () => {
     const before = (await mock.order(id)).state.state;
     // day 86 of 90: the renewal is due
     await mock.advanceSeconds(86 * 86_400);
-    await gotoNav(page, 'nav-orders');
+    await gotoOrders(page);
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toHaveAttribute('data-type', 'dca');
     await expect(row.getByTestId('order-renewal-due')).toBeVisible({ timeout: 30_000 });
@@ -171,7 +171,7 @@ test.describe('cancel', () => {
     const exitId = kids[0]!;
     expect((await mock.order(exitId)).contract).toBe('KobCondAsk');
 
-    await gotoNav(page, 'nav-orders');
+    await gotoOrders(page);
     const card = page.locator('[data-testid^="position-"][data-kind]').first();
     await expect(card).toBeVisible();
     await expect(card.getByTestId(`order-row-${entryId}`)).toBeVisible();
@@ -200,7 +200,8 @@ test.describe('cancel', () => {
     await expect(page.getByTestId('orders-tab-active')).toContainText('(3)');
     const tok = await mock.token();
 
-    // per token
+    // per token, from the Balances tab
+    await page.getByTestId('orders-tab-balances').click();
     await page.getByTestId(`orders-cancel-token-${tok.covenant_id}`).click();
     await expect(page.getByTestId('cancel-all-dialog')).toContainText('3 order');
     await page.getByTestId('cancel-all-confirm').click();
@@ -213,6 +214,7 @@ test.describe('cancel', () => {
     const st = await statusesOf(mock, 'alice');
     for (const id of ids) expect(st[id]).toBe('cancelled');
     expect(await tokens(mock)).toBe(3n * TOKEN);
+    await page.getByTestId('orders-tab-active').click();
     await expect(page.getByTestId('orders-empty')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('orders-cancel-all')).toBeDisabled();
   });
@@ -265,11 +267,15 @@ test.describe('refund, strays, balances', () => {
     await expect(strays.getByTestId('stray-row')).toHaveCount(1);
     await expect(strays.getByTestId('stray-row')).toHaveAttribute('data-lost', '0');
     await expect(strays.getByTestId('stray-row')).toContainText('recover: sweep or cancel');
+    // the strays open the folded section by themselves, with a notice on top
+    await expect(page.getByTestId('orders-strays-notice')).toBeVisible();
+    await page.getByTestId('orders-tab-balances').click();
     const bal = page.getByTestId('balances-panel');
     await expect(bal.getByTestId('balance-escrowed')).toHaveText(/^3/);
     await expect(bal.getByTestId('balance-strays')).toHaveText(/^2/);
     await expect(page.getByTestId('strays-note')).toBeVisible();
 
+    await page.getByTestId('orders-tab-active').click();
     await page.getByTestId(`order-cancel-${id}`).click();
     const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
     // the order's own 3 tokens plus the 2 strays come back to the maker, each counted once
@@ -286,6 +292,7 @@ test.describe('refund, strays, balances', () => {
       { side: 'bid', price: 2_400_000, tokens: 2 },
     ]);
     await openOrders(page, mock);
+    await page.getByTestId('orders-tab-balances').click();
     const tok = await mock.token();
     const bal = page.getByTestId('balances-panel');
     const row = bal.getByTestId(`balance-row-${tok.covenant_id}`);
@@ -305,7 +312,7 @@ test.describe('recovery', () => {
     const placed = await placeOrder(page, mock);
     const id = placed.views[0].covenant_id;
 
-    await gotoNav(page, 'nav-orders');
+    await gotoOrders(page, 'settings');
     await expect(page.getByTestId('recover-count')).toContainText('1 placement');
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('orders-export').click()]);
     const file = await download.path();
@@ -326,6 +333,7 @@ test.describe('recovery', () => {
     await page.reload();
     await connectWallet(page);
     await expect(page.getByTestId('orders-indexer-down')).toBeVisible();
+    await openOrdersSettings(page);
     await expect(page.getByTestId('recover-count')).toContainText('0 placement');
     await expect(page.getByTestId(`order-row-${id}`)).toHaveCount(0);
 
@@ -353,7 +361,7 @@ test.describe('recovery', () => {
     await page.route('**/v1/**', (r) => r.abort());
     await page.reload();
     await connectWallet(page);
-    await gotoNav(page, 'nav-orders');
+    await gotoOrders(page);
     await expect(page.getByTestId('orders-indexer-down')).toBeVisible();
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toBeVisible();
