@@ -1,6 +1,7 @@
 //! `kobd db migrate`: a store written by an earlier build (schema 5: states whole, no counters, the indexes of that time; schema 7: packed
-//! states, 32-byte ids in every row; schema 8: integer ids in the child tables, blobs in the orders) is rebuilt as schema 9 (integer ids in
-//! the orders too) in one run, and no read changes: every table digests the same
+//! states, 32-byte ids in every row; schema 8: integer ids in the child tables, blobs in the orders; schema 9: no fees, executors or
+//! activity totals) is rebuilt as the current schema (integer ids in the orders too, the fees of the fills, the totals) in one run, and no
+//! read changes: every table digests the same
 //! with its ids joined back and its states decoded, the API reads return the same JSON, the event ids and sequences are kept, a
 //! store this build refuses is left as it is, and the migrated store goes on being indexed.
 
@@ -23,6 +24,8 @@ use std::path::Path;
 const SCHEMA7: &str = include_str!("fixtures/schema7.sql");
 /// The schema of the build before the orders named their maker, token, templates and quote token by id (schema 8), as a fixture.
 const SCHEMA8: &str = include_str!("fixtures/schema8.sql");
+/// The schema of the build before the fills kept their fee and executor and the activity totals were kept (schema 9), as a fixture.
+const SCHEMA9: &str = include_str!("fixtures/schema9.sql");
 
 /// Which earlier layout [`legacy_store`] writes.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,6 +36,8 @@ enum Legacy {
     V7,
     /// Integer ids in the child tables, 32-byte ids in the orders.
     V8,
+    /// Integer ids everywhere; no fee or executor on the fills, no activity totals.
+    V9,
 }
 
 fn cancel(c: &Ctx, order: OrderUtxo<AnyState>, custody: Option<TokenUtxo>, strays: Vec<TokenUtxo>) -> SignedTx {
@@ -241,7 +246,12 @@ fn legacy_store(src: &Path, dest: &Path, kind: Legacy) {
     }
     let w = Connection::open(dest).unwrap();
     packed::register(&w).unwrap();
-    w.execute_batch(if kind == Legacy::V8 { SCHEMA8 } else { SCHEMA7 }).unwrap();
+    w.execute_batch(match kind {
+        Legacy::V9 => SCHEMA9,
+        Legacy::V8 => SCHEMA8,
+        _ => SCHEMA7,
+    })
+    .unwrap();
     // the tables the executor adds to the same file (token-logo reports), which no chain rebuilds
     w.execute_batch(kobd::logo_reports::SCHEMA).unwrap();
     w.execute("ATTACH DATABASE ?1 AS cur", [src.to_string_lossy().as_ref()]).unwrap();
@@ -258,17 +268,30 @@ fn legacy_store(src: &Path, dest: &Path, kind: Legacy) {
     let run = |sql: String| {
         w.execute(&sql, []).unwrap_or_else(|e| panic!("{e}: {sql}"));
     };
-    let (c, s) = list("orders", &|c| match c {
-        "template_hash" => Some("tm.h".to_string()),
-        "maker" => Some("mk.h".to_string()),
-        "token_cov_id" => Some("tk.h".to_string()),
-        "token_tpl_hash" => Some("tp.h".to_string()),
-        "ext_commit" => Some("ex.h".to_string()),
-        "quote_cov_id" => Some("qt.h".to_string()),
-        "genesis_state" if whole => Some(genesis_whole.clone()),
-        _ => None,
-    });
-    run(format!("INSERT INTO orders ({c}) SELECT {s} FROM cur.orders x{order_ids}ORDER BY x.id"));
+    if kind == Legacy::V9 {
+        // the tables of schema 9 are those of today without the new columns: every row as it is, by the names of schema 9
+        for t in ["ids", "orders", "order_utxos", "order_events", "order_state", "order_amends", "token_utxos", "token_holdings"] {
+            let names = cols(&w, t).join(", ");
+            run(format!("INSERT INTO {t} ({names}) SELECT {names} FROM cur.{t} ORDER BY rowid"));
+        }
+    }
+    let (c, s) = if kind == Legacy::V9 {
+        (String::new(), String::new())
+    } else {
+        list("orders", &|c| match c {
+            "template_hash" => Some("tm.h".to_string()),
+            "maker" => Some("mk.h".to_string()),
+            "token_cov_id" => Some("tk.h".to_string()),
+            "token_tpl_hash" => Some("tp.h".to_string()),
+            "ext_commit" => Some("ex.h".to_string()),
+            "quote_cov_id" => Some("qt.h".to_string()),
+            "genesis_state" if whole => Some(genesis_whole.clone()),
+            _ => None,
+        })
+    };
+    if kind != Legacy::V9 {
+        run(format!("INSERT INTO orders ({c}) SELECT {s} FROM cur.orders x{order_ids}ORDER BY x.id"));
+    }
     if kind == Legacy::V8 {
         // the children keep the integers of the current store: its ids come with them
         run("INSERT INTO ids SELECT * FROM cur.ids".to_string());
@@ -277,7 +300,7 @@ fn legacy_store(src: &Path, dest: &Path, kind: Legacy) {
             run(format!("INSERT INTO {t} ({names}) SELECT {names} FROM cur.{t} ORDER BY rowid"));
         }
     }
-    if kind != Legacy::V8 {
+    if kind != Legacy::V8 && kind != Legacy::V9 {
         let (c, s) = list("order_utxos", &|c| match c {
             "covenant_id" => Some("o.covenant_id".to_string()),
             "state" if whole => Some(format!("kob_ustate(x.state, {go})")),
@@ -333,7 +356,8 @@ fn legacy_store(src: &Path, dest: &Path, kind: Legacy) {
         let names = cols(&w, t).join(", ");
         run(format!("INSERT INTO {t} ({names}) SELECT {names} FROM cur.{t} ORDER BY 1"));
     }
-    run("INSERT INTO meta (k, v) SELECT k, v FROM cur.meta WHERE k NOT IN ('schema_version')".to_string());
+    // (the activity totals came with schema 10)
+    run("INSERT INTO meta (k, v) SELECT k, v FROM cur.meta WHERE k NOT IN ('schema_version', 'activity')".to_string());
     if whole {
         // schema 5: no row counters, no program counts, the indexes of that time
         w.execute_batch(
@@ -368,6 +392,7 @@ fn legacy_store(src: &Path, dest: &Path, kind: Legacy) {
             Legacy::V5 => "5",
             Legacy::V7 => "7",
             Legacy::V8 => "8",
+            Legacy::V9 => "9",
         }],
     )
     .unwrap();
@@ -391,7 +416,7 @@ fn snapshot_file(c: &Ctx, path: &Path) {
 }
 
 #[tokio::test]
-async fn migrate_rebuilds_a_schema_5_store_as_schema_9_and_no_read_changes() {
+async fn migrate_rebuilds_a_schema_5_store_as_the_current_schema_and_no_read_changes() {
     let c = flows().await;
     let dir = tempfile::tempdir().unwrap();
     let cur = dir.path().join("current.sqlite3");
@@ -638,4 +663,166 @@ async fn an_unknown_table_stops_the_migration_and_a_lean_store_stays_lean() {
         v.into_iter().filter(|d| !matches!(d.0.as_str(), "candles" | "candle_meta" | "meta")).collect()
     };
     assert_eq!(kept(table_digests(&after)), kept(original));
+}
+
+fn amend_req(c: &Ctx, at: &SignedTx, idx: usize, a: &AskState, amended: AskState) -> AmendOrder {
+    AmendOrder {
+        order: c.w.order(at, idx, AnyState::KobAsk(a.clone())),
+        amended: AnyState::KobAsk(amended),
+        value: None,
+        funding: vec![],
+        change: None,
+        lock_time: 0,
+        deadline: None,
+        records: vec![],
+        fee: FeeOptions::default(),
+    }
+}
+
+/// Every event's fee, by event id.
+fn fees(conn: &Connection) -> Vec<(i64, String, Option<i64>)> {
+    let mut st = conn.prepare("SELECT id, kind, fee FROM order_events ORDER BY id").unwrap();
+    st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(|r| r.unwrap()).collect()
+}
+
+/// An activity bucket: (iv, t, fills, fees, orders).
+type Bucket = (i64, i64, i64, i64, i64);
+
+/// The activity buckets and the makers (by key, with their newest block) the totals keep.
+fn kept_totals(conn: &Connection) -> (Vec<Bucket>, Vec<(Vec<u8>, i64)>) {
+    let mut st = conn.prepare("SELECT iv, t, fills, fees, orders FROM activity ORDER BY iv, t").unwrap();
+    let buckets =
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap().map(|r| r.unwrap()).collect();
+    let mut st =
+        conn.prepare("SELECT i.h, a.last_block FROM actors a JOIN ids i ON i.id = a.actor_id WHERE a.kind = 1 ORDER BY i.h").unwrap();
+    let makers = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect();
+    (buckets, makers)
+}
+
+/// A schema 9 store (no fees on its fills, no executors, no activity totals) is rebuilt as schema 10 with the fees and the totals the
+/// store that indexed the same chain itself has: a fill is paid at the tip the order had at the fill, though an amend raised it later.
+/// Only the executors are unknown (the history recorded no payer): none is counted. The migrated store goes on being indexed, and the
+/// fills after the migration count their executor.
+#[tokio::test]
+async fn a_schema_9_store_gets_the_fees_and_totals_of_a_fresh_store_and_no_executors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    let mut c = Ctx::with(Harness::new(db::open_writer(&path, "testnet-10").unwrap(), None));
+    scenario(&mut c, |_| {}).await;
+    // an ask filled, its tip tripled by an amend, filled again
+    let a = ask(MAKER_B, P250);
+    let create = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_B, 10 * WHOLE);
+    c.push(&[&create]).await;
+    let cov = c.w.cov(&create, 0);
+    let custody = c.w.token_at(&create, 1, Kcc20State::custody(10 * WHOLE, cov.0, EXT));
+    let leg = Leg::Ask { order: c.w.order(&create, 0, a.clone()), custody, amount: 2 * WHOLE, t: None };
+    let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), vec![leg])));
+    c.push(&[&fill]).await;
+    let a8 = AskState { amount_left: 8 * WHOLE, ..a.clone() };
+    let oi = find_cov(&fill, &cov).unwrap();
+    let custody = c.w.token_at(&fill, find_custody(&fill, &cov, 8 * WHOLE).unwrap(), Kcc20State::custody(8 * WHOLE, cov.0, EXT));
+    let amended = AskState { tip: 3 * a.tip, ..a8.clone() };
+    let am = c.w.sign(&Action::AmendOrder(amend_req(&c, &fill, oi, &a8, amended.clone())));
+    c.push(&[&am]).await;
+    let leg = Leg::Ask { order: c.w.order(&am, 0, amended.clone()), custody, amount: 3 * WHOLE, t: None };
+    let fill2 = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), vec![leg])));
+    c.push(&[&fill2]).await;
+    assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "amend", "fill"]);
+
+    let since: i64 = c.hs.query("SELECT MAX(ts) - 60000 FROM order_events", []);
+    let fresh = {
+        let g = c.hs.ingest.lock().unwrap();
+        let totals = |s| kobd::indexer::activity::activity(g.conn(), s).unwrap();
+        (fees(g.conn()), kept_totals(g.conn()), totals(None), table_digests(g.conn()), totals(Some(since)))
+    };
+    // the fills of the scenario (4 whole at the tip) and of this ask (2 whole at the tip, 3 at three times it)
+    let paid: Vec<i64> = fresh.0.iter().filter(|e| e.1 == "fill").map(|e| e.2.unwrap()).collect();
+    assert_eq!(paid, [4 * TIP, 2 * TIP, 9 * TIP]);
+    assert_eq!(fresh.2.fees_paid, (15 * TIP).to_string());
+    assert_eq!((fresh.2.fills, fresh.2.executors), (3, 1), "the taker funded every fill");
+
+    // the indexer lets go of the file, the file becomes the store of schema 9 and is migrated
+    let node = c.hs.node.clone();
+    let cur = dir.path().join("current.sqlite3");
+    snapshot_file(&c, &cur);
+    c.hs = Harness::new(db::open_memory("testnet-10").unwrap(), None);
+    legacy_store(&cur, &path, Legacy::V9);
+    std::fs::remove_file(&cur).unwrap();
+    {
+        let old = open_ro(&path);
+        assert!(old.prepare("SELECT fee FROM order_events").is_err(), "a schema 9 store has no fees");
+    }
+    let mut lines = vec![];
+    let rep = storage::migrate(&config(dir.path()), storage::Options::default(), |l| lines.push(l.to_string())).unwrap();
+    assert_eq!(rep.from_schema, 9, "{lines:?}");
+    let after = open_ro(&path);
+    assert_eq!(fees(&after), fresh.0, "every fill's fee, at the tip in force at the fill");
+    assert_eq!(kept_totals(&after), fresh.1);
+    let v = kobd::indexer::activity::activity(&after, None).unwrap();
+    assert_eq!(v, kobd::indexer::activity::ActivityView { executors: 0, ..fresh.2.clone() }, "every figure but the executors");
+    let known: i64 = after.query_row("SELECT COUNT(*) FROM order_events WHERE executor_id IS NOT NULL", [], |r| r.get(0)).unwrap();
+    assert_eq!(known, 0);
+    // a window: the same
+    let w = kobd::indexer::activity::activity(&after, Some(since)).unwrap();
+    assert_eq!(w, kobd::indexer::activity::ActivityView { executors: 0, ..fresh.4.clone() });
+    assert!(fresh.4.fills >= 1);
+    // every other table reads as it did (the logo rows were put into the file only)
+    let chain = |v: Vec<(String, u64, String)>| -> Vec<(String, u64, String)> {
+        v.into_iter().filter(|d| !d.0.starts_with("logo_")).collect()
+    };
+    assert_eq!(chain(table_digests(&after)), chain(fresh.3));
+    drop(after);
+
+    // the indexer goes on from the migrated store: a fill after it counts its executor
+    let w = db::open_writer(&path, "testnet-10").unwrap();
+    c.hs = Harness::with_node(node, w, None, wide_window());
+    let leg = Leg::Ask {
+        order: c.w.order(&fill2, find_cov(&fill2, &cov).unwrap(), AskState { amount_left: 5 * WHOLE, ..amended.clone() }),
+        custody: c.w.token_at(&fill2, find_custody(&fill2, &cov, 5 * WHOLE).unwrap(), Kcc20State::custody(5 * WHOLE, cov.0, EXT)),
+        amount: WHOLE,
+        t: None,
+    };
+    let fill3 = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), vec![leg])));
+    c.push(&[&fill3]).await;
+    let v = {
+        let g = c.hs.ingest.lock().unwrap();
+        kobd::indexer::activity::activity(g.conn(), None).unwrap()
+    };
+    assert_eq!((v.fills, v.executors, v.fees_paid), (4, 1, (18 * TIP).to_string()));
+    // the totals stay what the rows say (`testkit::assert_read_invariants`)
+    let _ = c.hs.snapshot();
+}
+
+/// A lean schema 9 store (incremental auto-vacuum) is upgraded as one, and a second run finds nothing to do.
+#[tokio::test]
+async fn a_lean_schema_9_store_stays_lean() {
+    let c = flows().await;
+    let dir = tempfile::tempdir().unwrap();
+    let cur = dir.path().join("current.sqlite3");
+    snapshot_file(&c, &cur);
+    let path = dir.path().join("index.sqlite3");
+    legacy_store(&cur, &path, Legacy::V9);
+    std::fs::remove_file(&cur).unwrap();
+    Connection::open(&path).unwrap().execute_batch("PRAGMA auto_vacuum = 2; VACUUM;").unwrap();
+    let mut lean = config(dir.path());
+    lean.lean = true;
+    let rep = storage::migrate(&lean, storage::Options::default(), |_| {}).unwrap();
+    assert_eq!(rep.from_schema, 9);
+    assert_eq!(rep.rows("orders"), 3);
+    let after = open_ro(&path);
+    assert_eq!(after.query_row::<i64, _, _>("PRAGMA auto_vacuum", [], |r| r.get(0)).unwrap(), 2);
+    assert_eq!(after.query_row::<String, _, _>("PRAGMA integrity_check", [], |r| r.get(0)).unwrap(), "ok");
+    let original = {
+        let g = c.hs.ingest.lock().unwrap();
+        kobd::indexer::activity::activity(g.conn(), None).unwrap()
+    };
+    assert_eq!(
+        kobd::indexer::activity::activity(&after, None).unwrap(),
+        kobd::indexer::activity::ActivityView { executors: 0, ..original }
+    );
+    drop(after);
+    std::fs::remove_file(rep.kept_old.unwrap()).unwrap();
+    let again = storage::migrate(&lean, storage::Options::default(), |_| {}).unwrap();
+    assert_eq!(again.from_schema, db::SCHEMA_VERSION);
+    assert!(again.kept_old.is_none());
 }

@@ -1699,6 +1699,19 @@ impl Processor {
             }
             Act::Unknown => events.push(("unknown", None, None, closes)),
         }
+        // a fill: what it released to the filler at the order's tip in force (an amend of an earlier transaction has taken its new
+        // tip into the row), and the script that funded the transaction (`activity`, `GET /v1/stats`)
+        let (fee, executor) = match events.iter().find(|e| e.0 == "fill") {
+            Some(&(_, amount, _, _)) => {
+                let terms: Option<(Option<i64>, Option<i64>)> = conn
+                    .prepare_cached("SELECT tip, scale FROM orders WHERE covenant_id = ?1")?
+                    .query_row([&s.cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .optional()?;
+                let fee = terms.and_then(|(tip, scale)| super::activity::fill_fee(amount, tip, scale));
+                (fee, rec.payer.as_deref().map(|spk| super::activity::intern_script(conn, spk)).transpose()?)
+            }
+            None => (None, None),
+        };
         for (i, (kind, amount, price, closing)) in events.iter().enumerate() {
             let d = if i == 0 {
                 detail.to_string()
@@ -1706,9 +1719,9 @@ impl Processor {
                 json!({"input": s.input_idx, "entry": s.entry, "remainder": true}).to_string()
             };
             conn.prepare_cached(concat!(
-                "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, payout, closes, detail) VALUES (",
+                "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, payout, closes, detail, fee, executor_id) VALUES (",
                 order_of!("?1"),
-                ",?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,kob_dpack(?14,?7))"
+                ",?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,kob_dpack(?14,?7),?15,?16)"
             ))?
             .execute(params![
                 &s.cov.0[..],
@@ -1724,7 +1737,9 @@ impl Processor {
                 price,
                 if i == 0 { payout } else { None },
                 *closing as i64,
-                d
+                d,
+                if *kind == "fill" { fee } else { None },
+                if *kind == "fill" { executor } else { None }
             ])?;
             // a fill moves its token's candle bucket (recomputed before the transaction commits: `candles::refresh`)
             if *kind == "fill" {

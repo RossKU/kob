@@ -18,8 +18,10 @@
 //! template table per frame (record-log code -> template hash of every order template and token program the frame refers
 //! to) and length-prefixed states, so a frame decodes whatever the templates are when it is read; a reveal of a template
 //! this build does not pin is dropped and counted, never misread. Format 3 ([`FORMAT_KCC23`], since 2026-10-19) is format 2
-//! with KCC-23 declaration sections in its records, written only for the frames that hold one. A frame this build cannot decode (format 1, written
-//! before 2026-10-01 without a marker, or a newer format) is kept and skipped by [`read_all`] with a counted warning
+//! with KCC-23 declaration sections in its records, written only for the frames that hold one; format 4 ([`FORMAT_PAYER`],
+//! since 2026-11-09) is format 3 with payer sections (who funded a transaction that spends a tracked order), likewise. A
+//! frame this build cannot decode (format 1, written before 2026-10-01 without a marker, or a newer format) is kept and
+//! skipped by [`read_all`] with a counted warning
 //! (`open` checks the chain only and never decodes a body).
 //!
 //! A sealed segment (every one but the newest) is kept as `seg-<n>.kobrec.gz`, the gzip of the segment file: the writer compresses
@@ -145,6 +147,13 @@ pub const FORMAT: u8 = 2;
 /// format 2, byte for byte, so a build before declarations reads it and skips (with a counted "newer format" warning) only the
 /// frames with declarations instead of misreading them.
 pub const FORMAT_KCC23: u8 = 3;
+
+/// Format 4 (since 2026-11-09): format 3 whose records may carry a payer section (`record::TxRecord::payer`: the script that funded a
+/// transaction spending a tracked order, flagged by bit 29 of a record's position). Only a frame that holds such a section is written
+/// as format 4 (KCC-23 sections may be in it too); every other frame stays format 2 or 3, so a build before payers skips (with a
+/// counted "newer format" warning) only those frames instead of misreading them. A record of an earlier frame has no payer: the
+/// submitter of its transaction is unknown.
+pub const FORMAT_PAYER: u8 = 4;
 
 impl LogOp {
     fn encode(&self, w: &mut Writer) {
@@ -339,11 +348,19 @@ impl LogBatch {
         (orders, programs)
     }
 
-    /// Encodes the batch as a format-2 frame body (format 3 when a record carries a KCC-23 declaration section).
+    /// Encodes the batch as a format-2 frame body (format 3 when a record carries a KCC-23 declaration section, 4 when one carries a
+    /// payer section).
     pub fn encode(&self, now_ms: u64) -> Vec<u8> {
         let mut w = Writer::new();
         w.u8(0);
-        w.u8(if self.blocks.iter().flat_map(|b| &b.txs).any(|t| t.kcc23.is_some()) { FORMAT_KCC23 } else { FORMAT });
+        let txs = || self.blocks.iter().flat_map(|b| &b.txs);
+        w.u8(if txs().any(|t| t.payer.is_some()) {
+            FORMAT_PAYER
+        } else if txs().any(|t| t.kcc23.is_some()) {
+            FORMAT_KCC23
+        } else {
+            FORMAT
+        });
         w.var(now_ms);
         let (orders, programs) = self.tables();
         write_table(&mut w, &orders);
@@ -373,10 +390,10 @@ impl LogBatch {
         w.buf
     }
 
-    /// Decodes a frame body (format 2 or 3).
+    /// Decodes a frame body (format 2, 3 or 4).
     pub fn decode(body: &[u8]) -> Result<DecodedBatch, WireError> {
         match body {
-            [0, FORMAT | FORMAT_KCC23, rest @ ..] => {
+            [0, FORMAT | FORMAT_KCC23 | FORMAT_PAYER, rest @ ..] => {
                 let mut r = Reader::new(rest);
                 let written_ms = r.var()?;
                 let orders = read_table(&mut r)?;
@@ -1027,6 +1044,7 @@ mod tests {
                     tok_outs: vec![],
                     holds: vec![],
                     kcc23: None,
+                    payer: None,
                 }],
             }],
             ops: vec![LogOp::CloseGap { txid: Hash32([1; 32]), index: 2, covenant_id: Hash32([3; 32]) }],
@@ -1403,6 +1421,7 @@ mod tests {
             tok_outs: vec![],
             holds: vec![],
             kcc23: None,
+            payer: None,
         }
     }
 

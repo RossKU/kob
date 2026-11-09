@@ -365,8 +365,8 @@ program changes. The program is not replaced while it runs, and it does not upda
 6. **When the release notes ask for a rebuild** (the database is refused as old): an Executor on lean storage has no record log to
    replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
    the fast start rebuilds the live book within seconds. Make sure the key file is not inside `kob-data` (setup puts it next
-   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive of schema 5, 6, 7 or 8 is brought
-   to schema 9 (the current one) offline with `kobd db --config kobd.toml migrate` in its folder (stop it first;
+   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive of schema 5 to 9 is brought
+   to schema 10 (the current one) offline with `kobd db --config kobd.toml migrate` in its folder (stop it first;
    free disk about the size of the store; the old file stays as `index.sqlite3.before-migrate` until you delete it; an older build refuses
    the migrated store; `docs/ops/executor.md`, 7.6a); any other archive rebuilds with `kobd db --config kobd.toml
    replay` while offline; the public read server has a way without downtime (`docs/ops/chart-server.md`, section 6).
@@ -516,7 +516,7 @@ to a newer build is uninstalling, which deletes the key. Withdraw first.
 
 **Database update.** Each time you switch the executor on, the app first runs `kobd db migrate` on its database (the
 status says `updating the database`). On a current database this takes a moment and changes nothing. A database of an
-earlier version (v0.1.0 wrote schema 5; this build reads schema 9) is rebuilt beside the old one, checked row by row and
+earlier version (v0.1.0 wrote schema 5; this build reads schema 10) is rebuilt beside the old one, checked row by row and
 only then swapped in; the key file is not touched and the orders are kept. It needs free storage about the size of the
 database (the Executor's is at most 500 MB) and can take some minutes. The old file stays in the app's storage as
 `index.sqlite3.before-migrate` until the executor has run on the new database: the app deletes it by itself once the

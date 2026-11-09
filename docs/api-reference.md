@@ -896,27 +896,36 @@ curl -s $API/v1/logo-blocklist
 ### 3.21 `GET /v1/stats`
 
 The activity totals of the whole store, not of one token: what the web app's Activity summary shows beside the candles. Heavy; cached
-(per data generation, keyed by `since`). Every read is on an index and every scan is capped, so the cost follows the range, not the size of the store.
+(per data generation, keyed by `since`). Since schema 10 every figure is read from aggregates the store keeps by triggers in the
+transaction of every write (per-minute and per-hour buckets of the fills, their fees and the orders placed; the newest block of each maker
+and executor), so the cost is a few hundred bucket rows and one index range whatever the size of the history, and a reorg takes its blocks
+out of the totals exactly.
 
 | Param | Type | Default | Meaning |
 |---|---|---|---|
 | `since` | integer | all time | Start of the range, unix milliseconds, rounded down to the minute; the range runs to the newest block. Negative or not a number: 400. |
 
 ```json
-{ "since": 1790000000000, "ts": 1790086000000, "orders": 42, "traders": 9, "executors": null,
+{ "since": 1790000000000, "ts": 1790086000000, "orders": 42, "fills": 130, "traders": 9, "executors": 2,
   "fees_paid": "1250000", "kas_locked": "880000000000" }
 ```
 
-* `orders`: orders placed in the range, of every kind, listed or not (the chain's placements, not the book's listings). The range begins at the
-  first block with an event at `since`; all time is the store's order counter.
-* `traders`: distinct makers (order keys, not persons) of those orders. `null` when the store holds more than 200,000 makers.
-* `executors`: always `null`. The record log keeps no key of whoever submitted a fill, so the number does not exist for this store.
-* `fees_paid` (sompi, string): what the range's fills released to their fillers, `amount x tip / scale` summed per fill event, with the tip an
-  order carries (an order amended in place counts at its current tip). `null` when the range holds more than 200,000 fills.
+* `orders`: orders placed in the range, of every kind, listed or not (the chain's placements, not the book's listings): the `create` events at
+  or after `since`. All time is the store's order counter.
+* `fills` (number): the fill events in the range (a transaction that fills three orders is three).
+* `traders` (number): distinct makers (order keys, not persons) of the orders placed in the range. The range begins at the first block with an
+  event at `since`.
+* `executors` (number): distinct scripts that funded the fill transactions of the range (the script public key of a fill transaction's first
+  input that spends no covenant output: an Executor's funding key), from the same first block. Only fills indexed from record-log frames written
+  since 2026-11-09 (format 4, which records that script) name one: the fills a store indexed before (and a replay of an older log) have no
+  executor and are not counted, nor is a fill whose transaction no plain input funded.
+* `fees_paid` (sompi, string): what the range's fills released to their fillers, `floor(amount x tip / scale)` per fill event at the tip the
+  order had at the fill (an amend after it does not change it). A fill whose terms are unknown (an imported history without a tip) counts 0.
 * `kas_locked` (sompi, string): the KAS in the live order UTXOs now, whatever `since` is.
 * `ts` (number or null): the newest event time; `since` is the minute used (`null` for all time).
 
-A store that keeps part of its history (`lean = true`) counts what it keeps. An empty store answers zeros.
+A store that keeps part of its history (`lean = true`) counts what it keeps. An empty store answers zeros. An indexer before schema 10 answers
+without `fills`, with `executors` always `null` and `traders` / `fees_paid` `null` beyond its scan caps (200,000 makers / fills).
 
 ## 4. WebSocket
 
