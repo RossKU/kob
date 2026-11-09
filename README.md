@@ -10,8 +10,7 @@ and earn the spread. No bridge, no sequencer, no admin key, no oracle, no protoc
 
 ## Quick start
 
-Trade: open the web app, [kob.kaspa.ag](https://kob.kaspa.ag) (fallback mirror without Cloudflare and without private-key signing:
-[rossku.github.io/kob](https://rossku.github.io/kob/)), with KasWare or Kaspire, see the [user guide](docs/user-guide.md).
+Trade: open the web app, [kob.kaspa.ag](https://kob.kaspa.ag), with KasWare or Kaspire, see the [user guide](docs/user-guide.md).
 
 Run `kobd` (an Indexer, keyless; or an Executor that matches orders) on testnet-10, with Git, [rustup](https://rustup.rs)
 and a C compiler installed:

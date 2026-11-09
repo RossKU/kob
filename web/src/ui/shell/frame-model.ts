@@ -1,6 +1,5 @@
 // The footer's facts (pure, tested in frame-model.test.ts): which links it shows on which page, and whether it carries the chart library's attribution.
-import { MIRROR } from '../../app/mirror';
-import { APP_HASH, EXECUTOR_URL, MIRROR_APP_URL, publicApiUrl, REPO_URL } from '../landing/landing-model';
+import { APP_HASH, EXECUTOR_URL, publicApiUrl, REPO_URL } from '../landing/landing-model';
 
 /** Which page the frame is on: the landing page (no charts, no app links) or the app shell. */
 export type FrameContext = 'landing' | 'app';
@@ -19,14 +18,13 @@ export interface FooterLink {
 }
 
 /**
- * The footer's one row of links: App, the app on the GitHub Pages mirror (not on the mirror itself, `onMirror`), GitHub, Run an executor, when the deployment has an indexer its Public API, when there is a donation address Support (`support`),
+ * The footer's one row of links: App, GitHub, Run an executor, when the deployment has an indexer its Public API, when there is a donation address Support (`support`),
  * and the Disclaimer; the app adds Settings and data, Recover orders and kaspa.org.
  */
-export function footerLinks(context: FrameContext, indexerUrl: string | null | undefined, support = false, onMirror = MIRROR !== ''): FooterLink[] {
+export function footerLinks(context: FrameContext, indexerUrl: string | null | undefined, support = false): FooterLink[] {
   const api = publicApiUrl(indexerUrl);
   const site: FooterLink[] = [
     { key: 'landing.footer.app', href: APP_HASH, group: 'site' },
-    ...(onMirror ? [] : [{ key: 'landing.footer.mirror', href: MIRROR_APP_URL, external: true, title: 'landing.footer.mirror.title', testid: 'footer-mirror', group: 'site' } as const]),
     { key: 'landing.github', href: REPO_URL, group: 'site' },
     { key: 'landing.footer.executor', href: EXECUTOR_URL, group: 'site' },
     ...(api ? [{ key: 'landing.footer.api', href: api, testid: context === 'app' ? 'footer-api' : 'landing-api', group: 'site' } as const] : []),
