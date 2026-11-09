@@ -44,6 +44,8 @@ export interface OrderRowProps {
   loadEvents?: (id: Hex, signal: AbortSignal) => Promise<EventView[]>;
   /** wall-clock mapping of DAA scores: the line's placement time (none: no time) */
   clock?: Clock | null;
+  /** a market page's panel: the details are drawn only once opened, and never open by themselves (the warning mark stays on the line) */
+  compact?: boolean;
 }
 
 /** An order that needs the reader: its details open by themselves (a warning, a renewal, an expiry, a source other than the indexer). */
@@ -181,10 +183,10 @@ export function OrderRow(props: OrderRowProps) {
   // (an order under an older contract version is only cancelled: no sweep)
   const canSweep = row.live && row.canCancel && row.strayCount > 0 && !row.cancelOnly;
   const attention = needsAttention(row);
-  const [open, setOpen] = useState(attention);
+  const [open, setOpen] = useState(attention && !props.compact);
   // an order that comes to need the reader later (a renewal due, an expiry, a warning after a refresh) opens its details then
   useEffect(() => {
-    if (attention) setOpen(true);
+    if (attention && !props.compact) setOpen(true);
   }, [attention]);
   const line = lineFacts(row, tk, bToken, props.clock);
   const marketText = tk && row.pair ? `${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}` : tk ? `${tk.ticker}/KAS` : row.token ? longId(row.token) : '—';
@@ -254,6 +256,7 @@ export function OrderRow(props: OrderRowProps) {
           </svg>
         </button>
       </div>
+      {props.compact && !open ? null : (
       <div class="or-details" id={`order-details-${row.id}`} hidden={!open} data-testid={`order-details-${row.id}`}>
       <div class="row-between">
         <div class="row" style="gap:6px">
@@ -426,6 +429,7 @@ export function OrderRow(props: OrderRowProps) {
         </div>
       ) : null}
       </div>
+      )}
     </div>
   );
 }

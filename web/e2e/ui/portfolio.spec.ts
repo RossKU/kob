@@ -78,3 +78,24 @@ test('#/portfolio/recover opens the page with its folded section of strays, auto
   await page.getByTestId('orders-settings-toggle').click();
   await expect.poll(() => box.evaluate((e) => (e as HTMLDetailsElement).open)).toBe(false);
 });
+
+test('a market page shows the same panel under the depth chart, this market only by default; the switch shows every market', async ({ appPage: page, mock }) => {
+  const [here] = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 1 }]);
+  const tok = await mock.token();
+  await openMarket(page, mock, { route: `/market/${tok.covenant_id}` });
+  const panel = page.getByTestId('market-orders');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTestId('orders-tab-active')).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByTestId(`order-line-${here}`)).toBeVisible();
+  await expect(panel.getByTestId('market-orders-only-input')).toBeChecked();
+  // the details of a line on a market page are drawn only once opened (they share test ids with the ticket)
+  await expect(panel.getByTestId(`order-details-${here}`)).toHaveCount(0);
+  await panel.getByTestId(`order-toggle-${here}`).click();
+  await expect(panel.getByTestId(`order-details-${here}`)).toBeVisible();
+  // the tabs stay on the page (not in its address)
+  await panel.getByTestId('orders-tab-balances').click();
+  await expect(page).toHaveURL(new RegExp(`#/market/${tok.covenant_id}$`));
+  await expect(panel.getByTestId('kas-balance')).toBeVisible();
+  await expect(panel.getByTestId(`balance-row-${tok.covenant_id}`)).toBeVisible();
+  await expect(panel.getByTestId('market-orders-portfolio')).toHaveAttribute('href', '#/portfolio/balances');
+});

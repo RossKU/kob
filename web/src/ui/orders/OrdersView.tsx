@@ -3,6 +3,12 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
 import { navigate, routeToHash, tokenRoute, type PortfolioTab } from '../../app/router';
+
+/** The market a market page's panel stands on: a token's KAS market (`quote` null) or a token/token pair. */
+export interface MarketOf {
+  base: Hex;
+  quote: Hex | null;
+}
 import { formatDateTime, t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
@@ -32,7 +38,7 @@ import {
   planRefundFor, planSweepFor, planSweepMany, warnEntryOnly,
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
-import { buildListItems, cancellableIds, filterItems, tabCounts } from './list-model';
+import { buildListItems, cancellableIds, filterItems, itemMemberIds, tabCounts } from './list-model';
 import { loadOrderEvents, loadOrders, type OrdersData } from './orders-data';
 import '../market/market.css';
 
@@ -54,7 +60,11 @@ const SKELETON_ROWS = 3;
  * fills, one tab each (`#/portfolio/<tab>`, Balances first); strays, automatic refunds and recovery in one section under them, folded. Cancel / amend /
  * refund / cancel-all as before. Nothing here signs: every transaction goes through <TxFlow> (ui/confirm/send.ts).
  */
-export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}) {
+export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed?: MarketOf } = {}) {
+  // on a market page (`embed`): the same tabs, Open orders first, its tab kept here (not in the address), this market only by default
+  const embed = props.embed ?? null;
+  const [embedTab, setEmbedTab] = useState<PortfolioTab>('open');
+  const [onlyHere, setOnlyHere] = useState(true);
   const services = useServices();
   const wallet = useWallet();
   const { indexer: health } = useSystemStatus();
@@ -81,8 +91,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
   );
   useLiveRefresh(services, ['fills'], () => true, data.refresh, REFRESH_MS);
 
-  const tab: PortfolioTab = props.tab ?? 'balances';
-  const setTab = (next: PortfolioTab) => navigate({ name: 'portfolio', tab: next });
+  const tab: PortfolioTab = embed ? embedTab : (props.tab ?? 'balances');
+  const setTab = (next: PortfolioTab) => (embed ? setEmbedTab(next) : navigate({ name: 'portfolio', tab: next }));
   // the order list of the Open orders and Order history tabs
   const listTab = tab === 'history' ? 'history' : 'active';
   // Strays, automatic refunds and recovery: one folded section; it opens by itself while strays are waiting
@@ -114,7 +124,14 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
   }, [d, services.kob]);
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const entryById = useMemo(() => new Map((d?.entries ?? []).map((e) => [e.id, e])), [d]);
-  const items = useMemo(() => (d ? buildListItems(d.entries, d.positions) : []), [d]);
+  // an order of the market this panel stands on (a market page with "this market only"): every order elsewhere
+  const inMarket = (r: OrderRowModel | undefined): boolean =>
+    !!r && (!embed || !onlyHere || (r.token === embed.base && (embed.quote ? r.pair?.quote === embed.quote : !r.pair)));
+  const allItems = useMemo(() => (d ? buildListItems(d.entries, d.positions) : []), [d]);
+  const items = useMemo(
+    () => (embed && onlyHere ? allItems.filter((i) => itemMemberIds(i).some((id) => inMarket(rowById.get(id)))) : allItems),
+    [allItems, rowById, embed?.base, embed?.quote, onlyHere],
+  );
   const counts = useMemo(() => tabCounts(items, rowById), [items, rowById]);
   const shown = useMemo(() => filterItems(items, rowById, listTab), [items, rowById, listTab]);
   const stats = useMemo(() => countByStatus(rows), [rows]);
@@ -291,6 +308,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
   };
 
   if (!wallet.info) {
+    if (embed) return null;
     return (
       <div class="stack" data-testid="orders-view">
         <h1>{t('orders.title')}</h1>
@@ -299,10 +317,11 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
     );
   }
 
-  const cancellable = cancellableIds(rows, null);
+  const marketRows = embed && onlyHere ? rows.filter((r) => inMarket(r)) : rows;
+  const cancellable = cancellableIds(marketRows, null);
   // fill history (R-8): per order on demand, and every fill of the wallet as one CSV
   const loadEvents = services.indexer && !d?.indexerError ? (id: Hex, signal: AbortSignal) => loadOrderEvents(services.indexer!, id, signal) : null;
-  const filledRows = rows.filter((r) => filledAmountOf(r) > 0n);
+  const filledRows = marketRows.filter((r) => filledAmountOf(r) > 0n);
   const exportFills = () =>
     void guarded('export-fills', async () => {
       if (!loadEvents) return;
@@ -339,8 +358,20 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
   const replaceReady = !!amendToken && (!amend?.pair || !!amendQuote);
 
   return (
-    <div class="stack" data-testid="orders-view">
-      <div class="row-between">
+    <div class={embed ? 'stack mkt-card market-orders' : 'stack'} data-testid={embed ? 'market-orders' : 'orders-view'}>
+      {embed ? (
+        <div class="row-between market-orders-head">
+          <h2 class="section-title" style="margin:0">{t('orders.market.title')}</h2>
+          <div class="row">
+            <label class="check" data-testid="market-orders-only">
+              <input type="checkbox" checked={onlyHere} onChange={(e) => setOnlyHere((e.currentTarget as HTMLInputElement).checked)} data-testid="market-orders-only-input" />
+              <span>{t('orders.market.onlyHere')}</span>
+            </label>
+            <a class="small" href={routeToHash({ name: 'portfolio', tab })} data-testid="market-orders-portfolio">{t('orders.market.toPortfolio')}</a>
+          </div>
+        </div>
+      ) : null}
+      <div class="row-between" style={embed ? 'display:none' : undefined}>
         <h1 style="margin:0">{t('orders.title')}</h1>
         <div class="row">
           {d?.clock ? <span class="small muted">{t('common.updated', { time: formatDateTime(Number(d.clock.unixSeconds), { dateStyle: undefined, timeStyle: 'medium' }) })}</span> : null}
@@ -454,7 +485,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
         />
       ) : null}
 
-      {liveStrays > 0 ? (
+      {liveStrays > 0 && !embed ? (
         <Banner
           tone="info"
           data-testid="orders-strays-notice"
@@ -468,6 +499,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
         </Banner>
       ) : null}
 
+      {embed ? null : (
       <div class="pf-strip" data-testid="portfolio-summary">
         <div class="pf-stat">
           <span class="pf-k">{t('orders.summary.total')}</span>
@@ -487,6 +519,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
           <span class="pf-v num" data-testid="portfolio-open-count">{d ? String(counts.active) : '—'}</span>
         </div>
       </div>
+      )}
 
       <div class="portfolio" data-testid="portfolio">
         <Tabs
@@ -514,6 +547,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
                 busy={busy}
                 onMergeToken={mergeToken}
                 balances={balances}
+                {...(embed && onlyHere ? { onlyTokens: new Set([embed.base, ...(embed.quote ? [embed.quote] : [])]) } : {})}
               />
             ) : data.loading ? (
               <BalancesFrame />
@@ -566,7 +600,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
                 {shown.map((item) =>
                   item.type === 'single' ? (
                     rowById.get(item.id) ? (
-                      <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} clock={d?.clock ?? null} {...(loadEvents ? { loadEvents } : {})} />
+                      <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} clock={d?.clock ?? null} {...(embed ? { compact: true } : {})} {...(loadEvents ? { loadEvents } : {})} />
                     ) : null
                   ) : (
                     <PositionCard
@@ -604,6 +638,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
         </div>
       </div>
 
+      {embed ? null : (
       <details
         class="section portfolio-settings"
         id="portfolio-settings"
@@ -633,6 +668,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
             records={d?.records ?? []} pubkey={wallet.info.pubkey} store={wallet.records} onChanged={data.reload} />
         </div>
       </details>
+      )}
 
       {amend && amendState && amendK && amendK !== 'replace' ? (
         <AmendDialog

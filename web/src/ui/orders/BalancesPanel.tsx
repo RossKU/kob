@@ -47,10 +47,13 @@ export function BalancesPanel(props: {
   onMergeToken?(token: Hex): void;
   /** the page's balances (use-balances.ts): the free balances, combined with the orders and strays, and each token's value in KAS */
   balances: WalletBalances;
+  /** only these tokens (a market page: its token, a pair's two); KAS always */
+  onlyTokens?: ReadonlySet<Hex>;
 }) {
   const services = useServices();
   const { registry } = services;
   const { free, combined, valueOf } = props.balances;
+  const shownTokens = (combined?.tokens ?? []).filter((b) => !props.onlyTokens || props.onlyTokens.has(b.token));
 
   // free token UTXOs a merge may take, per token (two or more)
   const mergeable = useMemo(
@@ -117,10 +120,10 @@ export function BalancesPanel(props: {
                 </td>
                 <td class="right bal-actions bal-actions-none" />
               </tr>
-              {combined.tokens.length === 0 ? (
+              {shownTokens.length === 0 ? (
                 <TableMessage colSpan={7} data-testid="balances-empty">{t('orders.balances.empty')}</TableMessage>
               ) : (
-                combined.tokens.map((b) => {
+                shownTokens.map((b) => {
                   const info = registry.byCovenantId.get(b.token);
                   // shown in whole tokens also without a registry entry (app/token-display.ts: this browser's issuance, else 8 assumed decimals)
                   const shown = displayToken(registry, services.config.network, b.token)!;

@@ -423,3 +423,18 @@ body:has(.market-page) .container { max-width: 1520px; }
 .tip-panel { position: fixed; z-index: 60; width: min(20rem, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; font-size: 0.85rem; white-space: normal; text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .ml-line3-wrap { height: auto; min-height: 1.25rem; flex-wrap: wrap; gap: 2px 8px; }
 .ml-line3-wrap .ml-badges { flex-wrap: wrap; }
+
+/* the wallet's panel on a market page (MarketShell `mine`, OrdersView embedded): after the ticket on a phone, the full width under the two columns on two,
+   under the book and the depth chart beside the ticket on three */
+.mkt-area-mine { grid-area: mine; min-width: 0; }
+.mkt-grid.mkt-has-mine { grid-template-areas: 'chart' 'book' 'ticket' 'mine' 'depth'; }
+@media (min-width: 760px) {
+  .mkt-grid.mkt-has-mine { grid-template-areas: 'chart chart' 'book side' 'depth side' '. side' 'mine mine'; grid-template-rows: auto auto auto 1fr auto; }
+  .mkt-has-mine .mkt-area-mine { margin-bottom: 12px; }
+}
+@media (min-width: 1200px) {
+  .mkt-grid.mkt-has-mine { grid-template-areas: 'book chart chart ticket' 'book depth depth ticket' 'mine mine mine ticket'; grid-template-rows: auto auto 1fr; }
+}
+.market-orders { padding: 12px 14px; }
+.market-orders-head { flex-wrap: wrap; gap: 6px 12px; }
+.market-orders .check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; cursor: pointer; }

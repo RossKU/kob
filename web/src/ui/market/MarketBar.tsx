@@ -138,6 +138,8 @@ export function MarketShell(props: {
   chart: ComponentChildren;
   depth?: ComponentChildren;
   ticket: ComponentChildren;
+  /** the wallet's orders, fills and balances (OrdersView on this market): under the depth chart beside the ticket, after the ticket on a phone */
+  mine?: ComponentChildren;
   /** the activity log of the market: the full width under the grid, above the facts */
   activity?: ComponentChildren;
   details?: ComponentChildren;
@@ -165,12 +167,13 @@ export function MarketShell(props: {
       {props.header}
       {props.notices}
       {props.stats}
-      <div class="mkt-grid">
+      <div class={props.mine ? 'mkt-grid mkt-has-mine' : 'mkt-grid'}>
         {props.book}
         {props.chart}
         {props.depth}
         {/* two columns: the ticket is a column of its own beside the book and the depth chart (market.css); otherwise its children are grid items */}
         <div class="mkt-side">{props.ticket}</div>
+        {props.mine ? <div class="mkt-area-mine">{props.mine}</div> : null}
       </div>
       {props.activity}
       {/* the facts take the full width under the grid (never a column of it, so no column is left empty beside them); DOM order = reading order */}

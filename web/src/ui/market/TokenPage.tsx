@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { pageTitle, useDocumentTitle } from '../../app/page-title';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { useServices, useWallet } from '../../app/context';
+import { OrdersView } from '../orders/OrdersView';
 import type { TicketPreset } from '../../app/router';
 import { longId } from '../../kob/registry';
 import { t } from '../../i18n';
@@ -428,6 +429,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           )}
         </div>
       }
+      mine={wallet.info ? <OrdersView embed={{ base: id, quote: null }} /> : undefined}
       activity={<MarketActivity market={{ kind: 'token', token: id }} />}
       details={<TokenDetails row={row} services={services} note={onChain ? shown : null} {...(checkedRow ? { checked: checkedRow } : {})} />}
     />

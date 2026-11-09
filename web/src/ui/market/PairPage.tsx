@@ -11,7 +11,8 @@
 // trigger a debounced refetch (5 s polling without the socket). An indexer without the pair routes (404 / 405 / 501) shows "pair book unavailable"
 // and still lets the user place orders.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { useServices } from '../../app/context';
+import { useServices, useWallet } from '../../app/context';
+import { OrdersView } from '../orders/OrdersView';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { pageTitle, useDocumentTitle } from '../../app/page-title';
 import { navigate, pairRoute, replaceRoute, routeToHash, tokenRoute } from '../../app/router';
@@ -61,6 +62,7 @@ const pairToken = (x: TokenInfo): PairToken => ({ covenantId: x.covenantId, tick
 
 export function PairPage(props: { base: string; quote: string }) {
   const services = useServices();
+  const wallet = useWallet();
   const { registry, indexer, kob, config } = services;
   const { favorites, change: changeFavorites } = useFavorites(config.network);
   const standalone = useStandalone(services.standalone)?.active === true;
@@ -385,6 +387,7 @@ export function PairPage(props: { base: string; quote: string }) {
           </p>
         </div>
       }
+      mine={wallet.info ? <OrdersView embed={{ base: props.base, quote: props.quote }} /> : undefined}
       activity={<MarketActivity market={{ kind: 'pair', base: props.base, quote: props.quote }} pairFills={pairFillsSrc} />}
       details={<PairDetails shared={shared} rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} services={services} />}
     />
