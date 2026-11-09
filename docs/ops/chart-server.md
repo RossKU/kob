@@ -34,11 +34,12 @@ address needs a domain, so do it in this order:
    repository variable later, run *Actions* > *deploy-pages* > *Run workflow* on `master`: a changed variable alone deploys nothing.
 5. Section 5: set up an alert before you rely on it.
 
-`chart.example.org` here is a placeholder for your own hostname. The project's testnet-10 canary serves its keyless indexer at
-`https://kob-api.kaspa.ag` through a named Cloudflare tunnel (the same `/v1/...` API, CORS open, WebSocket at `/v1/ws`; this is the
-`indexer_url` of the testnet-10 deployment record, which `kob` reads by default), and the web app at `https://kob.kaspa.ag` from
-Cloudflare Pages (`docs/ops/web-hosting.md`). The old relay paths of `kob.kaspa.ag` are gone, with no redirect: an older `kob`, whose default was
-`https://kob.kaspa.ag/indexer`, needs `--indexer https://kob-api.kaspa.ag` (or `KOB_INDEXER_URL`). A temporary quick tunnel
+`chart.example.org` here is a placeholder for your own hostname. The project serves a keyless indexer per network through one named
+Cloudflare tunnel (the same `/v1/...` API, CORS open, WebSocket at `/v1/ws`): `https://kob-api-tn10.kaspa.ag` for testnet-10 (the
+`indexer_url` of the testnet-10 deployment record, which `kob` reads by default) and `https://kob-api.kaspa.ag` for mainnet (the
+`indexer_url` of the mainnet record). The web apps are served from Cloudflare Pages (`docs/ops/web-hosting.md`): `https://kob-tn10.kaspa.ag`
+for testnet-10 and `https://kob.kaspa.ag` for mainnet. The old relay paths of `kob.kaspa.ag` are gone, with no redirect: an older `kob`, whose default was
+`https://kob.kaspa.ag/indexer` or (testnet-10) `https://kob-api.kaspa.ag`, needs `--indexer https://kob-api-tn10.kaspa.ag` (or `KOB_INDEXER_URL`). A temporary quick tunnel
 (a `trycloudflare.com` address) changes whenever `cloudflared` restarts: never publish one as a permanent `KOB_PAGES_INDEXER_URL` or
 `indexer_url`.
 

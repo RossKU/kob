@@ -8,6 +8,13 @@ name: deploy-pages
 # the signer page's own policy) and every file byte for byte (web/scripts/check-pages.mjs); any difference fails the job. The job
 # summary lists the deployment URL and the sha256 of every deployed file.
 #
+# Two sites: the testnet-10 app (project KOB_PAGES_PROJECT, variables KOB_PAGES_*) and the mainnet app (project KOB_PAGES_MAINNET_PROJECT,
+# variables KOB_PAGES_MAINNET_*, always built with network mainnet). The mainnet site is deployed only when KOB_PAGES_MAINNET_PROJECT and
+# KOB_PAGES_MAINNET_INDEXER_URL are both set; with them unset nothing mainnet is built or published. Each site's custom domain is the host
+# of its public URL (KOB_PAGES_PUBLIC_URL, KOB_PAGES_MAINNET_PUBLIC_URL): after the deployment web/scripts/pages-domain.mjs adds it to the
+# project through the Pages API when it is not attached yet, and says exactly what is left to do in the dashboard when it cannot do it
+# (the DNS CNAME, a domain that is still attached to another project).
+#
 # Without the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID or the variables KOB_PAGES_PROJECT and KOB_PAGES_INDEXER_URL
 # (a fork, or before the setup) nothing is built: the job config says what is missing and the deploy job is skipped. A variable that
 # is set but invalid fails the job config.
@@ -59,7 +66,7 @@ jobs:
         shell: bash
     outputs:
       ready: ${{ steps.gate.outputs.ready }}
-      project: ${{ steps.gate.outputs.project }}
+      matrix: ${{ steps.gate.outputs.matrix }}
       branch: ${{ steps.gate.outputs.branch }}
     steps:
       - name: Production deploys only from master
@@ -77,6 +84,19 @@ jobs:
           PROJECT: ${{ vars.KOB_PAGES_PROJECT }}
           INDEXER: ${{ vars.KOB_PAGES_INDEXER_URL }}
           BRANCH: ${{ vars.KOB_PAGES_BRANCH }}
+          NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
+          EXTRA: ${{ vars.KOB_PAGES_EXTRA_INDEXER_URLS }}
+          NODE: ${{ vars.KOB_PAGES_NODE_URL }}
+          EXPLORER: ${{ vars.KOB_PAGES_EXPLORER_URL }}
+          NAMES: ${{ vars.KOB_PAGES_TOKEN_NAMES_URL }}
+          PUBLIC: ${{ vars.KOB_PAGES_PUBLIC_URL }}
+          MAIN_PROJECT: ${{ vars.KOB_PAGES_MAINNET_PROJECT }}
+          MAIN_INDEXER: ${{ vars.KOB_PAGES_MAINNET_INDEXER_URL }}
+          MAIN_EXTRA: ${{ vars.KOB_PAGES_MAINNET_EXTRA_INDEXER_URLS }}
+          MAIN_NODE: ${{ vars.KOB_PAGES_MAINNET_NODE_URL }}
+          MAIN_EXPLORER: ${{ vars.KOB_PAGES_MAINNET_EXPLORER_URL }}
+          MAIN_NAMES: ${{ vars.KOB_PAGES_MAINNET_TOKEN_NAMES_URL }}
+          MAIN_PUBLIC: ${{ vars.KOB_PAGES_MAINNET_PUBLIC_URL }}
         run: |
           missing=()
           [ "$HAS_TOKEN" = true ] || missing+=("secret CLOUDFLARE_API_TOKEN")
@@ -105,7 +125,25 @@ jobs:
           if ! [[ "$BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ ]]; then
             echo "::error::KOB_PAGES_BRANCH \`$BRANCH\` is not a branch name"; exit 1
           fi
-          { echo "ready=true"; echo "project=$PROJECT"; echo "branch=$BRANCH"; } >> "$GITHUB_OUTPUT"
+          # the mainnet site: both variables or neither (neither = no mainnet site)
+          if [ -n "$MAIN_PROJECT$MAIN_INDEXER" ]; then
+            if [ -z "$MAIN_PROJECT" ] || [ -z "$MAIN_INDEXER" ]; then
+              echo "::error::KOB_PAGES_MAINNET_PROJECT and KOB_PAGES_MAINNET_INDEXER_URL must be set together"; exit 1
+            fi
+            if ! [[ "$MAIN_PROJECT" =~ ^[a-z0-9][a-z0-9-]{0,57}$ ]]; then
+              echo "::error::KOB_PAGES_MAINNET_PROJECT \`$MAIN_PROJECT\` is not a Pages project name (a-z, 0-9 and -, at most 58 characters)"; exit 1
+            fi
+            if [ "$MAIN_PROJECT" = "$PROJECT" ]; then
+              echo "::error::KOB_PAGES_MAINNET_PROJECT must not be the testnet-10 project"; exit 1
+            fi
+          fi
+          # one matrix entry per site; every value is a repository variable (not a secret)
+          matrix=$(jq -nc \
+            --arg p "$PROJECT" --arg n "${NETWORK:-testnet-10}" --arg i "$INDEXER" --arg e "$EXTRA" --arg nd "$NODE" --arg ex "$EXPLORER" --arg nm "$NAMES" --arg u "$PUBLIC" \
+            --arg mp "$MAIN_PROJECT" --arg mi "$MAIN_INDEXER" --arg me "$MAIN_EXTRA" --arg mnd "$MAIN_NODE" --arg mex "$MAIN_EXPLORER" --arg mnm "$MAIN_NAMES" --arg mu "$MAIN_PUBLIC" \
+            '{include: ([{site: "testnet", project: $p, network: $n, indexer: $i, extra: $e, node: $nd, explorer: $ex, names: $nm, public: $u}]
+              + (if $mp != "" then [{site: "mainnet", project: $mp, network: "mainnet", indexer: $mi, extra: $me, node: $mnd, explorer: $mex, names: $mnm, public: $mu}] else [] end))}')
+          { echo "ready=true"; echo "branch=$BRANCH"; echo "matrix=$matrix"; } >> "$GITHUB_OUTPUT"
       - if: steps.gate.outputs.ready == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -114,20 +152,28 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - name: The variables make a valid public config.json (before anything is built)
+      - name: The variables make a valid public config.json for every site (before anything is built)
         if: steps.gate.outputs.ready == 'true'
         env:
-          KOB_PAGES_NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
-          KOB_PAGES_INDEXER_URL: ${{ vars.KOB_PAGES_INDEXER_URL }}
-          KOB_PAGES_EXTRA_INDEXER_URLS: ${{ vars.KOB_PAGES_EXTRA_INDEXER_URLS }}
-          KOB_PAGES_NODE_URL: ${{ vars.KOB_PAGES_NODE_URL }}
-          KOB_PAGES_EXPLORER_URL: ${{ vars.KOB_PAGES_EXPLORER_URL }}
-          KOB_PAGES_TOKEN_NAMES_URL: ${{ vars.KOB_PAGES_TOKEN_NAMES_URL }}
-        run: node web/scripts/pages-config.mjs --check
+          MATRIX: ${{ steps.gate.outputs.matrix }}
+        run: |
+          rc=0
+          while IFS= read -r site; do
+            echo "== $(jq -r .site <<< "$site")"
+            KOB_PAGES_NETWORK=$(jq -r .network <<< "$site") KOB_PAGES_INDEXER_URL=$(jq -r .indexer <<< "$site") \
+            KOB_PAGES_EXTRA_INDEXER_URLS=$(jq -r .extra <<< "$site") KOB_PAGES_NODE_URL=$(jq -r .node <<< "$site") \
+            KOB_PAGES_EXPLORER_URL=$(jq -r .explorer <<< "$site") KOB_PAGES_TOKEN_NAMES_URL=$(jq -r .names <<< "$site") \
+              node web/scripts/pages-config.mjs --check || rc=1
+          done < <(jq -c '.include[]' <<< "$MATRIX")
+          exit "$rc"
 
   deploy:
     needs: config
     if: needs.config.outputs.ready == 'true' && github.ref == 'refs/heads/master'
+    name: deploy (${{ matrix.site }})
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.config.outputs.matrix) }}
     # a required reviewer of the environment approves here, before the job (and the Cloudflare secrets) start
     environment: production
     runs-on: ubuntu-latest
@@ -166,7 +212,7 @@ jobs:
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: web-playwright-report
+          name: web-playwright-report-${{ matrix.site }}
           path: |
             web/test-results
             web/playwright-report
@@ -175,8 +221,8 @@ jobs:
       # network and, when set, the public origin the deployment is served from (og:url, og:image)
       - run: npm run build:release
         env:
-          KOB_NETWORK: ${{ vars.KOB_PAGES_NETWORK || 'testnet-10' }}
-          KOB_PUBLIC_URL: ${{ vars.KOB_PAGES_PUBLIC_URL }}
+          KOB_NETWORK: ${{ matrix.network }}
+          KOB_PUBLIC_URL: ${{ matrix.public }}
       - name: Release hashes (the deployment record reproduces, the bundle embeds and ships the registry the mainnet record pins)
         working-directory: .
         run: |
@@ -186,12 +232,12 @@ jobs:
       # the deployment: config.json from the repository variables
       - name: config.json from the repository variables
         env:
-          KOB_PAGES_NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
-          KOB_PAGES_INDEXER_URL: ${{ vars.KOB_PAGES_INDEXER_URL }}
-          KOB_PAGES_EXTRA_INDEXER_URLS: ${{ vars.KOB_PAGES_EXTRA_INDEXER_URLS }}
-          KOB_PAGES_NODE_URL: ${{ vars.KOB_PAGES_NODE_URL }}
-          KOB_PAGES_EXPLORER_URL: ${{ vars.KOB_PAGES_EXPLORER_URL }}
-          KOB_PAGES_TOKEN_NAMES_URL: ${{ vars.KOB_PAGES_TOKEN_NAMES_URL }}
+          KOB_PAGES_NETWORK: ${{ matrix.network }}
+          KOB_PAGES_INDEXER_URL: ${{ matrix.indexer }}
+          KOB_PAGES_EXTRA_INDEXER_URLS: ${{ matrix.extra }}
+          KOB_PAGES_NODE_URL: ${{ matrix.node }}
+          KOB_PAGES_EXPLORER_URL: ${{ matrix.explorer }}
+          KOB_PAGES_TOKEN_NAMES_URL: ${{ matrix.names }}
         run: node scripts/pages-config.mjs --dist dist | tee "$RUNNER_TEMP/pages-config.txt"
       - name: sha256 of every file deployed (the logic of scripts/release-hashes.sh)
         working-directory: .
@@ -205,7 +251,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.152.0"
           packageManager: npm
-          command: pages project create ${{ needs.config.outputs.project }} --production-branch=${{ needs.config.outputs.branch }}
+          command: pages project create ${{ matrix.project }}--production-branch=${{ needs.config.outputs.branch }}
       - name: Upload web/dist to Cloudflare Pages
         id: deploy
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
@@ -214,7 +260,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.152.0"
           packageManager: npm
-          command: pages deploy web/dist --project-name=${{ needs.config.outputs.project }} --branch=${{ needs.config.outputs.branch }} --commit-hash=${{ github.sha }} --commit-dirty=true
+          command: pages deploy web/dist --project-name=${{ matrix.project }}--branch=${{ needs.config.outputs.branch }} --commit-hash=${{ github.sha }} --commit-dirty=true
       - name: Summary (deployment URL, config.json, sha256 of every deployed file)
         working-directory: .
         env:
@@ -224,7 +270,7 @@ jobs:
           DEPLOYMENT_ID: ${{ steps.deploy.outputs.pages-deployment-id }}
         run: |
           {
-            echo "## Cloudflare Pages deployment"
+            echo "## Cloudflare Pages deployment: ${{ matrix.site }} (${{ matrix.network }}, project ${{ matrix.project }})"
             echo
             echo "- deployment: $URL"
             [ -z "$ALIAS" ] || echo "- alias: $ALIAS"
@@ -269,3 +315,13 @@ jobs:
           cat "$RUNNER_TEMP/check.txt"
           { echo; echo "### Post-deploy check"; echo; echo '```'; cat "$RUNNER_TEMP/check.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
+      # the custom domain: the host of the public URL, attached to the project (and its DNS record) when that is not done yet; what the
+      # token cannot do is printed as dashboard steps (docs/ops/web-hosting.md, section 5)
+      - name: Custom domain of the site (the host of the public URL)
+        if: matrix.public != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ matrix.project }}
+          PUBLIC_URL: ${{ matrix.public }}
+        run: node scripts/pages-domain.mjs --project "$PROJECT" --public-url "$PUBLIC_URL" | tee -a "$GITHUB_STEP_SUMMARY"

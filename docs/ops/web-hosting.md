@@ -69,7 +69,9 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
 | `KOB_PAGES_TOKEN_NAMES_URL` | no | the source of token names and icons: the base of a kascov.io-shaped data set, `https://...` (default `https://kascov.io/data`); `off` = none (see "Token names and icons" below) |
 | `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
-| `KOB_PAGES_PUBLIC_URL` | no | the origin the app is served from, `https://...` (the custom domain of section 5, e.g. `https://kob.kaspa.ag`): the link preview's `og:url` and `og:image` need it; empty = no absolute preview links |
+| `KOB_PAGES_MAINNET_PROJECT`, `KOB_PAGES_MAINNET_INDEXER_URL` | no, together | a second site, built with network `mainnet`: its Pages project (e.g. `kob-web-mainnet`) and its indexer. Both unset = no mainnet site (nothing mainnet is built or published); one of them alone fails the run. The workflow creates the project on its first run |
+| `KOB_PAGES_MAINNET_PUBLIC_URL`, `KOB_PAGES_MAINNET_EXTRA_INDEXER_URLS`, `KOB_PAGES_MAINNET_NODE_URL`, `KOB_PAGES_MAINNET_EXPLORER_URL`, `KOB_PAGES_MAINNET_TOKEN_NAMES_URL` | no | the mainnet site's own values of the variables above (nothing is inherited from the testnet-10 site; the branch is shared) |
+| `KOB_PAGES_PUBLIC_URL` | no | the origin the app is served from, `https://...` (the custom domain of section 5, e.g. `https://kob-tn10.kaspa.ag`): the link preview's `og:url` and `og:image` need it; empty = no absolute preview links |
 
 ### Further indexers: cross-check and failover
 
@@ -305,6 +307,8 @@ on *Actions* > *deploy-pages* > *Run workflow*:
    `/signer.html` and `/signer` send the signer's own policy and `X-Frame-Options: SAMEORIGIN`, never the app's; `/assets/*`
    sends `Access-Control-Allow-Origin: *`; every built file is served byte for byte. Any failure fails the run.
 
+With the `KOB_PAGES_MAINNET_*` variables set, job `deploy` is a matrix of two sites (`testnet`, `mainnet`) that run the same steps with their own project, network, indexer and public URL; the mainnet one is always built with network `mainnet`. A site's custom domain (section 5) is the host of its public URL: the last step, `web/scripts/pages-domain.mjs`, attaches it to the project through the Pages API when it is not attached yet.
+
 One deployment runs at a time; a newer push cancels an older run. The job has read access to the repository only.
 
 ### 4a. The deploy gate
@@ -335,13 +339,15 @@ Settings, so the hosts cannot be pinned (README, *Deployment headers*).
 
 ## 5. Custom domain
 
+The workflow does this for the host of `KOB_PAGES_PUBLIC_URL` (and `KOB_PAGES_MAINNET_PUBLIC_URL`): the last step of job `deploy` adds the domain to the project through the Pages API (the token of section 2 is enough) and, when the token may also edit DNS, creates the proxied `CNAME`; with a token limited to Pages it prints the record to add in the dashboard (the job summary says which). A domain that is still attached to another project is never moved by the workflow (the other site would go down): remove it there first, then run the workflow again. By hand:
+
 Pages project > *Custom domains* > *Set up a custom domain*, e.g. `kob.example.org`. With the domain's DNS on Cloudflare the
 record is created for you; elsewhere add a `CNAME kob.example.org -> kob-web.pages.dev` at your DNS provider. The certificate
 is issued automatically (minutes). `_headers` applies to the custom domain as to `*.pages.dev`. Check it (section 7) with the
 custom domain as the URL.
 
 `kob.kaspa.ag/indexer` was the canary's indexer relay before the app moved to Pages and is gone, with no redirect: an older `kob`, whose default it
-was, needs `--indexer https://kob-api.kaspa.ag` (or `KOB_INDEXER_URL`).
+was, needs `--indexer https://kob-api-tn10.kaspa.ag` (or `KOB_INDEXER_URL`) on testnet-10.
 
 ## 6. Deploying by hand from a PC
 
@@ -414,8 +420,8 @@ stay on the old version, revert the commit (or clear `KOB_PAGES_PROJECT`, which 
 
 ## 10. GitHub Pages mirror (fallback entrance)
 
-https://rossku.github.io/kob/ serves the same app from GitHub Pages, for when Cloudflare is unreachable. The main site stays
-https://kob.kaspa.ag. `.github/workflows/deploy-gh-pages.yml` deploys it on the same pushes to `master` as `deploy-pages.yml` (and on
+https://rossku.github.io/kob/ serves the same app from GitHub Pages, for when Cloudflare is unreachable. It is built from the same `KOB_PAGES_*` variables, so it is the testnet-10 app; the main sites are
+https://kob-tn10.kaspa.ag (testnet-10) and https://kob.kaspa.ag (mainnet). `.github/workflows/deploy-gh-pages.yml` deploys it on the same pushes to `master` as `deploy-pages.yml` (and on
 *Run workflow*): the same build and unit tests, `config.json` from the same `KOB_PAGES_*` variables (no secret is used), then
 `actions/upload-pages-artifact` and `actions/deploy-pages` into the environment `github-pages`. Repository setting: *Settings > Pages >
 Source: GitHub Actions* (`gh api -X POST repos/RossKU/kob/pages -f build_type=workflow`).

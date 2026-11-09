@@ -177,7 +177,7 @@ tier: tentative (any accepted event, may still reorg) or settled. Facilitators s
 
 ## 3. Endpoints
 
-All examples use `$API` for the base URL (`https://kob-api.kaspa.ag` for the public testnet-10 server, `http://127.0.0.1:8090` for your own) and `$TOKEN` / `$ORDER` for a 64-hex covenant id.
+All examples use `$API` for the base URL (`https://kob-api-tn10.kaspa.ag` for the public testnet-10 server, `https://kob-api.kaspa.ag` for the public mainnet server, `http://127.0.0.1:8090` for your own) and `$TOKEN` / `$ORDER` for a 64-hex covenant id.
 Hex values in the example responses are shown as `<hex32>` or `<hex>`; ids, DAA scores and amounts are illustrative.
 "Abridged" means fields are left out for brevity; the field tables list what the code serialises.
 
@@ -340,8 +340,8 @@ Registered only when `[api] metrics = true` (the default); with `metrics = false
 follower's state in the Prometheus text format (`# HELP` / `# TYPE` / sample lines, `kob_indexer_*` names such as
 `kob_indexer_caught_up`, `kob_indexer_lag_daa`, `kob_indexer_book_complete`), with the same numbers as `/v1/health`. With several
 nodes it adds per-node series labelled by node URL and role. The route is public like the rest of `/v1/`; set `metrics = false`
-on a listener the public reaches ([ops/chart-server.md](ops/chart-server.md), section 2). The public testnet-10 server
-`https://kob-api.kaspa.ag` blocks it by design (`404`).
+on a listener the public reaches ([ops/chart-server.md](ops/chart-server.md), section 2). The public servers
+`https://kob-api-tn10.kaspa.ag` and `https://kob-api.kaspa.ag` block it by design (`404`).
 
 ### 3.4 `GET /v1/tokens`
 
