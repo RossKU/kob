@@ -9,6 +9,7 @@ import { Amount, Banner, Button, ErrorBanner, Section, Table, TableMessage, unit
 import { formatKas, formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
 import { IdentityBlock } from '../market/Fingerprint';
+import type { KascovMeta } from '../market/token-model';
 import type { WalletBalances } from './use-balances';
 import { balanceColumnFractions, unreviewedProgram } from './balances-model';
 import { mergeableCounts, nextMergeFrees } from './merge-model';
@@ -49,6 +50,8 @@ export function BalancesPanel(props: {
   balances: WalletBalances;
   /** only these tokens (a market page: its token, a pair's two); KAS always */
   onlyTokens?: ReadonlySet<Hex>;
+  /** kascov.io's picture of a token, for its icon */
+  iconOf?: (covenantId: string) => KascovMeta | null;
 }) {
   const services = useServices();
   const { registry } = services;
@@ -137,7 +140,7 @@ export function BalancesPanel(props: {
                     <tr key={b.token} data-testid={`balance-row-${b.token}`}>
                       <td class="bal-token">
                         <span class="bal-asset">
-                          <IdentityBlock row={{ covenantId: b.token, ticker: shown.ticker, kascov: null }} size="sm" />
+                          <IdentityBlock row={{ covenantId: b.token, ticker: shown.ticker, kascov: props.iconOf?.(b.token) ?? null }} size="sm" />
                           <a href={routeToHash(tokenRoute(b.token))} class="bal-name" title={label} data-testid="balance-market">
                             {label}
                           </a>

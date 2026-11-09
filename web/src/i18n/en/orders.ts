@@ -23,6 +23,8 @@ export default {
   'orders.col.valueKas': 'Value (KAS)',
   'orders.summary.total': 'Total value',
   'orders.market.title': 'Your orders and balances',
+  'orders.position.showSummary': 'Show the price path, the result and the fills',
+  'orders.position.hideSummary': 'Hide the price path, the result and the fills',
   'orders.market.onlyHere': 'This market only',
   'orders.market.toPortfolio': 'All in Portfolio',
   'orders.summary.unpriced': '{n} token(s) without a last price are not counted',

@@ -6,7 +6,6 @@ import { ActivityPage } from '../ui/activity/ActivityPage';
 import { IssueView } from '../ui/issue/IssueView';
 import { ToastHost } from '../ui/kit';
 import { MarketView } from '../ui/market/MarketView';
-import { usdTokenOf } from '../ui/market/usd-model';
 import { LandingPage } from '../ui/landing/LandingPage';
 import { homeTargetOf, showsLanding } from '../ui/landing/landing-model';
 import { OrdersView } from '../ui/orders/OrdersView';
@@ -28,8 +27,8 @@ import { useDeclarationsVersion } from './use-declaration';
 import { loadDeclaration, noteListedTickers, noteMarketDecimals, noteTokenProgram, restoreDeclarations } from '../data/token-declarations';
 import { exponentOf } from '../kob/open-token';
 import { logoBlocklist, logoBlocklistUrlOf } from '../data/logo-blocklist';
-import { routeToHash, useRoute, usdMarketHash, type Route } from './router';
-import { appTitle, Titled, useDocumentTitle } from './page-title';
+import { routeToHash, useRoute, type Route } from './router';
+import { Titled } from './page-title';
 
 /**
  * The empty hash inside the shell: an operator's explicit config `home` (a chart, a pair or the list). The default `landing` never gets here: the App
@@ -47,28 +46,11 @@ function HomeView() {
   );
 }
 
-/**
- * Old `#/usd/kas` and `#/usd/<token>` links: there is no USD page, every USD view is a tradable page. They are redirected (the history entry is replaced) to
- * the USD token's market (<ticker>/KAS) or the pair page `<token>/<USD token>`; without a USD token or for an unknown token, to the market list.
- */
-function LegacyUsdLink(props: { asset: string }) {
-  const { config, registry } = useServices();
-  const usd = usdTokenOf(config.quoteTokens, registry.tokens);
-  const known = props.asset === 'kas' || registry.byCovenantId.has(props.asset);
-  const hash = usd && known ? usdMarketHash(props.asset, usd.covenantId) : '#/market';
-  useEffect(() => {
-    window.location.replace(hash);
-  }, [hash]);
-  return null;
-}
-
 function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
   const r = props.route;
   switch (r.name) {
     case 'home':
       return <HomeView />;
-    case 'usd':
-      return <LegacyUsdLink asset={r.asset} />;
     case 'market':
       return (
         <Titled page="market">
@@ -121,9 +103,6 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
 export function App(props: { warnings: ConfigWarning[]; storedOverrides?: StoredOverride[] }) {
   const services = useServices();
   const route = routeWithSupport(useRoute(), supportAddressOf(services.config.features));
-
-  // the tab's title names the page: each view sets its own (app/page-title.ts); only the legacy redirect, which shows no view, is left to the shell
-  useDocumentTitle(route.name === 'usd' ? appTitle() : null);
 
   // a new page moves the focus to its content (screen readers announce it, Tab continues from there), not on the first load and not from an open dialog
   const routeKey = routeToHash(route);

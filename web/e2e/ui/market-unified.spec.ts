@@ -104,9 +104,6 @@ test.describe('one market page, a pair selector', () => {
     await page.goForward();
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
 
-    // the old pair link is an alias
-    await page.goto(`/#/pair/${base}/${QUOTE}`);
-    await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
 
     // picking KAS on the quote side goes back to the token's KAS market, in the same place
     await pickAsset(page, 'market-quote-select', 'kas');

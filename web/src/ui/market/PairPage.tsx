@@ -1,4 +1,4 @@
-// `#/market/<base>/<quote>` (alias `#/pair/<base>/<quote>`): a token/token pair A/B (BASE/QUOTE, e.g. BTC/USDT). The page shows the pair book of
+// `#/market/<base>/<quote>`: a token/token pair A/B (BASE/QUOTE, e.g. BTC/USDT). The page shows the pair book of
 // `GET /v1/pairs/{base}/{quote}/book` (resting pair orders = direct levels, if-done pair entries resting at their limit = entry levels, quotes
 // through the two KAS books = route levels, "via KAS") and the unified order ticket with B as its quote (every order type of the KAS ticket, prices
 // in B per whole A, tips KAS), and the same panels as a token market in the same places: 24 h strip, chart, depth chart (of the pair book), the

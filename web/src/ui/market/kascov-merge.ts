@@ -74,6 +74,19 @@ export function applyKascov(row: TokenRow, tokens: readonly KascovToken[] | null
   return mine && k.templateHash && mine !== k.templateHash ? row : enrich(row, k, standIn !== undefined && row.ticker === standIn);
 }
 
+/**
+ * The icon facts kascov.io has for one token (its checked picture), for a line that shows a token's icon outside the market list (the Portfolio page):
+ * none when kascov does not list the token or names another program than the registry's. Words and facts stay KOB's.
+ */
+export function kascovIconOf(tokens: readonly KascovToken[] | null | undefined, covenantId: string, templateHash: string | null | undefined): KascovMeta | null {
+  const k = tokens?.find((x) => x.covenantId === covenantId.toLowerCase());
+  if (!k || (templateHash && k.templateHash && templateHash !== k.templateHash)) return null;
+  return {
+    ticker: k.ticker, name: k.name, usedTicker: false, usedName: false, verified: k.verified, tickerDiffers: false, decimalsDiffers: false,
+    decimals: k.decimals, imageHash: k.imageHash, imageUrl: k.imageUrl, supply: k.supply ?? null,
+  };
+}
+
 /** A row for a token only kascov names: no registry entry, no indexer view, no orders (`openAsks` / `openBids` unknown, never 0). */
 function kascovOnlyRow(k: KascovToken, ctx: KascovMergeContext): TokenRow {
   const tpl = ctx.templates.find((x) => x.hash === k.templateHash && x.tokenSlots)!;

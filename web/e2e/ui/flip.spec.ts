@@ -329,64 +329,10 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await expect(page.getByTestId('token-usd-chart')).toHaveCount(0);
   });
 
-  test('old #/usd/kas links open the USD token market and can build an order (no chart-only dead end)', async ({ appPage: page, mock }) => {
+  test('the old #/usd links are gone: an unknown page, the market list', async ({ appPage: page, mock }) => {
     await mock.seed({ pair: true });
-    await fund(mock, 'alice');
     await listBoth(page);
     await page.goto('/#/usd/kas');
-    await expect(page).toHaveURL(new RegExp(`#/market/${QUOTE}$`));
-    await expect(page.getByTestId('token-page')).toHaveAttribute('data-token', QUOTE);
-    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
-    await expect(page.getByTestId('usd-page')).toHaveCount(0);
-    await expect(page.getByTestId('order-book')).toBeVisible();
-    await expect(page.getByTestId('activity-list')).toBeVisible();
-    await expect(page.getByTestId('order-ticket')).toBeVisible();
-    await connectWallet(page);
-    // the flipped view, KAS/EXUSD: amounts in KAS
-    await page.getByTestId('market-flip').click();
-    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
-
-    // shown Sell of 1 KAS (for EXUSD) at 3 EXUSD per KAS = native buy of 3 EXUSD at about 0.33 KAS: far below the book, it rests
-    await page.getByTestId(TESTID.orderSideSell).click();
-    await page.getByTestId(TESTID.orderAmount).fill('1');
-    await page.getByTestId(TESTID.orderPrice).fill('3');
-    await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 3 EXUSD at your price');
-    const placed = await placeOrder(page, mock);
-    expect(placed.submission.created).toHaveLength(1);
-    // the signed order is the native buy of the EXUSD token: a bid of that token's own book
-    expect(placed.views[0].contract).toBe('KobBid');
-    expect(placed.views[0].token).toBe(QUOTE);
-  });
-
-  test('old #/usd/<token> links open the pair page TOKEN/EXUSD and can build a pair order', async ({ appPage: page, mock }) => {
-    await mock.seed({ pair: true });
-    await fund(mock, 'alice');
-    await listBoth(page);
-    const exkcc = await seeded(mock);
-    await page.goto(`/#/usd/${exkcc}`);
-    await expect(page).toHaveURL(new RegExp(`#/market/${exkcc}/${QUOTE}$`));
-    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
-    await expect(page.getByTestId('usd-page')).toHaveCount(0);
-    await expect(page.getByTestId('pair-book')).toBeVisible();
-    await expect(page.getByTestId('price-chart')).toBeVisible();
-    await expect(page.getByTestId('order-ticket')).toBeVisible();
-    await expect(page.getByTestId('pair-usd-chart')).toHaveCount(0);
-    await connectWallet(page);
-
-    await page.getByTestId('order-side-sell').click();
-    await page.getByTestId('order-price').fill('0.0515');
-    await page.getByTestId('order-amount').fill('2');
-    const placed = await placeOrder(page, mock);
-    // the pair order sells EXKCC for EXUSD
-    expect(placed.views[0].contract).toBe('KobPair');
-    expect(placed.views[0].state.state).toMatchObject({ side: '1', price: '51500', sCovId: exkcc, tCovId: QUOTE });
-  });
-
-  test('an unknown token or a missing USD token falls back to the market list', async ({ appPage: page, mock }) => {
-    await mock.seed({ pair: true });
-    await listBoth(page);
-    await page.goto(`/#/usd/${'12'.repeat(32)}`);
-    await expect(page).toHaveURL(/#\/market$/);
     await expect(page.getByTestId('token-list-view')).toBeVisible();
   });
 

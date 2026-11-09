@@ -12,6 +12,7 @@ import { Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, tick
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
 import { IdentityBlock } from '../market/Fingerprint';
+import type { KascovMeta } from '../market/token-model';
 import { displayToken } from '../../app/token-display';
 import type { EventView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
@@ -46,6 +47,8 @@ export interface OrderRowProps {
   clock?: Clock | null;
   /** a market page's panel: the details are drawn only once opened, and never open by themselves (the warning mark stays on the line) */
   compact?: boolean;
+  /** kascov.io's picture of a token, for its icon (none: a letter on the token's colour) */
+  iconOf?: (covenantId: string) => KascovMeta | null;
 }
 
 /** An order that needs the reader: its details open by themselves (a warning, a renewal, an expiry, a source other than the indexer). */
@@ -197,7 +200,7 @@ export function OrderRow(props: OrderRowProps) {
       <div class="or-line" data-testid={`order-line-${row.id}`}>
         <span class="or-time num">{line.time}</span>
         <span class="or-market">
-          {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
+          {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
           <span class="or-market-name">{marketText}</span>
         </span>
         <span class="or-type">{t(`orders.type.${row.typeKey}`)}</span>

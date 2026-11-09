@@ -10,6 +10,9 @@ import type { OrderRowModel } from './orders-model';
 import { summarizePosition } from './position-model';
 import { PositionSummaryPanel } from './PositionSummary';
 import './positions.css';
+import { useState } from 'preact/hooks';
+import { IdentityBlock } from '../market/Fingerprint';
+import type { KascovMeta } from '../market/token-model';
 
 export interface PositionCardProps {
   position: Position;
@@ -28,11 +31,17 @@ export interface PositionCardProps {
   clock?: Clock | null;
   /** loads the fill events of one order; absent (no indexer): no fills section */
   loadEvents?: (id: Hex, signal: AbortSignal) => Promise<EventView[]>;
+  /** a market page's panel: the member lines draw their details only once opened */
+  compact?: boolean;
+  /** kascov.io's picture of a token, for the icons */
+  iconOf?: (covenantId: string) => KascovMeta | null;
 }
 
 /** An if-done / OCO-entry / repeat position: the entry with its exits, one cancel for all of them (ONE transaction where possible). */
 export function PositionCard(props: PositionCardProps) {
   const p = props.position;
+  // the price path, the PnL and the fills: under the head line on demand (the member lines say the rest)
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const entryRow = p.entry ? props.rows.get(p.entry.covenant_id) : undefined;
   const exitRows = p.exits.map((x) => props.rows.get(x.covenant_id)).filter((r): r is OrderRowModel => !!r);
   const sum = summarizePosition(p, props.rows, props.clock ?? null);
@@ -51,6 +60,19 @@ export function PositionCard(props: PositionCardProps) {
       data-phase={sum.phase}
     >
       <div class="position-head pc-head">
+        <button
+          type="button"
+          class="or-toggle pc-toggle"
+          aria-expanded={summaryOpen ? 'true' : 'false'}
+          aria-label={t(summaryOpen ? 'orders.position.hideSummary' : 'orders.position.showSummary')}
+          onClick={() => setSummaryOpen((o) => !o)}
+          data-testid={`position-toggle-${p.id}`}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        </button>
+        {sum.token ? <IdentityBlock row={{ covenantId: sum.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(sum.token) ?? null }} size="sm" /> : null}
         <div class="pc-head-main">
           <strong class="pc-title" data-testid="position-title">
             {typeKey === 'ifo' || typeKey === 'ifd' || typeKey === 'repeat' ? t(`orders.type.${typeKey}`) : t(`orders.position.${p.kind}`)}
@@ -97,17 +119,19 @@ export function PositionCard(props: PositionCardProps) {
         ) : null}
       </div>
       {/* the realised PnL is in KAS from the fills' KAS prices: a pair fill has none (it never makes a price), so a pair position has no PnL line */}
-      <PositionSummaryPanel position={p} summary={sum} token={token} pair={pair} {...(props.loadEvents && !pair ? { loadEvents: props.loadEvents } : {})} />
+      <div class="pc-summary-box" hidden={!summaryOpen} data-testid={`position-summary-box-${p.id}`}>
+        <PositionSummaryPanel position={p} summary={sum} token={token} pair={pair} {...(props.loadEvents && !pair ? { loadEvents: props.loadEvents } : {})} />
+      </div>
       <div class="pc-members stack-sm">
         {p.orphanExits ? <p class="small muted pc-note">{t('orders.position.orphan')}</p> : null}
         {entryRow ? (
-          <OrderRow row={entryRow} token={props.tokenOf(entryRow.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === entryRow.id} clock={props.clock ?? null} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
+          <OrderRow row={entryRow} token={props.tokenOf(entryRow.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === entryRow.id} clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
         ) : null}
         {exitRows.length ? (
           <div class="position-exits stack-sm" data-testid="position-exits">
             <div class="pc-section-label">{t('orders.position.exits')}</div>
             {exitRows.map((r) => (
-              <OrderRow key={r.id} row={r} token={props.tokenOf(r.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === r.id} nested clock={props.clock ?? null} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
+              <OrderRow key={r.id} row={r} token={props.tokenOf(r.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === r.id} nested clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
             ))}
           </div>
         ) : null}

@@ -8,6 +8,7 @@ import type { Hex } from '../../kob/types';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { CopyText, ErrorBanner, fixedPricePerToken, Loading, Table, TableMessage, tickPriceFraction, useAsync } from '../kit';
 import { IdentityBlock } from '../market/Fingerprint';
+import type { KascovMeta } from '../market/token-model';
 import { fillHistory, type FillRow } from './fills-model';
 import type { OrderRowModel } from './orders-model';
 
@@ -28,6 +29,8 @@ export function WalletFills(props: {
   rows: readonly OrderRowModel[];
   tokenOf(id: string | null, scale?: bigint | null): TokenInfo | undefined;
   loadEvents: ((id: Hex, signal: AbortSignal) => Promise<EventView[]>) | null;
+  /** kascov.io's picture of a token, for its icon */
+  iconOf?: (covenantId: string) => KascovMeta | null;
 }) {
   const txUrl = useTxUrl();
   const key = props.rows.map((r) => `${r.id}:${r.status}`).join(',');
@@ -89,7 +92,7 @@ export function WalletFills(props: {
                   <td class="nowrap">{fill.atMs > 0 ? formatDateTime(Math.floor(fill.atMs / 1000), { dateStyle: 'short', timeStyle: 'medium' }) : '—'}</td>
                   <td class="nowrap">
                     <span class="bal-asset">
-                      {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: token?.ticker ?? '', kascov: null }} size="sm" /> : null}
+                      {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" /> : null}
                       {marketHref ? <a href={marketHref}>{market}</a> : market}
                     </span>
                   </td>

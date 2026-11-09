@@ -1,4 +1,4 @@
-// Smoke tests of the token creation view (#/create; the old #/issue leads there) against the mock stack: a full creation (KCC-23: the
+// Smoke tests of the token creation view (#/create) against the mock stack: a full creation (KCC-23: the
 // preparation declaring the token details, then the genesis spending it) with the mock KasWare wallet and with the private key (one approval in
 // the signer frame), and the blocking cases.
 import { test, expect, TEST_KEYS } from '../fixtures';

@@ -64,3 +64,10 @@
   .or-act { justify-content: stretch; }
   .or-act .btn { width: 100%; }
 }
+
+/* a position (PositionCard.tsx): one head line (the toggle, the icon and fingerprint, title, side, phase, its buttons), its summary under it on demand,
+   then its orders, one line each */
+.pc-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.pc-head .pc-head-main { flex: 1 1 auto; min-width: 0; }
+.pc-open .pc-toggle svg, .pc-toggle[aria-expanded='true'] svg { transform: rotate(90deg); }
+.pc-summary-box[hidden] { display: none; }

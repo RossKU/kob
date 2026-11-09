@@ -40,7 +40,7 @@ export interface AppConfig {
   /**
    * Tokens that stand for a fiat currency (`{ "<covenant id>": "USD" }`): the first registry token marked `USD` is the app's USD reference (e.g. the TN10
    * soak's TUSD, which tracks 1 USD worth of KAS). It only sets the landing screen (that token's market opens as TUSD/KAS like every other
-   * market); no ticker is ever renamed and there are no USD-only views (old `#/usd/...` links redirect to the token market / the pair page).
+   * market); no ticker is ever renamed and there are no USD-only views.
    * config.json / `__KOB_CONFIG__` only: a link or a stored setting must not mark a token as a dollar. Empty = every market TOKEN/KAS.
    */
   quoteTokens: Record<string, QuoteCurrency>;

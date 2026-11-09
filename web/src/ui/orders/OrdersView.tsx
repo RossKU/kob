@@ -15,6 +15,8 @@ import type { Position } from '../../kob/positions';
 import type { Hex } from '../../kob/types';
 import { Banner, Button, ErrorBanner, Modal, RawDetails, Section, Tabs, showToast, toError, useAsync } from '../kit';
 import { useLiveRefresh } from '../market/live';
+import { useKascov } from '../market/use-kascov';
+import { kascovIconOf } from '../market/kascov-merge';
 import { useSystemStatus } from '../shell/StatusProvider';
 import { AmendDialog } from './AmendDialog';
 import { ReplaceDialog } from './ReplaceDialog';
@@ -115,6 +117,10 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const d = late && late.base === data.data ? late.next : (data.data ?? null);
   // the wallet's balances, read once for the page: the summary strip over the tabs and the Balances tab show the same figures
   const balances = useWalletBalances(d, pubkey, data.data ?? null);
+  // the icons' pictures: kascov.io's checked copy, as on the market list (none: a letter on the token's colour)
+  const kascov = useKascov();
+  const kascovTokens = kascov.status === 'ok' ? kascov.tokens : null;
+  const iconOf = (id: string) => kascovIconOf(kascovTokens, id, services.registry.byCovenantId.get(id)?.templateHash ?? null);
   // the maker-wide stray list counts every live stray per order (the list views of the indexer carry no strays)
   const rows = useMemo(() => {
     if (!d) return [];
@@ -499,7 +505,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
         </Banner>
       ) : null}
 
-      {embed ? null : (
+      {(
       <div class="pf-strip" data-testid="portfolio-summary">
         <div class="pf-stat">
           <span class="pf-k">{t('orders.summary.total')}</span>
@@ -547,6 +553,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 busy={busy}
                 onMergeToken={mergeToken}
                 balances={balances}
+                iconOf={iconOf}
                 {...(embed && onlyHere ? { onlyTokens: new Set([embed.base, ...(embed.quote ? [embed.quote] : [])]) } : {})}
               />
             ) : data.loading ? (
@@ -600,7 +607,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 {shown.map((item) =>
                   item.type === 'single' ? (
                     rowById.get(item.id) ? (
-                      <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} clock={d?.clock ?? null} {...(embed ? { compact: true } : {})} {...(loadEvents ? { loadEvents } : {})} />
+                      <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} clock={d?.clock ?? null} iconOf={iconOf} {...(embed ? { compact: true } : {})} {...(loadEvents ? { loadEvents } : {})} />
                     ) : null
                   ) : (
                     <PositionCard
@@ -614,6 +621,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                       onClosePosition={onClosePosition}
                       busy={busy}
                       clock={d?.clock ?? null}
+                      iconOf={iconOf}
+                      {...(embed ? { compact: true } : {})}
                       {...(loadEvents ? { loadEvents } : {})}
                     />
                   ),
@@ -632,7 +641,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 ) : undefined
               }
             >
-              <WalletFills rows={filledRows} tokenOf={shownToken} loadEvents={loadEvents} />
+              <WalletFills rows={filledRows} tokenOf={shownToken} loadEvents={loadEvents} iconOf={iconOf} />
             </Section>
           ) : null}
         </div>

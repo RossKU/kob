@@ -1,4 +1,4 @@
-// Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair; the old `#/pair/<base>/<quote>` is an alias), `#/usd/kas` + `#/usd/<covenantId>` (legacy: redirected to the tradable USD pages), `#/activity` (`?market=<id>` or `?market=<base>/<quote>`: one market), `#/portfolio` (`/<tab>`, `/recover`), `#/create` (the old `#/issue` leads there),
+// Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair), `#/activity` (`?market=<id>` or `?market=<base>/<quote>`: one market), `#/portfolio` (`/<tab>`, `/recover`), `#/create`,
 // `#/settings`, `#/disclaimer`, `#/support` (the market list while there is no donation address: ui/support/support-model.ts). An empty hash is the landing screen (`home`: config `home`, by default the landing page, src/ui/landing; an operator may set a chart or the list); an unknown one is the market list.
 // The parsing / formatting is pure (tested in router.test.ts); only `useRoute` / `navigate` touch `window`.
 import { useEffect, useState } from 'preact/hooks';
@@ -8,16 +8,11 @@ export type Route =
   | { name: 'home'; covenantId?: undefined }
   | { name: 'market'; covenantId?: undefined; invalidToken?: string }
   /**
-   * LEGACY `#/usd/kas` / `#/usd/<covenant id>` links: not a page of its own any more, the app redirects them to the tradable page (`usdMarketHash`:
-   * the USD token's market for `kas`, the pair page `<token>/<USD token>` for a token). `asset` = `kas` or a token's covenant id
-   */
-  | { name: 'usd'; asset: string; covenantId?: undefined }
-  /**
    * `ticket`: the order ticket opens on this preset (`?ticket=sell&amount=N`: sell N base units at market, the close of a buy-first position;
    * `?ticket=cover&amount=N`: buy N base units back at market, the close of a sell-first position; `?ticket=close`: the "close (sell all)" type)
    */
   | { name: 'token'; covenantId: string; ticket?: TicketPreset; amount?: string }
-  /** token/token pair BASE/QUOTE (pair orders of every type, prices in QUOTE per BASE): `#/market/<base>/<quote>` (alias `#/pair/<base>/<quote>`) */
+  /** token/token pair BASE/QUOTE (pair orders of every type, prices in QUOTE per BASE): `#/market/<base>/<quote>` */
   | { name: 'pair'; base: string; quote: string; covenantId?: undefined }
   /**
    * `#/activity`: the activity log of every market; `?market=<covenant id>` narrows it to one token's KAS book, `?market=<base>/<quote>` to one pair (a link
@@ -66,11 +61,6 @@ export function parseHash(hash: string): Route {
   const [first, second, third] = parts;
   if (!first) return { name: 'home' };
   const page = first.toLowerCase();
-  if (page === 'usd') {
-    const a = (second ?? '').toLowerCase();
-    if (a === 'kas' || HEX64.test(a)) return { name: 'usd', asset: a };
-    return { name: 'market', invalidToken: (second ?? '').slice(0, 80) };
-  }
   const dec = (v: string | undefined): string => {
     try {
       return decodeURIComponent(v ?? '');
@@ -80,7 +70,7 @@ export function parseHash(hash: string): Route {
   };
   // a third segment that is neither `kas` nor an id is ignored (as before): `#/market/<id>/anything` is the token market
   const quoteSeg = page === 'market' && third !== undefined && (third.toLowerCase() === 'kas' || HEX64.test(dec(third)));
-  if (page === 'pair' || quoteSeg) {
+  if (quoteSeg) {
     const b = dec(second);
     const q = dec(third);
     // `#/market/<token>/kas` is the token's own KAS market
@@ -108,8 +98,6 @@ export function parseHash(hash: string): Route {
     return (PORTFOLIO_TABS as readonly string[]).includes(tab) ? { name: 'portfolio', tab: tab as PortfolioTab } : { name: 'portfolio' };
   }
   if ((PAGES as readonly string[]).includes(page)) return { name: page as (typeof PAGES)[number] };
-  // the token creation page was `#/issue` before it was named "Create token": the old address still leads there
-  if (page === 'issue') return { name: 'create' };
   return { name: 'market' };
 }
 
@@ -122,8 +110,6 @@ export function routeToHash(route: Route): string {
       return '#/market';
     case 'pair':
       return `#/market/${route.base.toLowerCase()}/${route.quote.toLowerCase()}`;
-    case 'usd':
-      return `#/usd/${route.asset.toLowerCase()}`;
     case 'home':
       return '#/';
     case 'activity':
@@ -147,20 +133,12 @@ export const activityRoute = (market?: ActivityMarket | null): Route => (market 
 
 /** Which top-level nav entry a route belongs to. */
 export const navOf = (route: Route): 'market' | 'activity' | 'portfolio' | 'create' | 'settings' | 'disclaimer' | 'support' =>
-  route.name === 'token' || route.name === 'pair' || route.name === 'usd' || route.name === 'home' ? 'market' : route.name;
+  route.name === 'token' || route.name === 'pair' || route.name === 'home' ? 'market' : route.name;
 
 export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint): Route => ({
   name: 'token', covenantId: covenantId.toLowerCase(), ...(ticket ? { ticket } : {}), ...(takesAmount(ticket) && amount !== undefined && BigInt(amount) > 0n ? { amount: BigInt(amount).toString() } : {}),
 });
 export const pairRoute = (base: string, quote: string): Route => ({ name: 'pair', base: base.toLowerCase(), quote: quote.toLowerCase() });
-/**
- * Where an old USD link goes (there is no USD page, all settlement is through the KAS books, so every view is tradable): `kas` (and the USD token itself)
- * to the USD token's own market page, a token to the pair page `<token>/<USD token>` (implied book and chart, cross ticket through the KAS route).
- * Tickers are shown as they are.
- */
-export const usdMarketRoute = (asset: string, usdToken: string): Route =>
-  asset.toLowerCase() === 'kas' || asset.toLowerCase() === usdToken.toLowerCase() ? tokenRoute(usdToken) : pairRoute(asset, usdToken);
-export const usdMarketHash = (asset: string, usdToken: string): string => routeToHash(usdMarketRoute(asset, usdToken));
 
 const currentHash = (): string => (typeof window === 'undefined' ? '' : window.location.hash);
 

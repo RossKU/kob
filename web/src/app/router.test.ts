@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityRoute, navOf, parseHash, PORTFOLIO_TABS, routeToHash, tokenRoute, type Route, pairRoute, usdMarketHash, usdMarketRoute } from './router';
+import { activityRoute, navOf, parseHash, PORTFOLIO_TABS, routeToHash, tokenRoute, type Route, pairRoute } from './router';
 
 const ID = 'ab'.repeat(32);
 
@@ -11,33 +11,14 @@ describe('router', () => {
     expect(navOf({ name: 'home' })).toBe('market');
   });
 
-  it('old USD links still parse (the app redirects them), and map to the tradable pages', () => {
-    expect(parseHash('#/usd/kas')).toEqual({ name: 'usd', asset: 'kas' });
-    expect(parseHash('#/usd/KAS')).toEqual({ name: 'usd', asset: 'kas' });
-    expect(parseHash(`#/usd/${ID.toUpperCase()}`)).toEqual({ name: 'usd', asset: ID });
-    expect(parseHash('#/usd/nope')).toMatchObject({ name: 'market', invalidToken: 'nope' });
-    const kas: Route = { name: 'usd', asset: 'kas' };
-    expect(routeToHash({ name: 'usd', asset: ID })).toBe(`#/usd/${ID}`);
-    expect(parseHash(routeToHash(kas))).toEqual(kas);
-    expect(navOf(kas)).toBe('market');
-    // KAS/USD -> the USD token's own market (book, trades, ticket); a token in USD -> the pair page <token>/<USD token>
-    const USD = 'cd'.repeat(32);
-    expect(usdMarketHash('kas', USD)).toBe(`#/market/${USD}`);
-    expect(usdMarketHash(USD.toUpperCase(), USD)).toBe(`#/market/${USD}`);
-    expect(usdMarketHash(ID.toUpperCase(), USD)).toBe(`#/market/${ID}/${USD}`);
-    // the targets are real, tradable pages
-    expect(usdMarketRoute(ID, USD).name).toBe('pair');
-    expect(usdMarketRoute('kas', USD).name).toBe('token');
-    expect(parseHash(usdMarketHash(ID, USD))).toEqual(pairRoute(ID, USD));
-    expect(parseHash(usdMarketHash('kas', USD))).toEqual(tokenRoute(USD));
+  it('the old addresses are gone: #/usd, #/pair and #/issue are unknown pages (the market list)', () => {
+    for (const h of ['#/usd/kas', `#/usd/${ID}`, `#/pair/${ID}/${'cd'.repeat(32)}`, '#/issue', '#/orders']) expect(parseHash(h)).toEqual({ name: 'market' });
   });
 
   it('parses the pages', () => {
     expect(parseHash('#/portfolio')).toEqual({ name: 'portfolio' });
     expect(parseHash('#/orders')).toEqual({ name: 'market' }); // the old address is gone
     expect(parseHash('#/create')).toEqual({ name: 'create' });
-    // the page's old address leads to it
-    expect(parseHash('#/issue')).toEqual({ name: 'create' });
     expect(parseHash('#/settings')).toEqual({ name: 'settings' });
     expect(parseHash('/portfolio')).toEqual({ name: 'portfolio' });
     expect(parseHash('#/PORTFOLIO/')).toEqual({ name: 'portfolio' });
@@ -106,8 +87,6 @@ describe('router', () => {
 
   it('parses a pair route (two different 64-hex ids), round-trips it and highlights the market nav', () => {
     const Q = 'cd'.repeat(32);
-    expect(parseHash(`#/pair/${ID.toUpperCase()}/${Q}`)).toEqual({ name: 'pair', base: ID, quote: Q });
-    // the canonical form is the market URL; the old pair URL is an alias of it
     expect(routeToHash(pairRoute(ID, Q))).toBe(`#/market/${ID}/${Q}`);
     expect(parseHash(`#/market/${ID.toUpperCase()}/${Q}`)).toEqual({ name: 'pair', base: ID, quote: Q });
     expect(parseHash(`#/market/${ID}/kas`)).toEqual(tokenRoute(ID));
@@ -116,9 +95,7 @@ describe('router', () => {
     expect(parseHash(`#/market/${ID}/${'ab'.repeat(31)}`)).toEqual(tokenRoute(ID));
     expect(parseHash(routeToHash(pairRoute(ID, Q)))).toEqual(pairRoute(ID, Q));
     expect(navOf(pairRoute(ID, Q))).toBe('market');
-    expect(parseHash(`#/pair/${ID}/${ID}`).name).toBe('market');
-    expect(parseHash(`#/pair/${ID}`)).toMatchObject({ name: 'market' });
-    expect(parseHash('#/pair/xyz/abc')).toMatchObject({ name: 'market', invalidToken: 'xyz/abc' });
+    expect(parseHash(`#/market/xyz/${Q}`)).toMatchObject({ name: 'market', invalidToken: `xyz/${Q}` });
   });
 
   it('the activity page: every market, or the one its link names (a KAS book of one token, or a pair); anything else is every market', () => {

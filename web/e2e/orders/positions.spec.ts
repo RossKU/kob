@@ -37,6 +37,7 @@ test.describe('position cards', () => {
     await expect(card.getByTestId('position-amount')).toContainText('2 EXKCC in total: 1 EXKCC entered, 0 EXKCC exited, 2 EXKCC open');
     await expect(card.getByTestId('position-repeat')).toHaveCount(0);
     // fills on demand: one entry fill of 1 EXKCC, no exit fill yet
+    await card.locator('[data-testid^="position-toggle-"]').click();
     await card.getByTestId('position-fills-toggle').click();
     await expect(card.getByTestId('position-fills-entry')).toContainText('Entry: 1 EXKCC filled in 1 fill');
     await expect(card.getByTestId('position-fills-exits')).toContainText('Exits: 0 EXKCC filled in 0 fill');
