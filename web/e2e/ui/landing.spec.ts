@@ -54,7 +54,6 @@ for (const [width, height] of [
     await page.getByTestId('landing-bigbook').scrollIntoViewIfNeeded();
     await expect(page.getByTestId('landing-bigbook')).toHaveClass(/lp-seen/);
     await expect.poll(() => page.locator('.lp-bb').first().evaluate((e) => e.getBoundingClientRect().width)).toBeGreaterThan(width * 0.5);
-    await expect(page.getByTestId('landing-not-business')).toHaveText('KOB is not a business. No fee goes to the project and no company stands in the middle. It is software for Kaspa, and it keeps working without us.');
     await page.getByTestId('footer').scrollIntoViewIfNeeded();
     await expect(page.getByTestId('landing-disclaimer')).toContainText('Open review.');
     await expect(page.getByTestId('landing-disclaimer')).toContainText('never holds funds or orders, does not trade and does not operate executors');

@@ -109,7 +109,6 @@ export default {
   'landing.feedback.issue': 'Open an issue →',
   'landing.feedback.message': 'Send a message on X →',
 
-  'landing.final.lead': 'KOB is not a business. No fee goes to the project and no company stands in the middle. It is software for Kaspa, and it keeps working without us.',
   'landing.final.l1': 'The book',
   'landing.final.l2': 'is open.',
 
