@@ -48,7 +48,7 @@ describe.each(combos)('KobIfdPair on %s', (_name, mkA, mkB) => {
 
   it('IFD buy-first: the B escrow is the spend of the whole amount at the limit (rounded down); every fill creates an ASK exit holding its A', () => {
     const tip = 50_001n;
-    const p = pairValid(env(), { type: 'ifd', side: 'buy', amount, tip, entry: { price: 1_401n }, exit: { takeProfit: 1_601n } });
+    const p = pairValid(env(), { type: 'ifd', side: 'buy', amount, tip, entry: { price: 1_401n }, exit: { takeProfit: 1_601n, tip: 0n } });
     const e = entryOf(p);
     expect(e).toMatchObject({
       side: '2', aCovId: a.covenantId, bCovId: b.covenantId, aScale: String(a.scale), bScale: String(b.scale), price: '1401', prefund: '0', tip: String(tip),
@@ -80,7 +80,7 @@ describe.each(combos)('KobIfdPair on %s', (_name, mkA, mkB) => {
   });
 
   it('IFO sell-first: A custody and a B prefund covering the exit\'s worst buy-back; every fill creates a BID exit holding proceeds plus prefund', () => {
-    const p = pairValid(env(), { type: 'ifo', side: 'sell', amount, entry: { price: 1_599n }, exit: { takeProfit: 1_399n, stop: 1_700n } });
+    const p = pairValid(env(), { type: 'ifo', side: 'sell', amount, tip: 0n, entry: { price: 1_599n }, exit: { takeProfit: 1_399n, stop: 1_700n, tip: 0n } });
     const e = entryOf(p);
     const worst = maxB(1_399n, 1_700n + band(1_700n));
     const prefund = worst - 1_599n;
@@ -124,7 +124,7 @@ describe.each(combos)('KobIfdPair on %s', (_name, mkA, mkB) => {
   });
 
   it('repeat IFD (buy-first, counted) and repeat IFO (sell-first, unlimited): rptAmount, the merge tip, one more exit carrier', () => {
-    const r = pairValid(env(), { type: 'repeatIfd', side: 'buy', amount, entry: { price: 1_400n }, exit: { takeProfit: 1_500n, tip: 1_000n }, repeat: { count: 5n } });
+    const r = pairValid(env(), { type: 'repeatIfd', side: 'buy', amount, tip: 0n, entry: { price: 1_400n }, exit: { takeProfit: 1_500n, tip: 1_000n }, repeat: { count: 5n } });
     const e = entryOf(r);
     expect(e.rptAmount).toBe(String(1n + 5n * amount));
     const mergeTip = ceilDivM(PAIR_MERGE_COST_BUY_FIRST * a.scale, exitMin);

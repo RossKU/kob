@@ -10,6 +10,7 @@ import { MAX_IDLE_DAA } from '../daa';
 import { goldenRequest } from '../../testing/golden';
 import { market3x3 } from '../../testing/fixtures';
 import { CLOCK, KAS, MAKER_PK, ceilDivM, ceilQ, floorQ, kronA, kronB, level, makePairEnv, tokenA, tokenB } from './pair-fixtures';
+import { defaultPairTip, lowPairTipFields, pairTipBelowDefault } from './pair-common';
 import { K, codes, errorCodes, pairValid, plan } from './pair-testkit';
 
 const pairState = (p: { states: { kind: string; state: unknown }[] }): PairState => {
@@ -149,7 +150,7 @@ describe.each(combos)('KobPair IOC / FOK / market / streaming / close on %s', (_
 
   it('IOC and FOK: tif, minFill 1, one delivery, life 300 DAA, a bid escrow of floor + 1', () => {
     for (const [type, tif] of [['ioc', '1'], ['fok', '2']] as const) {
-      const sell = pairValid(env(), { type, side: 'sell', amount: 3_000n, price: 1_450n });
+      const sell = pairValid(env(), { type, side: 'sell', amount: 3_000n, price: 1_450n, tip: 0n });
       expect(pairState(sell)).toMatchObject({ tif, minFill: '1', expiryDaa: String(CLOCK.daa + 300n) });
       expect(sell.pair!.deliveries).toBe(1n);
       expect(sell.pair!.orderValue).toBe(DC);
@@ -206,7 +207,7 @@ describe.each(combos)('KobPair TWAP / DCA / Dutch on %s', (_name, mkA, mkB) => {
   const env = () => makePairEnv({ a, b });
 
   it('TWAP sell: maxFill = slice, interval, one delivery carrier per slice; a per-slice auction decays to priceEnd', () => {
-    const p = pairValid(env(), { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n });
+    const p = pairValid(env(), { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n, tip: 0n });
     expect(pairState(p)).toMatchObject({ maxFill: '2500', interval: '600', side: '1', slope: '0' });
     expect(BigInt(pairState(p).minFill) <= 2_500n).toBe(true);
     expect(p.pair!.deliveries).toBe(4n);
@@ -296,7 +297,7 @@ describe('KobPair refusals and guards', () => {
 
   it('a resting order funds one delivery carrier per possible fill by default; fewer carriers are disclosed', () => {
     // minFill 1 000 of 20 000: 20 possible fills, each funded
-    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, minFill: 1_000n });
+    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, minFill: 1_000n, tip: 0n });
     expect(p.pair!.deliveries).toBe(20n);
     expect(p.pair!.orderValue).toBe(20n * DC);
     expect(codes(p)).not.toContain('PAIR_FILLS_LIMITED');
@@ -309,7 +310,7 @@ describe('KobPair refusals and guards', () => {
   });
 
   it('maxFills of a resting order budgets the delivery carriers (both sides)', () => {
-    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, maxFills: 5n });
+    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, maxFills: 5n, tip: 0n });
     expect(p.pair!.deliveries).toBe(5n);
     expect(p.pair!.orderValue).toBe(5n * DC);
     expect(errorCodes(plan(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, maxFills: 0n }))).toEqual(['MAX_FILLS_INVALID']);
@@ -330,7 +331,7 @@ describe('golden vectors: the planned KobPair is the protocol\'s', () => {
     for (const [name, side] of [['pair.create.ask', 'sell'], ['pair.create.bid', 'buy']] as const) {
       const g = goldenRequest(name, MAKER_PK);
       const gs = (g as unknown as { order: { state: Record<string, string> } }).order.state;
-      const p = pairValid(env, { type: 'limit', side, amount: 10_000n, price: 1_000n, minFill: 1_000n, maxFills: 9n });
+      const p = pairValid(env, { type: 'limit', side, amount: 10_000n, price: 1_000n, minFill: 1_000n, maxFills: 9n, tip: 0n });
       const s = pairState(p) as unknown as Record<string, string>;
       // the escrow is floor(amount p / scale(A)) + 1, like the golden bid
       const skip = new Set(['expiryDaa', 'decayStep', 'custody']);
@@ -352,5 +353,69 @@ describe('fill rule consistency: what the plan discloses is what kob-wasm lets a
     const fb = K.pairFill(bid.states[0], 7_777n, 1_333n, bid.pair!.orderValue);
     expect(fb.sOut).toBe(bid.pair!.payMaxB);
     expect(fb.outAmount).toBe(bid.pair!.escrowB - bid.pair!.payMaxB!);
+  });
+});
+
+describe('the default tip of a pair order pays a netting fill\'s fee share (the executor nets crossing pair orders only when tips pay the netting)', () => {
+  const keeperTip = (a: TokenMarket, b: TokenMarket): bigint => BigInt(K.pairTips(a.program, b.program).keeperTip);
+  const tipTotal = (p: { states: { state: unknown }[] }, amount: bigint, a: TokenMarket): bigint => (amount * BigInt((p.states[0].state as PairState).tip)) / a.scale;
+
+  it.each([1_000n, 10_007n, 90_000n])('a limit order of %s base units without a tip carries at least the pair keeper tip in total, both sides', (amount) => {
+    const a = tokenA();
+    const b = tokenB();
+    for (const [side, price] of [['sell', 1_550n], ['buy', 1_300n]] as const) {
+      const p = pairValid(makePairEnv({ a, b }), { type: 'limit', side, amount, price });
+      expect(tipTotal(p, amount, a)).toBeGreaterThanOrEqual(keeperTip(a, b));
+      expect(p.pair!.tipKasTotal).toBe(tipTotal(p, amount, a));
+    }
+  });
+
+  it('every pair order kind without a tip carries the default (market, IOC, TWAP, stop)', () => {
+    const a = tokenA();
+    const b = tokenB();
+    const env = () => makePairEnv({ a, b });
+    for (const intent of [
+      { type: 'market', side: 'sell', amount: 3_000n },
+      { type: 'ioc', side: 'sell', amount: 3_000n, price: 1_450n },
+      { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n },
+    ]) {
+      const p = pairValid(env(), intent);
+      expect(tipTotal(p, intent.amount, a), intent.type).toBeGreaterThanOrEqual(keeperTip(a, b));
+    }
+    const stop = pairValid(env(), { type: 'stopMarket', side: 'sell', amount: 20_000n, stop: 1_400n });
+    expect(BigInt((stop.states[0].state as { tip: string }).tip) * 20_000n / a.scale).toBeGreaterThanOrEqual(keeperTip(a, b));
+  });
+
+  it('an explicit tip is kept as typed, zero included', () => {
+    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 10_007n, price: 1_550n, tip: 0n });
+    expect((p.states[0].state as PairState).tip).toBe('0');
+    expect(p.pair!.tipKasTotal).toBe(0n);
+    const q = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 10_007n, price: 1_550n, tip: 77n });
+    expect((q.states[0].state as PairState).tip).toBe('77');
+  });
+
+  it('defaultPairTip / pairTipBelowDefault: no amount, no default; below the default total is flagged, at or above is not, unset never', () => {
+    const env = makePairEnv();
+    const tips = BigInt(K.pairTips(env.token.program, env.pair.quote.program).keeperTip);
+    expect(defaultPairTip(env, 0n)).toBe(0n);
+    const amount = 10_007n;
+    const d = defaultPairTip(env, amount);
+    expect((amount * d) / env.token.scale).toBeGreaterThanOrEqual(tips);
+    expect(pairTipBelowDefault(env, amount, d)).toBe(false);
+    expect(pairTipBelowDefault(env, amount, 0n)).toBe(true);
+    expect(pairTipBelowDefault(env, amount, d - 1_000_000_000n > 0n ? d - 1_000_000_000n : 0n)).toBe(true);
+    expect(pairTipBelowDefault(env, amount, undefined)).toBe(false);
+    expect(pairTipBelowDefault(env, 0n, 0n)).toBe(false);
+  });
+
+  it('lowPairTipFields names the tip fields typed below the default, the exit of an if-done order included', () => {
+    const env = makePairEnv();
+    const d = defaultPairTip(env, 10_007n);
+    expect(lowPairTipFields(env, { amount: 10_007n, tip: 0n })).toEqual(['tip']);
+    expect(lowPairTipFields(env, { amount: 10_007n })).toEqual([]);
+    expect(lowPairTipFields(env, { amount: 10_007n, tip: d, exit: { tip: 0n } })).toEqual(['exit.tip']);
+    expect(lowPairTipFields(env, { amount: 10_007n, tip: 0n, exit: { tip: 0n } })).toEqual(['tip', 'exit.tip']);
+    expect(lowPairTipFields(env, { tip: 0n })).toEqual([]);
+    expect(lowPairTipFields(env, null)).toEqual([]);
   });
 });

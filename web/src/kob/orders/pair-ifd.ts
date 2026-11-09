@@ -25,7 +25,7 @@ import {
 import { checkExitShape, exitLegInput, resolveEntry } from './cond-ifd';
 import { askWorst, bidWorst, resolveLegs } from './cond-legs';
 import {
-  DEFAULT_EXIT_FILLS, checkPairNotional, checkPairTip, failedPairPlan, legEnvOf, makeCondPairState, makeIfdPairState, pairTipsOf, placePair, withCustody,
+  DEFAULT_EXIT_FILLS, checkPairNotional, checkPairTip, defaultPairTip, failedPairPlan, legEnvOf, makeCondPairState, makeIfdPairState, pairTipsOf, placePair, withCustody,
 } from './pair-common';
 import { pairIssue } from './pair-issues';
 
@@ -90,7 +90,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
 
   // ---- exit (built first: the entry commits to it, its minimum fill included)
   const exitIn = intent.exit;
-  const exitTipBase = exitIn.tip ?? 0n;
+  const exitTipBase = exitIn.tip ?? defaultPairTip(env, amount);
   if (exitTipBase < 0n) {
     log.shared('TIP_NEGATIVE', undefined, 'exit.tip');
     return fail();

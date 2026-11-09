@@ -61,7 +61,7 @@ describe('ticket keys', () => {
 
   it('label overrides and placeholders refer to real fields and types', () => {
     for (const k of allKeys().filter((k) => /^ticket\.(label|ph)\./.test(k))) {
-      const body = k.replace(/^ticket\.(label|ph)\./, '').replace(/\.inv$/, ''); // `.inv`: the wording of the inverted market
+      const body = k.replace(/^ticket\.(label|ph)\./, '').replace(/\.(inv|pair)$/, ''); // `.inv`: the wording of the inverted market, `.pair`: of a token pair
       const type = ORDER_TYPES.find((ty) => body.endsWith(`.${ty}`));
       const id = type ? body.slice(0, -(type.length + 1)) : body;
       expect(FIELDS[body] ?? FIELDS[id], `${k}: ${id} is not a field`).toBeDefined();

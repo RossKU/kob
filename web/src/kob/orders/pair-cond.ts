@@ -19,7 +19,7 @@ import { IssueLog, checkSelfTrade, resolveActivation, resolveExpiry, type CondSu
 import { NOTES_BY_TYPE, legInputOf, type LegsIntent } from './cond';
 import { askWorst, bidWorst, resolveLegs } from './cond-legs';
 import {
-  checkPairNotional, defaultPairFills, checkPairTip, failedPairPlan, legEnvOf, makeCondPairState, pairCarrierOf, pairKasLines, pairTipsOf, placePair,
+  checkPairNotional, defaultPairFills, defaultPairTip, checkPairTip, failedPairPlan, legEnvOf, makeCondPairState, pairCarrierOf, pairKasLines, pairTipsOf, placePair,
   withCustody,
 } from './pair-common';
 import { planPairIfd } from './pair-ifd';
@@ -168,7 +168,7 @@ export function planPairCond(env: PairPlanEnv, intent: CondIntent): PairOrderPla
   }
   // the A amount: the custody of a sell, the delivery of a buy, every exit's custody of an if-done order (KRON: at most 1e9)
   log.add(...checkAmount(raw.amount, env.token, 'amount', raw.side === 'sell' || isIfdLike(intent)));
-  const tip = intent.tip ?? 0n;
+  const tip = intent.tip ?? defaultPairTip(env, raw.amount);
   if (tip < 0n) log.add(issue('TIP_NEGATIVE', undefined, 'tip'));
   const carrier = pairCarrierOf(env, intent.carrier);
   if (carrier <= 0n) log.cond('COND_CARRIER_INVALID', undefined, 'carrier');

@@ -128,7 +128,7 @@ describe('KobCondPair presets, warnings and refusals', () => {
   });
 
   it('a custom keeper tip and maxFills of either side', () => {
-    const p = pairValid(makePairEnv(), { type: 'stopMarket', side: 'sell', amount: 20_000n, stop: 1_400n, keeperTip: 5_000_000n, maxFills: 5n });
+    const p = pairValid(makePairEnv(), { type: 'stopMarket', side: 'sell', amount: 20_000n, stop: 1_400n, keeperTip: 5_000_000n, maxFills: 5n, tip: 0n });
     expect(cs(p).keeperTip).toBe('5000000');
     expect(p.pair!.deliveries).toBe(5n);
     expect(p.pair!.orderValue).toBe(5n * DC + 5_000_000n);

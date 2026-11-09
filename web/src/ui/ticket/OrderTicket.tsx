@@ -19,6 +19,7 @@ import type { TokenInfo } from '../../kob/registry';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { costLine, costPreview } from './cost-preview';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
+import { lowPairTipFields } from '../../kob/orders/pair-common';
 import { Banner, Button, Dropdown, Loading, RawDetails, Segmented, useAsync } from '../kit';
 import { bookFromIndexer, readClock } from '../../app/env';
 import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
@@ -270,6 +271,8 @@ export function OrderTicket(props: OrderTicketProps) {
   }, [intentType, intentAmount, intentType === 'close' ? tokenBalance : 0n]);
   const kasBalance = env ? sum(env.funding.map((u) => BigInt(u.amount))) : 0n;
   const pairPart = env && isPairEnv(env) ? env.pair : null;
+  /** a pair: the tip fields typed below what a netting fill needs (the order's own tip, and an if-done exit's) */
+  const lowTips = useMemo(() => (env && isPairEnv(env) ? lowPairTipFields(env, built.intent as Parameters<typeof lowPairTipFields>[1]) : []), [env, built.intent]);
   /** a pair: the quote token B the wallet can spend (a buy pays in B) */
   const quoteBalance = pairPart ? sum(pairPart.quoteTokenUtxos.map((u) => BigInt(u.state.amount))) : 0n;
   const refPrice = (() => {
@@ -762,13 +765,13 @@ export function OrderTicket(props: OrderTicketProps) {
 
         <TicketFields
           form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} slider={slider} cost={costText}
-          {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})}
+          {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
         />
 
         <details class="tk-advanced" data-testid="order-advanced">
           <summary>{t('ticket.advanced')}</summary>
           <div class="tk-advanced-body">
-            <TicketFields form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})} />
+            <TicketFields form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})} />
           </div>
         </details>
       </div>
