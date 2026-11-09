@@ -19,6 +19,14 @@ test('Balances first; Open orders, Order history and Fills each have their addre
   await expect(page.getByTestId('orders-tab-balances')).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('balances-panel')).toBeVisible();
   await expect(page.getByTestId('orders-list')).toHaveCount(0);
+  // the summary strip over the tabs: the total value, the KAS to spend and in orders, the open orders
+  await expect(page.getByTestId('portfolio-open-count')).toHaveText('1');
+  await expect(page.getByTestId('portfolio-total')).toContainText('KAS');
+  await expect(page.getByTestId('portfolio-available')).toContainText('KAS');
+  // KAS is the first row of the balances, the tokens follow with their icon and fingerprint
+  const rows = page.getByTestId('token-balances-table').locator('tbody tr');
+  await expect(rows.first()).toHaveAttribute('data-testid', 'kas-balance');
+  await expect(page.locator('[data-testid^="balance-row-"] .fp').first()).toBeVisible();
 
   await page.getByTestId('orders-tab-active').click();
   await expect(page).toHaveURL(/#\/portfolio\/open$/);

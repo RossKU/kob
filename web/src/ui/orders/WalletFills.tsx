@@ -7,6 +7,7 @@ import { longId, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { CopyText, ErrorBanner, fixedPricePerToken, Loading, Table, TableMessage, tickPriceFraction, useAsync } from '../kit';
+import { IdentityBlock } from '../market/Fingerprint';
 import { fillHistory, type FillRow } from './fills-model';
 import type { OrderRowModel } from './orders-model';
 
@@ -86,7 +87,12 @@ export function WalletFills(props: {
               return (
                 <tr key={`${fill.txid}-${row.id}-${fill.atMs}`} data-testid="wallet-fill-row" data-txid={fill.txid} data-order={row.id}>
                   <td class="nowrap">{fill.atMs > 0 ? formatDateTime(Math.floor(fill.atMs / 1000), { dateStyle: 'short', timeStyle: 'medium' }) : '—'}</td>
-                  <td class="nowrap">{marketHref ? <a href={marketHref}>{market}</a> : market}</td>
+                  <td class="nowrap">
+                    <span class="bal-asset">
+                      {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: token?.ticker ?? '', kascov: null }} size="sm" /> : null}
+                      {marketHref ? <a href={marketHref}>{market}</a> : market}
+                    </span>
+                  </td>
                   <td class={row.side === 'buy' ? 'buy' : 'sell'} data-testid="wallet-fill-side">{t(`common.side.${row.side}`)}</td>
                   <td class="right num">{price}</td>
                   <td class="right num nowrap">

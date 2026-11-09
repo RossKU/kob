@@ -1,4 +1,4 @@
-import { formatUnits } from '../../kob/units';
+import { formatKas, formatUnits } from '../../kob/units';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
@@ -19,6 +19,7 @@ import { PositionCard } from './PositionCard';
 import { RecoverPanel } from './RecoverPanel';
 import { StraysPanel } from './StraysPanel';
 import { WalletFills } from './WalletFills';
+import { useWalletBalances } from './use-balances';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
 import { mergeFailure, mergeStep, mergeSummary, reservedOutpoints } from './merge-model';
 import { unwindAmount } from './position-model';
@@ -102,6 +103,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
   const [sweepFollowUp, setSweepFollowUp] = useState<{ pending: boolean; retry: () => void } | null>(null);
 
   const d = late && late.base === data.data ? late.next : (data.data ?? null);
+  // the wallet's balances, read once for the page: the summary strip over the tabs and the Balances tab show the same figures
+  const balances = useWalletBalances(d, pubkey, data.data ?? null);
   // the maker-wide stray list counts every live stray per order (the list views of the indexer carry no strays)
   const rows = useMemo(() => {
     if (!d) return [];
@@ -465,6 +468,26 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
         </Banner>
       ) : null}
 
+      <div class="pf-strip" data-testid="portfolio-summary">
+        <div class="pf-stat">
+          <span class="pf-k">{t('orders.summary.total')}</span>
+          <span class="pf-v num" data-testid="portfolio-total">{balances.summary ? `≈ ${formatKas(balances.summary.total, { group: ',' })}` : '—'}<span class="pf-unit">KAS</span></span>
+          {balances.summary && balances.summary.unpriced > 0 ? <span class="pf-s" data-testid="portfolio-unpriced">{t('orders.summary.unpriced', { n: balances.summary.unpriced })}</span> : null}
+        </div>
+        <div class="pf-stat">
+          <span class="pf-k">{t('orders.summary.available')}</span>
+          <span class="pf-v num" data-testid="portfolio-available">{balances.summary ? formatKas(balances.summary.kasFree, { group: ',' }) : '—'}<span class="pf-unit">KAS</span></span>
+        </div>
+        <div class="pf-stat">
+          <span class="pf-k">{t('orders.summary.inOrders')}</span>
+          <span class="pf-v num" data-testid="portfolio-in-orders">{balances.summary ? formatKas(balances.summary.kasLocked, { group: ',' }) : '—'}<span class="pf-unit">KAS</span></span>
+        </div>
+        <div class="pf-stat">
+          <span class="pf-k">{t('orders.summary.open')}</span>
+          <span class="pf-v num" data-testid="portfolio-open-count">{d ? String(counts.active) : '—'}</span>
+        </div>
+      </div>
+
       <div class="portfolio" data-testid="portfolio">
         <Tabs
           aria-label={t('orders.title')}
@@ -490,6 +513,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean } = {}
                 reserved={reserved}
                 busy={busy}
                 onMergeToken={mergeToken}
+                balances={balances}
               />
             ) : data.loading ? (
               <BalancesFrame />

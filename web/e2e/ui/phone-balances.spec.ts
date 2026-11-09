@@ -29,7 +29,7 @@ test.describe('phone, 390 px wide', () => {
     expect(await name.evaluate((el) => el.getBoundingClientRect().height < 2.2 * parseFloat(getComputedStyle(el).lineHeight))).toBe(true); // one line
     // Free / In your orders / Strays / KAS locked: title and figure
     const labels = await row.locator('td[data-label]').evaluateAll((tds) => tds.map((td) => getComputedStyle(td, '::before').content));
-    expect(labels).toEqual(['"Free tokens"', '"In your orders"', '"Strays"', '"KAS locked in orders"']);
+    expect(labels).toEqual(['"Free tokens"', '"In your orders"', '"Strays"', '"KAS locked in orders"', '"Value (KAS)"']);
     await expect(row.getByTestId('balance-escrowed')).toHaveText(/^3/); // test ids and text unchanged
     const rb = (await row.boundingBox())!;
     expect(rb.x).toBeGreaterThanOrEqual(0);
