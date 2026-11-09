@@ -307,6 +307,7 @@ on a desktop, Chrome on Android), and a phone browser is not told to install an 
 
 * `npm test`: unit tests (vitest), including consensus checks: every planned transaction is signed locally, finalized and validated in the wasm script engine.
 * `npm run build && npm run e2e`: mock-API + mock-wallet Playwright suite (needs Playwright's Chromium: `npx playwright install chromium`).
+* `npm run e2e:landing`: the landing-only build (`KOB_LANDING_ONLY=1`, the mainnet front page: the landing page at every address, no app, no wallet, no node or indexer connection; `docs/ops/web-hosting.md` section 4b), built into `dist-landing/`; no mock stack.
 * `node e2e-real/run.mjs`: real wallets on TN10 (needs extensions, funded DEV key in the gitignored `e2e-real/.env`, a TN10 node of your own: `KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`).
 
 ## Indexer, token families, fees

@@ -10,8 +10,9 @@ and earn the spread. No bridge, no sequencer, no admin key, no oracle, no protoc
 
 ## Quick start
 
-Trade: open the web app, [kob.kaspa.ag](https://kob.kaspa.ag) (mainnet), or [kob-tn10.kaspa.ag](https://kob-tn10.kaspa.ag) (testnet-10, for testing), with
-KasWare or Kaspire, see the [user guide](docs/user-guide.md).
+Trade: open the testnet-10 web app, [kob-tn10.kaspa.ag](https://kob-tn10.kaspa.ag) (test tokens with no value), with KasWare or Kaspire, see the
+[user guide](docs/user-guide.md). [kob.kaspa.ag](https://kob.kaspa.ag) is the production front page: mainnet is in preparation, so it shows the landing page only
+(no app, no wallet connection) and links to the testnet app.
 
 Run `kobd` (an Indexer, keyless; or an Executor that matches orders) on testnet-10, with Git, [rustup](https://rustup.rs)
 and a C compiler installed:
