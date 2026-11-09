@@ -129,7 +129,9 @@ test.describe('the trust us row', () => {
     await expect(row).toContainText('None.');
     await expect(page.getByTestId('landing-audit')).toContainText('Verify it yourself');
     await expect(page.getByTestId('landing-audit')).toContainText('no review can show the code is free of bugs');
-    await expect(page.getByTestId('landing-audit')).toContainText('test tokens');
+    await expect(page.getByTestId('landing-audit')).toContainText('Red-team work and private reports are welcome.');
+    // one text on every network: the testnet build does not mention test tokens here either
+    await expect(page.getByTestId('landing-audit')).not.toContainText(/testnet|test tokens/i);
     await expect(page.getByTestId('landing-audit-note')).toHaveText('Please test only with your own funds and orders. There is no bug bounty.');
     for (const id of ['landing-feedback-security', 'landing-feedback-issue', 'landing-feedback-message']) await expect(row.getByTestId(id)).toBeVisible();
     await expect(page.getByTestId('landing-feedback')).toHaveCount(0);
