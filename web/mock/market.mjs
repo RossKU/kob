@@ -296,3 +296,34 @@ export function depthView(chain, tokenId, q) {
   return { token: tok.covenant_id, price_basis: str(basis),
     decimals: tok.decimals ?? null, ts: chain.nowMs(), daa: chain.daa(), bids: side(levels.bids, 2), asks: side(levels.asks, 1) };
 }
+
+/**
+ * `GET /v1/stats?since=`: the store's activity totals over the range from `since` (unix ms, rounded down to the minute; all time without it):
+ * orders placed (create events), their distinct makers, what the fills released to their fillers (amount x tip / scale per fill, the order's tip)
+ * and the KAS in the live order UTXOs now. `executors` is always null (the indexer records no filler key).
+ */
+export function activityView(chain, q) {
+  const raw = intParam(q, 'since');
+  if (raw !== null && raw < 0) throw badRequest('since must be a unix time in milliseconds');
+  const since = raw === null ? null : raw - (raw % 60_000);
+  const from = since ?? 0;
+  const makers = new Set();
+  let orders = 0;
+  let fees = 0n;
+  let ts = null;
+  for (const ev of chain.events) {
+    ts = ts === null || ev.ts > ts ? ev.ts : ts;
+    if (ev.ts < from) continue;
+    const o = chain.orders.get(ev.covenant_id);
+    if (ev.kind === 'create') {
+      orders++;
+      if (o) makers.add(o.state.state.maker);
+    } else if (ev.kind === 'fill' && o && ev.amount !== null) {
+      const t = termsOf(o.state);
+      if (t.scale > 0n && t.tip > 0n) fees += (BigInt(ev.amount) * t.tip) / t.scale;
+    }
+  }
+  let locked = 0n;
+  for (const o of chain.orders.values()) if ((o.status === 'open' || o.status === 'partial') && o.current) locked += o.current.value;
+  return { since, ts, orders, traders: makers.size, executors: null, fees_paid: fees.toString(), kas_locked: locked.toString() };
+}

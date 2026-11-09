@@ -1,9 +1,10 @@
 // The Activity page's summary (ActivitySummary.tsx): all time, a time window (1D / 7D / 1M / 1Y) with its volume chart, and the books now. Pure, tested
-// in summary-model.test.ts. Built from what the indexer serves today: the KAS candles of every token (`/v1/candles`), the token list's open orders
-// and the pairs' live orders. Volume and trades are the KAS markets' (exact, sompi): a pair fill carries no KAS price, and most go through the KAS
-// books, whose fills these already count. What the indexer does not report yet (orders placed, traders, executors, fees paid to them, the KAS locked
-// in orders) is null: the page shows "—".
-import type { CandleView, IndexerTokenView, PairSummaryView } from '../../data/indexer-types';
+// in summary-model.test.ts. Built from what the indexer serves: the KAS candles of every token (`/v1/candles`), the token list's open orders and the
+// pairs' live orders, and the store's activity totals (`/v1/stats?since=`: orders placed, traders, fees paid to executors, the KAS locked in orders).
+// Volume and trades are the KAS markets' (exact, sompi): a pair fill carries no KAS price, and most go through the KAS books, whose fills these already
+// count. What an indexer does not report (an older one has no `/v1/stats`; executors are recorded by none) is null: the page shows "—".
+import { unorderedPairKey } from '../market/pair-model';
+import type { ActivityStatsView, CandleView, IndexerTokenView, PairSummaryView } from '../../data/indexer-types';
 
 export type SummaryWindow = '1D' | '7D' | '1M' | '1Y';
 export const SUMMARY_WINDOWS: readonly SummaryWindow[] = ['1D', '7D', '1M', '1Y'];
@@ -28,6 +29,14 @@ export const WINDOWS: Record<SummaryWindow, WindowDef> = {
   '1M': { interval: '1d', bucketMs: DAY, buckets: 30, unit: 'day' },
   '1Y': { interval: '1d', bucketMs: 7 * DAY, buckets: 52, unit: 'week' },
 };
+
+/** The length of each window as the page words it (last 24 hours, 7 days, 30 days, 52 weeks): `/v1/stats?since=` starts that far back. */
+export const WINDOW_SPAN_MS: Record<SummaryWindow, number> = { '1D': DAY, '7D': 7 * DAY, '1M': 30 * DAY, '1Y': 52 * 7 * DAY };
+
+/** `since` of a window's activity totals: the start of the last whole minute, so every viewer of a minute asks the same (cached) question. */
+export function activitySince(window: SummaryWindow, now: number): number {
+  return Math.floor((now - WINDOW_SPAN_MS[window]) / 60_000) * 60_000;
+}
 
 /** Hourly candles a token needs for 1D and 7D with their previous windows (two weeks), and daily ones for everything (all time). */
 export const HOURLY_LIMIT = 14 * 24;
@@ -120,6 +129,22 @@ export function summarizeAllTime(daily: readonly (readonly CandleView[])[]): All
   return { quote, trades, since };
 }
 
+export interface ActivityFigures {
+  orders: number | null;
+  traders: number | null;
+  executors: number | null;
+  /** sompi released to the fillers */
+  paid: bigint | null;
+  /** sompi in the live orders now */
+  locked: bigint | null;
+}
+
+/** The activity totals as the page shows them; every figure is null (a dash) for an indexer that does not report them. */
+export function activityFigures(v: ActivityStatsView | null | undefined): ActivityFigures {
+  if (!v) return { orders: null, traders: null, executors: null, paid: null, locked: null };
+  return { orders: v.orders, traders: v.traders, executors: v.executors, paid: v.fees_paid === null ? null : big(v.fees_paid), locked: big(v.kas_locked) };
+}
+
 export interface BooksNow {
   bids: number;
   asks: number;
@@ -128,7 +153,7 @@ export interface BooksNow {
   pairs: number;
 }
 
-/** The books now: the token list's listed open orders and the pairs' live pair orders. */
+/** The books now: the token list's listed open orders and the pairs' live pair orders (`pairs`: the pairs with orders, the two orientations of one counted once). */
 export function booksNow(tokens: readonly IndexerTokenView[], pairs: readonly PairSummaryView[]): BooksNow {
   let bids = 0;
   let asks = 0;
@@ -141,7 +166,9 @@ export function booksNow(tokens: readonly IndexerTokenView[], pairs: readonly Pa
     if (a + b > 0) withOrders++;
   }
   const pairOrders = pairs.reduce((s, p) => s + p.direct_asks + p.direct_bids + p.entry_asks + p.entry_bids + p.conditionals, 0);
-  return { bids, asks, pairOrders, tokensWithOrders: withOrders, pairs: pairs.length };
+  // a pair is one market whichever way its orders are placed: QUOTE/BASE and BASE/QUOTE (each its own entry of `/v1/pairs`) count once
+  const markets = new Set(pairs.map((p) => unorderedPairKey(p.base, p.quote)));
+  return { bids, asks, pairOrders, tokensWithOrders: withOrders, pairs: markets.size };
 }
 
 /** Change against the window before, in whole percent (null: nothing to compare with). */
@@ -160,6 +187,15 @@ export function compactKas(sompi: bigint): string {
   if (kas >= 1e6) return `${trim(kas / 1e6)}M`;
   if (kas >= 1e5) return `${Math.floor(kas / 1e3)}k`;
   return Math.floor(kas).toLocaleString('en-US');
+}
+
+/** KAS of a sompi amount where it is small, to the cent (0.37 · 12.5 · 840); from 1,000 KAS up as [`compactKas`]. Never rounded up. */
+export function fineKas(sompi: bigint): string {
+  if (sompi >= 1_000n * 100_000_000n) return compactKas(sompi);
+  const cents = sompi / 1_000_000n;
+  const whole = cents / 100n;
+  const frac = (cents % 100n).toString().padStart(2, '0').replace(/0+$/, '');
+  return `${whole.toLocaleString('en-US')}${frac ? `.${frac}` : ''}`;
 }
 
 /** The chart's top: the highest bar rounded up to 1, 2 or 5 times a power of ten (0 for an empty window). */
