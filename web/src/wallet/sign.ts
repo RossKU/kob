@@ -11,6 +11,7 @@ import type { BuiltTx, SignedTx, TxJson } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import type { NodeApi, NodeUtxo } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
+import { markOwnAction } from '../data/fresh';
 import { confirmInputsOnNode } from '../kob/node-verify';
 import { normalizeNetwork, spkStringToAddress, type KaspaSdk } from '../data/kaspa-sdk';
 import type { SignerNote } from '../signer/protocol';
@@ -230,6 +231,8 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   if (txid !== signed.tx.id) {
     throw new SignFlowError('submitting', null, `The node answered with transaction id ${String(txid).slice(0, 16)}... but the signed transaction is ${signed.tx.id.slice(0, 16)}...: its answer cannot be trusted. Check the explorer before retrying.`, 'txid-mismatch');
   }
+  // what this transaction changes is read past the indexer's cache from now on (data/fresh.ts)
+  markOwnAction();
   stage('submitted', { txid });
   return { txid, built, signed, fee: BigInt(signed.fee.fee) };
 }

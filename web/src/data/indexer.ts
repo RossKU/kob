@@ -7,12 +7,13 @@
 import type {
   BookView, EventView, HealthView, IndexerTokenView, OrderView, Page, StrayView, TokenEventView, TokenUtxoView, WsFrame,
   FillNoticeView, BookNotice, OrderNotice, ReorgNotice, HealthCursorNotice, HealthTickNotice,
-  CandleInterval, CandlesView, DepthView, StatsView, TradesView, PairBookView, PairCandlesView, PairFillsView, PairSummaryView,
+  ActivityStatsView, CandleInterval, CandlesView, DepthView, StatsView, TradesView, PairBookView, PairCandlesView, PairFillsView, PairSummaryView,
 } from './indexer-types';
 import { adaptPairCandles, adaptPairFills, adaptPairSummaries, sanitizePairBook } from './pair-api';
 import type { Hex } from '../kob/types';
 import { dropZeroDepthLevels, dropEmptyRows } from './book-view';
 import { plainUntrusted } from '../kob/registry';
+import { BYPASS_PARAM, bypassValue, isLiveRoute, recentOwnAction } from './fresh';
 
 /** Largest indexer response body read (bytes); a longer one is refused, not parsed (default of `HttpIndexerOptions.maxBodyBytes`). */
 export const MAX_INDEXER_BODY_BYTES = 8 * 1024 * 1024;
@@ -112,6 +113,11 @@ export interface RequestOptions {
    * first when a slow indexer has every one of them busy (a browser opens about six per host over HTTP/1.1)
    */
   priority?: 'high' | 'low' | 'auto';
+  /**
+   * read past any cache between the app and the indexer (a CDN keeps a live read for a second or more): adds the bypass parameter `_nc`. Left out, a live route is
+   * read this way for a while after the user's own action (data/fresh.ts), so what the action changed shows at once.
+   */
+  fresh?: boolean;
 }
 
 export interface OrdersQuery {
@@ -154,6 +160,17 @@ export interface CandlesQuery {
 
 export const CANDLE_INTERVALS: readonly CandleInterval[] = ['1m', '5m', '1h', '1d'];
 
+const count = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
+const sompiOf = (v: unknown): string | null => (typeof v === 'string' && /^\d+$/.test(v) ? v : null);
+
+/** The activity totals as the summary reads them: a field of another shape is null (shown as a dash), and no `orders` or `kas_locked` means it is not this route. */
+function adaptActivity(r: Record<string, unknown>): ActivityStatsView | null {
+  const orders = count(r.orders);
+  const locked = sompiOf(r.kas_locked);
+  if (orders === null || locked === null) return null;
+  return { since: count(r.since), ts: count(r.ts), orders, traders: count(r.traders), executors: count(r.executors), fees_paid: sompiOf(r.fees_paid), kas_locked: locked };
+}
+
 /** HTTP answers that mean "this indexer does not serve that route" (an older build): the market-data readers resolve to null on them. */
 const isUnsupported = (e: unknown): boolean => e instanceof IndexerError && (e.status === 404 || e.status === 405 || e.status === 501);
 
@@ -189,6 +206,11 @@ export interface IndexerApi {
   candles(token: Hex, q: CandlesQuery, o?: RequestOptions): Promise<CandlesView | null>;
   stats(token: Hex, o?: RequestOptions): Promise<StatsView | null>;
   depth(token: Hex, q?: { levels?: number }, o?: RequestOptions): Promise<DepthView | null>;
+  /**
+   * `GET /v1/stats?since=<unix ms>`: the store's activity totals (orders placed, traders, fees paid to executors, KAS locked; all time without `since`).
+   * Resolves to `null` on an indexer without the route (404 / 405 / 501) or an answer of another shape: the Activity summary keeps its dash.
+   */
+  activity(q?: { since?: number }, o?: RequestOptions): Promise<ActivityStatsView | null>;
   /**
    * Token/token pairs (docs/ops/executor.md 5.4; oriented: base A, quote B): `GET /v1/pairs/{base}/{quote}/book?depth=` (levels of source `direct` =
    * resting KobPair orders, `entry` = KobIfdPair entries at their limit, `route` = quotes implied through the two KAS books; prices quote base units
@@ -322,7 +344,8 @@ export class HttpIndexer implements IndexerApi {
   }
 
   private async get<T>(path: string, query: Record<string, string | number | boolean | undefined>, o?: RequestOptions): Promise<T> {
-    return (await this.request(this.url(path, query), o)).body as T;
+    const bypass = o?.fresh ?? (isLiveRoute(path) && recentOwnAction());
+    return (await this.request(this.url(path, bypass ? { ...query, [BYPASS_PARAM]: bypassValue() } : query), o)).body as T;
   }
 
   /** GET that maps 404 to null (unknown resource). */
@@ -460,6 +483,11 @@ export class HttpIndexer implements IndexerApi {
   async stats(token: Hex, o?: RequestOptions): Promise<StatsView | null> {
     const r = await this.getOptional<StatsView>(`/v1/stats/${assertHash('token', token)}`, {}, o);
     return r && typeof r === 'object' && typeof r.price_basis === 'string' ? r : null;
+  }
+
+  async activity(q: { since?: number } = {}, o?: RequestOptions): Promise<ActivityStatsView | null> {
+    const r = await this.getOptional<Record<string, unknown>>('/v1/stats', { since: q.since === undefined ? undefined : Math.max(0, Math.floor(q.since)) }, o);
+    return r && typeof r === 'object' ? adaptActivity(r) : null;
   }
 
   async depth(token: Hex, q: { levels?: number } = {}, o?: RequestOptions): Promise<DepthView | null> {

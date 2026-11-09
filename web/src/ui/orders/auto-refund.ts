@@ -10,6 +10,7 @@ import { useEffect, useRef } from 'preact/hooks';
 import { buildCancelEnv } from '../../app/env';
 import type { Services } from '../../app/services';
 import type { OrderView } from '../../data/indexer-types';
+import { markOwnAction } from '../../data/fresh';
 import { t } from '../../i18n';
 import { planRefund, type CancelPlan } from '../../kob/cancel';
 import { decodeSigning } from '../../kob/decode';
@@ -79,6 +80,7 @@ export async function autoRefundPass(s: Services, pubkey: Hex, store: RecordStor
       s.kob.validate(signed);
       const txid = await s.node.submitTransaction(signed.tx);
       if (txid !== signed.tx.id) continue;
+      markOwnAction();
       await markCancelling(store, plan, txid);
       out.push(txid);
     } catch {
