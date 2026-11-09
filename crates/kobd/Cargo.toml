@@ -41,7 +41,7 @@ anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
-rusqlite = { version = "0.37", features = ["bundled", "functions"] }
+rusqlite = { version = "0.41", features = ["bundled", "functions"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs", "io-util"] }
 # `wss:` endpoints (public nodes, `rpc::multi`): rustls with the ring provider and the webpki roots (no system OpenSSL)
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
