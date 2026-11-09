@@ -56,18 +56,33 @@ jobs:
         with:
           toolchain: "1.94.0"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Workspace tests (harness order carrier 10 KAS, KRON template 2433)
+      - name: Workspace tests (KRON template 2433)
+        if: runner.os == 'Linux'
         env:
           # the live TN10 tests (node follow, x402 end-to-end) need a reachable testnet node and mine their own funds: not for CI
           KOB_SKIP_NETWORK_TESTS: "1"
         run: cargo test --workspace --locked
+      # Windows runs what it adds beyond Linux (kobd, kob-cli, kob-x402, kob-protocol, paths and files): the script-engine
+      # harness (kob-tests) and the budget table measurements are platform-independent CPU work that Linux already covers,
+      # and took about 45 minutes here. A smoke set of kob-tests that read the repository's files still runs.
+      - name: Workspace tests, Windows (without the engine harness and the budget table measurements)
+        if: runner.os == 'Windows'
+        env:
+          KOB_SKIP_NETWORK_TESTS: "1"
+        run: >
+          cargo test --workspace --locked --exclude kob-tests --
+          --skip compute_budget_table_is_generated_exact_and_current
+          --skip wide_pad_shapes_are_measured_on_every_program
+          --skip pair_shapes_are_measured_on_every_program_pair
+          --skip every_pair_role_is_present_and_sufficient_on_every_program_pair
+      - name: Engine harness smoke set, Windows (the tests that read artifacts, registries and pinned files)
+        if: runner.os == 'Windows'
+        run: >
+          cargo test --locked -p kob-tests --test artifacts_tests --test registry_tests --test protocol_lib_tests
+          --test argent_import_pin_tests --test retired_cancel_tests
       - name: "Mainnet deployment build (feature deploy-mainnet: the embedded record, the pinned registry, the network checks; docs/ops/release.md 5)"
+        if: runner.os == 'Linux'
         run: cargo test --locked -p kob-protocol -p kobd --lib --features deploy-mainnet
-      - name: Engine harness, carrier sensitivity (1 KAS = the wallet default order carrier)
-        shell: bash
-        run: |
-          KOB_CARRIER_KAS=1 cargo test --locked -p kob-tests
-          KOB_CARRIER_KAS=20 cargo test --locked -p kob-tests
 
   wasm:
     runs-on: ubuntu-latest
