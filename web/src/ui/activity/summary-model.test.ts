@@ -95,6 +95,12 @@ describe('the activity totals', () => {
     expect([activityFigures(null), activityFigures(undefined)]).toEqual([none, none]);
   });
 
+  it('shows the executors an indexer counts, a dash where it counts none', () => {
+    expect(activityFigures({ ...view, executors: 3 }).executors).toBe(3);
+    expect(activityFigures({ ...view, executors: 0 }).executors).toBe(0);
+    expect(activityFigures(view).executors).toBeNull();
+  });
+
   it('starts a window as far back as the page words it, at a whole minute', () => {
     const now = Date.UTC(2026, 10, 8, 13, 20, 41, 500);
     expect(activitySince('1D', now)).toBe(Date.UTC(2026, 10, 7, 13, 20));
