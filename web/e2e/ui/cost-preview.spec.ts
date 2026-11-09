@@ -33,13 +33,14 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     await expect(line).toHaveText(/^0\.0735 KAS$/);
     expect(await box()).toEqual(first);
 
+    // (the unit stands once, at the end of the line, as in the units column of the box above)
     // a market buy: an estimate from the asks, and the bound the slippage allows beside it when they differ
     await pickType(page, 'market', 'buy');
     let here = await box();
     await sameSize();
     await fillFields(page, { amount: '2' });
     // (the plan lands a moment after the estimate: its slippage bound joins the line)
-    await expect(line).toHaveText(/^≈ [\d,.]+ KAS · max [\d,.]+ KAS$/);
+    await expect(line).toHaveText(/^≈ [\d,.]+ · max [\d,.]+ KAS$/);
     expect(await box()).toEqual(here);
 
     // a market sell: the proceeds, with the least the order accepts
@@ -47,7 +48,7 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     here = await box();
     await sameSize();
     await fillFields(page, { amount: '2' });
-    await expect(line).toHaveText(/^≈ [\d,.]+ KAS · min [\d,.]+ KAS$/);
+    await expect(line).toHaveText(/^≈ [\d,.]+ · min [\d,.]+ KAS$/);
     expect(await box()).toEqual(here);
 
     // a book too thin for the amount

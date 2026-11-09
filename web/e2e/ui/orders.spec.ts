@@ -192,6 +192,7 @@ test.describe('recover', () => {
     await appPage.evaluate((k) => localStorage.removeItem(k), storeKey);
     await appPage.reload();
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await openOrdersSettings(appPage); // the section is folded again after a reload
     await expect(appPage.getByTestId('recover-count')).toContainText('0 placement');
     await appPage.getByTestId(TESTID.ordersImport).setInputFiles(path);
     await expect(appPage.getByTestId('import-preview')).toContainText('1 record(s) can be imported');

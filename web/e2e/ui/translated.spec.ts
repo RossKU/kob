@@ -145,7 +145,7 @@ test('a machine-translated page shows every changed text afresh: status bar, tic
   expect(pageErrors.filter((e) => /view crashed|insertBefore|NotFoundError/.test(e))).toEqual([]);
 });
 
-test('a machine-translated My orders keeps its tab counts current (TN10 2026-10-17: "History (0)" over five listed orders)', async ({ appPage: page, mock }) => {
+test('a machine-translated Portfolio keeps its tab counts current (TN10 2026-10-17: "History (0)" over five listed orders)', async ({ appPage: page, mock }) => {
   await page.addInitScript(installTranslator);
   await fund(mock, 'alice');
   const ids = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 1 }, { side: 'ask', price: 2_710_000, tokens: 1 }]);
@@ -157,7 +157,7 @@ test('a machine-translated My orders keeps its tab counts current (TN10 2026-10-
   // one fills: the counts change while the page is translated
   await mock.fill(ids[0]!);
   await page.getByTestId('orders-refresh').click();
-  await expect.poll(() => seen(page, 'orders-tab-history'), { timeout: 20_000 }).toBe('History (1)');
-  await expect.poll(() => seen(page, 'orders-tab-active')).toBe('Active (1)');
+  await expect.poll(() => seen(page, 'orders-tab-history'), { timeout: 20_000 }).toBe('Order history (1)');
+  await expect.poll(() => seen(page, 'orders-tab-active')).toBe('Open orders (1)');
   expect(await staleTexts(page), 'texts Preact changed after the translator replaced them').toEqual([]);
 });

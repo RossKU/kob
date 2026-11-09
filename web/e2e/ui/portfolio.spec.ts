@@ -2,16 +2,15 @@
 // reload or a link keeps the tab; the Fills tab lists every fill of the wallet's orders, one line each; the folded section of strays, automatic
 // refunds and recovery under the tabs stays closed unless strays wait, and `#/portfolio/recover` (the footer's Recover link) opens it.
 import { expect, test } from '../fixtures';
-import { openMarket } from '../helpers/env';
+import { connectWallet, openMarket } from '../helpers/env';
 import { seedOrders } from '../helpers/orders';
 
 test.use({ autoOpen: false });
 
 test('Balances first; Open orders, Order history and Fills each have their address and survive a reload', async ({ appPage: page, mock }) => {
-  const [filled, open] = await seedOrders(mock, [
-    { side: 'ask', price: 2_700_000, tokens: 2 },
-    { side: 'ask', price: 2_800_000, tokens: 1 },
-  ]);
+  // one call each: a call returns its new orders in no fixed order, and which of the two is filled matters (a fill takes one whole token: the order of one token is filled entirely)
+  const [filled] = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 1 }]);
+  const [open] = await seedOrders(mock, [{ side: 'ask', price: 2_800_000, tokens: 1 }]);
   await mock.fill(filled!);
   await openMarket(page, mock, { route: '/portfolio' });
   await expect(page.locator('h1')).toHaveText('Portfolio');
@@ -62,6 +61,7 @@ test('Balances first; Open orders, Order history and Fills each have their addre
 
   // the tab is in the address: a reload opens it again
   await page.reload();
+  await connectWallet(page); // a reload disconnects the wallet; the tab is in the address
   await expect(page.getByTestId('orders-tab-fills')).toHaveAttribute('aria-selected', 'true');
   // no strays: the folded section stays closed
   expect(await page.getByTestId('orders-settings').evaluate((e) => (e as HTMLDetailsElement).open)).toBe(false);
