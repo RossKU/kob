@@ -56,12 +56,18 @@ jobs:
         with:
           toolchain: "1.94.0"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # the budget table measurements (kob-protocol/tests/budget_table.rs, about 9 minutes of CPU) run in their own job beside this one
       - name: Workspace tests (KRON template 2433)
         if: runner.os == 'Linux'
         env:
           # the live TN10 tests (node follow, x402 end-to-end) need a reachable testnet node and mine their own funds: not for CI
           KOB_SKIP_NETWORK_TESTS: "1"
-        run: cargo test --workspace --locked
+        run: >
+          cargo test --workspace --locked --
+          --skip compute_budget_table_is_generated_exact_and_current
+          --skip wide_pad_shapes_are_measured_on_every_program
+          --skip pair_shapes_are_measured_on_every_program_pair
+          --skip every_pair_role_is_present_and_sufficient_on_every_program_pair
       # Windows runs what it adds beyond Linux (kobd, kob-cli, kob-x402, kob-protocol, paths and files): the script-engine
       # harness (kob-tests) and the budget table measurements are platform-independent CPU work that Linux already covers,
       # and took about 45 minutes here. A smoke set of kob-tests that read the repository's files still runs.
@@ -83,6 +89,19 @@ jobs:
       - name: "Mainnet deployment build (feature deploy-mainnet: the embedded record, the pinned registry, the network checks; docs/ops/release.md 5)"
         if: runner.os == 'Linux'
         run: cargo test --locked -p kob-protocol -p kobd --lib --features deploy-mainnet
+
+  budget-table:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Budget table measurements (every builder shape on every program, the generated table exact and current)
+        run: cargo test --locked -p kob-protocol --test budget_table
 
   wasm:
     runs-on: ubuntu-latest
