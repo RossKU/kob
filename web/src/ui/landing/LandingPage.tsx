@@ -107,10 +107,12 @@ function useFitLines(head: { current: HTMLDivElement | null }) {
     const el = head.current;
     const h2 = el?.querySelector('h2');
     if (!el || !h2) return;
-    let width = -1;
+    let seen = '';
     const fit = (force: boolean) => {
-      if (!force && el.clientWidth === width) return;
-      width = el.clientWidth;
+      // the mark beside the heading is sized by the window (vw) while the row stops growing at its maximum, so the window's width counts too
+      const key = `${el.clientWidth}/${window.innerWidth}`;
+      if (!force && key === seen) return;
+      seen = key;
       h2.style.removeProperty('font-size');
       const room = h2.clientWidth;
       const need = Math.max(0, ...Array.from(h2.querySelectorAll<HTMLElement>('.lp-ln > span'), (s) => s.scrollWidth));
@@ -119,8 +121,13 @@ function useFitLines(head: { current: HTMLDivElement | null }) {
     fit(true);
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => fit(false)) : null;
     ro?.observe(el);
+    const onResize = () => fit(false);
+    window.addEventListener('resize', onResize);
     void document.fonts?.ready.then(() => fit(true));
-    return () => ro?.disconnect();
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
   }, []);
 }
 
