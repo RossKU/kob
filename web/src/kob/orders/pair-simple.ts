@@ -20,7 +20,7 @@ import { ceilDiv, maxBig } from '../units';
 import { hasError, issue } from './common-issues';
 import { activationDaa, auctionBound, checkBps, checkFills, decaySlope, lifeDaa, positiveDuration, resolveLifetime } from './simple';
 import {
-  checkPairNotional, defaultPairFills, checkPairPrice, checkPairTip, failedPairPlan, heldOf, makePairState, pairCarrierOf, pairKasLines, pairTipsOf, placePair,
+  checkPairNotional, defaultPairFills, defaultPairTip, checkPairPrice, checkPairTip, failedPairPlan, heldOf, makePairState, pairCarrierOf, pairKasLines, pairTipsOf, placePair,
   withCustody,
 } from './pair-common';
 import { pairIssue, type PairIssueCode } from './pair-issues';
@@ -169,7 +169,7 @@ function planLimit(env: PairPlanEnv, i: LimitIntent): PairOrderPlan {
   if (i.maxFills !== undefined) checkFills(i.maxFills, pre);
   if (hasError(pre)) return failedPairPlan(pre);
   const ticker = env.pair.quote.ticker;
-  const d = blank(i.side, i.amount, i.price, i.tip ?? 0n, i.minFill);
+  const d = blank(i.side, i.amount, i.price, i.tip ?? defaultPairTip(env, i.amount), i.minFill);
   const requested = activationDaa(env, i.activeFrom);
   const future = requested !== null && requested > env.clock.daa;
   d.requestedActiveFrom = requested;
@@ -216,7 +216,7 @@ function planImmediate(env: PairPlanEnv, i: IocIntent | FokIntent): PairOrderPla
   const pre: PlanIssue[] = [...checkPairPrice(i.price)];
   const life = lifeDaa(env, i.life, pre);
   if (hasError(pre)) return failedPairPlan(pre);
-  const d = blank(i.side, i.amount, i.price, i.tip ?? 0n, i.minFill);
+  const d = blank(i.side, i.amount, i.price, i.tip ?? defaultPairTip(env, i.amount), i.minFill);
   d.immediate = true;
   const requested = activationDaa(env, i.activeFrom);
   const future = requested !== null && requested > env.clock.daa;
@@ -287,7 +287,7 @@ function planAuction(env: PairPlanEnv, r: AuctionRequest, pre: PlanIssue[]): Pai
 
 function planMarket(env: PairPlanEnv, i: MarketIntent): PairOrderPlan {
   return planAuction(env, {
-    side: i.side, amount: i.amount, tip: i.tip ?? 0n, minFill: i.minFill, reference: touchPrice(env.book, i.side), bps: i.slippageBps ?? SLIPPAGE_BPS,
+    side: i.side, amount: i.amount, tip: i.tip ?? defaultPairTip(env, i.amount), minFill: i.minFill, reference: touchPrice(env.book, i.side), bps: i.slippageBps ?? SLIPPAGE_BPS,
     auction: i.auction, activation: i.activation, life: i.life, allOrNothing: i.allOrNothing ?? false, notes: ['market'],
   }, []);
 }
@@ -296,7 +296,7 @@ function planStreaming(env: PairPlanEnv, i: StreamingIntent): PairOrderPlan {
   const pre: PlanIssue[] = [];
   if (i.displayedPrice <= 0n) pre.push(issue('REFERENCE_PRICE_INVALID', undefined, 'displayedPrice'));
   return planAuction(env, {
-    side: i.side, amount: i.amount, tip: i.tip ?? 0n, minFill: i.minFill, reference: i.displayedPrice > 0n ? i.displayedPrice : null, bps: i.toleranceBps,
+    side: i.side, amount: i.amount, tip: i.tip ?? defaultPairTip(env, i.amount), minFill: i.minFill, reference: i.displayedPrice > 0n ? i.displayedPrice : null, bps: i.toleranceBps,
     auction: i.auction, activation: i.activation, life: i.life, allOrNothing: i.allOrNothing ?? false, notes: ['streaming'],
   }, pre);
 }
@@ -305,7 +305,7 @@ function planClose(env: PairPlanEnv, i: CloseIntent): PairOrderPlan {
   const held = heldOf(env.token, env.maker, env.tokenUtxos);
   if (i.amount === undefined && held <= 0n) return failedPairPlan([issue('CLOSE_NOTHING_TO_SELL')]);
   return planAuction(env, {
-    side: 'sell', amount: i.amount ?? held, tip: i.tip ?? 0n, reference: touchPrice(env.book, 'sell'), bps: i.slippageBps ?? SLIPPAGE_BPS,
+    side: 'sell', amount: i.amount ?? held, tip: i.tip ?? defaultPairTip(env, i.amount ?? held), reference: touchPrice(env.book, 'sell'), bps: i.slippageBps ?? SLIPPAGE_BPS,
     auction: i.auction, activation: i.activation, life: i.life, allOrNothing: i.allOrNothing ?? false, notes: ['market', 'close'],
   }, []);
 }
@@ -326,7 +326,7 @@ function planSchedule(env: PairPlanEnv, i: TwapIntent | DcaIntent): PairOrderPla
   if (i.type === 'dca' && i.maxFills !== undefined) checkFills(i.maxFills, pre);
   if (hasError(pre)) return failedPairPlan(pre);
 
-  const d = blank(side, i.amount, i.price, i.tip ?? 0n, i.minFill);
+  const d = blank(side, i.amount, i.price, i.tip ?? defaultPairTip(env, i.amount), i.minFill);
   const requested = activationDaa(env, i.activeFrom);
   const future = requested !== null && requested > env.clock.daa;
   d.requestedActiveFrom = requested;
@@ -374,7 +374,7 @@ function planDutch(env: PairPlanEnv, i: DutchIntent): PairOrderPlan {
   if (i.maxFills !== undefined) checkFills(i.maxFills, pre);
   if (hasError(pre)) return failedPairPlan(pre);
 
-  const d = blank(i.side, i.amount, i.price, i.tip ?? 0n, i.minFill);
+  const d = blank(i.side, i.amount, i.price, i.tip ?? defaultPairTip(env, i.amount), i.minFill);
   const requested = activationDaa(env, i.activeFrom);
   const future = requested !== null && requested > env.clock.daa;
   d.requestedActiveFrom = requested;

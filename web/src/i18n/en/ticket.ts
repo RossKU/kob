@@ -212,6 +212,9 @@ export default {
 
   'ticket.help.tip': 'Priority: matchers prefer higher tips (no time priority on chain). A sell receives price minus tip, a buy pays price plus tip. Default 0.',
   'ticket.help.tip.inv': 'Priority: matchers prefer higher tips. KAS per {ticker} traded: a Buy receives the KAS minus the tip, a Sell pays the KAS plus the tip. Default 0.',
+  'ticket.help.tip.pair': 'Priority: matchers prefer higher tips. KAS per {ticker} traded, prefunded on the order and paid to the matcher. Default: enough to pay for a matching fill.',
+  'ticket.help.exit.tip.pair': 'Exit priority tip, KAS per {ticker} traded; repeats add the merge cost. Default: enough to pay for a matching fill.',
+  'ticket.tipLow.pair': 'With no tip, a crossing pair order may wait for a route through the KAS books.',
   'ticket.help.amount.inv': 'KAS, converted to {ticker} and rounded down. Selling KAS converts at the most the order can pay (its worst price plus the tip): it never spends more KAS than you typed.',
   'ticket.help.maxFills.inv': 'Each fill pays a delivery carrier from the escrow. Default 3, more when it crosses many orders now (up to 10; DCA: one per slice).',
   'ticket.help.stop.inv': 'Arms only when a matcher fills a trade at or beyond it (Buy stop: at or above; Sell stop: at or below) resting the rest time (default 5 s), of at least your threshold. Quotes and unused trades do not count: it can trigger later than the chart suggests.',
@@ -268,6 +271,7 @@ export default {
   'ticket.help.ladder.step': 'Price between levels: lower each level for buy first, higher for sell first. Entry and exit move together.',
 
   'ticket.ph.tip': '0',
+  'ticket.ph.tip.pair': 'default',
   'ticket.ph.maxFills': 'default',
   'ticket.ph.maxFills.market': '1',
   'ticket.minValue.default': 'Worth {value} KAS, under the usual {min} KAS minimum order value: it will not be listed, so it will not fill. Cancel it in Portfolio.',
@@ -289,6 +293,7 @@ export default {
   'ticket.ph.prefund': 'automatic',
   'ticket.ph.repeat.count': 'unlimited (90 days)',
   'ticket.ph.exit.tip': '0',
+  'ticket.ph.exit.tip.pair': 'default',
   'ticket.ph.priceEnd': 'none',
   'ticket.ph.amount': '0.0',
   'ticket.amountWholePh': '0',

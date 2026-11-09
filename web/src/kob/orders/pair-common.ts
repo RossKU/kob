@@ -51,6 +51,30 @@ export function pairTipsOf(env: PairPlanEnv): { refundTip: bigint; keeperTip: bi
 }
 
 /**
+ * The priority tip (KAS sompi per whole A) a pair order carries when the user sets none: the pair's keeper tip (the measured fee of one update,
+ * doubled; `pair_keeper_tips.json`) over the whole amount, rounded up. The executor nets two crossing pair orders only when the tips pay the
+ * netting's network fee (a netting moves no KAS), so an untipped crossing pair order would wait for a route through the KAS books. An explicit
+ * tip, zero included, is kept as typed.
+ */
+export function defaultPairTip(env: PairPlanEnv, amount: bigint): bigint {
+  if (amount <= 0n) return 0n;
+  const scale = env.token.scale;
+  return (pairTipsOf(env).keeperTip * scale + amount - 1n) / amount;
+}
+
+/** A tip typed for a pair order whose total over `amount` is below the default's: a crossing pair order may then wait for a route through the KAS books. */
+export function pairTipBelowDefault(env: PairPlanEnv, amount: bigint, tip: bigint | undefined): boolean {
+  if (tip === undefined || amount <= 0n) return false;
+  return (amount * tip) / env.token.scale < pairTipsOf(env).keeperTip;
+}
+
+/** The tip fields of an intent (`tip`, an if-done `exit.tip`) typed below what a netting fill needs: the ticket says a crossing pair order may wait. */
+export function lowPairTipFields(env: PairPlanEnv, intent: { amount?: bigint; tip?: bigint; exit?: { tip?: bigint } } | null): string[] {
+  if (!intent || intent.amount === undefined) return [];
+  return [pairTipBelowDefault(env, intent.amount, intent.tip) ? 'tip' : '', pairTipBelowDefault(env, intent.amount, intent.exit?.tip) ? 'exit.tip' : ''].filter(Boolean);
+}
+
+/**
  * The environment the shared leg / expiry helpers (cond-legs.ts, cond-common.ts) run in for a pair: prices are B per whole A, so the KAS tick
  * does not apply (tick 1), and the default keeper / refund tips are the pair's (kob-wasm `pairTips`).
  */

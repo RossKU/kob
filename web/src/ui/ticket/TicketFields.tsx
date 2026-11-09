@@ -37,6 +37,8 @@ export interface TicketFieldsProps {
   flip?: FlipCtx;
   /** a token/token pair: the ticker of the quote token B the prices are typed in (B per whole `ticker`); absent = KAS. Tips stay KAS. */
   quoteTicker?: string;
+  /** a pair: the tip fields whose typed tip is below what a netting fill needs (pair-common `pairTipBelowDefault`): a hint says a crossing order may wait */
+  lowTips?: readonly string[];
 }
 
 /** What the fields need to speak the shown (inverted) market: the token's name, its scale and a KAS price per whole token to turn amounts into KAS. */
@@ -114,10 +116,10 @@ export function TicketFields(props: TicketFieldsProps) {
         const label = t(props.flip && has(`ticket.label.${id}.inv`) ? `ticket.label.${id}.inv` : labelKey(form.type, id));
         // an inverted market has its own wording where the native help speaks of buying / selling the token
         // a market order's Fills box has its own help on either view (it speaks of transactions, not of a limit's escrow)
-        const helpKey = id === 'maxFills' && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
+        const helpKey = props.quoteTicker && has(`ticket.help.${id}.pair`) ? `ticket.help.${id}.pair` : id === 'maxFills' && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
         // (the plain amount help, "Amount of X to buy or sell", says what the label and the unit beside the box say: it is not shown)
         const help = helpKey !== 'ticket.help.amount' && has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS', local: formatLocalTime(nextUtcMidnight(Date.now())) }) : undefined;
-        const phKey = has(`ticket.ph.${id}.${form.type}`) ? `ticket.ph.${id}.${form.type}` : `ticket.ph.${id}`;
+        const phKey = has(`ticket.ph.${id}.${form.type}`) ? `ticket.ph.${id}.${form.type}` : props.quoteTicker && has(`ticket.ph.${id}.pair`) ? `ticket.ph.${id}.pair` : `ticket.ph.${id}`;
         // a token without decimals takes whole numbers: its amount box says "0", not "0.0"
         const wholeAmount = spec.kind === 'amount' && !form.kas && ctx.decimals === 0 && phKey === 'ticket.ph.amount';
         const defaultHint = value === '' && FIELD_DEFAULTS[id] === undefined && has(phKey) ? (wholeAmount ? t('ticket.amountWholePh') : t(phKey)) : undefined;
@@ -257,6 +259,14 @@ export function TicketFields(props: TicketFieldsProps) {
           const unit = UNIT_KEY[spec.kind];
           if (unit) suffix = <span class="tk-unit">{t(unit)}</span>;
           inputMode = spec.kind === 'percent' || spec.kind === 'minutes' ? 'decimal' : 'numeric';
+        }
+        if (spec.kind === 'tip' && props.lowTips?.includes(id)) {
+          hint = (
+            <>
+              <span class="tk-sub" data-testid={`${spec.testid}-low`}>{t('ticket.tipLow.pair')}</span>
+              {hint}
+            </>
+          );
         }
         if (spec.kind === 'amount') {
           // an amount counts the base of the shown pair: the token natively (whole-token units, its decimals), KAS in a `kas` form
