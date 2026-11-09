@@ -160,6 +160,15 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   const flippedFacts = page.getByTestId('pair-token-details');
   await expect(flippedFacts.nth(0)).toHaveAttribute('data-token', QUOTE);
   await expect(flippedFacts.nth(1)).toHaveAttribute('data-token', base);
+
+  // the market list's row of the favourite pair, favoured as EXUSD/EXKCC, counts the fills of the EXKCC/EXUSD orders too (one market, not two): the volume is in
+  // EXKCC (this row's quote) and the two fills are there
+  await page.getByTestId('pair-favorite').click();
+  await page.goto('/#/market');
+  await page.getByTestId('token-list-favorites').click();
+  const row = page.getByTestId(`pair-row-${QUOTE}-${base}`);
+  await expect(row).toHaveAttribute('data-state', 'ready');
+  await expect(row.getByTestId(`pair-volume-${QUOTE}-${base}`)).toHaveAttribute('title', /EXKCC · 2 pair fills in 24 h$/);
 });
 
 test('pair page without a pair fill: the prices still come from the two KAS markets, the volume is zero and the activity log has no fill', async ({ appPage: page, mock }) => {

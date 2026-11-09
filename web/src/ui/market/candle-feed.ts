@@ -17,6 +17,37 @@ export type ChartView =
 /** The chart's source: one token's KAS book, or a pair BASE/QUOTE (`pairCandles`: ask the indexer for its pair candles first). */
 export type ChartSource = { token: string } | { base: string; quote: string; pairCandles?: boolean };
 
+/**
+ * The pair candles of BASE/QUOTE with the pair volume of QUOTE/BASE added to each bucket, turned round (the two orientations are one market: the pair
+ * fills of an order placed as QUOTE/BASE are volume of this pair too; the volume of A is the other view's volume of B and the other way round). The rates come
+ * from the two KAS series and are the same either way, so only the volumes are taken from the other view (a bucket it lacks adds nothing). The view
+ * unchanged for a missing one or one of another pair.
+ */
+export function mergePairCandleOrientations(ab: PairCandlesView, ba: PairCandlesView | null | undefined): PairCandlesView {
+  if (!ba || ba.base !== ab.quote || ba.quote !== ab.base) return ab;
+  const n = (v: string): bigint => (/^\d+$/.test(v) ? BigInt(v) : 0n);
+  const back = new Map(ba.items.map((c) => [c.t, c]));
+  return {
+    ...ab,
+    items: ab.items.map((c) => {
+      const r = back.get(c.t);
+      return r ? { ...c, pair_volume_a: (n(c.pair_volume_a) + n(r.pair_volume_b)).toString(), pair_volume_b: (n(c.pair_volume_b) + n(r.pair_volume_a)).toString(), pair_fills: c.pair_fills + r.pair_fills } : c;
+    }),
+  };
+}
+
+/** The pair candles of both orientations as one series (a missing or unreadable other orientation leaves this one). */
+async function pairCandlesBoth(indexer: IndexerApi, base: string, quote: string, q: { interval: CandleInterval; from?: number; limit: number }, signal: AbortSignal): Promise<PairCandlesView | null> {
+  const [ab, ba] = await Promise.all([
+    indexer.pairCandles(base, quote, q, { signal, priority: 'low' }),
+    indexer.pairCandles(quote, base, q, { signal, priority: 'low' }).catch((e: unknown) => {
+      if (signal.aborted) throw e;
+      return null;
+    }),
+  ]);
+  return ab ? mergePairCandleOrientations(ab, ba) : null;
+}
+
 /** The bars of `old` before `from`, then `fresh` (ascending; a bucket in both is taken from `fresh`), the newest `max` of them. */
 export function mergeBars<T extends { t: number }>(old: readonly T[], fresh: readonly T[], from: number, max: number = MAX_BARS): T[] {
   const kept = old.filter((x) => x.t < from);
@@ -48,7 +79,7 @@ async function loadFull(indexer: IndexerApi, src: ChartSource, interval: CandleI
     return v ? { kind: 'kas', v } : null;
   }
   if (src.pairCandles) {
-    const pc = await indexer.pairCandles(src.base, src.quote, { interval, limit }, { signal, priority: 'low' });
+    const pc = await pairCandlesBoth(indexer, src.base, src.quote, { interval, limit }, signal);
     if (pc) return { kind: 'pair', pc };
   }
   // both legs on the same interval and window
@@ -64,7 +95,7 @@ async function loadNewer(indexer: IndexerApi, src: ChartSource, prev: ChartView,
   }
   if ('token' in src) return null;
   if (prev.kind === 'pair') {
-    const pc = await indexer.pairCandles(src.base, src.quote, q, { signal, priority: 'low' });
+    const pc = await pairCandlesBoth(indexer, src.base, src.quote, q, signal);
     if (!pc || pc.price_basis !== prev.pc.price_basis || pc.quote_price_basis !== prev.pc.quote_price_basis || pc.items.length >= limit) return null;
     return { kind: 'pair', pc: { ...pc, items: mergeBars(prev.pc.items, pc.items, from, limit) } };
   }

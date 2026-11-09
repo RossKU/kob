@@ -21,6 +21,7 @@ import { fitAmountColumn, fitDecimalTexts, tickPriceFraction } from '../kit/form
 import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, priceDecimals, toneOf, unitsToNumber, type Tone } from './market-model';
 import { kasPerToken } from './orientation';
 import type { PairDepth, PairVolume } from './pair-market';
+import { mergePairSummaries } from './pair-model';
 import type { FavoritePair } from './favorites';
 import { filterTokens, idOnlyRow, tokenLabel, type TokenRow } from './token-model';
 import { usdStats } from './usd-model';
@@ -275,7 +276,7 @@ export interface ListedPair {
   key: string;
   base: TokenRow;
   quote: TokenRow;
-  /** its live order counts; null when `/v1/pairs` does not list it this way round */
+  /** its live order counts, both orientations together (`mergePairSummaries`); null when `/v1/pairs` lists neither */
   summary: PairSummaryView | null;
 }
 
@@ -293,7 +294,7 @@ export function listedPairs(wanted: readonly FavoritePair[], rows: readonly Toke
     return r.decimals === null && typeof r.index?.market_scale === 'number' ? { ...r, decimals: exponentOf(r.index.market_scale) } : r;
   };
   return wanted.map(({ base, quote }) => ({
-    key: `${base}/${quote}`, base: side(base), quote: side(quote), summary: summaries?.find((s) => s.base === base && s.quote === quote) ?? null,
+    key: `${base}/${quote}`, base: side(base), quote: side(quote), summary: mergePairSummaries(base, quote, summaries),
   }));
 }
 

@@ -150,10 +150,12 @@ describe('market list pairs', () => {
   const summary = (base: string, quote: string): PairSummaryView => ({ base, quote, direct_asks: 3, direct_bids: 1, entry_asks: 0, entry_bids: 1, conditionals: 1 });
   const pair = (base: TokenRow, quote: TokenRow) => ({ base: base.covenantId, quote: quote.covenantId });
 
-  it('lists the favourite pairs in their order, each as it was favoured, with the order counts of the same orientation', () => {
+  it('lists the favourite pairs in their order, each as it was favoured, with the order counts of both orientations (the flipped pair turns them round)', () => {
     const got = listedPairs([pair(u, a), pair(a, u)], [a, u], [summary(a.covenantId, u.covenantId)]);
     expect(got.map((p) => p.key)).toEqual([`${u.covenantId}/${a.covenantId}`, `${a.covenantId}/${u.covenantId}`]);
-    expect(got.map((p) => p.summary === null)).toEqual([true, false]);
+    // the one listed orientation is counted under either way round: EXKCC/EXUSD has 3 asks and 1 bid, so EXUSD/EXKCC has 1 ask and 3 bids
+    expect(got.map((p) => p.summary && [p.summary.direct_asks, p.summary.direct_bids])).toEqual([[1, 3], [3, 1]]);
+    expect(listedPairs([pair(a, u)], [a, u], [])[0]!.summary).toBeNull();
     expect(pairLabelOf(got[1]!)).toBe('EXKCC (aaaa…aaaa) / EXUSD (eeee…eeee)');
     expect(listedPairs([], [a, u], [summary(a.covenantId, u.covenantId)])).toEqual([]);
   });
