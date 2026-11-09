@@ -5,6 +5,8 @@
 //   KOB_PUBLIC_URL   the public origin the build is served from (`https://kob.kaspa.ag`): og:url and og:image (and twitter:image) need ABSOLUTE urls,
 //                    so they are emitted only when it is given. Unset: both are omitted, and the output does not depend on any host.
 //
+//   landing-only     (an option of applyHead, from KOB_LANDING_ONLY): the description and the link-preview text say the app is in preparation.
+//
 // The rest of the head (title, description, og:title, og:description, twitter:card, icons, manifest) is static in index.html.
 export const TESTNET_TITLE_PREFIX = 'Testnet · ';
 
@@ -34,11 +36,17 @@ export function parsePublicOrigin(raw) {
 
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
-/** `index.html` with the build's network and public origin applied. */
-export function applyHead(html, { network, publicUrl }) {
+/** The description of a landing-only build (the mainnet front page): it does not offer an app that is not there. */
+export const LANDING_ONLY_DESCRIPTION = 'Kaspa Order Book: decentralized limit orders for Kaspa tokens. No admin keys, no oracle. Mainnet is in preparation; the testnet app is open. Open source.';
+
+/** `index.html` with the build's network and public origin applied (and, landing-only, the "in preparation" description). */
+export function applyHead(html, { network, publicUrl, landingOnly = false }) {
   const net = parseBuildNetwork(network);
   const origin = parsePublicOrigin(publicUrl);
   let out = html;
+  if (landingOnly) {
+    out = out.replace(/(<meta (?:name|property)="(?:description|og:description|twitter:description)" content=")[^"]*(")/g, (_m, a, b) => `${a}${esc(LANDING_ONLY_DESCRIPTION)}${b}`);
+  }
   if (net !== 'mainnet') {
     out = out
       .replace(/<title>([^<]*)<\/title>/, (_m, t) => `<title>${TESTNET_TITLE_PREFIX}${t}</title>`)

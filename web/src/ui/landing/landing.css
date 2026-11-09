@@ -220,3 +220,7 @@ body.lp-body { background: #050808; overflow-x: hidden; }
 @media (max-width: 359px) {
   .lp-hero-chip { display: inline-flex; }
 }
+
+/* landing-only (src/app/landing-only.ts): the kicker's chip always shows ("Mainnet — in preparation"), and the hero says in one line what is and is not there */
+.lp[data-mode='soon'] .lp-hero-chip { display: inline-flex; }
+.lp .lp-soon-note { max-width: 44em; margin: 26px 0 0; padding-left: 14px; border-left: 2px solid var(--warn); font-size: clamp(14px, 1.2vw, 16px); line-height: 1.55; color: var(--fg-2); text-wrap: pretty; }

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyHead, parseBuildNetwork, parsePublicOrigin } from '../head-meta.mjs';
+import { applyHead, LANDING_ONLY_DESCRIPTION, parseBuildNetwork, parsePublicOrigin } from '../head-meta.mjs';
 
 const web = (rel: string) => fileURLToPath(new URL(`../${rel}`, import.meta.url));
 const html = readFileSync(web('index.html'), 'utf8');
@@ -59,7 +59,7 @@ describe('the frame logo (header and footer of every page)', () => {
     const attrs = (s: string) =>
       [...s.matchAll(/<rect\b([^>]*?)\s*\/>/g)].map((m) => [...m[1]!.matchAll(/(\w+)="([^"]*)"/g)].map((a) => `${a[1]}=${a[2]}`).sort().join(' '));
     const fav = readFileSync(web('public/favicon.svg'), 'utf8');
-    const src = readFileSync(web('src/ui/shell/Frame.tsx'), 'utf8');
+    const src = readFileSync(web('src/ui/shell/frame-parts.tsx'), 'utf8');
     const start = src.indexOf('function Logo()');
     const logo = src.slice(start, src.indexOf('</svg>', start));
     expect(logo).toContain('class="brand-mark" viewBox="0 0 512 512" aria-hidden="true" focusable="false"');
@@ -89,6 +89,18 @@ describe('build-time head (head-meta.mjs)', () => {
     expect(out).toContain('<meta name="twitter:image" content="https://kob.kaspa.ag/og.png" />');
     expect(out).toContain(`<title>${TITLE}</title>`);
     expect(out.indexOf('og:image')).toBeLessThan(out.indexOf('</head>'));
+  });
+
+  it('landing-only: the description and the link preview say mainnet is in preparation, nothing else changes', () => {
+    const out = applyHead(html, { network: 'mainnet', publicUrl: 'https://kob.kaspa.ag', landingOnly: true });
+    expect(LANDING_ONLY_DESCRIPTION).toContain('Mainnet is in preparation');
+    expect(LANDING_ONLY_DESCRIPTION).not.toMatch(/buy and sell/i);
+    for (const tag of ['<meta name="description"', '<meta property="og:description"', '<meta name="twitter:description"']) expect(out).toContain(`${tag} content="${LANDING_ONLY_DESCRIPTION}" />`);
+    expect(out).not.toContain(DESC);
+    expect(out).toContain(`<title>${TITLE}</title>`);
+    expect(out).toContain('<meta property="og:url" content="https://kob.kaspa.ag/" />');
+    // off (the default): the app's head, byte for byte
+    expect(applyHead(html, { network: 'mainnet', landingOnly: false })).toBe(html);
   });
 
   it('rejects an unknown network and a public URL that is not a plain http(s) origin', () => {

@@ -46,6 +46,17 @@ export const META_DIRECTIVES = {
   'trusted-types': ['default'],
 };
 
+/**
+ * The landing-only build's page (src/app/landing-only.ts): the same policy with no network at all (`connect-src 'none'`: the page makes no request but
+ * its own bundle's, so a node or an indexer could not be reached even by a script that got in), no frames and no images beyond its own files.
+ */
+export const LANDING_META_DIRECTIVES = {
+  ...META_DIRECTIVES,
+  'connect-src': ["'none'"],
+  'img-src': ["'self'", 'data:'],
+  'frame-src': ["'none'"],
+};
+
 /** The private-key signer page: its bundle and wasm from its own origin, nothing else. */
 export const SIGNER_META_DIRECTIVES = {
   'default-src': ["'none'"],
@@ -68,6 +79,9 @@ const render = (d) => Object.entries(d).map(([k, v]) => `${k} ${v.join(' ')}`).j
 export const CSP_META = render(META_DIRECTIVES);
 /** Policy for the real HTTP header (`public/_headers`): the same plus `frame-ancestors 'none'`. */
 export const CSP_HEADER = `${CSP_META}; frame-ancestors 'none'`;
+
+/** The landing-only page's <meta> policy (its host still sends public/_headers' header policy, which this one only narrows). */
+export const LANDING_CSP_META = render(LANDING_META_DIRECTIVES);
 
 /** The signer page's <meta> policy. */
 export const SIGNER_CSP_META = render(SIGNER_META_DIRECTIVES);

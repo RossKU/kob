@@ -22,7 +22,8 @@
     "mock": "node mock/server.mjs",
     "e2e": "playwright test --config playwright.config.ts",
     "e2e:real": "node e2e-real/run.mjs",
-    "e2e:ghpages": "playwright test --config playwright.ghpages.config.ts"
+    "e2e:ghpages": "playwright test --config playwright.ghpages.config.ts",
+    "e2e:landing": "playwright test --config playwright.landing.config.ts"
   },
   "dependencies": {
     "lightweight-charts": "^5.2.1",

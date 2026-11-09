@@ -1,4 +1,5 @@
 // The footer's facts (pure, tested in frame-model.test.ts): which links it shows on which page, and whether it carries the chart library's attribution.
+import { TESTNET_APP_URL } from '../../app/landing-only';
 import { APP_HASH, EXECUTOR_URL, publicApiUrl, REPO_URL } from '../landing/landing-model';
 
 /** Which page the frame is on: the landing page (no charts, no app links) or the app shell. */
@@ -37,6 +38,15 @@ export function footerLinks(context: FrameContext, indexerUrl: string | null | u
     { key: 'shell.footer.settings', href: '#/settings', group: 'app' },
     { key: 'shell.footer.recover', href: '#/portfolio/recover', group: 'app' },
     { key: 'shell.footer.kaspa', href: 'https://kaspa.org', external: true, group: 'app' },
+  ];
+}
+
+/** The landing-only page's footer: the testnet app, GitHub and Run an executor; no link into an app that is not there (App, Mirror, Public API, Support, Disclaimer, Settings). */
+export function soonFooterLinks(): FooterLink[] {
+  return [
+    { key: 'landing.soon.try', href: TESTNET_APP_URL, testid: 'footer-testnet-app', group: 'site' },
+    { key: 'landing.github', href: REPO_URL, group: 'site' },
+    { key: 'landing.footer.executor', href: EXECUTOR_URL, group: 'site' },
   ];
 }
 

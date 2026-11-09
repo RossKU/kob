@@ -53,6 +53,21 @@ export function landingNetworkText(network: NetworkName, site: string): LandingN
   };
 }
 
+/**
+ * The sentences of the landing-only page (src/app/landing-only.ts), the production front of a network that has not launched: "in preparation" instead of a
+ * network and its open-review chip, and no sentence that has real funds at risk or a live app. The test-token network it points to is named once, in the note.
+ */
+export function landingSoonText(site: string): LandingNetworkText {
+  return {
+    chip: t('landing.soon.chip'),
+    chipTip: t('landing.soon.chipTip'),
+    txNote: t('landing.tx.note'),
+    auditBody: t('landing.soon.audit.body'),
+    discLead: t('landing.soon.disc.lead'),
+    discBody: `${t('landing.disc.body', { site })} ${t('landing.soon.disc.tail')}`,
+  };
+}
+
 /** The trust us row's actions: a security report, an issue and, once there is a channel, a message. */
 export function feedbackActions(contactUrl: string = FEEDBACK_CONTACT_URL): { key: string; href: string; testid: string }[] {
   return [

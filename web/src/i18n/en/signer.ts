@@ -6,7 +6,7 @@ export default {
   'signer.unsupported': 'Not available in this browser. Use a browser extension wallet.',
   'signer.unsupportedWhy': 'This browser cannot use the in-page private key signer: it cannot check what the signer shows. On a desktop, use an extension wallet (KasWare or Kaspire).',
   'signer.unsupportedWhyPhone': 'This browser cannot use the in-page private key signer: it cannot check what the signer shows (iOS browsers and Firefox lack the feature). Use Chrome on Android, or open this page on a desktop with an extension wallet (KasWare or Kaspire).',
-  'signer.mirrorOff': 'Private-key signing is off on this mirror: GitHub Pages cannot send the headers that isolate the key entry. Use a wallet extension (KasWare or Kaspire), or the main site kob.kaspa.ag.',
+  'signer.mirrorOff': 'Private-key signing is off on this mirror: GitHub Pages cannot send the headers that isolate the key entry. Use a wallet extension (KasWare or Kaspire), or the testnet app kob-tn10.kaspa.ag.',
   'signer.mirrorOffTitle': 'Private key is not available on this mirror',
   'signer.mirrorOpenApp': 'Open the app',
   'signer.frameTitle': 'Private key signer',

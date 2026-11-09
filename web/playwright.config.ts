@@ -42,8 +42,8 @@ const baseURL = target === 'app' ? `http://127.0.0.1:${APP_PORT}` : `http://127.
 export default defineConfig({
   testDir: './e2e',
   testMatch: target === 'infra' ? 'infra/**/*.spec.ts' : '**/*.spec.ts',
-  // e2e/ghpages runs against the mirror build only (playwright.ghpages.config.ts)
-  testIgnore: target === 'app' ? ['infra/**', /[\\/]e2e[\\/]ghpages[\\/]/] : undefined,
+  // e2e/ghpages runs against the mirror build only (playwright.ghpages.config.ts), e2e/landing against the landing-only build (playwright.landing.config.ts)
+  testIgnore: target === 'app' ? ['infra/**', /[\\/]e2e[\\/]ghpages[\\/]/, /[\\/]e2e[\\/]landing[\\/]/] : undefined,
   timeout: 60_000,
   expect: { timeout: 10_000 },
   // the shared mock server holds global state: one worker unless every worker gets its own server

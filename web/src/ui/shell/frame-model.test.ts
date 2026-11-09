@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { has } from '../../i18n';
-import { footerLinks, showsChartNotice } from './frame-model';
+import { footerLinks, showsChartNotice, soonFooterLinks } from './frame-model';
 
 const src = (p: string) => readFileSync(fileURLToPath(new URL(`../../${p}`, import.meta.url)), 'utf8');
 
@@ -11,7 +11,7 @@ describe('the shared footer', () => {
     expect(showsChartNotice('app')).toBe(true);
     expect(showsChartNotice('landing')).toBe(false);
     // the attribution itself: TradingView's NOTICE text and a link to tradingview.com, under its test id
-    const frame = src('ui/shell/Frame.tsx');
+    const frame = src('ui/shell/frame-parts.tsx');
     expect(frame).toContain('data-testid="footer-chart-notice"');
     expect(frame).toContain('href="https://www.tradingview.com/"');
     expect(frame).toContain('TradingView Lightweight Charts™');
@@ -53,6 +53,20 @@ describe('the shared footer', () => {
     for (const l of footerLinks('app', 'https://idx.example', true)) {
       expect(has(l.key), l.key).toBe(true);
       if (l.title) expect(has(l.title), l.title).toBe(true);
+    }
+  });
+
+  it('the landing-only footer has the testnet app, GitHub and Run an executor, and no link into an app that is not there', () => {
+    const links = soonFooterLinks();
+    expect(links.map((l) => [l.key, l.href])).toEqual([
+      ['landing.soon.try', 'https://kob-tn10.kaspa.ag/#/market'],
+      ['landing.github', 'https://github.com/RossKU/kob'],
+      ['landing.footer.executor', 'https://github.com/RossKU/kob'],
+    ]);
+    for (const l of links) {
+      expect(has(l.key), l.key).toBe(true);
+      expect(l.group).toBe('site');
+      expect(l.href.startsWith('#'), l.href).toBe(false);
     }
   });
 });

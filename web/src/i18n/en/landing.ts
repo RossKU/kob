@@ -6,6 +6,18 @@ export default {
   'landing.openApp': 'Open the app',
   'landing.toTop': 'KOB, back to the top',
 
+  // landing-only mode (src/app/landing-only.ts): the production front page of a network that has not launched; the `.soon` keys replace the network's sentences
+  'landing.soon.chip': 'Mainnet — in preparation',
+  'landing.soon.chip.short': 'In preparation',
+  'landing.soon.chipTip': 'Kaspa mainnet is not live for KOB. The app is being built and cannot be used here yet; it runs on Kaspa testnet-10 with test tokens.',
+  'landing.soon.try': 'Try it on testnet',
+  'landing.soon.try.short': 'Testnet app',
+  'landing.soon.operator.body': '{site} only publishes this page. It never holds funds or orders, does not trade, and does not run executors.',
+  'landing.soon.audit.body': 'Verify it yourself: the code is public. Mainnet is being built, and KOB runs on Kaspa testnet-10 with test tokens. The specification is not final, and no review can show the code is free of bugs. Red-team work and private reports are welcome.',
+  'landing.soon.disc.lead': 'Mainnet · in preparation.',
+  'landing.soon.disc.tail': 'Nothing here can lock funds yet. The testnet app uses test tokens, which have no value. Not financial advice.',
+  'landing.soon.note': 'Mainnet is being built: nothing on this site can hold funds. KOB runs today on Kaspa testnet-10 with test tokens, which have no value.',
+
   'landing.kicker': 'Kaspa Order Book',
   'landing.chip': '{network} · open review',
   'landing.chipTip': 'Kaspa {network}. Open review: the specification is not final, and no review can show the code is free of bugs.',
