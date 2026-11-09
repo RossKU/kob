@@ -66,6 +66,8 @@ async function load(ix: IndexerApi, signal: AbortSignal): Promise<Loaded> {
 }
 
 const UNKNOWN = t('activity.summary.unknown');
+/** A line's place while its text loads (a plain space collapses and the line takes no height). */
+const NBSP = '\u00a0';
 
 function Stat(props: { label: string; value: string | null; sub?: string | null; kas?: boolean; testid: string }) {
   const known = props.value !== null;
@@ -76,7 +78,8 @@ function Stat(props: { label: string; value: string | null; sub?: string | null;
         {known ? props.value : DASH}
         {known && props.kas ? <span class="sum-unit">KAS</span> : null}
       </span>
-      {props.sub ? <span class="sum-s">{props.sub}</span> : null}
+      {/* a sub line that comes with the figures (null while they load) keeps its place meanwhile: the tile does not grow when they arrive */}
+      {props.sub !== undefined ? <span class="sum-s">{props.sub ?? NBSP}</span> : null}
     </div>
   );
 }
@@ -130,7 +133,7 @@ export function ActivitySummary() {
       <div class="sum-band">
         <h2 class="sum-h">{t('activity.summary.allTime')}</h2>
         <span class="sum-hint" data-testid="activity-summary-since">
-          {view ? (view.all.since === null ? t('activity.summary.sinceNone') : t('activity.summary.since', { date: dateFmt(view.all.since) })) : ' '}
+          {view ? (view.all.since === null ? t('activity.summary.sinceNone') : t('activity.summary.since', { date: dateFmt(view.all.since) })) : NBSP}
         </span>
       </div>
       <div class="sum-strip sum-strip-6">

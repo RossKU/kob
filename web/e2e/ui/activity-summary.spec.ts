@@ -76,3 +76,30 @@ test.describe('activity summary on a phone', () => {
     expect(Math.abs(a.y - b.y)).toBeLessThan(2);
   });
 });
+
+test.describe('activity summary while it loads', () => {
+  // the lines that come with the figures (since the first trade, the trades' change, the markets' split) keep their places while they load: the summary
+  // does not grow, and the log below it does not jump, when they arrive
+  for (const width of [1440, 390]) {
+    test(`keeps its height when the figures arrive (${width} px)`, async ({ appPage: page, mock }) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await seed(page, mock);
+      const held: (() => void)[] = [];
+      let hold = true;
+      await page.route(/\/v1\/candles\//, async (route) => {
+        if (hold) await new Promise<void>((go) => held.push(go));
+        await route.fallback();
+      });
+      await page.goto('/#/activity');
+      const sum = page.getByTestId('activity-summary');
+      await expect(sum).toHaveAttribute('aria-busy', 'true');
+      await expect.poll(() => held.length).toBeGreaterThan(0);
+      const before = await sum.evaluate((e) => e.getBoundingClientRect().height);
+      hold = false;
+      for (const go of held.splice(0)) go();
+      await expect(sum).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
+      await expect(page.getByTestId('activity-summary-since')).toContainText('since the first trade');
+      expect(await sum.evaluate((e) => e.getBoundingClientRect().height)).toBe(before);
+    });
+  }
+});
