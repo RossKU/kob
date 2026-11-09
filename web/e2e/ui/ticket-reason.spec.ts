@@ -131,5 +131,27 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     const cost = page.getByTestId('order-cost-preview');
     await expect(cost).toContainText(/\S{3,}/);
     expect((await cost.boundingBox())!.height).toBeLessThan(24);
+    // the Available and cost lines under the amount: the figure ends under the box's (right-aligned) figure, the unit stands under the amount's unit
+    await pickType(page, 'market', 'buy');
+    await page.getByTestId('order-amount').fill('1');
+    await expect(page.getByTestId('order-cost-preview').locator('.tk-line-unit')).toHaveText('KAS');
+    await expect(page.getByTestId('order-available').locator('.tk-line-unit')).toHaveText('KAS');
+    expect(await page.getByTestId('order-amount').evaluate((e) => getComputedStyle(e).textAlign)).toBe('right');
+    const edges = await page.getByTestId('order-ticket').evaluate((root) => {
+      const r = (sel: string) => root.querySelector(sel)!.getBoundingClientRect().right;
+      const input = root.querySelector<HTMLInputElement>('[data-testid="order-amount"]')!;
+      const pad = parseFloat(getComputedStyle(input).paddingRight) + parseFloat(getComputedStyle(input).borderRightWidth);
+      const amountRow = input.closest('.field')!;
+      return {
+        unit: amountRow.querySelector('.tk-suffix')!.getBoundingClientRect().right,
+        figure: input.getBoundingClientRect().right - pad,
+        availUnit: r('[data-testid="order-available"] .tk-line-unit'),
+        costUnit: r('[data-testid="order-cost-preview"] .tk-line-unit'),
+        availFigure: r('[data-testid="order-available"] .tk-line-num'),
+        costFigure: r('[data-testid="order-cost-preview"] .tk-line-text') - parseFloat(getComputedStyle(root.querySelector('[data-testid="order-cost-preview"] .tk-line-text')!).paddingRight),
+      };
+    });
+    for (const k of ['availUnit', 'costUnit'] as const) expect(Math.abs(edges[k] - edges.unit), k).toBeLessThan(1);
+    for (const k of ['availFigure', 'costFigure'] as const) expect(Math.abs(edges[k] - edges.figure), k).toBeLessThan(1);
   });
 }

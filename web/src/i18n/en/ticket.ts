@@ -11,7 +11,7 @@ export default {
   'ticket.cost.aria': 'Estimated cost or proceeds of this amount',
   'ticket.advanced': 'Advanced options',
   'ticket.max.aria': 'Largest amount your balance allows',
-  'ticket.available': 'Available {amount}',
+  'ticket.available': 'Available',
   'ticket.slider.aria': 'Amount, percent of Max',
   'ticket.slider.points': 'Amount presets',
   'ticket.slider.value': '{pct}% · {amount}',

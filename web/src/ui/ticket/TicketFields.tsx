@@ -23,12 +23,12 @@ export interface TicketFieldsProps {
   onChange(id: string, value: string): void;
   /** Max: fills the amount with the largest the balance allows (the "Available" figure of the amount label row is its button) */
   onMax?: () => void;
-  /** "Available 988.41 KAS": the balance this order spends, at the right end of the amount label row; a tap does `onMax` */
-  available?: string;
+  /** "Available 988.41 KAS": the balance this order spends, the line under the amount box (the figure under the box's, the unit in the units column); a tap does `onMax` */
+  available?: { amount: string; unit: string };
   /** the 0..100 % of Max slider under the amount field */
   slider?: AmountSliderProps;
-  /** the line under the amount box: what the amount costs or yields in the other asset (cost-preview.ts); a fixed-height line, "—" when there is nothing to say */
-  cost?: string;
+  /** the line under the Available line: what the amount costs or yields in the other asset (cost-preview.ts), its unit apart; a fixed-height line, a placeholder when there is nothing to say */
+  cost?: { text: string; unit: string };
   disabled?: boolean;
   /**
    * the market is shown inverted (KAS/TOKEN, orientation.ts): the PRICE inputs take tokens per KAS (`name` per KAS). The form still keeps native text
@@ -274,8 +274,12 @@ export function TicketFields(props: TicketFieldsProps) {
         }
         // the balance this order spends is the Max button, at the right end of the label row
         const availableBtn = id === 'amount' && props.onMax && props.available ? (
-          <button type="button" class="tk-available" onClick={props.onMax} disabled={props.disabled} title={t('ticket.max.aria')} data-testid="order-available">
-            <span key={props.available}>{props.available}</span>
+          <button type="button" class="tk-available tk-line" onClick={props.onMax} disabled={props.disabled} title={t('ticket.max.aria')} data-testid="order-available">
+            <span class="tk-line-text tk-line-split">
+              <span>{t('ticket.available')}</span>{' '}
+              <span class="tk-line-num" key={props.available.amount}>{props.available.amount}</span>
+            </span>{' '}
+            <span class="tk-line-unit">{props.available.unit}</span>
           </button>
         ) : undefined;
         const field = (
@@ -296,8 +300,9 @@ export function TicketFields(props: TicketFieldsProps) {
             {/* two adjacent lines of fixed height under the box: what this order can spend (the Max button) and what the amount costs */}
             <div class="tk-avail-line" data-testid="order-available-line">{availableBtn}</div>
             {props.cost !== undefined ? (
-              <div class="tk-cost" aria-label={t('ticket.cost.aria')} data-testid="order-cost-preview">
-                <span key={props.cost}>{props.cost}</span>
+              <div class="tk-cost tk-line" aria-label={t('ticket.cost.aria')} data-testid="order-cost-preview">
+                <span class="tk-line-text" key={props.cost.text}>{props.cost.text}</span>{props.cost.unit ? ' ' : null}
+                <span class="tk-line-unit">{props.cost.unit}</span>
               </div>
             ) : null}
             {props.slider ? <AmountSlider {...props.slider} disabled={props.disabled || props.slider.disabled} /> : null}

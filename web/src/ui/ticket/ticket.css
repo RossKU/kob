@@ -60,6 +60,16 @@
 
 /* the cost preview under the amount box: one muted line of a fixed height, whatever it says (or "—"), tabular numbers, never wrapped */
 .tk-avail-line { height: 1.4rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.5rem; }
+/* the Available and cost lines read down the same two edges as the input rows: the figure ends under the box's figure (the numbers in the boxes are
+   right-aligned), the unit stands in the units column under the amount's unit, right-aligned */
+.tk-line { display: grid; grid-template-columns: minmax(0, 1fr) var(--tk-unit-w); column-gap: 8px; align-items: baseline; width: 100%; text-align: right; }
+.tk-line-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding-right: 11px; }
+.tk-line-split { display: flex; justify-content: space-between; gap: 8px; }
+.tk-line-split > span:first-child { flex: none; }
+.tk-line-split > .tk-line-num { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tk-line-unit { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* every figure typed in the ticket is right-aligned, so its digits stand over the figures of the lines under it */
+.tk .input[inputmode='decimal'], .tk .input[inputmode='numeric'] { text-align: right; font-variant-numeric: tabular-nums; }
 .tk-avail-line + .tk-cost { margin-top: 0; }
 .tk-cost { height: 1.2rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 0.8rem; line-height: 1.2rem; font-variant-numeric: tabular-nums; }
 

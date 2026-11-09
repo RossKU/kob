@@ -389,12 +389,14 @@ export function OrderTicket(props: OrderTicketProps) {
     const pv = env
       ? costPreview({ intent: built.intent, book: env.book, scale: env.token.scale, worstPrice: plan?.disclosure?.worstPrice ?? null, fee: quote ? null : plan?.disclosure?.fee ?? null })
       : ({ kind: 'empty' } as const);
-    return costLine(
+    // the figures without their unit: the unit stands once, in the units column under the amount's (TicketFields.tsx)
+    const text = costLine(
       pv,
-      (v) => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`),
-      (v) => `${formatUnits(v, token.decimals, { group: ',' })} ${ticker}`,
+      (v) => (quote ? formatUnits(v, quote.decimals, { group: ',' }) : formatKas(v, { group: ',' })),
+      (v) => formatUnits(v, token.decimals, { group: ',' }),
       (key, params) => t(`ticket.cost.${key}`, params),
     );
+    return { text, unit: pv.kind === 'empty' ? '' : pv.kind === 'thin' ? ticker : quote ? quote.ticker : 'KAS' };
   }, [env, built.intent, plan, quote, token.decimals, ticker]);
   /** an amount of the market's quote (KAS, or a pair's token B) in words */
   const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`);
@@ -701,8 +703,13 @@ export function OrderTicket(props: OrderTicketProps) {
 
   // the balance this order spends, shown at the right end of the amount label row (it is the Max button): a buy pays in the quote (KAS, or a
   // pair's token B), a sell gives the token. The form's side is the native one, so an inverted view needs no case of its own.
-  const spendBalance = form.side === 'buy' ? quoteText(quote ? quoteBalance : kasBalance) : `${formatUnits(tokenBalance, token.decimals, { group: ',' })} ${ticker}`;
-  const available = enabled && env ? t('ticket.available', { amount: spendBalance }) : undefined;
+  const spendBalance =
+    form.side === 'buy'
+      ? quote
+        ? { amount: formatUnits(quoteBalance, quote.decimals, { group: ',' }), unit: quote.ticker }
+        : { amount: formatKas(kasBalance, { group: ',' }), unit: 'KAS' }
+      : { amount: formatUnits(tokenBalance, token.decimals, { group: ',' }), unit: ticker };
+  const available = enabled && env ? spendBalance : undefined;
 
   if (!tradable) {
     const reason = token.untradableReason;
