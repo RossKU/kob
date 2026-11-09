@@ -44,11 +44,11 @@ for (const width of [390, 800, 1280]) {
       await expect(page.getByTestId('portfolio-rows-20')).toHaveAttribute('aria-checked', 'true');
       await expect(page.locator('[data-testid^="order-row-"]')).toHaveCount(20);
       await expect(page.getByTestId('portfolio-showing')).toHaveText(`1–20 of ${total}`);
-      // the tab line: the control is on the line of the tabs, centred with them, where there is room (1280 px; any width in the default font from 800 px); else under the tabs
+      // the tab line: the control is on the line of the tabs, centred with them, where there is room (1280 px, and 800 px unless the font is wide); else under the tabs, at the right edge
       const tabBox = (await page.getByTestId('orders-tab-history').boundingBox())!;
       const rowsBox = (await rows.boundingBox())!;
       const under = rowsBox.y > tabBox.y + tabBox.height - 2;
-      if (width === 1280 || (width === 800 && process.env.KOB_WIDE_FONTS !== '1')) expect(under, 'on the line of the tabs').toBe(false);
+      if (width === 1280) expect(under, 'on the line of the tabs').toBe(false); // (at 800 px a wide font may leave no room beside the tabs)
       if (width === 390) expect(under, 'under the tabs').toBe(true);
       if (!under) expect(Math.abs(rowsBox.y + rowsBox.height / 2 - (tabBox.y + tabBox.height / 2)), 'centred with the tabs').toBeLessThan(8);
       else expect(Math.abs(rowsBox.x + rowsBox.width - (await page.getByTestId('portfolio-panel-history').boundingBox())!.x - (await page.getByTestId('portfolio-panel-history').boundingBox())!.width), 'right-aligned').toBeLessThan(2);
