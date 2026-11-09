@@ -52,11 +52,11 @@ function Ctas(props: { class?: string; mode: LandingMode }) {
   return (
     <div class={`lp-ctas${props.class ? ` ${props.class}` : ''}`}>
       <a class="lp-pill lp-pill-solid" href={soon ? TESTNET_APP_URL : APP_HASH} data-testid="landing-cta">
-        {t(soon ? 'landing.soon.try' : 'landing.openApp')} <ArrowIcon />
+        <span class="btn-label">{t(soon ? 'landing.soon.try' : 'landing.openApp')}</span> <ArrowIcon />
       </a>
       <a class="lp-pill lp-pill-line" href={REPO_URL}>
         <GitHubIcon class="lp-ico" />
-        {t('landing.github')}
+        <span class="btn-label">{t('landing.github')}</span>
       </a>
     </div>
   );
@@ -73,17 +73,17 @@ function Nav(props: { network: string; mode: LandingMode }) {
       <nav class="header-tools" aria-label={t('landing.nav.label')}>
         <a class="btn btn-ghost btn-sm fh-wide" href={REPO_URL}>
           <GitHubIcon />
-          {t('landing.github')}
+          <span class="btn-label">{t('landing.github')}</span>
         </a>
         {soon ? (
           <span class="net-chip net-chip-warn" title={t('landing.soon.chipTip')} data-testid="landing-soon-chip">
-            {t(tight ? 'landing.soon.chip.short' : 'landing.soon.chip')}
+            <span class="chip-label">{t(tight ? 'landing.soon.chip.short' : 'landing.soon.chip')}</span>
           </span>
         ) : (
           <NetworkChip network={props.network} short={tight} />
         )}
         <a class="btn btn-sm btn-pill" href={soon ? TESTNET_APP_URL : APP_HASH} data-testid="landing-open-app">
-          {t(soon ? (phone ? 'landing.soon.try.short' : 'landing.soon.try') : 'landing.openApp')}
+          <span class="btn-label">{t(soon ? (phone ? 'landing.soon.try.short' : 'landing.soon.try') : 'landing.openApp')}</span>
         </a>
         <ThemeToggle />
       </nav>
@@ -197,7 +197,7 @@ export function LandingContent(props: { network: string; mode: LandingMode; foot
               <p class="lp-kicker lp-fade">
                 {t('landing.kicker')}{' '}
                 <span class="lp-chip lp-hero-chip" title={net.chipTip} data-testid="landing-chip">
-                  {net.chip}
+                  <span class="chip-label">{net.chip}</span>
                 </span>
               </p>
               <h1 aria-label={t('landing.h1')} data-testid="landing-h1">

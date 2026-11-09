@@ -82,7 +82,7 @@ export function ResultPanel(props: ResultPanelProps) {
       </Section>
 
       <div class="row">
-        <a class="btn btn-primary" href={routeToHash(tokenRoute(plan.token.covenantId))} data-testid="issue-open-market">{t('issue.result.openMarket')}</a>
+        <a class="btn btn-primary" href={routeToHash(tokenRoute(plan.token.covenantId))} data-testid="issue-open-market"><span class="btn-label">{t('issue.result.openMarket')}</span></a>
         <Button onClick={props.onAnother} data-testid="issue-another">{t('issue.result.another')}</Button>
       </div>
     </div>

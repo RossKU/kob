@@ -126,7 +126,7 @@ export function RiskChip(props: { row: Pick<TokenRow, 'covenantId' | 'facts' | '
   return (
     <span class="risk-chip" data-testid="badge-high-risk" data-reasons={codes.join(' ')}>
       <button type="button" class="badge badge-warn risk-btn" ref={button} onClick={toggle} aria-expanded={pos ? 'true' : 'false'} aria-label={`${t('market.badge.highRisk')}: ${t('market.risk.open')}`} data-testid="high-risk-toggle">
-        {t('market.badge.highRisk')}
+        <span class="chip-label">{t('market.badge.highRisk')}</span>
       </button>
       {pos ? (
         <div class="risk-panel" data-risk-panel role="note" style={{ left: `${pos.left}px`, top: `${pos.top}px` }} data-testid="high-risk-reasons">

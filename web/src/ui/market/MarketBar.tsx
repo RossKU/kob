@@ -181,7 +181,7 @@ export function MarketShell(props: {
       {/* phone only (market.css): jumps to the ticket */}
       {ticketAway ? (
         <button type="button" class="mkt-trade-fab" onClick={jumpToTicket} aria-label={t('market.ticket.jump')} data-testid="market-trade-jump">
-          {t('market.ticket.title')}
+          <span class="btn-label">{t('market.ticket.title')}</span>
         </button>
       ) : null}
     </div>

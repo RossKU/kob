@@ -43,7 +43,7 @@ function ReportDialog(props: { covenantId: string; onClose: () => void }) {
       footer={
         <>
           <a class="btn btn-sm" href={githubReportUrl(props.covenantId)} target="_blank" rel="noopener noreferrer" data-testid="logo-report-github">
-            {t('market.logo.report.github')}
+            <span class="btn-label">{t('market.logo.report.github')}</span>
           </a>
           {done ? null : (
             <Button variant="primary" onClick={() => void send()} loading={busy} disabled={!reportsUrl} data-testid="logo-report-send">

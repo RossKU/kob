@@ -58,7 +58,7 @@ export function TipBadge(props: { label: string; detail: string; 'data-testid': 
         aria-label={`${props.label}: ${props.detail}`}
         data-testid={props['data-testid']}
       >
-        <span aria-hidden="true">{'\u26A0\uFE0E'}</span> {props.label}
+        <span class="chip-label"><span aria-hidden="true">{'\u26A0\uFE0E'}</span> {props.label}</span>
       </button>
       {pos ? (
         <div class="tip-panel" data-tip-panel role="note" style={{ left: `${pos.left}px`, top: `${pos.top}px` }} data-testid={props['data-detail-testid']}>

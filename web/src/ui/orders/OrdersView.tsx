@@ -454,7 +454,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
           actions={
             closeFollowUp.amount > 0n ? (
               <a class="btn btn-primary btn-sm" href={routeToHash(tokenRoute(closeFollowUp.token, 'cover', closeFollowUp.amount))} data-testid="orders-close-buy">
-                {t('orders.close.buy', { amount: coverText(closeFollowUp.token, closeFollowUp.amount) })}
+                <span class="btn-label">{t('orders.close.buy', { amount: coverText(closeFollowUp.token, closeFollowUp.amount) })}</span>
               </a>
             ) : undefined
           }
@@ -473,7 +473,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
             // nothing bought yet: nothing to sell
             closeFollowUp.amount > 0n ? (
               <a class="btn btn-primary btn-sm" href={routeToHash(tokenRoute(closeFollowUp.token, 'sell', closeFollowUp.amount))} data-testid="orders-close-sell">
-                {t('orders.close.sell', { amount: coverText(closeFollowUp.token, closeFollowUp.amount) })}
+                <span class="btn-label">{t('orders.close.sell', { amount: coverText(closeFollowUp.token, closeFollowUp.amount) })}</span>
               </a>
             ) : undefined
           }

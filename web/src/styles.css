@@ -358,6 +358,18 @@ small, .small { font-size: 0.85em; }
 /* busy for a while: the spinner sits over the label's place (the label keeps its room: the button's size never changes) */
 .btn-spin > .spinner { position: absolute; inset: 0; margin: auto; }
 .btn-spin > :not(.spinner) { visibility: hidden; }
+/* The label of a button, a pill, a chip or a segment sits on the vertical centre by its CAP HEIGHT. A system UI font with a tall ascent and a short descent
+   (Segoe UI and Yu Gothic UI on Windows) puts the capitals below the middle of a line box that flexbox centres. `text-box` trims the line to the cap
+   height (top) and the baseline (bottom), and the padding gives the trimmed lines back as equal room above and below: the box has the height it had (one
+   line: `1lh`; the control's min-height, height and padding are not touched) and its capitals are in the middle of it. `text-box` trims a block
+   container, not a flex container: the label is a block of its own (`.btn-label` in a button or a pill, `.chip-label` in a chip or a badge; a segment is a
+   plain button, trimmed in place, its own padding restated). A browser without `text-box` (Firefox, an older Chrome) keeps the old look. */
+@supports (text-box: trim-both cap alphabetic) {
+  .btn-label, .chip-label, .net-chip > span:not(.dot) { text-box: trim-both cap alphabetic; padding-block: calc((1lh - 1cap) / 2); }
+  .segmented button { text-box: trim-both cap alphabetic; padding-block: calc(6px + (1lh - 1cap) / 2); }
+  .act-seg button { text-box: trim-both cap alphabetic; padding-block: calc(4px + (1lh - 1cap) / 2); }
+  .act-new { text-box: trim-both cap alphabetic; padding-block: calc(3px + (1lh - 1cap) / 2); }
+}
 
 /* ------------------------------------------------------------------ spinner */
 

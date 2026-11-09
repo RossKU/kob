@@ -15,7 +15,7 @@ export interface BadgeProps {
 export function Badge(props: BadgeProps) {
   return (
     <span class={`badge badge-${props.tone ?? 'neutral'}${props.class ? ` ${props.class}` : ''}`} title={props.title} data-testid={props['data-testid']}>
-      {props.children}
+      <span class="chip-label">{props.children}</span>
     </span>
   );
 }
