@@ -79,6 +79,11 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   await fillFields(page, { price: '0.0515', amount: '2' });
   await waitReviewable(page);
 
+  // the indexer's live reads carry the cache bypass `_nc` right after the user's own action (data/fresh.ts)
+  const liveReads: string[] = [];
+  page.on('request', (r) => {
+    if (/\/v1\/(pairs\/[0-9a-f]+\/[0-9a-f]+\/book|orders|books)/.test(r.url())) liveReads.push(r.url());
+  });
   const placed = await placeOrderAndRead(page, mock);
   expect(placed.views).toHaveLength(1);
   const view = placed.views[0];
@@ -96,6 +101,7 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   expect(await balanceOf(mock, 'EXKCC')).toBe(98n * TOKEN);
   // the new direct ask shows up in the pair book (book:<EXKCC> / book:<EXUSD> trigger the refetch)
   await expect(book.locator('[data-testid="pair-level"][data-source="direct"][data-price="0.0515"]')).toHaveCount(1, { timeout: 15_000 });
+  expect(liveReads.filter((u) => u.includes('_nc=')).length, 'the reads after the placement bypass any cache').toBeGreaterThan(0);
 
   // My orders: the pair, its price in EXUSD per EXKCC, the EXKCC it holds; cancel returns the custody
   await page.getByTestId('pair-my-orders').click();

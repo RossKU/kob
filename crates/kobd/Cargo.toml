@@ -63,6 +63,8 @@ hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
+# gzip of the read API's JSON bodies (`api::compression`): the answers are tens of KB of repetitive JSON and the link to a public indexer is a tunnel
+tower-http = { version = "0.6", default-features = false, features = ["compression-gzip"] }
 
 # the single-writer lock (`indexer::lock`): flock(2) directly, because std's File::try_lock is unsupported on Android
 [target.'cfg(unix)'.dependencies]

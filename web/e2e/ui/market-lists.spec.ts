@@ -552,7 +552,10 @@ test.describe('favourite pairs, and no table of pairs by default', () => {
     expect(pairReads).toEqual([]);
     await page.getByTestId('token-list-favorites').click();
     await expect(page.getByTestId(`pair-row-${base}-${QUOTE}`)).toHaveAttribute('data-state', 'ready');
-    expect([...new Set(pairReads)].sort()).toEqual(['/v1/pairs', `/v1/pairs/${base}/${QUOTE}/book`, `/v1/pairs/${base}/${QUOTE}/fills`].sort());
+    // both orientations of the pair are read (they are one market: its book and its volume count the orders of QUOTE/BASE too)
+    expect([...new Set(pairReads)].sort()).toEqual(
+      ['/v1/pairs', `/v1/pairs/${base}/${QUOTE}/book`, `/v1/pairs/${base}/${QUOTE}/fills`, `/v1/pairs/${QUOTE}/${base}/book`, `/v1/pairs/${QUOTE}/${base}/fills`].sort(),
+    );
   });
 
   test('a star on the pair page, kept by covenant ids, whichever way round; the Favorites view lists the pair with its figures', async ({ appPage: page, mock }) => {

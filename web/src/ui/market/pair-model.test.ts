@@ -4,7 +4,7 @@ import { sanitizePairBook } from '../../data/indexer';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
 import type { TokenInfo } from '../../kob/registry';
-import { bridgeQuoteFlip, buildPairBook, mergeOrientations, pairSideOf, pickOf, spreadLine } from './pair-model';
+import { bridgeQuoteFlip, buildPairBook, mergeOrientations, mergePairSummaries, pairSideOf, pickOf, spreadLine, unorderedPairKey } from './pair-model';
 import type { TokenRow } from './token-model';
 import type { MarketToken } from './use-market-token';
 
@@ -197,5 +197,29 @@ describe('a bridge-issued token is the quote', () => {
     expect(bridgeQuoteFlip(ok(true), ok(true))).toBe(false);
     expect(bridgeQuoteFlip(null, null)).toBe(false);
     expect(bridgeQuoteFlip({ status: 'unavailable', reason: 'no-source' as never }, ok(false))).toBe(false);
+  });
+});
+
+describe('the two orientations of a pair are one market', () => {
+  const A = 'aa'.repeat(32);
+  const B = 'bb'.repeat(32);
+  const sum = (base: string, quote: string, n: number) => ({ base, quote, direct_asks: n, direct_bids: n + 1, entry_asks: n + 2, entry_bids: n + 3, conditionals: n + 4 });
+
+  it('has one key whichever way round', () => {
+    expect(unorderedPairKey(A, B)).toBe(unorderedPairKey(B.toUpperCase(), A));
+    expect(unorderedPairKey(A, B)).not.toBe(unorderedPairKey(A, 'cc'.repeat(32)));
+  });
+
+  it('adds the live order counts of QUOTE/BASE turned round (its asks are bids of BASE/QUOTE); conditionals add', () => {
+    const list = [sum(A, B, 1), sum(B, A, 10)];
+    expect(mergePairSummaries(A, B, list)).toEqual({ base: A, quote: B, direct_asks: 1 + 11, direct_bids: 2 + 10, entry_asks: 3 + 13, entry_bids: 4 + 12, conditionals: 5 + 14 });
+    expect(mergePairSummaries(B, A, list)).toEqual({ base: B, quote: A, direct_asks: 10 + 2, direct_bids: 11 + 1, entry_asks: 12 + 4, entry_bids: 13 + 3, conditionals: 14 + 5 });
+  });
+
+  it('counts one orientation alone, turned round for the other page; none when neither is listed', () => {
+    expect(mergePairSummaries(B, A, [sum(A, B, 1)])).toMatchObject({ base: B, quote: A, direct_asks: 2, direct_bids: 1 });
+    expect(mergePairSummaries(A, B, [])).toBeNull();
+    expect(mergePairSummaries(A, B, null)).toBeNull();
+    expect(mergePairSummaries(A, B, [sum(A, 'cc'.repeat(32), 1)])).toBeNull();
   });
 });

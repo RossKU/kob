@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
-import type { IndexerTokenView, StatsView } from '../../data/indexer-types';
+import type { IndexerTokenView, PairBookView, PairFillsView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
 import { Banner, Button, compactZeros, ErrorBanner, Field, Section, Table, TableMessage, toError, useAsync, zerosTitle } from '../kit';
@@ -24,6 +24,8 @@ import {
   ariaSort, DEFAULT_SORT, filterPairs, kascovEntry, keepOrder, listedPairs, LOADING, nextSort, NONE, pageWindow, pairEntry, pairHasDecimals, pairLabelOf, sortEntries, tokenEntry,
   type Cell, type ListedPair, type ListEntry, type Slot, type SortKey, type SortState,
 } from './market-list';
+import { mergeOrientations } from './pair-model';
+import { mergePairFills } from '../activity/activity-model';
 import { PAIR_DEPTH_LEVELS, pairDepthOf, pairVolumeOf, type PairDepth, type PairVolume } from './pair-market';
 import { buildTokenRows, filterTokens, idOnlyRow, isNameless, parseCovenantId, tokenLabel, tradableHere, tradableRows, type TokenRow } from './token-model';
 import { useKascov } from './use-kascov';
@@ -339,16 +341,20 @@ export function TokenList(props: { invalidToken?: string }) {
       const p = byKey.get(key);
       if (!p || !pairHasDecimals(p)) return null;
       const [base, quote] = [pairToken(p.base), pairToken(p.quote)];
-      // the 24 h volume and the depth near the mid (the pair book): a book that cannot be read leaves only its own cell empty
-      const [view, book] = await Promise.all([
+      // the 24 h volume and the depth near the mid (the pair book), both orientations of the pair together (the pair page's figures): a book that cannot be read
+      // leaves only its own cell empty, and an orientation that cannot be read leaves the other's figure
+      const soft = <T,>(e: unknown): T | null => {
+        if (isAbort(e)) throw e;
+        return null;
+      };
+      const [view, viewBack, book, bookBack] = await Promise.all([
         indexer.pairFills(p.base.covenantId, p.quote.covenantId, { limit: 1 }, { signal }),
-        indexer.pairBook(p.base.covenantId, p.quote.covenantId, { depth: PAIR_DEPTH_LEVELS }, { signal }).catch((e: unknown) => {
-          if (isAbort(e)) throw e;
-          return null;
-        }),
+        indexer.pairFills(p.quote.covenantId, p.base.covenantId, { limit: 1 }, { signal }).catch(soft<PairFillsView>),
+        indexer.pairBook(p.base.covenantId, p.quote.covenantId, { depth: PAIR_DEPTH_LEVELS }, { signal }).catch(soft<PairBookView>),
+        indexer.pairBook(p.quote.covenantId, p.base.covenantId, { depth: PAIR_DEPTH_LEVELS }, { signal }).catch(soft<PairBookView>),
       ]);
-      const volume = pairVolumeOf(view, base, quote);
-      const depth = pairDepthOf(book, base, quote);
+      const volume = pairVolumeOf(view ? mergePairFills(view, viewBack) : view, base, quote);
+      const depth = pairDepthOf(book ? mergeOrientations(book, bookBack) : book, base, quote);
       return volume === null && depth === null ? null : { volume, depth };
     };
   }, [indexer, listed]);

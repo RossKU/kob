@@ -5,7 +5,7 @@
 // A pair order enforces only its own price (founder option 2): a filler may net opposite pair orders, route them through the KAS books or fill them
 // from inventory, so a crossing of ANY sources is fillable. A crossed book is shown as it is (a negative spread). Pure and DOM-free.
 import type { GenesisCheck } from '../../data/genesis-check';
-import type { PairBookView, PairLevelSource, PairLevelView } from '../../data/indexer-types';
+import type { PairBookView, PairLevelSource, PairLevelView, PairSummaryView } from '../../data/indexer-types';
 import { cmpRational, formatRational, ratToNumber, reduce, significantDp, wholePrice, type PairToken, type Rational } from '../../kob/pair';
 import type { OpenTokenIssue } from '../../kob/open-token';
 import type { TokenInfo } from '../../kob/registry';
@@ -202,4 +202,30 @@ export function pickOf(row: Pick<PairLevelRow, 'side' | 'unitPrice'>, base: Pair
   const n = row.unitPrice.num * base.scale;
   const d = row.unitPrice.den;
   return row.side === 'ask' ? { side: 'buy', price: (n + d - 1n) / d } : { side: 'sell', price: n / d };
+}
+
+/** The unordered identity of a pair: the same for BASE/QUOTE and QUOTE/BASE (the two orientations are one market). */
+export const unorderedPairKey = (a: string, b: string): string => {
+  const [x, y] = [a.toLowerCase(), b.toLowerCase()];
+  return x < y ? `${x}/${y}` : `${y}/${x}`;
+};
+
+/**
+ * The live pair-order counts of BASE/QUOTE with those of QUOTE/BASE turned round (`GET /v1/pairs` lists each orientation as a pair of its own): an ask of
+ * QUOTE/BASE sells QUOTE for BASE, a bid of BASE/QUOTE, so asks and bids swap; conditionals add. Null when neither orientation is listed.
+ */
+export function mergePairSummaries(base: string, quote: string, summaries: readonly PairSummaryView[] | null | undefined): PairSummaryView | null {
+  const [b, q] = [base.toLowerCase(), quote.toLowerCase()];
+  const ab = summaries?.find((s) => s.base.toLowerCase() === b && s.quote.toLowerCase() === q) ?? null;
+  const ba = summaries?.find((s) => s.base.toLowerCase() === q && s.quote.toLowerCase() === b) ?? null;
+  if (!ab && !ba) return null;
+  return {
+    base: b,
+    quote: q,
+    direct_asks: (ab?.direct_asks ?? 0) + (ba?.direct_bids ?? 0),
+    direct_bids: (ab?.direct_bids ?? 0) + (ba?.direct_asks ?? 0),
+    entry_asks: (ab?.entry_asks ?? 0) + (ba?.entry_bids ?? 0),
+    entry_bids: (ab?.entry_bids ?? 0) + (ba?.entry_asks ?? 0),
+    conditionals: (ab?.conditionals ?? 0) + (ba?.conditionals ?? 0),
+  };
 }

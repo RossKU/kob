@@ -255,6 +255,7 @@ export async function startMockServer(opts = {}) {
     // ---- market data: trades, candles, 24 h stats, depth
     if (get && (m = /^\/v1\/trades\/([^/]+)$/.exec(path))) return ok(M.tradesPage(chain, m[1], q));
     if (get && (m = /^\/v1\/candles\/([^/]+)$/.exec(path))) return ok(M.candlesView(chain, m[1], q));
+    if (get && path === '/v1/stats') return ok(M.activityView(chain, q));
     if (get && (m = /^\/v1\/stats\/([^/]+)$/.exec(path))) return ok(M.statsView(chain, m[1]));
     if (get && (m = /^\/v1\/depth\/([^/]+)$/.exec(path))) return ok(M.depthView(chain, m[1], q));
     // ---- token/token pairs (pair orders): the pair book, the pair list, candles derived from the two KAS series, pair fills (pairs.mjs)

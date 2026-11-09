@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CandleView, IndexerTokenView, PairSummaryView } from '../../data/indexer-types';
-import { axisTop, barPct, booksNow, changePct, compactKas, summarizeAllTime, summarizeWindow, WINDOWS, windowEnd } from './summary-model';
+import type { ActivityStatsView, CandleView, IndexerTokenView, PairSummaryView } from '../../data/indexer-types';
+import { activityFigures, activitySince, axisTop, barPct, booksNow, changePct, compactKas, fineKas, summarizeAllTime, summarizeWindow, WINDOWS, windowEnd } from './summary-model';
 
 const H = 3_600_000;
 const D = 24 * H;
@@ -61,6 +61,12 @@ describe('all time and the books now', () => {
     const pair: PairSummaryView = { base: 'aa', quote: 'bb', direct_asks: 1, direct_bids: 2, entry_asks: 0, entry_bids: 1, conditionals: 3 };
     expect(booksNow([tok(2, 1), tok(0, 0), tok(0, 4)], [pair])).toEqual({ asks: 2, bids: 5, pairOrders: 7, tokensWithOrders: 2, pairs: 1 });
   });
+
+  it('counts a pair once whichever way its orders are placed, and every order of both', () => {
+    const p = (base: string, quote: string): PairSummaryView => ({ base, quote, direct_asks: 1, direct_bids: 0, entry_asks: 0, entry_bids: 0, conditionals: 1 });
+    const got = booksNow([], [p('aa', 'bb'), p('bb', 'aa'), p('aa', 'cc')]);
+    expect([got.pairs, got.pairOrders]).toEqual([2, 6]);
+  });
 });
 
 describe('numbers', () => {
@@ -76,5 +82,29 @@ describe('numbers', () => {
     const bars = (q: bigint[]) => q.map((quote) => ({ t: 0, quote, trades: 1 }));
     expect([axisTop(bars([7n, 3n])), axisTop(bars([12n])), axisTop(bars([340n])), axisTop(bars([0n]))]).toEqual([10n, 20n, 500n, 0n]);
     expect([barPct(25n, 100n), barPct(1n, 0n)]).toEqual(['25.0%', '0%']);
+  });
+});
+
+describe('the activity totals', () => {
+  const view: ActivityStatsView = { since: null, ts: 1, orders: 42, traders: 9, executors: null, fees_paid: '250000000', kas_locked: '880000000000' };
+
+  it('reads them as numbers and sompi; every figure is a dash for an indexer without them', () => {
+    expect(activityFigures(view)).toEqual({ orders: 42, traders: 9, executors: null, paid: 250_000_000n, locked: 880_000_000_000n });
+    expect(activityFigures({ ...view, fees_paid: null, traders: null })).toMatchObject({ traders: null, paid: null });
+    const none = { orders: null, traders: null, executors: null, paid: null, locked: null };
+    expect([activityFigures(null), activityFigures(undefined)]).toEqual([none, none]);
+  });
+
+  it('starts a window as far back as the page words it, at a whole minute', () => {
+    const now = Date.UTC(2026, 10, 8, 13, 20, 41, 500);
+    expect(activitySince('1D', now)).toBe(Date.UTC(2026, 10, 7, 13, 20));
+    expect(activitySince('7D', now)).toBe(Date.UTC(2026, 10, 1, 13, 20));
+    expect(activitySince('1M', now)).toBe(Date.UTC(2026, 9, 9, 13, 20));
+    expect(activitySince('1Y', now)).toBe(now - 364 * D - (now % 60_000));
+  });
+
+  it('shows a small sum to the cent and a large one compact, never rounded up', () => {
+    expect([fineKas(0n), fineKas(37_999_999n), fineKas(1_250_000_000n), fineKas(84_000n * KAS), fineKas(412_999n * KAS)]).toEqual(['0', '0.37', '12.5', '84,000', '412k']);
+    expect(fineKas(999n * KAS + 99_999_999n)).toBe('999.99');
   });
 });

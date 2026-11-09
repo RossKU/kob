@@ -707,6 +707,8 @@ function standaloneIndexer(c: StandaloneController): IndexerApi {
     trades: async (token, q) => c.tradesView(token, q ?? {}),
     candles: async (token, q) => c.candlesView(token, q),
     stats: async (token) => c.statsView(token),
+    // no history of its own: the Activity summary is not shown in standalone mode
+    activity: async () => null,
     depth: async (token, q) => c.depthView(token, q?.levels),
     pairBook: no('the pair book'),
     pairs: no('the pair list'),

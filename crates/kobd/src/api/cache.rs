@@ -1,4 +1,4 @@
-//! A per-batch cache of the hot read responses (`/v1/stats`, `/v1/books`, `/v1/depth`, `/v1/tokens`, `/v1/candles`).
+//! A per-batch cache of the hot read responses (`/v1/stats`, `/v1/stats/{token}`, `/v1/books`, `/v1/depth`, `/v1/tokens`, `/v1/candles`).
 //!
 //! Every web client of a market polls the same few reads of the same token; between two commits of the indexer their answers
 //! are the same. A response body is kept under the request's parameters for one **data generation** of the store

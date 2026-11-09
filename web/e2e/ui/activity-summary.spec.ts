@@ -11,6 +11,9 @@ async function seed(page: Page, mock: MockClient): Promise<void> {
   await listExkcc(page);
 }
 
+/** `GET /v1/stats` of the mock indexer (the activity totals), not `/v1/stats/{token}` */
+const STATS_URL = /\/v1\/stats(\?|$)/;
+
 const num = (s: string | null) => Number((s ?? '').replace(/[^0-9.]/g, ''));
 
 test.describe('activity summary', () => {
@@ -26,10 +29,19 @@ test.describe('activity summary', () => {
     await expect(page.getByTestId('summary-all-volume')).toContainText('KAS');
     expect(num(await page.getByTestId('summary-all-trades').locator('.sum-v').textContent())).toBeGreaterThan(0);
     await expect(page.getByTestId('activity-summary-since')).toContainText('since the first trade');
-    for (const id of ['summary-all-orders', 'summary-all-traders', 'summary-all-executors', 'summary-all-paid', 'summary-window-executors', 'summary-now-locked']) {
+    // the indexer's totals (GET /v1/stats): orders placed, traders, fees paid to executors, the KAS locked in live orders; executors are recorded by no indexer ("—")
+    expect(num(await page.getByTestId('summary-all-orders').locator('.sum-v').textContent())).toBeGreaterThan(0);
+    expect(num(await page.getByTestId('summary-all-traders').locator('.sum-v').textContent())).toBeGreaterThan(0);
+    await expect(page.getByTestId('summary-all-paid').locator('.sum-v')).toContainText('KAS');
+    expect(num(await page.getByTestId('summary-now-locked').locator('.sum-v').textContent())).toBeGreaterThan(0);
+    for (const id of ['summary-all-executors', 'summary-window-executors']) {
       await expect(page.getByTestId(id).locator('.sum-v')).toHaveText('—');
       await expect(page.getByTestId(id).locator('.sum-v')).toHaveAttribute('title', 'Not reported by this indexer yet');
     }
+    // the window's own totals (the last 24 hours): the history seeded two hours back, 30 trades
+    await expect(page.getByTestId('summary-window-orders').locator('.sum-v')).not.toHaveText('—');
+    expect(num(await page.getByTestId('summary-window-orders').locator('.sum-v').textContent())).toBeGreaterThan(0);
+    expect(num(await page.getByTestId('summary-window-traders').locator('.sum-v').textContent())).toBeGreaterThan(0);
     // the window: 24 hourly bars, the trades of the last two hours in it
     await expect(page.getByTestId('summary-bars').locator('button')).toHaveCount(24);
     expect(num(await page.getByTestId('summary-window-trades').locator('.sum-v').textContent())).toBeGreaterThan(0);
@@ -52,6 +64,36 @@ test.describe('activity summary', () => {
     const sumBox = (await sum.boundingBox())!;
     const logBox = (await page.getByTestId('activity').first().boundingBox())!;
     expect(logBox.y).toBeGreaterThanOrEqual(sumBox.y + sumBox.height - 1);
+  });
+
+  test('an indexer without GET /v1/stats keeps the dash for every total and the rest of the summary works', async ({ appPage: page, mock }) => {
+    await seed(page, mock);
+    await page.route(STATS_URL, (route) => route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: { code: 'not_found', message: 'no such route' } }) }));
+    await page.goto('/#/activity');
+    await expect(page.getByTestId('activity-summary')).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
+    for (const id of ['summary-all-orders', 'summary-all-traders', 'summary-all-executors', 'summary-all-paid', 'summary-now-locked', 'summary-window-orders', 'summary-window-traders', 'summary-window-paid', 'summary-window-executors']) {
+      await expect(page.getByTestId(id).locator('.sum-v')).toHaveText('—');
+    }
+    expect(num(await page.getByTestId('summary-all-trades').locator('.sum-v').textContent())).toBeGreaterThan(0);
+    expect(num(await page.getByTestId('summary-now-orders').locator('.sum-v').textContent())).toBeGreaterThan(0);
+  });
+
+  test('the totals of the window follow the window chosen', async ({ appPage: page, mock }) => {
+    await seed(page, mock);
+    const since: string[] = [];
+    await page.route(STATS_URL, (route) => {
+      since.push(new URL(route.request().url()).searchParams.get('since') ?? '');
+      return route.continue();
+    });
+    await page.goto('/#/activity');
+    await expect(page.getByTestId('activity-summary')).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
+    await expect(page.getByTestId('summary-window-orders').locator('.sum-v')).not.toHaveText('');
+    await page.getByTestId('summary-window-1M').click();
+    await expect.poll(() => since.filter((v) => v !== '').length, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    const spans = since.filter((v) => v !== '').map((v) => Date.now() - Number(v));
+    expect(Math.min(...spans)).toBeGreaterThan(23 * 3_600_000);
+    expect(Math.max(...spans)).toBeGreaterThan(29 * 86_400_000);
+    expect(since.includes(''), 'the all-time totals are asked without since').toBe(true);
   });
 
   test('not on the token page', async ({ appPage: page, mock }) => {

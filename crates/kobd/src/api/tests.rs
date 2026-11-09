@@ -1032,6 +1032,181 @@ async fn market_data_trades_candles_stats_depth() {
     assert!(v["items"].as_array().unwrap().is_empty());
 }
 
+/// The raw answer of `uri`: status, headers and the body bytes as they came (not decoded).
+async fn raw(app: &Router, uri: &str, headers: &[(&str, &str)]) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let mut req = Request::builder().uri(uri);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let mut req = req.body(Body::empty()).unwrap();
+    req.extensions_mut().insert(peer("127.0.0.1"));
+    let (parts, body) = app.clone().oneshot(req).await.unwrap().into_parts();
+    (parts.status, parts.headers, body.collect().await.unwrap().to_bytes().to_vec())
+}
+
+/// A JSON read is gzip for a client that accepts it and plain for one that does not; small bodies, the Prometheus text and an `Accept-Encoding` without gzip are plain.
+#[tokio::test]
+async fn json_answers_are_gzip_only_for_a_client_that_accepts_it() {
+    use std::io::Read;
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let app = router(e.state.clone());
+    let (s, h0, plain) = raw(&app, "/v1/orders", &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(h0.get("content-encoding").is_none(), "no Accept-Encoding: the JSON as it is");
+    let want: Value = serde_json::from_slice(&plain).expect("plain JSON");
+    assert!(plain.len() > 1_000, "the fixture is big enough to compress: {} B", plain.len());
+
+    let (s, hz, packed) = raw(&app, "/v1/orders", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(hz.get("content-encoding").and_then(|v| v.to_str().ok()), Some("gzip"));
+    assert_eq!(hz.get("content-type").and_then(|v| v.to_str().ok()), Some("application/json"));
+    assert!(
+        hz.get("vary").and_then(|v| v.to_str().ok()).is_some_and(|v| v.to_ascii_lowercase().contains("accept-encoding")),
+        "{hz:?}"
+    );
+    assert!(packed.len() * 2 < plain.len(), "{} B gzip of {} B", packed.len(), plain.len());
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(&packed[..]).read_to_end(&mut out).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), want, "the same document");
+
+    // a cached read (the response cache keeps the plain body) and a browser's list of encodings
+    let (_, hc, _) = raw(&app, &format!("/v1/stats/{}", h(TOKEN)), &[("accept-encoding", "br, gzip, deflate")]).await;
+    assert!(hc.get("content-encoding").is_none(), "a body below the threshold is sent as it is");
+    let (_, hb, _) = raw(&app, "/v1/orders", &[("accept-encoding", "br")]).await;
+    assert!(hb.get("content-encoding").is_none(), "only gzip is offered");
+    let (_, hi, _) = raw(&app, "/v1/orders", &[("accept-encoding", "identity")]).await;
+    assert!(hi.get("content-encoding").is_none());
+
+    // the Prometheus text is not compressed, nor is a tiny answer
+    let (s, hm, _) = raw(&app, "/v1/metrics", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(hm.get("content-encoding").is_none());
+    let (_, hr, _) = raw(&app, "/v1/health/ready", &[("accept-encoding", "gzip")]).await;
+    assert!(hr.get("content-encoding").is_none());
+}
+
+/// The `Cache-Control` each class of route sends through the whole router (the policy table itself is tested in `edge_cache`).
+#[tokio::test]
+async fn cache_control_by_route_class() {
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let app = router(e.state.clone());
+    let cc = |h: &HeaderMap| h.get("cache-control").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let t0 = 1_700_000_000_000i64;
+    for (uri, want) in [
+        (format!("/v1/books/{}", h(TOKEN)), "public, max-age=1, s-maxage=1"),
+        ("/v1/orders".to_string(), "public, max-age=1, s-maxage=1"),
+        (format!("/v1/orders?maker={}", h(MAKER)), "public, max-age=1, s-maxage=1"),
+        ("/v1/fills".to_string(), "public, max-age=1, s-maxage=1"),
+        (format!("/v1/trades/{}", h(TOKEN)), "public, max-age=1, s-maxage=1"),
+        ("/v1/tokens".to_string(), "public, max-age=5, s-maxage=5, stale-while-revalidate=5"),
+        ("/v1/pairs".to_string(), "public, max-age=5, s-maxage=5, stale-while-revalidate=5"),
+        ("/v1/stats".to_string(), "public, max-age=10, s-maxage=10, stale-while-revalidate=10"),
+        (format!("/v1/stats/{}", h(TOKEN)), "public, max-age=2, s-maxage=2"),
+        (format!("/v1/candles/{}?interval=1h", h(TOKEN)), "public, max-age=3, s-maxage=3"),
+        (format!("/v1/candles/{}?interval=1h&to={}", h(TOKEN), t0), "public, max-age=3600, s-maxage=3600"),
+        ("/v1/health".to_string(), "no-store"),
+        ("/v1/health/ready".to_string(), "no-store"),
+        ("/v1/metrics".to_string(), "no-store"),
+        (format!("/v1/books/{}?_nc=123", h(TOKEN)), "no-store"),
+        // an error is never kept: a bad token, an unknown route, a bad range
+        ("/v1/books/zz".to_string(), "no-store"),
+        ("/v1/nothing".to_string(), "no-store"),
+        (format!("/v1/candles/{}?interval=2m", h(TOKEN)), "no-store"),
+    ] {
+        let (_, hd, _) = get_from(&app, &uri, "127.0.0.1", &[]).await;
+        assert_eq!(cc(&hd).as_deref(), Some(want), "{uri}");
+    }
+    // a compressed answer carries it too, and the bypass parameter changes nothing else
+    let (_, hz, _) = raw(&app, "/v1/orders", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(cc(&hz).as_deref(), Some("public, max-age=1, s-maxage=1"));
+    let (s, _, v) = get_from(&app, &format!("/v1/books/{}?_nc=9", h(TOKEN)), "127.0.0.1", &[]).await;
+    let (s0, _, v0) = get_from(&app, &format!("/v1/books/{}", h(TOKEN)), "127.0.0.1", &[]).await;
+    assert_eq!((s, v), (s0, v0), "the server ignores the bypass parameter");
+    // a POST is never kept
+    let mut req = Request::builder().method("POST").uri("/v1/orders").body(Body::empty()).unwrap();
+    req.extensions_mut().insert(peer("127.0.0.1"));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(cc(resp.headers()).as_deref(), Some("no-store"));
+}
+
+/// `GET /v1/stats?since=`: the activity totals over a range of the store, all time without `since`.
+#[tokio::test]
+async fn activity_totals_over_a_range() {
+    let e = env(|_| {});
+    let c = &e.w;
+    // blocks 1 and 2 are old, 3 and 4 recent: makers MAKER (orders 1, 3), 0xbb (order 2), 0xcc (order 4)
+    seed_order(c, 1, 1, 300_000, 1, "open", Some(10 * W), Some(10 * W), true, MAKER);
+    seed_order(c, 2, 1, 250_000, 2, "partial", Some(10 * W), Some(4 * W), true, 0xbb);
+    seed_order(c, 3, 1, 250_000, 3, "open", Some(5 * W), Some(5 * W), true, MAKER);
+    seed_order(c, 4, 2, 240_000, 4, "open", None, Some(3 * W), true, 0xcc);
+    // tips: order 1 and 3 pay 2 000 sompi per whole token, order 2 pays 500, order 4 none
+    c.execute("UPDATE orders SET tip = 2000 WHERE covenant_id IN (?1, ?2)", params![cid(1), cid(3)]).unwrap();
+    c.execute("UPDATE orders SET tip = 500 WHERE covenant_id = ?1", params![cid(2)]).unwrap();
+    let t0 = 1_700_000_000_000i64;
+    for (cov, block, ts, kind, amount) in [
+        (1u8, 1i64, t0 - 10 * 86_400_000, "create", 0),
+        (2, 2, t0 - 9 * 86_400_000, "create", 0),
+        (3, 3, t0 - 60_000, "create", 0),
+        (4, 4, t0, "create", 0),
+        (2, 2, t0 - 9 * 86_400_000, "fill", 2 * W),
+        (1, 3, t0 - 30_000, "fill", W),
+        (3, 4, t0, "fill", 3 * W / 2),
+    ] {
+        c.execute(
+            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes)              VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), ?2, ?3, ?4, ?5, 0, ?6, (SELECT id FROM ids WHERE h = ?7), 1, ?8, 250000, 0)",
+            params![cid(cov), block, block * 100, ts, cid(block as u8 + 60), kind, cid(TOKEN), amount],
+        )
+        .unwrap();
+    }
+    // live order UTXOs: two unspent (1 000 000 each) and one spent
+    c.execute("INSERT INTO order_utxos (txid, idx, order_id, value, spk, created_block, created_daa, spent_block) VALUES (?1, 0, (SELECT id FROM orders WHERE covenant_id = ?2), 7, x'00', 1, 100, 1)", params![cid(0x90), cid(1)]).unwrap();
+    for (n, cov) in [(0x91u8, 1u8), (0x92, 4)] {
+        c.execute("INSERT INTO order_utxos (txid, idx, order_id, value, spk, created_block, created_daa) VALUES (?1, 0, (SELECT id FROM orders WHERE covenant_id = ?2), 1000000, x'00', 1, 100)", params![cid(n), cid(cov)]).unwrap();
+    }
+    let app = router(e.state.clone());
+
+    // all time: 4 orders, 3 makers; fees 2 whole x 500 + 1 whole x 2000 + 1.5 whole x 2000 = 6 000; locked 2 000 000
+    let (s, v) = get(&app, "/v1/stats").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["since"].is_null());
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64()), (Some(4), Some(3)));
+    assert_eq!((v["fees_paid"].as_str(), v["kas_locked"].as_str()), (Some("6000"), Some("2000000")));
+    assert!(v["executors"].is_null(), "the store keeps no filler key");
+    assert_eq!(v["ts"].as_i64(), Some(t0));
+
+    // the last day: orders 3 and 4 (makers MAKER and 0xcc), the fills of blocks 3 and 4 (1 whole and 1.5 whole at 2 000)
+    let (s, v) = get(&app, &format!("/v1/stats?since={}", t0 - 86_400_000 + 17)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["since"].as_i64(), Some((t0 - 86_400_000 + 17) / 60_000 * 60_000), "rounded down to the minute");
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64()), (Some(2), Some(2)));
+    assert_eq!(v["fees_paid"], "5000");
+    assert_eq!(v["kas_locked"], "2000000", "locked is the state now, whatever the range");
+
+    // a range with nothing in it
+    let (_, v) = get(&app, &format!("/v1/stats?since={}", t0 + 3_600_000)).await;
+    assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fees_paid"].as_str()), (Some(0), Some(0), Some("0")));
+
+    let (s, _) = get(&app, "/v1/stats?since=-5").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = get(&app, "/v1/stats?since=yesterday").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+/// An empty store answers zeros, never an error.
+#[tokio::test]
+async fn activity_totals_of_an_empty_store() {
+    let e = env(|_| {});
+    let (s, v) = get(&router(e.state.clone()), "/v1/stats").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        (v["orders"].as_i64(), v["traders"].as_i64(), v["fees_paid"].as_str(), v["kas_locked"].as_str()),
+        (Some(0), Some(0), Some("0"), Some("0"))
+    );
+    assert!(v["ts"].is_null());
+}
+
 // ------------------------------------------------------------------------------------------------ pair books (pair orders)
 
 /// A live, listed order with a real state (the pair book decodes it): its current UTXO, `order_state` (`remaining` base units)

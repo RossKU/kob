@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CandlesQuery, IndexerApi } from '../../data/indexer';
-import type { CandleView } from '../../data/indexer-types';
-import { incrementalFrom, loadCandles, mergeBars, type ChartView } from './candle-feed';
+import type { CandleView, PairCandleView, PairCandlesView } from '../../data/indexer-types';
+import { incrementalFrom, loadCandles, mergeBars, mergePairCandleOrientations, type ChartView } from './candle-feed';
 
 const bar = (t: number, c = '100'): CandleView => ({ t, o: c, h: c, l: c, c, volume: '1', quote_volume: '1', trades: 1 });
 const kas = (items: CandleView[], basis = '1000') => ({ token: 'aa', interval: '1m' as const, price_basis: basis, decimals: 3, items });
@@ -107,10 +107,60 @@ describe('loadCandles', () => {
     items[1] = pbar(60_000, '6');
     items.push(pbar(120_000, '7'));
     const next = await loadCandles(api, { base: 'a', quote: 'b', pairCandles: true }, '1m', first, signal);
-    expect(queries.map((q) => q.from)).toEqual([undefined, 60_000]);
+    // each load reads both orientations of the pair (a pair fill of QUOTE/BASE is volume of this pair too)
+    expect(queries.map((q) => q.from)).toEqual([undefined, undefined, 60_000, 60_000]);
     if (next?.kind !== 'pair') throw new Error('pair');
     expect(next.pc.items.map((x) => [x.t, x.c.value])).toEqual([[0, '5'], [60_000, '6'], [120_000, '7']]);
     const none = { pairCandles: async () => null, candles: async () => kas([bar(0)]) } as unknown as IndexerApi;
     expect((await loadCandles(none, { base: 'a', quote: 'b', pairCandles: true }, '1m', null, signal))?.kind).toBe('usd');
+  });
+});
+
+describe('pair candles of both orientations', () => {
+  const A = 'aa'.repeat(32);
+  const B = 'bb'.repeat(32);
+  const rate = { value: '2', num: '2', den: '1' };
+  const pc = (t: number, a: string, b: string, fills: number): PairCandleView => ({ t, o: rate, h: rate, l: rate, c: rate, a_traded: true, b_traded: true, pair_volume_a: a, pair_volume_b: b, pair_fills: fills });
+  const view = (base: string, quote: string, items: PairCandleView[]): PairCandlesView => ({ base, quote, interval: '1m', price_basis: '1000', quote_price_basis: '1000', decimals: 3, quote_decimals: 3, price_source: 'kas_books', items });
+
+  it("adds the other orientation's pair volume to each bucket, its two amounts turned round", () => {
+    const ab = view(A, B, [pc(0, '100', '200', 1), pc(60_000, '0', '0', 0)]);
+    const ba = view(B, A, [pc(0, '30', '10', 2), pc(60_000, '7', '5', 1), pc(120_000, '9', '9', 9)]);
+    const m = mergePairCandleOrientations(ab, ba);
+    // volume of A = A's own + what the other view calls B; volume of B = B's own + what it calls A; the other view's extra buckets add nothing
+    expect(m.items.map((c) => [c.t, c.pair_volume_a, c.pair_volume_b, c.pair_fills])).toEqual([[0, '110', '230', 3], [60_000, '5', '7', 1]]);
+    expect(m.items[0]!.o).toBe(rate);
+  });
+
+  it("leaves the view as it is without the other orientation, or with another pair's", () => {
+    const ab = view(A, B, [pc(0, '1', '2', 1)]);
+    expect(mergePairCandleOrientations(ab, null)).toBe(ab);
+    expect(mergePairCandleOrientations(ab, view(A, B, [pc(0, '5', '5', 5)]))).toBe(ab);
+  });
+
+  it('the chart load reads both orientations, in full and for the bars since the newest one, and still draws without the other', async () => {
+    const calls: { base: string; quote: string; from?: number }[] = [];
+    const api = {
+      pairCandles: async (base: string, quote: string, q: { from?: number }) => {
+        calls.push({ base, quote, ...(q.from !== undefined ? { from: q.from } : {}) });
+        if (base === A) return view(A, B, [pc(0, '100', '200', 1)]);
+        return view(B, A, [pc(0, '30', '10', 2)]);
+      },
+    } as unknown as IndexerApi;
+    const first = await loadCandles(api, { base: A, quote: B, pairCandles: true }, '1m', null, signal);
+    expect(first?.kind === 'pair' && first.pc.items[0]!.pair_volume_a).toBe('110');
+    expect(calls.map((c) => c.base === A)).toEqual([true, false]);
+    const next = await loadCandles(api, { base: A, quote: B, pairCandles: true }, '1m', first, signal);
+    expect(next?.kind === 'pair' && [next.pc.items[0]!.pair_volume_a, next.pc.items[0]!.pair_fills]).toEqual(['110', 3]);
+    expect(calls.slice(2).every((c) => c.from === 0)).toBe(true);
+    // the other orientation fails: this one alone
+    const lone = {
+      pairCandles: async (base: string) => {
+        if (base !== A) throw new Error('boom');
+        return view(A, B, [pc(0, '100', '200', 1)]);
+      },
+    } as unknown as IndexerApi;
+    const v = await loadCandles(lone, { base: A, quote: B, pairCandles: true }, '1m', null, signal);
+    expect(v?.kind === 'pair' && v.pc.items[0]!.pair_volume_a).toBe('100');
   });
 });

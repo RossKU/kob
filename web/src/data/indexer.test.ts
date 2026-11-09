@@ -230,6 +230,36 @@ describe('HttpIndexer.tokenUtxos', () => {
   });
 });
 
+describe('HttpIndexer activity totals (GET /v1/stats)', () => {
+  const body = { since: 1_790_000_000_000, ts: 1_790_086_000_000, orders: 42, traders: 9, executors: null, fees_paid: '1250000', kas_locked: '880000000000' };
+
+  it('asks with since (whole ms, never negative) or without, and returns the totals', async () => {
+    const { f, calls } = stub(() => json(body));
+    const ix = new HttpIndexer({ baseUrl: 'https://kob.example', fetch: f });
+    expect(await ix.activity({ since: 1_790_000_000_000.7 })).toEqual(body);
+    await ix.activity();
+    await ix.activity({ since: -5 });
+    expect(calls.map((u) => u.pathname + u.search)).toEqual(['/v1/stats?since=1790000000000', '/v1/stats', '/v1/stats?since=0']);
+  });
+
+  it('keeps a null count and drops a field of another shape', async () => {
+    const odd = { ...body, traders: null, fees_paid: 12, executors: 'x' };
+    const got = await new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json(odd)).f }).activity();
+    expect(got).toMatchObject({ orders: 42, traders: null, executors: null, fees_paid: null, kas_locked: '880000000000' });
+  });
+
+  it('is null on an indexer without the route or an answer that is not these totals; real failures still throw', async () => {
+    for (const status of [404, 405, 501]) {
+      const ix = new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json({ error: { code: 'not_found', message: 'no such route' } }, status)).f });
+      expect(await ix.activity({ since: 5 })).toBeNull();
+    }
+    expect(await new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json({ nope: true })).f }).activity()).toBeNull();
+    expect(await new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json([])).f }).activity()).toBeNull();
+    const bad = new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json({ error: { code: 'internal', message: 'x' } }, 500)).f });
+    await expect(bad.activity()).rejects.toMatchObject({ status: 500 });
+  });
+});
+
 describe('HttpIndexer market data (trades, candles, stats, depth)', () => {
   const basis = '100000000';
   it('builds the contract URLs and returns the bodies', async () => {

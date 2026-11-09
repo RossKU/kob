@@ -17,12 +17,14 @@
 //!   `/v1/pairs/{base}/{quote}/fills?limit=&before=` (pair-order fills: volume, counterparty, never a price)
 //! - `/v1/orders?maker=&token=&status=&limit=&cursor=`, `/v1/orders/{covenant_id}`, `/v1/orders/{covenant_id}/events`
 //! - `/v1/fills?token=&side=&limit=&before=`
+//! - `/v1/stats?since=` (the activity totals: orders placed, traders, fees paid to fillers, KAS locked), `/v1/stats/{token}` (24 h statistics)
 //! - `/v1/ws` (WebSocket, see [`ws`])
 //! - with `[logo_reports] enabled`: `POST /v1/logo-reports` and `GET /v1/logo-blocklist` ([`crate::logo_reports`])
 
 pub mod cache;
 pub mod client_ip;
 pub mod conn;
+pub mod edge_cache;
 pub mod ratelimit;
 pub mod rest;
 pub mod ws;
@@ -173,6 +175,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         cache: cache::ResponseCache::default(),
         state,
     });
+    // the JSON reads are compressed (gzip, when the client accepts it); the WebSocket upgrade, the Prometheus text and the logo routes come after the layer
     let mut router = Router::new()
         .route("/v1/health", get(rest::health))
         .route("/v1/health/ready", get(rest::ready))
@@ -192,8 +195,10 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .route("/v1/token-utxos", get(rest::token_utxos))
         .route("/v1/trades/{token}", get(rest::trades))
         .route("/v1/candles/{token}", get(rest::candles))
+        .route("/v1/stats", get(rest::activity))
         .route("/v1/stats/{token}", get(rest::stats))
         .route("/v1/depth/{token}", get(rest::depth))
+        .layer(compression())
         .route("/v1/ws", get(ws::handler));
     if app.state.cfg.metrics {
         router = router.route("/v1/metrics", get(rest::metrics));
@@ -211,11 +216,51 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
     (router, app)
 }
 
+/// Bodies below this size are sent as they are: the gzip header and the CPU cost more than they save.
+const COMPRESS_MIN_BYTES: u64 = 512;
+
+/// gzip for a client that sends `Accept-Encoding: gzip` (the layer reads it, answers `Content-Encoding` and `Vary: accept-encoding`, and sends
+/// the body as it is for any other client): the read API's answers are tens of KB of repetitive JSON (`/v1/tokens`: 29 KB, 2.8 KB compressed)
+/// and a public indexer sits behind a tunnel. The fastest level: the same ratio within a few percent on JSON for a fraction of the CPU.
+fn compression() -> tower_http::compression::CompressionLayer<JsonAboveMin> {
+    tower_http::compression::CompressionLayer::new()
+        .gzip(true)
+        .no_br()
+        .no_deflate()
+        .no_zstd()
+        .quality(tower_http::CompressionLevel::Fastest)
+        .compress_when(JsonAboveMin)
+}
+
+/// Compress a response only when it is JSON of at least [`COMPRESS_MIN_BYTES`] (a body of unknown length counts as large).
+#[derive(Clone, Copy)]
+pub struct JsonAboveMin;
+
+impl tower_http::compression::predicate::Predicate for JsonAboveMin {
+    fn should_compress<B>(&self, response: &axum::http::Response<B>) -> bool
+    where
+        B: axum::body::HttpBody,
+    {
+        let json = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.trim_start().to_ascii_lowercase().starts_with("application/json"));
+        let size = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            .or_else(|| response.body().size_hint().exact());
+        json && size.is_none_or(|n| n >= COMPRESS_MIN_BYTES)
+    }
+}
+
 /// Rate-limit weight of a route: the queries that scan (candles, stats, depth, trades, books, holdings, strays) cost `heavy`
 /// tokens, everything else one.
 fn route_cost(path: &str, heavy: u32) -> u32 {
     const HEAVY: [&str; 8] =
-        ["/v1/candles/", "/v1/stats/", "/v1/depth/", "/v1/trades/", "/v1/books/", "/v1/token-utxos", "/v1/strays", "/v1/pairs"];
+        ["/v1/candles/", "/v1/stats", "/v1/depth/", "/v1/trades/", "/v1/books/", "/v1/token-utxos", "/v1/strays", "/v1/pairs"];
     if HEAVY.iter().any(|p| path.starts_with(p)) {
         heavy.max(1)
     } else {
@@ -230,7 +275,9 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
     req.extensions_mut().insert(ClientIp(ip));
     let cors = app.state.cfg.cors_allow_origin.clone();
 
-    let cost = route_cost(req.uri().path(), app.state.cfg.rate_limit.heavy_route_cost);
+    let (method, path, query) =
+        (req.method().clone(), req.uri().path().to_string(), req.uri().query().unwrap_or_default().to_string());
+    let cost = route_cost(&path, app.state.cfg.rate_limit.heavy_route_cost);
     let mut resp = if let Err(wait) = app.limiter.check_cost(ip, cost) {
         let mut e = ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "rate limit exceeded");
         e.retry_after = Some(retry_after_secs(wait));
@@ -253,6 +300,11 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
             }
         }
     };
+    // what a CDN may keep of the answer, and for how long (`edge_cache`)
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    edge_cache::apply(&mut resp, &method, &path, &query, now_ms);
     if let Some(origin) = cors {
         if let Ok(v) = HeaderValue::from_str(&origin) {
             let h = resp.headers_mut();
@@ -315,6 +367,7 @@ mod cost_tests {
     fn scanning_routes_cost_the_heavy_weight() {
         for p in [
             "/v1/candles/ab",
+            "/v1/stats",
             "/v1/stats/ab",
             "/v1/depth/ab",
             "/v1/trades/ab",
