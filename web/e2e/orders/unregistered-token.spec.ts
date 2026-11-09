@@ -2,7 +2,7 @@
 // base units", taken for a wrong supply). Its amounts read in whole tokens: its decimals come from its declaration, its program's default, the scale of its
 // order or market, else the issuing browser's issuance record (its ticker too, marked unverified), with a small marker by its name.
 import { test, expect } from '../fixtures';
-import { connectWallet, fund } from '../helpers/env';
+import { connectWallet, fund, gotoOrders } from '../helpers/env';
 import { openOrders } from '../helpers/orders';
 import { cancelReceipt, clickPlaceOnly, fillFields, pickType, readReceipt, waitReviewable } from '../helpers/ticket';
 
@@ -85,6 +85,7 @@ test('a token nothing states the decimals of (no declaration, no program default
   await fund(mock, 'alice', { tokens: 0n });
   await mock.giveTokens('alice', 1_234_567n, { token: OTHER });
   await openOrders(page, mock);
+  await gotoOrders(page, 'balances'); // the balances are their own tab of the Portfolio page
   const row = page.getByTestId(`balance-row-${OTHER}`);
   await expect(row).toContainText(OTHER_SHORT);
   await expect(row).toContainText('1,234,567');

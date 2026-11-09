@@ -338,6 +338,7 @@ test.describe('recovery', () => {
     await expect(page.getByTestId('orders-indexer-down')).toBeVisible();
     await openOrdersSettings(page);
     await expect(page.getByTestId('recover-count')).toContainText('0 placement');
+    await page.getByTestId('orders-tab-active').click(); // the page opens on Balances; the order rows are under Open orders
     await expect(page.getByTestId(`order-row-${id}`)).toHaveCount(0);
 
     // import the backup: the order is resolved on the node from its placement record
@@ -345,6 +346,7 @@ test.describe('recovery', () => {
     await expect(page.getByTestId('import-preview')).toContainText('1 record(s) can be imported');
     await page.getByTestId('orders-import-apply').click();
     await expect(page.getByTestId('recover-message')).toContainText('Imported 1');
+    await page.getByTestId('orders-tab-active').click();
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute('data-status', 'open');

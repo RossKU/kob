@@ -66,6 +66,6 @@ describe('tab titles', () => {
     expect(pageTitle(`${'ROCKET'} / ${'KAS'}`)).toBe('ROCKET / KAS - KOB');
   });
   it('the pages of the app have names', () => {
-    for (const p of ['market', 'orders', 'create', 'settings']) expect(t(`shell.nav.${p}`)).not.toMatch(/^shell\./);
+    for (const p of ['market', 'portfolio', 'create', 'settings']) expect(t(`shell.nav.${p}`)).not.toMatch(/^shell\./);
   });
 });
