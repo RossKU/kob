@@ -255,39 +255,3 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     for (const name of ['KOB_PAGES_PROJECT', 'KOB_PAGES_INDEXER_URL', 'KOB_PAGES_BRANCH', 'KOB_PAGES_NETWORK', 'KOB_PAGES_EXTRA_INDEXER_URLS', 'KOB_PAGES_NODE_URL', 'KOB_PAGES_EXPLORER_URL', 'KOB_PAGES_TOKEN_NAMES_URL']) expect(wf).toContain(`vars.${name}`);
   });
 });
-
-describe('the GitHub Pages mirror workflow (deploy-gh-pages.yml, docs/ops/web-hosting.md)', () => {
-  const read = (f: string) => readFileSync(fileURLToPath(new URL(`../../.github/workflows/${f}`, import.meta.url)), 'utf8');
-  const wf = read('deploy-gh-pages.yml');
-  const paths = (text: string) => text.slice(text.indexOf('    paths:\n'), text.indexOf('  workflow_dispatch:')).split('\n').filter((l) => l.trim().startsWith('- ')).map((l) => l.trim());
-
-  it('runs on the pushes deploy-pages runs on (its own file instead of deploy-pages.yml) and on workflow_dispatch, from master only', () => {
-    const own = paths(wf).filter((p) => !p.includes('.github/workflows/'));
-    expect(own).toEqual(paths(read('deploy-pages.yml')).filter((p) => !p.includes('.github/workflows/')));
-    expect(paths(wf)).toContain('- ".github/workflows/deploy-gh-pages.yml"');
-    expect(wf).toContain('  workflow_dispatch:\n');
-    expect(wf).toMatch(/- name: The mirror is deployed only from master\n\s+if: github\.ref != 'refs\/heads\/master'/);
-    expect(wf).toContain("if: needs.build.outputs.ready == 'true' && github.ref == 'refs/heads/master'");
-  });
-
-  it('builds the mirror variant from the same variables, tests it under /kob/, and needs no secret', () => {
-    expect(wf).toMatch(/run: npm run build:release\n\s+env:\n\s+KOB_MIRROR: github-pages\n/);
-    expect(wf).toContain('run: npm run e2e:ghpages');
-    expect(wf).toContain('node scripts/pages-config.mjs --dist dist');
-    for (const name of ['KOB_PAGES_INDEXER_URL', 'KOB_PAGES_NETWORK', 'KOB_PAGES_EXTRA_INDEXER_URLS', 'KOB_PAGES_NODE_URL', 'KOB_PAGES_EXPLORER_URL', 'KOB_PAGES_TOKEN_NAMES_URL']) expect(wf).toContain(`vars.${name}`);
-    expect(wf).not.toContain('secrets.');
-    // the main workflows never build the mirror variant
-    for (const f of ['deploy-pages.yml', 'ci.yml']) expect(read(f)).not.toContain('KOB_MIRROR');
-  });
-
-  it('publishes with the official Pages actions, pinned by commit, with the Pages permissions only in the deploy job', () => {
-    for (const m of wf.matchAll(/uses: ([^\s#]+)/g)) expect(m[1], m[1]).toMatch(/@[0-9a-f]{40}$/);
-    expect(wf).toMatch(/uses: actions\/upload-pages-artifact@[0-9a-f]{40} # v\d/);
-    expect(wf).toMatch(/uses: actions\/deploy-pages@[0-9a-f]{40} # v\d/);
-    expect(wf).toMatch(/^permissions:\n  contents: read\n/m);
-    const deploy = wf.slice(wf.indexOf('\n  deploy:\n'));
-    expect(deploy).toMatch(/permissions:\n      pages: write\n      id-token: write\n/);
-    expect(deploy).toMatch(/environment:\n      name: github-pages\n/);
-    expect(wf.slice(0, wf.indexOf('\n  deploy:\n'))).not.toMatch(/pages: write|id-token: write/);
-  });
-});

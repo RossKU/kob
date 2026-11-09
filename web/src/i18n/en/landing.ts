@@ -103,8 +103,6 @@ export default {
 
   'landing.footer.nav': 'Links',
   'landing.footer.app': 'App',
-  'landing.footer.mirror': 'Mirror',
-  'landing.footer.mirror.title': 'The same app on GitHub Pages, for when this site is unreachable',
   'landing.footer.executor': 'Run an executor',
   'landing.footer.api': 'Public API',
   'landing.footer.support': 'Support',

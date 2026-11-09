@@ -19,8 +19,6 @@ export const FEEDBACK_CONTACT_URL: string = 'https://x.com/kaspaorderbook';
 /** The market list: "Open the app" and the footer's "App" (an in-app link, so a self-hosted copy stays on its own host). */
 export const APP_HASH = '#/market';
 
-/** The app on the GitHub Pages mirror (docs/ops/web-hosting.md, "GitHub Pages mirror"): the way in when the main site is unreachable. */
-export const MIRROR_APP_URL = `https://rossku.github.io/kob/${APP_HASH}`;
 
 /** The networks the sentences below exist for (one dictionary key each). */
 export const LANDING_NETWORKS: readonly NetworkName[] = ['testnet-10', 'mainnet'];
