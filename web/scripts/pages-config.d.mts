@@ -1,6 +1,6 @@
 export const NETWORKS: string[];
 export const MAX_EXTRA_INDEXERS: number;
-export interface PagesConfig { network: string; indexerUrl: string; extraIndexerUrls: string[]; nodeUrl: string; explorerUrl?: string; tokenNamesUrl?: string }
+export interface PagesConfig { network: string; indexerUrl?: string; extraIndexerUrls?: string[]; nodeUrl?: string; explorerUrl?: string; tokenNamesUrl?: string; /** the landing-only site: no config.json is written */ landingOnly?: boolean }
 /** True for a host name that is not reachable from the public internet (loopback, private, link-local, unspecified). */
 export function isPrivateHost(hostname: string): boolean;
 /** A public URL of one of `schemes`, trailing slashes removed; or an error message. */
@@ -11,3 +11,4 @@ export function pagesConfig(env: Record<string, string | undefined>): { config: 
 export function programRegistry(registryText: string, network: string): string;
 /** Writes config.json (and the testnet-10 program list) into `dist`. */
 export function writeDeployment(dist: string, config: PagesConfig, registryPath?: string): { path: string; sha256: string }[];
+export function noindexDist(dist: string): { path: string; sha256: string }[];

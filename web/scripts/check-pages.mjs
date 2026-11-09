@@ -2,7 +2,8 @@
 // Post-deploy check of a hosted web app (.github/workflows/deploy-pages.yml, docs/ops/web-hosting.md): the host must send what
 // public/_headers asks for, and serve exactly the built files.
 //
-//   node scripts/check-pages.mjs <base url> [--dist dist]
+//   node scripts/check-pages.mjs <base url> [--dist dist] [--landing-only]
+//   node scripts/check-pages.mjs --protected <url> [<url> ...]     (the internal mainnet app: unauthenticated requests must meet Cloudflare Access, never the app)
 //
 // * `/`: Content-Security-Policy equal to CSP_HEADER of csp.mjs (with `frame-ancestors 'none'`), X-Frame-Options DENY,
 //   X-Content-Type-Options nosniff, Referrer-Policy no-referrer.
@@ -12,6 +13,7 @@
 // * a file under `/assets/`: Access-Control-Allow-Origin `*` (the sandboxed signer loads its bundle cross-origin).
 // * with --dist: every built file (except the host's own `_headers` / `_redirects`) is fetched and its sha256 compared with the
 //   local file, so a host that rewrites pages (an injected analytics script, minification, an old deployment) is caught.
+// * --landing-only (the landing-only site, web/src/app/landing-only.ts, has no signer page): the signer checks are skipped.
 // Redirects are followed (Pages sends `/index.html` to `/`). Prints one line per check; exits 1 when any fails.
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -41,7 +43,7 @@ export function distFiles(dir) {
  * (only the first request is retried: a wrong header on a reachable deployment is a failure, not a delay).
  * @returns {Promise<{ ok: boolean, lines: string[] }>}
  */
-export async function checkPages(base, { dist, fetchFn = fetch, attempts = 6, delayMs = 5000 } = {}) {
+export async function checkPages(base, { dist, landingOnly = false, fetchFn = fetch, attempts = 6, delayMs = 5000 } = {}) {
   const root = new URL(base.endsWith('/') ? base : base + '/');
   const lines = [];
   let ok = true;
@@ -79,7 +81,7 @@ export async function checkPages(base, { dist, fetchFn = fetch, attempts = 6, de
     expect('/', index, 'referrer-policy', 'no-referrer');
   }
 
-  for (const path of ['/signer.html', '/signer']) {
+  for (const path of landingOnly ? [] : ['/signer.html', '/signer']) {
     const res = await get(path);
     if (res.status !== 200) {
       fail(`${path} answered HTTP ${res.status}`);
@@ -126,14 +128,70 @@ async function firstScript(res) {
   }
 }
 
+/**
+ * The internal mainnet app is a preview deployment behind the Pages project's access policy (Cloudflare Access, docs/ops/web-hosting.md 4c). An unauthenticated
+ * request to each of `urls` must NOT get the app: it must be sent to Cloudflare Access (a redirect to `<team>.cloudflareaccess.com` or a `/cdn-cgi/access/` path)
+ * or refused (401 / 403). Anything else (a 2xx above all) means the app is open to the world: the check fails. Redirects are not followed; a network error
+ * is retried (`attempts`, a new deployment is not reachable at once) and then fails (an unreachable URL proves nothing).
+ * @returns {Promise<{ ok: boolean, lines: string[] }>}
+ */
+export async function checkProtected(urls, { fetchFn = fetch, attempts = 4, delayMs = 5000 } = {}) {
+  const lines = [];
+  let ok = true;
+  for (const url of urls) {
+    let res = null;
+    let err = '';
+    for (let i = 1; i <= attempts && !res; i++) {
+      try {
+        res = await fetchFn(url, { redirect: 'manual', cache: 'no-store', headers: { accept: 'text/html' } });
+      } catch (e) {
+        err = e instanceof Error ? e.message : String(e);
+        if (i < attempts) await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+    if (!res) {
+      ok = false;
+      lines.push(`FAIL  ${url} unreachable (${err}): the protection cannot be confirmed`);
+      continue;
+    }
+    const where = res.headers.get('location') ?? '';
+    let to = null;
+    try {
+      to = where ? new URL(where, url) : null;
+    } catch {
+      /* not a URL */
+    }
+    if ([301, 302, 303, 307, 308].includes(res.status) && to && (to.hostname.endsWith('.cloudflareaccess.com') || to.pathname.startsWith('/cdn-cgi/access/'))) {
+      lines.push(`ok    ${url} sends an unauthenticated visitor to Cloudflare Access (HTTP ${res.status} -> ${to.hostname}${to.pathname.startsWith('/cdn-cgi/access/') ? to.pathname : ''})`);
+    } else if (res.status === 401 || res.status === 403) {
+      lines.push(`ok    ${url} refuses an unauthenticated visitor (HTTP ${res.status})`);
+    } else {
+      ok = false;
+      lines.push(`FAIL  ${url} answered HTTP ${res.status}${to ? ` (to ${to.origin}${to.pathname})` : ''} to an unauthenticated request: the internal app is NOT protected. Enable the Pages project's access policy for previews (docs/ops/web-hosting.md 4c) and delete this deployment`);
+    }
+  }
+  return { ok, lines };
+}
+
 async function main(argv) {
+  if (argv.includes('--protected')) {
+    const urls = argv.filter((a) => /^https:\/\//.test(a));
+    if (urls.length === 0) {
+      console.error('usage: node scripts/check-pages.mjs --protected <https url> [<https url> ...]');
+      return 2;
+    }
+    const { ok, lines } = await checkProtected(urls);
+    for (const l of lines) console.log(l);
+    console.log(ok ? 'every URL is behind Cloudflare Access' : 'PROTECTION CHECK FAILED');
+    return ok ? 0 : 1;
+  }
   const base = argv.find((a) => !a.startsWith('--') && argv[argv.indexOf(a) - 1] !== '--dist');
   const i = argv.indexOf('--dist');
   if (!base || !/^https?:\/\//.test(base)) {
-    console.error('usage: node scripts/check-pages.mjs <base url> [--dist dist]');
+    console.error('usage: node scripts/check-pages.mjs <base url> [--dist dist] [--landing-only]');
     return 2;
   }
-  const { ok, lines } = await checkPages(base, { dist: i >= 0 ? argv[i + 1] : undefined });
+  const { ok, lines } = await checkPages(base, { dist: i >= 0 ? argv[i + 1] : undefined, landingOnly: argv.includes('--landing-only') });
   for (const l of lines) console.log(l);
   console.log(ok ? `${base}: every check passed` : `${base}: CHECK FAILED`);
   return ok ? 0 : 1;

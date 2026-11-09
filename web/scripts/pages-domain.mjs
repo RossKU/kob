@@ -10,8 +10,11 @@
 // * not attached: `POST /accounts/{id}/pages/projects/{project}/domains`. A domain that is attached to another project is NOT moved (a move
 //   is an outage until the other project releases it): the step says to remove it there first, in the dashboard, and exits 1.
 // * DNS: when the zone is found (the token needs Zone > Read and DNS > Edit; a token limited to Pages > Edit cannot), a missing proxied
-//   `CNAME <host> -> <project>.pages.dev` is created. Otherwise the step prints the record to add in the dashboard (exit 0: the site
-//   itself is deployed, only the name does not point at it yet).
+//   `CNAME <host> -> <the project's pages.dev address>` is created. That address is the `subdomain` the Pages API reports for the project
+//   (GET /accounts/{id}/pages/projects/{project}): when the plain `<project>.pages.dev` name is taken by someone else, Cloudflare gives the project a
+//   suffixed one (`kob-web-bs6.pages.dev`), and a CNAME to the plain name reaches the other party's site (Cloudflare error 1014). Only when the API
+//   cannot say is `<project>.pages.dev` assumed, and the summary says so. Without such a token the step prints the record to add in the dashboard (exit 0:
+//   the site itself is deployed, only the name does not point at it yet).
 // Prints markdown (the workflow appends it to the job summary).
 import { fileURLToPath } from 'node:url';
 
@@ -50,15 +53,29 @@ async function call(fetchFn, token, method, path, body) {
   return { ok: res.ok && json?.success !== false, status: res.status, json, errors: (json?.errors ?? []).map((e) => `${e.code}: ${e.message}`).join('; ') };
 }
 
+/** The pages.dev host the project is served at, from the `subdomain` of the Pages API's project object; null when it is missing or not a host name. */
+export function pagesDevHost(subdomain) {
+  let v = String(subdomain ?? '').trim().toLowerCase().replace(/\.$/, '');
+  if (!/^[a-z0-9][a-z0-9.-]*$/.test(v)) return null;
+  if (!v.includes('.')) v += '.pages.dev';
+  return v.endsWith('.pages.dev') ? v : null;
+}
+
 /**
  * Attaches `host` to `project` and creates its DNS record when possible. Returns `{ ok, lines }` (`lines`: markdown for the job summary).
  * `fetchFn` is injectable (tests).
  */
 export async function ensureDomain({ token, account, project, host, fetchFn = fetch }) {
   const lines = [`### Custom domain \`${host}\` (project \`${project}\`)`, ''];
-  const target = `${project}.pages.dev`;
-  const base = `/accounts/${account}/pages/projects/${project}/domains`;
+  const projectPath = `/accounts/${account}/pages/projects/${project}`;
+  const base = `${projectPath}/domains`;
   let ok = true;
+
+  // the CNAME target: the project's own pages.dev address, which carries a suffix when `<project>.pages.dev` was taken (the API says which)
+  const info = await call(fetchFn, token, 'GET', projectPath);
+  const real = info.ok ? pagesDevHost(info.json?.result?.subdomain) : null;
+  const target = real ?? `${project}.pages.dev`;
+  if (!real) lines.push(`- the project's pages.dev address could not be read from the API (HTTP ${info.status}): \`${target}\` is assumed; copy the real one from the project page (Workers & Pages > ${project}) if it differs (a suffixed name such as \`${project}-abc.pages.dev\`).`);
 
   const have = await call(fetchFn, token, 'GET', base);
   if (!have.ok) {

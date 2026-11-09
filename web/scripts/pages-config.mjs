@@ -19,6 +19,13 @@
 //                                 kascov.io's data set (https); empty or unset = https://kascov.io/data (the app's default); `off` = no token names
 //                                 (config.json `tokenNamesUrl: ""`; GitHub cannot tell an empty variable from an unset one, hence the word)
 //
+//   KOB_PAGES_LANDING_ONLY        `1` / `true`: the site is the landing-only front page of a network that has not launched (web/src/app/landing-only.ts; the workflow
+//                                 sets it for the mainnet site). The page reads no config.json and connects to nothing, so no indexer is required, the variables
+//                                 above are ignored (a note says so) and no config.json is written.
+//
+//   KOB_PAGES_INTERNAL            `1`: the build is the internal mainnet app (a protected preview deployment, docs/ops/web-hosting.md 4c): `--dist` also writes
+//                                 robots.txt (Disallow: /) and adds `X-Robots-Tag: noindex, nofollow` to the dist's `_headers`, so no search engine keeps it.
+//
 // A public page is served over https, so every URL must be https / wss (a browser blocks http / ws from it anyway), name a public
 // host (not localhost or a private address) and carry no user name, password, query or fragment (config.json is public: an API key
 // in it would be published). Prints the config written; exits 1 with every problem listed.
@@ -76,6 +83,16 @@ export function pagesConfig(env) {
   const notes = [];
   const network = (env.KOB_PAGES_NETWORK ?? '').trim() || 'testnet-10';
   if (!NETWORKS.includes(network)) errors.push(`KOB_PAGES_NETWORK: \`${network}\` must be testnet-10 or mainnet`);
+
+  const landing = (env.KOB_PAGES_LANDING_ONLY ?? '').trim().toLowerCase();
+  if (!['', '0', 'false', '1', 'true'].includes(landing)) errors.push(`KOB_PAGES_LANDING_ONLY: \`${landing}\` must be empty, 0, false, 1 or true`);
+  if (landing === '1' || landing === 'true') {
+    // the landing-only page connects to nothing: no indexer, node or explorer to validate, and no config.json for it to read
+    const ignored = ['INDEXER_URL', 'EXTRA_INDEXER_URLS', 'NODE_URL', 'EXPLORER_URL', 'TOKEN_NAMES_URL'].filter((k) => (env[`KOB_PAGES_${k}`] ?? '').trim());
+    if (ignored.length) notes.push(`KOB_PAGES_LANDING_ONLY: the landing-only page connects to nothing, so KOB_PAGES_${ignored.join(', KOB_PAGES_')} ${ignored.length > 1 ? 'are' : 'is'} ignored`);
+    if (errors.length) return { config: null, errors, notes };
+    return { config: { network, landingOnly: true }, errors, notes };
+  }
 
   let indexerUrl = '';
   if (!(env.KOB_PAGES_INDEXER_URL ?? '').trim()) errors.push('KOB_PAGES_INDEXER_URL is empty: the app needs an indexer for the book, the charts and the orders');
@@ -148,9 +165,10 @@ export function programRegistry(registryText, network) {
   return JSON.stringify({ ...rest, network, tokens: [] }, null, 2) + '\n';
 }
 
-/** Writes config.json (and the testnet-10 program list) into `dist`; returns the paths written with their sha256. */
+/** Writes config.json (and the testnet-10 program list) into `dist`; returns the paths written with their sha256. A landing-only site has no config.json: nothing is written. */
 export function writeDeployment(dist, config, registryPath = DEFAULT_REGISTRY_PATH) {
   const out = [];
+  if (config.landingOnly) return out;
   const put = (rel, text) => {
     const p = join(dist, rel);
     mkdirSync(join(p, '..'), { recursive: true });
@@ -160,6 +178,22 @@ export function writeDeployment(dist, config, registryPath = DEFAULT_REGISTRY_PA
   put('config.json', JSON.stringify(config, null, 2) + '\n');
   // mainnet: `npm run build:release` already shipped the pinned registry (scripts/release-hashes.sh checks it)
   if (config.network !== 'mainnet') put('registry/tokens.json', programRegistry(readFileSync(registryPath, 'utf8'), config.network));
+  return out;
+}
+
+/**
+ * Keeps a build out of search engines: robots.txt that disallows everything, and an `X-Robots-Tag: noindex, nofollow` rule appended to the dist's `_headers` (a
+ * second `/*` block: Pages applies every block that matches). Used for the internal mainnet app only; returns the files written with their sha256.
+ */
+export function noindexDist(dist) {
+  const out = [];
+  const put = (rel, text) => {
+    writeFileSync(join(dist, rel), text);
+    out.push({ path: rel, sha256: createHash('sha256').update(text).digest('hex') });
+  };
+  const headersPath = join(dist, '_headers');
+  put('_headers', `${readFileSync(headersPath, 'utf8').replace(/\s*$/, '\n')}\n/*\n  X-Robots-Tag: noindex, nofollow\n`);
+  put('robots.txt', 'User-agent: *\nDisallow: /\n');
   return out;
 }
 
@@ -186,6 +220,7 @@ function main(argv) {
       return 1;
     }
     for (const f of writeDeployment(dir, config)) console.log(`wrote ${f.path} (sha256 ${f.sha256})`);
+    if ((process.env.KOB_PAGES_INTERNAL ?? '').trim() === '1') for (const f of noindexDist(dir)) console.log(`wrote ${f.path} (sha256 ${f.sha256}; the internal app is kept out of search engines)`);
   }
   console.log(JSON.stringify(config, null, 2));
   return 0;

@@ -236,6 +236,8 @@ jobs:
         run: bash scripts/release-hashes.sh
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
+      # the landing-only build (KOB_LANDING_ONLY, the mainnet front page): its own build in dist-landing/, the landing page at every address, no request but its own files
+      - run: npm run e2e:landing
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
