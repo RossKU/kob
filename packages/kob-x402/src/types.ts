@@ -246,6 +246,7 @@ export interface IntentTerms {
   /** The payer's x-only key (64 hex). */
   payer: string;
   maxPay?: string;
+  /** KasToToken: one cap for the merchant's carrier, the fillers and the fee; whoever executes the intent may keep up to it. */
   maxExtra?: string;
   maxSell?: string;
   lockOutputIndex?: number;

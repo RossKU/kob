@@ -222,6 +222,48 @@ fn kas_to_token_and_token_swap_are_executed() {
     f.settle(&v, &facts, &BTreeSet::new());
 }
 
+/// `max_extra` is a single cap (the executor may keep all of it), so the default is tight: the merchant's carrier, the fillers of
+/// the shape (none for the default one-ask resting shape) and the fee at 5 times the payer's fee rate, plus a small margin. It still
+/// executes when the keeper prices its fee at 5 times the floor, and a keeper that would pay a much higher fee cannot build.
+#[test]
+fn the_default_max_extra_is_tight_and_survives_a_fee_spike() {
+    let f = fx();
+    let offer = f.token_offer(2 * WHOLE as u64, MERCHANT);
+    let max_pay = 2 * 250_000_000;
+    let p = f.pay(&offer, "KAS", &IntentOptions { max_pay: Some(max_pay), ..IntentOptions::default() }).unwrap();
+    let IntentState::KasToToken { max_extra, .. } = &p.state else { panic!("a KasToToken intent") };
+    // the carrier (1 KAS), no filler (KasToToken_buy rests), 24476 grams (3500 + 8500 + 2 x 6238 template bytes of the 8/8 token) at
+    // 5 x 100 sompi, 0.02 KAS of margin
+    assert_eq!(*max_extra as u64, KAS + 24_476 * 500 + 2_000_000, "carrier + 0.142 KAS, not carrier + 1 KAS");
+    assert_eq!(
+        p.payload.payload.route.as_ref().and_then(|r| r.intent.as_ref()).and_then(|i| i.max_extra.as_deref()),
+        Some("114238000")
+    );
+    assert_eq!(p.intent.amount, max_pay + *max_extra as u64, "the intent holds exactly maxPay + maxExtra");
+    // a higher fee rate of the payer raises the default with it (5 x the rate of 300)
+    let spike =
+        f.pay(&offer, "KAS", &IntentOptions { max_pay: Some(max_pay), fee_rate: Some(300), ..IntentOptions::default() }).unwrap();
+    let IntentState::KasToToken { max_extra: spiked, .. } = &spike.state else { unreachable!() };
+    assert_eq!(*spiked as u64, KAS + 24_476 * 1_500 + 2_000_000);
+    // the keeper executes at the floor and priced at 5 times it; at 50 times the intent cannot pay the fee
+    let (v, facts) = f.verify(&offer, &p.payload).unwrap();
+    f.chain.submit(&v.tx).unwrap();
+    f.chain.mine(1);
+    for rate in [100, 500] {
+        let kp = KeeperParams { fee: kob_protocol::tx::FeeOptions::rate(rate), ..f.keeper() };
+        assert!(
+            build_execution(&facts, &f.book(), &BTreeSet::new(), NOW, &kp).unwrap().is_some(),
+            "an execution at {rate} sompi per gram"
+        );
+    }
+    let kp = KeeperParams { fee: kob_protocol::tx::FeeOptions::rate(5_000), ..f.keeper() };
+    assert!(build_execution(&facts, &f.book(), &BTreeSet::new(), NOW, &kp).unwrap().is_none(), "the cap holds at 50 times the floor");
+    let ex = build_execution(&facts, &f.book(), &BTreeSet::new(), NOW, &f.keeper()).unwrap().unwrap();
+    f.chain.submit(&ex.tx).unwrap();
+    f.chain.mine(1);
+    assert!(matches!(f.chain.output_status(&ex.merchant_output, &ex.merchant_spk).unwrap(), OutputStatus::Accepted { .. }));
+}
+
 #[test]
 fn a_conflicting_fill_is_retried_without_the_payer() {
     let f = fx();

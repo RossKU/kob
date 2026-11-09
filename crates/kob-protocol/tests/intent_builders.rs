@@ -880,3 +880,116 @@ fn dump_router_intents() {
     println!("{n} router intents (create + execute) in {}", dir.display());
     assert!(n >= 30 + 12 + 6, "every actor ran on its programs ({n} runs)");
 }
+
+// ---------------------------------------------------------------------------------------------- max_extra
+
+/// Every KCC-20 program a router intent may name (the token B of a `KasToToken` intent).
+const B_PROGRAMS: [TemplateId; 6] =
+    [TemplateId::Kcc20Ref, TemplateId::Kcc20Ref4x5, P8, TemplateId::Kcc20Ref16x16, TemplateId::Kcc20P2, PM];
+
+/// A `KasToToken` intent of `actor` on token program `b` whose terms are `max_pay` = the asks' quotes and `max_extra`, funded
+/// as the SDK funds it (`value = max_pay + max_extra`, plus `surplus` the router must return), with the legs of `legs_for`.
+fn kas_to_token_with_max_extra(actor: &Actor, b: TemplateId, max_extra: i64, surplus: i64) -> (Created, Vec<IntentAsk>, i64) {
+    let p = Progs { a: P8, b };
+    let (asks, _) = legs_for(actor, p);
+    let (state, ..) = state_for(actor, p, &asks, &[]);
+    let quote: i64 = asks.iter().map(|a| quote_of(a.amount, a.order.state.price, a.order.state.scale, Round::Up).unwrap()).sum();
+    let IntentState::KasToToken { payer, merchant, token, program, amount, b_extension, deadline, .. } = state else { unreachable!() };
+    let state = IntentState::KasToToken { payer, merchant, token, program, amount, max_pay: quote, max_extra, b_extension, deadline };
+    let c = create(actor, state, p, (quote + max_extra + surplus) as u64, 0);
+    (c, asks, quote)
+}
+
+/// The default `max_extra` pays for what every `KasToToken` shape's execution takes on every program: at the relay floor and at
+/// [`MAX_EXTRA_RATE_FACTOR`] times it (an execution priced above the rate the payer saw), the router accepts the execution and
+/// the fee mass stays under the bound the default is computed from; at a rate far above the factor the intent refuses to pay
+/// (the cap is a cap). The default is also tight: what it leaves the executor beyond what the execution takes at the floor is
+/// less than half the merchant's carrier.
+#[test]
+fn the_default_max_extra_covers_every_kas_to_token_execution_and_is_tight() {
+    let floor = MIN_FEE_RATE;
+    let mut ran = 0;
+    for actor in ACTORS.iter().filter(|a| a.shape.kind == IntentKind::KasToToken) {
+        for b in B_PROGRAMS {
+            if !actor.shape.fits(None, Some(b)) {
+                continue;
+            }
+            let default = default_max_extra(&actor.shape, b, MCARRIER, None) as i64;
+            assert_eq!(
+                default as u64,
+                kas_to_token_extra_needed(&actor.shape, b, MCARRIER, REFERENCE_FILLER, MAX_EXTRA_RATE_FACTOR * floor)
+                    + MAX_EXTRA_MARGIN,
+                "{}",
+                actor.name
+            );
+            let (c, asks, quote) = kas_to_token_with_max_extra(actor, b, default, 0);
+            let mut r = exec_req(&c, actor, asks.clone(), vec![], 0);
+            r.filler = REFERENCE_FILLER;
+            for rate in [floor, MAX_EXTRA_RATE_FACTOR * floor] {
+                r.fee = FeeOptions::rate(rate);
+                let (tx, _, facts) =
+                    validate_exec(&r).unwrap_or_else(|e| panic!("{} on {} at rate {rate}: {e}", actor.name, b.name()));
+                let me = tx.inputs.len() - 1;
+                let used = c.intent.amount as i64 - tx.outputs[me].value as i64 - facts.quote_pay;
+                assert!(
+                    used <= default,
+                    "{} on {} at rate {rate}: the execution takes {used}, max_extra {default}",
+                    actor.name,
+                    b.name()
+                );
+                if rate == floor {
+                    let (s, _) = execute_intent(&r).unwrap();
+                    assert!(
+                        s.fee.mass.fee_mass <= execution_fee_mass_bound(actor.shape.asks, b),
+                        "{} on {}: fee mass {} above the bound {}",
+                        actor.name,
+                        b.name(),
+                        s.fee.mass.fee_mass,
+                        execution_fee_mass_bound(actor.shape.asks, b)
+                    );
+                    let fillers = (0..me).filter(|i| tx.outputs[*i].script_public_key == p2pk_spk(&pk(PAYER))).count() as u64;
+                    assert_eq!(fillers, kas_to_token_fillers(&actor.shape), "{}: the fillers the default pays for", actor.name);
+                    assert!(
+                        default - used < (MCARRIER / 2) as i64,
+                        "{} on {}: the default leaves {} sompi beyond what the execution takes",
+                        actor.name,
+                        b.name(),
+                        default - used
+                    );
+                }
+            }
+            // far above the factor: the intent cannot pay the fee (a cap, not a blank cheque)
+            r.fee = FeeOptions::rate(50 * floor);
+            let e = execute_intent(&r).unwrap_err().to_string();
+            assert!(e.contains("max_extra") || e.contains("never filled"), "{} on {}: {e}", actor.name, b.name());
+            let _ = quote;
+            ran += 1;
+        }
+    }
+    assert!(ran >= 6 * 3, "every KasToToken shape ran on several programs ({ran} runs)");
+}
+
+/// The router's bound is exact: the payer's change must reach `value - pay - max_extra`; one sompi less is refused at the intent input
+/// (the executor cannot keep more than `max_extra`, whatever it does with the carrier, the fillers or the fee).
+#[test]
+fn an_execution_that_keeps_more_than_max_extra_is_refused_by_the_router() {
+    let actor = Actor::by_name("KasToToken_buy").unwrap();
+    let default = default_max_extra(&actor.shape, P8, MCARRIER, None) as i64;
+    let surplus = 3 * KAS as i64; // value = pay + max_extra + surplus: the change must be at least the surplus
+    let (c, asks, _) = kas_to_token_with_max_extra(actor, P8, default, surplus);
+    let r = exec_req(&c, actor, asks, vec![], 0);
+    let (tx, entries, facts) = validate_exec(&r).unwrap();
+    let me = tx.inputs.len() - 1;
+    // the honest change is the surplus plus what the cap did not need; shrink it to exactly the bound, then one sompi below
+    let used = c.intent.amount as i64 - tx.outputs[me].value as i64 - facts.quote_pay;
+    assert!(used < default);
+    let mut at_bound = tx.clone();
+    at_bound.outputs[me].value = surplus as u64;
+    assert!(execute(&at_bound, &entries, true).unwrap()[me].is_ok(), "a change of exactly value - pay - max_extra passes");
+    let mut below = tx.clone();
+    below.outputs[me].value = surplus as u64 - 1;
+    assert!(
+        execute(&below, &entries, true).unwrap()[me].is_err(),
+        "one sompi below value - pay - max_extra fails at the intent input"
+    );
+}

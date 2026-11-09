@@ -4,6 +4,15 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Intent `maxExtra` is tight by default
+
+- `maxExtra` of a `KasToToken` intent is a single cap: whoever executes the intent may keep up to `maxExtra` of the payer's KAS (the router
+  only checks that the payer's change reaches `value - pay - maxExtra`), so wallets should set it tight. The default, when `intentTerms` gives
+  none, is no longer the merchant's carrier + 1 KAS but what the actor's shape needs: the carrier, the fillers of the shape (0.2 KAS each; none
+  for the default one-ask resting shape) and the execution's fee on the merchant token's program at 5 times the client's `feeRate` (the
+  relay floor when unset), plus 0.02 KAS. For the default shape on an 8/8 token that is the carrier + 0.14 KAS.
+  Rust: `kob_protocol::build::default_max_extra`. The intent holds `maxPay + maxExtra` as before, so the payer's worst case shrinks with it.
+
 ### The Kaspa x402 binding v1.0.1 (conformance vectors)
 
 - Conformance vectors: `crates/kob-x402/vectors/kaspa-x402-v1.0.1/` (tag `v1.0.1`, commit `5622191`; byte-identical upstream

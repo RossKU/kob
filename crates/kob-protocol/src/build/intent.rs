@@ -910,6 +910,62 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     Ok((built, facts))
 }
 
+// -------------------------------------------------------------------------------------------- max_extra
+
+/// The filler an execution puts in each output slot it must hold open, sompi: the reference keeper's (`KeeperParams::default`
+/// of `kob-x402`, `intents.fillerSompi` of the Executor). 0.2 KAS is what the storage mass of an output allows
+/// (`C / value`, KIP-9): a smaller one makes the execution too heavy to relay.
+pub const REFERENCE_FILLER: u64 = 20_000_000;
+
+/// Fee mass of a `KasToToken` execution of `asks` asks on a token B of `program`, an upper bound over every shape of that many
+/// asks (`tests/intent_builders.rs` measures every router-capable KCC-20 program and fails if a build is heavier):
+/// `3_500 + asks * (8_500 + 2 * L)`, `L` the bytes of the program's template (prefix and suffix: each ask's custody input and each
+/// token output carry it, and the relay floor charges twice the size, `MassReport::fee_mass`, the transient mass).
+pub fn execution_fee_mass_bound(asks: usize, program: TemplateId) -> u64 {
+    let t = crate::artifacts::token_template(program);
+    3_500 + asks as u64 * (8_500 + 2 * (t.prefix.len() + t.suffix.len()) as u64)
+}
+
+/// Output slots a `KasToToken` execution fills with fillers: the `2k` slots before the payer's change, less the `k` ask
+/// payouts and the custody rest of a last ask that continues. Fillers are paid to the payer, but the router cannot tell
+/// them from a keeper's gain: it counts them against `max_extra`. A resting one-ask shape (`KasToToken_buy`) has none.
+pub fn kas_to_token_fillers(shape: &crate::router::Shape) -> u64 {
+    (shape.asks as u64).saturating_sub(u64::from(shape.last_ask_rests))
+}
+
+/// What a `KasToToken` execution takes out of the intent beyond the asks' quotes, i.e. the `max_extra` it needs:
+/// `merchant_carrier + fillers(shape) * filler + fee_mass_bound(asks, program) * fee_rate` (the maker payouts, the custody rest and
+/// the ask continuation are balanced by the asks' own inputs; an ask that demands less than its quote only lowers it).
+/// `fee_rate` is sompi per gram.
+pub fn kas_to_token_extra_needed(
+    shape: &crate::router::Shape,
+    program: TemplateId,
+    merchant_carrier: u64,
+    filler: u64,
+    fee_rate: u64,
+) -> u64 {
+    merchant_carrier
+        .saturating_add(kas_to_token_fillers(shape).saturating_mul(filler))
+        .saturating_add(execution_fee_mass_bound(shape.asks, program).saturating_mul(fee_rate))
+}
+
+/// How many times the payer's fee rate the default `max_extra` pays for: an execution may be priced above the rate the payer
+/// saw (the Executor's high bucket, at most 10 times the floor by default) and falls back to the floor when the intent cannot
+/// pay it.
+pub const MAX_EXTRA_RATE_FACTOR: u64 = 5;
+/// The fixed margin of the default `max_extra`, sompi: about one floor fee of the heaviest one-ask shape, for the rounding of
+/// the asks' quotes and a mass bound that is a little low.
+pub const MAX_EXTRA_MARGIN: u64 = 2_000_000;
+
+/// The default `max_extra` of a `KasToToken` intent, tight on purpose: whoever executes the intent may keep all of it
+/// (`router_head.ag`: the payer's change only has to reach `value - pay - max_extra`). It is what the shape's execution needs
+/// ([`kas_to_token_extra_needed`], with the [`REFERENCE_FILLER`]) at [`MAX_EXTRA_RATE_FACTOR`] times the payer's `fee_rate`
+/// (sompi per gram; the relay floor when it is lower or unknown) plus [`MAX_EXTRA_MARGIN`].
+pub fn default_max_extra(shape: &crate::router::Shape, program: TemplateId, merchant_carrier: u64, fee_rate: Option<u64>) -> u64 {
+    let rate = fee_rate.unwrap_or(crate::tx::MIN_FEE_RATE).max(crate::tx::MIN_FEE_RATE).saturating_mul(MAX_EXTRA_RATE_FACTOR);
+    kas_to_token_extra_needed(shape, program, merchant_carrier, REFERENCE_FILLER, rate).saturating_add(MAX_EXTRA_MARGIN)
+}
+
 // ---------------------------------------------------------------------------------------------- budgets
 
 /// Budget of a router `cancel` input (one Schnorr signature check and, for a token intent, the read of its observed
@@ -933,12 +989,25 @@ pub fn intent_budgets(role: &str) -> Result<u16> {
     }
 }
 
+/// Budget a router fill input has in the measuring build of [`execute_intent`]: a little above the largest real one (52 units over
+/// every actor and program the builders cover), so that the fee of that build is close to the real fee. With the fallback budget
+/// the measuring build would cost about twenty times the real router input and could exceed a tight `max_extra` (which the router
+/// itself checks) although the exact build fits.
+const ROUTER_FILL_BUDGET_MEASURING: u16 = 64;
+
+fn measuring_budgets(role: &str) -> Result<u16> {
+    match intent_budgets(role) {
+        Ok(ROUTER_FILL_BUDGET_FALLBACK) if role.starts_with("router.") => Ok(ROUTER_FILL_BUDGET_MEASURING),
+        r => r,
+    }
+}
+
 /// Builds an execution with the exact compute budget of every input (a first pass is measured in the
 /// script engine, the second is built with the measured budgets, so the fee pays for what is used) and
 /// finalises it: an execution needs no signature.
 #[cfg(feature = "engine")]
 pub fn execute_intent(r: &ExecuteIntent) -> Result<(crate::tx::SignedTx, ExecutionFacts)> {
-    let (first, _) = build_execute_intent(r, &intent_budgets)?;
+    let (first, _) = build_execute_intent(r, &measuring_budgets)?;
     let (tx, entries) = crate::tx::assemble(&first, &[])?;
     let units = crate::verify::measure_units(&tx, &entries)?;
     let mut by_role: std::collections::BTreeMap<String, u16> = std::collections::BTreeMap::new();

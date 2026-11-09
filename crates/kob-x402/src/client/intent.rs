@@ -15,7 +15,8 @@ use std::collections::BTreeMap;
 
 use kaspa_consensus_core::tx::{Transaction, UtxoEntry};
 use kob_protocol::build::{
-    build_cancel_intent, build_create_intent, intent_budgets, CancelIntent, CreateIntent, INTENT_OUTPUT, LOCK_OUTPUT,
+    build_cancel_intent, build_create_intent, default_max_extra, intent_budgets, CancelIntent, CreateIntent, INTENT_OUTPUT,
+    LOCK_OUTPUT,
 };
 use kob_protocol::family::Family;
 use kob_protocol::payload::Record;
@@ -85,8 +86,10 @@ pub struct IntentOptions {
     pub actor: Option<String>,
     /// KasToToken: most sompi the asks may demand at their quotes (required).
     pub max_pay: Option<u64>,
-    /// KasToToken: most sompi for the merchant's carrier, fillers and the network fee (default: the
-    /// merchant carrier + 1 KAS).
+    /// KasToToken: most sompi for the merchant's carrier, fillers and the network fee. A single cap: whoever executes the
+    /// intent may keep up to `max_extra` of the payer's KAS, so set it tight. Default ([`default_max_extra`]): what the
+    /// actor's shape needs (the merchant carrier, the fillers of the shape, the execution's fee) at 5 times `fee_rate`
+    /// (the relay floor when unset) plus a small margin, e.g. the carrier + 0.14 KAS for the default one-ask shape on an 8/8 token.
     pub max_extra: Option<u64>,
     /// TokenToKas / TokenSwap: most units of the pay token sold (required).
     pub max_sell: Option<i64>,
@@ -305,7 +308,8 @@ pub fn prepare_intent(
         IntentKind::KasToToken => {
             let m = merchant.as_ref().expect("token gain");
             let max_pay = positive(opts.max_pay, "maxPay")?;
-            let max_extra = opts.max_extra.unwrap_or(m.carrier + 100_000_000);
+            let max_extra =
+                opts.max_extra.unwrap_or_else(|| default_max_extra(&actor.shape, m.allowed.program, m.carrier, opts.fee_rate));
             let st = IntentState::KasToToken {
                 payer,
                 merchant: merchant_key,

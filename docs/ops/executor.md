@@ -539,7 +539,11 @@ at any time, and the SDK builds the same expiry for anyone to submit (`expireInt
 * It holds no key. Executions need no signature (every input is a covenant). `keeperPubkey` only receives
   what token intents leave to the keeper (the spread above the merchant's amount and the intent's unused KAS)
   and their filler outputs (an output that holds an index open; `fillerSompi` each). A `KasToToken` intent
-  returns its unused KAS to the payer.
+  returns its unused KAS to the payer, less what the intent's `max_extra` lets an execution take: the merchant's carrier, the
+  fillers (`fillerSompi`, paid back to the payer) and the fee. A payer's default `max_extra` assumes the reference filler of
+  0.2 KAS (`fillerSompi` 20000000); a larger one can make an execution of a shape with fillers (`buy_out`, two or three
+  asks) exceed the cap, and the one-ask resting shape has none. The facilitator prices the fee at the high bucket and builds at
+  its own floor when the intent cannot pay that.
 * The router reads every token under the program the intent names (open ICC): pay assets on any KCC-20 program of
   the 112-byte state (3/3, 8/8, ...) or a KRON program, merchant tokens on a KCC-20 one (a KRON token is never
   received). KaspaCom's program (pending review) uses the payer-signed route (`kob-swap-v1`). A KRON intent is

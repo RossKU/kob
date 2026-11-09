@@ -737,7 +737,13 @@ pub struct KeeperParams {
 
 impl Default for KeeperParams {
     fn default() -> Self {
-        KeeperParams { keeper: [0; 32], filler: 20_000_000, fee: FeeOptions::default(), max_candidates: 8, max_builds: 24 }
+        KeeperParams {
+            keeper: [0; 32],
+            filler: kob_protocol::build::REFERENCE_FILLER,
+            fee: FeeOptions::default(),
+            max_candidates: 8,
+            max_builds: 24,
+        }
     }
 }
 
