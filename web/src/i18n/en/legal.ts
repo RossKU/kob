@@ -1,10 +1,9 @@
-// The disclaimer page (#/disclaimer, src/ui/shell/DisclaimerPage.tsx). Written for mainnet; `legal.network.*` is the one line that depends on the network.
+// The disclaimer page (#/disclaimer, src/ui/shell/DisclaimerPage.tsx). It reads the same on every network.
 export default {
   'legal.title': 'Disclaimer',
-  'legal.updated': 'Last updated 2026-11-08',
+  'legal.updated': 'Last updated 2026-11-09',
   'legal.intro': 'What KOB is and what it is not. Please read this before you use it.',
-  'legal.network.mainnet': 'This site runs on Kaspa mainnet. Real funds are at risk.',
-  'legal.network.testnet-10': 'This site runs on Kaspa testnet-10. Test tokens have no value.',
+  'legal.network': 'This app runs on Kaspa.',
 
   'legal.audit.title': 'Open review',
   'legal.audit.body': 'The specification is not final. The code is public and under open review, and no review can show the code is free of bugs. The contracts may contain bugs that lose funds, and a deployed contract cannot be paused, upgraded or repaired. Use KOB at your own risk and only with funds you can afford to lose.',

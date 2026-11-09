@@ -54,8 +54,9 @@ for (const [width, height] of [
     await page.getByTestId('landing-bigbook').scrollIntoViewIfNeeded();
     await expect(page.getByTestId('landing-bigbook')).toHaveClass(/lp-seen/);
     await expect.poll(() => page.locator('.lp-bb').first().evaluate((e) => e.getBoundingClientRect().width)).toBeGreaterThan(width * 0.5);
+    await expect(page.getByTestId('landing-not-business')).toHaveText('KOB is not a business. No fee goes to the project and no company stands in the middle. It is software for Kaspa, and it keeps working without us.');
     await page.getByTestId('footer').scrollIntoViewIfNeeded();
-    await expect(page.getByTestId('landing-disclaimer')).toContainText('Testnet · open review.');
+    await expect(page.getByTestId('landing-disclaimer')).toContainText('Open review.');
     await expect(page.getByTestId('landing-disclaimer')).toContainText('never holds funds or orders, does not trade and does not operate executors');
     await expect(page.getByTestId('landing-disclaimer').getByRole('link', { name: 'Security policy' })).toHaveAttribute('href', /SECURITY.md$/);
     // no charts on this page: no chart attribution, no app-only links
@@ -128,7 +129,9 @@ test.describe('the trust us row', () => {
     await expect(row).toContainText('None.');
     await expect(page.getByTestId('landing-audit')).toContainText('Verify it yourself');
     await expect(page.getByTestId('landing-audit')).toContainText('no review can show the code is free of bugs');
-    await expect(page.getByTestId('landing-audit')).toContainText('test tokens');
+    await expect(page.getByTestId('landing-audit')).toContainText('Red-team work and private reports are welcome.');
+    // one text on every network: the testnet build does not mention test tokens here either
+    await expect(page.getByTestId('landing-audit')).not.toContainText(/testnet|test tokens/i);
     await expect(page.getByTestId('landing-audit-note')).toHaveText('Please test only with your own funds and orders. There is no bug bounty.');
     for (const id of ['landing-feedback-security', 'landing-feedback-issue', 'landing-feedback-message']) await expect(row.getByTestId(id)).toBeVisible();
     await expect(page.getByTestId('landing-feedback')).toHaveCount(0);
@@ -142,18 +145,18 @@ test.describe('the trust us row', () => {
 
 test.describe('mainnet build', () => {
   test.use({ appConfig: { network: 'mainnet' } });
-  test('the chip, the audit row and the disclaimer name mainnet, never testnet', async ({ appPage: page }) => {
+  test('the chip names mainnet, and nothing on the page says testnet', async ({ appPage: page }) => {
     await page.goto('/');
     await expect(page.getByTestId('landing')).toHaveAttribute('data-network', 'mainnet');
     await expect(page.getByTestId('landing-chip')).toHaveText('mainnet · open review');
-    await expect(page.getByTestId('landing-disclaimer')).toContainText('Mainnet · open review.');
+    await expect(page.getByTestId('landing-disclaimer')).toContainText('Open review.');
     await expect(page.getByTestId('landing-audit')).toContainText('no review can show the code is free of bugs');
     await expect(page.getByTestId('landing')).not.toContainText(/testnet|test tokens/i);
     await expect(page.getByTestId('landing-nav')).not.toContainText(/testnet|tn10/i);
     await expect(page.getByTestId('footer')).not.toContainText(/testnet|test tokens/i);
     // the app's footer says the same
     await page.goto('/#/settings');
-    await expect(page.getByTestId('footer-preaudit')).toContainText('Mainnet · open review.');
+    await expect(page.getByTestId('footer-preaudit')).toContainText('Open review.');
     await expect(page.getByTestId('footer')).not.toContainText(/testnet|test tokens/i);
   });
 });

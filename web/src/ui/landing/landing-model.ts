@@ -48,9 +48,9 @@ export function landingNetworkText(network: NetworkName, site: string): LandingN
   return {
     chip: t('landing.chip', { network: net }),
     chipTip: t('landing.chipTip', { network: net }),
-    txNote: t(`landing.tx.note.${net}`),
-    auditBody: t(`landing.trust.audit.body.${net}`),
-    discLead: t(`landing.disc.lead.${net}`),
+    txNote: t('landing.tx.note'),
+    auditBody: t('landing.trust.audit.body'),
+    discLead: t('landing.disc.lead'),
     discBody: `${t('landing.disc.body', { site })} ${t(`landing.disc.tail.${net}`)}`,
   };
 }
