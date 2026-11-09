@@ -23,6 +23,9 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
   (`not_found`, "no such route").
 * **JSON** (`application/json`) for every route except `GET /v1/metrics` (Prometheus text, `text/plain; version=0.0.4`) and the
   WebSocket. Errors use one envelope (section 5).
+* **Compression.** A JSON answer of 512 bytes or more is sent gzip-compressed (`Content-Encoding: gzip`, `Vary: Accept-Encoding`) to a client whose
+  `Accept-Encoding` lists `gzip`, and as it is to any other (`/v1/tokens`: 29 KB, 2.8 KB compressed). Small answers, `GET /v1/metrics`, the logo routes and the
+  WebSocket are never compressed. The compressed body is the same document: the response cache (section 5.6) keeps the plain one.
 * **Plain HTTP/1.1.** The executor terminates no TLS; put a reverse proxy or CDN in front of a public listener
   ([ops/chart-server.md](ops/chart-server.md)).
 * **Default listen address** `127.0.0.1:8090` (loopback). Change it with `[api] listen` or `--listen`; `--no-api` (or
@@ -33,7 +36,7 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
   `Access-Control-Allow-Headers: content-type` and `Access-Control-Expose-Headers: retry-after`. The value is sent as configured (use `*` for a public server). The WebSocket
   upgrade checks no `Origin`.
 * **No `Cache-Control`** except on `GET /v1/logo-blocklist` (`public, max-age=5`). The API sets none on any other route (it keeps its own server-side response cache for a few
-  hot reads, section 5.6). The headers it adds itself are `Content-Type`, `Retry-After` on some errors, and the CORS headers
+  hot reads, section 5.6). The headers it adds itself are `Content-Type`, `Content-Encoding` and `Vary` on a compressed answer, `Retry-After` on some errors, and the CORS headers
   when configured.
 * **Staleness.** Answers reflect the indexer's store, which follows the chain a few blocks behind the node (`GET /v1/health`
   says how far). The mempool is not served: an order or fill appears once its transaction is in a chain block the indexer

@@ -1032,6 +1032,60 @@ async fn market_data_trades_candles_stats_depth() {
     assert!(v["items"].as_array().unwrap().is_empty());
 }
 
+/// The raw answer of `uri`: status, headers and the body bytes as they came (not decoded).
+async fn raw(app: &Router, uri: &str, headers: &[(&str, &str)]) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let mut req = Request::builder().uri(uri);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let mut req = req.body(Body::empty()).unwrap();
+    req.extensions_mut().insert(peer("127.0.0.1"));
+    let (parts, body) = app.clone().oneshot(req).await.unwrap().into_parts();
+    (parts.status, parts.headers, body.collect().await.unwrap().to_bytes().to_vec())
+}
+
+/// A JSON read is gzip for a client that accepts it and plain for one that does not; small bodies, the Prometheus text and an `Accept-Encoding` without gzip are plain.
+#[tokio::test]
+async fn json_answers_are_gzip_only_for_a_client_that_accepts_it() {
+    use std::io::Read;
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let app = router(e.state.clone());
+    let (s, h0, plain) = raw(&app, "/v1/orders", &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(h0.get("content-encoding").is_none(), "no Accept-Encoding: the JSON as it is");
+    let want: Value = serde_json::from_slice(&plain).expect("plain JSON");
+    assert!(plain.len() > 1_000, "the fixture is big enough to compress: {} B", plain.len());
+
+    let (s, hz, packed) = raw(&app, "/v1/orders", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(hz.get("content-encoding").and_then(|v| v.to_str().ok()), Some("gzip"));
+    assert_eq!(hz.get("content-type").and_then(|v| v.to_str().ok()), Some("application/json"));
+    assert!(
+        hz.get("vary").and_then(|v| v.to_str().ok()).is_some_and(|v| v.to_ascii_lowercase().contains("accept-encoding")),
+        "{hz:?}"
+    );
+    assert!(packed.len() * 2 < plain.len(), "{} B gzip of {} B", packed.len(), plain.len());
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(&packed[..]).read_to_end(&mut out).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), want, "the same document");
+
+    // a cached read (the response cache keeps the plain body) and a browser's list of encodings
+    let (_, hc, _) = raw(&app, &format!("/v1/stats/{}", h(TOKEN)), &[("accept-encoding", "br, gzip, deflate")]).await;
+    assert!(hc.get("content-encoding").is_none(), "a body below the threshold is sent as it is");
+    let (_, hb, _) = raw(&app, "/v1/orders", &[("accept-encoding", "br")]).await;
+    assert!(hb.get("content-encoding").is_none(), "only gzip is offered");
+    let (_, hi, _) = raw(&app, "/v1/orders", &[("accept-encoding", "identity")]).await;
+    assert!(hi.get("content-encoding").is_none());
+
+    // the Prometheus text is not compressed, nor is a tiny answer
+    let (s, hm, _) = raw(&app, "/v1/metrics", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(hm.get("content-encoding").is_none());
+    let (_, hr, _) = raw(&app, "/v1/health/ready", &[("accept-encoding", "gzip")]).await;
+    assert!(hr.get("content-encoding").is_none());
+}
+
 /// `GET /v1/stats?since=`: the activity totals over a range of the store, all time without `since`.
 #[tokio::test]
 async fn activity_totals_over_a_range() {

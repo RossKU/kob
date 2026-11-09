@@ -174,6 +174,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         cache: cache::ResponseCache::default(),
         state,
     });
+    // the JSON reads are compressed (gzip, when the client accepts it); the WebSocket upgrade, the Prometheus text and the logo routes come after the layer
     let mut router = Router::new()
         .route("/v1/health", get(rest::health))
         .route("/v1/health/ready", get(rest::ready))
@@ -196,6 +197,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .route("/v1/stats", get(rest::activity))
         .route("/v1/stats/{token}", get(rest::stats))
         .route("/v1/depth/{token}", get(rest::depth))
+        .layer(compression())
         .route("/v1/ws", get(ws::handler));
     if app.state.cfg.metrics {
         router = router.route("/v1/metrics", get(rest::metrics));
@@ -211,6 +213,46 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
     (router, app)
+}
+
+/// Bodies below this size are sent as they are: the gzip header and the CPU cost more than they save.
+const COMPRESS_MIN_BYTES: u64 = 512;
+
+/// gzip for a client that sends `Accept-Encoding: gzip` (the layer reads it, answers `Content-Encoding` and `Vary: accept-encoding`, and sends
+/// the body as it is for any other client): the read API's answers are tens of KB of repetitive JSON (`/v1/tokens`: 29 KB, 2.8 KB compressed)
+/// and a public indexer sits behind a tunnel. The fastest level: the same ratio within a few percent on JSON for a fraction of the CPU.
+fn compression() -> tower_http::compression::CompressionLayer<JsonAboveMin> {
+    tower_http::compression::CompressionLayer::new()
+        .gzip(true)
+        .no_br()
+        .no_deflate()
+        .no_zstd()
+        .quality(tower_http::CompressionLevel::Fastest)
+        .compress_when(JsonAboveMin)
+}
+
+/// Compress a response only when it is JSON of at least [`COMPRESS_MIN_BYTES`] (a body of unknown length counts as large).
+#[derive(Clone, Copy)]
+pub struct JsonAboveMin;
+
+impl tower_http::compression::predicate::Predicate for JsonAboveMin {
+    fn should_compress<B>(&self, response: &axum::http::Response<B>) -> bool
+    where
+        B: axum::body::HttpBody,
+    {
+        let json = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.trim_start().to_ascii_lowercase().starts_with("application/json"));
+        let size = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            .or_else(|| response.body().size_hint().exact());
+        json && size.is_none_or(|n| n >= COMPRESS_MIN_BYTES)
+    }
 }
 
 /// Rate-limit weight of a route: the queries that scan (candles, stats, depth, trades, books, holdings, strays) cost `heavy`
