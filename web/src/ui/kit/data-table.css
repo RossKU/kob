@@ -59,14 +59,14 @@
 /* a status too long for its cell ("expired (IOC/FOK)") wraps inside its chip */
 .dt-c-status .badge { white-space: normal; min-width: 0; }
 
-/* ---- cards: every row of a table narrower than 1120 px. Row 1: the market (the title, the side and the kind after it), the time at the right, the chevron; then the label / value pairs two to a line; the buttons last. */
+/* ---- cards: every row of a table narrower than 1120 px. Row 1: the market (the title, the side and the kind after it), the time at the right, the chevron; then the label / value pairs, as many to a line as fit (two on a phone); the buttons last. */
 @container dt (max-width: 1119px) {
   .dt-head { display: none; }
   .dt .dt-sortctl { display: inline-flex; }
   .dt-body { gap: 8px; }
   .dt-group { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
   /* a card: two columns of label / value pairs; the title (the market) on the first line, the status at its right, the chevron in the corner; the wide pairs and the buttons take a line */
-  .dt-row { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
+  .dt-row { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(9rem, calc(50% - 6px)), 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
   .dt-c { min-width: 0; text-align: left; }
   .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
   .dt-num { text-align: left; }
@@ -74,8 +74,8 @@
   .dt-c[data-card='head']::before, .dt-c[data-card='title']::before, .dt-c[data-card='badge']::before, .dt-c[data-card='action']::before, .dt-c[data-card='toggle']::before { content: none; }
   .dt-c[data-card='title'], .dt-c[data-card='head'] { grid-row: 1; padding-right: 40px; }
   .dt-c[data-card='title'] { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-  .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1; padding-right: 0; }
-  .dt-c[data-card='badge'] { grid-column: 2; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
+  .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1 / -2; padding-right: 0; }
+  .dt-c[data-card='badge'] { grid-column: -2 / -1; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
   .dt-c[data-card='toggle'] { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }
   .dt-c[data-card='toggle'] .dt-chev { width: 36px; height: 36px; }
   .dt-c[data-card='action']:empty { display: none; }
@@ -94,7 +94,7 @@
   .dt-force-cards .dt-body { gap: 8px; }
   .dt-force-cards .dt-group { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
   /* a card: two columns of label / value pairs; the title (the market) on the first line, the status at its right, the chevron in the corner; the wide pairs and the buttons take a line */
-  .dt-force-cards .dt-row { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
+  .dt-force-cards .dt-row { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(9rem, calc(50% - 6px)), 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
   .dt-force-cards .dt-c { min-width: 0; text-align: left; }
   .dt-force-cards .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
   .dt-force-cards .dt-num { text-align: left; }
@@ -102,8 +102,8 @@
   .dt-force-cards .dt-c[data-card='head']::before, .dt-force-cards .dt-c[data-card='title']::before, .dt-force-cards .dt-c[data-card='badge']::before, .dt-force-cards .dt-c[data-card='action']::before, .dt-force-cards .dt-c[data-card='toggle']::before { content: none; }
   .dt-force-cards .dt-c[data-card='title'], .dt-force-cards .dt-c[data-card='head'] { grid-row: 1; padding-right: 40px; }
   .dt-force-cards .dt-c[data-card='title'] { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-  .dt-force-cards .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1; padding-right: 0; }
-  .dt-force-cards .dt-c[data-card='badge'] { grid-column: 2; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
+  .dt-force-cards .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1 / -2; padding-right: 0; }
+  .dt-force-cards .dt-c[data-card='badge'] { grid-column: -2 / -1; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
   .dt-force-cards .dt-c[data-card='toggle'] { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }
   .dt-force-cards .dt-c[data-card='toggle'] .dt-chev { width: 36px; height: 36px; }
   .dt-force-cards .dt-c[data-card='action']:empty { display: none; }
@@ -115,11 +115,9 @@
   .dt-force-cards .dt-c[data-card='badge'] { text-align: right; }
   .dt-force-cards .dt-details { border-top: 1px solid var(--border); }
 
-/* a wider card (a tablet, a narrow window): four columns of pairs */
+/* a wider card (a tablet, a narrow window): as many columns of pairs as fit (9rem each: two on a phone, four or five on a tablet), so a card is never
+   two half-empty columns; a wide pair takes two */
 @container dt (min-width: 640px) and (max-width: 1119px) {
-  .dt-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1 / span 2; }
-  .dt-c[data-card='badge'] { grid-column: 3 / -1; }
   .dt-c[data-card='wide'] { grid-column: span 2; }
 }
 @container dt (min-width: 520px) and (max-width: 1119px) {
