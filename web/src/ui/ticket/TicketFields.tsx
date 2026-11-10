@@ -28,7 +28,7 @@ export interface TicketFieldsProps {
   /** the 0..100 % of Max slider under the amount field */
   slider?: AmountSliderProps;
   /** the line under the Available line: what the amount costs or yields in the other asset (cost-preview.ts), its unit apart; a fixed-height line, a placeholder when there is nothing to say */
-  cost?: { text: string; unit: string };
+  cost?: { text: string; unit: string; /** the read-only dollars of the estimate (USD display): text and tooltip; null while KAS is shown */ usd?: { text: string; title: string } | null };
   disabled?: boolean;
   /**
    * the market is shown inverted (KAS/TOKEN, orientation.ts): the PRICE inputs take tokens per KAS (`name` per KAS). The form still keeps native text
@@ -310,7 +310,8 @@ export function TicketFields(props: TicketFieldsProps) {
             {/* two adjacent lines of fixed height under the box: what this order can spend (the Max button) and what the amount costs */}
             <div class="tk-avail-line" data-testid="order-available-line">{availableBtn}</div>
             {props.cost !== undefined ? (
-              <div class="tk-cost tk-line" aria-label={t('ticket.cost.aria')} data-testid="order-cost-preview">
+              <div class={`tk-cost tk-line${props.cost.usd ? ' tk-cost-usd' : ''}`} aria-label={t('ticket.cost.aria')} data-testid="order-cost-preview">
+                {props.cost.usd ? <span class="tk-line-usd" title={props.cost.usd.title || undefined} data-testid="order-cost-usd">{props.cost.usd.text}</span> : null}
                 <span class="tk-line-text" key={props.cost.text}>{props.cost.text}</span>{props.cost.unit ? ' ' : null}
                 <span class="tk-line-unit">{props.cost.unit}</span>
               </div>

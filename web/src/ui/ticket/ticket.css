@@ -67,6 +67,9 @@
 .tk-line-split { display: flex; justify-content: space-between; gap: 8px; }
 .tk-line-split > span:first-child { flex: none; }
 .tk-line-split > .tk-line-num { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* the USD display: a muted read-only "≈ $x" in a column of its own at the left of the cost line (a fixed width, so nothing moves when a figure comes or goes) */
+.tk-cost-usd { grid-template-columns: 5.6rem minmax(0, 1fr) var(--tk-unit-w); }
+.tk-line-usd { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; opacity: 0.85; }
 .tk-line-unit { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* every figure typed in the ticket is right-aligned, so its digits stand over the figures of the lines under it */
 .tk .input[inputmode='decimal'], .tk .input[inputmode='numeric'] { text-align: right; font-variant-numeric: tabular-nums; }

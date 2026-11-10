@@ -1,5 +1,6 @@
 import type { RefObject } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { kasTitleOf, sompiToUsdCompact, type Fiat } from '../../app/fiat';
 import { formatNumber, t } from '../../i18n';
 import { depthGeometry, type DepthSeries } from './market-model';
 
@@ -33,13 +34,21 @@ const fmtAmount = (v: number) =>
  * Depth chart: cumulative bids (left, green) and asks (right, red) around the mid price, step areas with a soft gradient, a subtle grid,
  * price and amount axes, a hover read-out. Drawn in SVG at the panel's pixel width (crisp text at any size).
  */
-export function DepthChart(props: { series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book'; /** the data could not be loaded (not an empty book) */ unavailable?: boolean }) {
+export function DepthChart(props: { /** the USD display in force and the series is in KAS (a flipped KAS/TOKEN market): the cumulative KAS is shown as dollars, with the KAS figure in the read-out; null: as is */ fiat?: Fiat | null; series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book'; /** the data could not be loaded (not an empty book) */ unavailable?: boolean }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<{ x: number; y: number; side: 'bid' | 'ask'; price: number; cum: number } | null>(null);
   const s = props.series;
   const plotH = HEIGHT - AXIS;
   const g = s && width > 0 ? depthGeometry(s, width, plotH) : null;
-  const summary = s ? t('market.depth.summary', { bids: fmtAmount(s.bids.at(-1)?.cum ?? 0), asks: fmtAmount(s.asks.at(-1)?.cum ?? 0), ticker: props.ticker }) : null;
+  // the cumulative amount of a flipped market is KAS: dollars when the USD display is in force (a float of whole KAS is display only)
+  const fiat = props.fiat ?? null;
+  const usdOfKas = (kas: number): string => sompiToUsdCompact(BigInt(Math.round(kas * 1e8)), fiat!);
+  const amountText = (v: number): string => (fiat ? usdOfKas(v) : fmtAmount(v));
+  const summary = s
+    ? fiat
+      ? t('market.depth.summaryUsd', { bids: usdOfKas(s.bids.at(-1)?.cum ?? 0), asks: usdOfKas(s.asks.at(-1)?.cum ?? 0) })
+      : t('market.depth.summary', { bids: fmtAmount(s.bids.at(-1)?.cum ?? 0), asks: fmtAmount(s.asks.at(-1)?.cum ?? 0), ticker: props.ticker })
+    : null;
 
   const onMove = (e: MouseEvent) => {
     if (!g || !s || !g.hasData) return;
@@ -75,7 +84,7 @@ export function DepthChart(props: { series: DepthSeries | null; loading: boolean
             {g.yTicks.map((tk) => (
               <g key={`y${tk.value}`}>
                 <line class="grid" x1="0" x2={width} y1={tk.y} y2={tk.y} />
-                <text class="axis-label" x={width - 2} y={tk.y - 3} text-anchor="end">{fmtAmount(tk.value)}</text>
+                <text class="axis-label" x={width - 2} y={tk.y - 3} text-anchor="end">{amountText(tk.value)}</text>
               </g>
             ))}
             {g.xTicks.map((tk) => {
@@ -111,7 +120,12 @@ export function DepthChart(props: { series: DepthSeries | null; loading: boolean
         {hover ? (
           <div class="depth-tip" style={{ left: `${Math.min(Math.max(hover.x + 10, 0), Math.max(0, width - 170))}px`, top: `${Math.max(0, hover.y - 44)}px` }}>
             <div class={hover.side === 'bid' ? 'buy' : 'sell'}>{t(hover.side === 'bid' ? 'market.depth.bids' : 'market.depth.asks')}</div>
-            <div>{t('market.depth.tip', { price: fmtPrice(hover.price, props.dp), priceUnit: props.priceUnit ?? t('market.stats.unitOf', { base: props.ticker, quote: 'KAS' }), amount: fmtFixed(hover.cum, props.amountDp ?? 2), ticker: props.ticker })}</div>
+            <div>
+              {fiat
+                ? t('market.depth.tipUsd', { price: fmtPrice(hover.price, props.dp), priceUnit: props.priceUnit ?? '', amount: usdOfKas(hover.cum) })
+                : t('market.depth.tip', { price: fmtPrice(hover.price, props.dp), priceUnit: props.priceUnit ?? t('market.stats.unitOf', { base: props.ticker, quote: 'KAS' }), amount: fmtFixed(hover.cum, props.amountDp ?? 2), ticker: props.ticker })}
+            </div>
+            {fiat ? <div class="muted">{kasTitleOf(fmtFixed(hover.cum, props.amountDp ?? 2), fiat)}</div> : null}
           </div>
         ) : null}
       </div>

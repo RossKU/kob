@@ -8,6 +8,8 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
+import { kasTitleOf, sompiToUsd, usdTextFit } from '../../app/fiat';
+import { useFiat } from '../../app/use-fiat';
 import { has, t } from '../../i18n';
 
 import { issueText, keyedText } from '../../i18n/issue-text';
@@ -388,6 +390,8 @@ export function OrderTicket(props: OrderTicketProps) {
   const shownPlan: OrderPlan | null = enabled && current ? plan : null;
   const planErrors = shownPlan ? errors(shownPlan) : [];
   // under the amount box: what this amount costs (a buy) or yields (a sell) in the quote, from the book the planner sees; a fixed line, "—" when empty
+  // the USD display (Settings): a muted read-only "≈ $x" beside the estimate of a KAS-quoted order; the ticket's own figures and everything signed stay KAS
+  const fiat = useFiat();
   const costText = useMemo(() => {
     const pv = env
       ? costPreview({ intent: built.intent, book: env.book, scale: env.token.scale, worstPrice: plan?.disclosure?.worstPrice ?? null, fee: quote ? null : plan?.disclosure?.fee ?? null })
@@ -399,8 +403,10 @@ export function OrderTicket(props: OrderTicketProps) {
       (v) => formatUnits(v, token.decimals, { group: ',' }),
       (key, params) => t(`ticket.cost.${key}`, params),
     );
-    return { text, unit: pv.kind === 'empty' ? '' : pv.kind === 'thin' ? ticker : quote ? quote.ticker : 'KAS' };
-  }, [env, built.intent, plan, quote, token.decimals, ticker]);
+    // the dollars of the estimate: only a KAS quote has a price in dollars; the slot stays while USD is chosen, so nothing moves when a figure comes or goes
+    const usd = fiat && !quote ? { text: pv.kind === 'cost' ? `≈ ${usdTextFit(sompiToUsd(pv.estimate, fiat.rate), 11)}` : '', title: pv.kind === 'cost' ? kasTitleOf(formatKas(pv.estimate, { group: ',' }), fiat) : '' } : null;
+    return { text, unit: pv.kind === 'empty' ? '' : pv.kind === 'thin' ? ticker : quote ? quote.ticker : 'KAS', usd };
+  }, [env, built.intent, plan, quote, token.decimals, ticker, fiat]);
   /** an amount of the market's quote (KAS, or a pair's token B) in words */
   const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`);
   // the LAST order of a limit ladder is the one furthest from the typed price: planned too, so a level that could never be placed is refused before the first is signed
