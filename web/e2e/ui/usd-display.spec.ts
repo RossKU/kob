@@ -448,3 +448,41 @@ test('the ticket shows a muted read-only dollar estimate beside the order total,
   // it is a muted figure, not an input: nothing to type in or tab to
   expect(await usd.evaluate((e) => e.tagName)).toBe('SPAN');
 });
+
+test('the four Portfolio tabs with a fill: the orders, the trade history and the balances show no figure in KAS (the token amounts stay tokens), the headers say USD, the sort stays numeric', async ({ appPage: page, mock }) => {
+  const [open] = await seedOrders(mock, [{ side: 'ask', price: 2_800_000, tokens: 3 }]);
+  const [done] = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 2 }]);
+  await mock.fill(done!, 200_000_000n);
+  await chooseUsd(page);
+  await fund(mock);
+  await openMarket(page, mock, { route: '/portfolio/open' });
+  await expect(page.getByTestId(`order-row-${open}`)).toBeVisible();
+  await expect(page.getByTestId('orders-sort-price')).toContainText('Price (USD)');
+  await expect(page.getByTestId('orders-sort-total')).toContainText('Total (USD)');
+  expect(kasAmounts(await textWithout(page, []))).toEqual([]);
+  await expect(page.getByTestId(`order-line-${open}`).locator('.or-price .dt-val')).toHaveText(/^\$[\d,.]+$/);
+  await expect(page.getByTestId(`order-line-${open}`).locator('.or-value .dt-val')).toHaveText(/^\$[\d,.]+$/);
+  // the amount of tokens is not converted
+  await expect(page.getByTestId(`order-line-${open}`).locator('.or-amount')).toContainText('EXKCC');
+
+  await page.getByTestId('orders-tab-history').click();
+  await expect(page.getByTestId(`order-row-${done}`)).toBeVisible();
+  await expect(page.getByTestId('orders-sort-avg')).toContainText('Avg price (USD)');
+  expect(kasAmounts(await textWithout(page, []))).toEqual([]);
+
+  await page.getByTestId('orders-tab-fills').click();
+  await expect(page.getByTestId('wallet-fill-row').first()).toBeVisible();
+  await expect(page.getByTestId('wallet-fills-sort-price')).toContainText('Price (USD)');
+  await expect(page.getByTestId('wallet-fills-sort-value')).toContainText('Value (USD)');
+  expect(kasAmounts(await textWithout(page, []))).toEqual([]);
+  const price = page.getByTestId('wallet-fill-row').first().locator('.dt-c-price .dt-val');
+  await expect(price).toHaveText(/^\$[\d,.]+$/);
+  // sorted by the price: numeric (the dollar texts are read as numbers)
+  await page.getByTestId('wallet-fills-sort-price').click();
+  const prices = (await page.locator('[data-testid="wallet-fill-row"] .dt-c-price .dt-val').allTextContents()).map(numberOf);
+  expect(prices).toEqual([...prices].sort((a, b) => b - a));
+
+  await page.getByTestId('orders-tab-balances').click();
+  await expect(page.getByTestId('kas-balance')).toBeVisible();
+  expect(kasAmounts(await textWithout(page, []))).toEqual([]);
+});

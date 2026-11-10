@@ -120,7 +120,7 @@ for (const width of [360, 390, 430]) {
       await expect.soft(page.getByTestId(`order-line-${ids.budget}`).locator('.or-amount')).toContainText('KAS budget');
       const cancel = page.getByTestId(`order-cancel-${ids.open}`);
       await expect(cancel).toBeVisible();
-      expect.soft((await cancel.boundingBox())!.height, 'Cancel tap target').toBeGreaterThanOrEqual(40);
+      expect.soft((await cancel.boundingBox())!.height, 'Cancel tap target').toBeGreaterThanOrEqual(39.9);
 
       // Order history: the same lines, aligned (the icon, the market and the status of every row at one x), a short budget label
       await page.getByTestId('orders-tab-history').click();

@@ -1,4 +1,7 @@
 // Fill history of one order on demand (R-8): every fill with its time, amount, price and payout, the average price, and a CSV download.
+import { kasValueText } from '../../app/fiat';
+import { useFiat } from '../../app/use-fiat';
+import { priceUsdText } from './fiat-price';
 import { useState } from 'preact/hooks';
 import type { EventView } from '../../data/indexer-types';
 import { useTxUrl } from '../../app/explorer';
@@ -30,13 +33,15 @@ export function OrderFills(props: OrderFillsProps) {
   const { row, token } = props;
   const [open, setOpen] = useState(false);
   const txUrl = useTxUrl();
+  // the USD display: a price and the payout in dollars
+  const fiat = useFiat();
   const data = useAsync(async (signal) => (open ? fillHistory(await props.loadEvents(row.id, signal), row.scale) : null), [open, row.id]);
   // prices are the order's state prices (sompi per whole token of `row.scale` base units)
   const price = (p: bigint) =>
-    `${formatPricePerToken(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale)} ${t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })}`;
+    fiat && !row.pair ? priceUsdText(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, fiat) : `${formatPricePerToken(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale)} ${t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })}`;
   // the price column: fixed decimals for every row (from the token's tick, else 8), the unit in the header (decimal points line up)
   const priceFraction = token ? (tickPriceFraction(token.tick, token.decimals, row.scale) ?? 8) : 8;
-  const priceCell = (p: bigint) => fixedPricePerToken(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, priceFraction);
+  const priceCell = (p: bigint) => (fiat && !row.pair ? priceUsdText(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, fiat) : fixedPricePerToken(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, priceFraction));
   const amountText = (a: bigint) => formatUnits(a, token?.decimals ?? RAW_TOKEN_DECIMALS, { group: ',' });
   // a pair order: its fills are volume only (amounts of A and B, how it was filled), never a price
   const pairOrder = !!row.pair;
@@ -62,7 +67,7 @@ export function OrderFills(props: OrderFillsProps) {
               <p data-testid="order-fills-summary">
                 {t('orders.fills.summary', { fills: h.rows.length, amount: `${amountText(h.amount)} ${token?.ticker ?? ''}`.trim() })}
                 {h.avgPrice !== null ? ` · ${t('orders.fills.avg', { price: price(h.avgPrice) })}` : ''}
-                {h.payout > 0n ? ` · ${t('orders.fills.payout', { kas: formatKas(h.payout) })}` : ''}
+                {h.payout > 0n ? ` · ${fiat ? t('orders.fills.payoutUsd', { usd: kasValueText(h.payout, fiat) }) : t('orders.fills.payout', { kas: formatKas(h.payout) })}` : ''}
               </p>
               {h.rows.length ? (
                 <Table dense data-testid="order-fills-table">
@@ -76,7 +81,7 @@ export function OrderFills(props: OrderFillsProps) {
                           <th>{t('orders.fills.via')}</th>
                         </>
                       ) : (
-                        <th class="right">{t('orders.fills.priceIn', { unit: t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' }) })}</th>
+                        <th class="right">{t('orders.fills.priceIn', { unit: t(fiat ? 'orders.unit.usdPer' : 'orders.unit.kasPer', { ticker: token?.ticker ?? '?' }) })}</th>
                       )}
                       <th>{t('orders.fills.tx')}</th>
                     </tr>

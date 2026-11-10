@@ -5,6 +5,7 @@ import type { EventView } from '../../data/indexer-types';
 import type { Position } from '../../kob/positions';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
+import { useFiat } from '../../app/use-fiat';
 import { Amount, Button, Loading, scaleOfDecimals, tickPriceFraction, toError, useAsync } from '../kit';
 import { formatUnits } from '../../kob/units';
 import { ratio, realisedPnl, summarizePositionFills, type PositionFills, type PositionSummary } from './position-model';
@@ -24,6 +25,7 @@ export interface PositionSummaryProps {
  * Missing: a dash.
  */
 function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: bigint; pair?: PositionSummaryProps['pair'] }) {
+  const fiat = useFiat();
   if (p.value === null) return <>{'—'}</>;
   const tk = p.token;
   if (p.pair) {
@@ -34,7 +36,7 @@ function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: b
   // fixed decimals from the market's tick: every price of the card (entry, exits, averages) has the same number of decimals
   // whole tokens; a token of unknown decimals on the assumed 8 (never "base units")
   const pf = tk ? tickPriceFraction(tk.tick, tk.decimals, p.scale) : null;
-  return <Amount kind="price" value={p.value} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} scale={p.scale} unit={t('orders.unit.kasPer', { ticker: tk?.ticker ?? '?' })} {...(pf === null ? {} : { fraction: pf })} group />;
+  return <Amount kind="price" value={p.value} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} scale={p.scale} unit={t('orders.unit.kasPer', { ticker: tk?.ticker ?? '?' })} {...(pf === null ? {} : { fraction: pf })} group fiat={fiat} />;
 }
 
 function Prices({ values, token, scale, pair }: { values: readonly bigint[]; token: TokenInfo | undefined; scale: bigint; pair?: PositionSummaryProps['pair'] }) {
@@ -78,6 +80,7 @@ const pctText = (v: number): string => `${v > 0 ? '+' : ''}${formatNumber(v, { m
 
 /** Realised fills of the position: entry and exit legs with their average prices (loaded by the panel on demand). */
 function Fills({ fills: f, token, amount }: { fills: PositionFills; token: TokenInfo | undefined; amount: (v: bigint | null) => string }) {
+  const fiat = useFiat();
   const spread = f.spreadPerToken;
   return (
     <div class="pc-fills small" data-testid="position-fills">
@@ -100,7 +103,7 @@ function Fills({ fills: f, token, amount }: { fills: PositionFills; token: Token
       {spread !== null ? (
         <div class="pc-fill-row" data-testid="position-fills-spread">
           <span>{t('orders.position.fills.spread')}</span>
-          <Amount kind="price" value={spread} decimals={token?.decimals ?? RAW_TOKEN_DECIMALS} scale={f.scale} signed unit={t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
+          <Amount kind="price" value={spread} decimals={token?.decimals ?? RAW_TOKEN_DECIMALS} scale={f.scale} signed unit={t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })} fiat={fiat} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
         </div>
       ) : null}
     </div>
@@ -109,6 +112,7 @@ function Fills({ fills: f, token, amount }: { fills: PositionFills; token: Token
 
 /** Stat grid of a position card: price path, amounts with progress, repeat progress, realised PnL; realised fills on demand. */
 export function PositionSummaryPanel({ position, summary: s, token, loadEvents, pair = null }: PositionSummaryProps) {
+  const fiat = useFiat();
   const [showFills, setShowFills] = useState(false);
   const members = position.entry ? [position.entry, ...position.exits] : position.exits;
   const key = members.map((m) => `${m.covenant_id}:${m.filled_amount}:${m.status}`).join(',');
@@ -202,7 +206,7 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
             ) : null
           }
         >
-          {pnl && pnl.pnl !== null ? <Amount kind="kas" value={pnl.pnl} signed unit="KAS" class={pnlClass} data-testid="position-pnl-value" /> : '—'}
+          {pnl && pnl.pnl !== null ? <Amount kind="kas" value={pnl.pnl} signed unit="KAS" fiat={fiat} class={pnlClass} data-testid="position-pnl-value" /> : '—'}
         </Stat>
 
         <Stat

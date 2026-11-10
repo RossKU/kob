@@ -417,7 +417,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
 
   const marketRows = embed && onlyHere ? rows.filter((r) => inMarket(r)) : rows;
   const cancellable = cancellableIds(marketRows, null);
-  const cols = orderColumns(tab === 'history' ? 'history' : 'open');
+  const cols = orderColumns(tab === 'history' ? 'history' : 'open', !!fiat);
   const ownCol = cols.find((c) => c.key === 'time') as DtColumn<OrderSortKey>; // the lists are newest first: the time, largest first
   // fill history (R-8): per order on demand, and every fill of the wallet as one CSV
   const loadEvents = services.indexer && !d?.indexerError ? (id: Hex, signal: AbortSignal) => loadOrderEvents(services.indexer!, id, signal) : null;
@@ -614,15 +614,15 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
               />
             ) : null}
           </div>
-          <span class="pf-v num" data-testid="portfolio-total"><MoneyCell kas={balances.summary ? balances.summary.total : null} fraction={2} class="pf-money" /></span>
+          <span class="pf-v num" data-testid="portfolio-total" title={balances.summary ? kasValueTitle(balances.summary.total, fiat) : undefined}><MoneyCell kas={balances.summary ? balances.summary.total : null} fraction={2} class="pf-money" /></span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.available')}</span></div>
-          <span class="pf-v num" data-testid="portfolio-available"><MoneyCell kas={balances.summary ? balances.summary.kasFree : null} class="pf-money" /></span>
+          <span class="pf-v num" data-testid="portfolio-available" title={balances.summary ? kasValueTitle(balances.summary.kasFree, fiat) : undefined}><MoneyCell kas={balances.summary ? balances.summary.kasFree : null} class="pf-money" /></span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.inOrders')}</span></div>
-          <span class="pf-v num" data-testid="portfolio-in-orders"><MoneyCell kas={balances.summary ? balances.summary.kasLocked : null} class="pf-money" /></span>
+          <span class="pf-v num" data-testid="portfolio-in-orders" title={balances.summary ? kasValueTitle(balances.summary.kasLocked, fiat) : undefined}><MoneyCell kas={balances.summary ? balances.summary.kasLocked : null} class="pf-money" /></span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.open')}</span></div>

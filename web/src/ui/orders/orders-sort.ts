@@ -14,16 +14,16 @@ export type OrderSortKey = (typeof ORDER_SORT_KEYS)[number];
  * The columns of the order tables, in the usual exchange order, the time first. Open orders: Time, Market, Type, Side, Price, Amount, Filled, Total, Status, the buttons; Order
  * history: Time, Market, Type, Side, Avg price, Price, Filled, Amount, Total, Status. `time` is the table's own order (newest first).
  */
-export function orderColumns(tab: 'open' | 'history'): (DtColumn<OrderSortKey> | DtPlain)[] {
+export function orderColumns(tab: 'open' | 'history', usd = false): (DtColumn<OrderSortKey> | DtPlain)[] {
   const time: DtColumn<OrderSortKey> = { key: 'time', label: t('orders.col.time'), kind: 'time', card: 'badge' };
   const market: DtColumn<OrderSortKey> = { key: 'market', label: t('orders.col.market'), kind: 'text', card: 'title' };
   const type: DtColumn<OrderSortKey> = { key: 'type', label: t('orders.col.type'), kind: 'text', card: 'hidden' };
   const side: DtColumn<OrderSortKey> = { key: 'side', label: t('orders.col.side'), kind: 'text', card: 'hidden' };
-  const price: DtColumn<OrderSortKey> = { key: 'price', label: t('orders.col.priceLine'), kind: 'number', right: true };
-  const avg: DtColumn<OrderSortKey> = { key: 'avg', label: t('orders.col.avgPrice'), kind: 'number', right: true };
+  const price: DtColumn<OrderSortKey> = { key: 'price', label: t(usd ? 'orders.col.priceLineUsd' : 'orders.col.priceLine'), kind: 'number', right: true };
+  const avg: DtColumn<OrderSortKey> = { key: 'avg', label: t(usd ? 'orders.col.avgPriceUsd' : 'orders.col.avgPrice'), kind: 'number', right: true };
   const amount: DtColumn<OrderSortKey> = { key: 'amount', label: t('orders.col.amount'), kind: 'number', right: true };
   const filled: DtColumn<OrderSortKey> = { key: 'filled', label: t('orders.col.filled'), kind: 'number', right: true };
-  const total: DtColumn<OrderSortKey> = { key: 'total', label: t('orders.col.total'), kind: 'number', right: true };
+  const total: DtColumn<OrderSortKey> = { key: 'total', label: t(usd ? 'orders.col.totalUsd' : 'orders.col.total'), kind: 'number', right: true };
   const status: DtColumn<OrderSortKey> = { key: 'status', label: t('orders.col.status'), kind: 'text' };
   return tab === 'history'
     ? [time, market, type, side, avg, price, filled, amount, total, status, { key: 'toggle', plain: true }]

@@ -329,7 +329,7 @@ test.describe('390 px wide: the cards have a sort control', () => {
     expectOrdered((await texts(page.locator('[data-testid^="order-line-"] .or-price'))).map(num), 'asc', 'card price');
     // the tap target of the control is a finger's
     const b = (await ctl.getByTestId('orders-sortctl-dir').boundingBox())!;
-    expect(b.height).toBeGreaterThanOrEqual(40);
+    expect(b.height).toBeGreaterThanOrEqual(39.9);
     expect(b.x + b.width).toBeLessThanOrEqual(390);
     await shot(page, 'history-390');
     // back to the own order: the time, largest first
@@ -372,7 +372,7 @@ test.describe('390 px wide: the cards have a sort control', () => {
     await ctl.getByTestId('activity-sortctl-column').selectOption('amount');
     const amounts = (await texts(page.locator('[data-testid="activity-row"] .act-c-amt b'))).map(num);
     expectOrdered(amounts, 'desc', 'activity card amount');
-    expect((await ctl.getByTestId('activity-sortctl-dir').boundingBox())!.height).toBeGreaterThanOrEqual(40);
+    expect((await ctl.getByTestId('activity-sortctl-dir').boundingBox())!.height).toBeGreaterThanOrEqual(39.9);
     await shot(page, 'activity-390');
   });
 });

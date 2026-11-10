@@ -2,13 +2,14 @@ import { useMemo } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { EventView } from '../../data/indexer-types';
 import { useTxUrl } from '../../app/explorer';
+import { useFiat } from '../../app/use-fiat';
 import { pairRoute, routeToHash } from '../../app/router';
 import { formatDateTime, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import { longId, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatUnits, quoteOf } from '../../kob/units';
 import {
-  CopyText, DataTable, DtCell, DtGroup, DtRow, ErrorBanner, KeyValueList, Loading, MoneyCell, Num, RowToggle, fixedPricePerToken, scaledUnits, sortBy, tickPriceFraction, toggleLabel, useAsync, useOpenRow,
+  Amount, CopyText, DataTable, DtCell, DtGroup, DtRow, ErrorBanner, KeyValueList, Loading, MoneyCell, Num, RowToggle, fixedPricePerToken, scaledUnits, sortBy, tickPriceFraction, toggleLabel, useAsync, useOpenRow,
   type DtColumn, type DtPlain, type SortState, type SortValue,
 } from '../kit';
 import { IdentityBlock } from '../market/Fingerprint';
@@ -21,14 +22,14 @@ export const FILL_SORT_KEYS = ['time', 'market', 'side', 'price', 'amount', 'val
 export type FillSortKey = (typeof FILL_SORT_KEYS)[number];
 
 /** The columns of the fills table, in its order; `time` is the table's own order (newest first). */
-export function fillColumns(): (DtColumn<FillSortKey> | DtPlain)[] {
+export function fillColumns(usd = false): (DtColumn<FillSortKey> | DtPlain)[] {
   return [
     { key: 'time', label: t('orders.fills.time'), kind: 'time', card: 'badge' },
     { key: 'market', label: t('orders.col.market'), kind: 'text', card: 'title' },
     { key: 'side', label: t('orders.col.side'), kind: 'text', card: 'hidden' },
-    { key: 'price', label: t('orders.col.price'), kind: 'number', right: true },
+    { key: 'price', label: t(usd ? 'orders.col.priceUsd' : 'orders.col.price'), kind: 'number', right: true },
     { key: 'amount', label: t('orders.col.amount'), kind: 'number', right: true },
-    { key: 'value', label: t('orders.col.valueKas'), kind: 'number', right: true },
+    { key: 'value', label: t(usd ? 'orders.col.valueUsd' : 'orders.col.valueKas'), kind: 'number', right: true },
     { key: 'tx', label: t('orders.fills.tx'), kind: 'text' },
     { key: 'toggle', plain: true },
   ];
@@ -74,6 +75,8 @@ export function WalletFills(props: {
   onPage: (page: number) => void;
 }) {
   const txUrl = useTxUrl();
+  // the USD display: the price and the value of a fill in dollars; the amount of tokens never
+  const fiat = useFiat();
   const key = props.rows.map((r) => `${r.id}:${r.status}`).join(',');
   const data = useAsync(
     async (signal) => {
@@ -123,7 +126,7 @@ export function WalletFills(props: {
   };
   const all = data.data ? sortBy(data.data, props.sort, valueOf) : data.data;
   const { rows: list, window: win } = pageOf(all ?? [], props.size, props.page);
-  const cols = fillColumns();
+  const cols = fillColumns(!!fiat);
   const ownCol = cols.find((c) => c.key === 'time') as DtColumn<FillSortKey>;
   const pager = all ? <PortfolioPager id="wallet-fills" window={win} total={all.length} onPage={props.onPage} /> : null;
 
@@ -152,7 +155,7 @@ export function WalletFills(props: {
           {list.length === 0 ? <p class="dt-empty" data-testid="wallet-fills-empty">{t('orders.fills.none')}</p> : null}
           {list.map((item) => {
             const f = factsOf(item);
-            return <FillRowView key={f.key} item={item} f={f} txUrl={txUrl} />;
+            return <FillRowView key={f.key} item={item} f={f} txUrl={txUrl} fiat={!!fiat} />;
           })}
         </DataTable>
       ) : null}
@@ -162,7 +165,8 @@ export function WalletFills(props: {
 }
 
 /** One fill: its row, and under it (on a chevron) the order and the transaction in full. */
-function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) => string | null }) {
+function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) => string | null; fiat: boolean }) {
+  const fiat = useFiat();
   const { fill, row } = props.item;
   const f = props.f;
   const [open, setOpen] = useOpenRow(`fills:${f.key}`, false);
@@ -180,9 +184,11 @@ function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) 
           <span class="dt-card-only dt-sub"><span class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</span></span>
         </DtCell>
         <DtCell k="side" label={t('orders.col.side')} card="hidden" data-testid="wallet-fill-side" class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</DtCell>
-        <DtCell k="price" label={t('orders.col.price')} num><Num value={f.price} /></DtCell>
+        <DtCell k="price" label={t(props.fiat ? 'orders.col.priceUsd' : 'orders.col.price')} num>
+          {fiat && !row.pair && fill.price !== null ? <Amount kind="price" value={fill.price} decimals={props.item.token?.decimals ?? RAW_TOKEN_DECIMALS} scale={row.scale} unit={false} fiat={fiat} class="dt-val" /> : <Num value={f.price} />}
+        </DtCell>
         <DtCell k="amount" label={t('orders.col.amount')} num><Num value={f.amount} unit={f.ticker} /></DtCell>
-        <DtCell k="value" label={t('orders.col.valueKas')} num><MoneyCell kas={f.valueKas} unit={false} /></DtCell>
+        <DtCell k="value" label={t(props.fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas')} num><MoneyCell kas={f.valueKas} unit={false} /></DtCell>
         <DtCell k="tx" label={t('orders.fills.tx')} card="wide"><CopyText value={fill.txid} head={6} tail={4} href={href} data-testid="wallet-fill-tx" /></DtCell>
         <RowToggle open={open} onToggle={() => setOpen(!open)} controls={detailsId} label={toggleLabel(open)} data-testid="wallet-fill-toggle" />
       </DtRow>
@@ -194,7 +200,7 @@ function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) 
             { label: t('orders.orderId'), value: <CopyText value={row.id} head={8} tail={6} /> },
             { label: t('orders.fills.tx'), value: <CopyText value={fill.txid} short={false} href={href} /> },
             { label: t('orders.fills.time'), value: f.time },
-            { label: t('orders.col.valueKas'), value: <MoneyCell kas={f.valueKas} /> },
+            { label: t(props.fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas'), value: <MoneyCell kas={f.valueKas} /> },
           ]}
         />
       </div>

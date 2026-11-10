@@ -10,6 +10,7 @@ import { formatKas, formatPricePerToken, formatUnits, quoteOf, statePriceToToken
 import { formatLocal, formatUtc } from '../../kob/daa';
 import type { Clock } from '../../kob/plan-types';
 import { longId, type TokenInfo } from '../../kob/registry';
+import { useFiat } from '../../app/use-fiat';
 import { Amount, Badge, Banner, Button, CopyText, DtCell, DtGroup, DtRow, KeyValueList, MoneyCell, Num, RawDetails, RowToggle, hasOpenChoice, tickPriceFraction, toggleLabel, useOpenRow, type Tone } from '../kit';
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
@@ -122,14 +123,15 @@ function pairPriceText(value: bigint, row: OrderRowModel, a: TokenInfo | undefin
  */
 function PriceCell(p: { row: OrderRowModel; token: TokenInfo | undefined; quote?: TokenInfo | undefined; value: bigint | null; testid?: string }) {
   const tk = p.token;
+  const fiat = useFiat();
   if (p.value === null) return <>{'—'}</>;
   if (p.row.pair) return <span data-testid={p.testid} data-unit="pair">{pairPriceText(p.value, p.row, tk, p.quote)}</span>;
   return (
     <span data-testid={p.testid}>
       {tk ? (
-        <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: tk.ticker })} {...fixed(tickPriceFraction(tk.tick, tk.decimals, p.row.scale))} group />
+        <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: tk.ticker })} {...fixed(tickPriceFraction(tk.tick, tk.decimals, p.row.scale))} group fiat={fiat} />
       ) : (
-        <Amount kind="price" value={p.value} decimals={RAW_TOKEN_DECIMALS} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: p.row.token ? shortId(p.row.token) : '?' })} group />
+        <Amount kind="price" value={p.value} decimals={RAW_TOKEN_DECIMALS} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: p.row.token ? shortId(p.row.token) : '?' })} group fiat={fiat} />
       )}
     </span>
   );
@@ -210,6 +212,14 @@ export function OrderRow(props: OrderRowProps) {
     if (attention && !props.compact && !hasOpenChoice(openKey)) setOpen(true);
   }, [attention]);
   const line = lineFacts(row, tk, bToken, props.clock, props.avg);
+  // the USD display: a KAS-per-token price of the table's cells in dollars (a pair price is a price in another token: never converted)
+  const fiat = useFiat();
+  const priceFigure = (value: bigint | null | undefined, text: string) =>
+    fiat && !row.pair && value !== null && value !== undefined ? (
+      <Amount kind="price" value={value} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} scale={row.scale} unit={false} fiat={fiat} class="dt-val" />
+    ) : (
+      <Num value={text} />
+    );
   const marketText = tk && row.pair ? `${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}` : tk ? `${tk.ticker}/KAS` : row.token ? longId(row.token) : '—';
   const cancellable = !row.oldTemplate && (row.live || row.status === 'unknown');
 
@@ -236,10 +246,10 @@ export function OrderRow(props: OrderRowProps) {
     <DtCell k="side" label={t('orders.col.side')} card="hidden" class={`or-side ${row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}`}>{t(`common.side.${row.side}`)}</DtCell>
   );
   cells.price = (
-    <DtCell k="price" label={t('orders.col.priceLine')} num class="or-price"><Num value={line.price} /></DtCell>
+    <DtCell k="price" label={t(fiat ? 'orders.col.priceLineUsd' : 'orders.col.priceLine')} num class="or-price">{priceFigure(row.price, line.price)}</DtCell>
   );
   cells.avg = (
-    <DtCell k="avg" label={t('orders.col.avgPrice')} num class="or-avg"><Num value={line.avgText} /></DtCell>
+    <DtCell k="avg" label={t(fiat ? 'orders.col.avgPriceUsd' : 'orders.col.avgPrice')} num class="or-avg">{priceFigure(props.avg, line.avgText)}</DtCell>
   );
   cells.amount = (
     <DtCell k="amount" label={t('orders.col.amount')} num class="or-amount" title={line.budget ? t('orders.budgetOrder') : undefined}>
@@ -260,7 +270,7 @@ export function OrderRow(props: OrderRowProps) {
     </DtCell>
   );
   cells.total = (
-    <DtCell k="total" label={t('orders.col.total')} num class="or-value"><MoneyCell kas={line.valueKas} unit={false} /></DtCell>
+    <DtCell k="total" label={t(fiat ? 'orders.col.totalUsd' : 'orders.col.total')} num class="or-value"><MoneyCell kas={line.valueKas} unit={false} /></DtCell>
   );
   cells.status = (
     <DtCell k="status" label={t('orders.col.status')} class="or-status">
