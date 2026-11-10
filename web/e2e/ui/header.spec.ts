@@ -58,8 +58,9 @@ for (const [width, spare] of [[1280, 20]] as const) {
     await connectWallet(page);
     await expect(page.getByTestId('nav-market')).toBeVisible();
     await expect(page.getByTestId('menu-button')).toHaveCount(0);
-    const [market, activity] = await Promise.all(['nav-market', 'nav-activity'].map((id) => page.getByTestId(id).boundingBox()));
-    expect(activity!.x - market!.x - market!.width).toBeCloseTo(12, 0);
+    // the tab after Market (no market opened yet: no Trade tab) is Portfolio
+    const [market, next] = await Promise.all(['nav-market', 'nav-portfolio'].map((id) => page.getByTestId(id).boundingBox()));
+    expect(next!.x - market!.x - market!.width).toBeCloseTo(12, 0);
     // what `wideWidth` (narrow.ts) sums, against what `roomOf` gives it
     const left = await page.evaluate(() => {
       const px = (v: string) => Number.parseFloat(v) || 0;
