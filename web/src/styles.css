@@ -316,7 +316,9 @@ small, .small { font-size: 0.85em; }
 /* from a tablet up the disclaimer and the meta line sit in the middle under the full-width row (a phone keeps them left: centred lines are hard to read narrow) */
 @media (min-width: 720px) {
   .footer .ff-disc { margin-inline: auto; text-align: center; max-width: 64em; }
-  .footer .ff-meta { justify-content: center; }
+  /* centred items that wrap would start a line with the separator dot: a gap stands in for the dots */
+  .footer .ff-meta { justify-content: center; gap: 4px 20px; }
+  .footer .ff-meta > span + span::before { content: none; }
 }
 @media (max-width: 719px) {
   .footer { padding: 20px 0 24px; }
