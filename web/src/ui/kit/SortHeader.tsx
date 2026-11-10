@@ -82,7 +82,7 @@ export function SortControl<K extends string>(props: {
   return (
     <div class={`sortctl${props.class ? ` ${props.class}` : ''}`} data-testid={`${props.id}-sortctl`}>
       <span class="small muted" aria-hidden="true">{t('common.sort')}</span>
-      <div class="segmented">
+      <div class="sort-pill">
         <select
           aria-label={t('common.sort.column')}
           value={key}

@@ -13,13 +13,13 @@
 @media (pointer: coarse) { .sortbtn { min-height: 40px; } }
 
 .sortctl { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.sortctl .segmented select {
-  appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 600; min-height: 36px; padding: 6px 28px 6px 14px; cursor: pointer;
+/* the pill of the rows control (Segmented), kept apart from it: this one is a select and a button, and it may be hidden (a header stands in for it where there is room) */
+.sort-pill { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; background: var(--surface-2); }
+.sort-pill select {
+  appearance: none; -webkit-appearance: none; border: 0; background-color: transparent; color: var(--text); font: inherit; font-weight: 600; min-height: 40px; padding: 6px 30px 6px 16px; cursor: pointer; max-width: 14rem;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; max-width: 14rem;
+  background-position: calc(100% - 17px) 55%, calc(100% - 12px) 55%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
 }
-.sortctl .segmented select:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: -2px; }
-.sortctl .segmented button { flex: none; min-width: 40px; min-height: 40px; padding: 6px 12px; }
-.sortctl .segmented select { min-height: 40px; }
-.sortctl .segmented { border: 1px solid var(--border); }
-.sortctl .segmented > * + * { border-left: 1px solid var(--border); }
+.sort-pill select:focus-visible, .sort-pill button:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: -2px; }
+.sort-pill button { flex: none; min-width: 44px; min-height: 40px; padding: 6px 14px; border: 0; border-left: 1px solid var(--border); background: transparent; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; }
+.sort-pill button:hover { background: var(--surface-3); color: var(--text); }

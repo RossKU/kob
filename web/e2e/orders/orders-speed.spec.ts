@@ -35,6 +35,10 @@ test('ended orders of the browser\'s records do not hold My orders back: the lis
   expect(await count('history')).toBe(await rows());
   expect(await count('history')).toBeGreaterThanOrEqual(ids.length);
   await page.getByTestId('orders-tab-active').click();
+  // (the tab's own list is drawn once the address has changed: wait for it before counting its rows)
+  await expect(page.getByTestId('orders-tab-active')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('portfolio-panel-open')).toBeVisible();
+  await expect.poll(rows).toBe(await count('active'));
   expect(await count('active')).toBe(await rows());
   await mock.latency(0);
 });
