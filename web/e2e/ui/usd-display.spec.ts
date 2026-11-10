@@ -166,9 +166,13 @@ test('the Portfolio summary and the Balances value column are dollars with the K
   expect(numberOf(await available.textContent())).toBeCloseTo(kasFree * PRICE, 1);
   await expect(available).not.toContainText('KAS');
   await expect(available).toHaveAttribute('title', /^[\d,.]+ KAS · USD estimate at \$0\.03 per KAS$/);
-  await expect(page.getByTestId('portfolio-total')).toHaveText(/^≈\s\$[\d,]+\.\d\d$/);
+  await expect(page.getByTestId('portfolio-total')).toHaveText(/^\$[\d,]+\.\d\d$/);
   expect(numberOf(await page.getByTestId('portfolio-total').textContent())).toBeCloseTo(kasTotal * PRICE, 1);
   await expect(page.getByTestId('portfolio-in-orders')).toHaveText(/^\$[\d,]+\.\d\d$/);
+  // the Estimate tag of the total says it is dollars, not KAS
+  await page.getByTestId('portfolio-estimate').click();
+  await expect(page.getByTestId('portfolio-estimate-detail')).toContainText('An estimate in US dollars');
+  await page.keyboard.press('Escape');
   // an open-orders count is a count
   await expect(page.getByTestId('portfolio-open-count')).not.toContainText('$');
   await expect(page.getByTestId('fiat-note')).toBeVisible();

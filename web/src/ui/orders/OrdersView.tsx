@@ -584,7 +584,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
               <TipBadge
                 variant="tag"
                 label={t('orders.summary.estimate')}
-                detail={balances.summary.unpriced > 0 ? `${t('orders.summary.estimateTip')} ${t('orders.summary.unpriced', { n: balances.summary.unpriced })}` : t('orders.summary.estimateTip')}
+                detail={balances.summary.unpriced > 0 ? `${t(fiat ? 'orders.summary.estimateTipUsd' : 'orders.summary.estimateTip')} ${t('orders.summary.unpriced', { n: balances.summary.unpriced })}` : t(fiat ? 'orders.summary.estimateTipUsd' : 'orders.summary.estimateTip')}
                 data-testid="portfolio-estimate"
                 data-detail-testid="portfolio-estimate-detail"
               />

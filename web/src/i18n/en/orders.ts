@@ -33,6 +33,7 @@ export default {
   'orders.market.toPortfolio': 'All in Portfolio',
   'orders.summary.estimate': 'Estimate',
   'orders.summary.estimateTip': 'An estimate, to the nearest 0.01 KAS: your KAS and your tokens at their last traded prices. It moves with every trade.',
+  'orders.summary.estimateTipUsd': 'An estimate in US dollars, to the nearest cent: your KAS and your tokens at their last traded prices, at the KAS price noted below. It moves with every trade and with the KAS price.',
   'orders.summary.unpriced': '{n} token(s) without a last price are not counted',
   'orders.summary.available': 'Available',
   'orders.summary.inOrders': 'In your orders',
