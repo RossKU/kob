@@ -99,7 +99,7 @@ pub struct IndexOpts {
     #[arg(long, global = true)]
     pub listen: Option<std::net::SocketAddr>,
     /// Serve `GET /v1/price/kas-usd`, the KAS price in USD for the web app's optional USD display (`usd_price` in `[api]`). The indexer asks
-    /// CoinGecko's keyless API for it (a KuCoin KAS-USDT ticker when CoinGecko fails), at most once in 5 minutes and only while a client asks,
+    /// CoinGecko's keyless API for it (a KuCoin KAS-USDT ticker when CoinGecko fails), at most once a minute (backing off to 10 minutes while an upstream fails) and only while a client asks,
     /// and serves the last good value with its time and source.
     /// Off by default: no call to a third party unless this is given.
     #[arg(long, global = true, env = "KOB_USD_PRICE")]

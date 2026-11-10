@@ -12,10 +12,14 @@
 //!   5 s ceiling, so one slow exchange costs nothing but its own vote;
 //! * the answer is CoinGecko's when it answered, else the VWAP; when both answered and differ by more than [`DIVERGENCE`] (2 %) the server
 //!   logs a warning (never sent to the client). `source` names who answered: `coingecko`, or `vwap:<exchange>,<exchange>,...` (the ones used);
-//! * the upstreams are asked at most once per [`REFRESH`] (5 min) whatever the number of clients, and only when a client asks: with nobody
+//! * the upstreams are asked at most once per [`REFRESH`] (60 s) whatever the number of clients, and only when a client asks: with nobody
 //!   on USD they are never called. Concurrent requests share one round;
+//! * an upstream that fails or rate-limits (429) is left alone for twice as long after each failure in a row, up to [`MAX_BACKOFF`]
+//!   (10 min), and asked at the normal pace again after its first success: each source has its own count, so one rate-limited site does not
+//!   slow the others. An exchange's last reading counts in the average for five periods at most, so a source in its back-off is not voted
+//!   with an old price for long;
 //! * a round that yields nothing keeps the last good value with its own `at`, so a client can judge how old it is; before the first
-//!   success the route answers 503. A failed round is retried after the same 5 min, so a down or rate-limited upstream is not hammered.
+//!   success the route answers 503.
 //!
 //! The answer is `{"usd": <number>, "at": <unix seconds of the round>, "source": "<source>"}`.
 
@@ -27,7 +31,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The upstreams are called at most once per this long.
-pub const REFRESH: Duration = Duration::from_secs(300);
+pub const REFRESH: Duration = Duration::from_secs(60);
+/// The longest an upstream is left alone after failures in a row (the wait doubles from `REFRESH` with each one).
+pub const MAX_BACKOFF: Duration = Duration::from_secs(600);
+/// An exchange's last reading is used in the average for at most this many refresh periods.
+const READING_PERIODS: u32 = 5;
 /// Connect and read timeout of one upstream call.
 const CALL_TIMEOUT: Duration = Duration::from_secs(4);
 /// What one source may take in all (a peer that trickles bytes cannot hold a round longer).
@@ -126,18 +134,65 @@ pub struct Quote {
     pub source: String,
 }
 
+/// The pace of the refresh (tests use short ones).
+#[derive(Debug, Clone, Copy)]
+pub struct Tuning {
+    /// The upstreams are asked at most once per this long.
+    pub refresh: Duration,
+    /// What one call may take in all.
+    pub ceiling: Duration,
+    /// The longest wait after failures in a row.
+    pub max_backoff: Duration,
+}
+
+impl Tuning {
+    /// [`REFRESH`], [`CEILING`], [`MAX_BACKOFF`].
+    pub const LIVE: Tuning = Tuning { refresh: REFRESH, ceiling: CEILING, max_backoff: MAX_BACKOFF };
+}
+
+/// How one upstream has been doing: failures in a row and the earliest it is asked again.
+#[derive(Debug, Clone, Copy, Default)]
+struct Health {
+    fails: u32,
+    next_at: Option<Instant>,
+}
+
+impl Health {
+    fn due(&self, now: Instant) -> bool {
+        self.next_at.is_none_or(|t| now >= t)
+    }
+    fn ok(&mut self) {
+        *self = Health::default();
+    }
+    /// One more failure: the wait is twice as long as after the one before (from `2 * refresh`), at most `max_backoff`. Returns it.
+    fn failed(&mut self, now: Instant, t: &Tuning) -> Duration {
+        self.fails = self.fails.saturating_add(1);
+        let wait = t.refresh.saturating_mul(1u32 << self.fails.min(16)).min(t.max_backoff.max(t.refresh));
+        self.next_at = Some(now + wait);
+        wait
+    }
+}
+
+#[derive(Default, Clone)]
+struct ExchangeState {
+    health: Health,
+    /// The last good reading and when it was taken.
+    reading: Option<(Reading, Instant)>,
+}
+
 #[derive(Default)]
 struct Slot {
     good: Option<Quote>,
     /// When the upstreams were last asked (success or not).
     attempted: Option<Instant>,
+    primary: Health,
+    exchanges: Vec<ExchangeState>,
 }
 
 struct Inner {
     fetch: Fetch,
     sources: SourceSet,
-    refresh: Duration,
-    ceiling: Duration,
+    tuning: Tuning,
     state: Mutex<Slot>,
     /// One round at a time: the requests that find one due wait here and then find it done.
     gate: tokio::sync::Mutex<()>,
@@ -150,19 +205,13 @@ pub struct UsdPrice(Arc<Inner>);
 impl UsdPrice {
     /// CoinGecko and the exchanges over the blocking TLS client.
     pub fn live() -> Self {
-        Self::with_fetch(Arc::new(|url| crate::rpc::tls::http_get(url, CALL_TIMEOUT)), SourceSet::live(), REFRESH, CEILING)
+        Self::with_fetch(Arc::new(|url| crate::rpc::tls::http_get(url, CALL_TIMEOUT)), SourceSet::live(), Tuning::LIVE)
     }
 
-    /// A price over any fetch, sources, refresh period and per-source ceiling (tests).
-    pub fn with_fetch(fetch: Fetch, sources: SourceSet, refresh: Duration, ceiling: Duration) -> Self {
-        UsdPrice(Arc::new(Inner {
-            fetch,
-            sources,
-            refresh,
-            ceiling,
-            state: Mutex::new(Slot::default()),
-            gate: tokio::sync::Mutex::new(()),
-        }))
+    /// A price over any fetch, sources and pace (tests).
+    pub fn with_fetch(fetch: Fetch, sources: SourceSet, tuning: Tuning) -> Self {
+        let slot = Slot { exchanges: vec![ExchangeState::default(); sources.exchanges.len()], ..Slot::default() };
+        UsdPrice(Arc::new(Inner { fetch, sources, tuning, state: Mutex::new(slot), gate: tokio::sync::Mutex::new(()) }))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Slot> {
@@ -170,7 +219,7 @@ impl UsdPrice {
     }
 
     fn due(&self) -> bool {
-        self.lock().attempted.is_none_or(|t| t.elapsed() >= self.0.refresh)
+        self.lock().attempted.is_none_or(|t| t.elapsed() >= self.0.tuning.refresh)
     }
 
     /// The last good quote, refreshed first when the upstreams have not been asked for a period. `None` before the first success.
@@ -190,30 +239,75 @@ impl UsdPrice {
     /// One call, on the blocking pool, within the ceiling.
     async fn call(&self, url: &'static str) -> FetchResult {
         let fetch = self.0.fetch.clone();
-        match tokio::time::timeout(self.0.ceiling, tokio::task::spawn_blocking(move || fetch(url))).await {
+        let ceiling = self.0.tuning.ceiling;
+        match tokio::time::timeout(ceiling, tokio::task::spawn_blocking(move || fetch(url))).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => Err(format!("fetch task: {e}")),
-            Err(_) => Err(format!("no answer within {} ms", self.0.ceiling.as_millis())),
+            Err(_) => Err(format!("no answer within {} ms", ceiling.as_millis())),
         }
     }
 
-    /// Ask the primary and every exchange at once and keep what they say.
+    /// The call, unless its upstream is still in its back-off (`None`).
+    async fn call_if(&self, due: bool, url: &'static str) -> Option<FetchResult> {
+        if due {
+            Some(self.call(url).await)
+        } else {
+            None
+        }
+    }
+
+    /// Ask the primary and every exchange that is not in its back-off, all at once, and keep what they say.
     async fn round(&self) {
-        self.lock().attempted = Some(Instant::now());
+        let t = self.0.tuning;
         let (primary, exchanges) = (self.0.sources.primary, &self.0.sources.exchanges);
-        let (p, e) = tokio::join!(self.call(primary.url), futures_util::future::join_all(exchanges.iter().map(|x| self.call(x.url))));
-        let coingecko = match p.and_then(|(s, b)| parse_number(s, &b, primary.path)) {
-            Ok(v) => Some(v),
-            Err(err) => {
-                tracing::warn!("usd price: {}: {err}", primary.name);
-                None
-            }
+        let now = Instant::now();
+        let (p_due, x_due): (bool, Vec<bool>) = {
+            let mut g = self.lock();
+            g.attempted = Some(now);
+            (g.primary.due(now), g.exchanges.iter().map(|e| e.health.due(now)).collect())
         };
+        let (p, e) = tokio::join!(
+            self.call_if(p_due, primary.url),
+            futures_util::future::join_all(exchanges.iter().zip(&x_due).map(|(x, due)| self.call_if(*due, x.url)))
+        );
+        let now = Instant::now();
+        let mut coingecko = None;
         let mut readings = Vec::new();
-        for (x, r) in exchanges.iter().zip(e) {
-            match r.and_then(|(s, b)| parse_ticker(s, &b, x)) {
-                Ok((last, volume)) => readings.push(Reading { name: x.name, last, volume }),
-                Err(err) => tracing::debug!("usd price: {}: {err}", x.name),
+        {
+            let mut g = self.lock();
+            if let Some(r) = p {
+                match r.and_then(|(s, b)| parse_number(s, &b, primary.path)) {
+                    Ok(v) => {
+                        g.primary.ok();
+                        coingecko = Some(v);
+                    }
+                    Err(err) => {
+                        let wait = g.primary.failed(now, &t);
+                        tracing::warn!("usd price: {}: {err} (not asked again for {} s)", primary.name, wait.as_secs());
+                    }
+                }
+            }
+            for ((x, r), st) in exchanges.iter().zip(e).zip(g.exchanges.iter_mut()) {
+                let Some(r) = r else { continue };
+                match r.and_then(|(s, b)| parse_ticker(s, &b, x)) {
+                    Ok((last, volume)) => {
+                        st.health.ok();
+                        st.reading = Some((Reading { name: x.name, last, volume }, now));
+                    }
+                    Err(err) => {
+                        let wait = st.health.failed(now, &t);
+                        tracing::debug!("usd price: {}: {err} (not asked again for {} s)", x.name, wait.as_secs());
+                    }
+                }
+            }
+            // what the average is made of: each exchange's last good reading while it is not too old
+            let fresh = t.refresh.saturating_mul(READING_PERIODS);
+            for st in &g.exchanges {
+                if let Some((r, at)) = &st.reading {
+                    if now.duration_since(*at) <= fresh {
+                        readings.push(r.clone());
+                    }
+                }
             }
         }
         let average = vwap(&readings);
@@ -235,7 +329,7 @@ impl UsdPrice {
             }
             (None, Ok(a)) => Some(Quote { usd: a.usd, at, source: format!("vwap:{}", a.names.join(",")) }),
             (None, Err(err)) => {
-                tracing::warn!("usd price: no exchange average either: {err}");
+                tracing::debug!("usd price: no exchange average: {err}");
                 None
             }
         };
@@ -243,7 +337,7 @@ impl UsdPrice {
             Some(q) => self.lock().good = Some(q),
             None => {
                 let kept = if self.lock().good.is_some() { "serving the last good price" } else { "no price yet" };
-                tracing::warn!("usd price: no source answered ({kept})");
+                tracing::warn!("usd price: no source gave a price ({kept})");
             }
         }
     }
@@ -395,6 +489,7 @@ pub(crate) mod tests {
         scripts: Arc<Mutex<Vec<Script>>>,
         delays: Arc<Mutex<Vec<(String, Duration)>>>,
         pub(crate) log: Arc<Mutex<Vec<String>>>,
+        times: Arc<Mutex<Vec<(String, Instant)>>>,
     }
     impl Mock {
         pub(crate) fn on(self, url: &str, script: Vec<FetchResult>) -> Self {
@@ -412,6 +507,7 @@ pub(crate) mod tests {
             let m = self.clone();
             Arc::new(move |url| {
                 m.log.lock().unwrap().push(url.to_string());
+                m.times.lock().unwrap().push((url.to_string(), Instant::now()));
                 let delay = m.delays.lock().unwrap().iter().find(|(u, _)| u == url).map(|(_, d)| *d);
                 if let Some(d) = delay {
                     std::thread::sleep(d);
@@ -429,6 +525,11 @@ pub(crate) mod tests {
         pub(crate) fn calls_to(&self, url: &str) -> usize {
             self.log.lock().unwrap().iter().filter(|u| *u == url).count()
         }
+        /// The gaps between the successive calls to `url`.
+        fn gaps_of(&self, url: &str) -> Vec<Duration> {
+            let t: Vec<Instant> = self.times.lock().unwrap().iter().filter(|(u, _)| u == url).map(|(_, at)| *at).collect();
+            t.windows(2).map(|w| w[1].duration_since(w[0])).collect()
+        }
     }
 
     /// A mock answering all four sources: the primary at `p` (None: down), the exchanges at 0.0300 / 0.0302 / 0.0301 with volumes 100 / 200 / 300.
@@ -440,8 +541,14 @@ pub(crate) mod tests {
             .on(Z.url, vec![t_ok("0.0301", "300")])
     }
 
+    /// A pace of `refresh_ms` with no back-off (the cap is the refresh itself): the plain cadence.
+    pub(crate) fn flat(refresh_ms: u64) -> Tuning {
+        let d = Duration::from_millis(refresh_ms);
+        Tuning { refresh: d, ceiling: Duration::from_secs(2), max_backoff: d }
+    }
+
     fn price(m: &Mock, refresh_ms: u64) -> UsdPrice {
-        UsdPrice::with_fetch(m.fetch(), set(), Duration::from_millis(refresh_ms), Duration::from_secs(2))
+        UsdPrice::with_fetch(m.fetch(), set(), flat(refresh_ms))
     }
 
     fn r(name: &'static str, last: f64, volume: f64) -> Reading {
@@ -452,7 +559,8 @@ pub(crate) mod tests {
     fn the_live_sources_are_https_and_have_distinct_names() {
         let s = SourceSet::live();
         assert_eq!((s.primary.name, s.exchanges.len()), ("coingecko", 4));
-        assert_eq!(REFRESH, Duration::from_secs(300), "the upstreams are asked at most once in 5 minutes");
+        assert_eq!((REFRESH, MAX_BACKOFF), (Duration::from_secs(60), Duration::from_secs(600)), "once a minute, backed off to ten");
+        assert_eq!(Tuning::LIVE.refresh, REFRESH);
         let mut names: Vec<&str> = s.exchanges.iter().map(|x| x.name).collect();
         names.sort_unstable();
         names.dedup();
@@ -587,7 +695,11 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn one_exchange_timing_out_costs_only_its_own_vote() {
         let m = full(None).slow(Y.url, Duration::from_millis(600));
-        let p = UsdPrice::with_fetch(m.fetch(), set(), Duration::from_secs(60), Duration::from_millis(150));
+        let p = UsdPrice::with_fetch(
+            m.fetch(),
+            set(),
+            Tuning { refresh: Duration::from_secs(60), ceiling: Duration::from_millis(150), max_backoff: Duration::from_secs(600) },
+        );
         let started = Instant::now();
         let q = p.get().await.unwrap();
         assert!(
@@ -598,11 +710,19 @@ pub(crate) mod tests {
         assert_eq!(q.source, "vwap:x,z");
         // the primary slow: the average answers
         let m = full(Some("0.05")).slow(P.url, Duration::from_millis(600));
-        let p = UsdPrice::with_fetch(m.fetch(), set(), Duration::from_secs(60), Duration::from_millis(150));
+        let p = UsdPrice::with_fetch(
+            m.fetch(),
+            set(),
+            Tuning { refresh: Duration::from_secs(60), ceiling: Duration::from_millis(150), max_backoff: Duration::from_secs(600) },
+        );
         assert!(p.get().await.unwrap().source.starts_with("vwap:"));
         // two of the three slow: one left is no average, and no primary: no price
         let m = full(None).slow(Y.url, Duration::from_millis(600)).slow(Z.url, Duration::from_millis(600));
-        let p = UsdPrice::with_fetch(m.fetch(), set(), Duration::from_secs(60), Duration::from_millis(150));
+        let p = UsdPrice::with_fetch(
+            m.fetch(),
+            set(),
+            Tuning { refresh: Duration::from_secs(60), ceiling: Duration::from_millis(150), max_backoff: Duration::from_secs(600) },
+        );
         assert_eq!(p.get().await, None);
     }
 
@@ -657,5 +777,91 @@ pub(crate) mod tests {
         assert_eq!(m.calls(), 4, "one round, then no hammering of a failing upstream");
         tokio::time::sleep(Duration::from_millis(130)).await;
         assert_eq!(p.get().await.unwrap().usd, 0.05);
+    }
+
+    /// A pace for the back-off tests: 60 ms doubling to 240 ms.
+    const BACKOFF: Tuning =
+        Tuning { refresh: Duration::from_millis(60), ceiling: Duration::from_secs(2), max_backoff: Duration::from_millis(240) };
+
+    /// Calls `get` every 10 ms until `done` or `limit`.
+    async fn drive(p: &UsdPrice, limit: Duration, done: impl Fn() -> bool) {
+        let t = Instant::now();
+        while !done() && t.elapsed() < limit {
+            let _ = p.get().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_primary_is_left_alone_for_twice_as_long_after_each_failure_up_to_the_cap_and_asked_at_the_normal_pace_after_a_success(
+    ) {
+        let m = full(None).on(
+            P.url,
+            vec![
+                Ok((429, "slow down".into())),
+                Ok((429, String::new())),
+                Err("down".into()),
+                Ok((429, String::new())),
+                p_ok("0.05"),
+                p_ok("0.05"),
+            ],
+        );
+        let p = UsdPrice::with_fetch(m.fetch(), set(), BACKOFF);
+        drive(&p, Duration::from_secs(5), || m.calls_to(P.url) >= 6).await;
+        let g = m.gaps_of(P.url);
+        assert_eq!(g.len(), 5, "{g:?}");
+        let ms = |d: Duration| d.as_millis();
+        // after the 1st failure 2 x 60, after the 2nd 4 x 60 capped at 240, then the cap
+        assert!(ms(g[0]) >= 120, "{g:?}");
+        assert!(ms(g[1]) >= 240, "{g:?}");
+        assert!(ms(g[2]) >= 240, "{g:?}");
+        assert!(ms(g[3]) >= 240, "{g:?}");
+        // the cap holds: not a further doubling (generous for a loaded machine)
+        assert!(ms(g[1]) < 1_000 && ms(g[2]) < 1_000 && ms(g[3]) < 1_000, "{g:?}");
+        // the 5th call succeeded: the next one is a normal period later, not the cap
+        assert!(ms(g[4]) >= 60 && ms(g[4]) < 200, "{g:?}");
+        // the exchanges, which did not fail, were asked at the normal pace meanwhile: more often than the primary
+        assert!(m.calls_to(X.url) > m.calls_to(P.url), "x {} p {}", m.calls_to(X.url), m.calls_to(P.url));
+        // and a price was served all along (the average of the exchanges), then CoinGecko's
+        let q = p.get().await.unwrap();
+        assert!(q.source == "alpha" || q.source.starts_with("vwap:"), "{q:?}");
+    }
+
+    #[tokio::test]
+    async fn the_last_good_value_keeps_being_served_with_its_own_time_while_every_source_backs_off() {
+        let m = Mock::default()
+            .on(P.url, vec![p_ok("0.05"), Ok((429, String::new()))])
+            .on(X.url, vec![Ok((429, String::new()))])
+            .on(Y.url, vec![Ok((429, String::new()))])
+            .on(Z.url, vec![Ok((429, String::new()))]);
+        let p = UsdPrice::with_fetch(m.fetch(), set(), BACKOFF);
+        let first = p.get().await.unwrap();
+        assert_eq!((first.usd, first.source.as_str()), (0.05, "alpha"));
+        drive(&p, Duration::from_millis(900), || false).await;
+        assert_eq!(p.get().await, Some(first), "the same quote, its own time");
+        // 900 ms of 60 ms periods would be 15 rounds; with the back-off each source was asked a handful of times
+        assert!(m.calls_to(P.url) <= 6, "{}", m.calls_to(P.url));
+        assert!(m.calls_to(X.url) <= 6, "{}", m.calls_to(X.url));
+    }
+
+    #[tokio::test]
+    async fn an_exchange_that_fails_is_skipped_and_its_old_reading_counts_for_five_periods_only() {
+        // the primary is down throughout, so the average is what is served
+        let m = Mock::default()
+            .on(P.url, vec![Err("down".into())])
+            .on(X.url, vec![t_ok("0.0300", "100"), Ok((429, String::new()))])
+            .on(Y.url, vec![y_ok("0.0302", "200")])
+            .on(Z.url, vec![t_ok("0.0301", "300")]);
+        let tune =
+            Tuning { refresh: Duration::from_millis(50), ceiling: Duration::from_secs(2), max_backoff: Duration::from_millis(400) };
+        let p = UsdPrice::with_fetch(m.fetch(), set(), tune);
+        assert_eq!(p.get().await.unwrap().source, "vwap:x,y,z");
+        // its 429 follows: its reading from before still counts for a while (5 x 50 ms), and it is not asked again at once
+        drive(&p, Duration::from_millis(100), || false).await;
+        assert!(p.get().await.unwrap().source.starts_with("vwap:"));
+        drive(&p, Duration::from_millis(900), || false).await;
+        let q = p.get().await.unwrap();
+        assert_eq!(q.source, "vwap:y,z", "x's reading is too old now and x is in its back-off");
+        assert!(m.calls_to(X.url) <= 6 && m.calls_to(Y.url) >= 10, "x {} y {}", m.calls_to(X.url), m.calls_to(Y.url));
     }
 }

@@ -1925,7 +1925,7 @@ use crate::api::price::tests::{full, p_ok, set, t_ok, Mock, P, X, Y, Z};
 fn price_env(m: &Mock) -> Env {
     let e = env(|_| {});
     let mut state = e.state.clone();
-    state.price = Some(crate::api::price::UsdPrice::with_fetch(m.fetch(), set(), crate::api::price::REFRESH, Duration::from_secs(2)));
+    state.price = Some(crate::api::price::UsdPrice::with_fetch(m.fetch(), set(), crate::api::price::Tuning::LIVE));
     Env { state, ..e }
 }
 
@@ -1945,7 +1945,7 @@ async fn the_price_route_serves_the_cached_quote_with_a_short_cache_header() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!((v["usd"].as_f64(), v["source"].as_str()), (Some(0.0576), Some("alpha")));
     assert!(v["at"].as_u64().is_some_and(|at| at >= now - 5 && at <= now + 5), "{v}");
-    assert_eq!(hd.get("cache-control").unwrap(), "public, max-age=300, s-maxage=300");
+    assert_eq!(hd.get("cache-control").unwrap(), "public, max-age=60, s-maxage=60");
     // 25 more clients: no further call to any upstream, the same `at`
     for i in 0..25 {
         let (s, _, w) = get_from(&app, "/v1/price/kas-usd", &format!("10.0.0.{i}"), &[]).await;
