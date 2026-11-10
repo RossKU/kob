@@ -136,7 +136,7 @@ async fn kron_transfers_are_held_spent_and_reverted() {
     transfers_and_spends(Family::Kron).await;
 }
 
-/// Holdings do not depend on the listing: a token outside the allowlist, traded by no order (received from another DEX, a
+/// Holdings do not depend on the listing: a token outside the allowlist, traded by no order (received from another trading app, a
 /// launchpad or a bridge), is tracked like a listed one as long as its program is pinned.
 #[tokio::test]
 async fn a_token_outside_the_allowlist_is_tracked_too() {

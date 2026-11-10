@@ -862,7 +862,7 @@ impl Extractor<'_> {
             let token = c.covenant_id;
             let order_gate = payload_tokens.contains(&token) || token_known(self.conn, &token)?;
             // Every token output is a holding candidate (a wallet's balance of a token no order trades, received from another
-            // DEX, a launchpad or a bridge), and may be owned by an order id: a FOREIGN stray (matcher.md 1.2), which the indexer
+            // trading app, a launchpad or a bridge), and may be owned by an order id: a FOREIGN stray (matcher.md 1.2), which the indexer
             // must flag. The leader is read for every output except one of a token no order trades whose authorising input is
             // a tracked order (an order's continuation is never a token output): one signature-script parse per token transfer.
             if !order_gate && inputs.get(c.authorizing_input as usize).is_some_and(|i: &RecIn| i.reveal.is_some() || i.daa > 0) {

@@ -1693,7 +1693,7 @@ the state is not readable from the output. It is read from the transaction that 
 `next_states`; the columns of a KRON token input, which every input of the token carries; the `recipient_state` of a
 public-mint app's `PublicMint::mint` / `TokenSeed::create`) and kept only if the P2SH of that state under the pinned token
 program equals the output's script public key (the same proof custody and strays already use). Every token of a pinned
-program is tracked, listed or not and traded by an order or not (tokens received from another DEX, a launchpad or a
+program is tracked, listed or not and traded by an order or not (tokens received from another trading app, a launchpad or a
 bridge): the allowlist decides what is listed, not what a wallet holds. An output of a program this build does not pin,
 or of a look-alike template, proves nothing and is not kept; `program` says which pinned program it is (a consumer marks
 the programs whose profile is not `reviewed`). A transaction that creates such an output, or spends a tracked one, is a relevant transaction

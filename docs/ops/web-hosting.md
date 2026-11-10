@@ -268,7 +268,7 @@ address* above); the blocklist and the report use the indexer's origin, already 
 
 **Privacy.** The visitor's browser asks the source for the list (it sees the visitor's IP and that the market list was opened) and for the
 pictures of the rows in view (kascov.io for the checked copies; for a token without one, the creator's own host or an IPFS gateway, see above). The founder accepted this
-for a DEX; there is no proxy through the host. The visitor can switch pictures off in Settings ("Load token icons", on by default): letters only, and no image host
+as other trading front ends do; there is no proxy through the host. The visitor can switch pictures off in Settings ("Load token icons", on by default): letters only, and no image host
 is contacted; "Load token logos from creator sites" switches off only the creators' addresses. The host sees nothing of this.
 
 **Neutrality.** The names are the creators' own claims, labelled "declared by its creator"; the list is not curated or ranked, and KOB marks nothing

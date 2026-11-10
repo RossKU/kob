@@ -27,7 +27,7 @@ export interface FreeBalances {
 /**
  * Spendable KAS (node) and free token UTXOs (tracker, verified on the node) of a key. The registry `tokens` with a known program are read; with
  * `anyToken` every other token the key holds as well (the indexer's holdings of the key and the local candidates, verified the same way: tokens
- * from other DEXes, launchpads, bridges), and KRON UTXOs KOB cannot spend (`id_type` 0), which only a balance shows.
+ * from other trading apps, launchpads, bridges), and KRON UTXOs KOB cannot spend (`id_type` 0), which only a balance shows.
  */
 export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonly TokenInfo[], o: { anyToken?: boolean } = {}): Promise<FreeBalances> {
   const errors: BalanceError[] = [];

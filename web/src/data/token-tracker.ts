@@ -8,7 +8,7 @@
 // storage entry can therefore be stale or wrong, never dangerous.
 //
 // Balances read every token the wallet holds, not only the registry's (`heldTokens`): the indexer tracks the holdings of every token of
-// a pinned program (a token received from another DEX, a launchpad or a bridge), and each candidate is verified the same way. The script
+// a pinned program (a token received from another trading app, a launchpad or a bridge), and each candidate is verified the same way. The script
 // is derived from the program kob-wasm pins, so a look-alike program or an output whose state the indexer misreports never verifies.
 //
 // The reverse also holds: the local list is the only record of holdings the indexer never saw (issuance outputs, anything from before

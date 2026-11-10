@@ -321,7 +321,7 @@ describe('TokenTracker.heldTokens (balances: every token the key holds)', () => 
     const bag: { views: TokenUtxoView[] } = { views: [] };
     const calls: unknown[] = [];
     const w = world({ indexer: { tokenUtxos: async (q) => (calls.push(q), bag.views) } });
-    // a KCC-20 token no registry names (received from another DEX), on a prototype program
+    // a KCC-20 token no registry names (received from another trading app), on a prototype program
     const a = tokenState(500n);
     put(w, 'KCC20Ref_8x8', OTHER_COV, a, '91'.repeat(32));
     // KRON held by the key (id_type 0: not spendable by KOB) and by address presence (3)
