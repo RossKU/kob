@@ -146,6 +146,33 @@ describe('indexer REST', () => {
     expect(opt.headers.get('access-control-allow-origin')).toBe('*');
   });
 
+  it('serves the KAS price in USD as kobd does with usd_price: a fresh time, a controllable age, source and mode (404 without the route, 503 before the first price), counting its reads; a reset restores it', async () => {
+    await post('/mock/reset');
+    const before = Math.floor(Date.now() / 1000);
+    let r = await get('/v1/price/kas-usd');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ usd: 0.03, source: 'coingecko' });
+    expect(r.body.at).toBeGreaterThanOrEqual(before);
+    expect(r.body.at).toBeLessThanOrEqual(before + 5);
+    expect(r.headers.get('access-control-allow-origin')).toBe('*');
+    r = await post('/mock/kas-price', { usd: 0.0125, source: 'vwap:bybit,kucoin', ageS: 900 });
+    expect(r.body).toMatchObject({ usd: 0.0125, source: 'vwap:bybit,kucoin', ageS: 900, mode: 'ok', reads: 1 });
+    r = await get('/v1/price/kas-usd');
+    expect(r.body).toMatchObject({ usd: 0.0125, source: 'vwap:bybit,kucoin' });
+    expect(r.body.at).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 899);
+    await post('/mock/kas-price', { mode: 'off' });
+    r = await get('/v1/price/kas-usd');
+    expect([r.status, r.body.error.code]).toEqual([404, 'not_found']);
+    await post('/mock/kas-price', { mode: 'down' });
+    r = await get('/v1/price/kas-usd');
+    expect([r.status, r.body.error.code]).toEqual([503, 'price_unavailable']);
+    expect((await get('/mock/kas-price')).body.reads).toBe(4);
+    expect((await post('/mock/kas-price', { usd: -1 })).status).toBe(400);
+    expect((await post('/mock/kas-price', { mode: 'maybe' })).status).toBe(400);
+    await post('/mock/reset');
+    expect((await get('/mock/kas-price')).body).toMatchObject({ usd: 0.03, mode: 'ok', ageS: 0, reads: 0 });
+  });
+
   it('serves the facts of tokens: powers, template_id, family, and an empty ticker for a token outside the registry; no per-token standing', async () => {
     const t0 = (await get('/v1/tokens')).body.tokens[0];
     expect(t0).toMatchObject({ powers: [], template_id: 'kcc20-ref-8x8', family: 'kcc20' });

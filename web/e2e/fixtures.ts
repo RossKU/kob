@@ -99,6 +99,17 @@ export class MockClient {
   feeEstimate(v: { priority?: number; normal?: number; low?: number } | 'off') {
     return this.post('/mock/fee-estimate', v === 'off' ? { off: true } : v);
   }
+  /**
+   * The KAS price in USD the mock indexer serves (`GET /v1/price/kas-usd`; the default after a reset: $0.03, CoinGecko, taken now): `{ usd, source, ageS }` (how old its time
+   * is), `mode`: `ok`, `off` (404: an indexer without `usd_price`) or `down` (503: no price yet). Resolves with the state and the number of reads so far.
+   */
+  kasPrice(v: { usd?: number; source?: string; ageS?: number; mode?: 'ok' | 'off' | 'down' } = {}) {
+    return this.post<{ usd: number; source: string; ageS: number; mode: string; reads: number }>('/mock/kas-price', v);
+  }
+  /** The KAS price state and the reads so far. */
+  kasPriceReads() {
+    return this.get<{ reads: number }>('/mock/kas-price').then((r) => r.reads);
+  }
   /** Additive declarative seed: `{tokens, orders, book, fills, utxos}`; see mock/seed.mjs. */
   seed(spec: Record<string, unknown>) {
     return this.post('/mock/seed', spec);

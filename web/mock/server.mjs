@@ -120,6 +120,9 @@ async function readJson(req) {
   }
 }
 
+/** The KAS/USD price the mock indexer serves (`GET /v1/price/kas-usd`, an opt-in route of kobd) until `POST /mock/kas-price` changes it. */
+export const DEFAULT_KAS_PRICE = Object.freeze({ usd: 0.03, source: 'coingecko' });
+
 /** The node's fee estimate the mock answers by default: a quiet network, every bucket at the relay floor (100 sompi per gram: fees stay the minimum). */
 export const DEFAULT_FEE_ESTIMATE = Object.freeze({ priority: 100, normal: 100, low: 100 });
 
@@ -141,6 +144,8 @@ export async function startMockServer(opts = {}) {
   // `GET /node/fee-estimate` answers this (null: the route is missing, 404, as on a node without getFeeEstimate)
   let feeEstimate = opts.feeEstimate === undefined ? { ...DEFAULT_FEE_ESTIMATE } : opts.feeEstimate;
   const sessions = new Set();
+  // the KAS/USD price: `mode` ok | off (404, an indexer without `usd_price`) | down (503, no price yet); `ageS`: how old its `at` is (0 = taken now); `reads` counts the reads
+  let kasPrice = { ...DEFAULT_KAS_PRICE, mode: 'ok', ageS: 0, reads: 0 };
 
   const seedAll = (withSeed, withFund, withHistory = false, withPair = false) => {
     if (withSeed) applyDefaultSeed(chain);
@@ -252,6 +257,13 @@ export async function startMockServer(opts = {}) {
     if (get && path === '/v1/strays') return ok(V.straysView(chain, q));
     if (get && path === '/v1/token-events') return ok(V.tokenEventsView(chain, q));
     if (get && path === '/v1/token-utxos') return ok(V.tokenUtxosPage(chain, q));
+    // the KAS price in USD (docs/api-reference.md): kobd serves it with `[api] usd_price`; without it the route is 404, before its first price 503
+    if (get && path === '/v1/price/kas-usd') {
+      kasPrice.reads += 1;
+      if (kasPrice.mode === 'off') throw notFound('no such route');
+      if (kasPrice.mode === 'down') throw new ApiError(503, 'price_unavailable', 'no KAS price yet');
+      return ok({ usd: kasPrice.usd, at: Math.floor(Date.now() / 1000) - kasPrice.ageS, source: kasPrice.source });
+    }
     // ---- market data: trades, candles, 24 h stats, depth
     if (get && (m = /^\/v1\/trades\/([^/]+)$/.exec(path))) return ok(M.tradesPage(chain, m[1], q));
     if (get && (m = /^\/v1\/candles\/([^/]+)$/.exec(path))) return ok(M.candlesView(chain, m[1], q));
@@ -311,6 +323,7 @@ export async function startMockServer(opts = {}) {
       ctl.indexerDown = false;
       blockLog.reset();
       feeEstimate = { ...DEFAULT_FEE_ESTIMATE };
+      kasPrice = { ...DEFAULT_KAS_PRICE, mode: 'ok', ageS: 0, reads: 0 };
       seedAll(body.seed !== false, body.fund === true, body.history ?? false, body.pair ?? false);
       return ok(summary(chain));
     }
@@ -343,6 +356,21 @@ export async function startMockServer(opts = {}) {
     if (post && path === '/mock/take') {
       if (!HEX64.test(body.covenant_id ?? '')) throw badRequest('covenant_id must be 64 hex characters');
       return ok(takeReal(chain, body.covenant_id, body.amount));
+    }
+    // the KAS price the indexer serves: `{ usd?, source?, ageS?, mode?: 'ok' | 'off' | 'down' }` (a field left out is kept); GET reads it with the number of reads so far
+    if (get && path === '/mock/kas-price') return ok(kasPrice);
+    if (post && path === '/mock/kas-price') {
+      if (body.usd !== undefined) {
+        if (typeof body.usd !== 'number' || !(body.usd > 0)) throw badRequest('usd must be a positive number');
+        kasPrice.usd = body.usd;
+      }
+      if (body.source !== undefined) kasPrice.source = String(body.source);
+      if (body.ageS !== undefined) kasPrice.ageS = Math.max(0, Math.floor(Number(body.ageS)) || 0);
+      if (body.mode !== undefined) {
+        if (!['ok', 'off', 'down'].includes(body.mode)) throw badRequest('mode must be ok, off or down');
+        kasPrice.mode = body.mode;
+      }
+      return ok(kasPrice);
     }
     if (post && path === '/mock/fee-estimate') {
       feeEstimate = body.off ? null : { priority: Number(body.priority ?? 100), normal: Number(body.normal ?? 100), low: Number(body.low ?? 100) };

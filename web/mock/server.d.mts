@@ -23,6 +23,9 @@ export interface MockServerOptions {
   feeEstimate?: { priority: number; normal: number; low: number } | null;
 }
 
+/** The KAS/USD price the mock indexer serves (`GET /v1/price/kas-usd`) until `POST /mock/kas-price` changes it. */
+export const DEFAULT_KAS_PRICE: Readonly<{ usd: number; source: string }>;
+
 /** The default fee estimate: every bucket at the relay floor (100 sompi per gram). */
 export const DEFAULT_FEE_ESTIMATE: Readonly<{ priority: number; normal: number; low: number }>;
 
