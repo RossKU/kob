@@ -723,7 +723,7 @@ export function OrderTicket(props: OrderTicketProps) {
   if (!tradable) {
     const reason = token.untradableReason;
     return (
-      <section class="tk" data-testid="order-ticket" data-state="untradable">
+      <section class="tk tk-plain" data-testid="order-ticket" data-state="untradable">
         <h2>{t('ticket.title')}</h2>
         <Banner tone="warn" title={t('ticket.untradable.title', { ticker })} data-testid="order-untradable">
           <p>{reason ? keyedText('untradable', reason) : t('ticket.untradable.generic')}</p>
@@ -735,6 +735,9 @@ export function OrderTicket(props: OrderTicketProps) {
 
   return (
     <section class="tk" data-testid="order-ticket" data-type={form.type} data-side={form.side} data-shown-side={shownSide} data-inverted={inverted ? '1' : '0'} aria-busy={pending || envLoading ? 'true' : 'false'}>
+      {/* the panel has the height of its row of the page (market.css) and never changes it: the form scrolls inside .tk-scroll, the reason slot and the button are the
+          footer, pinned to the bottom of the panel, so nothing that comes or goes in the form moves the button or anything beside or under the ticket */}
+      <div class="tk-scroll" data-testid="order-scroll">
       {/* the title row has a fixed height and the indicator an overlay of its own: it never changes the layout. It shows only when a plan takes longer than
           PENDING_SHOW_MS (a background re-plan on a tick is over before that and shows nothing) */}
       <div class="tk-titlerow">
@@ -819,6 +822,15 @@ export function OrderTicket(props: OrderTicketProps) {
       ) : null}
 
       {enabled ? gate.element : null}
+      {/* what the token's records say (facts, the genesis check) and the note of a ladder: the end of the scrolling form, so a late answer never moves the button */}
+      {props.facts}
+      {ladderNote ? (
+        <p class="muted" data-testid={ladderNote.done ? 'order-result-ladder' : 'order-ladder-stopped'}>
+          <span key={ladderNote.text}>{ladderNote.text}</span>
+        </p>
+      ) : null}
+      </div>
+      <div class="tk-foot">
       {/* the one place that says why the order cannot be placed: a slot of a fixed height directly above the button, empty when the order can be placed, so
           neither a sentence coming and going nor its length ever moves the button */}
       <div class="tk-reason" data-testid="order-issues" data-count={shownReasons.length} aria-live="polite">
@@ -843,14 +855,9 @@ export function OrderTicket(props: OrderTicketProps) {
       <Button variant="primary" block class="tk-place" data-side={form.side} onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
         <span key={enterText ?? `${sideName}|${typeName}`} data-state={enterText ? 'enter' : undefined}>{enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
-      <SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" />
-      {/* what the token's records say (facts, the genesis check): below the button, so a late answer of the check never moves it */}
-      {props.facts}
-      {ladderNote ? (
-        <p class="muted" data-testid={ladderNote.done ? 'order-result-ladder' : 'order-ladder-stopped'}>
-          <span key={ladderNote.text}>{ladderNote.text}</span>
-        </p>
-      ) : null}
+      {/* progress and the result of a click: one line under the button, in a slot of a fixed height (longer text scrolls in it), so it never moves the button */}
+      <div class="tk-status"><SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" /></div>
+      </div>
     </section>
   );
 }

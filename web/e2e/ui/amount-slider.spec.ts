@@ -29,8 +29,8 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
       const range = page.getByTestId('order-amount-range');
       const sb = (await slider.boundingBox())!;
       const tb = (await page.getByTestId('order-ticket').boundingBox())!;
-      // the width of the ticket (its padding on both sides)
-      expect(sb.width).toBeGreaterThan(tb.width - 40);
+      // the width of the ticket (its padding on both sides, and the thin scrollbar gutter of its form)
+      expect(sb.width).toBeGreaterThan(tb.width - 56);
       expect(sb.x).toBeGreaterThanOrEqual(tb.x);
       expect(sb.x + sb.width).toBeLessThanOrEqual(tb.x + tb.width);
       const rb = (await range.boundingBox())!;

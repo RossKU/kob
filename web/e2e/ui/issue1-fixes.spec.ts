@@ -42,36 +42,34 @@ test('token creation: the image address says each viewer loads the logo from it,
 });
 
 for (const width of [1280, 880, 390]) {
-  test(`${width} px: unfolding Advanced options makes the ticket taller by itself (the panels beside it stay put, no gap under the depth chart; the full-width facts keep clear of it)`, async ({ appPage: page, mock }) => {
+  test(`${width} px: unfolding Advanced options changes nothing around the ticket (its form scrolls inside the panel; the panels beside it and the full-width facts stay put)`, async ({ appPage: page, mock }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width, height: 900 });
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
     await settlePlan(page);
+    // what loads under the grid (the activity log's rows, the wallet's panel) changes the page's height by itself: measured once it is in
+    await page.getByTestId('activity-list').scrollIntoViewIfNeeded();
+    await expect(page.getByTestId('activity-list').getByTestId('activity-row').first()).toBeVisible();
+    await expect(page.getByTestId('market-orders').getByTestId('orders-section')).toBeVisible();
+    await page.waitForTimeout(500);
+    await page.evaluate(() => scrollTo(0, 0));
     const adv = page.getByTestId('order-advanced');
     // document coordinates (the click on the summary may scroll the page)
     const box = (id: string) => page.getByTestId(id).evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height }; });
-    const ids = ['depth-section', 'token-details', 'ticket-container'];
+    const ids = ['depth-section', 'token-details', 'ticket-container', 'order-place'];
     const closed: Record<string, { x: number; y: number; width: number; height: number }> = {};
     for (const id of ids) closed[id] = await box(id);
     await adv.locator('summary').click();
     await expect(adv.locator('.tk-advanced-body')).toBeVisible();
     await page.waitForTimeout(300);
-    const open: Record<string, { x: number; y: number; width: number; height: number }> = {};
-    for (const id of ids) open[id] = await box(id);
-    expect(open['ticket-container']!.height - closed['ticket-container']!.height, 'the ticket grew').toBeGreaterThan(100);
-    if (width >= 760) {
-      // the ticket is a column of its own: the depth chart stays where it was (the trades sit beside it on three columns, under the ticket on two)
-      expect(Math.abs(open['depth-section']!.y - closed['depth-section']!.y)).toBeLessThan(2);
-      expect(Math.abs(open['depth-section']!.height - closed['depth-section']!.height)).toBeLessThan(2);
-      // the facts take the full width under the whole grid: they follow the ticket down only when it grows past the panels beside it, and never overlap it
-      expect(open['token-details']!.y).toBeGreaterThanOrEqual(open['ticket-container']!.y + open['ticket-container']!.height - 1);
-      expect(open['token-details']!.y - closed['token-details']!.y).toBeLessThanOrEqual(open['ticket-container']!.height - closed['ticket-container']!.height + 2);
-    } else {
-      // a phone is one column: the ticket sits above the depth chart, which moves down with it
-      expect(open['ticket-container']!.y).toBeLessThan(open['depth-section']!.y);
+    for (const id of ids) {
+      const now = await box(id);
+      for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(now[k] - closed[id]![k]), id + '.' + k).toBeLessThanOrEqual(1);
     }
+    // the form is what grew: it scrolls inside the panel
+    expect(await page.getByTestId('order-scroll').evaluate((el) => el.scrollHeight > el.clientHeight), 'the form scrolls inside the panel').toBe(true);
     expect(await horizontalOverflow(page), 'page').toBe(0);
   });
 }
