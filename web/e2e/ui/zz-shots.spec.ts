@@ -1,4 +1,4 @@
-// Screenshots only (not a test of anything): every tab of the Portfolio and a market page's panel at 390, 600, 720, 1024 and 1440 px in the theme KOB_THEME, to KOB_SHOTS
+// Screenshots only (not a test of anything): every tab of the Portfolio and a market page's panel at 390, 600, 720, 1024, 1280 and 1440 px in the theme KOB_THEME, to KOB_SHOTS
 // with the prefix KOB_SHOT_TAG. Skipped without KOB_SHOTS.
 import { test } from '../fixtures';
 import { listExkcc, connectWallet } from '../helpers/env';
@@ -8,7 +8,7 @@ import { seedManyDone, seedPortfolio } from '../helpers/portfolio-seed';
 test.use({ autoOpen: false, timezoneId: lateTimeZone() });
 test.skip(!process.env.KOB_SHOTS, 'screenshots only');
 
-for (const width of [390, 600, 720, 1024, 1440]) {
+for (const width of [390, 600, 720, 1024, 1280, 1440]) {
   test(`shots at ${width}`, async ({ appPage: page, mock }) => {
     test.setTimeout(180_000);
     await page.setViewportSize({ width, height: 1100 });
