@@ -27,7 +27,7 @@ async function problems(root: Locator, where: string): Promise<string[]> {
       const lh = cs.lineHeight === 'normal' ? 1.25 * parseFloat(cs.fontSize) : parseFloat(cs.lineHeight);
       if (v.getBoundingClientRect().height > 1.3 * lh + 0.5) bad.push(`${w}: the value "${v.textContent}" is on several lines`);
       if (v.scrollWidth > v.clientWidth + 1) bad.push(`${w}: the value "${v.textContent}" is cut (${v.scrollWidth} in ${v.clientWidth})`);
-      for (const part of v.querySelectorAll<HTMLElement>(':scope > span')) {
+      for (const part of v.querySelectorAll<HTMLElement>('.dt-val, .dt-unit')) {
         const r = part.getBoundingClientRect();
         if (r.height > 1.3 * lh + 0.5) bad.push(`${w}: "${part.textContent}" is on several lines`);
       }
@@ -82,7 +82,7 @@ for (const width of ALL) {
     found.push(...(await problems(root, `page`)));
     await shot(page, root, `${theme}-${width}-page`);
     // the Total: two decimals, no "≈"; Available and In your orders keep their exact amounts; the note about unpriced tokens is not in the card
-    const total = (await page.getByTestId('portfolio-total').locator('span').first().textContent())!;
+    const total = (await page.getByTestId('portfolio-total').locator('.dt-val').textContent())!;
     expect(total, 'the total reads to two decimals').toMatch(/^\d{1,3}(,\d{3})*\.\d{2}$/);
     expect(await page.getByTestId('portfolio-summary').textContent()).not.toContain('≈');
     await expect(page.getByTestId('portfolio-unpriced')).toHaveCount(0);

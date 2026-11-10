@@ -1,30 +1,8 @@
 /* My orders > balances: a table on a desktop, one compact card per token on a phone. Same markup (every data-testid stays); each figure cell carries
    its column title in data-label, shown above its figure: the figures sit two by two under the asset's name. CSS variables of src/styles.css (light + dark). */
 .orders-skel { height: 64px; }
-.balances-cards .bal-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.dt-caption { margin: 0 0 6px; }
 
-/* cards in a box too narrow for the table (a phone, a tablet, a market page's panel; the class is set by use-table-cards.ts) */
-.bal-cards .table, .bal-cards tbody { display: block; }
-/* the column titles are the labels of the lines: kept for screen readers, not drawn */
-.bal-cards thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-.bal-cards tbody tr { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; margin-bottom: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.bal-cards tbody tr:hover { background: var(--surface-2); }
-.bal-cards td { display: block; padding: 0; border-bottom: 0; text-align: left; }
-.bal-cards td.table-empty { padding: 16px 8px; text-align: center; }
-/* the asset: its name on top, its notes ("8 decimals, from its market", "unsupported program") each on a line of its own under it */
-.bal-cards .bal-token { flex: 1 0 100%; min-width: 0; font-weight: 600; }
-.bal-cards .bal-token .bal-name { max-width: 100%; }
-.bal-cards .bal-token > .small { display: block; margin-top: 1px; font-weight: 400; }
-/* Available / In your orders / Strays / KAS locked / Value: the title over the figure, two to a line; a figure with a note under it takes the line */
-.bal-cards td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; overflow-wrap: anywhere; }
-.bal-cards td[data-label].bal-wide { flex-basis: 100%; }
-.bal-cards td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 0.78rem; font-weight: 400; }
-.bal-cards td[data-label] > .small { font-size: 0.78rem; overflow-wrap: normal; }
-.bal-cards .bal-kas td.muted[data-label] { display: none; }
-/* the buttons under the figures: a tap-sized height */
-.bal-cards .bal-actions { flex: 1 0 100%; display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 8px; margin-top: 2px; }
-.bal-cards .bal-actions .btn { min-height: 40px; }
-.bal-cards .bal-actions-none { display: none; }
 /* the Portfolio panel measures itself: the layouts below follow the width it has (a page's, or a market page's), not the screen's */
 .pf-root { container: pf / inline-size; }
 
@@ -64,7 +42,8 @@
 /* a figure is never cut, never broken and never moved to a second line: number and unit stand on one line and the size follows the room (the panel's width, in cqi) */
 .pf-v { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 0 4px; white-space: nowrap; font-size: clamp(0.62rem, calc((25cqi - 34px) / 11.2), 1.2rem); line-height: 1.25; font-weight: 650; font-variant-numeric: tabular-nums; }
 .pf-v > span { min-width: 0; }
-.pf-unit { font-size: max(0.62rem, 0.6em); font-weight: 600; color: var(--muted); }
+.pf-money { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 0 4px; }
+.pf-v .dt-unit { margin-left: 0; font-size: max(0.62rem, 0.6em); font-weight: 600; color: var(--muted); }
 .bal-nw { white-space: nowrap; }
 /* four across where the longest figure fits a quarter of the panel (1000 px), else two by two */
 @container pf (max-width: 999px) {
@@ -81,16 +60,3 @@
 /* a balance's asset: its icon and fingerprint (Fingerprint.tsx, small), then its name; KAS has a plain round mark */
 .bal-asset { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .kas-icon { flex: none; display: block; }
-
-/* the Fills tab on a phone (WalletFills.tsx): one card per fill: market, side and price; amount and value; time and the transaction (shortened, never broken) */
-.wf-cards { display: flex; flex-direction: column; gap: 8px; }
-.wf-card { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.9rem; }
-.wf-l1, .wf-l2, .wf-l3 { display: flex; align-items: center; justify-content: space-between; gap: 4px 12px; min-width: 0; }
-.wf-l1 { font-weight: 600; }
-.wf-market { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.wf-side, .wf-price, .wf-value { flex: none; white-space: nowrap; }
-.wf-l2 { flex-wrap: wrap; }
-.wf-l3 { flex-wrap: wrap; min-height: 40px; }
-.wf-tx { flex: none; margin-left: auto; }
-.wf-tx .wrap-anywhere { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
-.wf-tx .copy-btn { min-height: 40px; padding: 0 10px; }

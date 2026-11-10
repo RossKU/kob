@@ -22,13 +22,13 @@ test.describe('phone, 390 px wide', () => {
     await page.goto('/#/portfolio');
     const row = page.getByTestId(TESTID.balancesPanel).getByTestId(`balance-row-${tok.covenant_id}`);
     await expect(row).toBeVisible();
-    expect(await row.evaluate((el) => getComputedStyle(el).display)).toBe('flex'); // a card, not a table row
+    expect(await row.locator('.dt-row').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length)).toBe(2); // a card of two columns of label / value pairs
     const name = row.getByTestId('balance-market');
     const label = (await name.textContent())!;
     await expect(name).toHaveAttribute('title', label); // the full name
     expect(await name.evaluate((el) => el.getBoundingClientRect().height < 2.2 * parseFloat(getComputedStyle(el).lineHeight))).toBe(true); // one line
     // Free / In your orders / Strays / KAS locked: title and figure
-    const labels = await row.locator('td[data-label]').evaluateAll((tds) => tds.map((td) => getComputedStyle(td, '::before').content));
+    const labels = await row.locator('.dt-c[data-label]').evaluateAll((cells) => cells.map((c) => getComputedStyle(c, '::before').content));
     expect(labels).toEqual(['"Free tokens"', '"In your orders"', '"Strays"', '"KAS locked in orders"', '"Value (KAS)"']);
     await expect(row.getByTestId('balance-escrowed')).toHaveText(/^3/); // test ids and text unchanged
     const rb = (await row.boundingBox())!;
@@ -54,7 +54,7 @@ test.describe('desktop, 1280 px wide', () => {
     await page.goto('/#/portfolio');
     const row = page.getByTestId(TESTID.balancesPanel).getByTestId(`balance-row-${tokenId}`);
     await expect(row).toBeVisible();
-    expect(await row.evaluate((el) => getComputedStyle(el).display)).toBe('table-row');
-    await expect(page.getByTestId('token-balances-table').locator('thead')).toBeVisible();
+    expect(await row.locator('.dt-row').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length)).toBe(7); // a row of the table's seven columns, not a card
+    await expect(page.getByTestId('token-balances-table').getByTestId('balances-head')).toBeVisible();
   });
 });

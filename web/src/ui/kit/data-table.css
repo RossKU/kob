@@ -1,0 +1,118 @@
+/* The one table of the Portfolio (DataTable.tsx): Balances, Open orders, Order history and Fills, on the Portfolio page and in a market page's panel, all draw the same
+   header row, the same rows, the same cells. From 1120 px of table it is a table (columns on one grid per table, below); in anything narrower (a phone, a tablet, a narrow
+   panel: it is the table's own width that counts, not the screen's) every row is a card of label / value pairs. Colours are the app's tokens (styles.css), both themes. */
+.dt { container: dt / inline-size; min-width: 0; font-variant-numeric: tabular-nums; }
+.dt-head, .dt-row {
+  display: grid; grid-template-columns: var(--dt-cols); column-gap: 12px; align-items: center; padding: 0 12px; box-sizing: border-box; font-size: 0.86rem;
+}
+.dt-head { padding-bottom: 6px; font-size: 0.74rem; color: var(--muted); border-bottom: 1px solid var(--border); }
+.dt-head > * { min-width: 0; }
+.dt-head .dt-hr { display: flex; justify-content: flex-end; text-align: right; }
+.dt-body { display: flex; flex-direction: column; }
+
+/* a row (with its details under it, when it has them) */
+.dt-group { border-bottom: 1px solid var(--border); min-width: 0; }
+.dt-row { min-height: 46px; padding-top: 6px; padding-bottom: 6px; }
+.dt-row > * { min-width: 0; }
+.dt-c { min-width: 0; overflow-wrap: break-word; }
+.dt-num { text-align: right; font-variant-numeric: tabular-nums; }
+/* an amount: the number is one piece (never broken), its unit follows it in the small muted style and may wrap on its own */
+.dt-val { white-space: nowrap; }
+.dt-unit { color: var(--muted); font-size: 0.82em; margin-left: 0.3em; overflow-wrap: anywhere; }
+.dt-card-only { display: none; }
+.dt-sub { display: block; color: var(--muted); font-size: 0.76rem; font-weight: 400; }
+.dt-muted { color: var(--muted); }
+.dt-time { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.dt-side-buy { color: var(--buy); font-weight: 600; }
+.dt-side-sell { color: var(--sell); font-weight: 600; }
+.dt-market { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; }
+.dt-market-name { overflow-wrap: break-word; min-width: 0; }
+/* the notes under a token's name (its decimals, its program) stand on lines of their own */
+.dt-market-name > .small, .dt-market-name > .token-note { display: block; font-weight: 400; }
+/* a transaction id is shortened and never broken; its Copy button is a finger's */
+.dt-c-tx .wrap-anywhere { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+.dt-c-tx .copy { flex-wrap: nowrap; }
+@media (pointer: coarse) { .dt-c-tx .copy-btn { min-height: 40px; padding: 0 10px; } }
+.dt-act { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.dt-chev { width: 28px; height: 32px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.dt-chev:hover { background: var(--surface-3); color: var(--text); }
+.dt-chev:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+.dt-chev svg { transition: transform 0.15s; }
+.dt-chev[aria-expanded='true'] svg { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .dt-chev svg { transition: none; } }
+.dt-details { padding: 10px 12px 12px; border-top: 1px solid var(--border); background: var(--surface-2); }
+.dt-details[hidden] { display: none; }
+.dt-empty { padding: 18px 8px; text-align: center; color: var(--muted); }
+
+/* the sort control stands in for the header where the rows are cards */
+.dt .dt-sortctl { display: none; }
+
+/* the grids of the three tables, from 1040 px: the room is shared by weight, the long texts (market, filled part) get most of it; a text that does not fit its cell wraps
+   inside it, it never paints over a neighbour */
+.dt-orders-open { --dt-cols: 9.2em minmax(130px, 2fr) minmax(56px, 0.6fr) 40px minmax(96px, 1fr) minmax(100px, 1.1fr) minmax(120px, 1.3fr) minmax(96px, 1fr) minmax(100px, 1fr) 70px 28px; }
+.dt-orders-history { --dt-cols: 9.2em minmax(130px, 2fr) minmax(56px, 0.6fr) 40px minmax(96px, 1fr) minmax(96px, 1fr) minmax(120px, 1.3fr) minmax(100px, 1.1fr) minmax(96px, 1fr) minmax(100px, 1fr) 28px; }
+.dt-fills { --dt-cols: 11em minmax(150px, 2fr) 44px minmax(108px, 1fr) minmax(130px, 1.4fr) minmax(108px, 1fr) minmax(140px, 1.2fr) 28px; }
+.dt-balances { --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) minmax(150px, auto); }
+
+/* a status too long for its cell ("expired (IOC/FOK)") wraps inside its chip */
+.dt-c-status .badge { white-space: normal; min-width: 0; }
+
+/* ---- cards: every row of a table narrower than 1120 px. Row 1: the market (the title), the status, the chevron; then the label / value pairs two to a line; the buttons last. */
+@container dt (max-width: 1119px) {
+  .dt-head { display: none; }
+  .dt .dt-sortctl { display: inline-flex; }
+  .dt-body { gap: 8px; }
+  .dt-group { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
+  /* a card: two columns of label / value pairs; the title (the market) on the first line, the status at its right, the chevron in the corner; the wide pairs and the buttons take a line */
+  .dt-row { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
+  .dt-c { min-width: 0; text-align: left; }
+  .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
+  .dt-num { text-align: left; }
+  .dt-c[data-card='head'], .dt-c[data-card='title'], .dt-c[data-card='wide'], .dt-c[data-card='action'] { grid-column: 1 / -1; }
+  .dt-c[data-card='head']::before, .dt-c[data-card='title']::before, .dt-c[data-card='badge']::before, .dt-c[data-card='action']::before, .dt-c[data-card='toggle']::before { content: none; }
+  .dt-c[data-card='title'], .dt-c[data-card='head'] { grid-row: 1; padding-right: 40px; }
+  .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1; padding-right: 0; }
+  .dt-c[data-card='badge'] { grid-column: 2; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
+  .dt-c[data-card='toggle'] { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }
+  .dt-c[data-card='toggle'] .dt-chev { width: 36px; height: 36px; }
+  .dt-c[data-card='action']:empty { display: none; }
+  .dt-act { justify-content: stretch; }
+  .dt-act .btn { flex: 1 1 auto; min-height: 40px; }
+  .dt-c[data-card='hidden'] { display: none; }
+  .dt-c-status .badge { text-align: center; }
+  .dt-card-only { display: block; margin-top: 2px; }
+  .dt-c[data-card='badge'] { text-align: right; }
+  .dt-details { border-top: 1px solid var(--border); }
+}
+
+/* the same cards for a table that cannot hold its content (DataTable.tsx: `dt-force-cards`) */
+  .dt-force-cards .dt-head { display: none; }
+  .dt-force-cards .dt-sortctl { display: inline-flex; }
+  .dt-force-cards .dt-body { gap: 8px; }
+  .dt-force-cards .dt-group { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
+  /* a card: two columns of label / value pairs; the title (the market) on the first line, the status at its right, the chevron in the corner; the wide pairs and the buttons take a line */
+  .dt-force-cards .dt-row { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
+  .dt-force-cards .dt-c { min-width: 0; text-align: left; }
+  .dt-force-cards .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
+  .dt-force-cards .dt-num { text-align: left; }
+  .dt-force-cards .dt-c[data-card='head'], .dt-force-cards .dt-c[data-card='title'], .dt-force-cards .dt-c[data-card='wide'], .dt-force-cards .dt-c[data-card='action'] { grid-column: 1 / -1; }
+  .dt-force-cards .dt-c[data-card='head']::before, .dt-force-cards .dt-c[data-card='title']::before, .dt-force-cards .dt-c[data-card='badge']::before, .dt-force-cards .dt-c[data-card='action']::before, .dt-force-cards .dt-c[data-card='toggle']::before { content: none; }
+  .dt-force-cards .dt-c[data-card='title'], .dt-force-cards .dt-c[data-card='head'] { grid-row: 1; padding-right: 40px; }
+  .dt-force-cards .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1; padding-right: 0; }
+  .dt-force-cards .dt-c[data-card='badge'] { grid-column: 2; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
+  .dt-force-cards .dt-c[data-card='toggle'] { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }
+  .dt-force-cards .dt-c[data-card='toggle'] .dt-chev { width: 36px; height: 36px; }
+  .dt-force-cards .dt-c[data-card='action']:empty { display: none; }
+  .dt-force-cards .dt-act { justify-content: stretch; }
+  .dt-force-cards .dt-act .btn { flex: 1 1 auto; min-height: 40px; }
+  .dt-force-cards .dt-c[data-card='hidden'] { display: none; }
+  .dt-force-cards .dt-c-status .badge { text-align: center; }
+  .dt-force-cards .dt-card-only { display: block; margin-top: 2px; }
+  .dt-force-cards .dt-c[data-card='badge'] { text-align: right; }
+  .dt-force-cards .dt-details { border-top: 1px solid var(--border); }
+
+@container dt (min-width: 520px) and (max-width: 1119px) {
+  .dt-c[data-card='action'] { flex: 1 1 100%; }
+  .dt-act { justify-content: flex-end; }
+  .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
+}

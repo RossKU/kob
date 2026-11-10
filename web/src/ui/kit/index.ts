@@ -41,6 +41,7 @@ export { Dialog, Modal, type ModalProps } from './Modal';
 export { Section, type SectionProps } from './Section';
 export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmented';
 export { Loading, Spinner, type SpinnerProps } from './Spinner';
+export { DataTable, DtCell, DtGroup, DtRow, MoneyCell, Num, RowToggle, hasOpenChoice, toggleLabel, useOpenRow, type DtCard, type DtColumn, type DtPlain } from './DataTable';
 export { SortButton, SortControl, sortKeyOf, useSortState } from './SortHeader';
 export { ariaSortOf, chooseSort, nextSort, scaledUnits, sortBy, type SortColumn, type SortDir, type SortState, type SortValue } from './sort';
 export { Table, TableMessage, type TableProps } from './Table';

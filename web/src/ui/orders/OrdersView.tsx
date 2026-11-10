@@ -16,7 +16,7 @@ import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Banner, Button, ErrorBanner, Modal, RawDetails, Section, SortButton, SortControl, Tabs, ariaSortOf, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState } from '../kit';
+import { Banner, Button, DataTable, MoneyCell, ErrorBanner, Modal, RawDetails, Section, Tabs, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState, type DtColumn } from '../kit';
 import { useLiveRefresh } from '../market/live';
 import { RowsControl } from '../market/ListPaging';
 import { TipBadge } from '../market/TipBadge';
@@ -212,12 +212,36 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     const b = r.pair ? shownToken(r.pair.quote, r.pair.quoteScale) : undefined;
     return tk && r.pair ? `${tk.ticker}/${b?.ticker ?? longId(r.pair.quote)}` : tk ? `${tk.ticker}/KAS` : r.token ? longId(r.token) : '—';
   };
+  // the average fill price of an order (Order history): read from its events, once, for the orders of the page shown (`useAvgPrices` below)
+  const avgPrices = useRef(new Map<string, bigint | null>());
   // the lists sorted whole, then paged: page 1 is the top of the sorted list
   const shownAll = sortBy(filteredItems, orderSort, (item, key) => {
     const row = rowById.get(itemMemberIds(item)[0]!);
-    return row ? orderSortValue(row, key, { clock: d?.clock ?? null, marketText }) : null;
+    return row ? orderSortValue(row, key, { clock: d?.clock ?? null, marketText, decimalsOf: (r) => shownToken(r.token, r.scale)?.decimals, avgOf: (r) => avgPrices.current.get(r.id) ?? null }) : null;
   });
   const { rows: shown, window: shownWindow } = pageOf(shownAll, rowsPer, pageNo);
+  const [, setAvgVersion] = useState(0);
+  const wantAvg = tab === 'history' ? shown.flatMap((i) => itemMemberIds(i)).map((id) => rowById.get(id)).filter((r): r is OrderRowModel => !!r && filledAmountOf(r) > 0n && !avgPrices.current.has(r.id)) : [];
+  const wantAvgKey = wantAvg.map((r) => r.id).join(',');
+  useEffect(() => {
+    if (!wantAvg.length || !services.indexer || d?.indexerError) return;
+    const ctl = new AbortController();
+    void (async () => {
+      for (let i = 0; i < wantAvg.length; i += 4) {
+        await Promise.all(
+          wantAvg.slice(i, i + 4).map(async (r) => {
+            try {
+              avgPrices.current.set(r.id, fillHistory(await loadOrderEvents(services.indexer!, r.id, ctl.signal), r.scale).avgPrice);
+            } catch {
+              if (!ctl.signal.aborted) avgPrices.current.set(r.id, null);
+            }
+          }),
+        );
+        if (!ctl.signal.aborted) setAvgVersion((n) => n + 1);
+      }
+    })();
+    return () => ctl.abort();
+  }, [wantAvgKey]);
   // an amount of a token (base units) as its token amount with the ticker
   const coverText = (token: Hex, amount: bigint): string => {
     const tk = shownToken(token)!;
@@ -393,8 +417,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
 
   const marketRows = embed && onlyHere ? rows.filter((r) => inMarket(r)) : rows;
   const cancellable = cancellableIds(marketRows, null);
-  const cols = orderColumns();
-  const ownCol = cols[0]!; // the lists are newest first: the time, largest first
+  const cols = orderColumns(tab === 'history' ? 'history' : 'open');
+  const ownCol = cols.find((c) => c.key === 'time') as DtColumn<OrderSortKey>; // the lists are newest first: the time, largest first
   // fill history (R-8): per order on demand, and every fill of the wallet as one CSV
   const loadEvents = services.indexer && !d?.indexerError ? (id: Hex, signal: AbortSignal) => loadOrderEvents(services.indexer!, id, signal) : null;
   const filledRows = marketRows.filter((r) => filledAmountOf(r) > 0n);
@@ -590,15 +614,15 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
               />
             ) : null}
           </div>
-          <span class="pf-v num" data-testid="portfolio-total" title={balances.summary ? kasValueTitle(balances.summary.total, fiat) : undefined}><span>{balances.summary ? (fiat ? kasValueText(balances.summary.total, fiat) : formatKas(balances.summary.total, { group: ',', minFraction: 2, maxFraction: 2 })) : '—'}</span>{fiat ? null : <span class="pf-unit">KAS</span>}</span>
+          <span class="pf-v num" data-testid="portfolio-total"><MoneyCell kas={balances.summary ? balances.summary.total : null} fraction={2} class="pf-money" /></span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.available')}</span></div>
-          <span class="pf-v num" data-testid="portfolio-available" title={balances.summary ? kasValueTitle(balances.summary.kasFree, fiat) : undefined}><span>{balances.summary ? kasValueText(balances.summary.kasFree, fiat) : '—'}</span>{fiat ? null : <span class="pf-unit">KAS</span>}</span>
+          <span class="pf-v num" data-testid="portfolio-available"><MoneyCell kas={balances.summary ? balances.summary.kasFree : null} class="pf-money" /></span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.inOrders')}</span></div>
-          <span class="pf-v num" data-testid="portfolio-in-orders" title={balances.summary ? kasValueTitle(balances.summary.kasLocked, fiat) : undefined}><span>{balances.summary ? kasValueText(balances.summary.kasLocked, fiat) : '—'}</span>{fiat ? null : <span class="pf-unit">KAS</span>}</span>
+          <span class="pf-v num" data-testid="portfolio-in-orders"><MoneyCell kas={balances.summary ? balances.summary.kasLocked : null} class="pf-money" /></span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.open')}</span></div>
@@ -618,7 +642,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
             { id: 'balances', label: t('orders.tab.balances'), 'data-testid': 'orders-tab-balances' },
             { id: 'open', label: t(phone ? 'orders.tab.openShort' : 'orders.tab.open', { count: counts.active }), 'data-testid': 'orders-tab-active', ...(phone ? { 'aria-label': t('orders.tab.open', { count: counts.active }) } : {}) },
             { id: 'history', label: t(phone ? 'orders.tab.historyShort' : 'orders.tab.history', { count: counts.history }), 'data-testid': 'orders-tab-history', ...(phone ? { 'aria-label': t('orders.tab.history', { count: counts.history }) } : {}) },
-            { id: 'fills', label: t('orders.tab.fills', { count: filledRows.length }), 'data-testid': 'orders-tab-fills' },
+            { id: 'fills', label: t(phone ? 'orders.tab.fillsShort' : 'orders.tab.fills', { count: filledRows.length }), 'data-testid': 'orders-tab-fills', ...(phone ? { 'aria-label': t('orders.tab.fills', { count: filledRows.length }) } : {}) },
           ]}
         />
         {/* the rows per page of the lists: right of the tabs (under them on a phone); inert and unseen on Balances, which keeps the row's height */}
@@ -669,20 +693,18 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
             >
               {tab === 'open' ? <p class="small muted" data-testid="orders-race-note">{t('orders.raceNote')}</p> : null}
               {/* the rows come together, as soon as the indexer's answer is in: a trader acts on them, so they wait for nothing else (the balances, the node's answers) */}
-              <div class="or-wrap" role="table" aria-label={t(tab === 'history' ? 'orders.list.titleHistory' : 'orders.list.title')}>
-              {d && shownAll.length > 1 ? <SortControl id="orders" class="or-sortctl" columns={cols} state={orderSort} own={ownCol} onSort={setOrderSort} /> : null}
-              {d && shown.length > 0 ? (
-                <div class="or-head" role="row" data-testid="orders-head">
-                  {cols.map((c) => (
-                    <span key={c.key} role="columnheader" aria-sort={ariaSortOf(orderSort, c.key, ownCol)} class={c.key === 'price' || c.key === 'filled' || c.key === 'value' ? 'right' : undefined}>
-                      <SortButton id="orders" col={c} state={orderSort} own={ownCol} onSort={setOrderSort} />
-                    </span>
-                  ))}
-                  <span aria-hidden="true" />
-                  <span aria-hidden="true" />
-                </div>
-              ) : null}
-              <div class={`stack-sm${d ? ' ml-in' : ''}`} data-testid="orders-list" data-live={stats.live}>
+              <DataTable
+                id="orders"
+                grid={tab === 'history' ? 'orders-history' : 'orders-open'}
+                label={t(tab === 'history' ? 'orders.list.titleHistory' : 'orders.list.title')}
+                cols={cols}
+                sort={orderSort}
+                own={ownCol}
+                onSort={setOrderSort}
+                sortable={!!d && shownAll.length > 1}
+                headless={!(d && shown.length > 0)}
+                body={{ class: d ? 'ml-in' : undefined, 'data-testid': 'orders-list', 'data-live': stats.live }}
+              >
                 {data.loading && !d ? (
                   <div class="stack-sm" role="status" aria-label={t('common.loading')} data-testid="orders-loading">
                     {Array.from({ length: SKELETON_ROWS }, (_, i) => <div key={i} class="skeleton orders-skel" />)}
@@ -692,11 +714,12 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 {shown.map((item) =>
                   item.type === 'single' ? (
                     rowById.get(item.id) ? (
-                      <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} clock={d?.clock ?? null} iconOf={iconOf} {...(embed ? { compact: true } : {})} {...(loadEvents ? { loadEvents } : {})} />
+                      <OrderRow key={item.id} columns={tab === 'history' ? 'history' : 'open'} avg={avgPrices.current.get(item.id)} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} clock={d?.clock ?? null} iconOf={iconOf} {...(embed ? { compact: true } : {})} {...(loadEvents ? { loadEvents } : {})} />
                     ) : null
                   ) : (
                     <PositionCard
                       key={item.id}
+                      columns={tab === 'history' ? 'history' : 'open'}
                       position={item.position}
                       rows={rowById}
                       tokenOf={shownToken}
@@ -712,8 +735,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                     />
                   ),
                 )}
-              </div>
-              </div>
+              </DataTable>
               {d ? <PortfolioPager id="portfolio" window={shownWindow} total={shownAll.length} onPage={setPageNo} /> : null}
             </Section>
           ) : null}

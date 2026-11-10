@@ -1,33 +1,36 @@
 import { useMemo } from 'preact/hooks';
+import type { JSX } from 'preact';
 import type { EventView } from '../../data/indexer-types';
 import { useTxUrl } from '../../app/explorer';
 import { pairRoute, routeToHash } from '../../app/router';
 import { formatDateTime, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import { longId, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { formatKas, formatUnits, quoteOf } from '../../kob/units';
-import { CopyText, ErrorBanner, SortButton, SortControl, ariaSortOf, fixedPricePerToken, Loading, Table, TableMessage, scaledUnits, sortBy, tickPriceFraction, useAsync, type SortColumn, type SortState, type SortValue } from '../kit';
+import { formatUnits, quoteOf } from '../../kob/units';
+import {
+  CopyText, DataTable, DtCell, DtGroup, DtRow, ErrorBanner, KeyValueList, Loading, MoneyCell, Num, RowToggle, fixedPricePerToken, scaledUnits, sortBy, tickPriceFraction, toggleLabel, useAsync, useOpenRow,
+  type DtColumn, type DtPlain, type SortState, type SortValue,
+} from '../kit';
 import { IdentityBlock } from '../market/Fingerprint';
 import type { KascovMeta } from '../market/token-model';
 import { fillHistory, type FillRow } from './fills-model';
 import { PortfolioPager, pageOf } from './portfolio-paging';
-import { TABLE_FROM, useTableCards } from './use-table-cards';
-import './balances.css';
 import type { OrderRowModel } from './orders-model';
 
 export const FILL_SORT_KEYS = ['time', 'market', 'side', 'price', 'amount', 'value', 'tx'] as const;
 export type FillSortKey = (typeof FILL_SORT_KEYS)[number];
 
-/** The columns of the fills table, in its order; `time` is the list's own order (newest first). */
-export function fillColumns(): SortColumn<FillSortKey>[] {
+/** The columns of the fills table, in its order; `time` is the table's own order (newest first). */
+export function fillColumns(): (DtColumn<FillSortKey> | DtPlain)[] {
   return [
-    { key: 'time', label: t('orders.fills.time'), kind: 'time' },
-    { key: 'market', label: t('orders.col.market'), kind: 'text' },
-    { key: 'side', label: t('orders.col.side'), kind: 'text' },
-    { key: 'price', label: t('orders.col.price'), kind: 'number' },
-    { key: 'amount', label: t('orders.col.amount'), kind: 'number' },
-    { key: 'value', label: t('orders.col.valueKas'), kind: 'number' },
+    { key: 'time', label: t('orders.fills.time'), kind: 'time', card: 'badge' },
+    { key: 'market', label: t('orders.col.market'), kind: 'text', card: 'title' },
+    { key: 'side', label: t('orders.col.side'), kind: 'text', card: 'hidden' },
+    { key: 'price', label: t('orders.col.price'), kind: 'number', right: true },
+    { key: 'amount', label: t('orders.col.amount'), kind: 'number', right: true },
+    { key: 'value', label: t('orders.col.valueKas'), kind: 'number', right: true },
     { key: 'tx', label: t('orders.fills.tx'), kind: 'text' },
+    { key: 'toggle', plain: true },
   ];
 }
 
@@ -40,9 +43,21 @@ interface WalletFill {
   token: TokenInfo | undefined;
 }
 
+interface Facts {
+  ticker: string;
+  market: string;
+  marketHref: string | undefined;
+  price: string;
+  valueKas: bigint | null;
+  time: string;
+  amount: string;
+  identity: JSX.Element | null;
+  key: string;
+}
+
 /**
- * The Portfolio page's Fills tab: every fill of the wallet's orders, newest first, one line each (time, market, side, price, amount, value, the
- * transaction). Read when the tab opens: the events of each order that filled (the same requests as the CSV export of every fill).
+ * The Portfolio page's Fills tab: every fill of the wallet's orders, newest first, one row each (market, side, price, amount, value, time, the transaction), in
+ * the shared table (kit/DataTable.tsx). Read when the tab opens: the events of each order that filled (the same requests as the CSV export of every fill).
  */
 export function WalletFills(props: {
   rows: readonly OrderRowModel[];
@@ -109,104 +124,80 @@ export function WalletFills(props: {
   const all = data.data ? sortBy(data.data, props.sort, valueOf) : data.data;
   const { rows: list, window: win } = pageOf(all ?? [], props.size, props.page);
   const cols = fillColumns();
-  const ownCol = cols[0]!;
+  const ownCol = cols.find((c) => c.key === 'time') as DtColumn<FillSortKey>;
   const pager = all ? <PortfolioPager id="wallet-fills" window={win} total={all.length} onPage={props.onPage} /> : null;
-  // a narrow box reads each fill as a card (market, side and price; amount and value; time and transaction), a wide one as a table row (use-table-cards.ts)
-  const [box, phone] = useTableCards(TABLE_FROM);
 
-  /** What one fill says, in the words of both layouts. */
-  const factsOf = ({ fill, row, token }: WalletFill) => {
+  /** What one fill says. */
+  const factsOf = (w: WalletFill): Facts => {
+    const { fill, row, token } = w;
     const decimals = token?.decimals ?? RAW_TOKEN_DECIMALS;
     const ticker = token?.ticker ?? (row.token ? longId(row.token) : '?');
-    const market = marketOf({ fill, row, token });
     const marketHref = row.pair ? routeToHash(pairRoute(row.pair.base, row.pair.quote)) : row.token ? `#/market/${row.token}` : undefined;
     // a KAS market's fill has a price and a KAS value; a pair fill is volume only (the B amount stands for its value)
     const price = !row.pair && fill.price !== null ? fixedPricePerToken(fill.price, decimals, row.scale, (token ? tickPriceFraction(token.tick, decimals, row.scale) : null) ?? 8) : '—';
-    const value = !row.pair && fill.price !== null ? formatKas(quoteOf(fill.amount, fill.price, row.scale, 'down'), { group: ',' }) : '—';
+    const valueKas = !row.pair && fill.price !== null ? quoteOf(fill.amount, fill.price, row.scale, 'down') : null;
     const time = fill.atMs > 0 ? formatDateTime(Math.floor(fill.atMs / 1000), { dateStyle: 'short', timeStyle: 'medium' }) : '—';
     const amount = formatUnits(fill.amount, decimals, { group: ',' });
     const identity = row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" /> : null;
-    return { ticker, market, marketHref, price, value, time, amount, identity, key: `${fill.txid}-${row.id}-${fill.atMs}` };
+    return { ticker, market: marketOf(w), marketHref, price, valueKas, time, amount, identity, key: `${fill.txid}-${row.id}-${fill.atMs}` };
   };
 
   if (!props.loadEvents) return <p class="muted" data-testid="wallet-fills-off">{t('orders.fills.noIndexer')}</p>;
   return (
-    <div class="stack-sm" data-testid="wallet-fills" ref={box}>
+    <div class="stack-sm" data-testid="wallet-fills">
       {data.loading && !all ? <Loading /> : null}
       <ErrorBanner error={data.error} onRetry={data.reload} />
-      {all && phone ? (
-        <div class="wf-cards" data-testid="wallet-fills-cards">
-          {all.length > 1 ? <SortControl id="wallet-fills" columns={cols} state={props.sort} own={ownCol} onSort={props.onSort} /> : null}
-          {list.length === 0 ? <p class="muted center" data-testid="wallet-fills-empty">{t('orders.fills.none')}</p> : null}
+      {all ? (
+        <DataTable id="wallet-fills" grid="fills" label={t('orders.fills.title')} cols={cols} sort={props.sort} own={ownCol} onSort={props.onSort} sortable={all.length > 1} data-testid="wallet-fills-table">
+          {list.length === 0 ? <p class="dt-empty" data-testid="wallet-fills-empty">{t('orders.fills.none')}</p> : null}
           {list.map((item) => {
-            const { fill, row } = item;
             const f = factsOf(item);
-            return (
-              <div key={f.key} class="wf-card" data-testid="wallet-fill-row" data-txid={fill.txid} data-order={row.id}>
-                <div class="wf-l1">
-                  <span class="bal-asset wf-market">
-                    {f.identity}
-                    {f.marketHref ? <a href={f.marketHref}>{f.market}</a> : f.market}
-                  </span>
-                  <span class={`wf-side ${row.side === 'buy' ? 'buy' : 'sell'}`} data-testid="wallet-fill-side">{t(`common.side.${row.side}`)}</span>
-                  <span class="wf-price num">{f.price}</span>
-                </div>
-                <div class="wf-l2">
-                  <span class="num">{f.amount} <span class="muted small">{f.ticker}</span></span>
-                  <span class="wf-value">
-                    <span class="muted small">{t('orders.col.valueKas')}</span> <span class="num">{f.value}</span>
-                  </span>
-                </div>
-                <div class="wf-l3">
-                  <span class="wf-time muted small">{f.time}</span>
-                  <span class="wf-tx"><CopyText value={fill.txid} head={6} tail={4} href={txUrl(fill.txid)} data-testid="wallet-fill-tx" /></span>
-                </div>
-              </div>
-            );
+            return <FillRowView key={f.key} item={item} f={f} txUrl={txUrl} />;
           })}
-        </div>
-      ) : null}
-      {all && !phone ? (
-        <Table dense class="ml-table" data-testid="wallet-fills-table">
-          <thead>
-            <tr>
-              {cols.map((c) => (
-                <th key={c.key} class={c.key === 'price' || c.key === 'amount' || c.key === 'value' ? 'right' : undefined} aria-sort={ariaSortOf(props.sort, c.key, ownCol)}>
-                  <SortButton id="wallet-fills" col={c} state={props.sort} own={ownCol} onSort={props.onSort} />
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {list.length === 0 ? <TableMessage colSpan={7} data-testid="wallet-fills-empty">{t('orders.fills.none')}</TableMessage> : null}
-            {list.map((item) => {
-              const { fill, row } = item;
-              const f = factsOf(item);
-              return (
-                <tr key={f.key} data-testid="wallet-fill-row" data-txid={fill.txid} data-order={row.id}>
-                  <td class="nowrap">{f.time}</td>
-                  <td class="nowrap">
-                    <span class="bal-asset">
-                      {f.identity}
-                      {f.marketHref ? <a href={f.marketHref}>{f.market}</a> : f.market}
-                    </span>
-                  </td>
-                  <td class={row.side === 'buy' ? 'buy' : 'sell'} data-testid="wallet-fill-side">{t(`common.side.${row.side}`)}</td>
-                  <td class="right num">{f.price}</td>
-                  <td class="right num nowrap">
-                    {f.amount} <span class="muted small">{f.ticker}</span>
-                  </td>
-                  <td class="right num">{f.value}</td>
-                  <td>
-                    <CopyText value={fill.txid} head={6} tail={4} href={txUrl(fill.txid)} data-testid="wallet-fill-tx" />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
+        </DataTable>
       ) : null}
       {pager}
     </div>
+  );
+}
+
+/** One fill: its row, and under it (on a chevron) the order and the transaction in full. */
+function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) => string | null }) {
+  const { fill, row } = props.item;
+  const f = props.f;
+  const [open, setOpen] = useOpenRow(`fills:${f.key}`, false);
+  const href = props.txUrl(fill.txid);
+  const detailsId = `fill-details-${f.key}`;
+  return (
+    <DtGroup data-testid="wallet-fill-row" data-txid={fill.txid} data-order={row.id}>
+      <DtRow>
+        <DtCell k="time" label={t('orders.fills.time')} card="badge" class="dt-time">{f.time}</DtCell>
+        <DtCell k="market" card="title">
+          <span class="dt-market">
+            {f.identity}
+            <span class="dt-market-name">{f.marketHref ? <a href={f.marketHref}>{f.market}</a> : f.market}</span>
+          </span>
+          <span class="dt-card-only dt-sub"><span class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</span></span>
+        </DtCell>
+        <DtCell k="side" label={t('orders.col.side')} card="hidden" data-testid="wallet-fill-side" class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</DtCell>
+        <DtCell k="price" label={t('orders.col.price')} num><Num value={f.price} /></DtCell>
+        <DtCell k="amount" label={t('orders.col.amount')} num><Num value={f.amount} unit={f.ticker} /></DtCell>
+        <DtCell k="value" label={t('orders.col.valueKas')} num><MoneyCell kas={f.valueKas} unit={false} /></DtCell>
+        <DtCell k="tx" label={t('orders.fills.tx')} card="wide"><CopyText value={fill.txid} head={6} tail={4} href={href} data-testid="wallet-fill-tx" /></DtCell>
+        <RowToggle open={open} onToggle={() => setOpen(!open)} controls={detailsId} label={toggleLabel(open)} data-testid="wallet-fill-toggle" />
+      </DtRow>
+      <div class="dt-details" id={detailsId} hidden={!open} data-testid="wallet-fill-details">
+        <KeyValueList
+          compact
+          flow
+          items={[
+            { label: t('orders.orderId'), value: <CopyText value={row.id} head={8} tail={6} /> },
+            { label: t('orders.fills.tx'), value: <CopyText value={fill.txid} short={false} href={href} /> },
+            { label: t('orders.fills.time'), value: f.time },
+            { label: t('orders.col.valueKas'), value: <MoneyCell kas={f.valueKas} /> },
+          ]}
+        />
+      </div>
+    </DtGroup>
   );
 }

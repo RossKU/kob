@@ -7,7 +7,10 @@ import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { KasIcon } from '../kit/KasIcon';
-import { Amount, Banner, Button, ErrorBanner, Section, SortButton, SortControl, Table, TableMessage, ariaSortOf, scaledUnits, sortBy, unitsFraction, useSortState, type SortColumn, type SortValue } from '../kit';
+import {
+  Amount, Banner, Button, DataTable, DtCell, DtGroup, DtRow, ErrorBanner, MoneyCell, Section, scaledUnits, sortBy, unitsFraction, useSortState,
+  type DtColumn, type DtPlain, type SortValue,
+} from '../kit';
 import { formatKas, formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
 import { IdentityBlock } from '../market/Fingerprint';
@@ -16,11 +19,23 @@ import type { WalletBalances } from './use-balances';
 import { balanceColumnFractions, unreviewedProgram } from './balances-model';
 import { mergeableCounts, nextMergeFrees } from './merge-model';
 import type { OrdersData } from './orders-data';
-import { TABLE_FROM, useTableCards } from './use-table-cards';
 import './balances.css';
 
 const BALANCE_SORT_KEYS = ['asset', 'available', 'inOrders', 'strays', 'kasLocked', 'value'] as const;
 type BalanceSortKey = (typeof BALANCE_SORT_KEYS)[number];
+
+/** The columns of the balances table: the asset, the figures, the buttons (no title). */
+function balanceColumns(valueLabel: string, lockedLabel: string): (DtColumn<BalanceSortKey> | DtPlain)[] {
+  return [
+    { key: 'asset', label: t('orders.balances.asset'), kind: 'text', card: 'head' },
+    { key: 'available', label: t('orders.balances.available'), kind: 'number', right: true },
+    { key: 'inOrders', label: t('orders.balances.inOrders'), kind: 'number', right: true },
+    { key: 'strays', label: t('orders.balances.strays'), kind: 'number', right: true },
+    { key: 'kasLocked', label: lockedLabel, kind: 'number', right: true },
+    { key: 'value', label: valueLabel, kind: 'number', right: true },
+    { key: 'act', plain: true },
+  ];
+}
 
 function BalancesSkeleton() {
   return (
@@ -38,6 +53,7 @@ export function BalancesFrame() {
 /**
  * The balances wallets do not show: tokens inside the wallet's sell orders (0x04 custody), stray tokens, KAS locked in orders, next to the free
  * amounts. Free amounts come from the node / token tracker, the rest from the wallet's live orders (indexer, or records resolved on the node).
+ * Drawn in the shared table (kit/DataTable.tsx), KAS first.
  */
 export function BalancesPanel(props: {
   data: OrdersData;
@@ -61,21 +77,13 @@ export function BalancesPanel(props: {
 }) {
   const services = useServices();
   const { registry } = services;
-  // the USD display (Settings): the Value column in dollars; null = KAS
+  // the USD display (Settings): the KAS values in dollars (the money cell reads it itself; the Amount cells here take it); null = KAS
   const fiat = useFiat();
   const valueLabel = t(fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas');
-  // a narrow box (or a table that does not fit it) reads each asset as a card
-  const [box, cards] = useTableCards(TABLE_FROM);
+  const lockedLabel = t(fiat ? 'market.balances.kasLockedUsd' : 'market.balances.kasLocked');
   // the viewer's sort of the token rows (KAS stays on top); none: as the wallet lists them
   const [sort, setSort] = useSortState<BalanceSortKey>('balances', BALANCE_SORT_KEYS);
-  const sortCols: SortColumn<BalanceSortKey>[] = [
-    { key: 'asset', label: t('orders.balances.asset'), kind: 'text' },
-    { key: 'available', label: t('orders.balances.available'), kind: 'number' },
-    { key: 'inOrders', label: t('orders.balances.inOrders'), kind: 'number' },
-    { key: 'strays', label: t('orders.balances.strays'), kind: 'number' },
-    { key: 'kasLocked', label: t(fiat ? 'market.balances.kasLockedUsd' : 'market.balances.kasLocked'), kind: 'number' },
-    { key: 'value', label: valueLabel, kind: 'number' },
-  ];
+  const sortCols = balanceColumns(valueLabel, lockedLabel);
   const { free, combined, valueOf } = props.balances;
   const tokensOnShow = (combined?.tokens ?? []).filter((b) => !props.onlyTokens || props.onlyTokens.has(b.token));
 
@@ -124,113 +132,108 @@ export function BalancesPanel(props: {
         <Banner tone="warn" data-testid="balances-partial">{t('market.balances.partial', { sources: free.data.errors.map((e) => e.source).join(', ') })}</Banner>
       ) : null}
       {combined && free.data ? (
-        <div class="tk-in bal-box" ref={box}>
-          {cards && tokensOnShow.length > 1 ? <SortControl id="balances" columns={sortCols} state={sort} own={null} onSort={setSort} /> : null}
-          <Table dense class={`balances-cards${cards ? ' bal-cards' : ''}`} data-testid="token-balances-table" caption={t('orders.balances.tokens')}>
-            <thead>
-              <tr>
-                {sortCols.map((c) => (
-                  <th key={c.key} class={c.key === 'asset' ? undefined : 'right'} aria-sort={ariaSortOf(sort, c.key, null)}>
-                    <SortButton id="balances" col={c} state={sort} own={null} onSort={setSort} />
-                  </th>
-                ))}
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {/* KAS first: what the wallet can spend, what its orders hold, and the KAS that rides on its token coins (counted in the total) */}
-              <tr data-testid="kas-balance" class="bal-kas">
-                <td class="bal-token">
-                  <span class="bal-asset">
+        <div class="tk-in">
+          <p class="dt-caption small muted">{t('orders.balances.tokens')}</p>
+          <DataTable id="balances" grid="balances" label={t('orders.balances.tokens')} cols={sortCols} sort={sort} own={null} onSort={setSort} sortable={tokensOnShow.length > 1} data-testid="token-balances-table">
+            {/* KAS first: what the wallet can spend, what its orders hold, and the KAS that rides on its token coins (counted in the total) */}
+            <DtGroup data-testid="kas-balance" class="bal-kas">
+              <DtRow>
+                <DtCell k="asset" card="head">
+                  <span class="dt-market">
                     <KasIcon />
-                    <span class="bal-name">KAS</span>
+                    <span class="dt-market-name bal-name">KAS</span>
                   </span>
-                </td>
-                <td class={`right${combined.kas.onTokens > 0n ? ' bal-wide' : ''}`} data-label={t('orders.balances.available')}>
+                </DtCell>
+                <DtCell k="available" label={t('orders.balances.available')} num card={combined.kas.onTokens > 0n ? 'wide' : 'pair'}>
                   <span data-testid="kas-free">{free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.free} group fiat={fiat} /> : t('common.unavailable')}</span>
                   {combined.kas.onTokens > 0n ? (
-                    <div class="small muted" title={t('orders.balances.kasOnTokensHint')}>
-                      {t('orders.balances.kasOnTokensPlus')} <span class="bal-nw" data-testid="kas-on-tokens"><Amount kind="kas" value={combined.kas.onTokens} group fiat={fiat} /></span>
+                    <div class="dt-sub" title={t('orders.balances.kasOnTokensHint')}>
+                      {t('orders.balances.kasOnTokensPlus')} <span class="dt-val" data-testid="kas-on-tokens"><Amount kind="kas" value={combined.kas.onTokens} group fiat={fiat} /></span>
                     </div>
                   ) : null}
-                </td>
-                <td class="right" data-label={t('orders.balances.inOrders')} data-testid="kas-locked"><Amount kind="kas" value={combined.kas.locked} group fiat={fiat} /></td>
-                <td class="right muted" data-label={t('orders.balances.strays')}>—</td>
-                <td class="right muted" data-label={t(fiat ? 'market.balances.kasLockedUsd' : 'market.balances.kasLocked')}>—</td>
-                <td class="right" data-label={valueLabel} data-testid="kas-total">
-                  {free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.total} unit={false} group fiat={fiat} /> : '—'}
-                </td>
-                <td class="right bal-actions bal-actions-none" />
-              </tr>
-              {shownTokens.length === 0 ? (
-                <TableMessage colSpan={7} data-testid="balances-empty">{t('orders.balances.empty')}</TableMessage>
-              ) : (
-                shownTokens.map((b) => {
-                  const info = registry.byCovenantId.get(b.token);
-                  // shown in whole tokens also without a registry entry (app/token-display.ts: this browser's issuance, else 8 assumed decimals)
-                  const shown = displayToken(registry, services.config.network, b.token)!;
-                  const d = shown.decimals;
-                  const fr = (col: number) => col;
-                  const baseUnits = null;
-                  const label = tokenLabel(shown);
-                  const showMerge = !!(props.onMergeToken && info && mergeable.has(b.token));
-                  const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
-                  return (
-                    <tr key={b.token} data-testid={`balance-row-${b.token}`}>
-                      <td class="bal-token">
-                        <span class="bal-asset">
+                </DtCell>
+                <DtCell k="inOrders" label={t('orders.balances.inOrders')} num data-testid="kas-locked"><Amount kind="kas" value={combined.kas.locked} group fiat={fiat} /></DtCell>
+                <DtCell k="strays" label={t('orders.balances.strays')} num class="dt-muted" card="hidden">—</DtCell>
+                <DtCell k="kasLocked" label={lockedLabel} num class="dt-muted" card="hidden">—</DtCell>
+                <DtCell k="value" label={valueLabel} num data-testid="kas-total">
+                  {free.data.kasFree !== null ? <MoneyCell kas={combined.kas.total} unit={false} /> : '—'}
+                </DtCell>
+                <DtCell k="act" card="action" />
+              </DtRow>
+            </DtGroup>
+            {shownTokens.length === 0 ? (
+              <p class="dt-empty" data-testid="balances-empty">{t('orders.balances.empty')}</p>
+            ) : (
+              shownTokens.map((b) => {
+                const info = registry.byCovenantId.get(b.token);
+                // shown in whole tokens also without a registry entry (app/token-display.ts: this browser's issuance, else 8 assumed decimals)
+                const shown = displayToken(registry, services.config.network, b.token)!;
+                const d = shown.decimals;
+                const label = tokenLabel(shown);
+                const showMerge = !!(props.onMergeToken && info && mergeable.has(b.token));
+                const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
+                return (
+                  <DtGroup key={b.token} data-testid={`balance-row-${b.token}`}>
+                    <DtRow>
+                      <DtCell k="asset" card="head">
+                        <span class="dt-market">
                           <IdentityBlock row={{ covenantId: b.token, ticker: shown.ticker, kascov: props.iconOf?.(b.token) ?? null }} size="sm" />
-                          <a href={routeToHash(tokenRoute(b.token))} class="bal-name" title={label} data-testid="balance-market">
-                            {label}
-                          </a>
+                          <span class="dt-market-name">
+                            <a href={routeToHash(tokenRoute(b.token))} class="bal-name" title={label} data-testid="balance-market">
+                              {label}
+                            </a>
+                            <TokenNote token={shown} />
+                            {unreviewedProgram(program) ? (
+                              <span class="small muted" title={t('orders.balances.unreviewedHint', { program: program ?? '?' })} data-testid="balance-unreviewed">{' '}({t('orders.balances.unreviewed')})</span>
+                            ) : null}
+                          </span>
                         </span>
-                        <TokenNote token={shown} />
-                        {unreviewedProgram(program) ? (
-                          <span class="small muted" title={t('orders.balances.unreviewedHint', { program: program ?? '?' })} data-testid="balance-unreviewed">{' '}({t('orders.balances.unreviewed')})</span>
-                        ) : null}
-                      </td>
-                      <td class={`right${b.notSpendable > 0n ? ' bal-wide' : ''}`} data-label={t('market.balances.free')}>
-                        <Amount kind="token" value={b.free} decimals={d} unit={false} fraction={fr(cols.free)} group />
-                        {baseUnits}
+                      </DtCell>
+                      <DtCell k="available" label={t('market.balances.free')} num card={b.notSpendable > 0n ? 'wide' : 'pair'}>
+                        <Amount kind="token" value={b.free} decimals={d} unit={false} fraction={cols.free} group />
                         {b.notSpendable > 0n ? (
-                          <div class="small muted" title={t('orders.balances.notSpendableHint')} data-testid="balance-not-spendable">
+                          <div class="dt-sub" title={t('orders.balances.notSpendableHint')} data-testid="balance-not-spendable">
                             {t('orders.balances.notSpendable', { amount: formatUnits(b.notSpendable, d) })}
                           </div>
                         ) : null}
-                      </td>
-                      <td class="right" data-label={t('orders.balances.inOrders')} data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={fr(cols.escrowed)} group /></td>
-                      <td class="right" data-label={t('orders.balances.strays')} data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={fr(cols.strays)} group /></td>
-                      <td class="right" data-label={t(fiat ? 'market.balances.kasLockedUsd' : 'market.balances.kasLocked')}><Amount kind="kas" value={b.kasLocked} unit={false} fraction={cols.kas} group fiat={fiat} /></td>
-                      <td class="right" data-label={valueLabel} data-testid="balance-value">
-                        {valueOf(b) !== null ? <Amount kind="kas" value={valueOf(b)!} unit={false} group fiat={fiat} /> : <span class="muted" title={t('orders.balances.noPrice')}>—</span>}
-                      </td>
-                      <td class={`right bal-actions${showMerge || b.orderCount > 0 ? '' : ' bal-actions-none'}`}>
-                        {showMerge && info ? (
-                          <Button
-                            small
-                            disabled={!props.canSign || !!props.busy}
-                            loading={props.busy === `merge-${b.token}`}
-                            title={t('orders.merge.hint', { count: mergeable.get(b.token)!, max: info.slots.inputs })}
-                            onClick={() => props.onMergeToken!(b.token)}
-                            data-testid={`orders-merge-token-${b.token}`}
-                          >
-                            {(frees.get(b.token) ?? 0n) > 0n
-                              ? t('orders.merge.buttonFrees', { count: mergeable.get(b.token)!, kas: formatKas(frees.get(b.token)!) })
-                              : t('orders.merge.button', { count: mergeable.get(b.token)! })}
-                          </Button>
-                        ) : null}{' '}
-                        {b.orderCount > 0 ? (
-                          <Button small variant="danger" disabled={!props.canSign} onClick={() => props.onCancelToken(b.token)} data-testid={`orders-cancel-token-${b.token}`}>
-                            {t('orders.cancelToken')}
-                          </Button>
+                      </DtCell>
+                      <DtCell k="inOrders" label={t('orders.balances.inOrders')} num data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={cols.escrowed} group /></DtCell>
+                      <DtCell k="strays" label={t('orders.balances.strays')} num data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={cols.strays} group /></DtCell>
+                      <DtCell k="kasLocked" label={lockedLabel} num><Amount kind="kas" value={b.kasLocked} unit={false} fraction={cols.kas} group fiat={fiat} /></DtCell>
+                      <DtCell k="value" label={valueLabel} num data-testid="balance-value">
+                        {valueOf(b) !== null ? <MoneyCell kas={valueOf(b)!} unit={false} /> : <span class="dt-muted" title={t('orders.balances.noPrice')}>—</span>}
+                      </DtCell>
+                      <DtCell k="act" card="action">
+                        {showMerge || b.orderCount > 0 ? (
+                          <span class="dt-act">
+                            {showMerge && info ? (
+                              <Button
+                                small
+                                disabled={!props.canSign || !!props.busy}
+                                loading={props.busy === `merge-${b.token}`}
+                                title={t('orders.merge.hint', { count: mergeable.get(b.token)!, max: info.slots.inputs })}
+                                onClick={() => props.onMergeToken!(b.token)}
+                                data-testid={`orders-merge-token-${b.token}`}
+                              >
+                                {(frees.get(b.token) ?? 0n) > 0n
+                                  ? t('orders.merge.buttonFrees', { count: mergeable.get(b.token)!, kas: formatKas(frees.get(b.token)!) })
+                                  : t('orders.merge.button', { count: mergeable.get(b.token)! })}
+                              </Button>
+                            ) : null}
+                            {b.orderCount > 0 ? (
+                              <Button small variant="danger" disabled={!props.canSign} onClick={() => props.onCancelToken(b.token)} data-testid={`orders-cancel-token-${b.token}`}>
+                                {t('orders.cancelToken')}
+                              </Button>
+                            ) : null}
+                          </span>
                         ) : null}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </Table>
+                      </DtCell>
+                    </DtRow>
+                  </DtGroup>
+                );
+              })
+            )}
+          </DataTable>
           {combined.kas.onTokens > 0n && (
             <p class="muted small" style="margin:6px 0 0" data-testid="kas-on-tokens-note">{t('orders.balances.kasOnTokensNote')}</p>
           )}

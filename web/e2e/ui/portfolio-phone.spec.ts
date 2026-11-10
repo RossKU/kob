@@ -79,6 +79,14 @@ for (const width of [360, 390, 430]) {
       // KAS is drawn with the Kaspa mark (an inline picture named KAS), not a letter
       await expect(page.getByTestId('kas-balance').getByTestId('kas-icon')).toBeVisible();
       await expect(page.getByTestId('kas-balance').getByTestId('kas-icon')).toHaveAttribute('aria-label', 'KAS');
+      // the Kaspa mark is as big as a token's avatar, and its disc fills its box (no margin inside the picture)
+      const kasBox = (await page.getByTestId('kas-balance').getByTestId('kas-icon').boundingBox())!;
+      const avatarBox = (await page.locator('[data-testid^="balance-row-"] .tk-icon').first().boundingBox())!;
+      expect.soft(Math.abs(kasBox.width - avatarBox.width), 'KAS mark and avatar widths').toBeLessThanOrEqual(0.5);
+      expect.soft(Math.abs(kasBox.height - avatarBox.height), 'KAS mark and avatar heights').toBeLessThanOrEqual(0.5);
+      const disc = await page.getByTestId('kas-balance').getByTestId('kas-icon').locator('path').evaluate((p) => { const r = p.getBoundingClientRect(); return { w: r.width, h: r.height }; });
+      expect.soft(disc.w, 'the disc fills the mark').toBeGreaterThanOrEqual(kasBox.width - 1);
+      expect.soft(disc.h, 'the disc fills the mark').toBeGreaterThanOrEqual(kasBox.height - 1);
       await shot(page, `${tag}-1-balances`);
       const row = page.getByTestId('balance-row-' + ID);
       expect(await row.evaluate((el) => getComputedStyle(el).display)).not.toBe('table-row'); // a card
@@ -109,7 +117,7 @@ for (const width of [360, 390, 430]) {
       await shot(page, `${tag}-2-open`);
       await expectAligned('Open orders');
       await expect.soft(page.getByTestId(`order-line-${ids.budget}`)).not.toContainText('the amount follows from the price');
-      await expect.soft(page.getByTestId(`order-line-${ids.budget}`).locator('.or-filled')).toContainText('KAS budget');
+      await expect.soft(page.getByTestId(`order-line-${ids.budget}`).locator('.or-amount')).toContainText('KAS budget');
       const cancel = page.getByTestId(`order-cancel-${ids.open}`);
       await expect(cancel).toBeVisible();
       expect.soft((await cancel.boundingBox())!.height, 'Cancel tap target').toBeGreaterThanOrEqual(40);
@@ -129,7 +137,7 @@ for (const width of [360, 390, 430]) {
       await noOverflow('Fills');
       await shot(page, `${tag}-4-fills`);
       await expectOneLine(page.getByTestId('wallet-fill-tx'), 'the transaction');
-      await expectWhole(fills.locator('.wf-tx code'), 'the transaction');
+      await expectWhole(fills.locator('.dt-c-tx code'), 'the transaction');
       const txt = await page.getByTestId('wallet-fill-tx').first().textContent();
       expect.soft(txt, 'shortened txid').toMatch(/^[0-9a-f]{6}…[0-9a-f]{4}$/);
 
@@ -165,7 +173,7 @@ test.describe('desktop, 1280 px wide', () => {
     await shot(page, `1280-${theme}-3-history`);
     await page.getByTestId('orders-tab-fills').click();
     await expect(page.getByTestId('wallet-fills-table')).toBeVisible();
-    await expect(page.getByTestId('wallet-fills-cards')).toHaveCount(0);
+    await expect(page.getByTestId('wallet-fills-table')).toBeVisible();
     await shot(page, `1280-${theme}-4-fills`);
   });
 });

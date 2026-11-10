@@ -1,7 +1,7 @@
 /* Position cards (My orders). Only the CSS variables of src/styles.css (light + dark themes). A 4-column stat grid that collapses to 2 columns
    when the card is narrow (container query, with a viewport fallback): no horizontal scroll at 375 px. */
 .position.pc {
-  container-type: inline-size;
+  container: dt / inline-size;
   min-width: 0;
   border: 1px solid var(--border);
   border-left: 3px solid var(--buy);

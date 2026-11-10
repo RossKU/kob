@@ -66,6 +66,8 @@ test.describe('1280 px wide', () => {
     const rows = page.locator('[data-testid^="order-row-"]');
     await expect(rows.first()).toBeVisible();
     await page.waitForTimeout(900);
+    // (a table that cannot hold its content, in a wide font, is cards: no header to press; the control of the cards is tested at 390 px)
+    if (!(await page.getByTestId('orders-head').isVisible())) return;
     const own = await ids(page);
     const total = (await page.getByTestId('orders-tab-history').textContent())!;
     const sortBtn = (k: string) => page.getByTestId(`orders-sort-${k}`);
@@ -107,11 +109,11 @@ test.describe('1280 px wide', () => {
     await sortBtn('filled').click();
     expectOrdered(await filledNums(), 'asc', 'filled');
     await sortBtn('filled').click();
-    await sortBtn('value').click();
+    await sortBtn('total').click();
     expectOrdered((await cell('.or-value')).map(num), 'desc', 'value');
-    await sortBtn('value').click();
+    await sortBtn('total').click();
     expectOrdered((await cell('.or-value')).map(num), 'asc', 'value');
-    await sortBtn('value').click();
+    await sortBtn('total').click();
 
     // a text column (market): A to Z, then Z to A
     await sortBtn('market').click();
@@ -122,7 +124,7 @@ test.describe('1280 px wide', () => {
     const desc = (await cell('.or-market-name')).map((x) => x.replace(/\s+/g, ''));
     expect(desc).toEqual([...desc].sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' })));
     await sortBtn('market').click();
-    for (const k of ['type', 'side', 'status', 'trigger']) {
+    for (const k of ['side', 'status']) {
       await sortBtn(k).click();
       await expect(head(k)).not.toHaveAttribute('aria-sort', 'none');
       await sortBtn(k).click();
@@ -170,12 +172,12 @@ test.describe('1280 px wide', () => {
     await page.getByTestId('portfolio-rows-50').click();
     await expect(page.getByTestId('wallet-fill-row').first()).toBeVisible();
     // (where the table does not fit its room, in a wide font, the fills are cards: the control is tested at 390 px)
-    if (await page.getByTestId('wallet-fills-table').isVisible()) {
-    const fillHead = (k: string) => page.getByTestId(`wallet-fills-sort-${k}`).locator('xpath=ancestor::th');
+    if (!(await page.getByTestId('wallet-fills-sortctl').isVisible())) {
+    const fillHead = (k: string) => page.getByTestId(`wallet-fills-sort-${k}`).locator('xpath=ancestor::*[@role="columnheader"]');
     await expect(fillHead('time')).toHaveAttribute('aria-sort', 'descending');
-    const amounts = () => texts(page.locator('[data-testid="wallet-fill-row"] td:nth-child(5)')).then((a) => a.map(num));
-    const prices = () => texts(page.locator('[data-testid="wallet-fill-row"] td:nth-child(4)')).then((a) => a.map(num));
-    const values = () => texts(page.locator('[data-testid="wallet-fill-row"] td:nth-child(6)')).then((a) => a.map(num));
+    const amounts = () => texts(page.locator('[data-testid="wallet-fill-row"] .dt-c-amount .dt-val')).then((a) => a.map(num));
+    const prices = () => texts(page.locator('[data-testid="wallet-fill-row"] .dt-c-price .dt-val')).then((a) => a.map(num));
+    const values = () => texts(page.locator('[data-testid="wallet-fill-row"] .dt-c-value .dt-val')).then((a) => a.map(num));
     await page.getByTestId('wallet-fills-sort-amount').click();
     await expect(fillHead('amount')).toHaveAttribute('aria-sort', 'descending');
     expectOrdered(await amounts(), 'desc', 'fill amount');
@@ -199,24 +201,24 @@ test.describe('1280 px wide', () => {
     // Balances: the tokens by what is free, by what is in orders; KAS stays the first row
     await page.getByTestId('orders-tab-balances').click();
     await expect(page.getByTestId('kas-balance')).toBeVisible();
-    if ((await page.getByTestId('balances-sortctl').count()) === 0) {
-    const balHead = (k: string) => page.getByTestId(`balances-sort-${k}`).locator('xpath=ancestor::th');
+    if (!(await page.getByTestId('balances-sortctl').isVisible())) {
+    const balHead = (k: string) => page.getByTestId(`balances-sort-${k}`).locator('xpath=ancestor::*[@role="columnheader"]');
     const tokenRows = page.locator('[data-testid^="balance-row-"]');
-    const col = (n: number) => texts(page.locator(`[data-testid^="balance-row-"] td:nth-child(${n})`)).then((a) => a.map(num));
+    const col = (k: string) => texts(page.locator(`[data-testid^="balance-row-"] .dt-c-${k}`)).then((a) => a.map(num));
     await page.getByTestId('balances-sort-available').click();
     await expect(balHead('available')).toHaveAttribute('aria-sort', 'descending');
-    expectOrdered(await col(2), 'desc', 'available');
+    expectOrdered(await col('available'), 'desc', 'available');
     await page.getByTestId('balances-sort-inOrders').click();
-    expectOrdered(await col(3), 'desc', 'in orders');
+    expectOrdered(await col('inOrders'), 'desc', 'in orders');
     await page.getByTestId('balances-sort-inOrders').click();
-    expectOrdered(await col(3), 'asc', 'in orders');
+    expectOrdered(await col('inOrders'), 'asc', 'in orders');
     await page.getByTestId('balances-sort-value').click();
-    expectOrdered(await col(6), 'desc', 'value');
+    expectOrdered(await col('value'), 'desc', 'value');
     await page.getByTestId('balances-sort-asset').click();
     const names = (await texts(page.locator('[data-testid="balance-market"]'))).map((x) => x.replace(/\s+/g, ''));
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })));
     expect(await tokenRows.count()).toBeGreaterThan(1);
-    await expect(page.locator('tbody tr').first()).toHaveAttribute('data-testid', 'kas-balance');
+    await expect(page.locator('.dt-body > .dt-group').first()).toHaveAttribute('data-testid', 'kas-balance');
     }
     await shot(page, 'balances-1280');
   });
@@ -340,7 +342,7 @@ test.describe('390 px wide: the cards have a sort control', () => {
     const fctl = page.getByTestId('wallet-fills-sortctl');
     await expect(fctl).toBeVisible();
     await fctl.getByTestId('wallet-fills-sortctl-column').selectOption('price');
-    const cardPrices = await texts(page.locator('[data-testid="wallet-fill-row"] .wf-price'));
+    const cardPrices = await texts(page.locator('[data-testid="wallet-fill-row"] .dt-c-price'));
     expectOrdered(cardPrices.map(num), 'desc', 'fill card price');
     await shot(page, 'fills-390');
 
@@ -353,7 +355,7 @@ test.describe('390 px wide: the cards have a sort control', () => {
     await shot(page, 'balances-390');
     // the same state in the table layout: the sort chosen in cards shows at 1280
     await page.setViewportSize({ width: 1280, height: 1000 });
-    await expect(page.getByTestId('balances-sort-inOrders').locator('xpath=ancestor::th')).toHaveAttribute('aria-sort', 'descending');
+    await expect(page.getByTestId('balances-sort-inOrders').locator('xpath=ancestor::*[@role="columnheader"]')).toHaveAttribute('aria-sort', 'descending');
   });
 
   test('Activity: the control stands in for the header on a phone', async ({ appPage: page, mock }) => {

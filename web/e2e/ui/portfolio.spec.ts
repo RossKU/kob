@@ -23,7 +23,7 @@ test('Balances first; Open orders, Order history and Fills each have their addre
   await expect(page.getByTestId('portfolio-total')).toContainText('KAS');
   await expect(page.getByTestId('portfolio-available')).toContainText('KAS');
   // KAS is the first row of the balances, the tokens follow with their icon and fingerprint
-  const rows = page.getByTestId('token-balances-table').locator('tbody tr');
+  const rows = page.getByTestId('token-balances-table').locator('.dt-body > .dt-group');
   await expect(rows.first()).toHaveAttribute('data-testid', 'kas-balance');
   await expect(page.locator('[data-testid^="balance-row-"] .fp').first()).toBeVisible();
 
@@ -36,7 +36,8 @@ test('Balances first; Open orders, Order history and Fills each have their addre
   const line = page.getByTestId(`order-line-${open}`);
   await expect(line).toContainText('EXKCC/KAS');
   await expect(line).toContainText('Sell');
-  await expect(line).toContainText('0 / 1');
+  await expect(line).toContainText('0%'); // the filled part (0 of 1 EXKCC)
+  await expect(line.locator('.or-amount')).toContainText('1');
   await expect(line.locator('.fp')).toHaveCount(1);
   await expect(page.getByTestId(`order-cancel-${open}`)).toBeVisible();
   await expect(page.getByTestId(`order-details-${open}`)).toBeHidden();

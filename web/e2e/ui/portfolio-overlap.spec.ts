@@ -17,7 +17,7 @@ const SHOT_WIDTHS = new Set((process.env.KOB_SHOT_WIDTHS ?? '').split(',').filte
 async function overlaps(root: Locator, where: string): Promise<string[]> {
   return root.evaluate((el, w) => {
     const bad: string[] = [];
-    const rowsOf = [...el.querySelectorAll<HTMLElement>('.or-line, [data-testid="wallet-fills-table"] tbody tr')];
+    const rowsOf = [...el.querySelectorAll<HTMLElement>('.dt-row')];
     const name = (c: Element) => (c.getAttribute('class') ?? c.tagName).split(' ')[0] || c.tagName;
     const text = (c: Element, n: number) => (c.textContent ?? '').trim().slice(0, n);
     for (const row of rowsOf) {

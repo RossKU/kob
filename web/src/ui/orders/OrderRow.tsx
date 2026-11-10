@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'preact/hooks';
+import type { JSX } from 'preact';
+import { Fragment } from 'preact';
+import { useEffect } from 'preact/hooks';
 import { pairRoute, routeToHash } from '../../app/router';
 import { useServices } from '../../app/context';
 import { useTxUrl } from '../../app/explorer';
@@ -8,7 +10,7 @@ import { formatKas, formatPricePerToken, formatUnits, quoteOf, statePriceToToken
 import { formatLocal, formatUtc } from '../../kob/daa';
 import type { Clock } from '../../kob/plan-types';
 import { longId, type TokenInfo } from '../../kob/registry';
-import { Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, tickPriceFraction, type Tone } from '../kit';
+import { Amount, Badge, Banner, Button, CopyText, DtCell, DtGroup, DtRow, KeyValueList, MoneyCell, Num, RawDetails, RowToggle, hasOpenChoice, tickPriceFraction, toggleLabel, useOpenRow, type Tone } from '../kit';
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
 import { IdentityBlock } from '../market/Fingerprint';
@@ -23,6 +25,10 @@ import { unlistedHint, unlistedText } from './unlisted';
 import './order-line.css';
 
 const STATUS_TONE: Record<OrderStatusUi, Tone> = { open: 'ok', partial: 'info', filled: 'neutral', cancelled: 'neutral', refunded: 'neutral', killed: 'neutral', closed: 'neutral', unknown: 'warn' };
+
+/** The cells of a row in the order of its table (the keys are the columns': orders-sort.ts). */
+const OPEN_CELLS = ['time', 'market', 'type', 'side', 'price', 'amount', 'filled', 'total', 'status', 'act', 'toggle'] as const;
+const HISTORY_CELLS = ['time', 'market', 'type', 'side', 'avg', 'price', 'filled', 'amount', 'total', 'status', 'toggle'] as const;
 
 export interface OrderRowActions {
   onCancel(row: OrderRowModel): void;
@@ -50,6 +56,10 @@ export interface OrderRowProps {
   compact?: boolean;
   /** kascov.io's picture of a token, for its icon (none: a letter on the token's colour) */
   iconOf?: (covenantId: string) => KascovMeta | null;
+  /** which table the row is in: Open orders (the buttons) or Order history (the average fill price); default Open orders */
+  columns?: 'open' | 'history';
+  /** the average fill price of the order (history; null: none, undefined: not read yet) */
+  avg?: bigint | null;
 }
 
 /** An order that needs the reader: its details open by themselves (a warning, a renewal, an expiry, a source other than the indexer). */
@@ -61,7 +71,7 @@ export function needsAttention(row: OrderRowModel): boolean {
 }
 
 /** What the one line of an order says (OrderRow), from its model: the time, the price, the trigger, the filled part and the value in KAS. */
-function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo | undefined, clock: Clock | null | undefined) {
+function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo | undefined, clock: Clock | null | undefined, avg: bigint | null | undefined) {
   const decimals = tk?.decimals ?? RAW_TOKEN_DECIMALS;
   const unix = placedUnix(row, clock);
   const time = unix !== null ? formatDateTime(Number(unix), { dateStyle: 'short', timeStyle: 'short' }) : '—';
@@ -74,11 +84,15 @@ function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo |
   const pct = total !== null && total > 0n && filled !== null ? Number((filled * 100n) / total) : null;
   const unit = tk ? tk.ticker : row.token ? longId(row.token) : '';
   const amountText = (v: bigint) => formatUnits(v, decimals, { group: ',' });
-  const filledText = total !== null && filled !== null ? `${amountText(filled)} / ${amountText(total)}` : t('orders.budgetShort');
+  const filledParts: [string, string] | null = total !== null && filled !== null ? [amountText(filled), amountText(total)] : null;
+  const filledText = filledParts ? `${filledParts[0]} / ${filledParts[1]}` : t('orders.budgetShort');
+  const amountTotalText = total !== null ? amountText(total) : null;
+  const filledAmountText = filled !== null ? amountText(filled) : null;
+  const avgText = avg === null || avg === undefined ? '—' : row.pair ? pairPriceText(avg, row, tk, b) : formatPricePerToken(avg, decimals, row.scale, { group: ',' });
   // a buy order that holds a KAS budget has no amount to show: the line says so in two words (the amount follows from the price; the details say it in full)
   const budget = !(total !== null && filled !== null);
-  const value = !row.pair && total !== null && row.price !== null ? formatKas(quoteOf(total, row.price, row.scale, 'down'), { group: ',' }) : '—';
-  return { time, price, trigger, filledText, pct, unit, value, budget };
+  const valueKas = !row.pair && total !== null && row.price !== null ? quoteOf(total, row.price, row.scale, 'down') : null;
+  return { time, price, trigger, filledText, filledParts, pct, unit, valueKas, budget, amountTotalText, filledAmountText, avgText };
 }
 
 const localDate = (unix: bigint): string => formatDateTime(Number(unix));
@@ -187,81 +201,110 @@ export function OrderRow(props: OrderRowProps) {
   // (an order under an older contract version is only cancelled: no sweep)
   const canSweep = row.live && row.canCancel && row.strayCount > 0 && !row.cancelOnly;
   const attention = needsAttention(row);
-  const [open, setOpen] = useState(attention && !props.compact);
-  // an order that comes to need the reader later (a renewal due, an expiry, a warning after a refresh) opens its details then
+  // the details a viewer opened or closed stay so across refreshes; an order that comes to need the reader later (a renewal due, an expiry, a warning after a refresh)
+  // opens its details then, unless the viewer has closed them
+  const openKey = `order:${row.id}`;
+  const [open, setOpenState] = useOpenRow(openKey, attention && !props.compact);
+  const setOpen = (v: boolean) => setOpenState(v);
   useEffect(() => {
-    if (attention && !props.compact) setOpen(true);
+    if (attention && !props.compact && !hasOpenChoice(openKey)) setOpen(true);
   }, [attention]);
-  const line = lineFacts(row, tk, bToken, props.clock);
+  const line = lineFacts(row, tk, bToken, props.clock, props.avg);
   const marketText = tk && row.pair ? `${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}` : tk ? `${tk.ticker}/KAS` : row.token ? longId(row.token) : '—';
   const cancellable = !row.oldTemplate && (row.live || row.status === 'unknown');
 
-  return (
-    <div class={`order-card or-card${props.nested ? ' nested' : ''}${open ? ' or-open' : ''}`} data-testid={`order-row-${row.id}`} data-status={row.status} data-type={row.typeKey} data-side={row.side} data-live={row.live ? '1' : '0'}>
-      <div class="or-line" data-testid={`order-line-${row.id}`}>
-        <span class="or-time num">{line.time}</span>
-        <span class="or-market">
-          {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
-          <span class="or-market-name">{marketText.split('/').flatMap((part, i) => (i === 0 ? [part] : ['/', <wbr key={i} />, part]))}</span>
+  const cells: Record<string, JSX.Element> = {};
+  cells.time = (
+    <DtCell k="time" label={t('orders.col.time')} card="badge" class="or-time dt-time">{line.time}</DtCell>
+  );
+  cells.market = (
+    <DtCell k="market" card="title" class="or-market">
+      <span class="dt-market">
+        {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
+        <span class="dt-market-name or-market-name">{marketText.split('/').flatMap((part, i) => (i === 0 ? [part] : ['/', <wbr key={i} />, part]))}</span>
+      </span>
+      {/* in a card the side and the kind of the order stand under the market (their own cells are not drawn there) */}
+      <span class="dt-card-only dt-sub or-card-sub">
+        <span class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</span> · {t(`orders.typeShort.${row.typeKey}`)}
+      </span>
+    </DtCell>
+  );
+  cells.type = (
+    <DtCell k="type" label={t('orders.col.type')} card="hidden" class="or-type" title={t(`orders.type.${row.typeKey}`)}>{t(`orders.typeShort.${row.typeKey}`)}</DtCell>
+  );
+  cells.side = (
+    <DtCell k="side" label={t('orders.col.side')} card="hidden" class={`or-side ${row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}`}>{t(`common.side.${row.side}`)}</DtCell>
+  );
+  cells.price = (
+    <DtCell k="price" label={t('orders.col.priceLine')} num class="or-price"><Num value={line.price} /></DtCell>
+  );
+  cells.avg = (
+    <DtCell k="avg" label={t('orders.col.avgPrice')} num class="or-avg"><Num value={line.avgText} /></DtCell>
+  );
+  cells.amount = (
+    <DtCell k="amount" label={t('orders.col.amount')} num class="or-amount" title={line.budget ? t('orders.budgetOrder') : undefined}>
+      {line.amountTotalText !== null ? <Num value={line.amountTotalText} unit={line.unit} /> : <span class="dt-val">{t('orders.budgetShort')}</span>}
+    </DtCell>
+  );
+  cells.filled = (
+    <DtCell k="filled" label={t('orders.col.filled')} num class="or-filled">
+      <span class="num">
+        {line.filledAmountText !== null ? <Num value={line.filledAmountText} unit={line.unit} /> : <span class="dt-val">—</span>}
+        {line.pct !== null ? <span class="dt-unit or-pct"> {line.pct}%</span> : null}
+      </span>
+      {line.pct !== null ? (
+        <span class="or-bar" aria-hidden="true">
+          <span style={{ width: `${Math.min(100, line.pct)}%` }} />
         </span>
-        <span class="or-type">{t(`orders.type.${row.typeKey}`)}</span>
-        <span class={`or-side or-side-${row.side}`}>{t(`common.side.${row.side}`)}</span>
-        <span class="or-price num">{line.price}</span>
-        <span class="or-trigger">{line.trigger}</span>
-        <span class="or-filled">
-          <span class="num" title={line.budget ? t('orders.budgetOrder') : undefined}>
-            {line.filledText}{line.budget ? null : <> <span class="muted small or-unit">{line.unit}</span></>}
-            {line.pct !== null ? <span class="muted small or-pct"> {line.pct}%</span> : null}
-          </span>
-          {line.pct !== null ? (
-            <span class="or-bar" aria-hidden="true">
-              <span style={{ width: `${Math.min(100, line.pct)}%` }} />
-            </span>
-          ) : null}
-        </span>
-        <span class="or-value num">{line.value}</span>
-        <span class="or-status">
-          <Badge tone={STATUS_TONE[row.status]}>{t(`orders.status.${row.status}`)}</Badge>
-          {attention ? (
-            <span class="or-warn" title={t('orders.line.attention')} aria-label={t('orders.line.attention')} role="img">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M12 3l9.5 17h-19z" />
-                <path d="M12 10v4" />
-                <path d="M12 17.5v.5" />
-              </svg>
-            </span>
-          ) : null}
-        </span>
-        <span class="or-act">
-          {cancellable ? (
-            <Button
-              small
-              variant="danger"
-              disabled={!canSign || !row.canCancel || props.busy}
-              title={disabledReason ?? cancelHint}
-              onClick={() => actions.onCancel(row)}
-              data-testid={`order-cancel-${row.id}`}
-            >
-              {t('orders.cancel')}
-            </Button>
-          ) : null}
-        </span>
-        <button
-          type="button"
-          class="or-toggle"
-          aria-expanded={open ? 'true' : 'false'}
-          aria-controls={`order-details-${row.id}`}
-          aria-label={t(open ? 'orders.line.hide' : 'orders.line.show')}
-          onClick={() => setOpen((o) => !o)}
-          data-testid={`order-toggle-${row.id}`}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9 6l6 6-6 6" />
+      ) : null}
+    </DtCell>
+  );
+  cells.total = (
+    <DtCell k="total" label={t('orders.col.total')} num class="or-value"><MoneyCell kas={line.valueKas} unit={false} /></DtCell>
+  );
+  cells.status = (
+    <DtCell k="status" label={t('orders.col.status')} class="or-status">
+      <Badge tone={STATUS_TONE[row.status]}>{t(`orders.status.${row.status}`)}</Badge>
+      {attention ? (
+        <span class="or-warn" title={t('orders.line.attention')} aria-label={t('orders.line.attention')} role="img">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3l9.5 17h-19z" />
+            <path d="M12 10v4" />
+            <path d="M12 17.5v.5" />
           </svg>
-        </button>
-      </div>
+        </span>
+      ) : null}
+    </DtCell>
+  );
+  cells.act = (
+    <DtCell k="act" card="action" class="or-act">
+      {cancellable ? (
+        <span class="dt-act">
+          <Button
+            small
+            variant="danger"
+            disabled={!canSign || !row.canCancel || props.busy}
+            title={disabledReason ?? cancelHint}
+            onClick={() => actions.onCancel(row)}
+            data-testid={`order-cancel-${row.id}`}
+          >
+            {t('orders.cancel')}
+          </Button>
+        </span>
+      ) : null}
+    </DtCell>
+  );
+  cells.toggle = <RowToggle open={open} onToggle={() => setOpen(!open)} controls={`order-details-${row.id}`} label={toggleLabel(open)} data-testid={`order-toggle-${row.id}`} />;
+
+  return (
+    <DtGroup class={`order-card or-card${props.nested ? ' nested' : ''}${open ? ' or-open' : ''}`} data-testid={`order-row-${row.id}`} data-status={row.status} data-type={row.typeKey} data-side={row.side} data-live={row.live ? '1' : '0'}>
+      <DtRow class="or-line" data-testid={`order-line-${row.id}`}>
+        {(props.columns === 'history' ? HISTORY_CELLS : OPEN_CELLS).map((k) => (
+          <Fragment key={k}>{cells[k]}</Fragment>
+        ))}
+      </DtRow>
       {props.compact && !open ? null : (
-      <div class="or-details" id={`order-details-${row.id}`} hidden={!open} data-testid={`order-details-${row.id}`}>
+      <div class="dt-details or-details" id={`order-details-${row.id}`} hidden={!open} data-testid={`order-details-${row.id}`}>
       <div class="row-between">
         <div class="row" style="gap:6px">
           <strong data-testid={`order-type-${row.id}`}>{t(`orders.type.${row.typeKey}`)}</strong>
@@ -434,6 +477,6 @@ export function OrderRow(props: OrderRowProps) {
       ) : null}
       </div>
       )}
-    </div>
+    </DtGroup>
   );
 }

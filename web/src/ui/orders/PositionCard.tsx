@@ -35,6 +35,8 @@ export interface PositionCardProps {
   compact?: boolean;
   /** kascov.io's picture of a token, for the icons */
   iconOf?: (covenantId: string) => KascovMeta | null;
+  /** the table the card is in (its member lines have that table's cells) */
+  columns?: 'open' | 'history';
 }
 
 /** An if-done / OCO-entry / repeat position: the entry with its exits, one cancel for all of them (ONE transaction where possible). */
@@ -125,13 +127,13 @@ export function PositionCard(props: PositionCardProps) {
       <div class="pc-members stack-sm">
         {p.orphanExits ? <p class="small muted pc-note">{t('orders.position.orphan')}</p> : null}
         {entryRow ? (
-          <OrderRow row={entryRow} token={props.tokenOf(entryRow.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === entryRow.id} clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
+          <OrderRow columns={props.columns ?? 'open'} row={entryRow} token={props.tokenOf(entryRow.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === entryRow.id} clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
         ) : null}
         {exitRows.length ? (
           <div class="position-exits stack-sm" data-testid="position-exits">
             <div class="pc-section-label">{t('orders.position.exits')}</div>
             {exitRows.map((r) => (
-              <OrderRow key={r.id} row={r} token={props.tokenOf(r.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === r.id} nested clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
+              <OrderRow columns={props.columns ?? 'open'} key={r.id} row={r} token={props.tokenOf(r.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === r.id} nested clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
             ))}
           </div>
         ) : null}

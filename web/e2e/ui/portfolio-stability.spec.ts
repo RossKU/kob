@@ -149,7 +149,7 @@ for (const width of WIDTHS) {
           await check(s, '[data-testid="orders-refresh"]', `${id}: Refresh`);
           await check(s, '[data-testid^="order-cancel-"]', `${id}: Cancel`);
           await check(s, '[data-testid^="orders-cancel-"]', `${id}: Cancel all / token`);
-          await check(s, '.or-toggle', `${id}: order toggle`);
+          await check(s, '.dt-chev', `${id}: order toggle`);
           await check(s, '.copy-btn', `${id}: Copy`);
           await check(s, '[data-testid$="-older"], [data-testid$="-newer"]', `${id}: pager`);
           await check(s, '[data-testid="orders-export-fills"]', `${id}: Export`);

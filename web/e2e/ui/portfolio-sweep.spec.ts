@@ -22,16 +22,16 @@ async function problems(page: Page, root: Locator, where: string, wholePage = tr
     if (whole && doc.scrollWidth > window.innerWidth) bad.push(`${w}: the page is ${doc.scrollWidth - window.innerWidth}px wider than the window`);
     const r = el.getBoundingClientRect();
     if (el.scrollWidth > el.clientWidth + 1) bad.push(`${w}: the panel overflows sideways by ${el.scrollWidth - el.clientWidth}px`);
-    for (const x of el.querySelectorAll<HTMLElement>('.table-wrap, .or-line, .wf-card, .balances-cards tbody tr, .pf-strip, .pf-stat')) {
+    for (const x of el.querySelectorAll<HTMLElement>('.dt, .dt-row, .pf-strip, .pf-stat')) {
       if (x.scrollWidth > x.clientWidth + 1) bad.push(`${w}: .${x.className.split(' ')[0]} overflows by ${x.scrollWidth - x.clientWidth}px`);
       const b = x.getBoundingClientRect();
       if (b.right > r.right + 1 || b.left < r.left - 1) bad.push(`${w}: .${x.className.split(' ')[0]} sticks out of the panel`);
     }
     // the summary figures: whole, one line (a figure is never broken across lines, never cut)
-    for (const x of el.querySelectorAll<HTMLElement>('.pf-v, .pf-v > span')) {
+    for (const x of el.querySelectorAll<HTMLElement>('.pf-v, .pf-v .dt-val, .pf-v .dt-unit')) {
       const cs = getComputedStyle(x);
       const lh = cs.lineHeight === 'normal' ? 1.25 * parseFloat(cs.fontSize) : parseFloat(cs.lineHeight);
-      const isFigure = x.matches('.pf-v > span:first-child') || !x.querySelector('span');
+      const isFigure = x.matches('.pf-v .dt-val') || !x.querySelector('span');
       if (x.scrollWidth > x.clientWidth + 1) bad.push(`${w}: figure "${x.textContent}" is cut`);
       if (isFigure && x.getBoundingClientRect().height > 1.3 * lh + 0.5) bad.push(`${w}: figure "${x.textContent}" is on two lines (${x.getBoundingClientRect().height}px of ${lh}px lines)`);
     }

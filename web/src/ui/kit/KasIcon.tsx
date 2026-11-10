@@ -1,14 +1,14 @@
 // The Kaspa mark, for KAS as an asset (the Portfolio's Balances row): inline SVG, nothing to fetch (CSP: no external images).
 // Source: kaspa.org's own glyph, https://kaspa.org/icon.svg (the site's icon; "Kaspa logo / View logo assets" in its logo menu), fetched 2026-11-10; the same mark
 // is in kaspanet/rusty-kaspa (ISC licence) at wasm/examples/web/resources/kaspa.svg. kaspa.org states no licence for the mark itself: it is used here only
-// to name the KAS asset, as wallets and explorers do. Paths and colours (#6fc7ba disc, white K) are the file's; the white disc behind shows through the cut-out K,
+// to name the KAS asset, as wallets and explorers do. Paths and colours (#6fc7ba disc, white K) are the file's; the viewBox is cropped to the disc itself (the file's has a margin of about 18% on every side), so the mark fills its box like a token's round avatar; the white disc behind shows through the cut-out K,
 // so it reads the same on a dark and a light page.
 
 /** The Kaspa mark at `size` px (default 26, the height of a token's icon in a table line). */
 export function KasIcon(props: { size?: number }) {
   const size = props.size ?? 26;
   return (
-    <svg class="kas-icon" viewBox="30 30 137 137" width={size} height={size} role="img" aria-label="KAS" data-testid="kas-icon">
+    <svg class="kas-icon" viewBox="42.4 42.4 112.2 112.2" width={size} height={size} role="img" aria-label="KAS" data-testid="kas-icon">
       <title>KAS</title>
       <circle cx="98.52" cy="98.43" r="41.03" fill="#fff" />
       <path
