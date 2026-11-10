@@ -17,17 +17,17 @@ import type { PairFillsView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Badge, ErrorBanner, Section } from '../kit';
+import { Badge, ErrorBanner, Section, SortButton, SortControl, ariaSortOf, scaledUnits, sortBy, useSortState, type SortColumn, type SortValue } from '../kit';
 import { ListPager, RowsControl, showListStart } from '../market/ListPaging';
-import type { ListPageSize } from '../market/market-list';
+import { pageWindow, type ListPageSize } from '../market/market-list';
 import { useHeldUntil, useListPage, useListPageSize, useRising } from '../market/use-market-list';
 import { Popover } from '../shell/Popover';
 import { clockText } from '../shell/standalone';
 import {
-  ACTIVITY_DEPTH, ALL_KINDS, AVAILABLE_KINDS, PAGE_ROWS, logHasNext, logPage, rowHref, SETTLE_DAA, filterRows, heldView, marketKeyOf, readPrefs, rowMakers, shownKinds, writePrefs,
+  ACTIVITY_DEPTH, ALL_KINDS, confirmationsAt, AVAILABLE_KINDS, PAGE_ROWS, logHasNext, logPage, rowHref, SETTLE_DAA, filterRows, heldView, marketKeyOf, readPrefs, rowMakers, shownKinds, writePrefs,
   type ActivityKind, type ActivityPrefs, type ActivityRow, type ActorFilter, type MarketFilter, type MarketRef, type PrefsScope,
 } from './activity-model';
-import { KindGlyph, KindIcon } from './ActivityIcons';
+import { KindGlyph, KindIcon, kindLabel } from './ActivityIcons';
 import { ActivityRowView, RowsSkeleton, type RowFormat } from './ActivityRows';
 import { FIRST_LIMIT } from './activity-store';
 import { useActivity } from './use-activity';
@@ -35,6 +35,23 @@ import '../market/market.css';
 import './activity.css';
 
 const addressCache = new Map<string, string | null>();
+
+const ACTIVITY_SORT_KEYS = ['kind', 'market', 'tx', 'wallet', 'amount', 'price', 'conf', 'time'] as const;
+type ActivitySortKey = (typeof ACTIVITY_SORT_KEYS)[number];
+
+/** The columns of the log, in its order; `time` is its own order (newest first). */
+function activityColumns(): SortColumn<ActivitySortKey>[] {
+  return [
+    { key: 'kind', label: t('activity.col.kind'), kind: 'text' },
+    { key: 'market', label: t('activity.col.market'), kind: 'text' },
+    { key: 'tx', label: t('activity.col.tx'), kind: 'text' },
+    { key: 'wallet', label: t('activity.col.wallet'), kind: 'text' },
+    { key: 'amount', label: t('activity.col.amount'), kind: 'number' },
+    { key: 'price', label: t('activity.col.price'), kind: 'number' },
+    { key: 'conf', label: t('activity.col.conf'), kind: 'number' },
+    { key: 'time', label: t('activity.col.time'), kind: 'time' },
+  ];
+}
 
 /** Reads further back for one page at most: rows the filters hide must not read the whole history. */
 const OLDER_READS = 4;
@@ -103,6 +120,47 @@ function ActivityLogView(props: ActivityLogProps) {
     return addressCache.get(k)!;
   };
 
+  // how the rows name things: one object per registry and network, so the memoized rows see equal props between renders
+  const fmt = useMemo<RowFormat>(() => {
+    let explorerHost = 'the explorer';
+    try {
+      explorerHost = new URL(explorerTxUrl(config, '0'.repeat(64)) ?? '').host;
+    } catch {
+      /* no explorer configured */
+    }
+    return {
+      nameOf,
+      decimalsOf,
+      marketText: (m: MarketRef) => (m.kind === 'token' ? t('activity.market.kas', { ticker: nameOf(m.token) }) : t('activity.market.pair', { base: nameOf(m.base), quote: nameOf(m.quote) })),
+      explorerHost,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registry, config, declared]);
+
+  /** What a column compares for a row (the amounts as tokens, the price at its low end, the time in milliseconds). */
+  const activityValue = (r: ActivityRow, key: ActivitySortKey): SortValue => {
+    switch (key) {
+      case 'kind':
+        return kindLabel(r.kind, r.side);
+      case 'market':
+        return fmt.marketText(r.market);
+      case 'tx':
+        return r.txid;
+      case 'wallet': {
+        const first = rowMakers(r, data)[0];
+        return first ? (addressOf(first) ?? longId(first)) : null;
+      }
+      case 'amount':
+        return r.amount ? scaledUnits(r.amount.units, decimalsOf(r.amount.token)) : null;
+      case 'price':
+        // KAS per whole token, the low end of a ladder's range; a pair row has none
+        return r.price && r.price.scale > 0n && r.market.kind === 'token' ? (r.price.low * 10n ** BigInt(decimalsOf(r.market.token) + 8)) / r.price.scale : null;
+      case 'conf':
+        return confirmationsAt(r, data.chain?.daa ?? null).n;
+      case 'time':
+        return r.timeMs;
+    }
+  };
   const all = filterRows(data.rows, { prefs, market: props.market, mine: me, makersOf: (r) => rowMakers(r, data) });
 
   // ---- the hold: paused, or the pointer or the focus in the list
@@ -110,9 +168,12 @@ function ActivityLogView(props: ActivityLogProps) {
   const [hover, setHover] = useState(false);
   const [focusIn, setFocusIn] = useState(false);
   const [size, setSize] = useListPageSize(`kob.activity.rows.${props.prefsScope}`, props.pageRows ?? PAGE_ROWS);
+  // the viewer's sort of the rows within reach (none: newest first), kept per log in this browser
+  const [sort, setSort] = useSortState<ActivitySortKey>(`activity.${props.prefsScope}`, ACTIVITY_SORT_KEYS);
   const filterKey = `${marketKeyOf(props.market)}|${[...kinds].join(',')}|${prefs.mine ? 'mine' : ''}`;
+  const sortKey = sort ? `${sort.key}:${sort.dir}` : '-';
   // other filters or another size start at the first page
-  const [asked, setAsked] = useListPage(`${filterKey}|${size}`);
+  const [asked, setAsked] = useListPage(`${filterKey}|${size}|${sortKey}`);
   const held = paused || hover || focusIn || asked > 0;
   const [, setReleased] = useState(0);
   // what the hold keeps in place is every row within reach, not one page: the rows of the other pages are no new rows
@@ -123,8 +184,14 @@ function ActivityLogView(props: ActivityLogProps) {
   else if (snapshot.current === null || lastFilter.current !== filterKey) snapshot.current = new Set((lastFilter.current === filterKey ? keptBefore.current : all.slice(0, ACTIVITY_DEPTH)).map((r) => r.key));
   lastFilter.current = filterKey;
   const view = heldView(all, snapshot.current);
-  const { kept, shown, ...pager } = logPage(view.rows, size, asked);
-  keptBefore.current = kept;
+  const byTime = logPage(view.rows, size, asked);
+  // the hold is about the newest rows, in whatever order they are shown; a sorted log pages the same rows by the viewer's column (a row that arrives takes its place in it)
+  keptBefore.current = byTime.kept;
+  const cols = activityColumns();
+  const ownCol = cols[cols.length - 1]!;
+  const kept = sort ? sortBy(byTime.kept, sort, (r, key) => activityValue(r, key)) : byTime.kept;
+  const pager = pageWindow(kept.length, size, asked);
+  const shown = kept.slice(pager.from, pager.to);
   const release = () => {
     setPaused(false);
     setAsked(0);
@@ -153,13 +220,13 @@ function ActivityLogView(props: ActivityLogProps) {
   // rows that arrive after the first rows flash once; a page turned to, or older rows read in below the known ones, do not
   const seen = useRef<Set<string> | null>(null);
   const fresh = new Set<string>();
-  if (kept.length) {
+  if (byTime.kept.length) {
     const had = seen.current;
     if (had) {
-      const lastKnown = kept.reduce((last, r, i) => (had.has(r.key) ? i : last), -1);
-      for (const r of kept.slice(0, lastKnown)) if (!had.has(r.key)) fresh.add(r.key);
+      const lastKnown = byTime.kept.reduce((last, r, i) => (had.has(r.key) ? i : last), -1);
+      for (const r of byTime.kept.slice(0, lastKnown)) if (!had.has(r.key)) fresh.add(r.key);
     }
-    seen.current = new Set([...(had ?? []), ...kept.map((r) => r.key)]);
+    seen.current = new Set([...(had ?? []), ...byTime.kept.map((r) => r.key)]);
   }
 
   // the Wallet column: the owners of the rows' orders are looked up only while the list is read (on screen, or `eager`; one at a time: the order ticket's reads of
@@ -178,22 +245,6 @@ function ActivityLogView(props: ActivityLogProps) {
   const rising = useRising(open);
   const rowsShown = open && shown.length > 0;
 
-  // how the rows name things: one object per registry and network, so the memoized rows see equal props between renders
-  const fmt = useMemo<RowFormat>(() => {
-    let explorerHost = 'the explorer';
-    try {
-      explorerHost = new URL(explorerTxUrl(config, '0'.repeat(64)) ?? '').host;
-    } catch {
-      /* no explorer configured */
-    }
-    return {
-      nameOf,
-      decimalsOf,
-      marketText: (m: MarketRef) => (m.kind === 'token' ? t('activity.market.kas', { ticker: nameOf(m.token) }) : t('activity.market.pair', { base: nameOf(m.base), quote: nameOf(m.quote) })),
-      explorerHost,
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [registry, config, declared]);
   const today = new Date().toDateString();
   const liveKind = data.mode === 'standalone' ? 'standalone' : data.mode === 'off' ? 'off' : held ? 'held' : data.mode;
 
@@ -321,15 +372,14 @@ function ActivityLogView(props: ActivityLogProps) {
     <Section title={title} actions={tools} class="act" data-testid={props['data-testid'] ?? 'activity'}>
       <ErrorBanner error={data.rows.length ? null : data.error} title={t('activity.error')} onRetry={data.retry} data-testid="activity-error" />
       <div class="act-log" ref={listRef} role="table" aria-label={t('activity.tableLabel')} data-testid="activity-list" data-count={rowsShown ? shown.length : 0} data-held={held ? 'true' : 'false'}>
+        {/* where the log is two lines per row (no header), the same sort is a control above the rows */}
+        {rowsShown && kept.length > 1 ? <SortControl id="activity" class="act-sortctl" columns={cols} state={sort} own={ownCol} onSort={setSort} /> : null}
         <div class="act-head" role="row">
-          <span role="columnheader" aria-label={t('activity.col.kind')} />
-          <span role="columnheader">{t('activity.col.market')}</span>
-          <span role="columnheader">{t('activity.col.tx')}</span>
-          <span role="columnheader">{t('activity.col.wallet')}</span>
-          <span role="columnheader" class="act-num">{t('activity.col.amount')}</span>
-          <span role="columnheader" class="act-num">{t('activity.col.price')}</span>
-          <span role="columnheader" class="act-num">{t('activity.col.conf')}</span>
-          <span role="columnheader" class="act-num">{t('activity.col.time')}</span>
+          {cols.map((c) => (
+            <span key={c.key} role="columnheader" aria-sort={ariaSortOf(sort, c.key, ownCol)} class={c.key === 'amount' || c.key === 'price' || c.key === 'conf' || c.key === 'time' ? 'act-num' : undefined}>
+              <SortButton id="activity" col={c} state={sort} own={ownCol} onSort={setSort}>{c.key === 'kind' ? <span aria-hidden="true">⇅</span> : undefined}</SortButton>
+            </span>
+          ))}
         </div>
         <div
           class={`act-body${rowsShown ? ' act-rows' : ''}`}

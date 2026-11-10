@@ -1,0 +1,25 @@
+/* The header button of a sortable column and the narrow-card sort control (SortHeader.tsx). Colours are the app's tokens (styles.css), both themes. */
+.sortbtn {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; max-width: 100%; box-sizing: border-box; color: inherit; font: inherit;
+  border-radius: var(--radius-sm); white-space: nowrap;
+}
+.sortbtn > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sortbtn:hover { color: var(--text); }
+.sortbtn:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 2px; }
+.sortbtn.active { color: var(--text); }
+/* the mark has its room always (an empty mark is as wide as a ▲), so a header never changes its width when it becomes the sorted one */
+.sortbtn-mark { display: inline-block; width: 1em; flex: none; font-size: 0.7em; text-align: center; }
+/* a header you tap with a finger: a finger-sized target */
+@media (pointer: coarse) { .sortbtn { min-height: 40px; } }
+
+.sortctl { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sortctl .segmented select {
+  appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 600; min-height: 36px; padding: 6px 28px 6px 14px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; max-width: 14rem;
+}
+.sortctl .segmented select:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: -2px; }
+.sortctl .segmented button { flex: none; min-width: 40px; min-height: 40px; padding: 6px 12px; }
+.sortctl .segmented select { min-height: 40px; }
+.sortctl .segmented { border: 1px solid var(--border); }
+.sortctl .segmented > * + * { border-left: 1px solid var(--border); }

@@ -1,5 +1,5 @@
 import { formatKas, formatUnits } from '../../kob/units';
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
 import { navigate, routeToHash, tokenRoute, type PortfolioTab } from '../../app/router';
@@ -12,11 +12,11 @@ export interface MarketOf {
 import { formatDateTime, t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
+import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Banner, Button, ErrorBanner, Modal, RawDetails, Section, Tabs, showToast, toError, useAsync } from '../kit';
+import { Banner, Button, ErrorBanner, Modal, RawDetails, Section, SortButton, SortControl, Tabs, ariaSortOf, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState } from '../kit';
 import { useLiveRefresh } from '../market/live';
 import { RowsControl } from '../market/ListPaging';
-import { PHONE_QUERY, useMedia } from '../shell/narrow';
 import { useListPage } from '../market/use-market-list';
 import { useKascov } from '../market/use-kascov';
 import { kascovIconOf } from '../market/kascov-merge';
@@ -29,7 +29,7 @@ import { OrderRow, type OrderRowActions } from './OrderRow';
 import { PositionCard } from './PositionCard';
 import { RecoverPanel } from './RecoverPanel';
 import { StraysPanel } from './StraysPanel';
-import { WalletFills } from './WalletFills';
+import { FILL_SORT_KEYS, WalletFills, type FillSortKey } from './WalletFills';
 import { PORTFOLIO_PAGE_SIZES, PortfolioPager, pageOf, usePortfolioRows } from './portfolio-paging';
 import { useWalletBalances } from './use-balances';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
@@ -45,6 +45,7 @@ import {
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
 import { buildListItems, cancellableIds, filterItems, itemMemberIds, tabCounts } from './list-model';
+import { ORDER_SORT_KEYS, orderColumns, orderSortValue, type OrderSortKey } from './orders-sort';
 import { loadOrderEvents, loadOrders, type OrdersData } from './orders-data';
 import '../market/market.css';
 
@@ -57,6 +58,9 @@ interface Flow {
 }
 
 const REFRESH_MS = 15_000;
+
+/** Panel width (px, the panel's own, not the screen's) below which the tabs read Open / History. */
+const COMPACT_TABS_BELOW = 560;
 
 /**
  * A market page's panel keeps its tab and its "this market only" choice for the visit, per market: the panel can be drawn anew (the page behind it re-reads its
@@ -119,9 +123,31 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const listTab = tab === 'history' ? 'history' : 'active';
   // rows per page and the page turned to (the lists are read whole: a page is a slice); another tab, size or market filter starts at the first page
   const [rowsPer, setRows] = usePortfolioRows();
-  // the four tabs stand on one line on a phone: the short words, the full ones as their accessible names
-  const phone = useMedia(PHONE_QUERY);
-  const [pageNo, setPageNo] = useListPage(`${tab}|${rowsPer}|${embed && onlyHere ? 'here' : 'all'}`);
+  // the viewer's sort of each list (a column and a direction; none: newest first), kept in this browser; applied to the whole list, before it is paged
+  const [openSort, setOpenSort] = useSortState<OrderSortKey>('orders.open', ORDER_SORT_KEYS);
+  const [historySort, setHistorySort] = useSortState<OrderSortKey>('orders.history', ORDER_SORT_KEYS);
+  const [fillsSort, setFillsSort] = useSortState<FillSortKey>('fills', FILL_SORT_KEYS);
+  const orderSort = tab === 'history' ? historySort : openSort;
+  const setOrderSort = tab === 'history' ? setHistorySort : setOpenSort;
+  // the width this panel has (a page's, or a market page's narrower one): its layouts follow it, not the screen's (orders/balances.css, order-line.css: container queries)
+  const root = useRef<HTMLDivElement>(null);
+  const [panelW, setPanelW] = useState(0);
+  useEffect(() => {
+    const el = root.current;
+    if (!el || typeof ResizeObserver !== 'function') return;
+    // the content width: the room the panel's own contents have
+    const measure = () => {
+      const cs = getComputedStyle(el);
+      setPanelW(Math.round(el.clientWidth - (Number.parseFloat(cs.paddingLeft) || 0) - (Number.parseFloat(cs.paddingRight) || 0)));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    measure();
+    return () => ro.disconnect();
+  }, [!!wallet.info]);
+  // the four tabs stand on one line: the short words where the full ones do not fit, the full ones as their accessible names
+  const phone = panelW > 0 && panelW < COMPACT_TABS_BELOW;
+  const [pageNo, setPageNo] = useListPage(`${tab}|${rowsPer}|${embed && onlyHere ? 'here' : 'all'}|${sortKeyOf(tab === 'fills' ? fillsSort : orderSort)}`);
   // Strays, automatic refunds and recovery: one folded section; it opens by itself while strays are waiting
   const [settingsOpen, setSettingsOpen] = useState<boolean | null>(props.recover ? true : null);
   useEffect(() => {
@@ -164,8 +190,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     [allItems, rowById, embed?.base, embed?.quote, onlyHere],
   );
   const counts = useMemo(() => tabCounts(items, rowById), [items, rowById]);
-  const shownAll = useMemo(() => filterItems(items, rowById, listTab), [items, rowById, listTab]);
-  const { rows: shown, window: shownWindow } = pageOf(shownAll, rowsPer, pageNo);
+  const filteredItems = useMemo(() => filterItems(items, rowById, listTab), [items, rowById, listTab]);
   const stats = useMemo(() => countByStatus(rows), [rows]);
   // the tokens of each order (its own and a pair order's B): a stray of any other token is foreign
   const sweepable = useMemo(() => new Map(rows.filter((r) => r.token).map((r) => [r.id, [r.token!, ...(r.pair ? [r.pair.quote] : [])]])), [rows]);
@@ -176,6 +201,18 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   // does not list is shown on this browser's issuance of it, else on 8 assumed decimals, marked)
   const tokenOf = (id: string | null) => (id ? services.registry.byCovenantId.get(id) : undefined);
   const shownToken = (id: string | null, scale?: bigint | null) => displayToken(services.registry, services.config.network, id, undefined, scale);
+  // the market of an order as its line names it (the market column's sort reads the same text)
+  const marketText = (r: OrderRowModel): string => {
+    const tk = shownToken(r.token, r.scale);
+    const b = r.pair ? shownToken(r.pair.quote, r.pair.quoteScale) : undefined;
+    return tk && r.pair ? `${tk.ticker}/${b?.ticker ?? longId(r.pair.quote)}` : tk ? `${tk.ticker}/KAS` : r.token ? longId(r.token) : '—';
+  };
+  // the lists sorted whole, then paged: page 1 is the top of the sorted list
+  const shownAll = sortBy(filteredItems, orderSort, (item, key) => {
+    const row = rowById.get(itemMemberIds(item)[0]!);
+    return row ? orderSortValue(row, key, { clock: d?.clock ?? null, marketText }) : null;
+  });
+  const { rows: shown, window: shownWindow } = pageOf(shownAll, rowsPer, pageNo);
   // an amount of a token (base units) as its token amount with the ticker
   const coverText = (token: Hex, amount: bigint): string => {
     const tk = shownToken(token)!;
@@ -351,6 +388,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
 
   const marketRows = embed && onlyHere ? rows.filter((r) => inMarket(r)) : rows;
   const cancellable = cancellableIds(marketRows, null);
+  const cols = orderColumns();
+  const ownCol = cols[0]!; // the lists are newest first: the time, largest first
   // fill history (R-8): per order on demand, and every fill of the wallet as one CSV
   const loadEvents = services.indexer && !d?.indexerError ? (id: Hex, signal: AbortSignal) => loadOrderEvents(services.indexer!, id, signal) : null;
   const filledRows = marketRows.filter((r) => filledAmountOf(r) > 0n);
@@ -390,7 +429,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const replaceReady = !!amendToken && (!amend?.pair || !!amendQuote);
 
   return (
-    <div class={embed ? 'stack mkt-card market-orders' : 'stack'} data-testid={embed ? 'market-orders' : 'orders-view'}>
+    <div class={embed ? 'stack mkt-card market-orders pf-root' : 'stack pf-root'} ref={root} data-testid={embed ? 'market-orders' : 'orders-view'}>
       {embed ? (
         <div class="row-between market-orders-head">
           <h2 class="section-title" style="margin:0">{t('orders.market.title')}</h2>
@@ -614,19 +653,17 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
             >
               {tab === 'open' ? <p class="small muted" data-testid="orders-race-note">{t('orders.raceNote')}</p> : null}
               {/* the rows come together, as soon as the indexer's answer is in: a trader acts on them, so they wait for nothing else (the balances, the node's answers) */}
+              <div class="or-wrap" role="table" aria-label={t(tab === 'history' ? 'orders.list.titleHistory' : 'orders.list.title')}>
+              {d && shownAll.length > 1 ? <SortControl id="orders" class="or-sortctl" columns={cols} state={orderSort} own={ownCol} onSort={setOrderSort} /> : null}
               {d && shown.length > 0 ? (
-                <div class="or-head" aria-hidden="true" data-testid="orders-head">
-                  <span>{t('orders.col.time')}</span>
-                  <span>{t('orders.col.market')}</span>
-                  <span>{t('orders.col.type')}</span>
-                  <span>{t('orders.col.side')}</span>
-                  <span class="right">{t('orders.col.priceLine')}</span>
-                  <span>{t('orders.col.trigger')}</span>
-                  <span class="right">{t('orders.col.filled')}</span>
-                  <span class="right">{t('orders.col.valueKas')}</span>
-                  <span>{t('orders.col.status')}</span>
-                  <span />
-                  <span />
+                <div class="or-head" role="row" data-testid="orders-head">
+                  {cols.map((c) => (
+                    <span key={c.key} role="columnheader" aria-sort={ariaSortOf(orderSort, c.key, ownCol)} class={c.key === 'price' || c.key === 'filled' || c.key === 'value' ? 'right' : undefined}>
+                      <SortButton id="orders" col={c} state={orderSort} own={ownCol} onSort={setOrderSort} />
+                    </span>
+                  ))}
+                  <span aria-hidden="true" />
+                  <span aria-hidden="true" />
                 </div>
               ) : null}
               <div class={`stack-sm${d ? ' ml-in' : ''}`} data-testid="orders-list" data-live={stats.live}>
@@ -660,6 +697,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                   ),
                 )}
               </div>
+              </div>
               {d ? <PortfolioPager id="portfolio" window={shownWindow} total={shownAll.length} onPage={setPageNo} /> : null}
             </Section>
           ) : null}
@@ -674,7 +712,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 ) : undefined
               }
             >
-              <WalletFills rows={filledRows} tokenOf={shownToken} loadEvents={loadEvents} iconOf={iconOf} size={rowsPer} page={pageNo} onPage={setPageNo} />
+              <WalletFills rows={filledRows} tokenOf={shownToken} loadEvents={loadEvents} iconOf={iconOf} sort={fillsSort} onSort={setFillsSort} size={rowsPer} page={pageNo} onPage={setPageNo} />
             </Section>
           ) : null}
         </div>

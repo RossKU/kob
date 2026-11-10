@@ -6,7 +6,7 @@ import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { KasIcon } from '../kit/KasIcon';
-import { Amount, Banner, Button, ErrorBanner, Section, Table, TableMessage, unitsFraction } from '../kit';
+import { Amount, Banner, Button, ErrorBanner, Section, SortButton, SortControl, Table, TableMessage, ariaSortOf, scaledUnits, sortBy, unitsFraction, useSortState, type SortColumn, type SortValue } from '../kit';
 import { formatKas, formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
 import { IdentityBlock } from '../market/Fingerprint';
@@ -15,7 +15,11 @@ import type { WalletBalances } from './use-balances';
 import { balanceColumnFractions, unreviewedProgram } from './balances-model';
 import { mergeableCounts, nextMergeFrees } from './merge-model';
 import type { OrdersData } from './orders-data';
+import { TABLE_FROM, useTableCards } from './use-table-cards';
 import './balances.css';
+
+const BALANCE_SORT_KEYS = ['asset', 'available', 'inOrders', 'strays', 'kasLocked', 'value'] as const;
+type BalanceSortKey = (typeof BALANCE_SORT_KEYS)[number];
 
 function BalancesSkeleton() {
   return (
@@ -56,8 +60,38 @@ export function BalancesPanel(props: {
 }) {
   const services = useServices();
   const { registry } = services;
+  // a narrow box (or a table that does not fit it) reads each asset as a card
+  const [box, cards] = useTableCards(TABLE_FROM);
+  // the viewer's sort of the token rows (KAS stays on top); none: as the wallet lists them
+  const [sort, setSort] = useSortState<BalanceSortKey>('balances', BALANCE_SORT_KEYS);
+  const sortCols: SortColumn<BalanceSortKey>[] = [
+    { key: 'asset', label: t('orders.balances.asset'), kind: 'text' },
+    { key: 'available', label: t('orders.balances.available'), kind: 'number' },
+    { key: 'inOrders', label: t('orders.balances.inOrders'), kind: 'number' },
+    { key: 'strays', label: t('orders.balances.strays'), kind: 'number' },
+    { key: 'kasLocked', label: t('market.balances.kasLocked'), kind: 'number' },
+    { key: 'value', label: t('orders.col.valueKas'), kind: 'number' },
+  ];
   const { free, combined, valueOf } = props.balances;
-  const shownTokens = (combined?.tokens ?? []).filter((b) => !props.onlyTokens || props.onlyTokens.has(b.token));
+  const tokensOnShow = (combined?.tokens ?? []).filter((b) => !props.onlyTokens || props.onlyTokens.has(b.token));
+
+  const shownTokens = sortBy(tokensOnShow, sort, (b, key): SortValue => {
+    const decimals = displayToken(registry, services.config.network, b.token)?.decimals ?? 8;
+    switch (key) {
+      case 'asset':
+        return tokenLabel(displayToken(registry, services.config.network, b.token)!);
+      case 'available':
+        return scaledUnits(b.free, decimals);
+      case 'inOrders':
+        return scaledUnits(b.escrowed, decimals);
+      case 'strays':
+        return scaledUnits(b.strays, decimals);
+      case 'kasLocked':
+        return b.kasLocked;
+      case 'value':
+        return valueOf(b);
+    }
+  });
 
   // free token UTXOs a merge may take, per token (two or more)
   const mergeable = useMemo(
@@ -86,16 +120,16 @@ export function BalancesPanel(props: {
         <Banner tone="warn" data-testid="balances-partial">{t('market.balances.partial', { sources: free.data.errors.map((e) => e.source).join(', ') })}</Banner>
       ) : null}
       {combined && free.data ? (
-        <div class="tk-in">
-          <Table dense class="balances-cards" data-testid="token-balances-table" caption={t('orders.balances.tokens')}>
+        <div class="tk-in bal-box" ref={box}>
+          {cards && tokensOnShow.length > 1 ? <SortControl id="balances" columns={sortCols} state={sort} own={null} onSort={setSort} /> : null}
+          <Table dense class={`balances-cards${cards ? ' bal-cards' : ''}`} data-testid="token-balances-table" caption={t('orders.balances.tokens')}>
             <thead>
               <tr>
-                <th>{t('orders.balances.asset')}</th>
-                <th class="right">{t('orders.balances.available')}</th>
-                <th class="right">{t('orders.balances.inOrders')}</th>
-                <th class="right">{t('orders.balances.strays')}</th>
-                <th class="right">{t('market.balances.kasLocked')}</th>
-                <th class="right">{t('orders.col.valueKas')}</th>
+                {sortCols.map((c) => (
+                  <th key={c.key} class={c.key === 'asset' ? undefined : 'right'} aria-sort={ariaSortOf(sort, c.key, null)}>
+                    <SortButton id="balances" col={c} state={sort} own={null} onSort={setSort} />
+                  </th>
+                ))}
                 <th />
               </tr>
             </thead>

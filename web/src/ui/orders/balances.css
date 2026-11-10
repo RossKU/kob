@@ -3,49 +3,53 @@
 .orders-skel { height: 64px; }
 .balances-cards .bal-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 
-@media (max-width: 640px) {
-  .balances-cards .table, .balances-cards tbody { display: block; }
-  /* the column titles are the labels of the lines: kept for screen readers, not drawn */
-  .balances-cards thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-  .balances-cards tbody tr { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; margin-bottom: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-  .balances-cards tbody tr:hover { background: var(--surface-2); }
-  .balances-cards td { display: block; padding: 0; border-bottom: 0; text-align: left; }
-  .balances-cards td.table-empty { padding: 16px 8px; text-align: center; }
-  /* the asset: its name on top, its notes ("8 decimals, from its market", "unsupported program") each on a line of its own under it */
-  .balances-cards .bal-token { flex: 1 0 100%; min-width: 0; font-weight: 600; }
-  .balances-cards .bal-token .bal-name { max-width: 100%; }
-  .balances-cards .bal-token > .small { display: block; margin-top: 1px; font-weight: 400; }
-  /* Available / In your orders / Strays / KAS locked / Value: the title over the figure, two to a line; a figure with a note under it takes the line */
-  .balances-cards td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; overflow-wrap: anywhere; }
-  .balances-cards td[data-label].bal-wide { flex-basis: 100%; }
-  .balances-cards td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 0.78rem; font-weight: 400; }
-  .balances-cards td[data-label] > .small { font-size: 0.78rem; overflow-wrap: normal; }
-  .balances-cards .bal-kas td.muted[data-label] { display: none; }
-  /* the buttons under the figures: a tap-sized height */
-  .balances-cards .bal-actions { flex: 1 0 100%; display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 8px; margin-top: 2px; }
-  .balances-cards .bal-actions .btn { min-height: 40px; }
-  .balances-cards .bal-actions-none { display: none; }
-}
+/* cards in a box too narrow for the table (a phone, a tablet, a market page's panel; the class is set by use-table-cards.ts) */
+.bal-cards .table, .bal-cards tbody { display: block; }
+/* the column titles are the labels of the lines: kept for screen readers, not drawn */
+.bal-cards thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.bal-cards tbody tr { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; margin-bottom: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.bal-cards tbody tr:hover { background: var(--surface-2); }
+.bal-cards td { display: block; padding: 0; border-bottom: 0; text-align: left; }
+.bal-cards td.table-empty { padding: 16px 8px; text-align: center; }
+/* the asset: its name on top, its notes ("8 decimals, from its market", "unsupported program") each on a line of its own under it */
+.bal-cards .bal-token { flex: 1 0 100%; min-width: 0; font-weight: 600; }
+.bal-cards .bal-token .bal-name { max-width: 100%; }
+.bal-cards .bal-token > .small { display: block; margin-top: 1px; font-weight: 400; }
+/* Available / In your orders / Strays / KAS locked / Value: the title over the figure, two to a line; a figure with a note under it takes the line */
+.bal-cards td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; overflow-wrap: anywhere; }
+.bal-cards td[data-label].bal-wide { flex-basis: 100%; }
+.bal-cards td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+.bal-cards td[data-label] > .small { font-size: 0.78rem; overflow-wrap: normal; }
+.bal-cards .bal-kas td.muted[data-label] { display: none; }
+/* the buttons under the figures: a tap-sized height */
+.bal-cards .bal-actions { flex: 1 0 100%; display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 8px; margin-top: 2px; }
+.bal-cards .bal-actions .btn { min-height: 40px; }
+.bal-cards .bal-actions-none { display: none; }
+/* the Portfolio panel measures itself: the layouts below follow the width it has (a page's, or a market page's), not the screen's */
+.pf-root { container: pf / inline-size; }
 
 /* the Portfolio page (OrdersView.tsx): its tabs over one panel, then the folded section of strays, automatic refunds and recovery */
 /* the tab row: the tabs, and at the right end of the same line the rows per page of the lists (under the tabs, right-aligned, where the line is too short for both) */
 .pf-tabbar { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
-.pf-tabbar > .tabs { flex: 1 1 auto; border-bottom: 0; margin-bottom: 0; }
-/* a phone: the tabs on one line of their own, tighter; where they still do not fit (a wide font) the strip scrolls sideways, without a scrollbar, the active tab in view */
-@media (max-width: 759px) {
-  .pf-tabbar > .tabs { flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; position: relative; }
-  .pf-tabbar > .tabs::-webkit-scrollbar { display: none; }
-  .pf-tabbar > .tabs button { flex: none; padding: 8px 10px; white-space: nowrap; }
+.pf-tabbar > .tabs { flex: 1 1 auto; flex-wrap: nowrap; border-bottom: 0; margin-bottom: 0; }
+/* the four tabs are one line, always: where even the short words do not fit (a wide font) the strip scrolls sideways, without a scrollbar, the active tab in view */
+.pf-tabbar > .tabs { overflow-x: auto; scrollbar-width: none; position: relative; }
+.pf-tabbar > .tabs::-webkit-scrollbar { display: none; }
+.pf-tabbar > .tabs button { flex: none; white-space: nowrap; }
+/* a narrow panel: the tabs on a line of their own (the rows control under them), tighter */
+@container pf (max-width: 759px) {
+  .pf-tabbar > .tabs { flex-basis: 100%; }
+  .pf-tabbar > .tabs button { padding: 8px 10px; }
+  /* where it would take a line of its own it takes none on Balances */
+  .pf-rows-off { display: none; }
 }
 .pf-rows { margin-left: auto; padding: 4px 0; }
 .pf-rows .ml-size { margin-left: 0; }
 .pf-rows-off { visibility: hidden; }
-/* where it would take a line of its own (a phone) it takes none on Balances */
-@media (max-width: 759px) { .pf-rows-off { display: none; } }
 /* `‹ Newer  1–20 of 134  Older ›` under a list, at its right edge */
 .pf-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 12px; padding-top: 12px; }
 @media (max-width: 759px), (pointer: coarse) { .pf-pager .btn { min-height: 40px; } }
-@media (max-width: 479px) { .portfolio-panel > .section { padding: 12px 10px; } }
+@container pf (max-width: 479px) { .portfolio-panel > .section { padding: 12px 10px; } }
 .portfolio-settings > summary { cursor: pointer; font-weight: 600; }
 .portfolio-settings > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
 
@@ -53,17 +57,19 @@
 .pf-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 12px; }
 .pf-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 14px; background: var(--surface); }
 .pf-k { font-size: 0.75rem; color: var(--muted); }
-.pf-v { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 4px; font-size: 1.2rem; font-weight: 650; font-variant-numeric: tabular-nums; }
-/* a figure is never cut (no ellipsis): where it does not fit beside its unit the unit goes under it, and a figure wider than its box breaks */
-.pf-v > span { min-width: 0; overflow-wrap: anywhere; }
+.pf-v { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 4px; font-size: clamp(0.95rem, 1.8cqi, 1.2rem); font-weight: 650; font-variant-numeric: tabular-nums; }
+/* a figure is never cut and never broken (no ellipsis, no line break inside the number): it takes the size its room allows (the panel's width, in cqi), and the
+   unit goes under it where the two do not fit side by side */
+.pf-v > span { min-width: 0; }
+.pf-v > span:first-child { white-space: nowrap; }
 .pf-unit { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
 .bal-nw { white-space: nowrap; }
 .pf-s { font-size: 0.72rem; color: var(--muted); }
-/* a phone: two by two */
-@media (max-width: 639px) {
+/* four across where the longest figure fits a quarter of the panel (1000 px), else two by two */
+@container pf (max-width: 999px) {
   .pf-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pf-stat { padding: 10px 12px; }
-  .pf-v { font-size: clamp(0.9rem, 4.1vw, 1.05rem); line-height: 1.25; }
+  .pf-v { font-size: clamp(0.62rem, calc(4.2cqi - 3px), 1.2rem); line-height: 1.25; }
   .pf-s { overflow-wrap: anywhere; }
 }
 

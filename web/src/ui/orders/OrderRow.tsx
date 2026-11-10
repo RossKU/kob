@@ -5,7 +5,7 @@ import { useTxUrl } from '../../app/explorer';
 import { formatDateTime, formatNumber, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import { unitsText } from '../../kob/pair';
 import { formatKas, formatPricePerToken, formatUnits, quoteOf, statePriceToTokenPrice } from '../../kob/units';
-import { daaToUnix, formatLocal, formatUtc } from '../../kob/daa';
+import { formatLocal, formatUtc } from '../../kob/daa';
 import type { Clock } from '../../kob/plan-types';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, tickPriceFraction, type Tone } from '../kit';
@@ -18,6 +18,7 @@ import type { EventView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { OrderFills, filledAmountOf } from './OrderFills';
 import { GTC_RULE, type OrderRowModel, type OrderStatusUi } from './orders-model';
+import { placedUnix } from './orders-sort';
 import { unlistedHint, unlistedText } from './unlisted';
 import './order-line.css';
 
@@ -62,9 +63,7 @@ export function needsAttention(row: OrderRowModel): boolean {
 /** What the one line of an order says (OrderRow), from its model: the time, the price, the trigger, the filled part and the value in KAS. */
 function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo | undefined, clock: Clock | null | undefined) {
   const decimals = tk?.decimals ?? RAW_TOKEN_DECIMALS;
-  const genesis = row.entry.view ? BigInt(row.entry.view.genesis.daa) : null;
-  const placedRecord = row.entry.record?.placedAtUnix ? BigInt(row.entry.record.placedAtUnix) : 0n;
-  const unix = placedRecord > 0n ? placedRecord : genesis !== null && clock ? daaToUnix(clock, genesis) : null;
+  const unix = placedUnix(row, clock);
   const time = unix !== null ? formatDateTime(Number(unix), { dateStyle: 'short', timeStyle: 'short' }) : '—';
   const priceOf = (v: bigint | null): string => (v === null ? '—' : row.pair ? pairPriceText(v, row, tk, b) : formatPricePerToken(v, decimals, row.scale, { group: ',' }));
   const price = priceOf(row.price);
@@ -203,7 +202,7 @@ export function OrderRow(props: OrderRowProps) {
         <span class="or-time num">{line.time}</span>
         <span class="or-market">
           {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
-          <span class="or-market-name">{marketText}</span>
+          <span class="or-market-name">{marketText.split('/').flatMap((part, i) => (i === 0 ? [part] : ['/', <wbr key={i} />, part]))}</span>
         </span>
         <span class="or-type">{t(`orders.type.${row.typeKey}`)}</span>
         <span class={`or-side or-side-${row.side}`}>{t(`common.side.${row.side}`)}</span>
@@ -211,8 +210,8 @@ export function OrderRow(props: OrderRowProps) {
         <span class="or-trigger">{line.trigger}</span>
         <span class="or-filled">
           <span class="num" title={line.budget ? t('orders.budgetOrder') : undefined}>
-            {line.filledText}{line.budget ? null : <> <span class="muted small">{line.unit}</span></>}
-            {line.pct !== null ? <span class="muted small"> {line.pct}%</span> : null}
+            {line.filledText}{line.budget ? null : <> <span class="muted small or-unit">{line.unit}</span></>}
+            {line.pct !== null ? <span class="muted small or-pct"> {line.pct}%</span> : null}
           </span>
           {line.pct !== null ? (
             <span class="or-bar" aria-hidden="true">

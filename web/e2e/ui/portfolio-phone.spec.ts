@@ -154,7 +154,7 @@ test.describe('desktop, 1280 px wide', () => {
     await connectWallet(page, 'kasware');
     await expect(page.getByTestId('portfolio-total')).toContainText('KAS');
     await expect(page.getByTestId(`balance-row-${ID}`)).toBeVisible();
-    expect(await page.getByTestId(`balance-row-${ID}`).evaluate((el) => getComputedStyle(el).display)).toBe('table-row');
+    // (the balances are a table where it fits, cards where it does not: phone-balances.spec has the table)
     expect(await page.getByTestId('portfolio-summary').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length)).toBe(4);
     await shot(page, `1280-${theme}-1-balances`);
     await page.getByTestId('orders-tab-active').click();

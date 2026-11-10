@@ -6,14 +6,30 @@ import { formatDateTime, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import { longId, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
-import { CopyText, ErrorBanner, fixedPricePerToken, Loading, Table, TableMessage, tickPriceFraction, useAsync } from '../kit';
+import { CopyText, ErrorBanner, SortButton, SortControl, ariaSortOf, fixedPricePerToken, Loading, Table, TableMessage, scaledUnits, sortBy, tickPriceFraction, useAsync, type SortColumn, type SortState, type SortValue } from '../kit';
 import { IdentityBlock } from '../market/Fingerprint';
-import { PHONE_QUERY, useMedia } from '../shell/narrow';
 import type { KascovMeta } from '../market/token-model';
 import { fillHistory, type FillRow } from './fills-model';
 import { PortfolioPager, pageOf } from './portfolio-paging';
+import { TABLE_FROM, useTableCards } from './use-table-cards';
 import './balances.css';
 import type { OrderRowModel } from './orders-model';
+
+export const FILL_SORT_KEYS = ['time', 'market', 'side', 'price', 'amount', 'value', 'tx'] as const;
+export type FillSortKey = (typeof FILL_SORT_KEYS)[number];
+
+/** The columns of the fills table, in its order; `time` is the list's own order (newest first). */
+export function fillColumns(): SortColumn<FillSortKey>[] {
+  return [
+    { key: 'time', label: t('orders.fills.time'), kind: 'time' },
+    { key: 'market', label: t('orders.col.market'), kind: 'text' },
+    { key: 'side', label: t('orders.col.side'), kind: 'text' },
+    { key: 'price', label: t('orders.col.price'), kind: 'number' },
+    { key: 'amount', label: t('orders.col.amount'), kind: 'number' },
+    { key: 'value', label: t('orders.col.valueKas'), kind: 'number' },
+    { key: 'tx', label: t('orders.fills.tx'), kind: 'text' },
+  ];
+}
 
 /** Events of a few orders at a time: one request per order that filled. */
 const BATCH = 4;
@@ -34,6 +50,9 @@ export function WalletFills(props: {
   loadEvents: ((id: Hex, signal: AbortSignal) => Promise<EventView[]>) | null;
   /** kascov.io's picture of a token, for its icon */
   iconOf?: (covenantId: string) => KascovMeta | null;
+  /** the viewer's sort of the fills (none: newest first) and how it is changed */
+  sort: SortState<FillSortKey> | null;
+  onSort: (s: SortState<FillSortKey> | null) => void;
   /** the rows of a page and the page shown (0 first): the newest fills come first */
   size: number;
   page: number;
@@ -57,23 +76,49 @@ export function WalletFills(props: {
     },
     [key, !!props.loadEvents],
   );
-  const all = data.data;
-  const { rows: list, window: win } = pageOf(all ?? [], props.size, props.page);
-  const pager = all ? <PortfolioPager id="wallet-fills" window={win} total={all.length} onPage={props.onPage} /> : null;
   const quoteOfPair = useMemo(() => new Map<string, TokenInfo | undefined>(), []);
-  // a phone reads each fill as a card (market, side and price; amount and value; time and transaction), a wider screen as a table row
-  const phone = useMedia(PHONE_QUERY);
-
-  /** What one fill says, in the words of both layouts. */
-  const factsOf = ({ fill, row, token }: WalletFill) => {
-    const decimals = token?.decimals ?? RAW_TOKEN_DECIMALS;
+  const marketOf = ({ row, token }: WalletFill): string => {
     const ticker = token?.ticker ?? (row.token ? longId(row.token) : '?');
     let quote: TokenInfo | undefined;
     if (row.pair) {
       if (!quoteOfPair.has(row.pair.quote)) quoteOfPair.set(row.pair.quote, props.tokenOf(row.pair.quote, row.pair.quoteScale));
       quote = quoteOfPair.get(row.pair.quote);
     }
-    const market = row.pair ? `${ticker}/${quote?.ticker ?? longId(row.pair.quote)}` : `${ticker}/KAS`;
+    return row.pair ? `${ticker}/${quote?.ticker ?? longId(row.pair.quote)}` : `${ticker}/KAS`;
+  };
+  /** What a column compares: the amounts as tokens (the tokens have their own decimals), the KAS value as sompi, the time as milliseconds. */
+  const valueOf = (w: WalletFill, key: FillSortKey): SortValue => {
+    const { fill, row, token } = w;
+    switch (key) {
+      case 'time':
+        return fill.atMs > 0 ? fill.atMs : null;
+      case 'market':
+        return marketOf(w);
+      case 'side':
+        return t(`common.side.${row.side}`);
+      case 'price':
+        return !row.pair && fill.price !== null ? fill.price : null;
+      case 'amount':
+        return scaledUnits(fill.amount, token?.decimals ?? RAW_TOKEN_DECIMALS);
+      case 'value':
+        return !row.pair && fill.price !== null ? quoteOf(fill.amount, fill.price, row.scale, 'down') : null;
+      case 'tx':
+        return fill.txid;
+    }
+  };
+  const all = data.data ? sortBy(data.data, props.sort, valueOf) : data.data;
+  const { rows: list, window: win } = pageOf(all ?? [], props.size, props.page);
+  const cols = fillColumns();
+  const ownCol = cols[0]!;
+  const pager = all ? <PortfolioPager id="wallet-fills" window={win} total={all.length} onPage={props.onPage} /> : null;
+  // a narrow box reads each fill as a card (market, side and price; amount and value; time and transaction), a wide one as a table row (use-table-cards.ts)
+  const [box, phone] = useTableCards(TABLE_FROM);
+
+  /** What one fill says, in the words of both layouts. */
+  const factsOf = ({ fill, row, token }: WalletFill) => {
+    const decimals = token?.decimals ?? RAW_TOKEN_DECIMALS;
+    const ticker = token?.ticker ?? (row.token ? longId(row.token) : '?');
+    const market = marketOf({ fill, row, token });
     const marketHref = row.pair ? routeToHash(pairRoute(row.pair.base, row.pair.quote)) : row.token ? `#/market/${row.token}` : undefined;
     // a KAS market's fill has a price and a KAS value; a pair fill is volume only (the B amount stands for its value)
     const price = !row.pair && fill.price !== null ? fixedPricePerToken(fill.price, decimals, row.scale, (token ? tickPriceFraction(token.tick, decimals, row.scale) : null) ?? 8) : '—';
@@ -86,11 +131,12 @@ export function WalletFills(props: {
 
   if (!props.loadEvents) return <p class="muted" data-testid="wallet-fills-off">{t('orders.fills.noIndexer')}</p>;
   return (
-    <div class="stack-sm" data-testid="wallet-fills">
+    <div class="stack-sm" data-testid="wallet-fills" ref={box}>
       {data.loading && !all ? <Loading /> : null}
       <ErrorBanner error={data.error} onRetry={data.reload} />
       {all && phone ? (
         <div class="wf-cards" data-testid="wallet-fills-cards">
+          {all.length > 1 ? <SortControl id="wallet-fills" columns={cols} state={props.sort} own={ownCol} onSort={props.onSort} /> : null}
           {list.length === 0 ? <p class="muted center" data-testid="wallet-fills-empty">{t('orders.fills.none')}</p> : null}
           {list.map((item) => {
             const { fill, row } = item;
@@ -124,13 +170,11 @@ export function WalletFills(props: {
         <Table dense class="ml-table" data-testid="wallet-fills-table">
           <thead>
             <tr>
-              <th>{t('orders.fills.time')}</th>
-              <th>{t('orders.col.market')}</th>
-              <th>{t('orders.col.side')}</th>
-              <th class="right">{t('orders.col.price')}</th>
-              <th class="right">{t('orders.col.amount')}</th>
-              <th class="right">{t('orders.col.valueKas')}</th>
-              <th>{t('orders.fills.tx')}</th>
+              {cols.map((c) => (
+                <th key={c.key} class={c.key === 'price' || c.key === 'amount' || c.key === 'value' ? 'right' : undefined} aria-sort={ariaSortOf(props.sort, c.key, ownCol)}>
+                  <SortButton id="wallet-fills" col={c} state={props.sort} own={ownCol} onSort={props.onSort} />
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -154,7 +198,7 @@ export function WalletFills(props: {
                   </td>
                   <td class="right num">{f.value}</td>
                   <td>
-                    <CopyText value={fill.txid} head={6} tail={4} href={txUrl(fill.txid)} />
+                    <CopyText value={fill.txid} head={6} tail={4} href={txUrl(fill.txid)} data-testid="wallet-fill-tx" />
                   </td>
                 </tr>
               );

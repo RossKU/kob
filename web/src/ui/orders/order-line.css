@@ -3,7 +3,9 @@
 .or-card { padding: 0; overflow: hidden; }
 .or-line, .or-head {
   display: grid;
-  grid-template-columns: 76px minmax(150px, 1.1fr) 92px 44px minmax(90px, 0.9fr) minmax(90px, 0.8fr) minmax(150px, 1.3fr) 96px minmax(120px, 0.9fr) 72px 32px;
+  /* the room is shared by weight: the market and the filled part get most of what the fixed minimums leave (their texts are the long ones); the time has room for the
+     longest date ("10/30/26, 10:38 PM"); a text that still does not fit its cell wraps inside it, it never paints over a neighbour */
+  grid-template-columns: 10em minmax(140px, 2fr) minmax(76px, 0.9fr) 38px minmax(100px, 1fr) minmax(50px, 0.6fr) minmax(140px, 2fr) minmax(100px, 1fr) minmax(112px, 1fr) 78px 28px;
   column-gap: 10px;
   align-items: center;
   padding: 6px 12px;
@@ -14,22 +16,26 @@
 .or-head { min-height: 0; padding-top: 0; padding-bottom: 4px; font-size: 0.74rem; color: var(--muted); }
 .or-head .right, .or-price, .or-value, .or-filled { text-align: right; }
 .or-line > * { min-width: 0; }
-.or-time { color: var(--muted); white-space: nowrap; font-size: 0.8rem; }
+.or-time { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .or-market { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; }
-.or-market-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.or-type, .or-trigger { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* never cut: a name too long for its column wraps at its "/" */
+.or-market-name { overflow-wrap: break-word; }
+.or-type, .or-trigger { overflow-wrap: break-word; }
 .or-trigger { color: var(--muted); font-size: 0.8rem; }
 .or-side { font-weight: 600; }
 .or-side-buy { color: var(--buy); }
 .or-side-sell { color: var(--sell); }
-.or-price, .or-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-.or-filled { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.or-price, .or-value { font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
+.or-filled { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; font-variant-numeric: tabular-nums; }
+.or-filled > .num { min-width: 0; overflow-wrap: break-word; }
 .or-bar { display: block; width: 100%; max-width: 140px; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; }
 .or-bar > span { display: block; height: 100%; background: var(--primary); }
 .or-status { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* in the one-line grid a status too long for its cell ("expired (IOC/FOK)") wraps inside its pill */
+@container orc (min-width: 1120px) { .or-status .badge { white-space: normal; min-width: 0; } }
 .or-warn { display: inline-flex; color: var(--warn); flex: none; }
 .or-act { display: flex; justify-content: flex-end; }
-.or-toggle { width: 32px; height: 32px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.or-toggle { width: 28px; height: 32px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
 .or-toggle:hover { background: var(--surface-3); color: var(--text); }
 .or-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .or-toggle svg { transition: transform 0.15s; }
@@ -39,48 +45,44 @@
 .order-card.nested .or-market { padding-left: 14px; }
 @media (prefers-reduced-motion: reduce) { .or-toggle svg { transition: none; } }
 
-/* below a wide screen: two lines per order; the column titles go */
-@media (max-width: 1279px) {
-  .or-head { display: none; }
-  .or-line {
-    grid-template-columns: auto minmax(0, 1fr) auto auto 32px;
-    grid-template-areas: 'side market status act toggle' 'time price filled filled toggle';
-    row-gap: 4px;
-    column-gap: 8px;
-  }
-  .or-side { grid-area: side; }
-  .or-market { grid-area: market; }
-  .or-status { grid-area: status; justify-content: flex-end; }
-  .or-act { grid-area: act; }
-  .or-toggle { grid-area: toggle; }
-  .or-time { grid-area: time; }
-  .or-price { grid-area: price; text-align: left; }
-  .or-filled { grid-area: filled; }
-  .or-type, .or-trigger, .or-value { display: none; }
-}
-/* a phone: a card of up to four lines on one fixed grid, so the side, the icon and market and the status of every order sit at the same x
-   1: side, icon and market (whole: it wraps rather than being cut), the toggle   2: time, price, status at the right edge   3: the filled part with its bar
-   4: Cancel, tap-sized */
-@media (max-width: 479px) {
+/* The width an order has, not the screen's: one line (the columns above) from 1120 px of card; in any narrower card (a phone, a tablet, a market page's panel) a card of up to four
+   lines on one fixed grid, so the side, the icon and market and the status of every order sit at the same x, whatever the date or the status say:
+   1: side, icon and market (whole: it wraps at its "/" rather than being cut), the toggle   2: time, status at the right edge (a status of any length: the time
+   keeps its line)   3: price, the filled part with its bar under it   4: Cancel, tap-sized; the column titles go */
+.or-card { container: orc / inline-size; }
+.or-wrap { container: orl / inline-size; }
+@container orl (max-width: 1119px) { .or-head { display: none; } }
+/* the sort control stands in for the column titles where the orders are cards */
+@container orl (min-width: 1120px) { .or-sortctl { display: none; } }
+@container orc (max-width: 1119px) {
   .or-line {
     grid-template-columns: 2.6em minmax(0, 1fr) auto auto 36px;
-    grid-template-areas: 'side market market market toggle' 'time time price status status' 'filled filled filled filled filled' 'act act act act act';
+    grid-template-areas: 'side market market market toggle' 'time time time status status' 'price price filled filled filled' 'act act act act act';
     row-gap: 6px;
+    column-gap: 8px;
     padding: 8px 10px;
   }
-  .or-side { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .or-market { align-items: flex-start; }
+  .or-side { grid-area: side; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .or-market { grid-area: market; align-items: flex-start; }
   .or-market > :not(.or-market-name) { flex: none; }
-  .or-market-name { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
-  .or-status { justify-content: flex-end; white-space: nowrap; }
-  .or-toggle { width: 36px; height: 36px; margin: -6px 0; justify-self: end; }
-  .or-price { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; text-align: right; }
-  .or-filled { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; text-align: left; white-space: normal; }
-  .or-filled > .num { min-width: 0; overflow-wrap: anywhere; }
-  .or-bar { flex: none; width: 72px; }
+  .or-status { grid-area: status; justify-content: flex-end; white-space: nowrap; }
+  .or-act { grid-area: act; justify-content: stretch; }
   .or-act:empty { display: none; }
-  .or-act { justify-content: stretch; }
   .or-act .btn { width: 100%; min-height: 40px; }
+  .or-toggle { grid-area: toggle; width: 36px; height: 36px; margin: -6px 0; justify-self: end; }
+  .or-time { grid-area: time; }
+  .or-time { white-space: nowrap; }
+  .or-price { grid-area: price; text-align: left; white-space: nowrap; overflow: visible; text-overflow: clip; align-self: start; }
+  .or-filled { grid-area: filled; }
+  /* the amounts and the percentage stay on one line (a fill that adds a digit moves nothing below it); only a long token name wraps, inside itself */
+  .or-filled > .num { min-width: 0; white-space: nowrap; }
+  .or-filled .or-unit { white-space: normal; overflow-wrap: anywhere; }
+  .or-type, .or-trigger, .or-value { display: none; }
+}
+/* a card with room: Cancel at its right edge at its own width, not across the card */
+@container orc (min-width: 520px) and (max-width: 1119px) {
+  .or-act { justify-content: flex-end; }
+  .or-act .btn { width: auto; min-width: 8rem; }
 }
 
 /* a position (PositionCard.tsx): one head line (the toggle, the icon and fingerprint, title, side, phase, its buttons), its summary under it on demand,

@@ -50,6 +50,9 @@
 }
 .act-head { color: var(--muted); font-size: 0.74rem; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
 .act-head > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.act-head > .act-num { display: flex; justify-content: flex-end; }
+/* the sort control stands in for the header where the rows are two lines (below) */
+.act-sortctl { display: none; }
 .act-num { text-align: right; }
 .act-body { --act-row-h: 46px; }
 .act-body.act-rows { position: relative; height: calc(var(--n) * var(--act-row-h)); }
@@ -125,6 +128,7 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 /* a phone: two lines per row (icon | market and tx over the wallet | amount over the confirmations and the time) */
 @container actlog (max-width: 559px) {
   .act-head { display: none; }
+  .act-sortctl { display: inline-flex; }
   .act-body { --act-row-h: 64px; }
   .act-row {
     grid-template-columns: 30px minmax(0, 1fr) auto auto;
