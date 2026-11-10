@@ -5,6 +5,7 @@ export default {
   'activity.summary.sinceNone': 'no trade yet',
   'activity.summary.volume': 'Volume',
   'activity.summary.volumeKas': 'Volume, KAS markets',
+  'activity.summary.volumeUsd': 'Volume, KAS markets (USD)',
   'activity.summary.trades': 'Trades',
   'activity.summary.tradesN': '{n} trades',
   'activity.summary.orders': 'Orders placed',
@@ -29,6 +30,7 @@ export default {
   'activity.summary.activeSub': 'tokens with a KAS trade',
   'activity.summary.chart': 'Volume of the KAS markets per {unit}; choose a bar for its numbers',
   'activity.summary.bar': '{when}: {kas} KAS, {trades} trades',
+  'activity.summary.barUsd': '{when}: {kas}, {trades} trades',
   'activity.summary.weekOf': 'week of {day}',
   'activity.summary.unit.hour': 'hour',
   'activity.summary.unit.sixHours': '6 hours',
@@ -54,6 +56,7 @@ export default {
   'activity.col.wallet': 'Wallet',
   'activity.col.amount': 'Amount',
   'activity.col.price': 'Price (KAS)',
+  'activity.col.priceUsd': 'Price (USD)',
   'activity.col.conf': 'Conf.',
   'activity.col.time': 'Time',
 

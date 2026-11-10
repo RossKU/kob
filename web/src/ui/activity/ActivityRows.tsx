@@ -1,12 +1,13 @@
 // The activity log's rows, built to stay still while the list is live: each row is a keyed, memoized component whose cells render again only when
 // what they show changed (ActivityStore keeps an unchanged row's object); rows sit at fixed heights and move by a transform when a row arrives above
 // them (no layout shift); the confirmation cell follows the chain on its own, from one shared one-second clock, and renders only when its value changes.
+import { kasPerTokenToUsd, kasTitleOf, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat } from '../../app/fiat';
 import { navigate, pairRoute, tokenRoute } from '../../app/router';
 import { memo } from 'preact/compat';
 import { useEffect, useState } from 'preact/hooks';
 import { formatDateTime, t } from '../../i18n';
 import type { Hex } from '../../kob/types';
-import { pow10 } from '../../kob/units';
+import { formatKas, pow10 } from '../../kob/units';
 import { compactZeros, fitAmountColumn, unitsFraction, zerosTitle } from '../kit';
 import { priceDecimals, priceText } from '../market/market-model';
 import { TokenIcon } from '../market/TokenIcon';
@@ -19,6 +20,8 @@ export interface RowFormat {
   decimalsOf(token: Hex): number;
   marketText(m: MarketRef): string;
   explorerHost: string;
+  /** the USD display in force (Settings): the KAS value line and the price are dollars; null = KAS */
+  fiat: Fiat | null;
 }
 
 // ------------------------------------------------------------------------------------------------ the shared clock
@@ -152,7 +155,8 @@ const RowCells = memo(
     const fmt = props.fmt;
     const addrs = props.addrs ? props.addrs.split('\n') : [];
     const amount = amountOf(r, fmt);
-    const price = r.price ? priceRange(r.price, r.market.kind === 'token' ? fmt.decimalsOf(r.market.token) : 0) : '—';
+    const px = r.price ? priceRange(r.price, r.market.kind === 'token' ? fmt.decimalsOf(r.market.token) : 0, r.market.kind === 'token' ? fmt.fiat : null) : null;
+    const price = px ? px.text : '—';
     return (
       <>
         <span class="act-c-ty" role="cell">
@@ -180,9 +184,9 @@ const RowCells = memo(
         </span>
         <span class={`act-c-amt act-num${r.side ? ` act-${r.side}` : ''}`} role="cell" title={amount.exact ?? zerosTitle(amount.text)}>
           <b>{compactZeros(amount.text)}</b>
-          {amount.sub ? <span class="act-sub" title={zerosTitle(amount.sub)}>{compactZeros(amount.sub)}</span> : null}
+          {amount.sub ? <span class="act-sub" title={amount.subTitle ?? zerosTitle(amount.sub)}>{compactZeros(amount.sub)}</span> : null}
         </span>
-        <span class="act-c-px act-num" role="cell" title={price}>{compactZeros(price)}</span>
+        <span class="act-c-px act-num" role="cell" title={px ? px.title : price}>{compactZeros(price)}</span>
         <ConfCell daa={r.daa} confirmations={r.confirmations} settled={r.settled} chainDaa={props.chainDaa} chainAt={props.chainAt} />
         <span class="act-c-time act-num" role="cell" title={props.fullTime}>{rowTime(r.timeMs, Date.parse(props.today))}</span>
       </>
@@ -195,17 +199,22 @@ const RowCells = memo(
 const walletBody = (a: string): string => (a.includes(':') ? a.slice(a.indexOf(':') + 1) : a);
 
 /** The amount cell's two lines: the token amount and its KAS value (a pair: the B amount; a pair placement: its side). */
-function amountOf(r: ActivityRow, fmt: RowFormat): { text: string; sub: string; exact: string | null } {
+function amountOf(r: ActivityRow, fmt: RowFormat): { text: string; sub: string; subTitle: string | null; exact: string | null } {
   const token = r.amount?.token ?? null;
   const a = r.amount && token ? cellText(r.amount.units, fmt.decimalsOf(token)) : null;
   const text = a && token ? `${a.text} ${fmt.nameOf(token)}` : '—';
   let sub = '';
+  let subTitle: string | null = null;
   // a pair placement keeps its side on the second line (its quote amount is there to turn the row round on the other orientation's page)
   if (r.kind === 'placed' && r.pairSide) sub = t(r.pairSide === 'ask' ? 'activity.pairAsk' : 'activity.pairBid');
-  else if (r.value?.kind === 'kas') sub = `${fitAmountColumn([r.value.sompi], 8, { fraction: 2, width: 16 })[0]!.text} KAS`;
+  else if (r.value?.kind === 'kas' && fmt.fiat) {
+    // dollars, the exact KAS figure and the rate in the tooltip
+    sub = usdTextFit(sompiToUsd(r.value.sompi, fmt.fiat.rate), 16);
+    subTitle = kasTitleOf(formatKas(r.value.sompi, { group: ',' }), fmt.fiat);
+  } else if (r.value?.kind === 'kas') sub = `${fitAmountColumn([r.value.sompi], 8, { fraction: 2, width: 16 })[0]!.text} KAS`;
   else if (r.value?.kind === 'token') sub = `${cellText(r.value.units, fmt.decimalsOf(r.value.token)).text} ${fmt.nameOf(r.value.token)}`;
   else if (r.pairSide) sub = t(r.pairSide === 'ask' ? 'activity.pairAsk' : 'activity.pairBid');
-  return { text, sub, exact: a?.exact && token ? `${a.exact} ${fmt.nameOf(token)}` : null };
+  return { text, sub, subTitle, exact: a?.exact && token ? `${a.exact} ${fmt.nameOf(token)}` : null };
 }
 
 /** One token icon for a KAS book, `A / B` for a pair (the tickers in the cell's title and the row's label). It leads to that market; the rest of the row to the transaction. */
@@ -245,10 +254,15 @@ function cellText(units: bigint, decimals: number): { text: string; exact: strin
   return fitAmountColumn([units], decimals, { fraction: Math.min(unitsFraction(units, decimals), 6), width: 12 })[0]!;
 }
 
-/** KAS per whole token (the row's own precision); a ladder shows its range. */
-function priceRange(p: { low: bigint; high: bigint; scale: bigint }, decimals: number): string {
+/** KAS per whole token (the row's own precision); a ladder shows its range. With `fiat`: dollars per whole token, and `title` carries the KAS price and the rate. */
+function priceRange(p: { low: bigint; high: bigint; scale: bigint }, decimals: number, fiat: Fiat | null = null): { text: string; title: string } {
   const perToken = (x: bigint) => (p.scale > 0n ? (x * pow10(decimals)) / p.scale : x);
   const dp = priceDecimals(perToken(p.high));
   const one = (x: bigint) => priceText(x, decimals, p.scale, dp);
-  return p.low === p.high ? one(p.low) : `${one(p.low)}–${one(p.high)}`;
+  const kas = p.low === p.high ? one(p.low) : `${one(p.low)}–${one(p.high)}`;
+  if (!fiat) return { text: kas, title: kas };
+  // KAS per whole token = price x 10^decimals / (scale x 1e8)
+  const usd = (x: bigint) => usdText(kasPerTokenToUsd({ num: x * pow10(decimals), den: (p.scale > 0n ? p.scale : 1n) * 100_000_000n }, fiat.rate));
+  const text = p.low === p.high ? usd(p.low) : `${usd(p.low)}–${usd(p.high)}`;
+  return { text, title: `${kas} KAS · ${rateTitle(fiat)}` };
 }

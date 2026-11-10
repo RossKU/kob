@@ -28,6 +28,7 @@ import {
   type ActivityKind, type ActivityPrefs, type ActivityRow, type ActorFilter, type MarketFilter, type MarketRef, type PrefsScope,
 } from './activity-model';
 import { KindGlyph, KindIcon, kindLabel } from './ActivityIcons';
+import { useFiat } from '../../app/use-fiat';
 import { ActivityRowView, RowsSkeleton, type RowFormat } from './ActivityRows';
 import { FIRST_LIMIT } from './activity-store';
 import { useActivity } from './use-activity';
@@ -40,14 +41,14 @@ const ACTIVITY_SORT_KEYS = ['kind', 'market', 'tx', 'wallet', 'amount', 'price',
 type ActivitySortKey = (typeof ACTIVITY_SORT_KEYS)[number];
 
 /** The columns of the log, in its order; `time` is its own order (newest first). */
-function activityColumns(): SortColumn<ActivitySortKey>[] {
+function activityColumns(usd: boolean): SortColumn<ActivitySortKey>[] {
   return [
     { key: 'kind', label: t('activity.col.kind'), kind: 'text' },
     { key: 'market', label: t('activity.col.market'), kind: 'text' },
     { key: 'tx', label: t('activity.col.tx'), kind: 'text' },
     { key: 'wallet', label: t('activity.col.wallet'), kind: 'text' },
     { key: 'amount', label: t('activity.col.amount'), kind: 'number' },
-    { key: 'price', label: t('activity.col.price'), kind: 'number' },
+    { key: 'price', label: t(usd ? 'activity.col.priceUsd' : 'activity.col.price'), kind: 'number' },
     { key: 'conf', label: t('activity.col.conf'), kind: 'number' },
     { key: 'time', label: t('activity.col.time'), kind: 'time' },
   ];
@@ -120,6 +121,8 @@ function ActivityLogView(props: ActivityLogProps) {
     return addressCache.get(k)!;
   };
 
+  // the USD display (Settings): the KAS value line and the price of a KAS-market row in dollars; null = KAS
+  const fiat = useFiat();
   // how the rows name things: one object per registry and network, so the memoized rows see equal props between renders
   const fmt = useMemo<RowFormat>(() => {
     let explorerHost = 'the explorer';
@@ -133,9 +136,10 @@ function ActivityLogView(props: ActivityLogProps) {
       decimalsOf,
       marketText: (m: MarketRef) => (m.kind === 'token' ? t('activity.market.kas', { ticker: nameOf(m.token) }) : t('activity.market.pair', { base: nameOf(m.base), quote: nameOf(m.quote) })),
       explorerHost,
+      fiat,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [registry, config, declared]);
+  }, [registry, config, declared, fiat]);
 
   /** What a column compares for a row (the amounts as tokens, the price at its low end, the time in milliseconds). */
   const activityValue = (r: ActivityRow, key: ActivitySortKey): SortValue => {
@@ -187,7 +191,7 @@ function ActivityLogView(props: ActivityLogProps) {
   const byTime = logPage(view.rows, size, asked);
   // the hold is about the newest rows, in whatever order they are shown; a sorted log pages the same rows by the viewer's column (a row that arrives takes its place in it)
   keptBefore.current = byTime.kept;
-  const cols = activityColumns();
+  const cols = activityColumns(!!fiat);
   const ownCol = cols[cols.length - 1]!;
   const kept = sort ? sortBy(byTime.kept, sort, (r, key) => activityValue(r, key)) : byTime.kept;
   const pager = pageWindow(kept.length, size, asked);

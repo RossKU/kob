@@ -1,5 +1,6 @@
 // `#/activity`: the activity log of every market, full width (kaspa.stream's transaction list, for KOB). The page has no market filter: an old link with
 // `?market=...` shows every market too. The log on a token or pair page shows that market.
+import { FiatNote } from '../../app/use-fiat';
 import type { PairFillsView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { marketKeyOf, type MarketFilter, type MarketRef } from './activity-model';
@@ -14,6 +15,8 @@ const EVERY_MARKET: MarketFilter = { kind: 'all' };
 export function ActivityPage() {
   return (
     <div class="act-page" data-testid="activity-page">
+      {/* the USD display (Settings): what the dollars of the summary and the feed are, or why KAS is shown */}
+      <FiatNote />
       <ActivitySummary />
       <ActivityLog market={EVERY_MARKET} prefsScope="page" eager data-testid="activity" />
     </div>

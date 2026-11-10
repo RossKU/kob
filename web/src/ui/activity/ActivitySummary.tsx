@@ -5,6 +5,9 @@
 // shows without an indexer or in standalone mode (the node alone has no history).
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import { kasTitleOf, sompiToUsdCompact, type Fiat } from '../../app/fiat';
+import { useFiat } from '../../app/use-fiat';
+import { formatKas } from '../../kob/units';
 import type { IndexerApi } from '../../data/indexer';
 import type { ActivityStatsView, CandleView } from '../../data/indexer-types';
 import { t } from '../../i18n';
@@ -85,14 +88,20 @@ interface WindowActivity {
   activity: ActivityStatsView | null;
 }
 
-function Stat(props: { label: string; value: string | null; sub?: string | null; kas?: boolean; testid: string }) {
+/** A KAS value of the summary as it is shown: KAS (compact, or to the cent when small), or dollars with the exact KAS figure and the rate in the tooltip. */
+function money(sompi: bigint, fiat: Fiat | null, fine = false): { text: string; title?: string } {
+  if (!fiat) return { text: fine ? fineKas(sompi) : compactKas(sompi) };
+  return { text: sompiToUsdCompact(sompi, fiat), title: kasTitleOf(formatKas(sompi, { group: ',' }), fiat) };
+}
+
+function Stat(props: { label: string; value: string | null; sub?: string | null; kas?: boolean; usd?: boolean; tip?: string | undefined; testid: string }) {
   const known = props.value !== null;
   return (
     <div class="sum-stat" data-testid={props.testid}>
       <span class="sum-k">{props.label}</span>
-      <span class="sum-v" title={known ? undefined : UNKNOWN}>
+      <span class="sum-v" title={known ? props.tip : UNKNOWN}>
         {known ? props.value : DASH}
-        {known && props.kas ? <span class="sum-unit">KAS</span> : null}
+        {known && props.kas && !props.usd ? <span class="sum-unit">KAS</span> : null}
       </span>
       {/* a sub line that comes with the figures (null while they load) keeps its place meanwhile: the tile does not grow when they arrive */}
       {props.sub !== undefined ? <span class="sum-s">{props.sub ?? NBSP}</span> : null}
@@ -118,6 +127,8 @@ function barWhen(ms: number, w: SummaryWindow): string {
 export function ActivitySummary() {
   const { indexer, standalone } = useServices();
   const sa = useStandalone(standalone);
+  // the USD display (Settings): every KAS figure of the summary in dollars; null = KAS
+  const fiat = useFiat();
   const off = !indexer || !!sa?.active;
   const data = useAsync((signal) => (off ? Promise.resolve(null) : load(indexer!, signal)), [indexer, off]);
   const [win, setWin] = useState<SummaryWindow>('1D');
@@ -150,7 +161,8 @@ export function ActivitySummary() {
   const wd = winData.data && winData.data.win === win ? winData.data : null;
   const winAct = wd ? activityFigures(wd.activity) : null;
   const num = (n: number | null | undefined): string | null => (n === null || n === undefined ? null : n.toLocaleString('en-US'));
-  const kas = (v: bigint | null | undefined): string | null => (v === null || v === undefined ? null : fineKas(v));
+  const kas = (v: bigint | null | undefined): string | null => (v === null || v === undefined ? null : money(v, fiat, true).text);
+  const kasTip = (v: bigint | null | undefined): string | undefined => (v === null || v === undefined ? undefined : money(v, fiat, true).title);
   if (off || (data.error && !d)) return null;
   const loading = !view;
   const w = view?.w;
@@ -170,12 +182,12 @@ export function ActivitySummary() {
         </span>
       </div>
       <div class="sum-strip sum-strip-6">
-        <Stat label={t('activity.summary.volume')} value={view ? compactKas(view.all.quote) : ''} kas testid="summary-all-volume" />
+        <Stat label={t('activity.summary.volume')} value={view ? money(view.all.quote, fiat).text : ''} tip={view ? money(view.all.quote, fiat).title : undefined} kas usd={!!fiat} testid="summary-all-volume" />
         <Stat label={t('activity.summary.trades')} value={view ? view.all.trades.toLocaleString('en-US') : ''} testid="summary-all-trades" />
         <Stat label={t('activity.summary.orders')} value={view ? num(view.allAct.orders) : ''} testid="summary-all-orders" />
         <Stat label={t('activity.summary.traders')} value={view ? num(view.allAct.traders) : ''} testid="summary-all-traders" />
         <Stat label={t('activity.summary.executors')} value={view ? num(view.allAct.executors) : ''} testid="summary-all-executors" />
-        <Stat label={t('activity.summary.paid')} value={view ? kas(view.allAct.paid) : ''} kas testid="summary-all-paid" />
+        <Stat label={t('activity.summary.paid')} value={view ? kas(view.allAct.paid) : ''} tip={view ? kasTip(view.allAct.paid) : undefined} kas usd={!!fiat} testid="summary-all-paid" />
       </div>
 
       <div class="sum-band">
@@ -195,17 +207,17 @@ export function ActivitySummary() {
         <div class="sum-card sum-chart-card">
           <div class="sum-chart-head">
             <div class="sum-stat">
-              <span class="sum-k">{t('activity.summary.volumeKas')}</span>
-              <span class="sum-v sum-v-big" data-testid="summary-window-volume">
-                {w ? compactKas(w.quote) : ''}
-                <span class="sum-unit">KAS</span>
+              <span class="sum-k">{t(fiat ? 'activity.summary.volumeUsd' : 'activity.summary.volumeKas')}</span>
+              <span class="sum-v sum-v-big" data-testid="summary-window-volume" title={w ? money(w.quote, fiat).title : undefined}>
+                {w ? money(w.quote, fiat).text : ''}
+                {fiat ? null : <span class="sum-unit">KAS</span>}
               </span>
               <span class={`sum-s ${vol.tone}`}>{w ? vol.text : ' '}</span>
             </div>
             <p class="sum-readout" aria-live="polite" data-testid="summary-readout">
               {bar && w ? (
                 <>
-                  <strong>{barWhen(bar.t, win)}</strong> {compactKas(bar.quote)} KAS · {t('activity.summary.tradesN', { n: bar.trades.toLocaleString('en-US') })}
+                  <strong>{barWhen(bar.t, win)}</strong> <span title={money(bar.quote, fiat).title}>{money(bar.quote, fiat).text}{fiat ? '' : ' KAS'}</span> · {t('activity.summary.tradesN', { n: bar.trades.toLocaleString('en-US') })}
                 </>
               ) : (
                 ' '
@@ -214,8 +226,8 @@ export function ActivitySummary() {
           </div>
           <div class="sum-chart">
             <div class="sum-y" aria-hidden="true">
-              <span>{top > 0n ? compactKas(top) : ''}</span>
-              <span>{top > 0n ? compactKas(top / 2n) : ''}</span>
+              <span>{top > 0n ? money(top, fiat).text : ''}</span>
+              <span>{top > 0n ? money(top / 2n, fiat).text : ''}</span>
               <span>0</span>
             </div>
             <div class="sum-plot">
@@ -227,7 +239,8 @@ export function ActivitySummary() {
                     type="button"
                     class="sum-bar"
                     aria-pressed={i === pick ? 'true' : 'false'}
-                    aria-label={t('activity.summary.bar', { when: barWhen(b.t, win), kas: compactKas(b.quote), trades: b.trades.toLocaleString('en-US') })}
+                    aria-label={t(fiat ? 'activity.summary.barUsd' : 'activity.summary.bar', { when: barWhen(b.t, win), kas: money(b.quote, fiat).text, trades: b.trades.toLocaleString('en-US') })}
+                    title={money(b.quote, fiat).title}
                     onMouseEnter={() => setSel(i)}
                     onFocus={() => setSel(i)}
                     onClick={() => setSel(i)}
@@ -249,7 +262,7 @@ export function ActivitySummary() {
           <Stat label={t('activity.summary.executors')} value={winAct ? num(winAct.executors) : ''} testid="summary-window-executors" />
           <Stat label={t('activity.summary.orders')} value={winAct ? num(winAct.orders) : ''} testid="summary-window-orders" />
           <Stat label={t('activity.summary.traders')} value={winAct ? num(winAct.traders) : ''} testid="summary-window-traders" />
-          <Stat label={t('activity.summary.paid')} value={winAct ? kas(winAct.paid) : ''} kas testid="summary-window-paid" />
+          <Stat label={t('activity.summary.paid')} value={winAct ? kas(winAct.paid) : ''} tip={winAct ? kasTip(winAct.paid) : undefined} kas usd={!!fiat} testid="summary-window-paid" />
         </div>
       </div>
 
@@ -271,7 +284,7 @@ export function ActivitySummary() {
           </span>
           <span class="sum-s">{books ? t('activity.summary.ordersSplit', { bids: books.bids, asks: books.asks, pairs: books.pairOrders }) : ' '}</span>
         </div>
-        <Stat label={t('activity.summary.locked')} value={view ? kas(view.allAct.locked) : ''} kas testid="summary-now-locked" />
+        <Stat label={t('activity.summary.locked')} value={view ? kas(view.allAct.locked) : ''} tip={view ? kasTip(view.allAct.locked) : undefined} kas usd={!!fiat} testid="summary-now-locked" />
         <Stat
           label={t('activity.summary.withOrders')}
           value={books ? String(books.tokensWithOrders + books.pairs) : ''}
