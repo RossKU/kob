@@ -31,7 +31,7 @@ jobs:
     #   rust      crates/, vendor/, contracts/, registry/, scripts/, tools/, packages/, Cargo.*, toolchain files, and the two docs the Rust tests
     #             include (docs/spec/kob1-payload.md, docs/ops/executor.md): fmt, clippy, test, budget-table, wasm, x402-sdk, contracts, deps,
     #             reproducible, and web (the web build embeds kob-wasm and reads crates/, contracts/ and registry/)
-    #   web       web/ and the root README.md (a web unit test reads it): web, web-build, web-e2e, reproducible (the web bundle is built twice)
+    #   web       web/ and the root README.md (a web unit test reads it): web, web-build, web-e2e
     #   docs      other Markdown, docs/, LICENSE, NOTICE: contracts (scripts/check-pins.mjs reads every doc for pinned hashes)
     # .github/ and every other path: all of it.
     runs-on: ubuntu-latest
@@ -40,7 +40,6 @@ jobs:
       web: ${{ steps.diff.outputs.web }}
       contracts: ${{ steps.diff.outputs.contracts }}
       deps: ${{ steps.diff.outputs.deps }}
-      reproducible: ${{ steps.diff.outputs.reproducible }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,7 +88,6 @@ jobs:
           out web "$(anyof "$web" "$rust")"
           out contracts "$(anyof "$rust" "$docs")"
           out deps "$(anyof "$rust" "$pkg")"
-          out reproducible "$(anyof "$rust" "$web")"
 
   ci-ok:
     # The one result of this workflow (a required check, or what a script reads, names this job): it passes when every job passed or was
@@ -440,7 +438,7 @@ jobs:
 
   reproducible:
     needs: changes
-    if: needs.changes.outputs.reproducible == 'true'
+    if: needs.changes.outputs.rust == 'true'
     # The release outputs are built twice, from two checkouts at different paths (a/ and b/) with their own target and node_modules
     # directories and no cache, and every file must come out identical: the web bundle (web/dist, with the kob-wasm bindings it embeds,
     # scripts/build-wasm.sh --web --slim) and the kobd release binary. A difference means the output depends on the build
