@@ -1,7 +1,7 @@
 name: deploy-pages
 
 # The public web app on Cloudflare Pages (docs/ops/web-hosting.md). On a push to master that changes the app or its inputs, and on
-# workflow_dispatch: the web app is built and tested exactly as the web job of ci.yml does, config.json is written from the repository
+# workflow_dispatch: the web app is built and tested as the web job of ci.yml does (the e2e suite is that run's: the deploy waits for it), config.json is written from the repository
 # variables KOB_PAGES_* (web/scripts/pages-config.mjs; on testnet-10 also the token-program list as registry/tokens.json), web/dist
 # is uploaded to the Pages project KOB_PAGES_PROJECT (a Direct Upload project: the build needs Rust and wasm, so Cloudflare does not
 # build it) and the live deployment is checked: the headers of public/_headers (CSP with frame-ancestors 'none', X-Frame-Options DENY,
@@ -55,6 +55,7 @@ on:
 
 permissions:
   contents: read
+  actions: read # the step "ci passed for this commit" reads the ci.yml run of the same sha
 
 # one deploy at a time; a newer push cancels the older run (the latest commit wins)
 concurrency:
@@ -229,11 +230,10 @@ jobs:
       - run: npm run build:wasm -- --copy
       - run: npm run typecheck
       - run: npm test
-      - run: npx playwright install --with-deps chromium
-      # the e2e run builds dist/ for the mock stack, without the variables below: the release bundle comes after it, or the upload is that build
-      - run: npm run e2e
-        env:
-          KOB_E2E_TARGET: app
+      # the app's e2e suite is not run again here: ci.yml runs it on the same commit (sharded), and the step "ci passed for this commit" below waits for
+      # that run before anything is uploaded
+      - if: matrix.landing != ''
+        run: npx playwright install --with-deps chromium
       # the landing-only site: its own build (dist-landing/) must show the landing page at every address, offer no way into the app and request nothing but
       # its own files (web/e2e/landing); it runs for the entry that is landing-only
       - if: matrix.landing != ''
@@ -258,6 +258,21 @@ jobs:
         run: |
           bash scripts/release-hashes.sh > "$RUNNER_TEMP/release-hashes.md"
           cat "$RUNNER_TEMP/release-hashes.md"
+      - name: ci passed for this commit (the run of ci.yml on the same sha, whose ci-ok covers the e2e suite; a failed or cancelled run fails the deploy)
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 120); do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=1" --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"')
+            echo "ci: $run"
+            case "$run" in
+              "completed success") exit 0 ;;
+              completed*) echo "::error::ci did not pass for $GITHUB_SHA ($run)"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::ci did not finish within an hour"; exit 1
 
       # the deployment: config.json from the repository variables
       - name: config.json from the repository variables (none for the landing-only site, whose page reads none)
