@@ -105,7 +105,7 @@ test.describe('1280 px wide', () => {
       expect(await ids(page)).toEqual(own);
 
       // the filled part (by its percentage) and the value: KAS-budget buys have neither ("—"): last in both directions
-      const pct = (x: string) => { const m = /(d+)%/.exec(x); return m ? Number(m[1]) : Number.NaN; };
+      const pct = (x: string) => { const m = /(\d+)%/.exec(x); return m ? Number(m[1]) : Number.NaN; };
       const filledNums = () => cell('.or-filled').then((a) => a.map(pct));
       await sortBtn('filled').click();
       expectOrdered(await filledNums(), 'desc', 'filled');
@@ -282,7 +282,7 @@ test.describe('1280 px wide', () => {
     await page.getByTestId('activity-sort-time').click();
     await expect(head('time')).toHaveAttribute('aria-sort', 'ascending');
     // (the sort covers the rows within reach, up to 100: oldest first shows the oldest of them, not the same fifty rows turned round)
-    const seconds = (x: string) => { const m = /(d+):(d+):(d+)s*(AM|PM)?/i.exec(x); return m ? ((Number(m[1]) % 12) + (/pm/i.test(m[4] ?? '') ? 12 : 0)) * 3600 + Number(m[2]) * 60 + Number(m[3]) : Number.NaN; };
+    const seconds = (x: string) => { const m = /(\d+):(\d+):(\d+)\s*(AM|PM)?/i.exec(x); return m ? ((Number(m[1]) % 12) + (/pm/i.test(m[4] ?? '') ? 12 : 0)) * 3600 + Number(m[2]) * 60 + Number(m[3]) : Number.NaN; };
     const rowTimes = () => page.locator('[data-testid="activity-row"] .act-c-time').evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? ''));
     expectOrdered((await rowTimes()).map(seconds), 'asc', 'activity time');
     await page.getByTestId('activity-sort-time').click();
