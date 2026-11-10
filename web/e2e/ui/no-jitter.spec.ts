@@ -7,12 +7,11 @@ import { fillFields, pickType } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
-/** What is watched: the whole ticket, its title row, its submit button and the reason slot directly above it (founder, 2026-11-02: the button NEVER moves), and the book's header, its two sides (their slot blocks), the spread row and the tools. */
+/** What is watched: the whole ticket, its title row, its submit button (founder, 2026-11-02: the button NEVER moves; the reason slot above it takes no room when empty and grows upwards, so it is not watched), and the book's header, its two sides (their slot blocks), the spread row and the tools. */
 /** (the stats strip too; the activity log is under the whole grid and grows as rows arrive, which moves nothing above it) */
 const WATCHED = [
   'order-ticket',
   'order-place',
-  'order-issues',
   'order-cost-preview',
   'order-amount-slider',
   'book-asks',
