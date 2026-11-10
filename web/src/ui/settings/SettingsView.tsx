@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { useCreatorImagePref, useIconPref } from '../../app/icon-pref';
+import { useDisplayCurrency, type DisplayCurrency } from '../../app/currency-pref';
 import { displayToken } from '../../app/token-display';
 import type { TrackedToken } from '../../data/token-tracker';
 import { TokenNote } from '../market/TokenNote';
@@ -9,7 +10,7 @@ import { readSettings, saveSettings, type ConfigWarning, type NetworkName } from
 import { t } from '../../i18n';
 import { version as appVersion } from '../../../package.json';
 import {
-  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, exportFileName, Field, jsonText, KeyValueList, Modal, Section, Table, TableMessage,
+  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, exportFileName, Field, jsonText, KeyValueList, Modal, Section, Segmented, Table, TableMessage,
   showToast, toError,
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
@@ -107,6 +108,33 @@ function ConnectionSettings() {
         </div>
       </Section>
     </>
+  );
+}
+
+/**
+ * The display currency (app/currency-pref.ts): KAS, or approximate USD for the values the viewer reads. Applies at once, kept in this browser; the order book, the
+ * ticket and everything signed stay in KAS (the explanation says so).
+ */
+function DisplayCurrencySettings() {
+  const [currency, setCurrency] = useDisplayCurrency();
+  return (
+    <Section title={t('settings.currency.title')} data-testid="settings-currency">
+      <p class="small muted">{t('settings.currency.explain')}</p>
+      <div class="stack-sm">
+        <span class="small" id="settings-currency-label">{t('settings.currency.label')}</span>
+        <Segmented<DisplayCurrency>
+          options={[
+            { value: 'kas', label: t('settings.currency.kas'), 'data-testid': 'settings-currency-kas' },
+            { value: 'usd', label: t('settings.currency.usd'), 'data-testid': 'settings-currency-usd' },
+          ]}
+          value={currency}
+          onChange={setCurrency}
+          aria-label={t('settings.currency.label')}
+          data-testid="settings-currency-choice"
+        />
+        <p class="small muted">{t('settings.currency.hint')}</p>
+      </div>
+    </Section>
   );
 }
 
@@ -440,6 +468,7 @@ export function SettingsView(props: { warnings?: ConfigWarning[] }) {
         <div class="stack">
           <ConnectionSettings />
           <PrivateKeySettings />
+          <DisplayCurrencySettings />
           <TokenIconsSettings />
         </div>
         <div class="stack">

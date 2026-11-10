@@ -14,6 +14,7 @@ import type { Hex } from '../kob/types';
 import { dropZeroDepthLevels, dropEmptyRows } from './book-view';
 import { plainUntrusted } from '../kob/registry';
 import { BYPASS_PARAM, bypassValue, isLiveRoute, recentOwnAction } from './fresh';
+import { adaptKasUsd, type KasUsdQuote } from './kas-price';
 
 /** Largest indexer response body read (bytes); a longer one is refused, not parsed (default of `HttpIndexerOptions.maxBodyBytes`). */
 export const MAX_INDEXER_BODY_BYTES = 8 * 1024 * 1024;
@@ -222,6 +223,12 @@ export interface IndexerApi {
   pairs(token?: Hex, o?: RequestOptions): Promise<PairSummaryView[] | null>;
   pairCandles(base: Hex, quote: Hex, q: CandlesQuery, o?: RequestOptions): Promise<PairCandlesView | null>;
   pairFills(base: Hex, quote: Hex, q?: TradesQuery, o?: RequestOptions): Promise<PairFillsView | null>;
+  /**
+   * `GET /v1/price/kas-usd` (data/kas-price.ts): the KAS price in USD the indexer fetched, with its time and source. Resolves to `null` when the indexer does
+   * not serve the route (404 / 405 / 501: an older build, or one with `usd_price` off) or answers another shape: the USD display is then unavailable (the app
+   * shows KAS). A 503 (no price yet) and a network error are errors. Absent on an indexer object that predates it (also unavailable).
+   */
+  kasUsd?(o?: RequestOptions): Promise<KasUsdQuote | null>;
 }
 
 export interface HttpIndexerOptions {
@@ -515,6 +522,10 @@ export class HttpIndexer implements IndexerApi {
   async pairCandles(base: Hex, quote: Hex, q: CandlesQuery, o?: RequestOptions): Promise<PairCandlesView | null> {
     if (!CANDLE_INTERVALS.includes(q.interval)) throw new IndexerError('bad-request', 0, 'bad_request', `unknown candle interval ${String(q.interval)}`);
     return adaptPairCandles(await this.getOptional<unknown>(this.pairPath(base, quote, 'candles'), { interval: q.interval, from: q.from, to: q.to, limit: q.limit }, o));
+  }
+
+  async kasUsd(o?: RequestOptions): Promise<KasUsdQuote | null> {
+    return adaptKasUsd(await this.getOptional<unknown>('/v1/price/kas-usd', {}, o));
   }
 
   async pairFills(base: Hex, quote: Hex, q: TradesQuery = {}, o?: RequestOptions): Promise<PairFillsView | null> {

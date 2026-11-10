@@ -149,7 +149,7 @@ export function clearKobStorage(storage: EnumerableStorage): string[] {
 
 /** What a key holds, for the "what will be deleted" list. */
 export function describeStorageKey(key: string): 'settings' | 'records' | 'tokens' | 'other' {
-  if (key === 'kob.settings' || key === 'kob.icons' || key === 'kob.icons.creator') return 'settings';
+  if (key === 'kob.settings' || key === 'kob.icons' || key === 'kob.icons.creator' || key === 'kob.currency') return 'settings';
   if (key.startsWith('kob.records.')) return 'records';
   if (key.startsWith('kob.tokens.')) return 'tokens';
   return 'other';

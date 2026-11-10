@@ -23,6 +23,7 @@ import { SupportPage } from '../ui/support/SupportPage';
 import { routeWithSupport, supportAddressOf } from '../ui/support/support-model';
 import { useStandalone } from '../ui/shell/standalone';
 import { useServices } from './context';
+import { KasPriceFeed } from './use-fiat';
 import { useDeclarationsVersion } from './use-declaration';
 import { loadDeclaration, noteListedTickers, noteMarketDecimals, noteTokenProgram, restoreDeclarations } from '../data/token-declarations';
 import { exponentOf } from '../kob/open-token';
@@ -181,6 +182,7 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
       )}
       <ViewBoundary resetKey={routeKey}>
         <AutoRefundRunner />
+        <KasPriceFeed />
         <StandaloneReceipts />
         <ToastHost />
       </ViewBoundary>

@@ -160,6 +160,7 @@ describe('local data', () => {
   it('describes keys', () => {
     expect(describeStorageKey('kob.settings')).toBe('settings');
     expect(describeStorageKey('kob.icons')).toBe('settings'); // the choice to load token icons
+    expect(describeStorageKey('kob.currency')).toBe('settings'); // the display currency (KAS or USD)
     expect(describeStorageKey('kob.lang')).toBe('other'); // legacy key of the removed language switch
     expect(describeStorageKey('kob.records.v1:x:y')).toBe('records');
     expect(describeStorageKey('kob.tokens.v1.x.y')).toBe('tokens');
