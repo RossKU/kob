@@ -58,6 +58,11 @@ body:has(.market-page) .container { max-width: 1520px; }
   .mkt-area-ticket:has(.tk) > [data-testid='ticket-container'] { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
   .mkt-area-ticket .tk { flex: 1 1 0; min-height: 0; }
 }
+/* two columns: the column beside the ticket (the book and the depth chart) is far taller than the form, so the ticket keeps a height of its own (that of
+   the Limit form, shorter when the column is) instead of filling the column with empty room above its button */
+@media (min-width: 760px) and (max-width: 1199px) {
+  .mkt-area-ticket .tk { flex: 0 1 46rem; }
+}
 @media (min-width: 1200px) {
   /* the depth chart takes the middle under the chart; the last row is an empty one that takes whatever height the ticket still has over the other panels */
   .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) minmax(0, 1fr) 360px; grid-template-rows: auto auto 1fr; grid-template-areas: 'book chart chart ticket' 'book depth depth ticket' '. . . ticket'; margin-bottom: -12px; }

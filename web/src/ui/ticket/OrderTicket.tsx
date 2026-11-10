@@ -831,8 +831,8 @@ export function OrderTicket(props: OrderTicketProps) {
       ) : null}
       </div>
       <div class="tk-foot">
-      {/* the one place that says why the order cannot be placed: a slot of a fixed height directly above the button, empty when the order can be placed, so
-          neither a sentence coming and going nor its length ever moves the button */}
+      {/* the one place that says why the order cannot be placed, directly above the button: no room when the order can be placed, two lines at most (more
+          scroll in it); the footer grows upwards from the pinned button, so a sentence coming and going never moves the button */}
       <div class="tk-reason" data-testid="order-issues" data-count={shownReasons.length} aria-live="polite">
         {shownReasons.length > 0 ? (
           <ul>
@@ -852,11 +852,12 @@ export function OrderTicket(props: OrderTicketProps) {
           </ul>
         ) : null}
       </div>
+      {/* progress and the result of a click: one line above the button (a longer text scrolls in it); like the reason it takes no room when empty, and the
+          button is the footer's last line, pinned to the panel's bottom, so neither ever moves it */}
+      <div class="tk-status"><SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" /></div>
       <Button variant="primary" block class="tk-place" data-side={form.side} onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
         <span key={enterText ?? `${sideName}|${typeName}`} data-state={enterText ? 'enter' : undefined}>{enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
-      {/* progress and the result of a click: one line under the button, in a slot of a fixed height (longer text scrolls in it), so it never moves the button */}
-      <div class="tk-status"><SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" /></div>
       </div>
     </section>
   );

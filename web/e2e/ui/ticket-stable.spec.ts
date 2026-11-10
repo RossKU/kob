@@ -11,7 +11,7 @@ import { horizontalOverflow } from '../helpers/i18n';
 test.use({ autoOpen: false });
 
 /** What must not move: the ticket panel, its button and scroll area's footer, the book, the charts and the activity log under them. */
-const WATCHED = ['ticket-container', 'order-ticket', 'order-place', 'order-issues', 'order-book', 'chart-section', 'depth-section', 'activity-list'] as const;
+const WATCHED = ['ticket-container', 'order-ticket', 'order-place', 'order-book', 'chart-section', 'depth-section', 'activity-list'] as const;
 type Box = { x: number; y: number; width: number; height: number };
 
 /** Document coordinates (the page may scroll between two readings). */

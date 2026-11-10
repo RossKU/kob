@@ -10,7 +10,7 @@ import { fillFields, pickType, placeOrder, settlePlan, waitReviewable } from '..
 test.use({ autoOpen: false });
 
 for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
-  test(`${name} ${width} px: a disabled order button always shows its reason; the slot keeps its box`, async ({ appPage: page, mock }) => {
+  test(`${name} ${width} px: a disabled order button always shows its reason; the button keeps its box (the empty slot takes no room)`, async ({ appPage: page, mock }) => {
     test.setTimeout(180_000);
     await page.setViewportSize({ width, height: 900 });
     await fund(mock);
@@ -46,15 +46,15 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
           else await expect(slot, `${type} ${side}: amount only`).toContainText(/\S/);
         } else await expect(slot).not.toContainText(/\S/);
         // the slot, and the button under it, are where they were for every type that has the same fields above (the slot's own box never changes)
-        const box = (await slot.boundingBox())!;
+        const box = (await page.getByTestId('order-place').boundingBox())!;
         slotBox ??= { x: box.x, y: 0, width: box.width, height: box.height };
-        expect([box.x, box.width, box.height], `${type} ${side}: slot box`).toEqual([slotBox.x, slotBox.width, slotBox.height]);
+        expect([box.x, box.width, box.height], `${type} ${side}: button box`).toEqual([slotBox.x, slotBox.width, slotBox.height]);
       }
     }
     expect(seenDisabled).toBeGreaterThan(20);
   });
 
-  test(`${name} ${width} px: an empty field is no error: the button says what to enter first, the slot is empty and keeps its box; after a successful order the reset form is calm; a real error is red in the slot`, async ({ appPage: page, mock }) => {
+  test(`${name} ${width} px: an empty field is no error: the button says what to enter first, the slot is empty and the button keeps its box; after a successful order the reset form is calm; a real error is red in the slot`, async ({ appPage: page, mock }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width, height: 900 });
     await fund(mock);
@@ -64,7 +64,7 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '', price: '' });
     await settlePlan(page);
-    const box0 = (await slot.boundingBox())!;
+    const box0 = (await page.getByTestId('order-place').boundingBox())!;
     // the untouched form: "Enter an amount" on the disabled button, nothing in the slot, no red
     await expect(button).toBeDisabled();
     await expect(button).toHaveText('Enter an amount');
@@ -100,7 +100,7 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     await expect(slot).not.toContainText(/\S/);
     await expect(slot.locator('[data-severity="error"], .tk-reason-field')).toHaveCount(0);
     // the slot kept its size through all of it
-    const box1 = (await slot.boundingBox())!;
+    const box1 = (await page.getByTestId('order-place').boundingBox())!;
     expect([box1.x, box1.width, box1.height]).toEqual([box0.x, box0.width, box0.height]);
   });
 
