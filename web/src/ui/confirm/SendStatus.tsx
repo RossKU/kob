@@ -471,7 +471,6 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
       }
     >
       <div class="send-confirm">
-        {st.updated ? <p class="send-updated" data-testid="confirm-order-updated"><span>{t('send.updated')}</span></p> : null}
         <h2 data-testid="confirm-order-title"><span key={s.title}>{s.title}</span></h2>
         <dl class="send-lines" data-testid="confirm-order-summary">
           {s.lines.map((l, i) => (

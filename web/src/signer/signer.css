@@ -71,8 +71,6 @@ button:disabled { color: var(--muted); background: var(--bg); border-color: var(
 @keyframes flash { from { background: var(--flash); } to { background: transparent; } }
 .guide { margin: 8px 0 0; padding-left: 18px; font-size: 0.85em; }
 .small { font-size: 0.85em; }
-.updated { margin: 0 0 8px; font-weight: 600; color: var(--fg); background: var(--flash); padding: 4px 8px; border-radius: 6px; }
-.updated[hidden] { display: none; }
 /* the app's hints: secondary, muted, never a row of the signer's own decoding */
 .app-hints { margin: 8px 0 0; font-size: 0.85em; color: var(--muted); }
 .app-hints p { margin: 0 0 2px; font-style: italic; }

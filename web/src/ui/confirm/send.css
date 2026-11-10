@@ -7,7 +7,6 @@
 .send-rejected { color: var(--muted); }
 .send .raw-details { flex-basis: 100%; font-weight: 400; }
 /* the head of the final confirmation (the user's intent, above the confirmation screen's sections): also drawn by the signer frame */
-.send-updated { margin: 0 0 8px; font-weight: 600; color: var(--warn); }
 /* the final confirmation of an external wallet: the private-key signer's table (signer/signer.css), the same rows and look */
 .send-confirm h2 { font-size: 1rem; margin: 0 0 8px; }
 .send-lines { margin: 0; }

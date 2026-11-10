@@ -4,7 +4,6 @@ export default {
   'send.confirming': 'Confirm the order...',
   'send.continueInWallet': 'Continue in wallet',
   'send.cancelled': 'Cancelled. Nothing was sent.',
-  'send.updated': 'The market moved while you read: the figures below are new.',
   'send.signing': 'Approve in your wallet...',
   'send.sending': 'Sending...',
   'send.submitted.waiting': 'Submitted, waiting for a block:',

@@ -257,7 +257,7 @@ function flash(e: HTMLElement): void {
 }
 
 /** The request on screen: what an update fills in place. */
-let onScreen: { id: string; shape: string; cells: Cells; hold(): void; note: HTMLElement } | null = null;
+let onScreen: { id: string; shape: string; cells: Cells; hold(): void } | null = null;
 
 /** An update of the request on screen: filled in place when its table has the same shape, else drawn anew (seen again before Approve). */
 function updateView(core: SignerCore, req: PendingRequest): void {
@@ -283,11 +283,8 @@ function updateView(core: SignerCore, req: PendingRequest): void {
       flash(cell);
     }
   }
-  if (req.change === 'shown') {
-    v.note.hidden = false;
-    flash(v.note);
-    v.hold();
-  }
+  // a change worse for the user: the changed figures flash (above) and Approve waits a moment; no banner over the table, it would move Approve
+  if (req.change === 'shown') v.hold();
 }
 
 /** Every second: the times of the request on screen, from the clock. */
@@ -322,9 +319,6 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const title = el('h1', { 'data-testid': 'signer-title' }, s.title);
   cells.text.set('title', title);
   const orders = s.orders.map((o, i) => orderView(o, `signer-order-${i}`, cells, `o:${i}`));
-  // an update worse for the user than what was shown says so (drawn anew when its table changed shape)
-  const note = el('p', { class: 'updated', 'data-testid': 'signer-updated' }, t('signer.updated'));
-  note.hidden = req.change !== 'shown';
   const problems = s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t('signer.problems', { count: s.problems, codes: s.problemCodes.join(', ') }))] : [];
   if (!visibilityCheckSupported()) problems.push(el('p', { class: 'error', 'data-testid': 'signer-unsupported' }, t('signer.unsupported')));
   // the app's hints: under the signer's own rows and orders, muted, never part of what Approve waits for
@@ -388,8 +382,8 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     core.reject(req.id, 'user');
     idleView(core);
   });
-  onScreen = { id: req.id, shape: shapeOf(s), cells, hold, note };
-  show(note, title, list, ...orders, ...hintsView, ...problems, actions, waitWhy);
+  onScreen = { id: req.id, shape: shapeOf(s), cells, hold };
+  show(title, list, ...orders, ...hintsView, ...problems, actions, waitWhy);
 }
 
 // ------------------------------------------------------------------------------------------------ boot
