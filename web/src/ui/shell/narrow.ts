@@ -23,6 +23,9 @@ let neededWide: number | null = null;
 let failedRoom = 0;
 let failedWindow = 0;
 let squeezed = false;
+/** What the wide row held when it did not fit (`contentKey`), and whether the fonts were still loading then: either changing earns the wide row a new try. */
+let squeezedKey = '';
+let squeezedLoading = false;
 const listeners = new Set<() => void>();
 const setSqueezed = (v: boolean): void => {
   if (v === squeezed) return;
@@ -175,7 +178,7 @@ export function useHeaderLayout(root: { current: HTMLElement | null }, narrow: b
  * the measured width and the room are remembered. In the narrow layout: on a resize, on the fonts loading and when the layout changes, the wide row is given
  * back when the room fits the remembered width or has grown by a few pixels since it failed (the wide check then confirms it, or squeezes again with the new measure).
  */
-export function useSqueezeCheck(root: { current: HTMLElement | null }, narrow: boolean): void {
+export function useSqueezeCheck(root: { current: HTMLElement | null }, narrow: boolean, contentKey = ''): void {
   useLayoutEffect(() => {
     const el = root.current;
     if (!el || typeof ResizeObserver !== 'function') return;
@@ -187,11 +190,17 @@ export function useSqueezeCheck(root: { current: HTMLElement | null }, narrow: b
         // (the container has a maximum width: a wider window with the same room still earns a new try)
         if ((neededWide !== null && room >= neededWide + SPARE_PX) || room >= failedRoom + RETRY_PX || window.innerWidth >= failedWindow + RETRY_PX) setSqueezed(false);
       };
-      retry();
+      // the row it did not fit holds something else now (a wallet connected, the Trade tab shown), or the fonts it was measured in were not loaded yet: the
+      // remembered width is stale, so the wide row is tried again (and measured anew) instead of waiting for a resize
+      const fresh = () => {
+        if (squeezed && !widthNarrow()) setSqueezed(false);
+      };
+      if (squeezed && contentKey !== squeezedKey) fresh();
+      else retry();
       const ro = new ResizeObserver(retry);
       ro.observe(el);
       window.addEventListener('resize', retry);
-      void document.fonts?.ready.then(retry);
+      void document.fonts?.ready.then(() => (squeezedLoading ? fresh() : retry()));
       return () => {
         ro.disconnect();
         window.removeEventListener('resize', retry);
@@ -206,6 +215,8 @@ export function useSqueezeCheck(root: { current: HTMLElement | null }, narrow: b
       if (needed > room + 0.5) {
         failedRoom = room;
         failedWindow = window.innerWidth;
+        squeezedKey = contentKey;
+        squeezedLoading = document.fonts?.status === 'loading';
         setSqueezed(true);
       }
     };
@@ -214,5 +225,5 @@ export function useSqueezeCheck(root: { current: HTMLElement | null }, narrow: b
     ro.observe(el);
     void document.fonts?.ready.then(check);
     return () => ro.disconnect();
-  }, [narrow]);
+  }, [narrow, contentKey]);
 }

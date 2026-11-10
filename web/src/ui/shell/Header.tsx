@@ -1,4 +1,4 @@
-import { useServices } from '../../app/context';
+import { useServices, useWallet } from '../../app/context';
 import { navOf, routeToHash, type Route } from '../../app/router';
 import { useLastMarket } from '../../app/last-market';
 import type { ConfigWarning, StoredOverride } from '../../config';
@@ -98,10 +98,12 @@ export function Header(props: { route: Route; warnings: ConfigWarning[]; storedO
   const tight = useMedia(TIGHT_QUERY);
   const level = useStatusLevel();
   const inner = useRef<HTMLDivElement>(null);
-  useSqueezeCheck(inner, narrow);
-  const { brandName, centred, disconnectText } = useHeaderLayout(inner, narrow);
   const active = navOf(props.route);
   const trade = useLastMarket(config.network, props.route);
+  const wallet = useWallet().info;
+  // what the wide row holds: when it changes, a row that did not fit is tried again (narrow.ts)
+  useSqueezeCheck(inner, narrow, `${trade ? 1 : 0}|${wallet?.address ?? ''}|${wallet?.network ?? ''}`);
+  const { brandName, centred, disconnectText } = useHeaderLayout(inner, narrow);
   return (
     <SiteHeader
       context="app"
