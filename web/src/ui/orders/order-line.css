@@ -1,5 +1,4 @@
 /* What is particular to an order's row (OrderRow.tsx); the grid, the header, the cards and the chevron are the shared table's (kit/data-table.css). */
-.or-card { padding: 0; overflow: hidden; }
 .or-filled { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; font-variant-numeric: tabular-nums; }
 .or-filled > .num { min-width: 0; text-align: right; overflow-wrap: break-word; }
 .or-unit { overflow-wrap: anywhere; }
@@ -9,7 +8,7 @@
 .or-status { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .or-warn { display: inline-flex; color: var(--warn); flex: none; }
 .or-details { padding: 10px 12px 12px; }
-.order-card.nested .or-market { padding-left: 14px; }
+.or-group.nested .or-market { padding-left: 14px; }
 /* in a card the filled part reads left to right, its bar under it */
 @container dt (max-width: 1119px) {
   .or-filled { align-items: flex-start; }

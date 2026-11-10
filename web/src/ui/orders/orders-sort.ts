@@ -11,8 +11,8 @@ export const ORDER_SORT_KEYS = ['time', 'market', 'type', 'side', 'price', 'avg'
 export type OrderSortKey = (typeof ORDER_SORT_KEYS)[number];
 
 /**
- * The columns of the order tables, in the usual exchange order, the time first. Open orders: Time, Market, Type, Side, Price, Amount, Filled, Total, Status, the buttons; Order
- * history: Time, Market, Type, Side, Avg price, Price, Filled, Amount, Total, Status. `time` is the table's own order (newest first).
+ * The columns of the order tables, in the usual exchange order, the time first. The leading columns are the same in the three Portfolio tables (Trade
+ * history has no Type): Time, Market, Type, Side, Price, Amount, Total. Open orders go on with Filled, Status, the buttons; Order history with Avg price, Filled, Status. `time` is the table's own order (newest first).
  */
 export function orderColumns(tab: 'open' | 'history', usd = false): (DtColumn<OrderSortKey> | DtPlain)[] {
   const time: DtColumn<OrderSortKey> = { key: 'time', label: t('orders.col.time'), kind: 'time', card: 'badge' };
@@ -26,8 +26,8 @@ export function orderColumns(tab: 'open' | 'history', usd = false): (DtColumn<Or
   const total: DtColumn<OrderSortKey> = { key: 'total', label: t(usd ? 'orders.col.totalUsd' : 'orders.col.total'), kind: 'number', right: true };
   const status: DtColumn<OrderSortKey> = { key: 'status', label: t('orders.col.status'), kind: 'text' };
   return tab === 'history'
-    ? [time, market, type, side, avg, price, filled, amount, total, status, { key: 'toggle', plain: true }]
-    : [time, market, type, side, price, amount, filled, total, status, { key: 'act', plain: true }, { key: 'toggle', plain: true }];
+    ? [time, market, type, side, price, amount, total, avg, filled, status, { key: 'toggle', plain: true }]
+    : [time, market, type, side, price, amount, total, filled, status, { key: 'act', plain: true }, { key: 'toggle', plain: true }];
 }
 
 /** When the order was placed, unix seconds: the wallet's record of it, else the time of its genesis block (null: unknown). */

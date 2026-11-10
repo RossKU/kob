@@ -4,7 +4,7 @@ import type { EventView } from '../../data/indexer-types';
 import { useTxUrl } from '../../app/explorer';
 import { useFiat } from '../../app/use-fiat';
 import { pairRoute, routeToHash } from '../../app/router';
-import { formatDateTime, t, RAW_TOKEN_DECIMALS } from '../../i18n';
+import { t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import { longId, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatUnits, quoteOf } from '../../kob/units';
@@ -12,7 +12,7 @@ import {
   Amount, CopyText, ErrorBanner, KeyValueList, Loading, fixedPricePerToken, scaledUnits, sortBy, tickPriceFraction, useAsync, type SortState, type SortValue,
 } from '../kit';
 import {
-  DataTable, DtCell, DtGroup, DtRow, MoneyCell, Num, RowToggle, toggleLabel, useOpenRow, type DtColumn, type DtPlain,
+  DataTable, DtCell, DtGroup, DtRow, MarketCell, MoneyCell, Num, RowToggle, timeText, toggleLabel, useOpenRow, type DtColumn, type DtPlain,
 } from '../kit/DataTable';
 import { IdentityBlock } from '../market/Fingerprint';
 import type { KascovMeta } from '../market/token-model';
@@ -141,7 +141,7 @@ export function WalletFills(props: {
     // a KAS market's fill has a price and a KAS value; a pair fill is volume only (the B amount stands for its value)
     const price = !row.pair && fill.price !== null ? fixedPricePerToken(fill.price, decimals, row.scale, (token ? tickPriceFraction(token.tick, decimals, row.scale) : null) ?? 8) : '—';
     const valueKas = !row.pair && fill.price !== null ? quoteOf(fill.amount, fill.price, row.scale, 'down') : null;
-    const time = fill.atMs > 0 ? formatDateTime(Math.floor(fill.atMs / 1000), { dateStyle: 'short', timeStyle: 'medium' }) : '—';
+    const time = timeText(fill.atMs > 0 ? Math.floor(fill.atMs / 1000) : null);
     const amount = formatUnits(fill.amount, decimals, { group: ',' });
     const identity = row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" /> : null;
     return { ticker, market: marketOf(w), marketHref, price, valueKas, time, amount, identity, key: `${fill.txid}-${row.id}-${fill.atMs}` };
@@ -178,20 +178,14 @@ function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) 
     <DtGroup data-testid="wallet-fill-row" data-txid={fill.txid} data-order={row.id}>
       <DtRow>
         <DtCell k="time" label={t('orders.fills.time')} card="badge" class="dt-time">{f.time}</DtCell>
-        <DtCell k="market" card="title">
-          <span class="dt-market">
-            {f.identity}
-            <span class="dt-market-name">{f.marketHref ? <a href={f.marketHref}>{f.market}</a> : f.market}</span>
-          </span>
-          <span class="dt-card-only dt-sub"><span class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</span></span>
-        </DtCell>
+        <MarketCell name={f.market} href={f.marketHref} identity={f.identity} side={row.side} />
         <DtCell k="side" label={t('orders.col.side')} card="hidden" data-testid="wallet-fill-side" class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</DtCell>
         <DtCell k="price" label={t(props.fiat ? 'orders.col.priceUsd' : 'orders.col.price')} num>
           {fiat && !row.pair && fill.price !== null ? <Amount kind="price" value={fill.price} decimals={props.item.token?.decimals ?? RAW_TOKEN_DECIMALS} scale={row.scale} unit={false} fiat={fiat} class="dt-val" /> : <Num value={f.price} />}
         </DtCell>
         <DtCell k="amount" label={t('orders.col.amount')} num><Num value={f.amount} unit={f.ticker} /></DtCell>
         <DtCell k="value" label={t(props.fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas')} num><MoneyCell kas={f.valueKas} unit={false} /></DtCell>
-        <DtCell k="tx" label={t('orders.fills.tx')} card="wide"><CopyText value={fill.txid} head={6} tail={4} href={href} data-testid="wallet-fill-tx" /></DtCell>
+        <DtCell k="tx" label={t('orders.fills.tx')}><CopyText value={fill.txid} head={6} tail={4} href={href} data-testid="wallet-fill-tx" /></DtCell>
         <RowToggle open={open} onToggle={() => setOpen(!open)} controls={detailsId} label={toggleLabel(open)} data-testid="wallet-fill-toggle" />
       </DtRow>
       <div class="dt-details" id={detailsId} hidden={!open} data-testid="wallet-fill-details">

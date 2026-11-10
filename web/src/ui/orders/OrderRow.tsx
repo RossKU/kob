@@ -15,7 +15,7 @@ import {
   Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, tickPriceFraction, type Tone,
 } from '../kit';
 import {
-  DtCell, DtGroup, DtRow, MoneyCell, Num, RowToggle, hasOpenChoice, toggleLabel, useOpenRow,
+  DtCell, DtGroup, DtRow, MarketCell, MoneyCell, Num, RowToggle, hasOpenChoice, timeText, toggleLabel, useOpenRow,
 } from '../kit/DataTable';
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
@@ -33,8 +33,8 @@ import './order-line.css';
 const STATUS_TONE: Record<OrderStatusUi, Tone> = { open: 'ok', partial: 'info', filled: 'neutral', cancelled: 'neutral', refunded: 'neutral', killed: 'neutral', closed: 'neutral', unknown: 'warn' };
 
 /** The cells of a row in the order of its table (the keys are the columns': orders-sort.ts). */
-const OPEN_CELLS = ['time', 'market', 'type', 'side', 'price', 'amount', 'filled', 'total', 'status', 'act', 'toggle'] as const;
-const HISTORY_CELLS = ['time', 'market', 'type', 'side', 'avg', 'price', 'filled', 'amount', 'total', 'status', 'toggle'] as const;
+const OPEN_CELLS = ['time', 'market', 'type', 'side', 'price', 'amount', 'total', 'filled', 'status', 'act', 'toggle'] as const;
+const HISTORY_CELLS = ['time', 'market', 'type', 'side', 'price', 'amount', 'total', 'avg', 'filled', 'status', 'toggle'] as const;
 
 export interface OrderRowActions {
   onCancel(row: OrderRowModel): void;
@@ -80,7 +80,7 @@ export function needsAttention(row: OrderRowModel): boolean {
 function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo | undefined, clock: Clock | null | undefined, avg: bigint | null | undefined) {
   const decimals = tk?.decimals ?? RAW_TOKEN_DECIMALS;
   const unix = placedUnix(row, clock);
-  const time = unix !== null ? formatDateTime(Number(unix), { dateStyle: 'short', timeStyle: 'short' }) : '—';
+  const time = timeText(unix);
   const priceOf = (v: bigint | null): string => (v === null ? '—' : row.pair ? pairPriceText(v, row, tk, b) : formatPricePerToken(v, decimals, row.scale, { group: ',' }));
   const price = priceOf(row.price);
   const trigger = row.stopPrice !== null ? t('orders.line.stop', { price: priceOf(row.stopPrice) }) : row.armed === false && row.live ? t('orders.waitingTrigger') : '—';
@@ -232,17 +232,17 @@ export function OrderRow(props: OrderRowProps) {
   cells.time = (
     <DtCell k="time" label={t('orders.col.time')} card="badge" class="or-time dt-time">{line.time}</DtCell>
   );
+  const marketHref = row.pair ? routeToHash(pairRoute(row.pair.base, row.pair.quote)) : row.token ? `#/market/${row.token}` : undefined;
   cells.market = (
-    <DtCell k="market" card="title" class="or-market">
-      <span class="dt-market">
-        {row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
-        <span class="dt-market-name or-market-name">{marketText.split('/').flatMap((part, i) => (i === 0 ? [part] : ['/', <wbr key={i} />, part]))}</span>
-      </span>
-      {/* in a card the side and the kind of the order stand under the market (their own cells are not drawn there) */}
-      <span class="dt-card-only dt-sub or-card-sub">
-        <span class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</span> · {t(`orders.typeShort.${row.typeKey}`)}
-      </span>
-    </DtCell>
+    <MarketCell
+      name={marketText}
+      href={marketHref}
+      identity={row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
+      side={row.side}
+      kind={t(`orders.typeShort.${row.typeKey}`)}
+      class="or-market"
+      nameClass="or-market-name"
+    />
   );
   cells.type = (
     <DtCell k="type" label={t('orders.col.type')} card="hidden" class="or-type" title={t(`orders.type.${row.typeKey}`)}>{t(`orders.typeShort.${row.typeKey}`)}</DtCell>
@@ -312,7 +312,7 @@ export function OrderRow(props: OrderRowProps) {
   cells.toggle = <RowToggle open={open} onToggle={() => setOpen(!open)} controls={`order-details-${row.id}`} label={toggleLabel(open)} data-testid={`order-toggle-${row.id}`} />;
 
   return (
-    <DtGroup class={`order-card or-card${props.nested ? ' nested' : ''}${open ? ' or-open' : ''}`} data-testid={`order-row-${row.id}`} data-status={row.status} data-type={row.typeKey} data-side={row.side} data-live={row.live ? '1' : '0'}>
+    <DtGroup class={`or-group${props.nested ? ' nested' : ''}${open ? ' or-open' : ''}`} data-testid={`order-row-${row.id}`} data-status={row.status} data-type={row.typeKey} data-side={row.side} data-live={row.live ? '1' : '0'}>
       <DtRow class="or-line" data-testid={`order-line-${row.id}`}>
         {(props.columns === 'history' ? HISTORY_CELLS : OPEN_CELLS).map((k) => (
           <Fragment key={k}>{cells[k]}</Fragment>

@@ -1,4 +1,4 @@
-// Screenshots only (not a test of anything): every tab of the Portfolio and a market page's panel at 390, 600, 720, 1024, 1280 and 1440 px in the theme KOB_THEME, to KOB_SHOTS
+// Screenshots only (not a test of anything): every tab of the Portfolio and a market page's panel (its three order tabs) at 390, 600, 720, 1024, 1280 and 1440 px in the theme KOB_THEME, to KOB_SHOTS
 // with the prefix KOB_SHOT_TAG. Skipped without KOB_SHOTS.
 import { test } from '../fixtures';
 import { listExkcc, connectWallet } from '../helpers/env';
@@ -28,9 +28,11 @@ for (const width of [390, 600, 720, 1024, 1280, 1440]) {
     const token = await mock.token();
     await page.goto(`/#/market/${token.covenant_id}`);
     const mine = page.getByTestId('market-orders');
-    await mine.getByTestId('orders-tab-history').click();
-    await page.waitForTimeout(1500);
-    await mine.scrollIntoViewIfNeeded();
-    await mine.screenshot({ path: name('market-history') });
+    for (const id of ['active', 'history', 'fills']) {
+      await mine.getByTestId(`orders-tab-${id}`).click();
+      await page.waitForTimeout(1500);
+      await mine.scrollIntoViewIfNeeded();
+      await mine.screenshot({ path: name(`market-${id}`) });
+    }
   });
 }

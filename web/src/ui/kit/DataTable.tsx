@@ -4,7 +4,7 @@
 // the unit small and muted, a market as its icon and ticker, a side in its colour, a status as a chip. Sorting is the shared helper (sort.ts, SortHeader.tsx).
 import type { ComponentChildren, JSX } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { t } from '../../i18n';
+import { formatDateTime, t } from '../../i18n';
 import { kasValueText, kasValueTitle } from '../../app/fiat';
 import { useFiat } from '../../app/use-fiat';
 import { formatKas } from '../../kob/units';
@@ -126,6 +126,29 @@ export function DtCell(props: { k: string; label?: string; card?: DtCard; num?: 
     >
       {props.children}
     </div>
+  );
+}
+
+/** The one time format of the Portfolio's tables (Open orders, Order history, Trade history): short date, time with seconds. unix seconds; null reads "—". */
+export const timeText = (unix: number | bigint | null): string => (unix === null ? '—' : formatDateTime(unix, { dateStyle: 'short', timeStyle: 'medium' }));
+
+/**
+ * The one market cell of the tables: the token's icon and the pair (a link to its market when it has one, in every table the same weight and treatment). In a card the side (and,
+ * for an order, its kind) follow the pair on the header line ("Buy · Market"); the table has columns for them.
+ */
+export function MarketCell(props: { name: string; href: string | undefined; identity: JSX.Element | null; side: 'buy' | 'sell'; kind?: string; class?: string; nameClass?: string }) {
+  const parts = props.name.split('/').flatMap((part, i) => (i === 0 ? [part] : ['/', <wbr key={i} />, part]));
+  return (
+    <DtCell k="market" card="title" class={props.class}>
+      <span class="dt-market">
+        {props.identity}
+        <span class={`dt-market-name${props.nameClass ? ` ${props.nameClass}` : ''}`}>{props.href ? <a href={props.href}>{parts}</a> : parts}</span>
+      </span>
+      <span class="dt-card-only dt-sub">
+        <span class={props.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${props.side}`)}</span>
+        {props.kind ? ` · ${props.kind}` : ''}
+      </span>
+    </DtCell>
   );
 }
 
