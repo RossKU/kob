@@ -81,3 +81,4 @@ export const orderReplace = (covenantId: string) => `order-replace-${covenantId}
 
 /** Every intent form input has `data-testid="field-<intentFieldName>"` (the field names of src/kob/intent-*.ts). */
 export const field = (intentFieldName: string) => `field-${intentFieldName}`;
+// ci-speed probe (web-only change, reverted)
