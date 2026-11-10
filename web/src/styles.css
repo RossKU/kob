@@ -238,7 +238,7 @@ small, .small { font-size: 0.85em; }
 .brand-mark { width: var(--logo); height: var(--logo); flex: none; }
 .nav { display: flex; flex-wrap: nowrap; gap: 12px; min-width: 0; }
 .nav a {
-  display: inline-flex; align-items: center; height: var(--ctl-h); padding: 0 10px; white-space: nowrap; border-radius: var(--ctl-r); text-decoration: none; color: var(--muted);
+  display: inline-flex; align-items: center; height: var(--ctl-h); padding: 0 7px; white-space: nowrap; border-radius: var(--ctl-r); text-decoration: none; color: var(--muted);
   font-size: 14px; font-weight: 600;
 }
 .nav a:hover { background: var(--surface-2); color: var(--text); }
