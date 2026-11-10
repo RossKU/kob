@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { has } from '../../i18n';
 import { NOTIFY_KINDS, type NotificationEvent } from '../../kob/notifications';
 import type { TokenInfo } from '../../kob/registry';
+import { rateOf } from '../../app/fiat';
 import { REORG_WHATS, describeEvent } from './describe';
 
 describe('notify i18n', () => {
@@ -50,5 +51,27 @@ describe('notify i18n', () => {
     expect(describeEvent(ev({ what: 'fill', amount: '400', filled: '650', total: '1000', state: 'partial' }), null).body).toContain('650 of 1000');
     expect(part).not.toContain(' at ');
     expect(describeEvent(ev({}), null).body).not.toMatch(/[{}]/); // unknown "what": the generic text
+  });
+});
+
+describe('notifications with the USD display', () => {
+  const fiat = { rate: rateOf(0.0298)!, quote: { usd: 0.0298, at: 1_800_000_000, source: 'coingecko' }, testnet: false };
+  const tok = 'cc'.repeat(32);
+  const ev = (over: Partial<NotificationEvent>): NotificationEvent => ({ id: 'p', kind: 'payment', at: 1, read: false, params: {}, ...over });
+
+  it('a KAS payment is dollars and says it is an estimate; a token payment is never converted', () => {
+    const kas = describeEvent(ev({ params: { amount: '3580000000000' } }), null, fiat);
+    expect(kas.body).toBe('Received about $1,066.84 (an estimate in US dollars) at your address.');
+    expect(describeEvent(ev({ params: { amount: '3580000000000' } }), null).body).toBe('Received 35800 KAS at your address.');
+    const reg = { byCovenantId: new Map([[tok, { ticker: 'EXT', decimals: 2 } as unknown as TokenInfo]]) };
+    expect(describeEvent(ev({ token: tok, params: { amount: '12345' } }), reg, fiat).body).toBe('Received 123.45 EXT at your address.');
+  });
+
+  it('the price of a reverted fill is dollars per token', () => {
+    const reg = { byCovenantId: new Map([[tok, { ticker: 'EXT', decimals: 2 } as unknown as TokenInfo]]) };
+    // 2,510,000 sompi per whole token = 0.0251 KAS = $0.000748 at $0.0298
+    const d = describeEvent(ev({ kind: 'reorg', orderId: 'aa'.repeat(32), token: tok, side: 'sell', params: { what: 'fill', amount: '300', filled: '0', total: '1000', state: 'open', price: '2510000' } }), reg, fiat);
+    expect(d.body).toContain('$0.000748 per EXT');
+    expect(d.body).not.toContain('KAS');
   });
 });

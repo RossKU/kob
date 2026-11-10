@@ -5,6 +5,7 @@
 // new ones are collected is one line above the list, with its switch.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import { useFiat } from '../../app/use-fiat';
 import type { ConfigWarning, StoredOverride } from '../../config';
 import { formatDateTime, t } from '../../i18n';
 import type { NotificationEvent } from '../../kob/notifications';
@@ -31,7 +32,7 @@ function BellIcon() {
 function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
   const { registry } = useServices();
   const n = useNotify();
-  const d = describeEvent(props.e, registry);
+  const d = describeEvent(props.e, registry, useFiat());
   return (
     <li class={`notify-item${props.e.read ? '' : ' notify-unread'}`} data-testid={`notify-item-${props.e.kind}`} data-read={props.e.read ? 'true' : 'false'} onClick={() => n.markRead(props.e.id)}>
       <div class="notify-item-head">

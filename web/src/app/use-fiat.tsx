@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { onVisibilityChange } from '../ui/kit/hooks';
 import { useServices } from './context';
-import { useDisplayCurrency } from './currency-pref';
+import { readCurrencyPref, useDisplayCurrency } from './currency-pref';
 import { estimateNote, fallbackNotice, fiatOf, resolveFiat, type Fiat, type FiatState } from './fiat';
 import { kasPrice, startKasPriceFeed, type PriceSnapshot } from './kas-price';
 
@@ -31,6 +31,11 @@ export function useFiat(): Fiat | null {
   const quote = f?.quote;
   const testnet = f?.testnet;
   return useMemo(() => f, [quote, testnet]);
+}
+
+/** The USD display in force right now, read outside a component (a toast that is made when an event arrives); null = KAS. */
+export function currentFiat(testnet: boolean, nowMs = Date.now()): Fiat | null {
+  return fiatOf(resolveFiat({ currency: readCurrencyPref(), feed: kasPrice.snapshot, nowMs, testnet }));
 }
 
 /** The loop that reads the price: mounted once for the app, running only while USD is the display currency. */

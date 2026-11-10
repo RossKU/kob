@@ -13,6 +13,8 @@ import {
   NotificationStore, loadNotifySettings, parseInvoiceUrl, safeStorage, saveNotifySettings, type NotificationEvent, type NotifyKind, type NotifySettings,
 } from '../../kob/notifications';
 import { showToast, useInterval, type ToastTone } from '../kit';
+import type { Fiat } from '../../app/fiat';
+import { currentFiat } from '../../app/use-fiat';
 import { describeEvent } from './describe';
 import { INVOICE_POLL_MS, ORDERS_POLL_MS, pollInvoices, pollWallet } from './poll';
 import { useLiveRefresh } from '../market/live';
@@ -50,16 +52,16 @@ export const useNotify = (): NotifyApi => useContext(NotifyContext);
 
 const TONE: Partial<Record<NotifyKind, ToastTone>> = { fill: 'ok', payment: 'ok', expirySoon: 'warn', expired: 'warn', killed: 'warn' };
 
-function deliver(fresh: readonly NotificationEvent[], s: NotifySettings, registry: Parameters<typeof describeEvent>[1]): void {
+function deliver(fresh: readonly NotificationEvent[], s: NotifySettings, registry: Parameters<typeof describeEvent>[1], fiat: Fiat | null): void {
   const shown = fresh.length > 3 ? fresh.slice(0, 1) : fresh;
   for (const e of shown) {
-    const d = describeEvent(e, registry);
+    const d = describeEvent(e, registry, fiat);
     showToast(`${d.title}: ${d.body}`, TONE[e.kind] ?? 'info');
   }
   if (fresh.length > 3) showToast(t('notify.more', { count: fresh.length - 1 }), 'info');
   if (!s.browser || browserPermission() !== 'granted' || typeof document === 'undefined' || !document.hidden) return;
   for (const e of fresh.slice(0, 5)) {
-    const d = describeEvent(e, registry);
+    const d = describeEvent(e, registry, fiat);
     try {
       new Notification(d.title, { body: d.body, tag: e.id });
     } catch {
@@ -89,7 +91,7 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
       if (!store || !events.length) return;
       const s = settingsRef.current;
       const fresh = store.ingest(events, (k) => s.kinds[k]);
-      if (fresh.length) deliver(fresh, s, services.registry);
+      if (fresh.length) deliver(fresh, s, services.registry, currentFiat(services.config.network === 'testnet-10'));
     },
     [store, services.registry],
   );
