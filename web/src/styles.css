@@ -313,6 +313,11 @@ small, .small { font-size: 0.85em; }
 .ff-disc strong { color: var(--warn); }
 .footer .ff-meta { margin-top: 10px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 0; }
 .ff-meta > span + span::before { content: '\00b7'; margin: 0 8px; opacity: 0.6; }
+/* from a tablet up the disclaimer and the meta line sit in the middle under the full-width row (a phone keeps them left: centred lines are hard to read narrow) */
+@media (min-width: 720px) {
+  .footer .ff-disc { margin-inline: auto; text-align: center; max-width: 64em; }
+  .footer .ff-meta { justify-content: center; }
+}
 @media (max-width: 719px) {
   .footer { padding: 20px 0 24px; }
   .ff-links { margin-left: 0; width: 100%; }
