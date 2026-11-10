@@ -2,6 +2,8 @@ import { formatKas, formatUnits } from '../../kob/units';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
+import { kasValueText, kasValueTitle } from '../../app/fiat';
+import { FiatNote, useFiat } from '../../app/use-fiat';
 import { navigate, routeToHash, tokenRoute, type PortfolioTab } from '../../app/router';
 
 /** The market a market page's panel stands on: a token's KAS market (`quote` null) or a token/token pair. */
@@ -169,6 +171,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const d = late && late.base === data.data ? late.next : (data.data ?? null);
   // the wallet's balances, read once for the page: the summary strip over the tabs and the Balances tab show the same figures
   const balances = useWalletBalances(d, pubkey, data.data ?? null);
+  // the USD display (Settings): the summary's KAS values in dollars; null = KAS
+  const fiat = useFiat();
   // the icons' pictures: kascov.io's checked copy, as on the market list (none: a letter on the token's colour)
   const kascov = useKascov();
   const kascovTokens = kascov.status === 'ok' ? kascov.tokens : null;
@@ -572,7 +576,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       ) : null}
 
       {(
-      <div class="pf-strip" data-testid="portfolio-summary">
+      <div class="pf-strip" data-testid="portfolio-summary" data-currency={fiat ? 'usd' : 'kas'}>
         <div class="pf-stat">
           <div class="pf-kline">
             <span class="pf-k">{t('orders.summary.total')}</span>
@@ -586,15 +590,15 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
               />
             ) : null}
           </div>
-          <span class="pf-v num" data-testid="portfolio-total"><span>{balances.summary ? formatKas(balances.summary.total, { group: ',', minFraction: 2, maxFraction: 2 }) : '—'}</span><span class="pf-unit">KAS</span></span>
+          <span class="pf-v num" data-testid="portfolio-total" title={balances.summary ? kasValueTitle(balances.summary.total, fiat) : undefined}><span>{balances.summary ? (fiat ? kasValueText(balances.summary.total, fiat) : formatKas(balances.summary.total, { group: ',', minFraction: 2, maxFraction: 2 })) : '—'}</span>{fiat ? null : <span class="pf-unit">KAS</span>}</span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.available')}</span></div>
-          <span class="pf-v num" data-testid="portfolio-available"><span>{balances.summary ? formatKas(balances.summary.kasFree, { group: ',' }) : '—'}</span><span class="pf-unit">KAS</span></span>
+          <span class="pf-v num" data-testid="portfolio-available" title={balances.summary ? kasValueTitle(balances.summary.kasFree, fiat) : undefined}><span>{balances.summary ? kasValueText(balances.summary.kasFree, fiat) : '—'}</span>{fiat ? null : <span class="pf-unit">KAS</span>}</span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.inOrders')}</span></div>
-          <span class="pf-v num" data-testid="portfolio-in-orders"><span>{balances.summary ? formatKas(balances.summary.kasLocked, { group: ',' }) : '—'}</span><span class="pf-unit">KAS</span></span>
+          <span class="pf-v num" data-testid="portfolio-in-orders" title={balances.summary ? kasValueTitle(balances.summary.kasLocked, fiat) : undefined}><span>{balances.summary ? kasValueText(balances.summary.kasLocked, fiat) : '—'}</span>{fiat ? null : <span class="pf-unit">KAS</span>}</span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.open')}</span></div>
@@ -602,6 +606,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
         </div>
       </div>
       )}
+      {embed ? null : <FiatNote class="pf-fiat-note" />}
 
       <div class="portfolio" data-testid="portfolio">
         <div class="pf-tabbar">

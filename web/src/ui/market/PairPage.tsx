@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { OrdersView } from '../orders/OrdersView';
+import { FiatNote } from '../../app/use-fiat';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { pageTitle, useDocumentTitle } from '../../app/page-title';
 import { navigate, pairRoute, replaceRoute, routeToHash, tokenRoute } from '../../app/router';
@@ -274,6 +275,8 @@ export function PairPage(props: { base: string; quote: string }) {
     <MarketShell
       data-testid="pair-page"
       attrs={{ 'data-base': props.base, 'data-quote': props.quote }}
+      // the wallet's summary under the market shows its values in USD when that is chosen: the note says what the dollars are (the pair's own figures stay in their tokens)
+      notices={<FiatNote />}
       header={
         <div class="stack-sm" data-testid="pair-header">
           {/* line 1, always one line: the two tokens' pictures (icon and fingerprint of each), the pair selector and the swap button, then Live (which alone may wrap

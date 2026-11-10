@@ -652,3 +652,7 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 .support-pay { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 0 0 12px; }
 .support-qr { display: block; flex: none; max-width: 100%; height: auto; border-radius: 6px; }
 .support-address { flex: 1 1 220px; min-width: 0; }
+
+/* the one muted line that says what the USD display is (or why KAS is shown); under the Portfolio's summary strip it belongs to the strip */
+.fiat-note { margin: 4px 0 8px; line-height: 1.35; }
+.pf-fiat-note { margin: -4px 0 10px; }

@@ -24,6 +24,7 @@ export default {
   'orders.col.price': 'Price (KAS)',
   'orders.col.amount': 'Amount',
   'orders.col.valueKas': 'Value (KAS)',
+  'orders.col.valueUsd': 'Value (USD)',
   'orders.summary.total': 'Total value',
   'orders.market.title': 'Your orders and balances',
   'orders.position.showSummary': 'Show the price path, the result and the fills',
