@@ -720,6 +720,50 @@ export function OrderTicket(props: OrderTicketProps) {
       : { amount: formatUnits(tokenBalance, token.decimals, { group: ',' }), unit: ticker };
   const available = enabled && env ? spendBalance : undefined;
 
+  // the height of the whole Limit form (folded, no ladder), panel and footer included, for the market page: on two and three columns its row is at least that
+  // tall (market.css --tk-fit), so the form does not scroll. Measured once per width (again once the fonts and the data are first in), never on what
+  // comes and goes in the form later (another type, a ladder, an expiry, a reason): that never moves the page
+  const tkRef = useRef<HTMLElement>(null);
+  const fit = useRef({ w: -1, fonts: false, data: false });
+  const fitShape = form.type === 'limit' && !ladder;
+  const dataIn = useRef(false);
+  if (env && !envLoading) dataIn.current = true;
+  const dataWasIn = dataIn.current;
+  useEffect(() => {
+    const tk = tkRef.current;
+    const grid = tk?.closest<HTMLElement>('.mkt-grid');
+    if (!tk || !grid || !fitShape || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      const scroll = tk.querySelector<HTMLElement>('.tk-scroll');
+      const formEl = tk.querySelector<HTMLElement>('.tk-form');
+      const side = tk.closest<HTMLElement>('.mkt-side');
+      const holder = side && getComputedStyle(side).display !== 'contents' ? side : tk.closest<HTMLElement>('.mkt-area-ticket');
+      if (!scroll || !formEl || !holder || tk.querySelector<HTMLDetailsElement>('.tk-advanced')?.open) return;
+      const w = tk.clientWidth;
+      if (w === fit.current.w) return;
+      const top = scroll.getBoundingClientRect().top - scroll.scrollTop;
+      const content = formEl.getBoundingClientRect().bottom - top + parseFloat(getComputedStyle(scroll).paddingBottom || '0');
+      fit.current.w = w;
+      grid.style.setProperty('--tk-fit', `${Math.ceil(holder.offsetHeight - scroll.clientHeight + content)}px`);
+    };
+    if (dataWasIn && !fit.current.data) {
+      fit.current.data = true;
+      fit.current.w = -1;
+    }
+    measure();
+    if (!fit.current.fonts) {
+      void document.fonts?.ready.then(() => {
+        if (fit.current.fonts) return;
+        fit.current.fonts = true;
+        fit.current.w = -1;
+        measure();
+      });
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(tk);
+    return () => ro.disconnect();
+  }, [fitShape, dataWasIn]);
+
   if (!tradable) {
     const reason = token.untradableReason;
     return (
@@ -734,7 +778,7 @@ export function OrderTicket(props: OrderTicketProps) {
   }
 
   return (
-    <section class="tk" data-testid="order-ticket" data-type={form.type} data-side={form.side} data-shown-side={shownSide} data-inverted={inverted ? '1' : '0'} aria-busy={pending || envLoading ? 'true' : 'false'}>
+    <section ref={tkRef} class="tk" data-testid="order-ticket" data-type={form.type} data-side={form.side} data-shown-side={shownSide} data-inverted={inverted ? '1' : '0'} aria-busy={pending || envLoading ? 'true' : 'false'}>
       {/* the panel has the height of its row of the page (market.css) and never changes it: the form scrolls inside .tk-scroll, the reason slot and the button are the
           footer, pinned to the bottom of the panel, so nothing that comes or goes in the form moves the button or anything beside or under the ticket */}
       <div class="tk-scroll" data-testid="order-scroll">

@@ -4,23 +4,24 @@ import { kasTitleOf, sompiToUsdCompact, type Fiat } from '../../app/fiat';
 import { formatNumber, t } from '../../i18n';
 import { depthGeometry, type DepthSeries } from './market-model';
 
-const HEIGHT = 240;
+const HEIGHT = 240; // the least height: on three columns the panel can be taller (market.css), the drawing follows its box
 const AXIS = 18; // room for the price labels under the plot
 
-/** Width of an element, following resizes (0 until mounted). */
-function useWidth(): [RefObject<HTMLDivElement>, number] {
+/** Width and height of an element, following resizes (width 0 until mounted, height at least HEIGHT). */
+function useSize(): [RefObject<HTMLDivElement>, number, number] {
   const ref = useRef<HTMLDivElement>(null);
-  const [w, setW] = useState(0);
+  const [size, setSize] = useState({ w: 0, h: HEIGHT });
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    setW(el.clientWidth);
+    const read = () => setSize((o) => { const w = el.clientWidth, h = Math.max(HEIGHT, el.clientHeight); return o.w === w && o.h === h ? o : { w, h }; });
+    read();
     if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => setW(el.clientWidth));
+    const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  return [ref, w];
+  return [ref, size.w, size.h];
 }
 
 const fmtPrice = (v: number, dp: number) => formatNumber(v, { minimumFractionDigits: dp, maximumFractionDigits: dp });
@@ -35,10 +36,10 @@ const fmtAmount = (v: number) =>
  * price and amount axes, a hover read-out. Drawn in SVG at the panel's pixel width (crisp text at any size).
  */
 export function DepthChart(props: { /** the USD display in force and the series is in KAS (a flipped KAS/TOKEN market): the cumulative KAS is shown as dollars, with the KAS figure in the read-out; null: as is */ fiat?: Fiat | null; series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book'; /** the data could not be loaded (not an empty book) */ unavailable?: boolean }) {
-  const [ref, width] = useWidth();
+  const [ref, width, height] = useSize();
   const [hover, setHover] = useState<{ x: number; y: number; side: 'bid' | 'ask'; price: number; cum: number } | null>(null);
   const s = props.series;
-  const plotH = HEIGHT - AXIS;
+  const plotH = height - AXIS;
   const g = s && width > 0 ? depthGeometry(s, width, plotH) : null;
   // the cumulative amount of a flipped market is KAS: dollars when the USD display is in force (a float of whole KAS is display only)
   const fiat = props.fiat ?? null;
@@ -69,7 +70,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
     <figure style="margin:0" data-testid="depth-chart" data-source={props.source} data-state={g?.hasData ? 'ready' : props.loading ? 'loading' : 'empty'}>
       <div class="depth-box" ref={ref}>
         {g && g.hasData ? (
-          <svg class="depth-svg" width={width} height={HEIGHT} role="img" aria-label={summary ?? t('market.depth.title')} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+          <svg class="depth-svg" width={width} height={height} role="img" aria-label={summary ?? t('market.depth.title')} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
             <title>{t('market.depth.title')}</title>
             <defs>
               <linearGradient id="depth-bid-fill" x1="0" y1="0" x2="0" y2="1">
@@ -93,7 +94,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
               return (
                 <g key={`x${tk.value}`}>
                   <line class="grid" x1={tk.x} x2={tk.x} y1="0" y2={plotH} />
-                  <text class="axis-label" x={anchor === 'start' ? Math.max(tk.x, 0) : anchor === 'end' ? Math.min(tk.x, width) : tk.x} y={HEIGHT - 4} text-anchor={anchor}>{fmtPrice(tk.value, Math.min(props.dp, 8))}</text>
+                  <text class="axis-label" x={anchor === 'start' ? Math.max(tk.x, 0) : anchor === 'end' ? Math.min(tk.x, width) : tk.x} y={height - 4} text-anchor={anchor}>{fmtPrice(tk.value, Math.min(props.dp, 8))}</text>
                 </g>
               );
             })}
@@ -111,9 +112,9 @@ export function DepthChart(props: { /** the USD display in force and the series 
             ) : null}
           </svg>
         ) : props.loading ? (
-          <div class="skeleton" style={`height:${HEIGHT}px`} data-testid="depth-loading" />
+          <div class="skeleton" data-testid="depth-loading" />
         ) : (
-          <div class="mkt-empty" style={`height:${HEIGHT}px`} data-testid="depth-empty">
+          <div class="mkt-empty" data-testid="depth-empty">
             {t(props.unavailable ? 'market.depth.unavailable' : 'market.depth.empty')}
           </div>
         )}

@@ -45,30 +45,29 @@ body:has(.market-page) .container { max-width: 1520px; }
 /* under the grid, on the full width of the page (siblings of .mkt-grid): the activity log (ui/activity), then the facts */
 .mkt-area-details { min-width: 0; }
 @media (min-width: 760px) {
-  /* left: the book and the depth chart; right: the ticket. The last row is an empty one that takes whatever height the right
-     column has over the left, so the left panels never stretch */
-  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book side' 'depth side' '. side'; grid-template-rows: auto auto auto 1fr; margin-bottom: -12px; /* the empty last row's gap */ }
-  /* the tallest column keeps the page gap (12px) to the facts under the grid: the grid's -12px only cancels the empty last row's gap */
-  .mkt-side { display: flex; flex-direction: column; gap: 12px; grid-area: side; align-self: start; min-width: 0; margin-bottom: 12px; }
-  .mkt-side:has(.tk) { align-self: stretch; contain: size; min-height: 34rem; }
+  /* two columns: the ticket beside the book only, the depth chart on the full width under both (beside the book and the depth chart together the ticket
+     had empty room under or inside it). The row is as tall as the taller of the book and the whole Limit form (--tk-fit, measured by the ticket): the form
+     does not scroll unless more of it is unfolded, and the book's card stretches to the ticket */
+  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book side' 'depth depth'; }
+  .mkt-side { display: flex; flex-direction: column; gap: 12px; grid-area: side; align-self: start; min-width: 0; }
+  .mkt-side:has(.tk) { align-self: stretch; contain: size; min-height: max(34rem, var(--tk-fit, 0px)); }
   .mkt-side:has(.tk) > .mkt-area-ticket { flex: 1 1 0; min-height: 0; }
+  .mkt-area-book { align-self: stretch; }
 }
 @media (min-width: 760px) {
   .mkt-area-ticket:has(.tk) { display: flex; flex-direction: column; gap: 12px; }
   .mkt-area-ticket:has(.tk) > [data-testid='ticket-container'] { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
   .mkt-area-ticket .tk { flex: 1 1 0; min-height: 0; }
 }
-/* two columns: the column beside the ticket (the book and the depth chart) is far taller than the form, so the ticket keeps a height of its own (that of
-   the Limit form, shorter when the column is) instead of filling the column with empty room above its button */
-@media (min-width: 760px) and (max-width: 1199px) {
-  .mkt-area-ticket .tk { flex: 0 1 46rem; }
-}
 @media (min-width: 1200px) {
-  /* the depth chart takes the middle under the chart; the last row is an empty one that takes whatever height the ticket still has over the other panels */
-  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) minmax(0, 1fr) 360px; grid-template-rows: auto auto 1fr; grid-template-areas: 'book chart chart ticket' 'book depth depth ticket' '. . . ticket'; margin-bottom: -12px; }
+  /* the depth chart takes the middle under the chart and whatever height the ticket has over the chart and its own least height: the ticket is at least as
+     tall as its whole Limit form (--tk-fit, measured by the ticket), so the form does not scroll unless more of it is unfolded */
+  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) minmax(0, 1fr) 360px; grid-template-rows: auto 1fr; grid-template-areas: 'book chart chart ticket' 'book depth depth ticket'; }
   .mkt-side { display: contents; }
-  .mkt-area-ticket { margin-bottom: 12px; }
-  .mkt-area-ticket:has(.tk) { align-self: stretch; contain: size; min-height: 34rem; }
+  .mkt-area-ticket:has(.tk), .mkt-side:has(.tk) > .mkt-area-ticket:has(.tk) { align-self: stretch; contain: size; min-height: max(34rem, var(--tk-fit, 0px)); }
+  .mkt-area-depth { align-self: stretch; display: flex; flex-direction: column; }
+  .mkt-area-depth > .section-body, .mkt-area-depth figure { flex: 1 1 auto; display: flex; flex-direction: column; }
+  .mkt-area-depth .depth-box { flex: 1 1 auto; height: auto; min-height: 240px; }
   /* three columns end on one line, the bottom of the depth chart: the ticket (its form scrolls, its button is pinned there) and the book (its card has the height of the two rows, whatever it lists) */
   .mkt-area-book { align-self: stretch; }
 }
@@ -145,6 +144,8 @@ body:has(.market-page) .container { max-width: 1520px; }
 /* ------------------------------------------------------------------ depth chart */
 
 .depth-box { position: relative; height: 240px; }
+/* the drawing fills its box and gives it no height of its own: on three columns the box takes the height the row has over the chart (market grid) */
+.depth-box > .depth-svg, .depth-box > .skeleton, .depth-box > .mkt-empty { position: absolute; inset: 0; }
 .depth-svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .depth-svg .grid { stroke: var(--grid); stroke-width: 1; }
 .depth-svg .axis-label { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
@@ -458,15 +459,11 @@ body:has(.market-page) .container { max-width: 1520px; }
 .mkt-area-mine { position: relative; z-index: 1; }
 .mkt-grid.mkt-has-mine { grid-template-areas: 'chart' 'book' 'ticket' 'mine' 'depth'; }
 @media (min-width: 760px) {
-  .mkt-grid.mkt-has-mine { grid-template-areas: 'chart chart' 'book side' 'depth side' '. side' 'mine mine'; grid-template-rows: auto auto auto 1fr auto; }
-  .mkt-has-mine .mkt-area-mine { margin-bottom: 12px; }
+  .mkt-grid.mkt-has-mine { grid-template-areas: 'chart chart' 'book side' 'depth depth' 'mine mine'; }
 }
 @media (min-width: 1200px) {
-  /* the ticket keeps its column and its rows; the panel takes the row under all of them, so the column below the ticket is not left empty. The empty row
-     under the depth chart takes whatever height the ticket still has over the book and the depth chart */
-  .mkt-grid.mkt-has-mine { grid-template-areas: 'book chart chart ticket' 'book depth depth ticket' '. . . ticket' 'mine mine mine mine'; grid-template-rows: auto auto 1fr auto; }
-  .mkt-has-mine .mkt-area-ticket { margin-bottom: 0; }
-  .mkt-has-mine .mkt-area-ticket:has(.tk) { margin-bottom: 12px; } /* the panel above the page's gap ends where the depth chart does */
+  /* the ticket keeps its column and its rows; the panel takes the row under all of them, so the column below the ticket is not left empty */
+  .mkt-grid.mkt-has-mine { grid-template-areas: 'book chart chart ticket' 'book depth depth ticket' 'mine mine mine mine'; grid-template-rows: auto 1fr auto; }
 }
 .market-orders { padding: 12px 14px; }
 .market-orders-head { flex-wrap: wrap; gap: 6px 12px; }
