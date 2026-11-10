@@ -55,22 +55,27 @@
 
 /* the summary strip over the Portfolio tabs: the total value at the last prices, the KAS the wallet can spend, the KAS in its orders, the open orders */
 .pf-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 12px; }
-.pf-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 14px; background: var(--surface); }
-.pf-k { font-size: 0.75rem; color: var(--muted); }
-.pf-v { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 4px; font-size: clamp(0.95rem, 1.8cqi, 1.2rem); font-weight: 650; font-variant-numeric: tabular-nums; }
-/* a figure is never cut and never broken (no ellipsis, no line break inside the number): it takes the size its room allows (the panel's width, in cqi), and the
-   unit goes under it where the two do not fit side by side */
+.pf-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 14px; background: var(--surface); }
+/* the label row: the label, and at its right the "Estimate (?)" tag of the total; every card has it, at one height, so the values stand on one line across the cards */
+.pf-kline { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 1.5rem; min-width: 0; }
+.pf-k { font-size: 0.75rem; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tip-tag { flex: none; appearance: none; font: inherit; font-size: 0.68rem; line-height: 1.5; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; cursor: pointer; white-space: nowrap; }
+.tip-tag:hover { color: var(--text); border-color: var(--muted); }
+/* a figure is never cut, never broken and never moved to a second line: number and unit stand on one line and the size follows the room (the panel's width, in cqi) */
+.pf-v { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 0 4px; white-space: nowrap; font-size: clamp(0.62rem, calc((25cqi - 34px) / 11.2), 1.2rem); line-height: 1.25; font-weight: 650; font-variant-numeric: tabular-nums; }
 .pf-v > span { min-width: 0; }
-.pf-v > span:first-child { white-space: nowrap; }
-.pf-unit { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+.pf-unit { font-size: max(0.62rem, 0.6em); font-weight: 600; color: var(--muted); }
 .bal-nw { white-space: nowrap; }
-.pf-s { font-size: 0.72rem; color: var(--muted); }
 /* four across where the longest figure fits a quarter of the panel (1000 px), else two by two */
 @container pf (max-width: 999px) {
   .pf-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pf-stat { padding: 10px 12px; }
-  .pf-v { font-size: clamp(0.62rem, calc(4.2cqi - 3px), 1.2rem); line-height: 1.25; }
-  .pf-s { overflow-wrap: anywhere; }
+  .pf-v { font-size: clamp(0.62rem, calc((50cqi - 40px) / 11.2), 1.2rem); }
+}
+/* a narrow panel: the tag is its (?) (the word stays its accessible name), and the label is a little smaller */
+@container pf (max-width: 479px) {
+  .tip-tag .tip-word { display: none; }
+  .pf-k { font-size: 0.7rem; }
 }
 
 /* a balance's asset: its icon and fingerprint (Fingerprint.tsx, small), then its name; KAS has a plain round mark */

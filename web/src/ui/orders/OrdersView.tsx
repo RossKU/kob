@@ -17,6 +17,7 @@ import type { Hex } from '../../kob/types';
 import { Banner, Button, ErrorBanner, Modal, RawDetails, Section, SortButton, SortControl, Tabs, ariaSortOf, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState } from '../kit';
 import { useLiveRefresh } from '../market/live';
 import { RowsControl } from '../market/ListPaging';
+import { TipBadge } from '../market/TipBadge';
 import { useListPage } from '../market/use-market-list';
 import { useKascov } from '../market/use-kascov';
 import { kascovIconOf } from '../market/kascov-merge';
@@ -573,21 +574,31 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       {(
       <div class="pf-strip" data-testid="portfolio-summary">
         <div class="pf-stat">
-          <span class="pf-k">{t('orders.summary.total')}</span>
-          <span class="pf-v num" data-testid="portfolio-total"><span>{balances.summary ? `≈ ${formatKas(balances.summary.total, { group: ',' })}` : '—'}</span><span class="pf-unit">KAS</span></span>
-          {balances.summary && balances.summary.unpriced > 0 ? <span class="pf-s" data-testid="portfolio-unpriced">{t('orders.summary.unpriced', { n: balances.summary.unpriced })}</span> : null}
+          <div class="pf-kline">
+            <span class="pf-k">{t('orders.summary.total')}</span>
+            {balances.summary ? (
+              <TipBadge
+                variant="tag"
+                label={t('orders.summary.estimate')}
+                detail={balances.summary.unpriced > 0 ? `${t('orders.summary.estimateTip')} ${t('orders.summary.unpriced', { n: balances.summary.unpriced })}` : t('orders.summary.estimateTip')}
+                data-testid="portfolio-estimate"
+                data-detail-testid="portfolio-estimate-detail"
+              />
+            ) : null}
+          </div>
+          <span class="pf-v num" data-testid="portfolio-total"><span>{balances.summary ? formatKas(balances.summary.total, { group: ',', minFraction: 2, maxFraction: 2 }) : '—'}</span><span class="pf-unit">KAS</span></span>
         </div>
         <div class="pf-stat">
-          <span class="pf-k">{t('orders.summary.available')}</span>
+          <div class="pf-kline"><span class="pf-k">{t('orders.summary.available')}</span></div>
           <span class="pf-v num" data-testid="portfolio-available"><span>{balances.summary ? formatKas(balances.summary.kasFree, { group: ',' }) : '—'}</span><span class="pf-unit">KAS</span></span>
         </div>
         <div class="pf-stat">
-          <span class="pf-k">{t('orders.summary.inOrders')}</span>
+          <div class="pf-kline"><span class="pf-k">{t('orders.summary.inOrders')}</span></div>
           <span class="pf-v num" data-testid="portfolio-in-orders"><span>{balances.summary ? formatKas(balances.summary.kasLocked, { group: ',' }) : '—'}</span><span class="pf-unit">KAS</span></span>
         </div>
         <div class="pf-stat">
-          <span class="pf-k">{t('orders.summary.open')}</span>
-          <span class="pf-v num" data-testid="portfolio-open-count">{d ? String(counts.active) : '—'}</span>
+          <div class="pf-kline"><span class="pf-k">{t('orders.summary.open')}</span></div>
+          <span class="pf-v num" data-testid="portfolio-open-count"><span>{d ? String(counts.active) : '—'}</span></span>
         </div>
       </div>
       )}

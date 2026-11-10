@@ -3,7 +3,12 @@
 // it, does not cut it. A tap on the badge closes it again, as do Escape, a tap elsewhere, a scroll and a resize. Same behaviour as the "High risk" chip.
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 
-export function TipBadge(props: { label: string; detail: string; 'data-testid': string; 'data-detail-testid': string }) {
+/**
+ * `variant` 'warn' (default): the warning badge. 'tag': a small muted tag with a (?) (the summary cards' "Estimate (?)"): the same panel and behaviour, no space before it
+ * (the caller places it).
+ */
+export function TipBadge(props: { label: string; detail: string; 'data-testid': string; 'data-detail-testid': string; variant?: 'warn' | 'tag' }) {
+  const tag = props.variant === 'tag';
   const [pos, setPos] = useState<{ left: number; top: number; scrollY: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   // a layout effect: the listeners must exist in the same frame the panel appears (a passive effect runs after the next paint and an Escape or tap in between was lost)
@@ -47,10 +52,10 @@ export function TipBadge(props: { label: string; detail: string; 'data-testid': 
   };
   return (
     <>
-      {' '}
+      {tag ? null : ' '}
       <button
         type="button"
-        class="badge badge-warn tip-btn"
+        class={tag ? 'tip-btn tip-tag' : 'badge badge-warn tip-btn'}
         ref={button}
         onClick={toggle}
         title={props.detail}
@@ -58,7 +63,11 @@ export function TipBadge(props: { label: string; detail: string; 'data-testid': 
         aria-label={`${props.label}: ${props.detail}`}
         data-testid={props['data-testid']}
       >
-        <span class="chip-label"><span aria-hidden="true">{'\u26A0\uFE0E'}</span> {props.label}</span>
+        {tag ? (
+          <span class="chip-label"><span class="tip-word">{props.label} </span><span aria-hidden="true">(?)</span></span>
+        ) : (
+          <span class="chip-label"><span aria-hidden="true">{'\u26A0\uFE0E'}</span> {props.label}</span>
+        )}
       </button>
       {pos ? (
         <div class="tip-panel" data-tip-panel role="note" style={{ left: `${pos.left}px`, top: `${pos.top}px` }} data-testid={props['data-detail-testid']}>
