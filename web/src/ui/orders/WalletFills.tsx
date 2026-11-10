@@ -9,9 +9,11 @@ import { longId, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatUnits, quoteOf } from '../../kob/units';
 import {
-  Amount, CopyText, DataTable, DtCell, DtGroup, DtRow, ErrorBanner, KeyValueList, Loading, MoneyCell, Num, RowToggle, fixedPricePerToken, scaledUnits, sortBy, tickPriceFraction, toggleLabel, useAsync, useOpenRow,
-  type DtColumn, type DtPlain, type SortState, type SortValue,
+  Amount, CopyText, ErrorBanner, KeyValueList, Loading, fixedPricePerToken, scaledUnits, sortBy, tickPriceFraction, useAsync, type SortState, type SortValue,
 } from '../kit';
+import {
+  DataTable, DtCell, DtGroup, DtRow, MoneyCell, Num, RowToggle, toggleLabel, useOpenRow, type DtColumn, type DtPlain,
+} from '../kit/DataTable';
 import { IdentityBlock } from '../market/Fingerprint';
 import type { KascovMeta } from '../market/token-model';
 import { fillHistory, type FillRow } from './fills-model';

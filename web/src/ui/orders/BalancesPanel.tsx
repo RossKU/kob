@@ -8,9 +8,11 @@ import { t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { KasIcon } from '../kit/KasIcon';
 import {
-  Amount, Banner, Button, DataTable, DtCell, DtGroup, DtRow, ErrorBanner, MoneyCell, Section, scaledUnits, sortBy, unitsFraction, useSortState,
-  type DtColumn, type DtPlain, type SortValue,
+  Amount, Banner, Button, ErrorBanner, Section, scaledUnits, sortBy, unitsFraction, useSortState, type SortValue,
 } from '../kit';
+import {
+  DataTable, DtCell, DtGroup, DtRow, MoneyCell, type DtColumn, type DtPlain,
+} from '../kit/DataTable';
 import { formatKas, formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
 import { IdentityBlock } from '../market/Fingerprint';

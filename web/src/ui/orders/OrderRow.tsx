@@ -11,7 +11,12 @@ import { formatLocal, formatUtc } from '../../kob/daa';
 import type { Clock } from '../../kob/plan-types';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { useFiat } from '../../app/use-fiat';
-import { Amount, Badge, Banner, Button, CopyText, DtCell, DtGroup, DtRow, KeyValueList, MoneyCell, Num, RawDetails, RowToggle, hasOpenChoice, tickPriceFraction, toggleLabel, useOpenRow, type Tone } from '../kit';
+import {
+  Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, tickPriceFraction, type Tone,
+} from '../kit';
+import {
+  DtCell, DtGroup, DtRow, MoneyCell, Num, RowToggle, hasOpenChoice, toggleLabel, useOpenRow,
+} from '../kit/DataTable';
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
 import { IdentityBlock } from '../market/Fingerprint';

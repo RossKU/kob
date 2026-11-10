@@ -111,6 +111,13 @@
   .dt-force-cards .dt-c[data-card='badge'] { text-align: right; }
   .dt-force-cards .dt-details { border-top: 1px solid var(--border); }
 
+/* a wider card (a tablet, a narrow window): four columns of pairs */
+@container dt (min-width: 640px) and (max-width: 1119px) {
+  .dt-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1 / span 2; }
+  .dt-c[data-card='badge'] { grid-column: 3 / -1; }
+  .dt-c[data-card='wide'] { grid-column: span 2; }
+}
 @container dt (min-width: 520px) and (max-width: 1119px) {
   .dt-c[data-card='action'] { flex: 1 1 100%; }
   .dt-act { justify-content: flex-end; }

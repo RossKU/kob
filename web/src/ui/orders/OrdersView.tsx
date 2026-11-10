@@ -16,7 +16,10 @@ import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Banner, Button, DataTable, MoneyCell, ErrorBanner, Modal, RawDetails, Section, Tabs, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState, type DtColumn } from '../kit';
+import {
+  Banner, Button, ErrorBanner, Modal, RawDetails, Section, Tabs, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState,
+} from '../kit';
+import { DataTable, MoneyCell, type DtColumn } from '../kit/DataTable';
 import { useLiveRefresh } from '../market/live';
 import { RowsControl } from '../market/ListPaging';
 import { TipBadge } from '../market/TipBadge';
