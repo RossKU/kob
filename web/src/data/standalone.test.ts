@@ -298,3 +298,96 @@ describe('listing rules (stream-book)', () => {
     expect(orderViewOf(b.get(a2.covenantId)!, ctx)).toMatchObject({ state_known: true, status: 'open', side: 1, price: '240000000' });
   });
 });
+
+describe('what the indexer gave before the mode is kept', () => {
+  const OTHER = '71'.repeat(32);
+  const TEMPLATE = '173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b';
+  const row = (id: string, over: Record<string, unknown> = {}) => ({ ticker: id === TOKEN ? 'TUSD' : '', covenant_id: id, template_hash: TEMPLATE, extension_commitment: null, decimals: null, scale: null, market_scale: 1000, open_asks: 5, open_bids: 2, family: 'kcc20', ...over });
+  const OLD_BAR = Date.parse('2026-11-05T11:00:00Z');
+  /** an indexer that has loaded a market: two tokens, one hour bar, trades and 24 h figures priced per 1000 base units */
+  function loaded(scaleOfToken = 1000) {
+    return {
+      health: vi.fn(async () => health('following')),
+      tokens: vi.fn(async () => [row(TOKEN, { market_scale: scaleOfToken }), row(OTHER)]),
+      candles: vi.fn(async (token: string, q: { interval: string }) => ({ token, interval: q.interval, price_basis: '1000', items: [{ t: OLD_BAR, o: '230000000', h: '250000000', l: '220000000', c: '240000000', volume: '1000', quote_volume: '100', trades: 4 }] })),
+      trades: vi.fn(async (token: string) => ({ token, price_basis: '1000', next_cursor: null, items: [{ id: 777, txid: 'cc'.repeat(32), ts: OLD_BAR, daa: 5, price: '240000000', amount: '1000', quote: '100', side: 'sell', fills: 1, confirmations: 30, settled: true }] })),
+      stats: vi.fn(async (token: string) => ({
+        token, price_basis: '1000', ts: Date.now(), last: '240000000', last_ts: OLD_BAR, last_side: 'sell', open_24h: '230000000', high_24h: '250000000', low_24h: '220000000', change_24h_bps: 434, volume_24h: '1000',
+        quote_volume_24h: '100', trades_24h: 4, best_bid: null, best_ask: null, mid: null, spread_bps: null, open_asks: 5, open_bids: 2,
+      })),
+      book: vi.fn(async () => ({ asks: [], bids: [] })),
+    } as unknown as IndexerApi;
+  }
+
+  it('the token list, candles, trades and 24 h figures read before the mode stay, with the node fills added; the book is the node one', async () => {
+    const h = harness();
+    const real = loaded();
+    const ix = modeIndexer(real, h.c);
+    await ix.tokens();
+    await ix.candles(TOKEN, { interval: '1h' });
+    await ix.candles(TOKEN, { interval: '1m' });
+    await ix.trades(TOKEN, { limit: 50 });
+    await ix.stats(TOKEN);
+    h.c.setPrefs({ manual: true });
+    await vi.advanceTimersByTimeAsync(0);
+    const calls = (real.stats as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // the tokens: both stay with the facts the indexer gave (TUSD, its scale), no orders known on the node
+    const tokens = await ix.tokens();
+    expect(tokens.map((t) => [t.covenant_id, t.ticker, t.market_scale, t.open_asks])).toEqual([[TOKEN, 'TUSD', 1000, 0], [OTHER, '', 1000, 0]]);
+    expect(h.c.carry.tokenAt(TOKEN)).not.toBeNull();
+    // the market figures as read, before the node showed anything; the book is the node one (empty), a stale indexer book is not offered
+    expect((await ix.candles(TOKEN, { interval: '1h' }))!.items.map((b) => b.t)).toEqual([OLD_BAR]);
+    expect(await ix.stats(TOKEN)).toMatchObject({ last: '240000000', volume_24h: '1000', trades_24h: 4, price_basis: '1000' });
+    expect((await ix.trades(TOKEN, { limit: 50 }))!.items.map((t) => t.id)).toEqual([777]);
+    expect((await ix.book(TOKEN)).asks).toEqual([]);
+    expect((real.stats as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls);
+    expect(real.book).not.toHaveBeenCalled();
+
+    // a fill the node shows: added to the kept bars, the trades and the figures
+    const ask = legSnapshot('take.ask.partial');
+    h.c.adopt([ask], 1_000n);
+    const take = clone(goldenTx('take.ask.partial').signed.tx) as TxJson;
+    h.block([take], 1_200n);
+    await vi.advanceTimersByTimeAsync(10);
+    h.chain.applyTx(take);
+    await vi.advanceTimersByTimeAsync(VERIFY_DELAY_MS + 10);
+    expect((await ix.tokens()).find((t) => t.covenant_id === TOKEN)).toMatchObject({ ticker: 'TUSD', open_asks: 1 });
+    const bars = (await ix.candles(TOKEN, { interval: '1h' }))!.items;
+    expect(bars.map((b) => b.t)).toEqual([OLD_BAR, Math.floor(Date.now() / 3_600_000) * 3_600_000]);
+    expect(bars[1]).toMatchObject({ o: '250000000', c: '250000000', volume: '4000', trades: 1 });
+    // an incremental read from the newest bar on screen gets the merged bars from there
+    expect((await ix.candles(TOKEN, { interval: '1h', from: bars[1]!.t }))!.items.map((b) => b.t)).toEqual([bars[1]!.t]);
+    expect((await ix.trades(TOKEN, { limit: 50 }))!.items.map((t) => t.id === 777 ? 'kept' : t.txid)).toEqual([take.id, 'kept']);
+    expect(await ix.stats(TOKEN)).toMatchObject({ last: '250000000', last_side: 'buy', open_24h: '230000000', high_24h: '250000000', low_24h: '220000000', volume_24h: '5000', trades_24h: 5, price_basis: '1000' });
+    // what the node saw is priced on the indexer's basis, and the order listed is of the token as the indexer gave it
+    expect(h.c.bookView(TOKEN).asks).toHaveLength(1);
+
+    // back to the indexer: its data is used again, what the mode collected is dropped, the carry goes on recording
+    h.c.setPrefs({ manual: false });
+    expect(h.c.state.active).toBe(false);
+    expect((await ix.candles(TOKEN, { interval: '1h' }))!.items.map((b) => b.t)).toEqual([OLD_BAR]);
+    expect(h.c.tradesView(TOKEN).items.map((t) => t.id)).toEqual([777]);
+  });
+
+  it('an order of a token is listed against the facts the indexer gave for it: another scale or program is not', async () => {
+    const h = harness();
+    const ix = modeIndexer(loaded(100), h.c);
+    await ix.tokens();
+    h.c.setPrefs({ manual: true });
+    h.c.adopt([legSnapshot('take.ask.partial')], 1_000n);
+    // the golden order prices per 1000 base units: not the scale 100 the indexer gave this market
+    expect(h.c.bookView(TOKEN).asks).toEqual([]);
+    expect(h.c.carry.scaleOf(TOKEN)).toBe(100);
+  });
+
+  it('a token the page never read from the indexer is not listed and has no kept figures; nothing is kept when the mode is on from the start', async () => {
+    const h = harness({ manual: true });
+    const ix = modeIndexer(loaded(), h.c);
+    expect(await ix.tokens()).toEqual([]);
+    expect(h.c.carry.tokenAt(TOKEN)).toBeNull();
+    expect(h.c.carry.marketAt(TOKEN)).toBeNull();
+    expect((await ix.candles(TOKEN, { interval: '1h' }))!.items).toEqual([]);
+    expect((await ix.stats(TOKEN))!.last).toBeNull();
+  });
+});

@@ -459,7 +459,14 @@ export function TokenList(props: { invalidToken?: string }) {
         </div>
         <ListLegend names={kascov.status} />
         <FiatNote />
-        {sa?.active && sa.sinceMs !== null ? <p class="small muted" data-testid="token-list-standalone">{t('market.list.standalone', { time: clockText(sa.sinceMs) })}</p> : null}
+        {/* what the indexer gave this page before the mode is kept (data/stream-carry.ts) and says when it was read */}
+        {sa?.active && sa.sinceMs !== null ? (
+          standalone?.carry.tokensAt != null ? (
+            <p class="small muted" data-testid="token-list-standalone">{t('market.list.standaloneKept', { time: clockText(standalone.carry.tokensAt), since: clockText(sa.sinceMs) })}</p>
+          ) : (
+            <p class="small muted" data-testid="token-list-standalone">{t('market.list.standalone', { time: clockText(sa.sinceMs) })}</p>
+          )
+        ) : null}
         <ErrorBanner error={tokens.error} title={t('market.list.indexerError')} onRetry={tokens.reload} data-testid="token-list-error" />
         {noTokenTable ? null : (
           <Table dense class="ml-table ml-tokens" data-testid="token-table">

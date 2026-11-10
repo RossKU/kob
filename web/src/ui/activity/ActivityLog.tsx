@@ -364,9 +364,15 @@ function ActivityLogView(props: ActivityLogProps) {
       {t('activity.title')}
       <span class="act-scope muted">{props.market.kind === 'all' ? t('activity.allMarkets') : fmt.marketText(props.market)}</span>
       {data.sinceMs !== null ? (
-        <Badge tone="info" title={t('activity.sinceHint')} data-testid="activity-since">
-          {t('activity.since', { time: clockText(data.sinceMs) })}
-        </Badge>
+        data.keptUntilMs !== null ? (
+          <Badge tone="info" title={t('activity.keptHint')} data-testid="activity-since" data-kept="1">
+            {t('activity.kept', { until: clockText(data.keptUntilMs), since: clockText(data.sinceMs) })}
+          </Badge>
+        ) : (
+          <Badge tone="info" title={t('activity.sinceHint')} data-testid="activity-since">
+            {t('activity.since', { time: clockText(data.sinceMs) })}
+          </Badge>
+        )
       ) : null}
     </span>
   );
@@ -434,7 +440,7 @@ function ActivityLogView(props: ActivityLogProps) {
             </a>
           ) : null}
           {data.sinceMs !== null ? (
-            <span class="small muted" data-testid="activity-nothing-before">{t('activity.nothingBefore', { time: clockText(data.sinceMs) })}</span>
+            <span class="small muted" data-testid="activity-nothing-before">{data.keptUntilMs !== null ? t('activity.nothingBeforeKept') : t('activity.nothingBefore', { time: clockText(data.sinceMs) })}</span>
           ) : null}
         </span>
       </div>

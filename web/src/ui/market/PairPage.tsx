@@ -380,7 +380,7 @@ export function PairPage(props: { base: string; quote: string }) {
       ticket={
         <div class="stack mkt-area-ticket">
           {/* an open-list token in standalone mode: the rule of the token page, for either token */}
-          {standalone && [baseToken, quoteToken].some((m) => !!m.row && scaleNeedsIndexer(m.row, m.open.reason)) ? (
+          {standalone && [baseToken, quoteToken].some((m) => !!m.row && scaleNeedsIndexer(m.row, m.open.reason, services.standalone?.carry.scaleOf(m.row.covenantId) != null)) ? (
             <Section title={t('market.ticket.title')} data-testid="ticket-unavailable" class="mkt-card">
               <Banner tone="warn" data-testid="ticket-standalone-scale">{t('market.ticket.standaloneScale')}</Banner>
             </Section>

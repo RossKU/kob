@@ -112,6 +112,9 @@ export default {
   'activity.live.standalone': 'Standalone',
   'activity.live.standaloneHint': 'Standalone mode: what this page saw on the node since it started watching',
   'activity.since': 'since {time}',
+  'activity.kept': 'Indexer rows until {until}, then from your node (since {since})',
+  'activity.keptHint': 'Standalone mode: the rows the indexer gave this page are kept as they were read; what this page saw on the node since standalone mode started is added. Rows between the two times may be missing.',
+  'activity.nothingBeforeKept': 'Older rows are not available in standalone mode',
   'activity.sinceHint': 'Standalone mode: only what this page saw on the node since then. Nothing older is known.',
 
   'activity.loading': 'Loading activity…',

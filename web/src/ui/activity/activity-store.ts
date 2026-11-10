@@ -11,7 +11,7 @@ import type { IndexerApi } from '../../data/indexer';
 import type { EventView, OrderView, PairFillsView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import {
-  fillRows, inMarket, mergePairFills, mergeRows, MS_PER_DAA, orderMarket, orientRow, pairFillEvent, placedRows, ROW_CAP,
+  fillRows, inMarket, marketKeyOf, mergePairFills, mergeRows, MS_PER_DAA, orderMarket, orientRow, pairFillEvent, placedRows, ROW_CAP,
   type ActivityKind, type ActivityRow, type MarketFilter, type OrderFacts, type RowContext,
 } from './activity-model';
 
@@ -28,6 +28,11 @@ export interface StoreSources {
   indexer: IndexerApi | null;
   /** standalone mode: what the page saw on the node (null when the mode is off) */
   standalone: { seenActivity(): { fills: EventView[]; orders: OrderView[] } } | null;
+  /**
+   * what the page read from the indexer is kept for standalone mode (data/stream-carry.ts): a store that read from the indexer parks itself here under
+   * its market, and the store a standalone mode starts is seeded from it ("indexer data until HH:MM", then what the node showed)
+   */
+  carry?: { park(key: string, store: unknown): void; parked<T>(key: string): T | null } | null;
   /** the pair page's own copy of the pair's fills (so the pair's heavy route is not read twice) */
   pairFills?: { base: Hex; quote: Hex; view: PairFillsView | null | undefined } | null;
 }
@@ -56,6 +61,12 @@ export class ActivityStore {
   /** the chain's DAA score when it was last reported */
   chain: { daa: number; atMs: number } | null = null;
   version = 0;
+  /** when this store last read the indexer, ms (null: never) */
+  lastReadMs: number | null = null;
+  /** standalone mode: the records came from the indexer until this time, ms (a store parked by the indexer's reads seeded this one); null: none were kept */
+  keptUntilMs: number | null = null;
+  /** the transactions of the kept fills (a fill the node shows again is the same fill) */
+  private keptTxids = new Set<string>();
   private lookups = new Set<Hex>();
   private queue: Hex[] = [];
   private gen = 0;
@@ -67,7 +78,24 @@ export class ActivityStore {
     private readonly tokenScale: (token: Hex) => bigint | null,
     private readonly changed: () => void,
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    const prev = src.standalone ? src.carry?.parked<ActivityStore>(marketKeyOf(market)) ?? null : null;
+    if (prev && prev !== this && prev.lastReadMs !== null) this.seedFrom(prev);
+  }
+
+  /** Standalone mode: what the indexer's store of this market read is kept as it was. */
+  private seedFrom(prev: ActivityStore): void {
+    for (const [k, v] of prev.fills) {
+      this.fills.set(k, v);
+      if ('txid' in v && v.txid) this.keptTxids.add(v.txid);
+    }
+    for (const [k, v] of prev.orders) this.orders.set(k, v);
+    for (const [k, v] of prev.facts) this.facts.set(k, v);
+    this.timeRef = prev.timeRef;
+    this.chain = prev.chain;
+    this.keptUntilMs = prev.lastReadMs;
+    this.version++;
+  }
 
   dispose(): void {
     this.gen++;
@@ -162,11 +190,13 @@ export class ActivityStore {
     return this.ctl.signal;
   }
 
-  private addFills(items: readonly EventView[]): number {
+  /** `key`: the prefix of the record keys (the node's own fills are `n:`: their ids are this page's, not the indexer's) */
+  private addFills(items: readonly EventView[], key = 'e'): number {
     let fresh = 0;
     for (const e of items) {
       if (e.kind !== 'fill') continue;
-      const k = `e:${e.id}`;
+      if (key === 'n' && this.keptTxids.has(e.txid)) continue;
+      const k = `${key}:${e.id}`;
       if (!this.fills.has(k)) fresh++;
       this.fills.set(k, e);
       if (typeof e.ts === 'number' && e.ts > 0 && (!this.timeRef || e.daa > this.timeRef.daa)) this.timeRef = { daa: e.daa, ms: e.ts };
@@ -265,7 +295,7 @@ export class ActivityStore {
   /** Standalone mode: everything the page saw (no paging: nothing before the mode started is known). */
   private readStandalone(): void {
     const seen = this.src.standalone!.seenActivity();
-    this.addFills(seen.fills);
+    this.addFills(seen.fills, 'n');
     this.addOrders(seen.orders);
     this.fillsCursor = null;
     this.ordersCursor = null;
@@ -296,7 +326,12 @@ export class ActivityStore {
     } finally {
       this.replacing = false;
     }
-    if (gen === this.gen) this.bump();
+    if (gen === this.gen) {
+      // a read of the indexer that gave records: kept for standalone mode
+      this.lastReadMs = this.now();
+      if (this.fills.size || this.orders.size) this.src.carry?.park(marketKeyOf(this.market), this);
+      this.bump();
+    }
   }
 
   /** set by a replacing read: the next newest page of each source drops the records above its oldest one that it does not list (reverted) */

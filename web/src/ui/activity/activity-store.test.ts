@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IndexerApi } from '../../data/indexer';
 import type { EventView, OrderView, PairFillsView } from '../../data/indexer-types';
+import { IndexerCarry } from '../../data/stream-carry';
 import { ActivityStore } from './activity-store';
 import type { ActivityKind } from './activity-model';
 
@@ -143,5 +144,37 @@ describe('activity store', () => {
     expect(s.timeRef).toEqual({ daa: 100, ms: 10_000 });
     s.noteChain(200);
     expect(s.chain!.daa).toBe(200);
+  });
+
+  it('standalone mode keeps the rows the indexer gave and adds what the node showed; a fill both show is one row', async () => {
+    const carry = new IndexerCarry(() => 0);
+    const { ix } = fakeIndexer([ev(901, 900), ev(900, 899)], [ord(1, 898)]);
+    // the indexer's store of this market parks itself once it has read
+    const before = storeOf(ix, { kind: 'all' }, { carry });
+    expect(carry.parked('all')).toBeNull();
+    await before.readNewest({ fills: true, placed: true });
+    expect(carry.parked('all')).toBe(before);
+    expect(before.lastReadMs).toBe(0);
+    // standalone mode starts: the store of the mode is seeded from it, the node's fills come with their own keys (ids of this page, not the indexer's)
+    const seen = { fills: [{ ...ev(901, 900), id: 1 }, { ...ev(1, 905), id: 2, txid: hex(77) }], orders: [ord(2, 906)] };
+    const s = storeOf(null, { kind: 'all' }, { carry, standalone: { seenActivity: () => seen } });
+    expect(s.keptUntilMs).toBe(0);
+    await s.readNewest({ fills: true, placed: true });
+    // the indexer's two fills and its placement, the node's new fill and placement; the node's repeat of the first fill (same transaction) is not a second row
+    expect(s.rows(KINDS).map((r) => r.kind).sort()).toEqual(['fill', 'fill', 'fill', 'placed', 'placed']);
+    expect(s.hasOlder(KINDS)).toBe(false);
+    // the indexer's store is untouched
+    expect(before.fills.size).toBe(2);
+  });
+
+  it('standalone mode without anything the indexer gave starts empty and says nothing was kept', async () => {
+    const carry = new IndexerCarry(() => 0);
+    const s = storeOf(null, { kind: 'all' }, { carry, standalone: { seenActivity: () => ({ fills: [], orders: [] }) } });
+    expect(s.keptUntilMs).toBeNull();
+    // a market page that never read does not park an empty store
+    const { ix } = fakeIndexer([], []);
+    const empty = storeOf(ix, { kind: 'token', token: T }, { carry });
+    await empty.readNewest({ fills: true, placed: true });
+    expect(carry.parked(T)).toBeNull();
   });
 });

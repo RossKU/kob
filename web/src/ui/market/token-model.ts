@@ -326,11 +326,15 @@ export function withShownRows(rows: readonly TokenRow[], shown: readonly (TokenR
 
 /**
  * Standalone mode: an open-list token is traded only with decimals known without the indexer (its declaration or its program's default): the scale its
- * orders seen since the mode started use is no evidence of the market's.
+ * orders seen since the mode started use is no evidence of the market's. `carried`: the indexer gave the market's scale before the mode (the token
+ * list the page read, `IndexerCarry.scaleOf`), so the scale its row names is the one the token was traded on before the switch, the same trust.
  */
-export function scaleNeedsIndexer(row: Pick<TokenRow, 'source' | 'info'>, reason: OpenTokenIssue | null): boolean {
+export function scaleNeedsIndexer(row: Pick<TokenRow, 'source' | 'info'>, reason: OpenTokenIssue | null, carried = false): boolean {
   const i = row.info;
-  return row.source !== 'registry' && (reason === 'no-scale' || (!!i?.openList && i.openScale !== 'declared' && i.openScale !== 'program'));
+  if (row.source === 'registry') return false;
+  if (reason === 'no-scale') return true;
+  if (carried && i?.openScale === 'orders') return false;
+  return !!i?.openList && i.openScale !== 'declared' && i.openScale !== 'program';
 }
 
 /**

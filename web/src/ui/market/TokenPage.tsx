@@ -50,7 +50,14 @@ import './market.css';
 const BOOK_DEPTH = 12;
 
 /** Standalone mode (data/standalone.ts): a figure built from what was seen since the mode started says so. */
-function SinceBadge(props: { since: number; area: string }) {
+function SinceBadge(props: { since: number; area: string; /** what the indexer gave before the mode is kept: when it was read */ until?: number | null }) {
+  if (props.until != null) {
+    return (
+      <Badge tone="info" data-testid={`${props.area}-standalone`} data-kept="1" title={t('market.standalone.keptHint')}>
+        {t('market.standalone.kept', { until: clockText(props.until), since: clockText(props.since) })}
+      </Badge>
+    );
+  }
   return (
     <Badge tone="info" data-testid={`${props.area}-standalone`} title={t('market.standalone.sinceHint')}>
       {t('market.standalone.since', { time: clockText(props.since) })}
@@ -73,6 +80,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // standalone mode: the book, the trades and the figures come from what this page saw on the node since `sa.sinceMs`
   const sa = useStandalone(services.standalone);
   const standalone = sa?.active ? sa : null;
+  // what the indexer gave this page before the mode (data/stream-carry.ts): the token's facts (the token list) and its market figures, with when they were read
+  const carry = standalone ? services.standalone?.carry ?? null : null;
+  const keptTokenAt = carry?.tokenAt(id) ?? null;
+  const keptMarketAt = carry?.marketAt(id) ?? null;
   // the close of a position (My orders): `?ticket=sell&amount=N` (buy first) opens the ticket on a market SELL of the N base units the position
   // bought and has not sold yet, `?ticket=cover&amount=N` (sell first) on a market BUY of the N it sold; `?ticket=close` on "close (sell all)"
   const [prefill, setPrefill] = useState<{ side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: 'close' | 'market' } | undefined>(
@@ -279,9 +290,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     if (tokens.loading || held.loading || pub.loading) return <MarketFrame bookTitle={t('market.book.title')} data-testid="token-loading" />;
     return (
       <div class="stack" data-testid="token-not-found">
-        <ForgetMarket />
-        <Banner tone="warn" title={t('market.token.notFound')}>
-          {t('market.token.notFoundBody', { id })}
+        {/* in standalone mode a token no list names is only not known there: the Trade tab keeps leading to it */}
+        {standalone ? null : <ForgetMarket />}
+        <Banner tone="warn" title={standalone ? t('market.token.standaloneUnknown') : t('market.token.notFound')}>
+          {standalone ? t('market.token.standaloneUnknownBody', { id, time: clockText(standalone.sinceMs ?? Date.now()) }) : t('market.token.notFoundBody', { id })}
           {pub.reason ? <div data-testid="token-public-reason">{t(`market.public.${pub.reason}`)}</div> : null}
           {held.reason && held.reason !== 'not-held' ? <div data-testid="token-held-reason">{t(`market.held.${held.reason}`)}</div> : null}
           {!wallet.info ? <div data-testid="token-held-connect">{t('market.held.connect')}</div> : null}
@@ -310,7 +322,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const since = standalone?.sinceMs ?? null;
   // an open-list token is traded in standalone mode only with decimals known without the indexer (its declaration or its program's default): the
   // scale its orders seen since the mode started use is no evidence of the market's
-  const standaloneScaleBlocked = !!standalone && scaleNeedsIndexer(row, open.reason);
+  const standaloneScaleBlocked = !!standalone && scaleNeedsIndexer(row, open.reason, carry?.scaleOf(id) != null);
   // the pair selector: a change of side leads to another market; the same token with the other order is only a flip
   const onPair = (next: DisplayedPair) => {
     const m = marketFor(next);
@@ -349,7 +361,16 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           ) : null}
           <CrossCheckBanner token={id} refreshKey={liveKey} />
           <FiatNote />
-          {since !== null ? <div class="row"><SinceBadge since={since} area="stats" /></div> : null}
+          {since !== null ? (
+            <div class="row">
+              <SinceBadge since={since} area="stats" until={keptMarketAt} />
+              {keptTokenAt !== null ? (
+                <Badge tone="info" data-testid="token-kept-standalone" title={t('market.standalone.tokenKeptHint')}>
+                  {t('market.standalone.tokenKept', { time: clockText(keptTokenAt) })}
+                </Badge>
+              ) : null}
+            </div>
+          ) : null}
         </>
       }
       stats={
@@ -390,7 +411,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         </Section>
       }
       chart={
-        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" /> : undefined}>
+        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" until={keptMarketAt} /> : undefined}>
           <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} />
         </Section>
       }

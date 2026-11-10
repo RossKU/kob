@@ -464,6 +464,12 @@ describe('standalone mode: an open-list token needs decimals known without the i
     expect(scaleNeedsIndexer(open('entered'), null)).toBe(true);
     expect(scaleNeedsIndexer({ source: 'indexer', info: null }, 'no-scale')).toBe(true);
   });
+  it('a scale the indexer gave before the mode (the token list the page read) is trusted as before the switch; entered decimals and none still are not', () => {
+    expect(scaleNeedsIndexer(open('orders'), null, true)).toBe(false);
+    expect(scaleNeedsIndexer(open('entered'), null, true)).toBe(true);
+    expect(scaleNeedsIndexer(open('orders'), 'no-scale', true)).toBe(true);
+    expect(scaleNeedsIndexer({ source: 'indexer', info: null }, 'no-scale', true)).toBe(true);
+  });
   it('a registry token is not concerned', () => {
     expect(scaleNeedsIndexer({ source: 'registry', info: { openList: false } as TokenInfo }, null)).toBe(false);
     expect(scaleNeedsIndexer({ source: 'registry', info: null }, 'no-scale')).toBe(false);

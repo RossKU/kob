@@ -16,15 +16,20 @@
 //     standalone mode and the indexer's book is read again (its book wins). Off: the mode stays and `indexerBack` says it may end
 //     (`returnToIndexer`, the button of the bell's entry).
 //
+// What the page already read from the indexer in this session is KEPT, not dropped (data/stream-carry.ts: the candles, trades and 24 h figures of the
+// markets it loaded, the token list with the facts of open-list tokens, the activity rows): the views merge what the node shows afterwards into it and
+// say "indexer data until HH:MM". The book is never kept: a stale indexer book must not be offered.
+//
 // While active, the app's indexer (`modeIndexer`) answers the book, the orders of the book, the token list and the market data from here; what
 // needs the indexer's records (pair books, holders and token UTXOs, the order lists of My orders and the notifications) fails as it does with the
 // indexer down.
 import type { IndexerApi } from './indexer';
 import { IndexerError } from './indexer';
-import type { BookView, CandleInterval, EventView, HealthView, IndexerTokenView, OrderView } from './indexer-types';
+import type { BookView, CandleInterval, CandlesView, EventView, HealthView, IndexerTokenView, OrderView, StatsView, TradesView } from './indexer-types';
 import type { BlockSubscription, NodeApi } from './node';
 import type { StreamBlock } from './block-stream';
 import { StreamBook, bookViewOf, listingOf, orderViewOf, tokensViewOf, type ListingContext, type RegistryFacts } from './stream-book';
+import { IndexerCarry, mergeCandles, mergeStats, mergeTokens, mergeTrades } from './stream-carry';
 import { MAX_FILLS_PER_TOKEN, candlesView, depthView, statsView, tradesView, type SeenFill } from './stream-market';
 import { SnapshotError, type OrderSnapshot } from '../kob/cancel';
 import { confirmSnapshotsOnNode, fetchNodeInputFacts, outpointKey, type OutpointRef } from '../kob/node-verify';
@@ -97,6 +102,8 @@ export interface StandaloneDeps {
   network: string;
   /** the indexer the app reads otherwise: asked once more before an automatic mode starts */
   indexer: Pick<IndexerApi, 'health'>;
+  /** what the indexer in use answered before (`modeIndexer` records it); a controller made without one starts with nothing kept */
+  carry?: IndexerCarry;
   prefs?: Partial<StandalonePrefs>;
   /** how long a bad report is waited on before the indexer is asked again (default ENTER_CHECK_MS; longer with failover, which switches first) */
   enterCheckMs?: number;
@@ -119,6 +126,8 @@ interface PendingFill { fill: StreamFill; ts: number; daa: bigint; probe: Outpoi
 
 export class StandaloneController {
   readonly indexer: IndexerApi;
+  /** what the page read from the indexer before the mode (kept across it; the mode's own collection is dropped when it ends) */
+  readonly carry: IndexerCarry;
   private readonly kob: KobWasm;
   private readonly node: StandaloneDeps['node'];
   private readonly toAddress: (spk: string) => string;
@@ -164,6 +173,7 @@ export class StandaloneController {
     this.network = d.network;
     this.real = d.indexer;
     this.registry = d.registry;
+    this.carry = d.carry ?? new IndexerCarry(d.now);
     this.now = d.now ?? Date.now;
     this.setTimer = d.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = d.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
@@ -269,7 +279,8 @@ export class StandaloneController {
   // ------------------------------------------------------------------------------------------ views (the standalone indexer)
 
   ctx(): ListingContext {
-    return { kob: this.kob, daa: this.daa, nowUnix: BigInt(Math.floor(this.now() / 1000)), ...(this.registry ? { registry: this.registry } : {}) };
+    // a token the registry does not name is listed against the facts the indexer gave for it before the mode (its program, commitment and scale)
+    return { kob: this.kob, daa: this.daa, nowUnix: BigInt(Math.floor(this.now() / 1000)), registry: (t) => this.registry?.(t) ?? this.carry.factsOf(t) };
   }
   bookView(token: Hex, q: { depth?: number; aggregate?: boolean } = {}): BookView {
     return bookViewOf(this.book.entries(), token, this.ctx(), q);
@@ -278,13 +289,14 @@ export class StandaloneController {
     const e = this.book.get(id);
     return e && e.confirmed ? orderViewOf(e, this.ctx()) : null;
   }
+  /** The tokens with orders the node showed, and the tokens the indexer listed before (with the facts it gave). */
   tokensView(): IndexerTokenView[] {
-    return tokensViewOf(this.book.entries(), this.ctx());
+    return mergeTokens(this.carry.tokens(), tokensViewOf(this.book.entries(), this.ctx()));
   }
-  /** Sompi per this many base units: the registry's scale, else the scale of the first order seen of the token, else 1. */
+  /** Sompi per this many base units: what the carried figures are priced on, else the registry's scale, else the scale of the first order seen of the token, else 1. */
   basisOf(token: Hex): bigint {
     const t = token.toLowerCase();
-    return this.registry?.(t)?.scale ?? this.firstScale.get(t) ?? 1n;
+    return this.carry.basisOf(t) ?? this.registry?.(t)?.scale ?? this.firstScale.get(t) ?? 1n;
   }
   private fillsOf(token: Hex): SeenFill[] {
     return this.fills.get(token.toLowerCase()) ?? [];
@@ -319,13 +331,24 @@ export class StandaloneController {
     return { fills, orders };
   }
   tradesView(token: Hex, q: { limit?: number; before?: number | string } = {}) {
-    return tradesView(token.toLowerCase(), this.fillsOf(token), this.basisOf(token), q);
+    const seen = tradesView(token.toLowerCase(), this.fillsOf(token), this.basisOf(token), q);
+    // the carried trades are the newest page's: a page read further back (`before`) is the node's own rows only
+    return q.before === undefined ? mergeTrades(this.carry.trades(token), seen, Math.max(1, Math.min(q.limit ?? 50, 500))) : seen;
   }
   candlesView(token: Hex, q: { interval: CandleInterval; from?: number; to?: number; limit?: number }) {
-    return candlesView(token.toLowerCase(), this.fillsOf(token), this.basisOf(token), q);
+    const t = token.toLowerCase();
+    const basis = this.basisOf(t);
+    const carried = this.carry.candles(t, q.interval);
+    if (!carried.length) return candlesView(t, this.fillsOf(t), basis, q);
+    // the node's bars over the same window, merged with the carried ones
+    const { from, to } = q;
+    return mergeCandles(carried, candlesView(t, this.fillsOf(t), basis, { interval: q.interval, ...(from !== undefined ? { from } : {}), ...(to !== undefined ? { to } : {}), limit: 1500 }), q);
   }
   statsView(token: Hex) {
-    return statsView(token.toLowerCase(), this.fillsOf(token), this.basisOf(token), this.bookView(token, { depth: 500, aggregate: true }), this.now());
+    const t = token.toLowerCase();
+    const seen = statsView(t, this.fillsOf(t), this.basisOf(t), this.bookView(t, { depth: 500, aggregate: true }), this.now());
+    const carried = this.carry.stats(t);
+    return carried ? mergeStats(carried, seen, this.now()) : seen;
   }
   depthView(token: Hex, levels?: number) {
     return depthView(token.toLowerCase(), this.bookView(token, { depth: 500, aggregate: true }), this.basisOf(token), this.now(), this.daa, levels ?? 50);
@@ -721,13 +744,42 @@ function standaloneIndexer(c: StandaloneController): IndexerApi {
  * The app's indexer with standalone mode: the indexer (`real`, the failover proxy or the single indexer) while it is in use, the standalone views
  * while the mode is active. `health` goes to the indexer unless the mode is on by the setting (the status poll must see it come back).
  */
-export function modeIndexer(real: IndexerApi, c: Pick<StandaloneController, 'state' | 'indexer'>): IndexerApi {
+export function modeIndexer(real: IndexerApi, c: Pick<StandaloneController, 'state' | 'indexer'> & { carry?: IndexerCarry }): IndexerApi {
   return new Proxy({} as IndexerApi, {
     get: (_t, prop) => {
-      const target = ((prop === 'health' && c.state.reason !== 'manual') || !c.state.active ? real : c.indexer) as unknown as Record<string | symbol, unknown>;
+      const useReal = (prop === 'health' && c.state.reason !== 'manual') || !c.state.active;
+      const target = (useReal ? real : c.indexer) as unknown as Record<string | symbol, unknown>;
       const v = target[prop];
-      return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(target) : v;
+      if (typeof v !== 'function') return v;
+      const call = (v as (...x: unknown[]) => unknown).bind(target);
+      // what the indexer in use answers is remembered, to be kept when standalone mode starts (data/stream-carry.ts)
+      return useReal && c.carry ? recording(c.carry, prop, call) : call;
     },
     has: (_t, prop) => prop in real,
   });
+}
+
+/** `call` of the indexer, its answers to the market reads remembered in `carry` (the others pass through). */
+function recording(carry: IndexerCarry, prop: string | symbol, call: (...x: unknown[]) => unknown): (...x: unknown[]) => unknown {
+  const noted = (read: (r: never) => void) => async (...a: unknown[]) => {
+    const r = await call(...a);
+    try {
+      read(r as never);
+    } catch {
+      /* remembering must never fail a read */
+    }
+    return r;
+  };
+  switch (prop) {
+    case 'tokens':
+      return noted((r: IndexerTokenView[]) => carry.recordTokens(r));
+    case 'trades':
+      return (...a) => noted((r: TradesView | null) => carry.recordTrades(a[0] as Hex, a[1] as { before?: unknown } | undefined, r))(...a);
+    case 'candles':
+      return (...a) => noted((r: CandlesView | null) => carry.recordCandles(a[0] as Hex, a[1] as { interval: CandleInterval; from?: number }, r))(...a);
+    case 'stats':
+      return (...a) => noted((r: StatsView | null) => carry.recordStats(a[0] as Hex, r))(...a);
+    default:
+      return call;
+  }
 }

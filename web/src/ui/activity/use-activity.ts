@@ -32,6 +32,8 @@ export interface ActivityData {
   mode: LiveMode | 'standalone';
   /** standalone mode: since when the page has been watching the node */
   sinceMs: number | null;
+  /** standalone mode: the rows before this time (ms) are what the indexer gave this page before the mode (kept), null: none are */
+  keptUntilMs: number | null;
   hasOlder: boolean;
   loadingOlder: boolean;
   loadOlder(): void;
@@ -76,7 +78,7 @@ export function useActivity(o: {
   );
 
   const store = useMemo(
-    () => new ActivityStore(o.market, { indexer: services.indexer, standalone, pairFills: o.pairFills ?? null }, tokenScale, () => setTick((n) => n + 1)),
+    () => new ActivityStore(o.market, { indexer: services.indexer, standalone, carry: services.standalone?.carry ?? null, pairFills: o.pairFills ?? null }, tokenScale, () => setTick((n) => n + 1)),
     // a new market filter, source or reset starts over
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, services.indexer, standalone, tokenScale, resetKey],
@@ -188,6 +190,7 @@ export function useActivity(o: {
     retry: () => setResetKey((k) => k + 1),
     mode: standalone ? 'standalone' : mode,
     sinceMs: standalone ? sa?.sinceMs ?? null : null,
+    keptUntilMs: standalone ? store.keptUntilMs : null,
     hasOlder: store.hasOlder(o.kinds),
     loadingOlder,
     loadOlder: () => {

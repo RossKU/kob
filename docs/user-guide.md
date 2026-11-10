@@ -352,15 +352,29 @@ What it shows, and its limits:
 - **Only plain limit orders** rest in this book: asks and bids that are good till cancelled, without a price auction, worth at least 1 KAS.
   Stop and take-profit orders, if-done entries, IOC / FOK orders and pair orders are not listed. A partially filled order is followed when
   the app can derive its new state from the fill; when it cannot, the order leaves the book until the indexer is back.
-- **Charts and figures from what was seen.** Last price, 24 h figures, the price chart, the activity log and the depth chart are built from
-  the fills seen since standalone mode started (a fill counts once your node shows its transaction) and from the partial book. Each is marked
-  "Since hh:mm only (standalone mode)": earlier trades are not included, so "24 h" means "since hh:mm" when that is shorter.
+- **What the page already read from the indexer stays.** Going standalone, by the switch in Settings or by the automatic fallback, does not
+  empty the page. What it had read from the indexer in this session is kept, as it was read: the price chart's candles, the last price and
+  24 h figures and the trades of the markets it loaded, the activity log's rows (once the log had been on screen), and the token list with the
+  facts of each token (so an open-list token such as TUSD, whose decimals come from the indexer's market scale, stays listed with its market
+  page, its Trade tab and its ticket, trusted exactly as before the switch). What your node shows after the switch is added: a fill becomes
+  a new trade, a new candle (or joins the last one) and a new activity row. Each kept part says so: the chart, the figures and the log are marked
+  "Indexer data until hh:mm, then from your node (since hh:mm)" (the first time is when the page last read the indexer for it), and the token
+  says "Token facts from the indexer (read until hh:mm)". Fills between the two times, and anything older than what the page had loaded,
+  are not there: the node cannot supply them. The 24 h figures add the kept figures to what the node saw since, so they cover up to 24 h before
+  the last indexer read and nothing older; 24 h after that read only the last price is kept. A market, a token or a log the page never loaded
+  from the indexer in this session has nothing kept and behaves as below.
+- **The rest is from what was seen.** The depth chart, and the last price, 24 h figures, chart and activity log of a market with nothing kept,
+  are built from the fills seen since standalone mode started (a fill counts once your node shows its transaction) and from the partial book. Each is marked
+  "Since hh:mm only (standalone mode)": earlier trades are not included, so "24 h" means "since hh:mm" when that is shorter. The book is never
+  kept: a stale indexer book must not be offered, so it is always the partial book of your node, even for a market whose chart is kept.
 - **Needs the indexer, so unavailable here:** pair markets, holders and token holdings the indexer lists (the token UTXOs known to this
-  browser still work), the order history and fills under My orders, and notifications of your orders. A token without a
-  known declaration of its decimals or its program's default decimals cannot be traded in this mode (its scale cannot be checked without the indexer).
+  browser still work), the order history and fills under My orders, and notifications of your orders. A token the page never read from the
+  indexer this session is not listed, and its page says it is not known in standalone mode (the Trade tab keeps leading to it); it opens again once
+  the indexer is back. A token without a known declaration or program default for its decimals, and whose market scale the indexer did
+  not give this page before the switch, cannot be traded in this mode (its scale cannot be checked without the indexer): the ticket says so.
 - **Trading goes to the node as always**: you sign in your wallet and the page sends the transaction to the node.
 - **Back to the indexer**: when the indexer answers again, the page switches back by itself and its book is used again (the indexer's
-  book wins). What standalone mode collected is dropped.
+  book wins). What standalone mode collected is dropped; the kept indexer data is replaced by what the indexer says now.
 
 Settings has three switches for it: **"Standalone mode (use the node only)"** keeps the page in standalone mode whatever the indexer does,
 and then the page sends the indexer no request for the market (the token-logo blocklist is still read from it); **"Fall back to standalone
