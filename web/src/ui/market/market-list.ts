@@ -17,6 +17,7 @@ import type { PairSummaryView, StatsView } from '../../data/indexer-types';
 import { ASSUMED_TOKEN_DECIMALS, t } from '../../i18n';
 import { exponentOf } from '../../kob/open-token';
 import { cmpRational, formatRational, significantDp, type Rational } from '../../kob/pair';
+import { kasPerTokenToUsd, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat } from '../../app/fiat';
 import { fitAmountColumn, fitDecimalTexts, tickPriceFraction } from '../kit/format';
 import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, priceDecimals, toneOf, unitsToNumber, type Tone } from './market-model';
 import { kasPerToken } from './orientation';
@@ -127,6 +128,19 @@ export function volumeCell(v: bigint | null, decimals: number, unit: string, not
   return { text, title: note ? `${exact} · ${note}` : exact };
 }
 
+/**
+ * A figure of the KAS markets shown in USD (Settings, Display currency; app/fiat.ts): `kas` is its KAS cell, `usd` the same value in dollars. The text is
+ * `$1,066.77` (compact before it would cut a digit); the tooltip leads with the exact dollars when the text is compact, then the KAS cell's own tooltip (the exact KAS figure
+ * and its unit) and the rate used, so the KAS figure is always one hover away. A cell without a figure stays as it is.
+ */
+export function usdCell(kas: Cell, usd: Rational | null, fiat: Fiat): Cell {
+  if (kas.text === null || !usd) return kas;
+  const exact = usdText(usd);
+  const text = usdTextFit(usd, LIST_CELL_CHARS);
+  const title = [text !== exact ? exact : null, kas.title ?? kas.text, rateTitle(fiat)].filter((x): x is string => !!x).join(' · ');
+  return { ...kas, text, title };
+}
+
 // ------------------------------------------------------------------------------------------------ entries
 
 export type SortKey = 'market' | 'last' | 'change' | 'volume' | 'mcap' | 'spread' | 'depth';
@@ -192,12 +206,12 @@ export function supplyOf(row: Pick<TokenRow, 'info' | 'kascov'>): Supply | null 
  * The market cap cell in KAS: the last trade price (`last`, KAS per whole token) x the supply (`decimals`: the token's decimals, which the supply is in base units of);
  * the tooltip holds the exact figure and the supply it used with its source. Nothing without a price or a supply. The sort value is whole KAS.
  */
-export function marketCapCell(last: Rational | null, supply: Supply | null, decimals: number, ticker: string): { cell: Cell; value: number | null } {
+export function marketCapCell(last: Rational | null, supply: Supply | null, decimals: number, ticker: string): { cell: Cell; value: number | null; sompi?: bigint } {
   if (!last || last.num <= 0n || !supply) return { cell: EMPTY, value: null };
   const sompi = (last.num * supply.units * 100_000_000n) / (last.den * 10n ** BigInt(decimals));
   const whole = exactText({ num: supply.units, den: 10n ** BigInt(decimals) });
   const note = t(supply.source === 'registry' ? 'market.list.mcapSupplyRegistry' : 'market.list.mcapSupplyKascov', { supply: whole, unit: ticker });
-  return { cell: volumeCell(sompi, 8, 'KAS', note), value: unitsToNumber(sompi, 8) };
+  return { cell: volumeCell(sompi, 8, 'KAS', note), value: unitsToNumber(sompi, 8), sompi };
 }
 
 /** The depth cell of a token in KAS (`depth_2pct_quote`, sompi); empty for an empty book or an indexer that does not send it. */
@@ -214,8 +228,12 @@ export function kascovEntry(row: TokenRow): ListEntry {
   };
 }
 
-/** A token's KAS market (TOKEN/KAS) from its `/v1/stats` slot; the open order counts of `/v1/tokens` (the depth tooltip) are there before the stats. */
-export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
+/**
+ * A token's KAS market (TOKEN/KAS) from its `/v1/stats` slot; the open order counts of `/v1/tokens` (the depth tooltip) are there before the stats. With `fiat` (USD
+ * display in force) the price, the 24 h volume, the market cap and the depth are shown in dollars (`usdCell`); the change and the spread are ratios and stay, and
+ * the sort values stay KAS (the same order).
+ */
+export function tokenEntry(row: TokenRow, slot: Slot<StatsView>, fiat: Fiat | null = null): ListEntry {
   const label = tokenLabel(row);
   const v = slot.state === 'ok' ? slot.value : null;
   const asks = row.openAsks ?? finiteInt(v?.open_asks);
@@ -244,7 +262,9 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
   const trades = finiteInt(v.trades_24h);
   const spreadBps = finiteInt(v.spread_bps);
   const mcap = marketCapCell(lastR, supplyOf(row), decimals, row.ticker || label);
-  const depth = depthCell(bigOrNull(v.depth_2pct_quote), ordersNote(asks, bids));
+  const depthSompi = bigOrNull(v.depth_2pct_quote);
+  const depth = depthCell(depthSompi, ordersNote(asks, bids));
+  const inUsd = (kas: Cell, sompi: bigint | null): Cell => (fiat && sompi !== null ? usdCell(kas, sompiToUsd(sompi, fiat.rate), fiat) : kas);
   const side = (p: bigint | null): string => {
     const r = kas(p);
     return r ? formatRational(r, dp, 'nearest', dp, ',') : '—';
@@ -255,11 +275,11 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>): ListEntry {
     sort: { ...base.sort, last: lastR, change: bps, volume: qv === null ? null : unitsToNumber(qv, 8), mcap: mcap.value, spread: spreadBps, depth: depth.value },
     cells: {
       ...base.cells,
-      last: priceCell(lastR, dp, unit),
+      last: fiat && lastR ? usdCell(priceCell(lastR, dp, unit), kasPerTokenToUsd(lastR, fiat.rate), fiat) : priceCell(lastR, dp, unit),
       change: changeCell(bps),
-      volume: volumeCell(qv, 8, 'KAS', trades === null ? null : t('market.list.trades', { n: trades })),
-      mcap: mcap.cell,
-      depth: depth.cell,
+      volume: inUsd(volumeCell(qv, 8, 'KAS', trades === null ? null : t('market.list.trades', { n: trades })), qv),
+      mcap: inUsd(mcap.cell, mcap.sompi ?? null),
+      depth: inUsd(depth.cell, depthSompi),
       spread: spreadBps === null ? { text: null, title: quotes } : { text: bpsPercentText(spreadBps).replace('+', ''), title: quotes },
     },
   };

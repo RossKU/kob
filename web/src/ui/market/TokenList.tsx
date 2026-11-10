@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import { FiatNote, useFiat } from '../../app/use-fiat';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import type { IndexerTokenView, PairBookView, PairFillsView, StatsView } from '../../data/indexer-types';
@@ -123,13 +124,13 @@ function Figure(props: { cell: Cell; entry: ListEntry; testid: string; cls?: str
  * The figure columns, in order: key, header, the class that hides it on a narrow screen (a phone keeps the price and the change: the market cap and the depth
  * would not fit a card beside the name, the covenant id and the badges). The market cap is a token's (a pair has no supply).
  */
-const FIGURES: { key: Exclude<SortKey, 'market'>; label: (kas: boolean) => string; hint?: string; cls?: string; tokensOnly?: true }[] = [
-  { key: 'last', label: (kas) => (kas ? t('market.col.lastIn', { quote: 'KAS' }) : t('market.col.last')), hint: 'market.col.lastHint', cls: 'ml-last' },
+const FIGURES: { key: Exclude<SortKey, 'market'>; label: (quote: string | null) => string; hint?: string; cls?: string; tokensOnly?: true }[] = [
+  { key: 'last', label: (quote) => (quote ? t('market.col.lastIn', { quote }) : t('market.col.last')), hint: 'market.col.lastHint', cls: 'ml-last' },
   { key: 'change', label: () => t('market.col.change'), hint: 'market.col.changeHint', cls: 'ml-change' },
-  { key: 'volume', label: (kas) => (kas ? t('market.col.volumeIn', { quote: 'KAS' }) : t('market.col.volume')), cls: 'ml-md' },
-  { key: 'mcap', label: () => t('market.col.mcap', { quote: 'KAS' }), hint: 'market.col.mcapHint', cls: 'ml-md', tokensOnly: true },
+  { key: 'volume', label: (quote) => (quote ? t('market.col.volumeIn', { quote }) : t('market.col.volume')), cls: 'ml-md' },
+  { key: 'mcap', label: (quote) => t('market.col.mcap', { quote: quote ?? 'KAS' }), hint: 'market.col.mcapHint', cls: 'ml-md', tokensOnly: true },
   { key: 'spread', label: () => t('market.col.spread'), cls: 'ml-md' },
-  { key: 'depth', label: (kas) => (kas ? t('market.col.depthIn', { quote: 'KAS' }) : t('market.col.depth')), hint: 'market.col.depthHint', cls: 'ml-md' },
+  { key: 'depth', label: (quote) => (quote ? t('market.col.depthIn', { quote }) : t('market.col.depth')), hint: 'market.col.depthHint', cls: 'ml-md' },
 ];
 const TOKEN_FIGURES = FIGURES;
 const PAIR_FIGURES = FIGURES.filter((f) => !f.tokensOnly);
@@ -266,6 +267,8 @@ const pairToken = (r: TokenRow): PairToken => ({ covenantId: r.covenantId, ticke
  */
 export function TokenList(props: { invalidToken?: string }) {
   const { registry, indexer, kob, config, standalone } = useServices();
+  // USD display (Settings): the price, volume, market cap and depth of the token rows in dollars; null = KAS
+  const fiat = useFiat();
   // standalone mode (data/standalone.ts): the list and its figures are what this page saw on the node since the mode started, read again as it sees more
   const sa = useStandalone(standalone);
   const saKey = sa?.active ? `standalone:${sa.version}` : 'indexer';
@@ -372,9 +375,9 @@ export function TokenList(props: { invalidToken?: string }) {
     const inList = query.trim() ? rows : (showNameless ? rows : rows.filter((r) => !isNameless(r))).filter((r) => !hiddenSet.has(r.covenantId.toLowerCase()));
     const visible = favoritesOnly ? favoriteRows : hiddenOnly ? hiddenRows : inList;
     const byId = new Map(visible.map((r) => [r.covenantId, r]));
-    const entries = filterTokens(visible, query).map((r) => (r.source === 'kascov' ? kascovEntry(r) : tokenEntry(r, slotOf(r.covenantId))));
+    const entries = filterTokens(visible, query).map((r) => (r.source === 'kascov' ? kascovEntry(r) : tokenEntry(r, slotOf(r.covenantId), fiat)));
     return sortEntries(entries, sort).map((e) => ({ entry: e, row: byId.get(e.key)! }));
-  }, [rows, favoriteRows, favoritesOnly, hiddenRows, hiddenOnly, hiddenSet, query, sort, stats, indexer, showNameless]);
+  }, [rows, favoriteRows, favoritesOnly, hiddenRows, hiddenOnly, hiddenSet, query, sort, stats, indexer, showNameless, fiat]);
   const namelessCount = useMemo(() => rows.filter(isNameless).length, [rows]);
   const shownPairs = useMemo(() => {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);
@@ -455,6 +458,7 @@ export function TokenList(props: { invalidToken?: string }) {
           <RowsControl id="token-list" size={pageSize} onSize={setPageSize} />
         </div>
         <ListLegend names={kascov.status} />
+        <FiatNote />
         {sa?.active && sa.sinceMs !== null ? <p class="small muted" data-testid="token-list-standalone">{t('market.list.standalone', { time: clockText(sa.sinceMs) })}</p> : null}
         <ErrorBanner error={tokens.error} title={t('market.list.indexerError')} onRetry={tokens.reload} data-testid="token-list-error" />
         {noTokenTable ? null : (
@@ -462,7 +466,7 @@ export function TokenList(props: { invalidToken?: string }) {
             <thead>
               <tr>
                 <SortHeader k="market" label={t('market.col.token')} sort={sort} onSort={onSort} />
-                {TOKEN_FIGURES.map((f) => <SortHeader key={f.key} k={f.key} label={f.label(true)} hint={f.hint ? t(f.hint) : undefined} sort={sort} onSort={onSort} right cls={f.cls} />)}
+                {TOKEN_FIGURES.map((f) => <SortHeader key={f.key} k={f.key} label={f.label(fiat ? 'USD' : 'KAS')} hint={f.hint ? t(f.hint) : undefined} sort={sort} onSort={onSort} right cls={f.cls} />)}
               </tr>
             </thead>
             <tbody>
@@ -520,7 +524,7 @@ export function TokenList(props: { invalidToken?: string }) {
               <thead>
                 <tr>
                   <SortHeader k="market" label={t('market.col.pair')} sort={sort} onSort={onSort} />
-                  {PAIR_FIGURES.map((f) => <SortHeader key={f.key} k={f.key} label={f.label(false)} hint={f.hint ? t(f.hint) : undefined} sort={sort} onSort={onSort} right cls={f.cls} />)}
+                  {PAIR_FIGURES.map((f) => <SortHeader key={f.key} k={f.key} label={f.label(null)} hint={f.hint ? t(f.hint) : undefined} sort={sort} onSort={onSort} right cls={f.cls} />)}
                 </tr>
               </thead>
               <tbody>

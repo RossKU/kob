@@ -24,6 +24,10 @@ export function MarketStats(props: {
   unsupported: boolean;
   /** the figures are let in: they fade in together */
   open?: boolean;
+  /** the KAS tiles are shown in USD (Settings, Display currency; stats-usd.ts): the unit and the volume label say USD */
+  usd?: boolean;
+  /** the tooltip tail of the last price (its KAS figure and the rate used) */
+  lastTitle?: string | null;
   /** a token pair BASE/QUOTE (`ticker` = BASE): the same tiles; `titles` say where each figure comes from */
   quoteTicker?: string;
   /** tooltips of a pair's tiles by where their figure comes from (the exact figure of a volume is added in front) */
@@ -33,7 +37,7 @@ export function MarketStats(props: {
 }) {
   const tip = (exact: string | null | undefined, note: string | null | undefined): string | null => (exact && note ? `${exact} · ${note}` : (exact ?? note ?? null));
   const base = props.quoteTicker ? props.ticker : props.inverted ? 'KAS' : props.ticker;
-  const quote = props.quoteTicker ?? (props.inverted ? props.ticker : 'KAS');
+  const quote = props.quoteTicker ?? (props.inverted ? props.ticker : props.usd ? 'USD' : 'KAS');
   const m = props.model;
   const na = props.quoteTicker ? t('pair.stats.na') : null;
   const lastTone = m.lastSide === 'buy' ? 'up' : m.lastSide === 'sell' ? 'down' : null;
@@ -42,7 +46,7 @@ export function MarketStats(props: {
       data-state={props.unsupported ? 'unsupported' : props.loading && !m.last ? 'loading' : 'ready'}>
       <div class="mkt-stat mkt-stat-last" data-testid="stat-last">
         <span class="mkt-stat-label">{t('market.stats.last')}</span>
-        <span class={`mkt-stat-value${lastTone ? ` tone-${lastTone}` : ''}`} translate={false} title={zerosTitle(m.last)}>
+        <span class={`mkt-stat-value${lastTone ? ` tone-${lastTone}` : ''}`} translate={false} title={[zerosTitle(m.last), props.lastTitle].filter(Boolean).join(' · ') || undefined}>
           {(m.last && compactZeros(m.last)) ?? (props.loading ? <span class="skeleton skeleton-line" style="display:inline-block;width:120px;height:22px;margin:0" /> : '—')}
           <span class="mkt-stat-unit">{t('market.stats.unitOf', { quote, base })}</span>
         </span>
