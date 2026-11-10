@@ -29,6 +29,13 @@ test('no record: the amounts read in whole tokens on the scale of its order, the
   await expect(row.getByTestId('order-amount')).toContainText(`45,000 / 45,000 ${SHORT}`);
   await expect(row.getByTestId('order-price')).toContainText(new RegExp(`^10\\s*KAS per ${SHORT}`));
   await expect(page.getByTestId('orders-view')).not.toContainText(/base units/);
+  // the balances row: the covenant id and the fingerprint name the token, the source of its decimals is the name's tooltip, not text beside it
+  await gotoOrders(page, 'balances');
+  const bal = page.getByTestId(`balance-row-${ID}`);
+  await expect(bal.getByTestId('balance-market')).toHaveText(SHORT);
+  await expect(bal.getByTestId('balance-market')).toHaveAttribute('title', /8 decimals, the price scale of its market/);
+  await expect(bal.getByTestId('token-decimals-note')).toHaveCount(0);
+  await expect(bal).not.toContainText('from its market');
 });
 
 test('the issuing browser\'s record: its ticker and decimals, marked unverified; nothing reads "base units"', async ({ appPage: page, mock }) => {

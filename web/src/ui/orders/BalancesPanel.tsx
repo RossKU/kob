@@ -1,6 +1,6 @@
 import { useMemo } from 'preact/hooks';
 import { useServices } from '../../app/context';
-import { displayToken } from '../../app/token-display';
+import { decimalsNote, displayToken } from '../../app/token-display';
 import { useFiat } from '../../app/use-fiat';
 import { TokenNote } from '../market/TokenNote';
 import { routeToHash, tokenRoute } from '../../app/router';
@@ -172,6 +172,7 @@ export function BalancesPanel(props: {
                 const shown = displayToken(registry, services.config.network, b.token)!;
                 const d = shown.decimals;
                 const label = tokenLabel(shown);
+                const scaleNote = shown.decimalsSource === 'scale' && !shown.declarationConflicts?.length ? decimalsNote(shown) : null;
                 const showMerge = !!(props.onMergeToken && info && mergeable.has(b.token));
                 const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
                 return (
@@ -181,10 +182,12 @@ export function BalancesPanel(props: {
                         <span class="dt-market">
                           <IdentityBlock row={{ covenantId: b.token, ticker: shown.ticker, kascov: props.iconOf?.(b.token) ?? null }} size="sm" />
                           <span class="dt-market-name">
-                            <a href={routeToHash(tokenRoute(b.token))} class="bal-name" title={label} data-testid="balance-market">
+                            {/* the covenant id and the fingerprint identify the token; where its decimals come from (its market's price scale) is the name's tooltip, not text in the row.
+                                Warnings (unverified, facts disagree, assumed decimals) stay inline. */}
+                            <a href={routeToHash(tokenRoute(b.token))} class="bal-name" title={scaleNote ? `${label} - ${scaleNote.title}` : label} data-testid="balance-market">
                               {label}
                             </a>
-                            <TokenNote token={shown} />
+                            {scaleNote ? null : <TokenNote token={shown} />}
                             {unreviewedProgram(program) ? (
                               <span class="small muted" title={t('orders.balances.unreviewedHint', { program: program ?? '?' })} data-testid="balance-unreviewed">{' '}({t('orders.balances.unreviewed')})</span>
                             ) : null}
