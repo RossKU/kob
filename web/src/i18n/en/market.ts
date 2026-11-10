@@ -217,6 +217,7 @@ export default {
   'market.book.error': 'The order book could not be loaded',
   'market.depth.title': 'Depth chart',
   'market.depth.summary': 'In view: {bids} {ticker} bid, {asks} {ticker} offered',
+  'market.depth.summaryUsd': 'In view: {bids} bid, {asks} offered',
   'market.live.live': 'Live',
   'market.live.polling': 'Refreshing every 5 s',
   'market.live.off': 'No live data',
@@ -249,6 +250,7 @@ export default {
   'market.balances.free': 'Free tokens',
   'market.balances.kasFree': 'Free KAS',
   'market.balances.kasLocked': 'KAS locked in orders',
+  'market.balances.kasLockedUsd': 'Locked in orders (USD)',
 
   'market.stats.last': 'Last price',
   'market.stats.change': '24h change',
@@ -276,6 +278,7 @@ export default {
   'market.depth.bids': 'Bids',
   'market.depth.asks': 'Asks',
   'market.depth.tip': '{price} {priceUnit} · {amount} {ticker} cumulative',
+  'market.depth.tipUsd': '{price} {priceUnit} · {amount} cumulative',
   'market.depth.empty': 'No orders in the book.',
   'market.depth.unavailable': 'The book could not be loaded.',
   'market.depth.estimated': 'Bid amounts are upper bounds: buy orders hold a KAS budget, not tokens.',

@@ -1,7 +1,6 @@
 import { useMemo } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { displayToken } from '../../app/token-display';
-import { kasValueText, kasValueTitle, type Fiat } from '../../app/fiat';
 import { useFiat } from '../../app/use-fiat';
 import { TokenNote } from '../market/TokenNote';
 import { routeToHash, tokenRoute } from '../../app/router';
@@ -22,16 +21,6 @@ import './balances.css';
 
 const BALANCE_SORT_KEYS = ['asset', 'available', 'inOrders', 'strays', 'kasLocked', 'value'] as const;
 type BalanceSortKey = (typeof BALANCE_SORT_KEYS)[number];
-
-/** A value in KAS (no unit: the column says it) or, when the USD display is in force, in dollars with its KAS figure and the rate in the tooltip. */
-function Value(props: { sompi: bigint; fiat: Fiat | null }) {
-  if (!props.fiat) return <Amount kind="kas" value={props.sompi} unit={false} group />;
-  return (
-    <span class="amount num" translate={false} title={kasValueTitle(props.sompi, props.fiat)} data-currency="usd">
-      {kasValueText(props.sompi, props.fiat)}
-    </span>
-  );
-}
 
 function BalancesSkeleton() {
   return (
@@ -84,7 +73,7 @@ export function BalancesPanel(props: {
     { key: 'available', label: t('orders.balances.available'), kind: 'number' },
     { key: 'inOrders', label: t('orders.balances.inOrders'), kind: 'number' },
     { key: 'strays', label: t('orders.balances.strays'), kind: 'number' },
-    { key: 'kasLocked', label: t('market.balances.kasLocked'), kind: 'number' },
+    { key: 'kasLocked', label: t(fiat ? 'market.balances.kasLockedUsd' : 'market.balances.kasLocked'), kind: 'number' },
     { key: 'value', label: valueLabel, kind: 'number' },
   ];
   const { free, combined, valueOf } = props.balances;
@@ -158,18 +147,18 @@ export function BalancesPanel(props: {
                   </span>
                 </td>
                 <td class={`right${combined.kas.onTokens > 0n ? ' bal-wide' : ''}`} data-label={t('orders.balances.available')}>
-                  <span data-testid="kas-free">{free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.free} group /> : t('common.unavailable')}</span>
+                  <span data-testid="kas-free">{free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.free} group fiat={fiat} /> : t('common.unavailable')}</span>
                   {combined.kas.onTokens > 0n ? (
                     <div class="small muted" title={t('orders.balances.kasOnTokensHint')}>
-                      {t('orders.balances.kasOnTokensPlus')} <span class="bal-nw" data-testid="kas-on-tokens"><Amount kind="kas" value={combined.kas.onTokens} group /></span>
+                      {t('orders.balances.kasOnTokensPlus')} <span class="bal-nw" data-testid="kas-on-tokens"><Amount kind="kas" value={combined.kas.onTokens} group fiat={fiat} /></span>
                     </div>
                   ) : null}
                 </td>
-                <td class="right" data-label={t('orders.balances.inOrders')} data-testid="kas-locked"><Amount kind="kas" value={combined.kas.locked} group /></td>
+                <td class="right" data-label={t('orders.balances.inOrders')} data-testid="kas-locked"><Amount kind="kas" value={combined.kas.locked} group fiat={fiat} /></td>
                 <td class="right muted" data-label={t('orders.balances.strays')}>—</td>
-                <td class="right muted" data-label={t('market.balances.kasLocked')}>—</td>
+                <td class="right muted" data-label={t(fiat ? 'market.balances.kasLockedUsd' : 'market.balances.kasLocked')}>—</td>
                 <td class="right" data-label={valueLabel} data-testid="kas-total">
-                  {free.data.kasFree !== null ? <Value sompi={combined.kas.total} fiat={fiat} /> : '—'}
+                  {free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.total} unit={false} group fiat={fiat} /> : '—'}
                 </td>
                 <td class="right bal-actions bal-actions-none" />
               </tr>
@@ -211,9 +200,9 @@ export function BalancesPanel(props: {
                       </td>
                       <td class="right" data-label={t('orders.balances.inOrders')} data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={fr(cols.escrowed)} group /></td>
                       <td class="right" data-label={t('orders.balances.strays')} data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={fr(cols.strays)} group /></td>
-                      <td class="right" data-label={t('market.balances.kasLocked')}><Amount kind="kas" value={b.kasLocked} unit={false} fraction={cols.kas} group /></td>
+                      <td class="right" data-label={t(fiat ? 'market.balances.kasLockedUsd' : 'market.balances.kasLocked')}><Amount kind="kas" value={b.kasLocked} unit={false} fraction={cols.kas} group fiat={fiat} /></td>
                       <td class="right" data-label={valueLabel} data-testid="balance-value">
-                        {valueOf(b) !== null ? <Value sompi={valueOf(b)!} fiat={fiat} /> : <span class="muted" title={t('orders.balances.noPrice')}>—</span>}
+                        {valueOf(b) !== null ? <Amount kind="kas" value={valueOf(b)!} unit={false} group fiat={fiat} /> : <span class="muted" title={t('orders.balances.noPrice')}>—</span>}
                       </td>
                       <td class={`right bal-actions${showMerge || b.orderCount > 0 ? '' : ' bal-actions-none'}`}>
                         {showMerge && info ? (

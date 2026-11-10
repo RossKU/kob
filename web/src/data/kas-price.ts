@@ -13,8 +13,6 @@ export interface KasUsdQuote {
 export const KAS_USD_POLL_MS = 60_000;
 /** After a failed read the wait doubles each time, up to this (10 minutes); the first success brings back the normal pace. */
 export const KAS_USD_MAX_BACKOFF_MS = 10 * 60_000;
-/** A quote older than this (10 minutes) is not used: the display falls back to KAS. */
-export const KAS_USD_MAX_AGE_S = 10 * 60;
 /** An indexer that has no such route (404) is asked again after this, ms. */
 export const KAS_USD_RETRY_UNSUPPORTED_MS = 10 * 60_000;
 

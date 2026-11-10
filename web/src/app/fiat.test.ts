@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { KAS_USD_MAX_AGE_S, adaptKasUsd, type KasUsdQuote } from '../data/kas-price';
+import { adaptKasUsd, type KasUsdQuote } from '../data/kas-price';
 import { HttpIndexer } from '../data/indexer';
 import { CURRENCY_PREF_KEY, readCurrencyPref, resetCurrencyPrefMemory, writeCurrencyPref } from './currency-pref';
 import {
-  ageWords, estimateNote, fallbackNotice, fiatOf, kasPerTokenToUsd, quoteAgeS, rateOf, resolveFiat, sompiToUsd, sourceWords, usdCents, usdText, usdTextFit,
+  KAS_USD_MAX_AGE_S, ageWords, estimateNote, usdCompact, fallbackNotice, fiatOf, kasPerTokenToUsd, quoteAgeS, rateOf, resolveFiat, sompiToUsd, sourceWords, usdCents, usdText, usdTextFit,
   type PriceFeed,
 } from './fiat';
 
@@ -166,6 +166,19 @@ describe('conversion and text', () => {
     expect(usdTextFit(r(4_200_000_000), 12)).toBe('$4.20B');
     expect(usdTextFit(r(123_456_789_000_000), 12)).toBe('$123.46T');
     expect(usdTextFit(r(999_999), 12)).toBe('$999,999.00');
+  });
+
+  it('a tile or an axis is compact and never rounded up: cents below a hundred thousand dollars, then k, M, B, T', () => {
+    expect(usdCompact(r(984_099, 100))).toBe('$9,840.99');
+    expect(usdCompact(r(99_999_999, 1000))).toBe('$99,999.99');
+    expect(usdCompact(r(100_000))).toBe('$100k');
+    expect(usdCompact(r(412_999))).toBe('$412k');
+    expect(usdCompact(r(9_819_999))).toBe('$9.81M');
+    expect(usdCompact(r(1_999_999_999))).toBe('$1.99B');
+    expect(usdCompact(r(3_500_000_000_000))).toBe('$3.50T');
+    expect(usdCompact(r(0))).toBe('$0.00');
+    expect(usdCompact(r(576, 10_000))).toBe('$0.0576');
+    expect(usdCompact({ num: -150n, den: 100n })).toBe('-$1.50');
   });
 
   it('names where the price came from, and says that USDT is taken as USD for an average of exchanges', () => {

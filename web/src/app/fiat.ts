@@ -8,11 +8,14 @@
 //   * the quote must be there and not older than `KAS_USD_MAX_AGE_S`: otherwise KAS is shown, with a notice (never a wrong or stale number, silently).
 //   * the age is the larger of the clock's and the time since this browser first saw the quote's `at` (a wrong clock must not make an old quote look young).
 //   * testnet KAS has no value: the USD is the MAINNET price, for display only, and the note says so.
-import { KAS_USD_MAX_AGE_S, type KasUsdQuote } from '../data/kas-price';
+import type { KasUsdQuote } from '../data/kas-price';
 import { t } from '../i18n';
 import { formatRational, significantDp, type Rational } from '../kob/pair';
 import { formatKas, SOMPI_PER_KAS } from '../kob/units';
 import type { DisplayCurrency } from './currency-pref';
+
+/** A quote older than this (10 minutes) is not used: the display falls back to KAS. (Here, not in data/, so the UI kit's Amount can use this module.) */
+export const KAS_USD_MAX_AGE_S = 10 * 60;
 
 /** The KAS price as an exact rational (USD per KAS, nine decimals: the price is a display figure and the products below are exact on it). */
 export interface Rate {
@@ -117,6 +120,30 @@ export function usdTextFit(usd: Rational, width: number): string {
   }
   return full;
 }
+
+/**
+ * A dollar amount compact for a tile or an axis, never rounded up: `$9,840.12` below a hundred thousand dollars, then `$412k`, `$9.81M`, `$1.20B`, `$3.50T`.
+ * (The exact figure goes in the tooltip.)
+ */
+export function usdCompact(usd: Rational): string {
+  if (usd.num < 0n) return `-${usdCompact({ num: -usd.num, den: usd.den })}`;
+  const cents = (usd.num * 100n) / usd.den; // floor
+  const whole = cents / 100n;
+  const text = (n: bigint, suffix: string) => `$${n / 100n}.${String(n % 100n).padStart(2, '0')}${suffix}`;
+  if (whole >= 10n ** 12n) return text(cents / 10n ** 12n, 'T');
+  if (whole >= 10n ** 9n) return text(cents / 10n ** 9n, 'B');
+  if (whole >= 10n ** 6n) return text(cents / 10n ** 6n, 'M');
+  if (whole >= 100_000n) return `$${whole / 1000n}k`;
+  if (usd.num === 0n) return '$0.00';
+  // below a hundred thousand: floored to the cent from a dollar up, significant digits below (the text of `usdText`)
+  return whole >= 1n ? `$${whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${String(cents % 100n).padStart(2, '0')}` : usdText(usd);
+}
+
+/** A KAS value (sompi) as a compact dollar amount for a tile or an axis (`usdCompact`). */
+export const sompiToUsdCompact = (sompi: bigint, fiat: Fiat): string => usdCompact(sompiToUsd(sompi, fiat.rate));
+
+/** The tooltip of a value shown in USD whose KAS figure is `kasText` (`35,000`): the exact KAS and the rate used. */
+export const kasTitleOf = (kasText: string, fiat: Fiat): string => `${kasText} KAS · ${rateTitle(fiat)}`;
 
 // ------------------------------------------------------------------------------------------------ words
 
