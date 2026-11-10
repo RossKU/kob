@@ -2062,3 +2062,4 @@ mod tests {
         }
     }
 }
+// ci-speed probe (Rust-path change, reverted)
