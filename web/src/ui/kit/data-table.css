@@ -124,3 +124,13 @@
   .dt-act { justify-content: flex-end; }
   .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
 }
+
+/* Trade history, a card from 520 px of table (a tablet, a narrow window): two rows, not a tall card per fill. Row 1: the market with its side, the time at the right; row 2: price,
+   amount, value and the transaction on one line, each under its small label. Under 520 px (a phone) the figures need the two-column card above to stay whole. */
+@container dt (min-width: 520px) and (max-width: 1119px) {
+  .dt-fills .dt-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1.6fr); row-gap: 4px; }
+  .dt-fills .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1 / span 2; grid-row: 1; display: flex; align-items: baseline; gap: 8px; }
+  .dt-fills .dt-c[data-card='title'] .dt-card-only { margin-top: 0; }
+  .dt-fills .dt-c[data-card='badge'] { grid-column: 3 / span 2; grid-row: 1; }
+  .dt-fills .dt-c[data-card='wide'] { grid-column: span 1; }
+}
