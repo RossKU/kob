@@ -36,3 +36,5 @@
 /* the non-blocking notes of the final confirmation (below the summary): one short line each, shown only when they apply */
 .send-notes { margin: 8px 0 0; padding: 0 0 0 18px; font-size: 0.85rem; color: var(--muted); }
 .send-notes li + li { margin-top: 4px; }
+/* in a notification card (SendStatusToast): the card gives the frame and the tone */
+.send-toast .send { padding: 0; border: 0; background: none; }

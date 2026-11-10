@@ -15,6 +15,7 @@
 // first and put in place of the shown one, so what is approved is what is shown. The private-key signer takes it as an update and checks it
 // itself (signer/core.ts); the app's popup flashes the changed figures, says so and holds its button for UPDATE_HOLD_MS when one is worse for
 // the user than what was shown. Their times are said from the node clock ("in 28 s").
+import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { readClock } from '../../app/env';
@@ -559,4 +560,30 @@ export function SendStatusLine(props: { sender: Sender; lead?: string | null; 'd
       {s.phase === 'confirming' && s.table ? <ConfirmPopup status={s} onAnswer={props.sender.decide} /> : null}
     </div>
   );
+}
+
+/**
+ * The send status as a card of the notifications at the top right (the toast host, kit/Toast.tsx), the same structure as theirs: what an order click is
+ * doing, the submitted transaction, or why nothing was sent. The form under it never moves. Dismissed with its x once the send is over (an accepted
+ * order's card goes by itself a minute after its block); without a host (a page with no app shell) it is shown in place.
+ */
+export function SendStatusToast(props: { sender: Sender; lead?: string | null; 'data-testid'?: string }) {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  useEffect(() => setHost(document.querySelector<HTMLElement>('[data-testid="toast-host"]')), []);
+  const s = props.sender.status;
+  if (!s) return null;
+  const tone = s.phase === 'blocked' || s.phase === 'failed' ? 'error' : s.phase === 'submitted' ? 'ok' : 'info';
+  const card = (
+    <div class={`toast toast-${tone} send-toast`} data-testid="send-toast">
+      <div class="grow wrap-anywhere">
+        <SendStatusLine sender={props.sender} lead={props.lead ?? null} {...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {})} />
+      </div>
+      {sendBusy(s) ? null : (
+        <Button small variant="ghost" onClick={() => props.sender.clear()} aria-label={t('common.dismiss')} data-testid="send-toast-dismiss">
+          {'×'}
+        </Button>
+      )}
+    </div>
+  );
+  return host ? createPortal(card, host) : card;
 }
