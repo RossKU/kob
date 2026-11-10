@@ -26,18 +26,18 @@
   overflow-x: clip;
 }
 :root[data-theme='light'] .lp {
-  --bg: #f2f1ec; --bg-2: #e9e8e1; --surface: #ffffff;
+  --bg: #fafafa; --bg-2: #f0f0f0; --surface: #ffffff;
   --line: rgba(10, 20, 19, 0.1); --line-2: rgba(10, 20, 19, 0.2);
-  --fg: #0a1312; --fg-2: #465350; --fg-3: #8a9492; --fg-ghost: rgba(10, 19, 18, 0.08);
+  --fg: #0a1312; --fg-2: #4b4f4e; --fg-3: #8a9492; --fg-ghost: rgba(10, 19, 18, 0.08);
   --teal: #1a7457; --teal-ink: #ffffff; --kaspa: #3a9c8f; --warn: #9a5b00;
   --buy: #13945f; --sell: #d93348;
   color-scheme: light;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) .lp {
-    --bg: #f2f1ec; --bg-2: #e9e8e1; --surface: #ffffff;
+    --bg: #fafafa; --bg-2: #f0f0f0; --surface: #ffffff;
     --line: rgba(10, 20, 19, 0.1); --line-2: rgba(10, 20, 19, 0.2);
-    --fg: #0a1312; --fg-2: #465350; --fg-3: #8a9492; --fg-ghost: rgba(10, 19, 18, 0.08);
+    --fg: #0a1312; --fg-2: #4b4f4e; --fg-3: #8a9492; --fg-ghost: rgba(10, 19, 18, 0.08);
     --teal: #1a7457; --teal-ink: #ffffff; --kaspa: #3a9c8f; --warn: #9a5b00;
     --buy: #13945f; --sell: #d93348;
     color-scheme: light;
@@ -45,7 +45,7 @@
 }
 /* the page's background behind overscroll (LandingPage sets the class while it is shown) */
 body.lp-body { background: #070707; overflow-x: hidden; }
-:root[data-theme='light'] body.lp-body { background: #f2f1ec; }
+:root[data-theme='light'] body.lp-body { background: #fafafa; }
 
 .lp *, .lp *::before, .lp *::after { box-sizing: border-box; }
 .lp a { color: inherit; text-decoration: none; }

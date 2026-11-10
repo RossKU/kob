@@ -5,15 +5,15 @@
 
 :root {
   color-scheme: light dark;
-  --bg: #f2f1ec;
+  --bg: #fafafa;
   --surface: #ffffff;
-  --surface-2: #ebeae4;
-  --surface-3: #e2e1d9;
-  --border: #d0cfc6;
+  --surface-2: #f0f0f0;
+  --surface-3: #e6e6e6;
+  --border: #d6d6d6;
   --grid: rgba(10, 20, 19, 0.07);
   --skeleton: rgba(10, 20, 19, 0.07);
   --text: #0a1312;
-  --muted: #465350;
+  --muted: #4b4f4e;
   --primary: #1a7457;
   --primary-hover: #135c45;
   --primary-contrast: #ffffff;
@@ -41,7 +41,7 @@
   --boot-kaspa: #70c7ba;
   --boot-kaspa-in: #ffffff;
   --boot-planet: #5b7f79;
-  --boot-orbit: #e2e1d9;
+  --boot-orbit: #e6e6e6;
   --boot-trail: #3f9e90;
   --boot-buy: #2c9e77;
   --gutter: 16px;
