@@ -241,6 +241,10 @@ visitor address of this section, so keep `trusted_proxies` and `client_ip_header
 `kobd logo-reports --config kobd.toml list | restore | hide` in the server's folder (`executor.md`, Part B). Set the GitHub repository variable
 `KOB_LOGO_REPORT_URL` to `https://chart.example.org/v1/logo-reports` so the Issue form feeds the same list.
 
+**The KAS price for the USD display (`usd_price`).** With `[api] usd_price = true` (or `--usd-price` / `KOB_USD_PRICE=1`) the same server also serves `GET /v1/price/kas-usd` (`api-reference.md`, 3.22):
+`{usd, at, source}`, the same for every viewer, `Cache-Control: public, max-age=60, s-maxage=60`, so the cache rule below keeps it for a minute and the origin asks CoinGecko (and four exchanges
+if it fails) at most once a minute while anyone has USD on. It needs outbound HTTPS from this host to those sites and nothing else; the web page asks only your indexer, so its CSP is unchanged.
+
 **Abuse, in the API and at Cloudflare.** The API limits each client on its own: 20 requests per second with a burst of 60 per
 client address (an IPv6 visitor by its /64, and all the /64s of one /48 together at 100 per second), a heavy read (candles, stats,
 depth, trades, books, holdings, strays, pairs) costs 5 of those tokens, and the whole server answers 500 requests per second (burst

@@ -35,7 +35,7 @@ numbers cited elsewhere as "api.md 3.19" and the like are the reference's sectio
 | Errors | `{"error": {"code": "...", "message": "..."}}` (a `405`, a `413` or a transport-level `503` has no body). Branch on the HTTP status and `code`, not on the message. |
 | Rate limit | Token bucket per client: 20 requests/s, burst 60. Heavy routes (H below) cost 5. Over it: `429 rate_limited` with `Retry-After`. |
 | CORS | Sent only when the operator sets `cors_allow_origin` (the public server sends `*`); `OPTIONS` is then `204`. |
-| Caching | No `Cache-Control` header (except `/v1/logo-blocklist`, 5 s). Hot reads are cached server side per indexed batch; that adds no staleness. |
+| Caching | No `Cache-Control` header (except `/v1/logo-blocklist`, 5 s, and `/v1/price/kas-usd`, 60 s). Hot reads are cached server side per indexed batch; that adds no staleness. |
 
 The limits are the defaults; an operator can set others. Details: [api-reference.md](api-reference.md), sections 2 and 5.
 
@@ -70,6 +70,7 @@ H = heavy (rate-limit cost 5). `{token}`, `{covenant_id}`, `{base}` and `{quote}
 | `GET /v1/metrics` | Prometheus text; the operator may turn it off (the public server answers `404`) | | 1 |
 | `POST /v1/logo-reports` | Report a token logo; hides it until reviewed (only if enabled) | | 1 |
 | `GET /v1/logo-blocklist` | Tokens whose logo the web app does not load (only if enabled) | | 1 |
+| `GET /v1/price/kas-usd` | KAS price in USD `{usd, at, source}` for the web app's optional USD display; `at` is unix seconds; cached 60 s (only if the operator enabled `usd_price`; else `404`) | | 1 |
 
 `status=` takes `open`, `partial`, `filled`, `cancelled`, `refunded`, `killed`, `closed`, or `active` (open or partial).
 `maker=` is the maker's 64-hex x-only public key, not an address; `owner=` of `/v1/token-utxos` also takes a P2PK address.

@@ -277,7 +277,7 @@ kobd --test executor_e2e`).
 ### A.2 Flags
 
 `kobd --executor` takes the indexer options (`--config`, `--network`, `--rpc-url`, `--data-dir`, `--tokens`,
-`--start`, `--fast-start`, `--lean`, `--listen`, `--no-api`, `--no-record-log`, `--reorg-window-hours`; B 4) and the
+`--start`, `--fast-start`, `--lean`, `--listen`, `--no-api`, `--usd-price`, `--no-record-log`, `--reorg-window-hours`; B 4) and the
 matcher and keeper options (C, "Running"):
 
 | Flag | Default | Meaning |
@@ -1366,6 +1366,13 @@ still retains; not recommended). `kobd --indexer` follows and serves (the indexe
 `export-book` (the matcher's `--book-file` snapshot), `import-orders`, `rebase`, `migrate`; the logo reports are `kobd logo-reports`.
 `kobd --executor` (Part A) embeds this indexer together with the matcher and the keepers and takes
 the same options.
+
+**KAS price in USD (`[api] usd_price`, `--usd-price`, `KOB_USD_PRICE=1`).** The web app can show values in approximate US dollars (Settings, Display currency). The browser asks only this
+indexer for the price, never a price site, so the page's CSP stays closed: with the option on, `GET /v1/price/kas-usd` serves `{usd, at, source}` (docs/api-reference.md, 3.22). Off by
+default: the route is `404` and this process makes no call to any third party. On, it asks CoinGecko and four exchanges' public tickers (HTTPS, no key) at most once a minute and only while
+a viewer has USD selected, backs off an upstream that fails (twice as long each time, up to 10 minutes) and keeps serving the last good value with its time (the web app stops using one
+older than 10 minutes). Turn it on in `kobd.toml` (`[api]`, `usd_price = true`), with the flag, or with `KOB_USD_PRICE=1`, and restart; a CDN in front keeps the answer for a minute
+(ops/chart-server.md).
 
 **Token-logo reports (`[logo_reports]`, `logo-reports`).** KOB shows a token's logo straight from the address its creator gave, in
 the viewer's browser, and keeps no image. With `[logo_reports] enabled = true` this server also takes reports of such logos and

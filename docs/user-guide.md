@@ -455,7 +455,7 @@ KOB backup or a maker recovery file; every record is re-checked and only orders 
 reads them again. If the browser cannot store the records the page warns "Your order records are not saved" and keeps them in the
 tab only: export a backup now.
 
-**Settings** also holds the node, indexer and registry URLs, the switches for token icons and for logos from creator sites (kept in this browser as `kob.icons` and `kob.icons.creator`), "Local data" (what this browser stores) and "Clear local data". Export a
+**Settings** also holds the node, indexer and registry URLs, the **Display currency** (KAS, or approximate US dollars for the values you read: the market list's price, volume, market cap and depth, a market's last price and 24 h figures, the Portfolio's summary and balances value; kept in this browser as `kob.currency`; the order book, the ticket, the order and fill tables and the Activity feed always stay in KAS, a price you type or sign is never converted; the dollars use the KAS price your indexer fetches, say where it came from and how old it is, are an estimate and not a quote, show KAS instead when the price is missing or older than 10 minutes, and on testnet use the mainnet price for display only), the switches for token icons and for logos from creator sites (kept in this browser as `kob.icons` and `kob.icons.creator`), "Local data" (what this browser stores) and "Clear local data". Export a
 backup first: orders on chain stay, but without their records the app can only find them through the indexer.
 
 ## 14. Words you will meet

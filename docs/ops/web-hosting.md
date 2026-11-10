@@ -161,7 +161,7 @@ What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web
   not checked: see *Token logos from the creator's address* below. `img-src` is `'self' data: blob: https:` for that one case.
 * **Failure:** unreachable, slow (8 s), not JSON, a changed shape, a file for another network, larger than 12 MB: the list is exactly what
   the registry and the indexer give, plus a one-line "unavailable" hint. Nothing is thrown into the UI and nothing is stored as authority
-  (the persistent items are the visitor's two icon switches, `kob.icons` and `kob.icons.creator`, and the last blocklist read, `kob.logo-blocklist.v1`, a cache).
+  (the persistent items are the visitor's two icon switches, `kob.icons` and `kob.icons.creator`, the display currency, `kob.currency` = `usd` when USD is chosen, and the last blocklist read, `kob.logo-blocklist.v1`, a cache).
 
 ### Token logos from the creator's address (no image is stored by KOB)
 

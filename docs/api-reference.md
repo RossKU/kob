@@ -24,7 +24,7 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 * **JSON** (`application/json`) for every route except `GET /v1/metrics` (Prometheus text, `text/plain; version=0.0.4`) and the
   WebSocket. Errors use one envelope (section 5).
 * **Compression.** A JSON answer of 512 bytes or more is sent gzip-compressed (`Content-Encoding: gzip`, `Vary: Accept-Encoding`) to a client whose
-  `Accept-Encoding` lists `gzip`, and as it is to any other (`/v1/tokens`: 29 KB, 2.8 KB compressed). Small answers, `GET /v1/metrics`, the logo routes and the
+  `Accept-Encoding` lists `gzip`, and as it is to any other (`/v1/tokens`: 29 KB, 2.8 KB compressed). Small answers, `GET /v1/metrics`, the price route, the logo routes and the
   WebSocket are never compressed. The compressed body is the same document: the response cache (section 5.6) keeps the plain one.
 * **Plain HTTP/1.1.** The executor terminates no TLS; put a reverse proxy or CDN in front of a public listener
   ([ops/chart-server.md](ops/chart-server.md)).
@@ -46,7 +46,7 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 ### Routes
 
 The list below is the router (`api/mod.rs`, `build()`), in registration order: 22 routes, plus `GET /v1/metrics` as the 23rd
-only when `[api] metrics = true` (the default), and the two logo routes (24, 25) only when `[logo_reports] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
+only when `[api] metrics = true` (the default), the KAS price route (24) only when `[api] usd_price = true` (default false), and the two logo routes (25, 26) only when `[logo_reports] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
 (`heavy_route_cost`, default 5). "Cached" marks the reads kept in the response cache (section 5.6).
 
 | # | Route | Section | Cost | Cached |
@@ -74,8 +74,9 @@ only when `[api] metrics = true` (the default), and the two logo routes (24, 25)
 | 21 | `GET /v1/depth/{token}` | [3.18](#318-get-v1depthtoken) | H | yes |
 | 22 | `GET /v1/ws` | [4](#4-websocket) | 1 (upgrade) | no |
 | 23 | `GET /v1/metrics` (only with `metrics = true`) | [3.3](#33-get-v1metrics) | 1 | no |
-| 24 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
-| 25 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
+| 24 | `GET /v1/price/kas-usd` (only with `[api] usd_price`) | [3.22](#322-get-v1pricekas-usd) | 1 | no (own cache) |
+| 25 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
+| 26 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
 
 ## 2. Conventions
 
@@ -927,6 +928,44 @@ out of the totals exactly.
 A store that keeps part of its history (`lean = true`) counts what it keeps. An empty store answers zeros. An indexer before schema 10 answers
 without `fills`, with `executors` always `null` and `traders` / `fees_paid` `null` beyond its scan caps (200,000 makers / fills).
 
+### 3.22 `GET /v1/price/kas-usd`
+
+The KAS price in US dollars, for the web app's optional USD display (Settings, "Display currency"). The browser does not call a price site itself (the
+page's CSP stays closed and a viewer's address does not reach a third party): the indexer fetches the price and serves it. **Off by default**: the route
+exists only with `[api] usd_price = true` (or `--usd-price`, or `KOB_USD_PRICE=1` in the environment; `kobd --executor` takes the same option), else it is
+a `404` like any unknown route. It is the only place the server sends a dollar figure: no other route or WebSocket frame carries one, and every conversion
+and every format happens in the browser.
+
+```
+curl -s $API/v1/price/kas-usd
+```
+
+```json
+{ "usd": 0.0298, "at": 1794280895, "source": "coingecko" }
+```
+
+* `usd` (number): US dollars per KAS. A price that is not a positive finite number below 1,000 is never served.
+* `at` (number): unix **seconds** of the fetch round that produced it, so a client can judge how old it is (the web app uses nothing older than 10 minutes).
+* `source` (string): who answered: `coingecko`, or `vwap:<exchange>,<exchange>,...`, the exchanges the average was made of (below).
+
+Upstreams, tried in parallel (each over TLS with a 4 s timeout and a 5 s ceiling, with `User-Agent: kobd/<version>`; no key, no new dependency: the indexer's
+own blocking TLS client):
+
+1. **CoinGecko**, the keyless simple-price API (`https://api.coingecko.com/api/v3/simple/price?ids=kaspa&vs_currencies=usd`), an aggregate over exchanges. It is
+   the answer whenever it answers.
+2. **The exchanges' average**, the fallback: the KAS/USDT spot tickers of Bybit, KuCoin, Gate and MEXC (one public request each: the last price and the 24 h
+   quote volume), `price = sum(last_i x volume_i) / sum(volume_i)`. An exchange whose last price is more than 3 % from the median of the exchanges is dropped
+   first, and fewer than two left means no fallback value. USDT is taken as USD (the web app says "USD (USDT)" when this answered). A source is a URL and a JSON
+   path (`api/price.rs`, `EXCHANGES`).
+
+When both answer and differ by more than 2 %, the server logs a warning (nothing about it reaches the client).
+
+**Pace.** The upstreams are asked at most once per 60 seconds whatever the number of clients, and only while a client asks: with nobody on USD they are never called.
+An upstream that fails or answers 429 is left alone for twice as long after each failure in a row, up to 10 minutes (each source has its own count), and asked at the
+normal pace again after its first success. The last good value keeps being served with its own `at`; before the first success the route answers `503`
+(`price_unavailable`, no `Retry-After`). `Cache-Control: public, max-age=60, s-maxage=60` on the `200` (a `503` is `no-store`), the same for every viewer, so a CDN
+keeps it (`ops/chart-server.md`). An indexer without the route (an older build, or `usd_price` off) is a `404`, and the web app then shows KAS and says so.
+
 ## 4. WebSocket
 
 **URL** `ws://<host>/v1/ws` (`wss://` behind a TLS-terminating proxy). The route is an ordinary `GET` with the upgrade headers;
@@ -1136,6 +1175,7 @@ Every **successful** (200) answer to a GET carries a `Cache-Control` by the rout
 | open candles, token stats | `/v1/candles/{token}` and `/v1/pairs/{base}/{quote}/candles` unless closed (below); `/v1/stats/{token}` | candles `public, max-age=3, s-maxage=3`; stats `max-age=2, s-maxage=2` |
 | lists | `/v1/tokens`, `/v1/pairs`; `/v1/stats` | `public, max-age=5, s-maxage=5, stale-while-revalidate=5`; the totals 10 and 10 |
 | declarations | `/v1/tokens/{id}/declaration` | `public, max-age=60, s-maxage=60` |
+| price | `/v1/price/kas-usd` (only with `usd_price`; the upstreams are asked at most once a minute) | `public, max-age=60, s-maxage=60` |
 | closed candles | a candles query with a `to` at least one hour in the past: no bucket in it can change | `public, max-age=3600, s-maxage=3600` |
 | never | `/v1/health`, `/v1/health/ready`, `/v1/metrics`, `/v1/ws`, `POST`, every non-200 answer (errors, 429, 503), and any request that has the query parameter `_nc` | `no-store` |
 
@@ -1148,7 +1188,7 @@ reorg deeper than that is not expected on the chain these routes read.
 
 The `[api]` table of the executor's configuration file (`kobd.toml`; `kobd --indexer --config ...`), with the nested
 `[api.rate_limit]` table. All keys are optional; an unknown key in either table is refused at start. `--listen` and `--no-api`
-override `listen` and `enabled`. Defaults are those of `config.rs`.
+override `listen` and `enabled`, `--usd-price` (or `KOB_USD_PRICE=1`) turns `usd_price` on. Defaults are those of `config.rs`.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1173,6 +1213,7 @@ override `listen` and `enabled`. Defaults are those of `config.rs`.
 | `max_page_size` | `200` | Cap of `limit` / `depth` / `levels` on list responses. |
 | `cors_allow_origin` | unset | Value of `Access-Control-Allow-Origin`; unset = no CORS headers and `OPTIONS` is `405`. |
 | `metrics` | `true` | Serve `GET /v1/metrics`; `false` removes the route (`404`). |
+| `usd_price` | `false` | Serve `GET /v1/price/kas-usd` (section 3.22): the indexer then asks CoinGecko (and, if that fails, four exchanges) for the KAS price at most once a minute, only while a client asks. Off, the route is `404` and the indexer makes no call to any price site. `--usd-price` or `KOB_USD_PRICE=1` turn it on for one start. |
 | `rate_limit.per_ip_rps` | `20.0` | Sustained requests per second per client; 0 disables rate limiting per client (and site). |
 | `rate_limit.per_ip_burst` | `60` | Burst per client. |
 | `rate_limit.global_rps` | `500.0` | Sustained requests per second across all clients; 0 = unlimited. |
