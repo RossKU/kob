@@ -236,6 +236,7 @@ impl Indexer {
             } else {
                 None
             },
+            price: self.cfg.api.usd_price.then(crate::api::price::UsdPrice::live),
         };
         st.validate().map_err(IndexerError::Config)?;
         if let Some(w) = self.cfg.api.proxy_warning() {

@@ -6,6 +6,7 @@
 //! | live | books, depth, orders (lists, one order, its events), fills, trades, strays, token UTXOs, token events, the pair book and pair fills | `public, max-age=1, s-maxage=1` |
 //! | open candles | a candle query whose range reaches the present (no `to`, or a recent one); the 24 h stats of a token | `public, max-age=3, s-maxage=3` (stats: 2) |
 //! | lists | the token list, the pair list, the activity totals | `public, max-age=5, s-maxage=5, stale-while-revalidate=5` (totals: 10) |
+//! | price | the KAS/USD price (`/v1/price/kas-usd`, opt-in; the indexer asks its upstream at most once in 5 minutes) | `public, max-age=300, s-maxage=300` |
 //! | declarations | a token's KCC-23 launch proof | `public, max-age=60, s-maxage=60` |
 //! | closed candles | a candle query whose `to` is more than an hour ago: no bucket in it can change | `public, max-age=3600, s-maxage=3600` |
 //! | never | health, readiness, metrics, the WebSocket, every other method, every answer that is not a success, and a request that carries the bypass parameter | `no-store` |
@@ -65,6 +66,7 @@ pub fn policy(method: &Method, path: &str, query: &str, now_ms: i64) -> Policy {
         ["v1", "health" | "metrics" | "ws" | "logo-reports"] | ["v1", "health", "ready"] => Policy::NoStore,
         ["v1", "tokens"] | ["v1", "pairs"] => Policy::Public { secs: 5, stale: 5 },
         ["v1", "tokens", _, "declaration"] => public(60),
+        ["v1", "price", "kas-usd"] => public(300),
         ["v1", "stats"] => Policy::Public { secs: 10, stale: 10 },
         ["v1", "stats", _] => public(2),
         ["v1", "candles", _] | ["v1", "pairs", _, _, "candles"] => {
@@ -126,6 +128,7 @@ mod tests {
         assert_eq!(get("/v1/stats", "since=5"), "public, max-age=10, s-maxage=10, stale-while-revalidate=10");
         assert_eq!(get("/v1/stats/ab", ""), "public, max-age=2, s-maxage=2");
         assert_eq!(get("/v1/tokens/ab/declaration", ""), "public, max-age=60, s-maxage=60");
+        assert_eq!(get("/v1/price/kas-usd", ""), "public, max-age=300, s-maxage=300");
     }
 
     #[test]

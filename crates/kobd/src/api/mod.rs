@@ -19,12 +19,14 @@
 //! - `/v1/fills?token=&side=&limit=&before=`
 //! - `/v1/stats?since=` (the activity totals: orders placed, traders, fees paid to fillers, KAS locked), `/v1/stats/{token}` (24 h statistics)
 //! - `/v1/ws` (WebSocket, see [`ws`])
+//! - with `usd_price`: `GET /v1/price/kas-usd` (the KAS price in USD, fetched by the indexer: [`price`])
 //! - with `[logo_reports] enabled`: `POST /v1/logo-reports` and `GET /v1/logo-blocklist` ([`crate::logo_reports`])
 
 pub mod cache;
 pub mod client_ip;
 pub mod conn;
 pub mod edge_cache;
+pub mod price;
 pub mod ratelimit;
 pub mod rest;
 pub mod ws;
@@ -67,6 +69,8 @@ pub struct ApiState {
     pub min_order_value_sompi: i64,
     /// The token-logo blocklist (`[logo_reports]`, [`crate::logo_reports`]); `None` when it is off: its two routes answer 404.
     pub logo: Option<Arc<crate::logo_reports::LogoReports>>,
+    /// The KAS/USD price (`[api] usd_price`, [`price`]); `None` when it is off: `GET /v1/price/kas-usd` answers 404.
+    pub price: Option<price::UsdPrice>,
 }
 
 impl ApiState {
@@ -202,6 +206,9 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .route("/v1/ws", get(ws::handler));
     if app.state.cfg.metrics {
         router = router.route("/v1/metrics", get(rest::metrics));
+    }
+    if app.state.price.is_some() {
+        router = router.route("/v1/price/kas-usd", get(price::kas_usd));
     }
     if app.state.logo.is_some() {
         // the one write route of the API: a report is a few dozen bytes of JSON

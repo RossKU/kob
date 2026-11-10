@@ -72,6 +72,7 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
         lag_alarm_hours: vec![1, 6, 12, 24],
         min_order_value_sompi: 100_000_000,
         logo: None,
+        price: None,
     };
     Env { _dir: dir, w, state }
 }
@@ -1915,4 +1916,67 @@ async fn cors_allows_the_post_of_a_report() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert_eq!(resp.headers().get("access-control-allow-methods").unwrap(), "GET, POST, OPTIONS");
     assert_eq!(resp.headers().get("access-control-expose-headers").unwrap(), "retry-after");
+}
+
+// the KAS/USD price route (`api::price`): a mocked upstream, no network
+
+use crate::api::price::tests::{full, p_ok, set, t_ok, Mock, P, X, Y, Z};
+
+fn price_env(m: &Mock) -> Env {
+    let e = env(|_| {});
+    let mut state = e.state.clone();
+    state.price = Some(crate::api::price::UsdPrice::with_fetch(m.fetch(), set(), crate::api::price::REFRESH, Duration::from_secs(2)));
+    Env { state, ..e }
+}
+
+#[tokio::test]
+async fn the_price_route_is_absent_while_the_feature_is_off() {
+    let e = env(|_| {});
+    let (s, _) = get(&router(e.state.clone()), "/v1/price/kas-usd").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_price_route_serves_the_cached_quote_with_a_short_cache_header() {
+    let m = full(Some("0.0576"));
+    let app = router(price_env(&m).state.clone());
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let (s, hd, v) = get_from(&app, "/v1/price/kas-usd", "127.0.0.1", &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!((v["usd"].as_f64(), v["source"].as_str()), (Some(0.0576), Some("alpha")));
+    assert!(v["at"].as_u64().is_some_and(|at| at >= now - 5 && at <= now + 5), "{v}");
+    assert_eq!(hd.get("cache-control").unwrap(), "public, max-age=300, s-maxage=300");
+    // 25 more clients: no further call to any upstream, the same `at`
+    for i in 0..25 {
+        let (s, _, w) = get_from(&app, "/v1/price/kas-usd", &format!("10.0.0.{i}"), &[]).await;
+        assert_eq!((s, w["at"].clone()), (StatusCode::OK, v["at"].clone()));
+    }
+    assert_eq!(m.calls(), 4, "one round: the primary and the three exchanges");
+}
+
+#[tokio::test]
+async fn the_price_route_serves_the_exchange_average_and_names_the_exchanges_when_the_primary_failed() {
+    let m = full(None).on(Z.url, vec![t_ok("0.0450", "5")]);
+    let app = router(price_env(&m).state.clone());
+    let (s, _, v) = get_from(&app, "/v1/price/kas-usd", "127.0.0.1", &[]).await;
+    assert_eq!((s, v["source"].as_str()), (StatusCode::OK, Some("vwap:x,y")), "the outlier is not named");
+    let usd = v["usd"].as_f64().unwrap();
+    assert!((usd - (0.0300 * 100.0 + 0.0302 * 200.0) / 300.0).abs() < 1e-12, "{usd}");
+}
+
+#[tokio::test]
+async fn the_price_route_answers_503_before_the_first_success_and_never_caches_it() {
+    let m = Mock::default()
+        .on(P.url, vec![Err("upstream down".into())])
+        .on(X.url, vec![Err("down".into())])
+        .on(Y.url, vec![Err("down".into())])
+        .on(Z.url, vec![p_ok("0")]);
+    let app = router(price_env(&m).state.clone());
+    let (s, hd, v) = get_from(&app, "/v1/price/kas-usd", "127.0.0.1", &[]).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(v["error"]["code"], "price_unavailable");
+    assert_eq!(hd.get("cache-control").unwrap(), "no-store");
+    // inside the period the failed upstreams are not asked again
+    assert_eq!(get(&app, "/v1/price/kas-usd").await.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(m.calls(), 4, "one round");
 }

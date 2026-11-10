@@ -98,6 +98,12 @@ pub struct IndexOpts {
     /// API listen address, e.g. `127.0.0.1:8090`.
     #[arg(long, global = true)]
     pub listen: Option<std::net::SocketAddr>,
+    /// Serve `GET /v1/price/kas-usd`, the KAS price in USD for the web app's optional USD display (`usd_price` in `[api]`). The indexer asks
+    /// CoinGecko's keyless API for it (a KuCoin KAS-USDT ticker when CoinGecko fails), at most once in 5 minutes and only while a client asks,
+    /// and serves the last good value with its time and source.
+    /// Off by default: no call to a third party unless this is given.
+    #[arg(long, global = true, env = "KOB_USD_PRICE")]
+    pub usd_price: bool,
     /// Do not serve the read API.
     #[arg(long, global = true)]
     pub no_api: bool,
@@ -268,6 +274,9 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     }
     if let Some(v) = a.lean_max_db_mb {
         cfg.lean_max_db_mb = v;
+    }
+    if a.usd_price {
+        cfg.api.usd_price = true;
     }
     if a.no_api {
         cfg.api.enabled = false;
@@ -628,6 +637,20 @@ mod tests {
         let mut v = vec!["kobd", "--network", kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10")];
         v.extend_from_slice(args);
         build_config(&T::parse_from(v).opts).unwrap()
+    }
+
+    /// The KAS/USD price route is opt-in: off unless `--usd-price` (or `usd_price` in `[api]`, or `KOB_USD_PRICE`) says so.
+    #[test]
+    fn the_usd_price_route_is_off_by_default() {
+        let _g = crate::rpc::resolver::tests::serial();
+        assert!(!cfg(&[]).api.usd_price);
+        assert!(cfg(&["--usd-price"]).api.usd_price);
+        let c: IndexerConfig = toml::from_str(
+            "[api]
+usd_price = true",
+        )
+        .unwrap();
+        assert!(c.api.usd_price);
     }
 
     /// `resolver` is always a pair of public nodes; `--node resolver` adds a third; an own node with `--node resolver` is a

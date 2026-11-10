@@ -142,6 +142,11 @@ pub struct ApiConfig {
     /// The route is public like the rest of `/v1/`: `false` removes it (404) for a listener the public reaches, when nothing
     /// scrapes it. Default `true`.
     pub metrics: bool,
+    /// Serve `GET /v1/price/kas-usd`, the KAS price in USD for the web app's optional USD display (`--usd-price`, `KOB_USD_PRICE=1`).
+    /// The indexer fetches it from CoinGecko's keyless API (a KuCoin KAS-USDT ticker when CoinGecko fails), at most once in 5 minutes and only
+    /// while a client asks, and serves the last good value with its time and source (`api::price`). Off by default: an indexer makes no call to a third party unless the operator turns it on
+    /// (the route then answers 404). Default `false`.
+    pub usd_price: bool,
 }
 
 impl ApiConfig {
@@ -188,6 +193,7 @@ impl Default for ApiConfig {
             max_page_size: 200,
             cors_allow_origin: None,
             metrics: true,
+            usd_price: false,
         }
     }
 }
