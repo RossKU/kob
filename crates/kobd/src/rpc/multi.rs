@@ -579,7 +579,7 @@ impl<N: ChainSource> MultiNode<N> {
     /// from the node only bounds the primary's answer (a wrong one makes it shorter, and fewer chain blocks are verified, or
     /// longer).
     async fn fetch_checked(&self, i: usize, w: &WindowRequest) -> Result<Fetched, Attempt> {
-        let origin = Origin { node: i, trusted: false };
+        let origin = Origin { node: i, trusted: false, tier: 0 };
         let node = &*self.nodes[i];
         let classify = |e: RpcError| match e {
             e @ RpcError::TooLarge { .. } => Attempt::Window(e),

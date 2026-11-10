@@ -73,7 +73,8 @@ A complete file looks like this (`network`, `rpc_url`, `data_dir`, `tokens_path`
 
 ```toml
 network = "testnet-10"
-rpc_url = "resolver"                       # or "ws://127.0.0.1:18210" for your own testnet-10 node
+rpc_url = "resolver"                       # the default; or "ws://127.0.0.1:18210" for your own testnet-10 node, then
+                                           # add [failover] fallback = "resolver" (docs/ops/executor.md, Part C, *Node failover*)
 data_dir = "kob-data"
 tokens_path = "kob-tokens.json"            # testnet-10 only; the mainnet build uses the registry it embeds
 

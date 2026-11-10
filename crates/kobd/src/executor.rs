@@ -496,6 +496,20 @@ fn multi_submit(
     MultiSubmit::new(WrpcNode::new(WrpcConfig::new(cfg.primary_url().to_string())), others, Some(chain.board()))
 }
 
+/// The node failover (`[failover]`) is the Indexer's only: refused here rather than ignored. The Executor signs and submits:
+/// its matcher reads the operator's coins, the fee estimate and the sync state from the configured node and its submissions
+/// and acceptance tracking are bound to the nodes it was started with, so a switch of the chain source under it would mix two
+/// views mid-trade. An Executor that should survive the loss of its node runs on the public pair itself (`rpc_url =
+/// "resolver"`, which fails over within the pair), or on its own node with public `nodes` that take its submissions.
+pub fn refuse_failover(cfg: &crate::config::IndexerConfig) -> Result<()> {
+    if cfg.failover.enabled() {
+        bail!(
+            "[failover] is an option of the Indexer (`kobd --indexer`), not of the Executor: remove it, or run the Executor on the public nodes (rpc_url = \"resolver\": a cross-checked pair that fails over within itself); docs/ops/executor.md, Part C, *Node failover*"
+        );
+    }
+    Ok(())
+}
+
 /// `kobd --executor`.
 pub async fn run(a: RunArgs) -> Result<()> {
     if a.no_match && a.no_keep {
@@ -505,6 +519,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
     a.liveness.apply(&mut KeeperConfig::default()).map_err(anyhow::Error::msg)?;
     a.select.config().map_err(anyhow::Error::msg)?;
     let cfg = build_config(&a.index)?;
+    refuse_failover(&cfg)?;
     // listening before the slow part (opening the store, the first calls to the node): a Ctrl+C there is not lost
     let shutdown = shutdown_signal();
     let signer = HotKey::load(a.key_file.as_deref())?;

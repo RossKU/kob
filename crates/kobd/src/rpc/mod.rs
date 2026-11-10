@@ -6,6 +6,7 @@
 
 pub mod borsh;
 pub mod bridge;
+pub mod failover;
 pub mod multi;
 pub mod resolver;
 pub mod tls;
@@ -147,18 +148,24 @@ pub trait ChainSource: Send + Sync + 'static {
     fn node_stats(&self) -> Vec<multi::NodeStatus> {
         vec![]
     }
+    /// Which node list serves now, behind a [`failover::Failover`] (`None`: no failover configured).
+    fn source_status(&self) -> Option<failover::FailoverStatus> {
+        None
+    }
 }
 
 /// Where a window came from: the index of the node in the source's list (0: the primary) and whether it is the primary's own
-/// answer (`trusted`) or another node's, checked against the primary (`rpc::verify`).
+/// answer (`trusted`) or another node's, checked against the primary (`rpc::verify`). `tier`: the node list it came from
+/// behind a [`failover::Failover`] (0: the configured nodes, 1: the fallback; always 0 without one).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Origin {
     pub node: usize,
     pub trusted: bool,
+    pub tier: u8,
 }
 
 impl Origin {
-    pub const PRIMARY: Origin = Origin { node: 0, trusted: true };
+    pub const PRIMARY: Origin = Origin { node: 0, trusted: true, tier: 0 };
 }
 
 /// One window of the parallel fetch: the chain blocks after `start` up to and including `end` (`indexer::prefetch`).

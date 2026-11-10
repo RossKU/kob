@@ -238,7 +238,7 @@ pub fn address_balance(dir: &Path, node: &mut dyn SetupNode) -> Result<Value> {
     let network = crate::config::resolve_network(Some(&cfg.network)).map_err(|e| anyhow!(e))?;
     let address = HotKey::from_file(&dir.join(key_file))?.address(&network).to_string();
     let url = if cfg.rpc_url.is_empty() {
-        default_wrpc_url(&network).ok_or_else(|| anyhow!("no default node endpoint for {network}"))?
+        crate::config::default_node(&network).ok_or_else(|| anyhow!("no default node endpoint for {network}"))?
     } else {
         cfg.rpc_url.clone()
     };

@@ -1276,9 +1276,11 @@ there, for every executor command that talks to a node (`--indexer`, `--executor
 (`kob order`, `kob recover`, `kob token create`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, the
 views `kob book`, `orders`, `balances` and `kob watch`) defaults to mainnet like kaspad and takes `--testnet` / `--netsuffix=10` / `--network testnet-10`; its
 plans and confirmations name the network and the node must run it. A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
-and refuses another. `--rpc-url` (`rpc_url`; the facilitator's `node`) defaults to the local node's JSON wRPC port of that
-network, `ws://127.0.0.1:18110` on mainnet and `ws://127.0.0.1:18210` on testnet-10 (rusty-kaspa's defaults), never a
-testnet endpoint on mainnet.
+and refuses another. `--rpc-url` (`rpc_url`) of `--indexer`, `--executor` and `kobd withdraw` defaults to `resolver`: the
+public Kaspa nodes of that network as a cross-checked pair (Part C, *Node*), never a testnet node on mainnet. An own node is
+named with its URL and takes precedence (rusty-kaspa's local JSON wRPC ports: `ws://127.0.0.1:18110` on mainnet,
+`ws://127.0.0.1:18210` on testnet-10). The stand-alone tools `match`, `keep` and `kobd x402` still default to the local
+node's port.
 
 **Secrets in URLs.** Command-line arguments are visible to every local user (`ps`, `/proc/<pid>/cmdline`), so a node URL
 that carries a password (`wss://user:pass@host/...`) or an API key (in its path or `?apikey=...`) never goes in a flag.
@@ -2839,7 +2841,8 @@ the Executor, the indexer's follower supplies acceptance (Part A); with `match` 
 process follows it itself with `getVirtualChainFromBlockV2` at `Low` verbosity (a second follower
 that only knows the ids it submitted).
 
-**Public nodes** (`rpc_url = "resolver"`, `--rpc-url resolver`; the setup's default). The executor asks the Kaspa
+**Public nodes** (`rpc_url = "resolver"`, `--rpc-url resolver`; the default: the setup's first choice, and what a configuration
+without `rpc_url` uses). The executor asks the Kaspa
 resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.kaspa.red`, `*.kaspa.green`, `*.kaspa.blue`;
 `GET {resolver}/v2/kaspa/{network}/tls/wrpc/borsh`, tried in a random order with a 5 s timeout each) for public nodes, which serve Borsh wRPC over TLS only. It always uses two, on different hosts
 (`rpc::resolver`):
@@ -2867,6 +2870,42 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
 * Advanced: `KOB_RESOLVERS` (comma-separated resolver URLs, e.g. `https://resolver.example,http://127.0.0.1:8888`) replaces
   the built-in list, for an operator who runs a private resolver (rusty-kaspa's resolver service) over its own nodes; the
   API and the pair rules are the same.
+
+**Own node** (`rpc_url = "ws://127.0.0.1:18110"` or any `ws://` / `wss://` URL; the choice of a serious operator and of a
+public read server: faster, not shared, nobody between the operator and the chain). It is the one chain authority, with no
+cross-check unless `[[nodes]]` add one (Part B 3, *Several nodes*), and a single point of failure unless the failover below
+is on. A `[[nodes]]` entry with a fixed public URL is a further body node, checked against the primary and taking
+submissions; it is never the chain authority and does not take over when the primary is down.
+
+**Node failover** (`[failover]`, the Indexer only; `rpc::failover`). An Indexer on an own node can fall back to the public
+pair when that node stops answering, and come back when it is healthy again:
+
+```toml
+rpc_url = "ws://127.0.0.1:18210"   # the configured node first
+[failover]
+fallback = "resolver"              # the public Kaspa nodes as a cross-checked pair; the only fallback
+# after_failures = 5   after_secs = 60   probe_secs = 30   return_after_probes = 3   max_reorg_blocks = 100   max_behind_blue = 600
+```
+
+* The configured node is given up after `after_failures` failed calls in a row (transport, timeout, an undecodable answer,
+  IBD) **and** `after_secs` without any answer; a slow node whose small calls still answer never switches. The public pair
+  is checked first (the right network, synced, it knows the cursor); only then is it the chain source.
+* On the pair, the configured node is probed every `probe_secs` (the right network, synced, it knows the cursor, its sink at
+  most `max_behind_blue` behind the pair's) and taken back after `return_after_probes` healthy probes in a row.
+* No divergent chain is taken silently. Right after a switch the new source's first answer from the cursor may remove at most
+  `max_reorg_blocks` chain blocks (a reorg the old node had not seen); a deeper one, or a cursor the new source does not know
+  (which would rewind the store), is refused: logged as an error, nothing applied, the indexer waits as it would without a
+  failover. A refused return to the configured node goes back to the pair. After that the usual rules hold: a `removed`
+  list that contradicts the stored chain stops the indexer (`gap`), and the pair indexes only what both its nodes report.
+* `/v1/health` reports `node_source` (`active`: `primary` or `fallback`, `switches`, `last_switch_reason`, `settling`,
+  `refused`, `last_refusal`), the metrics `kob_indexer_node_failover_active`, `..._switches_total` and `..._refused_total`,
+  and the status line `node source: fallback (N switches)`. Every switch is logged at warn with its reason.
+* It is refused (not ignored) with `rpc_url = "resolver"` or a `resolver` entry in `nodes` (the pair fails over within
+  itself already), and by the Executor: its matcher reads the operator's coins, the fee estimate and the sync state from the
+  configured node and its submissions and pending transactions are bound to the nodes it started with, so a switch of the
+  chain source under it would mix two views mid-trade. An Executor that must survive the loss of its node runs on the public
+  pair (`rpc_url = "resolver"`, the default), or on its own node with public `[[nodes]]` that also take its submissions (it
+  still stops planning while its own node is down).
 
 Public nodes are shared and slower than an own node (and their retention decides how far back a first start can index). A
 bad node cannot steal funds: the executor signs only its own inputs and the covenants enforce every order; it could waste

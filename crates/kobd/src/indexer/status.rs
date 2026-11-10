@@ -77,6 +77,10 @@ pub struct HealthSnapshot {
     /// Per node (empty with a single node).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<crate::rpc::multi::NodeStatus>,
+    /// The node failover (`[failover]`, `rpc::failover`): which node list is the chain source now, its switches and refusals.
+    /// Absent without a failover. `nodes` lists the nodes of the active list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_source: Option<crate::rpc::failover::FailoverStatus>,
     /// The store holds every order the node's history still shows. `false` during a fast start ([`crate::faststart`]: the store
     /// follows the chain from the node's sink, and the history is being indexed into a second store; `backfill` then says how far
     /// that one is), and for good in a store that began after the oldest history (`start = "sink"` or a block hash, or a rebase past
@@ -262,6 +266,7 @@ impl HealthSnapshot {
             confirmed_blocks_total: 0,
             lies_total: 0,
             nodes: vec![],
+            node_source: None,
             book_complete: true,
             history_from_daa: None,
             catch_up: None,
@@ -418,6 +423,21 @@ impl HealthSnapshot {
             self.confirmed_blocks_total,
         );
         m("kob_indexer_node_lies_total", "counter", "Contradictions of the primary found in another node's data.", self.lies_total);
+        if let Some(f) = &self.node_source {
+            m(
+                "kob_indexer_node_failover_active",
+                "gauge",
+                "1 while the fallback (public nodes) is the chain source, 0 on the configured node.",
+                (f.active == "fallback") as u64,
+            );
+            m("kob_indexer_node_failover_switches_total", "counter", "Switches of the chain source since the start.", f.switches);
+            m(
+                "kob_indexer_node_failover_refused_total",
+                "counter",
+                "Answers refused right after a switch (a deep reorg or an unknown cursor).",
+                f.refused,
+            );
+        }
         if !self.nodes.is_empty() {
             let mut per = |name: &str, kind: &str, help: &str, v: &dyn Fn(&crate::rpc::multi::NodeStatus) -> u64| {
                 s.push_str(&format!(
@@ -545,6 +565,15 @@ impl HealthSnapshot {
                 })
                 .collect();
             s.push_str(&format!(" | nodes: {}", nodes.join(", ")));
+        }
+        if let Some(f) = &self.node_source {
+            if f.active != "primary" || f.switches > 0 {
+                s.push_str(&format!(" | node source: {} ({} switches", f.active, f.switches));
+                if f.refused > 0 {
+                    s.push_str(&format!(", {} refused", f.refused));
+                }
+                s.push(')');
+            }
         }
         if matches!(self.state, FollowerState::NodeUnavailable | FollowerState::Gap) {
             if let Some(e) = self.gap_reason.as_ref().or(self.last_error.as_ref()) {

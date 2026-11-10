@@ -256,15 +256,62 @@ impl Default for NodeConfig {
     }
 }
 
+/// The Indexer's fallback when its configured node stops answering (`[failover]`; `rpc::failover`, docs/ops/executor.md,
+/// Part C, *Node failover*). Off unless `fallback` is set. `kobd --indexer` only: the Executor refuses it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct FailoverConfig {
+    /// `"resolver"`: the public Kaspa nodes as a cross-checked pair (`rpc::resolver`). Empty (the default): no failover.
+    pub fallback: String,
+    /// The configured node is given up after this many failed calls in a row (transport, timeout, an undecodable answer, a
+    /// node in IBD) ...
+    pub after_failures: u32,
+    /// ... and this many seconds without any answer from it. Default 5 and 60.
+    pub after_secs: u64,
+    /// On the fallback, the configured node is probed this often (seconds; default 30) ...
+    pub probe_secs: u64,
+    /// ... and taken back after this many healthy probes in a row (synced, the right network, not behind the fallback, knows
+    /// the cursor). Default 3.
+    pub return_after_probes: u32,
+    /// Right after a switch, the new node's first answer from the cursor may remove at most this many chain blocks (a reorg
+    /// the old node had not seen yet); a deeper one, or a cursor the new node does not know, is refused, never applied.
+    /// Default 100 (about 10 s of chain).
+    pub max_reorg_blocks: usize,
+    /// A configured node whose sink is more than this many blue score behind the fallback's is not taken back yet. Default
+    /// 600 (about a minute).
+    pub max_behind_blue: u64,
+}
+
+impl Default for FailoverConfig {
+    fn default() -> Self {
+        FailoverConfig {
+            fallback: String::new(),
+            after_failures: 5,
+            after_secs: 60,
+            probe_secs: 30,
+            return_after_probes: 3,
+            max_reorg_blocks: 100,
+            max_behind_blue: 600,
+        }
+    }
+}
+
+impl FailoverConfig {
+    /// A fallback is configured.
+    pub fn enabled(&self) -> bool {
+        !self.fallback.trim().is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IndexerConfig {
     /// Expected network id reported by the node (`testnet-10`, `mainnet`). Empty (the default): the build's deployment network
     /// ([`resolve_network`]); the reference build requires it.
     pub network: String,
-    /// JSON wRPC endpoint of the node: the primary (chain authority) unless `nodes` names another one. Empty (the default):
-    /// the local node's default JSON wRPC port of the network ([`default_wrpc_url`]: `ws://127.0.0.1:18110` on mainnet,
-    /// `ws://127.0.0.1:18210` on testnet-10).
+    /// The node: the primary (chain authority) unless `nodes` names another one. `resolver`: the public Kaspa nodes as a
+    /// cross-checked pair (`rpc::resolver`); a JSON or Borsh wRPC URL (`ws://`, `wss://`): that node (an own node, the choice
+    /// of a serious operator). Empty (the default): `resolver` ([`default_node`]).
     pub rpc_url: String,
     /// Further nodes: windows of transaction bodies are fetched from all of them in parallel (checked against the primary)
     /// and transactions submitted to all of them. Empty: the one node of `rpc_url`.
@@ -272,6 +319,8 @@ pub struct IndexerConfig {
     /// With other nodes: the primary serves windows of the parallel fetch too (`false`: only when no other node can, e.g. a
     /// primary much slower than the others; it stays the chain authority either way).
     pub primary_fetch: bool,
+    /// The Indexer's fallback when the primary stops answering ([`FailoverConfig`]; off by default).
+    pub failover: FailoverConfig,
     pub data_dir: PathBuf,
     pub start: StartMode,
     /// `kobd --executor` on an empty data directory trades at once and fills in the history afterwards ([`crate::faststart`]):
@@ -379,6 +428,7 @@ impl Default for IndexerConfig {
             rpc_url: String::new(),
             nodes: Vec::new(),
             primary_fetch: true,
+            failover: FailoverConfig::default(),
             data_dir: PathBuf::from("kob-index"),
             start: StartMode::PruningPoint,
             fast_start: false,
@@ -502,6 +552,13 @@ pub fn default_wrpc_url(network: &str) -> Option<String> {
     Some(format!("ws://127.0.0.1:{port}"))
 }
 
+/// The node of a configuration that names none: the public Kaspa nodes as a cross-checked pair (`resolver`, `rpc::resolver`)
+/// for the networks the resolvers serve (mainnet, testnet-10); `None` for any other network (pass the endpoint explicitly).
+/// An own node is configured with its URL (`rpc_url`; its local default is [`default_wrpc_url`]).
+pub fn default_node(network: &str) -> Option<String> {
+    default_wrpc_url(network).map(|_| crate::rpc::resolver::RESOLVER.to_string())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("cannot read config {0}: {1}")]
@@ -617,6 +674,10 @@ mod tests {
         assert_eq!(default_wrpc_url("mainnet").as_deref(), Some("ws://127.0.0.1:18110"));
         assert_eq!(default_wrpc_url("testnet-10").as_deref(), Some("ws://127.0.0.1:18210"));
         assert_eq!(default_wrpc_url("devnet"), None);
+        // a configuration that names no node uses the public pair
+        assert_eq!(default_node("mainnet").as_deref(), Some("resolver"));
+        assert_eq!(default_node("testnet-10").as_deref(), Some("resolver"));
+        assert_eq!(default_node("devnet"), None);
         // the configuration's defaults name no network and no node
         let d = IndexerConfig::default();
         assert_eq!((d.network.as_str(), d.rpc_url.as_str()), ("", ""));

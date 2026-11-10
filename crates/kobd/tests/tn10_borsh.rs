@@ -88,8 +88,8 @@ async fn borsh_windows_equal_json_windows_on_tn10() {
     assert!(b.raw.wire_bytes < j.raw.wire_bytes, "Borsh is the smaller answer");
 
     // the other node at Full over Borsh verifies against the primary's ids over Borsh, and equals its JSON answer
-    let ob = fetch_window_from(&*other_b, &w, Verbosity::Full, Origin { node: 1, trusted: false }).await.unwrap();
-    let oj = fetch_window_from(&*other, &w, Verbosity::Full, Origin { node: 1, trusted: false }).await.unwrap();
+    let ob = fetch_window_from(&*other_b, &w, Verbosity::Full, Origin { node: 1, trusted: false, tier: 0 }).await.unwrap();
+    let oj = fetch_window_from(&*other, &w, Verbosity::Full, Origin { node: 1, trusted: false, tier: 0 }).await.unwrap();
     same(&oj.raw, &ob.raw, "other Full");
     let p_sink = primary_b.sink_blue_score().await.unwrap();
     let ids = primary_b.chain_with_ids(start, window_min_confirmations(p_sink, end_blue, None)).await.unwrap();

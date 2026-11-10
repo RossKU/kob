@@ -26,7 +26,7 @@ use kob_protocol::payment::{kas_payment, kas_sweep};
 use kob_protocol::tx::{finalize, FeeOptions, FinalizeOptions, KeyUtxo, Utxo, DUST_OUTPUT_MIN, MIN_FEE_RATE};
 use serde_json::{json, Value};
 
-use crate::config::{default_wrpc_url, IndexerConfig};
+use crate::config::IndexerConfig;
 use crate::indexer::lock::WriterLock;
 use crate::matcher::node::{classify_submit_error, AddressUtxo, NodeApi, RpcError, ServerInfo, SubmitOutcome, WrpcConfig, WrpcNode};
 use crate::matcher::run::kas_text;
@@ -227,7 +227,7 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
     })?;
 
     let url = match cfg.primary_url().trim() {
-        "" => default_wrpc_url(&network)
+        "" => crate::config::default_node(&network)
             .ok_or_else(|| anyhow!("no node endpoint for {network}: set rpc_url in {}", cfg_path.display()))?,
         u => u.to_string(),
     };

@@ -246,7 +246,12 @@ impl Indexer {
     }
     /// Follow the node and serve the API until `shutdown` resolves.
     pub async fn run(self, shutdown: impl std::future::Future<Output = ()> + Send + 'static) -> Result<(), IndexerError> {
-        let running = self.spawn(crate::index_cli::node_client(&self.cfg))?;
+        // with `[failover]`: the public pair takes over when the configured node stops answering (`rpc::failover`)
+        let running = if self.cfg.failover.enabled() {
+            self.spawn(crate::index_cli::failover_client(&self.cfg))?
+        } else {
+            self.spawn(crate::index_cli::node_client(&self.cfg))?
+        };
         shutdown.await;
         tracing::info!("shutting down");
         running.stop().await;

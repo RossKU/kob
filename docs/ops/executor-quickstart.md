@@ -93,6 +93,8 @@ host is found in the background. Public nodes are shared and slower than your ow
 bad node cannot steal funds (the executor signs only its own inputs, and the covenants enforce every order), but it could
 waste fees or hide orders: the cross-check is the guard. Good to start with and for a small operator.
 
+A configuration that names no node (no `rpc_url`, no `--rpc-url`) uses the public pair too.
+
 **Your own node (recommended for serious operators, required for Miner Mode).** Faster, not shared, and nobody between
 you and the chain. A rusty-kaspa node (v2.1.0 or later) of the same network on the same machine, with its JSON wRPC
 listener on and a UTXO index (the executor looks up its funds there):
@@ -105,8 +107,11 @@ kaspad --testnet --netsuffix=10 --utxoindex --rpclisten-json=default --retention
 ```
 
 `--rpclisten-json=default` listens on `127.0.0.1:18110` (mainnet) or `127.0.0.1:18210` (testnet-10), the addresses the
-executor uses by default. Keep the RPC on loopback; never `--unsaferpc`. A new node needs some hours to sync; the executor
-waits for it. Sizing and the reasons for each flag: `docs/ops/executor.md`, Part B 2 and 3.
+setup offers for an own node (`rpc_url` in `kobd.toml`). Keep the RPC on loopback; never `--unsaferpc`. A new node needs some hours to sync; the executor
+waits for it. Sizing and the reasons for each flag: `docs/ops/executor.md`, Part B 2 and 3. An own node is one point of
+failure: an **Indexer** on it can fall back to the public pair while it is down and return to it afterwards (`[failover]`
+with `fallback = "resolver"` in `kobd.toml`; `docs/ops/executor.md`, Part C, *Node failover*). The Executor does not fail
+over: run it on the public pair if it must outlive its node.
 
 ## 3. Double-click
 

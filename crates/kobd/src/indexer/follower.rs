@@ -414,8 +414,13 @@ impl<S: ChainSource> Follower<S> {
     pub async fn step(&self) -> StepOutcome {
         let outcome = if self.cfg.fetch_parallel > 1 { self.step_prefetch().await } else { self.step_sequential().await };
         let nodes = self.source.node_stats();
-        if !nodes.is_empty() {
-            self.health.update(|h| h.nodes = nodes);
+        let source = self.source.source_status();
+        if !nodes.is_empty() || source.is_some() {
+            // behind a failover the list is the active one's (it may be empty: a single node)
+            self.health.update(|h| {
+                h.nodes = nodes;
+                h.node_source = source;
+            });
         }
         outcome
     }

@@ -6,6 +6,7 @@ use crate::config::NodeConfig;
 use crate::config::{IndexerConfig, StartMode};
 use crate::indexer::{self, Indexer};
 use crate::recover::{self, MakerExport};
+use crate::rpc::failover::Failover;
 use crate::rpc::multi::{MultiNode, NodeSpec};
 use crate::rpc::{redact_url, ChainSource, WrpcClient, WrpcConfig};
 use anyhow::{anyhow, Context, Result};
@@ -44,8 +45,8 @@ pub struct IndexOpts {
     pub network: Option<String>,
     /// Node wRPC endpoint: JSON wRPC (`ws://`, `wss://`), Borsh wRPC (a `.../borsh` path or a default Borsh port `17110` /
     /// `17210`: every call in Borsh), or `resolver`: a public Kaspa node of the network found through the Kaspa resolvers
-    /// (Borsh over TLS; another one after a failure). Default: the local node's JSON port of the network
-    /// (`ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10). A URL with a password or an API key belongs
+    /// (Borsh over TLS, always a cross-checked pair; another one after a failure). Default: `resolver`. An own node (the local
+    /// one listens on `ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10) is named here. A URL with a password or an API key belongs
     /// in the config file (`rpc_url`) or in `KOB_NODE_WRPC`, not on the command line (`ps`).
     #[arg(long, global = true, env = "KOB_NODE_WRPC")]
     pub rpc_url: Option<String>,
@@ -297,14 +298,38 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     // is given explicitly, never a silent testnet-10.
     cfg.network = crate::config::resolve_network(Some(&cfg.network)).map_err(|e| anyhow!(e))?;
     if cfg.rpc_url.trim().is_empty() {
-        cfg.rpc_url = crate::config::default_wrpc_url(&cfg.network).ok_or_else(|| {
+        // no node named: the public pair (an own node is named with its URL)
+        cfg.rpc_url = crate::config::default_node(&cfg.network).ok_or_else(|| {
             anyhow!("no node endpoint for network {}: pass --rpc-url (or `rpc_url` in the configuration)", cfg.network)
         })?;
     }
     number_resolver_entries(&mut cfg);
+    check_failover(&cfg)?;
     // the resolver entries resolve public nodes of this network
     crate::rpc::resolver::set_network(&cfg.network);
     Ok(cfg)
+}
+
+/// The `[failover]` table, refused rather than half used: the fallback is the public pair (`resolver`), which the configured
+/// nodes must not use already (the pair's entries are process-wide, `rpc::resolver`).
+pub fn check_failover(cfg: &IndexerConfig) -> Result<()> {
+    use crate::rpc::resolver::{is_resolver, RESOLVER};
+    let f = &cfg.failover;
+    if !f.enabled() {
+        return Ok(());
+    }
+    if f.fallback.trim() != RESOLVER {
+        anyhow::bail!(
+            "[failover] fallback = {:?}: the only fallback is \"resolver\" (the public Kaspa nodes as a cross-checked pair)",
+            f.fallback
+        );
+    }
+    if is_resolver(cfg.primary_url()) || cfg.nodes.iter().any(|n| is_resolver(&n.url)) {
+        anyhow::bail!(
+            "[failover] fallback = \"resolver\" is for a configured node (rpc_url = \"ws://...\"): this configuration uses the public nodes already (rpc_url or nodes = \"resolver\"), which fail over among themselves; remove the [failover] table"
+        );
+    }
+    Ok(())
 }
 
 /// Gives every resolver entry of the configuration its own pseudo URL (`rpc::resolver::pseudo`), so each resolves a public
@@ -371,6 +396,34 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
         );
     }
     Arc::new(MultiNode::new(nodes, verifier))
+}
+
+/// The fallback of the node failover: the public Kaspa nodes as a cross-checked pair (`rpc_url = "resolver"`, with the
+/// configuration's fetch settings).
+pub fn fallback_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
+    let mut f = cfg.clone();
+    f.rpc_url = crate::rpc::resolver::RESOLVER.to_string();
+    f.nodes = vec![];
+    f.primary_fetch = true;
+    number_resolver_entries(&mut f);
+    node_client(&f)
+}
+
+/// The Indexer's node source with `[failover]`: the configured nodes ([`node_client`]) first, the public pair
+/// ([`fallback_client`]) when they stop answering (`rpc::failover`).
+pub fn failover_client(cfg: &IndexerConfig) -> Arc<Failover<MultiNode<WrpcClient>>> {
+    use crate::rpc::failover::FailoverPolicy;
+    let (primary, fallback) = (node_client(cfg), fallback_client(cfg));
+    let policy = FailoverPolicy::from_config(&cfg.failover);
+    tracing::info!(
+        primary = %redact_url(cfg.primary_url()),
+        fallback = %cfg.failover.fallback,
+        after_failures = policy.after_failures,
+        after_secs = policy.after.as_secs(),
+        probe_secs = policy.probe_every.as_secs(),
+        "node failover: the configured node first, the public Kaspa nodes (a cross-checked pair) when it stops answering"
+    );
+    Arc::new(Failover::new(primary, fallback, cfg.primary_url(), &cfg.failover.fallback, &cfg.network, policy))
 }
 
 pub use crate::shutdown::shutdown_signal;
@@ -667,9 +720,44 @@ usd_price = true",
         assert_eq!(urls(&c), ["resolver:2", "resolver:3"]);
         let c = cfg(&["--rpc-url", "ws://127.0.0.1:18210", "--node", "resolver"]);
         assert_eq!(urls(&c), ["resolver:2"]);
+        // no node named: the public pair by default
         let c = cfg(&[]);
-        let own = crate::config::default_wrpc_url(&c.network).unwrap();
-        assert!(c.nodes.is_empty() && c.rpc_url == own, "an own node by default on the command line");
+        assert_eq!((c.rpc_url.as_str(), urls(&c)), ("resolver", vec!["resolver:2".to_string()]));
+        // a configured node takes precedence
+        let c = cfg(&["--rpc-url", "ws://127.0.0.1:18210"]);
+        assert!(c.nodes.is_empty() && c.rpc_url == "ws://127.0.0.1:18210");
+    }
+
+    /// `[failover]` is for a configured node and its only fallback is the public pair: anything else is refused, not ignored.
+    #[test]
+    fn the_failover_falls_back_to_the_public_pair_from_a_configured_node_only() {
+        let _g = crate::rpc::resolver::tests::serial();
+        let parse = |toml: &str| {
+            let mut c = toml::from_str::<IndexerConfig>(toml).unwrap();
+            number_resolver_entries(&mut c);
+            c
+        };
+        let own = "rpc_url = \"ws://10.0.0.5:18210\"\n";
+        assert!(check_failover(&parse(own)).is_ok(), "off by default");
+        let on = parse(&format!("{own}[failover]\nfallback = \"resolver\"\n"));
+        assert!(check_failover(&on).is_ok());
+        assert_eq!((on.failover.after_failures, on.failover.after_secs, on.failover.probe_secs), (5, 60, 30));
+        let e = check_failover(&parse(&format!("{own}[failover]\nfallback = \"wss://other.example\"\n"))).unwrap_err();
+        assert!(e.to_string().contains("the only fallback is \"resolver\""), "{e}");
+        for pub_cfg in ["rpc_url = \"resolver\"\n", "rpc_url = \"ws://10.0.0.5:18210\"\n[[nodes]]\nurl = \"resolver\"\n"] {
+            let e = check_failover(&parse(&format!("{pub_cfg}[failover]\nfallback = \"resolver\"\n"))).unwrap_err();
+            assert!(e.to_string().contains("uses the public nodes already"), "{e}");
+        }
+        // the fallback client is the public pair
+        let f = fallback_client(&on);
+        assert_eq!(
+            f.specs().iter().map(|s| (s.url.as_str(), s.cross_check)).collect::<Vec<_>>(),
+            [("resolver", false), ("resolver:2", true)]
+        );
+        // the Executor refuses it
+        let e = crate::executor::refuse_failover(&on).unwrap_err();
+        assert!(e.to_string().contains("an option of the Indexer"), "{e}");
+        assert!(crate::executor::refuse_failover(&parse(own)).is_ok());
     }
 
     /// `--config <dir>/kobd.toml` from another directory reads the files next to the configuration (the setup's

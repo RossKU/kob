@@ -65,7 +65,7 @@ async fn a_window_from_another_tn10_node_verifies_against_the_primary() {
     let w = WindowRequest::new(start, end);
 
     // the check alone, on both answers
-    let f = fetch_window_from(&*other, &w, Verbosity::Full, Origin { node: 1, trusted: false }).await.unwrap();
+    let f = fetch_window_from(&*other, &w, Verbosity::Full, Origin { node: 1, trusted: false, tier: 0 }).await.unwrap();
     let end_blue = primary.block_blue_score(end).await.unwrap().unwrap();
     let p_sink = primary.sink_blue_score().await.unwrap();
     let ids = primary.chain_with_ids(start, window_min_confirmations(p_sink, end_blue, None)).await.unwrap();
@@ -79,10 +79,10 @@ async fn a_window_from_another_tn10_node_verifies_against_the_primary() {
         .count();
     eprintln!("{n} chain blocks, {txs} transactions ({v1} of version 1) from {o_url} verify against {p_url}");
     // a High answer cannot be checked (no UTXO commitment, no version): refused, not trusted
-    let high = fetch_window_from(&*other, &w, Verbosity::High, Origin { node: 1, trusted: false }).await.unwrap();
+    let high = fetch_window_from(&*other, &w, Verbosity::High, Origin { node: 1, trusted: false, tier: 0 }).await.unwrap();
     assert!(matches!(verify_window(&high.raw, &ids), Err(Rejection::Lie(_))));
     // tampering is found
-    let mut bad = fetch_window_from(&*other, &w, Verbosity::Full, Origin { node: 1, trusted: false }).await.unwrap();
+    let mut bad = fetch_window_from(&*other, &w, Verbosity::Full, Origin { node: 1, trusted: false, tier: 0 }).await.unwrap();
     let t = bad
         .raw
         .chain_block_accepted_transactions
@@ -97,7 +97,7 @@ async fn a_window_from_another_tn10_node_verifies_against_the_primary() {
     let spec = |url: &str, fetch: bool| NodeSpec { url: url.into(), fetch, submit: false, connections: 1, cross_check: false };
     let m = MultiNode::new(vec![(spec(&p_url, false), primary.clone()), (spec(&o_url, true), other.clone())], client(&p_url));
     let f = m.fetch_window(w).await.unwrap();
-    assert_eq!(f.origin, Origin { node: 1, trusted: false });
+    assert_eq!(f.origin, Origin { node: 1, trusted: false, tier: 0 });
     // the planned blocks first (blocks past the end may follow: the sink moved while the request travelled)
     let k = f.raw.added_chain_block_hashes.len().min(chain.len());
     assert!(k > 0 && f.raw.added_chain_block_hashes[..k] == chain[..k]);
