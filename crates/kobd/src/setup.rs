@@ -499,18 +499,20 @@ pub fn judge_node(info: &ServerInfo, network: &str, role: LaunchRole) -> Result<
 /// The interactive setup. Writes the configuration (and the key file, the token list) into `opts.dir` and returns its path
 /// when the executor should start now (`None`: written, or nothing changed, and the operator starts it later).
 pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOptions) -> Result<Option<PathBuf>> {
-    run_setup_with(io, node, opts, None)
+    run_setup_with(io, node, opts, None, false)
 }
 
 /// [`run_setup`] with the roles already chosen on the command line (`--executor`, `--indexer`): the role question is skipped.
+/// With `no_start` (`--no-start`) the "start now?" question is not asked and the result is `None`.
 pub fn run_setup_with(
     io: &mut dyn Console,
     node: &mut dyn SetupNode,
     opts: &SetupOptions,
     preset: Option<AppRole>,
+    no_start: bool,
 ) -> Result<Option<PathBuf>> {
     let config_path = opts.dir.join(CONFIG_FILE);
-    io.say(&format!("KOB executor {} setup", kob_protocol::VERSION));
+    io.say(&format!("kobd {} setup", kob_protocol::VERSION));
     io.say("Answer the questions below; Enter takes the default in [brackets]. Nothing is sent anywhere but to the Kaspa node you choose: no telemetry, no fee, no update check.");
     io.say("");
     let network = match &opts.build_network {
@@ -691,10 +693,22 @@ pub fn run_setup_with(
     io.say(&format!("    {}", service_line(&opts.dir, l.roles, &opts.program)));
     io.say("");
     io.say("From now on, starting kobd without arguments (a double click) runs it too.");
-    if ask_yes(io, "Start the executor now?", true)? {
+    if no_start {
+        return Ok(None);
+    }
+    if ask_yes(io, &format!("Start the {} now?", start_noun(app_role)), true)? {
         Ok(Some(config_path))
     } else {
         Ok(None)
+    }
+}
+
+/// What the "start now?" question names: the Indexer for an index-only configuration, else the executor.
+fn start_noun(role: AppRole) -> &'static str {
+    match role {
+        AppRole::Indexer => "Indexer",
+        AppRole::Executor => "executor",
+        AppRole::ExecutorIndexer => "Executor and Indexer",
     }
 }
 
@@ -1185,6 +1199,35 @@ mod tests {
         let (l, i) = built(AppRole::Indexer);
         assert_eq!(l.args, ["--config", CONFIG_FILE]);
         assert!(!i.lean && i.records.enabled && !i.fast_start);
+    }
+
+    /// The banner names no role (it comes before the role is chosen); the start question names the chosen one and is not asked
+    /// under `--no-start`.
+    #[test]
+    fn the_start_question_names_the_role_and_no_start_skips_it() {
+        // node (public), data dir, start
+        let d = tempfile::tempdir().unwrap();
+        let mut node = FakeNode::new("testnet-10");
+        let mut io = Script::new(&["", "", "n"]);
+        let o = opts(d.path(), "testnet-10", false);
+        assert_eq!(run_setup_with(&mut io, &mut node, &o, Some(AppRole::Indexer), false).unwrap(), None);
+        let out = io.text();
+        assert!(out.contains("Start the Indexer now?") && !out.contains("Start the executor now?"), "{out}");
+        assert!(out.starts_with(&format!("kobd {} setup", kob_protocol::VERSION)) && !out.contains("KOB executor"), "{out}");
+        // Enter starts it
+        let d = tempfile::tempdir().unwrap();
+        let mut io = Script::new(&["", "", ""]);
+        let o = opts(d.path(), "testnet-10", false);
+        let got = run_setup_with(&mut io, &mut node, &o, Some(AppRole::Indexer), false).unwrap();
+        assert_eq!(got, Some(d.path().join(CONFIG_FILE)));
+        // --no-start: the files are written, nothing is asked
+        let d = tempfile::tempdir().unwrap();
+        let mut io = Script::new(&["", ""]);
+        let o = opts(d.path(), "testnet-10", false);
+        assert_eq!(run_setup_with(&mut io, &mut node, &o, Some(AppRole::Indexer), true).unwrap(), None);
+        let out = io.text();
+        assert!(d.path().join(CONFIG_FILE).is_file() && out.contains("Wrote "), "{out}");
+        assert!(!out.contains("now?"), "{out}");
     }
 
     /// The third choice of the dialogue: the warning is shown, the key and the funding come as for the matcher, and the file

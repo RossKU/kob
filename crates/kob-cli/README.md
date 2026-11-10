@@ -23,7 +23,12 @@ kob --version
 
 ```sh
 # 1. Read a book (no key). Testnet-10 has a default indexer; mainnet needs --indexer for now.
-kob book TUSD --testnet
+#    First see which tokens have a market, then read one by its ticker or covenant id. A ticker is known from the
+#    registry or the indexer's token list: a fresh local indexer (--indexer http://127.0.0.1:8090) lists a token
+#    only once an order of it was seen, so use the covenant id that `kob tokens` prints.
+kob tokens --testnet
+kob book <covenant id> --testnet
+#    (the shared testnet-10 indexer also knows tickers: `kob book TUSD --testnet`)
 
 # 2. Plan an order and stop before signing (pick a price from the book; 0.25KAS is only an example)
 kob place limit --token TUSD --side sell --amount 12.5TUSD --price 0.25KAS \

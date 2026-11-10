@@ -398,10 +398,10 @@ fn setup_then_launch(
         logging::set_console(false);
     }
     let opts = SetupOptions::for_build(dir);
-    let done = setup::run_setup_with(&mut StdConsole, &mut WrpcSetupNode { rt }, &opts, roles);
+    let done = setup::run_setup_with(&mut StdConsole, &mut WrpcSetupNode { rt }, &opts, roles, no_start);
     logging::set_console(console_was);
     match done? {
-        Some(cfg) if !no_start => {
+        Some(cfg) => {
             println!();
             launch(rt, program, &cfg, &[])
         }

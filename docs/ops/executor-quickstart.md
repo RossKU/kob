@@ -121,8 +121,9 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
 1. **Network**: fixed by the binary; it says which.
 2. **Node**: public Kaspa nodes (the default: it finds the two, checks each one's network, sync state and UTXO index and
    shows their host names) or your own node (section 2).
-3. **Role**: the **Executor** (the default: matches crossing orders and refunds expired ones, earns, needs a funded key),
-   the **Indexer** (follows the chain, keeps the full history and serves the read API; no key, no funds) or **Executor and
+3. **Role**: the **Executor** (the default: matches crossing orders and refunds expired ones, earns; needs a key, and funds as a working float, item 6 below),
+   the **Indexer** (follows the chain, keeps the full history and serves the read API; no key, no funds; its first catch-up from the
+   pruning point takes hours, see section 4) or **Executor and
    Indexer** (both in one process: the Executor with a funded key and the Indexer's full history, record log and read API).
    The third choice comes with a warning: **the public API and the signing key then live on the same machine**. For a public
    server prefer separate machines: an Indexer-only host for the API and an Executor elsewhere. The roles can also be named on
@@ -144,11 +145,17 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
    waiting. The address is not lost if you do: every start prints it (`Funding address ...` under the command line, and
    `funding_address` in the first log line), the low-funds warning names it, and `kobd address-balance` prints it
    with the balance (section 5).
+
+   The funds are a working float, not a precondition for starting. The key must exist, but with 0 KAS the Executor still runs: it warns
+   `funds low (0 KAS, below 100 KAS ...)` and settles the matches whose own inputs pay their fee (a testnet-10 walkthrough with an
+   empty key settled two matches and earned a fee that way). What needs the key's own coins waits (`skipped why=lowering:
+   insufficient funds`): a batch whose fee or carriers the orders do not cover, and the keeper subsidy of a kill or refund. The
+   100 KAS is therefore an alert level (`--low-funds-kas`), not a minimum the executor enforces; below it, expect to miss work.
 7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6).
 
 It then writes `kobd.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
 testnet-10; the mainnet binary carries its pinned registry), prints the line that starts it (for example
-`C:\kob\kobd.exe --executor`, section 6), and asks `Start the executor now? [Y/n]`: Enter starts it, `n` leaves the files
+`C:\kob\kobd.exe --executor`, section 6), and asks `Start the executor now? [Y/n]` (`Start the Indexer now?` for the Indexer role): Enter starts it, `n` leaves the files
 and ends the setup (`setup --no-start` does not ask). From then on, a double-click runs that configuration directly. If another kobd already runs from the same folder,
 the start is refused at once with a message naming it, before anything else is printed or logged.
 
@@ -182,6 +189,10 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
   (`/v1/health`: `book_complete: false`), then switches over by itself (`docs/ops/executor.md`, A.1.1). Without it (an older
   configuration, `fast_start = false`) the indexer first catches up with everything the node retains and the matcher and
   keepers plan nothing until it is close to the tip. The banner at the start says which of the two applies.
+* **An Indexer's first catch-up takes hours.** It indexes the chain from the node's pruning point. Measured example (not a guarantee), 2026-11-10 on
+  testnet-10 through the public resolver pair: about 35 h of chain behind at the start and about 225 DAA/s net catch-up, so roughly 4 to
+  5 h until it was at the tip. Your figures depend on the nodes, the line and the chain's load; `/v1/health` shows the lag
+  (`lag_seconds`).
 * `WARNING:` names what needs you: the node not synced or unreachable, funds below 100 KAS (`--low-funds-kas`; the warning
   names the address to send KAS to; it is logged at the start, then at most every 10 minutes or when the balance changes by a
   quarter, and the status line shows the funds every 10 seconds; the executor trades with less than 100 KAS, the number is an alert
@@ -193,7 +204,9 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
   with a wrong clock. The executor does not check the clock.
 * **Port 8090 busy.** The read API listens on `127.0.0.1:8090` by default. If another program (or a second KOB executor for
   another network) holds the port, the executor still runs but logs `API server stopped: ...` and serves no API, although the
-  start banner printed the address. Change `[api] listen` in `kobd.toml` (or `--listen`) and restart.
+  start banner printed the address. Change `[api] listen` in `kobd.toml` (or `--listen`) and restart. A second kobd on the same
+  machine needs its own `--listen` port **and its own data folder** (a separate folder from `kobd setup --dir <folder>`, with its own
+  data directory), and `kob ... --indexer http://127.0.0.1:<port>` queries it.
 
 **What it costs to run.** Measured and estimated figures for sizing a machine or a metered line (`docs/ops/executor.md`, Part B 3 and A.1.2):
 
