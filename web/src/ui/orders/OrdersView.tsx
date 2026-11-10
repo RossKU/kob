@@ -344,7 +344,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     return (
       <div class="stack" data-testid="orders-view">
         <h1>{t('orders.title')}</h1>
-        <Banner tone="info" data-testid="orders-connect">{t('orders.connect')}</Banner>
+        <p class="muted empty-prompt" data-testid="orders-connect">{t('orders.connect')}</p>
       </div>
     );
   }

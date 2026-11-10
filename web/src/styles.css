@@ -483,6 +483,8 @@ small, .small { font-size: 0.85em; }
 .banner-warn { border-color: var(--warn); background: var(--warn-bg); }
 .banner-error { border-color: var(--bad); background: var(--bad-bg); }
 .banner-actions { display: flex; gap: 8px; flex: none; align-items: center; }
+/* a page with nothing to show until a wallet is connected: a plain line, not a banner (it is not news, only the empty state) */
+.empty-prompt { text-align: center; padding: 48px 16px; margin: 0; }
 
 /* ------------------------------------------------------------------ modal / toast */
 
