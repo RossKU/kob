@@ -486,3 +486,30 @@ test('the four Portfolio tabs with a fill: the orders, the trade history and the
   await expect(page.getByTestId('kas-balance')).toBeVisible();
   expect(kasAmounts(await textWithout(page, []))).toEqual([]);
 });
+
+test('a flipped market (KAS/TOKEN): the 24 h KAS volume tile is dollars with the KAS figure in its tooltip; the prices (tokens per KAS) and the token volume stay', async ({ appPage: page, mock }) => {
+  await fund(mock);
+  const id = await openMarket(page, mock);
+  await page.getByTestId('market-flip').click();
+  await expect(page.getByTestId('market-stats')).toHaveAttribute('data-state', 'ready');
+  // KAS first: the volume tile is in KAS
+  const volume = page.getByTestId('stat-volume');
+  await expect(volume).toContainText('24h volume (KAS)');
+  await expect(volume).not.toContainText('$');
+  const stats = await mock.get(`/v1/stats/${id}`);
+  const kasVolume = Number(stats.quote_volume_24h) / 1e8;
+
+  await page.evaluate(() => localStorage.setItem('kob.currency', 'usd'));
+  await page.reload();
+  await connectWallet(page);
+  await expect(page.getByTestId('market-stats')).toHaveAttribute('data-state', 'ready');
+  await expect(volume).toContainText('24h volume (USD)');
+  await expect(volume).toContainText('$');
+  await expect(volume).not.toContainText('KAS');
+  expect(numberOf(await volume.locator('.mkt-stat-value').textContent())).toBeCloseTo(kasVolume * PRICE, 1);
+  await expect(volume.locator('.mkt-stat-value')).toHaveAttribute('title', /KAS · USD estimate at \$0\.03 per KAS$/);
+  // the prices are tokens per KAS and the token volume is tokens: not dollars
+  for (const tile of ['stat-last', 'stat-high', 'stat-low', 'stat-quote-volume']) await expect(page.getByTestId(tile)).not.toContainText('$');
+  await expect(page.getByTestId('stat-quote-volume')).toContainText('24h volume (EXKCC)');
+  await expect(page.getByTestId('stat-last')).toContainText('per KAS');
+});

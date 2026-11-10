@@ -17,7 +17,7 @@ export interface UsdStats {
   model: StatsModel;
   /** tooltips of the converted tiles: the KAS figure and the rate used */
   lastTitle: string | null;
-  titles: { high: string | null; low: string | null; quoteVolume: string | null };
+  titles: { high: string | null; low: string | null; quoteVolume: string | null; volume?: string | null };
 }
 
 /** Characters of the volume tile before it turns compact (`$56.61M`). */
@@ -55,5 +55,19 @@ export function usdStatsModel(base: StatsModel, v: StatsView | null, decimals: n
       low: low ? kasTitle(base.low) : null,
       quoteVolume: base.quoteVolumeExact ? `${base.quoteVolumeExact} KAS · ${rate}` : null,
     },
+  };
+}
+
+/**
+ * The strip of a FLIPPED market (KAS/TOKEN, `statsModelFlipped`) in USD: its last, high and low are tokens per KAS (a ratio, not a KAS value) and stay, and so do the change, the trades and
+ * the volume in the token; the 24 h volume in KAS (the BASE tile) becomes dollars with the KAS figure and the rate in its tooltip.
+ */
+export function usdFlippedStatsModel(base: StatsModel, v: StatsView | null, fiat: Fiat): UsdStats {
+  const qv = v ? bigOrNull(v.quote_volume_24h) : null;
+  const volume = qv === null ? null : sompiToUsd(qv, fiat.rate);
+  return {
+    model: { ...base, volume: volume ? usdTextFit(volume, VOLUME_CHARS) : base.volume, volumeExact: volume ? usdText(volume) : base.volumeExact },
+    lastTitle: null,
+    titles: { high: null, low: null, quoteVolume: null, volume: base.volumeExact && volume ? `${base.volumeExact} KAS · ${rateTitle(fiat)}` : null },
   };
 }

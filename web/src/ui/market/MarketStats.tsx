@@ -37,6 +37,8 @@ export function MarketStats(props: {
 }) {
   const tip = (exact: string | null | undefined, note: string | null | undefined): string | null => (exact && note ? `${exact} · ${note}` : (exact ?? note ?? null));
   const base = props.quoteTicker ? props.ticker : props.inverted ? 'KAS' : props.ticker;
+  // the label of the BASE volume tile: a flipped market's KAS volume reads USD when it is shown in dollars (the price unit above keeps KAS)
+  const volumeBase = props.inverted && props.usd ? 'USD' : base;
   const quote = props.quoteTicker ?? (props.inverted ? props.ticker : props.usd ? 'USD' : 'KAS');
   const m = props.model;
   const na = props.quoteTicker ? t('pair.stats.na') : null;
@@ -54,7 +56,7 @@ export function MarketStats(props: {
       <Stat testid="stat-change" label={t('market.stats.change')} value={m.change} tone={m.changeTone} loading={props.loading} />
       <Stat testid="stat-high" label={t('market.stats.high')} value={m.high} title={props.titles?.high ?? na} loading={props.loading} />
       <Stat testid="stat-low" label={t('market.stats.low')} value={m.low} title={props.titles?.low ?? na} loading={props.loading} />
-      <Stat testid="stat-volume" label={t('market.stats.volume', { ticker: base })} value={m.volume} title={tip(m.volumeExact, props.titles?.volume) ?? na} loading={props.loading} />
+      <Stat testid="stat-volume" label={t('market.stats.volume', { ticker: volumeBase })} value={m.volume} title={tip(m.volumeExact, props.titles?.volume) ?? na} loading={props.loading} />
       <Stat testid="stat-quote-volume" label={t('market.stats.volume', { ticker: quote })} value={m.quoteVolume} title={tip(m.quoteVolumeExact, props.titles?.quoteVolume) ?? na} loading={props.loading} />
       <Stat testid="stat-trades" label={t('market.stats.trades')} value={m.tradesText ?? (m.trades === null ? null : String(m.trades))} title={props.titles?.trades ?? na} loading={props.loading} />
     </div>

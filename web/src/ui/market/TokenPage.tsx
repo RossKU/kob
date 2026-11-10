@@ -27,7 +27,7 @@ import {
 } from './orientation';
 import { useInverted } from './use-orientation';
 import { MarketStats } from './MarketStats';
-import { usdStatsModel } from './stats-usd';
+import { usdFlippedStatsModel, usdStatsModel } from './stats-usd';
 import { BookFrame, BookGrouping, OrderBook, StaleSince } from './OrderBook';
 import { FavoriteStar } from './FavoriteStar';
 import { isFavoriteToken, toggleToken, useFavorites } from './favorites';
@@ -235,14 +235,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     return { text: priceText(r.price!, decimals, tape!.basis ?? 0n, dp), side: r.side };
   }, [sm, tape, decimals, dp, inverted]);
   const statsForView = sm.last || !last ? sm : { ...sm, last: last.text, lastSide: last.side };
-  // the USD display (Settings): the KAS tiles of the strip in dollars, for the market read as TOKEN/KAS (a flipped market shows tokens per KAS: nothing to convert)
+  // the USD display (Settings): the KAS tiles of the strip in dollars (a flipped market's prices are tokens per KAS and stay; its KAS volume tile is dollars)
   const fiat = useFiat();
   const tapeLast = useMemo(() => {
     const r = tape?.rows.find((x) => x.price !== null);
     return r && tape?.basis ? { price: r.price!, basis: tape.basis } : null;
   }, [tape]);
   const usdStrip = useMemo(
-    () => (fiat && !inverted ? usdStatsModel(statsForView, stats.data ?? null, decimals, fiat, name, tapeLast) : null),
+    () => (fiat ? (inverted ? usdFlippedStatsModel(statsForView, stats.data ?? null, fiat) : usdStatsModel(statsForView, stats.data ?? null, decimals, fiat, name, tapeLast)) : null),
     [fiat, inverted, statsForView, stats.data, decimals, name, tapeLast],
   );
 

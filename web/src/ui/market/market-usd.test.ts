@@ -115,3 +115,27 @@ describe('the market page strip in USD', () => {
     expect(usdStatsModel(statsModel(x, 8, 4), x, 8, fiat, 'EXKCC').model.quoteVolume).toBe('$14.90M');
   });
 });
+
+describe('the flipped market strip in USD', () => {
+  it('only the KAS volume tile becomes dollars; the prices, the change, the token volume and the trades stay', async () => {
+    const { statsModelFlipped } = await import('./orientation');
+    const { usdFlippedStatsModel } = await import('./stats-usd');
+    const v = stats(ID('a'), { quote_volume_24h: '243000000000000' });
+    const base = statsModelFlipped(v, 8, 4);
+    const u = usdFlippedStatsModel(base, v, fiat);
+    // 2,430,000 KAS x $0.0298
+    expect(u.model.volume).toBe('$72,414.00');
+    expect(u.model.volumeExact).toBe('$72,414.00');
+    expect(u.titles.volume).toBe(`${base.volumeExact} KAS · ${RATE}`);
+    expect({ ...u.model, volume: base.volume, volumeExact: base.volumeExact }).toEqual(base);
+  });
+
+  it('without stats it changes nothing', async () => {
+    const { statsModelFlipped } = await import('./orientation');
+    const { usdFlippedStatsModel } = await import('./stats-usd');
+    const base = statsModelFlipped(null, 8, 4);
+    const u = usdFlippedStatsModel(base, null, fiat);
+    expect(u.model).toEqual(base);
+    expect(u.titles.volume).toBeNull();
+  });
+});
