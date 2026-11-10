@@ -4,6 +4,17 @@ on:
   push:
     branches: [master, main, "ci/**"]
   pull_request:
+  # a full run (every job, whatever changed) once a week: the skipped jobs of a push that did not touch their inputs are not a substitute
+  # for a run that sees new advisories (job deps) or a drifted toolchain
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+# A new push to a branch cancels that branch's superseded run. master and main are never cancelled: each master push has its own group (the run
+# id), so every master push gets a complete result of its own (a shared group would replace a queued run, and cancel-in-progress would stop it).
+concurrency:
+  group: ${{ (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && format('ci-{0}', github.run_id) || format('ci-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -13,7 +24,90 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  changes:
+    # Decides from the diff of the push (the before sha) or of the pull request (its base) which areas changed, and so which jobs run. A job
+    # that does not run is skipped, and a skipped job counts as passed (job ci-ok, the one result to look at, fails when a job failed or was cancelled).
+    # Everything runs when the diff cannot be had (a new branch, a force push, schedule, workflow_dispatch) and on any path not classified below.
+    #   rust      crates/, vendor/, contracts/, registry/, scripts/, tools/, packages/, Cargo.*, toolchain files, and the two docs the Rust tests
+    #             include (docs/spec/kob1-payload.md, docs/ops/executor.md): fmt, clippy, test, budget-table, wasm, x402-sdk, contracts, deps,
+    #             reproducible, and web (the web build embeds kob-wasm and reads crates/, contracts/ and registry/)
+    #   web       web/ and the root README.md (a web unit test reads it): web, web-build, web-e2e
+    #   docs      other Markdown, docs/, LICENSE, NOTICE: contracts (scripts/check-pins.mjs reads every doc for pinned hashes)
+    # .github/ and every other path: all of it.
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+      web: ${{ steps.diff.outputs.web }}
+      contracts: ${{ steps.diff.outputs.contracts }}
+      deps: ${{ steps.diff.outputs.deps }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          all=false rust=false web=false docs=false pkg=false
+          base=
+          case "$EVENT" in
+            push) base="$BEFORE" ;;
+            pull_request) base="$PR_BASE" ;;
+          esac
+          files=
+          if [ -n "$base" ] && ! [[ "$base" =~ ^0+$ ]] \
+            && git fetch --no-tags --depth=1 "https://github.com/$REPO.git" "$base" \
+            && files=$(git diff --name-only --no-renames "$base" HEAD) && [ -n "$files" ]; then
+            echo "changed files against $base:"; echo "$files" | sed 's/^/  /'
+          else
+            echo "no usable diff base (event $EVENT, base '$base'): everything runs"
+            all=true
+          fi
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              .github/*) all=true ;;
+              web/package.json|web/package-lock.json) web=true; pkg=true ;;
+              web/*) web=true ;;
+              docs/spec/kob1-payload.md|docs/ops/executor.md) rust=true ;;
+              docs/*|LICENSE|NOTICE) docs=true ;;
+              README.md) docs=true; web=true ;;
+              crates/*|vendor/*|contracts/*|registry/*|scripts/*|tools/*|packages/*|.cargo/*) rust=true ;;
+              Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|*.rs|*.sil|*.ag) rust=true ;;
+              *.md) docs=true ;;
+              *) echo "unclassified path $f: everything runs"; all=true ;;
+            esac
+          done <<< "$files"
+          if [ "$all" = true ]; then rust=true web=true docs=true pkg=true; fi
+          out() { echo "$1=$2" | tee -a "$GITHUB_OUTPUT"; }
+          anyof() { for v in "$@"; do [ "$v" = true ] && { echo true; return; }; done; echo false; }
+          out rust "$rust"
+          out web "$(anyof "$web" "$rust")"
+          out contracts "$(anyof "$rust" "$docs")"
+          out deps "$(anyof "$rust" "$pkg")"
+
+  ci-ok:
+    # The one result of this workflow (a required check, or what a script reads, names this job): it passes when every job passed or was
+    # skipped by the diff, and fails when any job failed or was cancelled. Its `needs` lists every other job.
+    if: always()
+    needs: [changes, fmt, clippy, test, budget-table, wasm, contracts, x402-sdk, deps, web, web-build, web-e2e, reproducible]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped")] | length')
+          [ "$bad" = 0 ] || { echo "a job failed or was cancelled" >&2; exit 1; }
+          [ "$(echo "$NEEDS" | jq -r .changes.result)" = success ] || { echo "the changes job did not run" >&2; exit 1; }
+
   fmt:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,6 +120,8 @@ jobs:
       - run: cargo fmt --all --check
 
   clippy:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,6 +139,8 @@ jobs:
           -- -D warnings
 
   test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +189,8 @@ jobs:
         run: cargo test --locked -p kob-protocol -p kobd --lib --features deploy-mainnet
 
   budget-table:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -104,6 +204,8 @@ jobs:
         run: cargo test --locked -p kob-protocol --test budget_table
 
   wasm:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -119,6 +221,8 @@ jobs:
         run: cargo check --locked -p silverscript-lang --target wasm32-unknown-unknown
 
   contracts:
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -147,6 +251,8 @@ jobs:
         run: node scripts/check-pins.mjs
 
   x402-sdk:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     # The TypeScript x402 SDK (packages/kob-x402): typecheck, then scripts/build-wasm.sh --test, which builds the kob-wasm node bindings,
     # replays the protocol golden vectors against them (crates/kob-wasm/tests/node) and runs the SDK tests with the wasm required
     # (KOB_REQUIRE_WASM=1: the wasm-golden test replays crates/kob-x402/vectors/golden). The SDK's copy of the router artifact id is
@@ -175,6 +281,8 @@ jobs:
         run: bash scripts/build-wasm.sh --install-bindgen --test
 
   deps:
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
     # Dependency policy: RustSec advisories, licences and sources (.cargo/deny.toml lists every accepted advisory with its reason), and the
     # npm advisories of the three lockfiles. New advisories make this job fail until they are fixed or accepted in .cargo/deny.toml.
     runs-on: ubuntu-latest
@@ -200,9 +308,13 @@ jobs:
           done
 
   web:
-    # The web app (web/): kob-wasm bindings, the official kaspa-wasm v2.1.0 SDK (fetched from the rusty-kaspa release, the npm package is
-    # stale), typecheck, unit tests, production build and the offline mock-stack Playwright e2e. The real-wallet TN10 run (web/e2e-real)
-    # needs browser extensions, funded keys and a reachable TN10 node: it is manual / nightly, never part of this job.
+    # The web app (web/) except the mock-stack e2e (job web-e2e): kob-wasm bindings, the official kaspa-wasm v2.1.0 SDK (fetched from the
+    # rusty-kaspa release, the npm package is stale), typecheck, unit tests, the release bundle (vite build plus dist/registry/tokens.json)
+    # with its hashes, and the landing-only e2e (its own build in dist-landing/, the mainnet front page: the landing page at every address,
+    # no request but its own files). The real-wallet TN10 run (web/e2e-real) needs browser extensions, funded keys and a reachable TN10 node:
+    # it is manual / nightly, never part of this workflow.
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -235,7 +347,6 @@ jobs:
         working-directory: .
         run: bash scripts/release-hashes.sh
       - run: npx playwright install --with-deps chromium
-      - run: npm run e2e
       # the landing-only build (KOB_LANDING_ONLY, the mainnet front page): its own build in dist-landing/, the landing page at every address, no request but its own files
       - run: npm run e2e:landing
       - if: failure()
@@ -246,7 +357,89 @@ jobs:
             web/test-results
             web/playwright-report
 
+  web-build:
+    # The app under test, built once for the web-e2e shards: the kob-wasm bindings (web/wasm, which the mock server also loads) and the plain
+    # production build (web/dist, the `npm run build` the e2e would otherwise run itself, once per shard).
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run fetch-sdk
+      - name: kob-wasm bindings (installs wasm-bindgen-cli 0.2.100 under target/tools)
+        working-directory: .
+        run: bash scripts/build-wasm.sh --install-bindgen --web --slim
+      - run: npm run build:wasm -- --copy
+      - run: npm run build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-e2e-build
+          path: |
+            web/dist
+            web/wasm
+          if-no-files-found: error
+          retention-days: 1
+
+  web-e2e:
+    # The offline mock-stack Playwright e2e (about 700 tests, one worker: the shared mock server holds global state), split over 10 runners by
+    # Playwright's own sharding. Each shard downloads the build of web-build (KOB_E2E_NO_BUILD=1: the e2e does not rebuild).
+    needs: [changes, web-build]
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run fetch-sdk
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-e2e-build
+          path: web
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e -- --shard=${{ matrix.shard }}/10
+        env:
+          KOB_E2E_NO_BUILD: "1"
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-playwright-report-${{ matrix.shard }}
+          path: |
+            web/test-results
+            web/playwright-report
+
   reproducible:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    # Not run for a web-only push (it takes 10 to 16 minutes, longer than the sharded e2e): a Rust push and the weekly schedule run it.
     # The release outputs are built twice, from two checkouts at different paths (a/ and b/) with their own target and node_modules
     # directories and no cache, and every file must come out identical: the web bundle (web/dist, with the kob-wasm bindings it embeds,
     # scripts/build-wasm.sh --web --slim) and the kobd release binary. A difference means the output depends on the build
