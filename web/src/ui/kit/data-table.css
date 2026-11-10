@@ -19,8 +19,9 @@
 /* an amount: the number is one piece (never broken), its unit follows it in the small muted style and may wrap on its own */
 .dt-val { white-space: nowrap; }
 .dt-unit { color: var(--muted); font-size: 0.82em; margin-left: 0.3em; overflow-wrap: anywhere; }
-.dt-card-only { display: none; }
 .dt-sub { display: block; color: var(--muted); font-size: 0.76rem; font-weight: 400; }
+/* after .dt-sub (same weight): a card-only line (the market cell's "Sell · GTD", which the table has columns for) is not drawn in the table */
+.dt-card-only { display: none; }
 .dt-muted { color: var(--muted); }
 .dt-time { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .dt-side-buy { color: var(--buy); font-weight: 600; }
