@@ -40,7 +40,8 @@ body:has(.market-page) .container { max-width: 1520px; }
    takes no height of its own (contain: size), it fills the rows it spans, and the form scrolls inside it (ticket.css .tk-scroll) with the button pinned at the
    bottom. A floor keeps it usable when the panels beside it are short. A phone is one column: the panel has a fixed height of its own, so nothing under it moves. */
 @media (max-width: 759px) {
-  .mkt-area-ticket .tk:has(> .tk-scroll) { height: min(85dvh, 46rem); }
+  /* as tall as its whole Limit form (--tk-fit, measured by the ticket once per width), never taller than the screen */
+  .mkt-area-ticket .tk:has(> .tk-scroll) { height: min(85dvh, var(--tk-fit, 46rem)); }
 }
 /* under the grid, on the full width of the page (siblings of .mkt-grid): the activity log (ui/activity), then the facts */
 .mkt-area-details { min-width: 0; }

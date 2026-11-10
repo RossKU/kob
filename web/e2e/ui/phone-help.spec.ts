@@ -1,4 +1,4 @@
-// Field help of the ticket wraps (a phone has no hover tooltip) instead of ending in an ellipsis. Mock stack.
+// Field help of the ticket: off at first on a phone (the form fits its panel), shown by the title row's "?"; it wraps (a phone has no hover tooltip) instead of ending in an ellipsis. Mock stack.
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 import { pickType } from '../helpers/ticket';
@@ -12,6 +12,11 @@ test.describe('phone, 390 px wide', () => {
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'stopMarket', 'sell'); // the longest help texts
+    // a phone hides the field help at first (the form fits the panel); the title row's "?" shows it
+    await expect(page.getByTestId('order-type-help')).toBeHidden();
+    await page.getByTestId('order-help-toggle').click();
+    await expect(page.getByTestId('order-help-toggle')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('order-type-help')).toBeVisible();
     const cut = await page.evaluate(() =>
       [...document.querySelectorAll<HTMLElement>('.tk-help, .tk-sub')].map((el) => ({ text: (el.textContent ?? '').slice(0, 40), ws: getComputedStyle(el).whiteSpace, over: el.scrollWidth - el.clientWidth })).filter((r) => r.ws === 'nowrap' || r.over > 1),
     );

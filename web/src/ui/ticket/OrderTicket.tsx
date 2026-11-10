@@ -29,7 +29,7 @@ import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { useFailoverState } from '../shell/failover';
 import { useCongestion } from './use-congestion';
-import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
+import { SendStatusToast, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
 import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, retimeLead } from '../confirm/signing-time';
 import { oppositeSide } from '../market/orientation';
@@ -96,6 +96,7 @@ const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
 
 /** A plan that takes longer than this shows its "Calculating..." indicator; a background re-plan on a tick is over before and shows nothing. */
 const PENDING_SHOW_MS = 500;
+const HELP_KEY = 'kob.ticket.help';
 
 /** `on` once it has been on for `ms` (false again the moment it goes off). */
 function useDelayedFlag(on: boolean, ms: number): boolean {
@@ -720,9 +721,30 @@ export function OrderTicket(props: OrderTicketProps) {
       : { amount: formatUnits(tokenBalance, token.decimals, { group: ',' }), unit: ticker };
   const available = enabled && env ? spendBalance : undefined;
 
-  // the height of the whole Limit form (folded, no ladder), panel and footer included, for the market page: on two and three columns its row is at least that
+  // the height of the whole Limit form (folded, no ladder), panel and footer included, for the market page: on two and three columns its row is at least that (a phone: the panel is that)
   // tall (market.css --tk-fit), so the form does not scroll. Measured once per width (again once the fonts and the data are first in), never on what
   // comes and goes in the form later (another type, a ladder, an expiry, a reason): that never moves the page
+  // the field help under the inputs (the title row's "?" shows or hides it, kept in this browser): on a phone it is off at first, so the form fits the panel
+  // without scrolling; beside the book (two and three columns) it is on at first, the row has the room for it
+  const [helpOn, setHelpOn] = useState(() => {
+    try {
+      const kept = localStorage.getItem(HELP_KEY);
+      if (kept === '1' || kept === '0') return kept === '1';
+    } catch {
+      /* nothing kept */
+    }
+    return typeof matchMedia === 'function' && matchMedia('(min-width: 760px)').matches;
+  });
+  const toggleHelp = () => {
+    const on = !helpOn;
+    setHelpOn(on);
+    try {
+      localStorage.setItem(HELP_KEY, on ? '1' : '0');
+    } catch {
+      /* not kept */
+    }
+  };
+
   const tkRef = useRef<HTMLElement>(null);
   const fit = useRef({ w: -1, fonts: false, data: false });
   const fitShape = form.type === 'limit' && !ladder;
@@ -778,7 +800,7 @@ export function OrderTicket(props: OrderTicketProps) {
   }
 
   return (
-    <section ref={tkRef} class="tk" data-testid="order-ticket" data-type={form.type} data-side={form.side} data-shown-side={shownSide} data-inverted={inverted ? '1' : '0'} aria-busy={pending || envLoading ? 'true' : 'false'}>
+    <section ref={tkRef} class={`tk${helpOn ? '' : ' tk-help-off'}`} data-testid="order-ticket" data-type={form.type} data-side={form.side} data-shown-side={shownSide} data-inverted={inverted ? '1' : '0'} aria-busy={pending || envLoading ? 'true' : 'false'}>
       {/* the panel has the height of its row of the page (market.css) and never changes it: the form scrolls inside .tk-scroll, the reason slot and the button are the
           footer, pinned to the bottom of the panel, so nothing that comes or goes in the form moves the button or anything beside or under the ticket */}
       <div class="tk-scroll" data-testid="order-scroll">
@@ -786,6 +808,17 @@ export function OrderTicket(props: OrderTicketProps) {
           PENDING_SHOW_MS (a background re-plan on a tick is over before that and shows nothing) */}
       <div class="tk-titlerow">
         <h2>{t('ticket.title')}</h2>
+        <button
+          type="button"
+          class="tk-help-toggle"
+          aria-pressed={helpOn ? 'true' : 'false'}
+          title={t(helpOn ? 'ticket.helpToggle.hide' : 'ticket.helpToggle.show')}
+          aria-label={t('ticket.helpToggle.label')}
+          data-testid="order-help-toggle"
+          onClick={toggleHelp}
+        >
+          ?
+        </button>
         {pendingShown ? (
           <span class="tk-pending" data-testid="order-pending">
             <Loading text={t('ticket.pending')} />
@@ -896,9 +929,8 @@ export function OrderTicket(props: OrderTicketProps) {
           </ul>
         ) : null}
       </div>
-      {/* progress and the result of a click: one line above the button (a longer text scrolls in it); like the reason it takes no room when empty, and the
-          button is the footer's last line, pinned to the panel's bottom, so neither ever moves it */}
-      <div class="tk-status"><SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" /></div>
+      {/* progress and the result of a click: a card of the notifications at the top right (not in the footer), so it never moves or covers the form */}
+      <SendStatusToast sender={sender} lead={ladderLead} data-testid="order-status" />
       <Button variant="primary" block class="tk-place" data-side={form.side} onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
         <span key={enterText ?? `${sideName}|${typeName}`} data-state={enterText ? 'enter' : undefined}>{enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>

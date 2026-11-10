@@ -13,7 +13,12 @@
 .tk-plain { padding: 14px var(--gutter); }
 /* the title row has a fixed height; the "Calculating..." indicator is an overlay at its right end, so it never changes the layout of the ticket */
 .tk-titlerow { position: relative; display: flex; align-items: center; min-height: 2.25rem; }
-.tk-pending { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+/* the field help is off unless the title row's "?" asks for it: the form fits its panel (a hint is still the field's tooltip on hover) */
+.tk-help-off .tk-help { display: none; }
+.tk-help-toggle { margin-left: auto; width: 26px; height: 26px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 0.85rem; font-weight: 600; line-height: 1; cursor: pointer; display: inline-grid; place-items: center; padding: 0; }
+.tk-help-toggle[aria-pressed='true'] { color: var(--primary); border-color: var(--primary); }
+.tk-help-toggle:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+.tk-pending { position: absolute; right: 34px; top: 50%; transform: translateY(-50%); }
 .tk-pending .loading-row { margin: 0; }
 .tk h3 { margin: 0 0 6px; font-size: 1.05rem; }
 .tk h4 { margin: 12px 0 4px; font-size: 0.95rem; }
