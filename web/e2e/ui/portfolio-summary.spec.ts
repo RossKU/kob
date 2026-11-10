@@ -1,4 +1,5 @@
-// The four summary cards over the Portfolio's tabs (Total value, Available, In your orders, Open orders), on the Portfolio page and in a market page's panel: at every
+// The four summary cards over the Portfolio's tabs (Total value, Available, In your orders, Open orders) on the Portfolio page (a market page's panel has no cards: its
+// Balances tab opens with one line of the money figures, checked below): at every
 // width from 360 to 1600 px (steps of 40) the value row of each card is one line (number and unit side by side, nothing broken), the cards are one height with their
 // labels and values on common lines, the Total reads to two decimals without a "≈" and carries an "Estimate (?)" tag whose popover opens by a click and by the keyboard
 // (and holds the note about tokens without a price, which is not in the card any more). Mock stack.
@@ -53,6 +54,32 @@ async function problems(root: Locator, where: string): Promise<string[]> {
       const free = c.getBoundingClientRect().bottom - c.querySelector('.pf-v')!.getBoundingClientRect().bottom;
       if (free > 16) bad.push(`${w}: ${Math.round(free)}px of empty space under a value`);
     }
+    return bad;
+  }, where);
+}
+
+/** What is wrong with the one-line summary of a market page's Balances tab in `root`, as sentences. */
+async function lineProblems(root: Locator, where: string): Promise<string[]> {
+  return root.evaluate((el, w) => {
+    const bad: string[] = [];
+    const line = el.querySelector<HTMLElement>('[data-testid="portfolio-summary"]');
+    if (!line) return [`${w}: no summary line`];
+    const items = [...line.querySelectorAll<HTMLElement>('.bal-item')];
+    if (items.length !== 3) bad.push(`${w}: ${items.length} items`);
+    for (const it of items) {
+      const v = it.querySelector<HTMLElement>('.bal-v')!;
+      const cs = getComputedStyle(v);
+      const lh = cs.lineHeight === 'normal' ? 1.25 * parseFloat(cs.fontSize) : parseFloat(cs.lineHeight);
+      if (v.getBoundingClientRect().height > 1.3 * lh + 0.5) bad.push(`${w}: the figure "${v.textContent}" is on several lines`);
+      if (v.scrollWidth > v.clientWidth + 1) bad.push(`${w}: the figure "${v.textContent}" is cut`);
+      for (const part of v.querySelectorAll<HTMLElement>('.dt-val, .dt-unit')) if (part.getBoundingClientRect().height > 1.3 * lh + 0.5) bad.push(`${w}: "${part.textContent}" is on several lines`);
+      const r = it.getBoundingClientRect();
+      if (r.right > line.getBoundingClientRect().right + 1) bad.push(`${w}: an item sticks out of the line`);
+    }
+    // the line is as tall as one row of items when they fit (the items wrap between each other on a narrow panel, never inside)
+    const refresh = line.querySelector<HTMLElement>('.bal-refresh');
+    if (!refresh) bad.push(`${w}: no Refresh`);
+    else if (Math.abs(refresh.getBoundingClientRect().right - line.getBoundingClientRect().right) > 1) bad.push(`${w}: Refresh is not at the right end`);
     return bad;
   }, where);
 }
@@ -113,13 +140,16 @@ for (const width of ALL) {
     await expect(detail).toHaveCount(0);
     expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))).toBe('portfolio-estimate');
 
-    // a market page's panel: the same cards
+    // a market page's panel: no cards; the Balances tab opens with ONE line of the money figures (Total with its Estimate tag, Available, In orders; Refresh at its right end)
     const token = await mock.token();
     await page.goto(`/#/market/${token.covenant_id}`);
     const mine = page.getByTestId('market-orders');
+    await mine.getByTestId('orders-tab-balances').click();
     await expect(mine.getByTestId('portfolio-total')).toContainText('KAS');
+    await expect(mine.locator('.pf-strip, .pf-stat')).toHaveCount(0);
+    await expect(mine.getByTestId('portfolio-open-count')).toHaveCount(0);
     await page.waitForTimeout(500);
-    found.push(...(await problems(mine, `market`)));
+    found.push(...(await lineProblems(mine, `market`)));
     await mine.scrollIntoViewIfNeeded();
     await shot(page, mine, `${theme}-${width}-market`);
     await expect(mine.getByTestId('portfolio-estimate')).toBeVisible();

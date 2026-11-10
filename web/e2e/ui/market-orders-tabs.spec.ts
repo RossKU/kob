@@ -46,13 +46,14 @@ for (const width of [390, 800, 1280]) {
         await expect(panel.getByTestId(`portfolio-panel-${panelId}`)).toBeVisible();
         await shot(id);
       }
+      // the Balances tab (the last one clicked) opens with the one-line summary, and the page's cards are not drawn in the panel; its figures are whole
+      await expect(panel.locator('.pf-strip')).toHaveCount(0);
+      await expect(panel.getByTestId('portfolio-summary')).toBeVisible();
+      const cut = await panel.locator('.bal-v, .bal-v > span').evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
+      expect.soft(cut, 'summary figures cut').toEqual([]);
       // and back to the first
       await panel.getByTestId('orders-tab-active').click({ timeout: 5_000 });
       await expect(panel.getByTestId('portfolio-panel-open')).toBeVisible();
-
-      // the summary figures are whole
-      const cut = await panel.locator('.pf-v, .pf-v > span').evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
-      expect.soft(cut, 'summary figures cut').toEqual([]);
 
       // the panel is as wide as the content under the grid (the activity log, when there is one, else the page container)
       const pw = (await panel.boundingBox())!.width;

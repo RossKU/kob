@@ -45,6 +45,9 @@ export default {
   'orders.summary.available': 'Available',
   'orders.summary.inOrders': 'In your orders',
   'orders.summary.open': 'Open orders',
+  'orders.line.total': 'Total',
+  'orders.line.available': 'Available',
+  'orders.line.inOrders': 'In orders',
   'orders.balances.asset': 'Asset',
   'orders.balances.available': 'Available',
   'orders.balances.kasOnTokensPlus': 'plus on your token UTXOs',
@@ -447,6 +450,7 @@ export default {
 
   'orders.balances.title': 'Balances the wallet does not show',
   'orders.balances.tokens': 'Tokens',
+  'orders.balances.notShown': 'These are the balances your wallet does not show.',
   'orders.balances.inOrders': 'In your orders',
   'orders.balances.strays': 'Strays',
   'orders.balances.empty': 'No tokens and nothing locked in orders.',

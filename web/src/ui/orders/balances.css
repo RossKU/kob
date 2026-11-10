@@ -45,6 +45,18 @@
 .pf-money { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 0 4px; }
 .pf-v .dt-unit { margin-left: 0; font-size: max(0.62rem, 0.6em); font-weight: 600; color: var(--muted); }
 .bal-nw { white-space: nowrap; }
+/* a market page's Balances tab: the money figures as one line, Refresh at its right end. The items wrap between each other (a dot closes each but the last); a figure is one piece */
+.bal-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-bottom: 10px; }
+.bal-items { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; min-width: 0; }
+.bal-item { display: inline-flex; flex-wrap: nowrap; align-items: baseline; gap: 6px; white-space: nowrap; font-size: 0.9rem; }
+.bal-item:not(:last-child)::after { content: '·'; margin: 0 10px; color: var(--muted); }
+.bal-k { color: var(--muted); font-size: 0.82rem; }
+.bal-v { font-weight: 650; font-variant-numeric: tabular-nums; }
+.bal-v .dt-unit { margin-left: 0; font-size: 0.8em; font-weight: 600; color: var(--muted); }
+.bal-item .tip-tag { align-self: center; }
+.bal-line .bal-refresh { margin-left: auto; }
+/* a narrow panel: the items wrap onto lines of their own, so no dot between them */
+@container pf (max-width: 599px) { .bal-item:not(:last-child)::after { content: none; } .bal-items { column-gap: 14px; } }
 /* four across where the longest figure fits a quarter of the panel (1000 px), else two by two */
 @container pf (max-width: 999px) {
   .pf-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }

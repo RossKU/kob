@@ -2,6 +2,8 @@ import { useMemo } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { decimalsNote, displayToken } from '../../app/token-display';
 import { useFiat } from '../../app/use-fiat';
+import { kasValueTitle } from '../../app/fiat';
+import { TipBadge } from '../market/TipBadge';
 import { TokenNote } from '../market/TokenNote';
 import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
@@ -76,6 +78,8 @@ export function BalancesPanel(props: {
   onlyTokens?: ReadonlySet<Hex>;
   /** kascov.io's picture of a token, for its icon */
   iconOf?: (covenantId: string) => KascovMeta | null;
+  /** a market page's panel: no heading; the money figures are one line at the top (the page's summary cards are the account overview of the Portfolio page only) */
+  compact?: boolean;
 }) {
   const services = useServices();
   const { registry } = services;
@@ -126,8 +130,39 @@ export function BalancesPanel(props: {
     [combined, registry],
   );
 
+  const refresh = <Button small class="bal-refresh" onClick={free.reload} loading={free.loading && !!free.data}>{t('common.refresh')}</Button>;
+  const sum = props.balances.summary;
+  const money = (kas: bigint | null, testid: string, fraction?: number) => (
+    <span class="bal-v num" data-testid={testid} title={kas !== null ? kasValueTitle(kas, fiat) : undefined}><MoneyCell kas={kas} {...(fraction !== undefined ? { fraction } : {})} class="pf-money" /></span>
+  );
   return (
-    <Section title={t('orders.balances.title')} data-testid="balances-panel" actions={<Button small onClick={free.reload} loading={free.loading && !!free.data}>{t('common.refresh')}</Button>}>
+    <Section
+      {...(props.compact ? { class: 'bal-embed' } : { title: t('orders.balances.title'), actions: refresh })}
+      data-testid="balances-panel"
+    >
+      {props.compact ? (
+        // the money figures, one line (the items wrap between each other, a figure never breaks), Refresh at the right end
+        <div class="bal-line" data-testid="portfolio-summary" data-currency={fiat ? 'usd' : 'kas'}>
+          <div class="bal-items">
+            <span class="bal-item">
+              <span class="bal-k">{t('orders.line.total')}</span>
+              {money(sum ? sum.total : null, 'portfolio-total', 2)}
+              {sum ? (
+                <TipBadge
+                  variant="tag"
+                  label={t('orders.summary.estimate')}
+                  detail={sum.unpriced > 0 ? `${t(fiat ? 'orders.summary.estimateTipUsd' : 'orders.summary.estimateTip')} ${t('orders.summary.unpriced', { n: sum.unpriced })}` : t(fiat ? 'orders.summary.estimateTipUsd' : 'orders.summary.estimateTip')}
+                  data-testid="portfolio-estimate"
+                  data-detail-testid="portfolio-estimate-detail"
+                />
+              ) : null}
+            </span>
+            <span class="bal-item"><span class="bal-k">{t('orders.line.available')}</span>{money(sum ? sum.kasFree : null, 'portfolio-available')}</span>
+            <span class="bal-item"><span class="bal-k">{t('orders.line.inOrders')}</span>{money(sum ? sum.kasLocked : null, 'portfolio-in-orders')}</span>
+          </div>
+          {refresh}
+        </div>
+      ) : null}
       {free.loading && !free.data ? <BalancesSkeleton /> : null}
       <ErrorBanner error={free.error} onRetry={free.reload} />
       {free.data && free.data.errors.length ? (
@@ -135,7 +170,7 @@ export function BalancesPanel(props: {
       ) : null}
       {combined && free.data ? (
         <div class="tk-in">
-          <p class="dt-caption small muted">{t('orders.balances.tokens')}</p>
+          {props.compact ? null : <p class="dt-caption small muted">{t('orders.balances.tokens')}</p>}
           <DataTable id="balances" grid="balances" label={t('orders.balances.tokens')} cols={sortCols} sort={sort} own={null} onSort={setSort} sortable={tokensOnShow.length > 1} data-testid="token-balances-table">
             {/* KAS first: what the wallet can spend, what its orders hold, and the KAS that rides on its token coins (counted in the total) */}
             <DtGroup data-testid="kas-balance" class="bal-kas">
@@ -243,7 +278,7 @@ export function BalancesPanel(props: {
             <p class="muted small" style="margin:6px 0 0" data-testid="kas-on-tokens-note">{t('orders.balances.kasOnTokensNote')}</p>
           )}
           {combined.tokens.some((b) => b.strays > 0n) ? <p class="small" data-testid="strays-note">{t('orders.balances.straysNote')}</p> : null}
-          <p class="small muted" data-testid="balances-old-holdings">{t('orders.balances.oldHoldings')}</p>
+          <p class="small muted" data-testid="balances-old-holdings">{props.compact ? `${t('orders.balances.notShown')} ` : ''}{t('orders.balances.oldHoldings')}</p>
           {combined.lostStrayTokens > 0n ? <Banner tone="warn" data-testid="strays-lost">{t('orders.balances.straysLost')}</Banner> : null}
         </div>
       ) : null}

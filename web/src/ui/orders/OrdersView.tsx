@@ -602,7 +602,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
         </Banner>
       ) : null}
 
-      {(
+      {embed ? null : (
       <div class="pf-strip" data-testid="portfolio-summary" data-currency={fiat ? 'usd' : 'kas'}>
         <div class="pf-stat">
           <div class="pf-kline">
@@ -668,6 +668,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 onMergeToken={mergeToken}
                 balances={balances}
                 iconOf={iconOf}
+                {...(embed ? { compact: true } : {})}
                 {...(embed && onlyHere ? { onlyTokens: new Set([embed.base, ...(embed.quote ? [embed.quote] : [])]) } : {})}
               />
             ) : data.loading ? (
