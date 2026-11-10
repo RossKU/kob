@@ -1,10 +1,11 @@
 // The KAS/USD price feed of the optional USD display: one store for the whole page and the loop that fills it.
 //
 // The loop runs only while USD is the display currency (app/currency-pref.ts), asks the indexer (`kasUsd`, data/kas-price.ts) once at the start and then every
-// KAS_USD_POLL_MS (5 minutes) while the page is shown, and once more when the page is shown again after a poll was due. An indexer that has no such route (null:
-// 404) is "unavailable" and is asked again only after KAS_USD_RETRY_UNSUPPORTED_MS; a failed read keeps the last quote (its age decides whether it is still used,
-// app/fiat.ts). Nothing here is authority for anything signed.
-import { KAS_USD_POLL_MS, KAS_USD_RETRY_UNSUPPORTED_MS, type KasUsdQuote } from '../data/kas-price';
+// KAS_USD_POLL_MS (a minute) while the page is shown, and once more when the page is shown again after a poll was due. An indexer that has no such route (null:
+// 404) is "unavailable" and is asked again only after KAS_USD_RETRY_UNSUPPORTED_MS; a failed read (a 503 before the indexer's first price, a network error) keeps the
+// last quote (its age decides whether it is still used, app/fiat.ts) and doubles the wait up to KAS_USD_MAX_BACKOFF_MS, which the first success resets. Nothing here is
+// authority for anything signed.
+import { KAS_USD_MAX_BACKOFF_MS, KAS_USD_POLL_MS, KAS_USD_RETRY_UNSUPPORTED_MS, type KasUsdQuote } from '../data/kas-price';
 import type { IndexerApi } from '../data/indexer';
 import type { PriceFeed } from './fiat';
 
@@ -56,6 +57,7 @@ export interface FeedDeps {
   store?: KasPriceStore;
   pollMs?: number;
   retryUnsupportedMs?: number;
+  maxBackoffMs?: number;
   tickMs?: number;
   now?: () => number;
   visible?: () => boolean;
@@ -73,6 +75,7 @@ export function startKasPriceFeed(d: FeedDeps): () => void {
   const store = d.store ?? kasPrice;
   const pollMs = d.pollMs ?? KAS_USD_POLL_MS;
   const retryMs = d.retryUnsupportedMs ?? KAS_USD_RETRY_UNSUPPORTED_MS;
+  const maxBackoffMs = d.maxBackoffMs ?? KAS_USD_MAX_BACKOFF_MS;
   const tickMs = d.tickMs ?? PRICE_TICK_MS;
   const now = d.now ?? Date.now;
   const visible = d.visible ?? (() => typeof document === 'undefined' || document.visibilityState !== 'hidden');
@@ -80,6 +83,8 @@ export function startKasPriceFeed(d: FeedDeps): () => void {
   const cancel = d.clearTimeout ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
   let stopped = false;
   let busy = false;
+  // failed reads in a row: each doubles the wait, a success resets it
+  let fails = 0;
   let timer: unknown = null;
   let ticker: unknown = null;
   // the earliest the next read may happen (ms on `now`); a hidden page leaves it due
@@ -104,8 +109,11 @@ export function startKasPriceFeed(d: FeedDeps): () => void {
       const fn = d.indexer?.kasUsd;
       const q = fn && d.indexer ? await fn.call(d.indexer, { priority: 'low', ...(ctl ? { signal: ctl.signal } : {}) }) : null;
       if (stopped) return;
-      if (q) store.received(q, now());
-      else {
+      if (q) {
+        fails = 0;
+        store.received(q, now());
+      } else {
+        fails = 0;
         // no such route here (another indexer after a failover, or one with the price off): an older quote is dropped, it would only age
         store.update((s) => ({ ...s, quote: null, seenAtMs: null, status: 'unavailable', nowMs: now() }));
         wait = retryMs;
@@ -114,6 +122,8 @@ export function startKasPriceFeed(d: FeedDeps): () => void {
       if (stopped) return;
       // the last quote is kept: its age decides whether it is still used
       store.update((s) => ({ ...s, status: 'error', nowMs: now() }));
+      fails += 1;
+      wait = Math.min(pollMs * 2 ** fails, Math.max(maxBackoffMs, pollMs));
     } finally {
       busy = false;
     }

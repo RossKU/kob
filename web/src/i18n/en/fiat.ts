@@ -6,7 +6,7 @@ export default {
   'settings.currency.kas': 'KAS',
   'settings.currency.usd': 'USD',
   'settings.currency.hint':
-    'USD uses the KAS price your indexer fetches (CoinGecko, or a volume-weighted average of several exchanges when CoinGecko is out of reach): it is an estimate, not a quote. Your browser asks only your indexer, never a price site. Applies at once and is kept in this browser. If the price is missing or older than 30 minutes, KAS is shown.',
+    'USD uses the KAS price your indexer fetches (CoinGecko, or a volume-weighted average of several exchanges when CoinGecko is out of reach): it is an estimate, not a quote. Your browser asks only your indexer, never a price site. Applies at once and is kept in this browser. If the price is missing or older than 10 minutes, KAS is shown.',
   'fiat.age.under': 'under a minute',
   'fiat.age.min': '{n} min',
   'fiat.age.hours': '{h} h {m} min',

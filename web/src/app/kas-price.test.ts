@@ -31,17 +31,17 @@ describe('the KAS price feed', () => {
     };
   }
 
-  it('reads once at the start, then every 5 minutes, and keeps each quote with the time it was first seen', async () => {
+  it('reads once at the start, then every minute, and keeps each quote with the time it was first seen', async () => {
     const t = setup((n) => Q(0.03 + n / 1000, Date.now() / 1000));
     await vi.advanceTimersByTimeAsync(0);
     expect(t.calls()).toBe(1);
     expect(t.store.snapshot).toMatchObject({ status: 'ok', quote: { usd: 0.031 } });
     expect(t.seen[0]).toMatchObject({ priority: 'low' });
-    await vi.advanceTimersByTimeAsync(299_000);
+    await vi.advanceTimersByTimeAsync(59_000);
     expect(t.calls()).toBe(1);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(t.calls()).toBe(2);
-    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(t.calls()).toBe(3);
     expect(t.store.snapshot.quote?.usd).toBe(0.033);
     t.stop();
@@ -54,7 +54,7 @@ describe('the KAS price feed', () => {
     const t = setup(() => Q(0.03, at));
     await vi.advanceTimersByTimeAsync(0);
     const first = t.store.snapshot.seenAtMs;
-    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(t.calls()).toBe(2);
     expect(t.store.snapshot.seenAtMs).toBe(first);
     t.stop();
@@ -75,7 +75,7 @@ describe('the KAS price feed', () => {
     t.show();
     await vi.advanceTimersByTimeAsync(0);
     expect(t.calls()).toBe(2);
-    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(t.calls()).toBe(3);
     t.stop();
   });
@@ -99,12 +99,12 @@ describe('the KAS price feed', () => {
 
   it('an indexer without the route is unavailable, any older quote is dropped, and it is asked again only much later', async () => {
     let n = 0;
-    const t = setup(() => (++n === 1 ? Q(0.03, Date.now() / 1000) : null), { pollMs: 60_000, retryUnsupportedMs: 30 * 60_000 });
+    const t = setup(() => (++n === 1 ? Q(0.03, Date.now() / 1000) : null), { retryUnsupportedMs: 10 * 60_000 });
     await vi.advanceTimersByTimeAsync(0);
     expect(t.store.snapshot.quote).not.toBeNull();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(t.store.snapshot).toMatchObject({ status: 'unavailable', quote: null, seenAtMs: null });
-    await vi.advanceTimersByTimeAsync(29 * 60_000);
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
     expect(t.calls()).toBe(2);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(t.calls()).toBe(3);
@@ -124,18 +124,59 @@ describe('the KAS price feed', () => {
     stop2();
   });
 
-  it('a failed read keeps the last quote and tries again at the normal pace', async () => {
+  it('a failed read keeps the last quote and the next read waits twice as long', async () => {
     let n = 0;
     const t = setup(() => {
       if (++n === 2) throw new Error('503');
       return Q(0.03, Date.now() / 1000);
     });
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(t.calls()).toBe(2);
     expect(t.store.snapshot).toMatchObject({ status: 'error', quote: { usd: 0.03 } });
-    await vi.advanceTimersByTimeAsync(300_000);
+    // not at the normal pace: twice as long
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(t.calls()).toBe(2);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(t.calls()).toBe(3);
     expect(t.store.snapshot.status).toBe('ok');
+    t.stop();
+  });
+
+  it('failures in a row double the wait up to 10 minutes and a success brings back the minute', async () => {
+    let n = 0;
+    const fail = new Set([1, 2, 3, 4, 5, 6, 7]);
+    const t = setup(() => {
+      if (fail.has(++n)) throw new Error('429');
+      return Q(0.03, Date.now() / 1000);
+    });
+    const waitOf = async (): Promise<number> => {
+      // the minutes (in 10 s steps) until the next read after the one just made
+      const calls = t.calls();
+      let ms = 0;
+      while (t.calls() === calls && ms < 20 * 60_000) {
+        await vi.advanceTimersByTimeAsync(10_000);
+        ms += 10_000;
+      }
+      return ms / 60_000;
+    };
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.calls()).toBe(1);
+    // read 1 failed: 2, then 4, 8, then the cap of 10 (twice), the 7th read fails too, the 8th is ok
+    expect([await waitOf(), await waitOf(), await waitOf(), await waitOf(), await waitOf(), await waitOf(), await waitOf()]).toEqual([2, 4, 8, 10, 10, 10, 10]);
+    expect(t.calls()).toBe(8);
+    expect(t.store.snapshot.status).toBe('ok');
+    // ok: the next read is a minute later
+    expect(await waitOf()).toBe(1);
+    t.stop();
+  });
+
+  it('no quote is kept from an error before the first one, and the status says so', async () => {
+    const t = setup(() => {
+      throw new Error('503');
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.store.snapshot).toMatchObject({ status: 'error', quote: null });
     t.stop();
   });
 

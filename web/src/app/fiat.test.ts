@@ -82,7 +82,7 @@ describe('what is shown', () => {
     expect(fiatOf(resolveFiat({ ...base, currency: 'kas', feed: feed(quote()) }))).toBeNull();
   });
 
-  it('USD in force needs a quote that is there and not older than 30 minutes', () => {
+  it('USD in force needs a quote that is there and not older than 10 minutes', () => {
     const s = resolveFiat({ ...base, currency: 'usd', feed: feed(quote()) });
     expect(s.kind).toBe('usd');
     if (s.kind === 'usd') {
@@ -90,11 +90,11 @@ describe('what is shown', () => {
       expect(s.fiat.rate.usd).toBe(0.0298);
       expect(s.fiat.testnet).toBe(false);
     }
-    // the limit: 30 minutes is still fresh, a second more is stale
+    // the limit: 10 minutes is still fresh, a second more is stale
     const at = (ageS: number) => resolveFiat({ ...base, currency: 'usd', feed: feed(quote({ at: NOW / 1000 - ageS }), { seenAtMs: NOW - ageS * 1000 }) });
-    expect(KAS_USD_MAX_AGE_S).toBe(1800);
-    expect(at(1800).kind).toBe('usd');
-    const stale = at(1801);
+    expect(KAS_USD_MAX_AGE_S).toBe(600);
+    expect(at(600).kind).toBe('usd');
+    const stale = at(601);
     expect(stale).toMatchObject({ kind: 'fallback', reason: 'stale' });
     expect(fiatOf(stale)).toBeNull();
   });
@@ -110,16 +110,16 @@ describe('what is shown', () => {
   });
 
   it('a failed read keeps the last quote until it is too old', () => {
-    const q = quote({ at: NOW / 1000 - 600 });
-    expect(resolveFiat({ ...base, currency: 'usd', feed: feed(q, { seenAtMs: NOW - 600_000, status: 'error' }) }).kind).toBe('usd');
-    expect(resolveFiat({ ...base, currency: 'usd', feed: feed(q, { seenAtMs: NOW - 600_000, status: 'error' }), nowMs: NOW + 1_300_000 }).kind).toBe('fallback');
+    const q = quote({ at: NOW / 1000 - 300 });
+    expect(resolveFiat({ ...base, currency: 'usd', feed: feed(q, { seenAtMs: NOW - 300_000, status: 'error' }) }).kind).toBe('usd');
+    expect(resolveFiat({ ...base, currency: 'usd', feed: feed(q, { seenAtMs: NOW - 300_000, status: 'error' }), nowMs: NOW + 400_000 }).kind).toBe('fallback');
   });
 
   it('the age is the larger of the clock\'s and the time this browser has held the quote: a slow clock does not make an old quote young', () => {
     const q = quote({ at: NOW / 1000 + 3600 });
     expect(quoteAgeS(q, null, NOW)).toBe(0);
-    expect(quoteAgeS(q, NOW - 40 * 60_000, NOW)).toBe(2400);
-    expect(resolveFiat({ ...base, currency: 'usd', feed: feed(q, { seenAtMs: NOW - 40 * 60_000 }) })).toMatchObject({ kind: 'fallback', reason: 'stale' });
+    expect(quoteAgeS(q, NOW - 20 * 60_000, NOW)).toBe(1200);
+    expect(resolveFiat({ ...base, currency: 'usd', feed: feed(q, { seenAtMs: NOW - 20 * 60_000 }) })).toMatchObject({ kind: 'fallback', reason: 'stale' });
     // a fast clock fails safe (KAS), never a wrong number
     expect(quoteAgeS(quote({ at: NOW / 1000 - 5000 }), NOW, NOW)).toBe(5000);
   });
@@ -189,7 +189,7 @@ describe('conversion and text', () => {
     expect(n('loading')).toContain('Fetching');
     expect(n('unavailable')).toContain('serves no KAS price');
     expect(n('missing')).toContain('could not be read');
-    expect(n('stale', 2400)).toBe('The KAS price is 40 min old, too old to show: showing KAS.');
+    expect(n('stale', 1200)).toBe('The KAS price is 20 min old, too old to show: showing KAS.');
     for (const reason of ['loading', 'unavailable', 'stale', 'missing'] as const) expect(n(reason, 100)).not.toContain('{');
   });
 });

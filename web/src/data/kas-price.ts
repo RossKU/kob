@@ -9,12 +9,14 @@ export interface KasUsdQuote {
   source: string;
 }
 
-/** The app asks every 5 minutes, only while the page is shown and USD is the display currency (the server refreshes its upstream at most that often). */
-export const KAS_USD_POLL_MS = 5 * 60_000;
-/** A quote older than this (30 minutes) is not used: the display falls back to KAS. */
-export const KAS_USD_MAX_AGE_S = 30 * 60;
+/** The app asks every minute, only while the page is shown and USD is the display currency (the server refreshes its upstream at most that often, and a CDN keeps the answer a minute). */
+export const KAS_USD_POLL_MS = 60_000;
+/** After a failed read the wait doubles each time, up to this (10 minutes); the first success brings back the normal pace. */
+export const KAS_USD_MAX_BACKOFF_MS = 10 * 60_000;
+/** A quote older than this (10 minutes) is not used: the display falls back to KAS. */
+export const KAS_USD_MAX_AGE_S = 10 * 60;
 /** An indexer that has no such route (404) is asked again after this, ms. */
-export const KAS_USD_RETRY_UNSUPPORTED_MS = 30 * 60_000;
+export const KAS_USD_RETRY_UNSUPPORTED_MS = 10 * 60_000;
 
 /** A price this far out is nonsense (the server refuses it too). */
 const MAX_USD = 1_000;

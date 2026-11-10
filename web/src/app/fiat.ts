@@ -11,7 +11,7 @@
 import { KAS_USD_MAX_AGE_S, type KasUsdQuote } from '../data/kas-price';
 import { t } from '../i18n';
 import { formatRational, significantDp, type Rational } from '../kob/pair';
-import { SOMPI_PER_KAS } from '../kob/units';
+import { formatKas, SOMPI_PER_KAS } from '../kob/units';
 import type { DisplayCurrency } from './currency-pref';
 
 /** The KAS price as an exact rational (USD per KAS, nine decimals: the price is a display figure and the products below are exact on it). */
@@ -154,3 +154,9 @@ export function fallbackNotice(s: Extract<FiatState, { kind: 'fallback' }>): str
 
 /** The short tooltip tail of one USD value: the price it used. */
 export const rateTitle = (f: Fiat): string => t('fiat.cell.rate', { price: usdText({ num: f.rate.num, den: f.rate.den }) });
+
+/** A KAS value (`sompi`) as the Portfolio shows it: dollars (`$1,066.77`) when USD is in force, else KAS with thousands grouped (no unit). */
+export const kasValueText = (sompi: bigint, fiat: Fiat | null): string => (fiat ? usdText(sompiToUsd(sompi, fiat.rate)) : formatKas(sompi, { group: ',' }));
+
+/** The tooltip of a value shown in USD: its exact KAS figure and the rate used; none while KAS is shown. */
+export const kasValueTitle = (sompi: bigint, fiat: Fiat | null): string | undefined => (fiat ? `${formatKas(sompi, { group: ',' })} KAS · ${rateTitle(fiat)}` : undefined);
