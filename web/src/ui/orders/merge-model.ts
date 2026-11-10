@@ -8,7 +8,9 @@ import { mergeCandidates, mergeSlots, outpointOf, type MergeLink, type MergePlan
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { formatKas } from '../../kob/order-facts';
 import type { TokenInfo } from '../../kob/registry';
-import type { Hex, TokenUtxo } from '../../kob/types';
+import type { KobWasm } from '../../kob/wasm';
+import { extensionOfState, familyOfProgram } from '../../kob/token-state';
+import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
 import type { FlowStep } from './TxFlow';
 
 const LIVE = new Set(['open', 'partial']);
@@ -41,12 +43,52 @@ export function mergeTokenOf(token: TokenInfo): MergeToken | null {
   return { covenantId: token.covenantId, program: token.program, templateHash: token.templateHash, extensionCommitment: token.extensionCommitment, slots: token.slots };
 }
 
-/** Per token: how many of the wallet's free UTXOs a merge may take (tokens with fewer than two are left out). */
-export function mergeableCounts(freeTokens: readonly TokenUtxo[], tokens: ReadonlyMap<Hex, TokenInfo>, maker: Hex, reserved: ReadonlySet<string>): Map<Hex, number> {
+/** What a token outside the registry is merged with: the build's templates (slots, template hash) and the program the node verified its UTXOs under (balances-data.ts `programOf`). */
+export interface UnlistedMerge {
+  kob: Pick<KobWasm, 'templates'>;
+  programs: ReadonlyMap<Hex, TokenProgram>;
+}
+
+/**
+ * The merge token of a token the registry does not list (an open-list or foreign KCC-20 / KRON the wallet holds): its program is the node-verified one, its template
+ * hash and input slots are those of that program's pinned template, and its extension commitment is the one the wallet's own plain UTXOs of it share (the one most of them
+ * carry when they differ: `mergeCandidates` then takes only those). Null without a verified program, a pinned template or a UTXO to merge.
+ */
+export function unlistedMergeToken(
+  id: Hex, freeTokens: readonly TokenUtxo[], maker: Hex, reserved: ReadonlySet<string>, unlisted: UnlistedMerge,
+): MergeToken | null {
+  const program = unlisted.programs.get(id);
+  const tpl = program ? unlisted.kob.templates().find((x) => x.name === program && x.tokenSlots) : undefined;
+  if (!program || !tpl?.tokenSlots) return null;
+  const base: MergeToken = { covenantId: id, program, templateHash: tpl.hash, extensionCommitment: null, slots: { inputs: tpl.tokenSlots[0] } };
+  if (familyOfProgram(program) === 'kron') return base;
+  // candidates under any extension, grouped by it: the commitment held by the most of them (ties: the smaller one, so the choice never flips)
+  const byExt = new Map<Hex, number>();
+  for (const u of mergeCandidates(freeTokens, base, maker, reserved)) {
+    const ext = extensionOfState(u.state);
+    if (ext) byExt.set(ext, (byExt.get(ext) ?? 0) + 1);
+  }
+  const best = [...byExt].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0];
+  return best ? { ...base, extensionCommitment: best[0] } : null;
+}
+
+/** The token to merge for a held token id: the registry's (unchanged), else, when `unlisted` is given, the one built from its node-verified program and the wallet's UTXOs. */
+export function mergeTokenFor(
+  id: Hex, freeTokens: readonly TokenUtxo[], tokens: ReadonlyMap<Hex, TokenInfo>, maker: Hex, reserved: ReadonlySet<string>, unlisted?: UnlistedMerge,
+): MergeToken | null {
+  const info = tokens.get(id);
+  if (info) return mergeTokenOf(info);
+  return unlisted ? unlistedMergeToken(id, freeTokens, maker, reserved, unlisted) : null;
+}
+
+/**
+ * Per token: how many of the wallet's free UTXOs a merge may take (tokens with fewer than two are left out). `unlisted`: tokens outside the registry are merged too,
+ * under their node-verified program (`unlistedMergeToken`).
+ */
+export function mergeableCounts(freeTokens: readonly TokenUtxo[], tokens: ReadonlyMap<Hex, TokenInfo>, maker: Hex, reserved: ReadonlySet<string>, unlisted?: UnlistedMerge): Map<Hex, number> {
   const out = new Map<Hex, number>();
   for (const id of new Set(freeTokens.map((u) => u.covenantId).filter((x): x is Hex => !!x))) {
-    const info = tokens.get(id);
-    const mt = info ? mergeTokenOf(info) : null;
+    const mt = mergeTokenFor(id, freeTokens, tokens, maker, reserved, unlisted);
     if (!mt) continue;
     const n = mergeCandidates(freeTokens, mt, maker, reserved).length;
     if (n >= 2) out.set(id, n);
@@ -59,11 +101,10 @@ export function mergeableCounts(freeTokens: readonly TokenUtxo[], tokens: Readon
  * (the smallest ones, `mergeCandidates` order, up to the program's inputs) less the carrier the merged UTXO keeps (the largest input's, at most the
  * default carrier: kob/merge.ts `mergedCarrier`). Tokens with fewer than two mergeable UTXOs are left out. The confirmation states the exact amount.
  */
-export function nextMergeFrees(freeTokens: readonly TokenUtxo[], tokens: ReadonlyMap<Hex, TokenInfo>, maker: Hex, reserved: ReadonlySet<string>): Map<Hex, bigint> {
+export function nextMergeFrees(freeTokens: readonly TokenUtxo[], tokens: ReadonlyMap<Hex, TokenInfo>, maker: Hex, reserved: ReadonlySet<string>, unlisted?: UnlistedMerge): Map<Hex, bigint> {
   const out = new Map<Hex, bigint>();
   for (const id of new Set(freeTokens.map((u) => u.covenantId).filter((x): x is Hex => !!x))) {
-    const info = tokens.get(id);
-    const mt = info ? mergeTokenOf(info) : null;
+    const mt = mergeTokenFor(id, freeTokens, tokens, maker, reserved, unlisted);
     if (!mt) continue;
     const take = mergeCandidates(freeTokens, mt, maker, reserved).slice(0, mergeSlots(mt));
     if (take.length < 2) continue;

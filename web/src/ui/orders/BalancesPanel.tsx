@@ -21,7 +21,7 @@ import { IdentityBlock } from '../market/Fingerprint';
 import type { KascovMeta } from '../market/token-model';
 import type { WalletBalances } from './use-balances';
 import { balanceColumnFractions, unreviewedProgram } from './balances-model';
-import { mergeableCounts, nextMergeFrees } from './merge-model';
+import { mergeTokenFor, mergeableCounts, nextMergeFrees } from './merge-model';
 import type { OrdersData } from './orders-data';
 import './balances.css';
 
@@ -111,16 +111,18 @@ export function BalancesPanel(props: {
     }
   });
 
+  // a token outside the registry is merged under the program the node verified its UTXOs under (the template's slots, the extension commitment its UTXOs share)
+  const unlisted = useMemo(() => (free.data ? { kob: services.kob, programs: free.data.programOf ?? free.data.programs } : undefined), [free.data, services.kob]);
   // free token UTXOs a merge may take, per token (two or more)
   const mergeable = useMemo(
-    () => (free.data ? mergeableCounts(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set()) : new Map<Hex, number>()),
-    [free.data, registry, props.pubkey, props.reserved],
+    () => (free.data ? mergeableCounts(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : new Map<Hex, number>()),
+    [free.data, registry, props.pubkey, props.reserved, unlisted],
   );
 
   // about how much KAS the next Merge click frees, per token (shown on the button: the reason to press it)
   const frees = useMemo(
-    () => (free.data ? nextMergeFrees(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set()) : new Map<Hex, bigint>()),
-    [free.data, registry, props.pubkey, props.reserved],
+    () => (free.data ? nextMergeFrees(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : new Map<Hex, bigint>()),
+    [free.data, registry, props.pubkey, props.reserved, unlisted],
   );
 
   // fixed decimals per column: the finest amount of the column, so every row shows the same number of decimals (decimal points line up)
@@ -209,7 +211,8 @@ export function BalancesPanel(props: {
                 const d = shown.decimals;
                 const label = tokenLabel(shown);
                 const scaleNote = shown.decimalsSource === 'scale' && !shown.declarationConflicts?.length ? decimalsNote(shown) : null;
-                const showMerge = !!(props.onMergeToken && info && mergeable.has(b.token));
+                const mergeAs = props.onMergeToken && mergeable.has(b.token) ? mergeTokenFor(b.token, free.data!.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : null;
+                const showMerge = !!mergeAs;
                 const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
                 return (
                   <DtGroup key={b.token} data-testid={`balance-row-${b.token}`}>
@@ -247,12 +250,12 @@ export function BalancesPanel(props: {
                       <DtCell k="act" card="action">
                         {showMerge || b.orderCount > 0 ? (
                           <span class="dt-act">
-                            {showMerge && info ? (
+                            {mergeAs ? (
                               <Button
                                 small
                                 disabled={!props.canSign || !!props.busy}
                                 loading={props.busy === `merge-${b.token}`}
-                                title={t('orders.merge.hint', { count: mergeable.get(b.token)!, max: info.slots.inputs })}
+                                title={t('orders.merge.hint', { count: mergeable.get(b.token)!, max: mergeAs!.slots.inputs })}
                                 onClick={() => props.onMergeToken!(b.token)}
                                 data-testid={`orders-merge-token-${b.token}`}
                               >

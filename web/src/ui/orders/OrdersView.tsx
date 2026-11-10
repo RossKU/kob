@@ -39,7 +39,8 @@ import { FILL_SORT_KEYS, WalletFills, type FillSortKey } from './WalletFills';
 import { PORTFOLIO_PAGE_SIZES, PortfolioPager, pageOf, usePortfolioRows } from './portfolio-paging';
 import { useWalletBalances } from './use-balances';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
-import { mergeFailure, mergeStep, mergeSummary, reservedOutpoints } from './merge-model';
+import { mergeFailure, mergeStep, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
+import { tickerOrId } from '../market/token-model';
 import { unwindAmount } from './position-model';
 import { fillHistory, fillsCsv, fillsFileName } from './fills-model';
 import { filledAmountOf } from './OrderFills';
@@ -367,11 +368,14 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
    */
   const mergeToken = (token: Hex) =>
     void guarded(`merge-${token}`, async () => {
-      const info = tokenOf(token);
-      if (!pubkey || !info) return;
-      const plan = await planMergeFor(services, pubkey, info, reserved);
+      // the registry's token, else (any held token the node verified a program for) the one built from that program and the wallet's UTXOs (merge-model.ts)
+      const free = balances.free.data;
+      const mt = pubkey && free ? mergeTokenFor(token, free.freeTokens, services.registry.byCovenantId, pubkey, reserved, { kob: services.kob, programs: free.programOf ?? free.programs }) : null;
+      if (!pubkey || !mt) return;
+      const ticker = tokenOf(token)?.ticker ?? tickerOrId(shownToken(token)?.ticker ?? '', token);
+      const plan = await planMergeFor(services, pubkey, mt, reserved);
       if (!plan.ok) return setPlanFail({ plans: [mergeFailure(plan)], failed: [] });
-      startFlow(t('orders.merge.heading', { ticker: info.ticker }), [mergeStep(plan.links[0]!, mergeSummary(plan, info.ticker))]);
+      startFlow(t('orders.merge.heading', { ticker }), [mergeStep(plan.links[0]!, mergeSummary(plan, ticker))]);
     });
 
   const onCancelPosition = (p: Position) => cancelMany(t('orders.flow.positionHeading'), p.cancelIds, p.id);

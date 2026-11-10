@@ -7,7 +7,7 @@ import { planMerge } from '../../kob/merge';
 import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, OTHER, TOKEN, keyUtxo, tokenUtxo, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { mergeFailure, mergeStep, mergeSummary, mergeTokenOf, mergeableCounts, nextMergeFrees, reservedOutpoints } from './merge-model';
+import { mergeFailure, mergeStep, mergeSummary, mergeTokenFor, mergeTokenOf, mergeableCounts, nextMergeFrees, reservedOutpoints, unlistedMergeToken } from './merge-model';
 import { summarize } from '../../signer/summary';
 import { formatKas } from '../../kob/units';
 
@@ -41,6 +41,44 @@ describe('mergeableCounts', () => {
     const counts = mergeableCounts([...mine, theirs], registry.byCovenantId, MAKER.pk, new Set([`${mine[2]!.transactionId}:${mine[2]!.index}`]));
     expect([...counts]).toEqual([[TOKEN.covenantId, 2]]);
     expect(mergeableCounts(mine.slice(0, 1), registry.byCovenantId, MAKER.pk, new Set()).size).toBe(0);
+  });
+});
+
+describe('a token the registry does not list (open list, foreign KCC-20)', () => {
+  const none = new Map<string, never>();
+  const unlisted = { kob, programs: new Map([[TOKEN.covenantId, TOKEN.program]]) };
+  const mine = [tokenUtxo(1n, MAKER.pk, 0xa1), tokenUtxo(2n, MAKER.pk, 0xa2), tokenUtxo(3n, MAKER.pk, 0xa3)];
+
+  it('is mergeable under its node-verified program: the template hash and slots of that program, the extension commitment of its UTXOs', () => {
+    const mt = unlistedMergeToken(TOKEN.covenantId, mine, MAKER.pk, new Set(), unlisted)!;
+    expect(mt).toEqual({ covenantId: TOKEN.covenantId, program: TOKEN.program, templateHash: info.templateHash, extensionCommitment: TOKEN.ext, slots: { inputs: info.slots.inputs } });
+    expect(mergeableCounts(mine, none, MAKER.pk, new Set(), unlisted)).toEqual(new Map([[TOKEN.covenantId, 3]]));
+    expect(nextMergeFrees(mine, none, MAKER.pk, new Set(), unlisted).has(TOKEN.covenantId)).toBe(true);
+    // no node-verified program: nothing to merge with (and without the option the registry-only behaviour stays)
+    expect(mergeableCounts(mine, none, MAKER.pk, new Set(), { kob, programs: new Map() }).size).toBe(0);
+    expect(mergeableCounts(mine, none, MAKER.pk, new Set()).size).toBe(0);
+  });
+
+  it('with UTXOs under different extension commitments, merges the commitment most of them carry', () => {
+    const other = 'dd'.repeat(32);
+    const mixed = [...mine, tokenUtxo(4n, MAKER.pk, 0xa4, 1_000_000_000n, 0, other), tokenUtxo(5n, MAKER.pk, 0xa5, 1_000_000_000n, 0, other), tokenUtxo(6n, MAKER.pk, 0xa6, 1_000_000_000n, 0, other), tokenUtxo(7n, MAKER.pk, 0xa7, 1_000_000_000n, 0, other)];
+    const mt = unlistedMergeToken(TOKEN.covenantId, mixed, MAKER.pk, new Set(), unlisted)!;
+    expect(mt.extensionCommitment).toBe(other);
+    expect(mergeableCounts(mixed, none, MAKER.pk, new Set(), unlisted).get(TOKEN.covenantId)).toBe(4);
+  });
+
+  it('a single UTXO, or only UTXOs of another key, is not mergeable; the registry token is still the registry one', () => {
+    expect(mergeableCounts(mine.slice(0, 1), none, MAKER.pk, new Set(), unlisted).size).toBe(0);
+    expect(unlistedMergeToken(TOKEN.covenantId, [tokenUtxo(4n, OTHER.pk, 0xa8)], MAKER.pk, new Set(), unlisted)).toBeNull();
+    expect(mergeTokenFor(TOKEN.covenantId, mine, registry.byCovenantId, MAKER.pk, new Set(), unlisted)).toEqual(mergeTokenOf(info));
+  });
+
+  it('the plan merges them: one transaction, the smallest UTXOs into one', () => {
+    const mt = unlistedMergeToken(TOKEN.covenantId, mine, MAKER.pk, new Set(), unlisted)!;
+    const plan = planMerge({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10n * KAS)] }, mt, mine, new Set(), 1);
+    expect(plan.ok).toBe(true);
+    expect(plan.links).toHaveLength(1);
+    expect(plan.links[0]!.inputs).toHaveLength(3);
   });
 });
 

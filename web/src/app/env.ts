@@ -296,7 +296,7 @@ export function dropPendingSpends<E extends PlanEnv>(e: E): E {
 }
 
 /** Environment of the cancel / cancel-replace / refund planners. */
-export async function buildCancelEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey'>, token?: TokenInfo): Promise<CancelEnv> {
+export async function buildCancelEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey'>, token?: Pick<TokenInfo, 'covenantId' | 'program'>): Promise<CancelEnv> {
   const [clock, funding, tokenUtxos, fees] = await Promise.all([
     readClock(s),
     s.utxos.fundingFor(wallet.pubkey),

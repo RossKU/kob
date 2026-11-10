@@ -15,10 +15,9 @@ import { custodyState, extensionOfState } from '../../kob/token-state';
 import type { Family, Hex, TokenUtxo } from '../../kob/types';
 import { t, tIssue } from '../../i18n';
 import { buildErrorText } from '../../i18n/build-error';
-import { planMerge, type MergePlan } from '../../kob/merge';
+import { planMerge, type MergePlan, type MergeToken } from '../../kob/merge';
 import type { TokenInfo } from '../../kob/registry';
 import { waitForAcceptance } from '../../wallet/sign';
-import { mergeTokenOf } from './merge-model';
 import { buildReplacement, type AmendInput, type AmendKind, type AmendResult } from './amend';
 import { spkToAddressFor } from './orders-data';
 import type { OrderEntry } from './orders-model';
@@ -299,11 +298,10 @@ export async function dropRecords(store: RecordStore, ids: readonly Hex[]): Prom
  * again to merge more (the same for a wallet and the private-key signer; nothing merges automatically). The token UTXOs come from the tracker
  * (indexer + local candidates, verified on the node), never one of `reserved` (the open orders' custodies and strays).
  */
-export async function planMergeFor(s: Services, pubkey: Hex, token: TokenInfo, reserved: ReadonlySet<string>): Promise<MergePlan> {
-  const mt = mergeTokenOf(token);
-  if (!mt) throw new Error(t('orders.merge.unsupported'));
+export async function planMergeFor(s: Services, pubkey: Hex, token: MergeToken | null, reserved: ReadonlySet<string>): Promise<MergePlan> {
+  if (!token) throw new Error(t('orders.merge.unsupported'));
   const env = await buildCancelEnv(s, { pubkey }, token);
-  return planMerge(env, mt, env.tokenUtxos ?? [], reserved, 1);
+  return planMerge(env, token, env.tokenUtxos ?? [], reserved, 1);
 }
 
 /** The user-facing text of a planning failure (a raw builder / node text becomes a plain sentence; `rawActionError` keeps it for "Details"). */

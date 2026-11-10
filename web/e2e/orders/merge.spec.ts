@@ -149,3 +149,26 @@ test('a merge the wallet rejects sends nothing: the UTXOs stay as they were', as
   expect(owned.map((u) => BigInt(u.amount))).toEqual([TOKEN, TOKEN, TOKEN, TOKEN, TOKEN]);
   await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge \(5\): about \+[0-9.,]+ KAS$/);
 });
+
+test('a token the registry does not list is mergeable too: Merge shows under its node-verified program and one click merges its three smallest UTXOs', async ({ appPage: page, mock, wallet }) => {
+  // EXSTD is in the mock chain only (no registry route here): the wallet holds it as an open-list token
+  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
+  const alice = (await mock.balance('alice')).pubkey;
+  for (let k = 1; k <= 4; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
+  await mock.giveKas('alice', 20n * KAS);
+  await page.goto('/#/portfolio');
+  await connectWallet(page, 'kasware');
+  const merge = page.getByTestId(`orders-merge-token-${STD}`);
+  await expect(merge).toHaveText(/^Merge \(4\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
+  await recordShownAs(page);
+  await merge.click();
+  await expect(page.getByTestId('flow-done')).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByTestId('tx-flow')).toContainText('UTXOs');
+  const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+  await expect(page.getByTestId('flow-done')).toContainText('1 transaction(s) submitted');
+  expect((await shownAs(page))[0]).toMatch(/into one in one transaction: 4 UTXOs become 2\./);
+  // ONE token output holding the three smallest amounts (1 + 2 + 3), the fourth UTXO untouched
+  expect(placed!.submission.token_outputs).toHaveLength(1);
+  expect(placed!.submission.token_outputs[0]!.amount).toBe((6n * TOKEN).toString());
+  expect((await ownedOf(mock, alice)).map((u) => BigInt(u.amount)).sort()).toEqual([4n * TOKEN, 6n * TOKEN]);
+});
