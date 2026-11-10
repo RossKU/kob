@@ -60,10 +60,12 @@ body:has(.market-page) .container { max-width: 1520px; }
 
 /* ------------------------------------------------------------------ 24 h stats strip */
 
+/* tiles like the Activity page's strips (.sum-strip): equal cells split by 1 px rules, the last price a wider first cell */
 .mkt-stats {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; align-items: end;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px;
+  background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
 }
+.mkt-stats > .mkt-stat { background: var(--surface); padding: 10px 14px; justify-content: space-between; }
 .mkt-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .mkt-stat-label { font-size: 0.74rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mkt-stat-value { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -74,9 +76,10 @@ body:has(.market-page) .container { max-width: 1520px; }
 .tone-down { color: var(--sell); }
 .tone-flat { color: var(--muted); }
 @media (min-width: 560px) { .mkt-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* one row: the last price, then every other figure in an equal column (however many the market has) */
 @media (min-width: 900px) {
-  .mkt-stats { display: flex; flex-wrap: wrap; gap: 8px 28px; }
-  .mkt-stat-last { grid-column: auto; margin-right: 8px; }
+  .mkt-stats { grid-template-columns: minmax(0, 1.6fr); grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+  .mkt-stat-last { grid-column: auto; }
 }
 
 /* ------------------------------------------------------------------ skeletons / empty states */
