@@ -30,6 +30,8 @@ export interface TicketFieldsProps {
   /** the line under the Available line: what the amount costs or yields in the other asset (cost-preview.ts), its unit apart; a fixed-height line, a placeholder when there is nothing to say */
   cost?: { text: string; unit: string; /** the read-only dollars of the estimate (USD display): text and tooltip; null while KAS is shown */ usd?: { text: string; title: string } | null };
   disabled?: boolean;
+  /** a market order: its price row stays, disabled ("Market price"), before the slippage box */
+  marketPrice?: boolean;
   /**
    * the market is shown inverted (KAS/TOKEN, orientation.ts): the PRICE inputs take tokens per KAS (`name` per KAS). The form still keeps native text
    * (KAS per token): what is typed is converted on input, rounded the way that never makes the limit worse, and the unit hint says what the order is.
@@ -105,9 +107,20 @@ export function TicketFields(props: TicketFieldsProps) {
   const errOf = (id: string) => props.errors.find((e) => e.field === id);
   // what the user typed in an inverted price box (the form's own text is the converted native price): kept while it still produces the form's text
   const [typed, setTyped] = useState<Record<string, string>>({});
-  return (
-    <>
-      {props.ids.map((id) => {
+  /** a market order has no price of its own: its price row stays, disabled, saying "Market price", so the rows (and the button) do not move between Limit and Market (the usual exchange layout) */
+  const marketPriceRow = (
+    <Field
+      key="marketPrice"
+      label={t('ticket.label.price')}
+      value={t('ticket.marketPrice')}
+      disabled
+      readOnly
+      data-testid="order-price-market"
+      suffix={<span class="tk-suffix"><span class="tk-unit">{props.flip ? t('ticket.unit.per', { unit: props.flip.name, per: 'KAS' }) : t('ticket.unit.per', { unit: props.quoteTicker ?? 'KAS', per: ticker })}</span></span>}
+    />
+  );
+  const fieldOf = (id: string): ComponentChildren => {
+    {
         const spec = FIELDS[id];
         if (!spec) return null;
         const value = form.values[id] ?? '';
@@ -321,7 +334,7 @@ export function TicketFields(props: TicketFieldsProps) {
         ) : (
           field
         );
-      })}
-    </>
-  );
+    }
+  };
+  return <>{props.ids.map((id) => (props.marketPrice && id === 'slippageBps' ? <Fragment key={id}>{marketPriceRow}{fieldOf(id)}</Fragment> : fieldOf(id)))}</>;
 }

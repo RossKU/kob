@@ -128,6 +128,7 @@ export default {
 
   'ticket.label.amount': 'Amount',
   'ticket.label.price': 'Price',
+  'ticket.marketPrice': 'Market price',
   'ticket.label.price.limit': 'Limit price',
   'ticket.label.price.ioc': 'Limit price',
   'ticket.label.price.fok': 'Limit price',

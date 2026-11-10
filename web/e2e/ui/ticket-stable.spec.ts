@@ -66,7 +66,11 @@ async function run(page: Page, mock: import('../fixtures').MockClient): Promise<
   await check('limit');
   await pickType(page, 'market', 'buy');
   await check('market');
+  // a market order keeps its price row, disabled and reading "Market price" (Limit's price row is where it stands), so the rows and the button do not move
+  await expect(page.getByTestId('order-price-market')).toBeDisabled();
+  await expect(page.getByTestId('order-price-market')).toHaveValue('Market price');
   await pickType(page, 'stopLimit', 'buy');
+  await expect(page.getByTestId('order-price-market')).toHaveCount(0);
   await check('stop limit');
   await pickType(page, 'limit', 'buy');
   await check('limit again');

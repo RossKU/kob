@@ -780,7 +780,7 @@ export function OrderTicket(props: OrderTicketProps) {
         </div>
 
         <TicketFields
-          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} slider={slider} cost={costText}
+          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} slider={slider} cost={costText}
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
         />
 
