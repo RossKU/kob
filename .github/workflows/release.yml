@@ -139,7 +139,7 @@ jobs:
           "$bin" --version
           "$bin" setup --help > /dev/null
           other=mainnet; [ "$NETWORK" = mainnet ] && other=testnet-10
-          out=$("$bin" index --network "$other" --data-dir "$RUNNER_TEMP/refuse" 2>&1 || true)
+          out=$(timeout 60 "$bin" --indexer --network "$other" --data-dir "$RUNNER_TEMP/refuse" 2>&1 || true)
           echo "$out"
           echo "$out" | grep -q "this binary is the $NETWORK deployment build"
           kob="target/$TARGET/release/kob$ext"
