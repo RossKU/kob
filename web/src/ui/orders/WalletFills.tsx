@@ -40,6 +40,19 @@ export function fillColumns(usd = false): (DtColumn<FillSortKey> | DtPlain)[] {
 /** Events of a few orders at a time: one request per order that filled. */
 const BATCH = 4;
 
+/**
+ * The fills last read, per list of orders (their ids and statuses), kept for the visit: the tab is drawn anew each time it is opened, and the rows of the last visit stand
+ * at once while the read is made again (as the Open orders and Order history lists, which live in the page, do), instead of a spinner. A few lists are kept: the
+ * Portfolio's and a market page's panel have their own.
+ */
+const fillsSeen = new Map<string, WalletFill[]>();
+const FILLS_SEEN_MAX = 8;
+const rememberFills = (key: string, fills: WalletFill[]): void => {
+  fillsSeen.delete(key);
+  fillsSeen.set(key, fills);
+  if (fillsSeen.size > FILLS_SEEN_MAX) fillsSeen.delete(fillsSeen.keys().next().value!);
+};
+
 interface WalletFill {
   fill: FillRow;
   row: OrderRowModel;
@@ -92,7 +105,9 @@ export function WalletFills(props: {
           for (const fill of fillHistory(lists[k]!, row.scale).rows) out.push({ fill, row, token });
         });
       }
-      return out.sort((a, b) => b.fill.atMs - a.fill.atMs);
+      out.sort((a, b) => b.fill.atMs - a.fill.atMs);
+      if (!signal.aborted) rememberFills(key, out);
+      return out;
     },
     [key, !!props.loadEvents],
   );
@@ -126,7 +141,9 @@ export function WalletFills(props: {
         return fill.txid;
     }
   };
-  const all = data.data ? sortBy(data.data, props.sort, valueOf) : data.data;
+  // what is read now, else what the last visit read for this very list
+  const read = data.data ?? fillsSeen.get(key);
+  const all = read ? sortBy(read, props.sort, valueOf) : read;
   const { rows: list, window: win } = pageOf(all ?? [], props.size, props.page);
   const cols = fillColumns(!!fiat);
   const ownCol = cols.find((c) => c.key === 'time') as DtColumn<FillSortKey>;
@@ -153,7 +170,7 @@ export function WalletFills(props: {
       {data.loading && !all ? <Loading /> : null}
       <ErrorBanner error={data.error} onRetry={data.reload} />
       {all ? (
-        <DataTable id="wallet-fills" grid="fills" label={t('orders.fills.title')} cols={cols} sort={props.sort} own={ownCol} onSort={props.onSort} sortable={all.length > 1} data-testid="wallet-fills-table">
+        <DataTable id="wallet-fills" grid="fills" label={t('orders.fills.title')} cols={cols} sort={props.sort} own={ownCol} onSort={props.onSort} sortable={all.length > 1} body={{ class: 'ml-in' }} data-testid="wallet-fills-table">
           {list.length === 0 ? <p class="dt-empty" data-testid="wallet-fills-empty">{t('orders.fills.none')}</p> : null}
           {list.map((item) => {
             const f = factsOf(item);

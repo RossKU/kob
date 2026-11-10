@@ -169,7 +169,8 @@ export function BalancesPanel(props: {
         <Banner tone="warn" data-testid="balances-partial">{t('market.balances.partial', { sources: free.data.errors.map((e) => e.source).join(', ') })}</Banner>
       ) : null}
       {combined && free.data ? (
-        <div class="tk-in">
+        // the rows rise in as the lists of the other tabs do (.ml-in, market.css), once, when the tab is opened; a refresh of the figures keeps this box and does not replay it
+        <div class="ml-in">
           {props.compact ? null : <p class="dt-caption small muted">{t('orders.balances.tokens')}</p>}
           <DataTable id="balances" grid="balances" label={t('orders.balances.tokens')} cols={sortCols} sort={sort} own={null} onSort={setSort} sortable={tokensOnShow.length > 1} data-testid="token-balances-table">
             {/* KAS first: what the wallet can spend, what its orders hold, and the KAS that rides on its token coins (counted in the total) */}

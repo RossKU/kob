@@ -697,7 +697,9 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
             >
               {tab === 'open' ? <p class="small muted" data-testid="orders-race-note">{t('orders.raceNote')}</p> : null}
               {/* the rows come together, as soon as the indexer's answer is in: a trader acts on them, so they wait for nothing else (the balances, the node's answers) */}
+              {/* one table per tab: opening Open orders or Order history draws its rows in (.ml-in), as Balances and Trade history do; a refresh or a page turned keeps the table and replays nothing */}
               <DataTable
+                key={tab}
                 id="orders"
                 grid={tab === 'history' ? 'orders-history' : 'orders-open'}
                 label={t(tab === 'history' ? 'orders.list.titleHistory' : 'orders.list.title')}
