@@ -7,6 +7,7 @@
 .notify-status h3 { margin: 0; font-size: 1rem; }
 .notify-list, .notify-invoices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .notify-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 2px; }
+.notify-item.notify-unread { cursor: pointer; }
 .notify-item.notify-unread { border-left: 3px solid var(--info); background: var(--info-bg); }
 .notify-item-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .notify-invoice h3 { margin: 0; font-size: 1rem; }

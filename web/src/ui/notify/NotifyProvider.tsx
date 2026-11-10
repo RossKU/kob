@@ -27,6 +27,7 @@ export interface NotifyApi {
   unread: number;
   /** a wallet is connected (notifications are per wallet) */
   connected: boolean;
+  markRead(id: string): void;
   markAllRead(): void;
   clear(): void;
   invoices: ReturnType<NotificationStore['invoices']>;
@@ -40,7 +41,7 @@ export interface NotifyApi {
 export const browserPermission = (): BrowserPermission => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
 
 const STUB: NotifyApi = {
-  settings: loadNotifySettings(null), update() {}, items: [], unread: 0, connected: false, markAllRead() {}, clear() {}, invoices: [], addInvoice: () => 'invalid', removeInvoice() {},
+  settings: loadNotifySettings(null), update() {}, items: [], unread: 0, connected: false, markRead() {}, markAllRead() {}, clear() {}, invoices: [], addInvoice: () => 'invalid', removeInvoice() {},
   permission: browserPermission, requestBrowser: async () => browserPermission(),
 };
 
@@ -143,6 +144,7 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
     items: store?.items() ?? [],
     unread: store?.unread() ?? 0,
     connected: !!store,
+    markRead: (id) => store?.markRead(id),
     markAllRead: () => store?.markAllRead(),
     clear: () => store?.clear(),
     invoices: store?.invoices() ?? [],

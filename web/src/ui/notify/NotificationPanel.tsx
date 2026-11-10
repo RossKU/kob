@@ -27,11 +27,13 @@ function BellIcon() {
   );
 }
 
+// A click anywhere on a notification (its link included) marks that one read; "Mark all read" stays for the rest.
 function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
   const { registry } = useServices();
+  const n = useNotify();
   const d = describeEvent(props.e, registry);
   return (
-    <li class={`notify-item${props.e.read ? '' : ' notify-unread'}`} data-testid={`notify-item-${props.e.kind}`} data-read={props.e.read ? 'true' : 'false'}>
+    <li class={`notify-item${props.e.read ? '' : ' notify-unread'}`} data-testid={`notify-item-${props.e.kind}`} data-read={props.e.read ? 'true' : 'false'} onClick={() => n.markRead(props.e.id)}>
       <div class="notify-item-head">
         <strong><span key={d.title}>{d.title}</span></strong>
         <time class="muted" dateTime={new Date(props.e.at).toISOString()}>{formatDateTime(Math.floor(props.e.at / 1000), undefined)}</time>

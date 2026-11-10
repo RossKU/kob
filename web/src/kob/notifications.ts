@@ -467,6 +467,13 @@ export class NotificationStore {
     return this.state.items.filter((e) => !e.read).length;
   }
 
+  /** Marks one notification read (a click on it); nothing when it is read already or gone. */
+  markRead(id: string): void {
+    if (!this.state.items.some((e) => e.id === id && !e.read)) return;
+    this.state.items = this.state.items.map((e) => (e.id === id ? { ...e, read: true } : e));
+    this.save();
+  }
+
   markAllRead(): void {
     if (!this.state.items.some((e) => !e.read)) return;
     this.state.items = this.state.items.map((e) => (e.read ? e : { ...e, read: true }));

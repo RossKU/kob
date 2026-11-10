@@ -232,6 +232,14 @@ describe('NotificationStore', () => {
     const s = new NotificationStore(null, 'mainnet', 'pk');
     s.ingest([ev('a'), ev('b', 'cancelled')], (k) => k !== 'cancelled');
     expect(s.unread()).toBe(1);
+    s.ingest([ev('c')]);
+    expect(s.unread()).toBe(2);
+    s.markRead('c');
+    expect(s.unread()).toBe(1);
+    expect(s.items().find((e) => e.id === 'c')!.read).toBe(true);
+    s.markRead('c');
+    s.markRead('nope');
+    expect(s.unread()).toBe(1);
     s.markAllRead();
     expect(s.unread()).toBe(0);
     s.clear();

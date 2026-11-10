@@ -27,7 +27,12 @@ test('notifications off: the bell still lists what its badge counts, newest firs
   expect(times).toEqual([...times].sort((a, b) => b - a));
   await expect(listed.first().locator('a')).toHaveAttribute('href', '#/portfolio/open');
   await expect(listed.first()).toContainText('Order filled');
-  // read: the badge goes
+  // one clicked: only that one is read, the badge counts the rest
+  await listed.nth(1).locator('.notify-item-head').click();
+  await expect(listed.nth(1)).toHaveAttribute('data-read', 'true');
+  await expect(listed.first()).toHaveAttribute('data-read', 'false');
+  await expect(page.getByTestId('notify-unread')).toHaveText('4');
+  // the rest at once: the badge goes
   await panel.getByTestId('notify-mark-read').click();
   await expect(page.getByTestId('notify-unread')).toHaveCount(0);
 });
