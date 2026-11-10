@@ -28,19 +28,25 @@ function BellIcon() {
   );
 }
 
-// A click anywhere on a notification (its link included) marks that one read; "Mark all read" stays for the rest.
+// A tap on a notification marks that one read and leaves the dialog open (several can be read in a row); only the arrow at its right goes to the
+// page it is about. A text link inside the body took taps meant for the body on Android (Chrome moves a near-miss onto a link).
 function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
   const { registry } = useServices();
   const n = useNotify();
   const d = describeEvent(props.e, registry, useFiat());
+  const go = props.e.kind === 'payment' && props.e.token ? t('notify.viewToken') : props.e.kind === 'invoice' ? t('notify.settings') : t('notify.viewOrders');
   return (
     <li class={`notify-item${props.e.read ? '' : ' notify-unread'}`} data-testid={`notify-item-${props.e.kind}`} data-read={props.e.read ? 'true' : 'false'} onClick={() => n.markRead(props.e.id)}>
-      <div class="notify-item-head">
-        <strong><span key={d.title}>{d.title}</span></strong>
-        <time class="muted" dateTime={new Date(props.e.at).toISOString()}>{formatDateTime(Math.floor(props.e.at / 1000), undefined)}</time>
+      <div class="notify-item-main">
+        <div class="notify-item-head">
+          <strong><span key={d.title}>{d.title}</span></strong>
+          <time class="muted" dateTime={new Date(props.e.at).toISOString()}>{formatDateTime(Math.floor(props.e.at / 1000), undefined)}</time>
+        </div>
+        <div><span key={d.body}>{d.body}</span></div>
       </div>
-      <div><span key={d.body}>{d.body}</span></div>
-      <a href={d.href} onClick={props.onNavigate}>{props.e.kind === 'payment' && props.e.token ? t('notify.viewToken') : props.e.kind === 'invoice' ? t('notify.settings') : t('notify.viewOrders')}</a>
+      <a class="notify-go" href={d.href} onClick={props.onNavigate} aria-label={go} title={go} data-testid="notify-go">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+      </a>
     </li>
   );
 }

@@ -6,7 +6,13 @@
 .notify-bell[data-status-tone='error'] { color: var(--bad); background: var(--bad-bg); }
 .notify-status h3 { margin: 0; font-size: 1rem; }
 .notify-list, .notify-invoices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.notify-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 2px; }
+.notify-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); display: flex; align-items: center; gap: 12px; }
+.notify-item-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* the only way to the page a notification is about: a 36 px round target, apart from the body */
+.notify-go { flex: none; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 999px; color: var(--text); background: var(--surface); }
+.notify-go:hover { border-color: var(--text); }
+.notify-go:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* unread: a tap on it marks it read */
 .notify-item.notify-unread { cursor: pointer; }
 .notify-item.notify-unread { border-left: 3px solid var(--info); background: var(--info-bg); }
 .notify-item-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }

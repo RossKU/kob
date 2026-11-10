@@ -25,13 +25,21 @@ test('notifications off: the bell still lists what its badge counts, newest firs
   // newest first, each with its time and a link to My orders
   const times = await listed.locator('time').evaluateAll((ts) => ts.map((x) => Date.parse(x.getAttribute('datetime') ?? '')));
   expect(times).toEqual([...times].sort((a, b) => b - a));
-  await expect(listed.first().locator('a')).toHaveAttribute('href', '#/portfolio/open');
+  // the arrow is the only link, named for where it goes
+  await expect(listed.first().locator('a')).toHaveCount(1);
+  await expect(listed.first().getByTestId('notify-go')).toHaveAttribute('href', '#/portfolio/open');
+  await expect(listed.first().getByTestId('notify-go')).toHaveAccessibleName('Open orders');
   await expect(listed.first()).toContainText('Order filled');
   // one clicked: only that one is read, the badge counts the rest
   await listed.nth(1).locator('.notify-item-head').click();
   await expect(listed.nth(1)).toHaveAttribute('data-read', 'true');
   await expect(listed.first()).toHaveAttribute('data-read', 'false');
   await expect(page.getByTestId('notify-unread')).toHaveText('4');
+  // the body of another one: read, and the dialog stays open
+  await listed.nth(2).locator('.notify-item-main > div').last().click();
+  await expect(listed.nth(2)).toHaveAttribute('data-read', 'true');
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('notify-unread')).toHaveText('3');
   // the rest at once: the badge goes
   await panel.getByTestId('notify-mark-read').click();
   await expect(page.getByTestId('notify-unread')).toHaveCount(0);
