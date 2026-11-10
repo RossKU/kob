@@ -6,9 +6,9 @@
    anything beside or under the ticket */
 .tk:has(> .tk-scroll) { padding: 0; gap: 0; overflow: hidden; }
 .tk-scroll { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; scrollbar-width: thin; overscroll-behavior: contain; padding: 14px var(--gutter) 8px; }
-.tk-foot { flex: none; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 10px var(--gutter) 12px; border-top: 1px solid var(--border); background: var(--surface); }
+.tk-foot { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px var(--gutter) 8px; border-top: 1px solid var(--border); background: var(--surface); }
 /* the progress and the result of a click: a slot of a fixed height under the button (a longer text scrolls in it) */
-.tk-status { height: 2.7rem; margin-top: -4px; overflow-y: auto; overflow-x: hidden; }
+.tk-status { height: 1.4rem; margin-top: 0; overflow-y: auto; overflow-x: hidden; }
 .tk-plain { padding: 14px var(--gutter); }
 /* the title row has a fixed height; the "Calculating..." indicator is an overlay at its right end, so it never changes the layout of the ticket */
 .tk-titlerow { position: relative; display: flex; align-items: center; min-height: 2.25rem; }
@@ -44,7 +44,7 @@
 .tk-issue-error { border-left-color: var(--bad); background: var(--bad-bg); font-weight: 600; }
 /* why the order cannot be placed: a slot of a FIXED height directly above the button (three lines; more scroll inside it), empty when the order can be placed.
    Nothing else on the ticket says anything that comes and goes, so the button never moves. */
-.tk-reason { height: 3.4rem; margin-top: -4px; overflow-y: auto; overflow-x: hidden; font-size: 0.85rem; line-height: 1.12rem; }
+.tk-reason { height: 2.3rem; margin-top: 0; overflow-y: auto; overflow-x: hidden; font-size: 0.85rem; line-height: 1.12rem; }
 .tk-reason ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .tk-reason-item { display: block; overflow-wrap: anywhere; color: var(--bad); font-weight: 600; }
 .tk-reason-need { color: var(--muted); font-weight: 500; }
