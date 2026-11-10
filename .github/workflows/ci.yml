@@ -399,7 +399,7 @@ jobs:
           retention-days: 1
 
   web-e2e:
-    # The offline mock-stack Playwright e2e (about 700 tests, one worker: the shared mock server holds global state), split over 6 runners by
+    # The offline mock-stack Playwright e2e (about 700 tests, one worker: the shared mock server holds global state), split over 10 runners by
     # Playwright's own sharding. Each shard downloads the build of web-build (KOB_E2E_NO_BUILD=1: the e2e does not rebuild).
     needs: [changes, web-build]
     if: needs.changes.outputs.web == 'true'
@@ -407,7 +407,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     defaults:
       run:
         working-directory: web
@@ -427,7 +427,7 @@ jobs:
           name: web-e2e-build
           path: web
       - run: npx playwright install --with-deps chromium
-      - run: npm run e2e -- --shard=${{ matrix.shard }}/6
+      - run: npm run e2e -- --shard=${{ matrix.shard }}/10
         env:
           KOB_E2E_NO_BUILD: "1"
       - if: failure()
