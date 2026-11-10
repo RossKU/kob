@@ -1,4 +1,4 @@
-// The header's "Trade" tab (Market | Trade | Activity | Portfolio | ...): Market is the list; Trade leads back to the market opened last (a token's KAS market or a
+// The header's "Trade" tab (Market | Trade | Portfolio | Activity | ...): Market is the list; Trade leads back to the market opened last (a token's KAS market or a
 // token/token pair, the exact route), per network in localStorage. Absent (not disabled) until a market has been opened. A stored value that is no market
 // route, or a market that does not resolve, is dropped. Trade is the active tab on a market page, Market only on the list. The phone menu has it too. 360 px fit.
 import { readFileSync } from 'node:fs';

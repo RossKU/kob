@@ -19,8 +19,9 @@ const NAV = [
   { name: 'market', href: '#/market', key: 'shell.nav.market', testid: 'nav-market' },
   // only once a market has been opened; its address is the last market's own (NavLinks)
   { name: 'trade', href: '#/market', key: 'shell.nav.trade', testid: 'nav-trade' },
-  { name: 'activity', href: '#/activity', key: 'shell.nav.activity', testid: 'nav-activity' },
+  // Market, Trade and Portfolio side by side (founder, 2026-11-11): the trading pages first, the network-wide log after them
   { name: 'portfolio', href: '#/portfolio', key: 'shell.nav.portfolio', testid: 'nav-portfolio' },
+  { name: 'activity', href: '#/activity', key: 'shell.nav.activity', testid: 'nav-activity' },
   { name: 'create', href: '#/create', key: 'shell.nav.create', testid: 'nav-create' },
   { name: 'settings', href: '#/settings', key: 'shell.nav.settings', testid: 'nav-settings' },
 ] as const;
