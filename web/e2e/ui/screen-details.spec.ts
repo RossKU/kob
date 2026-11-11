@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
-import { connectWallet, fund, listExkcc, openMarket, gotoNav, gotoOrders, openOrdersSettings, openSettingsAdvanced } from '../helpers/env';
+import { connectWallet, disconnectWallet, fund, listExkcc, openMarket, gotoNav, gotoOrders, openOrdersSettings, openSettingsAdvanced } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { fillFields, peekReceipt, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
 
@@ -275,7 +275,13 @@ test('the header after connecting: one network badge, a compact wallet chip, sho
   await expect(page.getByTestId('wallet-network')).toHaveCount(0);
   await expect(page.getByTestId('wallet-address')).toContainText(/^kaspatest:q\w{5}…\w{6}/);
   await expect(page.getByTestId('wallet-kind')).toHaveAttribute('title', 'Connected with: KasWare');
+  // the chip is one button; Copy, the explorer and Disconnect are in its menu
+  await page.getByTestId('wallet-menu').click();
   await expect(page.getByTestId('wallet-disconnect')).toHaveAccessibleName('Disconnect');
+  await expect(page.getByTestId('wallet-copy')).toBeVisible();
+  await expect(page.getByTestId('wallet-explorer')).toHaveAttribute('href', `https://tn10.kaspa.stream/addresses/${TEST_KEYS.alice.testnetAddress}`);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('wallet-menu-panel')).toHaveCount(0);
   const wide = await header.boundingBox();
   expect(wide!.height).toBeLessThan(70);
   // 375 px: still ONE row (the logo, the menu, the shortened network chip, the short address, the bell)
@@ -286,6 +292,6 @@ test('the header after connecting: one network badge, a compact wallet chip, sho
   const phone = await header.boundingBox();
   expect(phone!.height).toBeLessThan(60);
   expect(await noPageScroll(page)).toBe(true);
-  await page.getByTestId('wallet-disconnect').click();
+  await disconnectWallet(page);
   await expect(page.getByTestId('wallet-connected')).toHaveCount(0);
 });

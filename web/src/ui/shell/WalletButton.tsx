@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { useWallet } from '../../app/context';
 import { useServices } from '../../app/context';
+import { useAddressUrl } from '../../app/explorer';
 import { t } from '../../i18n';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
-import { Badge, Button, CopyText, Modal } from '../kit';
+import { Badge, Button, Modal } from '../kit';
+import { copyToClipboard } from '../kit/CopyText';
+import { Popover } from './Popover';
+import { installable } from './wallet-model';
 import { isPhoneBrowser } from './platform';
 import { useNarrow } from './narrow';
 
@@ -21,38 +25,100 @@ export const chipAddress = (address: string, narrow = false): string => {
 /** How the wallet is connected, for the chip's wallet icon (never a label of the address: "Private key" next to it reads as a key). */
 const connectedWith = (id: string, label: string): string => t('shell.wallet.connectedVia', { wallet: id === 'local-key' ? t('shell.wallet.viaLocalKey') : label });
 
+/** The mark of a wallet in the chooser: its initial on a tile (a key for the private key entry); a colour of its own keeps the rows apart at a glance. */
+const MARK_TONES: Record<string, string> = { kasware: '#2c9e77', kaspire: '#7a5af8', kastle: '#c2410c' };
+function WalletMark(props: { id: string; label: string }) {
+  if (props.id === 'local-key') {
+    return (
+      <svg class="wallet-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="8" cy="15" r="4" />
+        <path d="M11 12l9-9M16 7l3 3" />
+      </svg>
+    );
+  }
+  return (
+    // the letter is drawn by CSS (data-initial): it is a picture, not text, so it is not part of the row's name
+    <span class="wallet-mark wallet-mark-tile" data-initial={props.label.slice(0, 1)} style={{ background: MARK_TONES[props.id] ?? 'var(--surface-3)' }} aria-hidden="true" />
+  );
+}
+
+/** The chevron of the wallet chip: it is a menu. */
+function Caret() {
+  return (
+    <svg class="wallet-caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
 /**
- * Wallet area of the header. Not connected: one "Connect" button (ConnectBar). Connected: one compact chip with the address
- * (shortened, copyable) as its text, a small wallet icon whose tooltip says how it is connected, the wallet's network ONLY when it differs from the app's
- * (the header's network badge already names the app's), and a disconnect button (an icon, with its name beside it where the row has room: narrow.ts).
+ * Wallet area of the header. Not connected: one "Connect" button (ConnectBar). Connected: ONE chip with the address (shortened) as its text, a small wallet icon
+ * whose tooltip says how it is connected, and the wallet's network ONLY when it differs from the app's (the header's network chip already names the app's). A
+ * press opens a small menu under it (review L-06 / M-14): the full address and how it is connected, Copy address, the address on the block explorer, Disconnect.
  */
 export function WalletButton() {
   const w = useWallet();
   const narrow = useNarrow();
+  const addressUrl = useAddressUrl();
+  const [copied, setCopied] = useState(false);
+  // the "Copied" cue ends by itself; the timer is cleared with the chip
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
 
   if (w.info && w.adapter) {
+    const { address, id, label, network } = w.info;
+    const via = connectedWith(id, label);
+    const explorer = addressUrl(address);
+    const copy = async () => {
+      const ok = await copyToClipboard(address);
+      setCopied(ok);
+      if (timer.current) clearTimeout(timer.current);
+      if (ok) timer.current = setTimeout(() => setCopied(false), 1500);
+    };
     return (
-      <div class="wallet-chip" data-testid="wallet-connected" data-network={w.info.network} data-wallet={w.info.id}>
-        <span class="small">
-          <CopyText value={w.info.address} text={chipAddress(w.info.address, narrow)} data-testid="wallet-address" label={t('shell.wallet.address')} />
-        </span>
-        <span class="wallet-kind muted" data-testid="wallet-kind" role="img" aria-label={connectedWith(w.info.id, w.info.label)} title={connectedWith(w.info.id, w.info.label)}>
-          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 7h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l12-3v3M16 13.5h.01" />
-          </svg>
-        </span>
-        {w.networkMismatch ? (
-          <Badge tone="bad" data-testid="wallet-network" title={t('shell.wallet.networkOk', { network: w.info.network })}>
-            {w.info.network}
-          </Badge>
-        ) : null}
-        <Button small variant="ghost" class="wallet-disconnect" data-testid="wallet-disconnect" onClick={w.disconnect} aria-label={t('shell.wallet.disconnect')} title={t('shell.wallet.disconnect')}>
-          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" />
-          </svg>
-          <span class="wallet-disconnect-text" aria-hidden="true">{t('shell.wallet.disconnect')}</span>
-        </Button>
-      </div>
+      <Popover
+        label={t('shell.wallet.menu')}
+        anchor={narrow ? 'header' : 'self'}
+        triggerClass="wallet-chip"
+        triggerAttrs={{ 'data-testid': 'wallet-menu', 'aria-haspopup': 'true' }}
+        wrapAttrs={{ 'data-testid': 'wallet-connected', 'data-network': network, 'data-wallet': id }}
+        panelTestId="wallet-menu-panel"
+        closeOnLink
+        trigger={
+          <>
+            <span class="wallet-kind muted" data-testid="wallet-kind" role="img" aria-label={via} title={via}>
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 7h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l12-3v3M16 13.5h.01" />
+              </svg>
+            </span>
+            <code class="mono small wallet-address" data-testid="wallet-address" data-value={address} title={address}>{chipAddress(address, narrow)}</code>
+            {w.networkMismatch ? (
+              <Badge tone="bad" data-testid="wallet-network" title={t('shell.wallet.networkOk', { network })}>
+                {network}
+              </Badge>
+            ) : null}
+            <Caret />
+          </>
+        }
+      >
+        <div class="stack-xs">
+          <div class="small muted" data-testid="wallet-menu-via">{via}</div>
+          <code class="mono small wrap-anywhere" data-testid="wallet-menu-address" aria-label={t('shell.wallet.address')}>{address}</code>
+        </div>
+        <div class="menu-actions">
+          <button type="button" class="menu-item" data-testid="wallet-copy" onClick={copy}>
+            {copied ? t('common.copied') : t('shell.wallet.copyAddress')}
+          </button>
+          {explorer ? (
+            <a class="menu-item" href={explorer} target="_blank" rel="noopener noreferrer" data-testid="wallet-explorer">
+              {t('shell.wallet.explorer')}
+            </a>
+          ) : null}
+          <button type="button" class="menu-item menu-item-danger" data-testid="wallet-disconnect" onClick={w.disconnect}>
+            {t('shell.wallet.disconnect')}
+          </button>
+        </div>
+      </Popover>
     );
   }
 
@@ -125,16 +191,27 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
       {dialog === 'wallets' ? (
         <Modal title={t('shell.wallet.chooseTitle')} onClose={() => setDialog(null)} data-testid="wallet-dialog">
           <div class="stack-sm" data-testid="wallet-choose">
+            {/* the detected extensions first, each a row with its mark; the private key after them, with the one line that recommends an extension */}
             {w.detected.map((a) => (
-              <Button key={a.id} variant="primary" block data-testid={`wallet-connect-${a.id}`} loading={w.connecting} onClick={() => connectOne(a.id)}>
-                {w.connecting ? t('shell.wallet.connecting') : t('shell.wallet.connect', { wallet: a.label })}
+              <Button key={a.id} variant="primary" block class="wallet-row" data-testid={`wallet-connect-${a.id}`} loading={w.connecting} onClick={() => connectOne(a.id)}>
+                <WalletMark id={a.id} label={a.label} />
+                <span class="wallet-row-text">{w.connecting ? t('shell.wallet.connecting') : t('shell.wallet.connect', { wallet: a.label })}</span>
               </Button>
             ))}
             {supported ? (
-              <Button block data-testid="wallet-connect-local-key" onClick={() => { setDialog(null); w.openPrivateKey(); }}>
-                {t('shell.wallet.connectKey')}
+              <Button block class="wallet-row" data-testid="wallet-connect-local-key" onClick={() => { setDialog(null); w.openPrivateKey(); }}>
+                <WalletMark id="local-key" label={t('shell.wallet.connectKey')} />
+                <span class="wallet-row-text">{t('shell.wallet.connectKey')}</span>
               </Button>
             ) : null}
+            {supported ? <p class="small muted wallet-recommend" data-testid="wallet-recommend">{t('signer.recommend')}</p> : null}
+            {/* an extension this browser has not got: a link to get it (a row, not a button: it leaves the page) */}
+            {installable(w.detected.map((a) => a.id), config.features.kastle).map((k) => (
+              <a key={k.id} class="btn btn-block wallet-row wallet-install" href={k.installUrl} target="_blank" rel="noopener noreferrer" data-testid={`wallet-install-${k.id}`}>
+                <WalletMark id={k.id} label={k.label} />
+                <span class="wallet-row-text">{t('shell.wallet.install', { wallet: k.label })}</span>
+              </a>
+            ))}
           </div>
         </Modal>
       ) : null}

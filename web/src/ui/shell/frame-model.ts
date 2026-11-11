@@ -14,30 +14,28 @@ export interface FooterLink {
   testid?: string;
   /** Its tooltip. */
   title?: string;
-  /** `site`: the links of every page; `app`: the app's own (after a divider). */
+  /** `site`: the links of the row (the landing page's, the app's compact line); `app`: kept for a divided group of further app links (none now). */
   group: 'site' | 'app';
 }
 
 /**
- * The footer's one row of links: App, GitHub, Run an executor, when the deployment has an indexer its Public API, when there is a donation address Support (`support`),
- * and the Disclaimer; the app adds Settings and data, Recover orders and kaspa.org.
+ * The footer's links. The landing page's full row: App, GitHub, Run an executor, when the deployment has an indexer its Public API, when there is a donation
+ * address Support (`support`), and the Disclaimer. An app page has ONE compact line (review L-04) with only the essential ones: GitHub, Support (when there is
+ * a donation address) and the Disclaimer; the security policy link is the footer's own (FooterView). The rest (App, Run an executor, Public API) is on the
+ * landing page, and Settings is a tab of the header.
  */
 export function footerLinks(context: FrameContext, indexerUrl: string | null | undefined, support = false): FooterLink[] {
   const api = publicApiUrl(indexerUrl);
-  const site: FooterLink[] = [
+  const supportLink = { key: 'landing.footer.support', href: '#/support', testid: 'footer-support', group: 'site' } as const;
+  const disclaimer = { key: 'landing.footer.disclaimer', href: '#/disclaimer', testid: 'footer-disclaimer', group: 'site' } as const;
+  if (context === 'app') return [{ key: 'landing.github', href: REPO_URL, group: 'site' }, ...(support ? [supportLink] : []), disclaimer];
+  return [
     { key: 'landing.footer.app', href: APP_HASH, group: 'site' },
     { key: 'landing.github', href: REPO_URL, group: 'site' },
     { key: 'landing.footer.executor', href: EXECUTOR_URL, group: 'site' },
-    ...(api ? [{ key: 'landing.footer.api', href: api, testid: context === 'app' ? 'footer-api' : 'landing-api', group: 'site' } as const] : []),
-    ...(support ? [{ key: 'landing.footer.support', href: '#/support', testid: 'footer-support', group: 'site' } as const] : []),
-    { key: 'landing.footer.disclaimer', href: '#/disclaimer', testid: 'footer-disclaimer', group: 'site' },
-  ];
-  if (context !== 'app') return site;
-  return [
-    ...site,
-    { key: 'shell.footer.settings', href: '#/settings', group: 'app' },
-    { key: 'shell.footer.recover', href: '#/portfolio/recover', group: 'app' },
-    { key: 'shell.footer.kaspa', href: 'https://kaspa.org', external: true, group: 'app' },
+    ...(api ? [{ key: 'landing.footer.api', href: api, testid: 'landing-api', group: 'site' } as const] : []),
+    ...(support ? [supportLink] : []),
+    disclaimer,
   ];
 }
 

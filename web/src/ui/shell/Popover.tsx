@@ -16,11 +16,16 @@ export interface PopoverProps {
   /** the panel's align under the button: the end of the row by default */
   align?: 'start' | 'end';
   panelTestId?: string;
+  /** an extra class of the panel (the bell's list is wider than a menu) */
+  panelClass?: string;
+  /** extra attributes of the wrapper that holds the button and the panel (a test id of the whole control, data-* of its state) */
+  wrapAttrs?: Record<string, string | number | boolean | undefined>;
   /** a tap on a link inside the panel closes it, also when the link leads to the page already open (no hash change then) */
   closeOnLink?: boolean;
   /** a click on an element marked `data-pick` inside the panel closes it and puts the focus back on the button (a choice list that is done after one pick) */
   closeOnPick?: boolean;
-  children: ComponentChildren;
+  /** the panel; a function gets `close`, which closes it and puts the focus back on the button (a Close button, a Done) */
+  children: ComponentChildren | ((close: () => void) => ComponentChildren);
 }
 
 export function Popover(props: PopoverProps) {
@@ -49,13 +54,19 @@ export function Popover(props: PopoverProps) {
       window.removeEventListener('hashchange', onHash);
     };
   }, [open]);
+  const close = () => {
+    setOpen(false);
+    button.current?.focus();
+  };
   return (
     <div
       class={`hp${props.anchor === 'header' ? ' hp-header' : ''}`}
       ref={wrap}
+      {...props.wrapAttrs}
       onFocusOut={(e) => {
         const next = (e as FocusEvent).relatedTarget as Node | null;
-        if (next && !wrap.current?.contains(next)) setOpen(false);
+        // the clipboard fallback's textarea (kit/CopyText.tsx) holds the focus for an instant: not a departure
+        if (next && !wrap.current?.contains(next) && !(next as HTMLElement).hasAttribute?.('data-copy-shim')) setOpen(false);
       }}
     >
       <button
@@ -73,7 +84,7 @@ export function Popover(props: PopoverProps) {
       {open ? (
         <div
           id={id}
-          class={`hp-panel${props.align === 'start' ? ' hp-start' : ''}`}
+          class={`hp-panel${props.align === 'start' ? ' hp-start' : ''}${props.panelClass ? ` ${props.panelClass}` : ''}`}
           role="region"
           aria-label={props.label}
           data-testid={props.panelTestId}
@@ -90,7 +101,7 @@ export function Popover(props: PopoverProps) {
               : undefined
           }
         >
-          {props.children}
+          {typeof props.children === 'function' ? props.children(close) : props.children}
         </div>
       ) : null}
     </div>

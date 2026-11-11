@@ -2,7 +2,7 @@
 // The plan of the ticket was built for one key on one network: it must never be signed for another. The ticket refuses (button disabled, a need line)
 // while the wallet is wrong, and nothing may reach the wallet or the node.
 import { test, expect, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
-import { clickConnectOption, fund, openMarket, type WalletName } from '../helpers/env';
+import { clickConnectOption, disconnectWallet, fund, openMarket, type WalletName } from '../helpers/env';
 import { clickPlace, expectWalletSigned, fillFields, pickType, placedBy, waitReviewable, waitSubmitted } from '../helpers/ticket';
 import type { Page } from '@playwright/test';
 
@@ -106,7 +106,7 @@ test.describe('listeners follow the session', () => {
     // timeout) until it reaches the state the page shows, never read once right after the DOM changed.
     await expect.poll(() => wallet!.listenerCount()).toBeGreaterThan(0);
     const connected = await wallet!.listenerCount();
-    await page.getByTestId('wallet-disconnect').click();
+    await disconnectWallet(page);
     await expect(page.getByTestId('wallet-address')).toHaveCount(0);
     await expect.poll(() => wallet!.listenerCount()).toBe(0);
     await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key

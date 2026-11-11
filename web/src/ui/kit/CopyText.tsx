@@ -29,9 +29,12 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   } catch {
     /* fall through to the legacy path */
   }
+  const before = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
   try {
     const ta = document.createElement('textarea');
     ta.value = text;
+    // the shim takes the focus for a moment: a popover that closes when the focus leaves it (shell/Popover.tsx) must not take that for a departure
+    ta.setAttribute('data-copy-shim', '');
     ta.setAttribute('readonly', '');
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
@@ -39,6 +42,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     ta.select();
     const ok = document.execCommand('copy');
     document.body.removeChild(ta);
+    before?.focus?.({ preventScroll: true });
     return ok;
   } catch {
     return false;

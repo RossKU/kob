@@ -1,6 +1,6 @@
 import { useServices, useWallet } from '../../app/context';
 import { navOf, routeToHash, type Route } from '../../app/router';
-import { useLastMarket } from '../../app/last-market';
+import { tradeTarget, useLastMarket } from '../../app/last-market';
 import type { ConfigWarning, StoredOverride } from '../../config';
 import { t } from '../../i18n';
 import { Badge } from '../kit';
@@ -11,13 +11,13 @@ import { NetworkSwitch } from './NetworkSwitch';
 import { TIGHT_QUERY, useHeaderLayout, useMedia, useNarrow, useSqueezeCheck } from './narrow';
 import { useRef } from 'preact/hooks';
 import { Popover } from './Popover';
-import { StatusDot, StatusLines, useStatusLevel } from './StatusBar';
+import { StatusLines } from './StatusBar';
 import { useReorgNotice } from './reorg-notice';
 import { useSystemStatus } from './StatusProvider';
 
 const NAV = [
   { name: 'market', href: '#/market', key: 'shell.nav.market', testid: 'nav-market' },
-  // only once a market has been opened; its address is the last market's own (NavLinks)
+  // always there (the tab bar never shifts between pages); its address is the last market's own, else the first listed one (NavLinks)
   { name: 'trade', href: '#/market', key: 'shell.nav.trade', testid: 'nav-trade' },
   // Market, Trade and Portfolio side by side (founder, 2026-11-11): the trading pages first, the network-wide log after them
   { name: 'portfolio', href: '#/portfolio', key: 'shell.nav.portfolio', testid: 'nav-portfolio' },
@@ -48,12 +48,12 @@ function MenuIcon() {
   );
 }
 
-/** `trade`: the hash of the last market opened (the Trade tab is left out until there is one). */
-function NavLinks(props: { active: ReturnType<typeof navOf>; trade: string | null }) {
+/** `trade`: where the Trade tab leads (tradeTarget: the last market opened, else the first listed one, else the list). */
+function NavLinks(props: { active: ReturnType<typeof navOf>; trade: string }) {
   return (
     <>
-      {NAV.filter((n) => n.name !== 'trade' || props.trade !== null).map((n) => (
-        <a key={n.name} href={n.name === 'trade' ? props.trade! : n.href} data-testid={n.testid} aria-current={props.active === n.name ? 'page' : undefined}>
+      {NAV.map((n) => (
+        <a key={n.name} href={n.name === 'trade' ? props.trade : n.href} data-testid={n.testid} aria-current={props.active === n.name ? 'page' : undefined}>
           {t(n.key)}
         </a>
       ))}
@@ -61,8 +61,8 @@ function NavLinks(props: { active: ReturnType<typeof navOf>; trade: string | nul
   );
 }
 
-/** The phone menu: the four tabs, the theme toggle, what the network chip and the words open review mean, and the status lines. It closes on every navigation. */
-function Menu(props: { active: ReturnType<typeof navOf>; network: string; trade: string | null }) {
+/** The phone menu: the tabs, the theme toggle, what the network chip and the words open review mean, and the status lines. It closes on every navigation. */
+function Menu(props: { active: ReturnType<typeof navOf>; network: string; trade: string }) {
   return (
     <Popover
       label={t('shell.menu')}
@@ -88,28 +88,26 @@ function Menu(props: { active: ReturnType<typeof navOf>; network: string; trade:
 }
 
 /**
- * Top bar, ONE row. The wide row (when it fits): the brand, the four tabs, then the status dot, the network chip, the wallet buttons, the theme toggle and
- * the bell. The narrow row (a phone, or a row that does not fit): the logo, the shortened network chip with the status as a dot in it, one "Connect" button (or
- * the connected address), the bell and, last, a menu button (the tabs, the theme toggle, the network and status explanation).
+ * Top bar, ONE row. The wide row (when it fits): the brand, the tabs, then the network chip (with the status as a dot in it), the wallet button (or the
+ * connected address chip and its menu), the theme toggle and the bell. The narrow row (a phone, or a row that does not fit): the logo, the shortened network
+ * chip, one "Connect" button (or the connected address), the bell and, last, a menu button (the tabs, the theme toggle, the network and status explanation).
  */
 export function Header(props: { route: Route; warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
-  const { config } = useServices();
+  const { config, registry } = useServices();
   const narrow = useNarrow();
   const tight = useMedia(TIGHT_QUERY);
-  const level = useStatusLevel();
   const inner = useRef<HTMLDivElement>(null);
   const active = navOf(props.route);
-  const trade = useLastMarket(config.network, props.route);
+  const trade = tradeTarget(useLastMarket(config.network, props.route), registry);
   const wallet = useWallet().info;
   // what the wide row holds: when it changes, a row that did not fit is tried again (narrow.ts)
-  useSqueezeCheck(inner, narrow, `${trade ? 1 : 0}|${wallet?.address ?? ''}|${wallet?.network ?? ''}`);
-  const { brandName, centred, disconnectText } = useHeaderLayout(inner, narrow);
+  useSqueezeCheck(inner, narrow, `${wallet?.address ?? ''}|${wallet?.network ?? ''}`);
+  const { brandName, centred } = useHeaderLayout(inner, narrow);
   return (
     <SiteHeader
       context="app"
       layout={narrow ? 'narrow' : 'wide'}
       brandName={brandName}
-      disconnectText={disconnectText}
       centred={centred}
       innerRef={inner}
       brand={<Brand href={routeToHash({ name: 'home' })} testid="brand" />}
@@ -121,8 +119,7 @@ export function Header(props: { route: Route; warnings: ConfigWarning[]; storedO
       )}
       <div class="header-tools">
         <ReorgIndicator />
-        {narrow ? null : <StatusDot />}
-        <NetworkSwitch config={config} narrow={narrow} short={narrow || tight} {...(narrow ? { level } : {})} />
+        <NetworkSwitch config={config} narrow={narrow} short={narrow || tight} />
         <div class="header-wallet">
           <WalletButton />
         </div>

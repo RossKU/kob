@@ -2,7 +2,7 @@
 // Per-order-type specs belong to the ticket work; here: the list, the token page, live status, wallet, the shared-ticker note, health entries of the bell.
 import { expect, test, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
 import { TESTID } from '../testids';
-import { clickConnectOption } from '../helpers/env';
+import { clickConnectOption, disconnectWallet } from '../helpers/env';
 
 /** The seeded token as the mock indexer reports it (prices: sompi per whole token, i.e. per 1e8 base units). */
 async function seeded(mock: import('../fixtures').MockClient) {
@@ -50,7 +50,10 @@ test.describe('shell and token list', () => {
     await expect(appPage.locator('[data-testid="token-table"] thead th')).toHaveText([/^Token/, /^Price \(KAS\)/, /^24h/, /^24h volume \(KAS\)/, /^Market cap \(KAS\)/, /^Spread/, /^Depth ±2% \(KAS\)/]);
     await expect(row.locator('[data-testid^="token-pair-"]')).toHaveCount(0);
     await expect(appPage.getByTestId('network-badge')).toHaveText('testnet-10');
-    await expect(appPage.getByTestId('footer-statement')).toContainText('non-custodial');
+    // an app page has ONE compact footer line (the paragraph and the non-custodial statement are on the Disclaimer page and the landing page)
+    await expect(appPage.getByTestId('footer-statement')).toHaveCount(0);
+    await expect(appPage.getByTestId('footer-disclaimer')).toBeVisible();
+    expect((await appPage.getByTestId('footer').boundingBox())!.height).toBeLessThan(80);
     // the app's version; the engine of an unreleased build (0.0.0) is not shown as a version
     await expect(appPage.getByTestId('footer-versions')).toContainText(/^App \d+\.\d+\.\d+/);
     await expect(appPage.getByTestId('footer-versions')).not.toContainText('0.0.0');
@@ -66,14 +69,16 @@ test.describe('shell and token list', () => {
     await expect(appPage.getByTestId('token-list-view')).toBeVisible();
   });
 
-  test('the status dot shows node and indexer health; a press lists them; nothing else of it stays in the header', async ({ appPage }) => {
+  test('the status dot in the network chip shows node and indexer health; a press on the chip lists them; nothing else of it stays in the header', async ({ appPage }) => {
     const dot = appPage.getByTestId('status-dot');
     await expect(dot).toHaveAttribute('data-node-level', 'ok');
     await expect(dot).toHaveAttribute('data-indexer-code', 'ok');
     await expect(dot).toHaveAttribute('data-level', 'ok');
     await expect(dot).toHaveAttribute('title', /Node: reachable .* Indexer: following/);
     await expect(appPage.getByTestId('status-popover')).toHaveCount(0);
+    await expect(appPage.getByTestId('network-switch').getByTestId('status-dot')).toBeVisible();
     await dot.click();
+    await expect(appPage.getByTestId('status-popover')).toBeVisible();
     await expect(appPage.getByTestId('status-node')).toContainText('Node: reachable');
     await expect(appPage.getByTestId('status-indexer')).toContainText('following');
     await appPage.keyboard.press('Escape');
@@ -285,7 +290,7 @@ test.describe('wallet', () => {
     await expect(appPage.getByTestId('wallet-network')).toHaveCount(0);
     await expect(appPage.getByTestId('wallet-connected')).toHaveAttribute('data-network', 'testnet-10');
     await expect(appPage.getByTestId('banner-network-mismatch')).toHaveCount(0);
-    await appPage.getByTestId('wallet-disconnect').click();
+    await disconnectWallet(appPage);
     await expect(appPage.getByTestId('wallet-connect')).toBeVisible();
   });
 

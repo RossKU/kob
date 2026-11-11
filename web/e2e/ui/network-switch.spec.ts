@@ -38,6 +38,9 @@ test('the chip is a button with a name; it opens the panel with both networks, t
   await expect(page.getByTestId('network-option-mainnet')).not.toHaveAttribute('aria-current', 'true');
   await expect(page.getByTestId('network-option-mainnet')).toBeEnabled();
   await expect(page.getByTestId('network-switch-note')).toContainText('Open review');
+  // the status lines are in the same panel, above the networks (the chip's dot is their summary)
+  await expect(page.getByTestId('status-popover')).toBeVisible();
+  await expect(page.getByTestId('status-node')).toContainText('Node: reachable');
   await expect(page.getByTestId('network-switch-reload')).toContainText('reloads the page');
   await expect(page.getByTestId('network-switch-reload')).toContainText('real funds');
   // the deployment has an indexer, which is for testnet-10: the other network starts without it, and the panel says so
@@ -134,7 +137,7 @@ test('a phone: the chip (the short form with its status dot) opens the panel und
   await page.goto('/#/market');
   await expect(badge(page)).toHaveText('tn10');
   await expect(page.getByTestId('menu-button')).toBeVisible();
-  await expect(page.getByTestId('chip-dot')).toBeVisible();
+  await expect(page.getByTestId('network-switch').getByTestId('status-dot')).toBeVisible();
   await page.getByTestId('network-switch').click();
   const panel = page.getByTestId('network-switch-panel');
   await expect(panel).toBeVisible();

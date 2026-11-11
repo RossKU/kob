@@ -2,11 +2,11 @@ import { createContext, type ComponentChildren } from 'preact';
 import { useContext } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { FeedStatus } from '../../data/indexer';
-import { useFeedStatus, useIndexerStatus, useNodeStatus, useDeepReorgs, type DeepReorgs, type IndexerStatus, type NodeStatus } from './status';
+import { useFeedStatus, useIndexerStatus, useNodeStatus, useDeepReorgs, type DeepReorgs, type IndexerStatus, type LiveNodeStatus } from './status';
 
 export interface SystemStatus {
   indexer: IndexerStatus;
-  node: NodeStatus;
+  node: LiveNodeStatus;
   feed: FeedStatus;
   /** deep re-organisations seen since the page opened (shallow ones are routine and not tracked) */
   deepReorgs: DeepReorgs;

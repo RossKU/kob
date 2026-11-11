@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { clearLastMarket, lastMarketHash, lastMarketKey, marketRouteOf, rememberMarket } from './last-market';
+import { clearLastMarket, lastMarketHash, lastMarketKey, marketRouteOf, rememberMarket, tradeTarget } from './last-market';
 import { pairRoute, tokenRoute } from './router';
 
 const A = 'a'.repeat(64);
@@ -74,5 +74,23 @@ describe('the last market (the Trade tab)', () => {
     g.localStorage = new Proxy(fakeStorage(), { get: () => () => { throw new Error('blocked'); } });
     expect(() => rememberMarket('testnet-10', tokenRoute(A))).not.toThrow();
     expect(lastMarketHash('testnet-10')).toBeNull();
+  });
+});
+
+describe('where the Trade tab leads (always shown)', () => {
+  const token = (covenantId: string, tradable: boolean) => ({ covenantId, tradable });
+  const registry = (...tokens: ReturnType<typeof token>[]) => ({ tokens }) as unknown as Parameters<typeof tradeTarget>[1];
+
+  it('the last market opened wins, whatever the registry lists', () => {
+    expect(tradeTarget(`#/market/${B}`, registry(token(A, true)))).toBe(`#/market/${B}`);
+  });
+
+  it('with none, the first tradable token of the registry (no request is made for it)', () => {
+    expect(tradeTarget(null, registry(token(B, false), token(A, true)))).toBe(`#/market/${A}`);
+  });
+
+  it('with none of those, the market list: the tab is never missing', () => {
+    expect(tradeTarget(null, registry())).toBe('#/market');
+    expect(tradeTarget(null, registry(token(A, false)))).toBe('#/market');
   });
 });

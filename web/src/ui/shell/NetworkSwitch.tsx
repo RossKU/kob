@@ -4,22 +4,25 @@ import { t } from '../../i18n';
 import { NetworkChip } from './NetworkBadge';
 import { networkSwitchPatch, networkSwitchState, otherNetwork, SWITCH_NETWORKS } from './network-switch';
 import { Popover } from './Popover';
+import { StatusLines, useStatusSummary } from './StatusBar';
 
 /**
- * The header's network chip as a control (founder, 2026-11-11: switch the network from the header, like other DEXes): the chip is the button of a small panel
- * that lists the two networks (the current one marked), says what the chip's tooltip says (the open review notice) and that the page reloads (and that mainnet
- * uses real funds). Choosing the other one saves it like the Settings screen does (network only) and reloads, because the network is fixed at load. A
- * deployment that pins its network (`lockNetwork`) keeps the plain chip; a browser with saved servers gets the reason and the way to Settings instead of a
- * switch (network-switch.ts says why).
+ * The header's network chip as a control (founder, 2026-11-11: switch the network from the header, like other DEXes): the chip ("● testnet-10 · open review",
+ * the dot is the node and indexer status) is the button of a small panel that gives the status lines, lists the two networks (the current one marked), says
+ * what the chip's tooltip says (the open review notice) and that the page reloads (and that mainnet uses real funds). Choosing the other one saves it like the
+ * Settings screen does (network only) and reloads, because the network is fixed at load. A deployment that pins its network (`lockNetwork`) has the status
+ * lines and the notice in the panel but no choice; a browser with saved servers gets the reason and the way to Settings instead of a switch (network-switch.ts
+ * says why).
  */
-export function NetworkSwitch(props: { config: AppConfig; short?: boolean; level?: 'ok' | 'warn' | 'bad' | 'unknown'; narrow: boolean }) {
+export function NetworkSwitch(props: { config: AppConfig; short?: boolean; narrow: boolean }) {
   const { config } = props;
+  const status = useStatusSummary();
   const [failed, setFailed] = useState(false);
   // the saved servers are read again on every render and at the choice itself: Settings can have saved some since the header was drawn
   const [, recheck] = useState(0);
   const state = networkSwitchState(config);
-  const chip = <NetworkChip network={config.network} short={props.short} {...(props.level ? { level: props.level } : {})} />;
-  if (state.kind === 'pinned') return chip;
+  const chip = <NetworkChip network={config.network} short={props.short} status={status} />;
+  const pinned = state.kind === 'pinned';
   const choose = (n: NetworkName) => {
     if (n === config.network) return;
     if (networkSwitchState(config).kind !== 'open') return recheck((x) => x + 1);
@@ -30,15 +33,15 @@ export function NetworkSwitch(props: { config: AppConfig; short?: boolean; level
   // the deployment's servers are for its own network: on the other one the page has none (config.ts withoutDeploymentServers)
   const home = config.deploymentNetwork;
   const losesServers = config.network === home && config.indexerUrl !== '';
-  return (
-    <Popover
-      label={t('netswitch.trigger', { network: config.network })}
-      anchor={props.narrow ? 'header' : 'self'}
-      triggerClass="net-chip-trigger"
-      triggerAttrs={{ 'data-testid': 'network-switch', 'aria-haspopup': 'true' }}
-      trigger={chip}
-      panelTestId="network-switch-panel"
-    >
+  const statusBlock = (
+    <div class="stack-xs" data-testid="status-popover">
+      <div class="hp-heading">{t('shell.status.label')}</div>
+      <StatusLines />
+    </div>
+  );
+  // a pinned network: the status and the notice, nothing to choose
+  const choice = pinned ? null : (
+    <>
       <div class="net-options" role="group" aria-label={t('netswitch.title')}>
         {SWITCH_NETWORKS.map((n) => {
           const current = n === config.network;
@@ -71,6 +74,19 @@ export function NetworkSwitch(props: { config: AppConfig; short?: boolean; level
         <p class="small muted menu-note" data-testid="network-switch-servers">{t('netswitch.otherServers', { home, network: otherNetwork(home) })}</p>
       ) : null}
       {failed ? <p class="small menu-note" role="alert" data-testid="network-switch-failed">{t('netswitch.failed')}</p> : null}
+    </>
+  );
+  return (
+    <Popover
+      label={t(pinned ? 'netswitch.statusTrigger' : 'netswitch.trigger', { network: config.network })}
+      anchor={props.narrow ? 'header' : 'self'}
+      triggerClass="net-chip-trigger"
+      triggerAttrs={{ 'data-testid': pinned ? 'network-status' : 'network-switch', 'aria-haspopup': 'true' }}
+      trigger={chip}
+      panelTestId={pinned ? 'network-status-panel' : 'network-switch-panel'}
+    >
+      {statusBlock}
+      {choice}
       <p class="small muted menu-note" data-testid="network-switch-note">{t('preaudit.badgeTip')}</p>
     </Popover>
   );

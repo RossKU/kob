@@ -56,7 +56,7 @@ test.describe('without a wallet, notifications off (the defaults)', () => {
     await closeBell(page);
   });
 
-  test('the status is readable with the notifications off and no wallet; the dialog says both as before', async ({ appPage: page }) => {
+  test('the status is readable with the notifications off and no wallet; the panel says both as before', async ({ appPage: page }) => {
     await page.goto('/#/market');
     await expect(bell(page)).toBeVisible();
     await expect(await statusEntry(page, 'banner-preaudit')).toBeVisible();
@@ -118,12 +118,13 @@ test.describe('in test mode, with what is saved in this browser', () => {
       expect(inner.x + inner.width).toBeLessThanOrEqual(box.x + box.width);
     }
     await expect(dialog.getByTestId('banner-preaudit')).toBeVisible();
-    // taller than the screen: the last line is reached by scrolling the dialog
-    expect(box.height).toBeGreaterThan(500);
+    // taller than the room under the header: the panel hangs under it, ends inside the window and scrolls inside, so its last line is reached by scrolling it
+    expect(box.y + box.height).toBeLessThanOrEqual(500);
+    expect(await dialog.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
     const link = page.getByTestId('notify-settings-link');
     await link.scrollIntoViewIfNeeded();
     await expect(link).toBeInViewport();
-    await page.evaluate(() => document.querySelector('.modal-backdrop')?.scrollTo({ top: 0 }));
+    await dialog.evaluate((e) => e.scrollTo({ top: 0 }));
     await page.screenshot({ path: shot('bell-390') });
 
     await page.getByTestId('banner-stored-extra-indexers').getByRole('link', { name: 'Settings' }).click();

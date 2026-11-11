@@ -18,26 +18,19 @@ describe('the shared footer', () => {
     expect(frame).toContain('© 2025 TradingView, Inc.');
   });
 
-  it('one row of links: App, GitHub, Run an executor, then the Public API only when an indexer is configured', () => {
-    const keys = (ctx: 'app' | 'landing', url: string | null) => footerLinks(ctx, url).map((l) => l.key);
-    expect(keys('landing', null)).toEqual(['landing.footer.app', 'landing.github', 'landing.footer.executor', 'landing.footer.disclaimer']);
-    expect(keys('landing', 'not a url')).not.toContain('landing.footer.api');
+  it('the landing page has the full row: App, GitHub, Run an executor, then the Public API only when an indexer is configured, then the Disclaimer', () => {
+    const keys = (url: string | null) => footerLinks('landing', url).map((l) => l.key);
+    expect(keys(null)).toEqual(['landing.footer.app', 'landing.github', 'landing.footer.executor', 'landing.footer.disclaimer']);
+    expect(keys('not a url')).not.toContain('landing.footer.api');
     const api = footerLinks('landing', 'https://idx.example/').find((l) => l.key === 'landing.footer.api');
     expect(api).toMatchObject({ href: 'https://idx.example/v1/health', testid: 'landing-api' });
-    expect(footerLinks('app', 'https://idx.example').find((l) => l.key === 'landing.footer.api')?.testid).toBe('footer-api');
   });
 
-  it("the app adds its own links after the site's: Settings and data, Recover orders, kaspa.org (a new tab)", () => {
-    const app = footerLinks('app', null);
-    expect(app.filter((l) => l.group === 'site').map((l) => l.key)).toEqual(['landing.footer.app', 'landing.github', 'landing.footer.executor', 'landing.footer.disclaimer']);
-    expect(app.filter((l) => l.group === 'app').map((l) => [l.key, l.href, !!l.external])).toEqual([
-      ['shell.footer.settings', '#/settings', false],
-      ['shell.footer.recover', '#/portfolio/recover', false],
-      ['shell.footer.kaspa', 'https://kaspa.org', true],
-    ]);
-    expect(footerLinks('landing', 'https://idx.example').some((l) => l.group === 'app')).toBe(false);
-    // the App link stays in the app's own origin (a self-hosted copy stays on its host)
-    expect(app[0]!.href).toBe('#/market');
+  it('an app page has ONE compact line: GitHub and the Disclaimer only (the security policy is the footer itself); the rest is on the landing page', () => {
+    const app = footerLinks('app', 'https://idx.example');
+    expect(app.map((l) => l.key)).toEqual(['landing.github', 'landing.footer.disclaimer']);
+    expect(app.some((l) => l.group === 'app')).toBe(false);
+    expect(app.at(-1)).toMatchObject({ href: '#/disclaimer', testid: 'footer-disclaimer' });
   });
 
   it('Support stands before the Disclaimer on every page, only when there is a donation address', () => {
@@ -50,7 +43,7 @@ describe('the shared footer', () => {
   });
 
   it('every link text exists in the dictionary', () => {
-    for (const l of footerLinks('app', 'https://idx.example', true)) {
+    for (const l of [...footerLinks('app', 'https://idx.example', true), ...footerLinks('landing', 'https://idx.example', true)]) {
       expect(has(l.key), l.key).toBe(true);
       if (l.title) expect(has(l.title), l.title).toBe(true);
     }

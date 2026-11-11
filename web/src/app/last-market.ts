@@ -1,8 +1,10 @@
 // The "Trade" tab of the header leads back to the market the viewer opened last: a token's KAS market (`#/market/<token>`) or a token/token pair
 // (`#/market/<base>/<quote>`), whichever it was. Kept per network in localStorage (every access guarded: a private window, blocked site data and a full
-// disk leave the tab out, never break the page). Nothing stored: no tab. A stored value that is no market route is dropped when it is read; a market that
-// does not resolve (the token page's and the pair page's "not found") is forgotten by `ForgetMarket`.
+// disk store nothing, never break the page). The tab is ALWAYS shown (the tab bar must not shift between pages, review L-09): with nothing stored it leads
+// to the first market the registry lists (`tradeTarget`), and with none of those to the market list. A stored value that is no market route is dropped when
+// it is read; a market that does not resolve (the token page's and the pair page's "not found") is forgotten by `ForgetMarket`.
 import { useEffect, useState } from 'preact/hooks';
+import type { TokenRegistry } from '../kob/registry';
 import { parseHash, pairRoute, routeToHash, tokenRoute, type Route } from './router';
 
 export const lastMarketKey = (network: string): string => `kob.lastMarket.${network}`;
@@ -80,4 +82,14 @@ export function useLastMarket(network: string, route: Route): string | null {
     rememberMarket(network, route);
   }
   return lastMarketHash(network);
+}
+
+/**
+ * Where the Trade tab leads: the last market opened (`last`), else the first tradable token the registry lists (it is loaded at boot: no request is made
+ * for this), else the market list. Never null, so the tab is always there.
+ */
+export function tradeTarget(last: string | null, registry: Pick<TokenRegistry, 'tokens'>): string {
+  if (last) return last;
+  const first = registry.tokens.find((tk) => tk.tradable);
+  return first ? routeToHash(tokenRoute(first.covenantId)) : '#/market';
 }

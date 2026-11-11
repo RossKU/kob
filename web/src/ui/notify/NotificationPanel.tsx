@@ -1,7 +1,8 @@
-// The notification centre: the bell of the header and the dialog it opens: the current status (what holds now, ui/shell/status-entries.ts), then the
-// notifications (newest first, mark all read, clear, the x402 invoice watch box, a link to Settings). The current status does not depend on the notifications:
-// it is there with them off or no wallet connected, and Clear does not touch it; its worst tone colours the bell.
-// The dialog always lists what the bell counts (TN10 2026-10-17: a badge "5" opened a dialog that only said the notifications were off); whether
+// The notification centre: the bell of the header and the panel it opens under itself (a popover like the network chip's, review L-06; on a phone as wide as
+// the header): the current status (what holds now, ui/shell/status-entries.ts), then the notifications (newest first, mark all read, clear, the x402 invoice
+// watch box, a link to Settings). The current status does not depend on the notifications: it is there with them off or no wallet connected, and Clear does not
+// touch it; its worst tone colours the bell.
+// The panel always lists what the bell counts (TN10 2026-10-17: a badge "5" opened a panel that only said the notifications were off); whether
 // new ones are collected is one line above the list, with its switch.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
@@ -9,8 +10,10 @@ import { useFiat } from '../../app/use-fiat';
 import type { ConfigWarning, StoredOverride } from '../../config';
 import { formatDateTime, t } from '../../i18n';
 import type { NotificationEvent } from '../../kob/notifications';
-import { Badge, Button, Field, Modal, shortId } from '../kit';
+import { Badge, Button, Field, shortId } from '../kit';
+import { Popover } from '../shell/Popover';
 import { StatusBanner, useStatusEntries } from '../shell/Banners';
+import { useNarrow } from '../shell/narrow';
 import { worstTone, type StatusEntry } from '../shell/status-entries';
 import { describeEvent } from './describe';
 import { useNotify } from './NotifyProvider';
@@ -28,7 +31,7 @@ function BellIcon() {
   );
 }
 
-// A tap on a notification marks that one read and leaves the dialog open (several can be read in a row); only the arrow at its right goes to the
+// A tap on a notification marks that one read and leaves the panel open (several can be read in a row); only the arrow at its right goes to the
 // page it is about. A text link inside the body took taps meant for the body on Android (Chrome moves a near-miss onto a link).
 function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
   const { registry } = useServices();
@@ -83,18 +86,25 @@ function InvoiceWatch() {
   );
 }
 
-export function NotificationPanel(props: { status: readonly StatusEntry[]; onClose: () => void }) {
+/** The panel's content: `close` closes the popover (a link followed, the Close button) and puts the focus back on the bell. */
+export function NotificationPanel(props: { status: readonly StatusEntry[]; close: () => void }) {
   const n = useNotify();
-  const close = props.onClose;
+  const close = props.close;
   const body = useRef<HTMLDivElement>(null);
-  // an entry that left took the focus with it (its dismiss button, "Use the indexer again"): it stays in the dialog, or Escape and Tab would stop working here
+  // an entry that left took the focus with it (its dismiss button, "Use the indexer again"): it stays in the panel, or Escape and Tab would stop working here
   const count = props.status.length;
   useEffect(() => {
-    if (document.activeElement === document.body) body.current?.closest<HTMLElement>('.modal-body')?.focus({ preventScroll: true });
+    if (document.activeElement === document.body) body.current?.focus({ preventScroll: true });
   }, [count]);
   return (
-    <Modal title={t('notify.title')} onClose={close} data-testid="notify-panel">
-      <div class="stack" ref={body}>
+    <div class="notify-pop" ref={body} tabIndex={-1}>
+      <div class="notify-pop-head">
+        <h2>{t('notify.title')}</h2>
+        <Button small variant="ghost" onClick={close} aria-label={t('common.close')}>
+          {'×'}
+        </Button>
+      </div>
+      <div class="stack">
         {count ? (
           <section class="stack-sm notify-status" data-testid="notify-status">
             <h3>{t('notify.current.title')}</h3>
@@ -130,41 +140,40 @@ export function NotificationPanel(props: { status: readonly StatusEntry[]; onClo
         )}
         <a href="#/settings" onClick={close} data-testid="notify-settings-link">{t('notify.settings')}</a>
       </div>
-    </Modal>
+    </div>
   );
 }
 
-/** Header bell with the unread badge, coloured by the worst of the current status; opens the panel. */
+/** Header bell with the unread badge, coloured by the worst of the current status; opens the panel under it. */
 export function NotifyBell(props: { warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
   const n = useNotify();
   const status = useStatusEntries(props.warnings, props.storedOverrides);
-  const [open, setOpen] = useState(false);
+  const narrow = useNarrow();
   if (!SHOW_BELL_WHEN_OFF && !n.settings.enabled && !status.length) return null;
   const current = status.length ? t('notify.current.count', { count: status.length }) : '';
   const notifications = n.unread > 0 ? t('notify.bell.unread', { count: n.unread }) : t('notify.bell');
   const label = current ? `${notifications}. ${current}` : notifications;
   return (
-    <>
-      {/* one item of the header's tools: the row's measured width (narrow.ts) sums them, so the live region must not count as one */}
-      <span class="notify-bell-item">
-        <Button
-          small
-          variant="ghost"
-          class="notify-bell"
-          data-testid="notify-bell"
-          data-status-tone={worstTone(status) ?? 'none'}
-          data-status-count={status.length}
-          aria-label={label}
-          title={label}
-          onClick={() => setOpen(true)}
-        >
-          <BellIcon />
-          {n.unread > 0 ? <Badge tone="info" data-testid="notify-unread">{n.unread > 99 ? '99+' : n.unread}</Badge> : null}
-        </Button>
-        {/* a banner on the page was announced when it appeared: the count is, now that the entries are behind the bell */}
-        <span class="sr-only" role="status" data-testid="notify-status-live">{current}</span>
-      </span>
-      {open ? <NotificationPanel status={status} onClose={() => setOpen(false)} /> : null}
-    </>
+    // one item of the header's tools: the row's measured width (narrow.ts) sums them, so the live region must not count as one
+    <span class="notify-bell-item">
+      <Popover
+        label={label}
+        anchor={narrow ? 'header' : 'self'}
+        triggerClass="notify-bell"
+        triggerAttrs={{ 'data-testid': 'notify-bell', 'data-status-tone': worstTone(status) ?? 'none', 'data-status-count': status.length, title: label, 'aria-haspopup': 'true' }}
+        panelTestId="notify-panel"
+        panelClass="hp-panel-wide"
+        trigger={
+          <>
+            <BellIcon />
+            {n.unread > 0 ? <Badge tone="info" data-testid="notify-unread">{n.unread > 99 ? '99+' : n.unread}</Badge> : null}
+          </>
+        }
+      >
+        {(close) => <NotificationPanel status={status} close={close} />}
+      </Popover>
+      {/* a banner on the page was announced when it appeared: the count is, now that the entries are behind the bell */}
+      <span class="sr-only" role="status" data-testid="notify-status-live">{current}</span>
+    </span>
   );
 }

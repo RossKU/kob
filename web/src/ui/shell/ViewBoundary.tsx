@@ -1,6 +1,6 @@
 import { Component, type ComponentChildren } from 'preact';
 import { t } from '../../i18n';
-import { Banner, Button } from '../kit';
+import { Banner, Button, RawDetails } from '../kit';
 
 interface State { error: Error | null }
 
@@ -33,7 +33,9 @@ export class ViewBoundary extends Component<{ children?: ComponentChildren; rese
           data-testid="view-crashed"
           actions={<Button small onClick={() => this.setState({ error: null })}>{t('common.retry')}</Button>}
         >
-          {t('shell.view.error', { message: this.state.error.message })}
+          {/* the sentence first, the error's own text behind "Details" (review L-08) */}
+          <span>{t('shell.view.error')}</span>
+          <RawDetails text={this.state.error.message} />
         </Banner>
       );
     }

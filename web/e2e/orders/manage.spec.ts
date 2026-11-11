@@ -32,14 +32,15 @@ test.describe('cancel', () => {
 
     expect((await mock.order(id)).status).toBe('cancelled');
     expect(await tokens(mock)).toBe(3n * TOKEN);
-    // its toast sits top right, below the header, clear of the wallet chip
+    // its toast sits bottom right, clear of the header and its wallet chip (review L-02)
     const toast = page.getByTestId('toast-ok').first();
     await expect(toast).toBeVisible();
     const [tb, hb, cb, vp] = [await toast.boundingBox(), await page.locator('header.header').boundingBox(), await page.getByTestId('wallet-connected').boundingBox(), page.viewportSize()!];
     expect(tb!.y, 'below the header').toBeGreaterThanOrEqual(hb!.y + hb!.height);
     expect(tb!.y, 'clear of the wallet chip').toBeGreaterThanOrEqual(cb!.y + cb!.height);
     expect(vp.width - (tb!.x + tb!.width), 'at the right edge').toBeLessThanOrEqual(16);
-    expect(tb!.y, 'at the top').toBeLessThan(vp.height / 2);
+    expect(tb!.y, 'at the bottom').toBeGreaterThan(vp.height / 2);
+    expect(vp.height - (tb!.y + tb!.height), 'a little above the bottom edge').toBeLessThanOrEqual(24);
     // the order moves from Active to History
     await expect(page.getByTestId(`order-row-${id}`)).toHaveCount(0, { timeout: 15_000 });
     await page.getByTestId('orders-tab-history').click();

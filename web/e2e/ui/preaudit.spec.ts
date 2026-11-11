@@ -18,15 +18,13 @@ test.describe('open review notice', () => {
   });
 
   test('footer line, header badge and the entry of the bell; the dismissal is remembered across a reload', async ({ appPage: page }) => {
-    const footer = page.getByTestId('footer-preaudit');
-    await expect(footer).toBeVisible();
-    // the shared footer's disclaimer (the landing page's wording, for the configured network) and the app's non-custodial statement
-    await expect(footer).toContainText('Open review.');
-    await expect(footer).toContainText('The specification is not final, and no review can show the code is free of bugs.');
-    await expect(footer).toContainText('Not financial advice');
-    await expect(footer).toContainText('publishes software and information only');
-    await expect(footer).toContainText('non-custodial');
+    // an app page has ONE compact footer line (review L-04): the open review lead, the Disclaimer and the security policy; the long wording is on the
+    // Disclaimer page (above) and the landing page, one link away
+    const footer = page.getByTestId('footer');
+    await expect(page.getByTestId('footer-preaudit')).toHaveText('Open review.');
+    await expect(footer.getByTestId('footer-disclaimer')).toHaveAttribute('href', '#/disclaimer');
     await expect(footer.getByRole('link', { name: 'Security policy' })).toHaveAttribute('href', /SECURITY\.md$/);
+    expect((await footer.boundingBox())!.height, 'one line').toBeLessThan(80);
     await expect(page.getByTestId('preaudit-badge')).toHaveText('open review');
 
     const banner = await statusEntry(page, 'banner-preaudit');

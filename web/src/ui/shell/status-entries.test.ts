@@ -40,7 +40,7 @@ describe('statusEntries', () => {
     const w = [{ layer: 'query', field: 'node', message: 'invalid url, ignored' }];
     expect(one({ warnings: w })).toMatchObject({ testid: 'banner-config', tone: 'warn', title: t('shell.banner.configWarnings'), warnings: w });
     expect(one({ testMode: true })).toMatchObject({ testid: 'banner-test-mode', tone: 'warn', text: t('shell.banner.testMode') });
-    expect(one({ registryError: 'boom' })).toMatchObject({ testid: 'banner-registry', tone: 'warn', text: t('shell.banner.registry', { message: 'boom' }) });
+    expect(one({ registryError: 'boom' })).toMatchObject({ testid: 'banner-registry', tone: 'warn', text: t('shell.banner.registry'), raw: 'boom' });
   });
 
   it('a stored node, indexer, indexer list or query switch: named, with a link to Settings', () => {
@@ -70,8 +70,8 @@ describe('statusEntries', () => {
       testid: 'banner-wallet-network-restored', tone: 'info', text: t('shell.wallet.noticeRestored'), onDismiss: dismissNotice,
     });
     expect(one({ dismissNotice, notice: { kind: 'wallet-lost', wallet: 'KasWare' } })).toMatchObject({ testid: 'banner-wallet-lost', tone: 'error', onDismiss: dismissNotice });
-    const error = one({ walletError: 'refused' });
-    expect(error).toMatchObject({ testid: 'banner-wallet-error', tone: 'error', text: t('shell.wallet.error', { message: 'refused' }) });
+    const error = one({ walletError: 'User rejected the request' });
+    expect(error).toMatchObject({ testid: 'banner-wallet-error', tone: 'error', text: `${t('shell.wallet.error')} ${t('common.error.refused')}`, raw: 'User rejected the request' });
     expect(error.onDismiss).toBeUndefined();
   });
 
@@ -79,9 +79,11 @@ describe('statusEntries', () => {
     expect(ids({ node: { reachable: undefined, error: null } })).toEqual([]);
     const reason = t('shell.banner.nodeNoAnswer');
     expect(one({ node: { reachable: false, error: null } })).toMatchObject({
-      testid: 'banner-node', tone: 'error', title: t('shell.banner.nodeTitle'), text: t('shell.banner.nodeDown', { url: 'wss://node.example', reason, network: 'testnet-10' }),
+      testid: 'banner-node', tone: 'error', title: t('shell.banner.nodeTitle'), text: t('shell.banner.nodeDown', { url: 'wss://node.example', network: 'testnet-10' }), raw: reason,
     });
-    expect(one({ nodeUrl: '', node: { reachable: false, error: new Error('no route') } }).text).toBe(t('shell.banner.nodeDownResolver', { reason: 'no route', network: 'testnet-10' }));
+    const resolver = one({ nodeUrl: '', node: { reachable: false, error: new Error('no route') } });
+    expect(resolver.text).toBe(t('shell.banner.nodeDownResolver', { network: 'testnet-10' }));
+    expect(resolver.raw).toBe('no route');
   });
 
   it('a backup indexer is info, a warning once its history may be partial', () => {
@@ -120,7 +122,7 @@ describe('statusEntries', () => {
   });
 
   it('lists the worst first, keeping the order within a tone', () => {
-    expect(ids({ preAudit: true, testMode: true, registryError: 'boom', node: { reachable: false, error: null }, walletError: 'refused' })).toEqual([
+    expect(ids({ preAudit: true, testMode: true, registryError: 'boom', node: { reachable: false, error: null }, walletError: 'User rejected the request' })).toEqual([
       'banner-wallet-error', 'banner-node', 'banner-test-mode', 'banner-registry', 'banner-preaudit',
     ]);
   });

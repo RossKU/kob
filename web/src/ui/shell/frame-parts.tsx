@@ -126,8 +126,6 @@ export function SiteHeader(props: {
   innerRef?: Ref<HTMLDivElement>;
   layout?: 'narrow' | 'wide';
   brandName?: boolean;
-  /** the wide row has room for the word beside the wallet's disconnect icon (narrow.ts) */
-  disconnectText?: boolean;
   /** the app's wide row with its tabs in the true centre (narrow.ts useHeaderLayout) */
   centred?: boolean;
   testid?: string;
@@ -140,7 +138,6 @@ export function SiteHeader(props: {
       data-scrolled={scrolled ? '' : undefined}
       data-layout={props.layout}
       data-brand={props.brandName ? 'name' : undefined}
-      data-disconnect={props.disconnectText ? 'text' : undefined}
       data-centred={props.centred ? '' : undefined}
       data-testid={props.testid}
     >
@@ -169,7 +166,12 @@ export interface FooterData {
   brandLabel?: string;
 }
 
-/** The footer from its data alone (no services): the app's and the landing page's, and the landing-only page's, which has no services at all. */
+/**
+ * The footer from its data alone (no services): the app's and the landing page's, and the landing-only page's, which has no services at all.
+ * The landing page (and the landing-only page) keep the full footer: the brand, the tagline, the links and the network's disclaimer paragraph. An app page gets ONE
+ * compact line (review L-04): the brand, the version, the open review lead, a few links (the Disclaimer, the security policy, GitHub), the indexer trust and the
+ * chart library's attribution. The paragraph's words are on the Disclaimer page and the landing page, one link away.
+ */
 export function FooterView(props: FooterData) {
   const app = props.context === 'app';
   const { net, links } = props;
@@ -183,40 +185,30 @@ export function FooterView(props: FooterData) {
       {t(l.key)}
     </a>
   );
-  return (
-    <footer class="footer" data-testid="footer" data-context={props.context}>
-      <div class="container">
-        <div class="ff-top">
-          <Brand class="ff-brand" testid={app ? 'footer-brand' : 'landing-footer-brand'} onClick={props.brandOnClick} label={props.brandLabel} />
-          <span class="ff-tag">{t('shell.footer.protocol')}</span>
-          <nav class="ff-links" aria-label={t('landing.footer.nav')}>
-            {links.filter((l) => l.group === 'site').map(link)}
-            {app ? <span class="ff-sep" aria-hidden="true" /> : null}
-            {links.filter((l) => l.group === 'app').map(link)}
-          </nav>
-        </div>
-        {/* the network comes from the build's config: no "testnet" on mainnet */}
-        <p class="ff-disc" data-testid={app ? 'footer-preaudit' : 'landing-disclaimer'}>
-          <strong>{net.discLead}</strong> {net.discBody}
-          {app ? (
-            <>
-              {' '}
-              <span data-testid="footer-statement">{t('shell.footer.statement')}</span>
-            </>
-          ) : null}{' '}
-          <a href={SECURITY_POLICY_URL} {...EXTERNAL}>
-            {t('preaudit.policy')}
-          </a>
-        </p>
-        <p class="ff-meta">
-          <span data-testid="footer-versions">{props.versions}</span>
-          {app && props.trust ? (
-            <span data-testid="footer-indexer-trust" data-trust={props.trust}>
+  const security = (
+    <a href={SECURITY_POLICY_URL} data-testid="footer-security" {...EXTERNAL}>
+      {t('preaudit.policy')}
+    </a>
+  );
+  if (app) {
+    return (
+      <footer class="footer footer-compact" data-testid="footer" data-context="app">
+        <div class="container ff-line">
+          <Brand class="ff-brand" testid="footer-brand" onClick={props.brandOnClick} label={props.brandLabel} />
+          <span class="ff-meta-item" data-testid="footer-versions">{props.versions}</span>
+          {props.trust ? (
+            <span class="ff-meta-item" data-testid="footer-indexer-trust" data-trust={props.trust}>
               <a href="#/settings">{t(`shell.indexers.badge.${props.trust}`)}</a>
             </span>
           ) : null}
+          {/* the network comes from the build's config: no "testnet" on mainnet */}
+          <strong class="ff-lead" data-testid="footer-preaudit">{net.discLead}</strong>
+          <nav class="ff-links" aria-label={t('landing.footer.nav')}>
+            {links.map(link)}
+            {security}
+          </nav>
           {showsChartNotice(props.context) ? (
-            <span data-testid="footer-chart-notice">
+            <span class="ff-meta-item" data-testid="footer-chart-notice">
               {t('shell.footer.charts')}{' '}
               <a href="https://www.tradingview.com/" {...EXTERNAL}>
                 TradingView Lightweight Charts™
@@ -224,6 +216,26 @@ export function FooterView(props: FooterData) {
               © 2025 TradingView, Inc.
             </span>
           ) : null}
+        </div>
+      </footer>
+    );
+  }
+  return (
+    <footer class="footer" data-testid="footer" data-context={props.context}>
+      <div class="container">
+        <div class="ff-top">
+          <Brand class="ff-brand" testid="landing-footer-brand" onClick={props.brandOnClick} label={props.brandLabel} />
+          <span class="ff-tag">{t('shell.footer.protocol')}</span>
+          <nav class="ff-links" aria-label={t('landing.footer.nav')}>
+            {links.filter((l) => l.group === 'site').map(link)}
+          </nav>
+        </div>
+        {/* the network comes from the build's config: no "testnet" on mainnet */}
+        <p class="ff-disc" data-testid="landing-disclaimer">
+          <strong>{net.discLead}</strong> {net.discBody} {security}
+        </p>
+        <p class="ff-meta">
+          <span data-testid="footer-versions">{props.versions}</span>
         </p>
       </div>
     </footer>

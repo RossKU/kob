@@ -1,9 +1,8 @@
 import { t, formatNumber } from '../../i18n';
 import { formatLag } from './health';
-import { Popover } from './Popover';
 import { useSystemStatus, type SystemStatus } from './StatusProvider';
 
-type Level = 'ok' | 'warn' | 'bad' | 'unknown';
+export type Level = 'ok' | 'warn' | 'bad' | 'unknown';
 
 const dot = (level: Level) => <span class={`dot ${level === 'unknown' ? '' : level}`} aria-hidden="true" />;
 
@@ -39,28 +38,28 @@ export function StatusLines() {
   );
 }
 
-/** The status dot of the header's one row: the worse of the node and the indexer; a press opens the lines. A problem is also an entry of the bell's current status (status-entries.ts), and it colours the bell. */
-export function StatusDot() {
+/**
+ * What the status dot inside the header's network chip says: the worse of the node and the indexer as its level, the two levels and the indexer's code for the
+ * tests and the page's own scripts, and the one-line summary for its tooltip. A problem is also an entry of the bell's current status (status-entries.ts), and it
+ * colours the bell: the dot is never the only place it shows.
+ */
+export interface StatusSummary {
+  level: Level;
+  nodeLevel: Level;
+  indexerLevel: Level;
+  indexerCode: string;
+  summary: string;
+}
+
+export function useStatusSummary(): StatusSummary {
   const { node, indexer } = useSystemStatus();
   const a = indexer.assessment;
   const nodeLevel = nodeLevelOf(node);
-  const level = worst(nodeLevel, a.level);
-  const summary = `${t('shell.status.node')}: ${nodeTextOf(node)} · ${t('shell.status.indexer')}: ${indexerTextOf(a)}`;
-  return (
-    <Popover
-      label={t('shell.status.label')}
-      trigger={dot(level)}
-      triggerClass="status-dot"
-      triggerAttrs={{ 'data-testid': 'status-dot', 'data-level': level, 'data-node-level': nodeLevel, 'data-indexer-level': a.level, 'data-indexer-code': a.code, title: summary }}
-      panelTestId="status-popover"
-    >
-      <StatusLines />
-    </Popover>
-  );
-}
-
-/** The level a menu button shows as a small dot. */
-export function useStatusLevel(): Level {
-  const { node, indexer } = useSystemStatus();
-  return worst(nodeLevelOf(node), indexer.assessment.level);
+  return {
+    level: worst(nodeLevel, a.level),
+    nodeLevel,
+    indexerLevel: a.level,
+    indexerCode: a.code,
+    summary: `${t('shell.status.node')}: ${nodeTextOf(node)} · ${t('shell.status.indexer')}: ${indexerTextOf(a)}`,
+  };
 }

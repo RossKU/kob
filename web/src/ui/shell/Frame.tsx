@@ -15,9 +15,10 @@ import { FooterView, releasedVersion } from './frame-parts';
 export * from './frame-parts';
 
 /**
- * The footer of every page: the brand, the tagline and one row of links; the network's disclaimer (the site publishes software and information only) with
- * the security policy; the versions. The app adds its own links, the non-custodial statement, the indexer trust and the chart library's attribution
- * (TradingView's Apache-2.0 NOTICE, required on every page that can show its charts; the landing page has none).
+ * The footer: the landing page's is the full one (the brand, the tagline and one row of links; the network's disclaimer, the site publishes software and
+ * information only, with the security policy; the versions). An app page has ONE compact line (FooterView): the brand, the version, the open review lead, the
+ * Disclaimer, the security policy and GitHub, the indexer trust and the chart library's attribution (TradingView's Apache-2.0 NOTICE, required on every page that
+ * can show its charts; the landing page has none).
  */
 export function SiteFooter(props: { context: FrameContext; brandOnClick?: (e: Event) => void; brandLabel?: string }) {
   const services = useServices();

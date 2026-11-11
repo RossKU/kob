@@ -2,7 +2,7 @@
 // accepted order: a wallet that declines, a wallet that signs the wrong thing, a network mismatch, a node that refuses the transaction.
 // Wallet popups are blind to token semantics, so the failure modes are what protects the user: none of them may broadcast anything.
 import { test, expect } from '../fixtures';
-import { fund, openMarket, gotoOrders } from '../helpers/env';
+import { disconnectWallet, fund, openMarket, gotoOrders } from '../helpers/env';
 import { runFlow, seedOrders } from '../helpers/orders';
 import { clickPlace, expectStopped, expectWalletSigned, fillFields, pickType, placeOrder, placedBy, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -219,7 +219,7 @@ test.describe('blocked signing', () => {
     await openMarket(page, mock);
     await sellTicket(page);
     await expect(page.getByTestId('order-place')).toBeEnabled();
-    await page.getByTestId('wallet-disconnect').click();
+    await disconnectWallet(page);
     await expect(page.getByTestId('order-need-wallet')).toBeVisible();
     await expect(page.getByTestId('order-place')).toBeDisabled();
     expect(await wallet!.calls()).toHaveLength(0);

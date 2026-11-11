@@ -124,6 +124,12 @@ export async function connectWallet(page: Page, wallet: WalletName = 'kasware'):
   await expect(page.getByTestId('wallet-address')).toBeVisible();
 }
 
+/** Opens the connected wallet chip's menu (it may be open already) and presses Disconnect: the chip is one button, its menu holds Copy, the explorer and Disconnect. */
+export async function disconnectWallet(page: Page): Promise<void> {
+  if (!(await page.getByTestId('wallet-disconnect').isVisible())) await page.getByTestId('wallet-menu').click();
+  await page.getByTestId('wallet-disconnect').click();
+}
+
 /** Gives a key plenty of KAS (several UTXOs, so parallel carriers never run short) and EXKCC. */
 export async function fund(mock: MockClient, key: KeyName = 'alice', o: { kas?: bigint; tokens?: bigint; utxos?: number } = {}): Promise<void> {
   await mock.giveKas(key, (o.kas ?? 2000n) * KAS, o.utxos ?? 3);

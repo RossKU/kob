@@ -3,7 +3,7 @@
 // token; the app shows no popup of its own for this wallet) and signs only after a click on its own Confirm button.
 import type { Frame, Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { KAS, fund, mockClock, openConnect, openMarket, gotoOrders } from '../helpers/env';
+import { KAS, disconnectWallet, fund, mockClock, openConnect, openMarket, gotoOrders } from '../helpers/env';
 import { chooseOption } from '../helpers/dropdown';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted, type ReceiptRead } from '../helpers/ticket';
@@ -236,7 +236,7 @@ test('reload and disconnect forget the key; a key that does not parse is refused
 
   await connectKey(page);
   await expect(page.getByTestId('wallet-address')).toBeVisible();
-  await page.getByTestId('wallet-disconnect').click();
+  await disconnectWallet(page);
   await expect(page.getByTestId('wallet-connected')).toHaveCount(0);
   await expect(page.getByTestId('signer-frame')).toHaveCount(0);
   // connecting again needs the key again: the new frame starts empty

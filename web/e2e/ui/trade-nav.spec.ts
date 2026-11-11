@@ -1,6 +1,7 @@
 // The header's "Trade" tab (Market | Trade | Portfolio | Activity | ...): Market is the list; Trade leads back to the market opened last (a token's KAS market or a
-// token/token pair, the exact route), per network in localStorage. Absent (not disabled) until a market has been opened. A stored value that is no market
-// route, or a market that does not resolve, is dropped. Trade is the active tab on a market page, Market only on the list. The phone menu has it too. 360 px fit.
+// token/token pair, the exact route), per network in localStorage. It is ALWAYS there (the tab bar never shifts between pages): with nothing stored it leads to
+// the first market the registry lists. A stored value that is no market route, or a market that does not resolve, is dropped. Trade is the active tab on a
+// market page, Market only on the list. The phone menu has it too. 360 px fit.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -23,12 +24,20 @@ async function listPair(page: Page): Promise<void> {
   );
 }
 
-test('no Trade tab on a first visit: it is absent, not disabled', async ({ appPage: page }) => {
+test('a first visit has the Trade tab too: it leads to the first listed market, and nothing is stored until a market is opened', async ({ appPage: page, mock }) => {
   await page.goto('/#/market');
   await expect(page.getByTestId('nav-market')).toBeVisible();
-  await expect(page.getByTestId('nav-trade')).toHaveCount(0);
+  await expect(page.getByTestId('nav-trade')).toBeVisible();
+  await expect(page.getByTestId('nav-trade')).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-market')).toHaveAttribute('aria-current', 'page');
+  // the registry's first tradable token (the mock's EXKCC), else the list: a real market route either way
+  const token = (await mock.token()).covenant_id;
+  await expect(page.getByTestId('nav-trade')).toHaveAttribute('href', new RegExp('^#/market(/' + token + ')?$'));
   expect(await stored(page)).toBeNull();
+  // the tab does not move between the list and another page
+  const x = (await page.getByTestId('nav-trade').boundingBox())!.x;
+  await page.getByTestId('nav-activity').click();
+  expect((await page.getByTestId('nav-trade').boundingBox())!.x).toBeCloseTo(x, 0);
 });
 
 test('opening a market adds Trade (next to Market); Market then leads to the list and Trade back to the market', async ({ appPage: page, mock }) => {
@@ -97,36 +106,37 @@ test('a pair is remembered as a pair', async ({ appPage: page, mock }) => {
   expect(await stored(page)).toBe(`#/market/${base}`);
 });
 
-test('a stored value that is no market route is dropped: no Trade tab', async ({ appPage: page }) => {
+test('a stored value that is no market route is dropped: Trade leads to the first listed market', async ({ appPage: page }) => {
   await page.addInitScript((k) => localStorage.setItem(k, '#/portfolio'), KEY);
   await page.goto('/#/market');
   await expect(page.getByTestId('nav-market')).toBeVisible();
-  await expect(page.getByTestId('nav-trade')).toHaveCount(0);
+  await expect(page.getByTestId('nav-trade')).not.toHaveAttribute('href', '#/portfolio');
   expect(await stored(page)).toBeNull();
 });
 
-test('a market that no longer resolves is forgotten and Trade falls back out of the header', async ({ appPage: page }) => {
+test('a market that no longer resolves is forgotten and Trade falls back to the first listed market', async ({ appPage: page }) => {
+  const gone = '9d'.repeat(32);
   await page.addInitScript((k) => localStorage.setItem(k, `#/market/${'9d'.repeat(32)}`), KEY);
   await page.goto('/#/market');
-  await expect(page.getByTestId('nav-trade')).toBeVisible();
+  await expect(page.getByTestId('nav-trade')).toHaveAttribute('href', `#/market/${gone}`);
   await page.getByTestId('nav-trade').click();
   await expect(page.getByTestId('token-not-found')).toBeVisible();
-  await expect(page.getByTestId('nav-trade')).toHaveCount(0);
+  await expect(page.getByTestId('nav-trade')).not.toHaveAttribute('href', `#/market/${gone}`);
   expect(await stored(page)).toBeNull();
-  // the list is a click away, and it stays without the tab
+  // the list is a click away, and the tab is still there
   await page.getByTestId('nav-market').click();
   await expect(page.getByTestId('token-list-view')).toBeVisible();
-  await expect(page.getByTestId('nav-trade')).toHaveCount(0);
+  await expect(page.getByTestId('nav-trade')).toBeVisible();
 });
 
-test('without storage the app still works and there is no Trade tab', async ({ appPage: page, mock }) => {
+test('without storage the app still works and the Trade tab is there', async ({ appPage: page, mock }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, 'localStorage', { get: () => { throw new Error('blocked'); } });
   });
   const token = (await mock.token()).covenant_id;
   await page.goto(`/#/market/${token}`);
   await expect(page.getByTestId('nav-market')).toBeVisible();
-  await expect(page.getByTestId('nav-trade')).toHaveCount(0);
+  await expect(page.getByTestId('nav-trade')).toBeVisible();
 });
 
 for (const width of [360, 390]) {

@@ -9,6 +9,7 @@ import type { ConfigWarning, StoredOverride } from '../../config';
 import type { FailoverState } from '../../data/indexer-failover';
 import type { StandaloneState } from '../../data/standalone';
 import { t } from '../../i18n';
+import { friendlyErrorText } from '../kit/friendly-error';
 import { shortAddress } from '../kit/format';
 import { formatLag, type HealthAssessment } from './health';
 import { SECURITY_POLICY_URL } from './preaudit';
@@ -25,6 +26,8 @@ export interface StatusEntry {
   class?: string;
   title?: string;
   text?: string;
+  /** the raw technical text behind the sentence (a server or wallet string): shown only on request, behind "Details" (review L-08) */
+  raw?: string;
   /** the settings that were ignored, as a list */
   warnings?: readonly ConfigWarning[];
   /** standalone mode: the connecting line, and the offer to go back to the indexer */
@@ -120,16 +123,17 @@ export function statusEntries(f: StatusFacts): StatusEntry[] {
   if (f.testMode) out.push({ key: 'test', tone: 'warn', testid: 'banner-test-mode', text: t('shell.banner.testMode') });
   // a node / indexer saved in this browser's settings applies to every visit: said on every page
   out.push(...f.storedOverrides.map(storedEntry));
-  if (f.registryError) out.push({ key: 'registry', tone: 'warn', testid: 'banner-registry', text: t('shell.banner.registry', { message: f.registryError }) });
+  if (f.registryError) out.push({ key: 'registry', tone: 'warn', testid: 'banner-registry', text: t('shell.banner.registry'), raw: f.registryError });
   const notice = walletNoticeEntry(f.notice, f.dismissNotice);
   if (notice) out.push(notice);
-  if (f.walletError) out.push({ key: 'wallet', tone: 'error', testid: 'banner-wallet-error', text: t('shell.wallet.error', { message: f.walletError }) });
+  if (f.walletError) out.push({ key: 'wallet', tone: 'error', testid: 'banner-wallet-error', text: `${t('shell.wallet.error')} ${friendlyErrorText(f.walletError)}`, raw: f.walletError });
   if (f.node.reachable === false) {
-    // no node URL: the SDK's public resolver is asked for one (it does not work in a browser on testnet-10); a URL: that node did not answer
-    const reason = f.node.error?.message || t('shell.banner.nodeNoAnswer');
+    // no node URL: the SDK's public resolver is asked for one (it does not work in a browser on testnet-10); a URL: that node did not answer.
+    // The sentence says what to do; the node's own words are behind "Details"
     out.push({
       key: 'node', tone: 'error', testid: 'banner-node', title: t('shell.banner.nodeTitle'),
-      text: f.nodeUrl ? t('shell.banner.nodeDown', { url: f.nodeUrl, reason, network: f.network }) : t('shell.banner.nodeDownResolver', { reason, network: f.network }),
+      text: f.nodeUrl ? t('shell.banner.nodeDown', { url: f.nodeUrl, network: f.network }) : t('shell.banner.nodeDownResolver', { network: f.network }),
+      raw: f.node.error?.message || t('shell.banner.nodeNoAnswer'),
     });
   }
   // the book, charts and orders come from a backup indexer of the host's list while the main one is down, not ready or on another network

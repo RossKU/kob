@@ -17,3 +17,11 @@
 .notify-item.notify-unread { border-left: 3px solid var(--info); background: var(--info-bg); }
 .notify-item-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .notify-invoice h3 { margin: 0; font-size: 1rem; }
+
+/* the panel under the bell (NotificationPanel.tsx; a Popover panel, like the network chip's): wider than a menu, as tall as the window leaves room for, scrolling inside */
+.hp-panel.hp-panel-wide { width: min(28rem, calc(100vw - 2 * var(--gutter))); max-width: none; max-height: min(75vh, 40rem); overflow-y: auto; overscroll-behavior: contain; }
+/* a phone: as wide as the header, hanging under it (Popover anchor="header") */
+.hp-header .hp-panel.hp-panel-wide { width: auto; max-height: calc(100vh - var(--frame-h) - 16px); }
+.notify-pop:focus { outline: none; }
+.notify-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.notify-pop-head h2 { margin: 0; font-size: 1.05rem; }

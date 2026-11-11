@@ -1,7 +1,7 @@
 import { useServices, useWallet } from '../../app/context';
 import type { ConfigWarning, StoredOverride } from '../../config';
 import { t } from '../../i18n';
-import { Banner, Button } from '../kit';
+import { Banner, Button, RawDetails } from '../kit';
 import { useFailoverState } from './failover';
 import { usePreAuditBanner } from './preaudit';
 import { useSystemStatus } from './StatusProvider';
@@ -58,6 +58,7 @@ export function StatusBanner(props: { entry: StatusEntry; onNavigate: () => void
         </ul>
       ) : null}
       {e.text ? <span>{e.text}</span> : null}
+      <RawDetails text={e.raw} />
       {e.standalone?.connecting ? <div class="small muted" data-testid="standalone-connecting">{t('shell.banner.standaloneConnecting')}</div> : null}
       {e.standalone?.back ? (
         <div class="row" style="margin-top:6px" data-testid="standalone-back">

@@ -1,6 +1,7 @@
-// The header is ONE row, on a desktop (900 px and wider) and on a phone alike. Desktop: the logo, the tabs, a status dot, the chip "testnet-10 · open review",
-// "Connect wallet" and "Private key", the theme toggle and the bell. Phone: the logo, a menu button (the tabs, the theme toggle, the network and status
-// explanation), the shortened chip, one "Connect" button (a sheet with Wallet and Private key) and the bell. A problem also colours the bell and is listed in its dialog, never only the dot.
+// The header is ONE row, on a desktop (900 px and wider) and on a phone alike. Desktop: the logo, the tabs, the chip "● testnet-10 · open review" (the dot is the
+// node and indexer status, the chip opens its lines), "Connect" (or the address chip with its menu), the theme toggle and the bell. Phone: the logo, a menu button
+// (the tabs, the theme toggle, the network and status explanation), the shortened chip, one "Connect" button and the bell. A problem also colours the bell and is
+// listed in its panel, never only the dot.
 import type { Page } from '@playwright/test';
 import { test, expect, closeBell, statusEntry } from '../fixtures';
 import { connectWallet } from '../helpers/env';
@@ -58,8 +59,8 @@ for (const [width, spare] of [[1280, 20]] as const) {
     await connectWallet(page);
     await expect(page.getByTestId('nav-market')).toBeVisible();
     await expect(page.getByTestId('menu-button')).toHaveCount(0);
-    // the tab after Market (no market opened yet: no Trade tab) is Portfolio
-    const [market, next] = await Promise.all(['nav-market', 'nav-portfolio'].map((id) => page.getByTestId(id).boundingBox()));
+    // the tab after Market is Trade (always there)
+    const [market, next] = await Promise.all(['nav-market', 'nav-trade'].map((id) => page.getByTestId(id).boundingBox()));
     expect(next!.x - market!.x - market!.width).toBeCloseTo(12, 0);
     // what `wideWidth` (narrow.ts) sums, against what `roomOf` gives it
     const left = await page.evaluate(() => {
@@ -127,17 +128,23 @@ test('a row squeezed by wide texts comes back when the room is there: tabs again
   await expect(page.getByTestId('nav-market')).toBeVisible();
 });
 
-test('desktop: the status popover is keyboard accessible and closes on Escape and outside', async ({ appPage: page }) => {
+test('desktop: the status dot sits inside the network chip; the chip opens the status lines, by keyboard too, and closes on Escape and outside', async ({ appPage: page }) => {
   await page.goto('/#/market');
-  const dot = page.getByTestId('status-dot');
-  await dot.focus();
+  const chip = page.getByTestId('network-switch');
+  // no orphan dot: the dot is a part of the chip's own button
+  await expect(chip.getByTestId('status-dot')).toBeVisible();
+  const [dotBox, chipBox] = await Promise.all([page.getByTestId('status-dot').boundingBox(), chip.boundingBox()]);
+  expect(dotBox!.x).toBeGreaterThanOrEqual(chipBox!.x);
+  expect(dotBox!.x + dotBox!.width).toBeLessThanOrEqual(chipBox!.x + chipBox!.width);
+  await chip.focus();
   await page.keyboard.press('Enter');
-  await expect(dot).toHaveAttribute('aria-expanded', 'true');
+  await expect(chip).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('status-popover')).toBeVisible();
   await expect(page.getByTestId('status-node')).toContainText('Node: reachable');
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('status-popover')).toHaveCount(0);
-  await expect(dot).toBeFocused();
-  await dot.click();
+  await expect(chip).toBeFocused();
+  await chip.click();
   await expect(page.getByTestId('status-popover')).toBeVisible();
   await page.getByTestId('brand').click({ position: { x: 5, y: 5 } });
   await expect(page.getByTestId('status-popover')).toHaveCount(0);
@@ -152,11 +159,50 @@ test('desktop: Connect offers the one extension and the private key side by side
   await page.goto('/#/market');
   await page.getByTestId('wallet-connect').click();
   await expect(page.getByTestId('wallet-choose').getByRole('button')).toHaveText(['Connect KasWare', 'Private key']);
+  // rows with each wallet's mark; the extension this browser has not got is an Install link, and the private key entry carries the one line that recommends an extension
+  await expect(page.getByTestId('wallet-connect-kasware').locator('.wallet-mark')).toBeVisible();
+  await expect(page.getByTestId('wallet-connect-local-key').locator('.wallet-mark')).toBeVisible();
+  await expect(page.getByTestId('wallet-recommend')).toHaveText('A browser extension wallet is recommended.');
+  await expect(page.getByTestId('wallet-install-kaspire')).toHaveText(/^Install Kaspire/);
+  await expect(page.getByTestId('wallet-install-kaspire')).toHaveAttribute('href', /^https:\/\//);
+  await expect(page.getByTestId('wallet-install-kasware')).toHaveCount(0);
   await page.getByTestId('wallet-connect-kasware').click();
   await expect(page.getByTestId('wallet-address')).toContainText(/^kaspatest:q/);
   await expect(page.getByTestId('wallet-connect-list')).toHaveCount(0);
   const { ys } = await rowOf(page, ['brand', 'wallet-connected', 'theme-toggle']);
   expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
+});
+
+test('desktop: the connected address is ONE chip that opens a menu (copy, explorer, disconnect), not three buttons beside it', async ({ appPage: page }) => {
+  await page.goto('/#/market');
+  await connectWallet(page);
+  const chip = page.getByTestId('wallet-menu');
+  // closed: the chip holds the address and nothing else to press
+  await expect(page.getByTestId('wallet-connected').getByRole('button')).toHaveCount(1);
+  await expect(page.getByTestId('wallet-disconnect')).toHaveCount(0);
+  await expect(chip).toHaveAttribute('aria-expanded', 'false');
+  await chip.click();
+  await expect(chip).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('wallet-menu-address')).toHaveText(/^kaspatest:q[a-z0-9]{55,}$/);
+  await expect(page.getByTestId('wallet-copy')).toHaveText('Copy address');
+  await expect(page.getByTestId('wallet-explorer')).toHaveAttribute('href', /^https:\/\/tn10\.kaspa\.stream\/addresses\/kaspatest:q/);
+  await expect(page.getByTestId('wallet-explorer')).toHaveAttribute('target', '_blank');
+  await expect(page.getByTestId('wallet-disconnect')).toHaveText('Disconnect');
+  await page.getByTestId('wallet-copy').click();
+  await expect(page.getByTestId('wallet-copy')).toHaveText('Copied');
+  // Escape closes it and the focus returns to the chip; a press outside closes it too
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('wallet-menu-panel')).toHaveCount(0);
+  await expect(chip).toBeFocused();
+  await chip.click();
+  await expect(page.getByTestId('wallet-menu-panel')).toBeVisible();
+  await page.mouse.click(5, 500);
+  await expect(page.getByTestId('wallet-menu-panel')).toHaveCount(0);
+  // Disconnect ends the session
+  await chip.click();
+  await page.getByTestId('wallet-disconnect').click();
+  await expect(page.getByTestId('wallet-connected')).toHaveCount(0);
+  await expect(page.getByTestId('wallet-connect')).toBeVisible();
 });
 
 test.describe('phone', () => {
@@ -173,8 +219,10 @@ test.describe('phone', () => {
       expect([...xs].sort((a, b) => a - b)).toEqual(xs);
       expect((await page.locator('header.header').boundingBox())!.height).toBeLessThan(56);
       await expect(page.getByTestId('network-badge')).toHaveText('tn10');
+      // the status is the dot inside the chip, on a phone too
+      await expect(page.getByTestId('network-switch').getByTestId('status-dot')).toBeVisible();
       await expect(page.getByTestId('wallet-connect')).toHaveText('Connect');
-      for (const gone of ['nav-market', 'theme-toggle', 'status-dot', 'wallet-connect-local-key', 'wallet-install-hint']) await expect(page.getByTestId(gone)).toHaveCount(0);
+      for (const gone of ['nav-market', 'theme-toggle', 'wallet-connect-local-key', 'wallet-install-hint']) await expect(page.getByTestId(gone)).toHaveCount(0);
       expect(await noScroll(page)).toBe(true);
     });
   }
@@ -263,7 +311,11 @@ test.describe('phone', () => {
     const order = ['brand', 'network-chip', 'wallet-connected', 'notify-bell', 'menu-button'];
     const boxes = await Promise.all(order.map((id) => page.getByTestId(id).boundingBox()));
     for (let i = 0; i + 1 < order.length; i++) expect(boxes[i]!.x + boxes[i]!.width, `${order[i]} ends before ${order[i + 1]}`).toBeLessThanOrEqual(boxes[i + 1]!.x + 0.5);
-    // the connected chip's disconnect button can be pressed
+    // the connected chip opens its menu, under the header and inside the window, and its Disconnect can be pressed
+    await page.getByTestId('wallet-menu').click();
+    const menu = (await page.getByTestId('wallet-menu-panel').boundingBox())!;
+    expect(menu.x).toBeGreaterThanOrEqual(0);
+    expect(menu.x + menu.width).toBeLessThanOrEqual(375);
     await page.getByTestId('wallet-disconnect').click({ trial: true });
   });
 
@@ -275,7 +327,8 @@ test.describe('phone', () => {
     await expect(await statusEntry(page, 'banner-node')).toBeVisible();
     await closeBell(page);
     await expect(page.getByTestId('network-chip')).toHaveAttribute('data-level', 'bad');
-    await expect(page.getByTestId('chip-dot')).toBeVisible();
+    await expect(page.getByTestId('status-dot')).toHaveAttribute('data-level', 'bad');
+    await expect(page.getByTestId('status-dot')).toBeVisible();
   });
 });
 
@@ -316,4 +369,37 @@ test('desktop 1440 px: the tabs sit in the true centre of the row where it has r
   await expect(page.getByTestId('wallet-connected')).toBeVisible();
   if (await page.getByTestId('nav-market').isVisible()) await placement();
   else expect((await header.boundingBox())!.height, 'one row').toBeLessThan(60);
+});
+
+test.describe('a touch screen (pointer: coarse)', () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test('the header controls and the kit buttons are at least 36 px tall; the footer links 32 px', async ({ appPage: page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto('/#/market');
+    await connectWallet(page);
+    expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), 'the touch emulation is on').toBe(true);
+    for (const id of ['network-switch', 'wallet-menu', 'notify-bell', 'menu-button']) {
+      const box = (await page.getByTestId(id).boundingBox())!;
+      expect(box.height, `${id} is tall enough to tap`).toBeGreaterThanOrEqual(36);
+      expect(box.width, `${id} is wide enough to tap`).toBeGreaterThanOrEqual(36);
+    }
+    await page.getByTestId('wallet-menu').click();
+    expect((await page.getByTestId('wallet-disconnect').boundingBox())!.height).toBeGreaterThanOrEqual(36);
+    await page.keyboard.press('Escape');
+    for (const id of ['footer-disclaimer', 'footer-security']) {
+      await page.getByTestId(id).scrollIntoViewIfNeeded();
+      expect((await page.getByTestId(id).boundingBox())!.height, id).toBeGreaterThanOrEqual(32);
+    }
+  });
+
+  test('the toasts stand at the bottom of the window, full width minus the gutters', async ({ appPage: page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto('/#/settings');
+    const host = page.getByTestId('toast-host');
+    const css = await host.evaluate((e) => { const c = getComputedStyle(e); return { top: c.top, bottom: parseFloat(c.bottom), left: parseFloat(c.left), right: parseFloat(c.right) }; });
+    expect(css.left).toBe(16);
+    expect(css.right).toBe(16);
+    expect(css.bottom).toBeGreaterThanOrEqual(16);
+  });
 });

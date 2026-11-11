@@ -211,9 +211,18 @@ export async function readNodeStatus(node: Pick<Services['node'], 'getClock'>, w
   }
 }
 
+/** The node is known to be unreachable: a read that has not answered yet (`reachable` undefined) is not "down" (NodeDownNote.tsx). */
+export const nodeIsDown = (node: Pick<NodeStatus, 'reachable'>): boolean => node.reachable === false;
+
+/** The polled node status: `checkedAt` is when the last read ended (ms, 0 before the first), `refresh` reads again now (a read in flight is not doubled). */
+export interface LiveNodeStatus extends NodeStatus {
+  checkedAt: number;
+  refresh(): void;
+}
+
 /** Polls the node clock (virtual DAA). */
-export function useNodeStatus(s: Pick<Services, 'node'>): NodeStatus {
-  const [st, setSt] = useState<NodeStatus>({ reachable: undefined, daa: null, error: null });
+export function useNodeStatus(s: Pick<Services, 'node'>): LiveNodeStatus {
+  const [st, setSt] = useState<NodeStatus & { checkedAt: number }>({ reachable: undefined, daa: null, error: null, checkedAt: 0 });
   const busy = useRef(false);
   const poll = useCallback(() => {
     // one read at a time: a node that hangs must not pile up a new request every poll
@@ -221,12 +230,13 @@ export function useNodeStatus(s: Pick<Services, 'node'>): NodeStatus {
     busy.current = true;
     void readNodeStatus(s.node, NODE_WAIT_MS).then((next) => {
       busy.current = false;
-      setSt((prev) => (next.reachable ? next : { ...next, daa: prev.daa }));
+      const checkedAt = Date.now();
+      setSt((prev) => (next.reachable ? { ...next, checkedAt } : { ...next, daa: prev.daa, checkedAt }));
     });
   }, [s.node]);
   useEffect(poll, [poll]);
   useInterval(poll, HEALTH_POLL_MS);
-  return st;
+  return { ...st, refresh: poll };
 }
 
 /** Connection state of the WebSocket feed (`idle` when there is no feed). */

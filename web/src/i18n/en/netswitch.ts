@@ -1,5 +1,6 @@
 export default {
   'netswitch.trigger': 'Network: {network}. Change network',
+  'netswitch.statusTrigger': 'Network: {network}. System status',
   'netswitch.title': 'Network',
   'netswitch.current': 'current',
   'netswitch.note': 'Choosing a network reloads the page.',

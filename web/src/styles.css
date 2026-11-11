@@ -180,7 +180,11 @@ small, .small { font-size: 0.85em; }
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+/* one visible keyboard ring for every control (review L-14): buttons, links, inputs, selects, summaries, range sliders and anything with a tabindex, so a class
+   that has no rule of its own (the ticket's .tk-available and .tk-slider-range) still shows where the focus is. A control that draws its own ring (an input's
+   inset one, the table's sort button) overrides it with a more specific rule, so nothing is ringed twice; a pointer press does not show it (:focus-visible).
+   The ring follows the control's own corners: no border-radius here, or a pill would turn square while focused. */
+:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 2px; }
 /* "Skip to content": off screen until it has the keyboard focus */
 .skip-link { position: absolute; left: 8px; top: -48px; z-index: 1000; padding: 8px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .skip-link:focus { top: 8px; }
@@ -257,19 +261,35 @@ small, .small { font-size: 0.85em; }
 .header .header-tools .btn-icon, .header .header-tools .notify-bell, .header .header-tools .menu-button { min-width: var(--ctl-h); padding: 0 7px; }
 .header-tools { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin-left: auto; min-width: 0; }
 .header-wallet { display: flex; align-items: center; min-width: 0; }
-/* the connected wallet: one chip (address, a network badge only when it differs from the app's, disconnect as an icon: its word would cost the wide row more than its tabs' gaps) */
-.wallet-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: var(--ctl-h); padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
-.wallet-chip .copy { white-space: nowrap; }
-.wallet-disconnect { position: relative; display: inline-flex; align-items: center; gap: 6px; }
-/* the word beside the icon only where the row has room for it (data-disconnect, narrow.ts); clipped, not removed, so its width can be measured */
-.wallet-disconnect-text { position: absolute; width: 1px; height: 1px; overflow: hidden; white-space: nowrap; clip-path: inset(50%); }
-.header[data-disconnect='text'] .wallet-disconnect-text { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
+/* the connected wallet: ONE chip that is the button of its menu (WalletButton.tsx): the wallet icon, the address, a network badge only when it differs from the
+   app's, a chevron. Copy, the explorer and Disconnect are in the menu under it, not beside the address (review M-14) */
+.header .hp-trigger.wallet-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: var(--ctl-h); padding: 0 8px 0 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text); font-size: 13px; font-weight: 600; }
+.header .hp-trigger.wallet-chip:hover:not(:disabled), .header .hp-trigger.wallet-chip[aria-expanded='true'] { background: var(--surface-3); }
+.wallet-address { white-space: nowrap; font-weight: 600; }
+.wallet-caret { flex: none; color: var(--muted); transition: transform var(--dur-fast) var(--ease-out); }
+.wallet-chip[aria-expanded='true'] .wallet-caret { transform: rotate(180deg); }
+.header-wallet .hp { min-width: 0; }
+/* the rows of a small menu panel (the wallet's): one tap target each */
+.menu-actions { display: flex; flex-direction: column; gap: 2px; }
+.menu-item { display: flex; align-items: center; min-height: var(--ctl-h); padding: 6px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; font-weight: 600; text-align: left; text-decoration: none; cursor: pointer; }
+.menu-item:hover { background: var(--surface-2); }
+.menu-item-danger { color: var(--bad); }
+.stack-xs { display: flex; flex-direction: column; gap: 4px; }
+.hp-heading { font-size: 0.78rem; font-weight: 700; color: var(--muted); }
 /* not connected: the two buttons, one line, the same size */
 .wallet-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .wallet-actions .btn { flex: 0 0 auto; white-space: nowrap; }
-.header .wallet-chip .btn-sm { min-height: 26px; padding: 0 8px; border-radius: 999px; font-size: 13px; }
 .btn-off { opacity: 0.6; }
 .wallet-kind { display: inline-flex; align-items: center; cursor: help; }
+/* the connect chooser (WalletButton.tsx): a row per wallet, its mark first, the label beside it */
+.btn.wallet-row { justify-content: flex-start; gap: 12px; min-height: 48px; padding: 6px 14px; text-align: left; }
+.wallet-row-text { flex: 1 1 auto; min-width: 0; }
+.wallet-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; }
+.wallet-mark-tile { border-radius: 8px; color: #fff; font-size: 14px; font-weight: 800; line-height: 1; }
+.wallet-mark-tile::before { content: attr(data-initial); }
+.btn.wallet-install { color: var(--text); }
+.btn.wallet-install .wallet-row-text::after { content: ' \2197'; color: var(--muted); }
+.wallet-recommend { margin: -2px 0 6px 4px; }
 
 /* the combined network chip ("testnet-10 · open review") */
 .net-chip { display: inline-flex; align-items: center; white-space: pre; min-height: var(--chip-h); padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1; cursor: default; }
@@ -296,7 +316,6 @@ small, .small { font-size: 0.85em; }
 .hp-header { position: static; }
 .hp-header .hp-panel { left: 0; right: 0; top: 100%; max-width: none; min-width: 0; border-radius: 0 0 var(--radius) var(--radius); border-top: 0; }
 .status-lines { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 0.85rem; }
-.status-dot .dot { margin-right: 0; width: 10px; height: 10px; }
 .net-chip .dot { margin-right: 5px; width: 8px; height: 8px; flex: none; }
 .menu-nav { display: flex; flex-direction: column; gap: 2px; }
 .menu-nav a { padding: 10px 8px; border-radius: var(--radius-sm); text-decoration: none; color: var(--text); font-weight: 600; }
@@ -316,30 +335,37 @@ small, .small { font-size: 0.85em; }
 .ff-top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
 .footer .brand { font-size: 15px; gap: 8px; }
 .footer .brand-mark { width: 22px; height: 22px; }
-.ff-links { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-left: auto; font-weight: 500; }
+.ff-links { display: flex; flex-wrap: wrap; gap: 0 20px; margin-left: auto; font-weight: 500; }
 /* at least 24 px tall targets (WCAG 2.5.8) */
 .ff-links a { color: var(--text); opacity: 0.82; text-decoration: none; padding-block: 4px; }
 .ff-links a:hover { opacity: 1; text-decoration: underline; }
 .ff-links .ff-support { display: inline-flex; align-items: center; gap: 5px; opacity: 1; }
 .ff-support svg { color: var(--sell); flex: none; }
-.ff-sep { width: 1px; background: var(--border); align-self: stretch; }
 .footer .ff-disc { margin-top: 16px; max-width: 72em; }
 .ff-disc strong { color: var(--warn); }
 .footer .ff-meta { margin-top: 10px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 0; }
-.ff-meta > span + span::before { content: '\00b7'; margin: 0 8px; opacity: 0.6; }
-/* from a tablet up the disclaimer and the meta line sit in the middle under the full-width row (a phone keeps them left: centred lines are hard to read narrow) */
+/* an app page: ONE compact line (FooterView, review L-04): the brand, the version, the open review lead, the links, the attribution; it wraps only where the
+   window is too narrow for it */
+.footer-compact { padding: 8px 0; font-size: 12px; line-height: 1.4; }
+.ff-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 20px; }
+.footer-compact .ff-links { margin-left: 0; gap: 0 16px; }
+.footer-compact .ff-links a { padding-block: 6px; }
+.footer-compact .ff-meta-item a { color: var(--text); opacity: 0.82; }
+.ff-lead { color: var(--warn); font-weight: 700; }
+/* the attribution is the last item, at the right edge, where the row has room */
+.footer-compact .ff-line > :last-child:not(.ff-links) { margin-left: auto; }
+/* from a tablet up the landing page's disclaimer and meta line sit in the middle under the full-width row (a phone keeps them left: centred lines are hard to read narrow) */
 @media (min-width: 720px) {
   .footer .ff-disc { margin-inline: auto; text-align: center; max-width: 64em; }
-  /* centred items that wrap would start a line with the separator dot: a gap stands in for the dots */
   .footer .ff-meta { justify-content: center; gap: 4px 20px; }
-  .footer .ff-meta > span + span::before { content: none; }
 }
 @media (max-width: 719px) {
   .footer { padding: 20px 0 24px; }
+  .footer-compact { padding: 8px 0 10px; }
   .ff-links { margin-left: 0; width: 100%; }
-  .ff-sep { flex-basis: 100%; width: auto; height: 0; background: none; }
+  .footer-compact .ff-links { width: auto; }
+  .footer-compact .ff-line > :last-child:not(.ff-links) { margin-left: 0; }
   .ff-meta { flex-direction: column; }
-  .ff-meta > span + span::before { content: none; }
 }
 
 .boot { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: var(--gutter); text-align: center; }
@@ -542,17 +568,19 @@ small, .small { font-size: 0.85em; }
 .modal-foot { padding: 12px var(--gutter); border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 body.modal-open { overflow: hidden; }
 
-/* top right, just below the sticky header (its bottom is measured: Toast.tsx), never over the wallet chip */
-.toast-host { position: fixed; right: 12px; top: 72px; z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 24px); width: 360px; }
+/* bottom right on a desktop, the full width of the window (minus the gutters) at the bottom on a phone: never over the title area or the header's wallet chip
+   (review L-02). The newest card is the lowest. A phone's market page has its "Trade" button at the bottom right: the cards stand above it, 16 px clear */
+.toast-host { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 32px); width: 360px; pointer-events: none; }
+.toast-host > * { pointer-events: auto; }
 .toast {
   background: var(--surface); border: 1px solid var(--border); border-left-width: 5px; border-radius: var(--radius-sm);
   box-shadow: var(--shadow); padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start;
 }
-/* a card comes in from the right edge (a phone: from the top) with a fade; leaving is instant */
+/* a card comes in from the right edge (a phone: from the bottom) with a fade; leaving is instant */
 @keyframes toast-in { from { opacity: 0; transform: translateX(16px); } }
-@keyframes toast-in-top { from { opacity: 0; transform: translateY(-12px); } }
+@keyframes toast-in-bottom { from { opacity: 0; transform: translateY(12px); } }
 .toast { animation: toast-in var(--dur-slow) var(--ease-out) backwards; }
-@media (max-width: 719px) { .toast { animation-name: toast-in-top; } }
+@media (max-width: 719px) { .toast { animation-name: toast-in-bottom; } }
 .toast-ok { border-left-color: var(--ok); }
 .toast-warn { border-left-color: var(--warn); }
 .toast-error { border-left-color: var(--bad); }
@@ -629,7 +657,8 @@ body.modal-open { overflow: hidden; }
   .header-tools { min-width: 0; }
   .wallet-kind, .wallet-chip .copy-btn { display: none; }
   .wallet-chip { padding-left: 8px; }
-  .toast-host { left: 12px; right: 12px; width: auto; }
+  .toast-host { left: 16px; right: 16px; width: auto; max-width: none; }
+  body:has(.mkt-trade-fab) .toast-host { bottom: calc(16px + 44px + 16px + env(safe-area-inset-bottom, 0px)); }
 }
 /* a small phone: the chip keeps the dot and the network; "open review" is in its tooltip, the menu and the banner (so a connected row fits on any font) */
 @media (max-width: 430px) {
@@ -659,6 +688,11 @@ body.modal-open { overflow: hidden; }
   .wallet-actions { gap: 4px; }
   .net-chip { font-size: 11px; padding: 0 7px; }
 }
+/* the one-line note of a dead node (NodeDownNote.tsx): a line in the warn colour, no box */
+.node-down-note { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin: 0; font-size: 0.85rem; line-height: 1.4; color: var(--warn); }
+.node-down-note .btn { min-height: 24px; padding: 0 8px; color: var(--text); }
+/* the identity tile of a token (Fingerprint.tsx) sits on the surface in either theme (review L-13): a white tile is a hole in a dark page. The dots keep their colours, they are the identity */
+svg.fp > rect:first-of-type { fill: var(--surface-2); stroke: var(--border); stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .raw-details { margin-top: 2px; }
 .raw-details summary { cursor: pointer; }
 .raw-details code { display: block; white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
@@ -701,6 +735,34 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 /* the one muted line that says what the USD display is (or why KAS is shown); under the Portfolio's summary strip it belongs to the strip */
 .fiat-note { margin: 4px 0 8px; line-height: 1.35; }
 .pf-fiat-note { margin: -4px 0 10px; }
+
+/* ------------------------------------------------------------------ touch: tap targets (review M-11) */
+
+/* the browsers' own checkbox, in the app's colour at every pointer; 13 px is too small to hit with a finger */
+input[type='checkbox'], input[type='radio'] { accent-color: var(--primary); }
+@media (pointer: coarse) {
+  /* the header's controls: 36 px at least (the network chip's button is the hit area of the 22 px chip inside it) */
+  .header .btn-sm, .header .hp-trigger, .header .nav a, .header .header-tools .btn-icon { min-height: 36px; }
+  .header .header-tools .btn-icon, .header .header-tools .notify-bell, .header .header-tools .menu-button { min-width: 36px; }
+  .header .hp-trigger.net-chip-trigger { min-height: 36px; }
+  .header .hp-trigger.wallet-chip { min-height: 36px; }
+  .menu-item, .net-option, .menu-nav a { min-height: 40px; }
+  /* the kit's small button, tabs, segments and drop-downs */
+  .btn-sm { min-height: 36px; }
+  .segmented button, .tabs button { min-height: 40px; }
+  .select, .input, .picker-face { min-height: 40px; }
+  .picker-option { min-height: 44px; }
+  /* a checkbox: a 20 px box and a 44 px hit area (its label is part of it) */
+  input[type='checkbox'], input[type='radio'] { width: 20px; height: 20px; margin: 0; flex: none; }
+  .checkbox-row { align-items: center; min-height: 44px; }
+  .checkbox-row input { margin-top: 0; }
+  .checkbox-row label { flex: 1 1 auto; padding-block: 10px; }
+  label:has(> input[type='checkbox']) { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+  /* the footer's links */
+  .ff-links a { display: inline-flex; align-items: center; min-height: 32px; }
+  .footer-compact .ff-links a { min-height: 32px; }
+  .copy-btn { min-height: 28px; }
+}
 
 /* ------------------------------------------------------------------ motion (the tokens: :root) */
 
