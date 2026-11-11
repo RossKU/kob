@@ -70,6 +70,13 @@ pub struct Entry {
     pub profit: i64,
     pub fee: u64,
     pub fee_rate: u64,
+    /// `Tracked::deadline`, `Tracked::resend_until`, `Tracked::retired` (absent in a journal of an older build: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resend_until: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired: Option<u64>,
 }
 
 impl Entry {
@@ -87,6 +94,9 @@ impl Entry {
             profit: t.profit,
             fee: t.fee,
             fee_rate: t.fee_rate,
+            deadline: t.deadline,
+            resend_until: t.resend_until,
+            retired: t.retired,
         }
     }
 
@@ -107,6 +117,9 @@ impl Entry {
             fee: self.fee,
             fee_rate: self.fee_rate,
             unconfirmed: true,
+            deadline: self.deadline,
+            resend_until: self.resend_until,
+            retired: self.retired,
         })
     }
 }
@@ -140,8 +153,8 @@ pub struct Restored {
 pub struct Journal {
     path: PathBuf,
     file: std::fs::File,
-    /// The ids the file holds as added, and whether that entry carries a keeper job.
-    live: BTreeMap<[u8; 32], bool>,
+    /// The ids the file holds as added, and whether that entry carries a keeper job and is retired (`Tracked::retired`).
+    live: BTreeMap<[u8; 32], (bool, bool)>,
     appended: usize,
     /// The last write failed (logged once until a write succeeds).
     failing: bool,
@@ -172,27 +185,43 @@ fn read_lines(path: &Path) -> std::io::Result<(Live, usize)> {
     Ok((live, skipped))
 }
 
-impl Journal {
-    /// Opens (creates) the journal at `path`: returns what it held, rewritten to a compact file that is then appended to.
-    pub fn open(path: &Path) -> std::io::Result<(Journal, Restored)> {
-        let (entries, skipped) = read_lines(path)?;
-        let mut restored = Restored { skipped, ..Restored::default() };
-        let mut live = BTreeMap::new();
-        let mut body = String::new();
-        for (tx, job) in entries.into_values() {
-            match tx.tracked() {
-                Ok(t) => {
-                    live.insert(t.txid, job.is_some());
-                    body.push_str(&serde_json::to_string(&Line::Add { tx, job: job.clone() }).map_err(std::io::Error::other)?);
-                    body.push('\n');
-                    restored.txs.push((t, job));
-                }
-                Err(_) => restored.skipped += 1,
+/// What the journal at `path` holds, read only (nothing is written): the entries still added, as submissions without a
+/// verdict. An absent file holds nothing; a file that cannot be read is an error.
+pub fn read(path: &Path) -> std::io::Result<Restored> {
+    Ok(restore(read_lines(path)?).0)
+}
+
+/// The entries read, as the tracker takes them, and the compact file body that holds them.
+fn restore((entries, skipped): (Live, usize)) -> (Restored, BTreeMap<[u8; 32], (bool, bool)>, String) {
+    let mut restored = Restored { skipped, ..Restored::default() };
+    let mut live = BTreeMap::new();
+    let mut body = String::new();
+    for (tx, job) in entries.into_values() {
+        match tx.tracked() {
+            Ok(t) => {
+                let line = serde_json::to_string(&Line::Add { tx, job: job.clone() }).expect("an entry serialises");
+                live.insert(t.txid, (job.is_some(), t.retired.is_some()));
+                body.push_str(&line);
+                body.push('\n');
+                restored.txs.push((t, job));
             }
+            Err(_) => restored.skipped += 1,
         }
+    }
+    (restored, live, body)
+}
+
+impl Journal {
+    /// Opens (creates) the journal at `path`: returns what it held, rewritten to a compact file that is then appended to. A
+    /// rewrite that fails (a full disk; on Windows a scanner holding the file) keeps the file as it is and appends to it (the
+    /// next compaction tries again); only a file that cannot be read or appended to is an error.
+    pub fn open(path: &Path) -> std::io::Result<(Journal, Restored)> {
+        let (restored, live, body) = restore(read_lines(path)?);
         let tmp = path.with_extension("jsonl.tmp");
-        std::fs::write(&tmp, body)?;
-        std::fs::rename(&tmp, path)?;
+        if let Err(e) = std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, path)) {
+            let _ = std::fs::remove_file(&tmp);
+            tracing::warn!(file = %path.display(), error = %e, "cannot compact the in-flight journal at the start: appending to it as it is");
+        }
         let file = std::fs::OpenOptions::new().append(true).create(true).open(path)?;
         Ok((Journal { path: path.to_path_buf(), file, live, appended: 0, failing: false }, restored))
     }
@@ -233,7 +262,7 @@ impl Journal {
     /// Records `t` (and its keeper job) as in flight: called before it is submitted.
     pub fn add(&mut self, t: &Tracked, job: Option<&InFlightJob>) {
         self.write(&Line::Add { tx: Entry::of(t), job: job.cloned() });
-        self.live.insert(t.txid, job.is_some());
+        self.live.insert(t.txid, (job.is_some(), t.retired.is_some()));
     }
 
     /// Brings the file in line with what the tracker follows (`txs`) and the keeper jobs that may be replaced (`jobs`): an entry
@@ -247,7 +276,7 @@ impl Journal {
         }
         for (id, t) in txs {
             let job = jobs.get(id);
-            if self.live.get(id) != Some(&job.is_some()) {
+            if self.live.get(id) != Some(&(job.is_some(), t.retired.is_some())) {
                 self.add(t, job);
             }
         }
@@ -305,6 +334,10 @@ mod tests {
             fee: 2_000,
             fee_rate: 100,
             unconfirmed: false,
+            // a day order's fill: what bounds its resend survives too
+            deadline: (n == 3).then_some(1_790_000_000),
+            resend_until: (n == 3).then_some(5_000),
+            retired: None,
         }
     }
 
@@ -324,6 +357,10 @@ mod tests {
         // b refused (no longer tracked); the keeper jobs' round trip is `tests/keeper_liveness.rs`
         j.sync(&txs, &BTreeMap::new());
         assert_eq!(j.live().copied().collect::<Vec<_>>(), vec![[1; 32], [3; 32]]);
+        // a retires (no longer sent): the journal says so, a restart does not send it again either
+        txs.get_mut(&[1; 32]).unwrap().retired = Some(4_000);
+        j.sync(&txs, &BTreeMap::new());
+        let a = txs[&[1; 32]].clone();
         drop(j);
         // a kill mid-write
         std::fs::OpenOptions::new().append(true).open(&p).unwrap().write_all(b"{\"op\":\"add\",\"tx\":{\"txid\":").unwrap();
@@ -342,6 +379,25 @@ mod tests {
         drop(j);
         let (_, r) = Journal::open(&p).unwrap();
         assert!(r.txs.is_empty());
+    }
+
+    /// Audit round 2 R2-L-1: a journal that cannot be rewritten at the start (here its temporary file's name is taken by a
+    /// directory, as a full disk would fail the write) is kept as it is and appended to, so what it held is never lost and this
+    /// run is journaled too; read only, it gives the same entries; an absent file holds nothing.
+    #[test]
+    fn a_journal_that_cannot_be_compacted_is_appended_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join(FILE_NAME);
+        let (mut j, _) = Journal::open(&p).unwrap();
+        j.add(&tracked(1), None);
+        drop(j);
+        std::fs::create_dir(p.with_extension("jsonl.tmp")).unwrap();
+        let (mut j, r) = Journal::open(&p).unwrap();
+        assert_eq!(r.txs.len(), 1);
+        j.add(&tracked(2), None);
+        drop(j);
+        assert_eq!(read(&p).unwrap().txs.iter().map(|(t, _)| t.txid).collect::<Vec<_>>(), vec![[1; 32], [2; 32]]);
+        assert!(read(&dir.path().join("absent.jsonl")).unwrap().txs.is_empty());
     }
 
     /// A long run keeps the file small: it is rewritten with the live entries once enough lines were appended.

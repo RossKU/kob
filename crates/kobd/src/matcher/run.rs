@@ -25,7 +25,7 @@ use super::engine::{tick as matcher_tick, EngineConfig, TickInput};
 use super::family::Families;
 use super::node::{NodeApi, RpcError, SubmitOutcome};
 use super::select::{Role, SelectConfig, Selector};
-use super::submit::{Tracked, Tracker, TrackerConfig};
+use super::submit::{ResendClock, Tracked, Tracker, TrackerConfig};
 use super::wallet::{address_of, p2pk_spk_string, Signer};
 use crate::keepers::{tick_with_subsidy as keeper_tick, JobKind, KeeperConfig, KeeperInput, SubsidyAllowance, SubsidyBudget};
 
@@ -526,6 +526,31 @@ fn listed_outpoints(orders: &[ListedOrder]) -> BTreeSet<super::book::Outpoint> {
     s
 }
 
+/// DAA (five minutes) a maintenance sale may still be sent again after it was planned: its price was the book's of that
+/// tick, and a later sale is planned anew (`crate::maintenance`), never resent at a stale price.
+pub const MAINTENANCE_SALE_FRESH_DAA: u64 = 3_000;
+
+/// What bounds a resend of a transaction that fills the orders `ids` of the book, planned at `daa` (`docs/spec/matcher.md`
+/// §2.3; `Tracker::stale`): the earliest day-order deadline (UTC) and the earliest soft expiry (DAA) of those orders. An order
+/// already past its soft expiry when planned is merged, not filled: it bounds nothing.
+fn fill_bounds(orders: &[ListedOrder], ids: &BTreeSet<CovId>, daa: u64) -> (Option<u64>, Option<u64>) {
+    let (mut deadline, mut until): (Option<u64>, Option<u64>) = (None, None);
+    for o in orders.iter().filter(|o| ids.contains(&o.id())) {
+        if let Some(d) = o.deadline {
+            deadline = Some(deadline.map_or(d, |x| x.min(d)));
+        }
+        // an unaccepted continuation (a chained step) is accepted at or after `daa`
+        let udaa = if o.utxo_daa() == u64::MAX { daa } else { o.utxo_daa() };
+        let due = o.order.state.refund_due(i64::try_from(udaa).unwrap_or(i64::MAX)).unwrap_or(i64::MAX);
+        if let Ok(due) = u64::try_from(due) {
+            if due > daa {
+                until = Some(until.map_or(due, |x| x.min(due)));
+            }
+        }
+    }
+    (deadline, until)
+}
+
 impl<N: NodeApi, S: BookSource> Runner<N, S> {
     pub fn new(node: N, source: S, signer: Box<dyn Signer>, cfg: RunConfig) -> Self {
         let tracker = Tracker::new(cfg.tracker.clone());
@@ -555,8 +580,16 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         {
             Some(Ok((j, r))) => (Some(j), r),
             Some(Err(e)) => {
-                tracing::error!(error = %e, "the in-flight journal cannot be opened: transactions in flight are not kept across a restart");
-                (None, Default::default())
+                // what it holds is still reserved (and settled with the node), when it can be read at all: never planned over
+                let path = state_dir.as_deref().map(|d| d.join(super::journal::FILE_NAME)).unwrap_or_default();
+                let restored = super::journal::read(&path).unwrap_or_default();
+                tracing::error!(
+                    error = %e,
+                    file = %path.display(),
+                    restored = restored.txs.len(),
+                    "the in-flight journal cannot be written: what it held is tracked again, but what this run submits is not kept across a restart (free space or fix the file)"
+                );
+                (None, restored)
             }
             None => (None, Default::default()),
         };
@@ -575,6 +608,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             if let Some(j) = job {
                 keeper_inflight.insert(t.txid, j);
             }
+            tracker.restored.insert(t.txid);
             tracker.txs.insert(t.txid, t);
         }
         Runner {
@@ -696,6 +730,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 fee: job.built.fee.fee,
                 fee_rate: job.built.fee.fee_rate,
                 unconfirmed: false,
+                retired: None,
                 ..t.clone()
             };
             self.source.watch(new);
@@ -1064,9 +1099,12 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             self.finish(&rep);
             return Ok(rep);
         }
-        // A submit that got no answer may have reached the node: settle the doubt before planning anything over its inputs.
+        // A submit that got no answer may have reached the node: settle the doubt before planning anything over its inputs. A
+        // resend is checked first (`Tracker::stale`): the planning gates saw the transaction when it was planned, not now.
         if !self.cfg.dry_run {
-            for (id, outcome) in self.tracker.resubmit_unconfirmed(&self.node, daa).await {
+            let margin = self.cfg.clock_skew_max_secs.saturating_add(self.clock_skew.unwrap_or(0).unsigned_abs());
+            let resend = ResendClock { daa, utc: utc_now(), margin_secs: margin };
+            for (id, outcome) in self.tracker.resubmit_unconfirmed(&self.node, &resend).await {
                 tracing::info!(txid = %kob_protocol::json::to_hex(&id), ?outcome, "resent a submit that had no verdict");
                 match outcome {
                     SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput => rep.conflicts.push(id),
@@ -1076,7 +1114,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             }
             // a pending transaction no block accepted for a while: the node says whether it still holds it (never forgotten
             // while it does: its funding coin would refuse every later batch as a mempool double spend)
-            let r = self.tracker.recheck_pending(&self.node, daa, true).await;
+            let r = self.tracker.recheck_pending(&self.node, &resend, true).await;
             for (t, why) in &r.dropped {
                 tracing::warn!(
                     txid = %kob_protocol::json::to_hex(&t.txid),
@@ -1108,6 +1146,14 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
         if let Some(why) = self.waiting.take() {
             tracing::info!(was = %why, "the indexer caught up; planning");
+        }
+        // the store is current: a retired transaction it does not show accepted by now was not mined
+        for t in self.tracker.forget_retired(daa) {
+            tracing::info!(
+                txid = %kob_protocol::json::to_hex(&t.txid),
+                kind = %t.kind,
+                "a transaction no longer sent was not mined: forgotten, its inputs are free again"
+            );
         }
         let operator = self.signer.pubkey();
         let book = match self.source.snapshot_read(&operator) {
@@ -1235,10 +1281,12 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 }
                 let owners = input_owners(&p, &book.orders);
                 let addresses = input_addresses(&p, &owners, &self.cfg.network);
+                let orders = p.plan.spent_ids();
+                let (deadline, resend_until) = fill_bounds(&book.orders, &orders, daa);
                 let t = Tracked {
                     txid: p.txid(),
                     spends: p.signed.tx.inputs.iter().map(|i| (i.transaction_id, i.index)).collect(),
-                    orders: p.plan.spent_ids(),
+                    orders,
                     owners,
                     addresses,
                     parent: p.parent,
@@ -1250,6 +1298,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     fee: p.lowered.built.fee.fee,
                     fee_rate: p.lowered.built.fee.fee_rate,
                     unconfirmed: false,
+                    deadline,
+                    resend_until,
+                    retired: None,
                 };
                 let spent_ids = t.orders.clone();
                 self.send(t, daa, &mut rep).await;
@@ -1374,6 +1425,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     fee: j.built.fee.fee,
                     fee_rate: j.built.fee.fee_rate,
                     unconfirmed: false,
+                    deadline: None,
+                    resend_until: None,
+                    retired: None,
                 };
                 let txid = t.txid;
                 self.send(t, daa, &mut rep).await;
@@ -1485,10 +1539,17 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             if self.cfg.dry_run {
                 continue;
             }
+            let filled: BTreeSet<CovId> = j.order.into_iter().collect();
+            // a sale fills a bid at the book's price of this tick: never sent again once that price is stale
+            let (deadline, mut resend_until) = fill_bounds(orders, &filled, daa);
+            if matches!(j.kind, crate::maintenance::MaintKind::Sell) {
+                let fresh = daa.saturating_add(MAINTENANCE_SALE_FRESH_DAA);
+                resend_until = Some(resend_until.map_or(fresh, |u| u.min(fresh)));
+            }
             let t = Tracked {
                 txid: j.signed.tx.id,
                 spends: j.spends.clone(),
-                orders: j.order.into_iter().collect(),
+                orders: filled,
                 owners: BTreeMap::new(),
                 addresses: BTreeMap::new(),
                 parent: None,
@@ -1500,6 +1561,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 fee: j.built.fee.fee,
                 fee_rate: j.built.fee.fee_rate,
                 unconfirmed: false,
+                deadline,
+                resend_until,
+                retired: None,
             };
             self.send(t, daa, rep).await;
         }
@@ -1855,6 +1919,11 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
         "kob_matcher_dropped_total",
         "Transactions given up: refused by the node when checked again, or a race lost (their orders back off).",
         t.dropped_total.to_string(),
+    );
+    g(
+        "kob_matcher_resend_dropped_total",
+        "Pending transactions not sent again because they would no longer be valid (a day order's deadline, an order's expiry, a maintenance sale's stale price, a journal entry too old to send blindly).",
+        t.resend_dropped_total.to_string(),
     );
     g(
         "kob_matcher_held_coins",

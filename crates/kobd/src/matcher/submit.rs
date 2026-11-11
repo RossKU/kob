@@ -47,6 +47,10 @@ pub struct TrackerConfig {
     /// DAA after which an unaccepted transaction is checked with the node by an idempotent resend, and again every as many DAA
     /// while the node holds it (default 600, a minute; [`Tracker::recheck_pending`]).
     pub pending_timeout: u64,
+    /// A submission without a verdict (one the in-flight journal brought back after a restart, or whose submit got no answer)
+    /// older than this (DAA, default 6000: ten times `pending_timeout`) is not sent again blindly: it is retired
+    /// ([`Tracker::retire`]).
+    pub max_resend_age: u64,
     /// First back-off of an order after a conflict (DAA; doubles per attempt).
     pub backoff_base: u64,
     /// Longest back-off (DAA).
@@ -58,7 +62,14 @@ pub struct TrackerConfig {
 
 impl Default for TrackerConfig {
     fn default() -> Self {
-        TrackerConfig { final_depth: 100, pending_timeout: 600, backoff_base: 20, backoff_max: 600, hold_daa: 3_000 }
+        TrackerConfig {
+            final_depth: 100,
+            pending_timeout: 600,
+            max_resend_age: 6_000,
+            backoff_base: 20,
+            backoff_max: 600,
+            hold_daa: 3_000,
+        }
     }
 }
 
@@ -79,6 +90,8 @@ pub struct Recheck {
     pub dropped: Vec<(Tracked, String)>,
     /// Transactions the node reports already accepted by the chain (before this process followed it): done.
     pub accepted_earlier: Vec<Tracked>,
+    /// Transactions not sent again because they would no longer be valid ([`Tracker::stale`]): retired.
+    pub retired: Vec<[u8; 32]>,
 }
 
 /// A transaction the tracker follows.
@@ -113,6 +126,32 @@ pub struct Tracked {
     /// The submit call got no verdict (transport error / timeout): the node may hold the transaction. Cleared by the node's answer
     /// to a resend or by the transaction's acceptance.
     pub unconfirmed: bool,
+    /// The earliest UTC deadline (unix seconds) of the day orders the transaction fills: it is never sent again from then on,
+    /// nor within the clock margin before it (`docs/spec/matcher.md` §2.3: no fill after the deadline; [`Tracker::stale`]).
+    pub deadline: Option<u64>,
+    /// The DAA score from which the transaction is never sent again: the soft expiry of the first order it fills, or the end
+    /// of a maintenance sale's freshness (its price was the book's when it was planned).
+    pub resend_until: Option<u64>,
+    /// No longer sent ([`Tracker::retire`]): its inputs stay reserved until this DAA score, since a mempool may still hold it
+    /// (the chain then shows it, and it is followed to the end as any other); then it is forgotten
+    /// ([`Tracker::forget_retired`]).
+    pub retired: Option<u64>,
+}
+
+/// What a resend is checked against ([`Tracker::stale`]): the virtual DAA score, the local UTC time (unix seconds) and the
+/// clock margin a day order's deadline keeps (the clock check's bound plus the skew measured, `matcher::run`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResendClock {
+    pub daa: u64,
+    pub utc: u64,
+    pub margin_secs: u64,
+}
+
+impl ResendClock {
+    /// At `daa`, with no deadline in view (tests, and callers without a clock).
+    pub fn at(daa: u64) -> ResendClock {
+        ResendClock { daa, utc: 0, margin_secs: 0 }
+    }
 }
 
 /// Events of one tracker step (for logs and metrics).
@@ -231,6 +270,15 @@ pub struct Tracker {
     pub held_total: u64,
     /// Unix time (seconds) of the last submission the node took (0: none yet).
     pub last_submit_unix: u64,
+    /// Transactions not sent again because they would no longer be valid ([`Tracker::stale`]: a day order's deadline, an
+    /// order's soft expiry, a maintenance sale's stale price, a journal entry too old to send blindly).
+    pub resend_dropped_total: u64,
+    /// Submissions without a verdict the node refused for a missing input at a resend: possibly mined while this process was
+    /// down (their inputs are spent). Retired, not dropped: the store shows them accepted once it caught up, or they count as
+    /// dropped when forgotten ([`Tracker::forget_retired`]).
+    pub doubtful: BTreeSet<[u8; 32]>,
+    /// Transactions the in-flight journal brought back at the start, until the node's first answer about each.
+    pub restored: BTreeSet<[u8; 32]>,
 }
 
 impl Tracker {
@@ -264,9 +312,86 @@ impl Tracker {
         self.backoff.retain(|_, (until, _)| until.saturating_add(keep) > daa);
     }
 
-    /// DAA the oldest pending (unaccepted) transaction has waited at `daa` (0: none pending).
+    /// DAA the oldest pending (unaccepted) transaction has waited at `daa` (0: none pending). A retired one is not waited for.
     pub fn oldest_pending_daa(&self, daa: u64) -> u64 {
-        self.txs.values().filter(|t| t.accepted.is_none()).map(|t| daa.saturating_sub(t.submitted_daa)).max().unwrap_or(0)
+        self.txs
+            .values()
+            .filter(|t| t.accepted.is_none() && t.retired.is_none())
+            .map(|t| daa.saturating_sub(t.submitted_daa))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Why `t` must not be sent again now (`None`: it may): a day order it fills reached its deadline (or is within the clock
+    /// margin of it), an order it fills reached its soft expiry or a maintenance sale's price is no longer current
+    /// ([`Tracked::resend_until`]), or a submission without a verdict is older than `max_resend_age` (a journal entry from
+    /// before a long downtime: whatever it was planned on may have changed). The planning gates see only new plans; a resend
+    /// is checked here.
+    pub fn stale(&self, t: &Tracked, c: &ResendClock) -> Option<String> {
+        if let Some(d) = t.deadline.filter(|d| c.utc.saturating_add(c.margin_secs) >= *d) {
+            return Some(format!(
+                "a day order it fills has reached its deadline (UTC {d}, the local clock {} with a margin of {} s)",
+                c.utc, c.margin_secs
+            ));
+        }
+        if let Some(b) = t.resend_until.filter(|b| c.daa >= *b) {
+            return Some(format!("an order it fills expired, or the sale's price is no longer current (from DAA {b})"));
+        }
+        let age = c.daa.saturating_sub(t.submitted_daa);
+        if t.unconfirmed && age > self.cfg.max_resend_age {
+            return Some(format!("it was submitted {age} DAA ago without a verdict (before a restart): not sent again blindly"));
+        }
+        None
+    }
+
+    /// `id` is no longer sent (`why`): logged and counted ([`Tracker::resend_dropped_total`]); its inputs stay reserved for
+    /// `hold_daa`, since a mempool may still hold it (acceptance is followed meanwhile), then it is forgotten
+    /// ([`Tracker::forget_retired`]).
+    pub fn retire(&mut self, id: &[u8; 32], why: &str, daa: u64) {
+        let hold = self.cfg.hold_daa;
+        if !self.hold_retired(id, daa) {
+            return;
+        }
+        self.resend_dropped_total += 1;
+        let Some(t) = self.txs.get(id) else { return };
+        tracing::warn!(
+            txid = %kob_protocol::json::to_hex(id),
+            kind = %t.kind,
+            reason = why,
+            hold_daa = hold,
+            "a pending transaction is not sent again (it would no longer be valid); its inputs stay reserved meanwhile"
+        );
+    }
+
+    /// Marks `id` retired until `hold_daa` from `daa` (`false`: not tracked, or retired already).
+    fn hold_retired(&mut self, id: &[u8; 32], daa: u64) -> bool {
+        let hold = self.cfg.hold_daa;
+        let Some(t) = self.txs.get_mut(id).filter(|t| t.retired.is_none()) else { return false };
+        t.retired = Some(daa.saturating_add(hold));
+        t.unconfirmed = false;
+        self.checked.remove(id);
+        true
+    }
+
+    /// The retired transactions no chain block accepted by `daa` ([`Tracked::retired`]): forgotten, their inputs free again.
+    /// Called once the store has caught up (a transaction mined while this process was down shows as accepted first); a
+    /// doubtful one ([`Tracker::doubtful`]) counts as dropped then.
+    pub fn forget_retired(&mut self, daa: u64) -> Vec<Tracked> {
+        let gone: Vec<[u8; 32]> =
+            self.txs.values().filter(|t| t.accepted.is_none() && t.retired.is_some_and(|r| daa >= r)).map(|t| t.txid).collect();
+        let mut out = vec![];
+        for id in gone {
+            if let Some(t) = self.txs.remove(&id) {
+                self.checked.remove(&id);
+                if self.doubtful.remove(&id) {
+                    self.dropped_total += 1;
+                }
+                out.push(t);
+            }
+        }
+        let txs = &self.txs;
+        self.doubtful.retain(|id| txs.contains_key(id));
+        out
     }
 
     /// A mempool double spend of `t` that names one of the operator's funding coins (`msg`): the coin is held
@@ -351,12 +476,24 @@ impl Tracker {
 
     /// Resends every transaction whose submit got no verdict and that no chain block accepted yet (idempotent: the node answers
     /// "already in the mempool" for one it holds). The node's answer settles the doubt: taken -> tracked normally; refused -> dropped
-    /// and its orders back off; still no answer -> stays unconfirmed. Returns the answers.
-    pub async fn resubmit_unconfirmed<N: NodeApi>(&mut self, node: &N, daa: u64) -> Vec<([u8; 32], SubmitOutcome)> {
-        let todo: Vec<([u8; 32], Value)> =
-            self.txs.values().filter(|t| t.unconfirmed && t.accepted.is_none()).map(|t| (t.txid, t.rpc_tx.clone())).collect();
+    /// and its orders back off; still no answer -> stays unconfirmed. One that would no longer be valid ([`Tracker::stale`]) is
+    /// not sent: it is retired. A missing input (its inputs are spent: it may have been mined while this process was down) is
+    /// not counted as dropped yet: it is retired as doubtful until the store has caught up ([`Tracker::forget_retired`]).
+    /// Returns the answers.
+    pub async fn resubmit_unconfirmed<N: NodeApi>(&mut self, node: &N, clock: &ResendClock) -> Vec<([u8; 32], SubmitOutcome)> {
+        let daa = clock.daa;
+        let todo: Vec<([u8; 32], Value)> = self
+            .txs
+            .values()
+            .filter(|t| t.unconfirmed && t.accepted.is_none() && t.retired.is_none())
+            .map(|t| (t.txid, t.rpc_tx.clone()))
+            .collect();
         let mut out = vec![];
         for (id, rpc) in todo {
+            if let Some(why) = self.txs.get(&id).and_then(|t| self.stale(t, clock)) {
+                self.retire(&id, &why, daa);
+                continue;
+            }
             let mut msg: Option<String> = None;
             let outcome = match node.submit(rpc).await {
                 Ok(_) => SubmitOutcome::Accepted,
@@ -383,11 +520,24 @@ impl Tracker {
                     self.submitted_now();
                 }
                 SubmitOutcome::Unknown | SubmitOutcome::Busy => {}
+                SubmitOutcome::MissingInput if self.restored.contains(&id) => {
+                    // spent inputs: mined while this process was down, or a race lost; the store tells which
+                    if self.hold_retired(&id, daa) {
+                        self.doubtful.insert(id);
+                        tracing::info!(
+                            txid = %kob_protocol::json::to_hex(&id),
+                            "a transaction sent again after a restart has spent inputs (mined meanwhile, or a race lost): its acceptance is awaited, not counted as dropped yet"
+                        );
+                    }
+                }
                 SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput | SubmitOutcome::Rejected => {
                     if let Some(t) = self.txs.remove(&id) {
                         self.give_up(node, &t, outcome, msg.as_deref(), daa).await;
                     }
                 }
+            }
+            if !matches!(outcome, SubmitOutcome::Unknown | SubmitOutcome::Busy) {
+                self.restored.remove(&id);
             }
             out.push((id, outcome));
         }
@@ -431,8 +581,11 @@ impl Tracker {
     /// checked again later; already in the chain: done; refused (an input went elsewhere): dropped, its orders back off (no
     /// order for a held funding coin); no verdict: tried again at the next check. Not while `may_send` is false (the kill
     /// switch, a dry run): nothing leaves the process then, and nothing is dropped either. A transaction whose submission had
-    /// no verdict is settled by [`Tracker::resubmit_unconfirmed`] instead.
-    pub async fn recheck_pending<N: NodeApi>(&mut self, node: &N, daa: u64, may_send: bool) -> Recheck {
+    /// no verdict is settled by [`Tracker::resubmit_unconfirmed`] instead. One that would no longer be valid
+    /// ([`Tracker::stale`]: past a day order's deadline, an order's soft expiry, a sale's freshness) is not sent: it is retired
+    /// (a mempool that still holds it keeps it; nothing here replaces it).
+    pub async fn recheck_pending<N: NodeApi>(&mut self, node: &N, clock: &ResendClock, may_send: bool) -> Recheck {
+        let daa = clock.daa;
         let mut r = Recheck::default();
         let txs = &self.txs;
         self.checked.retain(|k, _| txs.contains_key(k));
@@ -443,13 +596,18 @@ impl Tracker {
         let due: Vec<([u8; 32], Value)> = self
             .txs
             .values()
-            .filter(|t| t.accepted.is_none() && !t.unconfirmed)
+            .filter(|t| t.accepted.is_none() && !t.unconfirmed && t.retired.is_none())
             .filter(|t| {
                 daa >= self.checked.get(&t.txid).copied().unwrap_or(t.submitted_daa).max(t.submitted_daa).saturating_add(interval)
             })
             .map(|t| (t.txid, t.rpc_tx.clone()))
             .collect();
         for (id, rpc) in due {
+            if let Some(why) = self.txs.get(&id).and_then(|t| self.stale(t, clock)) {
+                self.retire(&id, &why, daa);
+                r.retired.push(id);
+                continue;
+            }
             let (outcome, msg) = match node.submit(rpc).await {
                 Ok(_) => (SubmitOutcome::Accepted, None),
                 Err(RpcError::Node(m)) => (classify_submit_error(&m), Some(m)),
@@ -657,6 +815,9 @@ mod tests {
             fee: 0,
             fee_rate: 100,
             unconfirmed: false,
+            deadline: None,
+            resend_until: None,
+            retired: None,
         }
     }
 
@@ -724,8 +885,8 @@ mod tests {
             t.txs.insert([n; 32], tracked(n, 1_000));
         }
         // not due yet, and nothing is sent while paused
-        assert_eq!(t.recheck_pending(&node, 1_599, true).await, Recheck::default());
-        assert_eq!(t.recheck_pending(&node, 1_600, false).await, Recheck::default());
+        assert_eq!(t.recheck_pending(&node, &ResendClock::at(1_599), true).await, Recheck::default());
+        assert_eq!(t.recheck_pending(&node, &ResendClock::at(1_600), false).await, Recheck::default());
         assert_eq!(node.1.load(std::sync::atomic::Ordering::SeqCst), 0);
         node.0.lock().unwrap().extend([
             held(1),
@@ -733,7 +894,7 @@ mod tests {
             Some(RpcError::Node(format!("transaction {} was already accepted by the consensus", "03".repeat(32)))),
             Some(RpcError::Node("at least one outpoint of the transaction is lacking a matching UTXO entry".into())),
         ]);
-        let r = t.recheck_pending(&node, 1_600, true).await;
+        let r = t.recheck_pending(&node, &ResendClock::at(1_600), true).await;
         assert_eq!(r.kept, vec![[1; 32], [2; 32]]);
         assert_eq!(r.rebroadcast, vec![[2; 32]], "the node no longer held it and took it again");
         assert_eq!(r.accepted_earlier.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[3; 32]]);
@@ -742,10 +903,87 @@ mod tests {
         assert!(t.backed_off(1_600).contains(&[4; 32]) && !t.backed_off(1_600).contains(&[1; 32]));
         assert!(t.spent_outpoints().contains(&([1; 32], 0)), "the held one's inputs stay reserved");
         // the kept ones are checked again one interval after their check, not every step
-        assert_eq!(t.recheck_pending(&node, 2_100, true).await, Recheck::default());
+        assert_eq!(t.recheck_pending(&node, &ResendClock::at(2_100), true).await, Recheck::default());
         node.0.lock().unwrap().extend([held(1), held(2)]);
-        assert_eq!(t.recheck_pending(&node, 2_200, true).await.kept, vec![[1; 32], [2; 32]]);
+        assert_eq!(t.recheck_pending(&node, &ResendClock::at(2_200), true).await.kept, vec![[1; 32], [2; 32]]);
         assert_eq!(t.oldest_pending_daa(2_200), 1_200);
+    }
+
+    /// Audit round 2 R2-M-2: a resend is checked first. A pending transaction past a day order's deadline (or within the clock
+    /// margin of it), past an order's soft expiry or a sale's freshness, or a submission without a verdict older than
+    /// `max_resend_age`, is not sent: it is retired (counted), its inputs stay reserved for `hold_daa` and its acceptance is
+    /// still followed; then it is forgotten.
+    #[tokio::test]
+    async fn a_resend_that_would_no_longer_be_valid_is_not_sent() {
+        let node = Answers::default();
+        let sent = || node.1.load(std::sync::atomic::Ordering::SeqCst);
+        let mut t = Tracker::new(TrackerConfig::default());
+        let day = Tracked { deadline: Some(10_000), ..tracked(1, 1_000) };
+        let expiring = Tracked { resend_until: Some(1_500), ..tracked(2, 1_000) };
+        let fine = Tracked { deadline: Some(20_000), resend_until: Some(9_000), ..tracked(3, 1_000) };
+        for x in [day, expiring, fine] {
+            t.txs.insert(x.txid, x);
+        }
+        // the deadline is 30 s away, within the margin: not sent; the expired one neither; the third is
+        let clock = ResendClock { daa: 1_600, utc: 9_970, margin_secs: 30 };
+        let r = t.recheck_pending(&node, &clock, true).await;
+        assert_eq!(r.retired, vec![[1; 32], [2; 32]]);
+        assert_eq!((r.kept, sent()), (vec![[3; 32]], 1), "only the valid one was sent");
+        assert_eq!((t.resend_dropped_total, t.dropped_total), (2, 0));
+        assert!(t.spent_outpoints().contains(&([1; 32], 0)), "a mempool may still hold it: its inputs stay reserved");
+        assert_eq!(t.oldest_pending_daa(1_600), 600, "a retired one is not waited for");
+        // never sent again, however long it waits
+        let later = ResendClock { daa: 2_300, utc: 10_100, margin_secs: 30 };
+        assert!(t.recheck_pending(&node, &later, true).await.retired.is_empty());
+        assert_eq!(sent(), 2, "the valid one again, the retired ones never");
+        // the chain shows one of them accepted after all: followed to the end, its profit counts
+        let seen: BTreeMap<[u8; 32], (String, u64)> = [([2; 32], ("b".to_string(), 2_250))].into_iter().collect();
+        t.observe(&seen, 2_300);
+        // the hold ends: the unaccepted one is forgotten, the accepted one is kept
+        assert!(t.forget_retired(4_599).is_empty());
+        let gone = t.forget_retired(4_600);
+        assert_eq!(gone.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[1; 32]]);
+        assert!(t.txs.contains_key(&[2; 32]) && !t.spent_outpoints().contains(&([1; 32], 0)));
+        assert_eq!(t.dropped_total, 0, "not a refusal: counted apart");
+
+        // a submission without a verdict older than `max_resend_age` (a journal entry of a long downtime): not sent blindly
+        let mut t = Tracker::new(TrackerConfig::default());
+        t.txs.insert([5; 32], Tracked { unconfirmed: true, ..tracked(5, 1_000) });
+        t.txs.insert([6; 32], Tracked { unconfirmed: true, ..tracked(6, 7_000) });
+        let before = sent();
+        let out = t.resubmit_unconfirmed(&node, &ResendClock::at(7_001)).await;
+        assert_eq!(out.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![[6; 32]], "only the recent one is resent");
+        assert_eq!((sent() - before, t.resend_dropped_total), (1, 1));
+        assert!(t.txs[&[5; 32]].retired.is_some());
+    }
+
+    /// Audit round 2 R2-L-2: a journal entry refused for a missing input after a restart (its inputs are spent: it may have been
+    /// mined while the process was down) is not counted as dropped at once: it waits for the store, which shows it accepted (its
+    /// profit counts) or not (then it counts as dropped). A submission of this run refused the same way is given up as before.
+    #[tokio::test]
+    async fn a_restored_transaction_mined_during_the_downtime_is_not_counted_as_dropped() {
+        let node = Answers::default();
+        let missing = || Some(RpcError::Node("at least one outpoint of the transaction is lacking a matching UTXO entry".into()));
+        node.0.lock().unwrap().extend([missing(), missing(), missing()]);
+        let mut t = Tracker::new(TrackerConfig::default());
+        for n in 1..=3u8 {
+            t.txs.insert([n; 32], Tracked { unconfirmed: true, ..tracked(n, 1_000) });
+        }
+        t.restored = [[1; 32], [2; 32]].into_iter().collect();
+        t.resubmit_unconfirmed(&node, &ResendClock::at(1_100)).await;
+        assert_eq!(t.dropped_total, 1, "this run's own submission is given up as before");
+        assert!(!t.txs.contains_key(&[3; 32]));
+        assert_eq!(t.doubtful, [[1; 32], [2; 32]].into_iter().collect());
+        assert!(t.restored.is_empty(), "the node answered about each");
+        // the store catches up: one was mined during the downtime
+        let seen: BTreeMap<[u8; 32], (String, u64)> = [([1; 32], ("b".to_string(), 900))].into_iter().collect();
+        let ev = t.observe(&seen, 1_200);
+        assert_eq!(ev.finalized.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[1; 32]]);
+        assert_eq!((t.finalized_count, t.finalized_profit), (1, 7));
+        // the other was not: dropped once its hold ends
+        t.forget_retired(4_100);
+        assert_eq!((t.dropped_total, t.resend_dropped_total), (2, 0));
+        assert!(t.txs.is_empty() && t.doubtful.is_empty());
     }
 
     /// Audit 2026-11-11 M-2: a mempool double spend of the operator's own funding coin holds the coin (out of the funding) and

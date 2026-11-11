@@ -546,6 +546,30 @@ async fn a_day_order_near_its_deadline_is_left_alone_while_the_clock_is_off() {
     assert!(!r.clock_alarm());
 }
 
+/// Audit round 2 R2-M-2: a batch carries the deadline of the day order it fills, and a resend is checked against it: once the
+/// deadline is within the clock margin, the batch is not sent again (counted in the metrics), its inputs stay reserved.
+#[tokio::test]
+async fn a_batch_past_a_day_orders_deadline_is_not_sent_again() {
+    let node = MockNode::new(NOW + 5);
+    let mut b = crossing_book();
+    let deadline = kobd::matcher::book::utc_now() + 3_600;
+    b.orders[0].deadline = Some(deadline);
+    let mut r = runner(node.clone(), b, M);
+    let rep = r.step().await.unwrap();
+    assert_eq!((rep.submitted.len(), node.submits()), (1, 1));
+    let t = r.tracker.txs.values().next().unwrap().clone();
+    assert_eq!(t.deadline, Some(deadline), "the batch knows the deadline of the day order it fills");
+    // no block accepts it; the deadline comes within the margin before its recheck
+    r.tracker.txs.get_mut(&t.txid).unwrap().deadline = Some(kobd::matcher::book::utc_now() + 10);
+    node.0.lock().unwrap().daa = NOW + 5 + 700;
+    let rep = r.step().await.unwrap();
+    assert_eq!(node.submits(), 1, "not sent again");
+    assert!(rep.built.is_empty(), "its orders stay reserved");
+    assert!(r.tracker.txs[&t.txid].retired.is_some());
+    let m = kobd::matcher::run::metrics_text(&r, &rep);
+    assert!(m.contains("kob_matcher_resend_dropped_total 1"), "{m}");
+}
+
 /// A book source whose indexer halted (`BookSource::fatal`).
 struct Halted(MemoryBook, bool);
 

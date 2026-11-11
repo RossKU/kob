@@ -30,7 +30,7 @@ use crate::matcher::node::{MultiSubmit, NodeApi, WrpcConfig, WrpcNode};
 use crate::matcher::run::{BookSource, Roles, RunConfig, Runner};
 use crate::matcher::wallet::{HotKey, Signer};
 use crate::rpc::ChainSource;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -569,6 +569,16 @@ pub async fn run(a: RunArgs) -> Result<()> {
     // the in-flight journal, the keepers' subsidy window and the start count live next to the database (audit 2026-11-11
     // M-3, L-2)
     run_cfg.state_dir = Some(cfg.data_dir.clone());
+    // a journal that cannot be read would let this run plan over the inputs of the last run's mempool transactions
+    if !run_cfg.dry_run {
+        let path = cfg.data_dir.join(crate::matcher::journal::FILE_NAME);
+        crate::matcher::journal::read(&path).with_context(|| {
+            format!(
+                "cannot read the in-flight journal {} (what the last run had in flight): refusing to start; fix the file's permissions, or move it away once no transaction of this executor is pending",
+                path.display()
+            )
+        })?;
+    }
     tracing::info!(
         network = %cfg.network,
         rpc = %crate::rpc::redact_url(cfg.primary_url()),
