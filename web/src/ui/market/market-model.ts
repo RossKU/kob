@@ -7,6 +7,7 @@
 import type { CandleInterval, CandleView, DepthView, StatsView, TradeView, TradesView } from '../../data/indexer-types';
 import { formatNumber } from '../../i18n';
 import { formatPricePerToken, formatUnits, pow10, roundDiv, SOMPI_PER_KAS } from '../../kob/units';
+import { displayPriceDp } from '../kit/format';
 import type { BookModel } from './book-model';
 import type { TradeRow } from './trades-model';
 
@@ -44,22 +45,8 @@ export function basisToNumber(price: bigint, decimals: number, basis: bigint): n
 /** Base units -> whole tokens as a float (chart coordinates only). */
 export const unitsToNumber = (amount: bigint, decimals: number): number => Number(amount) / 10 ** decimals;
 
-/**
- * Fraction digits that show a price with about `significant` significant digits (min 2, max 10). Chosen once per market from a reference
- * price, so every row of a column has the same number of decimals (tabular alignment).
- */
-export function priceDecimals(refPerTokenSompi: bigint | null, significant = 5): number {
-  if (refPerTokenSompi === null || refPerTokenSompi <= 0n) return 4;
-  const intPart = refPerTokenSompi / SOMPI_PER_KAS;
-  let dp: number;
-  if (intPart > 0n) dp = significant - intPart.toString().length;
-  else {
-    // leading zeros after the point: 0.0025 KAS = 250000 sompi -> 8 - 6 = 2 zeros
-    const zeros = 8 - refPerTokenSompi.toString().length;
-    dp = zeros + significant;
-  }
-  return Math.min(10, Math.max(2, dp));
-}
+// the significant-digit rule is the kit's (ui/kit/format.ts: `displayPriceDp` is the one display precision; `priceDecimals` is its uncapped base)
+export { priceDecimals } from '../kit/format';
 
 /** Exact KAS-per-token text with `dp` fraction digits (half up), thousands grouped. */
 export function priceText(price: bigint, decimals: number, basis: bigint, dp: number): string {
@@ -230,7 +217,7 @@ export function statsModel(v: StatsView | null, decimals: number, dpHint?: numbe
   const basis = v ? basisOf(v.price_basis) : null;
   const last = v && basis ? bigOrNull(v.last) : null;
   const ref = last ?? (v && basis ? bigOrNull(v.mid) ?? bigOrNull(v.best_ask) ?? bigOrNull(v.best_bid) : null);
-  const dp = dpHint ?? priceDecimals(ref !== null && basis ? basisToTokenSompi(ref, decimals, basis) : null);
+  const dp = dpHint ?? displayPriceDp(ref !== null && basis ? basisToTokenSompi(ref, decimals, basis) : null);
   const p = (x: unknown): string | null => {
     const b = bigOrNull(x);
     return b !== null && basis ? priceText(b, decimals, basis, dp) : null;

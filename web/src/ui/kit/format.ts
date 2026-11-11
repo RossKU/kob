@@ -1,6 +1,5 @@
 // Display formatting shared by the UI kit and the views. Pure and bigint-safe (never `Number` for sompi or token amounts): every function
 // delegates to kob/units.ts, which does exact integer arithmetic.
-import { priceDecimals } from '../market/market-model';
 import { formatKas, formatPricePerToken, formatTokenAmount, formatUnits, pow10, SOMPI_PER_KAS } from '../../kob/units';
 
 /** `abcdef...123456` -> `abcd...3456` (head/tail characters). Strings that are already short come back unchanged. */
@@ -252,13 +251,14 @@ export function fitDecimalTexts(texts: readonly string[], o: { width?: number; u
 
 const SUBSCRIPT = '₀₁₂₃₄₅₆₇₈₉';
 
-/**
- * A number with four or more zeros after its point, for a row that is read on its own: `0.00002547` reads `0.0₄2547` (the subscript counts the zeros). For display only: the
- * book keeps its digits, as its rows are compared by eye, and the ticket and the final confirmation keep theirs. Text around the number stays as it is.
- */
 /** The digits of a number `compactZeros` shortened, for its tooltip; nothing for one it left as it is. */
 export const zerosTitle = (text: string | null | undefined): string | undefined => (text && compactZeros(text) !== text ? text : undefined);
 
+/**
+ * A number with four or more zeros after its point, for a CARD that is read on its own
+ * (never in a table or a strip: a column of figures keeps one notation, as `0.000835` beside `0.0₄85` cannot be compared by eye): `0.00002547` reads `0.0₄2547` (the subscript counts the zeros). For display only: the
+ * book keeps its digits, as its rows are compared by eye, and the ticket and the final confirmation keep theirs. Text around the number stays as it is.
+ */
 export const compactZeros = (text: string): string =>
   text.replace(/(^|[^\d.,])0\.(0{4,})(?=[1-9])/g, (_m, before: string, zeros: string) => `${before}0.0${[...String(zeros.length)].map((d) => SUBSCRIPT[Number(d)]).join('')}`);
 
@@ -290,10 +290,31 @@ export function rowTimeTitle(ms: number | null | undefined): string {
 /** `formatRowTime` of a unix-seconds time (the tables of the Portfolio); null reads `—`. */
 export const formatRowTimeUnix = (unix: number | bigint | null | undefined, nowMs: number = Date.now()): string => (unix === null || unix === undefined ? '—' : formatRowTime(Number(unix) * 1000, nowMs));
 
+/** The day alone of a time, `2026-11-10` (a date column, e.g. when a supporter first gave); a missing time reads `—`. */
+export const formatRowDate = (ms: number | null | undefined): string => (ms === null || ms === undefined || !Number.isFinite(ms) ? '—' : dateOf(new Date(ms)));
+
 /** `rowTimeTitle` of a unix-seconds time. */
 export const rowTimeTitleUnix = (unix: number | bigint | null | undefined): string => (unix === null || unix === undefined ? '' : rowTimeTitle(Number(unix) * 1000));
 
 // ------------------------------------------------------------------------------------------------ one price display rule
+
+/**
+ * Fraction digits that show a price with about `significant` significant digits (min 2, max 10). Chosen once per market from a reference
+ * price, so every row of a column has the same number of decimals (tabular alignment).
+ */
+export function priceDecimals(refPerTokenSompi: bigint | null, significant = 5): number {
+  if (refPerTokenSompi === null || refPerTokenSompi <= 0n) return 4;
+  const intPart = refPerTokenSompi / SOMPI_PER_KAS;
+  let dp: number;
+  if (intPart > 0n) dp = significant - intPart.toString().length;
+  else {
+    // leading zeros after the point: 0.0025 KAS = 250000 sompi -> 8 - 6 = 2 zeros
+    const zeros = 8 - refPerTokenSompi.toString().length;
+    dp = zeros + significant;
+  }
+  return Math.min(10, Math.max(2, dp));
+}
+
 
 /** Most fraction digits a price is ever displayed with (founder, 2026-11-11); the exact price stays in the `title`. */
 export const PRICE_DP_CAP = 6;
@@ -310,6 +331,9 @@ export function displayPriceDp(refPerTokenSompi: bigint | null | undefined, grou
   const sig = Math.min(PRICE_DP_CAP, priceDecimals(refPerTokenSompi ?? null, PRICE_SIGNIFICANT_DIGITS));
   return grouping === undefined || grouping === null ? sig : Math.max(0, Math.min(sig, Math.trunc(grouping)));
 }
+
+/** The fraction digits a price grouping step shows exactly (the book's selector: a step of 0.01 reads two decimals), at most `PRICE_DP_CAP`; the `grouping` of `displayPriceDp`. */
+export const groupingPriceDp = (group: bigint, decimals: number, scale: bigint | null | undefined): number | null => tickPriceFraction(group, decimals, scale, 0, PRICE_DP_CAP);
 
 /** The one `displayPriceDp` of a column that holds several markets' prices (the Portfolio tables): the finest any of them needs, so every decimal point lines up. */
 export function columnPriceDp(refsPerTokenSompi: Iterable<bigint | null | undefined>): number {

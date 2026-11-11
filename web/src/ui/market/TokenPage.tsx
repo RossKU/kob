@@ -6,13 +6,13 @@ import { useServices, useWallet } from '../../app/context';
 import { OrdersView } from '../orders/OrdersView';
 import type { TicketPreset } from '../../app/router';
 import { t } from '../../i18n';
-import { Badge, Banner, Button, displayPriceDp, ErrorBanner, PRICE_DP_CAP, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
+import { Badge, Banner, Button, displayPriceDp, ErrorBanner, groupingPriceDp, Section, tickKasFraction, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
 import { NodeDownNote } from '../shell/NodeDownNote';
 import { useSystemStatus } from '../shell/StatusProvider';
 import { clockText, useStandalone } from '../shell/standalone';
-import { buildBookModel, groupSizesAt, inferTick, levelsFromView } from './book-model';
+import { buildBookModel, displayGroupSizes, groupSizesAt, inferTick, levelsFromView } from './book-model';
 import { useStaleSince } from './book-stale';
 import { BOOK_FETCH_DEPTH, useBookRows } from './book-rows';
 import { useMarketToken } from './use-market-token';
@@ -194,9 +194,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     if (row?.tick && row.tick > 0n) return row.tick;
     return book.data ? inferTick([...levelsFromView(book.data.asks, bookScale), ...levelsFromView(book.data.bids, bookScale)].map((l) => l.price)) : 1n;
   }, [row?.tick, book.data]);
-  const groups = useMemo(() => groupSizesAt(baseTick, midDecade ? 10n ** BigInt(midDecade - 1) * 2n : null), [baseTick, midDecade]);
-  const groupIdx = Math.min(inverted ? groupIdxInv : groupIdxNative, groups.length - 1);
-  const group = groups[groupIdx]!;
 
   const tape = useMemo(() => {
     const d = trades.data;
@@ -219,6 +216,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const dpNative = useMemo(() => displayPriceDp(refPerToken), [refPerToken]);
   const dpFlipped = useMemo(() => flipDp(refPrice ? tokensPerKas(refPrice.price, decimals, refPrice.basis) : null), [refPrice, decimals]);
   const dp = inverted ? dpFlipped : dpNative;
+  // the grouping steps (the book's selector) start at the display step of the kit's price rule (10^-dp KAS: 0.001 at 34 KAS), never at the token's tick (1 sompi reads 0.00000001): the steps
+  // are that and the three decades above it, each a multiple of the tick. Without a reference price they are the tick's and the decades scaled to the book's price.
+  const groups = useMemo(() => {
+    if (refPerToken === null || !scale || scale <= 0n) return groupSizesAt(baseTick, midDecade ? 10n ** BigInt(midDecade - 1) * 2n : null);
+    return displayGroupSizes(baseTick, dpNative, decimals, scale);
+  }, [baseTick, midDecade, refPerToken, scale, decimals, dpNative]);
+  const groupIdx = Math.min(inverted ? groupIdxInv : groupIdxNative, groups.length - 1);
+  const group = groups[groupIdx]!;
 
   // the levels per side the card's height holds (book-rows.ts)
   const { rows: bookRows, fitRef: bookFit } = useBookRows();
@@ -226,14 +231,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const invMult = INVERTED_GROUP_MULTIPLIERS[Math.min(groupIdxInv, INVERTED_GROUP_MULTIPLIERS.length - 1)]!;
   const regroup = useMemo(() => (inverted && scale !== null ? invertedRegrouper({ decimals, scale, dp, mult: invMult }) : undefined), [inverted, scale, decimals, dp, invMult]);
   const freshModel = useMemo(
-    () => (book.data ? buildBookModel(book.data, { scale: bookScale, depth: bookRows, group: inverted || groupIdx === 0 ? 0n : group, ...(regroup ? { regroup } : {}) }) : null),
+    () => (book.data ? buildBookModel(book.data, { scale: bookScale, depth: bookRows, group: inverted ? 0n : group, ...(regroup ? { regroup } : {}) }) : null),
     [book.data, bookScale, group, groupIdx, inverted, regroup, bookRows],
   );
   // the live book as it is (a crossed book, matchers a moment behind, is drawn with a negative spread like any other)
   const model = freshModel;
   // the book's own decimals: the page's, or fewer for a coarser grouping (the selector is also the display precision: a step of 0.01 reads two decimals). A flipped book keeps the page's: its
   // steps are multiples of the displayed price step, so its rows show the same decimals at every grouping
-  const groupDp = groupIdx === 0 ? null : tickPriceFraction(group, decimals, scale, 0, PRICE_DP_CAP);
+  const groupDp = groupingPriceDp(group, decimals, scale);
   const bookDp = inverted ? dp : displayPriceDp(refPerToken, groupDp);
   // a failed or late pull: the last good book stays, "stale since" says how old it is
   const bookStaleSince = useStaleSince(book);

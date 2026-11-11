@@ -18,8 +18,8 @@ import { ASSUMED_TOKEN_DECIMALS, t } from '../../i18n';
 import { exponentOf } from '../../kob/open-token';
 import { cmpRational, formatRational, significantDp, type Rational } from '../../kob/pair';
 import { kasPerTokenToUsd, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat } from '../../app/fiat';
-import { fitAmountColumn, fitDecimalTexts, tickPriceFraction } from '../kit/format';
-import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, priceDecimals, toneOf, unitsToNumber, type Tone } from './market-model';
+import { displayPriceDp, fitAmountColumn, fitDecimalTexts } from '../kit/format';
+import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, toneOf, unitsToNumber, type Tone } from './market-model';
 import { kasPerToken } from './orientation';
 import type { PairDepth, PairVolume } from './pair-market';
 import { mergePairSummaries } from './pair-model';
@@ -170,9 +170,9 @@ export interface ListEntry {
 
 const finiteInt = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v) : null);
 
-/** Fraction digits of a token's KAS price: the registry tick's (every tick-aligned price exact), else about five significant digits of `ref`. */
-export function tokenPriceDp(row: Pick<TokenRow, 'tick' | 'scale'>, decimals: number, ref: bigint | null, basis: bigint | null): number {
-  return tickPriceFraction(row.tick, decimals, row.scale) ?? priceDecimals(ref !== null && basis ? basisToTokenSompi(ref, decimals, basis) : null);
+/** Fraction digits of a token's KAS price: the kit's one display rule (about five significant digits of `ref`, at most 6), not the registry tick (which can need 8 at 33 KAS); the exact price is the cell's title. */
+export function tokenPriceDp(decimals: number, ref: bigint | null, basis: bigint | null): number {
+  return displayPriceDp(ref !== null && basis ? basisToTokenSompi(ref, decimals, basis) : null);
 }
 
 /** The open order counts as a tooltip note (`3 asks · 4 bids`); null when neither is known. */
@@ -254,7 +254,7 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>, fiat: Fiat | nu
   const last = bigOrNull(v.last);
   const bid = bigOrNull(v.best_bid);
   const ask = bigOrNull(v.best_ask);
-  const dp = tokenPriceDp(row, decimals, last ?? bigOrNull(v.mid) ?? ask ?? bid, basis);
+  const dp = tokenPriceDp(decimals, last ?? bigOrNull(v.mid) ?? ask ?? bid, basis);
   const kas = (p: bigint | null): Rational | null => (p !== null && p > 0n && basis ? kasPerToken(p, decimals, basis) : null);
   const lastR = kas(last);
   const bps = finiteInt(v.change_24h_bps);

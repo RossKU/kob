@@ -68,13 +68,13 @@ describe('the list\'s rows', () => {
 });
 
 describe('market list cells', () => {
-  it('a token row: last price in KAS at the tick decimals with the exact price and KAS per TOKEN unit in the tooltip, change, KAS volume, spread, depth within 2 % (with the order counts in its tooltip); no supply, no market cap', () => {
+  it('a token row: last price in KAS at the display decimals (5 significant digits, at most 6) with the exact price and KAS per TOKEN unit in the tooltip, change, KAS volume, spread, depth within 2 % (with the order counts in its tooltip); no supply, no market cap', () => {
     const r = row('EXKCC', ID('a'));
     const e = tokenEntry(r, ok(stats(r.covenantId)));
-    expect(e.cells.last).toEqual({ text: '0.0251', title: '0.0251 (KAS per EXKCC)' });
+    expect(e.cells.last).toEqual({ text: '0.025100', title: '0.0251 (KAS per EXKCC)' });
     expect(e.cells.change).toEqual({ text: '+0.40%', title: null, tone: 'up' });
     expect(e.cells.volume).toEqual({ text: '0.38', title: '0.3765 KAS · 7 trades in 24 h' });
-    expect(e.cells.spread).toEqual({ text: '0.79%', title: 'Best bid 0.0250 · best ask 0.0252 (KAS per EXKCC)' });
+    expect(e.cells.spread).toEqual({ text: '0.79%', title: 'Best bid 0.025000 · best ask 0.025200 (KAS per EXKCC)' });
     expect(e.cells.depth).toEqual({ text: '1,200.00', title: '1,200.00 KAS · 3 asks · 4 bids' });
     expect(e.cells.mcap).toEqual({ text: null, title: null });
     expect(e.sort.depth).toBe(1200);
@@ -117,7 +117,7 @@ describe('market list cells', () => {
     expect(e.cells.last.text).toBeNull();
     expect(e.cells.change.text).toBeNull();
     expect(e.cells.volume.text).toBe('0.00');
-    expect(e.cells.spread).toEqual({ text: null, title: 'Best bid — · best ask 0.0252 (KAS per EXKCC)' });
+    expect(e.cells.spread).toEqual({ text: null, title: 'Best bid — · best ask 0.025200 (KAS per EXKCC)' });
   });
 
   it('never cuts a digit: a large price or volume turns compact with the exact figure in the tooltip, a dust volume reads <0.01', () => {

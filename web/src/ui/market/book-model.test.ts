@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BookOrderView, LevelView } from '../../data/indexer-types';
-import { buildBookModel, depthChartGeometry, groupLevels, groupPrice, groupSizes, groupSizesAt, inferTick, levelsFromView } from './book-model';
+import { buildBookModel, depthChartGeometry, groupLevels, groupPrice, groupSizes, groupSizesAt, displayGroupSizes, inferTick, levelsFromView } from './book-model';
 
 const lv = (price: string, amount: number, orders = 1, est = false, scale = 1): LevelView => ({ price, amount: String(amount), orders, amount_estimated: est, scale });
 const ord = (price: string, left: number | null, est = false, scale: number | null = 1): BookOrderView => ({
@@ -211,5 +211,24 @@ describe('price aggregation (tick grouping)', () => {
     // a cheap token whose tick is coarser than those steps keeps the tick multiples
     expect(groupSizesAt(10_000n, 2_500_000n)).toEqual([10_000n, 100_000n, 1_000_000n, 10_000_000n]);
     expect(groupSizesAt(7n, null)).toEqual(groupSizes(7n));
+  });
+});
+
+describe('grouping steps on the display rule', () => {
+  it('start at 10^-dp KAS per token, never at a finer tick: 0.001 / 0.01 / 0.1 / 1 at 34 KAS (dp 3)', () => {
+    // 8 decimals, scale 1e8: a state price is sompi per whole token; 0.001 KAS = 100,000 sompi
+    expect(displayGroupSizes(1n, 3, 8, 100_000_000n)).toEqual([100_000n, 1_000_000n, 10_000_000n, 100_000_000n]);
+    // 0.025 KAS (dp 6): 0.000001 KAS = 100 sompi
+    expect(displayGroupSizes(1n, 6, 8, 100_000_000n)).toEqual([100n, 1_000n, 10_000n, 100_000n]);
+  });
+  it('are multiples of the tick, and a tick coarser than the display step is the first step', () => {
+    expect(displayGroupSizes(10_000n, 6, 8, 100_000_000n)).toEqual([10_000n, 100_000n, 1_000_000n, 10_000_000n]);
+    expect(displayGroupSizes(300n, 6, 8, 100_000_000n)).toEqual([300n, 3_000n, 30_000n, 300_000n]);
+  });
+  it('follow the order scale: a price is per scale base units, the step per whole token', () => {
+    // 6 decimals, scale 1e6: 1 whole token = 1e6 base units; 0.001 KAS per token = 100,000 sompi per whole token
+    expect(displayGroupSizes(1n, 3, 6, 1_000_000n)[0]).toBe(100_000n);
+    // a scale of 10x the token's units: the same step per whole token is 10x the state price
+    expect(displayGroupSizes(1n, 3, 6, 10_000_000n)[0]).toBe(1_000_000n);
   });
 });

@@ -178,6 +178,22 @@ export function groupSizesAt(tick: bigint, ref: bigint | null): bigint[] {
   return out;
 }
 
+/**
+ * The grouping steps of a token's book on the kit's price rule: the display step (10^-`dp` KAS per whole token, `dp` = `displayPriceDp`: 0.001 at 34 KAS, 0.000001 at 0.025 KAS) and the
+ * three decades above it, each rounded up to a multiple of the tick. A step finer than the display decimals would read as the same price twice, so the tick (1 sompi: 0.00000001) is not offered
+ * where it is finer than that. `scale`: base units the book's state prices are per; `decimals`: the token's.
+ */
+export function displayGroupSizes(tick: bigint, dp: number, decimals: number, scale: bigint): bigint[] {
+  const t = tick > 0n ? tick : 1n;
+  const unit = 10n ** BigInt(Math.max(0, decimals));
+  // 10^-dp KAS = 10^(8-dp) sompi per whole token; a state price is sompi per `scale` base units
+  const perToken = 10n ** BigInt(Math.max(0, 8 - dp));
+  let step = (perToken * scale + unit - 1n) / unit;
+  if (step < t) step = t;
+  step = ((step + t - 1n) / t) * t;
+  return GROUP_MULTIPLIERS.map((m) => m * step);
+}
+
 export function buildBookModel(view: { asks: readonly (LevelView | BookOrderView)[]; bids: readonly (LevelView | BookOrderView)[] }, o: BookModelOptions = {}): BookModel {
   const scale = o.scale ?? 1n;
   const depth = Math.max(1, o.depth ?? 15);
