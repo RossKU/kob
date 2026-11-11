@@ -179,6 +179,8 @@ export interface KascovMeta {
   imageUrl: string | null;
   /** kascov's total supply of the token in base units (data/kascov.ts `supply`): only the market list's market cap uses it, labelled as kascov's */
   supply?: bigint | null;
+  /** kascov's price in KAS per whole token (data/kascov.ts `priceKas`), when it lists one: only the market page's third-party note uses it (kascov-price.ts) */
+  priceKas?: number | null;
 }
 
 export interface TokenRow {

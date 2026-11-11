@@ -50,6 +50,8 @@ export default {
   'market.kascov.source.ticker': 'ticker from kascov.io (declared by its creator)',
   'market.kascov.sourceTitle': "KOB has no name for this token of its own, so this is what the token's creator claimed in its creation record, as the explorer kascov.io shows it. Nobody has checked it, KOB does not vouch for it, and the token's facts (supply, decimals, prices, orders) do not come from kascov.io.",
   'market.kascov.via': 'via kascov',
+  'market.kascov.priceNote': 'kascov lists {price} KAS ({percent})',
+  'market.kascov.priceNoteTitle': "Third-party reference: the explorer kascov.io lists this price for the token, and it differs from KOB's by more than 20%. KOB does not use it for anything: its prices come from its own order book and trades.",
   'market.kascov.link': 'View on kascov.io',
   'market.kascov.linkTitle': "Opens this token's page on the explorer kascov.io in a new tab. What it shows is the explorer's, not KOB's.",
   'market.program.label': 'Program',

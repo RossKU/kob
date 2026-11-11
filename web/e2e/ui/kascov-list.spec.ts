@@ -178,6 +178,23 @@ test.describe('with kascov.io', () => {
     await expect(page.getByTestId(`kascov-ticker-differs-${exkcc}`)).toBeVisible();
     await expect(page.getByTestId(`token-icon-${exkcc}`)).toHaveAttribute('data-icon', 'letter');
   });
+
+  test("a kascov price more than 20% from KOB's own shows one muted third-party line on the market page; within 20%, or no price, nothing", async ({ appPage: page, mock }) => {
+    const exkcc = (await mock.token()).covenant_id;
+    const stats = await mock.get(`/v1/stats/${exkcc}`);
+    const own = Number(stats.last) / 1e8;
+    const note = page.getByTestId('kascov-price-note');
+    // half of KOB's own last price: -50%
+    await mockKascov(page, { tokens: tokens(exkcc).map((k) => (k.covenant_id === exkcc ? { ...k, price_kas: own / 2 } : k)) });
+    await page.goto(`/#/market/${exkcc}`);
+    await expect(note).toHaveText(/^kascov lists [\d.]+ KAS \(-50%\)$/);
+    await expect(note).toHaveAttribute('title', /^Third-party reference: .*KOB does not use it for anything/);
+    // 10% above: nothing
+    await mockKascov(page, { tokens: tokens(exkcc).map((k) => (k.covenant_id === exkcc ? { ...k, price_kas: own * 1.1 } : k)) });
+    await page.reload();
+    await expect(page.getByTestId('market-stats')).toHaveAttribute('data-state', 'ready');
+    await expect(note).toHaveCount(0);
+  });
 });
 
 test.describe('refresh policy', () => {

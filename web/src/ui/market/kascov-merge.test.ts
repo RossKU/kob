@@ -180,6 +180,12 @@ describe('applyKascov (a token page)', () => {
     expect(applyKascov(row, [], standIn)).toBe(row);
     expect(applyKascov(row, null, standIn)).toBe(row);
   });
+
+  it("carries kascov's optional price (display only) and nothing when it lists none", () => {
+    const row = buildTokenRows(registry, [view(ID('1'))])[0]!;
+    expect(applyKascov(row, [k({ templateHash: REF_8X8, priceKas: 0.012 })])!.kascov?.priceKas).toBe(0.012);
+    expect(applyKascov(row, [k({ templateHash: REF_8X8 })])!.kascov).not.toHaveProperty('priceKas');
+  });
 });
 
 describe('kascov\'s remark: a token it marks verified shows the chip "Verified by kascov" in place of "Genesis not verified" (third party, no fact)', () => {

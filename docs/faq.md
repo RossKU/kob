@@ -107,6 +107,10 @@ Pinned to commit [`47792a0e`](https://github.com/RossKU/kob/tree/47792a0eba552e0
 - **Names and icons only come from kascov.io.** The market list takes a display ticker, a name and an image from kascov's public
   token list. Supply, decimals, prices and orders never do
   ([`kascov.ts` L1-L13](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/data/kascov.ts#L1-L13)). Where kascov disagrees with what KOB derives, KOB wins and the list says so.
+- **A kascov price, if it ever lists one, is a footnote.** kascov does not publish prices today. If its token list gains an optional
+  `price_kas` and it is more than 20% away from KOB's own reference (the last trade, else the mid of the book), a token's market page
+  shows one small muted line, for example "kascov lists 0.012 KAS (-35%)", with a tooltip saying it is a third-party reference. KOB uses
+  it for nothing else: no warning, no ordering, no check. Without the field nothing is shown.
 - **Prices come from KOB's own book on chain.** The KOB indexer reads the order UTXOs and the fills from the chain. The book is the
   resting orders, and the last price is the last fill that actually happened. It is not a number anyone types in. Makers choose their
   own limit prices, as on any exchange, but a price only becomes "the price" once someone trades at it.

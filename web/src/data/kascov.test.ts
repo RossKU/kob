@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createIconLoader, createKascovClient, fetchVerifiedImage, generatedAtOf, iconSources, kascovImagesBase, kascovImageUrl, kascovNetwork, kascovTokensUrl,
-  KASCOV_BACKOFF_MAX_MS, KASCOV_REFRESH_MS, parseKascovToken, parseKascovTokens, readCapped, safeImageUrl, sha256Hex, sniffImage,
+  KASCOV_BACKOFF_MAX_MS, KASCOV_REFRESH_MS, parseKascovToken, parseKascovTokens, priceKasOf, readCapped, safeImageUrl, sha256Hex, sniffImage,
 } from './kascov';
 
 const ID = (c: string) => c.repeat(64);
@@ -45,6 +45,21 @@ describe('safeImageUrl', () => {
     for (const bad of ['http://x.example/a.png', 'ipfs://Qm123', 'data:image/png;base64,AAAA', 'javascript:alert(1)', 'https://u:p@x.example/a.png', 'not a url', '', 42, null, `https://x.example/${'a'.repeat(3000)}`]) {
       expect(safeImageUrl(bad), String(bad)).toBeNull();
     }
+  });
+});
+
+describe('price_kas (optional; kascov does not publish a price yet)', () => {
+  it('is read when it is a positive finite number or numeric string, and absent from the token otherwise', () => {
+    expect(parseKascovToken(entry({ price_kas: 0.012 }))!.priceKas).toBe(0.012);
+    expect(parseKascovToken(entry({ price_kas: '0.012' }))!.priceKas).toBe(0.012);
+    // no field, and every malformed value: no `priceKas` key at all (an older list parses exactly as before)
+    for (const bad of [undefined, null, 0, -1, NaN, Infinity, '', 'abc', '1e3', '-2', 1e-13, 1e16, {}, [], true]) {
+      const t = parseKascovToken(entry({ price_kas: bad }))!;
+      expect(t, String(bad)).not.toHaveProperty('priceKas');
+      expect(t).toEqual(parseKascovToken(entry())!);
+    }
+    expect(priceKasOf(5)).toBe(5);
+    expect(priceKasOf(0)).toBeNull();
   });
 });
 

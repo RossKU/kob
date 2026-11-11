@@ -59,6 +59,7 @@ function enrich(row: TokenRow, k: KascovToken, noTicker = false): TokenRow {
     tickerDiffers: row.ticker !== '' && !noTicker && k.ticker !== null && row.ticker.toUpperCase() !== k.ticker.toUpperCase(),
     decimalsDiffers: row.decimals !== null && k.decimals !== null && row.decimals !== k.decimals,
     decimals: k.decimals, imageHash: k.imageHash, imageUrl: k.imageUrl, supply: k.supply ?? null,
+    ...(k.priceKas != null ? { priceKas: k.priceKas } : {}),
   };
   return withKascovRemark({ ...row, ticker: usedTicker ? k.ticker! : row.ticker, name: usedName ? k.name : row.name, kascov: meta }, k.verified);
 }

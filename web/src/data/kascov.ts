@@ -7,7 +7,8 @@
 //
 // What the app takes from it, and what it does not:
 //
-//   * ONLY a display ticker, a display name, an image and, to flag a disagreement, the declared decimals and the program hash. These are the token creator's
+//   * ONLY a display ticker, a display name, an image and, to flag a disagreement, the declared decimals and the program hash (and, if kascov ever lists one, a price,
+//     below). These are the token creator's
 //     own claims, recorded in its genesis (the same status as a KCC-23 declaration: "declared by its creator"). Nobody has checked them.
 //   * Never a fact: supply, powers, the decimals a market trades with, prices and orders come from the chain and the KOB indexer exactly as before. Where
 //     kascov's ticker or decimals disagree with what KOB derives, KOB wins and the list says so (ui/market/kascov-merge.ts).
@@ -16,6 +17,9 @@
 //     checked it itself; founder decision 2026-10-28). It changes no warning, no fact and no rule. Whether a token is listed is decided by the program hash
 //     alone, against the programs this build pins and enables for the network (`kascovTradable`). kascov's `lineage_complete` ("provably genesis") is not
 //     read: it only says kascov's index began before the token did.
+//   * A PRICE is not in the list today. ASSUMPTION: if kascov adds one, it is an optional per-token `price_kas` (KAS per whole token, a positive JSON number or numeric
+//     string). It is read as `priceKas` and used for exactly one thing: a small muted third-party line on the token's market page when it differs from KOB's own reference by
+//     more than 20% (ui/market/kascov-price.ts). Absent or malformed = nothing. KOB never uses it for a warning, an ordering, a check or a figure.
 //   * Every failure (unreachable, slow, not JSON, a changed shape, a response for another network) is an `ok: false` result, never a throw: the list is then
 //     what it was before this module existed.
 //
@@ -89,6 +93,11 @@ export interface KascovToken {
    * (labelled as kascov's), and only for a token kascov marks `verified`.
    */
   supply?: bigint | null;
+  /**
+   * kascov's price of the token in KAS per whole token (optional `price_kas`; kascov does not publish one yet): a positive finite number, absent otherwise. Display only: the market
+   * page may note, labelled third-party, that it differs from KOB's own reference price (ui/market/kascov-price.ts). Never used for anything else.
+   */
+  priceKas?: number | null;
 }
 
 /**
@@ -137,6 +146,12 @@ function supplyOf(o: Record<string, unknown>): bigint | null {
   return typeof o.supply === 'number' && Number.isSafeInteger(o.supply) && o.supply >= 0 ? BigInt(o.supply) : null;
 }
 
+/** The `price_kas` of an entry: a positive finite number (or numeric string) within a sane range, else null. */
+export function priceKasOf(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 && n >= 1e-12 && n <= 1e15 ? n : null;
+}
+
 /** One entry of `tokens`, null when it has no usable covenant id. */
 export function parseKascovToken(raw: unknown): KascovToken | null {
   const o = asObject(raw);
@@ -144,6 +159,7 @@ export function parseKascovToken(raw: unknown): KascovToken | null {
   if (!o || !covenantId) return null;
   const dec = o.claimed_decimals;
   const imageHash = hex64(o.claimed_image_hash);
+  const priceKas = priceKasOf(o.price_kas);
   return {
     covenantId,
     ticker: text(o.claimed_ticker, 16),
@@ -154,6 +170,7 @@ export function parseKascovToken(raw: unknown): KascovToken | null {
     imageUrl: typeof o.claimed_image === 'string' && o.claimed_image.trim().length > 0 && o.claimed_image.length <= 2048 ? o.claimed_image.trim() : null,
     verified: o.status === 'verified',
     supply: supplyOf(o),
+    ...(priceKas !== null ? { priceKas } : {}),
   };
 }
 

@@ -29,6 +29,8 @@ export interface MockKascovToken {
   /** the program hash kascov names (`standard.view_template_hash`) */
   program?: string;
   status?: string;
+  /** the optional price (KAS per whole token) kascov may list one day (`price_kas`) */
+  price_kas?: number;
 }
 
 export interface MockKascovOptions {
@@ -65,6 +67,7 @@ const body = (o: MockKascovOptions) => ({
     ...(t.claimed_image !== undefined ? { claimed_image: t.claimed_image } : {}),
     ...(t.claimed_image_hash !== undefined ? { claimed_image_hash: t.claimed_image_hash } : {}),
     // kascov's remark: only `verified` shows the chip "Verified by kascov" (ui/genesis-check.spec.ts); the other specs are not about it
+    ...(t.price_kas !== undefined ? { price_kas: t.price_kas } : {}),
     status: t.status ?? 'unvalidated',
     alive: true,
     ...(t.program ? { standard: { kcc: 20, review: 'reviewed', template_hash: 'f'.repeat(64), view_template_hash: t.program } } : {}),
