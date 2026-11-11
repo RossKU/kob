@@ -8,9 +8,9 @@ import { useEffect, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { formatKas, pow10 } from '../../kob/units';
-import { displayPriceText, exactPriceText, formatRowTime, rowTimeTitle, shortId } from '../kit';
+import { displayPriceText, exactPriceText, formatRowTime, rowTimeTitle } from '../kit';
 import { TokenIcon } from '../market/TokenIcon';
-import { SETTLE_DAA, amountCell, confirmationsAt, daaNow, marketKeyOf, shortWallet, type ActivityRow, type MarketRef } from './activity-model';
+import { SETTLE_DAA, amountCell, confirmationsAt, daaNow, marketKeyOf, walletBody, type ActivityRow, type MarketRef } from './activity-model';
 import { KindIcon, kindLabel } from './ActivityIcons';
 
 /** How tokens and markets are named (one object per registry and network, so the rows' props stay equal between renders). */
@@ -167,15 +167,15 @@ const RowCells = memo(
         <span class="act-c-mk" role="cell" title={fmt.marketText(r.market)}>
           <MarketIcons market={r.market} nameOf={fmt.nameOf} label={fmt.marketText(r.market)} />
           {r.moreMarkets > 0 ? <span class="act-more" title={t(r.moreMarkets === 1 ? 'activity.moreMarketsTitle.one' : 'activity.moreMarketsTitle.other', { n: r.moreMarkets })}>{t('activity.moreMarkets', { n: r.moreMarkets })}</span> : null}
-          <span class="act-txm" title={r.txid}>{shortId(r.txid, 8, 8)}</span>
+          <span class="act-txm" title={r.txid}>{r.txid}</span>
         </span>
-        {/* the id with a middle ellipsis (the first and last eight characters: enough to tell two apart); the title and the link have it whole */}
-        <span class="act-c-tx" role="cell" title={r.txid}>{shortId(r.txid, 8, 8)}</span>
+        {/* the whole id: as much of it as the column has room for, then an ellipsis at its end (founder 2026-11-12: no middle ellipsis); the link and the title have it whole */}
+        <span class="act-c-tx" role="cell" title={r.txid}>{r.txid}</span>
         <span class="act-c-who" role="cell" title={addrs.length ? t(addrs.length === 1 ? 'activity.wallet.title.one' : 'activity.wallet.title.other', { list: addrs.join(', ') }) : undefined} data-testid="activity-wallet">
           {addrs.length ? (
             addrs.slice(0, 2).flatMap((a, i) => [
               ...(i > 0 ? [<i key="s" class="act-sep" aria-hidden="true">{'⇄'}</i>] : []),
-              <span key={a} class="act-w">{shortWallet(a)}</span>,
+              <span key={a} class="act-w">{walletBody(a)}</span>,
             ])
           ) : (
             <span class="act-w muted">{props.pending ? t('activity.wallet.pending') : t('activity.wallet.unknown')}</span>

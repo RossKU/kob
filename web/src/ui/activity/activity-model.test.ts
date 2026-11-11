@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { EventView, OrderView, PairFillView } from '../../data/indexer-types';
 import {
   ACTIVITY_DEPTH, AVAILABLE_KINDS, DEFAULT_PREFS, PREFS_KEY, SETTLE_DAA, amountCell, confirmationsAt, daaNow, filterRows, fillRows, heldView, inMarket, logHasNext, logPage, logPriceDp, mergePairFills, mergeRows, orientRow, pairFillEvent, parsePrefs,
-  placedRows, priceRefOf, readPrefs, rowHref, rowMakers, shortWallet, shownKinds, writePrefs,
+  placedRows, priceRefOf, readPrefs, rowHref, rowMakers, shownKinds, walletBody, writePrefs,
   type ActivityRow, type OrderFacts, type RowContext,
 } from './activity-model';
 import { formatRowTime } from '../kit/format';
@@ -314,8 +314,9 @@ describe('confirmations and time', () => {
   });
 
   it('the wallet column drops the network prefix and keeps the first and last six characters', () => {
-    expect(shortWallet('kaspatest:qz7vabcdefghk3f2')).toBe('qz7vab…ghk3f2');
-    expect(shortWallet('qq9d0hxa')).toBe('qq9d0hxa');
+    // whole, the prefix dropped: never a middle ellipsis (founder 2026-11-12); the cell ends it with an ellipsis where it has no room
+    expect(walletBody('kaspatest:qz7vabcdefghk3f2')).toBe('qz7vabcdefghk3f2');
+    expect(walletBody('qq9d0hxa')).toBe('qq9d0hxa');
   });
 });
 

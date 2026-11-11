@@ -12,7 +12,7 @@ import { explorerTxUrl, type AppConfig } from '../../config';
 import type { EventView, OrderView, PairFillsView, PairFillView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { pow10 } from '../../kob/units';
-import { columnPriceDp, fitAmountColumn, shortId, unitsFraction } from '../kit/format';
+import { columnPriceDp, fitAmountColumn, unitsFraction } from '../kit/format';
 import { pageWindow, type ListPageSize, type PageWindow } from '../market/market-list';
 
 // ------------------------------------------------------------------------------------------------ kinds
@@ -379,12 +379,12 @@ export function confirmationsAt(row: Pick<ActivityRow, 'daa' | 'confirmations' |
 }
 
 /**
- * A short form of an address for the Wallet column: the network prefix dropped, the first and last six characters of the rest with a middle ellipsis (the cell's title has it
- * whole). The time column is the kit's `formatRowTime` (one 24-hour format on every table and log: today HH:MM:SS, else YYYY-MM-DD HH:MM).
+ * An address for the Wallet column: the network prefix dropped, the rest whole; the cell ends it with an ellipsis where the column is too narrow (founder 2026-11-12: the ids
+ * and the wallets are never shortened in the middle), and its title has the address whole. The time column is the kit's `formatRowTime` (one 24-hour format on every table and
+ * log: today HH:MM:SS, else YYYY-MM-DD HH:MM).
  */
-export function shortWallet(address: string): string {
-  const body = address.includes(':') ? address.slice(address.indexOf(':') + 1) : address;
-  return shortId(body, 6, 6);
+export function walletBody(address: string): string {
+  return address.includes(':') ? address.slice(address.indexOf(':') + 1) : address;
 }
 
 // ------------------------------------------------------------------------------------------------ number formats

@@ -85,8 +85,8 @@ test.describe('activity page', () => {
     await expect(first).toHaveAttribute('aria-label', /opens tn10\.kaspa\.stream in a new tab/);
     // the columns: market icons, short tx, wallet, amount (+ KAS value), price, confirmations, time
     const fill = rows(page).and(page.locator('[data-kind="fill"]')).first();
-    // the id with a middle ellipsis (review M-08: the log is no longer 60 % hex), whole in its title
-    await expect(fill.locator('.act-c-tx')).toHaveText(/^[0-9a-f]{8}…[0-9a-f]{8}$/);
+    // the whole id, never shortened in the middle (founder 2026-11-12): the cell ends it with an ellipsis where it has no room; whole in its title too
+    await expect(fill.locator('.act-c-tx')).toHaveText(/^[0-9a-f]{64}$/);
     await expect(fill.locator('.act-c-tx')).toHaveAttribute('title', /^[0-9a-f]{64}$/);
     await expect(fill.locator('.act-c-amt')).toContainText('EXKCC');
     await expect(fill.locator('.act-c-amt')).toContainText('KAS');
@@ -95,8 +95,9 @@ test.describe('activity page', () => {
     await expect(fill.locator('.act-c-time')).toHaveText(/^(\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/);
     await expect(fill.locator('.act-c-time')).toHaveAttribute('title', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
     expect((await fill.locator('.act-c-amt, .act-c-px').allInnerTexts()).join(' ')).not.toMatch(/[₀-₉]/);
-    // the owners of the filled orders are looked up: a short address (the full one in the title)
-    await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{5}…[0-9a-z]{6}/, { timeout: 15_000 });
+    // the owners of the filled orders are looked up: the address without its network prefix, never shortened in the middle (the full one in the title)
+    await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{20,}/, { timeout: 15_000 });
+    expect(await fill.getByTestId('activity-wallet').innerText()).not.toContain('…');
     await expect(fill.getByTestId('activity-wallet')).toHaveAttribute('title', /kaspatest:/);
     // the legend under the table: phase 1 kinds and the confirmation marks
     await expect(page.getByTestId('activity-legend')).toContainText('fill, taker bought');

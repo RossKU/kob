@@ -114,7 +114,7 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-skel .act-c-conf .skeleton-line { width: 28px; }
 .act-skel .act-c-amt, .act-skel .act-c-time { min-width: 48px; }
 
-/* A wide log: the transaction id and the wallet are short (a middle ellipsis, ActivityRows.tsx) and stop growing at about 12rem; the figure columns take what is left, so the
+/* A wide log: the transaction id and the wallet columns stop growing at about 12rem (their whole text ends with an ellipsis there, ActivityRows.tsx); the figure columns take what is left, so the
    numbers keep their room and the log is no longer 60 % hex (review M-08). Three classes: the same rule under a token or pair page wins over market.css's older cap on the figures. */
 @container actlog (min-width: 1200px) {
   .act .act-log .act-head, .act .act-log .act-row { grid-template-columns: 28px 56px minmax(80px, 12rem) minmax(90px, 14rem) minmax(110px, 1fr) minmax(84px, 0.6fr) 64px 84px; }
