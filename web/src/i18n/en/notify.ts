@@ -14,6 +14,8 @@ export default {
   'notify.viewOrders': 'Open orders',
   'notify.viewToken': 'Token page',
   'notify.new': 'new',
+  'notify.toastMore': '+{count}',
+  'notify.toastMoreLabel': '{count} more notifications waiting: open the bell',
   'notify.more': '{count} more notifications are in the bell.',
 
   'notify.side.sell': 'sell',

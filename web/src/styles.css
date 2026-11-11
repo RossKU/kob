@@ -586,6 +586,24 @@ body.modal-open { overflow: hidden; }
 .toast-error { border-left-color: var(--bad); }
 .toast-info { border-left-color: var(--info); }
 
+/* a phone (narrow.ts PHONE_TOAST_QUERY; the host carries data-phone): the notification hangs at the TOP, just under the sticky header (--toast-top, kit/Toast.tsx),
+   the full width minus a 12 px gutter, over the page (nothing in the page moves) and never over the bottom Buy / Sell bar. One at a time; a "+N" chip says how
+   many wait and opens the bell. One line where it fits, two at most, the rest ellipsized (the bell has the full text); the x stays 32 px. It slides down from under the header. */
+@keyframes toast-in-top { from { opacity: 0; transform: translateY(-14px); } }
+.toast-host[data-phone] { top: calc(var(--toast-top, 56px) + 8px); bottom: auto; left: 12px; right: 12px; width: auto; max-width: none; }
+.toast-host[data-phone] .toast { animation-name: toast-in-top; align-items: center; padding: 4px 4px 4px 12px; gap: 6px; }
+.toast-host[data-phone] .toast-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+.toast-host[data-phone] .toast > .btn { flex: none; min-width: 32px; min-height: 32px; padding: 0; font-size: 1.3rem; line-height: 1; }
+.toast-host[data-phone] > .send-toast { max-height: 55vh; overflow-y: auto; align-items: flex-start; padding: 8px 6px 8px 12px; }
+.toast-host[data-phone] > .send-toast:not(:last-of-type) { display: none; }
+.toast-more {
+  position: absolute; left: 14px; bottom: -13px; min-width: 32px; height: 26px; padding: 0 9px; border-radius: 13px; border: 1px solid var(--border); background: var(--surface-2, var(--surface));
+  color: var(--text); font: inherit; font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 24px; box-shadow: var(--shadow); cursor: pointer; pointer-events: auto;
+}
+.toast-more::after { content: ''; position: absolute; inset: -6px -4px; } /* a thumb-sized hit area around the small chip */
+.toast-more:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .toast-host[data-phone] .toast { animation: none; } }
+
 /* ------------------------------------------------------------------ key value list / amount / copy */
 
 .kv { display: grid; grid-template-columns: minmax(110px, max-content) 1fr; gap: 4px 16px; margin: 0; }
@@ -658,7 +676,7 @@ body.modal-open { overflow: hidden; }
   .wallet-kind, .wallet-chip .copy-btn { display: none; }
   .wallet-chip { padding-left: 8px; }
   .toast-host { left: 16px; right: 16px; width: auto; max-width: none; }
-  body:has(.mkt-trade-fab) .toast-host { bottom: calc(16px + 44px + 16px + env(safe-area-inset-bottom, 0px)); }
+  body:has(.mkt-trade-fab) .toast-host:not([data-phone]) { bottom: calc(16px + 44px + 16px + env(safe-area-inset-bottom, 0px)); }
 }
 /* a small phone: the chip keeps the dot and the network; "open review" is in its tooltip, the menu and the banner (so a connected row fits on any font) */
 @media (max-width: 430px) {

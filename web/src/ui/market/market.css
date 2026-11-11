@@ -489,7 +489,7 @@ body:has(.market-page) .container { max-width: none; }
   .mkt-trade-btn:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 2px; }
   .mkt-area-ticket { scroll-margin-top: 112px; } /* under the sticky header (brand, navigation, wallet chip) */
   body:has(.market-page) { padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px)); }
-  body:has(.mkt-trade-bar) .toast-host { bottom: calc(8px + 60px + 8px + env(safe-area-inset-bottom, 0px)); }
+  body:has(.mkt-trade-bar) .toast-host:not([data-phone]) { bottom: calc(8px + 60px + 8px + env(safe-area-inset-bottom, 0px)); }
 }
 
 /* ---- token icons (TokenIcon): the picture whose bytes match the creator's committed hash, else a letter on a colour of the covenant id */

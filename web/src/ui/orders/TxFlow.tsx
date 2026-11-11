@@ -5,6 +5,7 @@ import type { CancelPlan } from '../../kob/cancel';
 import type { PlacementRecord } from '../../kob/records';
 import { Banner, Button, IssueLine, Spinner } from '../kit';
 import { SendStatusLine, useSend } from '../confirm/SendStatus';
+import { PHONE_TOAST_QUERY } from '../shell/narrow';
 import { tCount } from './plural';
 
 export interface FlowStep {
@@ -48,6 +49,8 @@ export interface TxFlowProps {
 
 /** How long the card of a flow whose every step went through stays (its toast says the same and stays longer). */
 const DONE_CLOSE_MS = 6000;
+/** ... and on a phone, where the card is the only notification on screen (kit/Toast.tsx). */
+const DONE_CLOSE_PHONE_MS = 4000;
 
 /**
  * Runs one or several transactions one after the other, each checked silently and approved in the wallet (ui/confirm/send.ts) as soon as the flow
@@ -133,7 +136,8 @@ export function TxFlow(props: TxFlowProps) {
   useEffect(() => setHost(document.querySelector<HTMLElement>('[data-testid="toast-host"]')), []);
   useEffect(() => {
     if (!allThrough || !props.onClose) return;
-    const timer = setTimeout(() => props.onClose?.(), DONE_CLOSE_MS);
+    const phone = typeof matchMedia === 'function' && matchMedia(PHONE_TOAST_QUERY).matches;
+    const timer = setTimeout(() => props.onClose?.(), phone ? DONE_CLOSE_PHONE_MS : DONE_CLOSE_MS);
     return () => clearTimeout(timer);
   }, [allThrough]);
   const tone = running ? 'info' : message || states.some((s) => s === 'failed') ? 'error' : anySubmitted ? 'ok' : 'info';

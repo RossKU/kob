@@ -11,6 +11,11 @@ export const NARROW_QUERY = '(max-width: 719px)';
 export const TIGHT_QUERY = '(max-width: 1199px)';
 /** A phone: the Portfolio page draws its fills as cards below this (orders/balances.css has the matching breakpoint for the strip and the balances). */
 export const PHONE_QUERY = '(max-width: 639px)';
+/**
+ * A phone for the notifications (toasts): below 640 px, or a touch screen below 760 px (the same cut as the market page's Buy / Sell bar). The toasts sit at
+ * the top under the header, one at a time (kit/Toast.tsx, styles.css `.toast-host[data-phone]`); a desktop keeps them at the bottom right.
+ */
+export const PHONE_TOAST_QUERY = '(max-width: 639px), (pointer: coarse) and (max-width: 759px)';
 /** Spare room asked for before the wide row is tried again after it did not fit. */
 const SPARE_PX = 4;
 const RETRY_PX = 8;
