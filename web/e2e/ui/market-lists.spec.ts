@@ -616,9 +616,9 @@ test.describe('a phone', () => {
     const star = (await page.getByTestId(`token-favorite-${base}`).boundingBox())!;
     expect(star.width).toBeGreaterThanOrEqual(44);
     expect(star.height).toBeGreaterThanOrEqual(32);
-    // the star leaves the price and the change alone
+    // the star is in the row's own line, at its left: it leaves the price and the change alone
     const change = (await page.getByTestId(`token-change-${base}`).boundingBox())!;
-    expect(star.y).toBeGreaterThanOrEqual(change.y + change.height - 2);
+    expect(star.x + star.width).toBeLessThanOrEqual(change.x + 1);
     await shot(page, 'market-390');
 
     await page.getByTestId('pair-pick-quote').click();

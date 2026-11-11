@@ -53,8 +53,8 @@ test('opening a market adds Trade (next to Market); Market then leads to the lis
   const xs = await Promise.all(['nav-market', 'nav-trade', 'nav-activity'].map(async (id) => (await page.getByTestId(id).boundingBox())!.x));
   expect(xs[0]).toBeLessThan(xs[1]!);
   expect(xs[1]).toBeLessThan(xs[2]!);
-  // the market page has the way back to the list
-  await expect(page.getByTestId('market-all')).toHaveText(/All markets/);
+  // the market page has no "All markets" line: the Market tab is one click
+  await expect(page.getByTestId('market-all')).toHaveCount(0);
 
   await page.getByTestId('nav-market').click();
   await expect(page.getByTestId('token-list-view')).toBeVisible();
@@ -67,8 +67,8 @@ test('opening a market adds Trade (next to Market); Market then leads to the lis
   await expect(page.getByTestId('order-ticket')).toBeVisible();
   await expect(page.getByTestId('nav-trade')).toHaveAttribute('aria-current', 'page');
 
-  // "All markets" goes to the list, and Trade is still there
-  await page.getByTestId('market-all').click();
+  // the Market tab goes to the list again, and Trade is still there
+  await page.getByTestId('nav-market').click();
   await expect(page.getByTestId('token-list-view')).toBeVisible();
   await expect(page.getByTestId('nav-trade')).toBeVisible();
   // other pages keep neither tab current

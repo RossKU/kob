@@ -1,6 +1,7 @@
-// The token page header is compact so the trading content comes first: the identity block and the pair selector, one line (short id with a copy button,
-// name, where its facts come from, Live) and one line of badges (the token family, whose tooltip names the program and the decimals, and the facts, each
-// with its sentence as the tooltip). No box, no bullet sentences, no disclosure. A real warning stays in the page as a one-line note.
+// The token page's header is the market bar (e2e/ui/market-bar.spec.ts): the identity block and the pair selector, the flip, the star and the 24 h figures in ONE row, then Live, and nothing else
+// unless there is a warning: no title block, no covenant id, no name, no chips. A normal token shows no status; the High risk chip (with its reason on a tap) is the one chip that stays. The
+// covenant id (whole, with a copy button), the name, where its facts come from and the program chip (whose tooltip names the program and the decimals) are in the token's details card, once. A real
+// warning stays in the page as a one-line note.
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures';
 
@@ -25,63 +26,61 @@ for (const [name, size] of [['desktop', { width: 1280, height: 900 }], ['phone',
   test.describe(`token header, ${name}`, () => {
     test.use({ viewport: size });
 
-    test('no blue box, no bullet sentences, no program line, no disclosure; one short id with a copy button; only the kind chip, the facts in the details', async ({ appPage: page, mock }) => {
+    test('no blue box, no bullet sentences, no program line, no disclosure; the id, the name and the kind chip are in the details; only a risk chip would be in the bar', async ({ appPage: page, mock }) => {
       await seedOpenToken(page, mock);
       await page.goto(`/#/market/${ID}`);
       const header = page.getByTestId('token-header');
       await expect(page.getByTestId('order-book')).toBeVisible();
       await expect(header.locator('.banner')).toHaveCount(0);
-      for (const gone of ['token-open-caution', 'open-token-decimals', 'token-program-note', 'token-more', 'token-fact-text-genesis_unverified', 'token-fact-text-public-mint']) await expect(header.getByTestId(gone)).toHaveCount(0);
+      for (const gone of ['token-open-caution', 'open-token-decimals', 'token-program-note', 'token-more', 'token-fact-text-genesis_unverified', 'token-fact-text-public-mint', 'token-short-id', 'token-meta']) await expect(header.getByTestId(gone)).toHaveCount(0);
       await expect(header.locator('details')).toHaveCount(0);
       await expect(header).not.toContainText(/Its creation was not checked|lets anyone create more|Not in the token registry|Token program:/);
       // the identity block, then the pair text, then the swap button right after it
       const [icon, fp, pair, flip] = await Promise.all([`token-icon-${ID}`, `fingerprint-${ID}`, 'market-pair', 'market-flip'].map((id) => header.getByTestId(id).boundingBox()));
       expect(icon!.x).toBeLessThan(fp!.x);
-      if (size.width >= 600) {
-        expect(fp!.x + fp!.width).toBeLessThan(pair!.x);
-        expect(pair!.x + pair!.width).toBeLessThanOrEqual(flip!.x + 1);
-      }
+      expect(fp!.x + fp!.width).toBeLessThan(pair!.x);
+      expect(pair!.x + pair!.width).toBeLessThanOrEqual(flip!.x + 1);
       // the fingerprint is 60 % of the icon and centred on it
       expect(Math.abs(fp!.height / icon!.height - 0.6)).toBeLessThan(0.03);
       expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
-      // the covenant id is said once, short, with a copy button (the title for screen readers is not drawn)
-      const shownId = size.width >= 600 ? ID : `${ID.slice(0, 12)}…${ID.slice(-12)}`;
-      await expect(header.getByTestId('token-short-id')).toHaveText(shownId);
-      await expect(header.getByTestId('token-short-id')).toHaveAttribute('title', ID);
-      await expect(header.getByTestId('token-short-id-copy')).toBeVisible();
-      await expect(header.getByTestId('token-meta').getByText(shownId)).toHaveCount(1);
-      // a normal token shows no status: no fact chip at all (no "Genesis not verified", no "Public mint"), no High risk chip; the kind chip (KCC-20) stays
+      // a normal token shows no status: no fact chip at all, no High risk chip, and the kind chip is not in the bar
       await expect(header.locator('[data-testid^="token-fact-"]')).toHaveCount(0);
       await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
-      await expect(header.getByTestId('badge-family')).toBeVisible();
+      await expect(header.getByTestId('badge-family')).toHaveCount(0);
       await expect(header).not.toContainText(/Genesis not verified|Public mint/);
+      // the covenant id is said once, whole, with a copy button, in the details; the kind chip is there too, its tooltip names the program and the decimals
+      const details = page.getByTestId('token-details');
+      await expect(details.getByTestId('token-covenant-id')).toHaveText(ID);
+      await expect(details.getByTestId('token-covenant-id')).toHaveAttribute('title', ID);
+      await expect(details.getByRole('button', { name: /copy/i }).first()).toBeVisible();
+      const chip = details.getByTestId('badge-family');
+      await expect(chip).toBeVisible();
+      await expect(chip).toHaveAttribute('title', /Token program: KCC20PublicMint \(reviewed\), as pinned in this build\./);
+      await expect(chip).toHaveAttribute('title', /whole tokens of 8 decimals/);
       // the facts are one tap away, in the details
       await page.getByTestId('token-status-details').getByRole('button').first().click();
       await expect(page.getByTestId('status-fact-public-mint')).toContainText(/anyone create more/);
       await expect(page.getByTestId('status-fact-genesis_unverified')).toContainText(/not checked against its token program/);
-      // the program (with its review) and the decimals are the tooltip of the family chip
-      const chip = header.getByTestId('badge-family');
-      await expect(chip).toHaveAttribute('title', /Token program: KCC20PublicMint \(reviewed\), as pinned in this build\./);
-      await expect(chip).toHaveAttribute('title', /whole tokens of 8 decimals/);
     });
 
-    test('the trading content starts right below the header', async ({ appPage: page, mock }) => {
+    test('the trading content starts right below the bar', async ({ appPage: page, mock }) => {
       await seedOpenToken(page, mock);
       await page.goto(`/#/market/${ID}`);
       await expect(page.getByTestId('order-book')).toBeVisible();
       const header = (await page.getByTestId('token-header').boundingBox())!;
-      const stats = (await page.getByTestId('market-stats').boundingBox())!;
-      // the header is the identity block, the pair selector and two short lines (the preamble was about 440 px on a phone, 270 on a desktop)
-      expect(header.height).toBeLessThan(size.width < 600 ? 330 : 170);
-      expect(stats.y - (header.y + header.height)).toBeLessThan(40);
+      const bar = (await page.getByTestId('market-bar').boundingBox())!;
+      const grid = (await page.locator('.mkt-grid').boundingBox())!;
+      // the bar is the header (one row of 56 to 64 px; a phone's first row and its figures under it), the grid follows it at the page gap
+      expect(header.height).toBeLessThan(size.width < 600 ? 135 : 70);
+      expect(grid.y - (bar.y + bar.height)).toBeLessThan(20);
     });
 
     test('a real warning is one line in the page', async ({ appPage: page, mock }) => {
       await seedOpenToken(page, mock, { powers: ['freeze'] });
       await page.goto(`/#/market/${ID}`);
       await expect(page.getByTestId('token-header').getByTestId('powers-warning')).toBeVisible();
-      // and the one High risk chip, its reason on a tap
-      await expect(page.getByTestId('token-header').getByTestId('badge-high-risk')).toHaveAttribute('data-reasons', 'issuer_control');
+      // and the one High risk chip, in the bar, its reason on a tap
+      await expect(page.getByTestId('market-bar').getByTestId('badge-high-risk')).toHaveAttribute('data-reasons', 'issuer_control');
       await page.getByTestId('token-header').getByTestId('high-risk-toggle').click();
       await expect(page.getByTestId('high-risk-reasons')).toContainText('freeze or seize balances');
     });

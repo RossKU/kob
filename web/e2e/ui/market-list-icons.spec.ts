@@ -1,13 +1,13 @@
 // The Market list's token icon is as tall as the row's text block allows, and never makes a row taller: the row is its text block plus its padding, whatever
-// the icon. The fingerprint is 60 % of the icon and centred on it; the letter of a fallback icon scales with the icon. Every row has the same three lines (the
-// ticker and the name on one line, the id fragment, the badges on their own line), so rows with no fact badge, one and two, and a long name are all as tall: one icon pitch.
+// the icon. The fingerprint is 60 % of the icon and centred on it; the letter of a fallback icon scales with the icon. A row is two lines of text (review M-02: the ticker and the name on
+// one line, the id fragment with the badges at its right), about 52 px, so rows with no fact badge, one and two, and a long name are all as tall: one icon pitch.
 import { readFileSync } from 'node:fs';
 import { test, expect } from '../fixtures';
 
 // the rows are measured in their final places: no rise-in
 test.use({ autoOpen: false, contextOptions: { reducedMotion: 'reduce' } });
 
-for (const [width, iconMin, iconMax] of [[1280, 46, 48], [880, 40, 48], [390, 38, 42]] as const) {
+for (const [width, iconMin, iconMax] of [[1280, 35, 37], [880, 35, 37], [390, 31, 33]] as const) {
   test(`${width} px: the icon fills the text block without growing the row`, async ({ appPage: page }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/#/market');
@@ -24,7 +24,8 @@ for (const [width, iconMin, iconMax] of [[1280, 46, 48], [880, 40, 48], [390, 38
     );
     expect(rows.length).toBeGreaterThan(1);
     for (const r of rows) {
-      // the row is its text block and its padding (7 px on a desktop, a card's on a phone): the icon is not what sets the height
+      // the row is its text block and its padding (6 px on a desktop, a card's on a phone): the icon is not what sets the height
+      expect(r.row, 'a compact row').toBeLessThan(64);
       expect(r.icon).toBeLessThanOrEqual(r.text + 0.5);
       expect(r.row - r.text).toBeGreaterThan(5);
       expect(r.row - r.text).toBeLessThan(width < 600 ? 14 : 8);

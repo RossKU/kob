@@ -129,14 +129,15 @@ test.describe('token issuance', () => {
     // on chain like the wallet views, and the banner says the decimals are the declared ones (not a price scale, not "the chain carries none")
     await page.goto(`/#/market/${tokenId}`);
     const header = page.getByTestId('token-header');
-    await expect(header.getByTestId('token-name')).toHaveText('New Example Coin');
+    // the name is in the details card (the market bar holds the pair, the figures and Live)
+    await expect(page.getByTestId('token-details').getByTestId('token-name')).toHaveText('New Example Coin');
     await expect(header.getByTestId('token-title')).toContainText('NEWKCC');
     // a token on its declaration is a normal token: no marker next to the name; where its facts come from is in the token's details
-    await expect(header.getByTestId('token-decimals-note')).toHaveCount(0);
+    await expect(page.getByTestId('token-details').getByTestId('token-decimals-note')).toHaveCount(0);
     await expect(header).not.toContainText('declared, bound by ancestry');
     await page.getByTestId('token-status-details').getByRole('button').first().click();
     await expect(page.getByTestId('status-declared')).toContainText('declared, bound by ancestry');
-    await expect(header.getByTestId('badge-family')).toHaveAttribute('title', /whole tokens of 2 decimals, as its creator declared at creation/);
+    await expect(page.getByTestId('token-details').getByTestId('badge-family')).toHaveAttribute('title', /whole tokens of 2 decimals, as its creator declared at creation/);
     await expect(header).not.toContainText('carries no decimals');
   });
 

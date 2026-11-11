@@ -420,39 +420,42 @@ test.describe('desktop', () => {
 test.describe('phone, 390 px wide, touch', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
+  /** On a touch screen the tools and the colours are behind the Draw button (chart-draw-sheet.spec.ts): open its sheet unless it is open. */
+  async function sheet(page: Page) {
+    if ((await page.getByTestId('chart-draw-panel').count()) === 0) await page.getByTestId('chart-draw-sheet').tap();
+    await expect(page.getByTestId('chart-draw-panel')).toBeVisible();
+  }
+  /** A tool of the sheet (a pick closes the sheet) / a colour (the sheet stays open). */
+  const tool = async (page: Page, k: string) => { await sheet(page); await page.getByTestId(`draw-${k}`).tap(); await expect(page.getByTestId('chart-draw-panel')).toHaveCount(0); };
+  const colour = async (page: Page, c: string) => { await sheet(page); await page.getByTestId(`draw-color-${c}`).tap(); await expect(page.getByTestId(`draw-color-${c}`)).toHaveAttribute('aria-pressed', 'true'); };
+
   test('taps place a horizontal line and a trend line, the layer leaves the axes free and the page does not scroll sideways', async ({ appPage: page, mock }) => {
     await mock.seedHistory({ hours: 48, trades: 600, seed: 7 });
     await fund(mock);
     const token = await openMarket(page, mock);
     await expect(chartOf(page)).toHaveAttribute('data-state', 'ready');
-    // the whole plot on screen (taps outside the viewport go nowhere), clear of the floating Trade button
+    // the whole plot on screen (taps outside the viewport go nowhere), clear of the Buy | Sell bar
     await page.locator('.chart-box').evaluate((el) => el.scrollIntoView({ block: 'center' }));
-    const tools = (await page.getByTestId('chart-tools').boundingBox())!;
     const box = (await page.locator('.chart-box').boundingBox())!;
-    expect(tools.y + tools.height, 'toolbar above the plot').toBeLessThanOrEqual(box.y + 1);
-    // the header is one row: the tools scroll sideways inside their own row when they do not fit beside the intervals (the page does not)
-    const row = (await page.locator('.chart-row').boundingBox())!;
-    expect(row.x + row.width).toBeLessThanOrEqual(390);
+    // the header is one row: the intervals, the Draw button and Expand, all inside the screen and above the plot, the button finger-sized
+    const draw = (await page.getByTestId('chart-draw-sheet').boundingBox())!;
+    expect(draw.x + draw.width).toBeLessThanOrEqual(390);
+    expect(draw.y + draw.height, 'Draw above the plot').toBeLessThanOrEqual(box.y + 1);
+    expect(draw.height).toBeGreaterThanOrEqual(30);
     const iv = (await page.getByTestId('chart-intervals').boundingBox())!;
-    expect(Math.abs(row.y + row.height / 2 - (iv.y + iv.height / 2)), 'tools on the interval row').toBeLessThan(8);
-    expect(await page.locator('.chart-row').evaluate((el) => [el.scrollWidth > el.clientWidth, getComputedStyle(el).overflowX])).toEqual([true, 'auto']);
-    // the tools and the colour button: inside the screen, above the plot, the button and the swatches finger-sized
+    expect(Math.abs(draw.y + draw.height / 2 - (iv.y + iv.height / 2)), 'Draw on the interval row').toBeLessThan(8);
     const acts = (await page.locator('.chart-actions').boundingBox())!;
     expect(acts.x).toBeGreaterThanOrEqual(0);
     expect(acts.x + acts.width).toBeLessThanOrEqual(390);
-    const cb = (await page.getByTestId('chart-color').boundingBox())!;
-    expect(cb.x + cb.width).toBeLessThanOrEqual(390);
-    expect(cb.y + cb.height, 'colour button above the plot').toBeLessThanOrEqual(box.y + 1);
-    expect(cb.height).toBeGreaterThanOrEqual(30);
-    await page.getByTestId('chart-color').tap();
+    // the sheet: inside the screen, the swatches finger-sized
+    await sheet(page);
     const sw = (await page.getByTestId('chart-swatches').boundingBox())!;
     expect(sw.x).toBeGreaterThanOrEqual(0);
     expect(sw.x + sw.width).toBeLessThanOrEqual(390);
     expect((await page.getByTestId('draw-color-sell').boundingBox())!.height).toBeGreaterThanOrEqual(30);
-    await page.getByTestId('draw-color-sell').tap();
-    await expect(page.getByTestId('chart-color')).toHaveAccessibleName('Drawing colour: Red');
+    await colour(page, 'sell');
 
-    await page.getByTestId('draw-hline').tap();
+    await tool(page, 'hline');
     await expect(layerOf(page)).toHaveCount(1);
     const lb = (await layerOf(page).boundingBox())!;
     expect(lb.x + lb.width, 'the price axis stays free').toBeLessThan(box.x + box.width - 20);
@@ -461,7 +464,7 @@ test.describe('phone, 390 px wide, touch', () => {
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '1');
     await expect(layerOf(page)).toHaveCount(0);
 
-    await page.getByTestId('draw-trend').tap();
+    await tool(page, 'trend');
     const a = await at(page, 0.2, 0.7);
     await page.touchscreen.tap(a.x, a.y);
     await expect(page.getByTestId('chart-draw-hint')).toContainText('second point');
@@ -471,8 +474,8 @@ test.describe('phone, 390 px wide, touch', () => {
     expect(await horizontalOverflow(page), 'market page').toBe(0);
 
     // a box by two taps, in a colour picked with a tap, and recoloured with a tap
-    await pickColor(page, 'info', true);
-    await page.getByTestId('draw-box').tap();
+    await colour(page, 'info');
+    await tool(page, 'box');
     const c1 = await at(page, 0.15, 0.85);
     await page.touchscreen.tap(c1.x, c1.y);
     await expect(page.getByTestId('chart-draw-hint')).toContainText('opposite corner');
@@ -480,15 +483,15 @@ test.describe('phone, 390 px wide, touch', () => {
     await page.touchscreen.tap(c2.x, c2.y);
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '3');
     expect(await colorsOf(page)).toEqual(['sell', 'sell', 'info']);
-    await pickColor(page, 'buy', true);
-    await page.getByTestId('draw-paint').tap();
+    await colour(page, 'buy');
+    await tool(page, 'paint');
     const e = await at(page, 0.3, 0.85);
     await page.touchscreen.tap(e.x, e.y);
     expect(await colorsOf(page)).toEqual(['sell', 'sell', 'buy']);
     expect(await horizontalOverflow(page), 'market page').toBe(0);
 
     // a finger deletes a drawing with some margin around its line
-    await page.getByTestId('draw-erase').tap();
+    await tool(page, 'erase');
     const near = await at(page, 0.9, 0.45);
     await page.touchscreen.tap(near.x, near.y + 9);
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');

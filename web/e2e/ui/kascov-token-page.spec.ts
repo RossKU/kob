@@ -86,7 +86,7 @@ for (const vp of VIEWPORTS) {
       // the units and the tab use the creator's ticker where KOB has no name of its own
       await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KASC/KAS');
       await expect(page.getByTestId('chart-unit')).toHaveText('KAS per KASC');
-      expect(await page.title()).toBe('KASC · KOB');
+      expect(await page.title()).toBe('KASC/KAS · KOB');
 
       // an empty book
       await expect(page.getByTestId('book-empty')).toHaveText('No orders yet');
@@ -121,7 +121,7 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('first-order')).toHaveCount(0);
       await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /3 decimals, the KaspaRocket convention/);
       await expect(page.getByTestId('book-empty')).toHaveText('No orders yet');
-      expect(await page.title()).toBe('ROCK · KOB');
+      expect(await page.title()).toBe('ROCK/KAS · KOB');
 
       await connectWallet(page);
       await expect(page.getByTestId('order-ticket')).toBeVisible();
@@ -147,7 +147,7 @@ for (const vp of VIEWPORTS) {
       await expect(why).toContainText('the indexer knows no token output of it for the node to confirm');
       await expect(page.getByTestId('order-ticket')).toHaveCount(0);
       await expect(page.getByTestId('book-empty')).toHaveText('No orders yet');
-      expect(await page.title()).toBe('GHST · KOB');
+      expect(await page.title()).toBe('GHST/KAS · KOB');
       expect(await horizontalOverflow(page)).toBe(0);
 
     });
@@ -178,7 +178,7 @@ for (const vp of VIEWPORTS) {
         '/portfolio': 'Portfolio · KOB',
         '/create': 'Create token · KOB',
         '/settings': 'Settings · KOB',
-        [`/market/${exkcc}`]: 'EXKCC · KOB',
+        [`/market/${exkcc}`]: 'EXKCC/KAS · KOB',
       };
       for (const [route, title] of Object.entries(titles)) {
         await page.goto(`/#${route}`);
