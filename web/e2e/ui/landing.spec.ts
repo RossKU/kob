@@ -98,7 +98,7 @@ for (const [width, height] of [
     await page.evaluate(() => localStorage.setItem('kob.theme', 'light'));
     await page.reload();
     await expect(page.getByTestId('landing')).toBeVisible();
-    expect(await bg()).toBe('rgb(242, 241, 236)');
+    expect(await bg()).toBe('rgb(250, 250, 250)');
     if (shots) await page.screenshot({ path: `${shots}/app-${width}-light.png`, fullPage: true });
   });
 }
