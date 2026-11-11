@@ -3178,7 +3178,9 @@ anew), or a submission without a verdict older than 10 min (`max_resend_age`, 60
 downtime) is **not sent again**: it is retired (`a pending transaction is not sent again (it would no longer be valid)`,
 `kob_matcher_resend_dropped_total`). A mempool that still holds it keeps it (nothing replaces it), so its inputs stay reserved
 for 5 min (`hold_daa`) and its acceptance is followed; then, once the store has caught up, it is forgotten (`a transaction no
-longer sent was not mined`) and its inputs are free again.
+longer sent was not mined`) and its inputs are free again. Earlier, when every node it was sent to says twice in a row, about
+10 s apart, that its mempool does not hold it (`getMempoolEntry`: `Transaction <id> not found`), it is forgotten at once (`a
+transaction no longer sent is in no node's mempool`); any other answer, or a node that cannot answer, keeps the hold.
 
 **Restarts.** The tracked transactions are kept in `<data_dir>/executor-inflight.jsonl` (one JSON line per change, written
 before each submit, compacted at every start and as it grows; no fsync: a killed process loses nothing, a power loss may lose

@@ -1306,6 +1306,18 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         if let Some(why) = self.waiting.take() {
             tracing::info!(was = %why, "the indexer caught up; planning");
         }
+        // a retired transaction that no node's mempool holds any more (twice in a row) is not waited for until its hold
+        // ends: its inputs are free again (audit round 3 R3-L-4); an unsure answer keeps the hold
+        for id in self.tracker.retired_to_check(daa) {
+            let held = self.node.in_mempool(id).await.ok();
+            if let Some(t) = self.tracker.retired_checked(&id, held, daa) {
+                tracing::info!(
+                    txid = %kob_protocol::json::to_hex(&t.txid),
+                    kind = %t.kind,
+                    "a transaction no longer sent is in no node's mempool: forgotten before its hold ends, its inputs are free again"
+                );
+            }
+        }
         // the store is current: a retired transaction it does not show accepted by now was not mined
         for t in self.tracker.forget_retired(daa) {
             tracing::info!(

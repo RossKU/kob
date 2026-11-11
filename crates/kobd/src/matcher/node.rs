@@ -153,6 +153,22 @@ pub trait NodeApi: Send + Sync {
     fn tip_timestamps_ms(&self) -> impl Future<Output = Vec<u64>> + Send {
         async { self.tip_timestamp_ms().await.ok().into_iter().collect() }
     }
+    /// Whether the node's mempool (its orphan pool included) holds the transaction `txid` (`getMempoolEntry`): `Ok(false)`
+    /// only when the node says it does not (`Transaction <id> not found`); anything else is an error (unsure). The default:
+    /// unsure.
+    fn in_mempool(&self, txid: [u8; 32]) -> impl Future<Output = Result<bool, RpcError>> + Send {
+        async move {
+            let _ = txid;
+            Err(RpcError::Node("no mempool query from this node client".into()))
+        }
+    }
+}
+
+/// Whether a node's refusal of `getMempoolEntry` for `txid` says the mempool does not hold it (rusty-kaspa
+/// `RpcError::TransactionNotFound`: `Transaction <id> not found`), not another failure (an unknown method, a bad request).
+pub fn mempool_miss(msg: &str, txid: &[u8; 32]) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("not found") && m.contains(&kob_protocol::json::to_hex(txid))
 }
 
 /// Connection settings.
@@ -453,6 +469,16 @@ impl NodeApi for WrpcNode {
             .ok_or_else(|| RpcError::Decode("getBlock without a header timestamp".into()))
     }
 
+    async fn in_mempool(&self, txid: [u8; 32]) -> Result<bool, RpcError> {
+        let params =
+            json!({"transactionId": kob_protocol::json::to_hex(&txid), "includeOrphanPool": true, "filterTransactionPool": false});
+        match self.call("getMempoolEntry", params).await {
+            Ok(_) => Ok(true),
+            Err(RpcError::Node(m)) if mempool_miss(&m, &txid) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     async fn fee_estimate(&self) -> Result<crate::fee::FeeEstimate, RpcError> {
         // a small answer: a short timeout, so a stalled node delays a tick by seconds, not by the request timeout
         let p = self.call_within("getFeeEstimate", json!({}), self.cfg.request_timeout.min(Duration::from_secs(5))).await?;
@@ -606,6 +632,20 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
 
     async fn tip_timestamp_ms(&self) -> Result<u64, RpcError> {
         self.primary.tip_timestamp_ms().await
+    }
+
+    /// Held by any node the transaction was submitted to: `Ok(false)` only when every node says it does not hold it (it went
+    /// to all of them); an error from any node, with none holding it, is unsure.
+    async fn in_mempool(&self, txid: [u8; 32]) -> Result<bool, RpcError> {
+        let all = std::iter::once(self.primary.clone()).chain(self.others.iter().map(|(_, n)| n.clone()));
+        let answers = futures_util::future::join_all(all.map(|n| async move { n.in_mempool(txid).await })).await;
+        if answers.iter().any(|a| matches!(a, Ok(true))) {
+            return Ok(true);
+        }
+        match answers.into_iter().find_map(Result::err) {
+            Some(e) => Err(e),
+            None => Ok(false),
+        }
     }
 
     /// Every node's tip timestamp (each within 5 s; one that does not answer is left out).

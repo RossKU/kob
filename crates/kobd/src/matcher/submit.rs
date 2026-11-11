@@ -279,7 +279,16 @@ pub struct Tracker {
     pub doubtful: BTreeSet<[u8; 32]>,
     /// Transactions the in-flight journal brought back at the start, until the node's first answer about each.
     pub restored: BTreeSet<[u8; 32]>,
+    /// Retired transactions the node's mempool did not hold at the last check: the DAA score of that check and the misses in
+    /// a row ([`Tracker::retired_to_check`]).
+    pub retired_misses: BTreeMap<[u8; 32], (u64, u32)>,
 }
+
+/// A retired transaction's mempool is checked at most this often (DAA, about ten seconds), and ...
+pub const RETIRED_CHECK_DAA: u64 = 100;
+/// ... it is forgotten before its hold ends after this many misses in a row: a transaction mined between two checks leaves the
+/// mempool too, and the chain shows it accepted (it is then followed as any other) before a second miss.
+pub const RETIRED_MISSES: u32 = 2;
 
 impl Tracker {
     pub fn new(cfg: TrackerConfig) -> Self {
@@ -346,7 +355,8 @@ impl Tracker {
 
     /// `id` is no longer sent (`why`): logged and counted ([`Tracker::resend_dropped_total`]); its inputs stay reserved for
     /// `hold_daa`, since a mempool may still hold it (acceptance is followed meanwhile), then it is forgotten
-    /// ([`Tracker::forget_retired`]).
+    /// ([`Tracker::forget_retired`]), or earlier once the nodes say twice in a row that their mempools do not hold it
+    /// ([`Tracker::retired_checked`]).
     pub fn retire(&mut self, id: &[u8; 32], why: &str, daa: u64) {
         let hold = self.cfg.hold_daa;
         if !self.hold_retired(id, daa) {
@@ -391,7 +401,44 @@ impl Tracker {
         }
         let txs = &self.txs;
         self.doubtful.retain(|id| txs.contains_key(id));
+        self.retired_misses.retain(|id, _| txs.contains_key(id));
         out
+    }
+
+    /// The retired transactions to ask the node's mempool about at `daa` (audit round 3 R3-L-4): unaccepted, their hold not
+    /// over, and not asked within [`RETIRED_CHECK_DAA`].
+    pub fn retired_to_check(&self, daa: u64) -> Vec<[u8; 32]> {
+        self.txs
+            .values()
+            .filter(|t| t.accepted.is_none() && t.retired.is_some_and(|r| daa < r))
+            .filter(|t| self.retired_misses.get(&t.txid).is_none_or(|(at, _)| daa >= at.saturating_add(RETIRED_CHECK_DAA)))
+            .map(|t| t.txid)
+            .collect()
+    }
+
+    /// The node's answer about retired `id` at `daa`: `Some(false)` it does not hold it, `Some(true)` it does, `None` unsure
+    /// (the hold stays). At [`RETIRED_MISSES`] misses in a row it is forgotten before its hold ends (returned; a doubtful one
+    /// counts as dropped, as [`Tracker::forget_retired`] does at the hold's end), its inputs free again.
+    pub fn retired_checked(&mut self, id: &[u8; 32], held: Option<bool>, daa: u64) -> Option<Tracked> {
+        if !self.txs.get(id).is_some_and(|t| t.accepted.is_none() && t.retired.is_some()) {
+            self.retired_misses.remove(id);
+            return None;
+        }
+        let misses = match held {
+            Some(false) => self.retired_misses.get(id).map_or(0, |m| m.1) + 1,
+            // held, or unsure: no miss in a row
+            _ => 0,
+        };
+        if misses < RETIRED_MISSES {
+            self.retired_misses.insert(*id, (daa, misses));
+            return None;
+        }
+        self.retired_misses.remove(id);
+        self.checked.remove(id);
+        if self.doubtful.remove(id) {
+            self.dropped_total += 1;
+        }
+        self.txs.remove(id)
     }
 
     /// A mempool double spend of `t` that names one of the operator's funding coins (`msg`): the coin is held
@@ -1100,5 +1147,54 @@ mod tests {
             t.back_off(&ids, 100);
         }
         assert_eq!(t.backoff[&[9; 32]].0, 700);
+    }
+
+    /// Audit round 3 R3-L-4: a retired transaction's inputs are free before its hold ends once the nodes say twice in a row,
+    /// checks at least `RETIRED_CHECK_DAA` apart, that their mempools do not hold it. A held or an unsure answer keeps the hold
+    /// (and begins the misses again); an accepted one is never released this way.
+    #[test]
+    fn a_retired_transaction_no_mempool_holds_is_released_before_its_hold_ends() {
+        let mut t = Tracker::new(TrackerConfig::default());
+        for n in 1..=3u8 {
+            t.txs.insert([n; 32], tracked(n, 1_000));
+            t.retire(&[n; 32], "test", 1_000);
+        }
+        t.txs.get_mut(&[3; 32]).unwrap().accepted = Some(("b".into(), 1_050));
+        t.doubtful.insert([2; 32]);
+        assert_eq!(t.retired_to_check(1_000), vec![[1; 32], [2; 32]], "the accepted one is followed as any other");
+        // first miss: kept, and not asked again within RETIRED_CHECK_DAA
+        assert!(t.retired_checked(&[1; 32], Some(false), 1_000).is_none());
+        assert!(t.retired_checked(&[2; 32], Some(false), 1_000).is_none());
+        assert!(t.retired_to_check(1_000 + RETIRED_CHECK_DAA - 1).is_empty());
+        let later = 1_000 + RETIRED_CHECK_DAA;
+        assert_eq!(t.retired_to_check(later), vec![[1; 32], [2; 32]]);
+        // the first: unsure (the node failed) keeps the hold and begins the misses again; the second: a second miss releases it
+        assert!(t.retired_checked(&[1; 32], None, later).is_none());
+        let gone = t.retired_checked(&[2; 32], Some(false), later).expect("released");
+        assert_eq!(gone.txid, [2; 32]);
+        assert!(!t.spent_outpoints().contains(&([2; 32], 0)), "its inputs are free again");
+        assert_eq!(t.dropped_total, 1, "a doubtful one counts as dropped, as at the hold's end");
+        // the first: held now (the node has it again), then two misses
+        let at = |k: u64| later + k * RETIRED_CHECK_DAA;
+        assert!(t.retired_checked(&[1; 32], Some(true), at(1)).is_none());
+        assert!(t.retired_checked(&[1; 32], Some(false), at(2)).is_none());
+        assert!(t.retired_checked(&[1; 32], Some(false), at(3)).is_some());
+        assert_eq!(t.txs.keys().copied().collect::<Vec<_>>(), vec![[3; 32]]);
+        assert!(t.retired_misses.is_empty());
+        // past its hold: not asked (forget_retired takes it)
+        let mut u = Tracker::new(TrackerConfig::default());
+        u.txs.insert([4; 32], tracked(4, 1_000));
+        u.retire(&[4; 32], "test", 1_000);
+        assert!(u.retired_to_check(1_000 + u.cfg.hold_daa).is_empty());
+    }
+
+    #[test]
+    fn only_a_transaction_not_found_answer_is_a_mempool_miss() {
+        let id = [0xab; 32];
+        let hex = kob_protocol::json::to_hex(&id);
+        assert!(super::super::node::mempool_miss(&format!("Transaction {hex} not found"), &id));
+        assert!(!super::super::node::mempool_miss("Method not found", &id));
+        assert!(!super::super::node::mempool_miss(&format!("Transaction {} not found", "cd".repeat(32)), &id));
+        assert!(!super::super::node::mempool_miss("connection closed", &id));
     }
 }
