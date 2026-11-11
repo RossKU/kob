@@ -61,7 +61,15 @@ fn help_is_reachable_every_way_and_prints_on_stdout() {
     }
     let (code, out, _) = kob(&["--help"]);
     assert_eq!(code, 0);
-    for want in ["READ (no key)", "TRADE (a key", "TOKENS AND REGISTRY", "GLOBAL OPTIONS", "--key-file", "--dry-run", "crates/kob-cli/README.md"] {
+    for want in [
+        "READ (no key)",
+        "TRADE (a key",
+        "TOKENS AND REGISTRY",
+        "GLOBAL OPTIONS",
+        "--key-file",
+        "--dry-run",
+        "crates/kob-cli/README.md",
+    ] {
         assert!(out.contains(want), "{want}: {out}");
     }
     assert!(out.is_ascii(), "the help text is ASCII");
@@ -114,4 +122,14 @@ fn the_version_line_names_the_build_and_the_commit() {
         let v = line.strip_prefix(&format!("kob {} (", env!("CARGO_PKG_VERSION"))).unwrap_or_else(|| panic!("{line}"));
         assert!(v.ends_with(')') && v.contains(" build, commit ") || v.contains("development build, no network, commit "), "{line}");
     }
+}
+
+#[test]
+fn an_unreachable_indexer_is_an_english_sentence_with_exit_1() {
+    let (code, out, err) = kob(&["book", "TUSD", "--indexer", "http://127.0.0.1:1", "--network", "testnet-10"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("cannot connect to the indexer http://127.0.0.1:1 ("), "{err}");
+    assert!(err.contains("(connection refused)") || err.contains("(timed out)"), "{err}");
+    assert_eq!(err.matches("127.0.0.1").count(), 1, "the host is named once: {err}");
+    assert!(out.is_empty(), "{out}");
 }

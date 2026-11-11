@@ -218,6 +218,7 @@ fn poll(ws: &mut WebSocket<Stream>) -> Result<Option<Value>, String> {
         Ok(_) => Ok(None),
         Err(tungstenite::Error::Io(e)) if is_timeout(&e) => Ok(None),
         Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => Err("the connection closed".into()),
+        Err(tungstenite::Error::Io(e)) => Err(crate::tls::describe_io(&e)),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -271,8 +272,8 @@ impl Watch {
     fn connect(&self) -> Result<WebSocket<Stream>, ConnectError> {
         let t = &self.target;
         let fail = |msg: String| ConnectError { msg, fatal: false, retry_after: None };
-        let stream =
-            crate::tls::connect(t.secure, &t.host, t.port, self.timing.connect).map_err(|e| fail(format!("{}: {e}", t.shown())))?;
+        let stream = crate::tls::connect(t.secure, &t.host, t.port, self.timing.connect)
+            .map_err(|e| fail(format!("cannot connect to the indexer {} ({e})", t.shown())))?;
         let mut req = t.url().into_client_request().map_err(|e| fail(e.to_string()))?;
         if let Some(a) = &t.auth {
             req.headers_mut().insert("Authorization", HeaderValue::from_str(&format!("Basic {a}")).map_err(|e| fail(e.to_string()))?);

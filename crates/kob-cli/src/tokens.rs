@@ -426,7 +426,7 @@ pub fn view(
             if let Some(l) = &v.last_modified {
                 headers.push(("If-Modified-Since", l));
             }
-            let r = http::get_with(&base, &path, &headers, FETCH_TIMEOUT).map_err(|e| format!("kascov list: {e}"))?;
+            let r = http::get_from("kascov list", &base, &path, &headers, FETCH_TIMEOUT)?;
             let max_age = max_age_of(r.header("cache-control"));
             match r.status {
                 200 => Ok(Fetched::Body {

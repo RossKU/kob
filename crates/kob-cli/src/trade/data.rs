@@ -22,8 +22,7 @@ pub const INDEXER_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The node's virtual DAA score and the local UTC clock.
 pub fn clock(node: &str) -> Result<Clock, String> {
-    let p = crate::wrpc::call(node, "getBlockDagInfo", json!({}), NODE_TIMEOUT)
-        .map_err(|e| format!("node {}: {e}", crate::wrpc::shown(node)))?;
+    let p = crate::wrpc::call(node, "getBlockDagInfo", json!({}), NODE_TIMEOUT).map_err(|e| crate::wrpc::node_failure(node, &e))?;
     let daa = match p.get("virtualDaaScore") {
         Some(Value::Number(n)) => n.as_i64(),
         Some(Value::String(s)) => s.parse().ok(),

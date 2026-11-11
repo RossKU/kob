@@ -88,7 +88,8 @@ impl BorshConn {
     pub fn connect(url: &str, timeout: Duration) -> Result<BorshConn, WrpcError> {
         let t = target(url).map_err(WrpcError::Socket)?;
         let socket = |e: String| WrpcError::Socket(format!("node {}: {e}", shown(url)));
-        let stream = crate::tls::connect(t.secure, &t.host, t.port, timeout).map_err(socket)?;
+        let stream = crate::tls::connect(t.secure, &t.host, t.port, timeout)
+            .map_err(|e| WrpcError::Socket(format!("cannot connect to the node {} ({e})", shown(url))))?;
         let mut req = t.url.as_str().into_client_request().map_err(|e| socket(e.to_string()))?;
         if let Some(a) = &t.auth {
             req.headers_mut()

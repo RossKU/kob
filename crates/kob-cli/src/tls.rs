@@ -65,19 +65,42 @@ impl Write for Stream {
     }
 }
 
+/// Why a socket operation failed, as an English phrase (the operating system's own text comes in the system language and
+/// names the host again): the kinds a user meets are named, any other error keeps its own text.
+pub fn describe_io(e: &std::io::Error) -> String {
+    use std::io::ErrorKind::*;
+    match e.kind() {
+        ConnectionRefused => "connection refused".into(),
+        TimedOut | WouldBlock => "timed out".into(),
+        ConnectionReset => "connection reset by the peer".into(),
+        ConnectionAborted => "connection closed".into(),
+        NotConnected => "not connected".into(),
+        HostUnreachable | NetworkUnreachable => "host unreachable".into(),
+        NetworkDown => "network down".into(),
+        AddrNotAvailable => "address not available".into(),
+        NotFound => "not found".into(),
+        PermissionDenied => "permission denied".into(),
+        UnexpectedEof => "connection closed early".into(),
+        _ => e.to_string(),
+    }
+}
+
 /// A TCP connection to `host:port` with read and write timeouts, wrapped in TLS when `secure` (server name: `host`). The
-/// errors name the host only.
+/// error is the reason only (`connection refused`, `timed out`, `cannot resolve the host name`): the caller names the host.
 pub fn connect(secure: bool, host: &str, port: u16, timeout: Duration) -> Result<Stream, String> {
-    let addr =
-        (host, port).to_socket_addrs().map_err(|e| format!("{host}: {e}"))?.next().ok_or_else(|| format!("{host}: no address"))?;
-    let tcp = TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("{host}: {e}"))?;
-    tcp.set_read_timeout(Some(timeout)).and_then(|_| tcp.set_write_timeout(Some(timeout))).map_err(|e| e.to_string())?;
+    let addr = (host, port)
+        .to_socket_addrs()
+        .map_err(|_| "cannot resolve the host name".to_string())?
+        .next()
+        .ok_or_else(|| "the host name has no address".to_string())?;
+    let tcp = TcpStream::connect_timeout(&addr, timeout).map_err(|e| describe_io(&e))?;
+    tcp.set_read_timeout(Some(timeout)).and_then(|_| tcp.set_write_timeout(Some(timeout))).map_err(|e| describe_io(&e))?;
     let _ = tcp.set_nodelay(true);
     if !secure {
         return Ok(Stream::Plain(tcp));
     }
-    let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| format!("{host}: {e}"))?;
-    let conn = rustls::ClientConnection::new(config(), name).map_err(|e| format!("TLS {host}: {e}"))?;
+    let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|_| "not a valid host name".to_string())?;
+    let conn = rustls::ClientConnection::new(config(), name).map_err(|e| format!("TLS: {e}"))?;
     Ok(Stream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
 }
 
@@ -86,10 +109,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_configuration_builds_and_a_refused_connection_names_the_host_only() {
+    fn the_configuration_builds_and_a_refused_connection_is_an_english_reason() {
         let _ = config();
         let e = connect(true, "127.0.0.1", 1, Duration::from_millis(300)).err().unwrap();
-        assert!(e.starts_with("127.0.0.1:"), "{e}");
+        // a closed port is refused (a firewall may time it out instead): never the system language, never the host
+        assert!(e == "connection refused" || e == "timed out", "{e}");
         assert!(connect(true, "not a host", 443, Duration::from_millis(300)).is_err());
+    }
+
+    #[test]
+    fn io_errors_become_phrases() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(describe_io(&Error::from(ErrorKind::ConnectionRefused)), "connection refused");
+        assert_eq!(describe_io(&Error::from(ErrorKind::TimedOut)), "timed out");
+        assert_eq!(describe_io(&Error::from(ErrorKind::WouldBlock)), "timed out");
+        assert_eq!(describe_io(&Error::from(ErrorKind::HostUnreachable)), "host unreachable");
+        assert_eq!(describe_io(&Error::other("boom")), "boom");
     }
 }

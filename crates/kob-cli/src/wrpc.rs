@@ -22,6 +22,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use serde_json::{json, Value};
+use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
@@ -65,7 +66,7 @@ pub fn shown(url: &str) -> String {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum WrpcError {
     /// Connection or websocket failure.
-    #[error("websocket: {0}")]
+    #[error("{0}")]
     Socket(String),
     /// No public node could be named (the Kaspa resolvers answered none).
     #[error("{0}")]
@@ -76,6 +77,19 @@ pub enum WrpcError {
     /// The reply was not the expected JSON.
     #[error("unexpected reply: {0}")]
     Protocol(String),
+}
+
+/// The target of a plain `ws://` URL ([`crate::nodelink::client::target`]); `None` for any other scheme.
+fn plain_target(url: &str) -> Option<Result<crate::nodelink::client::Target, String>> {
+    url.starts_with("ws://").then(|| crate::nodelink::client::target(url))
+}
+
+/// A node error as a sentence: `node <url>: <error>`, except that a failed connection already names the node.
+pub fn node_failure(node: &str, e: &WrpcError) -> String {
+    match e {
+        WrpcError::Socket(m) if m.starts_with("cannot connect to the node") => m.clone(),
+        _ => format!("node {}: {e}", shown(node)),
+    }
 }
 
 /// A JSON wRPC request.
@@ -140,6 +154,30 @@ impl Conn {
     pub fn connect(url: &str, timeout: Duration) -> Result<Conn, WrpcError> {
         if crate::nodelink::bridge::is_borsh_url(url) {
             return Ok(Conn { link: Link::Borsh(crate::nodelink::client::BorshConn::connect(url, timeout)?), next_id: 1 });
+        }
+        // a plain `ws://` socket is opened here, so that a refused or timed-out connection says why (tungstenite reports only
+        // that it could not connect); the handshake runs over it with the same timeouts
+        if let Some(plain) = plain_target(url) {
+            let t = plain.map_err(WrpcError::Socket)?;
+            let stream = crate::tls::connect(false, &t.host, t.port, timeout)
+                .map_err(|e| WrpcError::Socket(format!("cannot connect to the node {} ({e})", shown(url))))?;
+            let crate::tls::Stream::Plain(tcp) = stream else { unreachable!("a plain connection") };
+            let mut req = t.url.as_str().into_client_request().map_err(|e| WrpcError::Socket(e.to_string()))?;
+            if let Some(a) = &t.auth {
+                req.headers_mut().insert(
+                    "Authorization",
+                    tungstenite::http::HeaderValue::from_str(&format!("Basic {a}")).map_err(|e| WrpcError::Socket(e.to_string()))?,
+                );
+            }
+            return match tungstenite::client(req, MaybeTlsStream::Plain(tcp)) {
+                Ok((ws, _)) => Ok(Conn { link: Link::Json(ws), next_id: 1 }),
+                Err(tungstenite::HandshakeError::Failure(e)) => {
+                    Err(WrpcError::Socket(format!("node {}: {}", shown(url), kob_protocol::redact::scrub_url(&e.to_string(), url))))
+                }
+                Err(tungstenite::HandshakeError::Interrupted(_)) => {
+                    Err(WrpcError::Socket(format!("node {}: the handshake timed out", shown(url))))
+                }
+            };
         }
         // tungstenite echoes the URL it could not reach: the message names the node by its redacted URL
         let (mut ws, _) = tungstenite::connect(url).map_err(|e| {
@@ -244,7 +282,10 @@ pub fn node_network(url: &str, timeout: Duration) -> Result<String, WrpcError> {
 /// Refuses a node that runs another network than `network`. A signature commits to no network: a transaction signed for
 /// testnet-10 against a mainnet node spends mainnet coins of the same key, so every signing command checks the node first.
 pub fn check_node_network(url: &str, network: &str, timeout: Duration) -> Result<(), String> {
-    let got = node_network(url, timeout).map_err(|e| format!("node {}: cannot confirm its network: {e}", shown(url)))?;
+    let got = node_network(url, timeout).map_err(|e| match &e {
+        WrpcError::Socket(m) if m.starts_with("cannot connect to the node") => m.clone(),
+        _ => format!("node {}: cannot confirm its network: {e}", shown(url)),
+    })?;
     let want = normalize_network(network);
     if got != want {
         return Err(format!(
@@ -549,7 +590,11 @@ mod tests {
     #[test]
     fn unreachable_node_is_a_socket_error() {
         let e = submit_transaction("ws://127.0.0.1:1", &json!({}), false, Duration::from_millis(500)).unwrap_err();
-        assert!(matches!(e, WrpcError::Socket(_)));
+        // an English sentence naming the node once, with the reason: never the system language's own text
+        let WrpcError::Socket(m) = e else { panic!("{e:?}") };
+        assert!(m.starts_with("cannot connect to the node ws://127.0.0.1:1 ("), "{m}");
+        assert!(m.ends_with("(connection refused)") || m.ends_with("(timed out)"), "{m}");
+        assert_eq!(m.matches("127.0.0.1:1").count(), 1, "{m}");
     }
 
     /// A node URL with credentials or an API key never reaches an error message.

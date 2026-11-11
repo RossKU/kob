@@ -58,13 +58,13 @@ pub(crate) fn b64(s: &[u8]) -> String {
     out
 }
 
-fn parse(url: &str) -> Result<Target, String> {
+fn parse(label: &str, url: &str) -> Result<Target, String> {
     let (secure, rest) = if let Some(r) = url.strip_prefix("http://") {
         (false, r)
     } else if let Some(r) = url.strip_prefix("https://") {
         (true, r)
     } else {
-        return Err(format!("indexer {}: the indexer URL must be http:// or https://", shown(url)));
+        return Err(format!("{label} {}: the URL must be http:// or https://", shown(url)));
     };
     let (authority, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
@@ -75,11 +75,11 @@ fn parse(url: &str) -> Result<Target, String> {
         None => (None, authority),
     };
     let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) if !h.is_empty() => (h.to_string(), p.parse().map_err(|_| format!("indexer {}: bad port", shown(url)))?),
+        Some((h, p)) if !h.is_empty() => (h.to_string(), p.parse().map_err(|_| format!("{label} {}: bad port", shown(url)))?),
         _ => (hostport.to_string(), if secure { 443 } else { 80 }),
     };
     if host.is_empty() {
-        return Err(format!("indexer {}: no host", shown(url)));
+        return Err(format!("{label} {}: no host", shown(url)));
     }
     Ok(Target { secure, host, port, base: path.trim_end_matches('/').to_string(), auth })
 }
@@ -127,9 +127,16 @@ pub fn get(indexer: &str, path: &str, timeout: Duration) -> Result<(u16, Value),
 
 /// [`get`] with extra request headers (`If-None-Match`), and the answer's headers.
 pub fn get_with(indexer: &str, path: &str, headers: &[(&str, &str)], timeout: Duration) -> Result<Response, String> {
-    let t = parse(indexer)?;
+    get_from("indexer", indexer, path, headers, timeout)
+}
+
+/// [`get_with`] to a server that is not the indexer (the Kaspa resolvers, kascov): `what` names it in the messages
+/// (`cannot connect to the resolver https://...`).
+pub fn get_from(what: &str, indexer: &str, path: &str, headers: &[(&str, &str)], timeout: Duration) -> Result<Response, String> {
+    let t = parse(what, indexer)?;
     let who = shown(indexer);
-    let mut s = crate::tls::connect(t.secure, &t.host, t.port, timeout).map_err(|e| format!("indexer {who}: {e}"))?;
+    let mut s =
+        crate::tls::connect(t.secure, &t.host, t.port, timeout).map_err(|e| format!("cannot connect to the {what} {who} ({e})"))?;
     let mut req = format!(
         "GET {}{} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\nUser-Agent: kob-cli\r\n",
         t.base, path, t.host
@@ -140,24 +147,24 @@ pub fn get_with(indexer: &str, path: &str, headers: &[(&str, &str)], timeout: Du
     for (k, v) in headers {
         // a header is one line: a value that came from a server cannot add a line to the request
         if k.contains(['\r', '\n', ':']) || v.contains(['\r', '\n']) {
-            return Err(format!("indexer {who}: bad request header {k}"));
+            return Err(format!("{what} {who}: bad request header {k}"));
         }
         req.push_str(&format!("{k}: {v}\r\n"));
     }
     req.push_str("\r\n");
-    s.write_all(req.as_bytes()).map_err(|e| format!("indexer {who}: {e}"))?;
+    s.write_all(req.as_bytes()).map_err(|e| format!("{what} {who}: {}", crate::tls::describe_io(&e)))?;
     let mut raw = vec![];
     // a response is bounded: an endless one is an error, not memory exhaustion
     match (&mut s).take(MAX_RESPONSE_BYTES + 1).read_to_end(&mut raw) {
         Ok(_) => {}
         // a TLS peer that closes without close_notify: what was read is the answer (Connection: close)
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && !raw.is_empty() => {}
-        Err(e) => return Err(format!("indexer {who}: {e}")),
+        Err(e) => return Err(format!("{what} {who}: {}", crate::tls::describe_io(&e))),
     }
     if raw.len() as u64 > MAX_RESPONSE_BYTES {
-        return Err(format!("indexer {who}: response larger than {MAX_RESPONSE_BYTES} bytes"));
+        return Err(format!("{what} {who}: response larger than {MAX_RESPONSE_BYTES} bytes"));
     }
-    let end = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| format!("indexer {who}: malformed response"))?;
+    let end = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| format!("{what} {who}: malformed response"))?;
     let head = String::from_utf8_lossy(&raw[..end]).to_string();
     let mut body = raw[end + 4..].to_vec();
     let mut lines = head.lines();
@@ -165,17 +172,17 @@ pub fn get_with(indexer: &str, path: &str, headers: &[(&str, &str)], timeout: Du
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|c| c.parse().ok())
-        .ok_or_else(|| format!("indexer {who}: malformed status line"))?;
+        .ok_or_else(|| format!("{what} {who}: malformed status line"))?;
     let headers: Vec<(String, String)> =
         lines.filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))).collect();
     let chunked = headers.iter().any(|(k, v)| k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked"));
     if chunked {
-        body = dechunk(&body).map_err(|e| format!("indexer {who}: {e}"))?;
+        body = dechunk(&body).map_err(|e| format!("{what} {who}: {e}"))?;
     }
     let v = if body.iter().all(|b| b.is_ascii_whitespace()) {
         Value::Null
     } else {
-        serde_json::from_slice(&body).map_err(|e| format!("indexer {who}{path}: not JSON ({e})"))?
+        serde_json::from_slice(&body).map_err(|e| format!("{what} {who}{path}: not JSON ({e})"))?
     };
     Ok(Response { status, headers, body: v })
 }
@@ -293,8 +300,8 @@ mod tests {
         // https:// is spoken too (TLS to a port nothing listens on: refused, the host named, no credentials)
         let e = get_ok("https://bob:pw@127.0.0.1:1", "/", Duration::from_millis(300)).unwrap_err();
         assert!(e.contains("127.0.0.1") && !e.contains("pw"), "{e}");
-        assert_eq!(parse("https://h").unwrap().port, 443);
-        assert_eq!(parse("http://h").unwrap().port, 80);
+        assert_eq!(parse("indexer", "https://h").unwrap().port, 443);
+        assert_eq!(parse("indexer", "http://h").unwrap().port, 80);
         assert_eq!(b64(b"bob:pw"), "Ym9iOnB3");
     }
 

@@ -130,7 +130,9 @@ pub fn resolve(network: &str, avoid_hosts: &[String]) -> Result<Resolved, String
         _ => RESOLVERS.iter().map(|s| s.to_string()).collect(),
     };
     order.shuffle(&mut rand::thread_rng());
-    resolve_in(&order, network, avoid_hosts, |r, path| crate::trade::http::get(r, path, QUERY_TIMEOUT))
+    resolve_in(&order, network, avoid_hosts, |r, path| {
+        crate::trade::http::get_from("resolver", r, path, &[], QUERY_TIMEOUT).map(|r| (r.status, r.body))
+    })
 }
 
 #[cfg(test)]
