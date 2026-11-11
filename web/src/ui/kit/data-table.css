@@ -1,6 +1,7 @@
 /* The one table of the Portfolio (DataTable.tsx): Balances, Open orders, Order history and Trade history, on the Portfolio page and in a market page's panel, all draw the same
-   header row, the same rows, the same cells. From 1120 px of table it is a table (columns on one grid per table, below); in anything narrower (a phone, a tablet, a narrow
-   panel: it is the table's own width that counts, not the screen's) every row is a card of label / value pairs. Colours are the app's tokens (styles.css), both themes. */
+   header row, the same rows, the same cells. From a 1200 px window it is a table (columns on one grid per table, below); in a narrower one (a phone, a tablet)
+   every row is a card of label / value pairs. The WINDOW decides, not the table's own width (founder 2026-11-11): the market page's panel sits a card deeper than
+   the Portfolio, and the same screen must show both the same way; a table that still cannot hold its content takes the cards anyway (dt-force-cards). Colours are the app's tokens (styles.css), both themes. */
 .dt { container: dt / inline-size; min-width: 0; font-variant-numeric: tabular-nums; }
 .dt-head, .dt-row {
   display: grid; grid-template-columns: var(--dt-cols); column-gap: 12px; align-items: center; padding: 0 12px; box-sizing: border-box; font-size: 0.86rem;
@@ -59,8 +60,8 @@
 /* a status too long for its cell ("expired (IOC/FOK)") wraps inside its chip */
 .dt-c-status .badge { white-space: normal; min-width: 0; }
 
-/* ---- cards: every row of a table narrower than 1120 px. Row 1: the market (the title, the side and the kind after it), the time at the right, the chevron; then the label / value pairs, as many to a line as fit (two on a phone); the buttons last. */
-@container dt (max-width: 1119px) {
+/* ---- cards: every row of a table in a window narrower than 1200 px. Row 1: the market (the title, the side and the kind after it), the time at the right, the chevron; then the label / value pairs, as many to a line as fit (two on a phone); the buttons last. */
+@media (max-width: 1199px) {
   .dt-head { display: none; }
   .dt .dt-sortctl { display: inline-flex; }
   .dt-body { gap: 8px; }
@@ -117,11 +118,15 @@
 
 /* a wider card (a tablet, a narrow window): as many columns of pairs as fit (9rem each: two on a phone, four or five on a tablet), so a card is never
    two half-empty columns; a wide pair takes two */
-@container dt (min-width: 640px) and (max-width: 1119px) {
-  .dt-c[data-card='wide'] { grid-column: span 2; }
+@media (max-width: 1199px) {
+  @container dt (min-width: 640px) {
+    .dt-c[data-card='wide'] { grid-column: span 2; }
+  }
 }
-@container dt (min-width: 520px) and (max-width: 1119px) {
-  .dt-c[data-card='action'] { flex: 1 1 100%; }
-  .dt-act { justify-content: flex-end; }
-  .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
+@media (max-width: 1199px) {
+  @container dt (min-width: 520px) {
+    .dt-c[data-card='action'] { flex: 1 1 100%; }
+    .dt-act { justify-content: flex-end; }
+    .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
+  }
 }
