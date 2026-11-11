@@ -1,3 +1,4 @@
+import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { Dropdown } from '../kit';
 import { tapeTime } from './market-model';
@@ -35,13 +36,26 @@ export interface OrderBookProps {
 
 const estimatedNote = (inverted: boolean | undefined, token: string | undefined): string => (inverted ? t('market.book.estimatedNoteInv', { ticker: token ?? '' }) : t('market.book.estimatedNote'));
 
-function Row(props: { row: BookRowView; kind: 'ask' | 'bid'; onPick: OrderBookProps['onPick']; inverted?: boolean; token?: string }) {
+/** The level the pointer (or the keyboard focus) is on: its side, its place in that side's list and where its row is in the book (for the read-out). */
+interface Hover { kind: 'ask' | 'bid'; index: number; top: number }
+
+function Row(props: { row: BookRowView; kind: 'ask' | 'bid'; index: number; hot: boolean; onPick: OrderBookProps['onPick']; onHover: (h: Hover | null, row?: BookRowView) => void; inverted?: boolean; token?: string }) {
   const { row, kind } = props;
   const label = t(kind === 'ask' ? 'market.book.pickAsk' : 'market.book.pickBid', { price: row.priceText });
+  const enter = (e: Event) => {
+    const el = e.currentTarget as HTMLElement;
+    const book = el.closest('.book');
+    if (!book) return;
+    props.onHover({ kind, index: props.index, top: el.getBoundingClientRect().top - book.getBoundingClientRect().top }, row);
+  };
   return (
     <button
       type="button"
-      class={`book-row book-${kind}`}
+      class={`book-row book-${kind}${props.hot ? ' is-cum' : ''}`}
+      onMouseEnter={enter}
+      onFocus={enter}
+      onMouseLeave={() => props.onHover(null)}
+      onBlur={() => props.onHover(null)}
       translate={false}
       data-testid={`book-${kind}-row`}
       data-price={row.priceValue}
@@ -100,6 +114,13 @@ export function BookFrame(props: { head?: { price: string; size: string; total: 
 export function OrderBook(props: OrderBookProps) {
   const m = props.view;
   const blanksOf = (n: number) => Math.max(0, props.rows - n);
+  // the hover read-out (review M-17): every level from the best price to the one under the pointer is tinted, and a small line says what taking them all would be (average price,
+  // amount, value). Drawn over the book (absolute, no pointer events), so nothing moves.
+  const [hover, setHover] = useState<(Hover & { row: BookRowView }) | null>(null);
+  const onHover = (h: Hover | null, row?: BookRowView) => setHover(h && row ? { ...h, row } : null);
+  // asks are listed best-last: the stretch from the best ask is the hovered row and everything below it; bids best-first: the hovered row and everything above it
+  const hot = (kind: 'ask' | 'bid', i: number): boolean => !!hover && hover.kind === kind && (kind === 'ask' ? i >= hover.index : i <= hover.index);
+  const cum = hover?.row.cum;
   return (
     <div class="book ob tk-in" data-testid="order-book" style={{ '--ob-rows': String(props.rows) }}>
       <div class="ob-head" aria-hidden="true">
@@ -109,7 +130,7 @@ export function OrderBook(props: OrderBookProps) {
       </div>
       <div class="book-side" ref={props.fitRef} data-testid="book-asks" role="list" aria-label={t('market.book.asks')}>
         {Array.from({ length: blanksOf(m.asks.length) }, (_, i) => <Blank key={`ask-blank-${i}`} kind="ask" />)}
-        {m.asks.map((r) => <Row key={r.key} row={r} kind="ask" onPick={props.onPick} inverted={props.inverted} token={props.token} />)}
+        {m.asks.map((r, i) => <Row key={r.key} row={r} kind="ask" index={i} hot={hot('ask', i)} onHover={onHover} onPick={props.onPick} inverted={props.inverted} token={props.token} />)}
         {m.asks.length ? null : <div class="ob-none muted small">{t('market.book.noAsks')}</div>}
       </div>
       <div class="ob-mid book-mid" data-testid="book-spread">
@@ -138,14 +159,20 @@ export function OrderBook(props: OrderBookProps) {
         </span>
       </div>
       <div class="book-side" data-testid="book-bids" role="list" aria-label={t('market.book.bids')}>
-        {m.bids.map((r) => <Row key={r.key} row={r} kind="bid" onPick={props.onPick} inverted={props.inverted} token={props.token} />)}
+        {m.bids.map((r, i) => <Row key={r.key} row={r} kind="bid" index={i} hot={hot('bid', i)} onHover={onHover} onPick={props.onPick} inverted={props.inverted} token={props.token} />)}
         {Array.from({ length: blanksOf(m.bids.length) }, (_, i) => <Blank key={`bid-blank-${i}`} kind="bid" />)}
         {m.bids.length ? null : <div class="ob-none muted small">{t('market.book.noBids')}</div>}
       </div>
-      <p class="ob-foot">
-        {m.anyEstimated ? <span>{`~ ${estimatedNote(props.inverted, props.token)} `}</span> : null}
-        <span>{t('market.book.clickHint', { base: props.inverted ? 'KAS' : (props.token ?? '') })}</span>
+      {/* one short line; the whole sentences are its title */}
+      <p class="ob-foot" title={`${m.anyEstimated ? `~ ${estimatedNote(props.inverted, props.token)} ` : ''}${t('market.book.clickHint', { base: props.inverted ? 'KAS' : (props.token ?? '') })}`} data-testid="book-foot">
+        {m.anyEstimated ? `~ ${t('market.book.footEstimated')} · ` : ''}
+        {t('market.book.footClick')}
       </p>
+      {hover && cum ? (
+        <div class="ob-hover-tip" role="status" style={{ top: `${hover.top < 44 ? hover.top + 24 : hover.top - 30}px` }} data-testid="book-hover-tip">
+          {t(props.inverted ? 'market.book.hoverInv' : 'market.book.hover', { avg: cum.avg, amount: cum.amount, total: cum.total, token: props.token ?? '' })}
+        </div>
+      ) : null}
     </div>
   );
 }

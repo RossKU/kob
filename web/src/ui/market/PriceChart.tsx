@@ -9,8 +9,10 @@
 // toggle would be a second kind of control (a state to read off the toolbar) and would let a drawing change kind. Colours: one button beside the tools shows the current colour
 // and opens a small palette of six swatches that sets the colour of the NEXT drawing (remembered); the recolour tool, which works like the delete tool, gives the clicked drawing the selected colour. A click on a
 // drawing with no tool on cannot select it: there is no layer then, and the plot belongs to the chart's pan and zoom. The header is ONE row: the interval switch on the left, the tools and the colour button on the right (what does not fit scrolls sideways inside the tools' row on
-// a phone; the colour button stays outside the scroller so its palette is not clipped); the legend is a row of its own above the plot, never over it (the OHLC read-out, then the unit of the price). Its height never depends on the live values: one line with an
-// ellipsis on the read-out (the unit does not shrink), and a fixed two lines on a phone; a row that grew and shrank with every tick would move everything below it.
+// a phone; the colour button stays outside the scroller so its palette is not clipped). On a touch screen (`pointer: coarse`) the drawing tools and the colours sit behind ONE "Draw" button that opens a small
+// sheet (they do not scroll away behind an edge any more); the intervals and Expand stay in the row. The legend is a row of its own above the plot, never over it (the OHLC read-out with the volume and its unit, then
+// the unit of the price). Its height never depends on the live values: one line with an ellipsis on the read-out (the unit does not shrink; a phone drops the price unit, which the market bar names); a row
+// that grew and shrank with every tick would move everything below it. Prices are shown with the market's display decimals (the kit's price rule), the axis, the crosshair and the legend alike.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, MouseEventParams, Time, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
@@ -21,8 +23,9 @@ import { t } from '../../i18n';
 import { ErrorBanner, useAsync } from '../kit';
 import { loadCandles, MAX_BARS, type ChartSource, type ChartView } from './candle-feed';
 import { useTheme } from '../shell/theme';
+import { useMedia } from '../shell/narrow';
 import { Popover } from '../shell/Popover';
-import { basisOf, chartSeries, fillCandleGaps, INTERVAL_MS, parseCandles, priceText, type ChartBar, type VolumeBar } from './market-model';
+import { basisOf, chartSeries, compactText, fillCandleGaps, INTERVAL_MS, parseCandles, priceText, type ChartBar, type VolumeBar } from './market-model';
 import { flippedChartSeries } from './orientation';
 import { ratioCandles, ratioSeries, usdText } from './usd-model';
 import { pairRatioCandles } from './pair-market';
@@ -142,7 +145,7 @@ interface Series {
 }
 const NO_SERIES: Series = { bars: [], volumes: [], text: () => null };
 
-interface Legend { o: string; h: string; l: string; c: string; v: string; up: boolean }
+interface Legend { o: string; h: string; l: string; c: string; v: string; /** the whole volume, for its title */ vExact: string; up: boolean }
 
 /** Price panel: interval switch (1m / 5m / 1h / 1d, remembered), candles with the previous close carried across empty buckets, volume below. */
 export function PriceChart(props: PriceChartProps) {
@@ -235,7 +238,8 @@ export function PriceChart(props: PriceChartProps) {
     const x = series.text(i);
     const b = series.bars[i];
     if (!x || !b) return null;
-    return { ...x, v: series.volumes[i] ? series.volumes[i]!.value.toLocaleString(localeOf(), { maximumFractionDigits: 2 }) : '0', up: b.close >= b.open };
+    const vol = series.volumes[i]?.value ?? 0;
+    return { ...x, v: compactText(vol), vExact: vol.toLocaleString(localeOf(), { maximumFractionDigits: 8 }), up: b.close >= b.open };
   };
 
   // create the chart once the library is there and the panel has something to draw
@@ -471,6 +475,50 @@ export function PriceChart(props: PriceChartProps) {
   };
 
   const shown = legend ?? legendOf.current(series.bars.length - 1);
+  // the volume's unit: the token (a flipped market's volume bars are KAS); a pair chart's volume is in its base token
+  const volUnit = inverted ? 'KAS' : props.ticker;
+  // a touch screen: the drawing tools and the colours are behind one "Draw" button (a sheet), so no row of them scrolls away behind an edge
+  const coarse = useMedia('(pointer: coarse)');
+  /** The drawing tools (and the clear-all button): the same buttons in the desktop row and in the touch sheet, where a pick closes the sheet so the chart is free to draw on. */
+  const toolButtons = (pick: boolean) => (
+    <>
+      {TOOLS.map((k) => (
+        <button key={k} type="button" disabled={!ready} aria-pressed={toolOn === k ? 'true' : 'false'} aria-label={t(`market.chart.draw.${k}`)} title={`${t(`market.chart.draw.${k}`)}. ${t('market.chart.draw.local')}`} data-testid={`draw-${k}`} {...(pick ? { 'data-pick': '' } : {})} onClick={() => pickTool(k)}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            {k === 'hline' ? (
+              <path d="M3 12h18" />
+            ) : k === 'trend' ? (
+              <><path d="M5 18L19 6" /><circle cx="5" cy="18" r="1.6" /><circle cx="19" cy="6" r="1.6" /></>
+            ) : k === 'xline' ? (
+              <><path d="M2 20L22 4" /><circle cx="8" cy="15.2" r="1.6" /><circle cx="16" cy="8.8" r="1.6" /></>
+            ) : k === 'box' ? (
+              <rect x="4.5" y="7" width="15" height="10" rx="1" fill="currentColor" fill-opacity="0.16" />
+            ) : k === 'paint' ? (
+              <path d="M12 3.5s6 6.2 6 10.3a6 6 0 0 1-12 0C6 9.7 12 3.5 12 3.5z" />
+            ) : (
+              <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" />
+            )}
+          </svg>
+        </button>
+      ))}
+      <button type="button" disabled={!ready || drawings.length === 0} aria-label={t('market.chart.draw.clear')} title={`${t('market.chart.draw.clear')}. ${t('market.chart.draw.local')}`} data-testid="draw-clear" {...(pick ? { 'data-pick': '' } : {})} onClick={() => { setPending(null); commit([]); }}>
+        {/* a bin with a cross in it: every drawing goes (the delete tool's bin is empty) */}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 7h16M10 7V5h4v2M6 7l1 12h10l1-12M10.2 11l3.6 5M13.8 11l-3.6 5" />
+        </svg>
+      </button>
+    </>
+  );
+  /** The six swatches of the drawing colour: in the desktop palette a pick closes it; in the touch sheet it stays open (a colour, then a tool). */
+  const swatches = (pick: boolean) => (
+    <div class="chart-swatches" role="group" aria-label={t('market.chart.draw.colors')} data-testid="chart-swatches">
+      {DRAWING_COLORS.map((c) => (
+        <button key={c} type="button" class="chart-sw" data-color={c} {...(pick ? { 'data-pick': '' } : {})} aria-pressed={color === c ? 'true' : 'false'} aria-label={t(`market.chart.draw.color.${c}`)} title={t(`market.chart.draw.color.${c}`)} data-testid={`draw-color-${c}`} onClick={() => setColor(c)}>
+          <i aria-hidden="true" />
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div class="chart-panel" ref={panelRef} data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length} data-expanded={expanded ? '1' : '0'}>
@@ -483,53 +531,50 @@ export function PriceChart(props: PriceChartProps) {
           ))}
         </div>
         <div class="chart-actions">
-          <div class="chart-row">
-            <div class="chart-tools" role="group" aria-label={t('market.chart.draw.tools')} title={t('market.chart.draw.local')} data-testid="chart-tools">
-              {TOOLS.map((k) => (
-                <button key={k} type="button" disabled={!ready} aria-pressed={toolOn === k ? 'true' : 'false'} aria-label={t(`market.chart.draw.${k}`)} title={`${t(`market.chart.draw.${k}`)}. ${t('market.chart.draw.local')}`} data-testid={`draw-${k}`} onClick={() => pickTool(k)}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    {k === 'hline' ? (
-                      <path d="M3 12h18" />
-                    ) : k === 'trend' ? (
-                      <><path d="M5 18L19 6" /><circle cx="5" cy="18" r="1.6" /><circle cx="19" cy="6" r="1.6" /></>
-                    ) : k === 'xline' ? (
-                      <><path d="M2 20L22 4" /><circle cx="8" cy="15.2" r="1.6" /><circle cx="16" cy="8.8" r="1.6" /></>
-                    ) : k === 'box' ? (
-                      <rect x="4.5" y="7" width="15" height="10" rx="1" fill="currentColor" fill-opacity="0.16" />
-                    ) : k === 'paint' ? (
-                      <path d="M12 3.5s6 6.2 6 10.3a6 6 0 0 1-12 0C6 9.7 12 3.5 12 3.5z" />
-                    ) : (
-                      <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" />
-                    )}
-                  </svg>
-                </button>
-              ))}
-              <button type="button" disabled={!ready || drawings.length === 0} aria-label={t('market.chart.draw.clear')} title={`${t('market.chart.draw.clear')}. ${t('market.chart.draw.local')}`} data-testid="draw-clear" onClick={() => { setPending(null); commit([]); }}>
-                {/* a bin with a cross in it: every drawing goes (the delete tool's bin is empty) */}
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M4 7h16M10 7V5h4v2M6 7l1 12h10l1-12M10.2 11l3.6 5M13.8 11l-3.6 5" />
-                </svg>
-              </button>
+          {coarse ? (
+            <div class="chart-colors">
+              <Popover
+                label={t('market.chart.draw.sheet')}
+                trigger={
+                  <>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l1-4L16.5 4.5a2 2 0 0 1 3 3L8 19z" /><path d="M14.5 6.5l3 3" /></svg>
+                    <span>{t('market.chart.draw.button')}</span>
+                    {toolOn ? <i class="chart-dot" data-color={color} aria-hidden="true" /> : null}
+                  </>
+                }
+                triggerClass="chart-draw-btn"
+                triggerAttrs={{ 'data-testid': 'chart-draw-sheet', 'aria-haspopup': 'true', 'data-active': toolOn ? '1' : '0' }}
+                panelTestId="chart-draw-panel"
+                panelClass="chart-draw-sheet"
+                closeOnPick
+              >
+                <div class="chart-tools" role="group" aria-label={t('market.chart.draw.tools')} title={t('market.chart.draw.local')} data-testid="chart-tools">
+                  {toolButtons(true)}
+                </div>
+                {swatches(false)}
+              </Popover>
             </div>
-          </div>
-          <div class="chart-colors">
-            <Popover
-              label={t('market.chart.draw.colorNow', { color: t(`market.chart.draw.color.${color}`) })}
-              trigger={<><i class="chart-dot" data-color={color} aria-hidden="true" /><span class="chart-caret" aria-hidden="true">▾</span></>}
-              triggerClass="chart-color-btn"
-              triggerAttrs={{ 'data-testid': 'chart-color', 'aria-haspopup': 'true', title: t('market.chart.draw.colorHint') }}
-              panelTestId="chart-color-panel"
-              closeOnPick
-            >
-              <div class="chart-swatches" role="group" aria-label={t('market.chart.draw.colors')} data-testid="chart-swatches">
-                {DRAWING_COLORS.map((c) => (
-                  <button key={c} type="button" class="chart-sw" data-color={c} data-pick="" aria-pressed={color === c ? 'true' : 'false'} aria-label={t(`market.chart.draw.color.${c}`)} title={t(`market.chart.draw.color.${c}`)} data-testid={`draw-color-${c}`} onClick={() => setColor(c)}>
-                    <i aria-hidden="true" />
-                  </button>
-                ))}
+          ) : (
+            <>
+              <div class="chart-row">
+                <div class="chart-tools" role="group" aria-label={t('market.chart.draw.tools')} title={t('market.chart.draw.local')} data-testid="chart-tools">
+                  {toolButtons(false)}
+                </div>
               </div>
-            </Popover>
-          </div>
+              <div class="chart-colors">
+                <Popover
+                  label={t('market.chart.draw.colorNow', { color: t(`market.chart.draw.color.${color}`) })}
+                  trigger={<><i class="chart-dot" data-color={color} aria-hidden="true" /><span class="chart-caret" aria-hidden="true">▾</span></>}
+                  triggerClass="chart-color-btn"
+                  triggerAttrs={{ 'data-testid': 'chart-color', 'aria-haspopup': 'true', title: t('market.chart.draw.colorHint') }}
+                  panelTestId="chart-color-panel"
+                  closeOnPick
+                >
+                  {swatches(true)}
+                </Popover>
+              </div>
+            </>
+          )}
           {/* the size of the chart: outside the tools' scroller, so a phone never scrolls it away */}
           <div class="chart-tools chart-size">
             <button type="button" aria-pressed={expanded ? 'true' : 'false'} aria-label={expanded ? t('market.chart.restore') : t('market.chart.expand')} title={expanded ? t('market.chart.restore') : t('market.chart.expand')} data-testid="chart-expand" onClick={() => setChartExpanded(!expanded)}>
@@ -547,7 +592,7 @@ export function PriceChart(props: PriceChartProps) {
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.h')}<b>{shown.h}</b></span>
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.l')}<b>{shown.l}</b></span>
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.c')}<b>{shown.c}</b></span>
-            <span>{t('market.chart.v')}<b>{shown.v}</b></span>
+            <span title={`${shown.vExact} ${volUnit}`}>{t('market.chart.v')}<b>{shown.v}</b><span class="chart-vol-unit">{volUnit}</span></span>
           </span>
         ) : null}
         {/* the unit stays when there is nothing to read out (a market with no trades yet) */}

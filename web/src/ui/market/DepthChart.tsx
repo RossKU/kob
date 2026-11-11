@@ -97,7 +97,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
             {g.yTicks.map((tk) => (
               <g key={`y${tk.value}`}>
                 <line class="grid" x1="0" x2={width} y1={tk.y} y2={tk.y} />
-                <text class="axis-label" x={width - 2} y={tk.y - 3} text-anchor="end">{amountText(tk.value)}</text>
+                <text class="axis-label" x={width - 2} y={tk.y - 3} text-anchor="end">{fiat ? amountText(tk.value) : `${amountText(tk.value)} ${props.ticker}`}</text>
               </g>
             ))}
             {g.xTicks.map((tk) => {
@@ -146,6 +146,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
       <figcaption class="depth-legend">
         <span><i style="background:var(--buy)" />{t('market.depth.bids')}</span>
         <span><i style="background:var(--sell)" />{t('market.depth.asks')}</span>
+        {props.priceUnit ? <span data-testid="depth-price-unit">{t('market.depth.priceAxis', { unit: props.priceUnit })}</span> : null}
         <span class="grow" />
         {summary ? (
           <span data-testid="depth-summary">
