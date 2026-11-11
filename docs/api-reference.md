@@ -1215,7 +1215,7 @@ override `listen` and `enabled`, `--usd-price` (or `KOB_USD_PRICE=1`) turns `usd
 | `cors_allow_origin` | unset | Value of `Access-Control-Allow-Origin`; unset = no CORS headers and `OPTIONS` is `405`. |
 | `metrics` | `true` | Serve `GET /v1/metrics`; `false` removes the route (`404`). |
 | `usd_price` | `false` | Serve `GET /v1/price/kas-usd` (section 3.22): the indexer then asks CoinGecko (and, if that fails, four exchanges) for the KAS price at most once a minute, only while a client asks. Off, the route is `404` and the indexer makes no call to any price site. `--usd-price` or `KOB_USD_PRICE=1` turn it on for one start. |
-| `executor_funds` | `false` | `kobd --executor`: show the hot key's balance (`executor.funds_sompi`, `spendable_sompi` of `/v1/health`, `kob_matcher_funding_sompi` and `kob_matcher_funding_total_sompi` of `/v1/metrics`) on a listener other hosts can reach too. Off, a loopback listener shows them and any other leaves them out (`executor.funds_hidden: true`). |
+| `executor_funds` | `false` | `kobd --executor`: show the hot key's balance (`executor.funds_sompi`, `spendable_sompi` of `/v1/health`, `kob_matcher_funding_sompi` and `kob_matcher_funding_total_sompi` of `/v1/metrics`) on the read API. Off (the default), the API leaves them out on any listener (`executor.funds_hidden: true`): a loopback listener may be served to the public by a proxy or a tunnel. The status line, `kobd address-balance` and the metrics file show the balance. |
 | `rate_limit.per_ip_rps` | `20.0` | Sustained requests per second per client; 0 disables rate limiting per client (and site). |
 | `rate_limit.per_ip_burst` | `60` | Burst per client. |
 | `rate_limit.global_rps` | `500.0` | Sustained requests per second across all clients; 0 = unlimited. |

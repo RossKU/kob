@@ -2890,8 +2890,9 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   failing included) is given up at once, and a replacement on a host neither in use nor failed lately is resolved in the
   background; the same for the cross-checking node. A cross-checking node that cannot answer leaves the
   authority alone meanwhile (it has 5 s for a single step near the tip and 30 s for a window, and its timeouts count
-  against it as below; nothing can be contradicted while there is no second node). With no node left, both
-  are resolved again with a backoff (2 s doubling to 60 s). Every change is logged with the host names, and the status line
+  against it as below; nothing can be contradicted while there is no second node). With no node left (a network blip of a home link, a
+  phone switching networks, a laptop waking up), both are resolved again with a backoff (2 s doubling to 60 s), never held back
+  by the rate limit below: the pair is back within about a minute of the link. Every change is logged with the host names, and the status line
   shows both hosts, their state and how often each entry was replaced.
 * **Both nodes are judged the same way** (`rpc::judge`; the health watch of `rpc::multi`): every 10 s each is asked
   `getServerInfo` (5 s timeout). A node on another network, without the UTXO index (the Executor reads its funds there),
@@ -2900,14 +2901,24 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   like a failed one, whichever role it has. A DAA is each node's own claim, so a node that over-reports must not put its
   honest partner behind: the most advanced node's sink is taken at the first check of the streak and at the sixth, and the
   node behind is asked for it (`getBlock`) at each check after; once it knows both, each more than 300 DAA above its own DAA
-  of that check, the lag counts. A sink it does not learn within 30 checks (5 min), or one not that far ahead, refutes the
-  lead: nothing is held against the node behind (`a node's lead over the other node of the pair is not borne out`, a
-  warning at most every 10 min). A node that is stuck for real reports not synced soon, which is judged apart. A node behind
-  by the answers is not promoted meanwhile. When it is the authority, the other node takes the role, unless that one is
+  of that check, the lag counts: the other node's sink is a real block it placed in its own DAG, that far ahead of it (an
+  honest lag: its sink is an ancestor of the other's). A sink it does not learn within 30 checks (5 min), or one not that far
+  ahead, refutes the lead: nothing is held against the node behind (`a node's lead over the other node of the pair is not
+  borne out`, a warning at most every 10 min). A node behind by the other node's answers only is not suspect (it may be
+  promoted) until it has confirmed a lead. **A node that stopped advancing** (it may still report synced) is judged by the
+  DAG and the local monotonic clock, never by a block's timestamp (a miner sets it): its sink has not changed for 2 min while
+  the other node's changed within them (the chain makes about ten blocks a second), or for 10 min when no other node
+  answers. Both standing still (the network stalls) is nothing. **A lead the DAG does not back** counts against the node that
+  claims it: when the most advanced node's virtual DAA score is more than 300 above its own sink's DAA score, as it reports
+  that block and as the node behind (which places it in its own DAG) does, at two checks in a row, it is a contradiction. A
+  lead over a sink nobody else ever learns only refutes itself (a residual: such a node is not cut for it, but the node
+  behind is not suspect either). When it is the authority, the other node takes the role, unless that one is
   suspect itself (not synced, or behind at the last check): then the authority's entry resolves a node of its own. A
   resolution that fails is tried again with the backoff until the entry has a node. Resolutions are rate-limited: an entry
   resolves at most 3 times within 10 min, then once per 5 min, and all entries together 8 times (`public nodes were
-  replaced too often lately`; the setup's *try again* is not held back). `/v1/health` `nodes[].cut_reason` names the host
+  replaced too often lately`). Only resolutions that named a node count, and the chain authority's entry, any entry while no
+  entry has a node, and the setup's *try again* are never held back: the limit stops a node replaced over and over from
+  turning into queries on the public resolvers, not a recovery. `/v1/health` `nodes[].cut_reason` names the host
   given up and why (the status line: `replaced Nx, last: ...`; `kob_indexer_node_replaced_total`). An own node and its
   `--node` peers are judged the same way but never replaced: a finding raises an alarm (logged as an error, `node_alarms`
   in `/v1/health`, `NODE ALARM:` on the status line, `kob_indexer_node_alarms`) until it ends (a lag or sync alarm after a
@@ -2959,7 +2970,9 @@ bad node cannot steal funds: the executor signs only its own inputs and the cove
 work (a transaction it drops or delays) or hide orders. Exactly what the second node checks: before anything is indexed, the
 chain blocks the authority reports (which blocks, in which order, removed ones included) and the ids of the transactions each
 of them accepted must be the second node's too (`rpc::verify::agreement`), so leaving out a transaction, and with it an
-order, is caught. What it does not check: the bodies the authority serves under those ids (outputs, payload, the spent
+order, is caught. (**Accepted**, founder decision 2026-11-11, mainnet included, audit M-7: no funds are at risk, since the
+covenants and the signature rules hold whatever a node serves; a lying authority can only show phantom orders, which waste
+ticks.) What it does not check: the bodies the authority serves under those ids (outputs, payload, the spent
 outputs it attaches to inputs). They come at `High` verbosity, which lacks the fields a transaction id is hashed over
 (version, lock time, subnetwork, gas), so they cannot be re-hashed against their ids without fetching every window at `Full`
 verbosity, whose chain block headers alone are several times larger; only windows a non-authority node served are re-hashed
@@ -3099,9 +3112,12 @@ The same series, and the indexer's, are served by `GET /v1/metrics` (the Executo
 carries an `executor` object: `funds_sompi`, `spendable_sompi`, `low_funds`, `paused`, `dry_run`, `pending`,
 `oldest_pending_seconds`, `submitted_total`, `finalized_total`, `dropped_total`, `rejected_total`, `held_coins`,
 `last_submit_unix`, `last_step_unix`, `last_tick_error`, `clock_skew_seconds`, `clock_alarm`, `restarts`,
-`journal_entries`. Both are visible to whoever can reach the API (loopback by default). On a listener other hosts can reach,
-the balance is left out (`funds_sompi` and `spendable_sompi` absent, `funds_hidden: true`; no `kob_matcher_funding_sompi` and
-`kob_matcher_funding_total_sompi` on `/v1/metrics`; the metrics file keeps them) unless `[api] executor_funds = true`
+`journal_entries`. Both are visible to whoever can reach the API (loopback by default). The balance is left out
+(`funds_sompi` and `spendable_sompi` absent, `funds_hidden: true`; no `kob_matcher_funding_sompi` and
+`kob_matcher_funding_total_sompi` on `/v1/metrics`; the status line, `kobd address-balance` and the metrics file keep them)
+unless `[api] executor_funds = true`, whatever the API listens on: a loopback listener is often the public's through a reverse
+proxy or a tunnel on the same host. This unlinks the host from the amount, not the operator's address from its balance, which
+the chain shows to anyone who finds the address (its fills name it)
 (`[api] metrics = false` removes `/v1/metrics`).
 
 **Pending transactions.** A transaction no chain block accepted within `pending_timeout` (600 DAA, a minute) is resent
@@ -3143,7 +3159,10 @@ executor`) when its indexer stays stopped (`stopped`: its record log could not b
 start. Run it under a supervisor that restarts it (A.3; on Windows the archive's `kobd-supervise.cmd`, quickstart 6). A
 store halted at a **gap** does not end the process: the follower moves a pruned gap on its own, and a gap it gave up on
 (moved 10 times in one run, or a store the node contradicts) needs you (7.4); a restart would only move the store again and
-reset that bound, every few minutes. The process stays up and says so (`kob_indexer_halted` 1, the status line).
+reset that bound, every few minutes. The process stays up and says so (`kob_indexer_halted` 1, the status line, and the
+error `indexer still halted, nothing is indexed or traded` again every 10 minutes). A public chain authority whose answer
+contradicts the store (its removed chain blocks do not begin at the cursor) is given up for another instead, and the
+follower asks that one; only a node of your own halts the store there.
 
 Logs (`RUST_LOG=info`, default) report every submission, conflict, rejection, acceptance, final
 transaction and reorg rollback with its transaction id. A batch that triggers or arms stops logs `the batch triggers or

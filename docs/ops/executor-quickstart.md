@@ -344,16 +344,19 @@ flags for both roles; it adds `--config <file>` when the configuration is not in
 
 **Windows**: the archive holds `kobd-supervise.cmd`, the supervisor: it runs `kobd.exe` (next to it) with the arguments you
 give it and starts it again when it exits with an error (any exit status but 0, a stop, and 2, a stop that did not finish in
-time or a wrong option), after 10 s, the wait doubling to 5 min while it keeps failing within 10 min of its start; each
-restart is noted in `kobd-supervise.log` next to it. Task Scheduler's own "If the task fails, restart every" is not enough:
+time or a wrong option, and 130, a second Ctrl+C), after 10 s, the wait doubling to 5 min while it keeps failing within 10
+min of its start; each restart is noted in `kobd-supervise.log` next to it. Five starts in a row that each end within 30 s are
+not restarted again (another kobd holds the data directory, the key file is refused, a configuration error: a restart does not
+cure it; `kobd-supervise.log` says so, `kobd.log` says which). Task Scheduler's own "If the task fails, restart every" is not enough:
 it is not documented to act on a program's exit status. Make a Task Scheduler task "At startup" (run whether the user is
 logged on or not, as the account that owns the key file) with program `C:\kob\kobd-supervise.cmd`, arguments `--executor`
 and *Start in* `C:\kob`, and in its settings **untick "Stop the task if it runs longer than"** (checked with 3 days by
 default: the executor would be stopped after three days) and keep "If the task is already running: Do not start a new
 instance"; on a laptop also untick the conditions "Start the task only if the computer is on AC power" and "Stop if the
-computer switches to battery power". *End* on the task stops the supervisor; check that `kobd.exe` has ended too
-(`tasklist /fi "imagename eq kobd.exe"`), else end it with `taskkill /f /im kobd.exe` (the database survives a kill, section
-7). In a window, double-click `kobd-supervise.cmd` instead of `kobd.exe` to get the same restarts. A task has no
+computer switches to battery power". **To stop it**: create the file `kobd-supervise.stop` next to the script (`type nul > C:\kob\kobd-supervise.stop`), then
+end `kobd.exe` (`taskkill /f /im kobd.exe`; the database survives a kill, section 7): the supervisor sees the file and does
+not start it again, and ends. The next start of the script deletes the file. *End* on the task alone stops the supervisor
+but may leave `kobd.exe` running unsupervised: check with `tasklist /fi "imagename eq kobd.exe"` and end it as above. In a window, double-click `kobd-supervise.cmd` instead of `kobd.exe` to get the same restarts. A task has no
 console: its log is the file `kobd.log` the setup configured (see *Logs* below); read it with
 `Get-Content C:\kob\kobd.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
 while the executor runs: a mouse selection in the classic Windows console (Quick Edit mode) pauses the program's output
