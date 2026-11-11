@@ -219,7 +219,7 @@ test.describe('cancel', () => {
     expect(await tokens(mock)).toBe(3n * TOKEN);
     await page.getByTestId('orders-tab-active').click();
     await expect(page.getByTestId('orders-empty')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('orders-cancel-all')).toBeDisabled();
+    await expect(page.getByTestId('orders-cancel-all')).toHaveCount(0); // nothing to cancel: the button is not offered
   });
 
   test('cancel-all of everything asks first, names the count, and cancels every live order', async ({ appPage: page, mock, wallet }) => {
@@ -343,7 +343,7 @@ test.describe('recovery', () => {
 
     // import the backup: the order is resolved on the node from its placement record
     await page.getByTestId('orders-import').setInputFiles(file);
-    await expect(page.getByTestId('import-preview')).toContainText('1 record(s) can be imported');
+    await expect(page.getByTestId('import-preview')).toContainText('1 record can be imported');
     await page.getByTestId('orders-import-apply').click();
     await expect(page.getByTestId('recover-message')).toContainText('Imported 1');
     await page.getByTestId('orders-tab-active').click();
