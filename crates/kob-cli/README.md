@@ -7,7 +7,8 @@ transactions as the web wallet.
 > testnet-10 first, and run every signing command with `--dry-run` before you sign.
 
 Details (planner defaults, units, every option, the `--json` shapes, all exit codes): [REFERENCE.md](REFERENCE.md).
-Options of one command: `kob <command> --help`.
+Options of one command: `kob <command> --help` (or `kob help <command>`; `kob token --help` and `kob registry --help` list their
+subcommands). `kob --help` groups the commands (read, trade, tokens and registry) and lists the options they share.
 
 ## Install
 
@@ -16,13 +17,13 @@ Download `kob-<version>-<network>-<target>` from the [releases](https://github.c
 
 ```sh
 cargo build --release --locked --bin kob    # target/release/kob (kob.exe on Windows)
-kob --version
+kob --version    # kob 0.1.0 (testnet-10 build, commit a1b2c3d4e5f6); a plain build says `development build, no network`
 ```
 
 ## Quick start
 
 ```sh
-# 1. Read a book (no key). Testnet-10 has a default indexer; mainnet needs --indexer for now.
+# 1. Read a book (no key). The default indexer comes from the network's deployment record (see Configuration).
 #    First see which tokens have a market, then read one by its ticker or covenant id. A ticker is known from the
 #    registry or the indexer's token list: a fresh local indexer (--indexer http://127.0.0.1:8090) lists a token
 #    only once an order of it was seen, so use the covenant id that `kob tokens` prints.
@@ -70,15 +71,20 @@ Every signing command prints the plan and the decoded transaction first. It sign
 
 ### Keys
 
-- The key is a file holding the 64-hex secret (`--key-file`), or an environment variable (`KOB_KEY`, or `--key-env NAME`).
-  `--key-file` wins over the variable.
-- Trading commands refuse `--key` and any argument that contains the key: arguments are visible to other users (`ps`, shell
-  history). The key is never printed.
+One rule for every command that takes a key:
+
+- `--key-file PATH`: a file holding the 64-hex secret.
+- `--key-env NAME`: the environment variable holding it.
+- With neither, the environment variable `KOB_KEY`. `--key-file` wins over the variable.
+- The key is never printed, and a command line that contains the key's hex anywhere is refused (arguments are visible to
+  other users: `ps`, shell history). The trading commands refuse `--key` altogether.
 - The CLI does not check the file's permissions. Protect it yourself: `chmod 600` on Unix, an owner-only ACL on Windows.
-- `kob token create`, `kob recover` and `kob order` take `--key HEX|env:NAME|file:PATH` instead. `HEX` works there but is
-  visible to others; use `env:` or `file:`.
-- Signing commands: `place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `token create`, `recover --cancel`,
+- Commands that sign: `place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `token create`, `recover --cancel`,
   `order sweep|cancel`. `orders` and `balances` use only the public key (or `--maker KEY|ADDRESS`); the rest need no key.
+  `kob token create --dry-run` signs only when a key is named with `--key-file` or `--key-env`.
+- Older spellings of `kob token create`, `kob recover` and `kob order`: `--key file:PATH` (now `--key-file PATH`),
+  `--key env:NAME` (now `--key-env NAME`) and `--key HEX`. They still work and print a deprecation warning on stderr; a key
+  as `HEX` is visible to other users and is deprecated.
 
 ## Commands
 
@@ -215,10 +221,11 @@ kob watch health                                # indexer progress; a health lin
 |---|---|
 | 0 | done, `--dry-run` stopped after the plan, or a view was printed |
 | 1 | the command ran but did not do its work: node / indexer / plan error, or a refusal to sign (no `--yes`, or a declined prompt) |
-| 2 | usage (trading commands): unknown option, malformed argument (e.g. an amount without a unit), no key, `--key` on a trading command, `--yes` with `--dry-run` |
+| 2 | usage: unknown option, malformed argument (e.g. an amount without a unit, `--depth 0`), no key, `--key` on a trading command, `--yes` with `--dry-run` |
 
-The reason is on stderr (`error: ...` or `not signed: ...`) and, with `--json`, in the `issues` array. Other commands
-differ a little (`kob token create` uses 1 for every error): see [exit codes](REFERENCE.md#exit-codes) and every
+`--help` prints on stdout and exits 0; a usage printed because of a mistake (`kob place` with no arguments) goes to stderr and
+exits 2. The reason is on stderr (`error: ...` or `not signed: ...`) and, with `--json`, in the `issues` array. Other commands
+differ a little: see [exit codes](REFERENCE.md#exit-codes) and every
 [JSON key and type](REFERENCE.md#json-output).
 
 ## Bots and scripts
@@ -241,7 +248,7 @@ are a pre-release interface too.
 ```sh
 kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 1000000000000 \
   --fund-utxo <64 hex txid>:0:5000000000:kaspatest:qq... \
-  --network testnet-10 --key file:$HOME/.kob/maker.key --out-dir ./tusd-creation --dry-run
+  --network testnet-10 --key-file $HOME/.kob/maker.key --out-dir ./tusd-creation --dry-run
 ```
 
 - Required: `--name`, `--ticker` (2 to 12 of A-Z 0-9), `--decimals` (0 to 18), at least one `--fund-utxo` (amount in sompi),
@@ -252,7 +259,7 @@ kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 100000000
 - Files go to `--out-dir` (a submitting run without it: `./kob-create-<id>`). If the genesis did not go out:
   `kob token resume <DIR>`.
 - `kob token verify-declaration <launch_proof.json>` checks a launch proof from any source.
-- Help: `kob token create --help` (`kob token --help` is not a command). More: [details](REFERENCE.md#token-commands-details).
+- Help: `kob token create --help` (`kob token --help` lists the subcommands). More: [details](REFERENCE.md#token-commands-details).
 
 ## Finding tokens
 

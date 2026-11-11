@@ -137,7 +137,8 @@ A token argument is a ticker or a covenant id. Sources, in order:
 - **Key content.** The key file (or variable) is read as is, surrounding whitespace is trimmed, and the rest must be 64 hex
   characters (either case) that form a valid secret key. A command line that contains the key's hex anywhere is refused. The
   CLI does **not** check the file's permissions or owner: protect it yourself (`chmod 600` on Unix, an owner-only ACL on
-  Windows). `--key-file` wins over the environment.
+  Windows). `--key-file` wins over the environment. The one key rule of every command (`--key-file`, `--key-env`, `$KOB_KEY`) is
+  in the README's [Keys](README.md#keys).
 - **What you see before signing.** The plan (terms, carriers, fee, expiry) and the decoded transaction: each input and output
   with its owner, the net effect on the wallet in KAS and each token, the fee, the signatures asked for. A transaction that
   needs another key's signature is never signed.
@@ -322,6 +323,7 @@ One document on stdout; nothing is signed. `--yes` and `--dry-run` are accepted 
   "bids": [{ "price": "24500000", "price_text": "0.245 KAS per TUSD", "amount": "300000000", "orders": 1 }],
   "best_ask": "25000000",
   "best_bid": "24500000",
+  "crossed": false,
   "last_fill": "24800000"
 }
 ```
@@ -330,7 +332,8 @@ One document on stdout; nothing is signed. `--yes` and `--dry-run` are accepted 
   for a token without orders and without known decimals); `asks` and `bids` (levels: `price` is the state price as a
   string, sompi per `scale` base units on a KAS book or B base units on a pair; `price_text` the same per whole token;
   `amount` a base-unit string; `orders` a number); `best_ask`, `best_bid`, `last_fill` (state-price strings, `null` when
-  none; `last_fill` is always `null` on a pair).
+  none; `last_fill` is always `null` on a pair); `crossed` (boolean) is `true` when the best bid is above the best ask, which an
+  executor is about to match: the text then says `crossed by X` instead of a spread.
 - `orders`: `{"maker", "network", "orders": [...]}`. Each order has `covenant_id`, `contract` (template name), `market`
   (ticker or `A/B`), `status` (the indexer's), `what` (text), `expiry_daa` (number or `null`), `flags` (strings such as
   `expired`, `refundable from DAA N`, `possibly frozen`) and `value` (the indexer's `current.value` as sent, `null` when
@@ -392,12 +395,17 @@ The code separates three outcomes; the finer cause is in the message on stderr, 
 | 2 | usage: an unknown command or option, a missing or malformed argument, no signing key, a key on the command line (`--key` of a trading command), `--yes` with `--dry-run`, `kob place` without a kind; also an order term that does not read (an amount, price, tip or carrier without a unit or out of range, a covenant id that is not 64 hex, a missing required option of the kind) in `place`, `replace`, `take`, `send` and `refund` |
 
 So a refusal, a plan error, a node error and a declined prompt are all 1. Read stderr (`error: ...` for failures,
-`not signed: ...` for a refusal or a declined prompt) or the `issues` array. The views (`book`, `orders`, `balances`) report
-a term they cannot read while planning (for example `--depth 0`) as 1.
+`not signed: ...` for a refusal or a declined prompt) or the `issues` array. A mistake in the arguments is 2 on every command,
+the views (`book`, `orders`, `balances`) included (no token, `--depth 0`, no key and no `--maker`); their indexer and node
+failures are 1.
 
-`kob` with no command, `kob help` and `kob --help` print the usage on stdout and exit 0. An unknown command (also
-`kob token`, `kob token --help` and `kob registry --help`) prints the usage on stderr and exits 2. `kob place`, `kob order`,
-`kob recover`, `kob watch` and `kob token resume` with no arguments print their usage and exit 2.
+An explicit `--help` or `-h` prints the usage on stdout and exits 0, on every command and subcommand: `kob --help`,
+`kob token --help`, `kob registry --help`, `kob registry validate --help`, `kob book --help`. `kob help <command> [<subcommand>]` is
+`kob <command> [<subcommand>] --help`. `kob` with no command and `kob help` print the usage on stdout and exit 0. A usage
+printed because of a mistake goes to stderr and exits 2: an unknown command or subcommand, `kob token` or `kob registry` with
+no subcommand, and `kob place`, `kob order`, `kob watch` and `kob token resume` with no arguments. `kob --version` (`-V`)
+prints `kob 0.1.0 (testnet-10 build, commit a1b2c3d4e5f6)`; a build without a deployment feature says `development build, no
+network`, and the commit is `unknown` when the build was not given one.
 
 Per family:
 
@@ -406,8 +414,9 @@ Per family:
   `refused` (for `kob order` also when a file was `rejected`), when the report could not be written, or on an error such as
   an unreadable file or an unreachable node; 2 for an argument error (`--yes` with `--dry-run` included). An order that is
   only `skipped` does not make the code 1. `kob recover` without `--cancel` is 0 whatever it found.
-- **`kob token create`.** 0 on success or a dry run; 1 on any error, a bad option and a refusal (no `--yes`, no terminal)
-  included. `resume`: 0 or 1, and 2 with no argument. `verify-declaration`: 0 when the proof verifies, 1 when it does not or
+- **`kob token create`.** 0 on success or a dry run; 2 for an argument error (an unknown or malformed option, a missing
+  required one, no key); 1 on any other error and on a refusal (no `--yes`, no terminal). `resume`: the same, and 2 with no
+  argument. `verify-declaration`: 0 when the proof verifies, 1 when it does not or
   cannot be read, 2 for a wrong number of arguments.
 - **`kob tokens`.** 0 when the list was printed, 1 on an error, 2 for an argument error.
 - **`kob watch`.** 0 after Ctrl-C (or when the output pipe closes); 1 for a fatal error (no WebSocket route, credentials
@@ -415,7 +424,7 @@ Per family:
 - **`kob registry`.** `validate`: 0 valid, 1 invalid, 2 usage or an unreadable file. `verify-genesis`: 0 when the registry
   says exactly what the evidence proves, 1 on a mismatch or an invalid registry or evidence file, 2 for usage or an
   unreadable file. `programs`: 0, or 2 for usage. `add-program`: 0, 1 when the profile cannot be derived or `--write` is
-  refused, 2 for usage. `validate` and `programs` take no `--help`: it prints their usage line and exits 2.
+  refused, 2 for usage. Every one answers `--help` / `-h` with its usage on stdout and exit 0.
 
 ## kob watch details
 
@@ -475,7 +484,7 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
 | `--description`, `--image`, `--website`, `--x`, `--telegram` | declared on chain (at most 1024 bytes with name, symbol, decimals); `--logo` / `--icon` are deprecated spellings of `--image` |
 | `--image-file PATH` / `--image-hash HEX` | the picture's SHA-256, declared as `image_hash` (needs `--image`; PNG, JPEG, WebP or GIF up to 1500000 bytes, no SVG) |
 | `--extension-commitment`, `--allow-borrow` | advanced; see `--help` |
-| `--key HEX\|env:VAR\|file:PATH` | the signing secret (prefer `env:` or `file:`) |
+| `--key-file PATH`, `--key-env NAME` | the signing key (the README's [Keys](README.md#keys); else `$KOB_KEY` when the run signs). The older `--key file:PATH`, `--key env:VAR` and `--key HEX` still work and print a deprecation warning |
 | `--out-dir`, `--node`, `--network`, `--yes` / `-y`, `--dry-run` | as below |
 
 - **Program.** The default `public-mint` issues the `KCC20` actor of upstream's published `KCC20PublicMint` app (registry
@@ -484,10 +493,10 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
   less, but other indexers (kascov.io) do not recognise the token, and the plan says so. Measured on testnet-10 on
   2026-11-04: issuance 0.00415 KAS for both; a 1 -> 1 transfer 0.00901 KAS (public-mint) against 0.00678 KAS (3x3). Tokens
   already issued as 3 / 3 stay tradable.
-- **Dry run.** `--dry-run` builds and verifies everything offline and never submits. With `--key` it signs and runs every
+- **Dry run.** `--dry-run` builds and verifies everything offline and never submits. With a key it signs and runs every
   input in the script engine; without it the transactions stay unsigned and script execution is skipped (the output says
   so). Nothing is written unless `--out-dir` is given.
-- **Submitting.** Without `--dry-run`, `--key` is required. The node is `--node`, else `$KOB_NODE_WRPC`, else the public nodes,
+- **Submitting.** Without `--dry-run`, a key is required (`--key-file`, `--key-env` or `$KOB_KEY`). The node is `--node`, else `$KOB_NODE_WRPC`, else the public nodes,
   and it must run the named network. The plan is shown and confirmed like the trading commands: `--yes` submits, a terminal
   is asked, without either it stops with `error: not signed: pass --yes ...` (exit 1) before anything is written or sent.
 - **Files.** `preparation_tx.json`, `genesis_tx.json`, `submit_preparation.json`, `submit_request.json`, `supply.json`,
@@ -495,7 +504,7 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
   else (when submitting) to `./kob-create-<first 16 hex of the covenant id>`.
 - **`kob token resume <DIR> [--node URL] [--network NET]`** sends a creation whose genesis did not go out, from the directory
   `kob token create` wrote. Nothing is signed again: the preparation is sent first (a node that already has it refuses it,
-  which is fine), then the genesis. It refuses unsigned transactions (a dry run without `--key`) or a genesis that does not
+  which is fine), then the genesis. It refuses unsigned transactions (a dry run without a key) or a genesis that does not
   spend output 0 of the preparation. When the genesis fails, `kob token create` prints this command.
 - **`kob token verify-declaration <launch_proof.json>`** checks a KCC-23 launch proof from any source (an indexer's
   `GET /v1/tokens/<id>/declaration`, a community list, `kob token create`). It recomputes both transaction ids and the
@@ -513,10 +522,11 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
 - **`kob order sweep --view FILE...`** returns an order's strays to the maker while the order continues in place (same
   covenant id). **`kob order cancel --view FILE...`** is the maker's cancel from saved indexer views (an order under a retired template of
   the cancel-only table too: through that template's own cancel entry; `kob order sweep` skips such an order). Views come from `GET /v1/orders/{id}` or a page such as `GET /v1/orders?maker=<pubkey>&status=active`.
-- **`kob recover --from FILE... [--amount-left [ID=]AMOUNT] [--cancel --key ...]`** finds the maker's orders on a node alone,
+- **`kob recover --from FILE... [--amount-left [ID=]AMOUNT] [--cancel --key-file PATH]`** finds the maker's orders on a node alone,
   from the web wallet's backup, an indexer recovery / export file or an indexer view. The search is not exhaustive: an order
   partly filled by an unusual amount is reported `not_found` unless you pass `--amount-left`. `--cancel` cancels every live
   order of the key's maker (strays are not swept: use `kob order` from an indexer view first). `getUtxosByAddresses` needs a
   node with `--utxoindex`.
-- These three keep their own option parsers. `kob order` and `kob recover` take `--key HEX|env:NAME|file:PATH`; `HEX` is
-  accepted there but is visible in the process list and shell history, so use `env:` or `file:`.
+- These three keep their own option parsers, but the key rule is the same as everywhere: `--key-file PATH`, `--key-env NAME`,
+  else `$KOB_KEY`. The older `--key file:PATH`, `--key env:NAME` and `--key HEX` are still accepted and print a deprecation
+  warning that names the new spelling (a `HEX` key is visible in the process list and shell history).
