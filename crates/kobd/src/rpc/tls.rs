@@ -5,9 +5,9 @@
 //! OpenSSL, no system certificate store, the same trust on every platform and in a container with nothing installed.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The client configuration: ring, the safe default protocol versions, the webpki roots.
 fn config() -> Arc<rustls::ClientConfig> {
@@ -29,6 +29,16 @@ fn config() -> Arc<rustls::ClientConfig> {
 pub enum Stream {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+}
+
+impl Stream {
+    /// The TCP connection under it.
+    fn tcp(&self) -> &TcpStream {
+        match self {
+            Stream::Plain(s) => s,
+            Stream::Tls(s) => s.get_ref(),
+        }
+    }
 }
 
 impl Read for Stream {
@@ -104,16 +114,19 @@ pub fn target(url: &str) -> Result<Target, String> {
     Ok(Target { tls, host, port, path })
 }
 
-/// A TCP connection to `t` with read and write timeouts, wrapped in TLS when `t.tls` (server name: the host).
+/// A TCP connection to `t` with read and write timeouts, wrapped in TLS when `t.tls` (server name: the host). Every address
+/// the host resolves to is tried in turn until one takes the connection, all of them within `timeout`.
 pub fn connect(t: &Target, timeout: Duration) -> Result<Stream, String> {
-    let addr = (t.host.as_str(), t.port)
-        .to_socket_addrs()
-        .map_err(|e| format!("resolve {}: {e}", t.host))?
-        .next()
-        .ok_or_else(|| format!("no address for {}", t.host))?;
-    let tcp = TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("connect {}: {e}", t.host))?;
-    tcp.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-    tcp.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+    connect_until(t, Instant::now() + timeout, timeout)
+}
+
+/// [`connect`] by `deadline`, with read and write timeouts of `io_timeout`.
+fn connect_until(t: &Target, deadline: Instant, io_timeout: Duration) -> Result<Stream, String> {
+    let addrs: Vec<SocketAddr> =
+        (t.host.as_str(), t.port).to_socket_addrs().map_err(|e| format!("resolve {}: {e}", t.host))?.collect();
+    let tcp = connect_any(&addrs, deadline).map_err(|e| format!("connect {}: {e}", t.host))?;
+    tcp.set_read_timeout(Some(io_timeout)).map_err(|e| e.to_string())?;
+    tcp.set_write_timeout(Some(io_timeout)).map_err(|e| e.to_string())?;
     let _ = tcp.set_nodelay(true);
     if !t.tls {
         return Ok(Stream::Plain(tcp));
@@ -123,13 +136,52 @@ pub fn connect(t: &Target, timeout: Duration) -> Result<Stream, String> {
     Ok(Stream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
 }
 
+/// A failed connection attempt as an English phrase where its kind says enough (the operating system's own text comes in
+/// the system's language).
+fn connect_error(e: &std::io::Error) -> String {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::ConnectionRefused => "connection refused".into(),
+        K::TimedOut | K::WouldBlock => "timed out".into(),
+        K::ConnectionReset | K::ConnectionAborted => "connection reset".into(),
+        K::AddrNotAvailable | K::NetworkUnreachable | K::HostUnreachable => "unreachable".into(),
+        _ => e.to_string(),
+    }
+}
+
+/// The first of `addrs` that takes a TCP connection before `deadline` (audit 2026-11-11 L-12: a host whose first address does
+/// not answer, an IPv6 one on an IPv4-only link, is reached on the next). Each try gets an equal share of the time left (at
+/// least a second, never past the deadline), so one address that never answers does not use it all up.
+pub fn connect_any(addrs: &[SocketAddr], deadline: Instant) -> Result<TcpStream, String> {
+    if addrs.is_empty() {
+        return Err("no address".into());
+    }
+    let mut errors = vec![];
+    for (k, addr) in addrs.iter().enumerate() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            errors.push(format!("{addr}: the deadline passed"));
+            break;
+        }
+        let share = (left / (addrs.len() - k) as u32).max(Duration::from_secs(1)).min(left);
+        match TcpStream::connect_timeout(addr, share) {
+            Ok(s) => return Ok(s),
+            Err(e) => errors.push(format!("{addr}: {}", connect_error(&e))),
+        }
+    }
+    Err(errors.join("; "))
+}
+
 /// The most a GET answer may be (the resolver's is about a hundred bytes).
 const MAX_BODY: usize = 64 * 1024;
 
-/// `GET url` over HTTP/1.1 (`Connection: close`): the status code and the body, chunked transfer decoded.
+/// `GET url` over HTTP/1.1 (`Connection: close`): the status code and the body, chunked transfer decoded. The whole GET, every
+/// address of the host tried and the answer read, takes at most `timeout` (a server that answers a byte at a time does not
+/// hold it longer).
 pub fn http_get(url: &str, timeout: Duration) -> Result<(u16, String), String> {
     let t = target(url)?;
-    let mut s = connect(&t, timeout)?;
+    let deadline = Instant::now() + timeout;
+    let mut s = connect_until(&t, deadline, timeout)?;
     let host = if (t.tls && t.port == 443) || (!t.tls && t.port == 80) { t.host.clone() } else { format!("{}:{}", t.host, t.port) };
     let req = format!(
         "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: kobd/{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
@@ -140,6 +192,11 @@ pub fn http_get(url: &str, timeout: Duration) -> Result<(u16, String), String> {
     let mut raw = Vec::new();
     let mut buf = [0u8; 8192];
     loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(format!("GET {url}: no complete answer within {timeout:?}"));
+        }
+        let _ = s.tcp().set_read_timeout(Some(left));
         match s.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
@@ -252,6 +309,23 @@ mod tests {
         assert!(parse_response(b"SSH-2.0 hello\r\n\r\n").is_err());
         assert!(parse_response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n").is_err());
         assert!(parse_response(b"HTTP/1.1 200").is_err());
+    }
+
+    /// Audit 2026-11-11 L-12: every address of a host is tried until one takes the connection (here the first refuses it), and
+    /// a deadline that passed tries none.
+    #[test]
+    fn every_address_is_tried_within_the_deadline() {
+        let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap() // closed when `l` drops
+        };
+        let addrs = [closed, open.local_addr().unwrap()];
+        let s = connect_any(&addrs, Instant::now() + Duration::from_secs(30)).expect("the second address");
+        assert_eq!(s.peer_addr().unwrap(), open.local_addr().unwrap());
+        let e = connect_any(&addrs, Instant::now() - Duration::from_secs(1)).unwrap_err();
+        assert!(e.contains("the deadline passed"), "{e}");
+        assert_eq!(connect_any(&[], Instant::now() + Duration::from_secs(1)).unwrap_err(), "no address");
     }
 
     /// A GET against a local server: plain HTTP end to end (the TLS path is the same request over rustls).

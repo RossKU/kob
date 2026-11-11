@@ -6,7 +6,8 @@
 //! `GET {resolver}/v2/kaspa/{network}/{tls|any}/wrpc/{borsh|json}` answering `{"uid": ..., "url": "wss://.../wrpc/borsh"}`.
 //! The public nodes serve Borsh wRPC only (`json` is `NOT FOUND` on every resolver, 2026-10-22), so a resolved node is always
 //! Borsh over TLS and every call to it goes through `rpc::bridge`. Some resolvers are down at any time: they are tried in a
-//! random order, each with a short timeout, until one answers.
+//! random order, each with a short timeout ([`QUERY_TIMEOUT`] for the whole answer, every address of its host tried), until
+//! one answers, all of them within [`RESOLVE_DEADLINE`].
 //!
 //! **Entries.** A configured `resolver` is a pseudo URL: `resolver` is the chain authority's entry, and
 //! `index_cli::build_config` always adds a second one, `resolver:2`, the cross-checking node (`rpc::multi`: its acceptance data
@@ -63,8 +64,10 @@ pub const RESOLVERS: &[&str] = &[
     "https://luke.kaspa.blue",
 ];
 
-/// One resolver's answer may take this long.
+/// One resolver's answer may take this long (the whole GET: every address of its host, and the answer read) ...
 pub const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+/// ... and one resolution, every resolver and round, this long (the resolvers not asked by then are not asked).
+pub const RESOLVE_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Rounds over every resolver before a node on a host already in use is accepted (the resolvers spread their answers over
 /// the nodes, so a second round usually names another host).
@@ -185,7 +188,14 @@ pub fn resolve(network: &str, avoid_hosts: &[String]) -> Result<Resolved, String
         _ => RESOLVERS.iter().map(|s| s.to_string()).collect(),
     };
     order.shuffle(&mut rand::thread_rng());
-    resolve_in(&order, network, avoid_hosts, |u| crate::rpc::tls::http_get(u, QUERY_TIMEOUT))
+    let deadline = Instant::now() + RESOLVE_DEADLINE;
+    resolve_in(&order, network, avoid_hosts, |u| {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(format!("not asked: the resolution took {} s already", RESOLVE_DEADLINE.as_secs()));
+        }
+        crate::rpc::tls::http_get(u, QUERY_TIMEOUT.min(left))
+    })
 }
 
 /// How the state resolves a node (real HTTP; tests put a fake in).
