@@ -1,0 +1,30 @@
+# kobd.service: a systemd unit for the KOB executor (docs/ops/executor-quickstart.md, section 6).
+#
+# Copy the release folder to /opt/kob, owned by the user `kob` (chown -R kob: /opt/kob; the key file keeps mode 0600), run
+# `./kobd setup` there once as that user, then:
+#
+#     sudo cp /opt/kob/kobd.service /etc/systemd/system/kob.service
+#     sudo systemctl daemon-reload && sudo systemctl enable --now kob
+#     journalctl -u kob -f        # the log and the status line every 10 s
+#
+# Exit status 2 is a usage mistake or a stop that did not finish in time: RestartPreventExitStatus keeps systemd from
+# starting the same mistake again and again. Status 1 (an error the executor cannot fix while it runs) is restarted.
+# `kobd --indexer` (the keyless role) or `kobd --executor --indexer` run the same way: change ExecStart.
+
+[Unit]
+Description=KOB executor
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=/opt/kob
+ExecStart=/opt/kob/kobd --executor
+User=kob
+Restart=always
+RestartSec=10
+RestartPreventExitStatus=2
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

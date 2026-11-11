@@ -11,8 +11,12 @@ rem     is restarted; a crash): started again after 10 s, the wait doubling to 5
 rem     its start;
 rem   * 5 starts in a row that each ended within 30 s: not started again. That is a problem a restart does not cure (another
 rem     kobd holds the data directory, the key file is refused, a configuration error): kobd.log says which;
-rem   * the file kobd-supervise.stop next to this one: not started again (create it, then stop kobd: Ctrl+C, or
-rem     taskkill /f /im kobd.exe under Task Scheduler). It is deleted when the script starts.
+rem   * the file kobd-supervise.stop next to this one: not started again (create it, then stop kobd: Ctrl+C, or under Task
+rem     Scheduler `taskkill /f /pid <pid>` with the pid in kob-data\kob-writer.owner; `taskkill /f /im kobd.exe` would end
+rem     every kobd.exe of the machine, another network's too). It is deleted when the script starts.
+rem
+rem Ctrl+C in this window ends kobd (status 0, not started again) and then cmd asks "Terminate batch job (Y/N)?": either
+rem answer is harmless.
 rem
 rem Each restart is noted in kobd-supervise.log next to this file; why kobd stopped is in its own log (kobd.log).
 setlocal EnableExtensions DisableDelayedExpansion
@@ -52,6 +56,10 @@ goto run
 :rapid
 echo %DATE% %TIME% kobd failed 5 times in a row within 30 s of its start (last status %CODE%): a problem a restart does not cure (another kobd holds the data directory, the key file is refused, a configuration error; see kobd.log). Not started again: fix it, then start this script again>>"%SUPLOG%"
 echo kobd failed 5 times in a row within 30 s of its start: not started again. See kobd.log, fix the problem, then start this script again.
+rem a double-clicked window would close at once: keep it for a minute (timeout.exe refuses to wait without a console, as
+rem under Task Scheduler, so a scheduled run ends at once)
+echo This window closes in 60 s (press a key to close it now).
+timeout /t 60 >nul 2>&1
 exit /b %CODE%
 :stopped
 echo %DATE% %TIME% kobd exited with status %CODE% and kobd-supervise.stop is there: not started again>>"%SUPLOG%"
