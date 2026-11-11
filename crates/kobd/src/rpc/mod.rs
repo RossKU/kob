@@ -145,6 +145,13 @@ pub trait ChainSource: Send + Sync + 'static {
     fn report_lie(&self, origin: Origin, why: &str) {
         let _ = (origin, why);
     }
+    /// The chain authority's answer contradicts the store (`why`): `true` when the source gave that node up for another one
+    /// (a public node, `rpc::resolver`), so the follower asks again instead of halting. The default: `false` (a node of
+    /// one's own is not replaced; the store halts at the contradiction).
+    fn authority_contradicted(&self, why: &str) -> bool {
+        let _ = why;
+        false
+    }
     /// Per-node counters for `/v1/health` (empty for a single node).
     fn node_stats(&self) -> Vec<multi::NodeStatus> {
         vec![]

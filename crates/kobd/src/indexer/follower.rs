@@ -44,6 +44,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 
+/// How often a halted follower says again that it is halted (an error line).
+pub const HALT_REMIND: Duration = Duration::from_secs(600);
+
 #[derive(Debug, Clone)]
 pub struct FollowerConfig {
     pub network: String,
@@ -826,6 +829,12 @@ impl<S: ChainSource> Follower<S> {
             }
             Err(e @ IngestError::InconsistentRemoved(_)) => {
                 let msg = format!("stored chain contradicts the node: {e}");
+                // a public node that answers inconsistently is given up for another, and the follower asks it
+                if self.source.authority_contradicted(&msg) {
+                    let msg = format!("{msg}; the public node was given up for another, asking it");
+                    self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                    return StepOutcome::Retry(msg);
+                }
                 self.health.update(|h| {
                     h.state = FollowerState::Gap;
                     h.gap_reason = Some(msg.clone());
@@ -983,9 +992,17 @@ impl<S: ChainSource> Follower<S> {
                 }
             };
             self.health.update(|h| h.consecutive_failures = failures);
-            if let StepOutcome::Gap(_) | StepOutcome::Halted(_) = outcome {
-                // Stay halted: do not poll the node again until the operator restarts after bootstrapping.
-                let _ = shutdown.changed().await;
+            if let StepOutcome::Gap(r) | StepOutcome::Halted(r) = &outcome {
+                // Stay halted: do not poll the node again until the operator restarts after bootstrapping. Said again every
+                // `HALT_REMIND`: an unattended executor stays up and idle, and one line at the start is easily missed.
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => break,
+                        _ = tokio::time::sleep(HALT_REMIND) => {
+                            tracing::error!("indexer still halted, nothing is indexed or traded: {r}. See docs/ops/executor.md (Part B, 7.4 and 8).");
+                        }
+                    }
+                }
                 break;
             }
             if delay.is_zero() {

@@ -1206,6 +1206,15 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         self.board.drop_node(origin.node, why);
     }
 
+    /// A public chain authority (a resolver entry) that contradicts the store is given up for another (`rpc::judge`): the
+    /// follower asks the next one. A node named in the configuration is not.
+    fn authority_contradicted(&self, why: &str) -> bool {
+        let entry = self.board.entry(0).to_string();
+        let Some(node) = self.board.node_of(0).filter(|_| super::resolver::is_resolver(&entry)) else { return false };
+        super::judge::contradicted(&entry, &node, why);
+        true
+    }
+
     fn node_stats(&self) -> Vec<NodeStatus> {
         if self.nodes.len() > 1 {
             self.board.snapshot()
@@ -1413,6 +1422,27 @@ mod tests {
 
     fn req() -> VspcRequest {
         VspcRequest::new(Hash32([0; 32]), Verbosity::High, None)
+    }
+
+    /// Audit round 3 R3-L-2: a public chain authority whose answer contradicts the store is given up for another (the follower
+    /// asks that one instead of halting); a node named in the configuration is not.
+    #[test]
+    fn a_public_authority_that_contradicts_the_store_is_replaced() {
+        let _g = super::super::resolver::tests::serial();
+        super::super::resolver::tests::reset(|_, avoid| {
+            let nodes = ["wss://a.example/x/borsh", "wss://b.example/x/borsh", "wss://c.example/x/borsh"];
+            let pick = nodes.iter().find(|n| !avoid.contains(&super::super::resolver::host(n))).unwrap_or(&nodes[0]);
+            Ok(super::super::resolver::Resolved { url: pick.to_string(), resolver: "fake".into() })
+        });
+        let (a, b) = (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap());
+        let m = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&[1])));
+        assert!(m.authority_contradicted("stored chain contradicts the node"));
+        assert_eq!(super::super::resolver::current("resolver"), Some(b), "the other node is the authority now");
+        assert!(super::super::resolver::last_reason("resolver").unwrap().starts_with(&super::super::resolver::host(&a)));
+        let spec = |url: &str| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check: false };
+        let own = Fixed::new(&[1], Ok(&[]));
+        let m = MultiNode::new(vec![(spec("ws://127.0.0.1:18210"), own.clone())], own);
+        assert!(!m.authority_contradicted("stored chain contradicts the node"), "a node of one's own halts the store as before");
     }
 
     /// The pair's disagreement rules on the primary's single steps: the blocks both report are kept; a contradiction cuts the
