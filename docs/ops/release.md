@@ -184,7 +184,9 @@ everywhere.
 
 **Prebuilt binaries for operators** (`.github/workflows/release.yml`; the operators' page is
 `docs/ops/executor-quickstart.md`). The tag is `v` + the workspace version (`Cargo.toml` `[workspace.package] version`, which
-`kobd` and `kob-cli` inherit, so their `--version` is the tag; the CLI binary is `kob`): bump it, with `Cargo.lock`, in the very commit that is
+`kobd` and `kob-cli` inherit, so their `--version` is the tag; the CLI binary is `kob`): bump it, with `Cargo.lock` and the golden vectors
+(`KOB_REGEN=1 cargo test -p kob-protocol --test golden`: every placement the builders write carries the build's release, the
+RELEASE record of section 7a, so the vectors' payloads change with it), in the very commit that is
 tagged; the workflow refuses any other tag before it builds (`node scripts/package-release.mjs --check-tag v<version>` checks it
 locally). Pushing the tag `v<version>` builds `kobd` and `kob` (the `kob-cli` crate's binary) with `--release --locked`
 for Windows x86_64 (`x86_64-pc-windows-msvc`, static C runtime), Linux x86_64 (`x86_64-unknown-linux-gnu`, on the
@@ -286,6 +288,26 @@ outputs are listed only by indexers already upgraded.
 
 The record log keeps every payload as it was, so a rebuilt database replays the old ones unchanged; a rollback of the
 wallets is safe, a rollback of an indexer below the payload version in use is not.
+
+## 7a. How operators learn of a release
+
+There is no project server to ask (founder decision, 2026-11-11): an operator learns of a release in two ways.
+
+1. **The chain.** Every placement a build writes carries that build's release (the optional RELEASE record,
+   `docs/spec/kob1-payload.md`), the web app's and `kob`'s alike. An executor or indexer that sees a release newer than its own
+   on at least 3 accepted placements of at least 2 makers says so: its status line ends with
+   `| a newer KOB release is in use on chain (0.1.1): update`, `GET /v1/health` has
+   `"newer_release_seen": {"version": "0.1.1", "first_seen_daa": ...}` (`null` otherwise), the metric `kob_newer_release_seen`
+   is 1, `kob watch health` prints the same words, and the log has one INFO line per release. The notice is informational:
+   nothing the executor does changes, and the operator updates when convenient (it goes away when the executor runs that
+   release). It survives a restart (the store keeps it) and appears only once the new release is in use: after the release
+   commit is deployed to the web app, or makers place with the new `kob`. A pre-release build announces nothing.
+2. **The founder's posts on X**, which announce each release with its notes and hashes (section 6), including what the chain
+   cannot say: a migration window (section 7) and whether an update is urgent.
+
+The RELEASE record is optional, so it adds no upgrade order: an older indexer skips it and lists the placement as before.
+Anyone can write any release into a payload, which is why the notice needs several makers' placements and only ever informs;
+check a release against its tag and its published hashes (section 6) before installing it.
 
 ## 8. Operator requirements
 

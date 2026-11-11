@@ -2009,10 +2009,24 @@ Poll `/v1/health`, or scrape `GET /v1/metrics` (the same numbers as Prometheus t
 | `reorgs_total` jumps or `reverted_blocks_total` > 100 in an hour | network instability |
 | `records_next_n` not increasing while `relevant_txs_total` grows | record-log write failure |
 | `node_version` behind the newest release | upgrade drift |
+| `newer_release_seen` set, `kob_newer_release_seen` 1 | a KOB release newer than this build is in use on chain (placements of several makers announce it, *Updates* below); informational: nothing changes, update when convenient |
 | disk above 70 % (data dir and node) | |
 
 Cross-check against a second node/instance: compare `cursor_hash` and the order count, or the
 `export-orders` output hash, between the two sites once per minute.
+
+**Updates: how an operator learns of a release.** There is no project server. Two sources:
+
+* **The chain notice.** Every placement carries the release of the build that wrote it (the RELEASE record,
+  `docs/spec/kob1-payload.md`). Once a release newer than this build is seen on 3 accepted placements of at least 2 makers,
+  the status line ends with `| a newer KOB release is in use on chain (0.1.1): update`, `/v1/health` has
+  `newer_release_seen: {version, first_seen_daa}` (`null` otherwise), `kob_newer_release_seen` is 1, `kob watch health` prints
+  it, and one INFO line is logged per release. It is kept across restarts and clears when the executor runs that release.
+  It never changes what the executor does.
+* **The founder's posts on X**, which announce each release (notes, hashes, any migration window).
+
+Before installing, check the release against its tag, `SHA256SUMS` and its provenance (`docs/ops/release.md`, sections 6
+and 7a): the chain notice says only that someone places with a newer build.
 
 ### 7. Runbook
 
@@ -3124,6 +3138,7 @@ cannot be read counts as present (paused, with a warning).
 | `kob_clock_skew_seconds`, `kob_clock_skew_alarm` | the alarm 1: the local clock is more than 30 s off the chain's (set it: NTP); day orders that close to their deadline are not filled meanwhile |
 | `kob_executor_restarts_total`, `kob_matcher_journal_entries` | restarts rising (a crash loop: see the log of each start); the transactions a restart would resend |
 | `kob_build_info` | its labels (`version`, `commit`, `payload_version`, `template_generation`) differ from the release you meant to run (`docs/ops/release.md`, 7) |
+| `kob_newer_release_seen` | 1: a newer KOB release is in use on chain (`newer_release_seen` of `/v1/health` names it, `docs/ops/release.md`, 7a); informational, update when convenient |
 | `kob_matcher_finalized_total`, `kob_matcher_finalized_profit_sompi` | income tracking |
 | `kob_matcher_skipped_books` | persistent (unsupported programs, unprofitable books) |
 | `kob_fee_estimated`, `kob_fee_rate_high` / `_normal` / `_low`, `kob_fee_estimate_failures_total` | 0 for minutes on a node that should answer (the floor is paid: slow acceptance under load); a rate at `--fee-max-rate` for long (the network is busier than the cap allows) |

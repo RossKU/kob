@@ -239,6 +239,7 @@ curl -s "$API/v1/health"
 | `book_complete` | `false` while history is still being indexed, or for a store that began after the oldest history |
 | `min_order_value_sompi` | The smallest order this server lists; smaller orders are indexed but never in a book |
 | `version`, `commit`, `payload_version`, `template_generation` | The build that answers and the order templates it serves; compare with the release you integrate with |
+| `newer_release_seen` | `{version, first_seen_daa}` once placements of at least 2 makers announce a KOB release newer than this build (`null` otherwise): informational, the operator should update (`docs/ops/release.md`, 7a) |
 | `halt_reason`, `api_error`, `data_dir_free_bytes`, `db_bytes` | Operator monitoring: why the store is halted, a read API that stopped, the disk (absent when there is nothing to say or not measured yet) |
 | `executor` | Only on a server that also runs the Executor (`kobd --executor`): its funds, pending and dropped transactions, last submission and clock alarm (`docs/ops/executor.md`, Part C *Monitoring*) |
 
