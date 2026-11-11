@@ -31,7 +31,8 @@ test.describe('phone, 390 px wide', () => {
     const shown = await row.locator('.dt-c[data-label]').evaluateAll((cells) => cells.filter((c) => getComputedStyle(c).display !== 'none').map((c) => getComputedStyle(c, '::before').content));
     expect(shown).toEqual(['"Free tokens"', '"In your orders"', '"Value (KAS): "']);
     const tops = await row.locator('.dt-c-available > span, .dt-c-inOrders').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
-    expect(new Set(tops).size, `the two figures stand on one line: ${tops}`).toBe(1);
+    // one line: their tops agree within 2 px (a figure and a number with its unit round to neighbouring pixels on some fonts)
+    expect(Math.max(...tops) - Math.min(...tops), `the two figures stand on one line: ${tops}`).toBeLessThanOrEqual(2);
     expect((await row.boundingBox())!.height, 'a compact card').toBeLessThan(120);
     await expect(row.getByTestId('balance-escrowed')).toHaveText(/^3/); // test ids and text unchanged
     const rb = (await row.boundingBox())!;
