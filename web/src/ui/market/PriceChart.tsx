@@ -26,6 +26,7 @@ import { basisOf, chartSeries, fillCandleGaps, INTERVAL_MS, parseCandles, priceT
 import { flippedChartSeries } from './orientation';
 import { ratioCandles, ratioSeries, usdText } from './usd-model';
 import { pairRatioCandles } from './pair-market';
+import { setChartExpanded, useChartExpanded } from './chart-expand';
 import { DrawingsPrimitive, PICK_MOUSE, PICK_TOUCH, type DrawingColors } from './chart-drawings-primitive';
 import { COLOR_TOKEN, DEFAULT_COLOR, DRAWING_COLORS, drawingsMarket, isDrawingColor, loadDrawings, MAX_DRAWINGS, newDrawingId, saveDrawings, type Anchor, type Drawing, type DrawingColor } from './chart-drawings';
 
@@ -394,6 +395,19 @@ export function PriceChart(props: PriceChartProps) {
     ro.observe(boxRef.current);
     return () => ro.disconnect();
   }, [toolOn, series]);
+  // Expand chart (the page's grid follows: chart-expand.ts, market.css). Esc restores it, unless it already means something else: a drawing tool is on (it leaves the tool),
+  // a pop-up is open (it closes), or another handler took the key
+  const expanded = useChartExpanded();
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || toolOn) return;
+      if (document.querySelector('[aria-expanded="true"], [role="dialog"]')) return;
+      setChartExpanded(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [expanded, toolOn]);
   const pickTool = (next: Tool) => {
     setTool(tool === next ? null : next);
     setPending(null);
@@ -453,7 +467,7 @@ export function PriceChart(props: PriceChartProps) {
   const shown = legend ?? legendOf.current(series.bars.length - 1);
 
   return (
-    <div data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length}>
+    <div class="chart-panel" data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length} data-expanded={expanded ? '1' : '0'}>
       <div class="chart-head">
         <div class="chart-intervals" role="group" aria-label={t('market.chart.interval')} data-testid="chart-intervals">
           {CANDLE_INTERVALS.map((iv) => (
@@ -509,6 +523,14 @@ export function PriceChart(props: PriceChartProps) {
                 ))}
               </div>
             </Popover>
+          </div>
+          {/* the size of the chart: outside the tools' scroller, so a phone never scrolls it away */}
+          <div class="chart-tools chart-size">
+            <button type="button" aria-pressed={expanded ? 'true' : 'false'} aria-label={expanded ? t('market.chart.restore') : t('market.chart.expand')} title={expanded ? t('market.chart.restore') : t('market.chart.expand')} data-testid="chart-expand" onClick={() => setChartExpanded(!expanded)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                {expanded ? <path d="M10 4v6H4M10 10L3.5 3.5M14 20v-6h6M14 14l6.5 6.5" /> : <path d="M14 4h6v6M20 4l-6.5 6.5M10 20H4v-6M4 20l6.5-6.5" />}
+              </svg>
+            </button>
           </div>
         </div>
       </div>

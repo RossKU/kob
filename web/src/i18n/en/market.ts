@@ -272,6 +272,8 @@ export default {
 
   'market.chart.title': 'Price',
   'market.chart.interval': 'Candle interval',
+  'market.chart.expand': 'Expand chart',
+  'market.chart.restore': 'Restore',
   'market.chart.iv.1m': '1m',
   'market.chart.iv.5m': '5m',
   'market.chart.iv.1h': '1H',

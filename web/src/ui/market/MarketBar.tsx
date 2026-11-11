@@ -11,6 +11,7 @@ import { openPair } from './market-nav';
 import { KAS, assetChoices, type DisplayedPair } from './market-select';
 import { tokenTitle } from './TokenBadges';
 import { useMedia } from '../shell/narrow';
+import { useChartExpanded } from './chart-expand';
 import type { TokenRow } from './token-model';
 
 /** Three columns: the depth chart is a panel of its own under the chart. Below it the depth chart is a tab of the price chart's panel (PriceChart `depth`). market.css has the same breakpoint. */
@@ -111,11 +112,12 @@ export function FlipButton(props: { pair: string; pressed?: boolean; onClick: ()
 
 /** A market's frame while its token is looked up: the cards and their headings in their places. The ticket comes as soon as the token is known; it waits for nothing else. */
 export function MarketFrame(props: { 'data-testid'?: string; bookTitle: string }) {
+  const big = useChartExpanded();
   return (
     <div class="market-page" data-testid={props['data-testid']}>
       <div class="skeleton mkt-frame-head" />
       <div class="skeleton mkt-frame-stats" />
-      <div class="mkt-grid">
+      <div class={big ? 'mkt-grid mkt-chart-big' : 'mkt-grid'}>
         <Section title={props.bookTitle} class="mkt-area-book mkt-card"><BookFrame rows={12} /></Section>
         <Section title={t('market.chart.title')} class="mkt-area-chart mkt-card"><div class="skeleton chart-box" /></Section>
         <Section title={t('market.depth.title')} class="mkt-area-depth mkt-card"><div class="skeleton mkt-frame-depth" /></Section>
@@ -150,6 +152,8 @@ export function MarketShell(props: {
   details?: ComponentChildren;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  // the chart's "Expand" choice (PriceChart's button): three columns, the chart takes the book's and the depth chart's place; otherwise the chart is taller (market.css)
+  const big = useChartExpanded();
   // the "Trade" button of a phone (the ticket is below the book and the chart): shown while the ticket is off screen
   const [ticketAway, setTicketAway] = useState(true);
   useEffect(() => {
@@ -174,7 +178,7 @@ export function MarketShell(props: {
       {props.header}
       {props.notices}
       {props.stats}
-      <div class={props.mine ? 'mkt-grid mkt-has-mine' : 'mkt-grid'}>
+      <div class={`mkt-grid${props.mine ? ' mkt-has-mine' : ''}${big ? ' mkt-chart-big' : ''}`}>
         {props.book}
         {props.chart}
         {props.depth}
