@@ -449,6 +449,8 @@ struct Claim {
 /// the [`LAG_CHECKS`]-th (module documentation).
 #[derive(Debug, Clone, Default)]
 struct LagTrack {
+    /// The node the streak is about (a resolver entry that moved to another node begins again).
+    node: String,
     streak: u32,
     claims: Vec<Claim>,
 }
@@ -469,6 +471,12 @@ enum LagVerdict {
 
 impl LagTrack {
     /// The claims a streak needs before a lag is confirmed: one at its first check and one at its `checks`-th.
+    /// The streak begins again (the node stays).
+    fn clear(&mut self) {
+        self.streak = 0;
+        self.claims.clear();
+    }
+
     fn needed(checks: u32) -> usize {
         if checks <= 1 {
             1
@@ -480,7 +488,7 @@ impl LagTrack {
     /// One check: behind by the answers (`Some(daa)`) or not. Whether a new claim is wanted now.
     fn observe(&mut self, behind: Option<u64>, checks: u32) -> bool {
         if behind.is_none() {
-            *self = LagTrack::default();
+            self.clear();
             return false;
         }
         self.streak += 1;
@@ -498,12 +506,12 @@ impl LagTrack {
         let refuted =
             self.claims.iter().any(|c| c.lead.is_some_and(|l| l <= LAG_DAA) || (c.lead.is_none() && c.age > LAG_CONFIRM_CHECKS));
         if refuted {
-            *self = LagTrack::default();
+            self.clear();
             return LagVerdict::Refuted(behind);
         }
         if self.claims.len() == Self::needed(checks) && self.claims.iter().all(|c| c.lead.is_some()) {
             let lead = self.claims.iter().filter_map(|c| c.lead).min().unwrap_or(behind);
-            *self = LagTrack::default();
+            self.clear();
             return LagVerdict::Confirmed(lead);
         }
         LagVerdict::Unconfirmed(behind)
@@ -898,7 +906,18 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
         let mut w = lock();
         w.lag.resize(n, LagTrack::default());
         let checks = w.lag_checks;
-        answers.iter().filter(|(i, _, daa)| w.lag[*i].observe(behind_of(*daa), checks)).map(|a| a.0).collect()
+        answers
+            .iter()
+            .filter(|(i, node, daa)| {
+                let t = &mut w.lag[*i];
+                // the entry stands for another node now: what was claimed about the last one says nothing about it
+                if t.node != *node {
+                    *t = LagTrack { node: node.clone(), ..LagTrack::default() };
+                }
+                t.observe(behind_of(*daa), checks)
+            })
+            .map(|a| a.0)
+            .collect()
     };
     let sink = match wanting.is_empty() {
         false => match tokio::time::timeout(WATCH_TIMEOUT, src(top_i).dag_info()).await {
