@@ -30,6 +30,7 @@ import { useInverted } from './use-orientation';
 import { MarketStats } from './MarketStats';
 import { usdFlippedStatsModel, usdStatsModel } from './stats-usd';
 import { BookFrame, BookGrouping, OrderBook, StaleSince } from './OrderBook';
+import { MarketTrades } from './MarketTrades';
 import { BookPanelBody, BookViewSwitch, bookPanelClass, useBookPanelView } from './BookTabs';
 import { tokenDepthPick } from './depth-pick';
 import { FavoriteStar } from './FavoriteStar';
@@ -441,7 +442,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         </Section>
       }
       ticket={
-        <div class="stack mkt-area-ticket">
+        <div class="stack mkt-area-ticket mkt-has-trades">
           {/* a dead Kaspa node: the one line (with its Retry) beside the ticket, whose own button is disabled meanwhile */}
           <NodeDownNote class="mkt-node-note" />
           {standaloneScaleBlocked ? (
@@ -486,6 +487,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
               </Banner>
             </Section>
           )}
+          {/* the recent fills of this market in the room the row's drag handle gives the column under the ticket card (market.css shows it from 132 px of room); read from the tape above */}
+          <MarketTrades tape={tape} decimals={decimals} dp={dp} inverted={inverted} ticker={name} />
         </div>
       }
       mine={wallet.info ? <OrdersView embed={{ base: id, quote: null }} /> : undefined}

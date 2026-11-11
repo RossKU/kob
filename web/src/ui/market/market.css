@@ -69,7 +69,7 @@ body:has(.market-page) .container { max-width: none; }
      a floor (240 px: the panel's least height is its chrome and the floor), and a form shorter than that leaves the ticket the room instead of squeezing the chart further.
      No loop: --tk-fit is the ticket's own natural height (its panel less its scroll area, plus the form), measured once per width and never from the row, which the chart's box cannot change;
      the chart's canvas is drawn inside its box (absolute), so what it paints gives the box no height. */
-  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) 360px; grid-template-areas: 'book chart ticket'; }
+  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) 360px; grid-template-areas: 'book chart ticket'; grid-template-rows: minmax(var(--mkt-row-h, 0px), auto); }
   .mkt-area-chart { align-self: stretch; display: flex; flex-direction: column; }
   /* (flex-basis auto and no min-height: 0 down to the box: the panel's least height is its chrome and the box's floor) */
   .mkt-area-chart > .section-body { flex: 1 1 auto; display: flex; flex-direction: column; }
@@ -79,7 +79,35 @@ body:has(.market-page) .container { max-width: none; }
   .mkt-area-ticket:has(.tk), .mkt-side:has(.tk) > .mkt-area-ticket:has(.tk) { align-self: stretch; contain: size; min-height: max(34rem, var(--tk-fit, 0px)); }
   /* three columns end on one line: the ticket (its form scrolls, its button is pinned at the bottom) and the book (its card has the height of the row, whatever it lists) */
   .mkt-area-book { align-self: stretch; }
+  /* THE ROW'S HEIGHT (RowResize.tsx): --mkt-row-h is the least height of the row (the grid's first track above); the ticket's fit and the book's floor stay its floors, so a smaller choice changes
+     nothing. Where the token page has Market trades, the ticket card keeps ITS height (the fit: no empty room in it, however tall the row) and the room under it, if there are 132 px of it, is the
+     trades panel; with less the panel is not drawn. At the default height the row is the ticket's, the panel has no height and nothing differs from before. The card is shrinkable, so what else the
+     column holds (a banner, the pair page's link) takes its room from the card as it did when the card filled the column. */
+  .mkt-has-trades:has(.tk) { gap: 0; } /* (the panel brings its own 12 px: an empty panel must add none) */
+  .mkt-has-trades > .node-down-note { margin-bottom: 8px; }
+  .mkt-has-trades:has(.tk) > [data-testid='ticket-container'] { flex: 0 1 auto; height: max(34rem, var(--tk-fit, 0px)); }
+  .mkt-has-trades:has(.tk) > .mkt-trades { display: block; flex: 1 1 0; min-height: 0; container: mkt-trades / size; }
+  .mkt-trades-card { display: none; }
+  @container mkt-trades (min-height: 132px) {
+    .mkt-trades-card { display: flex; flex-direction: column; height: calc(100cqh - 12px); margin-top: 12px; padding: 10px var(--gutter) 6px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  }
+  /* the handle: over the gap under the row, the width of the grid; a grip shows on hover and on focus. Never over the activity log or the panel under the row: it is 8 px of the 12 px gap */
+  .mkt-resize { grid-row: 1; grid-column: 1 / -1; align-self: end; justify-self: stretch; height: 8px; margin-bottom: -10px; z-index: 5; cursor: row-resize; touch-action: none; display: flex; align-items: center; justify-content: center; border-radius: 4px; }
+  .mkt-resize > i { display: block; width: 56px; height: 4px; border-radius: 2px; background: var(--muted); opacity: 0; transition: opacity 0.12s; }
+  .mkt-resize:hover > i, .mkt-resize:focus-visible > i, body.mkt-resizing .mkt-resize > i { opacity: 0.7; }
+  .mkt-resize:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+  /* while dragging: no text selection, the row-resize cursor everywhere */
+  body.mkt-resizing { user-select: none; cursor: row-resize; }
 }
+.mkt-trades { display: none; }
+.mkt-trades-title { margin: 0 0 6px; font-size: 0.95rem; letter-spacing: 0.01em; }
+.mkt-trades-head, .mkt-trades-row { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) minmax(0, 1fr); gap: 6px; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.mkt-trades-head { color: var(--muted); padding-bottom: 3px; border-bottom: 1px solid var(--border); }
+.mkt-trades-head > span:not(:first-child), .mkt-trades-row > span:not(:first-child) { text-align: right; }
+.mkt-trades-list { flex: 1 1 0; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.mkt-trades-row { height: 21px; align-items: center; line-height: 21px; white-space: nowrap; }
+.mkt-trades-row > span { overflow: hidden; text-overflow: ellipsis; }
+.mkt-trades-empty { margin: 8px 0 0; }
 
 /* ------------------------------------------------------------------ token title bar */
 
@@ -598,10 +626,9 @@ body:has(.market-page) .container { max-width: none; }
 }
 @media (min-width: 1200px) {
   /* the panel takes the row under all three columns, so the column below the ticket is not left empty */
-  .mkt-grid.mkt-has-mine { grid-template-areas: 'book chart ticket' 'mine mine mine'; }
+  .mkt-grid.mkt-has-mine { grid-template-areas: 'book chart ticket' 'mine mine mine'; grid-template-rows: minmax(var(--mkt-row-h, 0px), auto) auto; }
 }
 .market-orders { padding: 12px 14px; }
-.market-orders-head { flex-wrap: wrap; gap: 6px 12px; }
 .market-orders .check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; cursor: pointer; }
 
 /* ------------------------------------------------------------------ expanded chart (chart-expand.ts: the button in the chart's header row, Esc restores, kept in this browser) */

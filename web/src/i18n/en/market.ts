@@ -254,6 +254,13 @@ export default {
 
   'market.ticket.title': 'Trade',
   'market.ticket.jump': 'Go to the order ticket (Buy / Sell)',
+  'market.resize.label': 'Height of the trading row',
+  'market.resize.hint': 'Drag to change the height of the order book, chart and ticket row; double-click to reset',
+  'market.mtrades.title': 'Market trades',
+  'market.mtrades.time': 'Time',
+  'market.mtrades.price': 'Price',
+  'market.mtrades.amount': 'Amount ({unit})',
+  'market.mtrades.empty': 'No trades yet.',
   'market.trade.buy': 'Buy',
   'market.trade.sell': 'Sell',
   'market.declaration.conflictTitle': 'The registry and the chain disagree about this token',

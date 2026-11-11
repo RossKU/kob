@@ -12,6 +12,8 @@ import { openPair } from './market-nav';
 import { KAS, assetChoices, type DisplayedPair } from './market-select';
 import { tokenTitle } from './TokenBadges';
 import { useChartExpanded } from './chart-expand';
+import { RowResize } from './RowResize';
+import { useMedia } from '../shell/narrow';
 import type { TokenRow } from './token-model';
 
 /** A token as an option of the selector. */
@@ -178,6 +180,9 @@ export function MarketShell(props: {
   details?: ComponentChildren;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const grid = useRef<HTMLDivElement>(null);
+  // the drag handle under the row (three columns, a fine pointer): it sets the row's height (RowResize.tsx)
+  const resizable = useMedia('(min-width: 1200px) and (pointer: fine)');
   // the chart's "Expand" choice (PriceChart's button): three columns, the chart takes the book's column too; otherwise the chart is taller (market.css)
   const big = useChartExpanded();
   // the Buy | Sell bar of a phone (the ticket is below the book and the chart): shown while the ticket is off screen
@@ -203,12 +208,13 @@ export function MarketShell(props: {
     <div class="market-page" data-testid={props['data-testid']} ref={root} {...props.attrs}>
       {props.header}
       {props.notices}
-      <div class={`mkt-grid${props.mine ? ' mkt-has-mine' : ''}${big ? ' mkt-chart-big' : ''}`}>
+      <div class={`mkt-grid${props.mine ? ' mkt-has-mine' : ''}${big ? ' mkt-chart-big' : ''}`} ref={grid}>
         {props.book}
         {props.chart}
         {/* two columns: the ticket is a column of its own beside the book (market.css); otherwise its children are grid items */}
         <div class="mkt-side">{props.ticket}</div>
         {props.mine ? <div class="mkt-area-mine">{props.mine}</div> : null}
+        {resizable ? <RowResize grid={() => grid.current} /> : null}
       </div>
       {props.activity}
       {/* the facts take the full width under the grid (never a column of it, so no column is left empty beside them); DOM order = reading order */}
