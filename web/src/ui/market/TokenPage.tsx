@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { pageTitle, useDocumentTitle } from '../../app/page-title';
+import { marketPageTitle, pageTitle, useDocumentTitle } from '../../app/page-title';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { useFiat } from '../../app/use-fiat';
 import { useServices, useWallet } from '../../app/context';
 import { OrdersView } from '../orders/OrdersView';
 import type { TicketPreset } from '../../app/router';
-import { longId } from '../../kob/registry';
 import { t } from '../../i18n';
-import { Badge, Banner, Button, ErrorBanner, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
+import { Badge, Banner, Button, displayPriceDp, ErrorBanner, PRICE_DP_CAP, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
+import { NodeDownNote } from '../shell/NodeDownNote';
 import { useSystemStatus } from '../shell/StatusProvider';
 import { clockText, useStandalone } from '../shell/standalone';
 import { buildBookModel, groupSizesAt, inferTick, levelsFromView } from './book-model';
@@ -20,7 +20,7 @@ import { FirstOrderDecimals } from './FirstOrderDecimals';
 import { issuedDecimals } from '../../data/issued-decimals';
 import { DepthChart } from './DepthChart';
 import { useLiveRefresh } from './live';
-import { basisToTokenSompi, depthFromBook, depthFromView, priceDecimals, priceText, statsModel, tapeFromFills, tapeFromTrades } from './market-model';
+import { basisToTokenSompi, depthFromBook, depthFromView, priceText, statsModel, tapeFromFills, tapeFromTrades } from './market-model';
 import {
   INVERTED_GROUP_MULTIPLIERS, defaultInverted, depthFromBookFlipped, depthFromViewFlipped, flipDp, flippedBookView, flippedPriceText, invertedRegrouper, marketKey, nativeBookView, oppositeSide, pairLabel, ratioText,
   statsModelFlipped, tokensPerKas,
@@ -34,7 +34,7 @@ import { BookPanelBody, BookViewSwitch, bookPanelClass, useBookPanelView } from 
 import { tokenDepthPick } from './depth-pick';
 import { FavoriteStar } from './FavoriteStar';
 import { isFavoriteToken, toggleToken, useFavorites } from './favorites';
-import { FlipButton, MarketFrame, MarketShell, PairSelector, useWideMarket } from './MarketBar';
+import { FlipButton, MarketFrame, MarketShell, PairSelector } from './MarketBar';
 import { ForgetMarket } from './ForgetMarket';
 import { settled } from './market-list';
 import { useHeldUntil } from './use-market-list';
@@ -179,8 +179,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const inverted = invertedChoice && canFlip;
   // the unit of every price and amount on the page: KOB's name of the token, else the creator's ticker (the same label rule as the list), else its covenant id
   const name = headerRow?.ticker || shown?.ticker || '';
-  // the tab: the token's name (a token still being looked up is named by its short id), `Token not found` when nothing names it
-  useDocumentTitle(pageTitle(row ? name || longId(id) : tokens.loading || held.loading || pub.loading ? longId(id) : t('market.token.notFound')));
+  // the tab: `EXKCC/KAS · KOB` (a token still being looked up, or with no name, is named by its short id, never a whole covenant id), `Token not found` when nothing names it
+  useDocumentTitle(row || tokens.loading || held.loading || pub.loading ? marketPageTitle({ name: row ? name : null, id }, { name: 'KAS', id: 'kas' }) : pageTitle(t('market.token.notFound')));
 
   // the book without grouping: the reference price of the page when there is neither a 24 h last price nor a trade
   const refMid = useMemo(() => {
@@ -212,10 +212,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     if (refMid && scale) return { price: refMid, basis: scale };
     return null;
   }, [stats.data, tape, refMid, scale]);
-  // native price decimals: from the market's tick when the registry has one (stable per market), else from the price magnitude (chosen from one
-  // reference price). Every row of every price column of the page shows exactly this many decimals.
-  const tickDp = useMemo(() => (row?.tick && row.tick > 0n ? tickPriceFraction(row.tick, decimals, scale) : null), [row?.tick, decimals, scale]);
-  const dpNative = useMemo(() => tickDp ?? priceDecimals(refPrice ? basisToTokenSompi(refPrice.price, decimals, refPrice.basis) : null), [tickDp, refPrice, decimals]);
+  // price decimals: the kit's one display rule (about 5 significant digits of the reference price, at most PRICE_DP_CAP decimals; not the token's tick, which can need 8 at 33 KAS), chosen
+  // once per market and shared by the book, the stats, the chart and the depth chart, so one price reads the same everywhere; the whole price is in the title where a cell shows less
+  const refPerToken = useMemo(() => (refPrice ? basisToTokenSompi(refPrice.price, decimals, refPrice.basis) : null), [refPrice, decimals]);
+  const dpNative = useMemo(() => displayPriceDp(refPerToken), [refPerToken]);
   const dpFlipped = useMemo(() => flipDp(refPrice ? tokensPerKas(refPrice.price, decimals, refPrice.basis) : null), [refPrice, decimals]);
   const dp = inverted ? dpFlipped : dpNative;
 
@@ -230,6 +230,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   );
   // the live book as it is (a crossed book, matchers a moment behind, is drawn with a negative spread like any other)
   const model = freshModel;
+  // the book's own decimals: the page's, or fewer for a coarser grouping (the selector is also the display precision: a step of 0.01 reads two decimals). A flipped book keeps the page's: its
+  // steps are multiples of the displayed price step, so its rows show the same decimals at every grouping
+  const groupDp = groupIdx === 0 ? null : tickPriceFraction(group, decimals, scale, 0, PRICE_DP_CAP);
+  const bookDp = inverted ? dp : displayPriceDp(refPerToken, groupDp);
   // a failed or late pull: the last good book stays, "stale since" says how old it is
   const bookStaleSince = useStaleSince(book);
   const groupOptions = useMemo(
@@ -251,9 +255,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const statsForView = sm.last || !last ? sm : { ...sm, last: last.text, lastSide: last.side };
   // the USD display (Settings): the KAS tiles of the strip in dollars (a flipped market's prices are tokens per KAS and stay; its KAS volume tile is dollars)
   const fiat = useFiat();
-  // three columns: the depth chart is a panel of its own; below that it is a view of the order book's panel (an "Order book | Depth" switch)
-  const wide = useWideMarket();
-  const bookPanel = useBookPanelView(wide);
+  // the depth chart is a view of the order book's panel at every width (an "Order book | Depth" switch)
+  const bookPanel = useBookPanelView();
   const tapeLast = useMemo(() => {
     const r = tape?.rows.find((x) => x.price !== null);
     return r && tape?.basis ? { price: r.price!, basis: tape.basis } : null;
@@ -279,13 +282,13 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       name,
       decimals,
       scale: bookScale,
-      dp,
+      dp: bookDp,
       tick: baseTick,
       labels: inverted
         ? { price: t('market.book.priceIn', { unit: t('market.stats.unitOf', { base: 'KAS', quote: name }) }), size: t('market.book.sizeIn', { unit: 'KAS' }), total: t('market.book.totalIn', { unit: name }) }
         : { price: t('market.book.priceIn', { unit: t('market.stats.unitOf', { base: name, quote: 'KAS' }) }), size: t('market.book.sizeIn', { unit: name }), total: t('market.book.totalIn', { unit: 'KAS' }) },
     }),
-    [name, decimals, bookScale, dp, baseTick, inverted],
+    [name, decimals, bookScale, bookDp, baseTick, inverted],
   );
   const bookView = useMemo(
     () => (model && !model.empty ? (inverted && scale !== null ? flippedBookView(model, bookCtx) : nativeBookView(model, bookCtx)) : null),
@@ -350,6 +353,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     <DepthChart onPick={onPickDepth} fiat={inverted ? fiat : null} series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
   );
 
+  // the 24 h figures, in the market bar (the book and the strip show together, once for the page)
+  const statsStrip = panelsOpen ? (
+    <MarketStats open model={usdStrip?.model ?? statsForView} ticker={name} inverted={inverted} loading={!!indexer && stats.data === undefined && stats.loading} unsupported={stats.data === null && !!indexer}
+      {...(usdStrip ? { usd: true, lastTitle: usdStrip.lastTitle, titles: usdStrip.titles } : {})} />
+  ) : (
+    <MarketStats model={statsModel(null, decimals, dp)} ticker={name} inverted={inverted} loading unsupported={false} />
+  );
+
   return (
     <MarketShell
       data-testid="token-page"
@@ -358,7 +369,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         <TokenHeader
           row={checkedRow ?? row}
           sharedTicker={sharedTicker}
-          note={onChain ? shown : null}
+          stats={statsStrip}
           badges={liveBadge}
           pair={
             <>
@@ -389,22 +400,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           ) : null}
         </>
       }
-      stats={
-        panelsOpen ? (
-          <MarketStats open model={usdStrip?.model ?? statsForView} ticker={name} inverted={inverted} loading={!!indexer && stats.data === undefined && stats.loading} unsupported={stats.data === null && !!indexer}
-            {...(usdStrip ? { usd: true, lastTitle: usdStrip.lastTitle, titles: usdStrip.titles } : {})} />
-        ) : (
-          <MarketStats model={statsModel(null, decimals, dp)} ticker={name} inverted={inverted} loading unsupported={false} />
-        )
-      }
       book={
         <Section
           title={t('market.book.title')}
           data-testid="book-section"
-          class={bookPanelClass(bookPanel.tabbed, bookPanel.view)}
+          class={bookPanelClass(bookPanel.view)}
           actions={
             <>
-              {bookPanel.tabbed ? <BookViewSwitch view={bookPanel.view} onChange={bookPanel.setView} /> : null}
+              <BookViewSwitch view={bookPanel.view} onChange={bookPanel.setView} />
               {stale ? <Badge tone={health.assessment.level === 'bad' ? 'bad' : 'warn'} data-testid="book-stale">{t('market.book.stale')}</Badge> : null}
               {/* the book's own controls keep their place while the depth chart is shown (market.css hides them, so the header does not change) */}
               <div class="ob-tools book-only">
@@ -418,7 +421,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             </>
           }
         >
-          <BookPanelBody tabbed={bookPanel.tabbed} view={bookPanel.view} depth={depthChart}>
+          <BookPanelBody view={bookPanel.view} depth={<>{since !== null ? <div class="book-depth-note"><SinceBadge since={since} area="depth" /></div> : null}{depthChart}</>}>
             {!indexer ? <Banner tone="info">{t('market.book.noIndexer')}</Banner> : null}
             {standalone && since !== null ? (
               <p class="small muted" data-testid="book-standalone">{t(standalone.reason === 'manual' ? 'market.book.standaloneManual' : 'market.book.standaloneAuto', { time: clockText(since) })}</p>
@@ -437,15 +440,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} />
         </Section>
       }
-      depth={
-        wide ? (
-          <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card" actions={since !== null ? <SinceBadge since={since} area="depth" /> : undefined}>
-            {depthChart}
-          </Section>
-        ) : undefined
-      }
       ticket={
         <div class="stack mkt-area-ticket">
+          {/* a dead Kaspa node: the one line (with its Retry) beside the ticket, whose own button is disabled meanwhile */}
+          <NodeDownNote class="mkt-node-note" />
           {standaloneScaleBlocked ? (
             <Section title={t('market.ticket.title')} data-testid="ticket-unavailable" class="mkt-card">
               <Banner tone="warn" data-testid="ticket-standalone-scale">{t('market.ticket.standaloneScale')}</Banner>

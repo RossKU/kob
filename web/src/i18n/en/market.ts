@@ -132,7 +132,6 @@ export default {
   'market.add.noIndexer': 'No indexer is configured, so a token cannot be looked up by its covenant id.',
 
   'market.token.back': 'All tokens',
-  'market.all': 'All markets',
   'market.pair.label': 'Market pair',
   'market.pair.base': 'Base asset of the pair',
   'market.pair.quote': 'Quote asset of the pair',
@@ -158,6 +157,7 @@ export default {
   'market.held.program-unreviewed': 'Your token outputs of it are of a token program this build does not support for trading: it is not traded on mainnet.',
   'market.held.not-kcc20': "Only a KCC-20 token opens its market from the wallet's holdings.",
   'market.held.extension-ambiguous': 'Your token outputs of it carry different extension commitments: the token cannot be identified.',
+  'market.token.name': 'Name',
   'market.token.covenantId': 'Covenant id',
   'market.token.decimals': 'Decimals',
   'market.token.scale': 'Price scale',
@@ -201,6 +201,10 @@ export default {
   'market.book.staleSince': 'stale since {time}',
   'market.book.staleSinceHint': 'The latest indexer answer is late or failed; the last good book is shown.',
   'market.book.clickHint': 'Click a price to prefill the ticket: an ask a buy of {base}, a bid a sell of {base}.',
+  'market.book.footEstimated': 'estimated size',
+  'market.book.footClick': 'Click a price to prefill the ticket',
+  'market.book.hover': 'avg {avg} · {amount} {token} · {total} KAS',
+  'market.book.hoverInv': 'avg {avg} · {amount} KAS · {total} {token}',
   'market.book.estimatedNote': 'Estimated size (buy orders hold a KAS budget, not tokens).',
   'market.book.estimatedNoteInv': 'Estimated size (orders selling KAS hold a budget, not {ticker}).',
   'market.book.pickAsk': 'Buy at {price}',
@@ -250,6 +254,8 @@ export default {
 
   'market.ticket.title': 'Trade',
   'market.ticket.jump': 'Go to the order ticket (Buy / Sell)',
+  'market.trade.buy': 'Buy',
+  'market.trade.sell': 'Sell',
   'market.declaration.conflictTitle': 'The registry and the chain disagree about this token',
   'market.declaration.conflict': 'What this token recorded on chain at its creation (KCC-23) differs from its registry entry (or from the price scale of its market) in: {fields}. The on-chain values are shown. When the decimals differ, orders of this token are not planned until the two agree.',
   'market.ticket.networkBlocked': 'Your wallet is on the wrong network: trading is blocked until you switch it.',
@@ -290,6 +296,8 @@ export default {
 
   // drawing tools of the price chart (chart-drawings.ts): kept in this browser per market, never sent anywhere
   'market.chart.draw.tools': 'Drawing tools',
+  'market.chart.draw.button': 'Draw',
+  'market.chart.draw.sheet': 'Drawing tools and colours',
   'market.chart.draw.local': 'Drawings stay in this browser: they are saved here only, per market, and are not synced to other devices.',
   'market.chart.draw.hline': 'Horizontal line',
   'market.chart.draw.trend': 'Trend line',
@@ -324,6 +332,7 @@ export default {
   'market.chart.draw.color.warn': 'Amber',
   'market.chart.draw.color.accent': 'Violet',
 
+  'market.depth.priceAxis': 'Price: {unit}',
   'market.depth.bids': 'Bids',
   'market.depth.asks': 'Asks',
   'market.depth.tip': '{price} {priceUnit} · {amount} {ticker} cumulative',

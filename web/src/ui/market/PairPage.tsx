@@ -14,11 +14,11 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { OrdersView } from '../orders/OrdersView';
 import { useDeclarationLookup } from '../../app/use-declaration';
-import { pageTitle, useDocumentTitle } from '../../app/page-title';
+import { marketPageTitle, useDocumentTitle } from '../../app/page-title';
 import { navigate, pairRoute, replaceRoute, routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { PairToken } from '../../kob/pair';
-import { longId, type TokenInfo } from '../../kob/registry';
+import type { TokenInfo } from '../../kob/registry';
 import { Badge, Banner, Button, ErrorBanner, scaleOfDecimals, Section, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { requestPairFlip } from '../ticket/pair-flip';
@@ -27,7 +27,8 @@ import { FavoriteStar } from './FavoriteStar';
 import { isFavoritePair, togglePair, useFavorites } from './favorites';
 import { PriceChart, type UsdChartSpec } from './PriceChart';
 import { useLiveRefresh } from './live';
-import { FlipButton, MarketFrame, MarketShell, PairSelector, useWideMarket } from './MarketBar';
+import { FlipButton, MarketBar, MarketFrame, MarketShell, PairSelector } from './MarketBar';
+import { NodeDownNote } from '../shell/NodeDownNote';
 import { ForgetMarket } from './ForgetMarket';
 import { settled } from './market-list';
 import { openPair } from './market-nav';
@@ -46,9 +47,9 @@ import { useGenesisCheck } from './use-genesis-check';
 import { idleLeg, pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
 import { mergePairFills } from '../activity/activity-model';
 import { MarketActivity } from '../activity/ActivityPage';
-import { TokenFacts, tokenTitle } from './TokenBadges';
+import { RiskChip, TokenFacts, tokenTitle } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
-import { PairDetails, TokenLine } from './TokenHeader';
+import { PairDetails } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
 import { buildTokenRows, scaleNeedsIndexer, sharedTickerIds, tokenLabel, tradableRows, withShownRows } from './token-model';
 import { useHeldUntil } from './use-market-list';
@@ -98,8 +99,8 @@ export function PairPage(props: { base: string; quote: string }) {
   }, [baseGenesis, quoteGenesis, props.base, props.quote]);
   // the two tokens are always among the choices, also when no list names them
   const selectorRows = useMemo(() => withShownRows(choiceRows, [baseRow, quoteRow]), [choiceRows, baseRow, quoteRow]);
-  // the tab: `BASE / QUOTE` by the tickers the page shows (a token without one: its short id)
-  useDocumentTitle(pageTitle(`${baseRow?.ticker || longId(props.base)} / ${quoteRow?.ticker || longId(props.quote)}`));
+  // the tab: `BASE/QUOTE · KOB` by the tickers the page shows (a token without one: its short id, never a whole covenant id)
+  useDocumentTitle(marketPageTitle({ name: baseRow?.ticker, id: props.base }, { name: quoteRow?.ticker, id: props.quote }));
 
   // the book of BASE/QUOTE with the resting orders of QUOTE/BASE turned round (pair-model.ts mergeOrientations): one book whichever way the pair is shown
   const book = useAsync(
@@ -217,9 +218,8 @@ export function PairPage(props: { base: string; quote: string }) {
   const fillsView = settled(fills) ? (fills.data ?? null) : undefined;
   const pairFillsSrc = useMemo(() => ({ base: props.base, quote: props.quote, view: fillsView }), [props.base, props.quote, fillsView]);
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
-  // three columns: the depth chart is a panel of its own; below that it is a view of the order book's panel (an "Order book | Depth" switch)
-  const wide = useWideMarket();
-  const bookPanel = useBookPanelView(wide);
+  // the depth chart is a view of the order book's panel at every width (an "Order book | Depth" switch)
+  const bookPanel = useBookPanelView();
 
   const sides = [baseSide, quoteSide];
   const blocked = sides.find((s) => s.state === 'blocked');
@@ -301,63 +301,70 @@ export function PairPage(props: { base: string; quote: string }) {
       attrs={{ 'data-base': props.base, 'data-quote': props.quote }}
       header={
         <div class="stack-sm" data-testid="pair-header">
-          {/* line 1, always one line: the two tokens' pictures (icon and fingerprint of each), the pair selector and the swap button, then Live (which alone may wrap
-              on a very narrow phone); then one compact line per token (short id with copy, name, chips). The base token's block is where the token page has it. */}
-          <div class="mkt-pairhd">
-            <div class="mkt-pairhd-main">
-              <IdentityBlock row={baseRow ?? { covenantId: props.base, ticker: baseInfo.ticker, kascov: null }} size="pair" data-testid="pair-base-identity" />
-              <span class="pair-sep mkt-pairhd-sep" aria-hidden="true">{'/'}</span>
-              <span data-testid="pair-identities">
-                <IdentityBlock row={quoteRow ?? { covenantId: props.quote, ticker: quoteInfo.ticker, kascov: null }} size="pair" data-testid="pair-quote-identity" />
+          {/* the token page's bar: the two tokens' pictures (icon and fingerprint of each), the pair selector, the swap and the star (a risk chip where a token has one), the 24 h figures, then Live */}
+          <MarketBar
+            identity={
+              <span class="mkt-bar-ids">
+                <IdentityBlock row={baseRow ?? { covenantId: props.base, ticker: baseInfo.ticker, kascov: null }} size="bar" data-testid="pair-base-identity" />
+                <span class="pair-sep" aria-hidden="true">{'/'}</span>
+                <span data-testid="pair-identities">
+                  <IdentityBlock row={quoteRow ?? { covenantId: props.quote, ticker: quoteInfo.ticker, kascov: null }} size="bar" data-testid="pair-quote-identity" />
+                </span>
               </span>
-              <span class="mkt-pairhd-tickers">
+            }
+            pair={
+              <>
                 <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={selectorRows} onChange={openPair} />
                 <span class="sr-only" data-testid="pair-subtitle">{t('pair.subtitle', { base: baseRow ? tokenTitle(baseRow) : baseInfo.ticker, quote: quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker })}</span>
-              </span>
-              <FlipButton
-                pair={`${quoteInfo.ticker}/${baseInfo.ticker}`}
-                onClick={() => {
-                  // the ticket of the other pair takes the order across: the side turns over, amounts and prices are converted (pair-flip.ts)
-                  requestPairFlip(props.base, props.quote);
-                  navigate(pairRoute(props.quote, props.base));
-                }}
+                <FlipButton
+                  pair={`${quoteInfo.ticker}/${baseInfo.ticker}`}
+                  onClick={() => {
+                    // the ticket of the other pair takes the order across: the side turns over, amounts and prices are converted (pair-flip.ts)
+                    requestPairFlip(props.base, props.quote);
+                    navigate(pairRoute(props.quote, props.base));
+                  }}
+                />
+              </>
+            }
+            tools={
+              <>
+                <FavoriteStar
+                  on={isFavoritePair(favorites, props.base, props.quote)}
+                  name={`${baseRow ? tokenTitle(baseRow) : baseInfo.ticker} / ${quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker}`}
+                  onToggle={() => changeFavorites((f) => togglePair(f, props.base, props.quote))}
+                  data-testid="pair-favorite"
+                />
+                {[baseRow, quoteRow].map((r) => (r ? <span class="mkt-bar-risk" key={r.covenantId}><RiskChip row={r} /></span> : null))}
+              </>
+            }
+            stats={
+              <MarketStats
+                open={panelsOpen}
+                model={panelsOpen ? statsModel : noStats(null, 0)}
+                ticker={baseInfo.ticker}
+                quoteTicker={quoteInfo.ticker}
+                loading={!panelsOpen || statsLoading}
+                unsupported={false}
+                volumeSource={src}
+                titles={{ high: rangeNote, low: rangeNote, volume: volumeNote, quoteVolume: volumeNote, trades: volumeNote }}
               />
-            </div>
-            <FavoriteStar
-              on={isFavoritePair(favorites, props.base, props.quote)}
-              name={`${baseRow ? tokenTitle(baseRow) : baseInfo.ticker} / ${quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker}`}
-              onToggle={() => changeFavorites((f) => togglePair(f, props.base, props.quote))}
-              data-testid="pair-favorite"
-            />
-            <Badge tone={mode === 'live' ? 'ok' : mode === 'polling' ? 'info' : 'neutral'} data-testid="pair-live" title={t(`market.live.${mode}Hint`)}>
-              {t(`market.live.${mode}`)}
-            </Badge>
-          </div>
-          <div class="mkt-pairhd-tokens" data-testid="pair-token-lines">
-            {[baseRow, quoteRow].map((r) => (r ? <TokenLine key={r.covenantId} row={r} ticker data-testid="pair-token-meta" /> : null))}
-          </div>
+            }
+            live={
+              <Badge tone={mode === 'live' ? 'ok' : mode === 'polling' ? 'info' : 'neutral'} data-testid="pair-live" title={t(`market.live.${mode}Hint`)}>
+                {t(`market.live.${mode}`)}
+              </Badge>
+            }
+          />
         </div>
-      }
-      stats={
-        <MarketStats
-          open={panelsOpen}
-          model={panelsOpen ? statsModel : noStats(null, 0)}
-          ticker={baseInfo.ticker}
-          quoteTicker={quoteInfo.ticker}
-          loading={!panelsOpen || statsLoading}
-          unsupported={false}
-          volumeSource={src}
-          titles={{ high: rangeNote, low: rangeNote, volume: volumeNote, quoteVolume: volumeNote, trades: volumeNote }}
-        />
       }
       book={
         <Section
           title={t('pair.book.title')}
           data-testid="pair-book-section"
-          class={bookPanelClass(bookPanel.tabbed, bookPanel.view)}
+          class={bookPanelClass(bookPanel.view)}
           actions={
             <>
-              {bookPanel.tabbed ? <BookViewSwitch view={bookPanel.view} onChange={bookPanel.setView} /> : null}
+              <BookViewSwitch view={bookPanel.view} onChange={bookPanel.setView} />
               {/* the refresh keeps its place while the depth chart is shown (market.css hides it, so the header does not change) */}
               <div class="ob-tools book-only">
                 <Button small variant="ghost" onClick={book.reload} loading={book.loading && !!book.data} title={t('common.refresh')} aria-label={t('common.refresh')} data-testid="pair-refresh">
@@ -367,21 +374,25 @@ export function PairPage(props: { base: string; quote: string }) {
             </>
           }
         >
-          <BookPanelBody tabbed={bookPanel.tabbed} view={bookPanel.view} depth={depthChart}>
+          <BookPanelBody view={bookPanel.view} depth={depthChart}>
             {!indexer ? <Banner tone="info">{t('market.book.noIndexer')}</Banner> : null}
             <ErrorBanner error={book.data ? null : book.error} title={t('pair.book.error')} onRetry={book.reload} data-testid="pair-book-error" />
             <StaleSince since={bookStaleSince} data-testid="pair-book-stale-since" />
             {unavailable ? <Banner tone="warn" data-testid="pair-book-unavailable" title={t('pair.book.unavailable')}>{t('pair.book.unavailableBody')}</Banner> : null}
             {book.data && !model ? <Banner tone="warn" data-testid="pair-book-mismatch">{t('pair.book.mismatch')}</Banner> : null}
             {indexer && (model ? !panelsOpen : book.loading && !book.data) ? (
-              <BookFrame head={{ price: t('pair.book.price', { base: baseInfo.ticker, quote: quoteInfo.ticker }), size: t('pair.book.amount', { base: baseInfo.ticker }), total: t('pair.book.source') }} rows={bookRows} fitRef={bookFit} data-testid="pair-book-loading" />
+              <BookFrame head={{ price: t('pair.book.price', { base: baseInfo.ticker, quote: quoteInfo.ticker }), size: t('pair.book.amount', { base: baseInfo.ticker }), total: t('pair.book.total', { quote: quoteInfo.ticker }) }} rows={bookRows} fitRef={bookFit} data-testid="pair-book-loading" />
             ) : null}
             {panelsOpen && model && model.empty ? <p class="muted center" data-testid="pair-book-empty">{t('pair.book.empty')}</p> : null}
-            {panelsOpen && model && !model.empty ? <PairBook model={model} rows={bookRows} fitRef={bookFit} base={baseInfo.ticker} quote={quoteInfo.ticker} onPick={onPick} /> : null}
-            <div class="pair-legend">
-              <span>{t('pair.book.legendDirect')}</span>
-              <span>{t('pair.book.legendEntry')}</span>
-              <span>{t('pair.book.legendRoute')}</span>
+            {panelsOpen && model && !model.empty ? <PairBook model={model} rows={bookRows} fitRef={bookFit} base={baseInfo.ticker} quote={quoteInfo.ticker} last={statsModel.last} onPick={onPick} /> : null}
+            {/* the three sources of a level, said once (a bar at the row's left edge; the via-KAS price in italics) */}
+            <div class="pair-legend" data-testid="pair-legend">
+              {([['direct', 'Direct'], ['entry', 'Entry'], ['route', 'Route']] as const).map(([k, key]) => (
+                <span key={k} class={`pair-legend-item pair-${k}`} title={t(`pair.book.legend${key}Hint`)} data-source={k}>
+                  <i aria-hidden="true" />
+                  {t(`pair.book.legend${key}`)}
+                </span>
+              ))}
             </div>
           </BookPanelBody>
         </Section>
@@ -393,15 +404,10 @@ export function PairPage(props: { base: string; quote: string }) {
           {idleNote ? <p class="small muted" style="margin:4px 0 0" data-testid="pair-chart-idle">{idleNote}</p> : null}
         </Section>
       }
-      depth={
-        wide ? (
-          <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card">
-            {depthChart}
-          </Section>
-        ) : undefined
-      }
       ticket={
         <div class="stack mkt-area-ticket">
+          {/* a dead Kaspa node: the one line (with its Retry) beside the ticket, whose own button is disabled meanwhile */}
+          <NodeDownNote class="mkt-node-note" />
           {/* an open-list token in standalone mode: the rule of the token page, for either token */}
           {standalone && [baseToken, quoteToken].some((m) => !!m.row && scaleNeedsIndexer(m.row, m.open.reason, services.standalone?.carry.scaleOf(m.row.covenantId) != null)) ? (
             <Section title={t('market.ticket.title')} data-testid="ticket-unavailable" class="mkt-card">

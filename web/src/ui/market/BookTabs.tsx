@@ -1,7 +1,6 @@
-// Below 1200 px the depth chart has no panel of its own: the order book's panel holds both, an "Order book | Depth" switch in its header (the choice remembered in
+// The depth chart has no panel of its own at any width (founder, 2026-11-11): the order book's panel holds both, an "Order book | Depth" switch in its header (the choice remembered in
 // this browser). The book is only hidden behind the depth chart (visibility, its body keeps its size and its state), never unmounted, so the panel does not change
-// height and the book is as it was when it comes back; the depth chart is mounted while it is shown, so it measures the body it fills. From 1200 px there is no
-// switch: the book is the column and the depth chart the panel under the chart (market.css).
+// height and the book is as it was when it comes back; the depth chart is mounted while it is shown, so it measures the body it fills.
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
@@ -20,8 +19,8 @@ function storedView(): BookPanelView {
   return 'book';
 }
 
-/** The view of the book's panel: `tabbed` below three columns (`wide` false), where `view` is the remembered choice; on three columns the book, always. */
-export function useBookPanelView(wide: boolean): { tabbed: boolean; view: BookPanelView; setView: (v: BookPanelView) => void } {
+/** The view of the book's panel: the remembered choice. */
+export function useBookPanelView(): { view: BookPanelView; setView: (v: BookPanelView) => void } {
   const [view, setViewState] = useState<BookPanelView>(storedView);
   const setView = (v: BookPanelView) => {
     setViewState(v);
@@ -31,7 +30,7 @@ export function useBookPanelView(wide: boolean): { tabbed: boolean; view: BookPa
       /* no storage */
     }
   };
-  return { tabbed: !wide, view: wide ? 'book' : view, setView };
+  return { view, setView };
 }
 
 /** The "Order book | Depth" switch for the panel's header actions. */
@@ -53,11 +52,10 @@ export function BookViewSwitch(props: { view: BookPanelView; onChange: (v: BookP
 }
 
 /** The class of the panel's section: what market.css keys the switch's header and the depth overlay on. */
-export const bookPanelClass = (tabbed: boolean, view: BookPanelView): string => `mkt-area-book mkt-card${tabbed ? ' book-tabbed' : ''}${tabbed && view === 'depth' ? ' is-depth' : ''}`;
+export const bookPanelClass = (view: BookPanelView): string => `mkt-area-book mkt-card book-tabbed${view === 'depth' ? ' is-depth' : ''}`;
 
-/** The panel's body: the book (hidden while the depth chart is shown) and, over it, the depth chart filling the body. Untabbed it is the book alone. */
-export function BookPanelBody(props: { tabbed: boolean; view: BookPanelView; depth: ComponentChildren; children: ComponentChildren }) {
-  if (!props.tabbed) return <>{props.children}</>;
+/** The panel's body: the book (hidden while the depth chart is shown) and, over it, the depth chart filling the body. */
+export function BookPanelBody(props: { view: BookPanelView; depth: ComponentChildren; children: ComponentChildren }) {
   const showDepth = props.view === 'depth';
   return (
     <>

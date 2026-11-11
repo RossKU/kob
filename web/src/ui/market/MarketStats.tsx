@@ -13,7 +13,10 @@ function Stat(props: { label: string; value: string | null; title?: string | nul
   );
 }
 
-/** 24 h statistics strip (`/v1/stats`): last price (coloured by the aggressor side), change, high, low, volume in the token and in KAS. */
+/**
+ * 24 h statistics strip (`/v1/stats`), the figures of the market bar (MarketBar.tsx): last price (coloured by the aggressor side) with its change, high, low, volume in the token and in KAS,
+ * trades. One flat row of cells split by thin rules; where the bar has no room it scrolls sideways inside itself (market.css). A price rounded to the market's display decimals has the whole price as its title.
+ */
 export function MarketStats(props: {
   model: StatsModel;
   /** display name of the token */
@@ -48,14 +51,14 @@ export function MarketStats(props: {
       data-state={props.unsupported ? 'unsupported' : props.loading && !m.last ? 'loading' : 'ready'}>
       <div class="mkt-stat mkt-stat-last" data-testid="stat-last">
         <span class="mkt-stat-label">{t('market.stats.last')}</span>
-        <span class={`mkt-stat-value${lastTone ? ` tone-${lastTone}` : ''}`} translate={false} title={[zerosTitle(m.last), props.lastTitle].filter(Boolean).join(' · ') || undefined}>
+        <span class={`mkt-stat-value${lastTone ? ` tone-${lastTone}` : ''}`} translate={false} title={[zerosTitle(m.last), m.lastExact, props.lastTitle].filter(Boolean).join(' · ') || undefined}>
           {(m.last && compactZeros(m.last)) ?? (props.loading ? <span class="skeleton skeleton-line" style="display:inline-block;width:120px;height:22px;margin:0" /> : '—')}
           <span class="mkt-stat-unit">{t('market.stats.unitOf', { quote, base })}</span>
         </span>
       </div>
       <Stat testid="stat-change" label={t('market.stats.change')} value={m.change} tone={m.changeTone} loading={props.loading} />
-      <Stat testid="stat-high" label={t('market.stats.high')} value={m.high} title={props.titles?.high ?? na} loading={props.loading} />
-      <Stat testid="stat-low" label={t('market.stats.low')} value={m.low} title={props.titles?.low ?? na} loading={props.loading} />
+      <Stat testid="stat-high" label={t('market.stats.high')} value={m.high} title={props.titles?.high ?? na ?? m.highExact} loading={props.loading} />
+      <Stat testid="stat-low" label={t('market.stats.low')} value={m.low} title={props.titles?.low ?? na ?? m.lowExact} loading={props.loading} />
       <Stat testid="stat-volume" label={t('market.stats.volume', { ticker: volumeBase })} value={m.volume} title={tip(m.volumeExact, props.titles?.volume) ?? na} loading={props.loading} />
       <Stat testid="stat-quote-volume" label={t('market.stats.volume', { ticker: quote })} value={m.quoteVolume} title={tip(m.quoteVolumeExact, props.titles?.quoteVolume) ?? na} loading={props.loading} />
       <Stat testid="stat-trades" label={t('market.stats.trades')} value={m.tradesText ?? (m.trades === null ? null : String(m.trades))} title={props.titles?.trades ?? na} loading={props.loading} />

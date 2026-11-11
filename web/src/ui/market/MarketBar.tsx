@@ -1,5 +1,6 @@
-// The common top of every market page: the pair as `BASE / QUOTE` where each side is a drop-down (KAS and the tokens), and the flip control. The same
-// markup for a token's KAS market and for a token pair, so the page keeps its layout whichever quote is chosen.
+// The common top of every market page: the market bar (one row: the token's picture and fingerprint, the pair as `BASE / QUOTE` where each side is a drop-down, the flip control, the
+// star, then the 24 h figures and the live state), the frame of a market while it loads, and the page's shell. The same markup for a token's KAS market and for a token pair, so the
+// page keeps its layout whichever quote is chosen.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
@@ -10,13 +11,8 @@ import { BookFrame } from './OrderBook';
 import { openPair } from './market-nav';
 import { KAS, assetChoices, type DisplayedPair } from './market-select';
 import { tokenTitle } from './TokenBadges';
-import { useMedia } from '../shell/narrow';
 import { useChartExpanded } from './chart-expand';
 import type { TokenRow } from './token-model';
-
-/** Three columns: the depth chart is a panel of its own under the chart. Below it the depth chart is a tab of the price chart's panel (PriceChart `depth`). market.css has the same breakpoint. */
-export const WIDE_QUERY = '(min-width: 1200px)';
-export const useWideMarket = (): boolean => useMedia(WIDE_QUERY);
 
 /** A token as an option of the selector. */
 const choiceRow = (r: TokenRow) => ({ covenantId: r.covenantId, ticker: r.ticker, row: r });
@@ -110,17 +106,47 @@ export function FlipButton(props: { pair: string; pressed?: boolean; onClick: ()
   );
 }
 
-/** A market's frame while its token is looked up: the cards and their headings in their places. The ticket comes as soon as the token is known; it waits for nothing else. */
+/**
+ * The market bar (review H-02 / H-10, founder 2026-11-11): ONE row of 56 to 64 px instead of a title block and a stats card. At the left the token's picture and fingerprint (the
+ * fingerprint is the anti-spoofing signal, so it stays), the pair selector with the flip control, the star (and a risk chip where a token has one); then the 24 h figures
+ * (`MarketStats`: last price with its change, high, low, the two volumes, trades), then the live state. The figures scroll sideways inside the bar where they do not fit (no visible
+ * scrollbar, the page never scrolls sideways); a phone puts them on a row of their own under the pair, so its first row is `[icon] TICKER / QUOTE ▾ ★ [Live]`. The covenant id, the
+ * name and the program are in the token's details card, not here.
+ */
+export function MarketBar(props: {
+  /** the token's picture and fingerprint (two of them on a pair page) */
+  identity: ComponentChildren;
+  /** the pair selector and the flip control */
+  pair: ComponentChildren;
+  /** the star and the risk chips */
+  tools?: ComponentChildren;
+  /** the 24 h figures (`MarketStats`) */
+  stats: ComponentChildren;
+  /** the live state chip */
+  live?: ComponentChildren;
+}) {
+  return (
+    <div class="mkt-bar" data-testid="market-bar">
+      <div class="mkt-bar-id">
+        {props.identity}
+        <div class="mkt-bar-pair">{props.pair}</div>
+        {props.tools}
+      </div>
+      <div class="mkt-bar-stats">{props.stats}</div>
+      <div class="mkt-bar-live">{props.live}</div>
+    </div>
+  );
+}
+
+/** A market's frame while its token is looked up: the bar and the cards with their headings in their places. The ticket comes as soon as the token is known; it waits for nothing else. */
 export function MarketFrame(props: { 'data-testid'?: string; bookTitle: string }) {
   const big = useChartExpanded();
   return (
     <div class="market-page" data-testid={props['data-testid']}>
-      <div class="skeleton mkt-frame-head" />
-      <div class="skeleton mkt-frame-stats" />
+      <div class="skeleton mkt-frame-bar" />
       <div class={big ? 'mkt-grid mkt-chart-big' : 'mkt-grid'}>
         <Section title={props.bookTitle} class="mkt-area-book mkt-card"><BookFrame rows={12} /></Section>
         <Section title={t('market.chart.title')} class="mkt-area-chart mkt-card"><div class="skeleton chart-box" /></Section>
-        <Section title={t('market.depth.title')} class="mkt-area-depth mkt-card"><div class="skeleton mkt-frame-depth" /></Section>
         <div class="mkt-side">
           <div class="stack mkt-area-ticket">
             <Section title={t('market.ticket.title')} class="mkt-card"><div class="skeleton mkt-frame-ticket" /></Section>
@@ -132,29 +158,29 @@ export function MarketFrame(props: { 'data-testid'?: string; bookTitle: string }
 }
 
 /**
- * The layout every market has: title bar (no "all tokens" line: the nav bar leads to the list), notices, 24 h strip, then the three columns (order book | chart, depth and trades | ticket) and the facts below.
- * A slot a market has no data for stays empty; nothing moves.
+ * The layout every market has: the market bar, notices, then the three columns on one row (order book with its Depth view | chart | ticket) and the facts below.
+ * There is no panel of its own for the depth chart: it is the "Depth" view of the order book's panel at every width (BookTabs.tsx). A slot a market has no data for stays empty;
+ * nothing moves.
  */
 export function MarketShell(props: {
   'data-testid': string;
   attrs?: Record<string, string>;
+  /** the market bar and what must be seen with it (warnings) */
   header: ComponentChildren;
   notices?: ComponentChildren;
-  stats?: ComponentChildren;
   book: ComponentChildren;
   chart: ComponentChildren;
-  depth?: ComponentChildren;
   ticket: ComponentChildren;
-  /** the wallet's orders, fills and balances (OrdersView on this market): under the depth chart beside the ticket, after the ticket on a phone */
+  /** the wallet's orders, fills and balances (OrdersView on this market): under the three columns, after the ticket on a phone */
   mine?: ComponentChildren;
   /** the activity log of the market: the full width under the grid, above the facts */
   activity?: ComponentChildren;
   details?: ComponentChildren;
 }) {
   const root = useRef<HTMLDivElement>(null);
-  // the chart's "Expand" choice (PriceChart's button): three columns, the chart takes the book's and the depth chart's place; otherwise the chart is taller (market.css)
+  // the chart's "Expand" choice (PriceChart's button): three columns, the chart takes the book's column too; otherwise the chart is taller (market.css)
   const big = useChartExpanded();
-  // the "Trade" button of a phone (the ticket is below the book and the chart): shown while the ticket is off screen
+  // the Buy | Sell bar of a phone (the ticket is below the book and the chart): shown while the ticket is off screen
   const [ticketAway, setTicketAway] = useState(true);
   useEffect(() => {
     const el = root.current?.querySelector('.mkt-area-ticket');
@@ -163,9 +189,11 @@ export function MarketShell(props: {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  const jumpToTicket = () => {
+  // a press takes the ticket's side (its own switch is pressed, so the form and the ticket's state follow exactly as for a click there) and brings the ticket on screen
+  const jumpToTicket = (side: 'buy' | 'sell') => {
     const area = root.current?.querySelector<HTMLElement>('.mkt-area-ticket');
     if (!area) return;
+    area.querySelector<HTMLElement>(`[data-testid="order-side-${side}"]`)?.click();
     const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     area.scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' });
     // the amount box takes the cursor (a phone opens its keyboard); no scroll of its own, the one above already runs
@@ -173,27 +201,28 @@ export function MarketShell(props: {
   };
   return (
     <div class="market-page" data-testid={props['data-testid']} ref={root} {...props.attrs}>
-      {/* the way back to the list (the header's Market tab is the list; its Trade tab is this market) */}
-      <a class="mkt-all small" href="#/market" data-testid="market-all">{'‹ '}{t('market.all')}</a>
       {props.header}
       {props.notices}
-      {props.stats}
       <div class={`mkt-grid${props.mine ? ' mkt-has-mine' : ''}${big ? ' mkt-chart-big' : ''}`}>
         {props.book}
         {props.chart}
-        {props.depth}
-        {/* two columns: the ticket is a column of its own beside the book and the depth chart (market.css); otherwise its children are grid items */}
+        {/* two columns: the ticket is a column of its own beside the book (market.css); otherwise its children are grid items */}
         <div class="mkt-side">{props.ticket}</div>
         {props.mine ? <div class="mkt-area-mine">{props.mine}</div> : null}
       </div>
       {props.activity}
       {/* the facts take the full width under the grid (never a column of it, so no column is left empty beside them); DOM order = reading order */}
       {props.details ? <div class="mkt-area-details">{props.details}</div> : null}
-      {/* phone only (market.css): jumps to the ticket */}
+      {/* phone only (market.css): Buy | Sell at the bottom edge, each takes the ticket's side and jumps to it; gone while the ticket is on screen */}
       {ticketAway ? (
-        <button type="button" class="mkt-trade-fab" onClick={jumpToTicket} aria-label={t('market.ticket.jump')} data-testid="market-trade-jump">
-          <span class="btn-label">{t('market.ticket.title')}</span>
-        </button>
+        <div class="mkt-trade-bar" role="group" aria-label={t('market.ticket.jump')} data-testid="market-trade-bar">
+          <button type="button" class="mkt-trade-btn" data-side="buy" onClick={() => jumpToTicket('buy')} data-testid="market-trade-buy">
+            <span class="btn-label">{t('market.trade.buy')}</span>
+          </button>
+          <button type="button" class="mkt-trade-btn" data-side="sell" onClick={() => jumpToTicket('sell')} data-testid="market-trade-sell">
+            <span class="btn-label">{t('market.trade.sell')}</span>
+          </button>
+        </div>
       ) : null}
     </div>
   );

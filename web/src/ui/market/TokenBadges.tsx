@@ -143,12 +143,23 @@ export function RiskChip(props: { row: Pick<TokenRow, 'covenantId' | 'facts' | '
   );
 }
 
-export function StatusBadges(props: { row: Pick<TokenRow, 'badges' | 'covenantId' | 'facts'> & { info?: { family: 'kcc20' | 'kron' } | null; powers: readonly string[]; genesis?: TokenRow['genesis'] }; /** more lines for the family chip's tooltip (the program, the decimals) */ familyNote?: string | null }) {
+/** The token-family chip (`KCC-20`); its tooltip names the program and where the decimals come from. Nothing for a row without a registry entry. */
+export function FamilyChip(props: { row: { info?: { family: 'kcc20' | 'kron' } | null }; /** more lines for the tooltip (the program, the decimals) */ note?: string | null }) {
+  const info = props.row.info;
+  if (!info) return null;
+  return (
+    <Badge tone="neutral" title={props.note ? `${t('market.badge.familyHint')}
+${props.note}` : t('market.badge.familyHint')} data-testid="badge-family">
+      {t(`market.badge.family.${info.family}`)}
+    </Badge>
+  );
+}
+
+export function StatusBadges(props: { row: Pick<TokenRow, 'badges' | 'covenantId' | 'facts'> & { info?: { family: 'kcc20' | 'kron' } | null; powers: readonly string[]; genesis?: TokenRow['genesis'] }; /** more lines for the family chip's tooltip (the program, the decimals) */ familyNote?: string | null; /** the family chip too (default); a details card that names the program itself leaves it out */ family?: boolean }) {
   const r = props.row;
   return (
     <span class="row" data-testid={`token-badges-${r.covenantId}`} style="gap:4px">
-      {r.info ? <Badge tone="neutral" title={props.familyNote ? `${t('market.badge.familyHint')}
-${props.familyNote}` : t('market.badge.familyHint')} data-testid="badge-family">{t(`market.badge.family.${r.info.family}`)}</Badge> : null}
+      {props.family === false ? null : <FamilyChip row={r} note={props.familyNote ?? null} />}
       {r.badges.map((b) => (
         <StatusBadge key={b.kind} badge={b} />
       ))}

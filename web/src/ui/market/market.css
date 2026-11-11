@@ -1,15 +1,13 @@
-/* Token page (exchange layout): stats strip, order book | chart + depth | ticket, the activity log under them. Desktop 3 columns (>= 1200 px), tablet 2, phone 1.
-   The depth chart is a panel of its own on three columns only; below 1200 px it is the "Depth" view of the order book's panel (BookTabs.tsx), so no grid area is left for it.
+/* Token page (exchange layout): the market bar, order book (with its Depth view) | chart | ticket on one row, the activity log under them. Desktop 3 columns (>= 1200 px), tablet 2, phone 1.
+   The depth chart has no panel of its own at any width: it is the "Depth" view of the order book's panel (BookTabs.tsx), so no grid area is left for it.
    The price chart is always shown, whatever the width.
    Every figure uses tabular numerals; panels keep their height while loading (skeletons), so nothing jumps when data arrives. */
 
 /* the page uses the window's width (the normal gutters of the frame stay): no cap. What would stretch is held in its panel instead: the book (320 px) and the ticket (360 px)
-   are fixed columns, the chart takes the rest, the activity log's figure columns have a ceiling (activity.css), the stats strip and the facts are cards that may be wide. */
+   are fixed columns, the chart takes the rest, the activity log's figure columns have a ceiling (activity.css), the market bar and the facts are cards that may be wide. */
 body:has(.market-page) .container { max-width: none; }
 
 .market-page { display: flex; flex-direction: column; gap: 12px; }
-.market-page > .mkt-all { align-self: flex-start; margin-bottom: -4px; padding-block: 2px; color: var(--muted); text-decoration: none; }
-.market-page > .mkt-all:hover { color: var(--text); text-decoration: underline; }
 .market-page .section { padding: 12px 14px; }
 .market-page .section-head { margin-bottom: 8px; }
 .market-page .section-head h2 { font-size: 0.95rem; letter-spacing: 0.01em; }
@@ -21,10 +19,6 @@ body:has(.market-page) .container { max-width: none; }
 /* a folded section is one line: its title and a short summary, never wrapped */
 .market-page .section-collapsed .section-head { margin-bottom: 0; flex-wrap: nowrap; justify-content: flex-start; gap: 12px; }
 .section-summary { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-.mkt-top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
-.mkt-top .field { min-width: 0; width: min(260px, 100%); }
-.mkt-top .field > label { font-size: 0.78rem; color: var(--muted); font-weight: 600; }
 
 /* The ticket is a column of its own (never a cell of a row it shares with the book or the depth chart): it spans the rows of the other panels, so unfolding
    "Advanced options" makes the ticket taller by itself, with no gap under the book or the depth chart (on two columns the activity log under the ticket moves down
@@ -42,9 +36,6 @@ body:has(.market-page) .container { max-width: none; }
 .mkt-area-book { grid-area: book; }
 .mkt-area-chart { grid-area: chart; }
 .mkt-area-ticket { grid-area: ticket; align-self: start; min-width: 0; }
-.mkt-area-depth { grid-area: depth; }
-/* the loading frame draws a depth panel too: it has no place below three columns, where the depth chart is a view of the book's panel */
-@media (max-width: 1199px) { .mkt-area-depth { display: none; } }
 /* The ticket panel has the height of its row and never changes it (founder, 2026-11-10; the usual exchange layout): beside the book and the chart its box
    takes no height of its own (contain: size), it fills the rows it spans, and the form scrolls inside it (ticket.css .tk-scroll) with the button pinned at the
    bottom. A floor keeps it usable when the panels beside it are short. A phone is one column: the panel has a fixed height of its own, so nothing under it moves. */
@@ -56,7 +47,7 @@ body:has(.market-page) .container { max-width: none; }
 .mkt-area-details { min-width: 0; }
 @media (min-width: 760px) {
   .mkt-grid { --mkt-chart-h: 420px; }
-  /* two columns: the ticket beside the book only, the chart on the full width over both (the depth chart is a view of the book's panel). The row is as tall as the taller of the book and the whole Limit form (--tk-fit, measured by the ticket): the form
+  /* two columns: the ticket beside the book only, the chart on the full width over both. The row is as tall as the taller of the book and the whole Limit form (--tk-fit, measured by the ticket): the form
      does not scroll unless more of it is unfolded, and the book's card stretches to the ticket */
   .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book side'; }
   .mkt-side { display: flex; flex-direction: column; gap: 12px; grid-area: side; align-self: start; min-width: 0; }
@@ -71,25 +62,22 @@ body:has(.market-page) .container { max-width: none; }
   .mkt-area-ticket .tk { flex: 1 1 0; min-height: 0; }
 }
 @media (min-width: 1200px) {
-  /* The ROWS together are as tall as the ticket (at least its whole Limit form, --tk-fit, measured by the ticket once per width, so the form does not scroll unless more of it is unfolded) and
-     the chart's box and the depth chart's box share what that leaves over the two panels' chrome, 3 : 2 (grid rows of 3fr and 2fr; each panel is a flex column, its box takes what is left under its
-     header, legend and notes). So book, chart + depth chart and ticket end on one line and the ticket has no empty room, whatever the window's height, the form's height (with or without the field
-     help) or the chart panel's chrome (the pair page's notes under the chart): no constant of any panel's chrome is written here. The boxes have floors (chart 240 px, depth 160 px: their panels'
-     least heights are the rows' floors); a form shorter than both floors and the chrome leaves the ticket the room instead of squeezing the charts further.
-     No loop: --tk-fit is the ticket's own natural height (its panel less its scroll area, plus the form), measured once per width and never from the rows, which the chart's box cannot change;
+  /* ONE row, book | chart | ticket (founder, 2026-11-11: the depth chart is a view of the book's panel, no panel of its own). The row is as tall as the ticket (at least its whole Limit form,
+     --tk-fit, measured by the ticket once per width, so the form does not scroll unless more of it is unfolded), the book's card is as tall as the row (it lists as many levels as it holds) and
+     the chart panel takes the whole row: its box is what is left under the header, legend and notes. So the three end on one line and the ticket has no empty room, whatever the window's height,
+     the form's height (with or without the field help) or the chart panel's chrome (the pair page's notes under the chart): no constant of any panel's chrome is written here. The chart's box has
+     a floor (240 px: the panel's least height is its chrome and the floor), and a form shorter than that leaves the ticket the room instead of squeezing the chart further.
+     No loop: --tk-fit is the ticket's own natural height (its panel less its scroll area, plus the form), measured once per width and never from the row, which the chart's box cannot change;
      the chart's canvas is drawn inside its box (absolute), so what it paints gives the box no height. */
-  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) minmax(0, 1fr) 360px; grid-template-rows: 3fr 2fr; grid-template-areas: 'book chart chart ticket' 'book depth depth ticket'; }
+  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) 360px; grid-template-areas: 'book chart ticket'; }
   .mkt-area-chart { align-self: stretch; display: flex; flex-direction: column; }
-  /* (flex-basis auto and no min-height: 0 down to the box: the panel's least height is its chrome and the box's floor, so a short form never lets the box spill over the depth chart) */
+  /* (flex-basis auto and no min-height: 0 down to the box: the panel's least height is its chrome and the box's floor) */
   .mkt-area-chart > .section-body { flex: 1 1 auto; display: flex; flex-direction: column; }
   .mkt-area-chart .chart-panel { flex: 1 1 auto; display: flex; flex-direction: column; }
   .mkt-area-chart .chart-box { flex: 1 1 0; height: auto; min-height: 240px; }
   .mkt-side { display: contents; }
   .mkt-area-ticket:has(.tk), .mkt-side:has(.tk) > .mkt-area-ticket:has(.tk) { align-self: stretch; contain: size; min-height: max(34rem, var(--tk-fit, 0px)); }
-  .mkt-area-depth { align-self: stretch; display: flex; flex-direction: column; }
-  .mkt-area-depth > .section-body, .mkt-area-depth figure { flex: 1 1 auto; display: flex; flex-direction: column; }
-  .mkt-area-depth .depth-box { flex: 1 1 0; height: auto; min-height: 160px; }
-  /* three columns end on one line, the bottom of the depth chart: the ticket (its form scrolls, its button is pinned there) and the book (its card has the height of the two rows, whatever it lists) */
+  /* three columns end on one line: the ticket (its form scrolls, its button is pinned at the bottom) and the book (its card has the height of the row, whatever it lists) */
   .mkt-area-book { align-self: stretch; }
 }
 
@@ -99,28 +87,48 @@ body:has(.market-page) .container { max-width: none; }
 .mkt-title .token-name { font-size: 1.35rem; font-weight: 800; letter-spacing: 0.01em; }
 .mkt-title .mkt-name { color: var(--muted); }
 
-/* ------------------------------------------------------------------ 24 h stats strip */
+/* ------------------------------------------------------------------ market bar (MarketBar.tsx): the pair and the 24 h figures in one row */
 
-/* tiles like the Activity page's strips (.sum-strip): equal cells split by 1 px rules, the last price a wider first cell */
-.mkt-stats {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px;
-  background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+/* ONE row of 56 to 64 px (founder, 2026-11-11; review H-02): [picture + fingerprint] TICKER / QUOTE ▾ (flip) (star) | last price (change) | high | low | volumes | trades | [Live]. The figures are
+   the middle column and scroll sideways inside it where they do not fit (no scrollbar drawn; the column is `minmax(0, 1fr)`, so the page itself never scrolls sideways). A phone puts them on a row of
+   their own under the pair: its first row is `[icon] TICKER / QUOTE ▾ ★ [Live]`. */
+.mkt-bar {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'id stats live'; align-items: center; column-gap: 12px; row-gap: 8px;
+  min-height: 60px; padding: 8px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
 }
-.mkt-stats > .mkt-stat { background: var(--surface); padding: 10px 14px; justify-content: space-between; }
-.mkt-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.mkt-stat-label { font-size: 0.74rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mkt-stat-value { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mkt-stat-last { grid-column: 1 / -1; }
-.mkt-stat-last .mkt-stat-value { font-size: 1.6rem; font-weight: 700; line-height: 1.15; }
-.mkt-stat-last .mkt-stat-unit { font-size: 0.8rem; color: var(--muted); font-weight: 500; margin-left: 6px; }
+.mkt-bar-id { grid-area: id; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mkt-bar-ids { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.mkt-bar-ids .pair-sep { font-size: 1rem; }
+.mkt-bar-pair { display: flex; align-items: center; gap: 4px; min-width: 0; }
+/* a long ticker, or wide fonts on a narrow phone, cut the tickers (the whole name is the face's title) instead of pushing the flip, the star and Live past the bar */
+.mkt-bar .pair-select, .mkt-bar .asset-select { min-width: 0; overflow: hidden; }
+.mkt-bar .asset-select-face { white-space: nowrap; }
+.mkt-bar .pair-select { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.01em; align-items: center; }
+.mkt-bar .asset-select-face { align-items: center; }
+.mkt-bar .flip-btn { min-height: 30px; }
+.mkt-bar-risk { display: inline-flex; flex: none; }
+.mkt-bar-stats { grid-area: stats; min-width: 0; overflow-x: auto; scrollbar-width: none; mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+.mkt-bar-stats::-webkit-scrollbar { display: none; }
+.mkt-bar-live { grid-area: live; display: flex; align-items: center; min-width: 0; }
+.mkt-bar-live:empty { display: none; }
+
+/* the figures: one flat row of cells split by thin rules; the change sits against the last price (one figure: "0.0255 (+0.80%)") */
+.mkt-stats { display: flex; align-items: stretch; width: max-content; min-width: 100%; }
+.mkt-stat { display: flex; flex-direction: column; justify-content: center; gap: 1px; min-width: 0; flex: none; padding: 0 14px; border-left: 1px solid var(--border); }
+.mkt-stat-label { font-size: 0.7rem; color: var(--muted); white-space: nowrap; }
+.mkt-stat-value { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.95rem; line-height: 1.35; white-space: nowrap; }
+.mkt-stat-last .mkt-stat-value { font-size: 1.25rem; font-weight: 700; line-height: 1.25; }
+.mkt-stat-last .mkt-stat-unit { font-size: 0.74rem; color: var(--muted); font-weight: 500; margin-left: 6px; }
+.mkt-stat-last + .mkt-stat { border-left: 0; padding-left: 0; }
 .tone-up { color: var(--buy); }
 .tone-down { color: var(--sell); }
 .tone-flat { color: var(--muted); }
-@media (min-width: 560px) { .mkt-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-/* one row: the last price, then every other figure in an equal column (however many the market has) */
-@media (min-width: 900px) {
-  .mkt-stats { grid-template-columns: minmax(0, 1.6fr); grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
-  .mkt-stat-last { grid-column: auto; }
+@media (max-width: 759px) {
+  .mkt-bar { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'id live' 'stats stats'; padding: 8px 12px; row-gap: 6px; }
+  .mkt-bar .pair-select { font-size: 1.05rem; }
+  .mkt-bar-stats { padding-top: 6px; border-top: 1px solid var(--border); }
+  .mkt-stat { padding: 0 10px; }
+  .mkt-stat-last { padding-left: 0; border-left: 0; }
 }
 
 /* ------------------------------------------------------------------ skeletons / empty states */
@@ -133,9 +141,8 @@ body:has(.market-page) .container { max-width: none; }
 @keyframes shimmer { to { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .skeleton::after { animation: none; } }
 .skeleton-line { height: 12px; margin: 7px 0; }
-.mkt-frame-head { height: 64px; max-width: 420px; }
-.mkt-frame-stats { height: 48px; }
-.mkt-frame-depth { height: 240px; }
+.mkt-frame-bar { height: 60px; }
+@media (max-width: 759px) { .mkt-frame-bar { height: 104px; } }
 .mkt-frame-ticket { height: 360px; }
 .mkt-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--muted); text-align: center; font-size: 0.9rem; padding: 16px; }
 .mkt-empty svg { opacity: 0.55; }
@@ -170,6 +177,13 @@ body:has(.market-page) .container { max-width: none; }
 .chart-tools button:disabled { opacity: 0.45; cursor: default; }
 .chart-tools svg { width: 16px; height: 16px; }
 @media (pointer: coarse) { .chart-tools button { min-width: 36px; height: 34px; } }
+/* a touch screen: ONE "Draw" button (pill, like the tools' row it replaces) opens a small sheet with the tools and the colours; a dot of the colour on the button says a tool is on */
+.chart-colors .hp-trigger.chart-draw-btn { min-height: 0; height: 34px; padding: 0 12px; gap: 6px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 0.82rem; font-weight: 600; }
+.chart-colors .hp-trigger.chart-draw-btn:hover, .chart-colors .hp-trigger.chart-draw-btn[aria-expanded='true'] { color: var(--text); background: var(--surface-3); }
+.chart-colors .hp-trigger.chart-draw-btn[data-active='1'] { color: var(--text); box-shadow: 0 0 0 1px var(--primary); }
+.chart-colors .hp-panel.chart-draw-sheet { min-width: 0; width: max-content; max-width: calc(100vw - 32px); padding: 8px; display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.chart-draw-sheet .chart-tools { display: flex; justify-content: space-between; }
+.chart-draw-sheet .chart-swatches { justify-content: space-between; }
 /* drawing colours: the swatches are theme tokens (read again at every paint of the chart, so a theme change recolours the drawings); the accent is the one hue the theme
    has no token for (violet, apart from buy green and info blue), declared here on :root because the chart's canvas reads it from there, as it reads the others */
 :root { --draw-accent: #7b3fc4; }
@@ -200,16 +214,17 @@ body:has(.market-page) .container { max-width: none; }
   background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .chart-canvas { position: absolute; inset: 0; }
-/* the legend's height is fixed whatever the live values are (a row that changed between one and two lines would move everything below the chart): from 760 px one line, the read-out
-   cut with an ellipsis and the unit after it, which does not shrink; on a phone a fixed two lines, the read-out wrapping between its items. */
+/* the legend's height is fixed whatever the live values are (a row that changed between one and two lines would move everything below the chart): ONE line at every width, the read-out cut with an
+   ellipsis and the unit after it, which does not shrink; a phone drops the price unit (the market bar above names it) so the whole read-out fits. */
 .chart-legend { display: flex; align-items: baseline; height: 1.35em; margin-bottom: 4px; padding-left: 2px; overflow: hidden; font-size: 0.78rem; line-height: 1.35; font-variant-numeric: tabular-nums; color: var(--muted); }
 .chart-ohlc { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chart-ohlc > span { margin-right: 10px; }
 @media (max-width: 759px) {
-  .chart-legend { display: block; height: 2.7em; }
-  .chart-ohlc { display: contents; }
-  .chart-ohlc > span, .chart-legend > .chart-unit { display: inline-block; white-space: nowrap; }
+  .chart-legend { font-size: 0.72rem; }
+  .chart-ohlc > span { margin-right: 8px; }
+  .chart-legend > .chart-unit { display: none; }
 }
+.chart-vol-unit { margin-left: 3px; opacity: 0.8; }
 .chart-legend b { font-weight: 600; color: var(--text); margin-left: 3px; }
 .chart-legend .tone-up b { color: var(--buy); }
 .chart-legend .tone-down b { color: var(--sell); }
@@ -219,7 +234,7 @@ body:has(.market-page) .container { max-width: none; }
 
 /* ------------------------------------------------------------------ depth chart */
 
-/* Below 1200 px the book's panel has an "Order book | Depth" switch: the book keeps its place, with its size and state, hidden behind the depth chart (hidden is not
+/* The book's panel has an "Order book | Depth" switch at every width: the book keeps its place, with its size and state, hidden behind the depth chart (hidden is not
    unmounted, so the panel never changes height), and the depth chart fills the body of the panel. The panel's title stays for assistive technology, the switch is
    what the eye reads. The book's own controls keep their place while the depth chart is shown (hidden, not removed), so the header does not change. */
 .book-tabbed { display: flex; flex-direction: column; }
@@ -234,14 +249,15 @@ body:has(.market-page) .container { max-width: none; }
 .book-tabbed.is-depth .book-only { visibility: hidden; }
 .book-main-off { visibility: hidden; }
 .book-depth-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.book-depth-note { flex: none; margin-bottom: 4px; }
 .book-depth-pane > figure { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .book-depth-pane .depth-box { flex: 1 1 auto; height: auto; min-height: 0; }
 .depth-box { position: relative; height: 240px; }
-/* the drawing fills its box and gives it no height of its own: on three columns the box takes the height the row has over the chart (market grid) */
+/* the drawing fills its box and gives it no height of its own: the box takes the height of the book's panel body (BookTabs: the depth pane fills it) */
 .depth-box > .depth-svg, .depth-box > .skeleton, .depth-box > .mkt-empty { position: absolute; inset: 0; }
 .depth-svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .depth-svg .grid { stroke: var(--grid); stroke-width: 1; }
-.depth-svg .axis-label { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.depth-svg .axis-label { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .depth-svg .bid-area { fill: url(#depth-bid-fill); }
 .depth-svg .ask-area { fill: url(#depth-ask-fill); }
 .depth-svg .bid-line { fill: none; stroke: var(--buy); stroke-width: 1.6; }
@@ -260,9 +276,10 @@ body:has(.market-page) .container { max-width: none; }
 
 /* ------------------------------------------------------------------ order book */
 
-.ob { display: flex; flex-direction: column; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.ob { position: relative; display: flex; flex-direction: column; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 .ob-tools { display: flex; gap: 6px; align-items: center; }
 .ob-tools .select { min-height: 26px; padding: 1px 6px; font-size: 0.8rem; width: 7.5rem; } /* a fixed width: the tick step it shows changes with the book and must not move the header */
+.book-tabbed .ob-tools .select { width: 5.75rem; } /* the switch, the step and the refresh share one line of the 320 px card */
 .ob-head, .ob .book-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
 .ob-head { padding: 2px 8px 4px; color: var(--muted); font-size: 0.74rem; height: 2.9em; overflow: hidden; } /* two lines of the column titles, whatever their text */
 /* the column titles carry their units ("Price (TICKER / KAS)"): they wrap instead of losing the unit to an ellipsis */
@@ -272,6 +289,8 @@ body:has(.market-page) .container { max-width: none; }
 /* a side is exactly its slots tall (levels, then blank slots): the block never grows or shrinks with the number of levels */
 .ob .book-side { position: relative; height: calc(var(--ob-rows, 12) * 21px); overflow: hidden; }
 .ob .book-blank { pointer-events: none; }
+/* a slot with no level (a thin book in a tall card; review L-01): the rung of the ladder, faint, so the band between the column titles and the first ask reads as empty slots and not as a gap */
+.ob .book-row.book-blank[data-testid^='ob-blank'] { box-shadow: inset 0 -1px 0 var(--grid); }
 .ob .ob-none { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .ob .book-side[data-testid='book-asks'], .ob .book-side.book-asks { justify-content: flex-end; } /* fewer levels than slots: the asks sit on the spread, the blank is at the top of the asks (the usual exchange look); the bids hang from it */
 .ob .book-row { height: 21px; padding: 0 8px; align-items: center; font-size: 0.82rem; line-height: 21px; }
@@ -279,6 +298,10 @@ body:has(.market-page) .container { max-width: none; }
 .ob .book-row > span.book-price { text-align: right; font-weight: 600; }
 .ob .book-bar { opacity: 1; }
 .ob .book-row:hover { background: var(--surface-3); }
+/* the hovered level and every level between it and the best price (review M-17): tinted, with a line that says what taking them all would be */
+.ob .book-row.is-cum { background: var(--surface-2); }
+.ob .book-row.is-cum:hover { background: var(--surface-3); }
+.ob-hover-tip { position: absolute; left: 8px; right: 8px; z-index: 3; padding: 3px 8px; font-size: 0.76rem; line-height: 1.4; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .ob-mid {
   display: flex; flex-wrap: nowrap; gap: 2px 12px; align-items: center; justify-content: space-between; padding: 0 8px; margin: 4px 0; height: 36px; overflow: hidden; white-space: nowrap;
   border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
@@ -291,7 +314,7 @@ body:has(.market-page) .container { max-width: none; }
 @container ob-mid (max-width: 250px) { .ob-mid-price { display: none; } }
 /* the book while it is held: its rows' places, its columns' titles over them */
 .ob .ob-skel { justify-self: end; width: 70%; height: 9px; margin: 0; }
-.ob-foot { margin: 6px 0 0; font-size: 0.74rem; color: var(--muted); height: 3.1em; overflow: hidden; } /* two lines: the note on estimated sizes comes and goes with the book */
+.ob-foot { margin: 6px 0 0; font-size: 0.74rem; line-height: 1.4; color: var(--muted); height: 1.4em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* ONE line (the whole sentence is its title): the note on estimated sizes comes and goes with the book */
 
 /* the activity log under the grid on a very wide page (the page uses the window's full width): the figure columns stop growing (the amount and the price keep a readable width, the numbers
    do not drift away from their titles), the transaction id and the wallet take the rest (activity.css has the table; its container queries are on the log) */
@@ -316,13 +339,19 @@ body:has(.market-page) .container { max-width: none; }
 .pair-title .pair-name { font-size: 1.35rem; font-weight: 800; letter-spacing: 0.01em; }
 .mkt-title .pair-name { font-size: 1.5rem; font-weight: 800; letter-spacing: 0.01em; }
 .mkt-title .pair-name + .token-name { font-size: 0.95rem; font-weight: 600; }
-.pair-book .book-row > span.pair-src { text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the source of a level (review M-09): a 3 px bar at the row's left edge, never a chip on every row. direct: solid, in the text colour; entry: solid blue; via KAS (route): dashed, grey, and its price in italics */
+.pair-book .book-row { border-left: 3px solid transparent; padding-left: 5px; }
+.pair-book .pair-direct { border-left-color: var(--text); }
+.pair-book .pair-entry { border-left-color: var(--info); }
+.pair-book .pair-route { border-left-style: dashed; border-left-color: var(--muted); }
 .pair-book .pair-route .book-price { font-style: italic; }
-.pair-via { font-size: 0.72rem; padding: 0 6px; border-radius: 8px; border: 1px dashed var(--border); color: var(--muted); }
-.pair-direct { font-size: 0.72rem; font-weight: 600; }
-.pair-entry-tag { font-weight: 500; color: var(--muted); }
 .pair-book .pair-entry .book-price { text-decoration: underline dotted; text-underline-offset: 3px; }
-.pair-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+.pair-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 0.74rem; color: var(--muted); margin-top: 6px; }
+.pair-legend-item { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
+.pair-legend-item i { display: inline-block; width: 0; height: 12px; border-left: 3px solid transparent; }
+.pair-legend .pair-direct i { border-left-color: var(--text); }
+.pair-legend .pair-entry i { border-left-color: var(--info); }
+.pair-legend .pair-route i { border-left-style: dashed; border-left-color: var(--muted); }
 
 /* ---- the pair selector of the title bar and the pair picker of the list: `BASE / QUOTE`, each side a searchable choice (AssetPicker.tsx) */
 .pair-select { display: inline-flex; align-items: baseline; gap: 4px; }
@@ -395,8 +424,8 @@ body:has(.market-page) .container { max-width: none; }
 .ml-tokens tr.ml-out { animation: ml-leave 0.36s cubic-bezier(0.7, 0, 0.84, 0) forwards; pointer-events: none; }
 @keyframes ml-leave { from { opacity: 1; translate: none; } to { opacity: 0; translate: 0 -16px; } }
 @media (prefers-reduced-motion: reduce) { .ml-in, .ml-in.ml-again-a, .ml-in.ml-again-b, .tk-in, .mkt-stats-in .mkt-stat-value, .ml-tokens tr.ml-out { animation: none; } }
-.ml-skel-row .ml-name { min-height: 72px; }
-.ml-skel-icon { flex: none; width: 56px; height: 56px; border-radius: 50%; }
+.ml-skel-row .ml-name { min-height: 46px; }
+.ml-skel-icon { flex: none; width: 36px; height: 36px; border-radius: 50%; }
 .ml-skel-text { flex: 1 1 auto; max-width: 160px; }
 .ml-skel-text .skeleton-line { display: block; margin: 4px 0; }
 /* the page turner: a phone's buttons are a thumb wide */
@@ -406,17 +435,22 @@ body:has(.market-page) .container { max-width: none; }
 @media (max-width: 759px), (pointer: coarse) { .ml-pager .btn { min-width: 44px; min-height: 44px; } }
 @media (max-width: 759px) { .ml-table .ml-md { display: none; } }
 
-/* a phone (one column): the ticket is below the book and the chart; a small "Trade" button stays at the bottom edge and jumps to it (MarketShell) */
-.mkt-trade-fab { display: none; }
+/* a phone (one column): the ticket is below the book and the chart; a bar at the bottom edge, Buy | Sell, takes the ticket's side and jumps to it (MarketShell). It is gone while the ticket is on
+   screen. It is part of the page, not a button over it: the page keeps room under its end (body padding, constant, so the page does not change height when the bar comes and goes), and the toasts
+   sit above it. */
+.mkt-trade-bar { display: none; }
 @media (max-width: 759px) {
-  .mkt-trade-fab {
-    display: inline-flex; align-items: center; justify-content: center; position: fixed; right: 16px; bottom: 16px; z-index: 30; min-height: 44px; padding: 0 22px;
-    border: 1px solid var(--primary); border-radius: 999px; background: var(--primary); color: var(--primary-contrast); font: inherit; font-weight: 700; cursor: pointer; box-shadow: var(--shadow);
+  .mkt-trade-bar {
+    display: flex; gap: 10px; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: var(--surface); border-top: 1px solid var(--border); box-shadow: var(--shadow);
   }
+  .mkt-trade-btn { flex: 1 1 0; min-height: 44px; border: 1px solid transparent; border-radius: var(--radius); font: inherit; font-weight: 700; cursor: pointer; color: var(--surface); }
+  .mkt-trade-btn[data-side='buy'] { background: var(--buy); border-color: var(--buy); }
+  .mkt-trade-btn[data-side='sell'] { background: var(--sell); border-color: var(--sell); }
+  .mkt-trade-btn:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 2px; }
   .mkt-area-ticket { scroll-margin-top: 112px; } /* under the sticky header (brand, navigation, wallet chip) */
-  .mkt-trade-fab:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
-  /* room under the last panel, so the button never covers it */
-  .market-page { padding-bottom: 56px; }
+  body:has(.market-page) { padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px)); }
+  body:has(.mkt-trade-bar) .toast-host { bottom: calc(8px + 60px + 8px + env(safe-area-inset-bottom, 0px)); }
 }
 
 /* ---- token icons (TokenIcon): the picture whose bytes match the creator's committed hash, else a letter on a colour of the covenant id */
@@ -439,35 +473,46 @@ body:has(.market-page) .container { max-width: none; }
 
 /* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, the icon is --idb tall, the fingerprint 60 % of it */
 .idb { --idb: 40px; flex: none; display: inline-flex; align-items: center; gap: 6px; }
-.idb-lg, .idb-pair { --idb: 64px; gap: 8px; }
+.idb-bar { --idb: 32px; gap: 4px; }
 .idb-sm { --idb: 26px; gap: 4px; }
 .idb .tk-icon { --tk-size: var(--idb); }
 /* the fingerprint is 60 % of the icon and centred on it (the block aligns its items in the middle) */
 .idb .fp { flex: none; display: block; height: calc(var(--idb) * 0.6); width: calc(var(--idb) * 0.6 * 100 / 132); border-radius: calc(var(--idb) * 0.08); }
-/* list rows: the icon is as tall as the row's text block allows, so the row keeps its height (two text lines on a wide screen: 48 px of text; the identity
-   block's width costs the text a little room, which a bigger icon on a narrow row would pay for with another wrapped line, so the sizes step down with the width;
-   measured with the e2e rows at 16 widths). The letter in a fallback icon follows the size (.tk-icon). */
-.idb-md { --idb: 48px; gap: 2px; }
-@media (max-width: 959px) {
-  .idb-md { --idb: 44px; }
-}
+/* list rows (review M-02): a small icon with its fingerprint, as tall as the row's two text lines; the sizes step down with the width so the text keeps its room. The letter in a fallback icon follows the size (.tk-icon). */
+.idb-md { --idb: 36px; gap: 3px; }
 @media (max-width: 599px) {
-  .idb-md { --idb: 46px; }
+  .idb-md { --idb: 34px; }
 }
 @media (max-width: 439px) {
-  .idb-md { --idb: 40px; }
+  .idb-md { --idb: 32px; }
 }
+/* the bar's first row on a phone (icon, selector, flip, star, Live; two blocks on a pair page) must fit 360 px */
 @media (max-width: 759px) {
-  .idb-lg { --idb: 52px; gap: 6px; }
-  /* the pair header must stay one line (icons, selector, swap) at 360 px: smaller blocks than the token header's */
-  .idb-pair { --idb: 34px; gap: 3px; }
+  .idb-bar { --idb: 28px; gap: 3px; }
+  .mkt-bar-id { gap: 3px; }
+  .mkt-bar-ids .pair-sep { display: none; }
+  .mkt-bar-ids { gap: 2px; }
+  .mkt-bar:has(.mkt-bar-ids) .idb-bar { --idb: 24px; gap: 2px; }
+  .mkt-bar .flip-btn { padding: 4px 4px; min-width: 28px; min-height: 28px; }
+}
+/* a pair's first row has two pictures and two tickers: its Live chip is a dot there (its text is the title and stays for assistive technology) */
+@media (max-width: 479px) {
+  .mkt-bar:has(.mkt-bar-ids) .mkt-bar-live .badge { width: 10px; height: 10px; min-width: 0; padding: 0; border-radius: 50%; font-size: 0; background: currentColor; }
+  .mkt-bar:has(.mkt-bar-ids) .pair-select { font-size: 0.92rem; }
+  .mkt-bar:has(.mkt-bar-ids) .asset-select-face { padding: 0 2px; gap: 2px; }
 }
 
-/* ---- a list row, always three lines (so every row is as tall and the icons keep one pitch): line 1 = ticker (bold) and name on one line, the name cut with an
-   ellipsis (the whole name is its title), "via kascov", warning sign; line 2 = the covenant id fragment with a copy button; line 3 = the badges on their own line,
-   never wrapped, what does not fit is cut. The line heights are fixed, whatever a row holds. */
+/* ---- a list row, two lines of text (about 52 px with its padding, was 77: review M-02; every row is as tall and the icons keep one pitch): line 1 = ticker (bold) and name on one line, the
+   name cut with an ellipsis (the whole name is its title), "via kascov", warning sign; line 2 = the covenant id fragment with a copy button, and at its right the badges (one line, what does
+   not fit is cut; a phone keeps only the risk chip). A row with a kascov disagreement keeps its wrapping badge line under the two. The line heights are fixed, whatever a row holds. */
 .ml-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.ml-name-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ml-name-text { min-width: 0; flex: 1 1 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: center; }
+.ml-line1 { grid-column: 1 / -1; }
+.ml-line2 { grid-column: 1; }
+.ml-line3 { grid-column: 2; }
+.ml-line2 .ml-id { min-width: 0; }
+.ml-line2 .ml-id code { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 759px) { .ml-line3 [data-testid='badge-family'] { display: none; } }
 .ml-line1, .ml-line2, .ml-line3 { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 0 8px; min-width: 0; overflow: hidden; }
 .ml-line1 { height: 1.5rem; }
 .ml-line2 { align-items: center; height: 22px; }
@@ -477,9 +522,6 @@ body:has(.market-page) .container { max-width: none; }
 .ml-via { margin-left: 4px; font-size: 0.72rem; border-bottom: 1px dotted var(--muted); cursor: help; white-space: nowrap; }
 .ml-id { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .ml-id code { font-size: 0.8rem; color: var(--muted); }
-/* a token's line: the whole id where it fits (IdCopy measures), never past the line */
-.ml-id-fit { display: flex; max-width: 100%; min-width: 0; }
-.ml-id-fit code { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* the 12 + 12 hex fragment keeps its length on a phone: its type follows the width instead (the text column of a card there is the viewport less the icon and the price) */
 @media (max-width: 439px) { .ml-id code { font-size: clamp(0.6rem, 2.9vw, 0.8rem); } }
 .ml-copy { display: inline-flex; align-items: center; justify-content: center; padding: 2px 4px; min-height: 22px; min-width: 22px; line-height: 1; }
@@ -498,39 +540,14 @@ body:has(.market-page) .container { max-width: none; }
 .ml-legend-badges > summary { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; width: fit-content; }
 .ml-legend-badges .tf-list { margin-top: 6px; }
 
-/* ---- the identity of a token page / pair page header */
-.mkt-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+/* ---- the chips of a token (TokenBadges.tsx) */
 .mkt-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .mkt-badges:empty { display: none; }
 /* a fact badge that names an amount or a reason ("Mint left: up to ...", "Genesis not verified: history not available") may be longer than a phone is wide: it wraps */
 .mkt-badges .badge { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
-.mkt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-width: 0; }
-.mkt-head > .mkt-title { flex: 1 1 16rem; min-width: 0; }
-.mkt-head > .mkt-title.mkt-title-fit { flex: 0 1 auto; }
-/* the token page header: the identity block at the left, two lines to its right (ticker / KAS with the flip; then the id, the name and the chips), vertically centred
-   on the block, so no row is left half empty */
-.mkt-hd { display: flex; align-items: center; gap: 4px 14px; min-width: 0; }
-.mkt-hd-text { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.mkt-hd-line1 { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; min-width: 0; }
-.mkt-hd-line1 .mkt-title { gap: 6px 10px; flex-wrap: nowrap; }
-.mkt-meta .mkt-meta-ticker { font-size: 0.95rem; }
-.mkt-meta .tf-inline, .mkt-meta [data-testid^='token-badges-'] { flex-wrap: wrap; }
-.mkt-meta .badge { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
-/* the pair page header: line 1 (never wrapped between the pictures, the selector and the swap) the two pictures, the tickers, the swap, then Live; then one compact line per token */
-.mkt-pairhd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; }
-.mkt-pairhd-main { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px 12px; min-width: 0; }
-.mkt-pairhd-sep { font-size: 1.5rem; font-weight: 800; color: var(--muted); }
-.mkt-pairhd-tickers { flex: none; white-space: nowrap; }
-.mkt-pairhd-tickers .pair-name { font-size: 1.5rem; font-weight: 800; letter-spacing: 0.01em; }
-@media (max-width: 759px) {
-  .mkt-pairhd { gap: 4px 6px; }
-  .mkt-pairhd-main { gap: 4px 4px; }
-  .mkt-pairhd-sep { font-size: 1.1rem; }
-  .mkt-pairhd-tickers .pair-name { font-size: 0.95rem; gap: 3px; }
-  .mkt-pairhd-tickers .asset-select-face { gap: 2px; padding: 0 2px; }
-  .mkt-pairhd-main .flip-btn { padding: 4px 5px; min-width: 28px; }
-}
-.mkt-pairhd-tokens { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* the program chip beside its line in the token's details */
+.tk-program, .tk-name-line { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
+.tk-program { align-items: center; gap: 4px 8px; }
 
 /* a phone: the token table is a list of cards, not columns (a name, a covenant id and badges beside five figures would not fit 375 px): the identity and the
    text take the left, the price over the change sit on the right; the header row becomes the sort bar */
@@ -544,10 +561,9 @@ body:has(.market-page) .container { max-width: none; }
   .ml-tokens tbody td:first-child { grid-column: 1; grid-row: 1 / span 3; padding-left: 0; }
   .ml-tokens tbody td.ml-last { grid-column: 2; grid-row: 1; align-self: end; }
   .ml-tokens tbody td.ml-change { grid-column: 2; grid-row: 2; align-self: start; font-size: 0.85rem; }
-  /* the star under the price and the change: the text beside the icon keeps its width */
-  .ml-tokens .ml-name .fav-star { position: absolute; right: 0; bottom: 0; width: 44px; height: 34px; margin: 0; }
-  /* the eye to the left of the star */
-  .ml-tokens .ml-name .fav-star.hide-btn { right: 44px; }
+  /* the star and the eye stay in the row's line (the row is two lines of text, there is no room under the price for them); their targets are 44 px, overlapping their neighbours' margins */
+  .ml-tokens .ml-name { gap: 0; }
+  .ml-tokens .ml-name .idb { margin-left: 4px; margin-right: 4px; }
   .ml-tokens tbody td[colspan] { grid-column: 1 / -1; grid-row: auto; }
 }
 
@@ -562,7 +578,7 @@ body:has(.market-page) .container { max-width: none; }
 .tip-btn { appearance: none; border: 0; font: inherit; font-size: 0.85em; line-height: inherit; cursor: pointer; white-space: nowrap; vertical-align: baseline; }
 .tip-btn:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
 .tip-panel { position: fixed; z-index: 60; width: min(20rem, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; font-size: 0.85rem; white-space: normal; text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
-.ml-line3-wrap { height: auto; min-height: 1.25rem; flex-wrap: wrap; gap: 2px 8px; }
+.ml-line3-wrap { grid-column: 1 / -1; height: auto; min-height: 1.25rem; flex-wrap: wrap; gap: 2px 8px; }
 .ml-line3-wrap .ml-badges { flex-wrap: wrap; }
 
 /* the wallet's panel on a market page (MarketShell `mine`, OrdersView embedded): after the ticket on a phone, then the full width of the page under the
@@ -576,8 +592,8 @@ body:has(.market-page) .container { max-width: none; }
   .mkt-grid.mkt-has-mine { grid-template-areas: 'chart chart' 'book side' 'mine mine'; }
 }
 @media (min-width: 1200px) {
-  /* the ticket keeps its column and its rows; the panel takes the row under all of them, so the column below the ticket is not left empty */
-  .mkt-grid.mkt-has-mine { grid-template-areas: 'book chart chart ticket' 'book depth depth ticket' 'mine mine mine mine'; grid-template-rows: 3fr 2fr auto; }
+  /* the panel takes the row under all three columns, so the column below the ticket is not left empty */
+  .mkt-grid.mkt-has-mine { grid-template-areas: 'book chart ticket' 'mine mine mine'; }
 }
 .market-orders { padding: 12px 14px; }
 .market-orders-head { flex-wrap: wrap; gap: 6px 12px; }
@@ -589,12 +605,9 @@ body:has(.market-page) .container { max-width: none; }
 .mkt-chart-big { --mkt-chart-h: max(360px, 70dvh); }
 @media (min-width: 760px) { .mkt-chart-big { --mkt-chart-h: clamp(420px, 70dvh, 1000px); } }
 @media (min-width: 1200px) {
-  /* three columns: the book and the depth chart give way, the chart spans the book's column and its own (the ticket keeps its column, and its height rules: --tk-fit, contain: size).
-     One row: the chart panel is as tall as its least height or the ticket's, and the chart box fills what the panel has. The least height is the window's less what is above the grid and
-     the panel's own header and legend, so the chart, the ticket and (on a 1080 px screen) the wallet's panel start in the first screen. */
-  .mkt-grid.mkt-chart-big { --mkt-chart-h: clamp(520px, calc(100dvh - 400px), 1200px); grid-template-rows: auto; grid-template-areas: 'chart chart chart ticket'; }
-  .mkt-grid.mkt-chart-big.mkt-has-mine { grid-template-rows: auto auto; grid-template-areas: 'chart chart chart ticket' 'mine mine mine mine'; }
-  .mkt-chart-big .mkt-area-book, .mkt-chart-big .mkt-area-depth { display: none; }
-  .mkt-chart-big .mkt-area-chart > .section-body, .mkt-chart-big .chart-panel { flex: 1 1 auto; }
-  .mkt-chart-big .chart-box { flex: 1 1 auto; min-height: var(--mkt-chart-h); }
+  /* three columns: the book gives way and the chart spans its column and its own (the ticket keeps its column, and its height rules: --tk-fit, contain: size). It is still one row, so the chart
+     and the ticket end on one line and the chart's box is what the ticket's row leaves, as it is unexpanded. Restore brings the book back in its place. */
+  .mkt-grid.mkt-chart-big { grid-template-areas: 'chart chart ticket'; }
+  .mkt-grid.mkt-chart-big.mkt-has-mine { grid-template-areas: 'chart chart ticket' 'mine mine mine'; }
+  .mkt-chart-big .mkt-area-book { display: none; }
 }

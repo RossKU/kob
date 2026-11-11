@@ -6,13 +6,13 @@ import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
 import { KascovNote } from './KascovNote';
-import { IdCopy } from './IdCopy';
 import { KascovLink, programFactText, programTitle } from './ProgramNote';
 import { IdentityBlock } from './Fingerprint';
 import { LogoSection } from './LogoReport';
+import { MarketBar } from './MarketBar';
 import { TokenNote } from './TokenNote';
 import { decimalsNote } from '../../app/token-display';
-import { GenesisFailedBanner, PowersWarning, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
+import { FamilyChip, GenesisFailedBanner, PowersWarning, RiskChip, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
 import { riskFactIds, templateDetail, type TemplateDetail, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
@@ -77,62 +77,37 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) 
 }
 
 /**
- * Token title bar (top of the page), compact so the trading content starts right below it: the identity block and the pair selector, one line with the
- * short covenant id (copy button), the name, where its facts come from, the link to kascov.io and the live state, one line of badges (the token
- * family, whose tooltip names the program and the decimals, and the facts, each with its sentence as the tooltip) and the warnings that must be seen. The
- * title itself is for screen readers: the pair selector already names the token.
+ * The token page's header: the market bar (MarketBar.tsx: picture and fingerprint, the pair selector, the flip and the star, the 24 h figures, the live state; one row) and the warnings that
+ * must be seen. The "High risk" chip, which must not wait for a tap into the details, stays in the bar beside the star. The covenant id with its copy button, the name (and where its
+ * facts come from), the link to kascov.io and the program chip are in the token's details card (`TokenDetails`). The title is for screen readers: the pair selector already names the token.
  */
 export function TokenHeader(props: {
   row: TokenRow;
   /** another listed token uses this ticker */
   sharedTicker?: boolean;
+  /** the live state chip */
   badges?: ComponentChildren;
+  /** the star */
   tools?: ComponentChildren;
   /** the pair selector (`BTC / KAS`, `KAS / TUSD`; MarketBar.tsx) */
   pair?: ComponentChildren;
-  /** where the token's facts come from its KCC-23 declaration: the marker next to its name (TokenNote.tsx), as on the wallet views */
-  note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null;
+  /** the 24 h figures (MarketStats.tsx) */
+  stats?: ComponentChildren;
 }) {
   const r = props.row;
   return (
     <div class="stack-sm" data-testid="token-header">
-      {/* compact: the identity block at the left, two lines to its right: the pair (ticker / KAS and the flip) and the token's line (short id with copy, name,
-          where its facts come from, the live state and the chips). No row of its own that is mostly empty. */}
-      <div class="mkt-hd">
-        <IdentityBlock row={r} size="lg" data-testid="token-identity" />
-        <div class="mkt-hd-text">
-          <div class="mkt-hd-line1">
-            <div class="mkt-title mkt-title-fit">{props.pair}</div>
-            {props.tools}
-          </div>
-          <h1 class="sr-only" data-testid="token-title" data-covenant-id={r.covenantId}>
-            {tokenTitle(r)}
-          </h1>
-          <TokenLine row={r} note={props.note} badges={props.badges} />
-        </div>
-      </div>
+      <MarketBar
+        identity={<IdentityBlock row={r} size="bar" data-testid="token-identity" />}
+        pair={props.pair}
+        tools={<>{props.tools}<RiskChip row={r} /></>}
+        stats={props.stats}
+        live={props.badges}
+      />
+      <h1 class="sr-only" data-testid="token-title" data-covenant-id={r.covenantId}>
+        {tokenTitle(r)}
+      </h1>
       <TokenWarnings row={r} sharedTicker={props.sharedTicker} />
-    </div>
-  );
-}
-
-/**
- * One token's compact info line: the covenant id, whole where the line has room, else its two ends, with its copy button, the name (and where its facts come from), the link to kascov.io, whatever
- * `badges` the page adds (the live state) and the chips (the token family, whose tooltip names the program and the decimals, and the facts: KCC-20, the
- * genesis status ...). They flow on one wrapping line; `ticker` names the token first when two of these lines are read together (a pair).
- */
-export function TokenLine(props: { row: TokenRow; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null | undefined; badges?: ComponentChildren; ticker?: boolean; 'data-testid'?: string }) {
-  const r = props.row;
-  return (
-    <div class="mkt-meta small" data-testid={props['data-testid'] ?? 'token-meta'} data-token={r.covenantId}>
-      {props.ticker ? <strong class="mkt-meta-ticker" data-testid="token-line-ticker">{r.ticker || longId(r.covenantId)}</strong> : null}
-      <IdCopy fit value={r.covenantId} data-testid={props.ticker ? 'pair-token-short-id' : 'token-short-id'} />
-      {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
-      <TokenNote token={props.note} />
-      <KascovNote row={r} />
-      <KascovLink row={r} />
-      {props.badges}
-      <StatusBadges row={r} familyNote={programTitle(r)} />
     </div>
   );
 }
@@ -207,6 +182,8 @@ function BridgeCustodyNote() {
 /** Token facts (bottom of the page): covenant id, program (what it runs and how that was established), issuance by a bridge, decimals, price scale, tick, open orders; a registry token's template checks are in "Status and checks". */
 export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'>; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null; /** the row with KOB's own genesis check applied (a token page): what the status section is printed from */ checked?: TokenRow }) {
   const r = props.row;
+  // the token as the page names it (the header's row: the names and icons kascov.io adds are merged into it)
+  const named = props.checked ?? r;
   const g = (props.checked ?? r).genesis;
   // from the genesis check only (the pinned BridgeMint in the token's genesis group), never from a name or a list
   const bridge = g?.status === 'verified' && g.bridge === true;
@@ -216,8 +193,30 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
         <KeyValueList
           compact
           items={[
+            {
+              // the token's name and where it comes from (the registry, its declaration, this browser's issuance or kascov.io) with the link to kascov.io
+              label: t('market.token.name'),
+              value: (
+                <span class="tk-name-line">
+                  <span data-testid="token-name">{named.name || r.name || '-'}</span>
+                  <TokenNote token={props.note} />
+                  <KascovNote row={named} />
+                  <KascovLink row={named} />
+                </span>
+              ),
+            },
+            // the whole covenant id (the token's identity) with its copy button
             { label: t('market.token.covenantId'), value: <CopyText value={r.covenantId} short={false} data-testid="token-covenant-id" /> },
-            { label: t('market.program.label'), value: <span data-testid="token-program">{programFactText(props.checked ?? r)}</span> },
+            {
+              // the program chip (its tooltip: the program as KOB pins it, where the decimals come from) with the program line
+              label: t('market.program.label'),
+              value: (
+                <span class="tk-program">
+                  <FamilyChip row={named} note={programTitle(named)} />
+                  <span data-testid="token-program">{programFactText(props.checked ?? r)}</span>
+                </span>
+              ),
+            },
             {
               label: t('market.token.issuance'),
               value: (
@@ -269,10 +268,10 @@ export function PairDetails(props: { rows: readonly TokenRow[]; shared?: Readonl
           <div class="mkt-title">
             <IdentityBlock row={r} data-testid="pair-token-identity" />
             <h2 class="token-name" style="margin:0;font-size:1.05rem" data-testid="pair-token-title">{tokenTitle(r)}</h2>
-            {r.name ? <span class="mkt-name">{r.name}</span> : null}
           </div>
+          {/* the name, the id, the program chip and the sources of the token's facts are in its details card below */}
           <div class="mkt-badges">
-            <StatusBadges row={r} familyNote={programTitle(r)} />
+            <StatusBadges row={r} family={false} />
           </div>
           <TokenWarnings row={r} sharedTicker={props.shared?.has(r.covenantId) ?? false} />
           <TokenDetails row={r} services={props.services} />
