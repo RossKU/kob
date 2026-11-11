@@ -232,13 +232,15 @@ curl -s "$API/v1/health"
 
 | Field | Use it for |
 |---|---|
-| `state` | `starting`, `catching_up`, `following`, `node_unavailable`, `gap`, `stopped` |
+| `state` | `starting`, `catching_up`, `following`, `node_unavailable`, `gap`, `stopped`, `storage_error` (the database cannot be written or is corrupt; `halt_reason` says why) |
 | `ok` | Following or catching up, with no lag alarm |
 | `caught_up` | `state` is `following` and the node's position is known |
 | `lag_seconds` | How far the store is behind the node (`null` while unknown) |
 | `book_complete` | `false` while history is still being indexed, or for a store that began after the oldest history |
 | `min_order_value_sompi` | The smallest order this server lists; smaller orders are indexed but never in a book |
-| `version`, `commit`, `payload_version` | The build that answers; compare with the release you integrate with |
+| `version`, `commit`, `payload_version`, `template_generation` | The build that answers and the order templates it serves; compare with the release you integrate with |
+| `halt_reason`, `api_error`, `data_dir_free_bytes`, `db_bytes` | Operator monitoring: why the store is halted, a read API that stopped, the disk (absent when there is nothing to say or not measured yet) |
+| `executor` | Only on a server that also runs the Executor (`kobd --executor`): its funds, pending and dropped transactions, last submission and clock alarm (`docs/ops/executor.md`, Part C *Monitoring*) |
 
 ```sh
 curl -s "$API/v1/health/ready"

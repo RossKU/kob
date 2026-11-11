@@ -49,7 +49,7 @@ local rusty-kaspa node with `--utxoindex --rpclisten-json=default`) and the role
   `--rpclisten-json=default`), checked at once (`getServerInfo`: network, sync, UTXO index, with the node command line on
   a failure); the roles
   (the **Executor**; the **Indexer**; or **Executor and Indexer**, both in one process: the Indexer's full history, record log and read API, `lean = false`, plus the Executor with a key, with a warning that the public API and the signing key then live on the same machine, so a public server should prefer separate machines; `--executor`, `--indexer` or both skip the question); the data directory (`kob-data`); the hot key (a new one from the OS CSPRNG into `kob-operator.key`, owner-only
-  from creation: mode `0600`, on Windows one ACL entry for the current account checked like `KOB_KEY_ACL_STRICT=1`; an
+  from creation: mode `0600`, on Windows one ACL entry for the current account, checked as every start checks it; an
   existing key file is offered again and never replaced; the secret is never printed); it shows the address, waits for at
   least 100 KAS (Enter skips) and asks for the x402 facilitator (off by default). It prints the line that starts it (`<program> --executor`, plus `--config <file>` when the folder is not the program's own). A build without a pinned registry
   (testnet-10) also gets `kob-tokens.json`: the embedded registry's programs for its network and no token entries, so every
@@ -1919,12 +1919,16 @@ stall or drain any executor:
   finality is). `":memory:"` ledgers are refused on mainnet, and a `pending` entry the node never saw is failed and its outpoints
   released after 15 minutes.
 * **The hot key**: the hex text read from the key file or `KOB_OPERATOR_KEY` is wiped after parsing. On Windows the file's
-  ACL is read (`icacls /save`, SDDL) and a warning names any group that may read it (Everyone, Users, Authenticated Users, ...);
-  `KOB_KEY_ACL_STRICT=1` makes that an error. `remove_var` does not scrub the environment block: prefer a key file or a systemd
-  credential. `--pause-file` also stops resends of transactions a reorg moved back to pending. A submit that gets no
-  answer (transport error, timeout) is not a rejection: the transaction is tracked as pending with its inputs reserved, resent
-  every tick until the node answers (accepted / already known: settled; refused: dropped and the orders back off) and dropped at the
-  pending timeout (`kob_matcher_unknown_submits_total`).
+  ACL is read (`icacls /save`, SDDL) and the start is refused, on every build, when any other account may read it: a group
+  (Everyone, Users, Authenticated Users, ...) or a named account or group; only the account running kobd (its SID from
+  `whoami`), SYSTEM, Administrators and the owner placeholders may. An ACL that cannot be read (no `icacls`) or an account
+  whose SID `whoami` cannot tell is refused too. `KOB_KEY_ACL_STRICT=0` turns each refusal into a warning (not recommended).
+  The fix: `icacls <file> /inheritance:r /grant:r <account>:F` (quickstart 5). `remove_var` does not scrub the environment
+  block: prefer a key file or a systemd credential. `--pause-file` also stops resends of transactions a reorg moved back to
+  pending. A submit that gets no answer (transport error, timeout) is not a rejection: the transaction is tracked as pending
+  with its inputs reserved and resent every tick until the node answers (accepted / already known: settled; refused: dropped
+  and the orders back off) (`kob_matcher_unknown_submits_total`). A pending transaction is never given up while a node holds
+  it: Part C, *Pending transactions*.
 * **The compute-budget table.** The generator measures every role in the largest batch contexts, with the smallest and the
   largest amounts per pad leg, every multi-cross route the planner can build (C, "Families"), and lowers each role's
   budget by one to prove the engine then rejects it (`kob-protocol/tests/budget_table.rs`); `tests/planner_mixed_scales.rs` fuzzes
@@ -1965,7 +1969,12 @@ Poll `/v1/health`, or scrape `GET /v1/metrics` (the same numbers as Prometheus t
 |---|---|
 | `state = gap` | halted, operator action (section 7); page immediately |
 | `gaps` non-empty, `kob_indexer_gaps_total` above 0 | the node pruned history the store had not read; the store skipped it and went on (7.4): orders created in that stretch need their makers' imports; page, then check the makers' open orders |
-| `state = node_unavailable` for more than 5 min | node down, unsynced, or in transitional IBD; also a database that cannot be written (disk full, a damaged file): `last_error` then begins `commit failed` |
+| `state = node_unavailable` for more than 5 min | node down, unsynced, or in transitional IBD |
+| `state = storage_error`, `kob_indexer_storage_error` 1 | the database cannot be written (a full disk, an I/O error, a read-only file) or is corrupt: `halt_reason` says which and what to do (free space: the follower goes on by itself; a corrupt lean store: delete it, fast start rebuilds it; a full one: `kobd db replay`). `kobd --executor` exits after 3 min of it (status 1) for its supervisor to restart; page |
+| `kob_data_dir_free_bytes` low, `kob_indexer_db_bytes` near `lean_max_db_mb`, `kob_indexer_lean_over_cap` 1 | the disk is filling up (measured once a minute; `data_dir_free_bytes`, `db_bytes` in `/v1/health`) |
+| `state = stopped` or `halt_reason` set, `kob_indexer_halted` 1 | the follower halted (a record-log write failed, or a storage error); `kobd --executor` exits after 3 min (a gap too) |
+| `api_error` set, `kob_api_failed` 1 | the read API stopped serving; `kobd --executor` exits at once (a port another process holds fails the start instead) |
+| `kob_indexer_deep_reorgs_total` above 0, `kob_indexer_lean_prune_failures_total` rising | a reorg deeper than the stored chain (its rows were not reverted: rebuild the store); lean pruning that keeps failing (the log says why) |
 | `node_alarms` non-empty, `kob_indexer_node_alarms` above 0 | a node named in the configuration is unusable (another network, no UTXO index, not synced for 2 min, hanging, behind the other node, contradicting it; Part C, *Node*): it is never replaced, fix it; a cross-checking one is cut off from the pair meanwhile |
 | `kob_indexer_node_replaced_total` rising every few minutes | the public nodes keep failing; `nodes[].cut_reason` says which host and why |
 | `lag_seconds` above 1 h / 6 h / 12 h / 24 h | approaching the node's retention; 12 h is consensus finality, 24 h leaves little of the default 30 h pruning window |
@@ -2731,8 +2740,9 @@ bucket of its urgency:
   floor, timed to expire under fee pressure (which a miner can create and then collect as fees); without the budget each of
   them costs the operator up to `--keeper-subsidy-max-kas`, with no bound on the total. A subsidy is charged when its
   transaction is submitted (also a submit or replacement without a verdict, which may still be accepted) and never given
-  back for a transaction that is not accepted: the budget counts at least what the operator paid. The window lives in
-  memory: a restart starts with an empty window (each restart can at most add one budget). A per-maker cap would not help
+  back for a transaction that is not accepted: the budget counts at least what the operator paid. The window is kept in
+  `<data_dir>/keeper-subsidy.json` (written on every charge): a restart continues it, so restarts add no budget; a deleted
+  data directory starts it empty. A per-maker cap would not help
   (maker keys are free). Using it up is logged once (`keeper subsidy budget of the window used up`); metric
   `kob_keeper_subsidy_budget_left_sompi`. At the defaults the subsidy costs the operator at most 24 KAS a day.
 * The estimate is read at most every `--fee-refresh-ms` (10 s), only by steps that plan; the last good one is used for
@@ -2932,10 +2942,18 @@ fallback = "resolver"              # the public Kaspa nodes as a cross-checked p
 
 Public nodes are shared and slower than an own node (and their retention decides how far back a first start can index). A
 bad node cannot steal funds: the executor signs only its own inputs and the covenants enforce every order; it could waste
-work (a transaction it drops or delays) or hide orders. The second node guards against hiding: the chain blocks and the
-accepted transaction ids the authority reports are cross-checked before anything is indexed. The transaction bodies the
-authority serves itself are not compared with the second node's (only bodies another node served are checked, against
-their ids), so a lying authority could show orders that do not exist; the covenants refuse to settle them. The x402 facilitator of the
+work (a transaction it drops or delays) or hide orders. Exactly what the second node checks: before anything is indexed, the
+chain blocks the authority reports (which blocks, in which order, removed ones included) and the ids of the transactions each
+of them accepted must be the second node's too (`rpc::verify::agreement`), so leaving out a transaction, and with it an
+order, is caught. What it does not check: the bodies the authority serves under those ids (outputs, payload, the spent
+outputs it attaches to inputs). They come at `High` verbosity, which lacks the fields a transaction id is hashed over
+(version, lock time, subnetwork, gas), so they cannot be re-hashed against their ids without fetching every window at `Full`
+verbosity, whose chain block headers alone are several times larger; only windows a non-authority node served are re-hashed
+and compared field by field with the authority's copy. A lying authority could therefore index outputs or payloads that do
+not exist under real ids: the read API would show orders that are not on chain and the matcher would plan on them. No funds
+are at risk: every transaction is built over the UTXO entries the node reports, signed, and validated by consensus, which
+refuses a spend of an output that is not what the transaction claims; the executor only loses races (`MissingInput`). A
+node caught contradicting the other is replaced. The x402 facilitator of the
 same process reads from the authority and submits to every node that takes submissions (both of the pair), as the
 matcher does: the first node that takes a transaction answers (`node: "resolver"` in its own configuration works too, also
 `wss://`).
@@ -3048,12 +3066,49 @@ cannot be read counts as present (paused, with a warning).
 | `kob_select_keeper_taken_total`, `kob_select_keeper_deferred_total`, `kob_select_keeper_overdue_total` | the same for the keepers' due jobs |
 | `kob_select_ceded_total` | orders this executor left for later that another transaction took first: races not run (the proxy of the collisions avoided) |
 | `kob_select_lost_steps_match_total`, `kob_select_lost_steps_keep_total`, `kob_select_enabled` | steps that lost a race; 1 while the selection is on |
-| `kob_matcher_pending_txs` | the transactions waiting for acceptance. One not accepted within about 60 s (600 DAA) is forgotten (not counted, not logged), so the gauge does not stay high: watch for `kob_matcher_conflicts_total` rising on a quiet book instead (a forgotten transaction still in the mempool blocks the coin it spends) |
+| `kob_matcher_pending_txs`, `kob_matcher_oldest_pending_seconds` | the transactions waiting for acceptance and how long the oldest has waited: above 0 for minutes / above 300 s (a node holds it, nothing mines it: a low fee rate under pressure, or a node that does not relay). It stays counted until a block accepts it or the node refuses it (*Pending transactions* below) |
+| `kob_matcher_dropped_total` | rising: transactions the node refused when they were checked again, or races lost; the log names each (`refused when checked again`) |
+| `kob_matcher_held_coins`, `kob_matcher_held_coins_total` | above 0: a funding coin is spent by a mempool transaction this process does not track (a second process on the key, a withdraw, a wallet); it is out of the funding for 5 min or until a block takes its spender |
+| `kob_matcher_last_submit_seconds` | older than you expect on a busy book (0: nothing since the start) |
+| `kob_matcher_tick_errors_total`, `kob_matcher_last_tick_ok` | rising / 0: steps fail (the node unreachable, the network wrong); a failed step writes the metrics too |
+| `kob_clock_skew_seconds`, `kob_clock_skew_alarm` | the alarm 1: the local clock is more than 30 s off the chain's (set it: NTP); day orders that close to their deadline are not filled meanwhile |
+| `kob_executor_restarts_total`, `kob_matcher_journal_entries` | restarts rising (a crash loop: see the log of each start); the transactions a restart would resend |
+| `kob_build_info` | its labels (`version`, `commit`, `payload_version`, `template_generation`) differ from the release you meant to run (`docs/ops/release.md`, 7) |
 | `kob_matcher_finalized_total`, `kob_matcher_finalized_profit_sompi` | income tracking |
 | `kob_matcher_skipped_books` | persistent (unsupported programs, unprofitable books) |
 | `kob_fee_estimated`, `kob_fee_rate_high` / `_normal` / `_low`, `kob_fee_estimate_failures_total` | 0 for minutes on a node that should answer (the floor is paid: slow acceptance under load); a rate at `--fee-max-rate` for long (the network is busier than the cap allows) |
 | `kob_matcher_book_stale`, `kob_matcher_book_lag_daa` | 1 for minutes (the book lags the node: a catching-up, stalled or `gap` indexer, or a stale snapshot file; nothing is planned meanwhile) |
 | `kob_matcher_budget_slack_retries_total` | above 0 (a transaction shape the compute-budget table misses: report it; the build was retried with more budget) |
+
+The same series, and the indexer's, are served by `GET /v1/metrics` (the Executor's after the indexer's), and `/v1/health`
+carries an `executor` object: `funds_sompi`, `spendable_sompi`, `low_funds`, `paused`, `dry_run`, `pending`,
+`oldest_pending_seconds`, `submitted_total`, `finalized_total`, `dropped_total`, `rejected_total`, `held_coins`,
+`last_submit_unix`, `last_step_unix`, `last_tick_error`, `clock_skew_seconds`, `clock_alarm`, `restarts`,
+`journal_entries`. Both are visible to whoever can reach the API (loopback by default): an API you expose shows the
+executor's funds (`[api] metrics = false` removes `/v1/metrics`).
+
+**Pending transactions.** A transaction no chain block accepted within `pending_timeout` (600 DAA, a minute) is resent
+(idempotent), and again every minute, and the node's answer settles it: "already in the mempool" (or taken again after an
+eviction, logged `sent again`): it stays pending and its inputs stay reserved; "already accepted by the consensus" (a block
+this process did not follow, before a restart): done, counted as final; refused (its inputs went elsewhere): dropped
+(`kob_matcher_dropped_total`, a warning) and its orders back off. Not while paused or in a dry run. A node keeps the
+transactions submitted to it until they are mined or evicted, so forgetting one earlier would free its funding coin for the
+next batch, which the node then refuses as a mempool double spend, batch after batch. A mempool double spend that names one of
+the operator's own funding coins (a transaction this process does not track spends it) backs off no order: the coin is held out
+of the funding (`kob_matcher_held_coins`) and the batch is planned again at once over the others.
+
+**Restarts.** The tracked transactions are kept in `<data_dir>/executor-inflight.jsonl` (one JSON line per change, written
+before each submit, compacted at every start and as it grows; no fsync: a killed process loses nothing, a power loss may lose
+the last lines). A start tracks them again as submissions without a verdict (`in-flight journal: transactions of the last run
+are tracked again`): their inputs are reserved from the first step, the first step resends them and the node settles each as
+above, and a kill or refund among them can still be replaced at a higher fee. A dry run neither reads nor writes it. Deleting
+the data directory deletes it: stop the executor and wait for `kob_matcher_pending_txs` 0 first, or let the hold above deal
+with a coin a forgotten transaction spends. `<data_dir>/executor-starts` counts the starts (`kob_executor_restarts_total`).
+
+**Exit for the supervisor.** `kobd --executor` ends with exit status 1 (`exiting so that a supervisor restarts the
+executor`) when its indexer stays halted (`stopped`, `gap`) or cannot write its database (`storage_error`) for 3 minutes,
+or at once when its read API stops serving; a read API that cannot take its port fails the start. Run it under a supervisor
+that restarts it (A.3, quickstart 6).
 
 Logs (`RUST_LOG=info`, default) report every submission, conflict, rejection, acceptance, final
 transaction and reorg rollback with its transaction id. A batch that triggers or arms stops logs `the batch triggers or

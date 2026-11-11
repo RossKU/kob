@@ -176,8 +176,10 @@ anchor when one is made). Users and operators check:
 * the web files against what the host serves (`index.html` carries the Content-Security-Policy).
 
 Rust release binaries are reproducible only on an identical toolchain and host; the hashes say what was
-built from the commit. CI (job `reproducible`) builds `web/dist` (with the kob-wasm bindings) and the
-kobd release binary twice, from two checkouts at different paths, and fails when any file differs. The source-level artifacts (templates, record, registry) reproduce byte for byte
+built from the commit. CI (job `reproducible`) builds `web/dist` (with the kob-wasm bindings), the plain
+kobd release binary, and `kobd` and `kob` exactly as `release.yml` builds the Linux mainnet archive (`--features
+deploy-mainnet`, `KOB_GIT_COMMIT` set, `--target x86_64-unknown-linux-gnu`) twice, from two checkouts at different paths,
+and fails when any file differs (the Windows and Android builds are not compared). The source-level artifacts (templates, record, registry) reproduce byte for byte
 everywhere.
 
 **Prebuilt binaries for operators** (`.github/workflows/release.yml`; the operators' page is
@@ -195,7 +197,22 @@ and a `SHA256SUMS` of those files, and `kob-<version>-<network>-<target>` (the c
 release job attaches the twelve archives, the Android app and a `SHA256SUMS` of them all to a **draft** release of the tag: add the output of
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
 runs the same builds as a dry run that only uploads workflow artifacts. The binaries and archives are not code-signed (the
-Windows binary shows SmartScreen); the Android app is signed with the **release key** (below). No container image is
+Windows binary shows SmartScreen); the Android app is signed with the **release key** (below).
+
+**Build provenance.** The release job attests every file it attaches (the archives, the APK and `SHA256SUMS`) with
+`actions/attest-build-provenance` (keyless Sigstore: a short-lived certificate for the workflow's GitHub identity, no key to
+keep, nothing paid; the job has only `id-token: write` and `attestations: write` besides `contents: write`). The attestation
+binds each file's SHA-256 to the workflow file, the run and the commit, and is stored in the repository's attestations, apart
+from the release page. Anyone checks a downloaded file with the GitHub CLI:
+
+```
+gh attestation verify kobd-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz --repo RossKU/kob
+```
+
+(it prints the workflow, `.github/workflows/release.yml`, and the commit; `--signer-workflow RossKU/kob/.github/workflows/release.yml`
+requires that workflow). A file or a `SHA256SUMS` swapped into the release afterwards fails it. It proves where a file was built,
+not that the tagged source is sound: the release hashes above and a rebuild remain the check of the source. A dry run
+(`workflow_dispatch`) attests nothing. No container image is
 published (`crates/kobd/Dockerfile` builds one from the source for operators who want a container, quickstart 6).
 
 **The Android app in the release** (`android/`, built by `.github/workflows/android.yml`, which `release.yml` calls as the job
@@ -223,8 +240,14 @@ would list none of the orders the new wallets place.
    (`docs/ops/executor.md` 7.6 and 7.6a).
    Check `GET /v1/health` and that a placement made with `kob` is listed.
    `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git
-   commit of the build, `null` when the build did not say) and `payload_version` (the `KOB1` payload version it reads and
-   writes). Compare them with the release: `curl -s https://<indexer>/v1/health | jq '{version, commit, payload_version}'`.
+   commit of the build, `null` when the build did not say), `payload_version` (the `KOB1` payload version it reads and
+   writes), `template_generation` (16 hex digits of a hash of the order templates the build pins: two builds with the same
+   value fill the same orders, `docs/spec/template-retirement.md`) and `cancel_only_generations` (the retirements whose
+   orders it still serves for their makers' cancel). Compare them with the release:
+   `curl -s https://<indexer>/v1/health | jq '{version, commit, payload_version, template_generation}'`. The executor's status
+   line ends with the same facts (`kobd 0.1.0 (commit ...), payload v4, templates ...`), and the metrics carry them as the labels
+   of `kob_build_info`. An executor whose `template_generation` differs from the release's does not see the orders placed under
+   the release's templates: upgrade it.
    The release workflow (`.github/workflows/release.yml`) and `crates/kobd/Dockerfile` (`--build-arg KOB_GIT_COMMIT=...`) set
    `KOB_GIT_COMMIT` to the tagged commit; a plain `cargo build` leaves `commit` null. The value is read with `option_env!`
    at compile time: there is no build script, no `git` call and no timestamp, so the same source, toolchain and

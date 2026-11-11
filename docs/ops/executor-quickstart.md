@@ -69,10 +69,21 @@ sha256sum -c --ignore-missing SHA256SUMS
 The hash must equal the line of the release's `SHA256SUMS` for that file. The release notes also carry the hashes of
 `scripts/release-hashes.sh` (`docs/ops/release.md`, 6): the order templates, the token registry and the binaries built
 from the tagged commit. Anyone can rebuild the binary from that commit with the pinned toolchain
-(`cargo build --release --locked -p kobd --features deploy-mainnet`) and compare. The archives are neither signed nor
-attested, and the `SHA256SUMS` sits on the same release page as the archives, so a matching hash proves that the download is intact, not
-that the release is genuine: compare the hashes with the copy in the release announcement, and, for an executor that will hold
-funds, rebuild it from the tagged commit.
+(`cargo build --release --locked -p kobd --features deploy-mainnet`) and compare.
+
+A matching hash proves that the download is intact, not that the release is genuine: the `SHA256SUMS` sits on the same
+release page as the archives. **Check the build provenance too** (releases published after 2026-11-11): every archive, the APK and
+`SHA256SUMS` carry a GitHub artifact attestation (keyless Sigstore) that names the workflow run and the commit that built the
+file. With the GitHub CLI (`gh`, logged in):
+
+```
+gh attestation verify kobd-<version>-mainnet-x86_64-pc-windows-msvc.zip --repo RossKU/kob
+```
+
+It must print `Verification succeeded!` and name `.github/workflows/release.yml` of `RossKU/kob` at the tag's commit. A file
+swapped into the release afterwards (with its sum swapped too) fails it. It does not protect against a compromised workflow or
+repository at the tagged commit: for an executor that will hold funds, also compare the hashes with the release announcement
+and rebuild it from the tagged commit. The binaries are not code-signed.
 
 Unzip the archive (or copy the binary you built) into a folder of its own that your account can write to (for example `C:\kob` or `~/kob`; not `Program Files`):
 the setup writes its configuration, the key file and the database next to the program. **Extract the archive first**: do not
@@ -91,8 +102,11 @@ different hosts: one is the chain authority, the other cross-checks it (only the
 are indexed), and every transaction goes to both. If one fails, the other carries on at once and a replacement on a third
 host is found in the background. Public nodes are shared and slower than your own, and the first catch-up takes longer. A
 bad node cannot steal funds (the executor signs only its own inputs, and the covenants enforce every order), but it could
-waste the executor's work or hide orders. The cross-check keeps orders from being hidden (the chain blocks and accepted
-transactions both nodes report); the transaction bodies come from the chain authority alone. A node that fails, hangs,
+waste the executor's work or hide orders. What the second node checks: which chain blocks the chain is made of and which
+transaction ids each of them accepted (nothing is indexed until both agree), so an order cannot be hidden by leaving out its
+transaction. What it does not check: the transaction bodies (outputs, payload) the authority serves under those ids, so a lying
+authority could show orders that do not exist; the executor then loses races on them and the covenants refuse any spend that
+does not match the real outputs, so no funds are at risk. A node that fails, hangs,
 falls behind, is on another network or contradicts the other is replaced, whichever role it has. Good to start with and
 for a small operator.
 
@@ -202,16 +216,19 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
 * `WARNING:` names what needs you: the node not synced or unreachable, funds below 100 KAS (`--low-funds-kas`; the warning
   names the address to send KAS to; it is logged at the start, then at most every 10 minutes or when the balance changes by a
   quarter, and the status line shows the funds every 10 seconds; the executor trades with less than 100 KAS, the number is an alert
-  threshold), the pause file present, transactions the node rejected. `NODE ALARM:` names an own node that is not usable
+  threshold), the pause file present, transactions the node rejected or dropped, a transaction pending for over 5 minutes (the
+  node still holds it: its coins stay reserved until a block takes it or the node refuses it), the clock off the chain's. `NODE ALARM:` names an own node that is not usable
   (another network, no UTXO index, not synced for minutes, hanging): it is never replaced, fix it.
 * The read API answers on `http://127.0.0.1:8090/v1/health` (loopback only).
 * For real monitoring use the metrics file (`--metrics-file`, `docs/ops/executor.md`, Part C *Monitoring*).
 * **Keep the computer's clock right** (automatic time sync on). The matcher compares a day order's UTC deadline with the system
   clock (a fast clock skips orders that are still valid, a slow one can fill past a deadline), and TLS to public nodes fails
-  with a wrong clock. The executor does not check the clock.
+  with a wrong clock. Once a minute the executor compares its clock with the chain's (the newest block's timestamp): more than
+  30 s apart is logged as an error, shown on the status line (`the local clock is N s off the chain's`) and in `/v1/health`
+  (`executor.clock_alarm`), and day orders whose deadline is that close are not filled until the clock is right again.
 * **Port 8090 busy.** The read API listens on `127.0.0.1:8090` by default. If another program (or a second KOB executor for
-  another network) holds the port, the executor still runs but logs `API server stopped: ...` and serves no API, although the
-  start banner printed the address. Change `[api] listen` in `kobd.toml` (or `--listen`) and restart. A second kobd on the same
+  another network) holds the port, the start fails with `the read API cannot listen on 127.0.0.1:8090`. Change `[api] listen`
+  in `kobd.toml` (or `--listen`) and start again. A second kobd on the same
   machine needs its own `--listen` port **and its own data folder** (a separate folder from `kobd setup --dir <folder>`, with its own
   data directory), and `kob ... --indexer http://127.0.0.1:<port>` queries it.
 
@@ -227,7 +244,10 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
 
 Mainnet record-log growth under real traffic is not measured yet. The status line's profit counts the final transactions since this
 run started; it is kept in memory only and starts again at zero after a restart, so the executor keeps no earnings history; to
-keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-file`) with your monitoring.
+keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-file`) with your monitoring. What is in flight does
+survive a restart: the transactions the executor sent and no block has taken yet are kept in `kob-data/executor-inflight.jsonl`,
+and the next start sends them again (the node answers "already in the mempool" for those it holds) instead of spending their coins
+twice. The keepers' fee top-up budget of the day (`kob-data/keeper-subsidy.json`) survives too.
 
 ## 5. Pause and stop
 
@@ -268,7 +288,10 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   node and builds one payment from the largest coins first (at most 50 inputs). `--amount all` sends everything those coins
   hold minus the fee; if more coins are left it says so, and you run it again once the first is accepted. It shows the
   network, both addresses, the amount and the fee, and asks you to type `yes`; `--yes` skips the question (scripts), and
-  without `--yes` and without a terminal it refuses to send. `--dry-run` shows the payment and sends nothing; `--fee-rate`
+  without `--yes` and without a terminal it refuses to send. Over the public nodes it asks one of them for the coins, not a
+  cross-checked pair: a node that lies about them can only make the payment invalid (the signature covers the coins it spends),
+  never send the funds elsewhere. `--dry-run` shows the payment and sends nothing (it still takes the writer lock: stop the
+  executor first for it too); `--fee-rate`
   (default 100, the relay floor) pays more per gram of mass. The address must belong to the binary's network (a mainnet
   binary refuses a `kaspatest:` address, and the node must report the same network). **A running executor makes it
   refuse**: the command takes the data directory's writer lock, the one a running kobd holds ("in use by another kobd
@@ -288,12 +311,24 @@ hours, indexed in the background). To move an executor:
 
 1. **Stop the old one first** (section 7 shows how). Two executors on one key race for the same coins: the node refuses one of
    each conflicting pair (a refused transaction pays no fee), so both waste work and back off; the writer lock protects one
-   data directory, not a key.
+   data directory, not a key. Best stop it when the status line shows `0 pending`: the transactions still in flight are kept in
+   `kob-data`, which the move leaves behind (a coin one of them spends is then held out of the new executor's funding for a few
+   minutes, nothing worse).
 2. Copy the program folder without `kob-data` (or run the setup on the new machine and name the copied key file when it asks).
    The paths in `kobd.toml` are relative to the file; check `rpc_url` (an own node's address differs per machine).
-3. On Linux the key file must be readable by its owner only (`chmod 600 kob-operator.key`): the executor refuses a key file that
-   group or others can read. On Windows a copy takes the permissions of the folder it lands in: check that only your account can read the
-   key (the setup made it so).
+3. The key file must be readable by your account only, or the executor refuses it. On Linux: `chmod 600 kob-operator.key` (group or
+   others may not read it). On Windows a copy takes the permissions of the folder it lands in, and the executor refuses a key file any
+   other account can read (Everyone, Users, or a named second account; only your account, SYSTEM and Administrators may). Restrict
+   it in a terminal in the folder (PowerShell or cmd):
+
+   ```
+   icacls kob-operator.key /inheritance:r /grant:r "%USERNAME%:F"      # cmd
+   icacls kob-operator.key /inheritance:r /grant:r "${env:USERNAME}:F"  # PowerShell
+   icacls kob-operator.key                                             # shows the result: one line, your account
+   ```
+
+   For an executor that runs as a service account, grant that account instead of yours. `KOB_KEY_ACL_STRICT=0` in the environment
+   turns the refusal into a warning (not recommended: anyone the warning names can read the key and spend its funds).
 4. Start the new one and look at `kobd address-balance` and the status line before you delete the old folder.
 
 ## 6. Move to a service
@@ -346,8 +381,11 @@ WantedBy=multi-user.target
 ```
 
 (`RestartSec=10` and `StartLimitIntervalSec=0` make systemd keep retrying: without them it gives up after five starts in ten
-seconds, for example while the network is still coming up after a boot.) The hardened unit of the operations guide, with the key
-as a systemd credential, is `docs/ops/executor.md`, A.3.
+seconds, for example while the network is still coming up after a boot.) A restart is also how the executor recovers from what it
+cannot fix while it runs: when its indexer stays halted or cannot write its database (a full disk, a corrupt file) for three
+minutes, or its read API stops serving, it logs why (`exiting so that a supervisor restarts the executor`) and exits with status
+1. Run it under a supervisor that restarts it (systemd as above, Docker's `--restart`, the Task Scheduler of section 6, the
+Android app). The hardened unit of the operations guide, with the key as a systemd credential, is `docs/ops/executor.md`, A.3.
 
 **Docker (Linux)**: `crates/kobd/Dockerfile` builds the executor of one network from the source (pinned base images, a
 non-root user, uid 10001). The volume `/data` holds the configuration, the key file and the data directory
@@ -393,7 +431,8 @@ program changes. The program is not replaced while it runs, and it does not upda
    the stored cursor. Check `kobd --version`, then `/v1/health`: `version`, `commit` and `payload_version` must be the
    release's, `state` becomes `following`, and the status line shows no `WARNING:`.
 6. **When the release notes ask for a rebuild** (the database is refused as old): an Executor on lean storage has no record log to
-   replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
+   replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it (best with `0 pending` on the status line: the
+   transactions in flight are kept in `kob-data`), move `kob-data` aside (or delete it) and start;
    the fast start rebuilds the live book within seconds. Make sure neither the key file nor the pause file is inside `kob-data`
    (the setup puts both next to the program; a configuration from an older setup has `pause_file = "kob-data/pause"`:
    change it to `"kob-pause"` first, or the pause goes with the folder and the executor trades on its next start). An Indexer's archive of schema 5 to 9 is brought
