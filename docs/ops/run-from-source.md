@@ -76,7 +76,7 @@ afford to lose, and back the file up where only you can read it.
 | Health | `GET /v1/health` (`ok`, `state`, `roles`, `network`, `book_complete`, lag), `GET /v1/health/ready` (200 / 503 for a probe); fields in `docs/api-reference.md` |
 | Files | `kobd.toml` (the configuration; its relative paths are taken from its folder), `kob-tokens.json` (the supported token programs), `kob-operator.key` (Executor only), `kob-data/` (the SQLite store and, for the Indexer, the record log) |
 | Logs | the console, with a status line every 10 seconds (`--status-secs`); `--log-file kobd.log` (or `log_file = "kobd.log"` in the configuration) also writes a rotated file. `RUST_LOG=debug` for more |
-| Pause, stop | the file `kob-data/pause` pauses an Executor's trading; Ctrl+C stops either role cleanly; the next start continues where it stopped |
+| Pause, stop | the file `kob-pause` next to `kobd.toml` pauses an Executor's trading (older setups: `kob-data/pause`); Ctrl+C stops either role cleanly; the next start continues where it stopped |
 
 Next: services (Task Scheduler, systemd), Docker, upgrades and withdrawals in `docs/ops/executor-quickstart.md`; every flag,
 the configuration keys, the economics and the runbook in `docs/ops/executor.md`. `kobd --help` lists the start options and

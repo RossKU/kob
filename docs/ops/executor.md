@@ -105,8 +105,12 @@ node (wRPC JSON)
 KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd --executor \
   --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
   --data-dir /var/lib/kob-index --tokens /etc/kob/tokens.json --listen 127.0.0.1:8090 \
-  --pause-file /var/lib/kob-index/pause --metrics-file /var/lib/node_exporter/kob.prom
+  --pause-file /etc/kob/pause --metrics-file /var/lib/node_exporter/kob.prom
 ```
+
+A start from options alone, like this one, has lean storage and fast start (A.1.1), as the `kobd.toml` of `kobd setup`
+has: on an empty data directory it trades within seconds. `--no-fast-start` (or `fast_start = false` in a `--config` file)
+indexes the history first. Its first log lines say which applies.
 
 ### A.1 One store, one follower, one truth
 
@@ -181,9 +185,9 @@ KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd --executor \
 ### A.1.1 Fast start: trade within seconds, index the history meanwhile
 
 A first start on an empty data directory indexes the chain from the node's pruning point (about 30 h on testnet-10; over
-public nodes on a phone about 8 h) and the matcher plans nothing until that is done. With `fast_start = true` (the key
-`kobd setup` and the Android app write for the Executor; `--fast-start` for one start; `--no-fast-start` or
-`fast_start = false` turns it off) the first start of the Executor runs two standard indexers in the one process, each with its
+public nodes on a phone about 8 h) and the matcher plans nothing until that is done. With fast start (on for every start of the
+Executor, from options alone too, as the key `fast_start = true` that `kobd setup` and the Android app write;
+`--no-fast-start` or `fast_start = false` turns it off, and so does the x402 facilitator, with a warning) the first start of the Executor runs two standard indexers in the one process, each with its
 own database (two histories are never merged):
 
 * the **tip store**, `<data_dir>/tip/`: its cursor starts at the node's current sink (`start = sink`, no record log, its
@@ -326,7 +330,7 @@ writers on one data directory.
 [Service]
 ExecStart=/usr/local/bin/kobd --executor --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
   --data-dir /var/lib/kob-index --tokens /etc/kob/tokens.json --listen 127.0.0.1:8090 \
-  --pause-file /var/lib/kob-index/pause --metrics-file /var/lib/node_exporter/kob.prom
+  --pause-file /etc/kob/pause --metrics-file /var/lib/node_exporter/kob.prom
 LoadCredential=kob-operator-key:/etc/kob/operator.key
 DynamicUser=yes
 StateDirectory=kob-index
@@ -339,11 +343,14 @@ Restart=always
 Keep the data directory on a path the unit may write (`StateDirectory=kob-index` is
 `/var/lib/kob-index`).
 
-**Pause file.** `touch /var/lib/kob-index/pause` pauses the matcher, the keepers and the x402 facilitator of the process
+**Pause file.** `touch /etc/kob/pause` pauses the matcher, the keepers and the x402 facilitator of the process
 (nothing is built, verified, settled or broadcast; the indexer keeps following); `rm` resumes. Keep it on persistent
 storage, never under `/run` (tmpfs): a pause must survive a reboot, or `Restart=always` brings the unit back trading. The
 file fails closed: when its state cannot be read (the unit may not look into its directory, an I/O error) the process
-counts as paused and warns once, so check `kob_matcher_paused` after a deployment.
+counts as paused and warns once, so check `kob_matcher_paused` after a deployment. A pause file whose directory does not
+exist counts as paused too (an unmounted volume, a mistyped path, a directory deleted with the file in it). Keep it out
+of the data directory, which a rebuild deletes: in the unit above `/etc/kob` must be searchable by the unit (mode 0755;
+the key file inside stays 0600, read by systemd for `LoadCredential`).
 
 **Deployment build.** Every build embeds the reference templates (no template depends on a network or a genesis step;
 conditional orders arm in every build). The deployment variant only records its network: it embeds
@@ -1958,7 +1965,9 @@ Poll `/v1/health`, or scrape `GET /v1/metrics` (the same numbers as Prometheus t
 |---|---|
 | `state = gap` | halted, operator action (section 7); page immediately |
 | `gaps` non-empty, `kob_indexer_gaps_total` above 0 | the node pruned history the store had not read; the store skipped it and went on (7.4): orders created in that stretch need their makers' imports; page, then check the makers' open orders |
-| `state = node_unavailable` for more than 5 min | node down, unsynced, or in transitional IBD |
+| `state = node_unavailable` for more than 5 min | node down, unsynced, or in transitional IBD; also a database that cannot be written (disk full, a damaged file): `last_error` then begins `commit failed` |
+| `node_alarms` non-empty, `kob_indexer_node_alarms` above 0 | a node named in the configuration is unusable (another network, no UTXO index, not synced for 2 min, hanging, behind the other node, contradicting it; Part C, *Node*): it is never replaced, fix it; a cross-checking one is cut off from the pair meanwhile |
+| `kob_indexer_node_replaced_total` rising every few minutes | the public nodes keep failing; `nodes[].cut_reason` says which host and why |
 | `lag_seconds` above 1 h / 6 h / 12 h / 24 h | approaching the node's retention; 12 h is consensus finality, 24 h leaves little of the default 30 h pruning window |
 | `last_progress_unix_ms` older than 60 s | the follower is stuck (progress is stamped on every successful poll, including "nothing new") |
 | `vspc_timeouts_total` rising, `batch_window_blue` small, `lag_blue` not falling | the link to the node is slower than the chain (section 3, *Bandwidth*): run the indexer next to its node |
@@ -2763,7 +2772,9 @@ The only secret is the operator's hot key (P2PK Schnorr). It is never a command-
 Sources, in order: `--key-file PATH` / `$KOB_OPERATOR_KEY_FILE`, a systemd credential
 `kob-operator-key` (`$CREDENTIALS_DIRECTORY`, tmpfs), `$KOB_OPERATOR_KEY` (hex; removed from the
 environment once read). A key file holds 64 hex characters and must be mode `0600` or `0400` (the
-process refuses group- or world-accessible files; on Windows it warns when another account group can read the file). The secret is wiped from memory on exit. `kobd setup` generates a key with the OS CSPRNG into a new file that is owner-only before the secret is written (Quick start).
+process refuses group- or world-accessible files; on Windows it warns when another account group can read the file). The key's own copy is wiped from memory when the
+process drops it (on exit); copies made by the libraries that parse it and sign with it are not, so treat the machine's
+memory (swap, crash dumps) as holding the key. `kobd setup` generates a key with the OS CSPRNG into a new file that is owner-only before the secret is written (Quick start).
 
 * Fund the key's P2PK address with a few days of operating KAS only; split it into several UTXOs
   (10 KAS or more each) so independent batches and keeper jobs can run in one tick. Change
@@ -2863,9 +2874,21 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   retried as the cross-checking one. A node that drops again within 2 minutes of its last drop (`DROP_WINDOW`; its retry
   failing included) is given up at once, and a replacement on a host neither in use nor failed lately is resolved in the
   background; the same for the cross-checking node. A cross-checking node that cannot answer leaves the
-  authority alone meanwhile (no stall; nothing can be contradicted while there is no second node). With no node left, both
+  authority alone meanwhile (it has 5 s for a single step near the tip and 30 s for a window, and its timeouts count
+  against it as below; nothing can be contradicted while there is no second node). With no node left, both
   are resolved again with a backoff (2 s doubling to 60 s). Every change is logged with the host names, and the status line
   shows both hosts, their state and how often each entry was replaced.
+* **Both nodes are judged the same way** (`rpc::judge`; the health watch of `rpc::multi`): every 10 s each is asked
+  `getServerInfo` (5 s timeout). A node on another network, without the UTXO index (the Executor reads its funds there),
+  reporting not synced for 2 min, with 3 request timeouts within 10 min (it hangs), more than 300 DAA behind the other
+  node at six checks in a row (a minute), or contradicting the other node is given up at once like a failed one, whichever
+  role it has. When it is the authority, the other node takes the role, unless that one is suspect itself (not synced, or
+  behind at the last check): then the authority's entry resolves a node of its own. A resolution that fails is tried again
+  with the backoff until the entry has a node. `/v1/health` `nodes[].cut_reason` names the host given up and why (the
+  status line: `replaced Nx, last: ...`; `kob_indexer_node_replaced_total`). An own node and its `--node` peers are judged
+  the same way but never replaced: a finding raises an alarm (logged as an error, `node_alarms` in `/v1/health`,
+  `NODE ALARM:` on the status line, `kob_indexer_node_alarms`) until it ends, and a cross-checking peer with an alarm is
+  left out of the pair meanwhile (one that contradicted the authority is dropped until a restart).
 * A further `--node resolver` adds a third public node (`resolver:3`) that fetches windows and takes submissions.
 * Advanced: `KOB_RESOLVERS` (comma-separated resolver URLs, e.g. `https://resolver.example,http://127.0.0.1:8888`) replaces
   the built-in list, for an operator who runs a private resolver (rusty-kaspa's resolver service) over its own nodes; the
@@ -2909,7 +2932,10 @@ fallback = "resolver"              # the public Kaspa nodes as a cross-checked p
 
 Public nodes are shared and slower than an own node (and their retention decides how far back a first start can index). A
 bad node cannot steal funds: the executor signs only its own inputs and the covenants enforce every order; it could waste
-fees (a transaction it drops or delays) or hide orders, which the second node guards against. The x402 facilitator of the
+work (a transaction it drops or delays) or hide orders. The second node guards against hiding: the chain blocks and the
+accepted transaction ids the authority reports are cross-checked before anything is indexed. The transaction bodies the
+authority serves itself are not compared with the second node's (only bodies another node served are checked, against
+their ids), so a lying authority could show orders that do not exist; the covenants refuse to settle them. The x402 facilitator of the
 same process reads from the authority and submits to every node that takes submissions (both of the pair), as the
 matcher does: the first node that takes a transaction answers (`node: "resolver"` in its own configuration works too, also
 `wss://`).
@@ -2946,7 +2972,7 @@ kobd match --book-file book.json --offline
 KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd match --book-file book.json \
   --network testnet-10 --rpc-url ws://127.0.0.1:18210 --dry-run
 
-# Indexer, matcher and keepers in one process, one store (Part A):
+# Indexer, matcher and keepers in one process, one store (Part A; fast start on an empty data directory, A.1.1):
 KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kobd --executor --network testnet-10 --data-dir /var/lib/kob-index \
   --tokens /etc/kob/tokens.json --metrics-file /var/lib/node_exporter/kob.prom
 
@@ -3022,7 +3048,7 @@ cannot be read counts as present (paused, with a warning).
 | `kob_select_keeper_taken_total`, `kob_select_keeper_deferred_total`, `kob_select_keeper_overdue_total` | the same for the keepers' due jobs |
 | `kob_select_ceded_total` | orders this executor left for later that another transaction took first: races not run (the proxy of the collisions avoided) |
 | `kob_select_lost_steps_match_total`, `kob_select_lost_steps_keep_total`, `kob_select_enabled` | steps that lost a race; 1 while the selection is on |
-| `kob_matcher_pending_txs` | stays above 0 for minutes (transactions not mined) |
+| `kob_matcher_pending_txs` | the transactions waiting for acceptance. One not accepted within about 60 s (600 DAA) is forgotten (not counted, not logged), so the gauge does not stay high: watch for `kob_matcher_conflicts_total` rising on a quiet book instead (a forgotten transaction still in the mempool blocks the coin it spends) |
 | `kob_matcher_finalized_total`, `kob_matcher_finalized_profit_sompi` | income tracking |
 | `kob_matcher_skipped_books` | persistent (unsupported programs, unprofitable books) |
 | `kob_fee_estimated`, `kob_fee_rate_high` / `_normal` / `_low`, `kob_fee_estimate_failures_total` | 0 for minutes on a node that should answer (the floor is paid: slow acceptance under load); a rate at `--fee-max-rate` for long (the network is busier than the cap allows) |

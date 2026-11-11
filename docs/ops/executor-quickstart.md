@@ -91,7 +91,10 @@ different hosts: one is the chain authority, the other cross-checks it (only the
 are indexed), and every transaction goes to both. If one fails, the other carries on at once and a replacement on a third
 host is found in the background. Public nodes are shared and slower than your own, and the first catch-up takes longer. A
 bad node cannot steal funds (the executor signs only its own inputs, and the covenants enforce every order), but it could
-waste fees or hide orders: the cross-check is the guard. Good to start with and for a small operator.
+waste the executor's work or hide orders. The cross-check keeps orders from being hidden (the chain blocks and accepted
+transactions both nodes report); the transaction bodies come from the chain authority alone. A node that fails, hangs,
+falls behind, is on another network or contradicts the other is replaced, whichever role it has. Good to start with and
+for a small operator.
 
 A configuration that names no node (no `rpc_url`, no `--rpc-url`) uses the public pair too.
 
@@ -151,7 +154,8 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
    empty key settled two matches and earned a fee that way). What needs the key's own coins waits (`skipped why=lowering:
    insufficient funds`): a batch whose fee or carriers the orders do not cover, and the keeper subsidy of a kill or refund. The
    100 KAS is therefore an alert level (`--low-funds-kas`), not a minimum the executor enforces; below it, expect to miss work.
-7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6).
+7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6). With it the first start
+   has no fast start (the history first, which takes hours; a warning says so), and `--dry-run` does not serve it.
 
 It then writes `kobd.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
 testnet-10; the mainnet binary carries its pinned registry), prints the line that starts it (for example
@@ -171,7 +175,7 @@ without it they are lost.
 
 ## 4. What to watch
 
-Once a minute the executor logs a status line:
+Every 10 seconds (`--status-secs`) the executor logs a status line:
 
 ```
 status: indexer following, caught up (3 DAA behind the node), 120 orders indexed | 14 transactions sent, 12 final,
@@ -179,24 +183,27 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
 ```
 
 * With public nodes the line ends with both hosts and their state, e.g. `nodes: muon-10.kaspa.blue (authority, ok),
-  vector-10.kaspa.green (cross-check, ok, replaced 1x)`: `replaced` counts nodes given up (failed, or disagreeing), and
+  vector-10.kaspa.green (cross-check, ok, replaced 1x, last: ...)`: `replaced` counts nodes given up (failed, hanging,
+  behind, on another network, or disagreeing; `last:` names the host and why), and
   `disagreements` answers of the authority the other node contradicted (nothing contradicted is indexed). The two public
   nodes' newest blocks often differ for a moment; that settles by the next poll, is not a disagreement, and is only counted
   (`tip_differs` in `/v1/health`) and logged at debug level. A warning appears if it does not settle.
 * The first start trades within seconds: the setup turns on the fast start, so the executor follows the chain from the node's
   current tip at once (`fast start: trading on orders seen since 14:32 UTC; full book in about 7 h 40 min`) while the
   history is indexed in the background; it misses the orders created before it started until the full book is there
-  (`/v1/health`: `book_complete: false`), then switches over by itself (`docs/ops/executor.md`, A.1.1). Without it (an older
-  configuration, `fast_start = false`) the indexer first catches up with everything the node retains and the matcher and
-  keepers plan nothing until it is close to the tip. The banner at the start says which of the two applies.
-* **An Indexer's first catch-up takes hours.** It indexes the chain from the node's pruning point. Measured example (not a guarantee), 2026-11-10 on
-  testnet-10 through the public resolver pair: about 35 h of chain behind at the start and about 225 DAA/s net catch-up, so roughly 4 to
-  5 h until it was at the tip. Your figures depend on the nodes, the line and the chain's load; `/v1/health` shows the lag
-  (`lag_seconds`).
+  (`/v1/health`: `book_complete: false`), then switches over by itself (`docs/ops/executor.md`, A.1.1). Without it (`fast_start = false`,
+  `--no-fast-start`, or with the x402 facilitator) the indexer first catches up with everything the node retains and the
+  matcher and keepers plan nothing until it is close to the tip. The banner at the start (a start from options alone: its
+  first log lines) says which of the two applies.
+* **An Indexer's first catch-up takes hours.** It indexes the chain from the node's pruning point (about 30 h of chain on
+  testnet-10). The status line shows the pace and the time to go (`indexing 20x chain speed, caught up in about 1 h 40 min`),
+  `/v1/health` the lag (`lag_seconds`, `catch_up`). The time depends on the nodes, the line and the chain's load: over the
+  public pair, plan for hours.
 * `WARNING:` names what needs you: the node not synced or unreachable, funds below 100 KAS (`--low-funds-kas`; the warning
   names the address to send KAS to; it is logged at the start, then at most every 10 minutes or when the balance changes by a
   quarter, and the status line shows the funds every 10 seconds; the executor trades with less than 100 KAS, the number is an alert
-  threshold), the pause file present, transactions the node rejected.
+  threshold), the pause file present, transactions the node rejected. `NODE ALARM:` names an own node that is not usable
+  (another network, no UTXO index, not synced for minutes, hanging): it is never replaced, fix it.
 * The read API answers on `http://127.0.0.1:8090/v1/health` (loopback only).
 * For real monitoring use the metrics file (`--metrics-file`, `docs/ops/executor.md`, Part C *Monitoring*).
 * **Keep the computer's clock right** (automatic time sync on). The matcher compares a day order's UTC deadline with the system
@@ -224,7 +231,10 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
 
 ## 5. Pause and stop
 
-* **Pause trading** without stopping the indexer: create the file `kob-data/pause` (any content); delete it to resume.
+* **Pause trading** without stopping the indexer: create the file `kob-pause` next to `kobd.toml` (any content); delete it to
+  resume. The start banner names the file. A configuration from an older setup names `kob-data/pause`: change
+  `pause_file` in its `[launch]` table to `"kob-pause"`, since a rebuild deletes `kob-data` and the pause with it. A pause
+  file whose folder does not exist counts as paused.
 * **Stop**: Ctrl+C in the window (or close it; `SIGTERM` / `docker stop` / `systemctl stop` do the same). The executor
   stops within a few seconds even when the node does not answer, flushes the database and exits; press Ctrl+C a second
   time to exit at once. The database survives either way; the next start continues where it stopped. A start after more
@@ -244,7 +254,7 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
   checking that it was set up for exactly these roles (otherwise it says so and starts nothing; with no configuration it opens the
   setup with the roles chosen, or, without a terminal, refuses). Plain `kobd` runs the configuration whatever its roles. Options
   follow the flags and are added to the configuration's: `kobd --executor --dry-run` (builds and checks every transaction,
-  sends nothing), `kobd --executor --listen 127.0.0.1:8091`; `kobd --help` lists them. The Indexer takes the indexer's options
+  sends nothing; the x402 facilitator is not served), `kobd --executor --listen 127.0.0.1:8091`; `kobd --help` lists them. The Indexer takes the indexer's options
   only.
 * **Withdraw**: stop the executor first, then, from the same folder (or with `--dir <folder>`, or `--config <file>` for a
   configuration elsewhere):
@@ -272,11 +282,13 @@ keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-fil
 
 **Back up, and move to another computer.** The only thing you cannot rebuild is the key: back up `kob-operator.key` (a plain
 64-hex-character private key; there is no seed phrase) where only you can read it. The configuration is a text file
-(`kobd.toml`) that setup writes again in a minute. The database is not precious: an Executor on lean storage rebuilds it
-from the node within seconds on a start with an empty data directory (fast start). To move an executor:
+(`kobd.toml`) that setup writes again in a minute. The database is not precious: an Executor on lean storage rebuilds the
+live book from the node within seconds on a start with an empty data directory (fast start; the full book then takes
+hours, indexed in the background). To move an executor:
 
-1. **Stop the old one first** (section 7 shows how). Two executors on one key spend each other's coins and waste fees; the writer
-   lock protects one data directory, not a key.
+1. **Stop the old one first** (section 7 shows how). Two executors on one key race for the same coins: the node refuses one of
+   each conflicting pair (a refused transaction pays no fee), so both waste work and back off; the writer lock protects one
+   data directory, not a key.
 2. Copy the program folder without `kob-data` (or run the setup on the new machine and name the copied key file when it asks).
    The paths in `kobd.toml` are relative to the file; check `rpc_url` (an own node's address differs per machine).
 3. On Linux the key file must be readable by its owner only (`chmod 600 kob-operator.key`): the executor refuses a key file that
@@ -351,7 +363,7 @@ docker logs -f kob                                                       # the s
 ```
 
 `--network host` lets the container reach the node's loopback RPC and keeps the read API on the host's loopback. Pause with
-`touch /srv/kob/kob-data/pause` (as uid 10001 or root), stop with `docker stop kob`. No image is published: build it from
+`touch /srv/kob/kob-pause` (as uid 10001 or root), stop with `docker stop kob`. No image is published: build it from
 the commit you verified.
 
 ## 7. Upgrade, stop and withdraw
@@ -382,8 +394,9 @@ program changes. The program is not replaced while it runs, and it does not upda
    release's, `state` becomes `following`, and the status line shows no `WARNING:`.
 6. **When the release notes ask for a rebuild** (the database is refused as old): an Executor on lean storage has no record log to
    replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
-   the fast start rebuilds the live book within seconds. Make sure the key file is not inside `kob-data` (setup puts it next
-   to the program), and create `kob-data/pause` again if you use it. An Indexer's archive of schema 5 to 9 is brought
+   the fast start rebuilds the live book within seconds. Make sure neither the key file nor the pause file is inside `kob-data`
+   (the setup puts both next to the program; a configuration from an older setup has `pause_file = "kob-data/pause"`:
+   change it to `"kob-pause"` first, or the pause goes with the folder and the executor trades on its next start). An Indexer's archive of schema 5 to 9 is brought
    to schema 10 (the current one) offline with `kobd db --config kobd.toml migrate` in its folder (stop it first;
    free disk about the size of the store; the old file stays as `index.sqlite3.before-migrate` until you delete it; an older build refuses
    the migrated store; `docs/ops/executor.md`, 7.6a); any other archive rebuilds with `kobd db --config kobd.toml
@@ -500,7 +513,7 @@ itself (`127.0.0.1:8090`).
 | `Order book: partial, trading on orders seen since HH:mm` | Fast start (`book_complete: false`); the time is the phone's. |
 | `History: X to index, full book in about Y` | The fast start's background indexing (`backfill`). |
 | `Node: host (chain authority, ok)` | Each public node: the authority (`primary`) or the cross-check, and its state. |
-| `N transactions sent, N final, N pending, ...` | The Executor's status line of the last minute (section 4). |
+| `N transactions sent, N final, N pending, ...` | The Executor's status line, every 10 seconds (section 4). |
 | `funds X KAS` | The key's funds; the balance under the address shows the same. |
 | `Read API: not reachable yet` | The executor is starting, or its API is not up. |
 | `Warnings:` | A restart, a failed database update (`not started: ...`), a catch-up more than an hour behind, a node error, funds below 100 KAS, and the `WARNING:` part of the status line (section 4). |
