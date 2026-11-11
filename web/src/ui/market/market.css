@@ -1,5 +1,6 @@
 /* Token page (exchange layout): stats strip, order book | chart + depth | ticket, the activity log under them. Desktop 3 columns (>= 1200 px), tablet 2, phone 1.
-   The depth chart is a panel of its own on three columns only; below 1200 px it is the "Depth" tab of the price chart's panel (PriceChart.tsx), so no grid area is left for it.
+   The depth chart is a panel of its own on three columns only; below 1200 px it is the "Depth" view of the order book's panel (BookTabs.tsx), so no grid area is left for it.
+   The price chart is always shown, whatever the width.
    Every figure uses tabular numerals; panels keep their height while loading (skeletons), so nothing jumps when data arrives. */
 
 body:has(.market-page) .container { max-width: 1520px; }
@@ -37,7 +38,7 @@ body:has(.market-page) .container { max-width: 1520px; }
 .mkt-area-chart { grid-area: chart; }
 .mkt-area-ticket { grid-area: ticket; align-self: start; min-width: 0; }
 .mkt-area-depth { grid-area: depth; }
-/* the loading frame draws a depth panel too: it has no place below three columns, where the depth chart is a tab of the price panel */
+/* the loading frame draws a depth panel too: it has no place below three columns, where the depth chart is a view of the book's panel */
 @media (max-width: 1199px) { .mkt-area-depth { display: none; } }
 /* The ticket panel has the height of its row and never changes it (founder, 2026-11-10; the usual exchange layout): beside the book and the chart its box
    takes no height of its own (contain: size), it fills the rows it spans, and the form scrolls inside it (ticket.css .tk-scroll) with the button pinned at the
@@ -49,7 +50,7 @@ body:has(.market-page) .container { max-width: 1520px; }
 /* under the grid, on the full width of the page (siblings of .mkt-grid): the activity log (ui/activity), then the facts */
 .mkt-area-details { min-width: 0; }
 @media (min-width: 760px) {
-  /* two columns: the ticket beside the book only, the chart on the full width over both (the depth chart is a tab of the chart's panel). The row is as tall as the taller of the book and the whole Limit form (--tk-fit, measured by the ticket): the form
+  /* two columns: the ticket beside the book only, the chart on the full width over both (the depth chart is a view of the book's panel). The row is as tall as the taller of the book and the whole Limit form (--tk-fit, measured by the ticket): the form
      does not scroll unless more of it is unfolded, and the book's card stretches to the ticket */
   .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book side'; }
   .mkt-side { display: flex; flex-direction: column; gap: 12px; grid-area: side; align-self: start; min-width: 0; }
@@ -162,17 +163,7 @@ body:has(.market-page) .container { max-width: 1520px; }
 .chart-sw[data-color='warn'] i { background: var(--warn); }
 .chart-sw[data-color='accent'] i { background: var(--draw-accent); }
 @media (pointer: coarse) { .chart-sw { width: 34px; height: 34px; } }
-/* the Price | Depth switch (below 1200 px): a small pill like the interval switch; what only the price chart has keeps its place (hidden, not removed) while the depth chart is shown, so the header does not change height */
-.chart-head .segmented button { min-height: 28px; padding-inline: 12px; font-size: 0.82rem; }
-@media (pointer: coarse) { .chart-head .segmented button { min-height: 34px; } }
-.chart-head[data-view='depth'] .chart-price-only { visibility: hidden; }
-.chart-stage { position: relative; }
 .chart-box { position: relative; height: 420px; }
-/* the depth tab: the price chart stays where it is, with its size and state, behind the depth chart (hidden is not unmounted) */
-.chart-box-off { visibility: hidden; }
-.chart-depth-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
-.chart-depth-pane > figure { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.chart-depth-pane .depth-box { flex: 1 1 auto; height: auto; min-height: 0; }
 .chart-draw-layer { position: absolute; left: 0; top: 0; z-index: 2; cursor: crosshair; touch-action: pan-y; }
 .chart-draw-layer.tool-erase, .chart-draw-layer.tool-paint { cursor: pointer; }
 .chart-draw-hint {
@@ -192,6 +183,23 @@ body:has(.market-page) .container { max-width: 1520px; }
 
 /* ------------------------------------------------------------------ depth chart */
 
+/* Below 1200 px the book's panel has an "Order book | Depth" switch: the book keeps its place, with its size and state, hidden behind the depth chart (hidden is not
+   unmounted, so the panel never changes height), and the depth chart fills the body of the panel. The panel's title stays for assistive technology, the switch is
+   what the eye reads. The book's own controls keep their place while the depth chart is shown (hidden, not removed), so the header does not change. */
+.book-tabbed { display: flex; flex-direction: column; }
+.book-tabbed > .section-body { position: relative; flex: 1 1 auto; }
+.book-tabbed.is-depth > .section-body { min-height: 300px; }
+.book-tabbed > .section-head > h2 { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.book-tabbed > .section-head { flex-wrap: nowrap; }
+.book-tabbed > .section-head > .row { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; }
+.book-tabs .segmented button { min-height: 26px; padding: 2px 10px; font-size: 0.8rem; white-space: nowrap; }
+@media (pointer: coarse) { .book-tabs .segmented button { min-height: 34px; } }
+.book-tabs { margin-right: auto; }
+.book-tabbed.is-depth .book-only { visibility: hidden; }
+.book-main-off { visibility: hidden; }
+.book-depth-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.book-depth-pane > figure { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.book-depth-pane .depth-box { flex: 1 1 auto; height: auto; min-height: 0; }
 .depth-box { position: relative; height: 240px; }
 /* the drawing fills its box and gives it no height of its own: on three columns the box takes the height the row has over the chart (market grid) */
 .depth-box > .depth-svg, .depth-box > .skeleton, .depth-box > .mkt-empty { position: absolute; inset: 0; }
@@ -203,6 +211,7 @@ body:has(.market-page) .container { max-width: 1520px; }
 .depth-svg .bid-line { fill: none; stroke: var(--buy); stroke-width: 1.6; }
 .depth-svg .ask-line { fill: none; stroke: var(--sell); stroke-width: 1.6; }
 .depth-svg .mid-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
+.depth-svg.depth-pick { cursor: pointer; }
 .depth-svg .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
 .depth-tip {
   position: absolute; z-index: 5; pointer-events: none; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);

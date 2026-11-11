@@ -144,9 +144,9 @@ test.describe('market data on a phone', () => {
   test('stacks the panels without horizontal scroll', async ({ appPage: page, mock }) => {
     await openWithHistory(page, mock);
     await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'ready');
-    // below 1200 px the depth chart is the Depth tab of the chart's panel, not a panel of its own (depth-tab.spec.ts)
+    // below 1200 px the depth chart is the Depth view of the book's panel, not a panel of its own (depth-tab.spec.ts)
     await expect(page.getByTestId('depth-section')).toHaveCount(0);
-    await page.getByTestId('chart-view-depth').click();
+    await page.getByTestId('book-view-depth').click();
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
     await page.getByTestId(TESTID.activityList).scrollIntoViewIfNeeded();
     await expect(page.getByTestId(TESTID.activityList).getByTestId('activity-row').first()).toBeVisible();

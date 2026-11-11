@@ -33,9 +33,11 @@ const fmtAmount = (v: number) =>
 
 /**
  * Depth chart: cumulative bids (left, green) and asks (right, red) around the mid price, step areas with a soft gradient, a subtle grid,
- * price and amount axes, a hover read-out. Drawn in SVG at the panel's pixel width (crisp text at any size).
+ * price and amount axes, a hover read-out. Drawn in SVG at the panel's pixel width (crisp text at any size). With `onPick` a click takes the price under
+ * the pointer and the side of the mid it is on (the page turns that into the ticket's prefill, as a click on a book row does); the chart is a pointer
+ * convenience, the book's rows stay the keyboard path, so the drawing is not a control for assistive technology.
  */
-export function DepthChart(props: { /** the USD display in force and the series is in KAS (a flipped KAS/TOKEN market): the cumulative KAS is shown as dollars, with the KAS figure in the read-out; null: as is */ fiat?: Fiat | null; series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book'; /** the data could not be loaded (not an empty book) */ unavailable?: boolean }) {
+export function DepthChart(props: { /** the USD display in force and the series is in KAS (a flipped KAS/TOKEN market): the cumulative KAS is shown as dollars, with the KAS figure in the read-out; null: as is */ fiat?: Fiat | null; series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book'; /** the data could not be loaded (not an empty book) */ unavailable?: boolean; /** a click on the chart: the price on its axis at the pointer and the side of the mid (left bid, right ask) */ onPick?: (side: 'bid' | 'ask', price: number) => void }) {
   const [ref, width, height] = useSize();
   const [hover, setHover] = useState<{ x: number; y: number; side: 'bid' | 'ask'; price: number; cum: number } | null>(null);
   const s = props.series;
@@ -51,13 +53,23 @@ export function DepthChart(props: { /** the USD display in force and the series 
       : t('market.depth.summary', { bids: fmtAmount(s.bids.at(-1)?.cum ?? 0), asks: fmtAmount(s.asks.at(-1)?.cum ?? 0), ticker: props.ticker })
     : null;
 
-  const onMove = (e: MouseEvent) => {
-    if (!g || !s || !g.hasData) return;
+  /** The price on the axis under the pointer and the side of the mid it is on. */
+  const pointAt = (e: MouseEvent): { x: number; price: number; side: 'bid' | 'ask' } | null => {
+    if (!g || !s || !g.hasData) return null;
     const box = (e.currentTarget as SVGElement).getBoundingClientRect();
     const x = e.clientX - box.left;
     const price = g.xMin + (x / g.width) * (g.xMax - g.xMin);
     const mid = s.mid ?? price;
-    const side: 'bid' | 'ask' = price <= mid ? 'bid' : 'ask';
+    return { x, price, side: price <= mid ? 'bid' : 'ask' };
+  };
+  const onClick = (e: MouseEvent) => {
+    const p = pointAt(e);
+    if (p && props.onPick && p.price > 0) props.onPick(p.side, p.price);
+  };
+  const onMove = (e: MouseEvent) => {
+    const at = pointAt(e);
+    if (!at || !g || !s) return;
+    const { x, price, side } = at;
     const pts = side === 'bid' ? s.bids : s.asks;
     // the cumulative amount available at this price: every level at least as good as it
     let cum = 0;
@@ -70,7 +82,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
     <figure style="margin:0" data-testid="depth-chart" data-source={props.source} data-state={g?.hasData ? 'ready' : props.loading ? 'loading' : 'empty'}>
       <div class="depth-box" ref={ref}>
         {g && g.hasData ? (
-          <svg class="depth-svg" width={width} height={height} role="img" aria-label={summary ?? t('market.depth.title')} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+          <svg class={props.onPick ? 'depth-svg depth-pick' : 'depth-svg'} width={width} height={height} role="img" aria-label={summary ?? t('market.depth.title')} onMouseMove={onMove} onMouseLeave={() => setHover(null)} onClick={props.onPick ? onClick : undefined}>
             <title>{t('market.depth.title')}</title>
             <defs>
               <linearGradient id="depth-bid-fill" x1="0" y1="0" x2="0" y2="1">
@@ -119,7 +131,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
           </div>
         )}
         {hover ? (
-          <div class="depth-tip" style={{ left: `${Math.min(Math.max(hover.x + 10, 0), Math.max(0, width - 170))}px`, top: `${Math.max(0, hover.y - 44)}px` }}>
+          <div class="depth-tip" style={{ left: `${Math.min(Math.max(hover.x + 10, 0), Math.max(0, width - (props.onPick ? 230 : 170)))}px`, top: `${Math.max(0, hover.y - 44)}px` }}>
             <div class={hover.side === 'bid' ? 'buy' : 'sell'}>{t(hover.side === 'bid' ? 'market.depth.bids' : 'market.depth.asks')}</div>
             <div>
               {fiat
@@ -127,6 +139,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
                 : t('market.depth.tip', { price: fmtPrice(hover.price, props.dp), priceUnit: props.priceUnit ?? t('market.stats.unitOf', { base: props.ticker, quote: 'KAS' }), amount: fmtFixed(hover.cum, props.amountDp ?? 2), ticker: props.ticker })}
             </div>
             {fiat ? <div class="muted">{kasTitleOf(fmtFixed(hover.cum, props.amountDp ?? 2), fiat)}</div> : null}
+            {props.onPick ? <div class="muted depth-tip-hint" data-testid="depth-pick-hint">{t('market.depth.pickHint')}</div> : null}
           </div>
         ) : null}
       </div>

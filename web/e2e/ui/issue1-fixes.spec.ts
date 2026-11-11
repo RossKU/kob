@@ -58,8 +58,8 @@ for (const width of [1280, 880, 390]) {
     const adv = page.getByTestId('order-advanced');
     // document coordinates (the click on the summary may scroll the page)
     const box = (id: string) => page.getByTestId(id).evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height }; });
-    // the depth chart is a panel of its own on three columns only (below 1200 px it is a tab of the chart's panel)
-    const ids = [width >= 1200 ? 'depth-section' : 'chart-section', 'token-details', 'ticket-container', 'order-place'];
+    // the depth chart is a panel of its own on three columns only (below 1200 px it is a view of the book's panel, which stays put instead)
+    const ids = [width >= 1200 ? 'depth-section' : 'book-section', 'token-details', 'ticket-container', 'order-place'];
     const closed: Record<string, { x: number; y: number; width: number; height: number }> = {};
     for (const id of ids) closed[id] = await box(id);
     await adv.locator('summary').click();

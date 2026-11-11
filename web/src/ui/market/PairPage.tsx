@@ -13,7 +13,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { OrdersView } from '../orders/OrdersView';
-import { FiatNote } from '../../app/use-fiat';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { pageTitle, useDocumentTitle } from '../../app/page-title';
 import { navigate, pairRoute, replaceRoute, routeToHash, tokenRoute } from '../../app/router';
@@ -39,6 +38,8 @@ import { PairBook } from './PairBook';
 import { useStaleSince } from './book-stale';
 import { loadCandles, type ChartView } from './candle-feed';
 import { BookFrame, StaleSince } from './OrderBook';
+import { BookPanelBody, BookViewSwitch, bookPanelClass, useBookPanelView } from './BookTabs';
+import { pairDepthPick } from './depth-pick';
 import { buildPairBook, bridgeQuoteFlip, mergeOrientations, pairSideOf, pickOf, type PairLevelRow } from './pair-model';
 import { useGenesisCheck } from './use-genesis-check';
 import { idleLeg, pairDepthSeries, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
@@ -214,8 +215,9 @@ export function PairPage(props: { base: string; quote: string }) {
   const fillsView = settled(fills) ? (fills.data ?? null) : undefined;
   const pairFillsSrc = useMemo(() => ({ base: props.base, quote: props.quote, view: fillsView }), [props.base, props.quote, fillsView]);
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
-  // three columns: the depth chart is a panel of its own; below that it is a tab of the price chart's panel
+  // three columns: the depth chart is a panel of its own; below that it is a view of the order book's panel (an "Order book | Depth" switch)
   const wide = useWideMarket();
+  const bookPanel = useBookPanelView(wide);
 
   const sides = [baseSide, quoteSide];
   const blocked = sides.find((s) => s.state === 'blocked');
@@ -273,8 +275,14 @@ export function PairPage(props: { base: string; quote: string }) {
   const statsLoading = !!indexer && ((stats.data === undefined && stats.loading) || (candles.data === undefined && candles.loading) || (fills.data === undefined && fills.loading));
   const unavailable = !!indexer && book.data === null && !book.loading && !book.error;
   const onPick = (row: PairLevelRow) => setPrefill(pickOf(row, base));
+  // a click on the depth chart prefills the ticket like a click on a book row (an ask a buy, a bid a sell) at the price under the pointer
+  const onPickDepth = (side: 'bid' | 'ask', price: number) => {
+    const p = pairDepthPick(side, price, base, quote);
+    if (p) setPrefill(p);
+  };
   const depthChart = (
     <DepthChart
+      onPick={onPickDepth}
       series={depthSeries}
       loading={!!indexer && book.data === undefined && !book.error}
       unavailable={!!book.error && !depthSeries}
@@ -289,8 +297,6 @@ export function PairPage(props: { base: string; quote: string }) {
     <MarketShell
       data-testid="pair-page"
       attrs={{ 'data-base': props.base, 'data-quote': props.quote }}
-      // the wallet's summary under the market shows its values in USD when that is chosen: the note says what the dollars are (the pair's own figures stay in their tokens)
-      notices={<FiatNote />}
       header={
         <div class="stack-sm" data-testid="pair-header">
           {/* line 1, always one line: the two tokens' pictures (icon and fingerprint of each), the pair selector and the swap button, then Live (which alone may wrap
@@ -346,33 +352,41 @@ export function PairPage(props: { base: string; quote: string }) {
         <Section
           title={t('pair.book.title')}
           data-testid="pair-book-section"
-          class="mkt-area-book mkt-card"
+          class={bookPanelClass(bookPanel.tabbed, bookPanel.view)}
           actions={
-            <Button small variant="ghost" onClick={book.reload} loading={book.loading && !!book.data} title={t('common.refresh')} aria-label={t('common.refresh')} data-testid="pair-refresh">
-              {'↻'}
-            </Button>
+            <>
+              {bookPanel.tabbed ? <BookViewSwitch view={bookPanel.view} onChange={bookPanel.setView} /> : null}
+              {/* the refresh keeps its place while the depth chart is shown (market.css hides it, so the header does not change) */}
+              <div class="ob-tools book-only">
+                <Button small variant="ghost" onClick={book.reload} loading={book.loading && !!book.data} title={t('common.refresh')} aria-label={t('common.refresh')} data-testid="pair-refresh">
+                  {'↻'}
+                </Button>
+              </div>
+            </>
           }
         >
-          {!indexer ? <Banner tone="info">{t('market.book.noIndexer')}</Banner> : null}
-          <ErrorBanner error={book.data ? null : book.error} title={t('pair.book.error')} onRetry={book.reload} data-testid="pair-book-error" />
-          <StaleSince since={bookStaleSince} data-testid="pair-book-stale-since" />
-          {unavailable ? <Banner tone="warn" data-testid="pair-book-unavailable" title={t('pair.book.unavailable')}>{t('pair.book.unavailableBody')}</Banner> : null}
-          {book.data && !model ? <Banner tone="warn" data-testid="pair-book-mismatch">{t('pair.book.mismatch')}</Banner> : null}
-          {indexer && (model ? !panelsOpen : book.loading && !book.data) ? (
-            <BookFrame head={{ price: t('pair.book.price', { base: baseInfo.ticker, quote: quoteInfo.ticker }), size: t('pair.book.amount', { base: baseInfo.ticker }), total: t('pair.book.source') }} rows={12} data-testid="pair-book-loading" />
-          ) : null}
-          {panelsOpen && model && model.empty ? <p class="muted center" data-testid="pair-book-empty">{t('pair.book.empty')}</p> : null}
-          {panelsOpen && model && !model.empty ? <PairBook model={model} base={baseInfo.ticker} quote={quoteInfo.ticker} onPick={onPick} /> : null}
-          <div class="pair-legend">
-            <span>{t('pair.book.legendDirect')}</span>
-            <span>{t('pair.book.legendEntry')}</span>
-            <span>{t('pair.book.legendRoute')}</span>
-          </div>
+          <BookPanelBody tabbed={bookPanel.tabbed} view={bookPanel.view} depth={depthChart}>
+            {!indexer ? <Banner tone="info">{t('market.book.noIndexer')}</Banner> : null}
+            <ErrorBanner error={book.data ? null : book.error} title={t('pair.book.error')} onRetry={book.reload} data-testid="pair-book-error" />
+            <StaleSince since={bookStaleSince} data-testid="pair-book-stale-since" />
+            {unavailable ? <Banner tone="warn" data-testid="pair-book-unavailable" title={t('pair.book.unavailable')}>{t('pair.book.unavailableBody')}</Banner> : null}
+            {book.data && !model ? <Banner tone="warn" data-testid="pair-book-mismatch">{t('pair.book.mismatch')}</Banner> : null}
+            {indexer && (model ? !panelsOpen : book.loading && !book.data) ? (
+              <BookFrame head={{ price: t('pair.book.price', { base: baseInfo.ticker, quote: quoteInfo.ticker }), size: t('pair.book.amount', { base: baseInfo.ticker }), total: t('pair.book.source') }} rows={12} data-testid="pair-book-loading" />
+            ) : null}
+            {panelsOpen && model && model.empty ? <p class="muted center" data-testid="pair-book-empty">{t('pair.book.empty')}</p> : null}
+            {panelsOpen && model && !model.empty ? <PairBook model={model} base={baseInfo.ticker} quote={quoteInfo.ticker} onPick={onPick} /> : null}
+            <div class="pair-legend">
+              <span>{t('pair.book.legendDirect')}</span>
+              <span>{t('pair.book.legendEntry')}</span>
+              <span>{t('pair.book.legendRoute')}</span>
+            </div>
+          </BookPanelBody>
         </Section>
       }
       chart={
-        <Section title={t(wide ? 'market.chart.title' : 'market.chart.titleTabs')} data-testid="chart-section" class="mkt-area-chart mkt-card">
-          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} {...(wide ? {} : { depth: depthChart })} />
+        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card">
+          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} />
           <p class="small muted" style="margin:6px 0 0" data-testid="pair-chart-note">{t('pair.chart.note', { base: baseInfo.ticker, quote: quoteInfo.ticker })}</p>
           {idleNote ? <p class="small muted" style="margin:4px 0 0" data-testid="pair-chart-idle">{idleNote}</p> : null}
         </Section>

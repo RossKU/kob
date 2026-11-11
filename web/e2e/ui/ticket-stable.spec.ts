@@ -10,7 +10,7 @@ import { horizontalOverflow } from '../helpers/i18n';
 
 test.use({ autoOpen: false });
 
-/** What must not move: the ticket panel, its button and scroll area's footer, the book, the charts and the activity log under them. The depth chart is a panel of its own on three columns only (below 1200 px it is a tab of the chart's panel). */
+/** What must not move: the ticket panel, its button and scroll area's footer, the book, the charts and the activity log under them. The depth chart is a panel of its own on three columns only (below 1200 px it is a view of the book's panel). */
 const watched = (page: Page): string[] => ['ticket-container', 'order-ticket', 'order-place', 'order-book', 'chart-section', ...((page.viewportSize()?.width ?? 0) >= 1200 ? ['depth-section'] : []), 'activity-list'];
 type Box = { x: number; y: number; width: number; height: number };
 

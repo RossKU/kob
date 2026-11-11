@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { pageTitle, useDocumentTitle } from '../../app/page-title';
 import { useDeclarationLookup } from '../../app/use-declaration';
-import { FiatNote, useFiat } from '../../app/use-fiat';
+import { useFiat } from '../../app/use-fiat';
 import { useServices, useWallet } from '../../app/context';
 import { OrdersView } from '../orders/OrdersView';
 import type { TicketPreset } from '../../app/router';
@@ -29,6 +29,8 @@ import { useInverted } from './use-orientation';
 import { MarketStats } from './MarketStats';
 import { usdFlippedStatsModel, usdStatsModel } from './stats-usd';
 import { BookFrame, BookGrouping, OrderBook, StaleSince } from './OrderBook';
+import { BookPanelBody, BookViewSwitch, bookPanelClass, useBookPanelView } from './BookTabs';
+import { tokenDepthPick } from './depth-pick';
 import { FavoriteStar } from './FavoriteStar';
 import { isFavoriteToken, toggleToken, useFavorites } from './favorites';
 import { FlipButton, MarketFrame, MarketShell, PairSelector, useWideMarket } from './MarketBar';
@@ -248,8 +250,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const statsForView = sm.last || !last ? sm : { ...sm, last: last.text, lastSide: last.side };
   // the USD display (Settings): the KAS tiles of the strip in dollars (a flipped market's prices are tokens per KAS and stay; its KAS volume tile is dollars)
   const fiat = useFiat();
-  // three columns: the depth chart is a panel of its own; below that it is a tab of the price chart's panel
+  // three columns: the depth chart is a panel of its own; below that it is a view of the order book's panel (an "Order book | Depth" switch)
   const wide = useWideMarket();
+  const bookPanel = useBookPanelView(wide);
   const tapeLast = useMemo(() => {
     const r = tape?.rows.find((x) => x.price !== null);
     return r && tape?.basis ? { price: r.price!, basis: tape.basis } : null;
@@ -335,8 +338,15 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     openPair(next);
   };
 
+  // a click on the depth chart prefills the ticket like a click on a book row: the book's rule (an ask a buy, a bid a sell; on a flipped market the chart's bid side
+  // is the native ask side, so there the other way round) at the price under the pointer, on the market's price step
+  const onPickDepth = (side: 'bid' | 'ask', price: number) => {
+    if (scale === null) return;
+    const p = tokenDepthPick(side, price, { inverted, decimals, scale: bookScale, tick: baseTick });
+    if (p) setPrefill(p);
+  };
   const depthChart = (
-    <DepthChart fiat={inverted ? fiat : null} series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
+    <DepthChart onPick={onPickDepth} fiat={inverted ? fiat : null} series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
   );
 
   return (
@@ -366,7 +376,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             </Banner>
           ) : null}
           <CrossCheckBanner token={id} refreshKey={liveKey} />
-          <FiatNote />
           {since !== null ? (
             <div class="row">
               <SinceBadge since={since} area="stats" until={keptMarketAt} />
@@ -391,34 +400,40 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         <Section
           title={t('market.book.title')}
           data-testid="book-section"
-          class="mkt-area-book mkt-card"
+          class={bookPanelClass(bookPanel.tabbed, bookPanel.view)}
           actions={
             <>
+              {bookPanel.tabbed ? <BookViewSwitch view={bookPanel.view} onChange={bookPanel.setView} /> : null}
               {stale ? <Badge tone={health.assessment.level === 'bad' ? 'bad' : 'warn'} data-testid="book-stale">{t('market.book.stale')}</Badge> : null}
-              {/* the steps come from the book's tick: no book on screen yet (loading, indexer unreachable), no grouping to offer */}
-              {book.data && panelsOpen ? <BookGrouping options={groupOptions} value={String(groupIdx)} onChange={(v) => (inverted ? setGroupIdxInv : setGroupIdxNative)(Math.max(0, Number(v) || 0))} /> : null}
-              {/* the glyph itself spins while the book is pulled: no spinner is added to the header, so the grouping box beside it never moves */}
-              <Button small variant="ghost" onClick={() => refreshAll(true)} title={t('common.refresh')} aria-label={t('common.refresh')} aria-busy={book.loading && !!book.data ? 'true' : undefined} data-testid="book-refresh">
-                <span class={`refresh-glyph${book.loading && !!book.data ? ' is-spinning' : ''}`} aria-hidden="true">{'↻'}</span>
-              </Button>
+              {/* the book's own controls keep their place while the depth chart is shown (market.css hides them, so the header does not change) */}
+              <div class="ob-tools book-only">
+                {/* the steps come from the book's tick: no book on screen yet (loading, indexer unreachable), no grouping to offer */}
+                {book.data && panelsOpen ? <BookGrouping options={groupOptions} value={String(groupIdx)} onChange={(v) => (inverted ? setGroupIdxInv : setGroupIdxNative)(Math.max(0, Number(v) || 0))} /> : null}
+                {/* the glyph itself spins while the book is pulled: no spinner is added to the header, so the grouping box beside it never moves */}
+                <Button small variant="ghost" onClick={() => refreshAll(true)} title={t('common.refresh')} aria-label={t('common.refresh')} aria-busy={book.loading && !!book.data ? 'true' : undefined} data-testid="book-refresh">
+                  <span class={`refresh-glyph${book.loading && !!book.data ? ' is-spinning' : ''}`} aria-hidden="true">{'↻'}</span>
+                </Button>
+              </div>
             </>
           }
         >
-          {!indexer ? <Banner tone="info">{t('market.book.noIndexer')}</Banner> : null}
-          {standalone && since !== null ? (
-            <p class="small muted" data-testid="book-standalone">{t(standalone.reason === 'manual' ? 'market.book.standaloneManual' : 'market.book.standaloneAuto', { time: clockText(since) })}</p>
-          ) : null}
-          {/* with a book on screen a failed pull is only the subtle marker below; the banner is for a page that has no book to show */}
-          <ErrorBanner error={book.data ? null : book.error} title={t('market.book.error')} onRetry={book.reload} data-testid="book-error" />
-          <StaleSince since={bookStaleSince} />
-          {indexer && (model ? !panelsOpen : book.loading) ? <BookFrame head={bookCtx.labels} rows={BOOK_DEPTH} data-testid="book-loading" /> : null}
-          {panelsOpen && model && model.empty ? <p class="muted center" data-testid="book-empty">{t('market.book.empty')}</p> : null}
-          {panelsOpen && bookView ? <OrderBook view={bookView} rows={BOOK_DEPTH} last={last} inverted={inverted} token={name} onPick={(side, price) => setPrefill({ side, price })} /> : null}
+          <BookPanelBody tabbed={bookPanel.tabbed} view={bookPanel.view} depth={depthChart}>
+            {!indexer ? <Banner tone="info">{t('market.book.noIndexer')}</Banner> : null}
+            {standalone && since !== null ? (
+              <p class="small muted" data-testid="book-standalone">{t(standalone.reason === 'manual' ? 'market.book.standaloneManual' : 'market.book.standaloneAuto', { time: clockText(since) })}</p>
+            ) : null}
+            {/* with a book on screen a failed pull is only the subtle marker below; the banner is for a page that has no book to show */}
+            <ErrorBanner error={book.data ? null : book.error} title={t('market.book.error')} onRetry={book.reload} data-testid="book-error" />
+            <StaleSince since={bookStaleSince} />
+            {indexer && (model ? !panelsOpen : book.loading) ? <BookFrame head={bookCtx.labels} rows={BOOK_DEPTH} data-testid="book-loading" /> : null}
+            {panelsOpen && model && model.empty ? <p class="muted center" data-testid="book-empty">{t('market.book.empty')}</p> : null}
+            {panelsOpen && bookView ? <OrderBook view={bookView} rows={BOOK_DEPTH} last={last} inverted={inverted} token={name} onPick={(side, price) => setPrefill({ side, price })} /> : null}
+          </BookPanelBody>
         </Section>
       }
       chart={
-        <Section title={t(wide ? 'market.chart.title' : 'market.chart.titleTabs')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" until={keptMarketAt} /> : undefined}>
-          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} {...(wide ? {} : { depth: depthChart })} />
+        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" until={keptMarketAt} /> : undefined}>
+          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} />
         </Section>
       }
       depth={

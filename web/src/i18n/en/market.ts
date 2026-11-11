@@ -222,6 +222,10 @@ export default {
   'market.list.standaloneKept': 'Standalone mode: the tokens and figures the indexer gave this page are kept (read until {time}); to them are added the orders and fills your node showed since {since}.',
   'market.ticket.standaloneScale': 'Standalone mode: this token has no known declaration and its program no default decimals, so its decimals cannot be checked without the indexer. It can be traded again once the indexer is back.',
   'market.book.error': 'The order book could not be loaded',
+  // below 1200 px the depth chart has no panel of its own: the book's panel switches between the book and the depth chart
+  'market.book.view': 'Order book panel view',
+  'market.book.view.book': 'Order book',
+  'market.book.view.depth': 'Depth',
   'market.depth.title': 'Depth chart',
   'market.depth.summary': 'In view: {bids} {ticker} bid, {asks} {ticker} offered',
   'market.depth.summaryUsd': 'In view: {bids} bid, {asks} offered',
@@ -267,13 +271,7 @@ export default {
   'market.stats.trades': '24h trades',
 
   'market.chart.title': 'Price',
-  // below 1200 px the panel holds the Price / Depth tabs: its title names both
-  'market.chart.titleTabs': 'Chart',
   'market.chart.interval': 'Candle interval',
-  // the depth chart as a tab of the price panel (under 1200 px, where it has no panel of its own)
-  'market.chart.view': 'Chart view',
-  'market.chart.view.price': 'Price',
-  'market.chart.view.depth': 'Depth',
   'market.chart.iv.1m': '1m',
   'market.chart.iv.5m': '5m',
   'market.chart.iv.1h': '1H',
@@ -328,6 +326,8 @@ export default {
   'market.depth.asks': 'Asks',
   'market.depth.tip': '{price} {priceUnit} · {amount} {ticker} cumulative',
   'market.depth.tipUsd': '{price} {priceUnit} · {amount} cumulative',
+  // a click on the chart prefills the ticket like a click on a book row (the chart is a pointer convenience: the book's rows are the keyboard path)
+  'market.depth.pickHint': 'Click to use this price in the ticket',
   'market.depth.empty': 'No orders in the book.',
   'market.depth.unavailable': 'The book could not be loaded.',
   'market.depth.estimated': 'Bid amounts are upper bounds: buy orders hold a KAS budget, not tokens.',
