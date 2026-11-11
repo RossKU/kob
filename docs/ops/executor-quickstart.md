@@ -55,7 +55,8 @@ node and the other way round. Start on testnet-10 if you have never run one.
 
 The program is called `kobd` (the KOB daemon). Its files are `kobd.toml` (the configuration), `kobd.log` (the log) and `kob-operator.key` (the hot key); the folder is the program's own, or `$KOBD_DIR`. A folder of an older build, whose files were named `kob-executor.toml` and `kob-executor.log`, is not read: rename the two files (and `KOB_EXECUTOR_DIR` to `KOBD_DIR`).
 
-Each `kobd-...` archive holds `kobd` (the daemon: the Executor and the Indexer roles), `kob` (the command-line client), this page, `LICENSE` and a
+Each `kobd-...` archive holds `kobd` (the daemon: the Executor and the Indexer roles), `kob` (the command-line client), `kobd-supervise.cmd` (Windows) or
+`kobd.service` (a sample systemd unit; every other target), this page, `LICENSE` and a
 `SHA256SUMS` of its files; the release also lists a `SHA256SUMS` of every archive and of the APK. The command line alone is also published as `kob-<version>-<network>-<target>` (the `kob` binary, its README, `LICENSE` and `NOTICE`). Check the archive you downloaded against
 it before you run anything:
 
@@ -112,7 +113,10 @@ does not match the real outputs, so no funds are at risk. A node that fails, han
 falls behind, is on another network or contradicts the other is replaced, whichever role it has. Good to start with and
 for a small operator.
 
-A configuration that names no node (no `rpc_url`, no `--rpc-url`) uses the public pair too.
+A configuration that names no node (no `rpc_url`, no `--rpc-url`) uses the public pair too. On `kobd --executor` and
+`kobd --indexer` the node itself is `--rpc-url` (`rpc_url` in `kobd.toml`, `KOB_NODE_WRPC`; default `resolver`) and `--extra-node`
+(repeatable; `[[nodes]]` in the configuration, `KOB_INDEX_NODES`) adds a further one: a bare `--node` there is a usage error
+(exit status 2). `kobd setup --node`, `kobd x402 --node` and `kob --node` still mean the node.
 
 **Your own node (recommended for serious operators, required for Miner Mode).** Faster, not shared, and nobody between
 you and the chain. A rusty-kaspa node (v2.1.0 or later) of the same network on the same machine, with its JSON wRPC
@@ -150,15 +154,17 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
    For your own node it then asks its URL: default `ws://127.0.0.1:18110` (mainnet) or
    `ws://127.0.0.1:18210` (testnet-10), connects at once and reports the node's version, network, sync state and UTXO index;
    on a problem it shows how to start the node and lets you check again, enter another URL, or `skip`.
-4. **Data directory**: default `kob-data` next to the program. The prompt reads "the database and the record log; a few GB",
-   which fits the Indexer. For the **Executor** the setup also turns on the fast start and **lean storage**: no
+4. **Data directory**: default `kob-data` next to the program. The prompt names the size the role needs: "the live book; at
+   most about 500 MB" for the Executor alone, "the database and the record log; a few GB" for an archive (the Indexer, or both
+   roles). For the **Executor** the setup also turns on the fast start and **lean storage**: no
    record log and a database capped at 500 MB (section 8, point 5; `docs/ops/executor.md`, A.1.2). For **Executor and
    Indexer** it turns on the fast start but **not** lean storage (`lean = false`, the record log stays on): the data directory
    grows with the orders like an Indexer's (section 4, the third column), while the Executor trades from the first seconds.
 5. **Operator key** (the Executor, and Executor and Indexer): it generates a new key into `kob-operator.key` with the operating system's
    random generator and makes the file readable by your account only (Windows: an ACL with your account alone; Linux: mode
    `0600`), or uses a key file you name (64 hex characters). The secret is never printed. An existing
-   `kob-operator.key` is offered again, never replaced.
+   `kob-operator.key` is offered again, never replaced. A start that finds no key says ``no operator key: give --key-file PATH (or
+   KOB_OPERATOR_KEY_FILE), a systemd credential `kob-operator-key`, or run `kobd setup`, which makes one``.
 6. **Funding**: it prints the key's address. Send at least 100 KAS (200 recommended, as a few transfers of 10 KAS or more,
    so several transactions can go out in one tick). It shows the balance as it arrives; press Enter to go on without
    waiting. The address is not lost if you do: every start prints it (`Funding address ...` under the command line, and
@@ -176,7 +182,9 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
 It then writes `kobd.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
 testnet-10; the mainnet binary carries its pinned registry), prints the line that starts it (for example
 `C:\kob\kobd.exe --executor`, section 6), and asks `Start the executor now? [Y/n]` (`Start the Indexer now?` for the Indexer role): Enter starts it, `n` leaves the files
-and ends the setup (`setup --no-start` does not ask). From then on, a double-click runs that configuration directly. If another kobd already runs from the same folder,
+and ends the setup (`setup --no-start` does not ask). From then on, a double-click runs that configuration directly when the
+folder is the one a start without arguments reads (the program's own folder, or `$KOBD_DIR`); for another folder the setup's
+last sentence says to use the printed line or to set `KOBD_DIR`. If another kobd already runs from the same folder,
 the start is refused at once with a message naming it, before anything else is printed or logged.
 
 **Which tokens it lists.** Every order of a token program the binary supports, whatever the token. KOB makes no listing
@@ -194,18 +202,26 @@ without it they are lost.
 Every 10 seconds (`--status-secs`) the executor logs a status line:
 
 ```
-status: indexer following, caught up (3 DAA behind the node), 120 orders indexed | 14 transactions sent, 12 final,
-1 pending, profit of the final ones 0.42 KAS | funds 182.4 KAS | no warnings
+status: fast start: trading on the orders since 08:44 UTC, full book in about 70 min (40 h 14 min to index) | indexer following,
+caught up (0 DAA behind the node), 61 orders indexed | nodes: neutrino-10.kaspa.stream (authority, ok), vector-10.kaspa.green
+(cross-check, ok) | history from about 2 min ago (older orders are not in this store) | sent 0, final 0, pending 0, profit 0 KAS |
+funds 0 KAS | no warnings
 ```
 
-* With public nodes the line ends with both hosts and their state, e.g. `nodes: muon-10.kaspa.blue (authority, ok),
+(One line in the log; it is wrapped here, and the log line starts with the time, `2026-11-11 08:44:28.529Z  INFO`.) The
+executor's part is `sent N, final N, pending N, profit X KAS`; a dry run (`--dry-run`) is shown as a mode in front of it,
+`dry run (nothing is submitted) | ...`, not as a warning. The build is logged once at the start, not on every line. Detail
+below `INFO` stays out of the console: the per-batch (`applied batch`) and per-tick (`tick`) lines are `DEBUG`
+(`RUST_LOG=kobd=debug`), and a repeated `skipped` reason is logged at `INFO` only when it first appears.
+
+* With public nodes the line shows both hosts and their state, e.g. `nodes: muon-10.kaspa.blue (authority, ok),
   vector-10.kaspa.green (cross-check, ok, replaced 1x, last: ...)`: `replaced` counts nodes given up (failed, hanging,
   behind, on another network, or disagreeing; `last:` names the host and why), and
   `disagreements` answers of the authority the other node contradicted (nothing contradicted is indexed). The two public
   nodes' newest blocks often differ for a moment; that settles by the next poll, is not a disagreement, and is only counted
   (`tip_differs` in `/v1/health`) and logged at debug level. A warning appears if it does not settle.
 * The first start trades within seconds: the setup turns on the fast start, so the executor follows the chain from the node's
-  current tip at once (`fast start: trading on orders seen since 14:32 UTC; full book in about 7 h 40 min`) while the
+  current tip at once (`fast start: trading on the orders since 14:32 UTC, full book in about 7 h 40 min (29 h 43 min to index)`) while the
   history is indexed in the background; it misses the orders created before it started until the full book is there
   (`/v1/health`: `book_complete: false`), then switches over by itself (`docs/ops/executor.md`, A.1.1). Without it (`fast_start = false`,
   `--no-fast-start`, or with the x402 facilitator) the indexer first catches up with everything the node retains and the
@@ -255,7 +271,8 @@ topping up the fees of kills and refunds; `--keeper-subsidy-budget-kas` raises i
 ## 5. Pause and stop
 
 * **Pause trading** without stopping the indexer: create the file `kob-pause` next to `kobd.toml` (any content); delete it to
-  resume. The start banner names the file. A configuration from an older setup names `kob-data/pause`: change
+  resume. The start banner names the file, and says `PAUSED: <path> exists, so nothing is built or submitted; delete it to
+  resume.` when it exists at the start. A configuration from an older setup names `kob-data/pause`: change
   `pause_file` in its `[launch]` table to `"kob-pause"`, since a rebuild deletes `kob-data` and the pause with it. A pause
   file whose folder does not exist counts as paused.
 * **Stop**: Ctrl+C in the window (or close it; `SIGTERM` / `docker stop` / `systemctl stop` do the same). The executor
@@ -263,22 +280,44 @@ topping up the fees of kills and refunds; `--keeper-subsidy-budget-kas` raises i
   time to exit at once. The database survives either way; the next start continues where it stopped. A start after more
   than the node's retention (7 days with the flags above) continues from the node's pruning point on its own and says so
   (`gaps` in `/v1/health`, the log; `docs/ops/executor.md`, Part B 7.4).
+* **Exit codes of `kobd`** (what a supervisor reads):
+
+  | Code | Meaning | A supervisor |
+  |---|---|---|
+  | 0 | A stop (Ctrl+C, `SIGTERM`, `docker stop`, `systemctl stop`). | Does not start it again. |
+  | 1 | An error, for example `exiting so that a supervisor restarts the executor`. | Starts it again. |
+  | 2 | A usage mistake (clap's own, an option of another role, `--node`, a role the configuration was not set up for, `--lean` on the wrong role), or a stop that did not finish in time. | Does not start it again unchanged: the same command fails the same way. |
+  | 130 | A second Ctrl+C. | Does not start it again. |
 * **Address and balance**: `kobd address-balance` (in the folder of `kobd.toml`, or with `--dir <folder>`)
   prints one JSON object: the key's address, the network and its plain balance read from the configured node
   (`balance_sompi`, `balance_kas`; when the node cannot be read, `balance_sompi` is `null` and `error` says why). It never
   prints the secret and can run while the executor runs. Its sibling for scripts and the Android app is `kobd setup
   --non-interactive --node resolver|<ws-url> --executor|--indexer|--executor --indexer [--new-key] [--network mainnet|testnet-10] [--dir <folder>]`:
-  no questions, no start; it writes the same files as the dialogue (replacing the configuration, keeping an existing key
-  file), and prints one JSON object with the `address` (`null` for the Indexer alone), the `roles` (`["executor"]`,
-  `["indexer"]` or `["executor", "indexer"]`) and the paths. Without a role flag it fails with a clear error. Both flags
+  no questions, no start; it writes the same files as the dialogue (replacing the configuration, which it keeps as
+  `kobd.toml.bak`, and keeping an existing key file), and prints one JSON object with the `address` (`null` for the Indexer
+  alone), the `roles` (`["executor"]`, `["indexer"]` or `["executor", "indexer"]`), the paths and `replaced` (the path of the
+  kept copy, `null` when there was no configuration to replace). Without a role flag it fails with a clear error. Both flags
   are the combined role: it needs a key like the Executor and writes a full store (`lean = false`, record log on).
   `--network` is only for a development build; a deployment build knows its own and refuses another.
 * **Start by role**: `kobd --executor`, `--indexer` or `--executor --indexer` starts the configuration in the folder, after
-  checking that it was set up for exactly these roles (otherwise it says so and starts nothing; with no configuration it opens the
-  setup with the roles chosen, or, without a terminal, refuses). Plain `kobd` runs the configuration whatever its roles. Options
+  checking that it was set up for exactly these roles (otherwise it says so and starts nothing, exit status 2; with no configuration it opens the
+  setup with the roles chosen, or, without a terminal, refuses; a `--config <file>` that is missing says ``no configuration at
+  <path>: run `kobd setup` to write one, or pass --config <file>``). Plain `kobd` runs the configuration whatever its roles. Options
   follow the flags and are added to the configuration's: `kobd --executor --dry-run` (builds and checks every transaction,
-  sends nothing; the x402 facilitator is not served), `kobd --executor --listen 127.0.0.1:8091`; `kobd --help` lists them. The Indexer takes the indexer's options
-  only.
+  sends nothing; the x402 facilitator is not served), `kobd --executor --listen 127.0.0.1:8091`. `kobd --help` (or `kobd help`) is the short top page: the kinds
+  of start, the commands, the log options and the exit status; the options of a start are `kobd --executor --help` (grouped
+  under Roles, Configuration and store, Node, Storage, Read API, Log, Executor, Fees, Matcher, Maintenance, Keepers and Work
+  selection) and `kobd --indexer --help` (the Indexer's options only: it takes no other), and `kobd help <command>` is a
+  command's page. The node itself is `--rpc-url`; `--extra-node` adds a further one (section 2).
+* **Check before a restart**: `kobd config check [--config <file>]` reads `kobd.toml` offline (no node is contacted, nothing is
+  written) and reports what a start would use: it refuses an unknown or misspelt key, resolves the paths, and shows the roles,
+  the network, the node and the extra nodes, the data directory and its store, the read API, the log file, the pause file (and
+  whether it exists), and the key file's access and funding address (never the secret). It prints `PROBLEM:` lines and exits
+  with status 1 when a start would refuse the configuration: run it after editing the file by hand. `kobd db info [--json]`
+  shows a store the same way, read-only and offline (it works next to a running executor): the schema and whether it is
+  current, older or newer than the build's, the network, the cursor's DAA and block, the number of orders, the size of the
+  database, lean or archive, where the history begins and the size of the record log. Before an upgrade (section 7) it shows
+  the schema the store has.
 * **Withdraw**: stop the executor first, then, from the same folder (or with `--dir <folder>`, or `--config <file>` for a
   configuration elsewhere):
 
@@ -290,8 +329,11 @@ topping up the fees of kills and refunds; `--keeper-subsidy-budget-kas` raises i
   through the resolvers) as well as with your own node, and needs no other tool. It lists the key's plain KAS coins at that
   node and builds one payment from the largest coins first (at most 50 inputs). `--amount all` sends everything those coins
   hold minus the fee; if more coins are left it says so, and you run it again once the first is accepted. It shows the
-  network, both addresses, the amount and the fee, and asks you to type `yes`; `--yes` skips the question (scripts), and
-  without `--yes` and without a terminal it refuses to send. Over the public nodes it asks one of them for the coins, not a
+  network, both addresses, the amount and the fee, and asks you to type `yes` (or `y`); `--yes` skips the question (scripts), and
+  without `--yes` and without a terminal it refuses to send. `--json` prints one JSON object on stdout, `{txid, network, from,
+  to, amount_sompi, fee_sompi, inputs, remaining_coins}` (`txid` is `null` for a dry run), or `{"error": "..."}` when it
+  refused (exit status 1); the details and the log go to stderr, so the output can be piped. Over the public nodes it asks
+  one of them for the coins (its messages name it, `at the public node vector-10.kaspa.green`), not a
   cross-checked pair: a node that lies about them can only make the payment invalid (the signature covers the coins it spends),
   never send the funds elsewhere. `--dry-run` shows the payment and sends nothing (it still takes the writer lock: stop the
   executor first for it too); `--fee-rate`
@@ -322,7 +364,9 @@ hours, indexed in the background). To move an executor:
 3. The key file must be readable by your account only, or the executor refuses it. On Linux: `chmod 600 kob-operator.key` (group or
    others may not read it). On Windows a copy takes the permissions of the folder it lands in, and the executor refuses a key file any
    other account can read (Everyone, Users, or a named second account; only your account, SYSTEM, Administrators, the built-in Administrator and TrustedInstaller may). Restrict
-   it in a terminal in the folder (PowerShell or cmd):
+   it in a terminal in the folder (PowerShell or cmd). The refusal names the groups that may read the file by name (Users,
+   Everyone, Authenticated Users, ...) and prints the exact command, for example
+   `icacls "C:\kob\kob-operator.key" /inheritance:r /grant:r "LAPTOP\momot:F"`:
 
    ```
    icacls kob-operator.key /inheritance:r /grant:r "%USERNAME%:F"      # cmd
@@ -347,16 +391,20 @@ give it and starts it again when it exits with an error (any exit status but 0, 
 time or a wrong option, and 130, a second Ctrl+C), after 10 s, the wait doubling to 5 min while it keeps failing within 10
 min of its start; each restart is noted in `kobd-supervise.log` next to it. Five starts in a row that each end within 30 s are
 not restarted again (another kobd holds the data directory, the key file is refused, a configuration error: a restart does not
-cure it; `kobd-supervise.log` says so, `kobd.log` says which). Task Scheduler's own "If the task fails, restart every" is not enough:
+cure it; `kobd-supervise.log` says so, `kobd.log` says which; run in a console (a double click), the window then stays for up to 60 s,
+or until a key is pressed, so the message can be read). Task Scheduler's own "If the task fails, restart every" is not enough:
 it is not documented to act on a program's exit status. Make a Task Scheduler task "At startup" (run whether the user is
 logged on or not, as the account that owns the key file) with program `C:\kob\kobd-supervise.cmd`, arguments `--executor`
 and *Start in* `C:\kob`, and in its settings **untick "Stop the task if it runs longer than"** (checked with 3 days by
 default: the executor would be stopped after three days) and keep "If the task is already running: Do not start a new
 instance"; on a laptop also untick the conditions "Start the task only if the computer is on AC power" and "Stop if the
 computer switches to battery power". **To stop it**: create the file `kobd-supervise.stop` next to the script (`type nul > C:\kob\kobd-supervise.stop`), then
-end `kobd.exe` (`taskkill /f /im kobd.exe`; the database survives a kill, section 7): the supervisor sees the file and does
-not start it again, and ends. The next start of the script deletes the file. *End* on the task alone stops the supervisor
-but may leave `kobd.exe` running unsupervised: check with `tasklist /fi "imagename eq kobd.exe"` and end it as above. In a window, double-click `kobd-supervise.cmd` instead of `kobd.exe` to get the same restarts. A task has no
+end that one `kobd.exe` (`taskkill /f /pid <pid>`, with the pid in `kob-data\kob-writer.owner`; not `taskkill /f /im kobd.exe`,
+which ends every `kobd.exe` on the machine, one per network for example; the database survives a kill, section 7): the
+supervisor sees the file and does not start it again, and ends. The next start of the script deletes the file. *End* on the task alone stops the supervisor
+but may leave `kobd.exe` running unsupervised: check with `tasklist /fi "imagename eq kobd.exe"` and end it as above. In a window, double-click `kobd-supervise.cmd` instead of `kobd.exe` to get the same restarts;
+Ctrl+C in that window ends kobd (exit status 0, not started again) and `cmd` then asks "Terminate batch job (Y/N)?": either
+answer is harmless. A task has no
 console: its log is the file `kobd.log` the setup configured (see *Logs* below); read it with
 `Get-Content C:\kob\kobd.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
 while the executor runs: a mouse selection in the classic Windows console (Quick Edit mode) pauses the program's output
@@ -367,20 +415,28 @@ you keep a window open); a scheduled task has no console to click in.
 **Logs.** The log goes to the console. The interactive setup also writes `log_file = "kobd.log"` into
 `kobd.toml` (a path relative to that file; not for the Indexer alone, and not for the Android app's
 non-interactive setup), and any start can set one with `--log-file <path>` (or `KOB_LOG_FILE`) or `log_file` in the
-configuration. With a log file the console still shows the log while it is a terminal (a double click) and shows nothing
-when it is not (a task, a service, a redirect): the file is then the log. The file is rotated by size: at `log_max_mb`
-(`--log-max-mb`, default 10) it becomes `<file>.1`, the older ones move up to `.2`, ..., and the one past `log_files`
+configuration. With a log file the console always keeps showing the log too (a terminal, a pipe, `journalctl -u kob -f`,
+`docker logs -f kob`): the file is a rotated copy, not a replacement, and a scheduled task, which has no console, is read from
+it. The start banner always names it: `Log file: <absolute path> (a new file at 10 MB, 5 old ones kept)`. The file is rotated
+by size: at `log_max_mb` (`--log-max-mb`, default 10) it becomes `<file>.1`, the older ones move up to `.2`, ..., and the one past `log_files`
 (`--log-files`, default 5; 0: start over) is deleted, so the log never takes more than (`log_files` + 1) x `log_max_mb` MB.
 ANSI colour codes are written only to a console that is a terminal (and not when `NO_COLOR` is set); the file never has
-them. `RUST_LOG` (default `info`) sets the detail. Under systemd the journal already keeps the log (`journalctl -u kob -f`).
+them. A log line has kaspad's shape: `2026-11-11 08:44:28.529Z  INFO status: ...` (UTC to the millisecond, the level, the
+message; the Rust module path is shown only while `RUST_LOG` is set). `RUST_LOG` (default `info`) sets the detail. The
+commands that print a document or a report on stdout (`kobd db ...`, `kobd logo-reports ...`, `kobd address-balance`, `kobd
+setup --non-interactive`, `kobd withdraw`, `kobd config check`, `kobd match` and `kobd keep` with `--offline`) keep their log
+on stderr, so `kobd db export-orders | jq` works.
 
 **Linux (systemd)**: copy the folder to `/opt/kob`, owned by the user `kob` (`chown -R kob: /opt/kob`; the key file keeps mode
-`0600`), then
+`0600`), run `./kobd setup` there once as that user, then install this unit (the Linux archive ships it as `kobd.service`,
+the same text with a header of comments: `sudo cp /opt/kob/kobd.service /etc/systemd/system/kob.service`, then
+`sudo systemctl daemon-reload && sudo systemctl enable --now kob`):
 
 ```
 [Unit]
 Description=KOB executor
 After=network-online.target
+Wants=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
@@ -389,14 +445,17 @@ ExecStart=/opt/kob/kobd --executor
 User=kob
 Restart=always
 RestartSec=10
+RestartPreventExitStatus=2
 NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+`journalctl -u kob -f` shows the log and the status line every 10 seconds (the log file, when one is set, is a copy of it).
 (`RestartSec=10` and `StartLimitIntervalSec=0` make systemd keep retrying: without them it gives up after five starts in ten
-seconds, for example while the network is still coming up after a boot.) A restart is also how the executor recovers from what it
+seconds, for example while the network is still coming up after a boot. `RestartPreventExitStatus=2` keeps it from starting a
+usage mistake, or a stop that did not finish in time, again and again; exit status 1 is restarted.) A restart is also how the executor recovers from what it
 cannot fix while it runs: when its indexer stays stopped or cannot write its database (a full disk, a corrupt file) for three
 minutes, or its read API stops serving, it logs why (`exiting so that a supervisor restarts the executor`) and exits with status
 1. Run it under a supervisor that restarts it (systemd as above, Docker's `--restart`, `kobd-supervise.cmd` on Windows as
@@ -428,9 +487,13 @@ program changes. The program is not replaced while it runs, and it does not upda
 1. **Read the release notes.** They say whether the release changes the `KOB1` payload version (indexers must go first,
    `docs/ops/release.md`, 7) or the database (brought up to date in place, migrated offline with `kobd db --config
    kobd.toml migrate`, or rebuilt: step 6).
-2. **Note what runs now:** `kobd --version` (the crate version, the release tag without the `v`) and
-   `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback only unless you
-   changed it). A build of a commit before the `0.1.0` release says `0.0.0`; tell builds of the same version apart by `commit`.
+2. **Note what runs now:** `kobd --version`, which prints for example `kobd 0.1.0 (testnet-10 build, commit 9e877ae7c0de,
+   payload v4, templates 0506de663e7837a3)` (the crate version, which is the release tag without the `v`; the network the
+   binary serves, or `development build, no network` for a plain build; the commit; the payload version; the template
+   generation), and `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback
+   only unless you changed it). A build of a commit before the `0.1.0` release says `0.0.0`; tell builds of the same version
+   apart by the commit. `kobd db --config kobd.toml info` (offline, it works next to a running executor; in the folder of
+   `kobd.toml` the option may be left out) shows the store's schema and whether it is current, older or newer than the new build's.
 3. **Build or download** the new version (section 1): `git pull` (or check out the tag) and run the same `cargo build`, or download
    and check the new archive and unzip it into a new folder; the archive holds the programs and this page, never your configuration.
 4. **Stop gracefully** and swap:
@@ -569,7 +632,7 @@ itself (`127.0.0.1:8090`).
 | `Order book: partial, trading on orders seen since HH:mm` | Fast start (`book_complete: false`); the time is the phone's. |
 | `History: X to index, full book in about Y` | The fast start's background indexing (`backfill`). |
 | `Node: host (chain authority, ok)` | Each public node: the authority (`primary`) or the cross-check, and its state. |
-| `N transactions sent, N final, N pending, ...` | The Executor's status line, every 10 seconds (section 4). |
+| `sent N, final N, pending N, profit X KAS` | The Executor's status line, every 10 seconds (section 4); the app shows its parts after the indexer, nodes and fast-start parts, which have their own lines above. |
 | `funds X KAS` | The key's funds; the balance under the address shows the same. |
 | `Read API: not reachable yet` | The executor is starting, or its API is not up. |
 | `Warnings:` | A restart, a failed database update (`not started: ...`), a catch-up more than an hour behind, a node error, funds below 100 KAS, and the `WARNING:` part of the status line (section 4). |

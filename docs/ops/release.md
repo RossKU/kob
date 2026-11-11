@@ -237,8 +237,8 @@ before the wallets: an indexer refuses a payload version it does not know (`payl
 would list none of the orders the new wallets place.
 
 1. Operators upgrade their **executors / indexers** first. A database schema change says in the release notes whether
-   the database is brought up to date in place, migrated offline with `kobd db migrate` (schema 5, 6 or 7 to 8: about 5 GB of free disk,
-   the old file kept as `index.sqlite3.before-migrate`, and an older build refuses the schema-8 store) or rebuilt with `kobd db replay`
+   the database is brought up to date in place, migrated offline with `kobd db migrate` (schema 5 to 9 to schema 10, the current one; `kobd db info` shows a store's schema: free disk about
+   the size of the store, the old file kept as `index.sqlite3.before-migrate`, and an older build refuses the migrated store) or rebuilt with `kobd db replay`
    (`docs/ops/executor.md` 7.6 and 7.6a).
    Check `GET /v1/health` and that a placement made with `kob` is listed.
    `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git
@@ -270,7 +270,9 @@ would list none of the orders the new wallets place.
    commit before that bump reports `"version": "0.0.0"`, which is not a defect of the build: tell builds of one version apart by
    `commit` (it is the git commit the build was made from) and compare that with the commit you mean. Between two releases
    `master` keeps the last release's version, so `version` equals the release only for the build of the tagged commit; `commit`
-   and `payload_version` are what a later build adds. `kob --version` reports the same workspace version (the web app shows its
+   and `payload_version` are what a later build adds. `kob --version` reports the same workspace version and the build (`kob 0.1.0 (testnet-10 build, commit a1b2c3d4e5f6)`), and `kobd --version` the same with the payload
+   version and the template generation (`kobd 0.1.0 (testnet-10 build, commit 9e877ae7c0de, payload v4, templates 0506de663e7837a3)`; a plain build says
+   `development build, no network`) (the web app shows its
    own package version, `web/package.json`, kept at the release version).
 2. Then the **web app** and other wallets (`kob`, bots) are published with the new builders.
 3. Announce the order in the release notes; a host serving the web app should point it only at indexers

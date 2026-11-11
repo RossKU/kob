@@ -24,7 +24,7 @@ cd kob
 cargo build --release --locked -p kobd --features deploy-tn10
 ```
 
-The binary is `target/release/kobd` (`target\release\kobd.exe` on Windows); `kobd --version` prints `kobd 0.1.0`. Give it a
+The binary is `target/release/kobd` (`target\release\kobd.exe` on Windows); `kobd --version` prints the version and the build, for example `kobd 0.1.0 (testnet-10 build, commit 9e877ae7c0de, payload v4, templates 0506de663e7837a3)` (a plain build says `development build, no network`). Give it a
 folder of its own, outside the repository and outside any folder a cloud service syncs: its configuration, key and data live
 next to it.
 
@@ -71,14 +71,15 @@ afford to lose, and back the file up where only you can read it.
 
 | What | Where |
 |---|---|
-| Node | `rpc_url = "resolver"`: two public testnet-10 nodes found through the Kaspa resolvers (outbound HTTPS and WSS, port 443), one cross-checking the other. Your own node instead: `kaspad --testnet --netsuffix=10 --utxoindex --rpclisten-json=default` and `--node ws://127.0.0.1:18210` in the setup (required for Miner Mode; `docs/ops/executor-quickstart.md`, section 2) |
+| Node | `rpc_url = "resolver"`: two public testnet-10 nodes found through the Kaspa resolvers (outbound HTTPS and WSS, port 443), one cross-checking the other. Your own node instead: `kaspad --testnet --netsuffix=10 --utxoindex --rpclisten-json=default` and `kobd setup --node ws://127.0.0.1:18210` (or `--rpc-url ws://127.0.0.1:18210` on a start; `--extra-node` adds a further node) (required for Miner Mode; `docs/ops/executor-quickstart.md`, section 2) |
 | Ports | the read API on `127.0.0.1:8090` (loopback; `--listen <addr>` or `[api] listen`). Nothing listens publicly and no inbound port is needed |
 | Health | `GET /v1/health` (`ok`, `state`, `roles`, `network`, `book_complete`, lag), `GET /v1/health/ready` (200 / 503 for a probe); fields in `docs/api-reference.md` |
 | Files | `kobd.toml` (the configuration; its relative paths are taken from its folder), `kob-tokens.json` (the supported token programs), `kob-operator.key` (Executor only), `kob-data/` (the SQLite store and, for the Indexer, the record log) |
-| Logs | the console, with a status line every 10 seconds (`--status-secs`); `--log-file kobd.log` (or `log_file = "kobd.log"` in the configuration) also writes a rotated file. `RUST_LOG=debug` for more |
+| Logs | the console, with a status line every 10 seconds (`--status-secs`); `--log-file kobd.log` (or `log_file = "kobd.log"` in the configuration) also writes a rotated copy of it: the console keeps showing the log, and the start banner names the file. `RUST_LOG=kobd=debug` for more |
 | Pause, stop | the file `kob-pause` next to `kobd.toml` pauses an Executor's trading (older setups: `kob-data/pause`); Ctrl+C stops either role cleanly; the next start continues where it stopped |
 
 Next: services (Task Scheduler, systemd), Docker, upgrades and withdrawals in `docs/ops/executor-quickstart.md`; every flag,
-the configuration keys, the economics and the runbook in `docs/ops/executor.md`. `kobd --help` lists the start options and
-the commands, `kobd help <command>` a command's. The mainnet build is `--features deploy-mainnet`; mainnet is a canary
+the configuration keys, the economics and the runbook in `docs/ops/executor.md`. `kobd --help` is the short top page (the kinds of
+start, the commands, the log options, the exit status), `kobd --executor --help` and `kobd --indexer --help` list the start options,
+`kobd help <command>` a command's; `kobd config check` reads a configuration offline and `kobd db info` a store. The mainnet build is `--features deploy-mainnet`; mainnet is a canary
 with no external audit (`docs/ops/release.md`).
