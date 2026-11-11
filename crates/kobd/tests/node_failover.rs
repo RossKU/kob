@@ -369,7 +369,11 @@ async fn a_public_node_that_is_behind_or_on_another_network_is_replaced_whicheve
     a.push_empty(20);
     b.push_empty(20);
     let m = pair(("resolver", &a), ("resolver:2", &b));
-    poll(&m, a.anchor()).await;
+    // One health check on the test's task, no follower request: a request also starts the watch on a task of its own, and a
+    // mock answers the same whichever host its entry stands for, so a second check that ran after the replacement was
+    // resolved judged the mock's answer as the new host's and replaced that one too (CI, 2026-11-11). A real client always
+    // asks the entry's current node, and a report about a node the entry no longer uses changes nothing (`rpc::judge::act`).
+    m.check_health().await;
     let st = m.board().snapshot();
     assert_eq!(st[1].replaced, 1, "{st:?}");
     let why = st[1].cut_reason.clone().unwrap();
@@ -390,8 +394,9 @@ async fn a_public_node_that_is_behind_or_on_another_network_is_replaced_whicheve
     let c = MockNode::new("testnet-10");
     c.push_empty(900);
     let m = pair(("resolver", &a), ("resolver:2", &c));
-    poll(&m, a.anchor()).await;
-    poll(&m, a.anchor()).await;
+    // two checks in a row (the watch's bound here), on the test's task only (as above: no check the test does not see)
+    m.check_health().await;
+    m.check_health().await;
     assert_eq!(resolver::current("resolver"), Some(third.clone()), "the healthy node is the authority now");
     let st = m.board().snapshot();
     assert!(st[0].cut_reason.as_deref().unwrap().contains("DAA behind the other node"), "{st:?}");
