@@ -8,6 +8,8 @@ import { cancelReceipt, clickPlaceOnly, fillFields, pickType, readReceipt, waitR
 
 const ID = '83'.repeat(32);
 const SHORT = '83838383…83838383';
+// the amount's unit slot shows the short form of an unnamed token (review M-03), the full id in its tooltip
+const UNIT = '8383…8383';
 
 async function seedToken(mock: Parameters<typeof openOrders>[1]): Promise<string> {
   await mock.seed({
@@ -26,8 +28,8 @@ test('no record: the amounts read in whole tokens on the scale of its order, the
   await expect(row).toHaveAttribute('data-status', 'open');
   await expect(row.getByTestId('order-token')).toHaveText(SHORT);
   await expect(row.getByTestId('token-decimals-note')).toHaveText('(8 decimals, from its market)');
-  await expect(row.getByTestId('order-amount')).toContainText(`45,000 / 45,000 ${SHORT}`);
-  await expect(row.getByTestId('order-price')).toContainText(new RegExp(`^10\\s*KAS per ${SHORT}`));
+  await expect(row.getByTestId('order-amount')).toContainText(`45,000 / 45,000 ${UNIT}`);
+  await expect(row.getByTestId('order-price')).toContainText(new RegExp(`^10(\\.0+)?\\s*KAS per (${SHORT}|${UNIT})`));
   await expect(page.getByTestId('orders-view')).not.toContainText(/base units/);
   // the balances row: the covenant id and the fingerprint name the token, the source of its decimals is the name's tooltip, not text beside it
   await gotoOrders(page, 'balances');
@@ -49,7 +51,7 @@ test('the issuing browser\'s record: its ticker and decimals, marked unverified;
   await expect(row.getByTestId('order-token')).toHaveText(`XYZ (${SHORT})`);
   await expect(row.getByTestId('token-decimals-note')).toHaveText('(unverified)');
   await expect(row.getByTestId('order-amount')).toContainText('45,000 / 45,000 XYZ');
-  await expect(row.getByTestId('order-price')).toContainText(/^10\s*KAS per XYZ/);
+  await expect(row.getByTestId('order-price')).toContainText(/^10(\.0+)?\s*KAS per XYZ/);
   await expect(page.getByTestId('orders-view')).not.toContainText(/base units/);
 });
 
