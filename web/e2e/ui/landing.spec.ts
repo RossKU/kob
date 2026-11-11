@@ -226,6 +226,18 @@ test('1440 px: one frame on both pages, the logo does not move when "Open the ap
   expect(lpFooterLogo.x).toBeCloseTo(lpLogo.x, 1);
 });
 
+test('1440x900: the hero buttons stand clearly inside the first screen (at least 100 px above the fold), and the 390 px hero is not pushed down', async ({ appPage: page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/#/');
+  await expect(page.getByTestId('landing-hero')).toHaveClass(/lp-go/);
+  const cta = page.getByTestId('landing-cta').first();
+  await expect.poll(async () => 900 - (await cta.boundingBox())!.y - (await cta.boundingBox())!.height, { message: 'the buttons stand above the fold' }).toBeGreaterThanOrEqual(100);
+  // a phone keeps its own, compact hero: no extra room under the buttons
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.lp-hero h1')).toBeVisible();
+  expect(await page.locator('.lp-hero').evaluate((e) => parseFloat(getComputedStyle(e).paddingBottom))).toBeLessThanOrEqual(40);
+});
+
 test('a portrait screen (a phone showing the desktop site, a tablet) gets no full-screen hero: the headline sits near the top', async ({ appPage: page }) => {
   await page.setViewportSize({ width: 980, height: 2200 });
   await page.goto('/#/');

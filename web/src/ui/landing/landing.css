@@ -63,10 +63,11 @@ body.lp-body { background: #070707; overflow-x: hidden; }
 .lp-pill .lp-ico { width: 18px; height: 18px; }
 
 /* hero */
-/* a landscape screen: the hero fills the first screen below the header (capped on a very tall monitor) with the text at its foot */
+/* a landscape screen: the hero fills the first screen below the header (capped on a very tall monitor) with the text at its foot; the foot stands 136 px above
+   the fold (review L-11: the buttons were on the fold at 1440x900, with ~150 px of empty hero above the eyebrow), so the buttons are plainly in the first screen */
 .lp-hero {
   position: relative; min-height: min(calc(100vh - var(--frame-h, 56px)), 1100px); min-height: min(calc(100svh - var(--frame-h, 56px)), 1100px);
-  display: flex; flex-direction: column; justify-content: flex-end; padding: 48px 0 56px;
+  display: flex; flex-direction: column; justify-content: flex-end; padding: 48px 0 136px;
 }
 /* a phone, a portrait or near-square screen (a tablet, an unfolded phone, a zoomed-out page, a phone showing the desktop site): no full-screen hero,
    or the text would sit under a screen of empty space; only a clearly landscape screen (wider than 5:4) gets the full-screen hero */
