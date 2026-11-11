@@ -63,6 +63,10 @@ pub struct WithdrawArgs {
     /// Build and show the withdrawal, send nothing.
     #[arg(long)]
     pub dry_run: bool,
+    /// Print the result as one JSON object on stdout (`{txid, network, from, to, amount_sompi, fee_sompi, inputs,
+    /// remaining_coins}`, `txid` null for a dry run; `{error}` when nothing was sent); the details and the log go to stderr.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// How much to send.
@@ -234,16 +238,17 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
     if crate::rpc::resolver::is_resolver(&url) {
         crate::rpc::resolver::set_network(&network);
     }
-    let shown = crate::rpc::redact_url(&url);
-    let info = node.server_info(&url).map_err(|e| anyhow!("cannot reach the node {shown}: {e}"))?;
+    let info = node.server_info(&url).map_err(|e| anyhow!("cannot reach {}: {e}", node_name(&url)))?;
+    // a resolver entry has found its public node now: name that host, not the configuration's word `resolver`
+    let shown = node_name(&url);
     if info.network_id != network {
-        bail!("the node {shown} is on {}, this is the {network} executor: nothing was sent", info.network_id);
+        bail!("{shown} is on {}, this is the {network} executor: nothing was sent", info.network_id);
     }
     if !info.is_synced {
-        bail!("the node {shown} is not synced yet, so its view of the coins is not current: try again in a few minutes");
+        bail!("{shown} is not synced yet, so its view of the coins is not current: try again in a few minutes");
     }
     if !info.has_utxo_index {
-        bail!("the node {shown} runs without a UTXO index (--utxoindex), so it cannot list the executor's coins");
+        bail!("{shown} runs without a UTXO index (--utxoindex), so it cannot list the executor's coins");
     }
 
     let spk = p2pk_spk_string(&pubkey);
@@ -312,7 +317,7 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
         kas_text((held - coins[used..].iter().map(|c| c.utxo.amount).sum::<u64>()) as i64)
     ));
     io.say(&format!("  stays:     {} KAS on the key", kas_text((held - sent - built.fee.fee) as i64)));
-    io.say(&format!("  node:      {shown}"));
+    io.say(&format!("  node:      {}", shown.trim_start_matches("the ")));
     if rest > 0 && req.amount == Amount::All {
         io.say(&format!(
             "  note:      {rest} smaller coin(s) are left; run the command again once this one is accepted to move them too"
@@ -342,7 +347,7 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
             );
         }
         io.say("Check the address: a transaction cannot be taken back. The executor must be stopped; it will warn about low funds when it starts.");
-        let a = io.ask("Send it? Type yes to confirm: ").ok_or_else(|| anyhow!("the input ended: nothing was sent"))?;
+        let a = io.ask("Send it? Type yes (or y) to confirm: ").ok_or_else(|| anyhow!("the input ended: nothing was sent"))?;
         if !matches!(a.to_ascii_lowercase().as_str(), "y" | "yes") {
             bail!("not confirmed: nothing was sent");
         }
@@ -360,6 +365,19 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
     Ok(out)
 }
 
+/// How the messages name the node of `url`: `the public node <host>` for a resolver entry that has found one, `the public
+/// nodes (resolver)` before that, else `the node <url>` (redacted).
+fn node_name(url: &str) -> String {
+    use crate::rpc::resolver;
+    if !resolver::is_resolver(url) {
+        return format!("the node {}", crate::rpc::redact_url(url));
+    }
+    match resolver::current(url) {
+        Some(n) => format!("the public node {}", resolver::host(&n)),
+        None => "the public nodes (resolver)".to_string(),
+    }
+}
+
 /// `submitTransaction`, again after a failure on the wire (the same signed transaction: an answer that it is already known counts
 /// as sent).
 fn submit(node: &mut dyn WithdrawNode, url: &str, rpc: &Value, id: [u8; 32], shown: &str) -> Result<[u8; 32]> {
@@ -370,10 +388,10 @@ fn submit(node: &mut dyn WithdrawNode, url: &str, rpc: &Value, id: [u8; 32], sho
             Err(RpcError::Node(msg)) => match classify_submit_error(&msg) {
                 SubmitOutcome::AlreadyKnown => return Ok(id),
                 SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput => bail!(
-                    "the node {shown} refused the transaction: a coin of the key is already spent (by a transaction the executor sent before it \
+                    "{shown} refused the transaction: a coin of the key is already spent (by a transaction the executor sent before it \
                      stopped, still on its way?). Nothing was lost; wait a minute and run the command again. The node said: {msg}"
                 ),
-                _ => bail!("the node {shown} refused the transaction: {msg}"),
+                _ => bail!("{shown} refused the transaction: {msg}"),
             },
             Err(e) => {
                 last = e.to_string();

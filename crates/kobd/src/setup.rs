@@ -59,22 +59,24 @@ pub struct SetupArgs {
     pub no_start: bool,
     /// For a wrapper (the Android app) that cannot answer questions: no dialogue, no start. Needs `--node` and a role
     /// (`--executor`, `--indexer` or both); writes the files and prints one JSON object (`address`, `config`, ...; never the
-    /// secret). Replaces an existing configuration, keeps an existing key file.
+    /// secret). Replaces an existing configuration (the old one is kept as `kobd.toml.bak`, named in the JSON as `replaced`),
+    /// keeps an existing key file.
     #[arg(long, requires = "node")]
     pub non_interactive: bool,
     /// Non-interactive: `resolver` (two public nodes, the default of the interactive setup) or your node's wRPC URL.
     #[arg(long, requires = "non_interactive")]
     pub node: Option<String>,
-    /// The roles: `--executor` (matches orders and refunds expired ones; needs a key), `--indexer` (full history and the read
-    /// API; no key) or both in one process. Without a flag the interactive setup asks.
-    #[command(flatten)]
-    pub roles: crate::app::RoleFlags,
     /// Non-interactive: make the operator key when the directory has none (an existing key file is never replaced).
     #[arg(long, requires = "non_interactive")]
     pub new_key: bool,
     /// Non-interactive, development builds only: `mainnet` or `testnet-10` (a deployment build knows its network).
     #[arg(long, requires = "non_interactive")]
     pub network: Option<String>,
+    /// The roles: `--executor` (matches orders and refunds expired ones; needs a key), `--indexer` (full history and the read
+    /// API; no key) or both in one process. Without a flag the interactive setup asks. (Last: the heading "Roles" holds it
+    /// alone.)
+    #[command(flatten)]
+    pub roles: crate::app::RoleFlags,
 }
 
 /// What a start without arguments does.
@@ -199,13 +201,31 @@ pub fn command_line(launch: &Launch, program: &str) -> String {
     format!("{cd} {}\n{} {}", shell_word(&launch.dir.to_string_lossy()), shell_word(program), args.join(" "))
 }
 
+/// Whether `dir` is the directory a start without arguments reads (`$KOBD_DIR`, else the executable's own).
+fn is_home(dir: &Path) -> bool {
+    let own = home_dir().ok().and_then(|h| h.canonicalize().ok());
+    own.is_some() && own == dir.canonicalize().ok()
+}
+
+/// What the setup says about a start without arguments (a double click) for the configuration in `dir`: that it runs it too
+/// when `dir` is the directory such a start reads, else what to do instead (the line above names `--config`).
+pub fn no_args_note(dir: &Path) -> String {
+    if is_home(dir) {
+        return "From now on, starting kobd without arguments (a double click) runs it too.".to_string();
+    }
+    let home = home_dir().map(|h| h.display().to_string()).unwrap_or_else(|_| "the executable's folder".into());
+    format!(
+        "A start without arguments (a double click) reads {home}, not this folder: use the line above, or set {DIR_ENV}={} first.",
+        dir.display()
+    )
+}
+
 /// The one line a service (or a terminal anywhere) starts the configuration of `dir` with: the program and the role flags, plus
 /// `--config <file>` when `dir` is not the directory the program reads by itself (`$KOBD_DIR`, else its own).
 pub fn service_line(dir: &Path, roles: AppRole, program: &str) -> String {
     let mut words = vec![shell_word(program)];
     words.extend(roles.flags().iter().map(|f| f.to_string()));
-    let own = home_dir().ok().and_then(|h| h.canonicalize().ok());
-    if own.is_none() || own != dir.canonicalize().ok() {
+    if !is_home(dir) {
         words.push("--config".into());
         words.push(shell_word(&dir.join(CONFIG_FILE).to_string_lossy()));
     }
@@ -228,8 +248,8 @@ pub struct SetupFile {
     /// Executor and Indexer, which keeps both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lean: Option<bool>,
-    /// `log_file` for the Executor: the console shows the log while it is a terminal (a double click), and a scheduled task or
-    /// service, which has no console, finds it in the file (rotated by size, `crate::logging`). Absent for the index role and
+    /// `log_file` for the Executor: the console shows the log (a double click, a pipe, the journal, `docker logs`), and the file
+    /// keeps a copy that a scheduled task without a console can be read from (rotated by size, `crate::logging`). Absent for the index role and
     /// for the wrapper's non-interactive setup (the Android app reads the process's output).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_file: Option<String>,
@@ -383,6 +403,23 @@ impl Console for StdConsole {
             Ok(None) | Err(RecvTimeoutError::Disconnected) => Poll::Closed,
             Err(RecvTimeoutError::Timeout) => Poll::Nothing,
         }
+    }
+}
+
+/// The terminal with the prose on stderr: for a command whose stdout is one JSON document (`kobd withdraw --json`).
+pub struct StderrConsole;
+
+impl Console for StderrConsole {
+    fn say(&mut self, line: &str) {
+        eprintln!("{line}");
+    }
+    fn ask(&mut self, prompt: &str) -> Option<String> {
+        eprint!("{prompt}");
+        let _ = std::io::stderr().flush();
+        read_line()
+    }
+    fn poll(&mut self, wait: Duration) -> Poll {
+        StdConsole.poll(wait)
     }
 }
 
@@ -634,7 +671,10 @@ pub fn run_setup_with(
         }
     }
     io.say("");
-    let data_dir = ask_default(io, "Data directory (the database and the record log; a few GB)", DATA_DIR)?;
+    // the sizes the roles need: lean storage is capped (`lean_max_db_mb`, 500 MB), an archive keeps the whole history
+    let sizing =
+        if app_role.is_archive() { "the database and the record log; a few GB" } else { "the live book; at most about 500 MB" };
+    let data_dir = ask_default(io, &format!("Data directory ({sizing})"), DATA_DIR)?;
 
     let mut launch = LaunchConfig { role, ..LaunchConfig::default() };
     if app_role.has_key() {
@@ -706,7 +746,7 @@ pub fn run_setup_with(
     io.say("");
     io.say(&format!("    {}", service_line(&opts.dir, l.roles, &opts.program)));
     io.say("");
-    io.say("From now on, starting kobd without arguments (a double click) runs it too.");
+    io.say(&no_args_note(&opts.dir));
     if no_start {
         return Ok(None);
     }

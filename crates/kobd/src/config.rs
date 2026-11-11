@@ -573,16 +573,34 @@ pub fn default_node(network: &str) -> Option<String> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("cannot read config {0}: {1}")]
+    #[error("cannot read config {0}: {}", io_text(.1))]
     Io(String, std::io::Error),
+    #[error("no configuration at {0}: run `kobd setup` to write one, or pass --config <file>")]
+    NotFound(String),
     #[error("invalid config {0}: {1}")]
     Parse(String, String),
+}
+
+/// An I/O error as an English sentence where its kind says enough (the operating system's own text comes in the system's
+/// language and turns into mojibake on a console of another code page); the OS text otherwise.
+pub fn io_text(e: &std::io::Error) -> String {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::NotFound => "it does not exist".into(),
+        K::PermissionDenied => "permission denied (another account's file, or opened by another program)".into(),
+        K::IsADirectory => "it is a directory, not a file".into(),
+        K::InvalidData => "it is not UTF-8 text".into(),
+        _ => e.to_string(),
+    }
 }
 
 impl IndexerConfig {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let p = path.display().to_string();
-        let s = std::fs::read_to_string(path).map_err(|e| ConfigError::Io(p.clone(), e))?;
+        let s = std::fs::read_to_string(path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => ConfigError::NotFound(p.clone()),
+            _ => ConfigError::Io(p.clone(), e),
+        })?;
         let cfg: IndexerConfig = toml::from_str(&s).map_err(|e| ConfigError::Parse(p, e.to_string()))?;
         if cfg.receipts.is_some() {
             tracing::warn!("config: the [receipts] table is retired and ignored");

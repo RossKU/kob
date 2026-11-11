@@ -28,16 +28,17 @@ pub const CREDENTIAL_NAME: &str = "kob-operator-key";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeyError {
-    #[error("no operator key: set {KEY_FILE_ENV}, --key-file, a systemd credential `{CREDENTIAL_NAME}`, or {KEY_ENV}")]
+    #[error("no operator key: give --key-file PATH (or {KEY_FILE_ENV}), a systemd credential `{CREDENTIAL_NAME}`, or run `kobd setup`, which makes one")]
     Missing,
     #[error("key file {0}: {1}")]
     File(PathBuf, String),
     #[error("key file {0} is accessible by group or others (mode {1:o}); chmod 600 it")]
     Permissions(PathBuf, u32),
+    /// The file, who else may read it (by name), and the command that restricts it.
     #[error(
-        "key file {0} is readable by other accounts ({1}); restrict its ACL (icacls <file> /inheritance:r /grant:r <you>:F), or set KOB_KEY_ACL_STRICT=0 to start anyway (not recommended)"
+        "key file {0} is readable by other accounts ({1}); restrict its ACL with `{2}`, or set KOB_KEY_ACL_STRICT=0 to start anyway (not recommended)"
     )]
-    Acl(PathBuf, String),
+    Acl(PathBuf, String, String),
     #[error("operator key: {0}")]
     Invalid(String),
 }
@@ -244,9 +245,23 @@ fn restrict_to_owner(path: &Path) -> Result<(), KeyError> {
     let sddl = windows_acl_sddl(path).ok_or_else(|| file_err("cannot read the file's ACL back (icacls /save)".into()))?;
     let others = sddl_readable_by_others(&sddl, current_sid().as_deref());
     if !others.is_empty() {
-        return Err(KeyError::Acl(path.to_path_buf(), others.join(", ")));
+        return Err(KeyError::Acl(path.to_path_buf(), trustee_names(&others), acl_fix(path)));
     }
     Ok(())
+}
+
+/// The command that gives the key file at `path` one entry, full control for the account running kobd (named
+/// `DOMAIN\user` when the environment says so, else by its SID), for the refusal to print as it is.
+#[cfg(not(unix))]
+fn acl_fix(path: &Path) -> String {
+    let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let me =
+        match (std::env::var("USERDOMAIN").ok().filter(|d| !d.is_empty()), std::env::var("USERNAME").ok().filter(|u| !u.is_empty())) {
+            (Some(d), Some(u)) => format!("{d}\\{u}"),
+            (None, Some(u)) => u,
+            _ => current_account().unwrap_or_else(|| "<your account>".into()),
+        };
+    format!("icacls \"{}\" /inheritance:r /grant:r \"{me}:F\"", abs.display())
 }
 
 /// The SID of the account that runs this process (`whoami /user`), once.
@@ -321,6 +336,31 @@ fn builtin_administrator(sid: &str) -> bool {
     sid.len() > "S-1-5-21-".len() && sid[.."S-1-5-21-".len()].eq_ignore_ascii_case("S-1-5-21-") && sid.ends_with("-500")
 }
 
+/// A trustee of an SDDL ACE as people know it: the well-known aliases and SIDs by their names (`BU` is `Users`, `WD`
+/// `Everyone`, ...), anything else (a named account's SID) as it is.
+pub fn trustee_name(trustee: &str) -> String {
+    let name = match trustee.to_ascii_uppercase().as_str() {
+        "WD" | "S-1-1-0" => "Everyone",
+        "BU" | "S-1-5-32-545" => "Users",
+        "AU" | "S-1-5-11" => "Authenticated Users",
+        "BG" | "S-1-5-32-546" => "Guests",
+        "IU" | "S-1-5-4" => "Interactive users",
+        "NU" | "S-1-5-2" => "Network logon users",
+        "AN" | "S-1-5-7" => "Anonymous",
+        "LG" => "the Guest account",
+        "PU" | "S-1-5-32-547" => "Power Users",
+        "RD" | "S-1-5-32-555" => "Remote Desktop Users",
+        "DU" => "Domain Users",
+        _ => return trustee.to_string(),
+    };
+    name.to_string()
+}
+
+/// [`trustee_name`] of each trustee, comma-separated.
+pub fn trustee_names(trustees: &[String]) -> String {
+    trustees.iter().map(|t| trustee_name(t)).collect::<Vec<_>>().join(", ")
+}
+
 /// Whether an SDDL access-rights field grants reading the file's data: an alias (`FA` file all, `FR` file read, `GA` generic all, `GR` generic
 /// read) or a hexadecimal mask with FILE_READ_DATA (0x1), GENERIC_READ (0x80000000) or GENERIC_ALL (0x10000000). An unparsable mask counts
 /// as read (fail towards the warning).
@@ -375,12 +415,15 @@ fn check_permissions(path: &Path) -> Result<(), KeyError> {
                 return Ok(());
             }
             let who = if me.is_none() {
-                format!("{} (the account running kobd could not be named by `whoami`, so every account counts)", others.join(", "))
+                format!(
+                    "{} (the account running kobd could not be named by `whoami`, so every account counts)",
+                    trustee_names(&others)
+                )
             } else {
-                others.join(", ")
+                trustee_names(&others)
             };
             if strict {
-                return Err(KeyError::Acl(path.to_path_buf(), who));
+                return Err(KeyError::Acl(path.to_path_buf(), who, acl_fix(path)));
             }
             who
         }
@@ -400,7 +443,8 @@ fn check_permissions(path: &Path) -> Result<(), KeyError> {
     tracing::warn!(
         path = %path.display(),
         readable_by = %problem,
-        "operator key file is readable by other accounts; KOB_KEY_ACL_STRICT=0 lets it start: restrict it (icacls <file> /inheritance:r /grant:r <you>:F)"
+        fix = %acl_fix(path),
+        "operator key file is readable by other accounts; KOB_KEY_ACL_STRICT=0 lets it start: restrict it with the command `fix`"
     );
     Ok(())
 }
@@ -508,6 +552,12 @@ mod tests {
         // a default user-profile ACL: Users have read/execute inherited from the folder
         let d = "O:S-1-5-21-1-2-3-1001G:S-1-5-21-1-2-3-513D:AI(A;ID;FA;;;BA)(A;ID;FA;;;SY)(A;ID;0x1200a9;;;BU)(A;ID;FA;;;S-1-5-21-1-2-3-1001)";
         assert_eq!(others(d), vec!["BU".to_string()]);
+        // named for people in the refusal
+        assert_eq!(trustee_names(&others(d)), "Users");
+        assert_eq!(
+            trustee_names(&["WD".into(), "S-1-5-11".into(), "S-1-5-21-1-2-3-1002".into()]),
+            "Everyone, Authenticated Users, S-1-5-21-1-2-3-1002"
+        );
         assert_eq!(others("D:(A;;FR;;;WD)(A;;FA;;;AU)(A;;GR;;;WD)"), vec!["AU".to_string(), "WD".to_string()]);
         assert_eq!(others("D:(A;;GA;;;S-1-1-0)"), vec!["S-1-1-0".to_string()]);
         // audit 2026-11-11 M-11: a named second account (or a group by its SID) may read: another account too

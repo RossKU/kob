@@ -37,6 +37,7 @@ pub const COMBINED_WARNING: &str =
 
 /// `--executor` and `--indexer`: kaspad-style role flags of the setup and of a start (`kobd --executor --indexer`).
 #[derive(clap::Args, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[command(next_help_heading = "Roles")]
 pub struct RoleFlags {
     /// The Executor role: match crossing orders and refund expired ones (needs a funded hot key). Lean storage (a full store
     /// with --indexer) and fast start: on an empty data directory it trades within seconds and indexes the history meanwhile
@@ -193,10 +194,22 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
         log_file: None,
         launch,
     };
+    // the configuration it replaces is kept beside it (a hand-edited `[api] listen`, `[launch] args`, `[failover]` would otherwise
+    // be gone after a wrapper runs the setup again)
+    let existing = opts.dir.join(CONFIG_FILE);
+    let replaced = if existing.is_file() {
+        let backup = opts.dir.join(format!("{CONFIG_FILE}.bak"));
+        std::fs::copy(&existing, &backup)
+            .with_context(|| format!("cannot keep a copy of {} as {}", existing.display(), backup.display()))?;
+        Some(backup.to_string_lossy().into_owned())
+    } else {
+        None
+    };
     let config = write_config(&opts.dir, &file)?;
     Ok(json!({
         "address": address,
         "config": config.to_string_lossy(),
+        "replaced": replaced,
         "key_file": file.launch.key_file.as_ref().map(|k| opts.dir.join(k).to_string_lossy().into_owned()),
         "network": network,
         "role": role.subcommand(),
@@ -330,6 +343,11 @@ mod tests {
         assert_eq!(out2["address"], out["address"]);
         assert_eq!(std::fs::read_to_string(&key_path).unwrap(), secret);
         assert_eq!(IndexerConfig::load(&dir.join(CONFIG_FILE)).unwrap().rpc_url, "ws://10.0.0.5:18210");
+        // ... and the replaced one is kept beside it, named in the JSON (the first run replaced nothing)
+        let bak = dir.join(format!("{CONFIG_FILE}.bak"));
+        assert!(out["replaced"].is_null());
+        assert_eq!(out2["replaced"], bak.to_string_lossy().as_ref());
+        assert_eq!(IndexerConfig::load(&bak).unwrap().rpc_url, "resolver");
         // without --new-key an existing key is used too
         let out3 = setup_non_interactive(&opts(&dir, tn, false), &ask("resolver", AppRole::Executor, false)).unwrap();
         assert_eq!(out3["address"], out["address"]);
