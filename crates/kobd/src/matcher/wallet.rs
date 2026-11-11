@@ -294,11 +294,32 @@ pub fn acl_strict() -> bool {
     std::env::var(STRICT_ACL_ENV).map(|v| v.trim() != "0").unwrap_or(true)
 }
 
-/// Trustees of an SDDL ACE that are not "another account": the account that runs the executor (passed in), SYSTEM, the
-/// Administrators group, and the owner-rights / creator-owner placeholders (aliases and the SIDs they abbreviate). Every other
-/// trustee that may read the file is another account: a well-known group (Everyone, Users, Authenticated Users, ...) as well
-/// as a named account or group (a second user, a sync client's service account).
-const OWN_TRUSTEES: &[&str] = &["SY", "BA", "OW", "CO", "S-1-5-18", "S-1-5-32-544", "S-1-3-4", "S-1-3-0"];
+/// Trustees of an SDDL ACE that are not "another account": the account that runs the executor (passed in) and the privileged
+/// principals, which can read any file of the machine anyway, so refusing them protects nothing (and a profile folder's
+/// inherited ACL names them on a fresh Windows and on CI runners): SYSTEM (`SY`), the Administrators group (`BA`), the built-in
+/// Administrator account (`LA`, or its full SID with RID 500, [`builtin_administrator`]), TrustedInstaller, and the
+/// owner-rights / creator-owner placeholders (aliases and the SIDs they abbreviate). Every other trustee that may read the file
+/// is another account: a well-known group (Everyone, Users, Authenticated Users, Guests, ...) as well as a named account or
+/// group (a second user, a sync client's service account).
+const OWN_TRUSTEES: &[&str] = &[
+    "SY",
+    "BA",
+    "LA",
+    "OW",
+    "CO",
+    "S-1-5-18",
+    "S-1-5-32-544",
+    "S-1-3-4",
+    "S-1-3-0",
+    // NT SERVICE\TrustedInstaller
+    "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+];
+
+/// The built-in Administrator account by its full SID (`S-1-5-21-<machine or domain>-500`): what `LA` abbreviates for the local
+/// machine's.
+fn builtin_administrator(sid: &str) -> bool {
+    sid.len() > "S-1-5-21-".len() && sid[.."S-1-5-21-".len()].eq_ignore_ascii_case("S-1-5-21-") && sid.ends_with("-500")
+}
 
 /// Whether an SDDL access-rights field grants reading the file's data: an alias (`FA` file all, `FR` file read, `GA` generic all, `GR` generic
 /// read) or a hexadecimal mask with FILE_READ_DATA (0x1), GENERIC_READ (0x80000000) or GENERIC_ALL (0x10000000). An unparsable mask counts
@@ -327,7 +348,9 @@ pub fn sddl_readable_by_others(sddl: &str, me: Option<&str>) -> Vec<String> {
             continue;
         }
         let trustee = f[5].trim();
-        let own = OWN_TRUSTEES.iter().any(|t| t.eq_ignore_ascii_case(trustee)) || me.is_some_and(|m| m.eq_ignore_ascii_case(trustee));
+        let own = OWN_TRUSTEES.iter().any(|t| t.eq_ignore_ascii_case(trustee))
+            || builtin_administrator(trustee)
+            || me.is_some_and(|m| m.eq_ignore_ascii_case(trustee));
         if !own && grants_read(f[2]) {
             out.push(trustee.to_string());
         }
@@ -497,6 +520,16 @@ mod tests {
         );
         // a service running as SYSTEM, the owner-rights placeholder
         assert!(sddl_readable_by_others("D:P(A;;FA;;;SY)(A;;FA;;;OW)", Some("S-1-5-18")).is_empty());
+        // the privileged principals can read any file anyway: the built-in Administrator (as the alias the profile folder of a
+        // fresh Windows or a CI runner gives it, or by its RID 500 SID), TrustedInstaller; a temp folder's inherited ACL passes
+        let runner = "D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)";
+        assert!(others(runner).is_empty(), "{:?}", others(runner));
+        assert!(sddl_readable_by_others(runner, Some("S-1-5-21-9-8-7-500")).is_empty(), "the account running kobd is LA itself");
+        assert!(others("D:(A;;FA;;;S-1-5-21-9-8-7-500)(A;;FR;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)")
+            .is_empty());
+        // ... but not a group of ordinary accounts beside them, the guest account, or an account whose RID merely contains 500
+        assert_eq!(others(&format!("{runner}(A;OICIID;0x1200a9;;;BU)")), vec!["BU".to_string()]);
+        assert_eq!(others("D:(A;;FR;;;LG)(A;;FR;;;S-1-5-21-1-2-3-5001)"), vec!["LG".to_string(), "S-1-5-21-1-2-3-5001".to_string()]);
         // no read bit (write attributes / synchronise only), a deny, a non-DACL section, a SACL
         assert!(others("D:(A;;0x100100;;;WD)").is_empty());
         assert!(others("D:(D;;FA;;;WD)").is_empty());
@@ -528,6 +561,16 @@ mod tests {
             let sddl = windows_acl_sddl(&p).expect("the ACL is readable");
             assert!(sddl_readable_by_others(&sddl, current_sid().as_deref()).is_empty(), "{sddl}");
             assert_eq!(HotKey::from_file(&p).unwrap().pubkey(), pubkey_of(&[0x33; 32]).unwrap());
+            // the built-in Administrator, SYSTEM and Administrators may read (a CI runner's temp folder grants them): it loads
+            if let Some(admin) = current_sid().and_then(|s| s.rsplit_once('-').map(|(m, _)| format!("{m}-500"))) {
+                for who in [format!("*{admin}:R"), "*S-1-5-18:F".into(), "*S-1-5-32-544:F".into()] {
+                    let ok = std::process::Command::new("icacls").arg(&p).arg("/grant").arg(&who).output().unwrap().status.success();
+                    assert!(ok, "icacls /grant {who}");
+                }
+                let sddl = windows_acl_sddl(&p).expect("the ACL is readable");
+                assert!(sddl_readable_by_others(&sddl, current_sid().as_deref()).is_empty(), "{sddl}");
+                assert!(HotKey::from_file(&p).is_ok(), "{sddl}");
+            }
             // Everyone may read: refused by default (audit 2026-11-11 M-11)
             assert!(std::process::Command::new("icacls").arg(&p).args(["/grant", "*S-1-1-0:R"]).output().unwrap().status.success());
             let sddl = windows_acl_sddl(&p).expect("the ACL is readable");
