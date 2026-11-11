@@ -218,6 +218,12 @@ export interface OrderRowModel {
   amountLeft: bigint | null;
   /** the amount left is an estimate (a bid holds a KAS budget) */
   amountEstimated: boolean;
+  /**
+   * A plain KAS bid's quantity is its KAS budget (the order UTXO's value minus the refund tip, the reserve and the delivery carrier), sompi: `placed` from the wallet's placement record (null on a
+   * browser that never placed it: the indexer's view carries no placement value), `left` from the order's current UTXO (0 once it is filled, null for an order that ended otherwise). null for
+   * every other kind.
+   */
+  budget: { placed: bigint | null; left: bigint | null } | null;
   /** the order's scale: base units per whole token (the denominator of its prices); 1 when unknown */
   scale: bigint;
   /** smallest fill (base units) unless a fill takes everything left; null when unknown */
@@ -338,6 +344,22 @@ function plannedExitOf(desc: OrderDescription | null, amountLeft: bigint | null)
   return { takeProfit, stop, amount: amountLeft ?? desc?.amountLeft ?? null };
 }
 
+/**
+ * The KAS budget of a plain KAS bid (see `OrderRowModel.budget`). What is not budget (refund tip, reserve, delivery carrier) is the same in every state of the order, so the placement record's
+ * value and the current UTXO's value give the placed and the remaining budget alike.
+ */
+function budgetOf(e: OrderEntry, state: OrderState | null, desc: OrderDescription | null, status: OrderStatusUi): OrderRowModel['budget'] {
+  if (!state || !desc || desc.pair || baseKind(state.kind) !== 'KobBid') return null;
+  const nonBudget = desc.refundTip + desc.reservedKas;
+  const net = (value: bigint): bigint => (value > nonBudget ? value - nonBudget : 0n);
+  const current = bi(e.view?.current?.value ?? null) ?? (e.resolved?.status === 'live' && e.resolved.order ? bi(e.resolved.order.amount) : null);
+  const left = current !== null ? net(current) : status === 'filled' ? 0n : null;
+  let placed = e.record ? net(big0(e.record.value)) : null;
+  // a top-up replaces the order (a new record), so a remaining budget above the record's is the record being older than the order
+  if (placed !== null && left !== null && left > placed) placed = left;
+  return { placed, left };
+}
+
 export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowModel {
   const es = entryState(e, ctx.kob);
   const status = statusOf(e);
@@ -420,6 +442,7 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
 
   return {
     id: e.id, entry: e, token: desc ? desc.tokenCovId : (v?.token ?? null), side, contract: v?.contract ?? kind, typeKey, status, source, live, expired, price, auctionStart, stopPrice, tip, allInPrice,
+    budget: budgetOf(e, es ? es.state : null, desc, status),
     amountTotal, amountLeft, amountEstimated: v ? v.amount_estimated : e.resolved !== null && es?.source === 'node' && baseKind(es.state.kind) === 'KobBid',
     scale, minFill: desc ? desc.minFill : bi(v?.min_fill ?? null),
     auction, armed: armedRaw === null ? null : armedRaw !== 0n, startsAtDaa: activeFrom !== null && nowDaa !== null && activeFrom > nowDaa ? activeFrom : null,

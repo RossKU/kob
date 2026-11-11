@@ -98,8 +98,15 @@ function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo |
   const filledAmountText = filled !== null ? amountCell(filled, decimals) : null;
   // a buy order that holds a KAS budget has no amount to show: the line says so in two words (the amount follows from the price; the details say it in full)
   const budget = !(total !== null && filled !== null);
+  // a plain KAS bid: its budget in KAS (the placed one when this browser placed it, else what is left), and how much of it the fills have spent
+  const bud = row.budget;
+  const budgetTotal = bud ? bud.placed ?? bud.left : null;
+  const budgetSpent = bud && bud.placed !== null && bud.left !== null ? bud.placed - bud.left : null;
+  const budgetTotalText = budgetTotal !== null ? amountCell(budgetTotal, 8) : null;
+  const budgetSpentText = budgetSpent !== null ? amountCell(budgetSpent, 8) : null;
+  const budgetPct = budgetSpent !== null && bud!.placed !== null && bud!.placed > 0n ? Number((budgetSpent * 100n) / bud!.placed) : null;
   const valueKas = !row.pair && total !== null && row.price !== null ? quoteOf(total, row.price, row.scale, 'down') : null;
-  return { time, timeTip: timeTitle(unix), price: pairPrice(row.price), pct, unit, valueKas, budget, amountTotalText, filledAmountText, avgText: pairPrice(avg) };
+  return { time, timeTip: timeTitle(unix), price: pairPrice(row.price), pct, unit, valueKas, budget, budgetTotalText, budgetPlaced: !!bud && bud.placed !== null, budgetSpentText, budgetPct, amountTotalText, filledAmountText, avgText: pairPrice(avg) };
 }
 
 const localDate = longDate;
@@ -259,18 +266,30 @@ export function OrderRow(props: OrderRowProps) {
   );
   cells.amount = (
     <DtCell k="amount" label={t('orders.col.amount')} num class="or-amount" title={line.budget ? t('orders.budgetOrder') : undefined}>
-      {line.amountTotalText !== null ? <Num value={line.amountTotalText.text} title={line.amountTotalText.title} unit={line.unit.text} unitTitle={line.unit.title} /> : <span class="dt-val">{t('orders.budgetShort')}</span>}
+      {line.amountTotalText !== null ? (
+        <Num value={line.amountTotalText.text} title={line.amountTotalText.title} unit={line.unit.text} unitTitle={line.unit.title} />
+      ) : line.budgetTotalText !== null ? (
+        <Num value={line.budgetTotalText.text} title={line.budgetTotalText.title ?? t(line.budgetPlaced ? 'orders.budgetPlacedHint' : 'orders.budgetLeftHint')} unit={t('orders.budgetUnit')} />
+      ) : (
+        <span class="dt-val">{t('orders.budgetShort')}</span>
+      )}
     </DtCell>
   );
   cells.filled = (
     <DtCell k="filled" label={t('orders.col.filled')} num class="or-filled">
       <span class="num">
-        {line.filledAmountText !== null ? <Num value={line.filledAmountText.text} title={line.filledAmountText.title} unit={line.unit.text} unitTitle={line.unit.title} /> : <span class="dt-val">—</span>}
-        {line.pct !== null ? <span class="dt-unit or-pct"> {line.pct}%</span> : null}
+        {line.filledAmountText !== null ? (
+          <Num value={line.filledAmountText.text} title={line.filledAmountText.title} unit={line.unit.text} unitTitle={line.unit.title} />
+        ) : line.budgetSpentText !== null ? (
+          <Num value={line.budgetSpentText.text} title={line.budgetSpentText.title ?? t('orders.budgetSpentHint')} unit="KAS" />
+        ) : (
+          <span class="dt-val">—</span>
+        )}
+        {(line.pct ?? line.budgetPct) !== null ? <span class="dt-unit or-pct"> {line.pct ?? line.budgetPct}%</span> : null}
       </span>
-      {line.pct !== null ? (
+      {(line.pct ?? line.budgetPct) !== null ? (
         <span class="or-bar" aria-hidden="true">
-          <span style={{ width: `${Math.min(100, line.pct)}%` }} />
+          <span style={{ width: `${Math.min(100, line.pct ?? line.budgetPct ?? 0)}%` }} />
         </span>
       ) : null}
     </DtCell>
@@ -431,6 +450,19 @@ export function OrderRow(props: OrderRowProps) {
                 )}
               </span>
             ),
+          },
+          {
+            label: t('orders.budgetDetail'),
+            value: (
+              <span data-testid="order-budget">
+                {row.budget && row.budget.left !== null
+                  ? row.budget.placed !== null
+                    ? t('orders.budgetOf', { left: amountCell(row.budget.left, 8).text, placed: amountCell(row.budget.placed, 8).text })
+                    : t('orders.budgetLeftOnly', { left: amountCell(row.budget.left, 8).text })
+                  : ''}
+              </span>
+            ),
+            show: !!row.budget && row.budget.left !== null,
           },
           { label: t('orders.expires'), value: <ExpiryText row={row} />, show: row.live },
           {

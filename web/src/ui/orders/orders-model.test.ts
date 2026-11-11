@@ -166,6 +166,31 @@ describe('prices, amounts and expiry', () => {
   });
 });
 
+describe('the KAS budget of a plain bid', () => {
+  const placed = placeGolden(kob, 'create.bid');
+  const [rec] = recordsFromBuilt(kob, placed.built, { maker: MAKER.pk, network: 'testnet-10', placedAtUnix: 1_789_990_000n, placedAtDaa: 900n });
+  const view = (over = {}) => orderViewOf(kob, placed.snapshots[0], over);
+  const nonBudget = (() => {
+    const row = describeEntry(buildEntries([view()], [])[0], ctx);
+    return row.budget!.left === null ? 0n : BigInt(view().current!.value!) - row.budget!.left;
+  })();
+
+  it('is the order UTXO value less the refund tip, reserve and carrier: placed from the record, left from the current UTXO', () => {
+    const row = describeEntry(buildEntries([view()], [rec])[0], ctx);
+    expect(row.amountTotal).toBeNull();
+    expect(row.budget).toEqual({ placed: BigInt(rec.value) - nonBudget, left: BigInt(view().current!.value!) - nonBudget });
+    // a fill spends escrow: the placed budget stays, what is left drops
+    const spent = describeEntry(buildEntries([view({ status: 'partial', current: { ...view().current!, value: String(BigInt(rec.value) - 5_000_000n) } })], [rec])[0], ctx);
+    expect(spent.budget!.placed! - spent.budget!.left!).toBe(5_000_000n);
+  });
+
+  it('without a placement record only what is left is known; a filled bid has none left; other kinds have no budget', () => {
+    expect(describeEntry(buildEntries([view()], [])[0], ctx).budget).toMatchObject({ placed: null, left: expect.any(BigInt) });
+    expect(describeEntry(buildEntries([view({ status: 'filled', current: null, state_known: false, state: null, placed_state: placed.snapshots[0].order.state as AnyState })], [rec])[0], ctx).budget!.left).toBe(0n);
+    expect(rowOf('create.ask').row.budget).toBeNull();
+  });
+});
+
 describe('bids that can no longer fund one base unit, and orders the token program may have frozen', () => {
   it('a live bid with amount 0 left is unfundable, can be cancelled (refunded) and amended with a top-up', () => {
     const { row } = rowOf('create.bid', { status: 'partial', amount_left: '0', amount_estimated: true });
