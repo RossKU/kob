@@ -326,8 +326,9 @@ pub struct IndexerConfig {
     /// `kobd --executor` on an empty data directory trades at once and fills in the history afterwards ([`crate::faststart`]):
     /// a second store in `<data_dir>/tip` follows the chain from the node's current sink (seconds) and the matcher and
     /// keepers work on it, while the normal store indexes the history from the pruning point; when that has caught up, the
-    /// executor switches to it and deletes the tip store. Default false (the setup writes true for a matcher). Without
-    /// the key, `--fast-start` switches it on for one start. It does nothing for `index`, with the x402 facilitator, or when
+    /// executor switches to it and deletes the tip store. Default false here, but a start of the Executor (`kobd --executor`,
+    /// also from options alone) turns it on unless the configuration has the key or `--no-fast-start` is given (`cli`; the
+    /// setup writes true). It does nothing for `index`, with the x402 facilitator, or when
     /// `start` is not the pruning point.
     pub fast_start: bool,
     /// Lean storage ([`crate::indexer::lean`]): the store keeps the live book (open and partly filled orders and what the

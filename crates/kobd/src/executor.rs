@@ -175,7 +175,7 @@ pub struct RunArgs {
     /// File holding the operator's secret key (64 hex, mode 0600). Not the key itself.
     #[arg(long, env = "KOB_OPERATOR_KEY_FILE")]
     pub key_file: Option<PathBuf>,
-    /// Build and validate everything, submit nothing.
+    /// Build and validate everything, submit nothing (nothing goes to the network: the x402 facilitator is not served either).
     #[arg(long)]
     pub dry_run: bool,
     /// Do not run the matcher (keepers only).
@@ -195,7 +195,8 @@ pub struct RunArgs {
     #[command(flatten)]
     pub fees: crate::fee::FeeArgs,
     /// Kill switch: nothing is built or submitted while this file exists (the matcher, the keepers and the x402
-    /// facilitator). A file whose state cannot be read (permission denied) counts as present. Keep it on persistent storage.
+    /// facilitator). A file whose state cannot be read (permission denied) or whose directory does not exist counts as present.
+    /// Keep it on persistent storage, outside the data directory (a rebuild deletes that).
     #[arg(long)]
     pub pause_file: Option<PathBuf>,
     /// Prometheus textfile-collector output (`.prom`).
@@ -268,12 +269,19 @@ pub struct RunArgs {
     #[command(flatten)]
     pub select: crate::matcher::select::SelectArgs,
     /// Also serve the x402 facilitator (strict JSON configuration, `crates/kobd/x402.example.json`).
-    /// Its `node` is the indexer's `--rpc-url`; its `network` must be the indexer's.
+    /// Its `node` is the indexer's `--rpc-url`; its `network` must be the indexer's. Not served with `--dry-run`; with it the
+    /// first start has no fast start (its book is bound to one store).
     #[arg(long, env = "KOB_X402_CONFIG")]
     pub x402_config: Option<PathBuf>,
 }
 
 impl RunArgs {
+    /// The x402 facilitator's configuration, when it is served: never in a dry run (`--dry-run` sends nothing to the network,
+    /// and the facilitator settles payers' transactions there).
+    pub fn x402(&self) -> Option<&std::path::Path> {
+        self.x402_config.as_deref().filter(|_| !self.dry_run)
+    }
+
     /// The runner's settings.
     pub fn run_config(&self, network: &str) -> RunConfig {
         let mut engine = EngineConfig::default();
@@ -520,6 +528,8 @@ pub async fn run(a: RunArgs) -> Result<()> {
     a.select.config().map_err(anyhow::Error::msg)?;
     let cfg = build_config(&a.index)?;
     refuse_failover(&cfg)?;
+    // the operator's funds are read from the nodes' UTXO index: a node without it is unusable (`rpc::judge`)
+    crate::rpc::judge::require_utxo_index();
     // listening before the slow part (opening the store, the first calls to the node): a Ctrl+C there is not lost
     let shutdown = shutdown_signal();
     let signer = HotKey::load(a.key_file.as_deref())?;
@@ -558,10 +568,13 @@ pub async fn run(a: RunArgs) -> Result<()> {
         fee_max_tx_sompi = fee_policy.max_tx_fee,
         "starting the executor (indexer, matcher and keepers in one process)"
     );
+    if a.dry_run && a.x402_config.is_some() {
+        tracing::warn!("dry run: the x402 facilitator is not served (it would settle payers' transactions on the network)");
+    }
     let mut fast = crate::faststart::plan(&cfg);
-    if fast != crate::faststart::Plan::Normal && a.x402_config.is_some() {
+    if fast != crate::faststart::Plan::Normal && a.x402().is_some() {
         // the facilitator's acceptance tracking and book are bound to one store
-        tracing::info!("fast start is not used with the x402 facilitator: the first start indexes the history before it plans");
+        tracing::warn!("no fast start with the x402 facilitator: the indexer first catches up with the chain (up to some hours on a new data directory); the matcher and keepers plan nothing until it has");
         fast = crate::faststart::Plan::Normal;
     }
     if fast != crate::faststart::Plan::Normal {
@@ -571,11 +584,11 @@ pub async fn run(a: RunArgs) -> Result<()> {
         return crate::faststart::run_with(cfg, fast, full_chain, tip_chain, node, Box::new(signer), run_cfg, shutdown).await;
     }
     let indexer = Indexer::open(cfg.clone()).map_err(|e: IndexerError| anyhow::anyhow!(e))?;
-    let x402 = match &a.x402_config {
+    let x402 = match a.x402() {
         Some(p) => {
             let ingest = indexer.ingest.clone();
             let c = cfg.clone();
-            let p = p.clone();
+            let p = p.to_path_buf();
             let pause = a.pause_file.clone();
             let health = indexer.health.clone();
             Some(tokio::task::block_in_place(move || x402_service(&p, &c, ingest, pause, Some(health)))?)

@@ -331,6 +331,12 @@ fn parse_start(roles: AppRole, program: &OsString, args: &[OsString]) -> anyhow:
         roles => {
             let mut c = StartCli::try_parse_from(argv).map_err(|e| anyhow!("{}", e.render()))?;
             let o = &mut c.run.index;
+            // fast start follows the role as lean storage does, and as the setup's kobd.toml writes it: on for every start of
+            // the Executor (alone or with the Indexer), from options alone too, unless --no-fast-start or the configuration's own
+            // `fast_start` key says otherwise (it does nothing on a data directory that has a store already)
+            if !o.fast_start && !o.no_fast_start && !config_sets_fast_start(o.config.as_deref()) {
+                o.fast_start = true;
+            }
             if roles == AppRole::Executor {
                 if o.no_lean {
                     bail!("--no-lean: the Executor alone keeps lean storage; a full store with the history is `kobd --executor --indexer`");
@@ -347,10 +353,25 @@ fn parse_start(roles: AppRole, program: &OsString, args: &[OsString]) -> anyhow:
     }
 }
 
-/// Runs a start that is not a launch configuration's (no banner).
+/// Whether the configuration file at `path` has a `fast_start` key (either value): then the file decides (`build_config` reads
+/// it), not the role. A file that cannot be read says nothing here (the start reports it).
+fn config_sets_fast_start(path: Option<&Path>) -> bool {
+    path.and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .is_some_and(|t| t.contains_key("fast_start"))
+}
+
+/// Runs a start that is not a launch configuration's (no banner, but the one line that says whether trading waits for the
+/// indexer to catch up: a service started from options alone would otherwise give no hint why it plans nothing for hours).
 fn run_start(rt: &tokio::runtime::Runtime, (start, log): (Start, LogArgs)) -> anyhow::Result<()> {
     refuse_second_writer(&start)?;
     attach_log(&log, start.opts().config.as_deref())?;
+    if let Start::Run(a) = &start {
+        let note = start_note(a);
+        if !note.is_empty() {
+            tracing::info!("{note}");
+        }
+    }
     rt.block_on(dispatch(start))
 }
 
@@ -484,12 +505,22 @@ fn refuse_second_writer(start: &Start) -> anyhow::Result<()> {
 fn start_note(a: &RunArgs) -> String {
     use crate::faststart::Plan;
     let Ok(cfg) = crate::index_cli::build_config(&a.index) else { return String::new() };
-    // the facilitator's book is bound to one store: no fast start with it
-    let plan = if a.x402_config.is_some() { Plan::Normal } else { crate::faststart::plan(&cfg) };
+    // the facilitator's book is bound to one store: no fast start with it (a dry run serves no facilitator)
+    let x402 = a.x402().is_some();
+    let plan = if x402 { Plan::Normal } else { crate::faststart::plan(&cfg) };
     match plan {
         Plan::Fresh | Plan::Resume => "Fast start: the matcher and keepers start within seconds, on the orders seen from now on. The history is indexed in the background (up to some hours on a new node), and the executor switches to the full book by itself.".into(),
         Plan::Normal if cfg.db_path().exists() => "The indexer resumes from its stored position; the matcher and keepers start once it has caught up (usually seconds).".into(),
-        Plan::Normal => "The indexer first catches up with the chain (a new node's whole retention: up to some hours); the matcher and keepers start once it has.".into(),
+        Plan::Normal => {
+            let why = if x402 {
+                " (no fast start: the x402 facilitator is served)"
+            } else if !cfg.fast_start {
+                " (fast start is off)"
+            } else {
+                ""
+            };
+            format!("The indexer first catches up with the chain (the node's whole retention: up to some hours){why}; the matcher and keepers start once it has.")
+        }
     }
 }
 
@@ -549,14 +580,34 @@ mod tests {
     fn the_roles_settle_the_storage_and_the_indexer_takes_its_options_only() {
         let p = OsString::from("kobd");
         let run = |r: AppRole, a: &[&str]| match parse_start(r, &p, &words(a)) {
-            Ok((Start::Run(a), _)) => Ok((a.index.lean, a.index.no_lean, a.dry_run)),
+            Ok((Start::Run(a), _)) => Ok((a.index.lean, a.index.no_lean, a.dry_run, a.index.fast_start)),
             Ok((Start::Index(_), _)) => Err("index".to_string()),
             Err(e) => Err(e.to_string()),
         };
-        assert_eq!(run(AppRole::Executor, &["--executor", "--dry-run"]), Ok((true, false, true)));
-        assert_eq!(run(AppRole::Executor, &["--lean"]), Ok((true, false, false)));
+        // fast start follows the role too (as `kobd setup` writes it), from options alone
+        assert_eq!(run(AppRole::Executor, &["--executor", "--dry-run"]), Ok((true, false, true, true)));
+        assert_eq!(run(AppRole::Executor, &["--lean"]), Ok((true, false, false, true)));
         assert!(run(AppRole::Executor, &["--no-lean"]).unwrap_err().contains("kobd --executor --indexer"));
-        assert_eq!(run(AppRole::ExecutorIndexer, &[]), Ok((false, true, false)));
+        assert_eq!(run(AppRole::ExecutorIndexer, &[]), Ok((false, true, false, true)));
+        assert_eq!(run(AppRole::Executor, &["--no-fast-start"]), Ok((true, false, false, false)), "--no-fast-start turns it off");
+        // a configuration's own `fast_start` key decides (either way); one without the key gets the role's
+        let d = tempfile::tempdir().unwrap();
+        let (off, plain) = (d.path().join("off.toml"), d.path().join("plain.toml"));
+        std::fs::write(
+            &off,
+            "network = \"testnet-10\"
+fast_start = false
+",
+        )
+        .unwrap();
+        std::fs::write(
+            &plain,
+            "network = \"testnet-10\"
+",
+        )
+        .unwrap();
+        let with = |f: &std::path::Path| run(AppRole::Executor, &["--config", f.to_str().unwrap()]).map(|r| r.3);
+        assert_eq!((with(&off), with(&plain)), (Ok(false), Ok(true)));
         assert!(run(AppRole::ExecutorIndexer, &["--lean"]).unwrap_err().contains("lean storage is the Executor alone"));
         // a later option wins (the command line after the configuration's [launch] options)
         let Ok((Start::Run(a), _)) =

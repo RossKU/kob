@@ -80,7 +80,8 @@ pub struct IndexOpts {
     /// history into the normal store meanwhile (`fast_start` in the configuration; docs/ops/executor.md, *Fast start*).
     #[arg(long, global = true, conflicts_with = "no_fast_start")]
     pub fast_start: bool,
-    /// Turn `fast_start` of the configuration off for this start.
+    /// Turn fast start off for this start: the history is indexed before the matcher plans (fast start is on for the Executor
+    /// unless the configuration says `fast_start = false`).
     #[arg(long, global = true)]
     pub no_fast_start: bool,
     /// Lean storage: keep the live book and 30 days of closed orders (500 MB cap), no record log, a file that shrinks (`lean` in the
