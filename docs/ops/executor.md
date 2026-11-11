@@ -311,6 +311,38 @@ JSON object, for scripts and the Android app) and `kobd withdraw --to ADDRESS --
 operator key over the configured node, public resolver pair included; it takes the data directory's writer lock, so it refuses while the
 executor runs; `--json` prints one object on stdout, `{txid, network, from, to, amount_sompi, fee_sompi, inputs, remaining_coins}` with `txid` null for a dry run, or `{"error": "..."}` with exit status 1 on a refusal, and the details and the log go to stderr; Quick start, section 5). `kobd setup --non-interactive` keeps the configuration it replaces as `kobd.toml.bak` and names it in its JSON as `replaced` (null when nothing was replaced). `kobd config check` and `kobd db info` are offline and read-only (the table above).
 
+**The KAS on the key's token outputs.** `kobd withdraw` moves plain KAS only. Tokens the operator key holds (the matcher's
+inventory, maintenance proceeds) stay on their own outputs, and each of those carries KAS (its carrier, 1 KAS by default).
+To get that KAS back, move the tokens with the command-line client `kob` (in the same archive) and the operator key, then
+withdraw what came back. From the executor's folder, with `--network` and `--node` the executor's own (`network` and
+`rpc_url` of `kobd.toml`; `resolver` is `kob`'s default too):
+
+1. Pause the executor, so it builds nothing from those outputs meanwhile, and keep it running: its read API is the indexer
+   `kob` needs for the token outputs (the pause file of `kobd.toml`, by default `kob-pause` next to it).
+
+   ```
+   touch kob-pause                                                    # Windows: type nul > kob-pause
+   kob balances --maker <funding address> --network testnet-10 --indexer http://127.0.0.1:8090
+   ```
+
+2. For each token it lists as free, either send all of it to your own wallet on a small carrier (the carriers of the outputs
+   it spends, less the new one and the fee, come back to the key as plain KAS), or merge the key's outputs of it into one
+   (the merged output keeps the largest carrier, at most 1 KAS; the freed carriers, less the fees, come back as plain KAS):
+
+   ```
+   kob send <TOKEN> <your address> <amount, e.g. 125TUSD> --carrier 0.08KAS --key-file kob-operator.key \
+     --network testnet-10 --node resolver --indexer http://127.0.0.1:8090 --yes
+   kob merge <TOKEN> --key-file kob-operator.key --network testnet-10 --node resolver --indexer http://127.0.0.1:8090 --yes
+   ```
+
+   A transfer spends at most the program's token inputs (3 on the 3 / 3 programs), and `kob merge` makes at most 10
+   transactions per run: run either again while `kob balances` lists more outputs of the token. `--dry-run` instead of
+   `--yes` shows the plan and signs nothing. `--carrier` is at least 0.08 KAS and the program's floor (the command says so).
+3. Stop the executor, delete `kob-pause`, and withdraw the plain KAS (`kobd withdraw --to <address> --amount all`, Quick start
+   section 5). `kobd address-balance` shows what is left.
+
+The units are required (`125TUSD`, `1250base`, `0.08KAS`); `kob send --help` and `kob merge --help` list every option.
+
 `kobd --indexer` (with the database tools `kobd db info`, `replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
 standalone modes. The database and the record log are the same files in every mode; never run two
 writers on one data directory.

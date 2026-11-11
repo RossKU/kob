@@ -541,7 +541,9 @@ Termux executor follows the steps above in its folder; for Docker rebuild the im
 
 **Stop for good, or empty the key.** Stop the executor (above), then withdraw (section 5, *Withdraw*:
 `kobd withdraw --to <address> --amount all`). It refuses while an executor runs from the same data directory, and moves
-only plain KAS: tokens the key holds stay where they are. Check with `kobd address-balance`.
+only plain KAS: tokens the key holds stay where they are, each on its own carrier of KAS. To get that KAS back too, move
+the tokens first with `kob send` or `kob merge` and the operator key (`docs/ops/executor.md`, *The KAS on the key's token
+outputs*), then withdraw. Check with `kobd address-balance`.
 
 **Logs and rotation.** The flags are `--log-file <path>` (or `KOB_LOG_FILE`), `--log-max-mb` (default 10; 0: never rotate) and
 `--log-files` (rotated files kept, default 5; 0: the file starts over when full), or the keys `log_file`, `log_max_mb`,
