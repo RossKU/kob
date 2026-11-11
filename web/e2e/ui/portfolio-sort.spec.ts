@@ -317,52 +317,38 @@ test.describe('1280 px wide', () => {
   });
 });
 
-test.describe('390 px wide: the cards have a sort control', () => {
+test.describe('390 px wide: the cards have no sort control (founder 2026-11-11)', () => {
   test.use({ viewport: { width: 390, height: 900 } });
 
-  test('Order history, Fills and Balances: the control sorts like the headers; the headers are gone; one state', async ({ appPage: page, mock }) => {
+  test('Order history, Fills and Balances: a phone is cards, in the own order of the list, with no header and no sort control; widened, the headers sort', async ({ appPage: page, mock }) => {
     test.setTimeout(Number(process.env.KOB_SORT_TIMEOUT ?? 240_000));
     await setup(page, mock, '/#/portfolio/history');
     await expect(page.locator('[data-testid^="order-row-"]').first()).toBeVisible();
     await page.waitForTimeout(900);
     await page.getByTestId('portfolio-rows-50').click();
     await expect(page.getByTestId('orders-head')).toBeHidden();
-    const ctl = page.getByTestId('orders-sortctl');
-    await expect(ctl).toBeVisible();
-    const own = await ids(page);
-    await ctl.getByTestId('orders-sortctl-column').selectOption('price');
-    expectOrdered((await texts(page.locator('[data-testid^="order-line-"] .or-price'))).map(num), 'desc', 'card price');
-    await ctl.getByTestId('orders-sortctl-dir').click();
-    expectOrdered((await texts(page.locator('[data-testid^="order-line-"] .or-price'))).map(num), 'asc', 'card price');
-    // the tap target of the control is a finger's
-    const b = (await ctl.getByTestId('orders-sortctl-dir').boundingBox())!;
-    expect(b.height).toBeGreaterThanOrEqual(39.9);
-    expect(b.x + b.width).toBeLessThanOrEqual(390);
+    await expect(page.getByTestId('orders-sortctl')).toHaveCount(0);
     await shot(page, 'history-390');
-    // back to the own order: the time, largest first
-    await ctl.getByTestId('orders-sortctl-column').selectOption('time');
-    await expect(ctl.getByTestId('orders-sortctl-dir')).toHaveAttribute('data-dir', 'desc');
-    expect(await ids(page)).toEqual(own);
 
     await page.getByTestId('orders-tab-fills').click();
     await expect(page.getByTestId('wallet-fill-row').first()).toBeVisible();
-    const fctl = page.getByTestId('wallet-fills-sortctl');
-    await expect(fctl).toBeVisible();
-    await fctl.getByTestId('wallet-fills-sortctl-column').selectOption('price');
-    const cardPrices = await texts(page.locator('[data-testid="wallet-fill-row"] .dt-c-price'));
-    expectOrdered(cardPrices.map(num), 'desc', 'fill card price');
+    await expect(page.getByTestId('wallet-fills-sortctl')).toHaveCount(0);
     await shot(page, 'fills-390');
 
     await page.getByTestId('orders-tab-balances').click();
     await expect(page.getByTestId('kas-balance')).toBeVisible();
-    const bctl = page.getByTestId('balances-sortctl');
-    await expect(bctl).toBeVisible();
-    await bctl.getByTestId('balances-sortctl-column').selectOption('inOrders');
-    await expect(bctl.getByTestId('balances-sortctl-dir')).toHaveAttribute('data-dir', 'desc');
+    await expect(page.getByTestId('balances-sortctl')).toHaveCount(0);
     await shot(page, 'balances-390');
-    // the same state in the table layout: the sort chosen in cards shows at 1280
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 'the page does not scroll sideways').toBeLessThanOrEqual(0);
+
+    // widened to a desktop, the table has its headers and they sort (no card is left)
     await page.setViewportSize({ width: 1280, height: 1000 });
-    await expect(page.getByTestId('balances-sort-inOrders').locator('xpath=ancestor::*[@role="columnheader"]')).toHaveAttribute('aria-sort', 'descending');
+    await page.waitForTimeout(500);
+    if (await page.getByTestId('balances-head').isVisible()) {
+      await expect(page.getByTestId('balances-sortctl')).toBeHidden();
+      await page.getByTestId('balances-sort-inOrders').click();
+      await expect(page.getByTestId('balances-sort-inOrders').locator('xpath=ancestor::*[@role="columnheader"]')).toHaveAttribute('aria-sort', 'descending');
+    }
   });
 
   test('Activity: a phone has no sort (founder 2026-11-11): the cards read newest first and the tools stay one row', async ({ appPage: page, mock }) => {

@@ -169,7 +169,7 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
     decide();
   }, [waiting, w.discovered, w.detected]);
   // no extension: the button opens the private key entry, and is named for it (the tests and the page's own scripts find it by that name)
-  // the Create token page's gate (`gate`) is the same button and action, full size, with its own test ids (the header's are on the same page)
+  // the pages' gates (`gate`: the Portfolio's, the Create token page's) are the same button and action, with their own test ids (the header's are on the same page)
   const testid = props.gate
     ? only ? `issue-connect-${only.id}` : choose ? 'issue-connect-choose' : 'issue-connect-local-key'
     : narrow ? 'wallet-connect' : only ? `wallet-connect-${only.id}` : choose ? 'wallet-connect' : 'wallet-connect-local-key';
@@ -177,14 +177,14 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
   return (
     <div class="wallet-actions" data-testid="wallet-connect-list" data-network={config.network}>
       <Button
-        small={!props.gate}
+        small
         variant="primary"
-        // the header's Connect is the landing page's pill (styles.css .btn-pill); the Create token page's gate keeps the primary button
-        {...(props.gate ? {} : { class: 'btn-pill' })}
+        // the one Connect of the app, the header's and the pages': the landing page's pill (styles.css .btn-pill), the same size and colours in both themes
         data-testid={testid}
         loading={w.connecting || waiting}
         onClick={onConnect}
-        {...(noExtension && !supported ? { 'data-state': 'unavailable', class: props.gate ? 'btn-off' : 'btn-pill btn-off', title: t(keyAllowed ? 'signer.unsupported' : 'signer.mirrorOff') } : {})}
+        class={noExtension && !supported ? 'btn-pill btn-off' : 'btn-pill'}
+        {...(noExtension && !supported ? { 'data-state': 'unavailable', title: t(keyAllowed ? 'signer.unsupported' : 'signer.mirrorOff') } : {})}
       >
         {w.connecting || waiting ? t('shell.wallet.connecting') : t('shell.wallet.connectShort')}
       </Button>

@@ -677,7 +677,7 @@ export function IssueView() {
               ) : (
                 <>
                   {wallet.detected.map((a) => (
-                    <Button key={a.id} variant="primary" loading={wallet.connecting} onClick={() => void wallet.connect(a.id)} data-testid={`issue-connect-${a.id}`}>
+                    <Button key={a.id} small variant="primary" class="btn-pill" loading={wallet.connecting} onClick={() => void wallet.connect(a.id)} data-testid={`issue-connect-${a.id}`}>
                       {t('issue.connect.button', { label: a.label })}
                     </Button>
                   ))}

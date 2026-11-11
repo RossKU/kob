@@ -1,14 +1,20 @@
 // The one table of the Portfolio (and of a market page's panel): a header row with sortable column titles, rows of cells, an expandable details area under a row, and,
-// where the table is narrow, the same rows as cards of label / value pairs (data-table.css: the table's own width decides, by a container query). Balances, Open orders,
-// Order history and Fills are all drawn with these parts, so they share one header style, one row height, one cell grammar: numbers right-aligned in tabular figures with
-// the unit small and muted, a market as its icon and ticker, a side in its colour, a status as a chip. Sorting is the shared helper (sort.ts, SortHeader.tsx).
+// where the table cannot be a table, the same rows as cards of label / value pairs. Balances, Open orders, Order history and Fills are all drawn with these parts, so
+// they share one header style, one row height, one cell grammar: numbers right-aligned in tabular figures with the unit small and muted, a market as its icon and
+// ticker, a side in its colour, a status as a chip. Sorting is the shared helper (sort.ts, SortHeader.tsx).
+//
+// The structure is decided by FIT, in one fixed order (`foldTable`): the full table (fold 0), then the table folded (1: tighter columns, the Copy button an icon, the time on
+// two lines; 2: the value / total under the amount), then cards. A phone (below 640 px, PHONE_QUERY) is always cards, and a card has no sort control there. The result
+// depends only on the table's width, the fonts and what the rows say, never on what the table was before: it is measured again, from fold 0, whenever one of them changes
+// (a resize, the fonts loading, rows arriving or changing), so the same width always gives the same structure.
 import type { ComponentChildren, JSX } from 'preact';
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { kasValueText, kasValueTitle } from '../../app/fiat';
 import { useFiat } from '../../app/use-fiat';
 import { formatKas } from '../../kob/units';
 import { formatRowTimeUnix, rowTimeTitleUnix } from './format';
+import { PHONE_QUERY, useMedia } from '../shell/narrow';
 import { SortButton, SortControl, ariaSortOf } from './SortHeader';
 import type { SortColumn, SortState } from './sort';
 import './data-table.css';
@@ -26,6 +32,44 @@ export interface DtColumn<K extends string = string> extends SortColumn<K> {
 export interface DtPlain {
   key: string;
   plain: true;
+}
+
+/** The folds of a table, in order (data-table.css): 0 the full table, 1 tighter (narrower columns, the Copy button an icon, the time on two lines), 2 the value / total under the amount. */
+const LAST_FOLD = 2;
+
+const spills = (e: HTMLElement): boolean => e.scrollWidth > e.clientWidth + 1;
+
+/** Whether the table, as it is drawn now, holds its content: no row wider than the table (the columns' minimum widths together), no cell cut off. */
+function holdsContent(el: HTMLElement): boolean {
+  const head = el.querySelector<HTMLElement>('.dt-head');
+  if (head && !head.hidden && spills(head)) return false;
+  for (const row of Array.from(el.querySelectorAll<HTMLElement>('.dt-body .dt-row')).slice(0, 40)) if (spills(row)) return false;
+  for (const c of Array.from(el.querySelectorAll<HTMLElement>('.dt-body .dt-c')).slice(0, 160)) if (c.dataset.card !== 'hidden' && spills(c)) return false;
+  return true;
+}
+
+/**
+ * Sets the table's structure (`data-fold`: 0, 1, 2 or cards): the first fold, in the fixed order, in which the table holds its content; cards on a phone and where no fold does.
+ * Always tried from fold 0, so the answer is a function of the room, the fonts and the rows only; `last` remembers what they were, so a call with nothing changed costs a string compare.
+ * All of it runs before the browser paints: a table never shows a state it does not stay in.
+ */
+function foldTable(el: HTMLElement, last: { current: string }): void {
+  const room = Math.round(el.clientWidth);
+  if (room === 0) return; // not on screen (another tab): nothing to measure
+  if (!el.querySelector('.dt-body .dt-row')) return; // no rows (loading, nothing listed): nothing to measure, and the structure the rows had stays until they are back
+  const phone = typeof matchMedia === 'function' && matchMedia(PHONE_QUERY).matches;
+  const state = `${room}|${phone}|${document.fonts?.status ?? ''}|${el.textContent ?? ''}`;
+  if (state === last.current && el.dataset.fold) return;
+  last.current = state;
+  if (phone) {
+    el.dataset.fold = 'cards';
+    return;
+  }
+  for (let fold = 0; fold <= LAST_FOLD; fold++) {
+    el.dataset.fold = String(fold);
+    if (holdsContent(el)) return;
+  }
+  el.dataset.fold = 'cards';
 }
 
 export function DataTable<K extends string>(props: {
@@ -49,41 +93,44 @@ export function DataTable<K extends string>(props: {
   body?: { class?: string; 'data-testid'?: string; 'data-live'?: string | number };
   children: ComponentChildren;
 }) {
-  // a table whose cells do not hold their content (a wide font, a long translation, a long name) is cards instead, until the table is wider than it was then
   const root = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-  const [tightAt, setTightAt] = useState<number | null>(null);
+  const probe = useRef<HTMLDivElement>(null);
+  const phone = useMedia(PHONE_QUERY);
+  const last = useRef('');
+  // the structure (data-fold on the table, read by data-table.css) is set here, before the browser paints: after every render, and whenever the room, the fonts or the rows change
   useLayoutEffect(() => {
-    const el = root.current;
-    if (!el || typeof ResizeObserver !== 'function') return;
-    const measure = () => setWidth(Math.round(el.clientWidth));
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  const forced = tightAt !== null && width <= tightAt + 24;
-  useLayoutEffect(() => {
-    const el = root.current;
-    if (!el || forced || width === 0) return;
-    const head = el.querySelector('.dt-head');
-    if (!head || getComputedStyle(head).display === 'none') return; // narrow already: the cards of the container query
-    for (const c of Array.from(el.querySelectorAll<HTMLElement>('.dt-body .dt-c')).slice(0, 160)) {
-      if (c.scrollWidth > c.clientWidth + 1 && c.dataset.card !== 'hidden') {
-        setTightAt(width);
-        return;
-      }
-    }
+    if (root.current) foldTable(root.current, last);
   });
+  useEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    const again = () => foldTable(el, last);
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(again) : null;
+    // the table's width is watched on a probe of no height: folding changes the table's height, and a resize observer on the table itself would answer its own change
+    if (probe.current) ro?.observe(probe.current);
+    // a row that changes by itself (the USD display, a live price) is not a render of the table
+    const mo = typeof MutationObserver === 'function' ? new MutationObserver(again) : null;
+    const body = el.querySelector('.dt-body');
+    if (body) mo?.observe(body, { childList: true, subtree: true, characterData: true });
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    void fonts?.ready.then(again);
+    fonts?.addEventListener?.('loadingdone', again);
+    return () => {
+      ro?.disconnect();
+      mo?.disconnect();
+      fonts?.removeEventListener?.('loadingdone', again);
+    };
+  }, []);
   return (
-    <div ref={root} class={`dt dt-${props.grid}${forced ? ' dt-force-cards' : ''}${props.class ? ` ${props.class}` : ''}`} role="table" aria-label={props.label} data-testid={props['data-testid']}>
-      {props.sortable && !props.headless ? <SortControl id={props.id} class="dt-sortctl" columns={props.cols.filter((c): c is DtColumn<K> => !('plain' in c))} state={props.sort} own={props.own} onSort={props.onSort} /> : null}
+    <div ref={root} class={`dt dt-${props.grid}${props.class ? ` ${props.class}` : ''}`} role="table" aria-label={props.label} data-testid={props['data-testid']}>
+      <div ref={probe} class="dt-probe" aria-hidden="true" />
+      {props.sortable && !props.headless && !phone ? <SortControl id={props.id} class="dt-sortctl" columns={props.cols.filter((c): c is DtColumn<K> => !('plain' in c))} state={props.sort} own={props.own} onSort={props.onSort} /> : null}
       <div class="dt-head" role="row" data-testid={`${props.id}-head`} hidden={props.headless}>
         {props.cols.map((c) =>
           'plain' in c ? (
             <span key={c.key} role="columnheader" aria-hidden="true" />
           ) : (
-            <span key={c.key} role="columnheader" class={c.right ? 'dt-hr' : undefined} aria-sort={ariaSortOf(props.sort, c.key, props.own)}>
+            <span key={c.key} role="columnheader" class={`dt-h-${c.key}${c.right ? ' dt-hr' : ''}`} aria-sort={ariaSortOf(props.sort, c.key, props.own)}>
               <SortButton id={props.id} col={c} state={props.sort} own={props.own} onSort={props.onSort} />
             </span>
           ),

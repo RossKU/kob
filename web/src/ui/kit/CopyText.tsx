@@ -70,8 +70,19 @@ export function CopyText(props: CopyTextProps) {
       ) : (
         <code class="mono wrap-anywhere" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{shown}</code>
       )}
-      <button type="button" class="copy-btn" onClick={onCopy} aria-label={props.label ?? t('common.copy')}>
-        {state === 'copied' ? t('common.copied') : state === 'failed' ? t('common.copyFailed') : t('common.copy')}
+      <button type="button" class="copy-btn" onClick={onCopy} aria-label={props.label ?? t('common.copy')} data-state={state}>
+        <span class="copy-btn-text">{state === 'copied' ? t('common.copied') : state === 'failed' ? t('common.copyFailed') : t('common.copy')}</span>
+        {/* the icon stands in for the words where a table is folded (kit/data-table.css); nowhere else is it drawn */}
+        <svg class="copy-btn-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+          {state === 'copied' ? (
+            <path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          ) : (
+            <>
+              <rect x="5.5" y="5.5" width="8" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4" />
+              <path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H3.5A1.5 1.5 0 0 0 2 3v6.5A1.5 1.5 0 0 0 3.5 11H4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            </>
+          )}
+        </svg>
       </button>
     </span>
   );

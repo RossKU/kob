@@ -254,10 +254,14 @@ small, .small { font-size: 0.85em; }
 .nav a[aria-current='page'] { background: var(--surface-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--primary); }
 /* every header control is one height (the buttons, the tabs, the wallet chip); an icon button is square */
 .header .btn-sm { min-height: var(--ctl-h); padding: 0 12px; border-radius: var(--ctl-r); font-size: 14px; }
-/* the header's call to action (the landing page's "Open the app", the app's "Connect"): the landing page's solid pill in the text colour on the page's
-   background (a white pill with dark text on dark, a near-black one on light); hover: the same pill, a shade softer */
-.header .btn.btn-pill { border-radius: 999px; padding: 0 16px; background: var(--text); border-color: var(--text); color: var(--bg); }
-.header .btn.btn-pill:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 86%, var(--bg)); border-color: color-mix(in srgb, var(--text) 86%, var(--bg)); color: var(--bg); }
+/* the call to action (the landing page's "Open the app", the app's "Connect" in the header AND in a page: the Portfolio's, the Create token gate's): the landing page's solid
+   pill in the text colour on the page's background (a white pill with dark text on dark, a near-black one on light); hover: the same pill, a shade softer. One size everywhere:
+   the header's control height (a finger's 36 px on a coarse pointer) */
+.btn.btn-pill { border-radius: 999px; padding: 0 16px; background: var(--text); border-color: var(--text); color: var(--bg); }
+.btn.btn-pill:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 86%, var(--bg)); border-color: color-mix(in srgb, var(--text) 86%, var(--bg)); color: var(--bg); }
+/* (the header's own rules for its small buttons, later in this file, are of the same weight and win there: nothing in the header changes) */
+.btn-pill.btn-sm { min-height: var(--ctl-h); font-size: 14px; }
+@media (pointer: coarse) { .btn-pill.btn-sm { min-height: 36px; } }
 .header .header-tools .btn-icon, .header .header-tools .notify-bell, .header .header-tools .menu-button { min-width: var(--ctl-h); padding: 0 7px; }
 .header-tools { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin-left: auto; min-width: 0; }
 .header-wallet { display: flex; align-items: center; min-width: 0; }
@@ -624,6 +628,8 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); border-radius: var(--radius-sm); font: inherit; font-size: 0.75rem; padding: 0 6px; cursor: pointer; min-height: 20px;
 }
 .copy-btn:hover { color: var(--text); background: var(--surface-3); }
+/* the icon of the Copy button stands in for its words only where a table is folded (kit/data-table.css) */
+.copy-btn-icon { display: none; }
 
 /* ------------------------------------------------------------------ market */
 

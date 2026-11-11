@@ -10,11 +10,6 @@
 .or-details { padding: 10px 12px 12px; }
 .or-group.nested .or-market { padding-left: 14px; }
 /* in a card the filled part reads left to right, its bar under it */
-@media (max-width: 1199px) {
-  .or-filled { align-items: flex-start; }
-  .or-filled > .num { text-align: left; }
-  .or-status { justify-content: flex-start; }
-}
-.dt-force-cards .or-filled { align-items: flex-start; }
-.dt-force-cards .or-filled > .num { text-align: left; }
-.dt-force-cards .or-status { justify-content: flex-start; }
+.dt[data-fold='cards'] .or-filled { align-items: flex-start; }
+.dt[data-fold='cards'] .or-filled > .num { text-align: left; }
+.dt[data-fold='cards'] .or-status { justify-content: flex-start; }

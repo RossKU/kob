@@ -1,8 +1,11 @@
 /* The one table of the Portfolio (DataTable.tsx): Balances, Open orders, Order history and Trade history, on the Portfolio page and in a market page's panel, all draw the same
-   header row, the same rows, the same cells. From a 1200 px window it is a table (columns on one grid per table, below); in a narrower one (a phone, a tablet)
-   every row is a card of label / value pairs. The WINDOW decides, not the table's own width (founder 2026-11-11): the market page's panel sits a card deeper than
-   the Portfolio, and the same screen must show both the same way; a table that still cannot hold its content takes the cards anyway (dt-force-cards). Colours are the app's tokens (styles.css), both themes. */
+   header row, the same rows, the same cells. The STRUCTURE is decided by fit, in one fixed order, and DataTable.tsx writes it on the table (`data-fold`): 0 the full table
+   (columns on one grid per table, below), 1 the table folded (tighter columns, the Copy button an icon, the time on two lines), 2 the table folded further (the value / total
+   under the amount), then cards: every row a card of label / value pairs. A phone (below 640 px) is always cards; a tablet is a table as long as a fold of it holds its
+   content, so the same width always gives the same structure. Colours are the app's tokens (styles.css), both themes. */
 .dt { container: dt / inline-size; min-width: 0; font-variant-numeric: tabular-nums; }
+/* the width probe of DataTable.tsx: no height, so folding never changes its size */
+.dt-probe { height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
 .dt-head, .dt-row {
   display: grid; grid-template-columns: var(--dt-cols); column-gap: 12px; align-items: center; padding: 0 12px; box-sizing: border-box; font-size: 0.86rem;
 }
@@ -48,98 +51,98 @@
 .dt-details[hidden] { display: none; }
 .dt-empty { padding: 18px 8px; text-align: center; color: var(--muted); }
 
-/* the sort control stands in for the header where the rows are cards */
+/* the sort control stands in for the header where the rows are cards (a phone has none: DataTable.tsx does not draw it) */
 .dt .dt-sortctl { display: none; }
 
-/* the grids of the three tables, from 1040 px: the room is shared by weight, the long texts (market, filled part) get most of it; a text that does not fit its cell wraps
-   inside it, it never paints over a neighbour */
+/* the grids of the three tables: the room is shared by weight, the long texts (market, filled part) get most of it; a text that does not fit its cell wraps inside it, it never
+   paints over a neighbour. `--dt-cols` is fold 0, `--dt-cols-1` the tighter table (fold 1), `--dt-cols-2` the table without its value / total column (fold 2: the value stands under the amount) */
 /* the Total / Value column holds a KAS figure with up to four fixed decimals (`450,000.0000`): 104 px keeps it whole on a wide font, so the table is not turned into cards by its own content */
 /* the leading columns are the same in the three: Time, Market, (Type,) Side, Price, Amount, Total / Value; then what is particular to the table; the chevron last */
-.dt-orders-open { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) 70px var(--dt-chev); }
-.dt-orders-history { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(92px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) var(--dt-chev); }
-.dt-fills { --dt-cols: 10.4em minmax(120px, 2fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(140px, 1.3fr) var(--dt-chev); }
-.dt-balances { --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) minmax(150px, auto); }
+.dt-orders-open {
+  --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) 70px var(--dt-chev);
+  --dt-cols-1: 6.4em minmax(104px, 2fr) minmax(48px, 0.6fr) 38px minmax(80px, 1fr) minmax(88px, 1.2fr) minmax(92px, 1fr) minmax(100px, 1.3fr) minmax(84px, 1fr) 64px var(--dt-chev);
+  --dt-cols-2: 6.4em minmax(104px, 2fr) minmax(48px, 0.6fr) 38px minmax(80px, 1fr) minmax(96px, 1.2fr) minmax(100px, 1.3fr) minmax(84px, 1fr) 64px var(--dt-chev);
+}
+.dt-orders-history {
+  --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(92px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) var(--dt-chev);
+  --dt-cols-1: 6.4em minmax(104px, 2fr) minmax(48px, 0.6fr) 38px minmax(80px, 1fr) minmax(88px, 1.2fr) minmax(92px, 1fr) minmax(80px, 1fr) minmax(100px, 1.3fr) minmax(84px, 1fr) var(--dt-chev);
+  --dt-cols-2: 6.4em minmax(104px, 2fr) minmax(48px, 0.6fr) 38px minmax(80px, 1fr) minmax(96px, 1.2fr) minmax(80px, 1fr) minmax(100px, 1.3fr) minmax(84px, 1fr) var(--dt-chev);
+}
+.dt-fills {
+  --dt-cols: 10.4em minmax(120px, 2fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(140px, 1.3fr) var(--dt-chev);
+  --dt-cols-1: 6.4em minmax(104px, 2fr) 38px minmax(80px, 1fr) minmax(88px, 1.2fr) minmax(88px, 1fr) minmax(136px, 1.3fr) var(--dt-chev);
+  --dt-cols-2: 6.4em minmax(104px, 2fr) 38px minmax(80px, 1fr) minmax(96px, 1.2fr) minmax(136px, 1.3fr) var(--dt-chev);
+}
+.dt-balances {
+  --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) minmax(150px, auto);
+  --dt-cols-1: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) minmax(128px, auto);
+  --dt-cols-2: var(--dt-cols-1);
+}
 
 /* a status too long for its cell ("expired (IOC/FOK)") wraps inside its chip */
 .dt-c-status .badge { white-space: normal; min-width: 0; }
 
-/* ---- cards: every row of a table in a window narrower than 1200 px. Row 1: the market (the title, the side and the kind after it), the time at the right, the chevron; then the label / value pairs, as many to a line as fit (two on a phone); the buttons last. */
-@media (max-width: 1199px) {
-  .dt-head { display: none; }
-  .dt .dt-sortctl { display: inline-flex; }
-  .dt-body { gap: 8px; }
-  .dt-group { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
-  /* a card: two columns of label / value pairs; the title (the market) on the first line, the status at its right, the chevron in the corner; the wide pairs and the buttons take a line */
-  .dt-row { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(9rem, calc(50% - 6px)), 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
-  .dt-c { min-width: 0; text-align: left; }
-  .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
-  .dt-num { text-align: left; }
-  .dt-c[data-card='head'], .dt-c[data-card='title'], .dt-c[data-card='wide'], .dt-c[data-card='action'] { grid-column: 1 / -1; }
-  .dt-c[data-card='head']::before, .dt-c[data-card='title']::before, .dt-c[data-card='badge']::before, .dt-c[data-card='action']::before, .dt-c[data-card='toggle']::before { content: none; }
-  .dt-c[data-card='title'], .dt-c[data-card='head'] { grid-row: 1; padding-right: 40px; }
-  .dt-c[data-card='title'] { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-  .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1 / -2; padding-right: 0; }
-  .dt-c[data-card='badge'] { grid-column: -2 / -1; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
-  .dt-c[data-card='toggle'] { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }
-  .dt-c[data-card='toggle'] .dt-chev { width: 36px; height: 36px; }
-  .dt-c[data-card='action']:empty { display: none; }
-  .dt-act { justify-content: stretch; }
-  .dt-act .btn { flex: 1 1 auto; min-height: 40px; }
-  .dt-c[data-card='hidden'] { display: none; }
-  .dt-c-status .badge { text-align: center; }
-  .dt-card-only { display: block; }
-  .dt-c[data-card='badge'] { text-align: right; }
-  .dt-details { border-top: 1px solid var(--border); }
-}
+/* ---- fold 1: tighter. Narrower columns and gaps (the time wraps at its space: the date over the hour), the Copy button an icon (its words are its accessible name and tooltip) */
+.dt[data-fold='1'], .dt[data-fold='2'] { --dt-cols: var(--dt-cols-1); }
+.dt[data-fold='2'] { --dt-cols: var(--dt-cols-2); }
+.dt:is([data-fold='1'], [data-fold='2']) :is(.dt-head, .dt-row) { column-gap: 8px; padding-left: 8px; padding-right: 8px; }
+.dt:is([data-fold='1'], [data-fold='2']) .dt-c-tx .copy-btn:not([data-state='failed']) .copy-btn-text { display: none; }
+.dt:is([data-fold='1'], [data-fold='2']) .dt-c-tx .copy-btn:not([data-state='failed']) .copy-btn-icon { display: block; }
+.dt:is([data-fold='1'], [data-fold='2']) .dt-c-tx .copy-btn:not([data-state='failed']) { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; min-height: 28px; padding: 0 6px; }
+@media (pointer: coarse) { .dt:is([data-fold='1'], [data-fold='2']) .dt-c-tx .copy-btn:not([data-state='failed']) { min-width: 36px; min-height: 40px; padding: 0; } }
 
-/* the same cards for a table that cannot hold its content (DataTable.tsx: `dt-force-cards`) */
-  .dt-force-cards .dt-head { display: none; }
-  .dt-force-cards .dt-sortctl { display: inline-flex; }
-  .dt-force-cards .dt-body { gap: 8px; }
-  .dt-force-cards .dt-group { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
-  /* a card: two columns of label / value pairs; the title (the market) on the first line, the status at its right, the chevron in the corner; the wide pairs and the buttons take a line */
-  .dt-force-cards .dt-row { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(9rem, calc(50% - 6px)), 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
-  .dt-force-cards .dt-c { min-width: 0; text-align: left; }
-  .dt-force-cards .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
-  .dt-force-cards .dt-num { text-align: left; }
-  .dt-force-cards .dt-c[data-card='head'], .dt-force-cards .dt-c[data-card='title'], .dt-force-cards .dt-c[data-card='wide'], .dt-force-cards .dt-c[data-card='action'] { grid-column: 1 / -1; }
-  .dt-force-cards .dt-c[data-card='head']::before, .dt-force-cards .dt-c[data-card='title']::before, .dt-force-cards .dt-c[data-card='badge']::before, .dt-force-cards .dt-c[data-card='action']::before, .dt-force-cards .dt-c[data-card='toggle']::before { content: none; }
-  .dt-force-cards .dt-c[data-card='title'], .dt-force-cards .dt-c[data-card='head'] { grid-row: 1; padding-right: 40px; }
-  .dt-force-cards .dt-c[data-card='title'] { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-  .dt-force-cards .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1 / -2; padding-right: 0; }
-  .dt-force-cards .dt-c[data-card='badge'] { grid-column: -2 / -1; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
-  .dt-force-cards .dt-c[data-card='toggle'] { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }
-  .dt-force-cards .dt-c[data-card='toggle'] .dt-chev { width: 36px; height: 36px; }
-  .dt-force-cards .dt-c[data-card='action']:empty { display: none; }
-  .dt-force-cards .dt-act { justify-content: stretch; }
-  .dt-force-cards .dt-act .btn { flex: 1 1 auto; min-height: 40px; }
-  .dt-force-cards .dt-c[data-card='hidden'] { display: none; }
-  .dt-force-cards .dt-c-status .badge { text-align: center; }
-  .dt-force-cards .dt-card-only { display: block; }
-  .dt-force-cards .dt-c[data-card='badge'] { text-align: right; }
-  .dt-force-cards .dt-details { border-top: 1px solid var(--border); }
+/* ---- fold 2: the value / total moves under the amount (the amount's column, a second line; every other cell spans both lines). The header of the moved column is not drawn. */
+.dt:is(.dt-fills, .dt-orders-open, .dt-orders-history)[data-fold='2'] .dt-row > * { grid-row: 1 / span 2; }
+.dt:is(.dt-fills, .dt-orders-open, .dt-orders-history)[data-fold='2'] .dt-row > .dt-c-amount { grid-row: 1; align-self: end; }
+.dt:is(.dt-fills, .dt-orders-open, .dt-orders-history)[data-fold='2'] .dt-row > :is(.dt-c-value, .dt-c-total) { grid-row: 2; align-self: start; color: var(--muted); font-size: 0.8rem; }
+.dt-fills[data-fold='2'] .dt-row > .dt-c-value { grid-column: 5; }
+.dt-orders-open[data-fold='2'] .dt-row > .dt-c-total, .dt-orders-history[data-fold='2'] .dt-row > .dt-c-total { grid-column: 6; }
+.dt-fills[data-fold='2'] .dt-head > .dt-h-value, .dt-orders-open[data-fold='2'] .dt-head > .dt-h-total, .dt-orders-history[data-fold='2'] .dt-head > .dt-h-total { display: none; }
 
-/* a wider card (a tablet, a narrow window): as many columns of pairs as fit (9rem each: two on a phone, four or five on a tablet), so a card is never
+/* ---- cards: a phone, and a table that no fold lets hold its content (data-fold='cards'). Row 1: the market (the title, the side and the kind after it), the time at the right, the chevron; then the label / value pairs, as many to a line as fit (two on a phone); the buttons last. */
+.dt[data-fold='cards'] .dt-head { display: none; }
+.dt[data-fold='cards'] .dt-sortctl { display: inline-flex; }
+.dt[data-fold='cards'] .dt-body { gap: 8px; }
+.dt[data-fold='cards'] .dt-group { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
+/* a card: two columns of label / value pairs; the title (the market) on the first line, the status at its right, the chevron in the corner; the wide pairs and the buttons take a line */
+.dt[data-fold='cards'] .dt-row { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(9rem, calc(50% - 6px)), 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
+.dt[data-fold='cards'] .dt-c { min-width: 0; text-align: left; }
+.dt[data-fold='cards'] .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
+.dt[data-fold='cards'] .dt-num { text-align: left; }
+.dt[data-fold='cards'] .dt-c[data-card='head'], .dt[data-fold='cards'] .dt-c[data-card='title'], .dt[data-fold='cards'] .dt-c[data-card='wide'], .dt[data-fold='cards'] .dt-c[data-card='action'] { grid-column: 1 / -1; }
+.dt[data-fold='cards'] .dt-c[data-card='head']::before, .dt[data-fold='cards'] .dt-c[data-card='title']::before, .dt[data-fold='cards'] .dt-c[data-card='badge']::before, .dt[data-fold='cards'] .dt-c[data-card='action']::before, .dt[data-fold='cards'] .dt-c[data-card='toggle']::before { content: none; }
+.dt[data-fold='cards'] .dt-c[data-card='title'], .dt[data-fold='cards'] .dt-c[data-card='head'] { grid-row: 1; padding-right: 40px; }
+.dt[data-fold='cards'] .dt-c[data-card='title'] { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.dt[data-fold='cards'] .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1 / -2; padding-right: 0; }
+.dt[data-fold='cards'] .dt-c[data-card='badge'] { grid-column: -2 / -1; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
+.dt[data-fold='cards'] .dt-c[data-card='toggle'] { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }
+.dt[data-fold='cards'] .dt-c[data-card='toggle'] .dt-chev { width: 36px; height: 36px; }
+.dt[data-fold='cards'] .dt-c[data-card='action']:empty { display: none; }
+.dt[data-fold='cards'] .dt-act { justify-content: stretch; }
+.dt[data-fold='cards'] .dt-act .btn { flex: 1 1 auto; min-height: 40px; }
+.dt[data-fold='cards'] .dt-c[data-card='hidden'] { display: none; }
+.dt[data-fold='cards'] .dt-c-status .badge { text-align: center; }
+.dt[data-fold='cards'] .dt-card-only { display: block; }
+.dt[data-fold='cards'] .dt-c[data-card='badge'] { text-align: right; }
+.dt[data-fold='cards'] .dt-details { border-top: 1px solid var(--border); }
+
+/* a wider card (a tablet whose table did not fit): as many columns of pairs as fit (9rem each: two on a phone, four or five on a tablet), so a card is never
    two half-empty columns; a wide pair takes two */
-@media (max-width: 1199px) {
-  @container dt (min-width: 640px) {
-    .dt-c[data-card='wide'] { grid-column: span 2; }
-  }
+@container dt (min-width: 640px) {
+  .dt[data-fold='cards'] .dt-c[data-card='wide'] { grid-column: span 2; }
 }
-@media (max-width: 1199px) {
-  @container dt (min-width: 520px) {
-    .dt-c[data-card='action'] { flex: 1 1 100%; }
-    .dt-act { justify-content: flex-end; }
-    .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
-  }
+@container dt (min-width: 520px) {
+  .dt[data-fold='cards'] .dt-c[data-card='action'] { flex: 1 1 100%; }
+  .dt[data-fold='cards'] .dt-act { justify-content: flex-end; }
+  .dt[data-fold='cards'] .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
 }
 
 /* finger targets (review M-11): the chevron that opens a row, its buttons and a time-sort header are 44 px / 40 px on a coarse pointer, also where the table is a table (a tablet in landscape) */
 .dt { --dt-chev: 28px; }
 @media (pointer: coarse) {
   .dt { --dt-chev: 44px; }
-  .dt-chev, .dt-c[data-card='toggle'] .dt-chev, .dt-force-cards .dt-c[data-card='toggle'] .dt-chev { width: var(--dt-chev); height: 44px; }
-  .dt-c[data-card='toggle'], .dt-force-cards .dt-c[data-card='toggle'] { width: 44px; height: 44px; }
+  .dt-chev, .dt[data-fold='cards'] .dt-c[data-card='toggle'] .dt-chev { width: var(--dt-chev); height: 44px; }
+  .dt-c[data-card='toggle'], .dt[data-fold='cards'] .dt-c[data-card='toggle'] { width: 44px; height: 44px; }
   .dt-act .btn { min-height: 40px; }
   .dt-c a { display: inline-block; padding-block: 6px; }
 }
