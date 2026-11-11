@@ -4,13 +4,15 @@
 //!   `$KOBD_DIR`), or the interactive setup when there is none; `kobd --executor`, `kobd --indexer` and `kobd --executor
 //!   --indexer` start those roles: with that configuration (which must have been set up for exactly these roles), with
 //!   `--config <file>`, or from the options alone. Every option of the roles follows the flags (`kobd --executor --dry-run`,
-//!   `kobd --indexer --listen 127.0.0.1:8091`; `kobd --help`). The Executor is the indexer, the matcher and the keepers in one
+//!   `kobd --indexer --listen 127.0.0.1:8091`; `kobd --executor --help`, `kobd --indexer --help`). The Executor is the indexer, the matcher and the keepers in one
 //!   process over one store (plus the x402 facilitator with `--x402-config`; docs/ops/executor.md), on lean storage; with
 //!   `--indexer` too, over a full store with the history; the Indexer alone is the indexer and its read API (the public,
 //!   keyless role).
 //! * `setup`: the interactive first run (`kobd::setup`), which writes `kobd.toml` next to the binary;
 //!   `setup --non-interactive` and `address-balance` are its JSON forms for a wrapper (the Android app, `kobd::app`);
-//! * `db <tool>`: the tools of a data directory's database (migrate, replay, export-orders, export-book, import-orders, rebase);
+//! * `config check`: the configuration read offline, with what a start would use (`kobd config check`);
+//! * `db <tool>`: the tools of a data directory's database (info, migrate, replay, export-orders, export-book, import-orders,
+//!   rebase);
 //! * `logo-reports`: the administrator's side of the token-logo reports (list, restore, hide, export, import);
 //! * `match`, `keep`: the matcher and the keepers alone, planning against a book snapshot file that an indexer exports
 //!   (`--book-file`), for deployments that keep the key away from the public API;
@@ -19,10 +21,13 @@
 //!   (`kobd::withdraw`).
 //!
 //! Roles that hold keys hold only the operator's hot key; the facilitator holds none.
+//!
+//! Exit status: 0 a stop, 1 an error (a supervisor starts it again), 2 a usage mistake ([`Usage`], clap's own) or a stop that
+//! did not finish in time (`shutdown`), 130 a second Ctrl+C. Commands that print a document on stdout keep the log on stderr.
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{anyhow, bail};
@@ -35,23 +40,57 @@ use crate::matcher::cli::{run_keep, run_match, KeepArgs, MatchArgs};
 use crate::setup::{self, NoArgs, SetupArgs, SetupOptions, StdConsole, WrpcSetupNode};
 use crate::withdraw::{self, WithdrawArgs};
 use crate::x402::{self, X402Args};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 const ABOUT: &str = "kobd, the KOB daemon: the Executor (matcher, keepers, x402 facilitator) and the Indexer (full history, read API)";
 
-const START_HELP: &str = "Start: `kobd` runs kobd.toml of the executable's directory ($KOBD_DIR when set), or the \
-setup when there is none. `kobd --executor`, `kobd --indexer` or both start those roles: with that configuration (set up for \
-exactly these roles), with --config <file>, or from the options alone; the options above follow the flags. The Indexer takes the \
-indexer's options only (no --key-file, --dry-run, ...).
+/// The top-level usage: the three kinds of start and the commands.
+const USAGE: &str = "kobd                        run kobd.toml of this folder (or the setup when there is none)
+       kobd --executor [OPTIONS]   start the Executor (its options: kobd --executor --help)
+       kobd --indexer [OPTIONS]    start the Indexer (its options: kobd --indexer --help)
+       kobd <COMMAND> [OPTIONS]    a command (kobd help <command>)";
 
-Commands: kobd setup, kobd address-balance, kobd withdraw, kobd db <migrate|replay|export-orders|export-book|import-orders|\
-rebase>, kobd logo-reports, kobd match, kobd keep, kobd x402 (kobd help <command>).";
+const TOP_HELP: &str = "A start names no command: `kobd` runs kobd.toml of the executable's directory ($KOBD_DIR when set), or \
+the setup when there is none. `kobd --executor`, `kobd --indexer` or both start those roles: with that configuration (set up for \
+exactly these roles), with --config <file>, or from the options alone. Their options: `kobd --executor --help`, `kobd --indexer \
+--help`.
+
+Exit status: 0 stopped, 1 an error (a supervisor may start it again), 2 a usage mistake or a stop that did not finish in \
+time (do not start it again unchanged), 130 a second Ctrl+C.";
+
+const START_HELP: &str = "A start: `kobd` runs kobd.toml of the executable's directory ($KOBD_DIR when set), or the setup when \
+there is none; `kobd --executor`, `kobd --indexer` or both start those roles with that configuration (set up for exactly these \
+roles), with --config <file>, or from the options alone; the options above follow the flags. The node is --rpc-url (default: \
+the public pair, `resolver`); --extra-node adds a further one. The commands (setup, withdraw, db, config check, ...): `kobd --help`.";
+
+const INDEX_HELP: &str = "The Indexer alone keeps the full history and serves the read API; it has no key (no --key-file, \
+--dry-run, ...: those are the Executor's, `kobd --executor --help`). The node is --rpc-url (default: the public pair, \
+`resolver`); --extra-node adds a further one. The commands: `kobd --help`.";
+
+/// A mistake on the command line (an option of another role, `--node` of earlier builds, a role the configuration was not set
+/// up for): exit status 2, as clap's own usage errors, so that a supervisor does not start the same command again.
+#[derive(Debug)]
+pub struct Usage(pub String);
+
+impl std::fmt::Display for Usage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Usage {}
+
+/// A usage error ([`Usage`]) as an `anyhow` error.
+fn usage(msg: impl Into<String>) -> anyhow::Error {
+    Usage(msg.into()).into()
+}
 
 /// The log options of every start and command.
 #[derive(clap::Args, Debug, Clone, Default)]
+#[command(next_help_heading = "Log")]
 struct LogArgs {
-    /// Write the log to this file (rotated by size) instead of only the console; the console also shows it while it is a
-    /// terminal. `log_file` of the configuration does the same.
+    /// Also write the log to this file, rotated by size (the console shows it too: a terminal, a pipe, the journal). `log_file`
+    /// of the configuration does the same.
     #[arg(long, global = true, env = "KOB_LOG_FILE", value_name = "PATH")]
     log_file: Option<std::path::PathBuf>,
     /// Rotate the log file at this many MB (default 10, or `log_max_mb` of the configuration; 0: never).
@@ -64,12 +103,7 @@ struct LogArgs {
 
 /// A command (`kobd setup`, `kobd db migrate`, ...).
 #[derive(Parser)]
-#[command(
-    name = "kobd",
-    version = kob_protocol::VERSION,
-    about = ABOUT,
-    after_help = "A start names no command: `kobd`, `kobd --executor`, `kobd --indexer` (their options: `kobd --help`)."
-)]
+#[command(name = "kobd", version = crate::version::long(), about = ABOUT, override_usage = USAGE, after_help = TOP_HELP)]
 struct Cli {
     #[command(flatten)]
     log: LogArgs,
@@ -79,34 +113,57 @@ struct Cli {
 
 /// A start of the Executor (or of both roles): every option of the role.
 #[derive(Parser)]
-#[command(name = "kobd", version = kob_protocol::VERSION, about = ABOUT, after_help = START_HELP, args_override_self = true)]
+#[command(
+    name = "kobd",
+    version = crate::version::long(),
+    about = "kobd --executor: the indexer, the matcher and the keepers in one process over one store (with --indexer too: the full history)",
+    override_usage = "kobd --executor [--indexer] [OPTIONS]",
+    after_help = START_HELP,
+    args_override_self = true
+)]
 struct StartCli {
-    #[command(flatten)]
-    log: LogArgs,
     /// The roles to start: `--executor`, `--indexer` or both (one process; the public API and the signing key then live on the
     /// same machine). Without a flag the configuration's roles start.
     #[command(flatten)]
     roles: RoleFlags,
     #[command(flatten)]
     run: RunArgs,
+    #[command(flatten)]
+    log: LogArgs,
 }
 
 /// A start of the Indexer alone: the indexer's options only.
 #[derive(Parser)]
-#[command(name = "kobd", version = kob_protocol::VERSION, about = ABOUT, after_help = START_HELP, args_override_self = true)]
+#[command(
+    name = "kobd",
+    version = crate::version::long(),
+    about = "kobd --indexer: follow the chain, keep the full history and the record log, serve the read API (no key)",
+    override_usage = "kobd --indexer [OPTIONS]",
+    after_help = INDEX_HELP,
+    args_override_self = true
+)]
 struct StartIndexCli {
-    #[command(flatten)]
-    log: LogArgs,
     #[command(flatten)]
     roles: RoleFlags,
     #[command(flatten)]
     opts: IndexOpts,
+    #[command(flatten)]
+    log: LogArgs,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// The database of a data directory: migrate (bring an earlier build's store to this build's layout), replay (rebuild it
-    /// from the record log), export-orders, export-book, import-orders, rebase.
+    /// First run: choose the roles (Executor, Indexer, or both), check the node, make the operator key, wait for funds, write
+    /// kobd.toml next to the binary, start.
+    Setup(SetupArgs),
+    /// The configuration: `kobd config check` reads kobd.toml offline and reports what a start would use.
+    Config(ConfigArgs),
+    /// The operator's address and its plain balance from the configured node, as one JSON object (never the secret).
+    AddressBalance(AddressBalanceArgs),
+    /// Send KAS out of the operator key over the configured node (the public resolver pair included). Stop the executor first.
+    Withdraw(WithdrawArgs),
+    /// The database of a data directory: info, migrate (bring an earlier build's store to this build's layout), replay (rebuild
+    /// it from the record log), export-orders, export-book, import-orders, rebase.
     Db(DbArgs),
     /// Token-logo reports (`[logo_reports]`): review what was reported, restore a logo, hide one for good. Works next to a
     /// running executor of the same data directory (a short write to its database); there is no administrative route on the network.
@@ -118,13 +175,25 @@ enum Cmd {
     Keep(KeepArgs),
     /// The x402 facilitator alone: GET /supported, POST /verify, POST /settle, GET /health, GET /metrics.
     X402(X402Args),
-    /// First run: choose the roles (Executor, Indexer, or both), check the node, make the operator key, wait for funds, write
-    /// kobd.toml next to the binary, start.
-    Setup(SetupArgs),
-    /// The operator's address and its plain balance from the configured node, as one JSON object (never the secret).
-    AddressBalance(AddressBalanceArgs),
-    /// Send KAS out of the operator key over the configured node (the public resolver pair included). Stop the executor first.
-    Withdraw(WithdrawArgs),
+}
+
+/// `kobd config`.
+#[derive(clap::Args)]
+struct ConfigArgs {
+    #[command(subcommand)]
+    cmd: ConfigCmd,
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Check a configuration offline, without starting: parse it (an unknown or misspelt key is refused), resolve its paths and
+    /// report the roles, the node, the data directory and its store, the read API, the log file, the pause file and the key
+    /// file's access. Contacts no node, takes no lock, writes nothing. Exit status 1 when a start would refuse it.
+    Check {
+        /// The configuration file. Default: kobd.toml of the executable's directory ($KOBD_DIR when set).
+        #[arg(long, env = "KOB_INDEX_CONFIG")]
+        config: Option<PathBuf>,
+    },
 }
 
 /// What a start runs, with its options.
@@ -157,7 +226,11 @@ pub fn main() -> ExitCode {
                 eprintln!("Press Enter to close this window.");
                 let _ = setup::read_line();
             }
-            ExitCode::FAILURE
+            if e.downcast_ref::<Usage>().is_some() {
+                ExitCode::from(2)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -199,27 +272,82 @@ fn only_roles(args: &[OsString]) -> bool {
     without_log_options(args).iter().all(|a| matches!(a.to_string_lossy().as_ref(), "--executor" | "--indexer"))
 }
 
+/// The help page a start asks for (`-h`, `--help`): the top-level page without a role flag, the Indexer's options for
+/// `--indexer` alone, the Executor's otherwise. `None`: no help asked.
+#[derive(Debug, PartialEq, Eq)]
+enum StartHelp {
+    Top { long: bool },
+    Indexer,
+    Executor,
+}
+
+fn start_help(args: &[OsString]) -> Option<StartHelp> {
+    let words: Vec<String> = without_log_options(args).iter().map(|w| w.to_string_lossy().into_owned()).collect();
+    let long = words.iter().any(|w| w == "--help");
+    if !long && !words.iter().any(|w| w == "-h") {
+        return None;
+    }
+    let has = |f: &str| words.iter().any(|w| w == f);
+    Some(match (has("--executor"), has("--indexer")) {
+        (false, false) => StartHelp::Top { long },
+        (false, true) => StartHelp::Indexer,
+        _ => StartHelp::Executor,
+    })
+}
+
 fn start_on(rt: &tokio::runtime::Runtime, argv: Vec<OsString>) -> anyhow::Result<()> {
     let program = argv.first().cloned().unwrap_or_else(|| "kobd".into());
     let args: Vec<OsString> = argv.iter().skip(1).cloned().collect();
     if names_a_command(&args) {
         return command(rt, program, Cli::parse_from(argv));
     }
+    match start_help(&args) {
+        Some(StartHelp::Top { long }) => {
+            let mut c = Cli::command();
+            if long {
+                c.print_long_help()?;
+            } else {
+                c.print_help()?;
+            }
+            return Ok(());
+        }
+        Some(StartHelp::Indexer) => {
+            // prints the Indexer's page and exits
+            StartIndexCli::parse_from(&argv);
+        }
+        _ => {}
+    }
     // a start: the options are checked (and --help, --version answered) before anything else happens
     let cli = StartCli::parse_from(&argv);
+    cli.run.index.node.refuse_old_node()?;
     logging::init(false);
     start_roles(rt, program, &args, &cli)
 }
 
 /// A command.
 fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow::Result<()> {
-    // the JSON commands keep stdout for their one object: the log goes to stderr
-    let json_out = matches!(&cli.cmd, Cmd::AddressBalance(_) | Cmd::Setup(SetupArgs { non_interactive: true, .. }));
-    logging::init(json_out);
-    if !json_out {
+    // a command that prints a document or a report on stdout keeps its log on stderr (`kobd db export-orders | jq`); the
+    // interactive setup (which starts the roles after it), the facilitator and the matcher and keepers that run keep it on stdout
+    let log_to_stderr = match &cli.cmd {
+        Cmd::Setup(a) => a.non_interactive,
+        Cmd::Match(a) => a.common.offline,
+        Cmd::Keep(a) => a.common.offline,
+        Cmd::X402(_) => false,
+        Cmd::Config(_) | Cmd::AddressBalance(_) | Cmd::Withdraw(_) | Cmd::Db(_) | Cmd::LogoReports(_) => true,
+    };
+    logging::init(log_to_stderr);
+    // the one-object JSON commands and the offline, read-only checks write no log file
+    let no_file = matches!(
+        &cli.cmd,
+        Cmd::AddressBalance(_)
+            | Cmd::Config(_)
+            | Cmd::Setup(SetupArgs { non_interactive: true, .. })
+            | Cmd::Db(DbArgs { sub: crate::index_cli::DbSub::Info { .. }, .. })
+    );
+    if !no_file {
         let config = match &cli.cmd {
-            Cmd::Db(a) => a.opts.config.as_deref(),
-            Cmd::LogoReports(a) => a.opts.config.as_deref(),
+            Cmd::Db(a) => a.store.config.as_deref(),
+            Cmd::LogoReports(a) => a.store.config.as_deref(),
             _ => None,
         };
         attach_log(&cli.log, config)?;
@@ -235,6 +363,7 @@ fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow:
             }
             setup_then_launch(rt, program, dir, a.no_start, a.roles.role())
         }
+        Cmd::Config(ConfigArgs { cmd: ConfigCmd::Check { config } }) => config_check(config),
         Cmd::AddressBalance(a) => {
             let dir = match &a.dir {
                 Some(d) => d.clone(),
@@ -256,8 +385,8 @@ fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow:
 /// the command line without the program name, `cli` their parse.
 fn start_roles(rt: &tokio::runtime::Runtime, program: OsString, args: &[OsString], cli: &StartCli) -> anyhow::Result<()> {
     let want = cli.roles.role();
-    let path = match &cli.run.index.config {
-        Some(p) => p.clone(),
+    let path = match cli.run.index.config() {
+        Some(p) => p.to_path_buf(),
         None => {
             let dir = setup::home_dir()?;
             let p = dir.join(setup::CONFIG_FILE);
@@ -265,12 +394,12 @@ fn start_roles(rt: &tokio::runtime::Runtime, program: OsString, args: &[OsString
                 if !only_roles(args) {
                     // options and no configuration: the roles named start from the options alone
                     let want = want.ok_or_else(|| {
-                        anyhow!(
+                        usage(format!(
                             "no {} in {}: name the roles to start from the options alone (`kobd --executor ...`, `kobd --indexer \
                              ...`), or run `kobd setup`",
                             setup::CONFIG_FILE,
                             dir.display()
-                        )
+                        ))
                     })?;
                     let start = parse_start(want, &program, args)?;
                     return run_start(rt, start);
@@ -291,23 +420,23 @@ fn start_roles(rt: &tokio::runtime::Runtime, program: OsString, args: &[OsString
     match AppRole::of_config(&cfg) {
         Some(have) => {
             if let Some(want) = want.filter(|w| *w != have) {
-                bail!(
+                return Err(usage(format!(
                     "{} is set up for the {} but the command line asks for the {}: start it without role flags, or run `kobd setup` to change the roles",
                     path.display(),
                     have.display(),
                     want.display()
-                );
+                )));
             }
             launch(rt, program, &path, args)
         }
         None => {
             // a plain --config file: the roles come from the command line
             let want = want.ok_or_else(|| {
-                anyhow!(
+                usage(format!(
                     "{} has no [launch] table, so it names no roles: start `kobd --executor --config ...` or `kobd --indexer --config \
                      ...`, or run `kobd setup`",
                     path.display()
-                )
+                ))
             })?;
             let start = parse_start(want, &program, args)?;
             run_start(rt, start)
@@ -317,34 +446,42 @@ fn start_roles(rt: &tokio::runtime::Runtime, program: OsString, args: &[OsString
 
 /// The start of `roles` with the words `args` (without the program name): the Executor's options, or the indexer's for the
 /// Indexer alone. The roles settle the storage: the Executor alone is lean, with the Indexer too it keeps the full store.
+/// A mistake in the words is a [`Usage`] error.
 fn parse_start(roles: AppRole, program: &OsString, args: &[OsString]) -> anyhow::Result<(Start, LogArgs)> {
     let argv = std::iter::once(program.clone()).chain(args.iter().cloned());
     match roles {
         AppRole::Indexer => {
-            let c = StartIndexCli::try_parse_from(argv)
-                .map_err(|e| anyhow!("the Indexer takes the indexer's options only (`kobd --help`): {}", e.render()))?;
+            let c = StartIndexCli::try_parse_from(argv).map_err(|e| {
+                usage(format!("the Indexer takes the indexer's options only (`kobd --indexer --help`): {}", e.render()))
+            })?;
+            c.opts.node.refuse_old_node()?;
             if c.opts.lean {
-                bail!("--lean: the Indexer keeps the full history; lean storage is the Executor's (`kobd --executor`)");
+                return Err(usage("--lean: the Indexer keeps the full history; lean storage is the Executor's (`kobd --executor`)"));
             }
             Ok((Start::Index(Box::new(c.opts)), c.log))
         }
         roles => {
-            let mut c = StartCli::try_parse_from(argv).map_err(|e| anyhow!("{}", e.render()))?;
+            let mut c = StartCli::try_parse_from(argv).map_err(|e| usage(e.render().to_string()))?;
+            c.run.index.node.refuse_old_node()?;
             let o = &mut c.run.index;
             // fast start follows the role as lean storage does, and as the setup's kobd.toml writes it: on for every start of
             // the Executor (alone or with the Indexer), from options alone too, unless --no-fast-start or the configuration's own
             // `fast_start` key says otherwise (it does nothing on a data directory that has a store already)
-            if !o.fast_start && !o.no_fast_start && !config_sets_fast_start(o.config.as_deref()) {
+            if !o.fast_start && !o.no_fast_start && !config_sets_fast_start(o.config()) {
                 o.fast_start = true;
             }
             if roles == AppRole::Executor {
                 if o.no_lean {
-                    bail!("--no-lean: the Executor alone keeps lean storage; a full store with the history is `kobd --executor --indexer`");
+                    return Err(usage(
+                        "--no-lean: the Executor alone keeps lean storage; a full store with the history is `kobd --executor --indexer`",
+                    ));
                 }
                 (o.lean, o.no_lean) = (true, false);
             } else {
                 if o.lean {
-                    bail!("--lean: the Executor and Indexer keeps the full store; lean storage is the Executor alone (`kobd --executor`)");
+                    return Err(usage(
+                        "--lean: the Executor and Indexer keeps the full store; lean storage is the Executor alone (`kobd --executor`)",
+                    ));
                 }
                 (o.lean, o.no_lean) = (false, true);
             }
@@ -361,15 +498,19 @@ fn config_sets_fast_start(path: Option<&Path>) -> bool {
         .is_some_and(|t| t.contains_key("fast_start"))
 }
 
-/// Runs a start that is not a launch configuration's (no banner, but the one line that says whether trading waits for the
-/// indexer to catch up: a service started from options alone would otherwise give no hint why it plans nothing for hours).
+/// Runs a start that is not a launch configuration's (no banner, but the lines that say whether trading waits for the
+/// indexer to catch up and whether it is paused: a service started from options alone would otherwise give no hint why it
+/// plans nothing for hours).
 fn run_start(rt: &tokio::runtime::Runtime, (start, log): (Start, LogArgs)) -> anyhow::Result<()> {
     refuse_second_writer(&start)?;
-    attach_log(&log, start.opts().config.as_deref())?;
+    attach_log(&log, start.opts().config())?;
     if let Start::Run(a) = &start {
         let note = start_note(a);
         if !note.is_empty() {
             tracing::info!("{note}");
+        }
+        if let Some(p) = a.pause_file.as_deref().filter(|p| crate::pause::is_set(p)) {
+            tracing::warn!(pause_file = %p.display(), "PAUSED at the start: the pause file exists (delete it to resume)");
         }
     }
     rt.block_on(dispatch(start))
@@ -378,29 +519,49 @@ fn run_start(rt: &tokio::runtime::Runtime, (start, log): (Start, LogArgs)) -> an
 /// `setup --non-interactive`: the files, and one JSON object on stdout.
 fn setup_json(dir: std::path::PathBuf, a: &SetupArgs) -> anyhow::Result<()> {
     let Some(node) = a.node.clone() else {
-        bail!("--non-interactive needs --node resolver|<ws-url> and a role: --executor, --indexer or both");
+        return Err(usage("--non-interactive needs --node resolver|<ws-url> and a role: --executor, --indexer or both"));
     };
-    let Some(role) = a.roles.role() else { bail!("--non-interactive needs a role: --executor, --indexer or both") };
+    let Some(role) = a.roles.role() else {
+        return Err(usage("--non-interactive needs a role: --executor, --indexer or both"));
+    };
     let opts = SetupOptions::for_build(dir);
     let ask = AppSetup { node, role, new_key: a.new_key, network: a.network.clone() };
     println!("{}", app::setup_non_interactive(&opts, &ask)?);
     Ok(())
 }
 
-/// `withdraw`: the withdrawal over the configured node, the confirmation on the terminal.
+/// `withdraw`: the withdrawal over the configured node, the confirmation on the terminal. With `--json` the result (or the
+/// refusal, `{"error": ...}`) is one JSON object on stdout and the details go to stderr.
 fn withdraw_cmd(rt: &tokio::runtime::Runtime, a: &WithdrawArgs) -> anyhow::Result<()> {
-    let (cfg, base) = withdraw::config_location(a)?;
-    let req = withdraw::Request {
-        to: a.to.clone(),
-        amount: withdraw::parse_amount(&a.amount)?,
-        key_file: a.key_file.clone(),
-        fee_rate: a.fee_rate,
-        yes: a.yes,
-        interactive: std::io::stdin().is_terminal(),
-        dry_run: a.dry_run,
+    let run = || -> anyhow::Result<serde_json::Value> {
+        let (cfg, base) = withdraw::config_location(a)?;
+        let req = withdraw::Request {
+            to: a.to.clone(),
+            amount: withdraw::parse_amount(&a.amount)?,
+            key_file: a.key_file.clone(),
+            fee_rate: a.fee_rate,
+            yes: a.yes,
+            interactive: std::io::stdin().is_terminal(),
+            dry_run: a.dry_run,
+        };
+        let mut node = withdraw::WrpcWithdrawNode::new(rt);
+        if a.json {
+            withdraw::withdraw(&cfg, &base, &req, &mut node, &mut setup::StderrConsole)
+        } else {
+            withdraw::withdraw(&cfg, &base, &req, &mut node, &mut StdConsole)
+        }
     };
-    withdraw::withdraw(&cfg, &base, &req, &mut withdraw::WrpcWithdrawNode::new(rt), &mut StdConsole)?;
-    Ok(())
+    match (run(), a.json) {
+        (Ok(v), true) => {
+            println!("{v}");
+            Ok(())
+        }
+        (Err(e), true) => {
+            println!("{}", serde_json::json!({ "error": format!("{e:#}") }));
+            Err(e)
+        }
+        (r, false) => r.map(|_| ()),
+    }
 }
 
 /// The interactive setup into `dir`; then, unless declined, the configuration it wrote.
@@ -456,8 +617,14 @@ fn launch(rt: &tokio::runtime::Runtime, program: OsString, cfg: &Path, args: &[O
     std::env::set_current_dir(&l.dir).map_err(|e| anyhow!("cannot change to {}: {e}", l.dir.display()))?;
     let mut words: Vec<OsString> = l.args.iter().map(OsString::from).collect();
     words.extend(without_config(args));
-    let (start, log) = parse_start(l.roles, &program, &words)
-        .map_err(|e| anyhow!("the start options of {} ([launch] and the command line): {e}", cfg.display()))?;
+    let (start, log) = parse_start(l.roles, &program, &words).map_err(|e| {
+        let text = format!("the start options of {} ([launch] and the command line): {e}", cfg.display());
+        if e.downcast_ref::<Usage>().is_some() {
+            usage(text)
+        } else {
+            anyhow!(text)
+        }
+    })?;
     refuse_second_writer(&start)?;
     println!("Roles: {}.", l.roles.display());
     println!("Running {} (the same as):", cfg.display());
@@ -465,11 +632,18 @@ fn launch(rt: &tokio::runtime::Runtime, program: OsString, cfg: &Path, args: &[O
     for line in setup::command_line(&shown, &setup::program_path()).lines() {
         println!("    {line}");
     }
+    let mut paused = None;
     match &start {
         Start::Run(a) => {
             println!("{}", start_note(a));
             if let Some(p) = &a.pause_file {
-                println!("Pause trading without stopping: create the file {} (delete it to resume).", l.dir.join(p).display());
+                let p = l.dir.join(p);
+                if crate::pause::is_set(&p) {
+                    println!("PAUSED: {} exists, so nothing is built or submitted; delete it to resume.", p.display());
+                    paused = Some(p);
+                } else {
+                    println!("Pause trading without stopping: create the file {} (delete it to resume).", p.display());
+                }
             }
         }
         Start::Index(_) => println!("The Indexer follows the chain and serves the read API; it has no key."),
@@ -482,12 +656,15 @@ fn launch(rt: &tokio::runtime::Runtime, program: OsString, cfg: &Path, args: &[O
             println!("Read API: http://{}/v1/health", c.api.listen);
         }
     }
+    attach_log(&log, start.opts().config())?;
     match start.opts().status_every() {
         Some(every) => println!("Stop it with Ctrl+C. A status line follows every {} s.", every.as_secs()),
         None => println!("Stop it with Ctrl+C."),
     }
     println!();
-    attach_log(&log, start.opts().config.as_deref())?;
+    if let Some(p) = paused {
+        tracing::warn!(pause_file = %p.display(), "PAUSED at the start: the pause file exists (delete it to resume)");
+    }
     rt.block_on(dispatch(start))
 }
 
@@ -525,21 +702,36 @@ fn start_note(a: &RunArgs) -> String {
 }
 
 /// The log file of the command line (`--log-file`) or of the configuration `cfg_path` (`log_file`, relative to the
-/// configuration's directory), attached to the log with the rotation settings; the console says so when it still shows the log.
-fn attach_log(log: &LogArgs, cfg_path: Option<&Path>) -> anyhow::Result<()> {
+/// configuration's directory), attached to the log with the rotation settings: the path and the rotation. `None`: no file.
+fn log_file_of(log: &LogArgs, cfg_path: Option<&Path>) -> Option<LogOptions> {
     let cfg = cfg_path.and_then(|p| crate::config::IndexerConfig::load(p).ok());
     let base = cfg_path.and_then(|p| p.parent()).filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let file = match (&log.log_file, cfg.as_ref().and_then(|c| c.log_file.as_ref())) {
         (Some(f), _) => f.clone(),
         (None, Some(f)) => logging::resolve(base, f),
-        (None, None) => return Ok(()),
+        (None, None) => return None,
     };
     let max_mb = log.log_max_mb.or(cfg.as_ref().map(|c| c.log_max_mb)).unwrap_or(10);
     let keep = log.log_files.or(cfg.as_ref().map(|c| c.log_files)).unwrap_or(5);
-    logging::attach_file(LogOptions::new(file.clone(), max_mb, keep))
-        .map_err(|e| anyhow!("cannot open the log file {}: {e}", file.display()))?;
-    if logging::console_shows_log() {
-        println!("Log file: {} (a new file at {max_mb} MB, {keep} old ones kept)", file.display());
+    Some(LogOptions::new(file, max_mb, keep))
+}
+
+/// How the banner names a log file: `<path> (a new file at N MB, K old ones kept)`.
+fn log_file_text(o: &LogOptions) -> String {
+    let abs = std::path::absolute(&o.file).unwrap_or_else(|_| o.file.clone());
+    format!("{} (a new file at {} MB, {} old ones kept)", abs.display(), o.max_bytes >> 20, o.keep)
+}
+
+/// Attaches the log file ([`log_file_of`]) and says where it is, always: the console shows the log too, and the file is where
+/// a scheduled task's or a service's history is read.
+fn attach_log(log: &LogArgs, cfg_path: Option<&Path>) -> anyhow::Result<()> {
+    let Some(o) = log_file_of(log, cfg_path) else { return Ok(()) };
+    let line = format!("Log file: {}", log_file_text(&o));
+    logging::attach_file(o.clone()).map_err(|e| anyhow!("cannot open the log file {}: {e}", o.file.display()))?;
+    if logging::on_stderr() {
+        eprintln!("{line}");
+    } else {
+        println!("{line}");
     }
     Ok(())
 }
@@ -549,6 +741,161 @@ async fn dispatch(start: Start) -> anyhow::Result<()> {
         Start::Run(a) => executor::run(*a).await,
         Start::Index(o) => crate::index_cli::follow_and_serve(*o).await,
     }
+}
+
+/// `kobd config check`: what a start of the configuration at `path` would use, read offline ([`check_lines`]); an error when
+/// a start would refuse it.
+fn config_check(path: Option<PathBuf>) -> anyhow::Result<()> {
+    let path = match path {
+        Some(p) => p,
+        None => setup::home_dir()?.join(setup::CONFIG_FILE),
+    };
+    let (lines, problems) = check_lines(&path)?;
+    for l in &lines {
+        println!("{l}");
+    }
+    if problems.is_empty() {
+        println!("OK: a start would use this configuration as shown (checked offline: no node was contacted, nothing was written).");
+        return Ok(());
+    }
+    for p in &problems {
+        println!("PROBLEM: {p}");
+    }
+    bail!("{} problem(s) in {}: a start would refuse it or misbehave", problems.len(), path.display())
+}
+
+/// The report of `kobd config check` on the file at `path` (absolute paths), and the problems a start would refuse. The file
+/// must parse (an error otherwise). Nothing is written and no node is contacted; the key file is read to check its access and
+/// its form, its secret is never shown (the funding address is).
+fn check_lines(path: &Path) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    use crate::config::IndexerConfig;
+    let abs = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let cfg_file = abs(path);
+    let parsed = IndexerConfig::load(&cfg_file)?;
+    let dir = cfg_file.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let mut lines = vec![format!("Configuration: {} (parsed: every key known)", cfg_file.display())];
+    let mut problems = vec![];
+    // the start the file stands for: its [launch] options in its directory, as `kobd` would run them (the paths of the
+    // options are relative to the file's directory, as the launcher changes to it first)
+    let program = OsString::from("kobd");
+    let start = match AppRole::of_config(&parsed) {
+        Some(roles) => {
+            lines.push(format!("Roles: {} ([launch] role)", roles.display()));
+            match setup::launch_args(&cfg_file) {
+                Ok(l) => {
+                    let mut words: Vec<OsString> = vec![];
+                    let mut it = l.args.iter();
+                    while let Some(w) = it.next() {
+                        words.push(w.into());
+                        // the values of the path options, against the file's directory
+                        if matches!(w.as_str(), "--config" | "--key-file" | "--pause-file" | "--x402-config") {
+                            if let Some(v) = it.next() {
+                                words.push(logging::resolve(&dir, Path::new(v)).into_os_string());
+                            }
+                        }
+                    }
+                    match parse_start(roles, &program, &words) {
+                        Ok((s, _)) => Some(s),
+                        Err(e) => {
+                            problems.push(format!("the start options ([launch] args): {e}"));
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    problems.push(format!("{e}"));
+                    None
+                }
+            }
+        }
+        None => {
+            lines.push("Roles: none named (no [launch] table): the command line names them, `kobd --executor --config ...`".into());
+            let mut o = IndexOpts::default();
+            o.store.config = Some(cfg_file.clone());
+            Some(Start::Index(Box::new(o)))
+        }
+    };
+    let Some(start) = start else { return Ok((lines, problems)) };
+    let cfg = match crate::index_cli::build_config(start.opts()) {
+        Ok(c) => c,
+        Err(e) => {
+            problems.push(format!("{e:#}"));
+            return Ok((lines, problems));
+        }
+    };
+    lines.push(format!("Network: {} ({})", cfg.network, crate::version::build_kind()));
+    let primary = cfg.primary_url();
+    lines.push(if crate::rpc::resolver::is_resolver(primary) {
+        "Node: resolver (two public nodes found through the Kaspa resolvers, one cross-checking the other)".to_string()
+    } else {
+        format!("Node: {} (the chain authority)", crate::rpc::redact_url(primary))
+    });
+    let extra: Vec<String> = cfg
+        .secondaries()
+        .iter()
+        .filter(|n| !(crate::rpc::resolver::is_resolver(primary) && n.url == crate::rpc::resolver::pseudo(2)))
+        .map(|n| crate::rpc::redact_url(&n.url))
+        .collect();
+    if !extra.is_empty() {
+        lines.push(format!("Extra nodes: {}", extra.join(", ")));
+    }
+    if cfg.failover.enabled() {
+        lines.push(format!("Failover: to {} when the node stops answering", cfg.failover.fallback));
+    }
+    match crate::index_cli::store_info(&cfg) {
+        Ok(v) => lines.extend(crate::index_cli::store_info_lines(&v)),
+        Err(e) => problems.push(format!("the store: {e:#}")),
+    }
+    lines.push(if cfg.api.enabled { format!("Read API: http://{}/v1/health", cfg.api.listen) } else { "Read API: off".into() });
+    let log = LogArgs::default();
+    lines.push(match log_file_of(&log, Some(&cfg_file)) {
+        Some(o) => format!("Log file: {}", log_file_text(&o)),
+        None => "Log file: none (the console only)".into(),
+    });
+    match &start {
+        Start::Run(a) => {
+            match &a.pause_file {
+                Some(p) if crate::pause::is_set(p) => {
+                    lines.push(format!("Pause file: {} EXISTS: the executor starts paused", p.display()))
+                }
+                Some(p) => lines.push(format!("Pause file: {} (absent: create it to pause)", p.display())),
+                None => lines.push("Pause file: none (no way to pause without stopping)".into()),
+            }
+            if let Err(e) = executor::refuse_files_in_data_dir(a.key_file.as_deref(), a.pause_file.as_deref(), &cfg.data_dir) {
+                problems.push(e.to_string());
+            }
+            match &a.key_file {
+                Some(k) => match crate::matcher::wallet::HotKey::from_file(k) {
+                    Ok(key) => lines.push(format!(
+                        "Key file: {} (readable by this account only; funding address {})",
+                        k.display(),
+                        key.address(&cfg.network)
+                    )),
+                    Err(e) => problems.push(e.to_string()),
+                },
+                None => {
+                    lines.push("Key file: none in the configuration (KOB_OPERATOR_KEY_FILE or a systemd credential gives it)".into())
+                }
+            }
+            if let Some(x) = a.x402_config.as_deref() {
+                lines.push(format!("x402 facilitator: {}{}", x.display(), if x.is_file() { "" } else { " (MISSING)" }));
+                if !x.is_file() {
+                    problems.push(format!("the x402 configuration {} does not exist", x.display()));
+                }
+            }
+            if let Err(e) = executor::refuse_failover(&cfg) {
+                problems.push(e.to_string());
+            }
+        }
+        Start::Index(o) => {
+            if AppRole::of_config(&parsed) == Some(AppRole::Indexer) {
+                if let Err(e) = crate::index_cli::refuse_run_only_options(&cfg, o.config()) {
+                    problems.push(e.to_string());
+                }
+            }
+        }
+    }
+    Ok((lines, problems))
 }
 
 #[cfg(test)]
@@ -621,8 +968,102 @@ fast_start = false
             parse_start(AppRole::Indexer, &p, &words(&["--indexer", "--listen", "127.0.0.1:1"])),
             Ok((Start::Index(_), _))
         ));
-        let e = parse_start(AppRole::Indexer, &p, &words(&["--dry-run"])).err().unwrap().to_string();
-        assert!(e.contains("the Indexer takes the indexer's options only") && e.contains("--dry-run"), "{e}");
+        let e = parse_start(AppRole::Indexer, &p, &words(&["--dry-run"])).err().unwrap();
+        assert!(e.downcast_ref::<Usage>().is_some(), "a usage mistake: exit status 2");
+        let e = e.to_string();
+        assert!(
+            e.contains("the Indexer takes the indexer's options only (`kobd --indexer --help`)") && e.contains("--dry-run"),
+            "{e}"
+        );
         assert!(parse_start(AppRole::Indexer, &p, &words(&["--lean"])).is_err());
+    }
+
+    /// `--node` of earlier builds (a further node on a start) is refused on every role with the new names, never taken as
+    /// the node or as a further node; `--extra-node` is the further node.
+    #[test]
+    fn the_old_node_option_is_a_usage_error_with_the_new_names() {
+        let p = OsString::from("kobd");
+        for role in [AppRole::Executor, AppRole::Indexer, AppRole::ExecutorIndexer] {
+            let e = parse_start(role, &p, &words(&["--node", "ws://127.0.0.1:18210"])).err().expect("refused");
+            assert!(e.downcast_ref::<Usage>().is_some(), "{role:?}");
+            assert!(e.to_string().contains("--extra-node") && e.to_string().contains("--rpc-url"), "{e}");
+        }
+        let Ok((Start::Run(a), _)) = parse_start(AppRole::Executor, &p, &words(&["--extra-node", "ws://10.0.0.5:18210"])) else {
+            panic!("a start")
+        };
+        assert_eq!(a.index.node.nodes, ["ws://10.0.0.5:18210"]);
+    }
+
+    #[test]
+    fn help_asked_on_a_start_shows_the_page_of_its_roles() {
+        assert_eq!(start_help(&words(&["--executor", "--dry-run"])), None);
+        assert_eq!(start_help(&words(&["--help"])), Some(StartHelp::Top { long: true }));
+        assert_eq!(start_help(&words(&["-h"])), Some(StartHelp::Top { long: false }));
+        assert_eq!(start_help(&words(&["--indexer", "--help"])), Some(StartHelp::Indexer));
+        assert_eq!(start_help(&words(&["--executor", "-h"])), Some(StartHelp::Executor));
+        assert_eq!(start_help(&words(&["--executor", "--indexer", "--help"])), Some(StartHelp::Executor));
+        assert_eq!(start_help(&words(&["--log-file", "--help"])), None, "a value of a log option is not a flag");
+        // the pages build (clap checks them in debug builds) and name what they promise
+        let top = Cli::command().render_long_help().to_string();
+        for w in ["kobd --executor --help", "kobd --indexer --help", "setup", "config", "withdraw", "db", "Exit status"] {
+            assert!(top.contains(w), "{w}: {top}");
+        }
+        let run = StartCli::command().render_long_help().to_string();
+        for w in ["Roles:", "Node:", "Executor:", "Fees:", "Matcher:", "Keepers:", "Log:", "--extra-node", "--key-file"] {
+            assert!(run.contains(w), "{w}: {run}");
+        }
+        assert!(!run.contains("\n      --node "), "the old option is hidden: {run}");
+        let index = StartIndexCli::command().render_long_help().to_string();
+        assert!(
+            index.contains("--listen")
+                && !index.contains(
+                    "
+      --dry-run"
+                )
+                && !index.contains(
+                    "
+      --key-file"
+                ),
+            "{index}"
+        );
+    }
+
+    /// `kobd config check` on a configuration the setup wrote: the roles, the node, the store, the files, offline.
+    #[test]
+    fn config_check_reports_a_setup_configuration_offline() {
+        let _g = crate::rpc::resolver::tests::serial();
+        let d = tempfile::tempdir().unwrap();
+        let net = kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10");
+        let mut opts = SetupOptions::for_build(d.path().to_path_buf());
+        opts.build_network = Some(net.to_string());
+        let ask = AppSetup { node: "resolver".into(), role: AppRole::Executor, new_key: true, network: Some(net.into()) };
+        app::setup_non_interactive(&opts, &ask).unwrap();
+        let (lines, problems) = check_lines(&d.path().join(setup::CONFIG_FILE)).unwrap();
+        let text = lines.join("\n");
+        assert!(problems.is_empty(), "{problems:?}\n{text}");
+        for w in [
+            "Roles: Executor",
+            "Node: resolver",
+            "does not exist yet",
+            "Pause file:",
+            "Key file:",
+            "funding address",
+            "Read API: http://",
+        ] {
+            assert!(text.contains(w), "{w}: {text}");
+        }
+        let secret = std::fs::read_to_string(d.path().join(setup::KEY_FILE)).unwrap();
+        assert!(!text.contains(secret.trim()), "never the secret");
+        // the pause file set: said; a key file inside the data directory: a problem
+        std::fs::write(d.path().join(setup::PAUSE_FILE), "").unwrap();
+        let (lines, _) = check_lines(&d.path().join(setup::CONFIG_FILE)).unwrap();
+        assert!(lines.join("\n").contains("EXISTS: the executor starts paused"));
+        // a misspelt key: refused with its name
+        std::fs::write(d.path().join("bad.toml"), "netwrok = \"testnet-10\"\n").unwrap();
+        let e = check_lines(&d.path().join("bad.toml")).unwrap_err().to_string();
+        assert!(e.contains("netwrok"), "{e}");
+        // no file: the way out
+        let e = check_lines(&d.path().join("none.toml")).unwrap_err().to_string();
+        assert!(e.contains("kobd setup"), "{e}");
     }
 }

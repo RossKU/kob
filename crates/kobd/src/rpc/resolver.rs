@@ -11,7 +11,7 @@
 //! **Entries.** A configured `resolver` is a pseudo URL: `resolver` is the chain authority's entry, and
 //! `index_cli::build_config` always adds a second one, `resolver:2`, the cross-checking node (`rpc::multi`: its acceptance data
 //! is compared with the authority's before anything is indexed, and it takes every submission too); a further
-//! `--node resolver` gets `resolver:3`, ... Every client of the process given an entry (the indexer's connections, the
+//! `--extra-node resolver` gets `resolver:3`, ... Every client of the process given an entry (the indexer's connections, the
 //! matcher's, the x402 facilitator's, the setup's check) asks [`endpoint`] for the node it stands for, so all of them use the
 //! same node per entry, and the entries use different hosts.
 //!

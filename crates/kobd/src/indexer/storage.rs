@@ -967,6 +967,9 @@ fn note(steps: &mut Vec<(&'static str, Duration)>, say: &mut impl FnMut(&str), n
     say(&format!("{name}: {what} ({:.1} s)", t.elapsed().as_secs_f64()));
 }
 
+/// The lowest schema `kobd db migrate` brings forward (an older store is rebuilt with `kobd db replay`).
+pub const MIGRATE_FROM_SCHEMA: i64 = 5;
+
 /// Runs the migration of the data directory of `cfg` (takes its writer lock). `say` reports each step as it finishes.
 pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) -> Result<Report, IndexerError> {
     let _writer = super::lock::WriterLock::acquire(cfg)?;
@@ -985,9 +988,9 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
     }
     if rep.from_schema == db::SCHEMA_VERSION {
         say(&format!("the store is of schema {} already: nothing to rebuild", db::SCHEMA_VERSION));
-    } else if rep.from_schema < 5 {
+    } else if rep.from_schema < MIGRATE_FROM_SCHEMA {
         return Err(IndexerError::Config(format!(
-            "{}: schema {}: open it once with the previous build (`run` or `index`) so that it is brought to schema 5 or later, or rebuild it with `kobd db replay`",
+            "{}: schema {}: open it once with the previous build (`run` or `index`) so that it is brought to schema {MIGRATE_FROM_SCHEMA} or later, or rebuild it with `kobd db replay`",
             path.display(),
             rep.from_schema
         )));

@@ -54,6 +54,22 @@ fn offline_match_and_keep_from_a_snapshot_file() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The exit status and stderr of a run that fails.
+fn exe_code(args: &[&str]) -> (Option<i32>, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_kobd"))
+        .args(args)
+        .env_remove("KOB_OPERATOR_KEY")
+        .env_remove("KOB_OPERATOR_KEY_FILE")
+        .env_remove("KOB_NETWORK")
+        .env_remove("KOB_NODE_WRPC")
+        .env_remove("KOB_INDEX_NODES")
+        .env("RUST_LOG", "error")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "expected a failure");
+    (out.status.code(), String::from_utf8(out.stderr).unwrap())
+}
+
 fn exe_fails(args: &[&str]) -> String {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_kobd"))
         .args(args)
@@ -83,8 +99,13 @@ fn the_executor_needs_a_role_and_a_key_and_db_has_the_tools() {
     let err = exe_fails(&["--data-dir", data, "--network", "testnet-10"]);
     assert!(err.contains("name the roles"), "{err}");
     // the Indexer takes the indexer's options only
-    let err = exe_fails(&["--indexer", "--dry-run", "--data-dir", data, "--network", "testnet-10"]);
-    assert!(err.contains("the Indexer takes the indexer's options only"), "{err}");
+    let (code, err) = exe_code(&["--indexer", "--dry-run", "--data-dir", data, "--network", "testnet-10"]);
+    assert!(err.contains("the Indexer takes the indexer's options only") && code == Some(2), "{code:?} {err}");
+    // the option of earlier builds for a further node: a usage error that names the new options, and nothing starts
+    for role in ["--executor", "--indexer"] {
+        let (code, err) = exe_code(&[role, "--node", "ws://127.0.0.1:18210", "--data-dir", data, "--network", "testnet-10"]);
+        assert!(err.contains("--node is now --extra-node") && err.contains("--rpc-url") && code == Some(2), "{role}: {code:?} {err}");
+    }
     // the commands of earlier builds are gone, with no alias and no hint: an unknown command, and nothing starts
     for args in [vec!["run", "--data-dir", data, "--network", "testnet-10"], vec!["index", "--config", "kobd.toml", "migrate"]] {
         let err = exe_fails(&args);
@@ -122,11 +143,15 @@ fn the_executor_needs_a_role_and_a_key_and_db_has_the_tools() {
     assert!(!dir.exists());
     let (help, _) = exe(&["match", "--help"]);
     assert!(help.contains("--max-book-lag-daa"), "{help}");
-    let (help, _) = exe(&["--help"]);
-    for cmd in ["kobd setup", "kobd db <migrate", "kobd logo-reports", "kobd match", "kobd keep", "--executor", "--indexer"] {
-        assert!(help.contains(cmd), "{help}");
+    // `kobd --help`: the starts and the commands; the options of a start are on its roles' page
+    let (top, _) = exe(&["--help"]);
+    for cmd in
+        ["setup", "config", "db", "logo-reports", "match", "keep", "withdraw", "kobd --executor --help", "kobd --indexer --help"]
+    {
+        assert!(top.contains(cmd), "{top}");
     }
-    assert!(!help.contains("kobd run") && !help.contains("kobd index"), "{help}");
+    assert!(!top.contains("kobd run") && !top.contains("kobd index") && !top.contains("--dry-run"), "{top}");
+    let (help, _) = exe(&["--executor", "--help"]);
     for flag in [
         "--dry-run",
         "--config",
@@ -144,9 +169,21 @@ fn the_executor_needs_a_role_and_a_key_and_db_has_the_tools() {
     ] {
         assert!(help.contains(flag), "{help}");
     }
+    // the Indexer's page: its options only
+    let (index, _) = exe(&["--indexer", "--help"]);
+    assert!(index.contains("--listen") && index.contains("--extra-node") && !index.contains("\n      --dry-run"), "{index}");
     // the command list: db and logo-reports, no index
     let (cmds, _) = exe(&["help"]);
     assert!(cmds.contains("db ") && cmds.contains("logo-reports") && !cmds.contains("index "), "{cmds}");
+    // a database tool lists the store's options, not a start's
+    let (db, _) = exe(&["db", "export-orders", "--help"]);
+    assert!(
+        db.contains("--data-dir") && !db.contains("--fast-start") && !db.contains("--listen") && !db.contains("--rpc-url"),
+        "{db}"
+    );
+    // `--version` names the network the build is bound to and the commit
+    let (v, _) = exe(&["--version"]);
+    assert!(v.starts_with("kobd ") && v.contains(" build") && v.contains("commit "), "{v}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

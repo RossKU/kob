@@ -18,7 +18,7 @@ use std::sync::Arc;
 #[derive(Args)]
 pub struct DbArgs {
     #[command(flatten)]
-    pub opts: IndexOpts,
+    pub store: StoreOpts,
     #[command(subcommand)]
     pub sub: DbSub,
 }
@@ -27,15 +27,15 @@ pub struct DbArgs {
 #[derive(Args)]
 pub struct LogoReportsArgs {
     #[command(flatten)]
-    pub opts: IndexOpts,
+    pub store: StoreOpts,
     #[command(subcommand)]
     pub cmd: LogoCmd,
 }
 
-/// The indexer options every start takes (`kobd --indexer`, `kobd --executor`), and the tools of `kobd db` and
-/// `kobd logo-reports`.
-#[derive(Args, Clone, Debug)]
-pub struct IndexOpts {
+/// The configuration and the store: what every start and every database tool takes.
+#[derive(Args, Clone, Debug, Default)]
+#[command(next_help_heading = "Configuration and store")]
+pub struct StoreOpts {
     /// TOML configuration file (all keys optional); flags override it.
     #[arg(long, global = true, env = "KOB_INDEX_CONFIG")]
     pub config: Option<PathBuf>,
@@ -43,81 +43,118 @@ pub struct IndexOpts {
     /// build (`deploy-mainnet`, `deploy-tn10`) implies its own and refuses another.
     #[arg(long, global = true, env = "KOB_NETWORK")]
     pub network: Option<String>,
-    /// Node wRPC endpoint: JSON wRPC (`ws://`, `wss://`), Borsh wRPC (a `.../borsh` path or a default Borsh port `17110` /
-    /// `17210`: every call in Borsh), or `resolver`: a public Kaspa node of the network found through the Kaspa resolvers
-    /// (Borsh over TLS, always a cross-checked pair; another one after a failure). Default: `resolver`. An own node (the local
-    /// one listens on `ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10) is named here. A URL with a password or an API key belongs
-    /// in the config file (`rpc_url`) or in `KOB_NODE_WRPC`, not on the command line (`ps`).
-    #[arg(long, global = true, env = "KOB_NODE_WRPC")]
+    /// Directory holding the SQLite database and the record log (`data_dir`; default `kob-data`).
+    #[arg(long, global = true, env = "KOB_INDEX_DATA_DIR")]
+    pub data_dir: Option<PathBuf>,
+    /// Token allowlist JSON (`tokens_path`; `registry/tokens.json`).
+    #[arg(long, global = true)]
+    pub tokens: Option<PathBuf>,
+}
+
+/// The node and the further nodes: a start, and the database tools that ask a node (`import-orders`, `rebase`).
+#[derive(Args, Clone, Debug, Default)]
+#[command(next_help_heading = "Node")]
+pub struct NodeOpts {
+    /// THE node (the chain authority): JSON wRPC (`ws://`, `wss://`), Borsh wRPC (a `.../borsh` path or a default Borsh port
+    /// `17110` / `17210`: every call in Borsh), or `resolver`: a public Kaspa node of the network found through the Kaspa
+    /// resolvers (Borsh over TLS, always a cross-checked pair; another one after a failure). Default: `resolver`. An own node
+    /// (the local one listens on `ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10) is named here. A URL
+    /// with a password or an API key belongs in the config file (`rpc_url`) or in `KOB_NODE_WRPC`, not on the command line
+    /// (`ps`).
+    #[arg(long, global = true, env = "KOB_NODE_WRPC", value_name = "URL")]
     pub rpc_url: Option<String>,
-    /// Another node (`ws://` or `wss://`, JSON or Borsh wRPC as `--rpc-url`, or `resolver`: another public node, resolved
-    /// independently of the primary's; repeatable): windows of transaction bodies are fetched from it too (checked against
-    /// the primary, `--rpc-url`) and transactions submitted to it too. Added to the config's `nodes`.
-    /// Command-line arguments are visible to other local users (`ps`): a URL with a password or an API key belongs in the
-    /// config file (`[[nodes]]`) or in `KOB_INDEX_NODES` (comma-separated).
-    #[arg(long = "node", global = true, value_name = "URL", env = "KOB_INDEX_NODES", value_delimiter = ',')]
+    /// A further node beside the node itself (`ws://` or `wss://`, JSON or Borsh wRPC as `--rpc-url`, or `resolver`: another
+    /// public node, resolved independently of the primary's; repeatable): windows of transaction bodies are fetched from it
+    /// too (checked against the node, `--rpc-url`) and transactions submitted to it too. Added to the config's `[[nodes]]`.
+    /// A URL with a password or an API key belongs in the config file or in `KOB_INDEX_NODES` (comma-separated), not on the
+    /// command line (`ps`).
+    #[arg(long = "extra-node", global = true, value_name = "URL", env = "KOB_INDEX_NODES", value_delimiter = ',')]
     pub nodes: Vec<String>,
-    /// With `--node`: the primary serves windows of transaction bodies only when no other node can (it stays the chain
-    /// authority).
+    /// The option of earlier builds for a further node: refused with the new name (`--extra-node`), never taken as the node.
+    #[arg(long = "node", global = true, value_name = "URL", hide = true)]
+    pub old_node: Vec<String>,
+    /// With `--extra-node`: the node itself serves windows of transaction bodies only when no other node can (it stays the
+    /// chain authority).
     #[arg(long, global = true)]
     pub no_primary_fetch: bool,
     /// Fetch the windows of transaction bodies over each node's Borsh wRPC endpoint (`borsh` in the config).
     #[arg(long, global = true)]
     pub borsh: bool,
     /// Parallel windows while the cursor is more than this many blue score behind the sink (`prefetch_min_lag_blue`).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, value_name = "BLUE")]
     pub prefetch_min_lag_blue: Option<u64>,
-    /// Directory holding the SQLite database and the record log.
-    #[arg(long, global = true, env = "KOB_INDEX_DATA_DIR")]
-    pub data_dir: Option<PathBuf>,
-    /// Token allowlist JSON (`registry/tokens.json`).
-    #[arg(long, global = true)]
-    pub tokens: Option<PathBuf>,
+}
+
+/// The refusal of the option `--node` of earlier builds on a start and the database tools: since this release a further
+/// node is `--extra-node`, and the node itself has always been `--rpc-url` (`kobd setup --node`, `kobd x402 --node` and `kob
+/// --node` name the node, so the word would otherwise mean two things).
+pub const OLD_NODE_OPTION: &str =
+    "--node is now --extra-node for a second node; the node itself is --rpc-url (or rpc_url in kobd.toml)";
+
+impl NodeOpts {
+    /// Refuses the option of earlier builds ([`OLD_NODE_OPTION`]).
+    pub fn refuse_old_node(&self) -> Result<()> {
+        if self.old_node.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::cli::Usage(OLD_NODE_OPTION.to_string()).into())
+        }
+    }
+}
+
+/// The indexer options every start takes (`kobd --indexer`, `kobd --executor`).
+#[derive(Args, Clone, Debug, Default)]
+pub struct IndexOpts {
+    #[command(flatten)]
+    pub store: StoreOpts,
+    #[command(flatten)]
+    pub node: NodeOpts,
     /// Where a fresh database starts: `pruning-point` (default), `sink`, or a chain block hash.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Storage", value_name = "WHERE")]
     pub start: Option<StartMode>,
     /// The Executor on an empty data directory: trade at once on a store that follows the chain from the node's sink, and index the
-    /// history into the normal store meanwhile (`fast_start` in the configuration; docs/ops/executor.md, *Fast start*).
-    #[arg(long, global = true, conflicts_with = "no_fast_start")]
+    /// history into the normal store meanwhile (`fast_start` in the configuration; docs/ops/executor.md, *Fast start*). On by
+    /// default for the Executor.
+    #[arg(long, global = true, conflicts_with = "no_fast_start", help_heading = "Storage")]
     pub fast_start: bool,
     /// Turn fast start off for this start: the history is indexed before the matcher plans (fast start is on for the Executor
     /// unless the configuration says `fast_start = false`).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Storage")]
     pub no_fast_start: bool,
     /// Lean storage: keep the live book and 30 days of closed orders (500 MB cap), no record log, a file that shrinks (`lean` in the
-    /// configuration; docs/ops/executor.md, *Lean storage*).
-    #[arg(long, global = true, conflicts_with = "no_lean")]
+    /// configuration; docs/ops/executor.md, *Lean storage*). The Executor alone is always lean, the Indexer never.
+    #[arg(long, global = true, conflicts_with = "no_lean", help_heading = "Storage")]
     pub lean: bool,
     /// Turn `lean` of the configuration off for this start.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Storage")]
     pub no_lean: bool,
     /// Lean storage: days closed orders stay readable (`lean_retention_days`, default 30).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Storage", value_name = "DAYS")]
     pub lean_retention_days: Option<u64>,
     /// Lean storage: size cap of the database in MB (`lean_max_db_mb`, default 500; 0: none).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Storage", value_name = "MB")]
     pub lean_max_db_mb: Option<u64>,
-    /// API listen address, e.g. `127.0.0.1:8090`.
-    #[arg(long, global = true)]
-    pub listen: Option<std::net::SocketAddr>,
-    /// Serve `GET /v1/price/kas-usd`, the KAS price in USD for the web app's optional USD display (`usd_price` in `[api]`). The indexer asks
-    /// CoinGecko's keyless API for it (a KuCoin KAS-USDT ticker when CoinGecko fails), at most once a minute (backing off to 10 minutes while an upstream fails) and only while a client asks,
-    /// and serves the last good value with its time and source.
-    /// Off by default: no call to a third party unless this is given.
-    #[arg(long, global = true, env = "KOB_USD_PRICE")]
-    pub usd_price: bool,
-    /// Do not serve the read API.
-    #[arg(long, global = true)]
-    pub no_api: bool,
     /// Disable the permanent record log (not recommended: it is the rebuild source, see docs/ops/executor.md, Part B).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Storage")]
     pub no_record_log: bool,
     /// Hours of chain blocks kept for reorgs (the finality window; default 12).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Storage", value_name = "HOURS")]
     pub reorg_window_hours: Option<u64>,
+    /// Read API listen address (`[api] listen`; default `127.0.0.1:8090`).
+    #[arg(long, global = true, help_heading = "Read API", value_name = "ADDR")]
+    pub listen: Option<std::net::SocketAddr>,
+    /// Serve `GET /v1/price/kas-usd`, the KAS price in USD for the web app's optional USD display (`usd_price` in `[api]`). The
+    /// indexer asks CoinGecko's keyless API for it (a KuCoin KAS-USDT ticker when CoinGecko fails), at most once a minute
+    /// (backing off to 10 minutes while an upstream fails) and only while a client asks, and serves the last good value with
+    /// its time and source. Off by default: no call to a third party unless this is given.
+    #[arg(long, global = true, env = "KOB_USD_PRICE", help_heading = "Read API")]
+    pub usd_price: bool,
+    /// Do not serve the read API.
+    #[arg(long, global = true, help_heading = "Read API")]
+    pub no_api: bool,
     /// Log a one-line status (the indexer's lag; with the Executor also the transactions sent, the profit, the funds and the
     /// warnings) every this many seconds, as kaspad logs one every 10 s; 0: never.
-    #[arg(long, global = true, default_value_t = 10)]
+    #[arg(long, global = true, default_value_t = 10, help_heading = "Log", value_name = "SECS")]
     pub status_secs: u64,
 }
 
@@ -126,8 +163,36 @@ impl IndexOpts {
     pub fn status_every(&self) -> Option<std::time::Duration> {
         (self.status_secs > 0).then(|| std::time::Duration::from_secs(self.status_secs))
     }
+
+    /// The configuration file (`--config`).
+    pub fn config(&self) -> Option<&std::path::Path> {
+        self.store.config.as_deref()
+    }
+
+    /// The options of a database tool: the store's, with the node's when the tool asks a node.
+    pub fn of_store(store: &StoreOpts, node: Option<&NodeOpts>) -> IndexOpts {
+        IndexOpts { store: store.clone(), node: node.cloned().unwrap_or_default(), ..IndexOpts::default() }
+    }
 }
 
+/// The schema numbers of `kobd db migrate --help`, from the code: the lowest schema it brings forward and this build's.
+fn migrate_about() -> &'static str {
+    static ABOUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ABOUT.get_or_init(|| {
+        format!(
+            "Bring a data directory written by an earlier build (schema {} to {}) to this build's layout (schema {}) in one run: a \
+             new store is built beside the old one (integer ids, packed state spans, fills-only indexes), verified row by row \
+             against it and swapped in, and the sealed record-log segments are gzip-compressed. Stop the executor first (it takes \
+             the writer lock); this build refuses an older store until this has run. Safe to repeat or to stop (the old store is \
+             not touched before the swap); the previous store file is kept beside the new one (`index.sqlite3.before-migrate`) \
+             until you delete it. Needs free disk for the new store (about three quarters of the old one) and the temporary files \
+             of the index builds.",
+            crate::indexer::storage::MIGRATE_FROM_SCHEMA,
+            crate::indexer::db::SCHEMA_VERSION - 1,
+            crate::indexer::db::SCHEMA_VERSION
+        )
+    })
+}
 #[derive(Subcommand)]
 pub enum DbSub {
     /// Rebuild a NEW database from the record log (the log is not modified), then follow the node from its cursor.
@@ -137,12 +202,10 @@ pub enum DbSub {
         #[arg(long)]
         onto_database: bool,
     },
-    /// Bring a data directory written by an earlier build (schema 5, 6, 7 or 8) to the compact layout (schema 9) in one run: a new
-    /// store is built beside the old one (integer ids, packed state spans, fills-only indexes), verified row by row against it
-    /// and swapped in, and the sealed record-log segments are gzip-compressed. Stop the executor first (it takes the writer
-    /// lock); this build refuses an older store until this has run. Safe to repeat or to stop (the old store is not touched
-    /// before the swap); the previous store file is kept beside the new one (`index.sqlite3.before-migrate`) until you delete it.
-    /// Needs free disk for the new store (about three quarters of the old one) and the temporary files of the index builds.
+    #[command(
+        about = "Bring a data directory of an earlier build to this build's schema (offline; stop the executor first)",
+        long_about = migrate_about()
+    )]
     Migrate {
         /// Do not compress the sealed record-log segments.
         #[arg(long)]
@@ -166,7 +229,11 @@ pub enum DbSub {
         out: Option<PathBuf>,
     },
     /// Recovery hook: import orders from a maker export or archive dump, verified against the node's UTXO set.
-    ImportOrders { file: PathBuf },
+    ImportOrders {
+        file: PathBuf,
+        #[command(flatten)]
+        node: NodeOpts,
+    },
     /// After a gap: move the cursor to a fresh start point and reconcile the tracked orders with the node.
     Rebase {
         /// `sink` or a chain block hash.
@@ -175,6 +242,15 @@ pub enum DbSub {
         /// Only move the cursor; do not touch the tracked orders (they may stay open although spent).
         #[arg(long)]
         no_reconcile: bool,
+        #[command(flatten)]
+        node: NodeOpts,
+    },
+    /// What a data directory holds, read-only and offline (works next to a running executor): the schema, the network, the
+    /// cursor, the orders, the sizes, lean or archive storage, where the history begins.
+    Info {
+        /// One JSON object instead of the text.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -219,7 +295,9 @@ fn relative_to_config(cfg: &mut IndexerConfig, file: &std::path::Path) {
 }
 
 pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
-    let mut cfg = match &a.config {
+    a.node.refuse_old_node()?;
+    let (s, n) = (&a.store, &a.node);
+    let mut cfg = match &s.config {
         Some(p) => {
             let mut c = IndexerConfig::load(p)?;
             relative_to_config(&mut c, p);
@@ -227,30 +305,30 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
         }
         None => IndexerConfig::default(),
     };
-    if let Some(v) = &a.network {
+    if let Some(v) = &s.network {
         cfg.network = v.clone();
     }
-    if let Some(v) = &a.rpc_url {
+    if let Some(v) = &n.rpc_url {
         cfg.rpc_url = v.clone();
     }
-    if a.no_primary_fetch {
+    if n.no_primary_fetch {
         cfg.primary_fetch = false;
     }
-    if let Some(v) = a.prefetch_min_lag_blue {
+    if let Some(v) = n.prefetch_min_lag_blue {
         cfg.prefetch_min_lag_blue = v;
     }
-    if a.borsh {
+    if n.borsh {
         cfg.borsh = true;
     }
-    for url in &a.nodes {
-        if !cfg.nodes.iter().any(|n| &n.url == url) {
+    for url in &n.nodes {
+        if !cfg.nodes.iter().any(|x| &x.url == url) {
             cfg.nodes.push(NodeConfig { url: url.clone(), ..NodeConfig::default() });
         }
     }
-    if let Some(v) = &a.data_dir {
+    if let Some(v) = &s.data_dir {
         cfg.data_dir = v.clone();
     }
-    if let Some(v) = &a.tokens {
+    if let Some(v) = &s.tokens {
         cfg.tokens_path = Some(v.clone());
     }
     if let Some(v) = &a.start {
@@ -336,7 +414,7 @@ pub fn check_failover(cfg: &IndexerConfig) -> Result<()> {
 /// Gives every resolver entry of the configuration its own pseudo URL (`rpc::resolver::pseudo`), so each resolves a public
 /// node of its own on another host: the primary's `resolver` stays `resolver`; a primary `resolver` always comes as a pair, the
 /// second entry `resolver:2` (added first, before any other node), which fetches windows, takes every submission and vouches
-/// for the primary's answers (`rpc::multi`, `NodeSpec::cross_check`); every other node `resolver` (`--node resolver`) becomes
+/// for the primary's answers (`rpc::multi`, `NodeSpec::cross_check`); every other node `resolver` (`--extra-node resolver`) becomes
 /// the next number.
 pub fn number_resolver_entries(cfg: &mut IndexerConfig) {
     use crate::config::NodeRole;
@@ -455,7 +533,7 @@ pub fn refuse_run_only_options(cfg: &IndexerConfig, file: Option<&std::path::Pat
 /// The Indexer: follow the node and serve the read API (`kobd --indexer`).
 pub async fn follow_and_serve(opts: IndexOpts) -> Result<()> {
     let cfg = build_config(&opts)?;
-    refuse_run_only_options(&cfg, opts.config.as_deref())?;
+    refuse_run_only_options(&cfg, opts.config())?;
     tracing::info!(network = %cfg.network, rpc = %redact_url(cfg.primary_url()), data = %cfg.data_dir.display(), "starting indexer");
     // listening before the slow part: a Ctrl+C while the store opens is not lost
     let shutdown = shutdown_signal();
@@ -481,8 +559,17 @@ pub async fn follow_and_serve(opts: IndexOpts) -> Result<()> {
 
 /// Runs a tool of `kobd db`.
 pub async fn run_db(a: DbArgs) -> Result<()> {
-    let cfg = build_config(&a.opts)?;
+    let node = match &a.sub {
+        DbSub::ImportOrders { node, .. } | DbSub::Rebase { node, .. } => Some(node),
+        _ => None,
+    };
+    let opts = IndexOpts::of_store(&a.store, node);
+    if let DbSub::Info { json } = a.sub {
+        return db_info(&opts, json);
+    }
+    let cfg = build_config(&opts)?;
     match a.sub {
+        DbSub::Info { .. } => unreachable!("answered above"),
         DbSub::Replay { onto_database: true } => {
             let f = indexer::replay_onto_database(&cfg)?;
             let r = &f.replay;
@@ -581,7 +668,7 @@ pub async fn run_db(a: DbArgs) -> Result<()> {
                 }
             }
         }
-        DbSub::ImportOrders { file } => {
+        DbSub::ImportOrders { file, .. } => {
             let export: MakerExport =
                 serde_json::from_str(&std::fs::read_to_string(&file).with_context(|| file.display().to_string())?)?;
             let idx = Indexer::open(cfg.clone())?;
@@ -593,7 +680,7 @@ pub async fn run_db(a: DbArgs) -> Result<()> {
             let report = recover::import_orders(&idx.ingest, client.as_ref(), &cfg.network, &export).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        DbSub::Rebase { to, no_reconcile } => {
+        DbSub::Rebase { to, no_reconcile, .. } => {
             let idx = Indexer::open(cfg.clone())?;
             let client = node_client(&cfg);
             let rep = recover::rebase(&idx.ingest, client.as_ref(), &cfg.network, &to, !no_reconcile).await?;
@@ -610,6 +697,110 @@ pub async fn run_db(a: DbArgs) -> Result<()> {
     Ok(())
 }
 
+/// The size of a file and its `-wal` beside it, in bytes (0: none).
+fn file_and_wal_bytes(path: &std::path::Path) -> u64 {
+    let wal = std::path::PathBuf::from(format!("{}-wal", path.display()));
+    [path, wal.as_path()].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
+}
+
+/// What `kobd db info` reports about the data directory of `cfg`: read-only and offline (no writer lock, no node, no schema
+/// change: a store of an older schema is described, not migrated).
+pub fn store_info(cfg: &IndexerConfig) -> Result<serde_json::Value> {
+    use crate::indexer::db::{meta_get, SCHEMA_VERSION};
+    use serde_json::json;
+    let path = std::path::absolute(cfg.db_path()).unwrap_or_else(|_| cfg.db_path());
+    let data_dir = std::path::absolute(&cfg.data_dir).unwrap_or_else(|_| cfg.data_dir.clone());
+    let mut v = json!({
+        "data_dir": data_dir.display().to_string(),
+        "database": path.display().to_string(),
+        "exists": path.exists(),
+        "network_configured": cfg.network,
+        "lean_configured": cfg.lean,
+        "build_schema": SCHEMA_VERSION,
+    });
+    if cfg.records.enabled && !cfg.lean {
+        v["record_log_bytes"] = json!(crate::indexer::recordlog::log_bytes(&cfg.records_dir()).unwrap_or(0));
+    }
+    if !path.exists() {
+        return Ok(v);
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("cannot open {} read-only", path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    let meta = |k: &str| meta_get(&conn, k).ok().flatten();
+    let schema: i64 = meta("schema_version").and_then(|s| s.parse().ok()).unwrap_or(0);
+    v["schema"] = json!(schema);
+    v["schema_state"] = json!(match schema {
+        s if s == SCHEMA_VERSION => "current".to_string(),
+        s if s > SCHEMA_VERSION => format!("newer than this build reads ({SCHEMA_VERSION}): run the newer build"),
+        s if s >= crate::indexer::storage::MIGRATE_FROM_SCHEMA => "older: `kobd db migrate` brings it to this build's".to_string(),
+        _ => "older than `kobd db migrate` takes: rebuild it with `kobd db replay`".to_string(),
+    });
+    v["network"] = json!(meta("network"));
+    v["cursor_daa"] = json!(meta("cursor_daa").and_then(|s| s.parse::<u64>().ok()));
+    v["cursor_hash"] = json!(meta("cursor_hash"));
+    v["history_from_daa"] = json!(meta("history_from_daa").and_then(|s| s.parse::<u64>().ok()));
+    v["orders"] = json!(conn.query_row("SELECT COUNT(*) FROM orders", [], |r| r.get::<_, i64>(0)).ok());
+    // a lean store gives freed pages back to the file (`auto_vacuum = INCREMENTAL`, `indexer::lean`)
+    let vacuum: i64 = conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0)).unwrap_or(0);
+    v["storage"] = json!(if vacuum == 2 { "lean" } else { "archive" });
+    v["database_bytes"] = json!(file_and_wal_bytes(&path));
+    Ok(v)
+}
+
+/// `kobd db info`.
+fn db_info(opts: &IndexOpts, json: bool) -> Result<()> {
+    let cfg = build_config(opts)?;
+    let v = store_info(&cfg)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+    for line in store_info_lines(&v) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// [`store_info`] as lines for people.
+pub fn store_info_lines(v: &serde_json::Value) -> Vec<String> {
+    let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+    let n = |k: &str| v[k].as_u64().map(|x| x.to_string()).unwrap_or_else(|| "unknown".into());
+    let mb = |k: &str| v[k].as_u64().map(|b| format!("{:.1} MB", b as f64 / 1_048_576.0)).unwrap_or_else(|| "-".into());
+    let mut out = vec![format!("Data directory: {}", s("data_dir"))];
+    if !v["exists"].as_bool().unwrap_or(false) {
+        out.push(format!("Database: {} does not exist yet (the first start creates it)", s("database")));
+        return out;
+    }
+    out.push(format!("Database: {} ({})", s("database"), mb("database_bytes")));
+    out.push(format!("Schema: {} ({}; this build reads {})", n("schema"), s("schema_state"), n("build_schema")));
+    let net = s("network");
+    let configured = s("network_configured");
+    out.push(if net == configured || net.is_empty() {
+        format!("Network: {}", if net.is_empty() { "not recorded".to_string() } else { net })
+    } else {
+        format!("Network: {net} (the configuration says {configured}: this store is another network's)")
+    });
+    out.push(format!(
+        "Storage: {} (the configuration says {})",
+        s("storage"),
+        if v["lean_configured"] == true { "lean" } else { "archive" }
+    ));
+    out.push(format!("Cursor: DAA {} (block {})", n("cursor_daa"), v["cursor_hash"].as_str().unwrap_or("none yet")));
+    out.push(format!("Orders: {}", n("orders")));
+    out.push(match v["history_from_daa"].as_u64() {
+        Some(d) => format!("History: from DAA {d} (older orders are not in this store: book_complete false)"),
+        None => "History: complete from the start point the node retained".to_string(),
+    });
+    if v.get("record_log_bytes").is_some() {
+        out.push(format!("Record log: {}", mb("record_log_bytes")));
+    }
+    out
+}
+
 fn ms_text(ms: i64) -> String {
     // seconds since the epoch are enough for an operator who pipes it to `date -d @`; keep the table dependency-free
     format!("{}", ms / 1000)
@@ -619,7 +810,7 @@ fn ms_text(ms: i64) -> String {
 pub fn run_logo_reports(a: LogoReportsArgs) -> Result<()> {
     use crate::hex::Hash32;
     use crate::logo_reports as lr;
-    let (cfg, cmd) = (build_config(&a.opts)?, a.cmd);
+    let (cfg, cmd) = (build_config(&IndexOpts::of_store(&a.store, None))?, a.cmd);
     let mut conn = lr::open(&cfg.db_path(), &cfg.network)?;
     let now = lr::system_now_ms();
     let id = |s: &str| Hash32::parse(s.trim()).map_err(|e| anyhow!("covenant id: {e}"));
@@ -707,8 +898,8 @@ usd_price = true",
         assert!(c.api.usd_price);
     }
 
-    /// `resolver` is always a pair of public nodes; `--node resolver` adds a third; an own node with `--node resolver` is a
-    /// primary and one public node.
+    /// `resolver` is always a pair of public nodes; `--extra-node resolver` adds a third; an own node with `--extra-node
+    /// resolver` is a primary and one public node. The option of earlier builds, `--node`, is refused with the new name.
     #[test]
     fn resolver_entries_come_as_a_pair_and_number_themselves() {
         // build_config sets the resolver state's network: not while the resolver tests use it
@@ -717,10 +908,14 @@ usd_price = true",
         let c = cfg(&["--rpc-url", "resolver"]);
         assert_eq!((c.rpc_url.as_str(), urls(&c)), ("resolver", vec!["resolver:2".to_string()]));
         assert_eq!(c.secondaries().len(), 1);
-        let c = cfg(&["--rpc-url", "resolver", "--node", "resolver"]);
+        let c = cfg(&["--rpc-url", "resolver", "--extra-node", "resolver"]);
         assert_eq!(urls(&c), ["resolver:2", "resolver:3"]);
-        let c = cfg(&["--rpc-url", "ws://127.0.0.1:18210", "--node", "resolver"]);
+        let c = cfg(&["--rpc-url", "ws://127.0.0.1:18210", "--extra-node", "resolver"]);
         assert_eq!(urls(&c), ["resolver:2"]);
+        // `--node` never silently becomes a further node (nor the node): a usage error that names both options
+        let net = kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10");
+        let e = build_config(&T::parse_from(["kobd", "--network", net, "--node", "ws://127.0.0.1:18210"]).opts).unwrap_err();
+        assert!(e.downcast_ref::<crate::cli::Usage>().is_some() && e.to_string() == OLD_NODE_OPTION, "{e}");
         // no node named: the public pair by default
         let c = cfg(&[]);
         assert_eq!((c.rpc_url.as_str(), urls(&c)), ("resolver", vec!["resolver:2".to_string()]));

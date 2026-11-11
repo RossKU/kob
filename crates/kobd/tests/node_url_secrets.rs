@@ -18,7 +18,8 @@ const SECRETS: [&str; 4] = ["alice", "s3cret", "apikey", "token=T"];
 /// `(flag, environment variable)` of every argument of `cmd` whose value is a node or indexer URL.
 fn url_flags(cmd: ClapCommand) -> Vec<(String, Option<String>)> {
     cmd.get_arguments()
-        .filter(|a| matches!(a.get_long(), Some("rpc-url" | "node")))
+        // the hidden `--node` of earlier builds takes no URL: it is refused with the new name (`--extra-node`)
+        .filter(|a| !a.is_hide_set() && matches!(a.get_long(), Some("rpc-url" | "node" | "extra-node")))
         .map(|a| (a.get_long().unwrap().to_string(), a.get_env().map(|e| e.to_string_lossy().into_owned())))
         .collect()
 }
@@ -34,7 +35,7 @@ fn every_node_url_flag_has_an_environment_alternative() {
         assert_eq!(got, expect);
     };
     // the starts, `--indexer` and `--executor` (the indexer options; the facilitator of `--executor` uses the indexer's node)
-    want(IndexOpts::augment_args(ClapCommand::new("index")), &[("rpc-url", "KOB_NODE_WRPC"), ("node", "KOB_INDEX_NODES")]);
+    want(IndexOpts::augment_args(ClapCommand::new("index")), &[("rpc-url", "KOB_NODE_WRPC"), ("extra-node", "KOB_INDEX_NODES")]);
     // `match` and `keep`
     want(CommonArgs::augment_args(ClapCommand::new("match")), &[("rpc-url", "KOB_NODE_WRPC")]);
     // `x402`

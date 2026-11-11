@@ -186,105 +186,105 @@ pub struct RunArgs {
     #[command(flatten)]
     pub index: IndexOpts,
     /// File holding the operator's secret key (64 hex, mode 0600). Not the key itself.
-    #[arg(long, env = "KOB_OPERATOR_KEY_FILE")]
+    #[arg(long, env = "KOB_OPERATOR_KEY_FILE", help_heading = "Executor")]
     pub key_file: Option<PathBuf>,
     /// Build and validate everything, submit nothing (nothing goes to the network: the x402 facilitator is not served either).
-    #[arg(long)]
+    #[arg(long, help_heading = "Executor")]
     pub dry_run: bool,
     /// Do not run the matcher (keepers only).
-    #[arg(long)]
+    #[arg(long, help_heading = "Executor")]
     pub no_match: bool,
     /// Do not run the keepers (matcher only).
-    #[arg(long)]
+    #[arg(long, help_heading = "Executor")]
     pub no_keep: bool,
     /// Tick period in milliseconds.
-    #[arg(long, default_value_t = 1_000)]
+    #[arg(long, default_value_t = 1_000, help_heading = "Executor")]
     pub tick_ms: u64,
     /// The lowest fee rate, sompi per gram (>= 100): what every transaction pays without a fee estimate (`--no-fee-estimate`,
     /// or the node answers none). With one, each transaction pays its urgency's bucket within `--fee-max-rate` and
     /// `--fee-max-tx-kas` (`docs/ops/executor.md`, fee policy).
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 100, help_heading = "Fees")]
     pub fee_rate: u64,
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Fees")]
     pub fees: crate::fee::FeeArgs,
     /// Kill switch: nothing is built or submitted while this file exists (the matcher, the keepers and the x402
     /// facilitator). A file whose state cannot be read (permission denied) or whose directory does not exist counts as present.
     /// Keep it on persistent storage, outside the data directory (a rebuild deletes that).
-    #[arg(long)]
+    #[arg(long, help_heading = "Executor")]
     pub pause_file: Option<PathBuf>,
     /// Prometheus textfile-collector output (`.prom`).
-    #[arg(long)]
+    #[arg(long, help_heading = "Executor")]
     pub metrics_file: Option<PathBuf>,
     /// Warn (and set `kob_operator_low_funds`) below this many KAS of funding.
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 100, help_heading = "Executor")]
     pub low_funds_kas: u64,
     /// Plan nothing while the indexer is more than this many DAA behind the node (0: never wait). Default: the indexer's
     /// lag tolerance (`max_lag_secs`, 30 s = 300 DAA), 300 when that is 0.
-    #[arg(long)]
+    #[arg(long, help_heading = "Executor")]
     pub max_book_lag_daa: Option<u64>,
     /// Matcher: smallest profit per batch after its fee, sompi.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 1, help_heading = "Matcher")]
     pub min_profit: i64,
     /// Matcher: optional cap on the size of one transaction, bytes (0, the default: the physical limit).
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help_heading = "Matcher")]
     pub max_tx_bytes: u64,
     /// Matcher: do not chain steps onto unaccepted parents.
-    #[arg(long)]
+    #[arg(long, help_heading = "Matcher")]
     pub no_chain: bool,
     /// Matcher: do not arm or ratchet stops with updates in the batches (the stops a batch's plain fills trigger are
     /// still filled next to their evidence).
-    #[arg(long)]
+    #[arg(long, help_heading = "Matcher")]
     pub no_arm: bool,
     /// Matcher: wall-clock budget of one tick in milliseconds (0: unlimited); what is left waits for the next tick.
-    #[arg(long, default_value_t = 20_000)]
+    #[arg(long, default_value_t = 20_000, help_heading = "Matcher")]
     pub tick_budget_ms: u64,
     /// Matcher: optional cap on the candidates per (book, class, side) the planner looks at (0, the default: all).
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help_heading = "Matcher")]
     pub max_candidates_per_group: usize,
     /// Matcher: most funding inputs of one batch (the largest UTXOs first until the batch is paid).
-    #[arg(long, default_value_t = 8)]
+    #[arg(long, default_value_t = 8, help_heading = "Matcher")]
     pub max_funding_inputs: usize,
     /// Matcher: above this many funding UTXOs each batch also merges the smallest into its change (see
     /// `--consolidate-funding`).
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 4, help_heading = "Matcher")]
     pub funding_target_utxos: usize,
     /// Matcher: most extra funding UTXOs one batch merges into its change while the pool is fragmented (0: off).
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = 2, help_heading = "Matcher")]
     pub consolidate_funding: usize,
     /// Do not run the maintenance jobs on the operator's own token UTXOs (merge, sell; with the matcher).
-    #[arg(long)]
+    #[arg(long, help_heading = "Maintenance")]
     pub no_maintenance: bool,
     /// Maintenance: merge the operator's token UTXOs only, never sell them into the book.
-    #[arg(long)]
+    #[arg(long, help_heading = "Maintenance")]
     pub no_dust_sell: bool,
     /// Maintenance: most transactions per tick.
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = 2, help_heading = "Maintenance")]
     pub maintenance_max_jobs: usize,
     /// Matcher and maintenance: the surplus-inventory policy (strict JSON, `docs/ops/executor.md`, "Surplus inventory"):
     /// the pair surpluses the operator may accumulate as inventory (never sold by maintenance). Default: none (off).
-    #[arg(long)]
+    #[arg(long, help_heading = "Matcher")]
     pub inventory_policy: Option<PathBuf>,
     /// Keepers: do not refund / kill / close.
-    #[arg(long)]
+    #[arg(long, help_heading = "Keepers")]
     pub no_refund: bool,
     /// Keepers: sweep strays of the operator's own orders in place (the order continues unchanged).
-    #[arg(long)]
+    #[arg(long, help_heading = "Keepers")]
     pub sweep_own_strays: bool,
     /// Keepers: return proven foreign strays (other tokens owned by an order id) to the maker inside the refund, kill or
     /// close that ends the order (permissionless; dropped from a job that would not pay with them).
-    #[arg(long)]
+    #[arg(long, help_heading = "Keepers")]
     pub return_foreign_strays: bool,
     /// Keepers: smallest profit (tip - fee) per job, sompi.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help_heading = "Keepers")]
     pub keeper_min_profit: i64,
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Keepers")]
     pub liveness: crate::keepers::LivenessArgs,
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Work selection among executors (advanced)")]
     pub select: crate::matcher::select::SelectArgs,
     /// Also serve the x402 facilitator (strict JSON configuration, `crates/kobd/x402.example.json`).
     /// Its `node` is the indexer's `--rpc-url`; its `network` must be the indexer's. Not served with `--dry-run`; with it the
     /// first start has no fast start (its book is bound to one store).
-    #[arg(long, env = "KOB_X402_CONFIG")]
+    #[arg(long, env = "KOB_X402_CONFIG", help_heading = "Executor")]
     pub x402_config: Option<PathBuf>,
 }
 
@@ -564,7 +564,7 @@ fn inside(file: &std::path::Path, dir: &std::path::Path) -> bool {
 /// refused (its funds would go with it). A pause file there (the setup of a build before 2026-11-11 wrote `kob-data/pause`)
 /// is warned about while the data directory exists, and refused when it does not: the directory was deleted, so a pause the
 /// operator had set went with it, and the start would recreate the directory and trade.
-fn refuse_files_in_data_dir(
+pub(crate) fn refuse_files_in_data_dir(
     key_file: Option<&std::path::Path>,
     pause_file: Option<&std::path::Path>,
     data_dir: &std::path::Path,

@@ -141,7 +141,7 @@ impl SelectConfig {
 #[derive(clap::Args, Debug, Clone)]
 pub struct SelectArgs {
     /// Plan deterministically, as the reference planner and keepers: every executor with the same view builds the same
-    /// transactions (`docs/spec/matcher.md` §3.6).
+    /// transactions (`docs/spec/matcher.md`, section 3.6).
     #[arg(long)]
     pub no_weighted_select: bool,
     /// Weight exponent of the selection: a work unit (a due keeper job) is drawn with probability proportional to its

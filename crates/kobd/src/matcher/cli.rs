@@ -45,7 +45,7 @@ pub struct CommonArgs {
     /// Tick period in milliseconds.
     #[arg(long, default_value_t = 1_000)]
     pub tick_ms: u64,
-    /// The lowest fee rate, sompi per gram (≥ 100); with the node's fee estimate each transaction pays its urgency's bucket
+    /// The lowest fee rate, sompi per gram (>= 100); with the node's fee estimate each transaction pays its urgency's bucket
     /// within `--fee-max-rate` and `--fee-max-tx-kas` (`docs/ops/executor.md`, fee policy).
     #[arg(long, default_value_t = 100)]
     pub fee_rate: u64,
@@ -84,7 +84,7 @@ pub struct MatchArgs {
     /// Do not chain onto unaccepted parents (a partially filled order continues next tick).
     #[arg(long)]
     pub no_chain: bool,
-    /// Do not arm or ratchet stops with updates in the batches (§4.3; the stops the batch's plain fills trigger are
+    /// Do not arm or ratchet stops with updates in the batches (docs/spec/matcher.md section 4.3; the stops the batch's plain fills trigger are
     /// still filled next to their evidence).
     #[arg(long)]
     pub no_arm: bool,
@@ -123,7 +123,7 @@ pub struct KeepArgs {
     pub return_foreign_strays: bool,
     #[command(flatten)]
     pub liveness: crate::keepers::LivenessArgs,
-    /// Smallest profit (tip − fee) per job, sompi.
+    /// Smallest profit (tip - fee) per job, sompi.
     #[arg(long, default_value_t = 0)]
     pub min_profit: i64,
 }
