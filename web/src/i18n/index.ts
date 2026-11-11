@@ -3,7 +3,7 @@
 // The dictionary is split by UI area: `src/i18n/en/<area>.ts`, each `export default { 'area.key': 'text with {param}' }`-style object with FLAT dotted
 // keys prefixed by the area name. All files are merged at build time with `import.meta.glob`, so adding an area never touches shared files.
 //
-// Placeholders: `{name}`; plural-free by design (sentences are phrased with counts as parameters). Use `formatNumber/formatDateTime` for locale-aware output.
+// Placeholders: `{name}`; plural-free by design (sentences are phrased with counts as parameters). Use `formatNumber` for locale-aware numbers; a time is the kit's (`formatRowTime`, ui/kit/format.ts: 24-hour, one order everywhere).
 
 import { formatTokenAmount } from '../kob/units';
 
@@ -76,10 +76,6 @@ export function tIssue(prefix: string, issue: { code: string; message: string; p
 
 export function formatNumber(n: number | bigint, opts?: Intl.NumberFormatOptions): string {
   return new Intl.NumberFormat(LOCALE, opts).format(n);
-}
-
-export function formatDateTime(unixSeconds: number | bigint, opts?: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat(LOCALE, { dateStyle: 'medium', timeStyle: 'short', ...opts }).format(new Date(Number(unixSeconds) * 1000));
 }
 
 /** Test helper: every key of the dictionary (for the completeness test). */

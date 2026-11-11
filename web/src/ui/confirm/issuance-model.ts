@@ -58,7 +58,8 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   const block = (code: string, params?: Params, extra: Partial<Finding> = {}) =>
     findings.push({ code, severity: 'blocking', message: code, ...(params ? { params } : {}), text: tr(`confirm.issue.finding.${code}`, params), ...extra });
   const warn = (code: string, params?: Params) => findings.push({ code, severity: 'warning', message: code, ...(params ? { params } : {}), text: tr(`confirm.issue.finding.${code}`, params) });
-  const info = (code: string, params?: Params) => findings.push({ code, severity: 'info', message: code, ...(params ? { params } : {}), text: tr(`confirm.issue.finding.${code}`, params) });
+  // `textKey`: the dictionary key of the text when it differs from the code (a count has a `.one` and an `.other` text)
+  const info = (textKey: string, params?: Params, code: string = textKey) => findings.push({ code, severity: 'info', message: code, ...(params ? { params } : {}), text: tr(`confirm.issue.finding.${textKey}`, params) });
 
   // ---- inputs: only the wallet's own P2PK KAS (of the preparation and of the genesis, which spends the preparation's output 0)
   const ownInputs = (b: BuiltTx) => {
@@ -163,7 +164,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   // ---- disclosure findings
   warn('unaudited');
   const others = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0));
-  if (others.length > 0) info('holdersOther', { count: others.length });
+  if (others.length > 0) info(others.length === 1 ? 'holdersOther.one' : 'holdersOther.other', { count: others.length }, 'holdersOther');
   info('walletBlind');
   if (prep && i.oneApproval === false) info('walletTwice');
 
@@ -209,7 +210,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   sections.push({ id: 'spend', title: tr('confirm.section.spend'), rows: [row('kas-spend', tr('confirm.spend.kas'), kas(kasIn))], fold: true });
   sections.push({
     id: 'locked', title: tr('confirm.section.locked'), note: tr('confirm.issue.lockedNote'),
-    rows: [row('locked-total', tr('confirm.locked.total'), kas(carriers), 'warn'), row('locked-carriers', tr('confirm.issue.carriers', { count: token.outputs.length }), kas(BigInt(token.carrier)), 'normal', tr('confirm.locked.carriersHint'))],
+    rows: [row('locked-total', tr('confirm.locked.total'), kas(carriers), 'warn'), row('locked-carriers', tr(token.outputs.length === 1 ? 'confirm.issue.carriers.one' : 'confirm.issue.carriers.other', { count: token.outputs.length }), kas(BigInt(token.carrier)), 'normal', tr('confirm.locked.carriersHint'))],
   });
   if (change > 0n) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: [row('kas-back', tr('confirm.back.kas'), kas(change), 'good')], fold: true });
   const feeDisc = i.fee ?? null;

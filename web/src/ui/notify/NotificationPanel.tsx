@@ -8,7 +8,8 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { useFiat } from '../../app/use-fiat';
 import type { ConfigWarning, StoredOverride } from '../../config';
-import { formatDateTime, t } from '../../i18n';
+import { t } from '../../i18n';
+import { formatRowTime, rowTimeTitle } from '../kit/format';
 import type { NotificationEvent } from '../../kob/notifications';
 import { Badge, Button, Field, shortId } from '../kit';
 import { Popover } from '../shell/Popover';
@@ -43,7 +44,7 @@ function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
       <div class="notify-item-main">
         <div class="notify-item-head">
           <strong><span key={d.title}>{d.title}</span></strong>
-          <time class="muted" dateTime={new Date(props.e.at).toISOString()}>{formatDateTime(Math.floor(props.e.at / 1000), undefined)}</time>
+          <time class="muted" dateTime={new Date(props.e.at).toISOString()} title={rowTimeTitle(props.e.at)}>{formatRowTime(props.e.at)}</time>
         </div>
         <div><span key={d.body}>{d.body}</span></div>
       </div>

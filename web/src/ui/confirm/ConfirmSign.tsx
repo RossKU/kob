@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { readClock } from '../../app/env';
-import { formatDateTime, has, t } from '../../i18n';
+import { has, t } from '../../i18n';
 import { issueText, walletNoticeText } from '../../i18n/issue-text';
 import { describeInputsForWallet } from '../../kob/decode';
 import type { IssueDeclaration, IssueDocs, IssueToken } from '../../kob/issue';
@@ -18,7 +18,7 @@ import { expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } fro
 import { signAndSubmitCreation } from '../../wallet/create';
 import { pendingSpends } from '../../app/pending-spends';
 import { Banner, Button, CopyText, Modal, RawDetails, Spinner, copyToClipboard } from '../kit';
-import { shortId } from '../kit/format';
+import { rowTimeTitleUnix, shortId } from '../kit/format';
 import type { ConfirmModel, Finding, Row, Section } from './confirm-model';
 import { buildIssuanceModel } from './issuance-model';
 import { feeDisclosureOf } from './fee-disclosure';
@@ -270,7 +270,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
         {model.notices.length > 0 ? (
           <aside class="cf-wallet" data-testid="confirm-wallet-notice">
             <h3>{t('confirm.wallet.title', { wallet: wallet.info?.label ?? t('confirm.wallet.yours') })}</h3>
-            <p>{t('confirm.wallet.lead', { count: built.sign.length })}</p>
+            <p>{t(built.sign.length === 1 ? 'confirm.wallet.lead.one' : 'confirm.wallet.lead.other', { count: built.sign.length })}</p>
             <ul>
               {model.notices.map((n) => (
                 <li key={n.code} data-code={n.code}>
@@ -368,7 +368,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
                   </a>
                 </p>
               ) : null}
-              {clock ? <p class="cf-note">{t('confirm.submittedAt', { time: `${formatDateTime(clock.unixSeconds)} (${formatUtc(clock.unixSeconds)})` })}</p> : null}
+              {clock ? <p class="cf-note">{t('confirm.submittedAt', { time: `${rowTimeTitleUnix(clock.unixSeconds)} (${formatUtc(clock.unixSeconds)})` })}</p> : null}
             </Banner>
           </div>
         ) : null}

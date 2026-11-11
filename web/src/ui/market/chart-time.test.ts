@@ -32,8 +32,8 @@ describe('the time axis labels', () => {
   });
 
   it('the crosshair label: the date, and the 24-hour time for an intraday bar', () => {
-    expect(crosshairLabel(D0, '1d', L, 'Asia/Tokyo')).toBe('Nov 11, 2026');
-    expect(crosshairLabel(D0 + 14 * 3600 + 35 * 60, '5m', L, 'UTC')).toBe('Nov 11, 2026, 14:35');
-    expect(crosshairLabel(D0, '1h', L, 'UTC')).toBe('Nov 11, 2026, 00:00');
+    expect(crosshairLabel(D0, '1d', L, 'Asia/Tokyo')).toBe('2026-11-11');
+    expect(crosshairLabel(D0 + 14 * 3600 + 35 * 60, '5m', L, 'UTC')).toBe('2026-11-11 14:35');
+    expect(crosshairLabel(D0, '1h', L, 'UTC')).toBe('2026-11-11 00:00');
   });
 });

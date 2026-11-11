@@ -1,5 +1,6 @@
 // Text of one notification: the event's plain params rendered with i18n at DISPLAY time, plus where it links to.
-import { formatDateTime, t } from '../../i18n';
+import { t } from '../../i18n';
+import { formatRowTime } from '../kit/format';
 import { kasPerTokenToUsd, sompiToUsd, usdText, type Fiat } from '../../app/fiat';
 import { routeToHash } from '../../app/router';
 import { pow10 } from '../../kob/units';
@@ -29,7 +30,7 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
   };
   const base = { token, side, amount: amountText(p.amount), total: amountText(p.total ?? p.amount) };
   let params: Record<string, string | number> = base;
-  if (e.kind === 'expirySoon' || e.kind === 'expired') params = { ...base, time: typeof p.at === 'number' && p.at > 0 ? formatDateTime(p.at) : '' };
+  if (e.kind === 'expirySoon' || e.kind === 'expired') params = { ...base, time: typeof p.at === 'number' && p.at > 0 ? formatRowTime(p.at * 1000, 0) : '' };
   if (e.kind === 'payment') {
     let amount: string;
     try {

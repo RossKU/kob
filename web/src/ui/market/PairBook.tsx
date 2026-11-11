@@ -21,7 +21,12 @@ export interface PairBookProps {
 /** The price as a plain number: no thousands separators, no padding zeros (the column shows fixed decimals). */
 export const plainPrice = (text: string): string => text.replace(/,/g, '').replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 
+// the hint of a level's source; a count of orders has a `.one` and an `.other` text (the route's has no count)
 const HINT: Record<string, string> = { direct: 'pair.book.directHint', entry: 'pair.book.entryHint', route: 'pair.book.routeHint' };
+const hintKey = (source: string, orders: number): string => {
+  const key = HINT[source] ?? 'pair.book.directHint';
+  return source === 'route' ? key : `${key}.${orders === 1 ? 'one' : 'other'}`;
+};
 
 function Level(props: { row: PairLevelRow; p: PairBookProps }) {
   const { row, p } = props;
@@ -36,7 +41,7 @@ function Level(props: { row: PairLevelRow; p: PairBookProps }) {
       data-price={plainPrice(row.priceText)}
       data-amount={row.amount.toString()}
       aria-label={label}
-      title={`${label} · ${t(HINT[row.source] ?? 'pair.book.directHint', { orders: row.orders })}`}
+      title={`${label} · ${t(hintKey(row.source, row.orders), { orders: row.orders })}`}
       onClick={() => p.onPick?.(row)}
     >
       <i class="book-bar" style={{ width: `${Math.round(row.bar * 100)}%` }} aria-hidden="true" />

@@ -2,7 +2,8 @@
 import { useMemo } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { readContributions, type Contributions } from '../../data/contributors';
-import { formatDateTime, t } from '../../i18n';
+import { t } from '../../i18n';
+import { formatRowDate } from '../kit/format';
 import { formatKas } from '../../kob/units';
 import { CopyText, shortAddress, Table, TableMessage, useAsync } from '../kit';
 import { README_URL } from '../landing/landing-model';
@@ -36,7 +37,7 @@ function ContributorRows(props: { data: Contributions | undefined }) {
           <td>
             <CopyText value={c.address} text={shortAddress(c.address)} />
           </td>
-          <td>{formatDateTime(Math.floor(c.first / 1000), { timeStyle: undefined })}</td>
+          <td>{formatRowDate(c.first)}</td>
           <td class="right num">{formatKas(c.total, { group: ',', maxFraction: 2 })}</td>
         </tr>
       ))}

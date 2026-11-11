@@ -3,6 +3,7 @@ import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { NOTIFY_KINDS } from '../../kob/notifications';
 import { Banner, Checkbox, Section } from '../kit';
+import { Learn } from '../settings/Learn';
 import { useNotify, type BrowserPermission } from './NotifyProvider';
 
 export function NotifySettingsSection() {
@@ -23,7 +24,9 @@ export function NotifySettingsSection() {
   return (
     <Section title={t('notify.settings.title')} data-testid="settings-notify">
       <div class="stack-sm">
-        <p class="muted">{t('notify.settings.intro')}</p>
+        <Learn short={t('notify.settings.intro.short')} data-testid="notify-intro">
+          <p>{t('notify.settings.intro')}</p>
+        </Learn>
         <Checkbox checked={s.enabled} onChange={(c) => n.update({ enabled: c })} label={t('notify.settings.enable')} hint={t('notify.settings.enable.hint')} data-testid="notify-enable" />
         <Checkbox
           checked={s.browser && perm === 'granted'}

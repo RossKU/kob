@@ -272,7 +272,7 @@ export function PairPage(props: { base: string; quote: string }) {
   const spec: UsdChartSpec = { base: { token: props.base, decimals: baseInfo.decimals }, quote: { token: props.quote, decimals: quoteInfo.decimals }, pairCandles: true };
   const statsModel = pairStats.model;
   const src = pairStats.source;
-  const volumeNote = src === 'fills' ? t('pair.stats.srcFills', { n: pairStats.fills }) : src === 'candles' ? t('pair.stats.srcCandles', { n: pairStats.fills }) : t('pair.stats.srcNone');
+  const volumeNote = src === 'fills' ? t(pairStats.fills === 1 ? 'pair.stats.srcFills.one' : 'pair.stats.srcFills.other', { n: pairStats.fills }) : src === 'candles' ? t(pairStats.fills === 1 ? 'pair.stats.srcCandles.one' : 'pair.stats.srcCandles.other', { n: pairStats.fills }) : t('pair.stats.srcNone');
   const rangeNote = statsModel.high !== null ? t('pair.stats.srcRange') : null;
   const statsLoading = !!indexer && ((stats.data === undefined && stats.loading) || (candles.data === undefined && candles.loading) || (fills.data === undefined && fills.loading));
   const unavailable = !!indexer && book.data === null && !book.loading && !book.error;

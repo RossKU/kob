@@ -30,9 +30,17 @@ export function tickLabel(sec: number, interval: CandleInterval, type: number, l
   return clock === '00:00' ? date() : clock;
 }
 
-/** The label of the crosshair on the time axis: the date, and for an intraday bar the 24-hour time after it. */
-export function crosshairLabel(sec: number, interval: CandleInterval, locale: string, timeZone?: string): string {
+/**
+ * The label of the crosshair on the time axis: the kit's one time form (ui/kit/format.ts `formatRowTime`), the year-first date `2026-11-11` and, for an intraday bar, the 24-hour time after it
+ * (`2026-11-11 14:35`); the axis ticks stay short (`Nov 11`, `14:35`).
+ */
+export function crosshairLabel(sec: number, interval: CandleInterval, _locale: string, timeZone?: string): string {
   const zone = zoneOf(interval, timeZone);
-  const day: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'short', day: 'numeric' };
-  return format(locale, interval === '1d' ? day : { ...day, ...CLOCK }, zone, sec);
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', ...(interval === '1d' ? {} : CLOCK), ...(zone ? { timeZone: zone } : {}) })
+      .formatToParts(new Date(sec * 1000))
+      .map((p) => [p.type, p.value]),
+  );
+  const date = `${parts.year}-${parts.month}-${parts.day}`;
+  return interval === '1d' ? date : `${date} ${parts.hour}:${parts.minute}`;
 }

@@ -49,7 +49,7 @@ export default {
   'confirm.token.label': '{ticker} ({id})',
 
   'confirm.locked.total': 'Total locked',
-  'confirm.locked.carriersHint': 'returned when the order ends',
+  'confirm.locked.carriersHint': 'returned when the tokens are spent or consolidated',
 
   'confirm.back.kas': 'KAS change',
   'confirm.fee.network': 'Network fee',
@@ -156,7 +156,8 @@ export default {
 
   'confirm.wallet.title': 'What {wallet} will show you',
   'confirm.wallet.yours': 'your wallet',
-  'confirm.wallet.lead': 'The wallet signs {count} time(s) but cannot read tokens or orders. Verify against THIS screen:',
+  'confirm.wallet.lead.one': 'The wallet signs once but cannot read tokens or orders. Verify against THIS screen:',
+  'confirm.wallet.lead.other': 'The wallet signs {count} times but cannot read tokens or orders. Verify against THIS screen:',
 
   'confirm.advanced.title': 'Technical details',
   'confirm.advanced.txid': 'Transaction id',
@@ -197,7 +198,8 @@ export default {
   'confirm.issue.holderYou': 'your wallet',
   'confirm.issue.holderOther': 'another key {owner} (owner scheme {scheme})',
   'confirm.issue.lockedNote': 'Every token output carries KAS. It returns when those tokens are moved and consolidated.',
-  'confirm.issue.carriers': 'KAS on {count} token output(s), each',
+  'confirm.issue.carriers.one': 'KAS on the token output',
+  'confirm.issue.carriers.other': 'KAS on {count} token outputs, each',
   'confirm.issue.netToken': '{ticker} in your wallet',
   'confirm.issue.netLocked': 'KAS locked with the tokens',
   'confirm.issue.netTokenHint': 'wallets do not show these tokens; the app tracks them for you',
@@ -216,7 +218,8 @@ export default {
   'confirm.issue.finding.feeHigh': 'The network fee ({fee}) is unreasonably high.',
   'confirm.issue.finding.feeRate': 'The transaction declares a fee rate of {rate} sompi per gram, above the {max} this wallet allows.',
   'confirm.issue.finding.unaudited': "The token program is the KCC-20 reference, which has not been audited. Only create tokens you can afford to lose.",
-  'confirm.issue.finding.holdersOther': '{count} output(s) send tokens to other keys, as you asked.',
+  'confirm.issue.finding.holdersOther.one': 'One output sends tokens to another key, as you asked.',
+  'confirm.issue.finding.holdersOther.other': '{count} outputs send tokens to other keys, as you asked.',
   'confirm.issue.declareSection': 'Recorded on chain with the token',
   'confirm.issue.declareNote': 'A first transaction writes these details on chain (KCC-23); the token id commits to them, so they can never be changed. Apps read them from the chain.',
   'confirm.issue.declare.description': 'Description',

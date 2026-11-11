@@ -16,6 +16,7 @@ import {
   showToast, toError,
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
+import { Learn } from './Learn';
 import { IndexerTrust } from '../shell/IndexerTrust';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
@@ -23,21 +24,6 @@ import './settings.css';
 import { changedFields, changesServers, clearKobStorage, configWithForm, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
 
 const reload = () => window.location.reload();
-
-/**
- * One short line with the complete text one click away (review M-10): the card stays scannable, nothing is deleted. A native `details`, so it works without
- * script, keyboard and screen readers get the disclosure for free, and the full text stays in the page for search.
- */
-function Learn(props: { short: string; children: ComponentChildren; 'data-testid'?: string }) {
-  return (
-    <details class="learn" data-testid={props['data-testid']}>
-      <summary>
-        <span class="learn-short">{props.short}</span> <span class="learn-more">{t('settings.learnMore')}</span>
-      </summary>
-      <div class="learn-full">{props.children}</div>
-    </details>
-  );
-}
 
 /** A count in a sentence: the singular or the plural key (no "(s)"). */
 const tCount = (base: string, count: number) => t(`${base}.${count === 1 ? 'one' : 'other'}`, { count });

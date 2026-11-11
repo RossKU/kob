@@ -85,6 +85,7 @@ export default {
   'notify.invoice.item': 'Invoice {id}: {status}',
 
   'notify.settings.title': 'Notifications',
+  'notify.settings.intro.short': 'Optional alerts for your orders and payments, worked out in this browser. Off by default.',
   'notify.settings.intro': 'Optional alerts for your orders and payments. They are worked out in this browser from the indexer and the node while this page is open (and on the next visit for anything that happened in between); nothing is sent to any server of ours. Off by default.',
   'notify.settings.enable': 'Notify me inside the app',
   'notify.settings.enable.hint': 'A bell in the header, a list of events and a short message when something happens.',

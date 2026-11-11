@@ -12,7 +12,8 @@ import { longId, type TokenInfo, type TokenRegistry } from '../kob/registry';
 import type { BuiltTx, Hex } from '../kob/types';
 import { decimalsOfScale, formatKas, formatTokenAmount } from '../kob/units';
 import type { KobWasm } from '../kob/wasm';
-import { RAW_TOKEN_DECIMALS, formatDateTime, t } from '../i18n';
+import { RAW_TOKEN_DECIMALS, t } from '../i18n';
+import { formatRowTime } from '../ui/kit/format';
 import { auctionSeconds, orderRows, orderTitle, orderTypeCode, type Fmt, type MarketFillsFacts } from '../ui/confirm/confirm-model';
 import type { GenesisClaim, TokenHint } from './protocol';
 import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './words';
@@ -134,7 +135,7 @@ function hintRegistry(hints: TokenHint[]): TokenRegistry {
 const SIGNED_TERM_DETAIL = new Set(['auction', 'entryStop', 'pairTrigger']);
 
 function orderSummary(d: OrderDescription, extra: Parameters<typeof orderRows>[1], hints: TokenHint[], registry: TokenRegistry, terms = false): SummaryOrder {
-  const f: Fmt = { tr: t, ref: refOfHint(d.tokenCovId, hints, terms), clock: null, time: (unix) => formatDateTime(unix), registry };
+  const f: Fmt = { tr: t, ref: refOfHint(d.tokenCovId, hints, terms), clock: null, time: (unix) => formatRowTime(Number(unix) * 1000, 0), registry };
   const exit = d.entry?.exit ? orderSummary(d.entry.exit, { value: null, locked: null, deadline: null }, hints, registry, terms) : null;
   return {
     title: orderTitle(d, extra.deadline, f),
