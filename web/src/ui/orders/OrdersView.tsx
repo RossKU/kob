@@ -505,16 +505,9 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const replaceReady = !!amendToken && (!amend?.pair || !!amendQuote);
 
   return (
-    <div class={embed ? 'stack mkt-card market-orders pf-root' : 'stack pf-root'} ref={root} data-testid={embed ? 'market-orders' : 'orders-view'}>
-      {embed ? (
-        <div class="row-between market-orders-head">
-          <h2 class="section-title" style="margin:0">{t('orders.market.title')}</h2>
-          <div class="row">
-            {tab === 'fills' ? exportButton : cancelAllButton}
-            <a class="small mo-all-link" href={routeToHash({ name: 'portfolio', tab })} data-testid="market-orders-portfolio">{t('orders.market.toPortfolio')}</a>
-          </div>
-        </div>
-      ) : null}
+    <div class={embed ? 'stack mkt-card market-orders pf-root' : 'stack pf-root'} ref={root} data-testid={embed ? 'market-orders' : 'orders-view'} {...(embed ? { role: 'region', 'aria-label': t('orders.market.title') } : {})}>
+      {/* a market page's panel has no heading row (the tabs name it; its name is a heading for screen readers); the actions of that row (Cancel all or Export, All in Portfolio) are at the right end of the tabs row */}
+      {embed ? <h2 class="sr-only">{t('orders.market.title')}</h2> : null}
       <div class="row-between" style={embed ? 'display:none' : undefined}>
         <h1 style="margin:0">{t('orders.title')}</h1>
         <div class="row">
@@ -709,6 +702,12 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
         <div class={`pf-rows${tab === 'balances' ? ' pf-rows-off' : ''}`} aria-hidden={tab === 'balances' ? 'true' : undefined} {...(tab === 'balances' ? { inert: true } : {})} data-testid="portfolio-rows-box">
           <RowsControl id="portfolio" size={rowsPer} onSize={(n) => setRows(n)} sizes={PORTFOLIO_PAGE_SIZES} />
         </div>
+        {embed ? (
+          <div class="pf-embed-actions">
+            {tab === 'fills' ? exportButton : cancelAllButton}
+            <a class="small mo-all-link" href={routeToHash({ name: 'portfolio', tab })} data-testid="market-orders-portfolio">{t('orders.market.toPortfolio')}</a>
+          </div>
+        ) : null}
         </div>
         <div role="tabpanel" aria-labelledby={`tab-${tab}`} class="portfolio-panel stack" data-testid={`portfolio-panel-${tab}`}>
           {tab === 'balances' ? (

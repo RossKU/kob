@@ -78,6 +78,8 @@
 .mo-body > .dt { margin-top: 2px; }
 .pf-scope { margin-left: auto; padding: 4px 0; }
 .pf-scope + .pf-rows { margin-left: 0; }
+/* a market page's panel: Cancel all / Export and "All in Portfolio" at the right end of the tabs row (there is no heading row for them) */
+.pf-embed-actions { display: flex; align-items: center; gap: 8px 12px; padding: 4px 0; flex: none; white-space: nowrap; }
 .pf-scope .segmented button { font-size: 0.82rem; white-space: nowrap; }
 @container pf (max-width: 759px) { .pf-scope { margin-left: 0; } .pf-scope + .pf-rows { margin-left: auto; } }
 /* the empty state of a list is one compact line under the tabs, not a page */
