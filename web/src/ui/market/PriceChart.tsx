@@ -27,6 +27,7 @@ import { flippedChartSeries } from './orientation';
 import { ratioCandles, ratioSeries, usdText } from './usd-model';
 import { pairRatioCandles } from './pair-market';
 import { setChartExpanded, useChartExpanded } from './chart-expand';
+import { crosshairLabel, tickLabel } from './chart-time';
 import { DrawingsPrimitive, PICK_MOUSE, PICK_TOUCH, type DrawingColors } from './chart-drawings-primitive';
 import { COLOR_TOKEN, DEFAULT_COLOR, DRAWING_COLORS, drawingsMarket, isDrawingColor, loadDrawings, MAX_DRAWINGS, newDrawingId, saveDrawings, type Anchor, type Drawing, type DrawingColor } from './chart-drawings';
 
@@ -101,13 +102,6 @@ type Tool = 'hline' | 'trend' | 'xline' | 'box' | 'paint' | 'erase';
 type TwoPoint = 'trend' | 'xline' | 'box';
 const isTwoPoint = (t: Tool | null): t is TwoPoint => t === 'trend' || t === 'xline' || t === 'box';
 const TOOLS: readonly Tool[] = ['hline', 'trend', 'xline', 'box', 'paint', 'erase'];
-
-function timeText(sec: number, interval: CandleInterval, withDate: boolean): string {
-  const d = new Date(sec * 1000);
-  const utc = interval === '1d';
-  const o: Intl.DateTimeFormatOptions = utc ? { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' } : withDate ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
-  return new Intl.DateTimeFormat(localeOf(), o).format(d);
-}
 
 /**
  * A pair chart: BASE over QUOTE (two tokens; the USD reference token as QUOTE reads as USD). Prices come only from the KAS series: with
@@ -227,6 +221,8 @@ export function PriceChart(props: PriceChartProps) {
           : 'ready';
 
   const boxRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const axisSeen = useRef(new Set<string>());
   const chartRef = useRef<{ chart: IChartApi; candles: ISeriesApi<'Candlestick'>; volume: ISeriesApi<'Histogram'>; drawings: DrawingsPrimitive } | null>(null);
   const [libReady, setLibReady] = useState(false);
   const [libError, setLibError] = useState<Error | null>(null);
@@ -293,12 +289,22 @@ export function PriceChart(props: PriceChartProps) {
     if (!c || !libReady) return;
     const pal = palette();
     const minMove = 10 ** -props.dp;
+    axisSeen.current = new Set();
+    panelRef.current?.removeAttribute('data-axis-ticks');
+    const noteTick = (label: string): string => {
+      if (!axisSeen.current.has(label)) {
+        axisSeen.current.add(label);
+        panelRef.current?.setAttribute('data-axis-ticks', [...axisSeen.current].join('|'));
+      }
+      return label;
+    };
     c.chart.applyOptions({
       layout: { background: { color: pal.bg }, textColor: pal.text },
       grid: { vertLines: { color: pal.grid }, horzLines: { color: pal.grid } },
       rightPriceScale: { borderColor: pal.border },
-      timeScale: { borderColor: pal.border, tickMarkFormatter: (time: Time) => timeText(Number(time), interval, false) },
-      localization: { locale: localeOf(), timeFormatter: (time: Time) => timeText(Number(time), interval, true) },
+      // the axis reads dates on day-level ticks and 24-hour times on intraday ones (chart-time.ts); the labels the library asks for are kept in `data-axis-ticks` (what the axis says, for the tests)
+      timeScale: { borderColor: pal.border, tickMarkFormatter: (time: Time, type: number) => noteTick(tickLabel(Number(time), interval, type, localeOf())) },
+      localization: { locale: localeOf(), timeFormatter: (time: Time) => crosshairLabel(Number(time), interval, localeOf()) },
     });
     c.candles.applyOptions({
       upColor: pal.up, downColor: pal.down, wickUpColor: pal.up, wickDownColor: pal.down, priceFormat: { type: 'price', precision: props.dp, minMove },
@@ -467,7 +473,7 @@ export function PriceChart(props: PriceChartProps) {
   const shown = legend ?? legendOf.current(series.bars.length - 1);
 
   return (
-    <div class="chart-panel" data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length} data-expanded={expanded ? '1' : '0'}>
+    <div class="chart-panel" ref={panelRef} data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length} data-expanded={expanded ? '1' : '0'}>
       <div class="chart-head">
         <div class="chart-intervals" role="group" aria-label={t('market.chart.interval')} data-testid="chart-intervals">
           {CANDLE_INTERVALS.map((iv) => (

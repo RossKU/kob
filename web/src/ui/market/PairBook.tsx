@@ -9,6 +9,10 @@ export interface PairBookProps {
   base: string;
   quote: string;
   onPick?: (row: PairLevelRow) => void;
+  /** slots per side (the levels the card holds: book-rows.ts; the model is built for as many) */
+  rows?: number;
+  /** goes on the asks' side: the page measures it to know how many levels fit */
+  fitRef?: (el: HTMLElement | null) => void;
 }
 
 /** The price as a plain number: no thousands separators, no padding zeros (the column shows fixed decimals). */
@@ -52,13 +56,13 @@ export function PairBook(props: PairBookProps) {
   const m = props.model;
   const line = spreadLine(m);
   return (
-    <div class="book ob pair-book tk-in" data-testid="pair-book">
+    <div class="book ob pair-book tk-in" data-testid="pair-book" style={props.rows ? { '--ob-rows': String(props.rows) } : undefined}>
       <div class="ob-head" aria-hidden="true">
         <span>{t('pair.book.price', { base: props.base, quote: props.quote })}</span>
         <span>{t('pair.book.amount', { base: props.base })}</span>
         <span>{t('pair.book.source')}</span>
       </div>
-      <div class="book-side book-asks" data-testid="pair-book-asks">
+      <div class="book-side book-asks" ref={props.fitRef} data-testid="pair-book-asks">
         {[...m.asks].reverse().map((r, i) => (
           <Level key={`a${i}`} row={r} p={props} />
         ))}

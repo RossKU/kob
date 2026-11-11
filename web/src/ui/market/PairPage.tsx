@@ -38,6 +38,7 @@ import { PairBook } from './PairBook';
 import { useStaleSince } from './book-stale';
 import { loadCandles, type ChartView } from './candle-feed';
 import { BookFrame, StaleSince } from './OrderBook';
+import { BOOK_FETCH_DEPTH, useBookRows } from './book-rows';
 import { BookPanelBody, BookViewSwitch, bookPanelClass, useBookPanelView } from './BookTabs';
 import { pairDepthPick } from './depth-pick';
 import { buildPairBook, bridgeQuoteFlip, mergeOrientations, pairSideOf, pickOf, type PairLevelRow } from './pair-model';
@@ -57,7 +58,6 @@ import { ratioCandles, usdDp, usdStats } from './usd-model';
 import './market.css';
 import '../ticket/ticket.css';
 
-const DEPTH = 15;
 const FILLS = 50;
 const CANDLE_INTERVAL = '5m' as const;
 const CANDLE_LIMIT = 600;
@@ -106,8 +106,8 @@ export function PairPage(props: { base: string; quote: string }) {
     (signal) =>
       indexer
         ? Promise.all([
-            indexer.pairBook(props.base, props.quote, { depth: DEPTH * 2 }, { signal }),
-            indexer.pairBook(props.quote, props.base, { depth: DEPTH * 2 }, { signal }).catch(() => null),
+            indexer.pairBook(props.base, props.quote, { depth: BOOK_FETCH_DEPTH }, { signal }),
+            indexer.pairBook(props.quote, props.base, { depth: BOOK_FETCH_DEPTH }, { signal }).catch(() => null),
           ]).then(([ab, ba]) => (ab ? mergeOrientations(ab, ba) : ab))
         : Promise.resolve(null),
     [indexer, props.base, props.quote],
@@ -126,7 +126,9 @@ export function PairPage(props: { base: string; quote: string }) {
   // keyed on what they read: an open-list token's TokenInfo is a new object after every live refresh, and the chart must not reload for that alone
   const base = useMemo(() => (baseInfo ? pairToken(baseInfo) : null), [baseInfo?.covenantId, baseInfo?.ticker, baseInfo?.decimals]);
   const quote = useMemo(() => (quoteInfo ? pairToken(quoteInfo) : null), [quoteInfo?.covenantId, quoteInfo?.ticker, quoteInfo?.decimals]);
-  const model = useMemo(() => (book.data && base && quote ? buildPairBook(book.data, base, quote, DEPTH) : null), [book.data, base, quote]);
+  // the levels per side the card's height holds (book-rows.ts)
+  const { rows: bookRows, fitRef: bookFit } = useBookRows();
+  const model = useMemo(() => (book.data && base && quote ? buildPairBook(book.data, base, quote, bookRows) : null), [book.data, base, quote, bookRows]);
 
   // last price and 24 h change: the two tokens' KAS stats (the pair price is implied through the two KAS markets)
   const key = `${props.base}/${props.quote}`;
@@ -372,10 +374,10 @@ export function PairPage(props: { base: string; quote: string }) {
             {unavailable ? <Banner tone="warn" data-testid="pair-book-unavailable" title={t('pair.book.unavailable')}>{t('pair.book.unavailableBody')}</Banner> : null}
             {book.data && !model ? <Banner tone="warn" data-testid="pair-book-mismatch">{t('pair.book.mismatch')}</Banner> : null}
             {indexer && (model ? !panelsOpen : book.loading && !book.data) ? (
-              <BookFrame head={{ price: t('pair.book.price', { base: baseInfo.ticker, quote: quoteInfo.ticker }), size: t('pair.book.amount', { base: baseInfo.ticker }), total: t('pair.book.source') }} rows={12} data-testid="pair-book-loading" />
+              <BookFrame head={{ price: t('pair.book.price', { base: baseInfo.ticker, quote: quoteInfo.ticker }), size: t('pair.book.amount', { base: baseInfo.ticker }), total: t('pair.book.source') }} rows={bookRows} fitRef={bookFit} data-testid="pair-book-loading" />
             ) : null}
             {panelsOpen && model && model.empty ? <p class="muted center" data-testid="pair-book-empty">{t('pair.book.empty')}</p> : null}
-            {panelsOpen && model && !model.empty ? <PairBook model={model} base={baseInfo.ticker} quote={quoteInfo.ticker} onPick={onPick} /> : null}
+            {panelsOpen && model && !model.empty ? <PairBook model={model} rows={bookRows} fitRef={bookFit} base={baseInfo.ticker} quote={quoteInfo.ticker} onPick={onPick} /> : null}
             <div class="pair-legend">
               <span>{t('pair.book.legendDirect')}</span>
               <span>{t('pair.book.legendEntry')}</span>

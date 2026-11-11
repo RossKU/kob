@@ -4,7 +4,7 @@ import { kasTitleOf, sompiToUsdCompact, type Fiat } from '../../app/fiat';
 import { formatNumber, t } from '../../i18n';
 import { depthGeometry, type DepthSeries } from './market-model';
 
-const HEIGHT = 240; // the least height: on three columns the panel can be taller (market.css), the drawing follows its box
+const HEIGHT = 160; // the least height (market.css: the depth chart's box floor on three columns, where the panel's height is the ticket's row split with the chart; elsewhere the box is 240 px): the drawing follows its box
 const AXIS = 18; // room for the price labels under the plot
 
 /** Width and height of an element, following resizes (width 0 until mounted, height at least HEIGHT). */

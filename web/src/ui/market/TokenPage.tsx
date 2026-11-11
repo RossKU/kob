@@ -14,6 +14,7 @@ import { useSystemStatus } from '../shell/StatusProvider';
 import { clockText, useStandalone } from '../shell/standalone';
 import { buildBookModel, groupSizesAt, inferTick, levelsFromView } from './book-model';
 import { useStaleSince } from './book-stale';
+import { BOOK_FETCH_DEPTH, useBookRows } from './book-rows';
 import { useMarketToken } from './use-market-token';
 import { FirstOrderDecimals } from './FirstOrderDecimals';
 import { issuedDecimals } from '../../data/issued-decimals';
@@ -48,8 +49,6 @@ import { applyGenesisCheck, buildTokenRows, scaleNeedsIndexer, sharedTickerIds, 
 import { MarketActivity } from '../activity/ActivityPage';
 import { tradeRows } from './trades-model';
 import './market.css';
-
-const BOOK_DEPTH = 12;
 
 /** Standalone mode (data/standalone.ts): a figure built from what was seen since the mode started says so. */
 function SinceBadge(props: { since: number; area: string; /** what the indexer gave before the mode is kept: when it was read */ until?: number | null }) {
@@ -124,7 +123,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // the pair selector's rows: the tradable tokens, this token named as the page names it (a token no list names has no row of its own: it is added)
   const selectorRows = useMemo(() => withShownRows(choiceRows, [headerRow ?? row]), [choiceRows, headerRow, row]);
 
-  const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: 60, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
+  const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: BOOK_FETCH_DEPTH, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
   // the latest trades (the last price and the page's price precision; the list of trades is the activity log below): `/v1/trades`, or the fill events of an indexer without it
   const trades = useAsync(
     async (signal) => {
@@ -220,12 +219,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const dpFlipped = useMemo(() => flipDp(refPrice ? tokensPerKas(refPrice.price, decimals, refPrice.basis) : null), [refPrice, decimals]);
   const dp = inverted ? dpFlipped : dpNative;
 
+  // the levels per side the card's height holds (book-rows.ts)
+  const { rows: bookRows, fitRef: bookFit } = useBookRows();
   // the grouped book (inverted: the steps are multiples of the displayed price step, `orientation.ts`)
   const invMult = INVERTED_GROUP_MULTIPLIERS[Math.min(groupIdxInv, INVERTED_GROUP_MULTIPLIERS.length - 1)]!;
   const regroup = useMemo(() => (inverted && scale !== null ? invertedRegrouper({ decimals, scale, dp, mult: invMult }) : undefined), [inverted, scale, decimals, dp, invMult]);
   const freshModel = useMemo(
-    () => (book.data ? buildBookModel(book.data, { scale: bookScale, depth: BOOK_DEPTH, group: inverted || groupIdx === 0 ? 0n : group, ...(regroup ? { regroup } : {}) }) : null),
-    [book.data, bookScale, group, groupIdx, inverted, regroup],
+    () => (book.data ? buildBookModel(book.data, { scale: bookScale, depth: bookRows, group: inverted || groupIdx === 0 ? 0n : group, ...(regroup ? { regroup } : {}) }) : null),
+    [book.data, bookScale, group, groupIdx, inverted, regroup, bookRows],
   );
   // the live book as it is (a crossed book, matchers a moment behind, is drawn with a negative spread like any other)
   const model = freshModel;
@@ -425,9 +426,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             {/* with a book on screen a failed pull is only the subtle marker below; the banner is for a page that has no book to show */}
             <ErrorBanner error={book.data ? null : book.error} title={t('market.book.error')} onRetry={book.reload} data-testid="book-error" />
             <StaleSince since={bookStaleSince} />
-            {indexer && (model ? !panelsOpen : book.loading) ? <BookFrame head={bookCtx.labels} rows={BOOK_DEPTH} data-testid="book-loading" /> : null}
+            {indexer && (model ? !panelsOpen : book.loading) ? <BookFrame head={bookCtx.labels} rows={bookRows} fitRef={bookFit} data-testid="book-loading" /> : null}
             {panelsOpen && model && model.empty ? <p class="muted center" data-testid="book-empty">{t('market.book.empty')}</p> : null}
-            {panelsOpen && bookView ? <OrderBook view={bookView} rows={BOOK_DEPTH} last={last} inverted={inverted} token={name} onPick={(side, price) => setPrefill({ side, price })} /> : null}
+            {panelsOpen && bookView ? <OrderBook view={bookView} rows={bookRows} fitRef={bookFit} last={last} inverted={inverted} token={name} onPick={(side, price) => setPrefill({ side, price })} /> : null}
           </BookPanelBody>
         </Section>
       }

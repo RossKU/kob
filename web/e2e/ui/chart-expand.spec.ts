@@ -13,6 +13,7 @@ const sameBox = (a: Box, b: Box) => {
   for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(a[k] - b[k]), `${k}: ${a[k]} vs ${b[k]}`).toBeLessThanOrEqual(1);
 };
 const noSideScroll = async (page: Page) => expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+const tkFit = (page: Page): Promise<string> => page.locator('.mkt-grid').evaluate((el) => (el as HTMLElement).style.getPropertyValue('--tk-fit'));
 const chartBox = async (page: Page): Promise<Box> => (await page.locator('.chart-box').boundingBox())!;
 const btn = (page: Page) => page.getByTestId('chart-expand');
 
@@ -23,6 +24,9 @@ async function open(page: Page, mock: MockClient, width: number, height: number)
   await openMarket(page, mock);
   await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'ready');
   await expect(btn(page)).toHaveAttribute('aria-pressed', 'false');
+  // the page settles once the ticket has measured its form (--tk-fit): from then on the three columns' boxes are what they stay
+  await expect.poll(() => page.locator('.mkt-grid').evaluate((el) => (el as HTMLElement).style.getPropertyValue('--tk-fit'))).toMatch(/px$/);
+  await page.waitForTimeout(400);
 }
 
 /** The canvas Lightweight Charts draws into fills the chart box (autoSize followed the box). */
@@ -51,6 +55,7 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
     expect(head!.x + head!.width).toBeGreaterThanOrEqual(eb.x + eb.width - 1);
     await expect(btn(page)).toHaveAccessibleName('Expand chart');
 
+    const fit0 = await tkFit(page);
     const before = { book: await box(page, 'book-section'), chart: b0, depth: await box(page, 'depth-section'), ticket: await box(page, 'ticket-container'), plot: await chartBox(page) };
     // state kept across the expand: the interval, a drawing
     await page.getByTestId('chart-interval-1h').click();
@@ -117,7 +122,11 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
     await expect(btn(page)).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('book-section')).toBeVisible();
     await expect(page.getByTestId('depth-section')).toBeVisible();
-    sameBox(await box(page, 'chart-section'), before.chart);
+    // after a reload the ticket measured its form again (--tk-fit), in the expanded page: the rows follow the form (its footer can read a line taller or shorter at that moment), so the box is
+    // compared in full when the measure is the same and by its place and width when it is not
+    const now = await box(page, 'chart-section');
+    if ((await tkFit(page)) === fit0) sameBox(now, before.chart);
+    else sameBox({ ...now, height: 0 }, { ...before.chart, height: 0 });
     await noSideScroll(page);
   });
 }
@@ -163,12 +172,15 @@ for (const [width, height] of [[850, 1000], [390, 844]] as const) {
   });
 }
 
-test('the chart height follows the window: 420 px on a 1080 px window, taller on a taller one (never above 900 px), 320 px on a phone', async ({ appPage: page, mock }) => {
+test('the chart height: on three columns what the ticket row leaves (the same on a short and a tall window, 240 px at least), 420 px on two columns, 320 px on a phone', async ({ appPage: page, mock }) => {
   await open(page, mock, 1920, 1080);
-  expect((await chartBox(page)).height).toBe(420);
+  const h = (await chartBox(page)).height;
+  expect(h).toBeGreaterThanOrEqual(240);
   await page.setViewportSize({ width: 1920, height: 1440 });
-  await expect.poll(async () => (await chartBox(page)).height).toBeGreaterThan(600);
-  expect((await chartBox(page)).height).toBeLessThanOrEqual(900);
+  await page.waitForTimeout(500);
+  expect(Math.abs((await chartBox(page)).height - h), 'the window height does not make the chart (or the row) taller').toBeLessThanOrEqual(1);
+  await page.setViewportSize({ width: 850, height: 1200 });
+  await expect.poll(async () => (await chartBox(page)).height).toBe(420);
   await page.setViewportSize({ width: 390, height: 1200 });
   await expect.poll(async () => (await chartBox(page)).height).toBe(320);
 });

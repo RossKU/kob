@@ -16,7 +16,7 @@ export function StaleSince(props: { since: number | null; 'data-testid'?: string
 export interface OrderBookProps {
   /** the book as drawn, in the shown orientation (orientation.ts) */
   view: BookView;
-  /** rows reserved per side (the panel keeps its height while levels come and go) */
+  /** slots per side: the levels, then blank slots (the panel keeps its height while levels come and go); the page's measure of what fits the card (book-rows.ts) */
   rows: number;
   /** last trade price text and aggressor side, shown in the spread row */
   last?: { text: string; side: 'buy' | 'sell' | null } | null;
@@ -25,6 +25,8 @@ export interface OrderBookProps {
    * orientation is shown, the same level prefills the same order.
    */
   onPick?: (side: 'buy' | 'sell', price: bigint) => void;
+  /** goes on the asks' side: the page measures it to know how many levels fit (book-rows.ts) */
+  fitRef?: (el: HTMLElement | null) => void;
   /** shown as KAS/TOKEN: the notes speak of KAS as the base asset */
   inverted?: boolean;
   /** display name of the token (the base asset of the native view) */
@@ -67,7 +69,7 @@ function Blank(props: { kind: 'ask' | 'bid' }) {
 }
 
 /** The book's frame while its rows are held: the column titles (none until the token is known) and the rows' places, as high as the book, so nothing moves when the rows come. */
-export function BookFrame(props: { head?: { price: string; size: string; total: string }; rows: number; 'data-testid'?: string }) {
+export function BookFrame(props: { head?: { price: string; size: string; total: string }; rows: number; fitRef?: (el: HTMLElement | null) => void; 'data-testid'?: string }) {
   const side = Array.from({ length: props.rows }, (_, i) => (
     <div key={i} class="book-row book-blank" aria-hidden="true">
       <span class="skeleton ob-skel" />
@@ -82,7 +84,7 @@ export function BookFrame(props: { head?: { price: string; size: string; total: 
         <span>{props.head?.size}</span>
         <span>{props.head?.total}</span>
       </div>
-      <div class="book-side">{side}</div>
+      <div class="book-side" ref={props.fitRef}>{side}</div>
       <div class="ob-mid book-mid" />
       <div class="book-side">{side}</div>
       <p class="ob-foot" />
@@ -92,7 +94,7 @@ export function BookFrame(props: { head?: { price: string; size: string; total: 
 
 /**
  * Aggregated order book: asks above (best at the bottom), the spread row with the last price, bids below; cumulative depth bars; price grouping. Each side
- * is exactly `rows` slots (levels, then blank slots: the asks are bottom-anchored, the bids top-anchored), the header, the spread row and the foot have
+ * is exactly `rows` slots (as many as fit the card from 760 px, 12 on a phone: book-rows.ts) (levels, then blank slots: the asks are bottom-anchored, the bids top-anchored), the header, the spread row and the foot have
  * fixed heights: nothing in the book moves when a level appears, goes or changes its text.
  */
 export function OrderBook(props: OrderBookProps) {
@@ -105,7 +107,7 @@ export function OrderBook(props: OrderBookProps) {
         <span>{m.head.size}</span>
         <span>{m.head.total}</span>
       </div>
-      <div class="book-side" data-testid="book-asks" role="list" aria-label={t('market.book.asks')}>
+      <div class="book-side" ref={props.fitRef} data-testid="book-asks" role="list" aria-label={t('market.book.asks')}>
         {Array.from({ length: blanksOf(m.asks.length) }, (_, i) => <Blank key={`ask-blank-${i}`} kind="ask" />)}
         {m.asks.map((r) => <Row key={r.key} row={r} kind="ask" onPick={props.onPick} inverted={props.inverted} token={props.token} />)}
         {m.asks.length ? null : <div class="ob-none muted small">{t('market.book.noAsks')}</div>}
