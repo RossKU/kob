@@ -14,7 +14,8 @@ describe('inverted wording', () => {
   it.each(INV)('%s renders and has a native counterpart', (key) => {
     const native = key.replace(/\.inv$/, '').replace(/Inv$/, '');
     expect(dict[native] ?? dict[`${native}.name`] ?? dict[`${native}.body`], native).toBeDefined();
-    const text = t(key, { name: 'TUSD', ticker: 'TUSD' });
+    // the book's hover read-out (market.book.hoverInv) takes its figures too
+    const text = t(key, { name: 'TUSD', ticker: 'TUSD', token: 'TUSD', avg: '40', amount: '10', total: '400' });
     expect(text).not.toMatch(/[{}]/);
   });
   it('the KAS-amount wording (amounts of an inverted market are KAS) renders without holes', () => {
