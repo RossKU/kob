@@ -1,0 +1,53 @@
+/* Settings page. Imported by SettingsView.tsx; uses the shared CSS variables of styles.css (light + dark). */
+
+/* the two card stacks start at the top and keep their own height: the Advanced card is full width below, so nothing leaves a tall empty column beside it */
+.settings-grid { align-items: start; }
+
+.settings-slot { min-width: 0; }
+@media (max-width: 899px) {
+  .settings-col { display: contents; }
+  .settings-slot { order: var(--slot); }
+}
+
+/* the registry table is wide: the tracker and the indexer check sit side by side below it where there is room */
+.settings-adv-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (min-width: 900px) {
+  .settings-adv-grid { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+}
+
+/* a long explanation as one line with "Learn more": the summary is the line, the full text unfolds under it */
+.learn { font-size: 0.85rem; color: var(--muted); }
+.learn > summary { cursor: pointer; list-style: none; }
+.learn > summary::-webkit-details-marker { display: none; }
+.learn-more { color: var(--link); text-decoration: underline; white-space: nowrap; }
+.learn > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+.learn-full { margin-top: 4px; }
+.banner .learn { color: inherit; }
+
+/* a fold inside the connection card: the body stays in the DOM, hidden, while folded */
+.settings-fold { border-top: 1px solid var(--border); padding-top: 8px; }
+.settings-fold-body { margin-top: 8px; }
+.settings-fold:not(.is-open) .settings-fold-body { display: none; }
+.settings-fold-toggle { font-weight: 600; }
+
+/* a touch screen (review M-11): every control is at least 32 px high and the main ones 44 px; a checkbox is a 20 px box inside a 44 px hit area */
+@media (pointer: coarse) {
+  .settings-view .checkbox-row { min-height: 44px; align-items: center; }
+  .settings-view .checkbox-row label { padding: 8px 0; }
+  .settings-view .checkbox-row input[type='checkbox'] {
+    appearance: none; -webkit-appearance: none; position: relative; flex: none; margin: 0 4px 0 0;
+    width: 20px; height: 20px; border: 2px solid var(--muted); border-radius: 4px; background: var(--surface); cursor: pointer;
+  }
+  /* the hit area: 12 px of the row around the 20 px box, part of the input for clicks */
+  .settings-view .checkbox-row input[type='checkbox']::after { content: ''; position: absolute; inset: -12px; }
+  .settings-view .checkbox-row input[type='checkbox']:checked {
+    background: var(--primary) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-6.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat;
+    border-color: var(--primary);
+  }
+  .settings-view .checkbox-row input[type='checkbox']:disabled { opacity: 0.5; cursor: not-allowed; }
+  .settings-view .checkbox-row input[type='checkbox']:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .settings-view .disclosure, .settings-view .learn > summary { min-height: 44px; display: inline-flex; align-items: center; }
+  .settings-view .learn > summary { display: block; min-height: 32px; padding: 6px 0; }
+  .settings-view .btn, .settings-view .btn-sm { min-height: 44px; }
+  .settings-view .btn-sm { min-height: 36px; }
+}

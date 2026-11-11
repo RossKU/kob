@@ -9,18 +9,51 @@ import { TokenNote } from '../market/TokenNote';
 import { recoverIssuedToken } from './recover-issued';
 import { readSettings, saveSettings, type AppConfig, type ConfigWarning, type NetworkName } from '../../config';
 import { t } from '../../i18n';
+import type { ComponentChildren } from 'preact';
 import { version as appVersion } from '../../../package.json';
 import {
-  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, exportFileName, Field, jsonText, KeyValueList, Modal, Section, Segmented, Table, TableMessage,
+  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, EmptyState, exportFileName, Field, friendlyErrorText, jsonText, KeyValueList, Modal, RawDetails, Section, Segmented, Table, TableMessage,
   showToast, toError,
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
 import { IndexerTrust } from '../shell/IndexerTrust';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
+import './settings.css';
 import { changedFields, changesServers, clearKobStorage, configWithForm, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
 
 const reload = () => window.location.reload();
+
+/**
+ * One short line with the complete text one click away (review M-10): the card stays scannable, nothing is deleted. A native `details`, so it works without
+ * script, keyboard and screen readers get the disclosure for free, and the full text stays in the page for search.
+ */
+function Learn(props: { short: string; children: ComponentChildren; 'data-testid'?: string }) {
+  return (
+    <details class="learn" data-testid={props['data-testid']}>
+      <summary>
+        <span class="learn-short">{props.short}</span> <span class="learn-more">{t('settings.learnMore')}</span>
+      </summary>
+      <div class="learn-full">{props.children}</div>
+    </details>
+  );
+}
+
+/** A count in a sentence: the singular or the plural key (no "(s)"). */
+const tCount = (base: string, count: number) => t(`${base}.${count === 1 ? 'one' : 'other'}`, { count });
+
+/** A fold inside a card (the card's Save button stays below it): the header text is the toggle, the body stays in the DOM, hidden, like the kit's collapsible Section. */
+function Fold(props: { title: string; children: ComponentChildren; 'data-testid'?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div class={`settings-fold${open ? ' is-open' : ''}`} data-testid={props['data-testid']}>
+      <button type="button" class="disclosure settings-fold-toggle" aria-expanded={open ? 'true' : 'false'} onClick={() => setOpen(!open)}>
+        {props.title}
+      </button>
+      <div class="settings-fold-body">{props.children}</div>
+    </div>
+  );
+}
 
 function ConnectionSettings() {
   const { config, standalone } = useServices();
@@ -56,48 +89,66 @@ function ConnectionSettings() {
   };
 
   return (
-    <>
-      <Section title={t('settings.connection.title')} data-testid="settings-connection">
-        <div class="stack-sm">
-          <Field
-            as="select"
-            label={t('settings.network')}
-            value={form.network}
-            options={[{ value: 'mainnet', label: 'mainnet' }, { value: 'testnet-10', label: 'testnet-10' }]}
-            onValue={(x) => set('network', x as NetworkName)}
-            error={err(v.errors.network)}
-            hint={t('settings.network.hint')}
-            data-testid="settings-network"
-          />
-          <Checkbox checked={form.kastle} onChange={(c) => set('kastle', c)} label={t('settings.kastle')} hint={t('settings.kastle.hint')} data-testid="settings-kastle" />
-          <Checkbox checked={form.priorityFee} onChange={(c) => set('priorityFee', c)} label={t('settings.priorityFee')} hint={t('settings.priorityFee.hint')} data-testid="settings-priority-fee" />
-          <Checkbox checked={form.dynamicFee} onChange={(c) => set('dynamicFee', c)} label={t('settings.dynamicFee')} hint={t('settings.dynamicFee.hint')} data-testid="settings-dynamic-fee" />
-          <Checkbox checked={form.standaloneManual} onChange={(c) => set('standaloneManual', c)} label={t('settings.standalone.manual')} hint={t('settings.standalone.manual.hint')} data-testid="settings-standalone" />
-          <Checkbox checked={form.standaloneAuto} onChange={(c) => set('standaloneAuto', c)} label={t('settings.standalone.auto')} hint={t('settings.standalone.auto.hint')} data-testid="settings-standalone-auto" />
-          <Checkbox checked={form.standaloneAutoReturn} onChange={(c) => set('standaloneAutoReturn', c)} label={t('settings.standalone.autoReturn')} hint={t('settings.standalone.autoReturn.hint')} data-testid="settings-standalone-return" />
-          {servers ? <Checkbox checked={ack} onChange={setAck} label={t('settings.servers.ack')} data-testid="settings-servers-ack" /> : null}
-          <div class="row">
-            <Button variant="primary" disabled={!v.ok || changes.length === 0 || (servers && !ack)} onClick={save} data-testid="settings-save">
-              {t('common.save')}
-            </Button>
-            {saved === 'ok' ? <Button onClick={reload} data-testid="settings-reload">{t('settings.reload')}</Button> : null}
-          </div>
-          {saved === 'ok' ? <Banner tone="ok" data-testid="settings-saved">{t('settings.saved')}</Banner> : null}
-          {saved === 'failed' ? <Banner tone="error" data-testid="settings-save-failed">{t('settings.saveFailed')}</Banner> : null}
-        </div>
-      </Section>
-      {/* everything for an operator or a power user, folded: the servers (saved with the Save button above), the registry and its template hashes, the token tracker, the indexer cross-check */}
-      <Section title={t('settings.advanced.title')} collapsible defaultOpen={false} class="settings-advanced" data-testid="settings-advanced">
-        <div class="stack">
-          <p class="small muted">{t('settings.advanced.explain')}</p>
+    <Section title={t('settings.connection.title')} data-testid="settings-connection">
+      {/* every setting that needs the Save button is in this one card (review M-10): the instant-apply cards are separate */}
+      <div class="stack-sm">
+        <Field
+          as="select"
+          label={t('settings.network')}
+          value={form.network}
+          options={[{ value: 'mainnet', label: 'mainnet' }, { value: 'testnet-10', label: 'testnet-10' }]}
+          onValue={(x) => set('network', x as NetworkName)}
+          error={err(v.errors.network)}
+          hint={t('settings.network.hint')}
+          data-testid="settings-network"
+        />
+        <Checkbox checked={form.kastle} onChange={(c) => set('kastle', c)} label={t('settings.kastle')} hint={t('settings.kastle.hint')} data-testid="settings-kastle" />
+        <Checkbox
+          checked={form.priorityFee}
+          onChange={(c) => set('priorityFee', c)}
+          label={t('settings.priorityFee')}
+          hint={<Learn short={t('settings.priorityFee.short')}>{t('settings.priorityFee.hint')}</Learn>}
+          data-testid="settings-priority-fee"
+        />
+        <Checkbox
+          checked={form.dynamicFee}
+          onChange={(c) => set('dynamicFee', c)}
+          label={t('settings.dynamicFee')}
+          hint={<Learn short={t('settings.dynamicFee.short')}>{t('settings.dynamicFee.hint')}</Learn>}
+          data-testid="settings-dynamic-fee"
+        />
+        <Checkbox
+          checked={form.standaloneManual}
+          onChange={(c) => set('standaloneManual', c)}
+          label={t('settings.standalone.manual')}
+          hint={<Learn short={t('settings.standalone.manual.short')}>{t('settings.standalone.manual.hint')}</Learn>}
+          data-testid="settings-standalone"
+        />
+        <Checkbox
+          checked={form.standaloneAuto}
+          onChange={(c) => set('standaloneAuto', c)}
+          label={t('settings.standalone.auto')}
+          hint={<Learn short={t('settings.standalone.auto.short')}>{t('settings.standalone.auto.hint')}</Learn>}
+          data-testid="settings-standalone-auto"
+        />
+        <Checkbox checked={form.standaloneAutoReturn} onChange={(c) => set('standaloneAutoReturn', c)} label={t('settings.standalone.autoReturn')} hint={t('settings.standalone.autoReturn.hint')} data-testid="settings-standalone-return" />
+        {/* the servers are settings of this card too (one Save for all), folded: an operator's choice, not a trader's */}
+        <Fold title={t('settings.servers.title')} data-testid="settings-servers-fold">
           <div class="stack-sm" data-testid="settings-servers">
             <Banner tone="warn" title={t('settings.servers.warnTitle')} data-testid="settings-server-warning">
-              {t('settings.servers.warn')}
+              <Learn short={t('settings.servers.warn.short')}>{t('settings.servers.warn')}</Learn>
             </Banner>
             <Field label={t('settings.indexerUrl')} value={form.indexerUrl} onValue={(x) => set('indexerUrl', x)} error={err(v.errors.indexerUrl)} hint={t('settings.indexerUrl.hint')} placeholder="https://" data-testid="settings-indexer-url" />
-            <Field label={t('settings.nodeUrl')} value={form.nodeUrl} onValue={(x) => set('nodeUrl', x)} error={err(v.errors.nodeUrl)} hint={t('settings.nodeUrl.hint')} placeholder="wss://" data-testid="settings-node-url" />
+            <Field
+              label={t('settings.nodeUrl')}
+              value={form.nodeUrl}
+              onValue={(x) => set('nodeUrl', x)}
+              error={err(v.errors.nodeUrl)}
+              hint={<Learn short={t('settings.nodeUrl.short')}>{t('settings.nodeUrl.hint')}</Learn>}
+              placeholder="wss://"
+              data-testid="settings-node-url"
+            />
             <Field label={t('settings.registryUrl')} value={form.registryUrl} onValue={(x) => set('registryUrl', x)} error={err(v.errors.registryUrl)} hint={t('settings.registryUrl.hint')} data-testid="settings-registry-url" />
-            <p class="small muted">{t('settings.advanced.saveAbove')}</p>
             {storedServers.length ? (
               <div class="row">
                 <Button onClick={resetServers} title={t('settings.resetServers.hint')} data-testid="settings-reset-servers">
@@ -106,12 +157,34 @@ function ConnectionSettings() {
               </div>
             ) : null}
           </div>
-          <RegistrySummary />
+        </Fold>
+        {servers ? <Checkbox checked={ack} onChange={setAck} label={t('settings.servers.ack')} data-testid="settings-servers-ack" /> : null}
+        <div class="row">
+          <Button variant="primary" disabled={!v.ok || changes.length === 0 || (servers && !ack)} onClick={save} data-testid="settings-save">
+            {t('common.save')}
+          </Button>
+          {saved === 'ok' ? <Button onClick={reload} data-testid="settings-reload">{t('settings.reload')}</Button> : null}
+        </div>
+        {saved === 'ok' ? <Banner tone="ok" data-testid="settings-saved">{t('settings.saved')}</Banner> : null}
+        {saved === 'failed' ? <Banner tone="error" data-testid="settings-save-failed">{t('settings.saveFailed')}</Banner> : null}
+      </div>
+    </Section>
+  );
+}
+
+/** Everything for an operator or a power user, folded: the registry and its template hashes, the token tracker, the indexer cross-check (the servers are in the connection card, saved with its Save button). */
+function AdvancedSettings() {
+  return (
+    <Section title={t('settings.advanced.title')} collapsible defaultOpen={false} class="settings-advanced" data-testid="settings-advanced">
+      <div class="stack">
+        <Learn short={t('settings.advanced.short')}>{t('settings.advanced.explain')}</Learn>
+        <RegistrySummary />
+        <div class="settings-adv-grid">
           <TrackerSettings />
           <TrustSection />
         </div>
-      </Section>
-    </>
+      </div>
+    </Section>
   );
 }
 
@@ -123,7 +196,7 @@ function DisplayCurrencySettings() {
   const [currency, setCurrency] = useDisplayCurrency();
   return (
     <Section title={t('settings.currency.title')} data-testid="settings-currency">
-      <p class="small muted">{t('settings.currency.explain')}</p>
+      <Learn short={t('settings.currency.short')}>{t('settings.currency.explain')}</Learn>
       {/* what the dollars are now: the source, how old, an estimate (the pages say nothing of it, only why they show KAS when they do) */}
       <FiatNote full />
       <div class="stack-sm">
@@ -138,7 +211,7 @@ function DisplayCurrencySettings() {
           aria-label={t('settings.currency.label')}
           data-testid="settings-currency-choice"
         />
-        <p class="small muted">{t('settings.currency.hint')}</p>
+        <Learn short={t('settings.currency.hint.short')}>{t('settings.currency.hint')}</Learn>
       </div>
     </Section>
   );
@@ -154,7 +227,7 @@ function TokenIconsSettings() {
   const [creatorOn, setCreatorOn] = useCreatorImagePref();
   return (
     <Section title={t('settings.icons.title')} data-testid="settings-icons">
-      <p class="small muted">{t('settings.icons.explain')}</p>
+      <Learn short={t('settings.icons.short')}>{t('settings.icons.explain')}</Learn>
       {config.tokenNamesUrl ? (
         <p class="small muted wrap-anywhere" data-testid="settings-icons-source">{t('settings.icons.source', { url: config.tokenNamesUrl })}</p>
       ) : (
@@ -180,7 +253,7 @@ function PrivateKeySettings() {
   }
   return (
     <Section title={t('settings.key.title')} data-testid="settings-private-key-section">
-      <p class="small muted">{t('settings.key.explain')}</p>
+      <Learn short={t('settings.key.short')}>{t('settings.key.explain')}</Learn>
       {supported ? null : <p class="small muted" data-testid="settings-private-key-unsupported">{t('signer.unsupportedWhy')}</p>}
       <Button disabled={!supported || !!w.info || w.connecting} onClick={w.openPrivateKey} data-testid="settings-private-key">
         {t('settings.key.open')}
@@ -233,7 +306,12 @@ function RegistrySummary() {
   const { registry, registryError, config } = useServices();
   return (
     <Section title={t('settings.registry.title')} data-testid="settings-registry">
-      {registryError ? <Banner tone="warn">{t('shell.banner.registry', { message: registryError })}</Banner> : null}
+      {registryError ? (
+        <Banner tone="warn" data-testid="settings-registry-error">
+          {t('settings.registry.loadFailed')}
+          <RawDetails text={registryError} />
+        </Banner>
+      ) : null}
       <KeyValueList
         compact
         items={[
@@ -295,27 +373,27 @@ function TrackerSettings() {
   const pubkey = wallet.info?.pubkey;
   const [rev, setRev] = useState(0);
   const [text, setText] = useState('');
-  const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string; raw?: string } | null>(null);
   // "Find a token you created earlier"
   const [findId, setFindId] = useState('');
   const [findAmount, setFindAmount] = useState('');
   const [findDecimals, setFindDecimals] = useState('');
   const [needDecimals, setNeedDecimals] = useState(false);
   const [finding, setFinding] = useState(false);
-  const [findMessage, setFindMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
+  const [findMessage, setFindMessage] = useState<{ tone: 'ok' | 'error'; text: string; raw?: string } | null>(null);
   const list = useMemo(() => (pubkey ? tracker.list(pubkey) : []), [tracker, pubkey, rev]);
 
   if (!pubkey) {
     return (
       <Section title={t('settings.tracker.title')} data-testid="settings-tracker">
-        <p class="muted">{t('settings.tracker.connect')}</p>
+        <EmptyState icon="wallet" compact data-testid="tracker-connect">{t('settings.tracker.connect')}</EmptyState>
       </Section>
     );
   }
   const doImport = () => {
     try {
       const n = tracker.importJson(pubkey, text);
-      setMessage({ tone: 'ok', text: t('settings.tracker.imported', { count: n }) });
+      setMessage({ tone: 'ok', text: tCount('settings.tracker.imported', n) });
       setText('');
       setRev((x) => x + 1);
     } catch (e) {
@@ -327,7 +405,7 @@ function TrackerSettings() {
     try {
       const r = await recoverIssuedToken({ kob, tracker, declarations: indexer, network: config.network }, pubkey, findId, findAmount, findDecimals);
       if (r.kind === 'found') {
-        setFindMessage({ tone: 'ok', text: t('settings.recover.found', { count: r.found.length }) });
+        setFindMessage({ tone: 'ok', text: tCount('settings.recover.found', r.found.length) });
         setRev((x) => x + 1);
       } else {
         if (r.code === 'decimals') setNeedDecimals(true);
@@ -335,15 +413,17 @@ function TrackerSettings() {
         setFindMessage({ tone: 'error', text: t(key[r.code]) });
       }
     } catch (e) {
-      setFindMessage({ tone: 'error', text: toError(e).message });
+      // a node or network failure: the plain sentence first, the raw text behind "Details"
+      const raw = toError(e).message;
+      setFindMessage({ tone: 'error', text: friendlyErrorText(raw), raw });
     } finally {
       setFinding(false);
     }
   };
   return (
     <Section title={t('settings.tracker.title')} data-testid="settings-tracker">
-      <p class="small muted">{t('settings.tracker.explain')}</p>
-      <p class="small muted">{t('settings.tracker.backup')}</p>
+      <Learn short={t('settings.tracker.short')}>{t('settings.tracker.explain')}</Learn>
+      <Learn short={t('settings.tracker.backup.short')} data-testid="tracker-backup">{t('settings.tracker.backup')}</Learn>
       <Table dense data-testid="tracker-list">
         <thead>
           <tr>
@@ -383,7 +463,7 @@ function TrackerSettings() {
       </div>
       {message ? <Banner tone={message.tone} data-testid="tracker-message">{message.text}</Banner> : null}
       <h3 style="margin-top:16px">{t('settings.recover.title')}</h3>
-      <p class="small muted">{t('settings.recover.explain')}</p>
+      <Learn short={t('settings.recover.short')}>{t('settings.recover.explain')}</Learn>
       <Field label={t('settings.recover.id')} value={findId} onValue={setFindId} data-testid="recover-id" />
       <Field label={t('settings.recover.amount')} value={findAmount} onValue={setFindAmount} hint={t('settings.recover.amountHint')} data-testid="recover-amount" />
       {needDecimals ? (
@@ -392,7 +472,12 @@ function TrackerSettings() {
       <div class="row" style="margin-top:8px">
         <Button disabled={finding || !findId.trim() || !findAmount.trim()} onClick={() => void doFind()} data-testid="recover-find">{t('settings.recover.find')}</Button>
       </div>
-      {findMessage ? <Banner tone={findMessage.tone} data-testid="recover-message">{findMessage.text}</Banner> : null}
+      {findMessage ? (
+        <Banner tone={findMessage.tone} data-testid="recover-message">
+          {findMessage.text}
+          <RawDetails text={findMessage.raw} />
+        </Banner>
+      ) : null}
     </Section>
   );
 }
@@ -418,7 +503,7 @@ function LocalData() {
   };
   return (
     <Section title={t('settings.local.title')} data-testid="settings-local">
-      <p>{t('settings.local.explain')}</p>
+      <Learn short={t('settings.local.short')}>{t('settings.local.explain')}</Learn>
       <ul data-testid="local-data-list">
         {(['settings', 'records', 'tokens', 'other'] as const)
           .filter((k) => counts[k])
@@ -445,7 +530,7 @@ function LocalData() {
             </>
           }
         >
-          <p>{t('settings.local.confirmBody', { count: keys.length })}</p>
+          <p>{tCount('settings.local.confirmBody', keys.length)}</p>
         </Modal>
       ) : null}
     </Section>
@@ -468,21 +553,24 @@ export function SettingsView(props: { warnings?: ConfigWarning[] }) {
           </ul>
         </Banner>
       ) : null}
-      {/* two columns of about the same height: how the app connects, signs and shows tokens; then what it tells you, what it runs
-          and what it keeps (the one destructive button last) */}
-      <div class="grid-2">
-        <div class="stack">
-          <ConnectionSettings />
-          <PrivateKeySettings />
-          <DisplayCurrencySettings />
-          <TokenIconsSettings />
+      {/* two stacks of about the same height (the columns are fixed, so a message inside a card never moves another card across): left, the one card with a Save button
+          (everything that needs it) and the cards that are a button of their own; right, the cards that apply at once. On a narrow screen the stacks dissolve and the cards
+          follow in the order of `--slot`: Save card first, then what applies at once. The folded Advanced card is full width below, so opening it leaves no empty
+          column beside it (review M-10) */}
+      <div class="grid-2 settings-grid">
+        <div class="stack settings-col">
+          <div class="settings-slot" style="--slot:1"><ConnectionSettings /></div>
+          <div class="settings-slot" style="--slot:5"><PrivateKeySettings /></div>
+          <div class="settings-slot" style="--slot:6"><Versions /></div>
+          <div class="settings-slot" style="--slot:7"><LocalData /></div>
         </div>
-        <div class="stack">
-          <NotifySettingsSection />
-          <Versions />
-          <LocalData />
+        <div class="stack settings-col">
+          <div class="settings-slot" style="--slot:2"><NotifySettingsSection /></div>
+          <div class="settings-slot" style="--slot:3"><DisplayCurrencySettings /></div>
+          <div class="settings-slot" style="--slot:4"><TokenIconsSettings /></div>
         </div>
       </div>
+      <AdvancedSettings />
     </div>
   );
 }

@@ -91,7 +91,7 @@ test('the template checks sit in "Status and checks": one line while folded, bes
   expect((await verification.boundingBox())!.height).toBeLessThan(70);
 });
 
-test('Settings: network, wallet and fee options in view; servers, registry, tracker and indexer check folded under "Advanced / self-hosting"', async ({ appPage: page }) => {
+test('Settings: network, wallet and fee options in view; the servers folded in the same card as Save; registry, tracker and indexer check folded under "Advanced / self-hosting"', async ({ appPage: page }) => {
   await page.goto('/#/settings');
   await expect(page.getByTestId('settings-view')).toBeVisible();
   for (const id of ['settings-network', 'settings-kastle', 'settings-priority-fee', 'settings-dynamic-fee', 'settings-save', 'settings-icons', 'settings-private-key-section', 'settings-local']) {
@@ -101,8 +101,13 @@ test('Settings: network, wallet and fee options in view; servers, registry, trac
   await expect(adv).toBeVisible();
   await expect(adv).toContainText('Advanced / self-hosting');
   // folded: the operator part is in the page but not shown
-  const operator = ['settings-indexer-url', 'settings-node-url', 'settings-registry-url', 'settings-registry', 'settings-tracker', 'settings-trust', 'settings-server-warning'];
-  for (const id of operator) await expect(page.getByTestId(id), `${id} folded`).toBeHidden();
+  const servers = ['settings-indexer-url', 'settings-node-url', 'settings-registry-url', 'settings-server-warning'];
+  const operator = ['settings-registry', 'settings-tracker', 'settings-trust'];
+  for (const id of [...servers, ...operator]) await expect(page.getByTestId(id), `${id} folded`).toBeHidden();
+  // the servers are settings of the Save card: their fold is inside it, with the Save button below
+  const fold = page.getByTestId('settings-connection').getByTestId('settings-servers-fold');
+  await fold.getByRole('button').first().click();
+  for (const id of servers) await expect(page.getByTestId(id), `${id} open`).toBeVisible();
   await adv.getByRole('button').first().click();
   for (const id of operator) await expect(page.getByTestId(id), `${id} open`).toBeVisible();
   // nothing was changed by looking: Save stays off

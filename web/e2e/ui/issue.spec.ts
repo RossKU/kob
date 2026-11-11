@@ -226,7 +226,7 @@ test.describe('token issuance', () => {
     // the exact amount: found, confirmed on the node, remembered
     await page.getByTestId('recover-amount').fill('5000');
     await page.getByTestId('recover-find').click();
-    await expect(page.getByTestId('recover-message')).toContainText('Found 1 output(s) of this token for your key.');
+    await expect(page.getByTestId('recover-message')).toContainText('Found 1 output of this token for your key.');
     await expect(page.getByTestId('tracker-row')).toHaveCount(1);
     const tracked = await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk), TEST_KEYS.alice.pubkey);
     expect(tracked).toHaveLength(1);
