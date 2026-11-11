@@ -4,6 +4,7 @@ import { buildBookModel } from './book-model';
 import {
   basisToNumber, basisToTokenSompi, bpsPercentText, chartSeries, compactText, cumulate, depthFromBook, depthFromView, depthGeometry, fillCandleGaps,
   INTERVAL_MS, niceTicks, parseCandles, priceDecimals, priceText, statsModel, tapeFromFills, tapeFromTrades, tapeTime, amountText, type Candle,
+  thinChangeNote,
 } from './market-model';
 import { tradeRows } from './trades-model';
 
@@ -123,6 +124,21 @@ describe('24h stats', () => {
     });
     expect(statsModel({ ...stats, change_24h_bps: -5 }, 8).changeTone).toBe('down');
     expect(statsModel({ ...stats, change_24h_bps: 0 }, 8).change).toBe('0.00%');
+  });
+  it('a change over fewer than 3 trades is muted and says how many; 3 or more, or no count, is as before', () => {
+    const thin = statsModel({ ...stats, change_24h_bps: 90_000, trades_24h: 2 }, 8);
+    expect(thin).toMatchObject({ change: '+900.00%', changeTone: 'flat', changeNote: 'Based on 2 trades in 24 h' });
+    expect(statsModel({ ...stats, change_24h_bps: 90_000, trades_24h: 1 }, 8).changeNote).toBe('Based on 1 trade in 24 h');
+    for (const n of [3, 412, null]) {
+      const m = statsModel({ ...stats, change_24h_bps: 90_000, trades_24h: n }, 8);
+      expect(m.changeTone).toBe('up');
+      expect(m).not.toHaveProperty('changeNote');
+    }
+    // an older indexer without the count at all: no marker
+    const { trades_24h: _drop, ...older } = { ...stats, change_24h_bps: 90_000 };
+    expect(statsModel(older as unknown as StatsView, 8)).not.toHaveProperty('changeNote');
+    expect(thinChangeNote(null, 1)).toBeNull();
+    expect(thinChangeNote(500, 0)).toBeNull();
   });
   it('is all dashes without trades or without the endpoint', () => {
     const none = statsModel({ ...stats, last: null, last_side: null, open_24h: null, high_24h: null, low_24h: null, change_24h_bps: null, volume_24h: null, quote_volume_24h: null, trades_24h: null }, 8);

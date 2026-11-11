@@ -59,6 +59,15 @@ test('a token row shows its last price in KAS, the 24 h change, KAS volume, spre
   await expect(row.getByTestId(`token-last-${id}`)).toHaveText(new RegExp(`^${last.replace('.', '\\.')}0*$`));
   await expect(row.getByTestId(`token-last-${id}`)).toHaveAttribute('title', `${last} (KAS per EXKCC)`);
   await expect(row.getByTestId(`token-change-${id}`)).toHaveText(/^[+-]?\d+\.\d\d%$/);
+  // a change over fewer than 3 trades in the window is muted with its count in the tooltip; over more it is as before
+  const thin = Number(stats.trades_24h) < 3;
+  const changeFigure = row.getByTestId(`token-change-${id}`).locator('span');
+  if (thin) {
+    await expect(changeFigure).toHaveAttribute('data-thin', 'true');
+    await expect(row.getByTestId(`token-change-${id}`)).toHaveAttribute('title', /^Based on [12] trades? in 24 h$/);
+  } else {
+    await expect(changeFigure).not.toHaveAttribute('data-thin', 'true');
+  }
   await expect(row.getByTestId(`token-volume-${id}`)).toHaveText((Number(stats.quote_volume_24h) / 1e8).toFixed(2));
   await expect(row.getByTestId(`token-volume-${id}`)).toHaveAttribute('title', new RegExp(`KAS · ${stats.trades_24h} trades in 24 h$`));
   await expect(row.getByTestId(`token-spread-${id}`)).toHaveText(/^\d+\.\d\d%$/);

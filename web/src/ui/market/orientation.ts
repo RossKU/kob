@@ -18,7 +18,7 @@ import { formatUnits, pow10, quoteOf, SOMPI_PER_KAS } from '../../kob/units';
 import { columnFraction, fitAmountColumn, fitDecimalTexts, PRICE_DP_CAP, PRICE_SIGNIFICANT_DIGITS, tickKasFraction, type AmountCell } from '../kit/format';
 import type { BookModel, BookRow, Level } from './book-model';
 import {
-  amountText, basisOf, basisToNumber, bigOrNull, bpsPercentText, compactText, exactIfRounded, exactPriceText, priceText, toneOf, unitsToNumber,
+  amountText, basisOf, basisToNumber, bigOrNull, bpsPercentText, compactText, exactIfRounded, exactPriceText, priceText, thinChangeNote, toneOf, unitsToNumber,
   type Candle, type ChartBar, type DepthPoint, type DepthSeries, type StatsModel, type VolumeBar,
 } from './market-model';
 
@@ -387,11 +387,13 @@ export function statsModelFlipped(v: StatsView | null, decimals: number, dp: num
   const nativeBps = v && typeof v.change_24h_bps === 'number' && Number.isFinite(v.change_24h_bps) ? Math.trunc(v.change_24h_bps) : null;
   // price p1 = p0 (1 + c)  ->  1/p1 = (1/p0) / (1 + c): the inverted change is 1/(1 + c) - 1
   const bps = nativeBps !== null && nativeBps > -10_000 ? Math.round(100_000_000 / (10_000 + nativeBps) - 10_000) : null;
+  const changeNote = thinChangeNote(bps, v?.trades_24h);
   return {
     last: p(v?.last),
     lastSide: v?.last_side === 'buy' ? 'sell' : v?.last_side === 'sell' ? 'buy' : null,
     change: bps === null ? null : bpsPercentText(bps),
-    changeTone: toneOf(bps),
+    changeTone: changeNote ? 'flat' : toneOf(bps),
+    ...(changeNote ? { changeNote } : {}),
     high: p(v?.low_24h),
     low: p(v?.high_24h),
     lastExact: exact(v?.last),

@@ -111,7 +111,7 @@ function Figure(props: { cell: Cell; entry: ListEntry; testid: string; cls?: str
   return (
     <td class={`right num nowrap${props.cls ? ` ${props.cls}` : ''}`} data-testid={props.testid} title={title ?? undefined}>
       {c.text !== null ? (
-        <span class={c.tone ? `tone-${c.tone}` : undefined}>{c.text}</span>
+        <span class={c.tone ? `tone-${c.tone}` : undefined} data-thin={c.thin ? 'true' : undefined}>{c.text}</span>
       ) : props.entry.loading ? (
         <span class="skeleton skeleton-line ml-skel" role="status" aria-label={t('common.loading')} />
       ) : (

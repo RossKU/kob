@@ -20,6 +20,8 @@ export default {
   'market.list.priceTitle': '{price} ({unit})',
   'market.list.unavailable': 'Unavailable from the indexer',
   'market.list.trades': '{n} trades in 24 h',
+  'market.change.thinOne': 'Based on 1 trade in 24 h',
+  'market.change.thin': 'Based on {n} trades in 24 h',
   'market.list.pairFills': '{n} pair fills in 24 h',
   'market.list.spreadTitle': 'Best bid {bid} · best ask {ask} ({unit})',
   'market.list.pairSpread': 'The best pair prices are on the pair page',

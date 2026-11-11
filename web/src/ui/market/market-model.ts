@@ -5,7 +5,7 @@
 // token = price / 1e8 * 10^decimals / price_basis. A book price (an order's state price: sompi per `scale` base units) is the same thing with
 // basis = scale, so every formatter below takes (price, decimals, basis) and works for both.
 import type { CandleInterval, CandleView, DepthView, StatsView, TradeView, TradesView } from '../../data/indexer-types';
-import { formatNumber } from '../../i18n';
+import { formatNumber, t } from '../../i18n';
 import { formatPricePerToken, formatUnits, pow10, roundDiv, SOMPI_PER_KAS } from '../../kob/units';
 import { displayPriceDp } from '../kit/format';
 import type { BookModel } from './book-model';
@@ -180,7 +180,10 @@ export interface StatsModel {
   lastSide: 'buy' | 'sell' | null;
   /** `+2.87%` / `-0.40%` / `0.00%` */
   change: string | null;
+  /** muted ('flat') while the change rests on a thin window (`changeNote`) */
   changeTone: Tone | null;
+  /** thin window only (fewer than `THIN_TRADES_24H` trades): the tooltip of the change, "Based on N trades in 24 h" */
+  changeNote?: string | null;
   high: string | null;
   low: string | null;
   /** 24 h volume in tokens (compact) and exact */
@@ -200,6 +203,18 @@ export interface StatsModel {
   lowExact?: string | null;
   /** decimals used for the prices */
   dp: number;
+}
+
+/**
+ * A 24 h change rests on a thin window when it counts fewer trades than this: the open is the FIRST trade of the window, so one tiny trade can put the change at +900%.
+ * Such a change is shown muted with its trade count in the tooltip (nothing else changes: same text, same cell).
+ */
+export const THIN_TRADES_24H = 3;
+
+/** The tooltip of a change over a thin window ("Based on 2 trades in 24 h"), or null when it has a normal basis or the indexer did not report the count (an older one: no marker). */
+export function thinChangeNote(bps: number | null, trades: number | null | undefined): string | null {
+  if (bps === null || typeof trades !== 'number' || !Number.isInteger(trades) || trades < 1 || trades >= THIN_TRADES_24H) return null;
+  return t(trades === 1 ? 'market.change.thinOne' : 'market.change.thin', { n: trades });
 }
 
 /** Signed percentage text of basis points: 287 -> `+2.87%`. */
@@ -229,11 +244,13 @@ export function statsModel(v: StatsView | null, decimals: number, dpHint?: numbe
     const b = bigOrNull(x);
     return b !== null && basis ? exactIfRounded(p(x), exactPriceText(b, decimals, basis)) : null;
   };
+  const changeNote = thinChangeNote(bps, v?.trades_24h);
   return {
     last: p(v?.last),
     lastSide: v?.last_side === 'buy' || v?.last_side === 'sell' ? v.last_side : null,
     change: bps === null ? null : bpsPercentText(bps),
-    changeTone: toneOf(bps),
+    changeTone: changeNote ? 'flat' : toneOf(bps),
+    ...(changeNote ? { changeNote } : {}),
     high: p(v?.high_24h),
     low: p(v?.low_24h),
     lastExact: exact(v?.last),

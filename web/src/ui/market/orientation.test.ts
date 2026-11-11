@@ -160,6 +160,8 @@ describe('24 h stats', () => {
     expect(m.low).toBe('20.00');
     expect(m.change).toBe('-20.00%'); // up 25 % one way is down 20 % the other
     expect(m.changeTone).toBe('down');
+    expect(m).not.toHaveProperty('changeNote');
+    expect(statsModelFlipped(stats({ trades_24h: 2 }), 8, 2)).toMatchObject({ changeTone: 'flat', changeNote: 'Based on 2 trades in 24 h' });
     expect(m.lastSide).toBe('sell');
     expect(m.volume).toBe('9'); // KAS turnover is the base volume now
     expect(m.quoteVolume).toBe('3'); // the token volume

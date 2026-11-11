@@ -19,7 +19,7 @@ import { exponentOf } from '../../kob/open-token';
 import { cmpRational, formatRational, significantDp, type Rational } from '../../kob/pair';
 import { kasPerTokenToUsd, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat } from '../../app/fiat';
 import { displayPriceDp, fitAmountColumn, fitDecimalTexts } from '../kit/format';
-import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, toneOf, unitsToNumber, type Tone } from './market-model';
+import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, thinChangeNote, toneOf, unitsToNumber, type Tone } from './market-model';
 import { kasPerToken } from './orientation';
 import type { PairDepth, PairVolume } from './pair-market';
 import { mergePairSummaries } from './pair-model';
@@ -92,6 +92,8 @@ export interface Cell {
   text: string | null;
   title: string | null;
   tone?: Tone | null;
+  /** a change over a thin window (few trades): shown muted, the tooltip says how many */
+  thin?: boolean;
 }
 
 const EMPTY: Cell = { text: null, title: null };
@@ -109,9 +111,14 @@ export function priceCell(r: Rational | null, dp: number, unit: string): Cell {
   return { text: fit.text, title: t('market.list.priceTitle', { price: exactText(r), unit }) };
 }
 
-/** A 24 h change cell (`+2.87%`) coloured by its sign. */
-export function changeCell(bps: number | null): Cell {
-  return bps === null ? EMPTY : { text: bpsPercentText(bps), title: null, tone: toneOf(bps) };
+/**
+ * A 24 h change cell (`+2.87%`) coloured by its sign. `trades` (the market's 24 h trade count, when the indexer reports it): a change over fewer than
+ * `THIN_TRADES_24H` trades is muted and its tooltip says "Based on N trades in 24 h" (`thin`); same text, same cell.
+ */
+export function changeCell(bps: number | null, trades?: number | null): Cell {
+  if (bps === null) return EMPTY;
+  const note = thinChangeNote(bps, trades);
+  return note ? { text: bpsPercentText(bps), title: note, tone: 'flat', thin: true } : { text: bpsPercentText(bps), title: null, tone: toneOf(bps) };
 }
 
 /**
@@ -276,7 +283,7 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>, fiat: Fiat | nu
     cells: {
       ...base.cells,
       last: fiat && lastR ? usdCell(priceCell(lastR, dp, unit), kasPerTokenToUsd(lastR, fiat.rate), fiat) : priceCell(lastR, dp, unit),
-      change: changeCell(bps),
+      change: changeCell(bps, trades),
       volume: inUsd(volumeCell(qv, 8, 'KAS', trades === null ? null : t('market.list.trades', { n: trades })), qv),
       mcap: inUsd(mcap.cell, mcap.sompi ?? null),
       depth: inUsd(depth.cell, depthSompi),

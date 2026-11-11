@@ -130,6 +130,8 @@ Pinned to commit [`47792a0e`](https://github.com/RossKU/kob/tree/47792a0eba552e0
   ([`market.rs` L619-L625](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/crates/kobd/src/indexer/market.rs#L619-L625)). If the 0.0002 fill
   opened the window, a later buy at 0.002 shows +900% (10×, not +100%). If trades near 0.002 came before it, the change stays near 0%,
   the 24 h low reads 0.0002 and the chart has a spike down. The fill leaves the 24 h figures after 24 h and stays in the chart's history.
+  When the window holds only one or two trades, the app shows the 24 h change muted, with "Based on 1 trade in 24 h" (or "2 trades") as its
+  tooltip: such a figure compares two prints, not a trend.
 - **The ticket warns before you sign.** A sell priced 10% or more below the market, or a buy 10% or more above it, shows "check for a
   typing error" ([`guards.ts` L403-L420](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/guards.ts#L403-L420),
   [`common-issues.ts` L55](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/orders/common-issues.ts#L55)). "The market" is the mid of the best bid and the best ask,

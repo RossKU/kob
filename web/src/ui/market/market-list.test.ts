@@ -111,6 +111,13 @@ describe('market list cells', () => {
     expect(none.sort.volume).toBeNull();
   });
 
+  it('a row whose 24 h change rests on 1 or 2 trades shows it muted with the count; the same row with 7 trades does not', () => {
+    const r = row('EXKCC', ID('a'));
+    const thin = tokenEntry(r, ok(stats(r.covenantId, { change_24h_bps: 90_000, trades_24h: 2 })));
+    expect(thin.cells.change).toEqual({ text: '+900.00%', title: 'Based on 2 trades in 24 h', tone: 'flat', thin: true });
+    expect(tokenEntry(r, ok(stats(r.covenantId, { change_24h_bps: 90_000 }))).cells.change).toEqual({ text: '+900.00%', title: null, tone: 'up' });
+  });
+
   it('a market without trades: no price or change, a zero volume, the spread of a one-sided book is none but the tooltip names the side there', () => {
     const r = row('EXKCC', ID('a'));
     const e = tokenEntry(r, ok(stats(r.covenantId, { last: null, open_24h: null, change_24h_bps: null, quote_volume_24h: '0', trades_24h: 0, best_bid: null, spread_bps: null, mid: null })));
@@ -133,6 +140,12 @@ describe('market list cells', () => {
     expect(changeCell(-1234)).toEqual({ text: '-12.34%', title: null, tone: 'down' });
     expect(changeCell(0)).toEqual({ text: '0.00%', title: null, tone: 'flat' });
     expect(changeCell(null).text).toBeNull();
+    // fewer than 3 trades in the window: muted, the count in the tooltip; 3 or none reported: as before
+    expect(changeCell(90_000, 2)).toEqual({ text: '+900.00%', title: 'Based on 2 trades in 24 h', tone: 'flat', thin: true });
+    expect(changeCell(0, 1)).toEqual({ text: '0.00%', title: 'Based on 1 trade in 24 h', tone: 'flat', thin: true });
+    expect(changeCell(90_000, 3)).toEqual({ text: '+900.00%', title: null, tone: 'up' });
+    expect(changeCell(90_000, null)).toEqual({ text: '+900.00%', title: null, tone: 'up' });
+    expect(changeCell(90_000)).toEqual({ text: '+900.00%', title: null, tone: 'up' });
   });
 
   it('a token without a registry tick shows about five significant digits; a token outside the registry is named by 8 + 8 hex', () => {

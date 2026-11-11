@@ -1,11 +1,11 @@
 import { t } from '../../i18n';
 import type { StatsModel } from './market-model';
 
-function Stat(props: { label: string; value: string | null; title?: string | null; tone?: string | null; testid: string; loading: boolean }) {
+function Stat(props: { label: string; value: string | null; title?: string | null; tone?: string | null; testid: string; loading: boolean; thin?: boolean }) {
   return (
     <div class="mkt-stat" data-testid={props.testid}>
       <span class="mkt-stat-label">{props.label}</span>
-      <span class={`mkt-stat-value${props.tone ? ` tone-${props.tone}` : ''}`} title={props.title ?? undefined}>
+      <span class={`mkt-stat-value${props.tone ? ` tone-${props.tone}` : ''}`} title={props.title ?? undefined} data-thin={props.thin ? 'true' : undefined}>
         {props.value ?? (props.loading ? <span class="skeleton skeleton-line" style="display:inline-block;width:64px;margin:0" /> : '—')}
       </span>
     </div>
@@ -55,7 +55,7 @@ export function MarketStats(props: {
           <span class="mkt-stat-unit">{t('market.stats.unitOf', { quote, base })}</span>
         </span>
       </div>
-      <Stat testid="stat-change" label={t('market.stats.change')} value={m.change} tone={m.changeTone} loading={props.loading} />
+      <Stat testid="stat-change" label={t('market.stats.change')} value={m.change} tone={m.changeTone} title={m.changeNote} thin={!!m.changeNote} loading={props.loading} />
       <Stat testid="stat-high" label={t('market.stats.high')} value={m.high} title={props.titles?.high ?? na ?? m.highExact} loading={props.loading} />
       <Stat testid="stat-low" label={t('market.stats.low')} value={m.low} title={props.titles?.low ?? na ?? m.lowExact} loading={props.loading} />
       <Stat testid="stat-volume" label={t('market.stats.volume', { ticker: volumeBase })} value={m.volume} title={tip(m.volumeExact, props.titles?.volume) ?? na} loading={props.loading} />
