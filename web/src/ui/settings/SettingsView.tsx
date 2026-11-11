@@ -6,7 +6,7 @@ import { displayToken } from '../../app/token-display';
 import type { TrackedToken } from '../../data/token-tracker';
 import { TokenNote } from '../market/TokenNote';
 import { recoverIssuedToken } from './recover-issued';
-import { readSettings, saveSettings, type ConfigWarning, type NetworkName } from '../../config';
+import { readSettings, saveSettings, type AppConfig, type ConfigWarning, type NetworkName } from '../../config';
 import { t } from '../../i18n';
 import { version as appVersion } from '../../../package.json';
 import {
@@ -17,17 +17,19 @@ import { NotifySettingsSection } from '../notify/NotifySettings';
 import { IndexerTrust } from '../shell/IndexerTrust';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
-import { changedFields, changesServers, clearKobStorage, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
+import { changedFields, changesServers, clearKobStorage, configWithForm, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
 
 const reload = () => window.location.reload();
 
 function ConnectionSettings() {
   const { config, standalone } = useServices();
-  const [form, setForm] = useState<SettingsForm>(() => formFromConfig(config));
+  // the settings in force: the page's, then what this form saved (the standalone switches as the mode follows them now)
+  const [base, setBase] = useState<AppConfig>(() => (standalone ? { ...config, standalone: { ...config.standalone, ...standalone.prefs } } : config));
+  const [form, setForm] = useState<SettingsForm>(() => formFromConfig(base));
   const [ack, setAck] = useState(false);
   const [saved, setSaved] = useState<'ok' | 'failed' | null>(null);
   const v = validateSettings(form);
-  const changes = changedFields(config, form);
+  const changes = changedFields(base, form);
   const servers = changesServers(changes);
   const set = <K extends keyof SettingsForm>(k: K, val: SettingsForm[K]) => {
     setForm((f) => ({ ...f, [k]: val }));
@@ -44,6 +46,7 @@ function ConnectionSettings() {
     setStoredServers(storedServerFields(readSettings()));
     // the standalone switches apply at once (data/standalone.ts); saved, they also apply on the next visit
     if (ok) standalone?.setPrefs({ manual: v.clean.standaloneManual, auto: v.clean.standaloneAuto, autoReturn: v.clean.standaloneAutoReturn });
+    if (ok) setBase((b) => configWithForm(b, v.clean));
   };
   const resetServers = () => {
     const ok = saveSettings(resetServersPatch());

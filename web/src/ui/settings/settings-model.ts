@@ -36,6 +36,21 @@ export const formFromConfig = (c: AppConfig): SettingsForm => ({
   standaloneAutoReturn: c.standalone.autoReturn,
 });
 
+/**
+ * The settings in force once `f` is saved: what the next change is measured against (a switch saved and then turned back is a change again; the standalone
+ * switches apply at once, the rest on the next load).
+ */
+export const configWithForm = (c: AppConfig, f: SettingsForm): AppConfig => ({
+  ...c,
+  network: f.network as AppConfig['network'],
+  indexerUrl: f.indexerUrl,
+  nodeUrl: f.nodeUrl,
+  registryUrl: f.registryUrl,
+  features: { ...c.features, kastle: f.kastle, priorityFee: f.priorityFee },
+  fees: { ...c.fees, dynamic: f.dynamicFee },
+  standalone: { ...c.standalone, manual: f.standaloneManual, auto: f.standaloneAuto, autoReturn: f.standaloneAutoReturn },
+});
+
 export interface SettingsValidation {
   ok: boolean;
   errors: Partial<Record<SettingsField, SettingsErrorCode>>;

@@ -276,3 +276,18 @@ test.describe('standalone mode', () => {
     expect(stored.standalone).toEqual({ manual: true });
   });
 });
+
+// founder 2026-11-11: switched on and saved, the mode could not be switched off in the same visit (the form compared itself with the page's settings, so
+// the box turned back read as no change and Save stayed disabled)
+test('Settings: standalone mode switched on and saved, then off and saved, in one visit', async ({ appPage: page }) => {
+  await page.goto('/#/settings');
+  await page.getByTestId('settings-standalone').check();
+  await page.getByTestId('settings-save').click();
+  await expect(page.getByTestId('settings-saved')).toBeVisible();
+  await page.getByTestId('settings-standalone').uncheck();
+  await expect(page.getByTestId('settings-save')).toBeEnabled();
+  await page.getByTestId('settings-save').click();
+  await expect(page.getByTestId('settings-saved')).toBeVisible();
+  const stored = await page.evaluate(() => Object.values(localStorage).filter((v) => v.includes('"standalone"')).join('|'));
+  expect(stored).toContain('"manual":false');
+});

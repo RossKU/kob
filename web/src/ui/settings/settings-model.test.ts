@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, mergeConfig, readSettings, saveSettings, type AppConfig } from '../../config';
-import { changedFields, changesServers, clearKobStorage, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings } from './settings-model';
+import { changedFields, changesServers, clearKobStorage, configWithForm, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings } from './settings-model';
 
 const base = (): AppConfig => mergeConfig({ injected: { network: 'testnet-10', indexerUrl: 'https://idx.example', nodeUrl: 'wss://node.example:18210' } });
 
@@ -61,6 +61,16 @@ describe('standalone mode settings', () => {
 });
 
 describe('changedFields', () => {
+  it('measures against what was saved: standalone mode switched on, saved, then off again is a change (the form never locks the mode on)', () => {
+    const page = DEFAULT_CONFIG as AppConfig;
+    const on = validateSettings({ ...formFromConfig(page), standaloneManual: true }).clean;
+    expect(changedFields(page, on)).toEqual(['standaloneManual']);
+    const saved = configWithForm(page, on);
+    expect(changedFields(saved, on)).toEqual([]);
+    const off = { ...on, standaloneManual: false };
+    expect(changedFields(saved, off)).toEqual(['standaloneManual']);
+  });
+
   it('lists what differs and flags server changes', () => {
     const c = base();
     const f = formFromConfig(c);
