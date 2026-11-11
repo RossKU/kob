@@ -8,9 +8,8 @@
 // browser, per market. The extended line is a tool of its own rather than a toggle: every tool is one pressed button that ends with the drawing it places, a
 // toggle would be a second kind of control (a state to read off the toolbar) and would let a drawing change kind. Colours: one button beside the tools shows the current colour
 // and opens a small palette of six swatches that sets the colour of the NEXT drawing (remembered); the recolour tool, which works like the delete tool, gives the clicked drawing the selected colour. A click on a
-// drawing with no tool on cannot select it: there is no layer then, and the plot belongs to the chart's pan and zoom. The tools sit in the legend's row, above the plot (a row of their own, never over it): the OHLC
-// read-out on the left (its last item is the unit of the price), the tools and the colour button on the right; where the row cannot hold both the tools take a line under the read-out,
-// and scroll sideways inside it if even that is too narrow (the colour button stays outside the scroller so its palette is not clipped).
+// drawing with no tool on cannot select it: there is no layer then, and the plot belongs to the chart's pan and zoom. The header is ONE row: the interval switch on the left, the tools and the colour button on the right (what does not fit scrolls sideways inside the tools' row on
+// a phone; the colour button stays outside the scroller so its palette is not clipped); the legend is a row of its own above the plot, never over it (the OHLC read-out, its last item the unit of the price).
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, MouseEventParams, Time, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
@@ -462,21 +461,6 @@ export function PriceChart(props: PriceChartProps) {
             </button>
           ))}
         </div>
-      </div>
-      <div class="chart-bar">
-        <div class="chart-legend" data-testid="chart-legend">
-          {state === 'ready' && shown ? (
-            <>
-              <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.o')}<b>{shown.o}</b></span>
-              <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.h')}<b>{shown.h}</b></span>
-              <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.l')}<b>{shown.l}</b></span>
-              <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.c')}<b>{shown.c}</b></span>
-              <span>{t('market.chart.v')}<b>{shown.v}</b></span>
-            </>
-          ) : null}
-          {/* the unit stays when there is nothing to read out (a market with no trades yet) */}
-          <span class="chart-unit" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' })}</span>
-        </div>
         <div class="chart-actions">
           <div class="chart-row">
             <div class="chart-tools" role="group" aria-label={t('market.chart.draw.tools')} title={t('market.chart.draw.local')} data-testid="chart-tools">
@@ -526,6 +510,19 @@ export function PriceChart(props: PriceChartProps) {
             </Popover>
           </div>
         </div>
+      </div>
+      <div class="chart-legend" data-testid="chart-legend">
+        {state === 'ready' && shown ? (
+          <>
+            <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.o')}<b>{shown.o}</b></span>
+            <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.h')}<b>{shown.h}</b></span>
+            <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.l')}<b>{shown.l}</b></span>
+            <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.c')}<b>{shown.c}</b></span>
+            <span>{t('market.chart.v')}<b>{shown.v}</b></span>
+          </>
+        ) : null}
+        {/* the unit stays when there is nothing to read out (a market with no trades yet) */}
+        <span class="chart-unit" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' })}</span>
       </div>
       <ErrorBanner error={candles.error ?? libError} title={t('market.chart.error')} onRetry={candles.reload} />
       <div class="chart-box">

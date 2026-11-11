@@ -430,8 +430,13 @@ test.describe('phone, 390 px wide, touch', () => {
     const tools = (await page.getByTestId('chart-tools').boundingBox())!;
     const box = (await page.locator('.chart-box').boundingBox())!;
     expect(tools.y + tools.height, 'toolbar above the plot').toBeLessThanOrEqual(box.y + 1);
-    expect(tools.x + tools.width).toBeLessThanOrEqual(390);
-    // the tools and the colour button (beside the read-out, or on a line under it): inside the screen, above the plot, the button and the swatches finger-sized
+    // the header is one row: the tools scroll sideways inside their own row when they do not fit beside the intervals (the page does not)
+    const row = (await page.locator('.chart-row').boundingBox())!;
+    expect(row.x + row.width).toBeLessThanOrEqual(390);
+    const iv = (await page.getByTestId('chart-intervals').boundingBox())!;
+    expect(Math.abs(row.y + row.height / 2 - (iv.y + iv.height / 2)), 'tools on the interval row').toBeLessThan(8);
+    expect(await page.locator('.chart-row').evaluate((el) => [el.scrollWidth > el.clientWidth, getComputedStyle(el).overflowX])).toEqual([true, 'auto']);
+    // the tools and the colour button: inside the screen, above the plot, the button and the swatches finger-sized
     const acts = (await page.locator('.chart-actions').boundingBox())!;
     expect(acts.x).toBeGreaterThanOrEqual(0);
     expect(acts.x + acts.width).toBeLessThanOrEqual(390);

@@ -126,12 +126,11 @@ body:has(.market-page) .container { max-width: 1520px; }
 
 /* ------------------------------------------------------------------ price chart */
 
-/* the header holds the interval switch; the legend's row (read-out left, drawing tools right) is a row of its own above the plot, never an overlay on it. The read-out has a floor
-   (28rem) and an ellipsis, so the tools do not move when its text changes length on hover; where the row cannot hold both, the tools wrap to a line under the read-out. */
-.chart-head { display: flex; align-items: center; margin-bottom: 6px; min-width: 0; }
-.chart-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 6px; min-width: 0; min-height: 30px; }
-.chart-actions { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; max-width: 100%; min-width: 0; }
-/* what does not fit scrolls sideways inside the tools' row, with no visible scrollbar (the page never scrolls sideways); the colour button stays outside it */
+/* the header is ONE row: the interval switch at the left, the drawing tools and the colour button at the right. What does not fit (a phone) scrolls sideways inside the tools' row, with
+   no visible scrollbar (the page never scrolls sideways); the colour button stays outside that row so its palette is not clipped. The legend is a row of its own above the plot. */
+.chart-head { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0; }
+.chart-intervals { flex: none; }
+.chart-actions { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; margin-left: auto; min-width: 0; }
 .chart-row { display: flex; flex: 0 1 auto; align-items: center; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .chart-row::-webkit-scrollbar { display: none; }
 .chart-row > * { flex: none; }
@@ -184,15 +183,10 @@ body:has(.market-page) .container { max-width: 1520px; }
   background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .chart-canvas { position: absolute; inset: 0; }
-.chart-legend {
-  flex: 1 1 28rem; min-width: 0; padding-left: 2px; font-size: 0.78rem; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
+.chart-legend { min-height: 20px; margin-bottom: 4px; padding-left: 2px; font-size: 0.78rem; font-variant-numeric: tabular-nums; color: var(--muted); }
 .chart-legend > span { margin-right: 10px; }
-/* a phone is too narrow for the whole read-out and its unit on one line, and has no hover to change the text: the read-out wraps between its items instead of cutting the unit off */
-@media (max-width: 759px) {
-  .chart-legend { white-space: normal; overflow: visible; }
-  .chart-legend > span { display: inline-block; white-space: nowrap; }
-}
+/* the read-out wraps between its items (a phone), so the unit is never cut off */
+.chart-legend > span { display: inline-block; white-space: nowrap; }
 .chart-legend b { font-weight: 600; color: var(--text); margin-left: 3px; }
 .chart-legend .tone-up b { color: var(--buy); }
 .chart-legend .tone-down b { color: var(--sell); }
