@@ -12,8 +12,18 @@ async function open(page: Page, mock: import('../fixtures').MockClient): Promise
   await page.goto(`/#/market/${id}`);
   await expect(page.getByTestId(TESTID.bookAsks).locator('.book-row:not(.book-blank)').first()).toBeVisible();
   await expect.poll(async () => page.getByTestId(TESTID.bookAsks).locator('.book-row').count()).toBeGreaterThanOrEqual(8);
-  await page.waitForTimeout(600);
-  LEVELS = await page.getByTestId(TESTID.bookAsks).locator('.book-row:not(.book-blank)').count();
+  // the card's height settles once the ticket has measured its form (and again once the fonts are in): the count is read once it no longer changes
+  const count = () => page.getByTestId(TESTID.bookAsks).locator('.book-row:not(.book-blank)').count();
+  let last = -1;
+  await expect
+    .poll(async () => {
+      const now = await count();
+      const stable = now === last;
+      last = now;
+      return stable;
+    }, { intervals: [700], timeout: 15_000 })
+    .toBe(true);
+  LEVELS = last;
   expect(LEVELS).toBeGreaterThanOrEqual(8);
   return id;
 }
