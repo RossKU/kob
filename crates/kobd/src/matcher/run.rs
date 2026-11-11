@@ -238,6 +238,10 @@ pub struct RunConfig {
     /// How long a halted book source (`BookSource::fatal`) is waited for before the runner ends with an error, so that a
     /// supervisor restarts the process.
     pub halt_exit_after: Duration,
+    /// Hand the operator's balance to the book source's `/v1/health` and `/v1/metrics` (`BookSource::report_executor`).
+    /// `false` (a read API other hosts can reach, `crate::config::ApiConfig::shows_executor_funds`): the amounts are left out
+    /// there; the metrics file keeps them.
+    pub report_funds: bool,
 }
 
 /// The start counter's file name in [`RunConfig::state_dir`].
@@ -271,8 +275,22 @@ impl Default for RunConfig {
             state_dir: None,
             clock_skew_max_secs: 30,
             halt_exit_after: Duration::from_secs(180),
+            report_funds: true,
         }
     }
+}
+
+/// The runner's series that carry the operator's balance: left out of what a read API other hosts can reach serves
+/// ([`RunConfig::report_funds`]).
+pub const FUNDS_SERIES: &[&str] = &["kob_matcher_funding_sompi", "kob_matcher_funding_total_sompi"];
+
+/// `metrics` (Prometheus text) without the series [`FUNDS_SERIES`] (their `# HELP` and `# TYPE` lines included).
+pub fn without_funds(metrics: &str) -> String {
+    let name = |line: &str| -> String {
+        let l = line.strip_prefix("# HELP ").or_else(|| line.strip_prefix("# TYPE ")).unwrap_or(line);
+        l.split([' ', '{']).next().unwrap_or("").to_string()
+    };
+    metrics.lines().filter(|l| !FUNDS_SERIES.contains(&name(l).as_str())).map(|l| format!("{l}\n")).collect()
 }
 
 /// What one step did.
@@ -1591,8 +1609,12 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 tracing::warn!(error = %e, "cannot write metrics");
             }
         }
-        let health = self.executor_health(rep);
-        let metrics = metrics_text(self, rep);
+        let mut health = self.executor_health(rep);
+        let mut metrics = metrics_text(self, rep);
+        if !self.cfg.report_funds {
+            (health.funds_sompi, health.spendable_sompi, health.funds_hidden) = (None, None, true);
+            metrics = without_funds(&metrics);
+        }
         self.source.report_executor(health, metrics);
     }
 
@@ -1603,6 +1625,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         crate::indexer::status::ExecutorHealth {
             funds_sompi: total.map(|v| v.to_string()),
             spendable_sompi: rep.funding.or(self.last_funding).map(|v| v.to_string()),
+            funds_hidden: false,
             low_funds: total.is_some_and(|f| f < self.cfg.low_funds) && !self.cfg.dry_run,
             low_funds_threshold_sompi: self.cfg.low_funds.to_string(),
             paused: rep.paused,

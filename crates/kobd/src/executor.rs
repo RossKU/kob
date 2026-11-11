@@ -632,6 +632,11 @@ pub async fn run(a: RunArgs) -> Result<()> {
     // the in-flight journal, the keepers' subsidy window and the start count live next to the database (audit 2026-11-11
     // M-3, L-2)
     run_cfg.state_dir = Some(cfg.data_dir.clone());
+    // the hot key's balance is not shown to other hosts unless the operator asks for it (`api.executor_funds`)
+    run_cfg.report_funds = cfg.api.shows_executor_funds();
+    if !run_cfg.report_funds && cfg.api.enabled {
+        tracing::info!(listen = %cfg.api.listen, "the read API is reachable from other hosts: /v1/health and /v1/metrics leave the executor's balance out (api.executor_funds = true shows it)");
+    }
     // a journal that cannot be read would let this run plan over the inputs of the last run's mempool transactions
     if !run_cfg.dry_run {
         let path = cfg.data_dir.join(crate::matcher::journal::FILE_NAME);

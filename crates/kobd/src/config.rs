@@ -147,9 +147,18 @@ pub struct ApiConfig {
     /// while a client asks, and serves the last good value with its time and source (`api::price`). Off by default: an indexer makes no call to a third party unless the operator turns it on
     /// (the route then answers 404). Default `false`.
     pub usd_price: bool,
+    /// Show the Executor's balance (`executor.funds_sompi` and `spendable_sompi` of `/v1/health`, the funding series of
+    /// `/v1/metrics`) on a listener other hosts can reach too. Default `false`: a loopback listener shows them, any other omits
+    /// them (`executor.funds_hidden`), since "this host holds so much in a hot key" is worth hiding from the public.
+    pub executor_funds: bool,
 }
 
 impl ApiConfig {
+    /// Whether the read API may show the Executor's balance ([`ApiConfig::executor_funds`]).
+    pub fn shows_executor_funds(&self) -> bool {
+        self.listen.ip().is_loopback() || self.executor_funds
+    }
+
     /// A warning for a listener other hosts can reach with no trusted proxy: a reverse proxy or CDN in front of it makes every
     /// client arrive from the proxy's address, so all of them share one set of per-client limits (rate, connections,
     /// WebSockets) until `trusted_proxies` names the proxy. `None` for a loopback listener (the default, and what
@@ -194,6 +203,7 @@ impl Default for ApiConfig {
             cors_allow_origin: None,
             metrics: true,
             usd_price: false,
+            executor_funds: false,
         }
     }
 }

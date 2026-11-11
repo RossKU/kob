@@ -153,9 +153,13 @@ pub struct HealthSnapshot {
 /// strings of sompi, like every amount of the API.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ExecutorHealth {
-    /// The operator's balance (the coins pending transactions hold included) and what is spendable now; `None`: not read yet.
+    /// The operator's balance (the coins pending transactions hold included) and what is spendable now; `None`: not read yet,
+    /// or not shown (`funds_hidden`).
     pub funds_sompi: Option<String>,
     pub spendable_sompi: Option<String>,
+    /// The amounts are left out: the read API is reachable from other hosts and `api.executor_funds` is off (the default).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub funds_hidden: bool,
     /// The balance is below the alert threshold (`--low-funds-kas`).
     pub low_funds: bool,
     pub low_funds_threshold_sompi: String,

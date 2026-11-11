@@ -570,6 +570,17 @@ async fn a_batch_past_a_day_orders_deadline_is_not_sent_again() {
     assert!(m.contains("kob_matcher_resend_dropped_total 1"), "{m}");
 }
 
+/// Audit round 2 R2-L-7: with `report_funds` off (a read API other hosts can reach) the balance is left out of what the book
+/// source serves (`/v1/health`, `/v1/metrics`), and the rest stays.
+#[test]
+fn the_funding_series_are_left_out_for_a_public_listener() {
+    let m = "# HELP kob_matcher_funding_sompi x\n# TYPE kob_matcher_funding_sompi gauge\nkob_matcher_funding_sompi 5\n\
+             # TYPE kob_matcher_funding_total_sompi gauge\nkob_matcher_funding_total_sompi 6\n\
+             # TYPE kob_matcher_pending_txs gauge\nkob_matcher_pending_txs 2\nkob_operator_low_funds 0\n";
+    let out = kobd::matcher::run::without_funds(m);
+    assert_eq!(out, "# TYPE kob_matcher_pending_txs gauge\nkob_matcher_pending_txs 2\nkob_operator_low_funds 0\n");
+}
+
 /// A book source whose indexer halted (`BookSource::fatal`).
 struct Halted(MemoryBook, bool);
 
