@@ -23,12 +23,10 @@ export interface TicketFieldsProps {
   onChange(id: string, value: string): void;
   /** Max: fills the amount with the largest the balance allows (the "Available" figure of the amount label row is its button) */
   onMax?: () => void;
-  /** "Available 988.41 KAS": the balance this order spends, the line under the amount box (the figure under the box's, the unit in the units column); a tap does `onMax` */
+  /** "Available 988.41 KAS": the balance this order spends, one right-aligned line under the amount box; a tap does `onMax` */
   available?: { amount: string; unit: string };
   /** the 0..100 % of Max slider under the amount field */
   slider?: AmountSliderProps;
-  /** the line under the Available line: what the amount costs or yields in the other asset (cost-preview.ts), its unit apart; a fixed-height line, a placeholder when there is nothing to say */
-  cost?: { text: string; unit: string; /** the read-only dollars of the estimate (USD display): text and tooltip; null while KAS is shown */ usd?: { text: string; title: string } | null };
   disabled?: boolean;
   /** a market order: its price row stays, disabled ("Market price"), before the slippage box */
   marketPrice?: boolean;
@@ -97,6 +95,15 @@ function KasAmountHint(props: { form: TicketForm; ctx: TicketCtx; id: string; ti
 
 export function TicketFields(props: TicketFieldsProps) {
   const { form, ctx, ticker } = props;
+  /**
+   * The long help of a field (what the "?" of the title row shows under it): an inverted market has its own wording where the native help speaks of buying
+   * or selling the token; a market order's Fills box has its own on either view (it speaks of transactions, not of a limit's escrow). The plain amount help
+   * says what the label and the unit beside the box say: it is not shown.
+   */
+  const helpOf0 = (id: string): string | undefined => {
+    const helpKey = props.quoteTicker && has(`ticket.help.${id}.pair`) ? `ticket.help.${id}.pair` : id === 'maxFills' && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
+    return helpKey !== 'ticket.help.amount' && has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS', local: formatLocalTime(nextUtcMidnight(Date.now())) }) : undefined;
+  };
   /** the text an amount box shows: the KAS value of an exact amount kept for it (a `kas` form), else what was typed */
   const amountText = (id: string): string => {
     const kept = form.values[id + BASE_SUFFIX];
@@ -127,11 +134,7 @@ export function TicketFields(props: TicketFieldsProps) {
         const e = errOf(id);
         // the inverted market drops "(per token)": the unit next to the box says what the amount is
         const label = t(props.flip && has(`ticket.label.${id}.inv`) ? `ticket.label.${id}.inv` : labelKey(form.type, id));
-        // an inverted market has its own wording where the native help speaks of buying / selling the token
-        // a market order's Fills box has its own help on either view (it speaks of transactions, not of a limit's escrow)
-        const helpKey = props.quoteTicker && has(`ticket.help.${id}.pair`) ? `ticket.help.${id}.pair` : id === 'maxFills' && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
-        // (the plain amount help, "Amount of X to buy or sell", says what the label and the unit beside the box say: it is not shown)
-        const help = helpKey !== 'ticket.help.amount' && has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS', local: formatLocalTime(nextUtcMidnight(Date.now())) }) : undefined;
+        const help = helpOf0(id);
         const phKey = has(`ticket.ph.${id}.${form.type}`) ? `ticket.ph.${id}.${form.type}` : props.quoteTicker && has(`ticket.ph.${id}.pair`) ? `ticket.ph.${id}.pair` : `ticket.ph.${id}`;
         // a token without decimals takes whole numbers: its amount box says "0", not "0.0"
         const wholeAmount = spec.kind === 'amount' && !form.kas && ctx.decimals === 0 && phKey === 'ticket.ph.amount';
@@ -297,11 +300,9 @@ export function TicketFields(props: TicketFieldsProps) {
         }
         // the balance this order spends is the Max button, at the right end of the label row
         const availableBtn = id === 'amount' && props.onMax && props.available ? (
-          <button type="button" class="tk-available tk-line" onClick={props.onMax} disabled={props.disabled} title={t('ticket.max.aria')} data-testid="order-available">
-            <span class="tk-line-text tk-line-split">
-              <span>{t('ticket.available')}</span>{' '}
-              <span class="tk-line-num" key={props.available.amount}>{props.available.amount}</span>
-            </span>{' '}
+          <button type="button" class="tk-available" onClick={props.onMax} disabled={props.disabled} title={t('ticket.max.aria')} data-testid="order-available">
+            <span class="tk-avail-label">{t('ticket.available')}</span>{' '}
+            <span class="tk-line-num" key={props.available.amount}>{props.available.amount}</span>{' '}
             <span class="tk-line-unit">{props.available.unit}</span>
           </button>
         ) : undefined;
@@ -317,18 +318,12 @@ export function TicketFields(props: TicketFieldsProps) {
             suffix={suffix ? <span class="tk-suffix">{suffix}</span> : undefined}
           />
         );
-        return id === 'amount' && (props.slider || props.cost !== undefined || availableBtn) ? (
+        return id === 'amount' && (props.slider || availableBtn) ? (
           <Fragment key={id}>
             {field}
-            {/* two adjacent lines of fixed height under the box: what this order can spend (the Max button) and what the amount costs */}
+            {/* one line of fixed height under the box: what this order can spend (the Max button), at the right end. What the amount costs stands in the
+                ticket's footer, over the button (OrderTicket.tsx "Total") */}
             <div class="tk-avail-line" data-testid="order-available-line">{availableBtn}</div>
-            {props.cost !== undefined ? (
-              <div class={`tk-cost tk-line${props.cost.usd ? ' tk-cost-usd' : ''}`} aria-label={t('ticket.cost.aria')} data-testid="order-cost-preview">
-                {props.cost.usd ? <span class="tk-line-usd" title={props.cost.usd.title || undefined} data-testid="order-cost-usd">{props.cost.usd.text}</span> : null}
-                <span class="tk-line-text" key={props.cost.text}>{props.cost.text}</span>{props.cost.unit ? ' ' : null}
-                <span class="tk-line-unit">{props.cost.unit}</span>
-              </div>
-            ) : null}
             {props.slider ? <AmountSlider {...props.slider} disabled={props.disabled || props.slider.disabled} /> : null}
           </Fragment>
         ) : (
@@ -336,5 +331,17 @@ export function TicketFields(props: TicketFieldsProps) {
         );
     }
   };
-  return <>{props.ids.map((id) => (props.marketPrice && id === 'slippageBps' ? <Fragment key={id}>{marketPriceRow}{fieldOf(id)}</Fragment> : fieldOf(id)))}</>;
+  /**
+   * A field with its long help as the tooltip (`title`): the help under the fields is off unless the title row's "?" asks for it, so what stays is the
+   * tooltip over the label and the box. `display: contents` (ticket.css) keeps the wrapper out of the layout: the form's gap and the field's own rows are
+   * untouched. An inverted price box has no help of its own (its hint says what the order is); a trigger threshold adds its trade-off.
+   */
+  const withTip = (id: string, node: ComponentChildren): ComponentChildren => {
+    const spec = FIELDS[id];
+    if (!node || !spec) return node;
+    const flipped = props.flip && spec.kind === 'price';
+    const parts = [flipped ? undefined : helpOf0(id), spec.kind === 'touch' ? t('ticket.touch.tradeoff') : undefined].filter(Boolean) as string[];
+    return parts.length ? <div class="tk-tip" key={id} title={parts.join(' ')}>{node}</div> : node;
+  };
+  return <>{props.ids.map((id) => (props.marketPrice && id === 'slippageBps' ? <Fragment key={id}>{marketPriceRow}{withTip(id, fieldOf(id))}</Fragment> : withTip(id, fieldOf(id))))}</>;
 }

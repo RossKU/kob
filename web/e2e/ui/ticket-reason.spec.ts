@@ -44,7 +44,7 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
         if (await button.isDisabled()) {
           if (/^Enter /.test((await button.textContent()) ?? '')) await expect(slot, `${type} ${side}: amount only, an empty field`).not.toContainText(/\S/);
           else await expect(slot, `${type} ${side}: amount only`).toContainText(/\S/);
-        } else await expect(slot).not.toContainText(/\S/);
+        } else await expect(slot.locator('li:not(.tk-reason-warn)')).toHaveCount(0); // (a warning, e.g. an order below the minimum value, is no reason)
         // the slot, and the button under it, are where they were for every type that has the same fields above (the slot's own box never changes)
         const box = (await page.getByTestId('order-place').boundingBox())!;
         slotBox ??= { x: box.x, y: 0, width: box.width, height: box.height };
@@ -129,9 +129,9 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     }
     await pickType(page, 'limit', 'buy');
     const cost = page.getByTestId('order-cost-preview');
-    await expect(cost).toContainText(/\S{3,}/);
+    await expect(cost).toHaveText('—');
     expect((await cost.boundingBox())!.height).toBeLessThan(24);
-    // the Available and cost lines under the amount: the figure ends under the box's (right-aligned) figure, the unit stands under the amount's unit
+    // the Available line under the amount ends at the right edge of the amount's unit column; the total over the button ends at the right edge of the footer
     await pickType(page, 'market', 'buy');
     await page.getByTestId('order-amount').fill('1');
     await expect(page.getByTestId('order-cost-preview').locator('.tk-line-unit')).toHaveText('KAS');
@@ -142,16 +142,16 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
       const input = root.querySelector<HTMLInputElement>('[data-testid="order-amount"]')!;
       const pad = parseFloat(getComputedStyle(input).paddingRight) + parseFloat(getComputedStyle(input).borderRightWidth);
       const amountRow = input.closest('.field')!;
+      const foot = root.querySelector('.tk-foot')!;
       return {
         unit: amountRow.querySelector('.tk-suffix')!.getBoundingClientRect().right,
-        figure: input.getBoundingClientRect().right - pad,
         availUnit: r('[data-testid="order-available"] .tk-line-unit'),
         costUnit: r('[data-testid="order-cost-preview"] .tk-line-unit'),
-        availFigure: r('[data-testid="order-available"] .tk-line-num'),
-        costFigure: r('[data-testid="order-cost-preview"] .tk-line-text') - parseFloat(getComputedStyle(root.querySelector('[data-testid="order-cost-preview"] .tk-line-text')!).paddingRight),
+        footEdge: foot.getBoundingClientRect().right - parseFloat(getComputedStyle(foot).paddingRight),
+        pad,
       };
     });
-    for (const k of ['availUnit', 'costUnit'] as const) expect(Math.abs(edges[k] - edges.unit), k).toBeLessThan(1);
-    for (const k of ['availFigure', 'costFigure'] as const) expect(Math.abs(edges[k] - edges.figure), k).toBeLessThan(1);
+    expect(Math.abs(edges.availUnit - edges.unit), 'availUnit').toBeLessThan(1);
+    expect(Math.abs(edges.costUnit - edges.footEdge), 'costUnit').toBeLessThan(1);
   });
 }

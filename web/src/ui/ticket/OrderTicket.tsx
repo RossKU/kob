@@ -4,7 +4,8 @@
 // wallet rules and builds the transaction. The ticket is the inputs and one button: the order's details are shown only in the final
 // confirmation (signer/summary.ts `receipt`). The button is enabled only for a built, error-free plan; a click plans the order again from the
 // state at the click, checks the built transaction silently (`ui/confirm/send.ts`: decoded and compared with the plan) and opens the final
-// confirmation, whose Confirm asks the wallet. Progress and the result are one line under the button.
+// confirmation, whose Confirm asks the wallet. Progress is the label of the button itself ("Confirm in KasWare...", "Sending..."); the result
+// is a card of the notifications at the top right.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
@@ -41,7 +42,7 @@ import {
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 import { expectedFromPlan } from './plan-expected';
-import { confirmNotes, confirmSignerNotes, minOrderValueOf } from './ticket-notes';
+import { confirmNotes, confirmSignerNotes, minOrderValueOf, minValueNote } from './ticket-notes';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
@@ -83,7 +84,8 @@ interface PlanStop {
 interface Reason {
   code: string;
   text: string;
-  kind: 'need' | 'field' | 'issue' | 'ladder';
+  /** `warn`: the order can be placed, but not as it is meant (below the minimum order value: it is never listed); shown in the slot even while the button is on */
+  kind: 'need' | 'field' | 'issue' | 'ladder' | 'warn';
   action?: 'retry';
   raw?: string;
   testid?: string;
@@ -701,15 +703,29 @@ export function OrderTicket(props: OrderTicketProps) {
   if (lastOrderErrors.length > 0) reasons.push({ code: 'ladder-last', text: lastOrderErrors.map((i) => t('ticket.ladder.lastLevel', { text: issueText(i, issueCtx) })).join(' '), kind: 'ladder', testid: 'order-ladder-last-errors' });
   // the button is off for a reason nothing above names (the plan is still being made, a click is running): said too, so a disabled button always has its sentence
   const busy = placing || sendBusy(sender.status);
+  // what the click is doing, as the label of the button itself (the eye is on it): checking, the app's confirmation, the wallet's approval, sending. A ladder
+  // says its level first. The button keeps its size: only its text changes
+  const phase = sender.status?.phase;
+  const busyText = busy
+    ? (ladderLead ? `${ladderLead} · ` : '')
+      + t(phase === 'signing' ? 'send.signing' : phase === 'sending' ? 'send.sending' : phase === 'confirming' ? 'send.confirming' : 'send.checking', { wallet: wallet.info?.label || t('send.yourWallet') })
+    : null;
   // nothing but empty required fields is in the way: the disabled button itself says what to enter first ("Enter an amount": the first missing field)
   const firstEmpty = isIncomplete(built.errors) ? built.errors.find((e) => e.code === 'required') : undefined;
   const enterText = !canPlace && !busy && reasons.length === 0 && firstEmpty ? enterTextOf(firstEmpty.field, form.type, inverted) : null;
   if (!canPlace && !busy && reasons.length === 0 && !enterText) reasons.push({ code: 'checking', text: t(pendingShown || pending ? 'ticket.pending' : 'ticket.need.checking'), kind: 'need' });
-  // a re-plan on a tick keeps the sentence of the plan it replaces for the moment it takes (no sentence flickers in and out of the slot)
+  // an order worth less than the minimum order value is never listed, so it never fills (and locks its funds until cancelled): the order can still be placed,
+  // so it is a warning, said here before the click (the final confirmation says it again as a callout). Only a plain order of a KAS market: the rule is not measured
+  // for a ladder, a conditional or a pair order (ticket-notes.ts `minValueNote`)
+  const lowValue = shownPlan && shownPlan.ok && planErrors.length === 0 && !quote && !ladder ? minValueNote(shownPlan, minOrderValueOf(indexerStatus.health).sompi) : null;
+  if (lowValue) reasons.push({ code: 'min-value', text: t('ticket.warn.belowMin', { min: formatKas(lowValue.min, { group: ',' }) }), kind: 'warn', testid: 'order-warn-min-value' });
+  // a re-plan on a tick keeps the sentence of the plan it replaces for the moment it takes (no sentence flickers in and out of the slot); an order that can be
+  // placed shows its warnings only
   const lastReasons = useRef<Reason[]>([]);
   const backgroundPlan = pending && !editPending;
-  const shownReasons = canPlace || busy ? [] : backgroundPlan && lastReasons.current.length > 0 ? lastReasons.current : reasons;
-  if (!backgroundPlan) lastReasons.current = canPlace || busy ? [] : reasons;
+  const ownReasons = busy ? [] : canPlace ? reasons.filter((r) => r.kind === 'warn') : reasons;
+  const shownReasons = busy ? [] : backgroundPlan && lastReasons.current.length > 0 ? lastReasons.current : ownReasons;
+  if (!backgroundPlan) lastReasons.current = ownReasons;
 
   // the balance this order spends, shown at the right end of the amount label row (it is the Max button): a buy pays in the quote (KAS, or a
   // pair's token B), a sell gives the token. The form's side is the native one, so an inverted view needs no case of its own.
@@ -721,11 +737,11 @@ export function OrderTicket(props: OrderTicketProps) {
       : { amount: formatUnits(tokenBalance, token.decimals, { group: ',' }), unit: ticker };
   const available = enabled && env ? spendBalance : undefined;
 
-  // the height of the whole Limit form (folded, no ladder), panel and footer included, for the market page: on two and three columns its row is at least that (a phone: the panel is that)
-  // tall (market.css --tk-fit), so the form does not scroll. Measured once per width (again once the fonts and the data are first in), never on what
-  // comes and goes in the form later (another type, a ladder, an expiry, a reason): that never moves the page
-  // the field help under the inputs (the title row's "?" shows or hides it, kept in this browser): on a phone it is off at first, so the form fits the panel
-  // without scrolling; beside the book (two and three columns) it is on at first, the row has the room for it
+  // the height of the whole Limit form (folded, no ladder, the field help off: the default), panel and footer included, for the market page: on two and three columns
+  // its row is at least that (a phone: the panel is that) tall (market.css --tk-fit), so the form does not scroll. Measured once per width (again once the fonts
+  // and the data are first in), never on what comes and goes in the form later (another type, a ladder, an expiry, a reason, the help): that never moves the page
+  // the field help under the inputs (the title row's "?" shows or hides it, kept in this browser): off at first on every width, so the form is its labels and
+  // boxes and fits the panel without scrolling (the --tk-fit measure below is taken on this default); the long text of a field is its tooltip meanwhile
   const [helpOn, setHelpOn] = useState(() => {
     try {
       const kept = localStorage.getItem(HELP_KEY);
@@ -733,7 +749,7 @@ export function OrderTicket(props: OrderTicketProps) {
     } catch {
       /* nothing kept */
     }
-    return typeof matchMedia === 'function' && matchMedia('(min-width: 760px)').matches;
+    return false;
   });
   const toggleHelp = () => {
     const on = !helpOn;
@@ -763,10 +779,16 @@ export function OrderTicket(props: OrderTicketProps) {
       if (!scroll || !formEl || !holder || tk.querySelector<HTMLDetailsElement>('.tk-advanced')?.open) return;
       const w = tk.clientWidth;
       if (w === fit.current.w) return;
+      // always the form with the field help off, the default: a reader who turned the help on gets a form that scrolls in the same panel, and the panel
+      // (so the row of the page) is the same whether the help is on or not (the class is put back before anything is painted)
+      const helpWasOn = !tk.classList.contains('tk-help-off');
+      if (helpWasOn) tk.classList.add('tk-help-off');
       const top = scroll.getBoundingClientRect().top - scroll.scrollTop;
       const content = formEl.getBoundingClientRect().bottom - top + parseFloat(getComputedStyle(scroll).paddingBottom || '0');
+      const chrome = holder.offsetHeight - scroll.clientHeight;
+      if (helpWasOn) tk.classList.remove('tk-help-off');
       fit.current.w = w;
-      grid.style.setProperty('--tk-fit', `${Math.ceil(holder.offsetHeight - scroll.clientHeight + content)}px`);
+      grid.style.setProperty('--tk-fit', `${Math.ceil(chrome + content)}px`);
     };
     if (dataWasIn && !fit.current.data) {
       fit.current.data = true;
@@ -841,7 +863,7 @@ export function OrderTicket(props: OrderTicketProps) {
           }))}
         />
 
-        <div class="field">
+        <div class="field" title={typeHelp}>
           <label id="order-type-label" for="order-type">{t('ticket.type.label')}</label>
           <Dropdown
             id="order-type"
@@ -857,7 +879,7 @@ export function OrderTicket(props: OrderTicketProps) {
         </div>
 
         <TicketFields
-          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} slider={slider} cost={costText}
+          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} slider={slider}
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
         />
 
@@ -908,8 +930,9 @@ export function OrderTicket(props: OrderTicketProps) {
       ) : null}
       </div>
       <div class="tk-foot">
-      {/* the one place that says why the order cannot be placed, directly above the button: no room when the order can be placed, two lines at most (more
-          scroll in it); the footer grows upwards from the pinned button, so a sentence coming and going never moves the button */}
+      {/* the one place that says why the order cannot be placed (and what to know before it is: a warning), above the total and the button: no room when there is
+          nothing to say, two lines at most (more scroll in it); the footer grows upwards from the pinned button, and the total is under the slot, so a sentence coming and
+          going moves neither of them */}
       <div class="tk-reason" data-testid="order-issues" data-count={shownReasons.length} aria-live="polite">
         {shownReasons.length > 0 ? (
           <ul>
@@ -929,10 +952,21 @@ export function OrderTicket(props: OrderTicketProps) {
           </ul>
         ) : null}
       </div>
-      {/* progress and the result of a click: a card of the notifications at the top right (not in the footer), so it never moves or covers the form */}
+      {/* what the amount costs (a buy) or yields (a sell), the figure a trader checks before the click, labelled and directly over the button, under the reason slot: one line of a fixed height,
+          "—" until there is an amount; the dollars of the estimate (USD display) stand in a column of their own at its left */}
+      <div class="tk-total" data-testid="order-total">
+        <span class="tk-total-label">{t('ticket.total')}</span>
+        <div class="tk-cost" {...(costText.unit ? {} : { 'data-empty': '1' })} aria-label={t('ticket.cost.aria')} data-testid="order-cost-preview" title={costText.text === t('ticket.cost.dash') ? undefined : `${costText.text} ${costText.unit}`.trim()}>
+          {costText.usd ? <span class="tk-line-usd" title={costText.usd.title || undefined} data-testid="order-cost-usd">{costText.usd.text}</span> : null}
+          <span class="tk-line-text" key={costText.text}>{costText.text}</span>{costText.unit ? ' ' : null}
+          <span class="tk-line-unit">{costText.unit}</span>
+        </div>
+      </div>
+      {/* the result of a click: a card of the notifications at the top right (not in the footer), so it never moves or covers the form; its progress is the
+          label of the button */}
       <SendStatusToast sender={sender} lead={ladderLead} data-testid="order-status" />
       <Button variant="primary" block class="tk-place" data-side={form.side} onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
-        <span key={enterText ?? `${sideName}|${typeName}`} data-state={enterText ? 'enter' : undefined}>{enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
+        <span key={busyText ?? enterText ?? `${sideName}|${typeName}`} data-state={busyText ? 'busy' : enterText ? 'enter' : undefined}>{busyText ?? enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
       </div>
     </section>

@@ -32,9 +32,15 @@
 @keyframes send-flash-0 { from { background: var(--warn-bg); } to { background: transparent; } }
 @keyframes send-flash-1 { from { background: var(--warn-bg); } to { background: transparent; } }
 
-/* the non-blocking notes of the final confirmation (below the summary): one short line each, shown only when they apply */
-.send-notes { margin: 8px 0 0; padding: 0 0 0 18px; font-size: 0.85rem; color: var(--muted); }
-.send-notes li + li { margin-top: 4px; }
+/* the notes of the final confirmation (an order below the minimum value never fills, a price far through the market, contended blocks): a warning callout over
+   the figures, one short paragraph each, shown only when they apply; they never stop the order */
+.send-warn { margin: 0 0 10px; padding: 8px 12px; border-left: 4px solid var(--warn); border-radius: var(--radius-sm); background: var(--warn-bg); font-size: 0.9rem; }
+.send-warn ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.send-warn li { padding-left: 1.5em; text-indent: -1.5em; }
+.send-warn li::before { content: '\26A0\FE0E'; display: inline-block; width: 1.5em; text-indent: 0; color: var(--warn); font-weight: 700; }
+/* the header of the confirmation: "Confirm order" with the wallet it goes to as its subtitle, and a close button big enough to hit */
+.modal-head h2 .send-via { display: block; margin-top: 1px; color: var(--muted); font-size: 0.85rem; font-weight: 400; }
+[data-testid='confirm-order'] .modal-head .btn, [data-testid='confirm-screen'] .modal-head .btn { min-width: 36px; min-height: 36px; padding: 0; font-size: 1.4rem; line-height: 1; }
 /* in a notification card (SendStatusToast): the card gives the frame and the tone */
 .send-toast .send { padding: 0; border: 0; background: none; }
 /* a My orders flow (orders/TxFlow.tsx) in the notifications: its title, the steps and the result stack in the card */

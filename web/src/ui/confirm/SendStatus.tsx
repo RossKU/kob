@@ -460,7 +460,8 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
   const live: Live = { flash: (cell) => (changed.has(cell) ? ` send-changed send-changed-${(st.rev ?? 0) % 2}` : ''), daa: st.daa ?? null };
   return (
     <Modal
-      title={<span>{st.walletLabel ?? ''}</span>}
+      // "Confirm order" is what this screen is; the wallet it goes to next is the subtitle
+      title={<><span>{t('send.confirmTitle')}</span>{st.walletLabel ? <span class="send-via" data-testid="confirm-order-via">{t('send.via', { wallet: st.walletLabel })}</span> : null}</>}
       onClose={() => props.onAnswer(false)}
       data-testid="confirm-order"
       footer={
@@ -472,6 +473,16 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
     >
       <div class="send-confirm">
         <h2 data-testid="confirm-order-title"><span key={s.title}>{s.title}</span></h2>
+        {/* what to know before continuing (an order below the minimum value never fills ...): a warning callout above the figures, not a bullet under them */}
+        {st.notes?.length ? (
+          <aside class="send-warn" role="note" data-testid="confirm-order-notes">
+            <ul>
+              {st.notes.map((n, i) => (
+                <li key={i} data-testid="confirm-order-note">{n}</li>
+              ))}
+            </ul>
+          </aside>
+        ) : null}
         <dl class="send-lines" data-testid="confirm-order-summary">
           {s.lines.map((l, i) => (
             <div class={`send-line ${l.dir ?? ''}${live.flash(`l:${i}`)}`} key={i}>
@@ -489,13 +500,6 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
             </div>
           ) : null}
         </dl>
-        {st.notes?.length ? (
-          <ul class="send-notes" data-testid="confirm-order-notes">
-            {st.notes.map((n, i) => (
-              <li key={i} data-testid="confirm-order-note">{n}</li>
-            ))}
-          </ul>
-        ) : null}
         {s.orders.map((o, i) => (
           <OrderTable order={o} testid={`confirm-order-order-${i}`} cell={`o:${i}`} live={live} key={i} />
         ))}
@@ -509,7 +513,7 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
             ))}
           </dl>
         ) : null}
-        {s.problems > 0 ? <p class="send-problems" data-testid="confirm-order-problems"><span>{t('signer.problems', { count: s.problems })}</span></p> : null}
+        {s.problems > 0 ? <p class="send-problems" data-testid="confirm-order-problems"><span>{t(s.problems === 1 ? 'signer.problems.one' : 'signer.problems.other', { count: s.problems, codes: s.problemCodes.join(', ') })}</span></p> : null}
       </div>
     </Modal>
   );
@@ -521,6 +525,7 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
  */
 export function SendStatusLine(props: { sender: Sender; lead?: string | null; 'data-testid'?: string }) {
   const { config } = useServices();
+  const wallet = useWallet();
   const s = props.sender.status;
   if (!s) return null;
   const busy = sendBusy(s);
@@ -529,7 +534,7 @@ export function SendStatusLine(props: { sender: Sender; lead?: string | null; 'd
   if (busy) {
     body = (
       <>
-        <Spinner /> <span class="send-text" key={s.phase}>{t(PHASE_TEXT[s.phase as keyof typeof PHASE_TEXT])}</span>
+        <Spinner /> <span class="send-text" key={s.phase}>{t(PHASE_TEXT[s.phase as keyof typeof PHASE_TEXT], { wallet: wallet.info?.label || t('send.yourWallet') })}</span>
       </>
     );
   } else if (s.phase === 'submitted' && s.txid) {

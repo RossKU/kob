@@ -17,6 +17,10 @@
 .tk-titlerow { position: relative; display: flex; align-items: center; min-height: 2.25rem; }
 /* the field help is off unless the title row's "?" asks for it: the form fits its panel (a hint is still the field's tooltip on hover) */
 .tk-help-off .tk-help { display: none; }
+/* ... and the hint box that held only it goes too (an empty box would still take the field's 4px gap); a hint with a real line in it (a conversion, a rounding) stays */
+.tk-help-off .field-hint:not(:has(> :not(.tk-help))) { display: none; }
+/* a field's long help is the tooltip of the whole field: the wrapper is out of the layout */
+.tk-tip { display: contents; }
 .tk-help-toggle { margin-left: auto; width: 26px; height: 26px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 0.85rem; font-weight: 600; line-height: 1; cursor: pointer; display: inline-grid; place-items: center; padding: 0; }
 .tk-help-toggle[aria-pressed='true'] { color: var(--primary); border-color: var(--primary); }
 .tk-help-toggle:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
@@ -56,6 +60,9 @@
 .tk-reason ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .tk-reason-item { display: block; overflow-wrap: anywhere; color: var(--bad); font-weight: 600; }
 .tk-reason-need { color: var(--muted); font-weight: 500; }
+/* a warning (the order can be placed, but it will not fill): the warn colour, its marker is a glyph that does not depend on colour alone */
+.tk-reason-warn { color: var(--warn); }
+.tk-reason-warn::before { content: '\26A0\FE0E\00a0'; }
 .tk-reason-item .btn { margin-left: 6px; vertical-align: baseline; }
 .tk-ladder-total { margin: 0; min-height: 1.4em; }
 
@@ -75,23 +82,23 @@
 .tk-notes { margin: 10px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 0.92rem; }
 @media (max-width: 560px) { .tk-row { grid-template-columns: 1fr; } }
 
-/* the cost preview under the amount box: one muted line of a fixed height, whatever it says (or "—"), tabular numbers, never wrapped */
-.tk-avail-line { height: 1.4rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.5rem; }
-/* the Available and cost lines read down the same two edges as the input rows: the figure ends under the box's figure (the numbers in the boxes are
-   right-aligned), the unit stands in the units column under the amount's unit, right-aligned */
-.tk-line { display: grid; grid-template-columns: minmax(0, 1fr) var(--tk-unit-w); column-gap: 8px; align-items: baseline; width: 100%; text-align: right; }
-.tk-line-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding-right: 11px; }
-.tk-line-split { display: flex; justify-content: space-between; gap: 8px; }
-.tk-line-split > span:first-child { flex: none; }
-.tk-line-split > .tk-line-num { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-/* the USD display: a muted read-only "≈ $x" in a column of its own at the left of the cost line (a fixed width, so nothing moves when a figure comes or goes) */
-.tk-cost-usd { grid-template-columns: 5.6rem minmax(0, 1fr) var(--tk-unit-w); }
-.tk-line-usd { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; opacity: 0.85; }
-.tk-line-unit { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* the Available line under the amount box: one line of a fixed height, right-aligned ("Available 100 EXKCC", the Max button), never wrapped */
+.tk-avail-line { display: flex; justify-content: flex-end; height: 1.4rem; margin-top: -6px; overflow: hidden; white-space: nowrap; line-height: 1.5rem; }
+.tk-available { display: inline-flex; gap: 0.3em; max-width: 100%; min-width: 0; }
+.tk-available .tk-line-num { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tk-available .tk-avail-label, .tk-available .tk-line-unit { flex: none; }
 /* every figure typed in the ticket is right-aligned, so its digits stand over the figures of the lines under it */
 .tk .input[inputmode='decimal'], .tk .input[inputmode='numeric'] { text-align: right; font-variant-numeric: tabular-nums; }
-.tk-avail-line + .tk-cost { margin-top: 0; }
-.tk-cost { height: 1.2rem; margin-top: -6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 0.8rem; line-height: 1.2rem; font-variant-numeric: tabular-nums; }
+/* the total over the button: "Total", then what the amount costs (a buy) or yields (a sell) with its unit, right-aligned, in one line of a fixed height. A longer
+   text ("book covers only ...", the estimate with its bound) gives way at its left end (the dollars of the USD display, then an ellipsis); the whole line is its tooltip */
+.tk-total { display: flex; align-items: baseline; gap: 8px; min-height: 1.4rem; font-variant-numeric: tabular-nums; }
+.tk-total-label { flex: none; color: var(--muted); font-size: 0.85rem; }
+.tk-cost { flex: 1 1 auto; min-width: 0; display: flex; justify-content: flex-end; align-items: baseline; gap: 0.3em; overflow: hidden; white-space: nowrap; font-size: 0.95rem; font-weight: 600; line-height: 1.4rem; }
+.tk-cost[data-empty] { color: var(--muted); font-weight: 400; }
+.tk-line-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tk-line-unit { flex: none; }
+/* the USD display: a muted read-only "≈ $x" at the left end of the line, it gives way first */
+.tk-line-usd { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-right: auto; font-size: 0.85rem; font-weight: 400; color: var(--muted); }
 
 /* amount slider: 0..100 % of Max under the amount box, the width of the ticket. The track is filled up to the thumb in the colour of the side, the ticks
    (0 / 25 / 50 / 75 / 100 %) are marks under the track with their labels (the buttons that set them) in one row, aligned to the thumb's travel; the thumb has a
@@ -104,6 +111,10 @@
 .btn.btn-primary.tk-place[data-side='sell'] { background: var(--sell); border-color: var(--sell); color: var(--surface); }
 .btn.btn-primary.tk-place:hover:not(:disabled) { filter: brightness(0.92); }
 .btn.btn-primary.tk-place:disabled:not(.btn-loading) { background: var(--surface-2); border-color: var(--border); color: var(--muted); opacity: 1; }
+/* a click is running: the label says the phase ("Confirm in KasWare...", "Sending..."), so the spinner stands at the left of it instead of over it */
+.btn.btn-primary.tk-place.btn-loading { opacity: 0.9; cursor: progress; }
+.btn.tk-place.btn-spin > :not(.spinner) { visibility: visible; }
+.btn.tk-place.btn-spin > .spinner { inset: 0 auto 0 14px; margin: auto 0; border-color: color-mix(in srgb, var(--surface) 35%, transparent); border-top-color: var(--surface); }
 @media (max-width: 759px), (pointer: coarse) { .tk-slider { --thumb: 44px; } }
 .tk-slider-track { position: relative; }
 .tk-slider-range {
@@ -141,3 +152,9 @@
 .tk-slider-pt[aria-pressed='true'] { color: var(--text); font-weight: 600; }
 .tk-slider-pt:disabled { opacity: 0.45; cursor: default; }
 .tk-slider-pt:focus-visible { outline: 2px solid var(--focus); border-radius: var(--radius-sm, 4px); }
+
+/* the order type's list: the group heading is a small-caps label over a rule (not a lighter line among the rows), and the list has a visible scrollbar where the window
+   cuts it (the panel is placed by the kit's drop-down, in the body: its test id names it) */
+[data-testid='order-type-panel'] .picker-group { margin-top: 4px; padding: 8px 8px 4px; border-top: 1px solid var(--border); color: var(--text); font-size: 0.82rem; font-weight: 700; font-variant-caps: all-small-caps; letter-spacing: 0.05em; }
+[data-testid='order-type-panel'] [role='group']:first-child > .picker-group { margin-top: 0; border-top: 0; }
+[data-testid='order-type-panel'] .picker-list { scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }

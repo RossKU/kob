@@ -5,7 +5,8 @@ for (const width of [850, 1100]) test(`${width} px: the ticket is as wide as its
   await page.setViewportSize({ width, height: 1000 });
   await fund(mock);
   await openMarket(page, mock);
-  await page.getByTestId('order-help-toggle').click();
+  // the field help is off at first on every width
+  await expect(page.getByTestId('order-help-toggle')).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTestId('order-type-help')).toBeHidden();
   await page.waitForTimeout(500);
   const w = await page.evaluate(() => { const r = (s: string) => document.querySelector(s)!.getBoundingClientRect(); return { tk: Math.round(r('.tk').right), chart: Math.round(r('.mkt-area-chart').right) }; });

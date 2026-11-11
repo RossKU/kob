@@ -69,7 +69,7 @@ test.describe('order ticket', () => {
     const shown = placed.receipt;
     expect(shown.title).toBe('Place order');
     expect(shown.lines['Locked in orders']).toBe('2 KAS');
-    expect(Object.values(shown.lines), 'the 3 EXKCC leave the wallet').toContain('−3');
+    expect(Object.values(shown.lines), 'the 3 EXKCC leave the wallet').toContain('−3 EXKCC');
     expect(shown.fee).toBe(`${formatKas(BigInt(placed.submission.fee))} KAS`);
     expect(shown.orders).toHaveLength(1);
     expect(shown.orders[0]!.title).toBe('Sell limit order');

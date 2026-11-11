@@ -15,6 +15,8 @@ test('the amount box has no help line to promise a cost line, and the day-order 
   // (no help line under the amount box at all: the label and the unit say what it is; the lines under it are Available and the cost)
   await expect(form).not.toContainText('Amount of EXKCC to buy or sell.');
   await expect(form).not.toContainText('JST');
+  // the field help is off at first (its long text is the field's tooltip); the "?" shows it under the fields
+  await page.getByTestId('order-help-toggle').click();
   await expect(form.getByText(/A day order ends by 00:00 UTC \(\d\d:\d\d \S+ for you\)\./)).toBeVisible();
 });
 

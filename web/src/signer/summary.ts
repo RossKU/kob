@@ -367,17 +367,19 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   const k = s.net.kas;
   const kas = (v: bigint) => `${formatKas(v)} KAS`;
   lines.push({ label: t('signer.net.kas'), value: signed(k.walletDelta, kas), dir: k.walletDelta < 0n ? 'out' : k.walletDelta > 0n ? 'in' : null });
+  // every token figure carries its unit ("−2 EXKCC"); a token nothing names (an assumed one: its amount is raw, its covenant id is its label) has none to carry
+  const unitOf = (hint: TokenHint | undefined): string => (hint && hint.source !== 'assumed' && hint.ticker ? ` ${hint.ticker}` : '');
   for (const tok of s.net.tokens) {
     const hint = hints.find((h) => h.covenantId === tok.ref.covenantId);
     const label = tokenName(tok.ref.covenantId, hint, terms);
-    const amount = (v: bigint) => formatTokenAmount(v, hint ? hint.decimals : RAW_TOKEN_DECIMALS);
+    const amount = (v: bigint) => `${formatTokenAmount(v, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unitOf(hint)}`;
     if (tok.walletDelta !== 0n) lines.push({ label, value: signed(tok.walletDelta, amount), dir: tok.walletDelta < 0n ? 'out' : 'in' });
     if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: amount(tok.toOthers), dir: 'out' });
   }
   const merged = mergedTokens(s);
   for (const m of merged ?? []) {
     const hint = hints.find((h) => h.covenantId === m.ref.covenantId);
-    const amount = formatTokenAmount(m.amount, hint ? hint.decimals : RAW_TOKEN_DECIMALS);
+    const amount = `${formatTokenAmount(m.amount, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unitOf(hint)}`;
     lines.push({ label: t('signer.net.merged', { token: tokenName(m.ref.covenantId, hint, terms) }), value: t('signer.net.mergedValue', { inCount: m.inCount, outCount: m.outCount, amount }), dir: null });
   }
   if (k.locked.total > 0n) lines.push({ label: t('signer.net.locked'), value: kas(k.locked.total), dir: null });

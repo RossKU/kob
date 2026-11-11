@@ -1,12 +1,13 @@
-// The cost preview under the amount box (founder, 2026-10-29): what the amount costs (a buy) or yields (a sell) in KAS, from the node-confirmed book the
-// planner sees; "—" when there is nothing to say; "book covers only N" when the book is too thin; the line has a fixed height, so it never moves anything.
+// The cost preview (founder, 2026-10-29), now the labelled "Total" line over the order button (UI review M-06): what the amount costs (a buy) or yields (a sell) in KAS,
+// from the node-confirmed book the planner sees; "—" when there is nothing to say; "book covers only N" when the book is too thin; the line has a fixed height, so it never moves anything.
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 import { fillFields, pickType } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
-const EMPTY = 'Estimate shows here once filled in';
+// the total over the button reads "Total" and, until there is an amount, a dash (the label stands outside the line)
+const EMPTY = '—';
 
 for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
   test(`${name} ${width} px: the line under the amount shows the cost or proceeds, a muted placeholder when empty, the thin-book wording, in a box that never changes`, async ({ appPage: page, mock }) => {

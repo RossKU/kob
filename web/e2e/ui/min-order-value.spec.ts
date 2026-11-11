@@ -1,5 +1,6 @@
-// An order worth less than the executor's minimum order value (default 1 KAS) is indexed but never listed, so it never fills. The ticket says nothing of it before
-// signing in no note at all (founder, 2026-11-02: the ticket shows only what blocks an order, so nothing on it appears or moves; the button stays enabled) the final confirmation says it in one line, and My orders says "Not listed by the indexer" with the reason and what to do.
+// An order worth less than the executor's minimum order value (default 1 KAS) is indexed but never listed, so it never fills. The ticket warns before the click, in the
+// slot over the button, in the warn tone (UI review H-08, founder 2026-11-11: a warning, not a block: the button stays enabled and stays where it is); the final confirmation says it
+// again as a warning callout, and My orders says "Not listed by the indexer" with the reason and what to do.
 // The mock indexer applies the rule like the real executor once `mock.minOrderValue(1 KAS)` is set (it is off by default). Desktop and a 375 px phone.
 import { expect, test, TEST_KEYS } from '../fixtures';
 import { KAS, fund, openMarket } from '../helpers/env';
@@ -23,42 +24,43 @@ for (const vp of VIEWPORTS) {
       await mock.minOrderValue(KAS);
     });
 
-    test('the ticket shows no note for a sell below the minimum (nothing appears or moves), and the order is never stopped', async ({ appPage: page, mock }) => {
+    test('the ticket warns before the click for a sell below the minimum (a warning, never a block), and the button does not move', async ({ appPage: page, mock }) => {
       await openMarket(page, mock);
       await pickType(page, 'limit', 'sell');
-      const note = page.getByTestId('order-note-min-value');
+      const warn = page.getByTestId('order-warn-min-value');
       const place = page.getByTestId('order-place');
-      const slot = page.getByTestId('order-issues');
 
-      // 38 EXKCC at 0.026 KAS = 0.988 KAS: below 1 KAS. No note, no reason (the order can be placed), the button is where it was
+      // 39 EXKCC at 0.026 KAS = 1.014 KAS: listed, no warning
       await fillFields(page, { amount: '39', price: '0.026' });
       await settlePlan(page);
       await expect(place).toBeEnabled();
+      await expect(warn).toHaveCount(0);
       const before = (await place.boundingBox())!;
+      // 38 EXKCC at 0.026 KAS = 0.988 KAS: below 1 KAS. The order can still be placed; the slot over the button says it will not fill
       await fillFields(page, { amount: '38' });
       await settlePlan(page);
-      await expect(note).toHaveCount(0);
-      await expect(page.getByTestId('order-notes')).toHaveCount(0);
+      await expect(warn).toHaveText('Below the 1 KAS minimum: it will not fill');
+      await expect(warn).toHaveClass(/tk-reason-warn/);
+      await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
       await expect(place).toBeEnabled();
-      await expect(slot).not.toContainText(/S/);
       expect(await place.boundingBox()).toEqual(before);
       expect(await horizontalOverflow(page), 'ticket').toBe(0);
-      // the price counts too: still no note either side of the limit
+      // the price counts too: 40 x 0.025 = 1 KAS is the minimum itself (listed); a hair under is not
       await fillFields(page, { amount: '40', price: '0.025' });
       await settlePlan(page);
-      await expect(note).toHaveCount(0);
+      await expect(warn).toHaveCount(0);
       await fillFields(page, { amount: '39.99999999' });
       await settlePlan(page);
-      await expect(note).toHaveCount(0);
+      await expect(warn).toHaveCount(1);
       await expect(place).toBeEnabled();
       expect(await place.boundingBox()).toEqual(before);
     });
 
-    test('the final confirmation notes an order below the minimum in one line (worked out when it opens), a listed order has none, and Continue still places it', async ({ appPage: page, mock }) => {
+    test('the final confirmation warns of an order below the minimum in a callout (worked out when it opens), a listed order has none, and Continue still places it', async ({ appPage: page, mock }) => {
       await openMarket(page, mock);
       await pickType(page, 'limit', 'sell');
       const notes = page.getByTestId('confirm-order-notes');
-      // 38 x 0.026 = 0.988 KAS: below 1 KAS. The ticket stays quiet; the confirmation says it once, under its summary
+      // 38 x 0.026 = 0.988 KAS: below 1 KAS. The ticket warned; the confirmation says it once more, as a callout over its figures
       await fillFields(page, { amount: '38', price: '0.026' });
       await settlePlan(page);
       await clickPlaceOnly(page);
@@ -66,6 +68,7 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('confirm-order-note')).toHaveCount(1);
       await expect(notes).toContainText('Worth 0.988 KAS');
       await expect(notes).toContainText('will not be listed, so it will not fill');
+      await expect(notes).toHaveClass(/send-warn/);
       expect(await horizontalOverflow(page), 'confirmation').toBe(0);
       await cancelReceipt(page);
       // 40 x 0.0255 = 1.02 KAS: listed, no note
@@ -85,28 +88,28 @@ for (const vp of VIEWPORTS) {
       await waitSubmitted(page);
     });
 
-    test('an order well above the minimum has no note', async ({ appPage: page, mock }) => {
+    test('an order well above the minimum has no warning', async ({ appPage: page, mock }) => {
       await openMarket(page, mock);
       await pickType(page, 'limit', 'sell');
       await fillFields(page, { amount: '100', price: '0.03' });
       await settlePlan(page);
-      await expect(page.getByTestId('order-note-min-value')).toHaveCount(0);
+      await expect(page.getByTestId('order-warn-min-value')).toHaveCount(0);
       await expect(page.getByTestId('order-place')).toBeEnabled();
     });
 
     test('an order placed below the minimum is shown in My orders as not listed, with the reason and the hint; a listed order is not', async ({ appPage: page, mock }) => {
       await openMarket(page, mock);
       await pickType(page, 'limit', 'sell');
-      // below: 38 x 0.026 = 0.988 KAS. The ticket says nothing and the order goes out anyway.
+      // below: 38 x 0.026 = 0.988 KAS. The ticket warns and the order goes out anyway.
       await fillFields(page, { amount: '38', price: '0.026' });
       await settlePlan(page);
-      await expect(page.getByTestId('order-note-min-value')).toHaveCount(0);
+      await expect(page.getByTestId('order-warn-min-value')).toHaveCount(1);
       const low = await placeOrder(page, mock);
       const lowId = low.submission.created[0]!.covenantId;
       // above: 40 x 0.0255 = 1.02 KAS
       await fillFields(page, { amount: '40', price: '0.0255' });
       await settlePlan(page);
-      await expect(page.getByTestId('order-note-min-value')).toHaveCount(0);
+      await expect(page.getByTestId('order-warn-min-value')).toHaveCount(0);
       const ok = await placeOrder(page, mock);
       const okId = ok.submission.created[0]!.covenantId;
 

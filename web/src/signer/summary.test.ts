@@ -104,7 +104,7 @@ describe('signer summary: a token merge', () => {
     expect(s.title).toBe('Merge token UTXOs');
     const line = s.lines.find((l) => /merged$/.test(l.label))!;
     expect(line.label).toContain('TUSD');
-    expect(line.value).toBe('3 UTXOs into 1: 6 in total, unchanged');
+    expect(line.value).toBe('3 UTXOs into 1: 6 TUSD in total, unchanged');
     // no token leaves or arrives: the net effect lists no TUSD movement line
     expect(s.lines.filter((l) => l.dir !== null && /TUSD/.test(l.label))).toEqual([]);
     // the KAS the freed carriers make spendable is still said

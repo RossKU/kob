@@ -319,7 +319,7 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const title = el('h1', { 'data-testid': 'signer-title' }, s.title);
   cells.text.set('title', title);
   const orders = s.orders.map((o, i) => orderView(o, `signer-order-${i}`, cells, `o:${i}`));
-  const problems = s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t('signer.problems', { count: s.problems, codes: s.problemCodes.join(', ') }))] : [];
+  const problems = s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t(s.problems === 1 ? 'signer.problems.one' : 'signer.problems.other', { count: s.problems, codes: s.problemCodes.join(', ') }))] : [];
   if (!visibilityCheckSupported()) problems.push(el('p', { class: 'error', 'data-testid': 'signer-unsupported' }, t('signer.unsupported')));
   // the app's hints: under the signer's own rows and orders, muted, never part of what Approve waits for
   const hints = noteSentences(req.notes);
