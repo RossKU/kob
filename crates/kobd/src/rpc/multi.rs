@@ -41,7 +41,9 @@
 //! lead (warned about, nothing held against the node behind, which is not suspect either until it confirmed a lead). A node
 //! that stopped advancing never confirms a lead, so the DAG and the local monotonic clock judge it (never a block's
 //! timestamp, which its miner sets): its sink has not changed for [`FROZEN_AFTER`] while another node's changed within it
-//! (or for [`FROZEN_ALONE_AFTER`] when no other node answers). A lead the DAG does not back counts against the node that
+//! (or for [`FROZEN_ALONE_AFTER`] when no other node answers); only a node whose sink was seen to change counts as advancing
+//! (one seen for the first time has no vote yet), and the finding is asserted again at every check while the sink stays
+//! where it was found frozen. A lead the DAG does not back counts against the node that
 //! claims it: its virtual DAA score more than [`LAG_DAA`] above its own sink's, as it and the node behind (which knows that
 //! block) both report it, at [`INFLATED_CHECKS`] checks in a row, is a contradiction. A node that contradicts the other (a
 //! hash, or the acceptance data) is judged too. Whichever node it is,
@@ -454,8 +456,13 @@ struct Progress {
     node: String,
     sink: Hash32,
     since: Instant,
-    /// This stillness was reported already (once per sink).
+    /// This stillness was reported already (once per sink; the finding is asserted again at every check while the sink stays
+    /// the same, so a named node's alarm does not end while it is still frozen).
     reported: bool,
+    /// The sink was seen to change on this node (a record before this one, of the same node, had another sink). Only such a
+    /// node counts as advancing: one seen for the first time (a new node, a replacement, one that answers again) has no vote
+    /// until its sink changes, so a network stall does not make it look advancing next to a node that stands still.
+    moved: bool,
 }
 
 /// The most advanced node's lead over a node, as the answers of one check put it: kept until the node behind can confirm it.
@@ -964,17 +971,20 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
         let now = (w.clock)();
         for ((i, node, _), sink) in &asked {
             let Some(sink) = sink else { continue };
-            let changed = w.progress[*i].as_ref().is_none_or(|p| p.node != *node || p.sink != *sink);
+            let same_node = w.progress[*i].as_ref().is_some_and(|p| p.node == *node);
+            let changed = !same_node || w.progress[*i].as_ref().is_some_and(|p| p.sink != *sink);
             if changed {
-                w.progress[*i] = Some(Progress { node: node.clone(), sink: *sink, since: now, reported: false });
+                w.progress[*i] = Some(Progress { node: node.clone(), sink: *sink, since: now, reported: false, moved: same_node });
             }
         }
         let still_for = |p: &Progress| now.saturating_duration_since(p.since);
         let alone = asked.len() == 1;
         let mut out = vec![];
         for ((i, node, _), _) in &asked {
-            let others_advance =
-                asked.iter().any(|((j, _, _), _)| j != i && w.progress[*j].as_ref().is_some_and(|p| still_for(p) < FROZEN_AFTER));
+            // another node of the list, as it answers now, whose sink was seen to change lately (audit round 4 R4-L-4)
+            let others_advance = asked.iter().any(|((j, other, _), _)| {
+                j != i && w.progress[*j].as_ref().is_some_and(|p| p.node == *other && p.moved && still_for(p) < FROZEN_AFTER)
+            });
             let limit = if alone {
                 Some(FROZEN_ALONE_AFTER)
             } else if others_advance {
@@ -982,23 +992,32 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
             } else {
                 None
             };
-            if let Some(p) = w.progress[*i].as_mut().filter(|p| p.node == *node && !p.reported) {
+            if let Some(p) = w.progress[*i].as_mut().filter(|p| p.node == *node) {
                 let s = now.saturating_duration_since(p.since);
-                if limit.is_some_and(|l| s >= l) {
+                if p.reported {
+                    // still the sink it was found frozen at (audit round 4 R4-L-3): the finding stands, asserted again
+                    out.push((*i, node.clone(), s.as_secs(), alone, true));
+                } else if limit.is_some_and(|l| s >= l) {
                     p.reported = true;
-                    out.push((*i, node.clone(), s.as_secs(), alone));
+                    out.push((*i, node.clone(), s.as_secs(), alone, false));
                 }
             }
         }
         out
     };
-    for (i, node, secs, alone) in still {
-        let why = if alone {
+    // the nodes found frozen and still frozen: no fine answer of this check ends their finding
+    let frozen: Vec<usize> = still.iter().map(|s| s.0).collect();
+    for (i, node, secs, alone, again) in still {
+        let why = if again {
+            format!("its sink has not changed for {secs} s (it stopped advancing)")
+        } else if alone {
             format!("its sink has not changed for {secs} s and no other node answers (it stopped advancing)")
         } else {
             format!("its sink has not changed for {secs} s while the other node's advances (it stopped advancing)")
         };
-        tracing::warn!(node = %board.shown(i), reason = %why, "a node stopped advancing");
+        if !again {
+            tracing::warn!(node = %board.shown(i), reason = %why, "a node stopped advancing");
+        }
         super::judge::frozen(board.entry(i), &node, &why);
     }
     let Some(&(top_i, _, top)) = answers.iter().max_by_key(|a| a.2).filter(|_| answers.len() > 1) else { return };
@@ -1121,6 +1140,10 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
         super::judge::contradicted(board.entry(top_i), &top_node, &why);
     }
     for (i, node, v, evidence) in verdicts {
+        if frozen.contains(&i) {
+            // judged frozen above: a lag verdict (fine, refuted or unconfirmed) must not end or soften that
+            continue;
+        }
         let entry = board.entry(i);
         match v {
             LagVerdict::Level => super::judge::lag(entry, &node, None, None),

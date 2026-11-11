@@ -541,3 +541,91 @@ async fn a_frozen_authority_whose_sink_stands_still_is_given_up() {
     }
     assert_eq!(resolver::replacements("resolver") + resolver::replacements("resolver:2"), before);
 }
+
+/// Audit round 4 R4-L-3: a named cross-checking node whose sink stands still keeps its "stopped advancing" alarm for as long as
+/// it stays frozen, through the lag streak's refutation (its claims are never learned) that used to end it, and the alarm ends
+/// once its sink moves again (the alarm ends at the first fine check here, after a minute of them in production).
+#[tokio::test]
+async fn a_named_frozen_node_keeps_its_alarm_while_it_stays_frozen() {
+    let _g = pair_serial().await;
+    kobd::rpc::resolver::set_network("testnet-10");
+    kobd::rpc::judge::set_alarm_clear_after(Duration::ZERO);
+    let (a, b) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
+    a.push_empty(400);
+    b.push_empty(400);
+    let (ua, ub) = ("ws://10.0.1.1:18210", "ws://10.0.1.2:18210");
+    let (offset, clock) = test_clock();
+    let m = pair((ua, &a), (ub, &b)).with_clock(clock);
+    let mut pushed = 400usize;
+    m.check_health().await;
+    let mut t = 0u64;
+    let mut raised_at = None;
+    for _ in 0..(kobd::rpc::multi::LAG_CONFIRM_CHECKS as usize + 40) {
+        t += 10;
+        offset.store(t, Ordering::Relaxed);
+        a.push_empty(10);
+        pushed += 10;
+        m.check_health().await;
+        match (kobd::rpc::judge::alarm_of(ub), raised_at) {
+            (Some(why), None) => {
+                assert!(why.contains("stopped advancing"), "{why}");
+                raised_at = Some(t);
+            }
+            (Some(why), Some(_)) => assert!(why.contains("stopped advancing"), "at {t} s: {why}"),
+            (None, Some(r)) => panic!("the alarm raised at {r} s ended at {t} s while the node is still frozen"),
+            (None, None) => assert!(t < 130, "no alarm by {t} s"),
+        }
+        if raised_at.is_some() {
+            assert_eq!(m.board().snapshot()[1].state, "cut", "at {t} s");
+        }
+    }
+    assert!(raised_at.is_some_and(|r| r <= 130));
+    // it catches up (the same chain as the other node): its sink moved, the alarm ends and it is back in the pair
+    b.push_empty(pushed - 400);
+    t += 10;
+    offset.store(t, Ordering::Relaxed);
+    m.check_health().await;
+    assert_eq!(kobd::rpc::judge::alarm_of(ub), None);
+    assert_eq!(m.board().snapshot()[1].state, "ok");
+    kobd::rpc::judge::set_alarm_clear_after(kobd::rpc::judge::ALARM_CLEAR_AFTER);
+}
+
+/// Audit round 4 R4-L-4: a node seen for the first time (here one that answers again after a while) has no vote on whether the
+/// chain advances until its sink has been seen to change: during a network stall (neither sink moves) the node that stood
+/// still longer is not judged frozen next to it. Once the newcomer's sink moves and the other's does not, it is.
+#[tokio::test]
+async fn a_node_seen_for_the_first_time_does_not_count_as_advancing() {
+    let _g = pair_serial().await;
+    kobd::rpc::resolver::set_network("testnet-10");
+    let (a, b) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
+    a.push_empty(300);
+    b.push_empty(300);
+    let (ta, tb) = (Tier::new(&a), Tier::new(&b));
+    tb.down.store(true, Ordering::Relaxed);
+    let (ua, ub) = ("ws://10.0.2.1:18210", "ws://10.0.2.2:18210");
+    let (offset, clock) = test_clock();
+    let m = pair((ua, &ta), (ub, &tb)).with_clock(clock);
+    // the stall: neither chain moves; the second node answers again at 200 s
+    for s in [0u64, 100, 200, 250, 300, 350, 400] {
+        offset.store(s, Ordering::Relaxed);
+        if s == 200 {
+            tb.down.store(false, Ordering::Relaxed);
+        }
+        m.check_health().await;
+        assert_eq!(kobd::rpc::judge::alarm_of(ua), None, "at {s} s: a stall is nothing");
+        assert_eq!(kobd::rpc::judge::alarm_of(ub), None, "at {s} s");
+    }
+    // the newcomer advances, the first node does not: two minutes later it is frozen
+    for s in [410u64, 470, 530] {
+        offset.store(s, Ordering::Relaxed);
+        b.push_empty(5);
+        m.check_health().await;
+    }
+    assert!(kobd::rpc::judge::alarm_of(ua).is_some_and(|w| w.contains("stopped advancing")), "{:?}", kobd::rpc::judge::alarm_of(ua));
+    kobd::rpc::judge::set_alarm_clear_after(Duration::ZERO);
+    a.push_empty(15);
+    offset.store(540, Ordering::Relaxed);
+    m.check_health().await;
+    kobd::rpc::judge::set_alarm_clear_after(kobd::rpc::judge::ALARM_CLEAR_AFTER);
+    assert_eq!(kobd::rpc::judge::alarm_of(ua), None, "it moved again");
+}

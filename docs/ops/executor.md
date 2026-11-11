@@ -2945,7 +2945,10 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   promoted) until it has confirmed a lead. **A node that stopped advancing** (it may still report synced) is judged by the
   DAG and the local monotonic clock, never by a block's timestamp (a miner sets it): its sink has not changed for 2 min while
   the other node's changed within them (the chain makes about ten blocks a second), or for 10 min when no other node
-  answers. Both standing still (the network stalls) is nothing. **A lead the DAG does not back** counts against the node that
+  answers. Both standing still (the network stalls) is nothing, and a node seen for the first time (a new node, a
+  replacement, one that answers again) counts as advancing only once its sink has been seen to change, so a fresh node
+  next to a stall does not make the other look frozen. A frozen named node keeps its alarm while its sink stays where it
+  was found frozen (the finding is asserted again at every check); it ends a minute after the sink moves again. **A lead the DAG does not back** counts against the node that
   claims it: when the most advanced node's virtual DAA score is more than 300 above its own sink's DAA score, as it reports
   that block and as the node behind (which places it in its own DAG) does, at two checks in a row, it is a contradiction. A
   lead over a sink nobody else ever learns only refutes itself (a residual: such a node is not cut for it, but the node
