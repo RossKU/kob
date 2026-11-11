@@ -4,7 +4,7 @@ import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { IssuePlan } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
-import { Banner, Button, CopyText, copyToClipboard, KeyValueList, Section } from '../kit';
+import { Banner, Button, CopyText, copyToClipboard, friendlyErrorText, KeyValueList, RawDetails, Section } from '../kit';
 import { downloadText } from './download';
 import { resultViewModel } from './issue-model';
 
@@ -31,7 +31,8 @@ export function ResultPanel(props: ResultPanelProps) {
     return (
       <Section title={t('issue.result.title')} data-testid="issue-result">
         <Banner tone="error" title={t('issue.failed.title')} data-testid="issue-result-error">
-          <span class="wrap-anywhere">{e instanceof Error ? e.message : String(e)}</span>
+          <span class="wrap-anywhere">{friendlyErrorText(e instanceof Error ? e.message : String(e))}</span>
+          <RawDetails text={e instanceof Error ? e.message : String(e)} />
         </Banner>
         <p class="mono wrap-anywhere">{txid}</p>
       </Section>

@@ -38,7 +38,7 @@ import { ConnectBar } from '../shell/WalletButton';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
-import { Banner, Button, ErrorBanner, Field, FieldShell, KeyValueList, Section, Segmented, Spinner, kasText, shortId, useAsync } from '../kit';
+import { Banner, Button, EmptyState, ErrorBanner, Field, FieldShell, KeyValueList, RawDetails, Section, Segmented, Spinner, friendlyErrorText, kasText, shortId, useAsync } from '../kit';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
   reviewSummary, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState,
@@ -87,7 +87,11 @@ export function IssueView() {
   const [notice, setNotice] = useState<Notice>(null);
   const [retry, setRetry] = useState(0);
   const [fileError, setFileError] = useState<string | null>(null);
+  // a small preview of the picked picture (an object URL of the file the browser already holds; nothing is uploaded), released when it is replaced or the view goes away
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => () => void (preview && URL.revokeObjectURL(preview)), [preview]);
 
+  const shownPreview = state.imageFile !== '' ? preview : null;
   const set = (patch: Partial<IssueUiState>) => setState((s) => ({ ...s, ...patch }));
   const touch = (f: string) => setTouched((s) => (s.has(f) ? s : new Set(s).add(f)));
 
@@ -100,6 +104,7 @@ export function IssueView() {
     if (r.ok) {
       setFileError(null);
       set({ imageHash: r.hash, imageFile: file.name });
+      setPreview(URL.createObjectURL(file));
     } else {
       setFileError(t(`issue.imageFile.err.${r.reason}`));
     }
@@ -255,6 +260,7 @@ export function IssueView() {
 
   const another = () => {
     setState(emptyUiState());
+    setPreview(null);
     setTouched(new Set());
     setNotice(null);
     setPhase({ kind: 'form' });
@@ -300,7 +306,12 @@ export function IssueView() {
           }
         >
           <p>{t('issue.pending.body', { ticker: rec.token.ticker, sent: rec.prepSent ? t('issue.pending.sent') : '' })}</p>
-          {resumeError?.id === rec.covenantId ? <p class="field-error wrap-anywhere" data-testid="issue-pending-error">{t('issue.pending.failed', { reason: resumeError.text })}</p> : null}
+          {resumeError?.id === rec.covenantId ? (
+            <div class="field-error wrap-anywhere" data-testid="issue-pending-error">
+              {t('issue.pending.failed', { reason: friendlyErrorText(resumeError.text) })}
+              <RawDetails text={resumeError.text} />
+            </div>
+          ) : null}
         </Banner>
       )) : null}
 
@@ -368,16 +379,25 @@ export function IssueView() {
             >
               {({ id, describedBy, invalid }) => (
                 <>
-                  <input
-                    id={id}
-                    class="input"
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svgz,image/heic,image/jxl,image/bmp,image/x-icon,image/tiff"
-                    aria-describedby={describedBy}
-                    aria-invalid={invalid ? 'true' : undefined}
-                    data-testid="issue-image-file"
-                    onChange={(e) => void pickImage(e.currentTarget as HTMLInputElement)}
-                  />
+                  {/* the native "Choose File | No file chosen" control is hidden (visually only: it keeps its focus, its label and its keyboard use) and a button with the
+                      file name and a small preview stands in for it; the button shows the focus ring while the hidden input has focus */}
+                  <div class="issue-file">
+                    <input
+                      id={id}
+                      class="issue-file-input"
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svgz,image/heic,image/jxl,image/bmp,image/x-icon,image/tiff"
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid ? 'true' : undefined}
+                      data-testid="issue-image-file"
+                      onChange={(e) => void pickImage(e.currentTarget as HTMLInputElement)}
+                    />
+                    <label for={id} class="btn issue-file-button" data-testid="issue-image-file-button">
+                      {shownPreview ? <img class="issue-file-preview" src={shownPreview} alt="" width="32" height="32" data-testid="issue-image-preview" /> : null}
+                      <span class="btn-label">{t(state.imageFile !== '' ? 'issue.field.imageFile.change' : 'issue.field.imageFile.pick')}</span>
+                    </label>
+                    <span class="small muted wrap-anywhere" data-testid="issue-image-file-name">{state.imageFile !== '' ? state.imageFile : t('issue.field.imageFile.none')}</span>
+                  </div>
                   {state.imageHash !== '' ? (
                     <div class="small muted" data-testid="issue-image-hash-note">
                       {t('issue.imageHash.set', { hash: state.imageHash.slice(0, 16), file: state.imageFile })}{' '}
@@ -386,6 +406,7 @@ export function IssueView() {
                         variant="ghost"
                         onClick={() => {
                           setFileError(null);
+                          setPreview(null);
                           set({ imageHash: '', imageFile: '' });
                         }}
                         data-testid="issue-image-hash-clear"
@@ -642,41 +663,48 @@ export function IssueView() {
 
   function renderWalletGate() {
     if (!wallet.info) {
+      // the kit's one disconnected state (review M-12): a sentence and the connect buttons as its action; the notes about a missing extension sit under it
       return (
-        <Banner
-          tone="info"
-          title={t('issue.connect.title')}
-          data-testid="issue-connect"
-          actions={
-            // a phone, or a desktop with no extension detected: the one Connect of the header (the extension if there is one, else the private key entry);
-            // a desktop with extensions: a button for each, and the private key beside them
-            phoneWidth || wallet.detected.length === 0 ? (
-              <ConnectBar gate />
-            ) : (
-              <div class="row">
-                {wallet.detected.map((a) => (
-                  <Button key={a.id} variant="primary" small loading={wallet.connecting} onClick={() => void wallet.connect(a.id)} data-testid={`issue-connect-${a.id}`}>
-                    {t('issue.connect.button', { label: a.label })}
-                  </Button>
-                ))}
-                {/* the private key beside the extensions, as the header's pick offers it (WalletButton.tsx) */}
-                {privateKeySigningAllowed() && visibilityCheckSupported() ? (
-                  <Button small onClick={() => wallet.openPrivateKey()} data-testid="issue-connect-local-key">
-                    {t('shell.wallet.connectKey')}
-                  </Button>
-                ) : null}
-              </div>
-            )
-          }
-        >
-          <p>{t('issue.connect.body')}</p>
+        <div class="stack-sm" data-testid="issue-connect">
+          <EmptyState
+            icon="wallet"
+            data-testid="issue-connect-state"
+            action={
+              // a phone, or a desktop with no extension detected: the one Connect of the header (the extension if there is one, else the private key entry);
+              // a desktop with extensions: a button for each, and the private key beside them
+              phoneWidth || wallet.detected.length === 0 ? (
+                <ConnectBar gate />
+              ) : (
+                <>
+                  {wallet.detected.map((a) => (
+                    <Button key={a.id} variant="primary" loading={wallet.connecting} onClick={() => void wallet.connect(a.id)} data-testid={`issue-connect-${a.id}`}>
+                      {t('issue.connect.button', { label: a.label })}
+                    </Button>
+                  ))}
+                  {/* the private key beside the extensions, as the header's pick offers it (WalletButton.tsx) */}
+                  {privateKeySigningAllowed() && visibilityCheckSupported() ? (
+                    <Button onClick={() => wallet.openPrivateKey()} data-testid="issue-connect-local-key">
+                      {t('shell.wallet.connectKey')}
+                    </Button>
+                  ) : null}
+                </>
+              )
+            }
+          >
+            {t('issue.connect.body')}
+          </EmptyState>
           {wallet.detected.length === 0 && !privateKeySigningAllowed() ? (
-            <p class="muted" data-testid="issue-connect-mirror">{t('signer.mirrorOff')}</p>
+            <p class="muted small issue-connect-note" data-testid="issue-connect-mirror">{t('signer.mirrorOff')}</p>
           ) : wallet.detected.length === 0 && visibilityCheckSupported() ? (
-            <p class="muted" data-testid="issue-connect-none">{t('issue.connect.none')}</p>
+            <p class="muted small issue-connect-note" data-testid="issue-connect-none">{t('issue.connect.none')}</p>
           ) : null}
-          {wallet.error ? <p class="field-error wrap-anywhere">{wallet.error}</p> : null}
-        </Banner>
+          {wallet.error ? (
+            <div class="field-error wrap-anywhere">
+              {friendlyErrorText(wallet.error)}
+              <RawDetails text={wallet.error} />
+            </div>
+          ) : null}
+        </div>
       );
     }
     if (wallet.networkMismatch) {
@@ -714,7 +742,8 @@ export function IssueView() {
     if (plan.status === 'error') {
       return (
         <Banner tone="error" title={t('issue.plan.errorTitle')} data-testid="issue-plan-error" actions={<Button small onClick={() => setRetry((n) => n + 1)} data-testid="issue-plan-retry">{t('issue.plan.retry')}</Button>}>
-          <span class="wrap-anywhere">{plan.message}</span>
+          <span class="wrap-anywhere">{friendlyErrorText(plan.message)}</span>
+          <RawDetails text={plan.message} />
         </Banner>
       );
     }
@@ -771,7 +800,7 @@ export function IssueView() {
         </div>
       );
     }
-    return <p class="muted" data-testid="issue-summary-empty">{t('issue.summary.empty')}</p>;
+    return <EmptyState icon="list" compact data-testid="issue-summary-empty">{t('issue.summary.empty')}</EmptyState>;
   }
 }
 

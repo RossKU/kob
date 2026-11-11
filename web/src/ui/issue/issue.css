@@ -35,3 +35,19 @@
 /* the token's details below its basics; the one plain line on what the program can do */
 .issue-details { margin-top: 14px; }
 .issue-fixed-line { margin: 0; font-weight: 600; }
+
+/* the logo picker (review M-15): the native file input is visually hidden but stays focusable and labelled; the button beside it is its face */
+.issue-file { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.issue-file-input { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); border: 0; white-space: nowrap; }
+.issue-file-button { cursor: pointer; }
+.issue-file:focus-within .issue-file-button, .issue-file-input:focus-visible + .issue-file-button { outline: 2px solid var(--focus); outline-offset: 2px; }
+.issue-file-preview { width: 32px; height: 32px; object-fit: contain; border-radius: var(--radius-sm, 5px); background: var(--surface-2, #eef0f4); flex: none; }
+.issue-file-button:has(.issue-file-preview) { padding-left: 6px; }
+.issue-connect-note { margin: 0; text-align: center; }
+
+/* a touch screen (review M-11): controls of this view at least 32 px high, the main ones 44 px (this view has no checkboxes) */
+@media (pointer: coarse) {
+  .issue-page .btn { min-height: 44px; }
+  .issue-page .btn-sm { min-height: 36px; }
+  .issue-page .disclosure, .issue-page details > summary { min-height: 44px; display: inline-flex; align-items: center; }
+}

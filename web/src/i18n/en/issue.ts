@@ -43,6 +43,9 @@ export default {
   'issue.field.icon.hint': 'An image address: https:// or ipfs://. The browser of each viewer loads the logo from this address, so its host sees who looks at it. Without a picture hash (below) you can change the picture there later and nobody can tell; an ipfs:// address is tamper-proof: it names the picture itself. A logo that is reported can be hidden.',
   'issue.field.imageFile': 'Logo file (optional)',
   'issue.field.imageHash.hint': "Pick the picture file (PNG, JPEG, WebP or GIF, up to 1.5 MB, no SVG). Your browser computes its fingerprint (SHA-256) and the file is not uploaded: put it at the address above yourself. The hash lets viewers and explorers check that the picture at the address is the one you chose. It is written into the token's creation record and cannot be changed later.",
+  'issue.field.imageFile.pick': 'Pick a logo file',
+  'issue.field.imageFile.change': 'Change logo file',
+  'issue.field.imageFile.none': 'No file chosen',
   'issue.imageHash.set': 'Picture hash {hash}... from {file}.',
   'issue.imageHash.clear': 'Remove',
   'issue.imageHash.advanced': 'Advanced: enter the picture hash yourself',
@@ -127,7 +130,7 @@ export default {
   'issue.pending.sent': ' and recorded on chain',
   'issue.pending.send': 'Send the creation',
   'issue.pending.discard': 'Forget it',
-  'issue.pending.failed': 'The creation could not be sent: {reason}',
+  'issue.pending.failed': 'The creation could not be sent. {reason}',
   'issue.pending.checking': 'Checking...',
 
   // result
