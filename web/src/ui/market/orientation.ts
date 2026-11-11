@@ -15,10 +15,10 @@
 import type { DepthView, StatsView } from '../../data/indexer-types';
 import { formatRational, parseDecimal, ratToNumber, reduce, significantDp, type Rational } from '../../kob/pair';
 import { formatUnits, pow10, quoteOf, SOMPI_PER_KAS } from '../../kob/units';
-import { columnFraction, fitAmountColumn, fitDecimalTexts, tickKasFraction, type AmountCell } from '../kit/format';
+import { columnFraction, fitAmountColumn, fitDecimalTexts, PRICE_DP_CAP, PRICE_SIGNIFICANT_DIGITS, tickKasFraction, type AmountCell } from '../kit/format';
 import type { BookModel, BookRow, Level } from './book-model';
 import {
-  amountText, basisOf, basisToNumber, bigOrNull, bpsPercentText, compactText, priceText, toneOf, unitsToNumber,
+  amountText, basisOf, basisToNumber, bigOrNull, bpsPercentText, compactText, exactIfRounded, exactPriceText, priceText, toneOf, unitsToNumber,
   type Candle, type ChartBar, type DepthPoint, type DepthSeries, type StatsModel, type VolumeBar,
 } from './market-model';
 
@@ -91,8 +91,8 @@ const add = (a: Rational, b: Rational): Rational => reduce({ num: a.num * b.den 
 const sub = (a: Rational, b: Rational): Rational => reduce({ num: a.num * b.den - b.num * a.den, den: a.den * b.den });
 const half = (a: Rational): Rational => reduce({ num: a.num, den: a.den * 2n });
 
-/** Fraction digits of an inverted price (about 5 significant digits, 2 to 10), chosen once per market. */
-export const flipDp = (ref: Rational | null): number => (ref ? significantDp(ref, 5, 2, 10) : 4);
+/** Fraction digits of an inverted price (the kit's display rule: about 5 significant digits, at most `PRICE_DP_CAP`, at least 2), chosen once per market. */
+export const flipDp = (ref: Rational | null): number => (ref ? Math.min(PRICE_DP_CAP, significantDp(ref, PRICE_SIGNIFICANT_DIGITS, 2, 10)) : 4);
 
 /** Exact text of an inverted price with `dp` digits, thousands grouped; negative values (a spread of a crossed book) keep their sign. */
 export function ratioText(r: Rational, dp: number, group = ','): string {
@@ -207,6 +207,8 @@ export interface BookRowView {
   nativePrice: bigint;
   /** the side a click prefills in the ticket, in NATIVE terms: an ask level means "buy the token at this price", a bid level "sell" */
   pick: 'buy' | 'sell';
+  /** from the best price to this level (the hover read-out, review M-17): the average price (one digit finer than the column), the amount of the token and its value in KAS (the other way round in a flipped book: KAS, then the token) */
+  cum: { avg: string; amount: string; total: string };
 }
 
 export interface BookView {
@@ -215,8 +217,9 @@ export interface BookView {
   /** best first */
   bids: BookRowView[];
   head: { price: string; size: string; total: string };
-  mid: { text: string; value: string } | null;
-  spread: { text: string; pct: string | null } | null;
+  /** `title`: the whole price when `text` is rounded to the display decimals */
+  mid: { text: string; value: string; title?: string | null } | null;
+  spread: { text: string; pct: string | null; title?: string | null } | null;
   anyEstimated: boolean;
 }
 
@@ -249,11 +252,17 @@ export function bookColumnFractions(c: Pick<BookViewCtx, 'decimals' | 'tick'>, a
   return { tokens: columnFraction(amounts, c.decimals), kas, totalKas: Math.min(kas, TOTAL_KAS_MAX_FRACTION) };
 }
 
-/** The price column of a book view as its cells show it (see `BookRowView.priceShown`). */
-function fitPrices(rows: Omit<BookRowView, 'priceShown' | 'priceTitle'>[]): BookRowView[] {
+/** A row before its price is fitted: `priceExact` is the whole price when `priceText` is rounded to the display decimals (the cell's title, review H-05). */
+type UnfittedRow = Omit<BookRowView, 'priceShown' | 'priceTitle'> & { priceExact: string | null };
+
+/** The price column of a book view as its cells show it (see `BookRowView.priceShown`): the title is the whole price wherever the cell shows less of it. */
+function fitPrices(rows: UnfittedRow[]): BookRowView[] {
   const cells = fitDecimalTexts(rows.map((r) => r.priceText));
-  return rows.map((r, i) => ({ ...r, priceShown: cells[i]!.text, priceTitle: cells[i]!.exact }));
+  return rows.map(({ priceExact, ...r }, i) => ({ ...r, priceShown: cells[i]!.text, priceTitle: cells[i]!.exact ?? priceExact }));
 }
+
+/** `ratioText` with every digit (12) and no trailing zeros: the whole inverted price for a title. */
+const exactRatio = (r: Rational): string => ratioText(r, 12).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 
 /** The cells of a fitted column by row. */
 const columnOf = <R,>(rows: readonly R[], cells: readonly AmountCell[]): Map<R, AmountCell> => new Map(rows.map((r, i) => [r, cells[i]!]));
@@ -265,9 +274,15 @@ export function nativeBookView(m: BookModel, c: BookViewCtx): BookView {
   const shown = [...m.asksDisplay, ...m.bids];
   const sizes = columnOf(shown, fitAmountColumn(shown.map((r) => r.amount), c.decimals, { fraction: fr.tokens, unit: c.name }));
   const totals = columnOf(shown, fitAmountColumn(shown.map((r) => r.cumValue), 8, { fraction: fr.totalKas, unit: 'KAS' }));
-  const row = (r: BookRow, side: 'ask' | 'bid'): Omit<BookRowView, 'priceShown' | 'priceTitle'> => ({
+  const row = (r: BookRow, side: 'ask' | 'bid'): UnfittedRow => ({
+    cum: {
+      avg: r.cumAmount > 0n ? priceText((r.cumValue * c.scale) / r.cumAmount, c.decimals, c.scale, c.dp + 1) : '—',
+      amount: amountText(r.cumAmount, c.decimals, 4),
+      total: formatUnits(r.cumValue, 8, { maxFraction: 4, group: ',' }),
+    },
     key: r.price.toString(),
     priceText: price(r.price),
+    priceExact: exactIfRounded(price(r.price), exactPriceText(r.price, c.decimals, c.scale)),
     priceValue: r.price.toString(),
     sizeText: sizes.get(r)!.text,
     sizeTitle: sizes.get(r)!.exact,
@@ -285,8 +300,8 @@ export function nativeBookView(m: BookModel, c: BookViewCtx): BookView {
     asks: priced.slice(0, m.asksDisplay.length),
     bids: priced.slice(m.asksDisplay.length),
     head: c.labels,
-    mid: m.mid !== null ? { text: price(m.mid), value: m.mid.toString() } : null,
-    spread: m.spread !== null ? { text: price(m.spread), pct: m.spreadBps !== null ? (m.spreadBps / 100).toFixed(2) : null } : null,
+    mid: m.mid !== null ? { text: price(m.mid), value: m.mid.toString(), title: exactIfRounded(price(m.mid), exactPriceText(m.mid, c.decimals, c.scale)) } : null,
+    spread: m.spread !== null ? { text: price(m.spread), pct: m.spreadBps !== null ? (m.spreadBps / 100).toFixed(2) : null, title: exactIfRounded(price(m.spread), exactPriceText(m.spread, c.decimals, c.scale)) } : null,
     anyEstimated: m.anyEstimated,
   };
 }
@@ -306,12 +321,19 @@ export function flippedBookView(m: BookModel, c: BookViewCtx): BookView {
   const invOf = (r: BookRow): Rational => r.inv ?? inv(r.price);
   const totalValue = (rows: BookRow[]): bigint => rows.at(-1)?.cumValue ?? 0n;
   const maxValue = totalValue(m.asks) > totalValue(m.bids) ? totalValue(m.asks) : totalValue(m.bids);
-  const row = (r: BookRow, side: 'ask' | 'bid'): Omit<BookRowView, 'priceShown' | 'priceTitle'> => {
+  const row = (r: BookRow, side: 'ask' | 'bid'): UnfittedRow => {
     const p = invOf(r);
     const tokens = r.cumAmount;
     return {
+      cum: {
+        // tokens per KAS over the whole stretch: (tokens / 10^decimals) / (KAS sompi / 1e8)
+        avg: r.cumValue > 0n && tokens > 0n ? ratioText(reduce({ num: tokens * SOMPI_PER_KAS, den: r.cumValue * pow10(c.decimals) }), c.dp + 1) : '—',
+        amount: formatUnits(r.cumValue, 8, { maxFraction: 4, group: ',' }),
+        total: amountText(tokens, c.decimals, 4),
+      },
       key: r.price.toString(),
       priceText: ratioText(p, c.dp),
+      priceExact: exactIfRounded(ratioText(p, c.dp), exactRatio(p)),
       priceValue: plain(p, c.dp),
       sizeText: sizes.get(r)!.text,
       sizeTitle: sizes.get(r)!.exact,
@@ -337,9 +359,9 @@ export function flippedBookView(m: BookModel, c: BookViewCtx): BookView {
     const bestAsk = invOf(m.bids[0]!);
     const midR = half(add(bestBid, bestAsk));
     const spreadR = sub(bestAsk, bestBid);
-    mid = { text: ratioText(midR, c.dp), value: plain(midR, 12) };
+    mid = { text: ratioText(midR, c.dp), value: plain(midR, 12), title: exactIfRounded(ratioText(midR, c.dp), exactRatio(midR)) };
     const pct = midR.num > 0n ? Number((spreadR.num * 10_000n * midR.den) / (spreadR.den * midR.num)) : null;
-    spread = { text: ratioText(spreadR, c.dp), pct: pct !== null ? (pct / 100).toFixed(2) : null };
+    spread = { text: ratioText(spreadR, c.dp), pct: pct !== null ? (pct / 100).toFixed(2) : null, title: exactIfRounded(ratioText(spreadR, c.dp), exactRatio(spreadR)) };
   }
   return { asks, bids, head: c.labels, mid, spread, anyEstimated: m.anyEstimated };
 }
@@ -354,6 +376,12 @@ export function statsModelFlipped(v: StatsView | null, decimals: number, dp: num
     const r = b !== null && basis ? tokensPerKas(b, decimals, basis) : null;
     return r ? ratioText(r, dp) : null;
   };
+  // the whole inverted price for a tooltip, when the shown one is rounded
+  const exact = (x: unknown): string | null => {
+    const b = bigOrNull(x);
+    const r = b !== null && basis ? tokensPerKas(b, decimals, basis) : null;
+    return r ? exactIfRounded(p(x), exactRatio(r)) : null;
+  };
   const vol = v ? bigOrNull(v.volume_24h) : null;
   const qv = v ? bigOrNull(v.quote_volume_24h) : null;
   const nativeBps = v && typeof v.change_24h_bps === 'number' && Number.isFinite(v.change_24h_bps) ? Math.trunc(v.change_24h_bps) : null;
@@ -366,6 +394,9 @@ export function statsModelFlipped(v: StatsView | null, decimals: number, dp: num
     changeTone: toneOf(bps),
     high: p(v?.low_24h),
     low: p(v?.high_24h),
+    lastExact: exact(v?.last),
+    highExact: exact(v?.low_24h),
+    lowExact: exact(v?.high_24h),
     volume: qv === null ? null : compactText(Number(qv) / 1e8),
     volumeExact: qv === null ? null : formatUnits(qv, 8, { group: ',' }),
     quoteVolume: vol === null ? null : compactText(unitsToNumber(vol, decimals)),

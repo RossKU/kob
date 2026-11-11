@@ -9,7 +9,8 @@ import type { PairBookView, PairLevelSource, PairLevelView, PairSummaryView } fr
 import { cmpRational, formatRational, ratToNumber, reduce, significantDp, wholePrice, type PairToken, type Rational } from '../../kob/pair';
 import type { OpenTokenIssue } from '../../kob/open-token';
 import type { TokenInfo } from '../../kob/registry';
-import { columnFraction, fitAmountColumn, fitDecimalTexts } from '../kit/format';
+import { columnFraction, fitAmountColumn, fitDecimalTexts, PRICE_DP_CAP, PRICE_SIGNIFICANT_DIGITS } from '../kit/format';
+import { exactIfRounded } from './market-model';
 import type { TokenRow } from './token-model';
 import type { MarketToken } from './use-market-token';
 
@@ -61,8 +62,10 @@ export interface PairLevelRow {
   amountText: string;
   /** the exact amount when `amountText` is rounded or compact */
   amountTitle: string | null;
-  /** QUOTE (whole) the level is worth: amount x price */
+  /** QUOTE (whole) the level is worth: amount x price; never a cut digit (fewer decimals or K / M / B when the column is too wide) */
   totalText: string;
+  /** the whole total when `totalText` is rounded or compact */
+  totalTitle: string | null;
   orders: number;
   /** 0..1 of the largest level on the page (depth bar width) */
   bar: number;
@@ -144,7 +147,7 @@ const toRat = (l: PairLevelView): Rational => reduce({ num: BigInt(l.price_num),
  */
 export function buildPairBook(view: PairBookView, base: PairToken, quote: PairToken, depth = 15): PairBookModel | null {
   if (view.base !== base.covenantId || view.quote !== quote.covenantId) return null;
-  const mk = (l: PairLevelView, side: 'ask' | 'bid'): Omit<PairLevelRow, 'priceText' | 'priceShown' | 'priceTitle' | 'amountText' | 'amountTitle' | 'bar' | 'totalText'> => {
+  const mk = (l: PairLevelView, side: 'ask' | 'bid'): Omit<PairLevelRow, 'priceText' | 'priceShown' | 'priceTitle' | 'amountText' | 'amountTitle' | 'bar' | 'totalText' | 'totalTitle'> => {
     const unitPrice = toRat(l);
     return { side, source: l.source, unitPrice, price: wholePrice(unitPrice, base.decimals, quote.decimals), amount: BigInt(l.amount), orders: l.orders };
   };
@@ -152,7 +155,8 @@ export function buildPairBook(view: PairBookView, base: PairToken, quote: PairTo
   const asks0 = view.asks.map((l) => mk(l, 'ask')).sort((a, b) => cmpRational(a.unitPrice, b.unitPrice) || srcOrder(a, b)).slice(0, depth);
   const bids0 = view.bids.map((l) => mk(l, 'bid')).sort((a, b) => cmpRational(b.unitPrice, a.unitPrice) || srcOrder(a, b)).slice(0, depth);
   const ref = asks0[0]?.price ?? bids0[0]?.price ?? null;
-  const dp = ref ? significantDp(ref, 6) : 2;
+  // the kit's price display rule (about 5 significant digits, at most PRICE_DP_CAP fraction digits); the whole price is the cell's title
+  const dp = ref ? Math.min(PRICE_DP_CAP, significantDp(ref, PRICE_SIGNIFICANT_DIGITS)) : 2;
   // the amount column: the finest amount of the shown levels fixes the decimals of every row
   const amountDp = columnFraction([...asks0, ...bids0].map((r) => r.amount), base.decimals);
   const max = [...asks0, ...bids0].reduce((m, r) => (r.amount > m ? r.amount : m), 0n);
@@ -160,22 +164,29 @@ export function buildPairBook(view: PairBookView, base: PairToken, quote: PairTo
   const shownAmounts = [...asks0, ...bids0];
   const fitted = fitAmountColumn(shownAmounts.map((x) => x.amount), base.decimals, { fraction: amountDp, unit: base.ticker });
   const amountCells = new Map(shownAmounts.map((r, i) => [r, fitted[i]!]));
-  const finish = (r: Omit<PairLevelRow, 'priceText' | 'priceShown' | 'priceTitle' | 'amountText' | 'amountTitle' | 'bar' | 'totalText'>): Omit<PairLevelRow, 'priceShown' | 'priceTitle'> => {
+  // the total column: what each level is worth in QUOTE, one number of decimals for every row, never a cut digit
+  const totalOf = (r: { amount: bigint; unitPrice: Rational }): Rational => {
     const total = reduce({ num: r.amount * r.unitPrice.num, den: r.unitPrice.den });
-    return {
-      ...r,
-      priceText: formatRational(r.price, dp, r.side === 'ask' ? 'up' : 'down', dp, ','),
-      amountText: amountCells.get(r)!.text,
-      amountTitle: amountCells.get(r)!.exact,
-      totalText: formatRational({ num: total.num, den: total.den * 10n ** BigInt(quote.decimals) }, Math.min(quote.decimals, dp + 2), 'down', Math.min(quote.decimals, dp + 2), ','),
-      bar: max > 0n ? ratToNumber({ num: r.amount, den: max }) : 0,
-    };
+    return { num: total.num, den: total.den * 10n ** BigInt(quote.decimals) };
   };
+  const totalDp = Math.min(quote.decimals, dp + 2);
+  const totalFitted = fitDecimalTexts(shownAmounts.map((r) => formatRational(totalOf(r), totalDp, 'down', totalDp, ',')), { unit: quote.ticker });
+  const totalCells = new Map(shownAmounts.map((r, i) => [r, totalFitted[i]!]));
+  const finish = (r: Omit<PairLevelRow, 'priceText' | 'priceShown' | 'priceTitle' | 'amountText' | 'amountTitle' | 'bar' | 'totalText' | 'totalTitle'>): Omit<PairLevelRow, 'priceShown' | 'priceTitle'> => ({
+    ...r,
+    priceText: formatRational(r.price, dp, r.side === 'ask' ? 'up' : 'down', dp, ','),
+    amountText: amountCells.get(r)!.text,
+    amountTitle: amountCells.get(r)!.exact,
+    totalText: totalCells.get(r)!.text,
+    totalTitle: totalCells.get(r)!.exact,
+    bar: max > 0n ? ratToNumber({ num: r.amount, den: max }) : 0,
+  });
   const asks1 = asks0.map(finish);
   const bids1 = bids0.map(finish);
   const prices = fitDecimalTexts([...asks1, ...bids1].map((r) => r.priceText));
-  const asks = asks1.map((r, i) => ({ ...r, priceShown: prices[i]!.text, priceTitle: prices[i]!.exact }));
-  const bids = bids1.map((r, i) => ({ ...r, priceShown: prices[asks1.length + i]!.text, priceTitle: prices[asks1.length + i]!.exact }));
+  const titleOf = (r: Omit<PairLevelRow, 'priceShown' | 'priceTitle'>, cell: { exact: string | null }): string | null => cell.exact ?? exactIfRounded(r.priceText, formatRational(r.price, 18, 'nearest', 0, ','));
+  const asks = asks1.map((r, i) => ({ ...r, priceShown: prices[i]!.text, priceTitle: titleOf(r, prices[i]!) }));
+  const bids = bids1.map((r, i) => ({ ...r, priceShown: prices[asks1.length + i]!.text, priceTitle: titleOf(r, prices[asks1.length + i]!) }));
   const bestAsk = asks[0] ?? null;
   const bestBid = bids[0] ?? null;
   let spreadText: string | null = null;

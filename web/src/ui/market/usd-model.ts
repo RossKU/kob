@@ -19,6 +19,7 @@
 import type { StatsView } from '../../data/indexer-types';
 import { cmpRational, formatRational, ratToNumber, reduce, significantDp, type Rational } from '../../kob/pair';
 import { pow10, SOMPI_PER_KAS } from '../../kob/units';
+import { PRICE_DP_CAP, PRICE_SIGNIFICANT_DIGITS } from '../kit/format';
 import { fillCandleGaps, type Candle, type ChartBar, type VolumeBar } from './market-model';
 
 /** A KAS-priced leg: indexer candles of a token (prices = sompi per `basis` base units). */
@@ -124,8 +125,8 @@ export function ratioSeries(candles: readonly RatioCandle[]): { bars: ChartBar[]
   return { bars, volumes };
 }
 
-/** Fraction digits of a USD price (about 5 significant digits, 2 to 10). */
-export const usdDp = (ref: Rational | null): number => (ref ? significantDp(ref, 5, 2, 10) : 4);
+/** Fraction digits of a pair or USD price: the kit's display rule (about 5 significant digits, at most `PRICE_DP_CAP`, at least 2). */
+export const usdDp = (ref: Rational | null): number => (ref ? Math.min(PRICE_DP_CAP, significantDp(ref, PRICE_SIGNIFICANT_DIGITS, 2, 10)) : 4);
 
 /** Exact text of a USD price with `dp` digits, thousands grouped. */
 export const usdText = (r: Rational, dp: number): string => formatRational(r, dp, 'nearest', dp, ',');

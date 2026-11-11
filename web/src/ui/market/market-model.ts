@@ -69,6 +69,21 @@ export function priceText(price: bigint, decimals: number, basis: bigint, dp: nu
   return formatPricePerToken(price, decimals, basis, { maxFraction: dp, trim: false, group: ',' });
 }
 
+/** Every digit of a price (KAS per whole token; trailing zeros trimmed, thousands grouped): the `title` of a price that is shown rounded to the market's display decimals. */
+export function exactPriceText(price: bigint, decimals: number, basis: bigint): string {
+  if (price < 0n) return '-' + exactPriceText(-price, decimals, basis);
+  if (basis <= 0n) return formatUnits(price, 8, { maxFraction: 8, group: ',' });
+  return formatPricePerToken(price, decimals, basis, { maxFraction: 18, group: ',' });
+}
+
+const plainNumber = (s: string): string => s.replace(/,/g, '').replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+
+/** `exact` when `shown` (a price cut to the display decimals) is not the whole of it, else null: a title is only worth having when it says more than the cell. */
+export function exactIfRounded(shown: string | null, exact: string | null): string | null {
+  if (!shown || !exact) return null;
+  return plainNumber(shown) === plainNumber(exact) ? null : exact;
+}
+
 /** Token amount text with at most `maxFraction` digits (trailing zeros trimmed), thousands grouped. */
 export function amountText(amount: bigint, decimals: number, maxFraction = 4): string {
   return formatUnits(amount, decimals, { maxFraction: Math.min(maxFraction, decimals), group: ',' });
@@ -192,6 +207,10 @@ export interface StatsModel {
   tradesText?: string | null;
   /** `0.24%` */
   spread: string | null;
+  /** the whole price when the shown one is rounded to the display decimals (their tooltips) */
+  lastExact?: string | null;
+  highExact?: string | null;
+  lowExact?: string | null;
   /** decimals used for the prices */
   dp: number;
 }
@@ -219,6 +238,10 @@ export function statsModel(v: StatsView | null, decimals: number, dpHint?: numbe
   const vol = v ? bigOrNull(v.volume_24h) : null;
   const qv = v ? bigOrNull(v.quote_volume_24h) : null;
   const bps = v && typeof v.change_24h_bps === 'number' && Number.isFinite(v.change_24h_bps) ? v.change_24h_bps : null;
+  const exact = (x: unknown): string | null => {
+    const b = bigOrNull(x);
+    return b !== null && basis ? exactIfRounded(p(x), exactPriceText(b, decimals, basis)) : null;
+  };
   return {
     last: p(v?.last),
     lastSide: v?.last_side === 'buy' || v?.last_side === 'sell' ? v.last_side : null,
@@ -226,6 +249,9 @@ export function statsModel(v: StatsView | null, decimals: number, dpHint?: numbe
     changeTone: toneOf(bps),
     high: p(v?.high_24h),
     low: p(v?.low_24h),
+    lastExact: exact(v?.last),
+    highExact: exact(v?.high_24h),
+    lowExact: exact(v?.low_24h),
     volume: vol === null ? null : compactText(unitsToNumber(vol, decimals)),
     volumeExact: vol === null ? null : formatUnits(vol, decimals, { group: ',' }),
     quoteVolume: qv === null ? null : compactText(Number(qv) / 1e8),

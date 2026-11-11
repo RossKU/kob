@@ -102,7 +102,7 @@ describe('order book', () => {
     expect(native.asks.map((r) => r.priceText)).toEqual(['0.0500', '0.0250']);
     expect(native.bids.map((r) => r.priceText)).toEqual(['0.0200', '0.0100']);
     expect(native.asks.at(-1)).toMatchObject({ sizeText: '7', priceValue: '2500000', amount: 700_000_000n });
-    expect(native.mid).toEqual({ text: '0.0225', value: '2250000' });
+    expect(native.mid).toMatchObject({ text: '0.0225', value: '2250000' });
   });
 
   it('inverted: native asks become bids (best = highest price) and native bids become asks', () => {
@@ -116,7 +116,7 @@ describe('order book', () => {
     expect(flipped.bids[1]).toMatchObject({ sizeText: '0.150', totalText: '10' });
     // mid and spread of the inverted touch: bid 40, ask 50
     expect(flipped.mid!.text).toBe('45.00');
-    expect(flipped.spread).toEqual({ text: '10.00', pct: '22.22' });
+    expect(flipped.spread).toMatchObject({ text: '10.00', pct: '22.22' });
   });
 
   it('the same level is the same click in either orientation: the ticket prefill is native', () => {
