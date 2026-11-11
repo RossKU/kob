@@ -344,7 +344,7 @@ test.describe('token issuance', () => {
     await mock.giveKas('alice', 500n * KAS);
     await page.goto('/#/create');
     const button = page.getByTestId('issue-connect').getByRole('button');
-    await expect(button).toHaveCount(1);
+    await expect(button).toHaveCount(2); // the extension and the private key
     await expect(page.getByTestId('issue-connect-kasware')).toBeVisible();
     await expect(page.getByTestId('issue-connect-kasware')).toHaveText(/Connect KasWare/);
     // the private key beside the extension, as in the header's pick
