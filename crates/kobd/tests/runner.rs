@@ -525,14 +525,14 @@ async fn a_funding_coin_a_mempool_transaction_holds_is_set_aside_not_the_orders(
 async fn a_day_order_near_its_deadline_is_left_alone_while_the_clock_is_off() {
     let now_ms = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
     let node = MockNode::new(NOW + 5);
-    // the local clock two minutes ahead of the chain's
-    node.0.lock().unwrap().tip_ms = Some(now_ms() - 120_000);
+    // the local clock 45 s ahead of the chain's: beyond the bound (30 s), within twice it
+    node.0.lock().unwrap().tip_ms = Some(now_ms() - 45_000);
     let mut b = crossing_book();
     b.orders[0].deadline = Some(kobd::matcher::book::utc_now() + 60);
-    let mut r = runner(node.clone(), b, M);
+    let mut r = runner(node.clone(), b.clone(), M);
     // a dry run plans every step anew (nothing is submitted), so each step shows whether the day order is planned
     r.cfg.dry_run = true;
-    // a block's timestamp is its miner's: two samples are no judgment yet
+    // a block's timestamp is its miner's: a skew this close to the bound waits for three samples
     for _ in 0..kobd::matcher::run::CLOCK_SAMPLES_MIN - 1 {
         r.clock_checked = None;
         let rep = r.step().await.unwrap();
@@ -542,12 +542,21 @@ async fn a_day_order_near_its_deadline_is_left_alone_while_the_clock_is_off() {
     r.clock_checked = None;
     let rep = r.step().await.unwrap();
     assert!(rep.built.is_empty(), "the day order is left alone");
+    assert!(r.clock_alarm() && r.clock_skew.is_some_and(|s| (44..=46).contains(&s)), "{:?}", r.clock_skew);
+    // audit round 4 R4-L-5: two minutes ahead, far beyond the bound, is judged at the first sample after the start
+    node.0.lock().unwrap().tip_ms = Some(now_ms() - 120_000);
+    let mut r = runner(node.clone(), b, M);
+    r.cfg.dry_run = true;
+    let rep = r.step().await.unwrap();
+    assert!(rep.built.is_empty(), "the day order is left alone from the first step");
     assert!(r.clock_alarm() && r.clock_skew.is_some_and(|s| (119..=121).contains(&s)), "{:?}", r.clock_skew);
     let m = kobd::matcher::run::metrics_text(&r, &rep);
     assert!(m.contains("kob_clock_skew_alarm 1"), "{m}");
     assert!(r.executor_health(&rep).clock_alarm);
     let f = r.status_facts(&rep);
-    assert!(kobd::matcher::run::status_line(&f).contains("the local clock is 1"), "{}", kobd::matcher::run::status_line(&f));
+    let line = kobd::matcher::run::status_line(&f);
+    // the samples span no time yet: the clock is ahead, or every node is behind; the line names both
+    assert!(line.contains("the local clock is 1") && line.contains("every node is behind"), "{line}");
     // the clock agrees again: once the median of the last samples does, planned again
     node.0.lock().unwrap().tip_ms = Some(now_ms());
     let mut rep = r.step().await.unwrap();
@@ -574,6 +583,29 @@ fn a_lying_block_timestamp_neither_raises_the_clock_alarm_nor_holds_day_orders()
     assert_eq!(median(&v(&[0, 3_600, 0, 1, 0])), Some(0), "one odd sample does not move the median");
     assert_eq!(median(&v(&[120, 0, 120])), Some(120));
     assert_eq!(median(&v(&[])), None);
+}
+
+/// Audit round 4 R4-L-5: the alarm does not blame the local clock when every node is behind it and the chain stands still (a
+/// stall or a partition): a sample grows with the local time then, while a clock that is merely off keeps it level.
+#[test]
+fn the_clock_alarm_names_the_nodes_when_the_chain_stands_still() {
+    use kobd::matcher::run::{clock_cause, ClockCause};
+    let p = |s: &[(u64, i64)]| s.iter().copied().collect::<std::collections::VecDeque<(u64, i64)>>();
+    let t = 1_790_000_000_000u64;
+    // every sample 120 s, over two minutes: the chain advances with the local time, the clock is ahead
+    let level = p(&[(t, 120), (t + 60_000, 120), (t + 120_000, 121)]);
+    assert_eq!(clock_cause(120, &level), ClockCause::ClockAhead);
+    // the sample grows with the local time: the chain stands still, the nodes are behind
+    let still = p(&[(t, 40), (t + 60_000, 100), (t + 120_000, 160)]);
+    assert_eq!(clock_cause(100, &still), ClockCause::NodesBehind);
+    // too short a span to tell (the start's samples a few seconds apart)
+    assert_eq!(clock_cause(120, &p(&[(t, 120), (t + 5_000, 125)])), ClockCause::AheadOrNodesBehind);
+    assert_eq!(clock_cause(120, &p(&[])), ClockCause::AheadOrNodesBehind);
+    // every node ahead of the local clock: the local clock is behind
+    assert_eq!(clock_cause(-90, &still), ClockCause::ClockBehind);
+    assert!(ClockCause::NodesBehind.describe(100).contains("the nodes are behind: check them"));
+    assert!(!ClockCause::NodesBehind.describe(100).contains("NTP"), "the local clock is not blamed");
+    assert!(ClockCause::ClockAhead.describe(120).contains("set it: NTP"));
 }
 
 /// Audit round 2 R2-M-2: a batch carries the deadline of the day order it fills, and a resend is checked against it: once the

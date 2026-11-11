@@ -265,6 +265,85 @@ pub const CLOCK_CHECK_EVERY: Duration = Duration::from_secs(60);
 /// The clock samples kept (one per [`CLOCK_CHECK_EVERY`]), and how many are needed before their median is judged.
 pub const CLOCK_SAMPLES: usize = 5;
 pub const CLOCK_SAMPLES_MIN: usize = 3;
+/// Until [`CLOCK_SAMPLES_MIN`] samples exist (after every start), a sample is taken this often instead, so the check judges
+/// within seconds of a start, not minutes (audit round 4 R4-L-5).
+pub const CLOCK_START_EVERY: Duration = Duration::from_secs(5);
+/// On fewer than [`CLOCK_SAMPLES_MIN`] samples the median is judged against this many times the bound: only a skew far
+/// beyond it raises the alarm that early, one within the bound clears it, and one in between waits for the samples.
+pub const CLOCK_EARLY_FACTOR: u64 = 2;
+/// Local time the samples must span before they tell whether the chain advances (whether every node stands still).
+pub const CLOCK_ADVANCE_SPAN_MS: u64 = 10_000;
+
+/// What a clock skew beyond the bound most likely means (the alarm's wording, [`clock_cause`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockCause {
+    /// Every node's newest block is ahead of the local clock: the local clock is behind.
+    ClockBehind,
+    /// The chain advances, and every node's newest block lags the local clock by the same amount: the local clock is ahead.
+    ClockAhead,
+    /// Every node's newest block is behind the local clock and the chain did not advance across the samples: the nodes are
+    /// behind the network (a stall or a partition), not the local clock.
+    NodesBehind,
+    /// Every node's newest block is behind the local clock, and the samples do not span enough time yet to tell why.
+    AheadOrNodesBehind,
+}
+
+impl ClockCause {
+    /// The status line's words for a skew of `s` seconds.
+    pub fn describe(self, s: i64) -> String {
+        let a = s.unsigned_abs();
+        match self {
+            ClockCause::ClockBehind => format!("the local clock is {a} s behind the chain's (set it: NTP)"),
+            ClockCause::ClockAhead => format!("the local clock is {a} s ahead of the chain's (set it: NTP)"),
+            ClockCause::NodesBehind => {
+                format!("every node's newest block is {a} s behind the local clock and not advancing (the nodes are behind: check them)")
+            }
+            ClockCause::AheadOrNodesBehind => format!(
+                "the local clock is {a} s ahead of every node's newest block (the clock is ahead, or every node is behind: check NTP and the nodes)"
+            ),
+        }
+    }
+
+    /// The error line's words.
+    fn explain(self) -> &'static str {
+        match self {
+            ClockCause::ClockBehind => {
+                "the local clock is behind the chain's (every node's newest block is ahead of it): set the system clock (NTP)"
+            }
+            ClockCause::ClockAhead => {
+                "the local clock is ahead of the chain's (the chain advances, and every node's newest block lags the local clock by the same amount): set the system clock (NTP)"
+            }
+            ClockCause::NodesBehind => {
+                "every node's newest block is behind the local clock and the chain did not advance over the samples: the nodes are behind the network (a stall or a partition), not the local clock; check the nodes"
+            }
+            ClockCause::AheadOrNodesBehind => {
+                "every node's newest block is behind the local clock: the local clock is ahead (set it: NTP), or every node is behind the network (check them)"
+            }
+        }
+    }
+}
+
+/// Why the skew `skew` (the median of the samples) is off, from the samples `points` (the local time in ms, the sample in
+/// seconds, oldest first): a sample is the local clock minus the newest chain block's time, so while the chain stands still
+/// it grows with the local time, and while the local clock is merely off it stays.
+pub fn clock_cause(skew: i64, points: &std::collections::VecDeque<(u64, i64)>) -> ClockCause {
+    if skew < 0 {
+        return ClockCause::ClockBehind;
+    }
+    let (Some(first), Some(last)) = (points.front(), points.back()) else { return ClockCause::AheadOrNodesBehind };
+    let span_ms = last.0.saturating_sub(first.0);
+    if span_ms < CLOCK_ADVANCE_SPAN_MS {
+        return ClockCause::AheadOrNodesBehind;
+    }
+    // how far the chain's newest block moved over the span, in seconds: the local time passed minus the sample's growth
+    let span = (span_ms / 1000) as i64;
+    let advanced = span - (last.1 - first.1);
+    if advanced * 2 < span {
+        ClockCause::NodesBehind
+    } else {
+        ClockCause::ClockAhead
+    }
+}
 
 /// One clock sample (seconds, the local clock minus the chain's) from the tip timestamps of the nodes `tips` at the local
 /// time `local_ms`: the one nearest the local clock. A block's timestamp is set by its miner, so no node's alone decides: a
@@ -454,6 +533,10 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     clock_logged: Option<std::time::Instant>,
     /// The last clock samples ([`chain_skew_secs`], seconds, oldest first; at most [`CLOCK_SAMPLES`]).
     pub clock_samples: std::collections::VecDeque<i64>,
+    /// The same samples with the local time each was taken at (ms): whether the chain advances ([`clock_cause`]).
+    clock_points: std::collections::VecDeque<(u64, i64)>,
+    /// Why the skew is off while it is beyond the bound ([`clock_cause`]).
+    pub clock_cause: Option<ClockCause>,
     /// Day orders left alone this step because the clock is off and their deadline is near ([`RunConfig::clock_skew_max_secs`]).
     pub deadline_near: BTreeSet<CovId>,
     /// Steps that failed (the node unreachable, the network wrong, ...).
@@ -668,6 +751,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             clock_checked: None,
             clock_logged: None,
             clock_samples: std::collections::VecDeque::new(),
+            clock_points: std::collections::VecDeque::new(),
+            clock_cause: None,
             deadline_near: BTreeSet::new(),
             tick_errors: 0,
             last_tick_error: None,
@@ -1009,12 +1094,16 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
     /// anything with real time: a day order's on-chain bound is its `expiryDaa`, a DAA score). This is only a check of that
     /// clock, never a clock of its own: a block's timestamp is its miner's, so each sample takes the node tip nearest the
     /// local clock ([`chain_skew_secs`]: one node agreeing outvotes a lying or stopped one), and only the median of the last
-    /// [`CLOCK_SAMPLES`] samples, once there are [`CLOCK_SAMPLES_MIN`], is judged. Beyond `clock_skew_max_secs` the skew is
+    /// [`CLOCK_SAMPLES`] samples is judged: from the first sample after a start, with samples [`CLOCK_START_EVERY`] apart until
+    /// there are [`CLOCK_SAMPLES_MIN`] and [`CLOCK_EARLY_FACTOR`] times the bound meanwhile, then every [`CLOCK_CHECK_EVERY`]
+    /// against the bound. The alarm names the likely cause ([`clock_cause`]: the local clock, or every node behind the
+    /// network). Beyond `clock_skew_max_secs` the skew is
     /// logged (an error, again every ten minutes while it lasts), shown on the status line, in `/v1/health` and the metrics,
     /// and [`Runner::deadline_near`] keeps the day orders whose deadline is within the skew (plus the bound) of the local clock
     /// out of every plan (audit 2026-11-11 M-14).
     async fn check_clock(&mut self) {
-        if self.cfg.clock_skew_max_secs == 0 || self.clock_checked.is_some_and(|t| t.elapsed() < CLOCK_CHECK_EVERY) {
+        let every = if self.clock_samples.len() < CLOCK_SAMPLES_MIN { CLOCK_START_EVERY } else { CLOCK_CHECK_EVERY };
+        if self.cfg.clock_skew_max_secs == 0 || self.clock_checked.is_some_and(|t| t.elapsed() < every) {
             return;
         }
         self.clock_checked = Some(std::time::Instant::now());
@@ -1024,25 +1113,38 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             return;
         };
         self.clock_samples.push_back(sample);
+        self.clock_points.push_back((local, sample));
         while self.clock_samples.len() > CLOCK_SAMPLES {
             self.clock_samples.pop_front();
         }
-        // a block's timestamp is its miner's: no judgment on fewer than three minutes of samples, then on their median
-        let Some(skew) = median(&self.clock_samples).filter(|_| self.clock_samples.len() >= CLOCK_SAMPLES_MIN) else { return };
+        while self.clock_points.len() > CLOCK_SAMPLES {
+            self.clock_points.pop_front();
+        }
+        let Some(skew) = median(&self.clock_samples) else { return };
         let max = self.cfg.clock_skew_max_secs as i64;
+        // a block's timestamp is its miner's: on fewer samples only a skew far beyond the bound counts (or one within it)
+        if self.clock_samples.len() < CLOCK_SAMPLES_MIN {
+            let far = skew.unsigned_abs() > self.cfg.clock_skew_max_secs.saturating_mul(CLOCK_EARLY_FACTOR);
+            if !far && skew.abs() > max {
+                return;
+            }
+        }
         let was_off = self.clock_skew.is_some_and(|s| s.abs() > max);
+        let cause = clock_cause(skew, &self.clock_points);
         let due = !was_off || self.clock_logged.is_none_or(|t| t.elapsed() >= LOW_FUNDS_LOG_EVERY);
         if skew.abs() > max && due {
             self.clock_logged = Some(std::time::Instant::now());
             tracing::error!(
                 skew_seconds = skew,
                 bound_seconds = max,
-                "the local clock differs from the chain's (every node's newest blocks, over the last minutes): set the system clock (NTP); day orders near their deadline are not filled meanwhile"
+                "{}; day orders near their deadline are not filled meanwhile",
+                cause.explain()
             );
         } else if was_off && skew.abs() <= max {
             tracing::info!(skew_seconds = skew, "the local clock agrees with the chain's again");
         }
         self.clock_skew = Some(skew);
+        self.clock_cause = (skew.abs() > max).then_some(cause);
     }
 
     /// The local clock is beyond the bound from the chain's.
@@ -1836,6 +1938,8 @@ pub struct StatusFacts {
     pub oldest_pending_secs: u64,
     /// The local clock's skew from the chain's while it is beyond the bound (seconds).
     pub clock_skew_alarm: Option<i64>,
+    /// What that skew most likely means ([`clock_cause`]; `None`: no alarm).
+    pub clock_cause: Option<ClockCause>,
     /// The build ([`crate::version::build_line`]); `None`: not shown.
     pub build: Option<String>,
 }
@@ -1866,6 +1970,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             dropped: t.dropped_total,
             oldest_pending_secs: t.oldest_pending_daa(rep.daa) / 10,
             clock_skew_alarm: self.clock_skew.filter(|_| self.clock_alarm()),
+            clock_cause: self.clock_cause.filter(|_| self.clock_alarm()),
             // the build is logged once at the start, not on every status line
             build: None,
         }
@@ -1934,7 +2039,8 @@ pub fn status_line(f: &StatusFacts) -> String {
         ));
     }
     if let Some(s) = f.clock_skew_alarm {
-        warn.push(format!("the local clock is {s} s off the chain's (set it: NTP); day orders near their deadline are not filled"));
+        let cause = f.clock_cause.unwrap_or(if s < 0 { ClockCause::ClockBehind } else { ClockCause::AheadOrNodesBehind });
+        warn.push(format!("{}; day orders near their deadline are not filled", cause.describe(s)));
     }
     parts.push(if warn.is_empty() { "no warnings".to_string() } else { format!("WARNING: {}", warn.join("; ")) });
     if let Some(b) = &f.build {
