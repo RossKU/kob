@@ -202,7 +202,7 @@ test.describe('phone', () => {
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveCount(0);
     await page.getByTestId('token-list-nameless').click();
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveText('Unnamed token');
-    await expect(page.getByTestId(`token-hash-${'0f'.repeat(32)}`)).toHaveText('0f0f0f0f0f0f…0f0f0f0f0f0f');
+    await expect(page.getByTestId(`token-hash-${'0f'.repeat(32)}`)).toHaveText('0f0f…0f0f');
     const row = page.getByTestId(`token-row-${exkcc}`);
     await expect(row.getByTestId(`token-link-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-last-${exkcc}`)).toBeVisible();

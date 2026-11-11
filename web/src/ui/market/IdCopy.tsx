@@ -3,9 +3,14 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { copyToClipboard } from '../kit/CopyText';
+import { shortId } from '../kit/format';
 import { wideId } from '../../kob/registry';
 
-export function IdCopy(props: { value: string; 'data-testid'?: string }) {
+/**
+ * A covenant id with its copy button. `compact` (a phone's list row, review M-02): the short id `e5e5…e5e5`, a tap on it opens the whole id (wrapped, over the lines it needs) and a second tap closes it again; the
+ * copy button copies the whole id either way. `expanded` / `onToggle` are the row's, so the row's line can grow with it.
+ */
+export function IdCopy(props: { value: string; 'data-testid'?: string; compact?: boolean; expanded?: boolean; onToggle?: () => void }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
@@ -17,7 +22,13 @@ export function IdCopy(props: { value: string; 'data-testid'?: string }) {
   const label = state === 'copied' ? t('common.copied') : state === 'failed' ? t('common.copyFailed') : t('market.id.copy');
   return (
     <span class="ml-id">
-      <code class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{wideId(props.value)}</code>
+      {props.compact ? (
+        <button type="button" class="ml-id-toggle" aria-expanded={props.expanded ? 'true' : 'false'} aria-label={t(props.expanded ? 'market.id.collapse' : 'market.id.expand')} onClick={props.onToggle} data-testid={props['data-testid'] ? `${props['data-testid']}-toggle` : undefined}>
+          <code class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{props.expanded ? props.value : shortId(props.value, 4, 4)}</code>
+        </button>
+      ) : (
+        <code class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{wideId(props.value)}</code>
+      )}
       <button type="button" class="copy-btn ml-copy" onClick={onCopy} aria-label={label} title={label} data-state={state} data-testid={props['data-testid'] ? `${props['data-testid']}-copy` : undefined}>
         {state === 'copied' ? (
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>

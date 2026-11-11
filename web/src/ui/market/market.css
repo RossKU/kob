@@ -314,8 +314,9 @@ body:has(.market-page) .container { max-width: none; }
 
 .ob { position: relative; display: flex; flex-direction: column; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 .ob-tools { display: flex; gap: 6px; align-items: center; }
-.ob-tools .select { min-height: 26px; padding: 1px 6px; font-size: 0.8rem; width: 7.5rem; } /* a fixed width: the tick step it shows changes with the book and must not move the header */
-.book-tabbed .ob-tools .select { width: 5.75rem; } /* the switch, the step and the refresh share one line of the 320 px card */
+.ob-tools .select { min-height: 26px; padding: 1px 4px; gap: 4px; font-size: 0.8rem; width: 7.5rem; font-variant-numeric: tabular-nums; }
+.ob-tools .picker-face-text { text-overflow: clip; } /* the step is never cut to an ellipsis: its labels are short (the display step and three decades) and the face holds the longest of them */ /* a fixed width: the tick step it shows changes with the book and must not move the header */
+.book-tabbed .ob-tools .select { width: 6.5rem; } /* the switch, the step and the refresh share one line of the 320 px card */
 .ob-head, .ob .book-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
 .ob-head { padding: 2px 8px 4px; color: var(--muted); font-size: 0.74rem; height: 2.9em; overflow: hidden; } /* two lines of the column titles, whatever their text */
 /* the column titles carry their units ("Price (TICKER / KAS)"): they wrap instead of losing the unit to an ellipsis */
@@ -323,13 +324,15 @@ body:has(.market-page) .container { max-width: none; }
 .ob-head > span { white-space: normal; overflow-wrap: break-word; min-width: 0; }
 .ob-head > span { text-align: right; } /* every numeric column is right-aligned so the decimal points line up (fixed decimals per column) */
 /* a side is exactly its slots tall (levels, then blank slots): the block never grows or shrinks with the number of levels */
-.ob .book-side { position: relative; height: calc(var(--ob-rows, 12) * 21px); overflow: hidden; }
+.ob .book-side { position: relative; height: calc(var(--ob-rows, 12) * var(--ob-row-h, 21px)); overflow: hidden; }
 .ob .book-blank { pointer-events: none; }
 /* a slot with no level (a thin book in a tall card; review L-01): the rung of the ladder, faint, so the band between the column titles and the first ask reads as empty slots and not as a gap */
 .ob .book-row.book-blank[data-testid^='ob-blank'] { box-shadow: inset 0 -1px 0 var(--grid); }
 .ob .ob-none { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .ob .book-side[data-testid='book-asks'], .ob .book-side.book-asks { justify-content: flex-end; } /* fewer levels than slots: the asks sit on the spread, the blank is at the top of the asks (the usual exchange look); the bids hang from it */
-.ob .book-row { height: 21px; padding: 0 8px; align-items: center; font-size: 0.82rem; line-height: 21px; }
+.ob .book-row { height: var(--ob-row-h, 21px); padding: 0 8px; align-items: center; font-size: 0.82rem; line-height: var(--ob-row-h, 21px); }
+/* a finger: a level is a tap target (it fills the ticket), so the row is 36 px tall (review M-11; book-rows.ts shows fewer levels on a phone for it) */
+@media (pointer: coarse) { .ob { --ob-row-h: 36px; } }
 .ob .book-row > span { text-align: right; }
 .ob .book-row > span.book-price { text-align: right; font-weight: 600; }
 .ob .book-bar { opacity: 1; }
@@ -585,6 +588,10 @@ body:has(.market-page) .container { max-width: none; }
 .tk-program, .tk-name-line { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
 .tk-program { align-items: center; gap: 4px 8px; }
 
+/* a desktop row's star and eye are inline (the "⋯" cell is a phone's: below) */
+.ml-actions { display: contents; }
+.ml-more-cell { display: none; }
+
 /* a phone: the token table is a list of cards, not columns (a name, a covenant id and badges beside five figures would not fit 375 px): the identity and the
    text take the left, the price over the change sit on the right; the header row becomes the sort bar */
 @media (max-width: 759px) {
@@ -597,9 +604,26 @@ body:has(.market-page) .container { max-width: none; }
   .ml-tokens tbody td:first-child { grid-column: 1; grid-row: 1 / span 3; padding-left: 0; }
   .ml-tokens tbody td.ml-last { grid-column: 2; grid-row: 1; align-self: end; }
   .ml-tokens tbody td.ml-change { grid-column: 2; grid-row: 2; align-self: start; font-size: 0.85rem; }
-  /* the star and the eye stay in the row's line (the row is two lines of text, there is no room under the price for them); their targets are 44 px, overlapping their neighbours' margins */
-  .ml-tokens .ml-name { gap: 0; }
+  /* the star and the eye are one "⋯" menu at the card's right end (review M-02; they took a third of the line): the menu is a small panel over the card's right half, the same two
+     buttons as on a desktop, each with its words */
+  .ml-tokens tbody tr { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .ml-tokens tbody td.ml-more-cell { display: block; grid-column: 3; grid-row: 1 / span 3; padding: 0; }
+  .ml-more { appearance: none; display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 44px; height: 100%; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); cursor: pointer; }
+  .ml-more:hover, .ml-more[aria-expanded='true'] { color: var(--text); background: var(--surface-2); }
+  .ml-more:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: -2px; }
+  .ml-tokens .ml-actions { display: none; }
+  .ml-tokens .ml-actions.is-open { display: flex; flex-direction: column; position: absolute; z-index: 5; right: 40px; top: 50%; transform: translateY(-50%); width: max-content; max-width: min(18rem, calc(100vw - 80px)); padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+  .ml-tokens .ml-actions .fav-star { width: 100%; height: 44px; margin: 0; justify-content: flex-start; gap: 10px; padding: 0 10px; }
+  .ml-tokens .ml-actions .fav-star::after { content: attr(title); color: var(--text); font-size: 0.9rem; text-align: left; line-height: 1.25; }
   .ml-tokens .ml-name .idb { margin-left: 4px; margin-right: 4px; }
+  .ml-tokens .ml-name { gap: 0; }
+  /* the covenant id: the short form is a button (a tap opens the whole id, wrapped over the lines it needs; a second tap closes it) */
+  .ml-id-toggle { all: unset; cursor: pointer; display: inline-flex; min-width: 0; min-height: 22px; align-items: center; border-radius: 3px; }
+  .ml-id-toggle code { font-size: 0.75rem; }
+  .ml-id-toggle:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+  .ml-line2.ml-line2-open { height: auto; min-height: 22px; overflow: visible; }
+  .ml-line2-open .ml-id { white-space: normal; min-width: 0; }
+  .ml-line2-open .ml-id code { white-space: normal; overflow-wrap: anywhere; overflow: visible; }
   .ml-tokens tbody td[colspan] { grid-column: 1 / -1; grid-row: auto; }
 }
 

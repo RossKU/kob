@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useMedia } from '../shell/narrow';
 import { useServices } from '../../app/context';
 import { FiatNote, useFiat } from '../../app/use-fiat';
 import { useDeclarationLookup } from '../../app/use-declaration';
@@ -6,7 +7,7 @@ import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import type { IndexerTokenView, PairBookView, PairFillsView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
-import { Banner, Button, compactZeros, ErrorBanner, Field, Section, Table, TableMessage, toError, useAsync, zerosTitle } from '../kit';
+import { Banner, Button, ErrorBanner, Field, Section, Table, TableMessage, toError, useAsync } from '../kit';
 import { FavoriteStar, HideToggle } from './FavoriteStar';
 import { isFavoritePair, isFavoriteToken, togglePair, toggleToken, useFavorites } from './favorites';
 import { useHiddenTokens } from './hidden-tokens';
@@ -108,9 +109,9 @@ function Figure(props: { cell: Cell; entry: ListEntry; testid: string; cls?: str
   const c = props.cell;
   const title = c.title ?? (c.text === null && props.entry.unavailable ? t('market.list.unavailable') : null);
   return (
-    <td class={`right num nowrap${props.cls ? ` ${props.cls}` : ''}`} data-testid={props.testid} title={title ?? zerosTitle(c.text)}>
+    <td class={`right num nowrap${props.cls ? ` ${props.cls}` : ''}`} data-testid={props.testid} title={title ?? undefined}>
       {c.text !== null ? (
-        <span class={c.tone ? `tone-${c.tone}` : undefined}>{compactZeros(c.text)}</span>
+        <span class={c.tone ? `tone-${c.tone}` : undefined}>{c.text}</span>
       ) : props.entry.loading ? (
         <span class="skeleton skeleton-line ml-skel" role="status" aria-label={t('common.loading')} />
       ) : (
@@ -182,17 +183,35 @@ function SkeletonRow() {
 const ROW_LEAVE_MS = 360;
 const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+/** A phone: the list is cards (market.css), and a card's star and eye are one "⋯" menu. */
+const PHONE_LIST_QUERY = '(max-width: 759px)';
+
 function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide, leaving, again }: { row: TokenRow; entry: ListEntry; step: number; favorite: boolean; onFavorite: (id: string) => void; hidden: boolean; onHide: (id: string) => void; leaving: boolean; again: '' | 'a' | 'b' }) {
   // every row has the same three lines, so every row is as tall and the icons keep one pitch: line 1 the ticker (bold) and the name (one line, an ellipsis, the
   // whole name in its title); line 2 the covenant id fragment with its copy button; line 3 the badges (one line, never wrapped). A token without a ticker is led by its name
   const headline = row.ticker || row.name || t('market.list.unnamed');
   const sub = row.ticker ? row.name : '';
+  // a phone: the star and the eye are behind one "⋯" (they took a third of a card's line), and the covenant id is short, the whole of it one tap away
+  const phone = useMedia(PHONE_LIST_QUERY);
+  const [menu, setMenu] = useState(false);
+  const [idOpen, setIdOpen] = useState(false);
+  useEffect(() => {
+    if (!menu) return;
+    const away = (e: Event) => { if (!(e.target as Element | null)?.closest?.(`[data-testid="token-row-${row.covenantId}"] .ml-actions, [data-testid="token-more-${row.covenantId}"]`)) setMenu(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(false); };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('pointerdown', away); document.removeEventListener('keydown', esc); };
+  }, [menu, row.covenantId]);
+  useEffect(() => { if (!phone) { setMenu(false); setIdOpen(false); } }, [phone]);
   return (
     <tr class={`ml-in${again ? ` ml-again-${again}` : ''}${leaving ? ' ml-out' : ''}`} style={`--i:${step}`} data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
       <td>
         <div class="ml-name">
-          <FavoriteStar on={favorite} name={tokenLabel(row)} onToggle={() => onFavorite(row.covenantId)} data-testid={`token-favorite-${row.covenantId}`} />
-          <HideToggle hidden={hidden} name={tokenLabel(row)} onToggle={() => onHide(row.covenantId)} data-testid={`token-hide-${row.covenantId}`} />
+          <span class={`ml-actions${menu ? ' is-open' : ''}`} role={phone ? 'menu' : undefined}>
+            <FavoriteStar on={favorite} name={tokenLabel(row)} onToggle={() => { onFavorite(row.covenantId); setMenu(false); }} data-testid={`token-favorite-${row.covenantId}`} />
+            <HideToggle hidden={hidden} name={tokenLabel(row)} onToggle={() => { onHide(row.covenantId); setMenu(false); }} data-testid={`token-hide-${row.covenantId}`} />
+          </span>
           <IdentityBlock row={row} />
           <div class="ml-name-text">
             <div class="ml-line1">
@@ -209,8 +228,8 @@ function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide,
                 </span>
               ) : null}
             </div>
-            <div class="ml-line2">
-              <IdCopy value={row.covenantId} data-testid={`token-hash-${row.covenantId}`} />
+            <div class={`ml-line2${phone && idOpen ? ' ml-line2-open' : ''}`}>
+              <IdCopy value={row.covenantId} data-testid={`token-hash-${row.covenantId}`} compact={phone} expanded={idOpen} onToggle={() => setIdOpen(!idOpen)} />
             </div>
             <div class={hasKascovMismatch(row) ? 'ml-line3 ml-line3-wrap' : 'ml-line3'} data-testid={`token-badges-${row.covenantId}`}>
               <span class="ml-badges">
@@ -222,6 +241,11 @@ function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide,
         </div>
       </td>
       {TOKEN_FIGURES.map((f) => <Figure key={f.key} cell={entry.cells[f.key]} entry={entry} testid={`token-${f.key}-${row.covenantId}`} cls={f.cls} />)}
+      <td class="ml-more-cell">
+        <button type="button" class="ml-more" aria-haspopup="menu" aria-expanded={menu ? 'true' : 'false'} aria-label={t('market.row.more', { name: tokenLabel(row) })} title={t('market.row.more', { name: tokenLabel(row) })} onClick={() => setMenu(!menu)} data-testid={`token-more-${row.covenantId}`}>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
+        </button>
+      </td>
     </tr>
   );
 }
@@ -505,7 +529,7 @@ export function TokenList(props: { invalidToken?: string }) {
           <p class="small muted row ml-list-more">
             {namelessCount > 0 && !query.trim() && !favoritesOnly && !hiddenOnly ? (
               <Button small onClick={() => setShowNameless((v) => !v)} data-testid="token-list-nameless">
-                {t(showNameless ? 'market.list.hideNameless' : 'market.list.showNameless', { n: namelessCount })}
+                {t(showNameless ? 'market.list.hideNameless' : namelessCount === 1 ? 'market.list.showNameless.one' : 'market.list.showNameless.other', { n: namelessCount })}
               </Button>
             ) : null}
             {hidden.length > 0 || hiddenOnly ? (

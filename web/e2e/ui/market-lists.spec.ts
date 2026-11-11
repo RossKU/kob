@@ -605,7 +605,7 @@ test.describe('favourite pairs, and no table of pairs by default', () => {
 test.describe('a phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test('no sideways scroll on the list, the picker, the Favorites view and the log; a star is a target a finger can hit', async ({ appPage: page, mock }) => {
+  test('no sideways scroll on the list, the picker, the Favorites view and the log; the row menu is a target a finger can hit', async ({ appPage: page, mock }) => {
     const base = await seedPair(page, mock);
     await mock.seedHistory({ hours: 2, trades: 60, seed: 3 });
     await mockKascov(page, { tokens: many });
@@ -613,12 +613,35 @@ test.describe('a phone', () => {
     await page.goto('/#/market');
     await expect(tokenRows(page)).toHaveCount(20);
     expect(await sideways(page)).toBeLessThanOrEqual(0);
-    const star = (await page.getByTestId(`token-favorite-${base}`).boundingBox())!;
-    expect(star.width).toBeGreaterThanOrEqual(44);
-    expect(star.height).toBeGreaterThanOrEqual(32);
-    // the star is in the row's own line, at its left: it leaves the price and the change alone
+    // the star and the eye are one "⋯" menu at the card's right end (review M-02): a target a finger can hit, the two buttons (with their words) only while it is open
+    const more = page.getByTestId(`token-more-${base}`);
+    const moreBox = (await more.boundingBox())!;
+    expect(moreBox.width).toBeGreaterThanOrEqual(40);
+    expect(moreBox.height).toBeGreaterThanOrEqual(44);
     const change = (await page.getByTestId(`token-change-${base}`).boundingBox())!;
-    expect(star.x + star.width).toBeLessThanOrEqual(change.x + 1);
+    expect(moreBox.x).toBeGreaterThanOrEqual(change.x + change.width - 1);
+    await expect(page.getByTestId(`token-favorite-${base}`)).toBeHidden();
+    await expect(page.getByTestId(`token-hide-${base}`)).toBeHidden();
+    await more.click();
+    await expect(more).toHaveAttribute('aria-expanded', 'true');
+    const star = (await page.getByTestId(`token-favorite-${base}`).boundingBox())!;
+    expect(star.height).toBeGreaterThanOrEqual(44);
+    expect(star.x).toBeGreaterThanOrEqual(0);
+    expect(star.x + star.width).toBeLessThanOrEqual(390);
+    await expect(page.getByTestId(`token-hide-${base}`)).toBeVisible();
+    expect(await sideways(page)).toBeLessThanOrEqual(0);
+    await shot(page, 'market-390-menu');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId(`token-favorite-${base}`)).toBeHidden();
+    // the covenant id is the short form; a tap opens the whole id, a second one closes it, and the copy button is still there
+    const hash = page.getByTestId(`token-hash-${base}`);
+    await expect(hash).toHaveText(`${base.slice(0, 4)}…${base.slice(-4)}`);
+    await page.getByTestId(`token-hash-${base}-toggle`).click();
+    await expect(hash).toHaveText(base);
+    expect(await sideways(page)).toBeLessThanOrEqual(0);
+    await page.getByTestId(`token-hash-${base}-toggle`).click();
+    await expect(hash).toHaveText(`${base.slice(0, 4)}…${base.slice(-4)}`);
+    await expect(page.getByTestId(`token-hash-${base}-copy`)).toBeVisible();
     await shot(page, 'market-390');
 
     await page.getByTestId('pair-pick-quote').click();
