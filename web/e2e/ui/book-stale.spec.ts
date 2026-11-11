@@ -4,10 +4,17 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
 
+/** The seed has 10 levels a side; the card lists as many as its height holds (8 to 40: a font a little taller or shorter than this machine's leaves 9 or 8), so LEVELS is what the page drew at first and what must stay through every refresh. */
+let LEVELS = 10;
+
 async function open(page: Page, mock: import('../fixtures').MockClient): Promise<string> {
   const id = (await mock.token()).covenant_id as string;
   await page.goto(`/#/market/${id}`);
-  await expect(page.getByTestId(TESTID.bookAsks).locator('[data-testid^="book-"]')).toHaveCount(10);
+  await expect(page.getByTestId(TESTID.bookAsks).locator('.book-row:not(.book-blank)').first()).toBeVisible();
+  await expect.poll(async () => page.getByTestId(TESTID.bookAsks).locator('.book-row').count()).toBeGreaterThanOrEqual(8);
+  await page.waitForTimeout(600);
+  LEVELS = await page.getByTestId(TESTID.bookAsks).locator('.book-row:not(.book-blank)').count();
+  expect(LEVELS).toBeGreaterThanOrEqual(8);
   return id;
 }
 
@@ -21,9 +28,9 @@ test.describe('order book keeps the last good book', () => {
     await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
     await page.route('**/v1/books/**', (route) => route.abort());
     await page.getByTestId('book-refresh').click();
-    // still there, 10 rows a side, a subtle marker with the time of the last good response, no big error banner in place of the book
+    // still there, the same rows a side, a subtle marker with the time of the last good response, no big error banner in place of the book
     await expect(page.getByTestId('book-stale-since')).toHaveText(/^stale since \d{2}:\d{2}:\d{2}$/);
-    await expect(asks(page)).toHaveCount(10);
+    await expect(asks(page)).toHaveCount(LEVELS);
     await expect(page.getByTestId('book-error')).toHaveCount(0);
     await expect(page.getByTestId('book-loading')).toHaveCount(0);
     // a later failure keeps the SAME since-time (the time of the last good book, not of the failure)
@@ -35,7 +42,7 @@ test.describe('order book keeps the last good book', () => {
     await page.unroute('**/v1/books/**');
     await page.getByTestId('book-refresh').click();
     await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
-    await expect(asks(page)).toHaveCount(10);
+    await expect(asks(page)).toHaveCount(LEVELS);
   });
 
   test('a slow pull keeps the book and marks it stale while the answer is late', async ({ appPage: page, mock }) => {
@@ -60,12 +67,12 @@ test.describe('order book keeps the last good book', () => {
     await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
     await page.clock.setSystemTime((await page.evaluate(() => Date.now())) + 9_000);
     await expect(page.getByTestId('book-stale-since')).toHaveText(/^stale since /);
-    await expect(asks(page)).toHaveCount(10);
+    await expect(asks(page)).toHaveCount(LEVELS);
     // the late answer itself replaces the book and clears the marker
     release();
     await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
     await expect(page.getByTestId('book-refresh')).not.toHaveAttribute('aria-busy', 'true');
-    await expect(asks(page)).toHaveCount(10);
+    await expect(asks(page)).toHaveCount(LEVELS);
   });
 
   test('a crossed book (matchers a moment behind) is drawn as it is with a negative spread, is not stale, and the next uncrossed book replaces it', async ({ appPage: page, mock }) => {
@@ -82,7 +89,7 @@ test.describe('order book keeps the last good book', () => {
     });
     await page.getByTestId('book-refresh').click();
     await expect(page.getByTestId('book-spread')).toContainText(/Spread -[\d.,]+ \(-[\d.]+%\)/);
-    await expect(asks(page)).toHaveCount(10);
+    await expect(asks(page)).toHaveCount(LEVELS);
     await expect(page.getByTestId('book-matching')).toHaveCount(0);
     await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
     // the depth chart (the Depth view of the book's panel) draws it too
@@ -94,6 +101,6 @@ test.describe('order book keeps the last good book', () => {
     await page.getByTestId('book-refresh').click();
     await expect(page.getByTestId('book-spread')).not.toContainText('Spread -');
     await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
-    await expect(asks(page)).toHaveCount(10);
+    await expect(asks(page)).toHaveCount(LEVELS);
   });
 });

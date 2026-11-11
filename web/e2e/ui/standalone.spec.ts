@@ -21,6 +21,8 @@ const SHOTS = process.env.SHOTS ?? join(tmpdir(), 'kob-standalone-shots');
 const HIGH_ASK = 3_000_000n;
 
 const asks = (page: Page) => page.getByTestId('book-asks').locator('.book-row:not(.book-blank)');
+/** The levels the book lists of `n`: its card holds as many as its height (8 to 40; the ticket's row sets it), so a book of more than that shows what fits. */
+const listed = async (page: Page, n: number) => Math.min(n, await page.getByTestId('book-asks').locator('.book-row').count());
 const banner = (page: Page) => page.getByTestId('banner-standalone');
 /** the mark of what the indexer gave before the mode and what the node added after it */
 const KEPT = /^Indexer data until \d\d:\d\d, then from your node \(since \d\d:\d\d\)$/;
@@ -45,10 +47,14 @@ async function placedWithoutIndexer(mock: MockClient, txid: string): Promise<Pla
 test.describe('standalone mode', () => {
   test('the indexer goes down: the book follows the node, labelled; an order placed meanwhile is listed; the indexer book is back when it returns', async ({ appPage: page, mock }) => {
     test.setTimeout(180_000);
+    // a short window from the start: the activity log is more than its 200 px of reading margin below the fold, so it reads nothing from the indexer until it is scrolled to (the page is short, the
+    // log starts right under the trading row)
+    await page.setViewportSize({ width: 1280, height: 420 });
     await listExkcc(page);
     const id = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${id}`);
-    await expect(asks(page)).toHaveCount(10);
+    await expect(asks(page).first()).toBeVisible();
+    await expect.poll(() => page.getByTestId('book-asks').locator('.book-row').count()).toBeGreaterThanOrEqual(8);
     await openBell(page);
     await expect(banner(page)).toHaveCount(0);
 
@@ -85,7 +91,7 @@ test.describe('standalone mode', () => {
     await openBell(page);
     await expect(banner(page)).toHaveCount(0, { timeout: 60_000 });
     await closeBell(page);
-    await expect(asks(page)).toHaveCount(11, { timeout: 20_000 });
+    await expect(asks(page)).toHaveCount(await listed(page, 11), { timeout: 20_000 });
     await expect(label).toHaveCount(0);
     await expect(page.getByTestId('chart-standalone')).toHaveCount(0);
   });
@@ -258,7 +264,7 @@ test.describe('standalone mode', () => {
       await page.getByTestId('standalone-return').click();
       await expect(banner(page)).toHaveCount(0);
       await closeBell(page);
-      await expect(asks(page)).toHaveCount(10, { timeout: 20_000 });
+      await expect(asks(page)).toHaveCount(await listed(page, 10), { timeout: 20_000 });
     });
   });
 
