@@ -496,7 +496,8 @@ test.describe('the pair picker', () => {
     await page.getByTestId('market-base-select').click();
     const rows = page.locator('[data-testid^="market-base-select-option-"]');
     await expect.poll(() => rows.count()).toBeGreaterThan(1);
-    const heights = await rows.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
+    // whole pixels: a panel entering (the 4 px rise of styles.css pop-in) gives float noise such as 47.99998
+    const heights = await rows.evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
     expect(new Set(heights).size, JSON.stringify(heights)).toBe(1);
     expect(heights[0]).toBeGreaterThanOrEqual(44);
     await page.keyboard.press('Escape');
