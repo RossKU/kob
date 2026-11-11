@@ -3297,3 +3297,24 @@ trailing ratchet, stop entries and a two-family batch; `matcher_pair` pair stops
 engine-validated planning against a book indexed from synthetic chain data (Part A, A.5). Every scenario of the matcher and keeper
 suites also runs a **KRON twin** of its book (`matcher_common::to_kron`), and the follower property test runs its
 random traffic in both families.
+
+## Accepted risks (founder 2026-11-12)
+
+The executor's product-readiness audit (rounds 1 to 4, closed 2026-11-12) left these Low findings open on purpose. Each was
+accepted by the founder with the reason given; the rest of its Lows were fixed. M-7 (the authority's transaction bodies are
+not cross-checked) was accepted on 2026-11-11 (Part C, *Node*).
+
+| Id | Risk | Why it is accepted |
+|---|---|---|
+| R4-L-2 | A lying public authority that fabricates its sink, or also lies in `getBlock`, is never held to account (the R3-M-2 residual): the runner plans nothing while it stays the authority. | DoS only, no loss; it cannot be decided with two nodes; a restart re-rolls the pair. The same class as M-7. |
+| R3-L-5 | The data-directory check compares paths lexically only. | It covers the shipped layouts and the documented mistake, with no false positives. |
+| R2-L-3 | Request timeouts on a slow link count as strikes against a public node. | A replacement, not a loss (accepted for TN10); revisit with mainnet catch-up measurements. |
+| R2-L-6 | A matcher batch gets no fee bump while it waits. | The batch is retired by the resend gates (R2-M-2), and its orders return to the book. |
+| R2-L-8 | The release has no out-of-band signature. | Attestation pinned, no out-of-band signature (no paid code signing, by decision). |
+| R2-L-9 | Persistent per-method errors of a node are not judged. | The node keeps failing the step; timeouts and sync are judged. |
+| R2-L-10 | Key file paths in OneDrive or Dropbox folders. | Covered in the docs only. |
+| L-4 | Maintenance merges are not gated. | Accepted on mainnet (the pinned program allowlist); the TN10 cost is unverified. |
+| L-5 | The plan is computed again every tick. | Bounded latency, not cost. |
+| L-6 | `--max-tx-bytes` defaults to 0. | The half-search recovers. |
+| L-8 | `kobd withdraw` reads the coins from one public node, not a cross-checked pair. | A forged UTXO only invalidates the signature. |
+| L-15 | The token-logo reports (`[logo_reports]`). | Off by default. |
