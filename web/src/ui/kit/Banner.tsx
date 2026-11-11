@@ -1,6 +1,8 @@
 import type { ComponentChildren } from 'preact';
 import { t } from '../../i18n';
 import { Button } from './Button';
+import { friendlyErrorText } from './friendly-error';
+import { RawDetails } from './RawDetails';
 
 export type BannerTone = 'info' | 'ok' | 'warn' | 'error';
 
@@ -39,7 +41,7 @@ export function Banner(props: BannerProps) {
   );
 }
 
-/** Error banner with a Retry button: the standard failure state of an async view. */
+/** Error banner with a Retry button: the standard failure state of an async view. A plain sentence says what failed; the raw message sits behind "Details". */
 export function ErrorBanner(props: { error: Error | string | null | undefined; title?: string; onRetry?: () => void; 'data-testid'?: string }) {
   if (!props.error) return null;
   const message = typeof props.error === 'string' ? props.error : props.error.message;
@@ -50,7 +52,9 @@ export function ErrorBanner(props: { error: Error | string | null | undefined; t
       data-testid={props['data-testid']}
       actions={props.onRetry ? <Button small onClick={props.onRetry}>{t('common.retry')}</Button> : undefined}
     >
-      <span class="wrap-anywhere">{message}</span>
+      {/* a plain sentence first (founder 2026-11-11), the raw server string only on request */}
+      <span class="wrap-anywhere">{friendlyErrorText(message)}</span>
+      <RawDetails text={message} />
     </Banner>
   );
 }

@@ -4,10 +4,11 @@
 // the unit small and muted, a market as its icon and ticker, a side in its colour, a status as a chip. Sorting is the shared helper (sort.ts, SortHeader.tsx).
 import type { ComponentChildren, JSX } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { formatDateTime, t } from '../../i18n';
+import { t } from '../../i18n';
 import { kasValueText, kasValueTitle } from '../../app/fiat';
 import { useFiat } from '../../app/use-fiat';
 import { formatKas } from '../../kob/units';
+import { formatRowTimeUnix, rowTimeTitleUnix } from './format';
 import { SortButton, SortControl, ariaSortOf } from './SortHeader';
 import type { SortColumn, SortState } from './sort';
 import './data-table.css';
@@ -129,8 +130,11 @@ export function DtCell(props: { k: string; label?: string; card?: DtCard; num?: 
   );
 }
 
-/** The one time format of the Portfolio's tables (Open orders, Order history, Trade history): short date, time with seconds. unix seconds; null reads "—". */
-export const timeText = (unix: number | bigint | null): string => (unix === null ? '—' : formatDateTime(unix, { dateStyle: 'short', timeStyle: 'medium' }));
+/** The one time format of the Portfolio's tables (Open orders, Order history, Trade history): `formatRowTime` (today HH:MM:SS, else YYYY-MM-DD HH:MM, 24-hour, the viewer's zone). unix seconds; null reads "—". */
+export const timeText = (unix: number | bigint | null): string => formatRowTimeUnix(unix);
+
+/** The tooltip of a time cell: the full timestamp with the viewer's zone (undefined for a missing time). */
+export const timeTitle = (unix: number | bigint | null): string | undefined => rowTimeTitleUnix(unix) || undefined;
 
 /**
  * The one market cell of the tables: the token's icon and the pair (a link to its market when it has one, in every table the same weight and treatment). In a card the side (and,

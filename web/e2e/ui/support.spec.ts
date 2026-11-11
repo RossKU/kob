@@ -49,7 +49,7 @@ test.describe('the page', () => {
     await page.goto('/#/settings');
     await page.getByTestId('footer-support').click();
     await expect(page.getByTestId('support-page')).toBeVisible();
-    await expect(page).toHaveTitle(/^Support - /);
+    await expect(page).toHaveTitle(/^Support · /);
 
     await expect(page.getByTestId('support-volunteers')).toContainText('built and run by volunteers');
     await expect(page.getByTestId('support-address')).toHaveAttribute('data-value', SUPPORT_ADDRESS);

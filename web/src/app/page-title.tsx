@@ -4,9 +4,19 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { t } from '../i18n';
+import { shortId } from '../ui/kit/format';
 
-/** `<page> - KOB`. */
-export const pageTitle = (page: string): string => `${page} - ${t('common.appName')}`;
+/** `<page> · KOB` (founder 2026-11-11: `EXKCC/KAS · KOB`). */
+export const pageTitle = (page: string): string => `${page} · ${t('common.appName')}`;
+
+/**
+ * The title of a market's page without a 64-hex covenant id (review M-05): `EXKCC/KAS · KOB`, `EXKCC · KOB`. `name` is the token's ticker or name; a token that has neither shows its id
+ * shortened (`e5e5…e5e5`), never in full. `quote` is the pair's other side (a pair page); omitted on a token's own page.
+ */
+export function marketPageTitle(base: { name?: string | null; id: string }, quote?: { name?: string | null; id: string } | null): string {
+  const label = (x: { name?: string | null; id: string }): string => x.name?.trim() || shortId(x.id);
+  return pageTitle(quote ? `${label(base)}/${label(quote)}` : label(base));
+}
 
 /** The landing title (the app's name and what it is): the page title of the legacy redirect, which shows no view. */
 export const appTitle = (): string => `${t('common.appName')} - ${t('common.tagline')}`;

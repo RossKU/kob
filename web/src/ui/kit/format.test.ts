@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { amountText, CELL_CHARS, columnFraction, compactZeros, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction } from './format';
+import { amountText, CELL_CHARS, columnFraction, compactZeros, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction, formatRowTime, formatRowTimeUnix, rowTimeTitle, displayPriceDp, columnPriceDp, displayPriceText, exactPriceText } from './format';
 
 describe('kit format', () => {
   it('shortens ids without touching short strings', () => {
@@ -186,5 +186,51 @@ describe('compactZeros', () => {
     expect(compactZeros('-0.00002547')).toBe('-0.0₄2547');
     expect(compactZeros('0.00001–0.00002')).toBe('0.0₄1–0.0₄2');
     expect(compactZeros('0.00000000')).toBe('0.00000000');
+  });
+});
+
+describe('one time format', () => {
+  const now = new Date(2026, 10, 11, 12, 0, 0).getTime();
+  it('shows today as HH:MM:SS and any other day as YYYY-MM-DD HH:MM (24-hour)', () => {
+    expect(formatRowTime(new Date(2026, 10, 11, 9, 5, 7).getTime(), now)).toBe('09:05:07');
+    expect(formatRowTime(new Date(2026, 10, 11, 23, 59, 1).getTime(), now)).toBe('23:59:01');
+    expect(formatRowTime(new Date(2026, 10, 10, 22, 35, 2).getTime(), now)).toBe('2026-11-10 22:35');
+    expect(formatRowTime(new Date(2025, 0, 2, 3, 4, 5).getTime(), now)).toBe('2025-01-02 03:04');
+    expect(formatRowTime(null, now)).toBe('—');
+    expect(formatRowTimeUnix(Math.floor(new Date(2026, 10, 10, 22, 35, 2).getTime() / 1000), now)).toBe('2026-11-10 22:35');
+    expect(formatRowTimeUnix(null, now)).toBe('—');
+  });
+
+  it('titles the full timestamp with the viewer zone', () => {
+    expect(rowTimeTitle(new Date(2026, 10, 10, 22, 35, 2).getTime())).toMatch(/^2026-11-10 22:35:02( \S+)?$/);
+    expect(rowTimeTitle(null)).toBe('');
+  });
+});
+
+describe('one price display rule', () => {
+  const kas = (n: number) => BigInt(Math.round(n * 1e8));
+  it('shows about five significant digits, at most six decimals', () => {
+    expect(displayPriceDp(kas(33.41892984))).toBe(3);
+    expect(displayPriceDp(kas(0.025))).toBe(6);
+    expect(displayPriceDp(250n)).toBe(6); // 0.0000025 would need 10: capped
+    expect(displayPriceDp(null)).toBe(4);
+  });
+
+  it('lets a coarser grouping show fewer digits and never more', () => {
+    expect(displayPriceDp(kas(0.025), 3)).toBe(3);
+    expect(displayPriceDp(kas(0.025), 8)).toBe(6);
+    expect(displayPriceDp(kas(0.025), 0)).toBe(0);
+  });
+
+  it('gives a column of several markets the finest digits any of them needs', () => {
+    expect(columnPriceDp([kas(33.4), kas(0.025), null])).toBe(6);
+    expect(columnPriceDp([kas(33.4), kas(120.5)])).toBe(3);
+    expect(columnPriceDp([])).toBe(4);
+  });
+
+  it('renders the rounded price and its exact twin', () => {
+    // 8 decimals, one whole token = 1e8 base units: a price in sompi per token
+    expect(displayPriceText(3_341_892_984n, 8, 100_000_000n, 3)).toBe('33.419');
+    expect(exactPriceText(3_341_892_984n, 8, 100_000_000n)).toBe('33.41892984');
   });
 });

@@ -1,5 +1,6 @@
 // Display formatting shared by the UI kit and the views. Pure and bigint-safe (never `Number` for sompi or token amounts): every function
 // delegates to kob/units.ts, which does exact integer arithmetic.
+import { priceDecimals } from '../market/market-model';
 import { formatKas, formatPricePerToken, formatTokenAmount, formatUnits, pow10, SOMPI_PER_KAS } from '../../kob/units';
 
 /** `abcdef...123456` -> `abcd...3456` (head/tail characters). Strings that are already short come back unchanged. */
@@ -260,3 +261,73 @@ export const zerosTitle = (text: string | null | undefined): string | undefined 
 
 export const compactZeros = (text: string): string =>
   text.replace(/(^|[^\d.,])0\.(0{4,})(?=[1-9])/g, (_m, before: string, zeros: string) => `${before}0.0${[...String(zeros.length)].map((d) => SUBSCRIPT[Number(d)]).join('')}`);
+
+// ------------------------------------------------------------------------------------------------ one time format
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+const clock = (d: Date, seconds: boolean): string => `${pad2(d.getHours())}:${pad2(d.getMinutes())}${seconds ? `:${pad2(d.getSeconds())}` : ''}`;
+const dateOf = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+/**
+ * The one time format of every table and log row (founder, 2026-11-11): today `HH:MM:SS`, any other day `YYYY-MM-DD HH:MM`; 24-hour, in the viewer's zone, never the
+ * reader's locale order (`11/10/26` reads as two different days). `nowMs` is the clock of the page (a prop in tests). A missing time reads `—`.
+ */
+export function formatRowTime(ms: number | null | undefined, nowMs: number = Date.now()): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—';
+  const d = new Date(ms);
+  const today = dateOf(new Date(nowMs));
+  return dateOf(d) === today ? clock(d, true) : `${dateOf(d)} ${clock(d, false)}`;
+}
+
+/** The full timestamp with the viewer's zone, for the `title` of a row time: `2026-11-10 22:35:02 GMT+9`. */
+export function rowTimeTitle(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  const zone = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(d).find((p) => p.type === 'timeZoneName')?.value ?? '';
+  return `${dateOf(d)} ${clock(d, true)}${zone ? ` ${zone}` : ''}`;
+}
+
+/** `formatRowTime` of a unix-seconds time (the tables of the Portfolio); null reads `—`. */
+export const formatRowTimeUnix = (unix: number | bigint | null | undefined, nowMs: number = Date.now()): string => (unix === null || unix === undefined ? '—' : formatRowTime(Number(unix) * 1000, nowMs));
+
+/** `rowTimeTitle` of a unix-seconds time. */
+export const rowTimeTitleUnix = (unix: number | bigint | null | undefined): string => (unix === null || unix === undefined ? '' : rowTimeTitle(Number(unix) * 1000));
+
+// ------------------------------------------------------------------------------------------------ one price display rule
+
+/** Most fraction digits a price is ever displayed with (founder, 2026-11-11); the exact price stays in the `title`. */
+export const PRICE_DP_CAP = 6;
+/** Significant digits a displayed price shows. */
+export const PRICE_SIGNIFICANT_DIGITS = 5;
+
+/**
+ * Fraction digits of a displayed price (KAS per whole token): the digits that show about five significant digits of the market's reference price (`priceDecimals`, market-model.ts:
+ * 33.4 KAS -> 3, 0.025 KAS -> 6), at most `PRICE_DP_CAP`. `refPerTokenSompi`: the market's reference price (last trade, else mid) in sompi per whole token (null: 4 digits).
+ * `grouping`: the fraction digits of the price grouping in force (the book's selector); a coarser grouping shows fewer digits, a finer one never more than the rule above.
+ * Chosen once per market and shared by the book, the chart axis, the stats and the tables, so the same price reads the same everywhere.
+ */
+export function displayPriceDp(refPerTokenSompi: bigint | null | undefined, grouping?: number | null): number {
+  const sig = Math.min(PRICE_DP_CAP, priceDecimals(refPerTokenSompi ?? null, PRICE_SIGNIFICANT_DIGITS));
+  return grouping === undefined || grouping === null ? sig : Math.max(0, Math.min(sig, Math.trunc(grouping)));
+}
+
+/** The one `displayPriceDp` of a column that holds several markets' prices (the Portfolio tables): the finest any of them needs, so every decimal point lines up. */
+export function columnPriceDp(refsPerTokenSompi: Iterable<bigint | null | undefined>): number {
+  let dp = 0;
+  let any = false;
+  for (const r of refsPerTokenSompi) {
+    if (r === null || r === undefined || r <= 0n) continue;
+    any = true;
+    dp = Math.max(dp, displayPriceDp(r));
+  }
+  return any ? dp : displayPriceDp(null);
+}
+
+/** A price (sompi per `basis` base units) as KAS per whole token with exactly `dp` fraction digits (grouped): what a table cell shows; its title is `exactPriceText`. */
+export const displayPriceText = (price: bigint, decimals: number, basis: bigint, dp: number): string => fixedPricePerToken(price, decimals, basis, dp);
+
+/** The same price in full (every digit, trailing zeros trimmed, thousands grouped): the `title` of a rounded price cell. */
+export function exactPriceText(price: bigint, decimals: number, basis: bigint): string {
+  if (basis <= 0n) return formatKas(price, { group: ',' });
+  return formatPricePerToken(price, decimals, basis, { maxFraction: 18, group: ',' });
+}

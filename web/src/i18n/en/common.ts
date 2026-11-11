@@ -50,5 +50,10 @@ export default {
   'common.unavailable': 'Unavailable',
   'common.updated': 'Updated {time}',
   'common.showMore': 'Show more',
+  'common.error.indexer': 'The indexer did not answer. Try again in a moment.',
+  'common.error.network': 'The connection failed. Check your network and try again.',
+  'common.error.refused': 'The request was declined.',
+  'common.error.generic': 'Something went wrong.',
+  'common.empty.connect': 'Connect a wallet to see this.',
   'common.errorDetail': 'Something went wrong: {message}',
 } as Record<string, string>;
