@@ -21,20 +21,29 @@ use kobd::rpc::failover::{Failover, FailoverPolicy};
 use kobd::rpc::types::*;
 use kobd::rpc::{ChainSource, RpcError};
 use kobd::testkit::*;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// A node that can go away (every call fails in transport, as a closed port does).
+/// A node that can go away (every call fails in transport, as a closed port does), or over-report its DAA (`boost`, with its
+/// real sink or, `fake_sink`, one no other node ever learns).
 struct Tier {
     node: Arc<MockNode>,
     down: AtomicBool,
     calls: AtomicUsize,
+    boost: AtomicU64,
+    fake_sink: AtomicBool,
 }
 
 impl Tier {
     fn new(node: &Arc<MockNode>) -> Arc<Tier> {
-        Arc::new(Tier { node: node.clone(), down: AtomicBool::new(false), calls: AtomicUsize::new(0) })
+        Arc::new(Tier {
+            node: node.clone(),
+            down: AtomicBool::new(false),
+            calls: AtomicUsize::new(0),
+            boost: AtomicU64::new(0),
+            fake_sink: AtomicBool::new(false),
+        })
     }
 
     fn gate(&self) -> Result<(), RpcError> {
@@ -53,11 +62,18 @@ impl ChainSource for Tier {
     }
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
         self.gate()?;
-        self.node.dag_info().await
+        let mut d = self.node.dag_info().await?;
+        d.virtual_daa_score += self.boost.load(Ordering::Relaxed);
+        if self.fake_sink.load(Ordering::Relaxed) {
+            d.sink = Hash32([0xee; 32]);
+        }
+        Ok(d)
     }
     async fn server_info(&self) -> Result<ServerInfo, RpcError> {
         self.gate()?;
-        self.node.server_info().await
+        let mut i = self.node.server_info().await?;
+        i.virtual_daa_score += self.boost.load(Ordering::Relaxed);
+        Ok(i)
     }
     async fn utxos_by_addresses(&self, a: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
         self.gate()?;
@@ -271,34 +287,36 @@ async fn pair_serial() -> tokio::sync::MutexGuard<'static, ()> {
     M.lock().await
 }
 
-fn pair(a: (&str, &Arc<MockNode>), b: (&str, &Arc<MockNode>)) -> kobd::rpc::multi::MultiNode<MockNode> {
+fn pair<N: ChainSource>(a: (&str, &Arc<N>), b: (&str, &Arc<N>)) -> kobd::rpc::multi::MultiNode<N> {
     use kobd::rpc::multi::{MultiNode, NodeSpec};
     let spec = |url: &str, cross_check| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check };
     MultiNode::new(vec![(spec(a.0, false), a.1.clone()), (spec(b.0, true), b.1.clone())], a.1.clone()).with_watch(Duration::ZERO, 2)
 }
 
-/// One poll of the follower near the sink, and the health check it starts (here on the test's task, to see its result).
-async fn poll(m: &kobd::rpc::multi::MultiNode<MockNode>, start: Hash32) {
-    let _ = m.vspc_v2(VspcRequest::new(start, Verbosity::High, None)).await;
-    m.check_health().await;
-}
-
-/// A pair of named nodes: the cross-checking one falls behind (an alarm once it stays behind, the node cut off from the pair
-/// and shown in the health), then catches up (the alarm ends, it is back). One on another network: an alarm at once. The
-/// authority is judged the same way, and stays the authority.
+/// A pair of named nodes: the cross-checking one falls behind (an alarm once it stays behind and confirmed the lead itself, the
+/// node cut off from the pair and shown in the health), then catches up (the alarm ends, it is back). One on another network:
+/// an alarm at once. The authority is judged the same way, and stays the authority. The checks run on the test's task only (a
+/// follower request would start one on a task of its own too).
 #[tokio::test]
 async fn a_named_node_that_is_behind_or_on_another_network_raises_an_alarm_and_is_cut_off_until_it_recovers() {
     let _g = pair_serial().await;
     kobd::rpc::resolver::set_network("testnet-10");
+    // a lag alarm ends at the first fine check here (after a minute of them in production)
+    kobd::rpc::judge::set_alarm_clear_after(Duration::ZERO);
     let (a, b) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
     a.push_empty(800);
     b.push_empty(100);
     assert!(a.tip_daa() > b.tip_daa() + kobd::rpc::multi::LAG_DAA);
     let (ua, ub) = ("ws://10.0.0.1:18210", "ws://10.0.0.2:18210");
     let m = pair((ua, &a), (ub, &b));
-    poll(&m, a.anchor()).await;
+    m.check_health().await;
     assert!(kobd::rpc::judge::alarm_of(ub).is_none(), "behind once is no finding yet");
-    poll(&m, a.anchor()).await;
+    m.check_health().await;
+    assert!(kobd::rpc::judge::alarm_of(ub).is_none(), "behind by the answers only: the node has not confirmed the lead yet");
+    // it learns the other node's sink of those checks (still far behind): the lead is confirmed
+    b.push_empty(700);
+    a.push_empty(800);
+    m.check_health().await;
     let why = kobd::rpc::judge::alarm_of(ub).expect("an alarm once it stays behind");
     assert!(why.contains("DAA behind the other node"), "{why}");
     let st = m.board().snapshot();
@@ -310,8 +328,8 @@ async fn a_named_node_that_is_behind_or_on_another_network_raises_an_alarm_and_i
     assert!(h.metrics_text().contains("kob_indexer_node_alarms 1"));
     assert!(serde_json::to_value(&h).unwrap()["nodes"][1]["cut_reason"].as_str().unwrap().contains("behind"));
     // it catches up: the alarm ends and the node is back in the pair
-    b.push_empty(700);
-    poll(&m, a.anchor()).await;
+    b.push_empty(800);
+    m.check_health().await;
     assert_eq!(kobd::rpc::judge::alarm_of(ub), None);
     assert_eq!(m.board().snapshot()[1].state, "ok");
 
@@ -322,17 +340,21 @@ async fn a_named_node_that_is_behind_or_on_another_network_raises_an_alarm_and_i
     let d = MockNode::new("testnet-10");
     d.push_empty(10);
     let m = pair((ud, &d), (uc, &c));
-    poll(&m, d.anchor()).await;
+    m.check_health().await;
     assert!(kobd::rpc::judge::alarm_of(uc).unwrap().contains("it is on testnet-11, not testnet-10"));
     assert_eq!(m.board().snapshot()[1].state, "cut");
     // the authority is compared with the other answers only (the node on another network gave none): judged on its own here
     let e = MockNode::new("testnet-10");
     e.push_empty(900);
     let m = pair((ud, &d), ("ws://10.0.0.5:18210", &e));
-    poll(&m, d.anchor()).await;
-    poll(&m, d.anchor()).await;
+    m.check_health().await;
+    m.check_health().await;
+    d.push_empty(890);
+    e.push_empty(900);
+    m.check_health().await;
     assert!(kobd::rpc::judge::alarm_of(ud).unwrap().contains("behind"), "the authority is watched the same way");
     assert_eq!(m.board().snapshot()[0].role, "primary");
+    kobd::rpc::judge::set_alarm_clear_after(kobd::rpc::judge::ALARM_CLEAR_AFTER);
 }
 
 /// A local Kaspa resolver that names `wss://n<k>.example/...` nodes in turn (no node is ever connected to: the pair's nodes
@@ -361,6 +383,8 @@ async fn a_public_node_that_is_behind_or_on_another_network_is_replaced_whicheve
     use kobd::rpc::resolver;
     let _g = pair_serial().await;
     std::env::set_var("KOB_RESOLVERS", local_resolver());
+    // the other pair tests resolved too: this one is not held back by their resolutions (`resolver::CHURN_WINDOW`)
+    resolver::forget_churn();
     resolver::set_network("testnet-10");
     let first = resolver::endpoint("resolver").unwrap();
     let second = resolver::endpoint("resolver:2").unwrap();
@@ -397,8 +421,52 @@ async fn a_public_node_that_is_behind_or_on_another_network_is_replaced_whicheve
     // two checks in a row (the watch's bound here), on the test's task only (as above: no check the test does not see)
     m.check_health().await;
     m.check_health().await;
+    assert_eq!(resolver::current("resolver"), Some(first.clone()), "behind by the answers only: not confirmed yet");
+    // the authority learns the other node's sink of those checks, still far behind: the lead is confirmed
+    a.push_empty(880);
+    c.push_empty(900);
+    m.check_health().await;
     assert_eq!(resolver::current("resolver"), Some(third.clone()), "the healthy node is the authority now");
     let st = m.board().snapshot();
     assert!(st[0].cut_reason.as_deref().unwrap().contains("DAA behind the other node"), "{st:?}");
     assert!(!kobd::rpc::judge::alarms().iter().any(|a| a.contains(".example")), "public nodes are replaced, they raise no alarm");
+}
+
+/// A node that over-reports its DAA (a lie, or a bug) never puts its honest partner behind, whichever role either has: a lead
+/// whose sink the partner knows is refuted at once, one whose sink the partner never learns after `LAG_CONFIRM_CHECKS` checks.
+/// Nothing is replaced and nothing is resolved.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_that_over_reports_its_daa_never_evicts_its_honest_partner() {
+    use kobd::rpc::resolver;
+    let _g = pair_serial().await;
+    std::env::set_var("KOB_RESOLVERS", local_resolver());
+    // the other pair tests resolved too: this one is not held back by their resolutions (`resolver::CHURN_WINDOW`)
+    resolver::forget_churn();
+    resolver::set_network("testnet-10");
+    let (first, second) = (resolver::endpoint("resolver").unwrap(), resolver::endpoint("resolver:2").unwrap());
+    let replaced = (resolver::replacements("resolver"), resolver::replacements("resolver:2"));
+    let (honest, lying) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
+    honest.push_empty(50);
+    lying.push_empty(50);
+    let (h, l) = (Tier::new(&honest), Tier::new(&lying));
+    l.boost.store(5_000, Ordering::Relaxed);
+    for (authority, cross) in [(&h, &l), (&l, &h)] {
+        let m = pair(("resolver", authority), ("resolver:2", cross));
+        // its real sink, which the honest node knows: refuted at every check
+        for _ in 0..10 {
+            m.check_health().await;
+        }
+        // a sink no node ever learns: refuted once it stayed unknown for the bound
+        l.fake_sink.store(true, Ordering::Relaxed);
+        for _ in 0..kobd::rpc::multi::LAG_CONFIRM_CHECKS + 5 {
+            m.check_health().await;
+        }
+        l.fake_sink.store(false, Ordering::Relaxed);
+        assert_eq!((resolver::current("resolver"), resolver::current("resolver:2")), (Some(first.clone()), Some(second.clone())));
+        assert_eq!((resolver::replacements("resolver"), resolver::replacements("resolver:2")), replaced);
+    }
+    // level again: nothing is held against either node
+    l.boost.store(0, Ordering::Relaxed);
+    pair(("resolver", &h), ("resolver:2", &l)).check_health().await;
+    assert!(!kobd::rpc::judge::suspect(&first) && !kobd::rpc::judge::suspect(&second));
 }

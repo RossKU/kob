@@ -33,11 +33,17 @@
 //! **The health watch** checks every node of the list the same way, the authority and the others alike: every
 //! [`WATCH_EVERY`] each is asked `getServerInfo` (within [`WATCH_TIMEOUT`]). An answer is judged (`rpc::judge`: another
 //! network, no UTXO index, not synced for long), a timeout counts as one (a node that hangs), and a node more than [`LAG_DAA`]
-//! behind the most advanced one for [`LAG_CHECKS`] checks in a row is behind. A node that contradicts the other (a hash, or
-//! the acceptance data) is judged too. Whichever node it is, a resolver entry gives it up for another public node (the
-//! authority's role moves to the other node at once, unless that one is suspect itself, `rpc::resolver`); a node named in the
-//! configuration raises an alarm, and a cross-checking one is cut off from the pair until the alarm ends (the authority goes
-//! on alone meanwhile). Each node's `cut_reason` says why it was last cut off.
+//! behind the most advanced one for [`LAG_CHECKS`] checks in a row is behind, **once it confirmed that lead itself**: a DAA
+//! is each node's own claim, and a node that over-reports must not put its honest partner behind. So the most advanced
+//! node's sink is taken at the first check of the streak and at the [`LAG_CHECKS`]-th, and the node behind is asked for it
+//! (`getBlock`) at each check after: once it knows both and each is more than [`LAG_DAA`] above its own DAA of that check, the
+//! lag is confirmed. A sink it does not learn within [`LAG_CONFIRM_CHECKS`] checks, or one not that far ahead, refutes the
+//! lead (warned about, nothing held against the node behind; a node that is stuck for real reports not synced soon, which
+//! is judged apart). A node that contradicts the other (a hash, or the acceptance data) is judged too. Whichever node it is,
+//! a resolver entry gives it up for another public node (the authority's role moves to the other node at once, unless that
+//! one is suspect itself, `rpc::resolver`); a node named in the configuration raises an alarm, and a cross-checking one is
+//! cut off from the pair until the alarm ends (the authority goes on alone meanwhile). Each node's `cut_reason` says why it
+//! was last cut off.
 //!
 //! `GET /v1/health` reports each node under `nodes`.
 
@@ -415,13 +421,93 @@ pub struct MultiNode<N: ChainSource> {
     watch: Arc<Mutex<Watch>>,
 }
 
-/// The health watch's state: its period, how many checks in a row make a node behind, when it last ran, and each node's
-/// checks in a row behind.
+/// The health watch's state: its period, how many checks in a row make a node behind, when it last ran, whether a check runs
+/// now, each node's lag, and when an unconfirmed lead was last warned about.
 struct Watch {
     every: Duration,
     lag_checks: u32,
     last: Option<Instant>,
-    behind: Vec<u32>,
+    busy: bool,
+    lag: Vec<LagTrack>,
+    last_refuted_warn: Option<Instant>,
+}
+
+/// The most advanced node's lead over a node, as the answers of one check put it: kept until the node behind can confirm it.
+#[derive(Debug, Clone, Copy)]
+struct Claim {
+    /// The most advanced node's sink at the check.
+    sink: Hash32,
+    /// The node's own DAA at the check.
+    own: u64,
+    /// Checks since, while unconfirmed.
+    age: u32,
+    /// `Some(lead)`: the node knows the sink now, and its DAA is `lead` above `own`; `None`: not yet.
+    lead: Option<u64>,
+}
+
+/// A node's checks in a row behind the most advanced answer, and the claims of that lead taken at the first of them and at
+/// the [`LAG_CHECKS`]-th (module documentation).
+#[derive(Debug, Clone, Default)]
+struct LagTrack {
+    streak: u32,
+    claims: Vec<Claim>,
+}
+
+/// What one check makes of a node's lag.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LagVerdict {
+    /// Not behind.
+    Level,
+    /// Behind by the answers (DAA), not confirmed yet.
+    Unconfirmed(u64),
+    /// The other node's lead was not borne out: its sink stayed unknown to this node for [`LAG_CONFIRM_CHECKS`] checks, or
+    /// it was not that far ahead (DAA claimed behind).
+    Refuted(u64),
+    /// Behind for the whole period, confirmed by this node itself (the smallest confirmed lead, DAA).
+    Confirmed(u64),
+}
+
+impl LagTrack {
+    /// The claims a streak needs before a lag is confirmed: one at its first check and one at its `checks`-th.
+    fn needed(checks: u32) -> usize {
+        if checks <= 1 {
+            1
+        } else {
+            2
+        }
+    }
+
+    /// One check: behind by the answers (`Some(daa)`) or not. Whether a new claim is wanted now.
+    fn observe(&mut self, behind: Option<u64>, checks: u32) -> bool {
+        if behind.is_none() {
+            *self = LagTrack::default();
+            return false;
+        }
+        self.streak += 1;
+        let n = self.claims.len();
+        n < Self::needed(checks) && (n == 0 || self.streak >= checks)
+    }
+
+    /// The verdict after this check's claims and confirmations (`behind`: the answers' lag now, DAA). A refuted or a
+    /// confirmed streak begins again at the next check.
+    fn verdict(&mut self, behind: Option<u64>, checks: u32) -> LagVerdict {
+        let Some(behind) = behind else { return LagVerdict::Level };
+        for c in self.claims.iter_mut().filter(|c| c.lead.is_none()) {
+            c.age += 1;
+        }
+        let refuted =
+            self.claims.iter().any(|c| c.lead.is_some_and(|l| l <= LAG_DAA) || (c.lead.is_none() && c.age > LAG_CONFIRM_CHECKS));
+        if refuted {
+            *self = LagTrack::default();
+            return LagVerdict::Refuted(behind);
+        }
+        if self.claims.len() == Self::needed(checks) && self.claims.iter().all(|c| c.lead.is_some()) {
+            let lead = self.claims.iter().filter_map(|c| c.lead).min().unwrap_or(behind);
+            *self = LagTrack::default();
+            return LagVerdict::Confirmed(lead);
+        }
+        LagVerdict::Unconfirmed(behind)
+    }
 }
 
 /// The start of the error when the two nodes' newest chain blocks differ and nothing can be applied yet (routine on a public
@@ -445,8 +531,12 @@ pub const WATCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A node more than this far (DAA, about 30 s of chain) behind the most advanced node of the list ...
 pub const LAG_DAA: u64 = 300;
-/// ... at this many health checks in a row (a minute) is behind: given up (a resolver entry) or an alarm (a named node).
+/// ... at this many health checks in a row (a minute) is behind: given up (a resolver entry) or an alarm (a named node), once
+/// it confirmed the lead itself (module documentation).
 pub const LAG_CHECKS: u32 = 6;
+/// Checks (five minutes) within which a node must learn the most advanced node's sink of a check that put it behind; a sink it
+/// never learns was not real, and nothing is held against the node.
+pub const LAG_CONFIRM_CHECKS: u32 = 30;
 
 impl<N: ChainSource> MultiNode<N> {
     /// `nodes[0]` is the primary; `verifier` a second client of the primary for the acceptance data.
@@ -470,7 +560,9 @@ impl<N: ChainSource> MultiNode<N> {
                 every: WATCH_EVERY,
                 lag_checks: LAG_CHECKS,
                 last: Some(Instant::now()),
-                behind: vec![],
+                busy: false,
+                lag: vec![],
+                last_refuted_warn: None,
             })),
         }
     }
@@ -747,18 +839,40 @@ impl<N: ChainSource> MultiNode<N> {
 }
 
 /// The health watch's check (module documentation): every node's `getServerInfo` at once, judged; then each node's DAA
-/// against the most advanced answer.
+/// against the most advanced answer, a lag confirmed by the node behind before it counts.
 async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board: &NodeBoard, watch: &Mutex<Watch>) {
+    let lock = || watch.lock().unwrap_or_else(|e| e.into_inner());
+    // one check at a time: a slow one (its timeouts) never overlaps the next
+    {
+        let mut w = lock();
+        if w.busy {
+            return;
+        }
+        w.busy = true;
+    }
+    struct Done<'a>(&'a Mutex<Watch>);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.lock().unwrap_or_else(|e| e.into_inner()).busy = false;
+        }
+    }
+    let _done = Done(watch);
     let n = nodes.len();
     let network = super::resolver::network();
     let network = network.as_str();
+    // the primary on the verifier's connections: never behind its own windows
+    let src = |i: usize| -> &N {
+        if i == 0 {
+            verifier
+        } else {
+            &nodes[i]
+        }
+    };
     let ask = |i: usize| async move {
         // a resolver entry being replaced has no node to ask
         let node = board.node_of(i)?;
         let entry = board.entry(i);
-        // the primary on the verifier's connections: never behind its own windows
-        let src: &N = if i == 0 { verifier } else { &nodes[i] };
-        match tokio::time::timeout(WATCH_TIMEOUT, src.server_info()).await {
+        match tokio::time::timeout(WATCH_TIMEOUT, src(i).server_info()).await {
             Ok(Ok(info)) => {
                 let judged = super::judge::server_info(entry, &node, &info.network_id, info.is_synced, info.has_utxo_index);
                 // the DAA of another network says nothing about this one's
@@ -774,28 +888,90 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
         }
     };
     let answers: Vec<(usize, String, u64)> = futures_util::future::join_all((0..n).map(ask)).await.into_iter().flatten().collect();
-    let Some(top) = answers.iter().map(|a| a.2).max().filter(|_| answers.len() > 1) else { return };
-    let mut findings = vec![];
-    {
-        let mut w = watch.lock().unwrap_or_else(|e| e.into_inner());
-        w.behind.resize(n, 0);
+    let Some(&(top_i, _, top)) = answers.iter().max_by_key(|a| a.2).filter(|_| answers.len() > 1) else { return };
+    let behind_of = |daa: u64| Some(top.saturating_sub(daa)).filter(|b| *b > LAG_DAA);
+    // A DAA is the node's own claim: a node that over-reports would put its honest partner behind. So a lag counts only once
+    // the node behind confirms it: the most advanced node's sink at the check must become known to it, and that far above its
+    // own DAA then (a sink it never learns was not real).
+    // the nodes that take a claim at this check
+    let wanting: Vec<usize> = {
+        let mut w = lock();
+        w.lag.resize(n, LagTrack::default());
         let checks = w.lag_checks;
-        for (i, node, daa) in answers {
-            let behind = top.saturating_sub(daa);
-            let lagging = behind > LAG_DAA;
-            w.behind[i] = if lagging { w.behind[i] + 1 } else { 0 };
-            let sustained = w.behind[i] >= checks;
-            if sustained {
-                w.behind[i] = 0;
+        answers.iter().filter(|(i, _, daa)| w.lag[*i].observe(behind_of(*daa), checks)).map(|a| a.0).collect()
+    };
+    let sink = match wanting.is_empty() {
+        false => match tokio::time::timeout(WATCH_TIMEOUT, src(top_i).dag_info()).await {
+            Ok(Ok(d)) => Some(d.sink),
+            _ => None, // no claim this check: taken at the next
+        },
+        true => None,
+    };
+    let pending: Vec<(usize, Vec<(usize, Hash32)>)> = {
+        let mut w = lock();
+        answers
+            .iter()
+            .filter(|(i, _, daa)| *i != top_i && behind_of(*daa).is_some())
+            .map(|(i, _, daa)| {
+                let t = &mut w.lag[*i];
+                if let Some(sink) = sink.filter(|_| wanting.contains(i)) {
+                    t.claims.push(Claim { sink, own: *daa, age: 0, lead: None });
+                }
+                (*i, t.claims.iter().enumerate().filter(|(_, c)| c.lead.is_none()).map(|(k, c)| (k, c.sink)).collect())
+            })
+            .collect()
+    };
+    let mut learned = vec![];
+    for (i, claims) in pending {
+        for (k, sink) in claims {
+            match tokio::time::timeout(WATCH_TIMEOUT, src(i).block_daa_score(sink)).await {
+                Ok(Ok(Some(daa))) => learned.push((i, k, daa)),
+                // not known yet (a later claim's sink is not either), or no answer: asked again at the next check
+                _ => break,
             }
-            findings.push((i, node, lagging.then_some(behind), sustained));
         }
     }
-    for (i, node, behind, sustained) in findings {
-        if sustained {
-            tracing::warn!(node = %board.shown(i), behind_daa = behind, "a node stays behind the other node of the pair");
+    let mut verdicts = vec![];
+    let refuted_warn = {
+        let mut w = lock();
+        let checks = w.lag_checks;
+        for (i, k, daa) in learned {
+            if let Some(c) = w.lag[i].claims.get_mut(k) {
+                c.lead = Some(daa.saturating_sub(c.own));
+            }
         }
-        super::judge::lag(board.entry(i), &node, behind, sustained);
+        for (i, node, daa) in answers {
+            let v = if i == top_i { LagVerdict::Level } else { w.lag[i].verdict(behind_of(daa), checks) };
+            verdicts.push((i, node, v));
+        }
+        let refuted = verdicts.iter().any(|v| matches!(v.2, LagVerdict::Refuted(_)));
+        let due = w.last_refuted_warn.is_none_or(|t| t.elapsed() >= Duration::from_secs(600));
+        if refuted && due {
+            w.last_refuted_warn = Some(Instant::now());
+        }
+        refuted && due
+    };
+    for (i, node, v) in verdicts {
+        let entry = board.entry(i);
+        match v {
+            LagVerdict::Level => super::judge::lag(entry, &node, None, None),
+            LagVerdict::Unconfirmed(d) => super::judge::lag(entry, &node, Some(d), None),
+            LagVerdict::Refuted(d) => {
+                if refuted_warn {
+                    tracing::warn!(
+                        node = %board.shown(i),
+                        ahead = %board.shown(top_i),
+                        claimed_daa = d,
+                        "a node's lead over the other node of the pair is not borne out (its sink stayed unknown, or was not that far ahead): nothing is held against the node behind"
+                    );
+                }
+                super::judge::lag(entry, &node, None, None)
+            }
+            LagVerdict::Confirmed(d) => {
+                tracing::warn!(node = %board.shown(i), behind_daa = d, "a node stays behind the other node of the pair (confirmed by the node itself)");
+                super::judge::lag(entry, &node, Some(d), Some(d))
+            }
+        }
     }
 }
 
@@ -956,6 +1132,55 @@ mod tests {
             assert!(!text.contains("hunter2") && !text.contains("SECRETKEY") && !text.contains("user:"), "{text}");
             assert!(text.contains("wss://node.example/..."), "{text}");
         }
+    }
+
+    /// A lag counts only once the node behind confirmed the lead itself: both claims (the streak's first check and its
+    /// `checks`-th) known to it later, each more than `LAG_DAA` above its own DAA then. A sink it never learns, or one not that
+    /// far ahead, refutes the lead and the streak begins again.
+    #[test]
+    fn a_lag_counts_only_once_the_node_behind_confirms_the_lead() {
+        let claim = |own| Claim { sink: Hash32([5; 32]), own, age: 0, lead: None };
+        let checks = 3;
+        // a real lag: a claim at the first check and at the third, both confirmed later
+        let mut t = LagTrack::default();
+        assert!(t.observe(Some(400), checks), "a claim at the streak's first check");
+        t.claims.push(claim(100));
+        assert_eq!(t.verdict(Some(400), checks), LagVerdict::Unconfirmed(400));
+        assert!(!t.observe(Some(400), checks));
+        assert_eq!(t.verdict(Some(400), checks), LagVerdict::Unconfirmed(400));
+        assert!(t.observe(Some(400), checks), "and at its third");
+        t.claims.push(claim(200));
+        t.claims[0].lead = Some(450);
+        assert_eq!(t.verdict(Some(400), checks), LagVerdict::Unconfirmed(400), "one confirmed is not enough");
+        assert!(!t.observe(Some(400), checks));
+        t.claims[1].lead = Some(380);
+        assert_eq!(t.verdict(Some(400), checks), LagVerdict::Confirmed(380), "the smallest confirmed lead");
+        assert_eq!(t.streak, 0, "a finding begins the streak again");
+        // a sink the node behind never learns: refuted after LAG_CONFIRM_CHECKS checks, never a finding
+        let mut t = LagTrack::default();
+        for k in 0..=LAG_CONFIRM_CHECKS {
+            if t.observe(Some(5_000), checks) && t.claims.is_empty() {
+                t.claims.push(claim(100));
+            }
+            let v = t.verdict(Some(5_000), checks);
+            let want = if k < LAG_CONFIRM_CHECKS { LagVerdict::Unconfirmed(5_000) } else { LagVerdict::Refuted(5_000) };
+            assert_eq!(v, want, "check {k}");
+        }
+        assert_eq!((t.streak, t.claims.len()), (0, 0));
+        // a sink it knows, but not that far ahead of it: refuted at once
+        assert!(t.observe(Some(5_000), checks));
+        t.claims.push(Claim { lead: Some(LAG_DAA), ..claim(100) });
+        assert_eq!(t.verdict(Some(5_000), checks), LagVerdict::Refuted(5_000));
+        // level: nothing kept
+        t.observe(Some(5_000), checks);
+        t.claims.push(claim(100));
+        assert!(!t.observe(None, checks));
+        assert_eq!((t.streak, t.claims.len(), t.verdict(None, checks)), (0, 0, LagVerdict::Level));
+        // one check to a finding: one claim
+        let mut t = LagTrack::default();
+        assert!(t.observe(Some(400), 1));
+        t.claims.push(Claim { lead: Some(400), ..claim(100) });
+        assert_eq!(t.verdict(Some(400), 1), LagVerdict::Confirmed(400));
     }
 
     /// A node of a fixed answer: the primary's chain blocks (`added`, no transactions) and the acceptance data it reports.

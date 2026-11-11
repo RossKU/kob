@@ -8,10 +8,12 @@
 //! * a **resolver entry** (`rpc::resolver`, a public node) gives the node up for another at once ([`resolver::replace`],
 //!   logged as a warning with the reason, which `/v1/health` shows per node as `cut_reason`): on another network, without the
 //!   UTXO index (when the process needs it, [`require_utxo_index`]), reporting not synced for [`UNSYNCED_GRACE`],
-//!   [`TIMEOUTS`] request timeouts within [`TIMEOUT_WINDOW`], behind the other node for a minute, or contradicting it;
+//!   [`TIMEOUTS`] request timeouts within [`TIMEOUT_WINDOW`], behind the other node for a minute (a lag the node itself
+//!   confirmed, `rpc::multi`: never a node's own claim to be ahead), or contradicting it;
 //! * a **node the operator named** (a fixed URL) cannot be replaced: the same findings raise an **alarm** instead. It is
 //!   logged as an error when it begins, listed under `node_alarms` in `/v1/health` (and as the node's `cut_reason`), counted
-//!   by `kob_indexer_node_alarms` and appended to the status line, until the node is fine again. A cross-checking node with an
+//!   by `kob_indexer_node_alarms` and appended to the status line, until the node is fine again (a lag or sync alarm: fine for
+//!   [`ALARM_CLEAR_AFTER`] without a break, so a node hovering at the bound does not flap). A cross-checking node with an
 //!   alarm is left out of the pair meanwhile (the authority carries on alone; one that contradicted the authority is
 //!   dropped by that pair until a restart, as before); the authority itself stays the authority.
 //!
@@ -20,7 +22,7 @@
 
 use super::{redact_url, resolver};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -31,6 +33,28 @@ pub const UNSYNCED_GRACE: Duration = Duration::from_secs(120);
 /// Request timeouts of one node within [`TIMEOUT_WINDOW`] that make it a hanging node.
 pub const TIMEOUTS: usize = 3;
 pub const TIMEOUT_WINDOW: Duration = Duration::from_secs(600);
+
+/// A named node's lag or sync alarm ends once the node has been fine for this long without a break (one fine answer is not
+/// enough: a node hovering around the bound would raise an error every minute or two).
+pub const ALARM_CLEAR_AFTER: Duration = Duration::from_secs(60);
+
+/// [`ALARM_CLEAR_AFTER`] in milliseconds, or another value a test set ([`set_alarm_clear_after`]).
+static CLEAR_AFTER_MS: AtomicU64 = AtomicU64::new(ALARM_CLEAR_AFTER.as_millis() as u64);
+
+/// How long a lag or sync alarm needs fine answers to end (tests: zero ends it at the first one).
+#[doc(hidden)]
+pub fn set_alarm_clear_after(d: Duration) {
+    CLEAR_AFTER_MS.store(d.as_millis() as u64, Ordering::Relaxed);
+}
+
+fn clear_after() -> Duration {
+    Duration::from_millis(CLEAR_AFTER_MS.load(Ordering::Relaxed))
+}
+
+/// The alarms that end only after [`ALARM_CLEAR_AFTER`] of fine answers (the others end with their finding).
+fn sticky(kind: Kind) -> bool {
+    matches!(kind, Kind::Lag | Kind::Sync)
+}
 
 /// What a finding is about: one alarm per named node and kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,9 +77,38 @@ struct Judge {
     behind: HashSet<String>,
     /// (named node, kind) -> what is wrong
     alarms: BTreeMap<(String, Kind), String>,
+    /// (named node, kind) of a sticky alarm -> since when its node has been fine without a break
+    fine_since: BTreeMap<(String, Kind), Instant>,
 }
 
 impl Judge {
+    /// A named node's findings now: the alarms that begin (what is wrong) and end. A sticky alarm ([`sticky`]) ends only
+    /// after [`clear_after`] of fine answers in a row.
+    fn alarm(&mut self, url: &str, findings: &[(Kind, Option<String>)], now: Instant) -> (Vec<String>, Vec<Kind>) {
+        let (mut began, mut ended) = (vec![], vec![]);
+        for (kind, why) in findings {
+            let key = (url.to_string(), *kind);
+            match why {
+                Some(w) => {
+                    self.fine_since.remove(&key);
+                    if self.alarms.insert(key, w.clone()).is_none() {
+                        began.push(w.clone());
+                    }
+                }
+                None if !self.alarms.contains_key(&key) => {}
+                None => {
+                    let since = *self.fine_since.entry(key.clone()).or_insert(now);
+                    if !sticky(*kind) || now.saturating_duration_since(since) >= clear_after() {
+                        self.fine_since.remove(&key);
+                        self.alarms.remove(&key);
+                        ended.push(*kind);
+                    }
+                }
+            }
+        }
+        (began, ended)
+    }
+
     /// Why `node` counts as not synced now (`None`: synced, or not for long enough yet).
     fn sync(&mut self, node: &str, synced: bool, now: Instant) -> Option<String> {
         if synced {
@@ -138,25 +191,7 @@ fn act(url: &str, node: &str, findings: &[(Kind, Option<String>)]) -> Option<(Ki
         }
         return bad;
     }
-    let (mut began, mut ended) = (vec![], vec![]);
-    {
-        let mut j = lock();
-        for (kind, why) in findings {
-            let key = (url.to_string(), *kind);
-            match why {
-                Some(w) => {
-                    if j.alarms.insert(key, w.clone()).is_none() {
-                        began.push(w.clone());
-                    }
-                }
-                None => {
-                    if j.alarms.remove(&key).is_some() {
-                        ended.push(*kind);
-                    }
-                }
-            }
-        }
-    }
+    let (began, ended) = lock().alarm(url, findings, Instant::now());
     for w in began {
         tracing::error!(
             node = %redact_url(url),
@@ -196,25 +231,27 @@ pub fn timed_out(url: &str, node: &str) {
     }
 }
 
-/// The pair's health watch (`rpc::multi`) compared `node` with the other node: `behind` (DAA) when it is behind by more than
-/// the watch's bound now, and `sustained` once it has been for the watch's whole period (a finding). `None` clears it.
-pub fn lag(url: &str, node: &str, behind: Option<u64>, sustained: bool) {
+/// The pair's health watch (`rpc::multi`) compared `node` with the other node: `behind` (DAA) when the answers put it behind by
+/// more than the watch's bound now (it is not promoted to authority meanwhile, [`suspect`]), and `confirmed` once the node
+/// itself confirmed that lag over the watch's whole period (a finding: the other node's sink, which it learned later, was
+/// that far ahead of it). `None` for both: level, or the other node's lead was not borne out (a fine answer).
+pub fn lag(url: &str, node: &str, behind: Option<u64>, confirmed: Option<u64>) {
     {
         let mut j = lock();
-        if behind.is_some() {
+        if behind.is_some() || confirmed.is_some() {
             j.behind.insert(node.to_string());
         } else {
             j.behind.remove(node);
         }
     }
-    match behind {
-        None => {
-            act(url, node, &[(Kind::Lag, None)]);
-        }
-        Some(d) if sustained => {
+    match (behind, confirmed) {
+        (_, Some(d)) => {
             act(url, node, &[(Kind::Lag, Some(format!("it stays {d} DAA behind the other node (about {} s of chain)", d / 10)))]);
         }
-        Some(_) => {}
+        (None, None) => {
+            act(url, node, &[(Kind::Lag, None)]);
+        }
+        (Some(_), None) => {}
     }
 }
 
@@ -290,6 +327,30 @@ mod tests {
         assert!(k.alarms.is_empty());
     }
 
+    /// A lag or sync alarm of a named node ends only after a minute of fine answers without a break (a node hovering at the
+    /// bound does not flap); another kind ends with its finding.
+    #[test]
+    fn lag_and_sync_alarms_end_after_a_minute_of_fine_answers() {
+        let mut j = Judge::default();
+        let t0 = Instant::now();
+        let s = |sec: u64| t0 + Duration::from_secs(sec);
+        let lag = |w: Option<&str>| [(Kind::Lag, w.map(str::to_string))];
+        assert_eq!(j.alarm("n", &lag(Some("behind")), t0).0, vec!["behind".to_string()]);
+        assert!(j.alarm("n", &lag(None), s(10)).1.is_empty(), "one fine answer is not enough");
+        assert!(j.alarm("n", &lag(None), s(50)).1.is_empty());
+        // behind again: the minute begins again, and the alarm is not raised a second time
+        let (began, ended) = j.alarm("n", &lag(Some("behind")), s(60));
+        assert!(began.is_empty() && ended.is_empty());
+        assert!(j.alarm("n", &lag(None), s(70)).1.is_empty());
+        assert!(j.alarm("n", &lag(None), s(120)).1.is_empty());
+        assert_eq!(j.alarm("n", &lag(None), s(130)).1, vec![Kind::Lag], "a minute of fine answers ends it");
+        assert!(j.alarms.is_empty() && j.fine_since.is_empty());
+        // another kind ends with its finding
+        let net = |w: Option<&str>| [(Kind::Network, w.map(str::to_string))];
+        j.alarm("n", &net(Some("other network")), s(200));
+        assert_eq!(j.alarm("n", &net(None), s(201)).1, vec![Kind::Network]);
+    }
+
     /// A named node is never replaced: its findings raise alarms, which end with the findings; a public node's finding
     /// replaces it at once, and a node on another network is never used.
     #[test]
@@ -328,12 +389,12 @@ mod tests {
         assert!(resolver::last_reason("resolver:2").unwrap().contains("hangs"));
         // a survivor that is behind is not promoted: the authority resolves a node of its own
         let d = resolver::endpoint("resolver:2").unwrap();
-        lag("resolver:2", &d, Some(500), false);
+        lag("resolver:2", &d, Some(500), None);
         assert!(suspect(&d));
         resolver::replace("resolver", &b, "test");
         assert_eq!(resolver::current("resolver:2"), Some(d.clone()), "the suspect keeps its role");
         assert_eq!(resolver::current("resolver"), None);
-        lag("resolver:2", &d, None, false);
+        lag("resolver:2", &d, None, None);
         assert!(!suspect(&d));
         assert!(!alarms().iter().any(|a| a.contains(".example")), "public nodes raise no alarm, they are replaced");
     }

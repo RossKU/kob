@@ -28,7 +28,9 @@
 //! the other entry's node over, and the entries left without a node resolve a replacement on a host different from the ones
 //! in use and from the failed ones, in the background (a resolution that fails is tried again with the backoff below until it
 //! names a node, so an entry is never left without one). When no node is left, every entry resolves again on its next
-//! use, with a backoff (2 s doubling to 60 s) while the resolvers name none. Every change is logged with the hosts.
+//! use, with a backoff (2 s doubling to 60 s) while the resolvers name none. Resolutions are rate-limited ([`CHURN_WINDOW`]:
+//! three per entry within ten minutes, then one per five minutes, and eight for all entries together), so a node that keeps
+//! being replaced cannot turn into a query storm on the public resolvers. Every change is logged with the hosts.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
@@ -71,6 +73,14 @@ pub const GRACE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A node that drops again within this long of its last drop is given up at once, without another reconnect.
 pub const DROP_WINDOW: Duration = Duration::from_secs(120);
+
+/// Resolutions are rate-limited over this window (a node replaced over and over is not a node problem, and each resolution
+/// asks up to every resolver [`ROUNDS`] times): an entry resolves at most [`CHURN_FREE`] times within it before its next
+/// resolution waits [`CHURN_SPACING`] after its last, and all entries together at most [`CHURN_MAX`] times.
+pub const CHURN_WINDOW: Duration = Duration::from_secs(600);
+pub const CHURN_FREE: usize = 3;
+pub const CHURN_SPACING: Duration = Duration::from_secs(300);
+pub const CHURN_MAX: usize = 8;
 
 /// Whether a configured node URL is a resolver entry.
 pub fn is_resolver(url: &str) -> bool {
@@ -203,6 +213,30 @@ struct State {
     dropped: HashMap<String, Instant>,
     /// entry -> why its last node was given up (`host: reason`), for `/v1/health`
     reasons: HashMap<String, String>,
+    /// entry -> when it resolved within [`CHURN_WINDOW`] (oldest first)
+    resolutions: HashMap<String, VecDeque<Instant>>,
+}
+
+impl State {
+    /// How long `url` must wait before it may resolve again ([`CHURN_WINDOW`]; zero: now). Old resolutions are forgotten.
+    fn churn_wait(&mut self, url: &str, now: Instant) -> Duration {
+        for q in self.resolutions.values_mut() {
+            while q.front().is_some_and(|t| now.saturating_duration_since(*t) >= CHURN_WINDOW) {
+                q.pop_front();
+            }
+        }
+        self.resolutions.retain(|_, q| !q.is_empty());
+        let mut until = now;
+        if let Some(q) = self.resolutions.get(url).filter(|q| q.len() >= CHURN_FREE) {
+            until = until.max(*q.back().expect("not empty") + CHURN_SPACING);
+        }
+        let mut all: Vec<Instant> = self.resolutions.values().flatten().copied().collect();
+        if all.len() >= CHURN_MAX {
+            all.sort();
+            until = until.max(all[all.len() - CHURN_MAX] + CHURN_WINDOW);
+        }
+        until.saturating_duration_since(now)
+    }
 }
 
 fn state() -> &'static Mutex<State> {
@@ -219,8 +253,14 @@ fn state() -> &'static Mutex<State> {
             background: true,
             dropped: HashMap::new(),
             reasons: HashMap::new(),
+            resolutions: HashMap::new(),
         })
     })
+}
+
+/// Forgets the resolutions made so far ([`CHURN_WINDOW`]): the operator asked for another try (the setup's check).
+pub fn forget_churn() {
+    lock().resolutions.clear();
 }
 
 fn lock() -> std::sync::MutexGuard<'static, State> {
@@ -269,7 +309,7 @@ pub fn endpoint(url: &str) -> Result<String, String> {
     // a node another entry took meanwhile is not taken a second time, the resolution is repeated on the new view
     for attempt in 1..=3 {
         let (network, avoid, resolve_fn) = {
-            let s = lock();
+            let mut s = lock();
             if let Some(u) = s.current.get(url) {
                 return Ok(u.clone());
             }
@@ -278,7 +318,26 @@ pub fn endpoint(url: &str) -> Result<String, String> {
             }
             if let Some(b) = s.backoff.get(url).filter(|b| b.until > Instant::now()) {
                 let wait = b.until.saturating_duration_since(Instant::now()).as_secs() + 1;
-                return Err(format!("no public node yet (the resolvers named none; again in {wait} s)"));
+                return Err(format!(
+                    "no public node yet (the resolvers named none lately, or nodes were replaced too often; again in {wait} s)"
+                ));
+            }
+            let now = Instant::now();
+            // one resolution per call (its repeats on a changed view are the same resolution)
+            let churn = if attempt == 1 { s.churn_wait(url, now) } else { Duration::ZERO };
+            if !churn.is_zero() {
+                // the refill thread sleeps until then; the first warning names why
+                let delay = s.backoff.get(url).map_or(Duration::from_secs(2), |b| b.delay);
+                s.backoff.insert(url.to_string(), Backoff { until: now + churn, delay });
+                tracing::warn!(
+                    entry = url,
+                    retry_secs = churn.as_secs(),
+                    "public nodes were replaced too often lately: the next resolution waits (the pair goes on with the node it has)"
+                );
+                return Err(format!("no public node yet (nodes were replaced too often; again in {} s)", churn.as_secs() + 1));
+            }
+            if attempt == 1 {
+                s.resolutions.entry(url.to_string()).or_default().push_back(now);
             }
             let mut avoid: Vec<String> = s.failed.iter().cloned().collect();
             avoid.extend(in_use(&s, url));
@@ -498,8 +557,51 @@ pub(crate) mod tests {
         s.pending.clear();
         s.dropped.clear();
         s.reasons.clear();
+        s.resolutions.clear();
         s.resolve = resolve;
         s.background = false;
+    }
+
+    /// Resolutions are rate-limited: an entry resolves [`CHURN_FREE`] times within [`CHURN_WINDOW`], then waits
+    /// [`CHURN_SPACING`] after its last; all entries together resolve at most [`CHURN_MAX`] times within it. The operator's
+    /// own try again (the setup) forgets them.
+    #[test]
+    fn resolutions_are_rate_limited() {
+        let _g = serial();
+        reset(fake_resolve);
+        let mut s = lock();
+        let t0 = Instant::now();
+        let min = |m: u64| t0 + Duration::from_secs(60 * m);
+        for m in 0..CHURN_FREE as u64 {
+            assert!(s.churn_wait("resolver:2", min(m)).is_zero(), "{m}");
+            s.resolutions.entry("resolver:2".into()).or_default().push_back(min(m));
+        }
+        let last = min(CHURN_FREE as u64 - 1);
+        assert_eq!(s.churn_wait("resolver:2", last), CHURN_SPACING, "then spaced after the last");
+        assert!(s.churn_wait("resolver", last).is_zero(), "another entry is not held back by this one");
+        assert!(s.churn_wait("resolver:2", last + CHURN_SPACING).is_zero());
+        // all entries together
+        for k in 0..CHURN_MAX as u64 {
+            s.resolutions.entry(format!("resolver:{}", 10 + k)).or_default().push_back(min(3));
+        }
+        assert_eq!(s.churn_wait("resolver", min(3)), CHURN_WINDOW, "{} in the window", CHURN_MAX);
+        // the window forgets them
+        assert!(s.churn_wait("resolver", min(3) + CHURN_WINDOW).is_zero());
+        assert!(s.resolutions.values().all(|q| q.iter().all(|t| *t >= min(3))));
+        drop(s);
+        // through endpoint: the fourth resolution of an entry within the window waits, and says so
+        reset(fake_resolve);
+        for _ in 0..CHURN_FREE {
+            let n = endpoint("resolver:2").unwrap();
+            lock().current.remove("resolver:2");
+            assert!(n.starts_with("wss://"));
+        }
+        let e = endpoint("resolver:2").unwrap_err();
+        assert!(e.contains("replaced too often"), "{e}");
+        assert!(endpoint("resolver:2").unwrap_err().contains("again in"), "the entry backs off meanwhile");
+        lock().backoff.clear();
+        forget_churn();
+        assert!(endpoint("resolver:2").is_ok(), "the operator's try again");
     }
 
     #[test]

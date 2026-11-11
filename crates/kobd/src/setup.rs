@@ -761,6 +761,8 @@ pub const PUBLIC_NODES: &str = "Public nodes are shared and slower than your own
 /// goes on anyway (the executor keeps resolving).
 fn check_public_pair(io: &mut dyn Console, node: &mut dyn SetupNode, network: &str, role: LaunchRole) -> Result<bool> {
     loop {
+        // the operator's own try again is never held back by the resolutions' rate limit (`rpc::resolver::CHURN_WINDOW`)
+        crate::rpc::resolver::forget_churn();
         io.say("Finding two public nodes through the Kaspa resolvers ...");
         let mut problems = vec![];
         for (entry, what) in [(crate::rpc::resolver::pseudo(1), "chain authority"), (crate::rpc::resolver::pseudo(2), "cross-check")] {
