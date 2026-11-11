@@ -7,8 +7,7 @@
 //
 // What the app takes from it, and what it does not:
 //
-//   * ONLY a display ticker, a display name, an image and, to flag a disagreement, the declared decimals and the program hash (and, if kascov ever lists one, a price,
-//     below). These are the token creator's
+//   * ONLY a display ticker, a display name, an image and, to flag a disagreement, the declared decimals and the program hash. These are the token creator's
 //     own claims, recorded in its genesis (the same status as a KCC-23 declaration: "declared by its creator"). Nobody has checked them.
 //   * Never a fact: supply, powers, the decimals a market trades with, prices and orders come from the chain and the KOB indexer exactly as before. Where
 //     kascov's ticker or decimals disagree with what KOB derives, KOB wins and the list says so (ui/market/kascov-merge.ts).
@@ -17,9 +16,10 @@
 //     checked it itself; founder decision 2026-10-28). It changes no warning, no fact and no rule. Whether a token is listed is decided by the program hash
 //     alone, against the programs this build pins and enables for the network (`kascovTradable`). kascov's `lineage_complete` ("provably genesis") is not
 //     read: it only says kascov's index began before the token did.
-//   * A PRICE is not in the list today. ASSUMPTION: if kascov adds one, it is an optional per-token `price_kas` (KAS per whole token, a positive JSON number or numeric
-//     string). It is read as `priceKas` and used for exactly one thing: a small muted third-party line on the token's market page when it differs from KOB's own reference by
-//     more than 20% (ui/market/kascov-price.ts). Absent or malformed = nothing. KOB never uses it for a warning, an ordering, a check or a figure.
+//   * A PRICE is read in one way only: whether kascov prices the token at all (`market.spot_num_sompi` over `spot_den`: an exact ratio of KAS sompi per base unit, kascov's own replay
+//     of the pools of other venues, a marginal price before fees; strict: two positive safe integers or digit strings, else the token is unpriced). It only decides whether the
+//     chart may offer the optional kascov line (ui/market/PriceChart.tsx); the line itself comes from kascov's candles (data/kascov-candles.ts), fetched only while the viewer has
+//     it on. KOB never uses a kascov price for a warning, an ordering, a check or a figure.
 //   * Every failure (unreachable, slow, not JSON, a changed shape, a response for another network) is an `ok: false` result, never a throw: the list is then
 //     what it was before this module existed.
 //
@@ -93,12 +93,14 @@ export interface KascovToken {
    * (labelled as kascov's), and only for a token kascov marks `verified`.
    */
   supply?: bigint | null;
-  /**
-   * kascov's price of the token in KAS per whole token (optional `price_kas`; kascov does not publish one yet): a positive finite number, absent otherwise. Display only: the market
-   * page may note, labelled third-party, that it differs from KOB's own reference price (ui/market/kascov-price.ts). Never used for anything else.
-   */
-  priceKas?: number | null;
+  /** kascov prices the token (its `market` carries a valid spot); false for `{ unpriced_reason }`, no `market`, or a spot that is not two positive safe integers */
+  priced: boolean;
+  /** kascov's spot: KAS sompi per base unit as the exact ratio `num / den`; null when unpriced. Display only (it gates the chart's optional kascov line). */
+  spot: KascovSpot | null;
 }
+
+/** kascov's spot price: `num` sompi per `den` base units, both positive. */
+export interface KascovSpot { num: bigint; den: bigint }
 
 /**
  * How long the list request (about 2.4 MB, 380 KB gzipped) may take, headers and body together. It was 8 s: on a slow phone link the answer came later, the request was
@@ -146,10 +148,18 @@ function supplyOf(o: Record<string, unknown>): bigint | null {
   return typeof o.supply === 'number' && Number.isSafeInteger(o.supply) && o.supply >= 0 ? BigInt(o.supply) : null;
 }
 
-/** The `price_kas` of an entry: a positive finite number (or numeric string) within a sane range, else null. */
-export function priceKasOf(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : NaN;
-  return Number.isFinite(n) && n > 0 && n >= 1e-12 && n <= 1e15 ? n : null;
+/** A positive safe integer, or a string of 1..30 digits without a leading zero, as a bigint; null for anything else (a float, zero, a negative, other text, an object). */
+export function positiveBigOf(v: unknown): bigint | null {
+  if (typeof v === 'number') return Number.isSafeInteger(v) && v > 0 ? BigInt(v) : null;
+  return typeof v === 'string' && /^[1-9]\d{0,29}$/.test(v) ? BigInt(v) : null;
+}
+
+/** The spot of an entry's `market` (`spot_num_sompi` over `spot_den`), null unless both are positive integers: an unpriced market is `{ unpriced_reason }` and has neither. */
+export function spotOf(market: unknown): KascovSpot | null {
+  const m = asObject(market);
+  const num = positiveBigOf(m?.spot_num_sompi);
+  const den = positiveBigOf(m?.spot_den);
+  return num !== null && den !== null ? { num, den } : null;
 }
 
 /** One entry of `tokens`, null when it has no usable covenant id. */
@@ -159,7 +169,7 @@ export function parseKascovToken(raw: unknown): KascovToken | null {
   if (!o || !covenantId) return null;
   const dec = o.claimed_decimals;
   const imageHash = hex64(o.claimed_image_hash);
-  const priceKas = priceKasOf(o.price_kas);
+  const spot = spotOf(o.market);
   return {
     covenantId,
     ticker: text(o.claimed_ticker, 16),
@@ -170,7 +180,8 @@ export function parseKascovToken(raw: unknown): KascovToken | null {
     imageUrl: typeof o.claimed_image === 'string' && o.claimed_image.trim().length > 0 && o.claimed_image.length <= 2048 ? o.claimed_image.trim() : null,
     verified: o.status === 'verified',
     supply: supplyOf(o),
-    ...(priceKas !== null ? { priceKas } : {}),
+    priced: spot !== null,
+    spot,
   };
 }
 

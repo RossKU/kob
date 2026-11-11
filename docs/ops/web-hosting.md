@@ -163,6 +163,13 @@ What the app takes from it, and what it does not (`web/src/data/kascov.ts`, `web
   the registry and the indexer give, plus a one-line "unavailable" hint. Nothing is thrown into the UI and nothing is stored as authority
   (the persistent items are the visitor's two icon switches, `kob.icons` and `kob.icons.creator`, the display currency, `kob.currency` = `usd` when USD is chosen, and the last blocklist read, `kob.logo-blocklist.v1`, a cache).
 
+* **Price (optional, third party, never a fact):** a token's `market.spot_num_sompi` / `spot_den` (strict: two positive safe integers or digit strings, else
+  unpriced) only decides whether the chart offers a small toggle (off by default, remembered in `kob.chart.kascov`) and adds one line to the market list's price-cell tooltip. Only
+  while the toggle is on, the chart asks `https://kascov.io/data/{network}/token/<covenant id>/candles?bucket={15m|1h|1d}&phase=all` (1m and 5m use 15m: kascov's 1m is about
+  10 MB for a token with a month of history), at most every 2 minutes while the tab is visible, and draws the closes as one thin line behind KOB's candles that never takes part in the
+  price scale. That request names the viewed token to kascov.io (it is the same origin as the list, so a pinned `connect-src` that allows `https://kascov.io` covers it).
+  KOB uses the price for nothing else (`web/src/data/kascov-candles.ts`, `web/src/ui/market/kascov-overlay.ts`).
+
 ### Token logos from the creator's address (no image is stored by KOB)
 
 A token created on KOB's own Create page is not indexed by kascov.io, and a creator's declaration (KCC-23, `image`; the older `logo` is read too) carries an address and, optionally, a hash (`image_hash`, the SHA-256 of the picture file; the Create

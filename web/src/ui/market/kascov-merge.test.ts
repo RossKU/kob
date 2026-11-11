@@ -19,7 +19,7 @@ const ID = (c: string) => c.repeat(64);
 const registry: TokenRegistry = { network: 'testnet-10', templates: [], templateChecks: [], tokens: [], byCovenantId: new Map() };
 
 const k = (over: Partial<KascovToken> = {}): KascovToken => ({
-  covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: ROCKET, imageHash: 'ab'.repeat(32), imageUrl: 'https://img.example/a.png', verified: false, ...over,
+  covenantId: ID('1'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: ROCKET, imageHash: 'ab'.repeat(32), imageUrl: 'https://img.example/a.png', verified: false, priced: false, spot: null, ...over,
 });
 const ctx = (network: string, over: Record<string, unknown> = {}) => ({ network, templates, registry, ...over });
 
@@ -181,10 +181,12 @@ describe('applyKascov (a token page)', () => {
     expect(applyKascov(row, null, standIn)).toBe(row);
   });
 
-  it("carries kascov's optional price (display only) and nothing when it lists none", () => {
+  it("carries kascov's spot (display only: it gates the chart's optional line) and null when kascov does not price the token", () => {
     const row = buildTokenRows(registry, [view(ID('1'))])[0]!;
-    expect(applyKascov(row, [k({ templateHash: REF_8X8, priceKas: 0.012 })])!.kascov?.priceKas).toBe(0.012);
-    expect(applyKascov(row, [k({ templateHash: REF_8X8 })])!.kascov).not.toHaveProperty('priceKas');
+    const meta = applyKascov(row, [k({ templateHash: REF_8X8, priced: true, spot: { num: 7n, den: 3n } })])!.kascov!;
+    expect(meta.spot).toEqual({ num: 7n, den: 3n });
+    expect(meta.priced).toBe(true);
+    expect(applyKascov(row, [k({ templateHash: REF_8X8 })])!.kascov!.spot).toBeNull();
   });
 });
 

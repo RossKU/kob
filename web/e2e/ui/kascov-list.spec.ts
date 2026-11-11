@@ -179,21 +179,76 @@ test.describe('with kascov.io', () => {
     await expect(page.getByTestId(`token-icon-${exkcc}`)).toHaveAttribute('data-icon', 'letter');
   });
 
-  test("a kascov price more than 20% from KOB's own shows one muted third-party line on the market page; within 20%, or no price, nothing", async ({ appPage: page, mock }) => {
+  test("kascov's price: a line in the price cell's tooltip of the market list and an optional line on the chart, asked for only while it is on", async ({ appPage: page, mock }) => {
     const exkcc = (await mock.token()).covenant_id;
     const stats = await mock.get(`/v1/stats/${exkcc}`);
-    const own = Number(stats.last) / 1e8;
-    const note = page.getByTestId('kascov-price-note');
-    // half of KOB's own last price: -50%
-    await mockKascov(page, { tokens: tokens(exkcc).map((k) => (k.covenant_id === exkcc ? { ...k, price_kas: own / 2 } : k)) });
+    const dec = Number(stats.decimals);
+    const own = Number(stats.last) / Number(stats.price_basis); // KOB's last price, KAS per whole token
+    // kascov's price: 0.0125 KAS per whole token (quote_sompi over base_amount of one whole token), an older close of 0.02 before it
+    const base = 10 ** dec;
+    const candles = { [exkcc]: [{ t: 1_000, base, quote: 2_000_000 }, { t: 2_000, base, quote: 1_250_000 }] };
+    const priced = (market: MockKascovToken['market']) => tokens(exkcc).map((k) => (k.covenant_id === exkcc ? { ...k, ...(market ? { market } : {}) } : k));
+    const toggle = page.getByTestId('chart-kascov-toggle');
+    const legend = page.getByTestId('chart-kascov');
+    const chart = page.getByTestId('price-chart');
+
+    // kascov does not price the token: no toggle, no candle request, no line in the tooltip
+    let log = await mockKascov(page, { tokens: priced({ unpriced_reason: "no single covenant holds this token's inventory" }), candles });
+    await page.goto('/#/market');
+    await expect(page.getByTestId(`token-last-${exkcc}`)).not.toHaveAttribute('title', /kascov/);
     await page.goto(`/#/market/${exkcc}`);
-    await expect(note).toHaveText(/^kascov lists [\d.]+ KAS \(-50%\)$/);
-    await expect(note).toHaveAttribute('title', /^Third-party reference: .*KOB does not use it for anything/);
-    // 10% above: nothing
-    await mockKascov(page, { tokens: tokens(exkcc).map((k) => (k.covenant_id === exkcc ? { ...k, price_kas: own * 1.1 } : k)) });
+    await expect(chart).toHaveAttribute('data-state', 'ready');
+    await expect(toggle).toHaveCount(0);
+    expect(log.candleRequests).toEqual([]);
+
+    // priced: the list's price cell keeps its text and tooltip and gains one line (the percent is against KOB's own price)
+    log = await mockKascov(page, { tokens: priced({ spot_num_sompi: 1_250_000, spot_den: base }), candles });
+    await page.reload(); // the app keeps the list for a while: a new page reads the new one
+    await page.goto('/#/market');
+    const cell = page.getByTestId(`token-last-${exkcc}`);
+    await expect(cell).toHaveAttribute('title', /\nkascov: 0\.0125 KAS \([+-]\d+%\)$/);
+    const pct = Number(/\(([+-]\d+)%\)$/.exec((await cell.getAttribute('title'))!)![1]);
+    expect(Math.abs(pct - Math.round(((0.0125 - own) / own) * 100))).toBeLessThanOrEqual(1);
+    expect(log.candleRequests).toEqual([]);
+
+    // the market page: a toggle, off, and nothing asked of kascov's candles yet
+    await page.goto(`/#/market/${exkcc}`);
+    await expect(chart).toHaveAttribute('data-state', 'ready');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(toggle).toHaveAttribute('title', 'kascov price (third-party)');
+    await expect(chart).toHaveAttribute('data-kascov', '0');
+    await expect(legend).toHaveCount(0);
+    expect(log.candleRequests).toEqual([]);
+
+    // on: the legend says the price and what it is, and the 5 minute chart asked for the 15 minute candles of this token, once
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(chart).toHaveAttribute('data-kascov', '1');
+    await expect(legend).toHaveText('kascov 0.0125');
+    await expect(legend).toHaveAttribute('title', "Third-party reference from kascov.io: a marginal pool price on other venues, before fees. KOB does not use it; KOB's prices come from its own book.");
+    expect(log.candleRequests).toEqual([`https://kascov.io/data/testnet-10/token/${exkcc}/candles?bucket=15m&phase=all`]);
+
+    // another interval asks for its own bucket; off stops the line and every request
+    await page.getByTestId('chart-interval-1h').click();
+    await expect.poll(() => log.candleRequests.length).toBe(2);
+    expect(log.candleRequests[1]).toContain('bucket=1h&phase=all');
+    await expect(legend).toHaveText('kascov 0.0125');
+    await toggle.click();
+    await expect(legend).toHaveCount(0);
+    await expect(chart).toHaveAttribute('data-kascov', '0');
+    await page.getByTestId('chart-interval-1d').click();
+    await page.getByTestId('chart-interval-5m').click();
+    await expect(chart).toHaveAttribute('data-state', 'ready');
+    expect(log.candleRequests.length).toBe(2);
+
+    // kascov answers with an error: the legend says so, nothing else breaks
+    log = await mockKascov(page, { tokens: priced({ spot_num_sompi: 1_250_000, spot_den: base }), candles, candlesMode: 'http' });
     await page.reload();
-    await expect(page.getByTestId('market-stats')).toHaveAttribute('data-state', 'ready');
-    await expect(note).toHaveCount(0);
+    await expect(chart).toHaveAttribute('data-state', 'ready');
+    await toggle.click();
+    await expect(legend).toHaveText('kascov unavailable');
+    await expect(chart).toHaveAttribute('data-state', 'ready');
+    expect(log.candleRequests.length).toBe(1);
   });
 });
 

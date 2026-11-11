@@ -2,7 +2,6 @@
 // with what KOB derived (short warn badges, see KascovMismatch). Nothing for a row kascov added nothing visible to.
 import { t } from '../../i18n';
 import { TipBadge } from './TipBadge';
-import type { KascovPriceNote } from './kascov-price';
 import type { TokenRow } from './token-model';
 
 /** `compact` (list rows): the source is the small marker "via kascov", the sentence is its tooltip and the legend above the list says it once. */
@@ -24,20 +23,6 @@ export function KascovNote(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' 
       ) : null}
       {props.compact ? null : <KascovMismatch row={props.row} />}
     </>
-  );
-}
-
-/**
- * The one muted third-party line under a market's bar: kascov.io lists a price that differs from KOB's own by more than 20% (kascov-price.ts; nothing renders without a listed
- * price or when the two agree). A tooltip says it is an outside reference and KOB's prices come from its own book.
- */
-export function KascovPrice(props: { note: KascovPriceNote | null }) {
-  const n = props.note;
-  if (!n) return null;
-  return (
-    <p class="small muted kascov-price" title={n.title} data-testid="kascov-price-note" data-percent={n.percent}>
-      {n.text}
-    </p>
   );
 }
 

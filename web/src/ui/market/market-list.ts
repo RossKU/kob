@@ -20,6 +20,7 @@ import { cmpRational, formatRational, significantDp, type Rational } from '../..
 import { kasPerTokenToUsd, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat } from '../../app/fiat';
 import { displayPriceDp, fitAmountColumn, fitDecimalTexts } from '../kit/format';
 import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, thinChangeNote, toneOf, unitsToNumber, type Tone } from './market-model';
+import { kascovTitleLine, spotPairPrice, spotPrice, withKascovLine } from './kascov-overlay';
 import { kasPerToken } from './orientation';
 import type { PairDepth, PairVolume } from './pair-market';
 import { mergePairSummaries } from './pair-model';
@@ -250,7 +251,10 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>, fiat: Fiat | nu
     sort: { last: null, change: null, volume: null, mcap: null, spread: null, depth: null },
     cells: { last: EMPTY, change: EMPTY, volume: EMPTY, mcap: EMPTY, spread: EMPTY, depth: EMPTY },
   };
-  if (!v) return base;
+  // kascov.io's price, a line of the price cell's tooltip: needs the decimals the price is read with (its own market's, else the row's)
+  const kSpot = row.kascov?.spot ?? null;
+  const kLine = (decimals: number | null, own: Rational | null): string | null => (kSpot && decimals !== null ? kascovTitleLine(spotPrice(kSpot, decimals), own, 'KAS') : null);
+  if (!v) return kLine(row.decimals, null) ? { ...base, cells: { ...base.cells, last: { text: null, title: kLine(row.decimals, null) } } } : base;
   const basis = basisOf(v.price_basis);
   // nothing else states them: the scale of its market, as the token page reads it; an indexer that reports 0 decimals for "unknown" and no market scale
   // would show its price per base unit (1e8 too low against its page)
@@ -282,7 +286,7 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>, fiat: Fiat | nu
     sort: { ...base.sort, last: lastR, change: bps, volume: qv === null ? null : unitsToNumber(qv, 8), mcap: mcap.value, spread: spreadBps, depth: depth.value },
     cells: {
       ...base.cells,
-      last: fiat && lastR ? usdCell(priceCell(lastR, dp, unit), kasPerTokenToUsd(lastR, fiat.rate), fiat) : priceCell(lastR, dp, unit),
+      last: withKascovLine(fiat && lastR ? usdCell(priceCell(lastR, dp, unit), kasPerTokenToUsd(lastR, fiat.rate), fiat) : priceCell(lastR, dp, unit), kLine(decimals, lastR)),
       change: changeCell(bps, trades),
       volume: inUsd(volumeCell(qv, 8, 'KAS', trades === null ? null : t('market.list.trades', { n: trades })), qv),
       mcap: inUsd(mcap.cell, mcap.sompi ?? null),
@@ -341,6 +345,10 @@ export function pairEntry(p: ListedPair, baseStats: Slot<StatsView>, quoteStats:
     pairHasDecimals(p) && baseStats.state === 'ok' && quoteStats.state === 'ok' ? usdStats({ stats: baseStats.value, decimals: bd }, { stats: quoteStats.value, decimals: qd }) : null;
   const last = stats?.last ?? null;
   const unit = t('market.stats.unitOf', { base: p.base.ticker, quote: p.quote.ticker });
+  // kascov.io's price of the pair, only when it prices both tokens (the ratio of the two)
+  const bs = p.base.kascov?.spot ?? null;
+  const qs = p.quote.kascov?.spot ?? null;
+  const pairKascovLine = bs && qs && pairHasDecimals(p) ? kascovTitleLine(spotPairPrice(bs, bd, qs, qd), last, p.quote.ticker) : null;
   const vol = volume.state === 'ok' ? volume.value : null;
   const dep = depth.state === 'ok' ? depth.value : null;
   const loading = baseStats.state === 'loading' || quoteStats.state === 'loading' || volume.state === 'loading' || depth.state === 'loading';
@@ -349,7 +357,7 @@ export function pairEntry(p: ListedPair, baseStats: Slot<StatsView>, quoteStats:
     key: p.key, kind: 'pair', name: pairLabelOf(p).toLowerCase(), loading, unavailable,
     sort: { last, change: stats?.changeBps ?? null, volume: vol ? unitsToNumber(vol.b, qd) : null, mcap: null, spread: null, depth: dep ? unitsToNumber(dep.quote, qd) : null },
     cells: {
-      last: priceCell(last, last ? significantDp(last, 5, 2, 10) : 4, unit),
+      last: withKascovLine(priceCell(last, last ? significantDp(last, 5, 2, 10) : 4, unit), pairKascovLine),
       change: changeCell(stats?.changeBps ?? null),
       volume: vol ? volumeCell(vol.b, qd, p.quote.ticker, t('market.list.pairFills', { n: vol.fills })) : EMPTY,
       mcap: EMPTY,

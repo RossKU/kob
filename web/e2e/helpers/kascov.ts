@@ -29,9 +29,15 @@ export interface MockKascovToken {
   /** the program hash kascov names (`standard.view_template_hash`) */
   program?: string;
   status?: string;
-  /** the optional price (KAS per whole token) kascov may list one day (`price_kas`) */
-  price_kas?: number;
+  /**
+   * kascov's `market`: a priced one carries the exact spot (`spot_num_sompi` over `spot_den`, sompi per base unit, numbers or digit strings as given), an unpriced one a reason.
+   * No `market` at all is a token kascov has not priced either.
+   */
+  market?: { spot_num_sompi?: number | string; spot_den?: number | string } | { unpriced_reason: string };
 }
+
+/** One candle's close as kascov serves it: `quote_sompi` over `base_amount` at the bucket starting at `t` (ms). */
+export interface MockKascovCandle { t: number; base: number | string; quote: number | string }
 
 export interface MockKascovOptions {
   network?: string;
@@ -46,6 +52,12 @@ export interface MockKascovOptions {
   tokensMode?: 'ok' | 'down' | 'shape' | 'http';
   /** the per-token files `<data>/<network>/c/<covenant id>.json` (what KOB's own genesis check reads): a body, `'down'` or a status number; a token without one answers 404 */
   files?: Record<string, unknown>;
+  /**
+   * the candles of a token (`<data>/<network>/token/<id>/candles?bucket=..&phase=all`): a list, or a function of the bucket's length in ms; a token without one answers 404.
+   * `candlesMode`: `http` answers a 503 instead, `down` aborts the request.
+   */
+  candles?: Record<string, MockKascovCandle[] | ((bucketMs: number) => MockKascovCandle[])>;
+  candlesMode?: 'ok' | 'http' | 'down';
 }
 
 export interface KascovLog {
@@ -54,7 +66,11 @@ export interface KascovLog {
   tokenRequests: number;
   /** the covenant ids whose per-token file was asked for, in order */
   fileRequests: string[];
+  /** every candles URL requested, in order */
+  candleRequests: string[];
 }
+
+const BUCKET_MS: Record<string, number> = { '1m': 60_000, '15m': 900_000, '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000 };
 
 const body = (o: MockKascovOptions) => ({
   network: o.network ?? 'testnet-10',
@@ -67,7 +83,7 @@ const body = (o: MockKascovOptions) => ({
     ...(t.claimed_image !== undefined ? { claimed_image: t.claimed_image } : {}),
     ...(t.claimed_image_hash !== undefined ? { claimed_image_hash: t.claimed_image_hash } : {}),
     // kascov's remark: only `verified` shows the chip "Verified by kascov" (ui/genesis-check.spec.ts); the other specs are not about it
-    ...(t.price_kas !== undefined ? { price_kas: t.price_kas } : {}),
+    ...(t.market !== undefined ? { market: t.market } : {}),
     status: t.status ?? 'unvalidated',
     alive: true,
     ...(t.program ? { standard: { kcc: 20, review: 'reviewed', template_hash: 'f'.repeat(64), view_template_hash: t.program } } : {}),
@@ -78,7 +94,7 @@ const CORS = { 'access-control-allow-origin': '*' };
 
 /** Installs the mock on `page` (call before the first navigation, with `autoOpen: false`). */
 export async function mockKascov(page: Page, o: MockKascovOptions): Promise<KascovLog> {
-  const log: KascovLog = { requests: [], tokenRequests: 0, fileRequests: [] };
+  const log: KascovLog = { requests: [], tokenRequests: 0, fileRequests: [], candleRequests: [] };
   const net = o.network ?? 'testnet-10';
   const origin = o.origin ?? 'https://kascov.io';
   await page.route(`${origin}/**`, (route: Route) => {
@@ -96,6 +112,21 @@ export async function mockKascov(page: Page, o: MockKascovOptions): Promise<Kasc
         default:
           return route.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify(body(o)) });
       }
+    }
+    // <data>/<network>/token/<id>/candles?bucket=<bucket>&phase=all
+    const tokenPrefix = `${origin}/data/${net}/token/`;
+    const cm = url.startsWith(tokenPrefix) ? /^([0-9a-f]{64})\/candles\?bucket=([0-9a-z]+)&phase=all$/.exec(url.slice(tokenPrefix.length)) : null;
+    if (cm) {
+      log.candleRequests.push(url);
+      const id = cm[1]!;
+      const bucket = cm[2]!;
+      const list = o.candles?.[id];
+      if (o.candlesMode === 'down') return route.abort('failed');
+      if (o.candlesMode === 'http') return route.fulfill({ status: 503, headers: CORS, body: 'unavailable' });
+      if (!list || !BUCKET_MS[bucket]) return route.fulfill({ status: 404, headers: CORS, body: 'not found' });
+      const ms = BUCKET_MS[bucket]!;
+      const candles = (typeof list === 'function' ? list(ms) : list).map((c) => ({ t: c.t, carried: false, trades: 1, close: { base_amount: c.base, quote_sompi: c.quote } }));
+      return route.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify({ bucket, bucket_ms: ms, network: net, token_id: id, candles }) });
     }
     const filePrefix = `${origin}/data/${net}/c/`;
     const fileId = url.startsWith(filePrefix) && url.endsWith('.json') ? url.slice(filePrefix.length, -5) : '';

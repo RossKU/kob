@@ -6,6 +6,7 @@
 import type { IndexerTokenView } from '../../data/indexer-types';
 import type { OpenTokenIssue } from '../../kob/open-token';
 import type { GenesisCheck } from '../../data/genesis-check';
+import type { KascovSpot } from '../../data/kascov';
 import type { DeclaredToken } from '../../data/token-declarations';
 import {
   longId, normalizeTicker, sanitizeUntrusted, verifyIndexerToken, type TokenInfo, type TokenRegistry, type UntradableReason,
@@ -179,8 +180,9 @@ export interface KascovMeta {
   imageUrl: string | null;
   /** kascov's total supply of the token in base units (data/kascov.ts `supply`): only the market list's market cap uses it, labelled as kascov's */
   supply?: bigint | null;
-  /** kascov's price in KAS per whole token (data/kascov.ts `priceKas`), when it lists one: only the market page's third-party note uses it (kascov-price.ts) */
-  priceKas?: number | null;
+  /** kascov prices the token and its spot (data/kascov.ts): only the chart's optional third-party line is offered by it (PriceChart.tsx) */
+  priced?: boolean;
+  spot?: KascovSpot | null;
 }
 
 export interface TokenRow {

@@ -43,8 +43,6 @@ import { openPair } from './market-nav';
 import { displayedPair, marketFor, type DisplayedPair } from './market-select';
 import { PriceChart } from './PriceChart';
 import { TokenFacts, tokenTitle } from './TokenBadges';
-import { KascovPrice } from './KascovNote';
-import { kascovPriceNote, ownReferenceKas } from './kascov-price';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
 import { useGenesisCheck } from './use-genesis-check';
@@ -252,8 +250,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     [inverted, groups, decimals, bookScale, dp],
   );
 
-  // third party, optional: kascov.io's price when it lists one and it is more than 20% from KOB's own reference (nothing else uses it)
-  const kascovPrice = useMemo(() => kascovPriceNote(headerRow?.kascov?.priceKas, ownReferenceKas(stats.data, decimals)), [headerRow?.kascov?.priceKas, stats.data, decimals]);
   const sm = useMemo(() => (inverted ? statsModelFlipped(stats.data ?? null, decimals, dp) : statsModel(stats.data ?? null, decimals, dp)), [stats.data, decimals, dp, inverted]);
   const last = useMemo(() => {
     if (sm.last) return { text: sm.last, side: sm.lastSide };
@@ -398,7 +394,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             </Banner>
           ) : null}
           <CrossCheckBanner token={id} refreshKey={liveKey} />
-          <KascovPrice note={kascovPrice} />
           {since !== null ? (
             <div class="row">
               <SinceBadge since={since} area="stats" until={keptMarketAt} />
@@ -448,7 +443,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       }
       chart={
         <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" until={keptMarketAt} /> : undefined}>
-          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} />
+          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} {...(headerRow?.kascov?.spot ? { kascov: [{ token: id, decimals }] } : {})} />
         </Section>
       }
       ticket={

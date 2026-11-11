@@ -18,6 +18,9 @@ export default {
   'market.col.depthIn': 'Depth ±2% ({quote})',
   'market.col.depthHint': 'How much can trade without moving the price more than 2%: the resting asks up to 2% above the mid price plus the resting bids down to 2% below it. Without a bid or an ask, around the one that exists.',
   'market.list.priceTitle': '{price} ({unit})',
+  // the optional third-party price from kascov.io, a line of the price cell's tooltip (kascov-overlay.ts); the percent is kascov's price against KOB's own
+  'market.list.kascovLine': 'kascov: {price} {unit}',
+  'market.list.kascovLinePct': 'kascov: {price} {unit} ({percent})',
   'market.list.unavailable': 'Unavailable from the indexer',
   'market.list.trades': '{n} trades in 24 h',
   'market.change.thinOne': 'Based on 1 trade in 24 h',
@@ -50,8 +53,6 @@ export default {
   'market.kascov.source.ticker': 'ticker from kascov.io (declared by its creator)',
   'market.kascov.sourceTitle': "KOB has no name for this token of its own, so this is what the token's creator claimed in its creation record, as the explorer kascov.io shows it. Nobody has checked it, KOB does not vouch for it, and the token's facts (supply, decimals, prices, orders) do not come from kascov.io.",
   'market.kascov.via': 'via kascov',
-  'market.kascov.priceNote': 'kascov lists {price} KAS ({percent})',
-  'market.kascov.priceNoteTitle': "Third-party reference: the explorer kascov.io lists this price for the token, and it differs from KOB's by more than 20%. KOB does not use it for anything: its prices come from its own order book and trades.",
   'market.kascov.link': 'View on kascov.io',
   'market.kascov.linkTitle': "Opens this token's page on the explorer kascov.io in a new tab. What it shows is the explorer's, not KOB's.",
   'market.program.label': 'Program',
@@ -308,6 +309,12 @@ export default {
   'market.chart.unsupported': 'This indexer does not serve price history yet.',
   'market.chart.off': 'No indexer is configured, so there is no price history.',
   'market.chart.error': 'The price history could not be loaded',
+
+  // the optional kascov.io price line of the chart (kascov-overlay.ts): third party, off by default, asked for only while on
+  'market.chart.kascov': 'kascov price (third-party)',
+  'market.chart.kascov.legend': 'kascov {price}',
+  'market.chart.kascov.unavailable': 'kascov unavailable',
+  'market.chart.kascov.title': "Third-party reference from kascov.io: a marginal pool price on other venues, before fees. KOB does not use it; KOB's prices come from its own book.",
 
   // drawing tools of the price chart (chart-drawings.ts): kept in this browser per market, never sent anywhere
   'market.chart.draw.tools': 'Drawing tools',

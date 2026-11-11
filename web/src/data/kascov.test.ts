@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createIconLoader, createKascovClient, fetchVerifiedImage, generatedAtOf, iconSources, kascovImagesBase, kascovImageUrl, kascovNetwork, kascovTokensUrl,
-  KASCOV_BACKOFF_MAX_MS, KASCOV_REFRESH_MS, parseKascovToken, parseKascovTokens, priceKasOf, readCapped, safeImageUrl, sha256Hex, sniffImage,
+  KASCOV_BACKOFF_MAX_MS, KASCOV_REFRESH_MS, parseKascovToken, parseKascovTokens, positiveBigOf, readCapped, safeImageUrl, sha256Hex, sniffImage, spotOf,
 } from './kascov';
 
 const ID = (c: string) => c.repeat(64);
@@ -48,18 +48,38 @@ describe('safeImageUrl', () => {
   });
 });
 
-describe('price_kas (optional; kascov does not publish a price yet)', () => {
-  it('is read when it is a positive finite number or numeric string, and absent from the token otherwise', () => {
-    expect(parseKascovToken(entry({ price_kas: 0.012 }))!.priceKas).toBe(0.012);
-    expect(parseKascovToken(entry({ price_kas: '0.012' }))!.priceKas).toBe(0.012);
-    // no field, and every malformed value: no `priceKas` key at all (an older list parses exactly as before)
-    for (const bad of [undefined, null, 0, -1, NaN, Infinity, '', 'abc', '1e3', '-2', 1e-13, 1e16, {}, [], true]) {
-      const t = parseKascovToken(entry({ price_kas: bad }))!;
-      expect(t, String(bad)).not.toHaveProperty('priceKas');
-      expect(t).toEqual(parseKascovToken(entry())!);
+describe('market spot (kascov prices a token by market.spot_num_sompi over spot_den)', () => {
+  const priced = { spot_num_sompi: 9634521588921, spot_den: 454104157, last_time_ms: 1, phase: 'graduated' };
+  it('a priced token keeps the exact ratio; numeric strings are read as integers too', () => {
+    const t = parseKascovToken(entry({ market: priced }))!;
+    expect(t.priced).toBe(true);
+    expect(t.spot).toEqual({ num: 9634521588921n, den: 454104157n });
+    expect(parseKascovToken(entry({ market: { spot_num_sompi: '123456789012345678901', spot_den: '3' } }))!.spot).toEqual({ num: 123456789012345678901n, den: 3n });
+  });
+
+  it('unpriced is a market with a reason, no market, or anything that is not two positive safe integers or digit strings', () => {
+    const unpriced = (v: unknown) => {
+      const t = parseKascovToken(entry({ market: v }))!;
+      expect(t.priced, JSON.stringify(v)).toBe(false);
+      expect(t.spot).toBeNull();
+    };
+    unpriced({ unpriced_reason: 'no single covenant holds the inventory' });
+    unpriced(undefined);
+    unpriced(null);
+    unpriced('market');
+    unpriced([]);
+    unpriced({});
+    unpriced({ spot_num_sompi: 5 }); // no denominator
+    unpriced({ spot_den: 5 });
+    for (const bad of [0, -1, 1.5, NaN, Infinity, 2 ** 60, '', '0', '007', '-3', '1.5', '1e3', ' 3', 'abc', '9'.repeat(31), {}, [], true, null]) {
+      unpriced({ spot_num_sompi: bad, spot_den: 3 });
+      unpriced({ spot_num_sompi: 3, spot_den: bad });
     }
-    expect(priceKasOf(5)).toBe(5);
-    expect(priceKasOf(0)).toBeNull();
+    // the rest of the entry still parses as before
+    expect(parseKascovToken(entry({ market: { unpriced_reason: 'x' } }))!.ticker).toBe('ROCKET');
+    expect(positiveBigOf(5)).toBe(5n);
+    expect(positiveBigOf(0)).toBeNull();
+    expect(spotOf({ spot_num_sompi: 1, spot_den: 2 })).toEqual({ num: 1n, den: 2n });
   });
 });
 
@@ -68,7 +88,7 @@ describe('parseKascovToken', () => {
     const t = parseKascovToken(entry());
     expect(t).toEqual({
       covenantId: ID('a'), ticker: 'ROCKET', name: 'Rocket Token', decimals: 3, templateHash: ID('b'), imageHash: sha(PNG), imageUrl: 'https://storage.googleapis.com/bucket/a.png',
-      verified: true, supply: null,
+      verified: true, supply: null, priced: false, spot: null,
     });
     // review / alive change nothing; status only flips the third-party remark (kascov's `verified`, no other word counts)
     expect(parseKascovToken(entry({ alive: false, standard: { view_template_hash: ID('b'), review: 'rejected' } }))).toEqual(t);
@@ -86,7 +106,7 @@ describe('parseKascovToken', () => {
 
   it('missing, empty or wrongly typed fields are null; the claimed image address is kept with or without a hash (it is only ever shown unchecked, data/logos.ts); bad decimals are null', () => {
     const t = parseKascovToken({ covenant_id: ID('a'), claimed_ticker: 7, claimed_name: '   ', claimed_decimals: 2.5, claimed_image: 'https://x.example/a.png', standard: 'weird' })!;
-    expect(t).toEqual({ covenantId: ID('a'), ticker: null, name: null, decimals: null, templateHash: null, imageHash: null, imageUrl: 'https://x.example/a.png', verified: false, supply: null });
+    expect(t).toEqual({ covenantId: ID('a'), ticker: null, name: null, decimals: null, templateHash: null, imageHash: null, imageUrl: 'https://x.example/a.png', verified: false, supply: null, priced: false, spot: null });
     expect(parseKascovToken(entry({ claimed_decimals: 19 }))!.decimals).toBeNull();
     expect(parseKascovToken(entry({ claimed_decimals: 0 }))!.decimals).toBe(0);
     expect(parseKascovToken(entry({ claimed_image: 7 }))!.imageUrl).toBeNull();

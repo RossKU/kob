@@ -258,6 +258,8 @@ body:has(.market-page) .container { max-width: none; }
   .chart-legend > .chart-unit { display: none; }
 }
 .chart-vol-unit { margin-left: 3px; opacity: 0.8; }
+/* the optional kascov.io price: after the read-out, muted like the rest of the legend, never cut (the read-out gives way) */
+.chart-legend > .chart-kascov { flex: none; margin-right: 10px; white-space: nowrap; }
 .chart-legend b { font-weight: 600; color: var(--text); margin-left: 3px; }
 .chart-legend .tone-up b { color: var(--buy); }
 .chart-legend .tone-down b { color: var(--sell); }

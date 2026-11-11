@@ -15,6 +15,7 @@
 // that grew and shrank with every tick would move everything below it. Prices are shown with the market's display decimals (the kit's price rule), the axis, the crosshair and the legend alike.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import { kascovBucketFor } from '../../data/kascov-candles';
 import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, MouseEventParams, Time, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
 import type { CandleInterval } from '../../data/indexer-types';
 import type { IndexerApi } from '../../data/indexer';
@@ -31,6 +32,8 @@ import { ratioCandles, ratioSeries, usdText } from './usd-model';
 import { pairRatioCandles } from './pair-market';
 import { setChartExpanded, useChartExpanded } from './chart-expand';
 import { crosshairLabel, tickLabel } from './chart-time';
+import { laidOnBars, lineData, overlayPriceText, pairPoints, tokenPoints } from './kascov-overlay';
+import { useKascovCandles } from './use-kascov-candles';
 import { DrawingsPrimitive, PICK_MOUSE, PICK_TOUCH, type DrawingColors } from './chart-drawings-primitive';
 import { COLOR_TOKEN, DEFAULT_COLOR, DRAWING_COLORS, drawingsMarket, isDrawingColor, loadDrawings, MAX_DRAWINGS, newDrawingId, saveDrawings, type Anchor, type Drawing, type DrawingColor } from './chart-drawings';
 
@@ -42,6 +45,16 @@ const loadLw = (): Promise<Lw> => (lwPromise ??= import('lightweight-charts'));
 const NARROW_PANEL_PX = 480;
 const INTERVAL_KEY = 'kob.chart.interval';
 const COLOR_KEY = 'kob.chart.draw.color';
+const KASCOV_KEY = 'kob.chart.kascov';
+
+/** The viewer's choice of the optional kascov line (off unless they turned it on), kept in this browser. */
+function storedKascov(): boolean {
+  try {
+    return localStorage.getItem(KASCOV_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function storedColor(): DrawingColor {
   try {
@@ -137,6 +150,11 @@ export interface PriceChartProps {
   quoteTicker?: string;
   /** draw a KAS book the other way round (orientation.ts): 1/price, high and low swap, volume in the other asset. Display only. */
   inverted?: boolean;
+  /**
+   * The tokens kascov.io may price for this chart, with their decimals: ONE for a token's market, BASE then QUOTE for a pair. Given only when kascov prices every one of them
+   * (data/kascov.ts `priced`); without it the chart has no kascov toggle. Third party and optional: kascov-overlay.ts.
+   */
+  kascov?: readonly { token: string; decimals: number }[];
 }
 
 interface Series {
@@ -147,7 +165,7 @@ interface Series {
 }
 const NO_SERIES: Series = { bars: [], volumes: [], text: () => null };
 
-interface Legend { o: string; h: string; l: string; c: string; v: string; /** the whole volume, for its title */ vExact: string; up: boolean }
+interface Legend { o: string; h: string; l: string; c: string; v: string; /** the whole volume, for its title */ vExact: string; up: boolean; /** the kascov price at this bar, when the line is on and has one */ k: string | null }
 
 /** Price panel: interval switch (1m / 5m / 1h / 1d, remembered), candles with the previous close carried across empty buckets, volume below. */
 export function PriceChart(props: PriceChartProps) {
@@ -225,10 +243,34 @@ export function PriceChart(props: PriceChartProps) {
           ? 'empty'
           : 'ready';
 
+  // the optional kascov.io line (third party, off by default): asked for only while it is on and the market has a kascov price (kascov-overlay.ts, use-kascov-candles.ts)
+  const kascovLegs = props.kascov ?? [];
+  const kascovKey = kascovLegs.map((l) => `${l.token}:${l.decimals}`).join('/');
+  const kascovAvail = kascovLegs.length > 0 && kascovLegs.length === (usd ? 2 : 1);
+  const [kascovOn, setKascovOnState] = useState<boolean>(storedKascov);
+  const setKascovOn = (v: boolean) => {
+    setKascovOnState(v);
+    try {
+      localStorage.setItem(KASCOV_KEY, v ? '1' : '0');
+    } catch {
+      /* no storage */
+    }
+  };
+  const kascovShown = kascovAvail && kascovOn;
+  const kascovIds = useMemo(() => kascovLegs.map((l) => l.token), [kascovKey]);
+  const kascovLine = useKascovCandles({ enabled: kascovShown, ids: kascovIds, bucket: kascovBucketFor(interval) });
+  // the line on KOB's own bars: one price (or none) per bar
+  const overlayValues = useMemo(() => {
+    if (!kascovShown || kascovLine.status !== 'ok' || kascovLine.legs.length !== kascovLegs.length) return null;
+    const legs = kascovLine.legs.map((candles, i) => ({ candles, decimals: kascovLegs[i]!.decimals }));
+    const points = usd ? pairPoints(legs[0]!, legs[1]!) : tokenPoints(legs[0]!, inverted);
+    return laidOnBars(points, series.bars.map((b) => b.time), INTERVAL_MS[interval]);
+  }, [kascovShown, kascovLine, kascovKey, series, interval, usd, inverted]);
+
   const boxRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const axisSeen = useRef(new Set<string>());
-  const chartRef = useRef<{ chart: IChartApi; candles: ISeriesApi<'Candlestick'>; volume: ISeriesApi<'Histogram'>; drawings: DrawingsPrimitive } | null>(null);
+  const chartRef = useRef<{ chart: IChartApi; candles: ISeriesApi<'Candlestick'>; kascov: ISeriesApi<'Line'>; volume: ISeriesApi<'Histogram'>; drawings: DrawingsPrimitive } | null>(null);
   const [libReady, setLibReady] = useState(false);
   const [libError, setLibError] = useState<Error | null>(null);
   const [theme] = useTheme();
@@ -241,7 +283,8 @@ export function PriceChart(props: PriceChartProps) {
     const b = series.bars[i];
     if (!x || !b) return null;
     const vol = series.volumes[i]?.value ?? 0;
-    return { ...x, v: compactText(vol), vExact: vol.toLocaleString(localeOf(), { maximumFractionDigits: 8 }), up: b.close >= b.open };
+    const k = overlayValues?.[i];
+    return { ...x, v: compactText(vol), vExact: vol.toLocaleString(localeOf(), { maximumFractionDigits: 8 }), up: b.close >= b.open, k: k ? overlayPriceText(k) : null };
   };
 
   // create the chart once the library is there and the panel has something to draw
@@ -260,6 +303,11 @@ export function PriceChart(props: PriceChartProps) {
           timeScale: { borderColor: pal.border, timeVisible: true, secondsVisible: false, rightOffset: 4, barSpacing: 7 },
           crosshair: { mode: lw.CrosshairMode.Normal },
         });
+        // the optional kascov line goes in FIRST: a series added later is drawn over it, so KOB's candles and volume are always in front. It never takes part in the price scale's
+        // auto-fit (a far-off third-party price must not squash KOB's candles), and it has no price tag, price line or crosshair dot.
+        const kascovSeries = chart.addSeries(lw.LineSeries, {
+          color: pal.text, lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null,
+        });
         const candlesSeries = chart.addSeries(lw.CandlestickSeries, {
           upColor: pal.up, downColor: pal.down, wickUpColor: pal.up, wickDownColor: pal.down, borderVisible: false, priceLineVisible: true,
         });
@@ -271,7 +319,7 @@ export function PriceChart(props: PriceChartProps) {
         });
         const drawingsPrim = new DrawingsPrimitive(drawingColors);
         candlesSeries.attachPrimitive(drawingsPrim);
-        chartRef.current = { chart, candles: candlesSeries, volume, drawings: drawingsPrim };
+        chartRef.current = { chart, candles: candlesSeries, kascov: kascovSeries, volume, drawings: drawingsPrim };
         setLibReady(true);
       },
       (e) => setLibError(e instanceof Error ? e : new Error(String(e))),
@@ -335,6 +383,14 @@ export function PriceChart(props: PriceChartProps) {
     }
     c.drawings.refresh();
   }, [libReady, series, props.dp, theme, interval, token, inverted]);
+
+  // the kascov line: its prices on KOB's bars (none while it is off or loading), in the muted text colour of the theme
+  useEffect(() => {
+    const c = chartRef.current;
+    if (!c || !libReady) return;
+    c.kascov.applyOptions({ color: palette().text, priceFormat: { type: 'price', precision: props.dp, minMove: 10 ** -props.dp } });
+    c.kascov.setData(overlayValues ? lineData(overlayValues, series.bars.map((b) => b.time)).map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) : []);
+  }, [libReady, overlayValues, series, props.dp, theme]);
 
   // ---- drawings: stored per network and market (and orientation), shown by the primitive, edited by the tools
   const network = useServices().config.network;
@@ -537,7 +593,7 @@ export function PriceChart(props: PriceChartProps) {
   );
 
   return (
-    <div class="chart-panel" ref={panelRef} data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length} data-expanded={expanded ? '1' : '0'}>
+    <div class="chart-panel" ref={panelRef} data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length} data-expanded={expanded ? '1' : '0'} data-kascov={kascovShown ? '1' : '0'}>
       <div class="chart-head">
         <div class="chart-intervals" role="group" aria-label={t('market.chart.interval')} data-testid="chart-intervals">
           {CANDLE_INTERVALS.map((iv) => (
@@ -593,6 +649,12 @@ export function PriceChart(props: PriceChartProps) {
           )}
           {/* the size of the chart: outside the tools' scroller, so a phone never scrolls it away */}
           <div class="chart-tools chart-size">
+            {kascovAvail ? (
+              <button type="button" aria-pressed={kascovOn ? 'true' : 'false'} aria-label={t('market.chart.kascov')} title={t('market.chart.kascov')} data-testid="chart-kascov-toggle" onClick={() => setKascovOn(!kascovOn)}>
+                {/* a plain circle: the line is a reference price drawn behind the candles, not a brand */}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5" /></svg>
+              </button>
+            ) : null}
             <button type="button" aria-pressed={expanded ? 'true' : 'false'} aria-label={expanded ? t('market.chart.restore') : t('market.chart.expand')} title={expanded ? t('market.chart.restore') : t('market.chart.expand')} data-testid="chart-expand" onClick={() => setChartExpanded(!expanded)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 {expanded ? <path d="M10 4v6H4M10 10L3.5 3.5M14 20v-6h6M14 14l6.5 6.5" /> : <path d="M14 4h6v6M20 4l-6.5 6.5M10 20H4v-6M4 20l6.5-6.5" />}
@@ -609,6 +671,12 @@ export function PriceChart(props: PriceChartProps) {
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.l')}<b>{shown.l}</b></span>
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.c')}<b>{shown.c}</b></span>
             <span title={`${shown.vExact} ${volUnit}`}>{t('market.chart.v')}<b>{shown.v}</b><span class="chart-vol-unit">{volUnit}</span></span>
+          </span>
+        ) : null}
+        {/* the optional third-party price: muted, with what it is in its tooltip; "unavailable" when kascov did not answer, and nothing else breaks */}
+        {state === 'ready' && kascovShown && (kascovLine.status === 'unavailable' || shown?.k) ? (
+          <span class="chart-kascov" title={t('market.chart.kascov.title')} data-testid="chart-kascov" data-state={kascovLine.status === 'ok' ? 'ok' : 'unavailable'}>
+            {kascovLine.status === 'ok' ? t('market.chart.kascov.legend', { price: shown!.k! }) : t('market.chart.kascov.unavailable')}
           </span>
         ) : null}
         {/* the unit stays when there is nothing to read out (a market with no trades yet) */}

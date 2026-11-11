@@ -397,3 +397,48 @@ describe('depth within 2 %', () => {
     expect(pairEntry(p!, ok(stats(a.covenantId)), ok(stats(u.covenantId)), NONE, LOADING).loading).toBe(true);
   });
 });
+
+describe("kascov.io's price: one more line of the price cell's tooltip, nothing visible", () => {
+  const spot = (num: bigint, den: bigint): KascovMeta['spot'] => ({ num, den });
+  const meta = (s: KascovMeta['spot'] | null): KascovMeta => ({
+    ticker: null, name: null, usedTicker: false, usedName: false, verified: false, tickerDiffers: false, decimalsDiffers: false, decimals: 8, imageHash: null, imageUrl: null,
+    supply: null, priced: s !== null, spot: s,
+  });
+  const kRow = (id: string, s: KascovMeta['spot'] | null, over: Partial<TokenRow> = {}): TokenRow => row('EXKCC', ID(id), { info: null, source: 'indexer', kascov: meta(s), ...over });
+
+  it('a token: the title keeps its own text and gains "kascov: price KAS (percent against KOB\'s price)"; the cell text is unchanged', () => {
+    // 13/800 sompi per base unit of an 8-decimals token = 0.01625 KAS; KOB's last is 0.0251: -35%
+    const plain = tokenEntry(kRow('a', null), ok(stats(ID('a'))));
+    const e = tokenEntry(kRow('a', spot(13n, 800n)), ok(stats(ID('a'))));
+    expect(e.cells.last.text).toBe(plain.cells.last.text);
+    expect(plain.cells.last.title).not.toContain('kascov');
+    expect(e.cells.last.title).toBe(`${plain.cells.last.title}\nkascov: 0.01625 KAS (-35%)`);
+    // above KOB's price: plus sign
+    expect(tokenEntry(kRow('a', spot(1n, 25n)), ok(stats(ID('a')))).cells.last.title).toMatch(/\nkascov: 0\.04 KAS \(\+59%\)$/);
+    // a price that rounds to the same percent
+    expect(tokenEntry(kRow('a', spot(251n, 10000n)), ok(stats(ID('a')))).cells.last.title).toMatch(/\nkascov: 0\.0251 KAS \(0%\)$/);
+  });
+
+  it('without a KOB price, the line has no percent; without a kascov price, or without its decimals, nothing', () => {
+    const noLast = tokenEntry(kRow('a', spot(13n, 800n)), ok(stats(ID('a'), { last: null })));
+    expect(noLast.cells.last).toEqual({ text: null, title: 'kascov: 0.01625 KAS' });
+    // no stats yet: the row's own decimals read the price
+    expect(tokenEntry(kRow('a', spot(13n, 800n)), LOADING).cells.last).toEqual({ text: null, title: 'kascov: 0.01625 KAS' });
+    expect(tokenEntry(kRow('a', spot(13n, 800n), { decimals: null }), LOADING).cells.last).toEqual({ text: null, title: null });
+    expect(tokenEntry(kRow('a', null), LOADING).cells.last).toEqual({ text: null, title: null });
+    expect(tokenEntry(row('EXKCC', ID('a')), ok(stats(ID('a')))).cells.last.title).not.toContain('kascov');
+  });
+
+  it('a pair: only when both tokens are priced, as the ratio of the two, against the pair price in the cell', () => {
+    const base = kRow('a', spot(13n, 800n)); // 0.01625 KAS
+    const quote = row('EXUSD', ID('e'), { info: null, source: 'indexer', decimals: 6, scale: 1_000_000n, kascov: meta(spot(50n, 1n)) }); // 0.5 KAS per token of 6 decimals
+    const stat = (id: string) => (id === ID('a') ? ok(stats(ID('a'))) : ok(stats(ID('e'), { last: '50000000', open_24h: '50000000', price_basis: '1000000', decimals: 6 })));
+    const [p] = listedPairs([{ base: ID('a'), quote: ID('e') }], [base, quote]);
+    const e = pairEntry(p!, stat(ID('a')), stat(ID('e')), NONE, NONE);
+    expect(e.cells.last.text).toBe('0.050200');
+    expect(e.cells.last.title).toBe('0.0502 (EXUSD per EXKCC)\nkascov: 0.0325 EXUSD (-35%)');
+    // one leg unpriced: nothing
+    const [half] = listedPairs([{ base: ID('a'), quote: ID('e') }], [base, { ...quote, kascov: meta(null) }]);
+    expect(pairEntry(half!, stat(ID('a')), stat(ID('e')), NONE, NONE).cells.last.title).toBe('0.0502 (EXUSD per EXKCC)');
+  });
+});
