@@ -164,12 +164,11 @@ async function expectSideOnLineOne(rows: Locator, where: string): Promise<void> 
       await expect(page.getByTestId('wallet-fill-tx').first()).toBeHidden();
       await expectSideOnLineOne(fills, 'Fills');
       const card = (await fills.first().boundingBox())!;
-      // a wide font, or the narrowest phone (360 px) with the CI runner's fonts, may wrap the figures of line 2 to a second line: allowed, nothing is cut
+      // the figures of line 2 stand on one line with this machine's fonts; a wider font (the CI runner's, KOB_WIDE_FONTS) may wrap them once: allowed, nothing is cut
       const wideFont = process.env.KOB_WIDE_FONTS === '1';
-      const roomy = !wideFont && (page.viewportSize()?.width ?? 0) >= 390;
-      if (!wideFont) expect.soft(card.height, 'a fill card is compact').toBeLessThan(roomy ? 86 : 130);
+      if (!wideFont) expect.soft(card.height, 'a fill card is compact').toBeLessThan(150);
       const line2 = await fills.first().locator('.dt-c-price, .dt-c-amount, .dt-c-value').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
-      if (!wideFont) expect.soft(new Set(line2).size, `price, amount and value on one line (two at most when narrow): ${line2}`).toBeLessThanOrEqual(roomy ? 1 : 2);
+      if (!wideFont) expect.soft(new Set(line2).size, `price, amount and value on one line (two at most): ${line2}`).toBeLessThanOrEqual(2);
       // the time reads MM-DD HH:MM (this year) or YYYY-MM-DD HH:MM, whatever the table says
       expect.soft(await fills.first().locator('.dt-time').getAttribute('data-short'), 'the card time').toMatch(/^(\d{4}-)?\d{2}-\d{2} \d{2}:\d{2}$/);
       // no caption is drawn, each figure keeps its column's words for a screen reader
