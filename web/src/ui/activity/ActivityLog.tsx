@@ -17,7 +17,7 @@ import type { PairFillsView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Badge, ErrorBanner, Section, SortButton, SortControl, ariaSortOf, scaledUnits, sortBy, useSortState, type SortColumn, type SortValue } from '../kit';
+import { Badge, ErrorBanner, Section, SortButton, ariaSortOf, scaledUnits, sortBy, useSortState, type SortColumn, type SortValue } from '../kit';
 import { ListPager, RowsControl, showListStart } from '../market/ListPaging';
 import { pageWindow, type ListPageSize } from '../market/market-list';
 import { useHeldUntil, useListPage, useListPageSize, useRising } from '../market/use-market-list';
@@ -383,7 +383,6 @@ function ActivityLogView(props: ActivityLogProps) {
       <ErrorBanner error={data.rows.length ? null : data.error} title={t('activity.error')} onRetry={data.retry} data-testid="activity-error" />
       <div class="act-log" ref={listRef} role="table" aria-label={t('activity.tableLabel')} data-testid="activity-list" data-count={rowsShown ? shown.length : 0} data-held={held ? 'true' : 'false'}>
         {/* where the log is two lines per row (no header), the same sort is a control above the rows */}
-        {rowsShown && kept.length > 1 ? <SortControl id="activity" class="act-sortctl" columns={cols} state={sort} own={ownCol} onSort={setSort} /> : null}
         <div class="act-head" role="row">
           {cols.map((c) => (
             <span key={c.key} role="columnheader" aria-sort={ariaSortOf(sort, c.key, ownCol)} class={c.key === 'amount' || c.key === 'price' || c.key === 'conf' || c.key === 'time' ? 'act-num' : undefined}>

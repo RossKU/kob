@@ -6,6 +6,8 @@
    anything beside or under the ticket */
 .tk:has(> .tk-scroll) { padding: 0; gap: 0; overflow: hidden; }
 .tk-scroll { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; scrollbar-width: thin; overscroll-behavior: contain; padding: 14px var(--gutter) 8px; }
+/* a phone: a swipe on a form that does not scroll moves the page (contain would keep it in the panel, and the page would not move under the finger) */
+@media (max-width: 759px) { .tk-scroll { overscroll-behavior: auto; } }
 .tk-foot { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px var(--gutter) 8px; border-top: 1px solid var(--border); background: var(--surface); }
 /* the progress and the result of a click: one line above the button (a longer text scrolls in it), no room when there is none */
 .tk-status { max-height: 1.4rem; overflow-y: auto; overflow-x: hidden; }

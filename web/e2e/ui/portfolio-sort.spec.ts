@@ -365,7 +365,7 @@ test.describe('390 px wide: the cards have a sort control', () => {
     await expect(page.getByTestId('balances-sort-inOrders').locator('xpath=ancestor::*[@role="columnheader"]')).toHaveAttribute('aria-sort', 'descending');
   });
 
-  test('Activity: the control stands in for the header on a phone', async ({ appPage: page, mock }) => {
+  test('Activity: a phone has no sort (founder 2026-11-11): the cards read newest first and the tools stay one row', async ({ appPage: page, mock }) => {
     test.setTimeout(Number(process.env.KOB_SORT_TIMEOUT ?? 240_000));
     await forgetStored(page);
     await page.addInitScript(() => localStorage.setItem('kob.theme', 'dark'));
@@ -373,13 +373,10 @@ test.describe('390 px wide: the cards have a sort control', () => {
     await listExkcc(page);
     await page.goto('/#/activity');
     await expect(page.locator('[data-testid="activity-row"]').first()).toBeVisible();
-    await page.waitForTimeout(1200);
-    const ctl = page.getByTestId('activity-sortctl');
-    await expect(ctl).toBeVisible();
-    await ctl.getByTestId('activity-sortctl-column').selectOption('amount');
-    const amounts = (await texts(page.locator('[data-testid="activity-row"] .act-c-amt b'))).map(num);
-    expectOrdered(amounts, 'desc', 'activity card amount');
-    expect((await ctl.getByTestId('activity-sortctl-dir').boundingBox())!.height).toBeGreaterThanOrEqual(39.9);
+    await expect(page.getByTestId('activity-sortctl')).toHaveCount(0);
+    const mids = await page.locator('.act-tools > *').evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetParent).map((e) => { const r = e.getBoundingClientRect(); return r.top + r.height / 2; }));
+    expect(Math.max(...mids) - Math.min(...mids), 'one row of tools').toBeLessThan(8);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 'the page does not scroll sideways').toBeLessThanOrEqual(0);
     await shot(page, 'activity-390');
   });
 });

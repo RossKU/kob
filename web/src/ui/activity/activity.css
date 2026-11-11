@@ -52,7 +52,6 @@
 .act-head > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-head > .act-num { display: flex; justify-content: flex-end; }
 /* the sort control stands in for the header where the rows are two lines (below) */
-.act-sortctl { display: none; }
 .act-num { text-align: right; }
 .act-body { --act-row-h: 46px; }
 .act-body.act-rows { position: relative; height: calc(var(--n) * var(--act-row-h)); }
@@ -128,7 +127,7 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 /* a phone: two lines per row (icon | market and tx over the wallet | amount over the confirmations and the time) */
 @container actlog (max-width: 559px) {
   .act-head { display: none; }
-  .act-sortctl { display: inline-flex; }
+  /* no sort on a phone (founder 2026-11-11): newest first, as the log reads */
   .act-body { --act-row-h: 64px; }
   .act-row {
     grid-template-columns: 30px minmax(0, 1fr) auto auto;
@@ -156,7 +155,16 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 
 /* ---- a phone: the tools start at the left */
 @media (max-width: 759px) {
-  .act-tools { justify-content: flex-start; }
+  /* the tools stay ONE row (founder 2026-11-11): what does not fit scrolls sideways inside the row, the page never does */
+  .act-tools { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+  .act-tools::-webkit-scrollbar { display: none; }
+  .act-tools > * { flex: none; }
+  /* compact enough for 390 px: tighter gaps and buttons, no Rows control (20 rows, the pager pages on), the held-rows button only while it holds rows */
+  .act-tools { gap: 4px; }
+  .act-tools .ml-size { display: none; }
+  .act-tools .act-seg button { padding: 2px 6px; font-size: 0.76rem; }
+  .act-tools .act-ib { width: 26px; }
+  .act-tools .act-new-off { display: none; }
   .act .section-head > .row { justify-content: flex-start; }
 }
 
