@@ -3,6 +3,8 @@ import { useState } from 'preact/hooks';
 
 export interface SectionProps {
   title?: ComponentChildren;
+  /** a small muted line under the title (the header stays one row: the title and its subtitle at the left, the actions at the right) */
+  subtitle?: ComponentChildren;
   /** right side of the header (buttons, badges) */
   actions?: ComponentChildren;
   children?: ComponentChildren;
@@ -28,6 +30,11 @@ export function Section(props: SectionProps) {
             <button type="button" class="disclosure" aria-expanded={open ? 'true' : 'false'} onClick={() => setOpen(!open)}>
               <h2>{props.title}</h2>
             </button>
+          ) : props.subtitle ? (
+            <div class="section-titles">
+              <h2>{props.title}</h2>
+              <p class="section-sub small muted">{props.subtitle}</p>
+            </div>
           ) : (
             <h2>{props.title}</h2>
           )}

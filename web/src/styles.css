@@ -382,6 +382,10 @@ small, .small { font-size: 0.85em; }
 .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px var(--gutter); min-width: 0; }
 .section-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .section-head h2, .section-head h3 { margin: 0; }
+/* a title with a subtitle and its actions stay one row (the subtitle wraps under the title, never the actions under both) */
+.section-head:has(.section-titles) { flex-wrap: nowrap; align-items: flex-start; }
+.section-titles { flex: 1 1 0; min-width: 0; }
+.section-sub { margin: 2px 0 0; }
 .section-body > :last-child { margin-bottom: 0; }
 .section-collapsed .section-body { display: none; }
 .disclosure {

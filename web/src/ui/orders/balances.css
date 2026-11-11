@@ -55,6 +55,8 @@
 .bal-v .dt-unit { margin-left: 0; font-size: 0.8em; font-weight: 600; color: var(--muted); }
 .bal-item .tip-tag { align-self: center; }
 .bal-line .bal-refresh { margin-left: auto; }
+/* Refresh is an icon (the book's ↻): a square target */
+.bal-refresh { min-width: 32px; padding-inline: 8px; font-size: 1.05rem; }
 /* a narrow panel: the items wrap onto lines of their own, so no dot between them */
 @container pf (max-width: 599px) { .bal-item:not(:last-child)::after { content: none; } .bal-items { column-gap: 14px; } }
 /* four across where the longest figure fits a quarter of the panel (1000 px), else two by two */

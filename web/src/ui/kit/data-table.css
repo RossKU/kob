@@ -112,27 +112,29 @@
 .dt[data-fold='cards'] .dt-details { border-top: 1px solid var(--border); }
 .dt-balances[data-fold='cards'] .dt-body { gap: 8px; }
 
-/* Balances: a card of two columns of label / value pairs; the asset on the first line, the wide pairs and the buttons take a line */
-.dt-balances[data-fold='cards'] .dt-row { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(9rem, calc(50% - 6px)), 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
+/* The Balances card, compact like the lists': line 1 the asset (icon and name) and, at the right, its value; line 2 the figures with their words, `Available 2.99 · In orders 0.00`;
+   a note under a figure (the KAS on token coins, the part not spendable) is a small third line; the strays and the KAS locked in orders are not on the card unless there are strays; the buttons
+   take the last line. The Available cell is drawn as if its children were the row's (`display: contents`), so its note can take a line of its own. */
+.dt-balances[data-fold='cards'] .dt-body { gap: 6px; }
+.dt-balances[data-fold='cards'] .dt-row { position: relative; display: flex; flex-wrap: wrap; align-items: center; column-gap: 0; row-gap: 0; padding: 6px 12px 8px; min-height: 0; }
+.dt-balances[data-fold='cards'] .dt-row::after { content: ''; flex: 0 0 100%; height: 0; order: 1; }
 .dt-balances[data-fold='cards'] .dt-c { min-width: 0; text-align: left; }
-.dt-balances[data-fold='cards'] .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
 .dt-balances[data-fold='cards'] .dt-num { text-align: left; }
-.dt-balances[data-fold='cards'] .dt-c[data-card='head'], .dt-balances[data-fold='cards'] .dt-c[data-card='wide'], .dt-balances[data-fold='cards'] .dt-c[data-card='action'] { grid-column: 1 / -1; }
-.dt-balances[data-fold='cards'] .dt-c[data-card='head']::before, .dt-balances[data-fold='cards'] .dt-c[data-card='action']::before { content: none; }
-.dt-balances[data-fold='cards'] .dt-c[data-card='head'] { grid-row: 1; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='head'] { order: 0; flex: 1 1 0; min-height: 30px; display: flex; align-items: center; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='end'] { order: 0; flex: none; min-height: 30px; display: flex; align-items: center; font-weight: 650; text-align: right; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='end']::before { content: attr(data-label) ': '; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='pair'] { order: 2; flex: 0 1 auto; margin-top: 1px; font-size: 0.9rem; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='pair']::before { content: attr(data-label); display: inline; margin-right: 0.4em; color: var(--muted); font-size: 0.82rem; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='pair']:has(~ .dt-c[data-card='pair'])::after { content: '·'; content: '·' / ''; margin: 0 0.5em; color: var(--muted); }
+.dt-balances[data-fold='cards'] .dt-c-available { display: contents; }
+.dt-balances[data-fold='cards'] .dt-c-available::before { order: 2; }
+.dt-balances[data-fold='cards'] .dt-c-available::after { order: 2; }
+.dt-balances[data-fold='cards'] .dt-c-available > span { order: 2; font-size: 0.9rem; }
+.dt-balances[data-fold='cards'] .dt-c-available > .dt-sub { order: 4; flex: 0 0 100%; margin-top: 2px; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='action'] { order: 5; flex: 0 0 100%; margin-top: 6px; }
 .dt-balances[data-fold='cards'] .dt-c[data-card='action']:empty { display: none; }
-.dt-balances[data-fold='cards'] .dt-act { justify-content: stretch; }
-.dt-balances[data-fold='cards'] .dt-act .btn { flex: 1 1 auto; min-height: 40px; }
-
-/* a wider Balances card (a tablet whose table did not fit): a wide pair takes two columns */
-@container dt (min-width: 640px) {
-  .dt-balances[data-fold='cards'] .dt-c[data-card='wide'] { grid-column: span 2; }
-}
-@container dt (min-width: 520px) {
-  .dt-balances[data-fold='cards'] .dt-c[data-card='action'] { flex: 1 1 100%; }
-  .dt-balances[data-fold='cards'] .dt-act { justify-content: flex-end; }
-  .dt-balances[data-fold='cards'] .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
-}
+.dt-balances[data-fold='cards'] .dt-act { justify-content: flex-end; }
+.dt-balances[data-fold='cards'] .dt-act .btn { flex: none; min-height: 34px; }
 
 /* The compact card of a list row (Open orders, Order history, Trade history), the shape of an exchange app's history:
      line 1  the market and its side (the kind), at the right the time (MM-DD HH:MM) and the chevron of the details

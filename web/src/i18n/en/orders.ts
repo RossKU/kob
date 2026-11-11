@@ -467,7 +467,8 @@ export default {
   'orders.balances.kasOnTokensHint': 'Each token UTXO carries KAS: its carrier and, after a buy, a price improvement or unspent budget of less than 1 KAS (from 1 KAS up it comes back as a plain KAS output of its own). It is yours; Merge, a sale or a transfer frees it.',
   'orders.balances.kasOnTokensNote': 'KAS held by your token coins; it comes back when they move.',
 
-  'orders.balances.title': 'Escrowed balances (not shown by your wallet)',
+  'orders.balances.title': 'Escrowed balances',
+  'orders.balances.subtitle': 'Not shown by your wallet',
   'orders.balances.tokens': 'Tokens',
   'orders.balances.notShown': 'These balances are not shown by your wallet.',
   'orders.balances.inOrders': 'In your orders',
