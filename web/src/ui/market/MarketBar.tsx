@@ -185,14 +185,39 @@ export function MarketShell(props: {
   const resizable = useMedia('(min-width: 1200px) and (pointer: fine)');
   // the chart's "Expand" choice (PriceChart's button): three columns, the chart takes the book's column too; otherwise the chart is taller (market.css)
   const big = useChartExpanded();
-  // the Buy | Sell bar of a phone (the ticket is below the book and the chart): shown while the ticket is off screen
+  // the Buy | Sell bar of a phone (the ticket is below the book and the chart): shown while the ticket's own Buy | Sell switch is off screen
+  // (founder 2026-11-12: not the whole ticket, so the rest of the ticket scrolled past the top still has the bar); the switch is watched once the ticket draws it (it renders late)
   const [ticketAway, setTicketAway] = useState(true);
   useEffect(() => {
-    const el = root.current?.querySelector('.mkt-area-ticket');
-    if (!el || typeof IntersectionObserver === 'undefined') return;
-    const io = new IntersectionObserver((entries) => setTicketAway(!entries.some((e) => e.isIntersecting)));
-    io.observe(el);
-    return () => io.disconnect();
+    const area = root.current?.querySelector('.mkt-area-ticket');
+    if (!area || typeof IntersectionObserver === 'undefined') return;
+    const seen = new Map<Element, boolean>();
+    // the sticky header covers the top of the screen: a switch under it is off screen too
+    const head = document.querySelector<HTMLElement>('.app-header, header')?.offsetHeight ?? 0;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) seen.set(e.target, e.isIntersecting);
+        setTicketAway(![...seen.values()].some(Boolean));
+      },
+      { rootMargin: `-${head}px 0px 0px 0px` },
+    );
+    const watched: Element[] = [];
+    const attach = () => {
+      const side = area.querySelector('[data-testid="order-side-buy"]')?.parentElement ?? null;
+      const now: Element[] = side ? [side] : [];
+      if (now.length === watched.length && now.every((x, i) => x === watched[i])) return;
+      for (const x of watched) io.unobserve(x);
+      seen.clear();
+      watched.splice(0, watched.length, ...now);
+      for (const x of now) io.observe(x);
+    };
+    attach();
+    const mo = new MutationObserver(attach);
+    mo.observe(area, { childList: true, subtree: true });
+    return () => {
+      mo.disconnect();
+      io.disconnect();
+    };
   }, []);
   // a press takes the ticket's side (its own switch is pressed, so the form and the ticket's state follow exactly as for a click there) and brings the ticket on screen
   const jumpToTicket = (side: 'buy' | 'sell') => {

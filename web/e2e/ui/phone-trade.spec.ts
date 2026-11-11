@@ -40,6 +40,26 @@ test.describe('phone, 390 px wide', () => {
     expect(await horizontalOverflow(page), 'market page').toBe(0);
   });
 
+  test('the bar follows the ticket\'s own Buy | Sell switch, not the whole ticket: the rest of the ticket on screen with its switch scrolled past still has the bar', async ({ appPage: page, mock }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    const bar = page.getByTestId('market-trade-bar');
+    const side = page.getByTestId('order-side-buy');
+    const place = page.getByTestId('order-place');
+    await expect(place).toBeAttached();
+    // the switch scrolled past (under the sticky header), the ticket's order button still on screen
+    await side.evaluate((el) => {
+      const r = el.parentElement!.getBoundingClientRect();
+      const head = document.querySelector<HTMLElement>('.app-header, header')!.offsetHeight;
+      window.scrollBy(0, r.bottom + 4 - head);
+    });
+    await expect(place).toBeInViewport();
+    await expect(bar).toBeVisible();
+    // the switch on screen: no bar
+    await side.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    await expect(bar).toBeHidden();
+  });
+
   test('the bar covers no content: the end of the page has room under it', async ({ appPage: page, mock }) => {
     await fund(mock);
     await openMarket(page, mock);
