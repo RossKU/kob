@@ -99,3 +99,35 @@ arbitrageurs keep the book near the fair rate. KOB does not promise that market 
 - **Token/token pairs.** Every order type also exists on a pair A/B, whose limit is in the quote token alone
   ([order types](https://github.com/RossKU/kob/blob/7603c7b5e4c08821a2556adb2bf771cca9897ee9/docs/spec/order-types.md#L137)). On an
   X/USDC book the price is in USDC, so a limit order keeps its dollar price whatever KAS does.
+
+## 6. Where do token names and prices come from? Does KOB take prices from kascov?
+
+Pinned to commit [`47792a0e`](https://github.com/RossKU/kob/tree/47792a0eba552e0469643c9d11b95d71b135c520).
+
+- **Names and icons only come from kascov.io.** The market list takes a display ticker, a name and an image from kascov's public
+  token list. Supply, decimals, prices and orders never do
+  ([`kascov.ts` L1-L13](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/data/kascov.ts#L1-L13)). Where kascov disagrees with what KOB derives, KOB wins and the list says so.
+- **Prices come from KOB's own book on chain.** The KOB indexer reads the order UTXOs and the fills from the chain. The book is the
+  resting orders, and the last price is the last fill that actually happened. It is not a number anyone types in. Makers choose their
+  own limit prices, as on any exchange, but a price only becomes "the price" once someone trades at it.
+- **USD figures are for display only:** the KAS price times KAS/USD from CoinGecko.
+- The web app reads one indexer and does not cross-check it (the footer says so). Standalone mode builds the book from your own node
+  instead.
+
+## 7. I priced an ask too low and part of it filled. What happens when I fix it?
+
+Pinned to commit [`47792a0e`](https://github.com/RossKU/kob/tree/47792a0eba552e0469643c9d11b95d71b135c520).
+
+- **What filled is final.** A fill is settled on chain and cannot be reversed.
+- **The rest stays on the book at the old price until your change confirms.** Cancel it, or use **Amend**, which re-prices the order in place with
+  one maker-signed transaction ([payload spec](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/docs/spec/kob1-payload.md#L31-L34)). Until that transaction
+  confirms, a market buy can still take the rest at the old price: a cancel can lose a race against a fill (see section 5). Kaspa
+  confirms in seconds, but a bot can be faster.
+- **Once it confirms, the old price is gone.** The next market buy pays the best ask on the book then: your corrected price, or a
+  cheaper ask from someone else.
+- **There is no floor.** The last price stays on the chart as history and binds nobody; buyers pay the asks that are actually on the book.
+- **The ticket warns before you sign.** A sell priced 10% or more below the market, or a buy 10% or more above it, shows "check for a
+  typing error" ([`guards.ts` L403-L420](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/guards.ts#L403-L420),
+  [`common-issues.ts` L55](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/orders/common-issues.ts#L55)). "The market" is the mid of the best bid and the best ask,
+  or the only side present ([`guards.ts` L32-L37](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/guards.ts#L32-L37)). On a book with no orders at all there is
+  nothing to compare with, so no warning shows yet.
