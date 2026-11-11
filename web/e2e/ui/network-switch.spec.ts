@@ -75,7 +75,7 @@ test('switching to mainnet and back: the setting is saved, the page reloads into
   await expect(page.getByTestId('network-switch')).toHaveAccessibleName('Network: mainnet. Change network');
   // none of the deployment's servers is in force: Settings (advanced) shows them empty, the network is mainnet
   await page.goto('/#/settings');
-  await page.getByTestId('settings-advanced').getByRole('button').first().click();
+  await page.getByTestId('settings-servers-fold').getByRole('button').first().click();
   await expect(page.getByTestId('settings-indexer-url')).toHaveValue('');
   await expect(page.getByTestId('settings-node-url')).toHaveValue('');
   await expect(page.getByTestId('settings-registry-url')).toHaveValue('./registry/tokens.json');
@@ -89,19 +89,23 @@ test('switching to mainnet and back: the setting is saved, the page reloads into
   await Promise.all([page.waitForEvent('load'), page.getByTestId('network-option-testnet-10').click()]);
   expect(await stored(page)).toEqual({ network: 'testnet-10' });
   await expect(badge(page)).toHaveAttribute('data-network', 'testnet-10');
-  await page.getByTestId('settings-advanced').getByRole('button').first().click();
+  await page.getByTestId('settings-servers-fold').getByRole('button').first().click();
   await expect(page.getByTestId('settings-indexer-url')).toHaveValue(mock.url);
   await expect(page.getByTestId('settings-registry-url')).toHaveValue(`${mock.url}/registry/tokens.json`);
 });
 
 test.describe('the deployment pins its network', () => {
   test.use({ appConfig: { lockNetwork: true } });
-  test('the chip stays a plain label: no button, no panel', async ({ appPage: page }) => {
+  test('the chip offers no choice: its panel has the status lines and the notice, no networks to pick', async ({ appPage: page }) => {
     await page.goto('/#/market');
     await expect(page.getByTestId('network-chip')).toBeVisible();
     await expect(badge(page)).toHaveAttribute('data-network', 'testnet-10');
     await expect(page.getByTestId('network-switch')).toHaveCount(0);
-    await page.getByTestId('network-chip').click();
+    await page.getByTestId('network-status').click();
+    await expect(page.getByTestId('network-status-panel')).toBeVisible();
+    await expect(page.getByTestId('status-node')).toBeVisible();
+    await expect(page.getByTestId('network-switch-note')).toContainText('Open review');
+    await expect(page.getByTestId('network-option-mainnet')).toHaveCount(0);
     await expect(page.getByTestId('network-switch-panel')).toHaveCount(0);
   });
 });
