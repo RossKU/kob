@@ -249,7 +249,8 @@ run started; it is kept in memory only and starts again at zero after a restart,
 keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-file`) with your monitoring. What is in flight does
 survive a restart: the transactions the executor sent and no block has taken yet are kept in `kob-data/executor-inflight.jsonl`,
 and the next start sends them again (the node answers "already in the mempool" for those it holds) instead of spending their coins
-twice. The keepers' fee top-up budget of the day (`kob-data/keeper-subsidy.json`) survives too.
+twice. The keepers' fee top-up budget (`kob-data/keeper-subsidy.json`: by default at most 1 KAS of your funding in any 24 hours goes to
+topping up the fees of kills and refunds; `--keeper-subsidy-budget-kas` raises it) survives too.
 
 ## 5. Pause and stop
 

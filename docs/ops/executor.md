@@ -299,7 +299,7 @@ matcher and keeper options (C, "Running"):
 | `--inventory-policy <file>` | none (off) | the surplus-inventory policy (C, "Surplus inventory"): the pair surpluses the operator may accumulate as inventory; maintenance never sells a listed token (also on `match`) |
 | `--no-refund`, `--sweep-own-strays`, `--return-foreign-strays`, `--keeper-min-profit` | as C | keepers (`--keeper-min-profit` is `keep --min-profit`) |
 | `--keeper-subsidy-max-kas`, `--keeper-replace-after-daa`, `--keeper-max-replacements` | 0.05, 100, 3 | keepers' liveness under fee pressure (C, "Fee policy"): the most KAS of its own funding the operator adds to one kill or refund its tip cannot pay at its urgency's rate (0: off); replace a stuck kill or refund of this process after this many DAA, at most this many times (0: never). Also on `keep` and `match --keep` |
-| `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 36000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (36,000 = one hour), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep` |
+| `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 864000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (864,000 = 24 hours: 1 KAS a day by default; kept across restarts), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep` |
 | `--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`, `--select-min-share`, `--select-seed` | on, 1, 30, 0.1, OS randomness | the weighted selection among competing executors (C, "Competing executors"; `docs/spec/matcher.md` §3.6): off plans deterministically; the weight exponent; the starvation bound in DAA; the lowest share of the optional work per tick; a fixed seed for a reproducible run. Also on `match` and `keep` |
 
 Next to `kobd --executor`: `kobd address-balance [--dir D]` (the key's address and plain balance as one JSON object, from the configured
@@ -2734,8 +2734,8 @@ bucket of its urgency:
   twice that) reaches about 680 sompi per gram. Subsidised jobs are logged (`keeper job subsidised from the operator's
   funding`, with the `subsidy` in sompi) and counted: `kob_keeper_subsidised_total`, `kob_keeper_subsidy_sompi_total`.
 * Subsidy budget: all subsidies together, the increase each replacement adds included, stay within
-  `--keeper-subsidy-budget-kas` (default 1 KAS) over any rolling window of `--keeper-subsidy-window-daa` (default 36,000
-  DAA, one hour), and at most `--keeper-subsidy-max-jobs` (default 8) kills and refunds are subsidised per tick. Once
+  `--keeper-subsidy-budget-kas` (default 1 KAS) over any rolling window of `--keeper-subsidy-window-daa` (default 864,000
+  DAA, 24 hours), and at most `--keeper-subsidy-max-jobs` (default 8) kills and refunds are subsidised per tick. Once
   either is used up, a job goes at the highest rate its own tip pays, exactly as with `--keeper-subsidy-max-kas 0`, until
   older subsidies leave the window (a job is subsidised with what is left, never more; a replacement whose increase does not
   fit is not sent and the original stays pending). Why: anyone can place many small IOC / GTD orders whose tips pay only the
@@ -2746,7 +2746,8 @@ bucket of its urgency:
   `<data_dir>/keeper-subsidy.json` (written on every charge): a restart continues it, so restarts add no budget; a deleted
   data directory starts it empty. A per-maker cap would not help
   (maker keys are free). Using it up is logged once (`keeper subsidy budget of the window used up`); metric
-  `kob_keeper_subsidy_budget_left_sompi`. At the defaults the subsidy costs the operator at most 24 KAS a day.
+  `kob_keeper_subsidy_budget_left_sompi`. At the defaults the subsidy costs the operator at most **1 KAS in any 24 hours** (raise it with
+  `--keeper-subsidy-budget-kas`, or shorten the window with `--keeper-subsidy-window-daa`, e.g. 36,000 for 1 KAS an hour).
 * The estimate is read at most every `--fee-refresh-ms` (10 s), only by steps that plan; the last good one is used for
   `--fee-max-age-ms` (60 s) while the node answers none, then every rate is the floor (logged once per outage: `no fee
   estimate from the node`). The policy never stops a job, it only prices it. `--no-fee-estimate` pays the floor always (the
@@ -3037,7 +3038,7 @@ kobd keep --network testnet-10 --book-file book.json --metrics-file /var/lib/nod
 | `--keep` (match) | off | run the keepers too |
 | `--no-refund` (keep) | off | disable refunds, kills and closes |
 | `--keeper-subsidy-max-kas` (keep, match) | 0.05 | the most KAS of the operator's funding added to the fee of one kill or refund whose tip pays the floor but not its urgency's rate (0: off; see Fee policy) |
-| `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` (keep, match) | 1, 36000, 8 | the most KAS of subsidy all kills and refunds together (replacements included) take within any rolling window of this many DAA, and the most subsidised jobs per tick; past either, jobs go at the rate their tip pays (0: no subsidy; see Fee policy, Subsidy budget) |
+| `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` (keep, match) | 1, 864000, 8 | the most KAS of subsidy all kills and refunds together (replacements included) take within any rolling window of this many DAA, and the most subsidised jobs per tick; past either, jobs go at the rate their tip pays (0: no subsidy; see Fee policy, Subsidy budget) |
 | `--keeper-replace-after-daa`, `--keeper-max-replacements` (keep, match) | 100, 3 | replace a kill or refund of this process still unaccepted after this many DAA at a higher rate, at most this many times (0: never; see Fee policy, Replacement) |
 | `--sweep-own-strays` (keep) | off | sweep the strays of the operator's own orders IN PLACE (`SweepOrder`, a `SWEEP` record: the order continues unchanged; own-token, token-B and foreign strays, per token within its program's inputs) |
 | `--return-foreign-strays` (keep) | off | carry proven FOREIGN strays (tokens other than the order's own) back to the maker inside the refund, kill or close that ends an order (permissionless: no refund path reads another token; after the order ends nothing could move them). A job that would not pay with them is built without them |

@@ -126,8 +126,9 @@ impl Default for KeeperConfig {
 
 /// Default [`KeeperConfig::subsidy_budget`]: 1 KAS.
 pub const DEFAULT_SUBSIDY_BUDGET: u64 = 100_000_000;
-/// Default [`KeeperConfig::subsidy_window_daa`]: 36,000 DAA (one hour at 10 blocks per second).
-pub const DEFAULT_SUBSIDY_WINDOW_DAA: u64 = 36_000;
+/// Default [`KeeperConfig::subsidy_window_daa`]: 864,000 DAA (24 hours at 10 blocks per second): with the default budget the
+/// operator adds at most 1 KAS a day to kills and refunds (founder decision, audit L-2).
+pub const DEFAULT_SUBSIDY_WINDOW_DAA: u64 = 864_000;
 /// Default [`KeeperConfig::subsidy_max_jobs`].
 pub const DEFAULT_SUBSIDY_MAX_JOBS: usize = 8;
 
@@ -140,11 +141,12 @@ pub struct LivenessArgs {
     #[arg(long, default_value_t = 0.05)]
     pub keeper_subsidy_max_kas: f64,
     /// Keepers: the most KAS of its own funding the operator adds to kills and refunds ALTOGETHER (replacements included)
-    /// within any `--keeper-subsidy-window-daa` (a rolling window; it starts empty when the process starts). Once it is used
-    /// up, jobs go at the highest rate their own tip pays until older subsidies leave the window. 0: never subsidise.
+    /// within any `--keeper-subsidy-window-daa` (a rolling window, kept in the data directory: a restart continues it). By
+    /// default at most 1 KAS a day. Once it is used up, jobs go at the highest rate their own tip pays until older subsidies
+    /// leave the window. 0: never subsidise.
     #[arg(long, default_value_t = 1.0)]
     pub keeper_subsidy_budget_kas: f64,
-    /// Keepers: the rolling window of `--keeper-subsidy-budget-kas`, DAA (10 per second; 36,000 = one hour).
+    /// Keepers: the rolling window of `--keeper-subsidy-budget-kas`, DAA (10 per second; 864,000 = 24 hours, 36,000 = one hour).
     #[arg(long, default_value_t = DEFAULT_SUBSIDY_WINDOW_DAA)]
     pub keeper_subsidy_window_daa: u64,
     /// Keepers: the most kills and refunds subsidised per tick (new jobs and replacements together). 0: never subsidise.
@@ -927,14 +929,15 @@ mod tests {
         let args = LivenessArgs {
             keeper_subsidy_max_kas: 0.05,
             keeper_subsidy_budget_kas: 1.0,
-            keeper_subsidy_window_daa: 36_000,
+            keeper_subsidy_window_daa: 864_000,
             keeper_subsidy_max_jobs: 8,
             keeper_replace_after_daa: 100,
             keeper_max_replacements: 3,
         };
         let mut c = KeeperConfig::default();
         args.apply(&mut c).unwrap();
-        assert_eq!((c.subsidy_max, c.subsidy_budget, c.subsidy_window_daa, c.subsidy_max_jobs), (5_000_000, 100_000_000, 36_000, 8));
+        assert_eq!((c.subsidy_max, c.subsidy_budget, c.subsidy_window_daa, c.subsidy_max_jobs), (5_000_000, 100_000_000, 864_000, 8));
+        assert_eq!(DEFAULT_SUBSIDY_WINDOW_DAA, 24 * 3_600 * 10, "by default 1 KAS within any 24 hours");
         let d = KeeperConfig::default();
         assert_eq!((d.subsidy_budget, d.subsidy_window_daa, d.subsidy_max_jobs), (c.subsidy_budget, c.subsidy_window_daa, 8));
         assert!(LivenessArgs { keeper_subsidy_budget_kas: -1.0, ..args.clone() }.apply(&mut c).is_err());
