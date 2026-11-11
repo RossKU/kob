@@ -7,8 +7,9 @@
 //! 3. `$KOB_OPERATOR_KEY` (hex; removed from the process environment once read).
 //!
 //! A key file holds 64 hex characters. On Unix it must not be readable or writable by group or
-//! others (mode `0600` / `0400`), or loading fails. On Windows the file's ACL is read (`icacls /save`, SDDL) and a warning names any
-//! account group (Everyone, Users, Authenticated Users, ...) that may read it; `KOB_KEY_ACL_STRICT=1` turns the warning into an error.
+//! others (mode `0600` / `0400`), or loading fails. On Windows the file's ACL is read (`icacls /save`, SDDL) and loading fails when
+//! any other account may read it (a group such as Everyone or Users, or a named account: anyone but the account running kobd,
+//! SYSTEM and Administrators), or when the ACL cannot be read; `KOB_KEY_ACL_STRICT=0` turns the refusal into a warning.
 //! The secret is wiped from memory on drop. Keep
 //! only a few days of operating funds on the key (a balance alert is part of monitoring).
 
@@ -33,7 +34,9 @@ pub enum KeyError {
     File(PathBuf, String),
     #[error("key file {0} is accessible by group or others (mode {1:o}); chmod 600 it")]
     Permissions(PathBuf, u32),
-    #[error("key file {0} is readable by other accounts ({1}); restrict its ACL (icacls <file> /inheritance:r /grant:r <you>:F)")]
+    #[error(
+        "key file {0} is readable by other accounts ({1}); restrict its ACL (icacls <file> /inheritance:r /grant:r <you>:F), or set KOB_KEY_ACL_STRICT=0 to start anyway (not recommended)"
+    )]
     Acl(PathBuf, String),
     #[error("operator key: {0}")]
     Invalid(String),
@@ -239,24 +242,33 @@ fn restrict_to_owner(path: &Path) -> Result<(), KeyError> {
         return Err(file_err(format!("icacls could not restrict the file: {}", String::from_utf8_lossy(&out.stdout).trim())));
     }
     let sddl = windows_acl_sddl(path).ok_or_else(|| file_err("cannot read the file's ACL back (icacls /save)".into()))?;
-    let others = sddl_readable_by_others(&sddl);
+    let others = sddl_readable_by_others(&sddl, current_sid().as_deref());
     if !others.is_empty() {
         return Err(KeyError::Acl(path.to_path_buf(), others.join(", ")));
     }
     Ok(())
 }
 
+/// The SID of the account that runs this process (`whoami /user`), once.
+#[cfg(not(unix))]
+fn current_sid() -> Option<String> {
+    static SID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    SID.get_or_init(|| {
+        std::process::Command::new("whoami")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| sid_of_whoami_csv(&String::from_utf8_lossy(&o.stdout)))
+    })
+    .clone()
+}
+
 /// The current account for `icacls /grant`: `*<SID>` from `whoami /user` (unambiguous, locale-independent), else
 /// `%USERDOMAIN%\%USERNAME%`.
 #[cfg(not(unix))]
 fn current_account() -> Option<String> {
-    let sid = std::process::Command::new("whoami")
-        .args(["/user", "/fo", "csv", "/nh"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| sid_of_whoami_csv(&String::from_utf8_lossy(&o.stdout)));
-    if let Some(sid) = sid {
+    if let Some(sid) = current_sid() {
         return Some(format!("*{sid}"));
     }
     let user = std::env::var("USERNAME").ok().filter(|u| !u.is_empty())?;
@@ -273,28 +285,20 @@ pub fn sid_of_whoami_csv(text: &str) -> Option<String> {
     (sid.starts_with("S-1-") && sid[4..].chars().all(|c| c.is_ascii_digit() || c == '-')).then(|| sid.to_string())
 }
 
-/// Set to any value other than `0` to make a key file readable by other accounts a hard error on Windows (default: a warning).
+/// Windows: a key file another account may read is refused (the default, on every build); `KOB_KEY_ACL_STRICT=0` turns the
+/// refusal into a warning (and a failure to read the ACL into a warning too). Any other value, or none, refuses.
 pub const STRICT_ACL_ENV: &str = "KOB_KEY_ACL_STRICT";
 
-/// Trustees of an SDDL ACE that stand for "other accounts": Everyone, Users, Authenticated Users, Interactive, Network, Anonymous, Guests
-/// (aliases and the SIDs they abbreviate). The owner, SYSTEM and Administrators are not "others".
-const OTHER_TRUSTEES: &[&str] = &[
-    "WD",
-    "BU",
-    "AU",
-    "IU",
-    "NU",
-    "AN",
-    "BG",
-    "LG",
-    "S-1-1-0",
-    "S-1-5-32-545",
-    "S-1-5-11",
-    "S-1-5-4",
-    "S-1-5-2",
-    "S-1-5-7",
-    "S-1-5-32-546",
-];
+/// Whether the Windows key-file check refuses (`KOB_KEY_ACL_STRICT` unset or anything but `0`).
+pub fn acl_strict() -> bool {
+    std::env::var(STRICT_ACL_ENV).map(|v| v.trim() != "0").unwrap_or(true)
+}
+
+/// Trustees of an SDDL ACE that are not "another account": the account that runs the executor (passed in), SYSTEM, the
+/// Administrators group, and the owner-rights / creator-owner placeholders (aliases and the SIDs they abbreviate). Every other
+/// trustee that may read the file is another account: a well-known group (Everyone, Users, Authenticated Users, ...) as well
+/// as a named account or group (a second user, a sync client's service account).
+const OWN_TRUSTEES: &[&str] = &["SY", "BA", "OW", "CO", "S-1-5-18", "S-1-5-32-544", "S-1-3-4", "S-1-3-0"];
 
 /// Whether an SDDL access-rights field grants reading the file's data: an alias (`FA` file all, `FR` file read, `GA` generic all, `GR` generic
 /// read) or a hexadecimal mask with FILE_READ_DATA (0x1), GENERIC_READ (0x80000000) or GENERIC_ALL (0x10000000). An unparsable mask counts
@@ -308,9 +312,10 @@ fn grants_read(rights: &str) -> bool {
 }
 
 /// The other accounts an SDDL DACL lets read the file: the trustees of every access-ALLOWED ACE (`A`) that grants read
-/// access and names Everyone / Users / Authenticated Users and the like. Deny ACEs and the owner / SYSTEM / Administrators are ignored.
-/// Pure text: the platform-specific part only fetches the SDDL.
-pub fn sddl_readable_by_others(sddl: &str) -> Vec<String> {
+/// access, other than `me` (the SID of the account that runs the executor), SYSTEM, Administrators and the owner placeholders
+/// ([`OWN_TRUSTEES`]): Everyone, Users and the like, and any named account or group. `me` unknown (`None`): every full SID
+/// counts as another account. Deny ACEs are ignored. Pure text: the platform-specific part only fetches the SDDL.
+pub fn sddl_readable_by_others(sddl: &str, me: Option<&str>) -> Vec<String> {
     let Some(dacl) = sddl.find("D:").map(|i| &sddl[i + 2..]) else { return vec![] };
     let dacl = dacl.split("S:").next().unwrap_or(dacl); // drop a SACL
     let mut out = vec![];
@@ -322,7 +327,8 @@ pub fn sddl_readable_by_others(sddl: &str) -> Vec<String> {
             continue;
         }
         let trustee = f[5].trim();
-        if OTHER_TRUSTEES.contains(&trustee) && grants_read(f[2]) {
+        let own = OWN_TRUSTEES.iter().any(|t| t.eq_ignore_ascii_case(trustee)) || me.is_some_and(|m| m.eq_ignore_ascii_case(trustee));
+        if !own && grants_read(f[2]) {
             out.push(trustee.to_string());
         }
     }
@@ -331,31 +337,49 @@ pub fn sddl_readable_by_others(sddl: &str) -> Vec<String> {
     out
 }
 
+/// Windows: the key file's ACL (`icacls /save`, SDDL) must let no other account read it ([`sddl_readable_by_others`], named
+/// accounts included), and an ACL that cannot be read (no `icacls`, an error) or an account whose SID cannot be found
+/// (`whoami`) is refused too: the default on every build (audit 2026-11-11 M-11). `KOB_KEY_ACL_STRICT=0` makes each of these
+/// a warning.
 #[cfg(not(unix))]
 fn check_permissions(path: &Path) -> Result<(), KeyError> {
     std::fs::metadata(path).map_err(|e| KeyError::File(path.to_path_buf(), e.to_string()))?;
-    match windows_acl_sddl(path) {
-        Some(sddl) => {
-            let others = sddl_readable_by_others(&sddl);
+    let strict = acl_strict();
+    let problem = match (windows_acl_sddl(path), current_sid()) {
+        (Some(sddl), me) => {
+            let others = sddl_readable_by_others(&sddl, me.as_deref());
             if others.is_empty() {
                 return Ok(());
             }
-            let strict = std::env::var(STRICT_ACL_ENV).map(|v| v != "0" && !v.is_empty()).unwrap_or(false);
+            let who = if me.is_none() {
+                format!("{} (the account running kobd could not be named by `whoami`, so every account counts)", others.join(", "))
+            } else {
+                others.join(", ")
+            };
             if strict {
-                return Err(KeyError::Acl(path.to_path_buf(), others.join(", ")));
+                return Err(KeyError::Acl(path.to_path_buf(), who));
             }
-            tracing::warn!(
-                path = %path.display(),
-                readable_by = %others.join(", "),
-                "operator key file is readable by other accounts; restrict it (icacls <file> /inheritance:r /grant:r <you>:F) or set KOB_KEY_ACL_STRICT=1 to refuse"
-            );
-            Ok(())
+            who
         }
-        None => {
-            tracing::warn!(path = %path.display(), "could not read the ACL of the operator key file (icacls unavailable); check it by hand");
-            Ok(())
+        (None, _) => {
+            if strict {
+                return Err(KeyError::File(
+                    path.to_path_buf(),
+                    "its ACL could not be read (icacls /save failed or is missing), so nobody can tell who else may read the key; \
+                     fix icacls, or set KOB_KEY_ACL_STRICT=0 to start anyway"
+                        .into(),
+                ));
+            }
+            tracing::warn!(path = %path.display(), "could not read the ACL of the operator key file (icacls); KOB_KEY_ACL_STRICT=0 lets it start: check it by hand");
+            return Ok(());
         }
-    }
+    };
+    tracing::warn!(
+        path = %path.display(),
+        readable_by = %problem,
+        "operator key file is readable by other accounts; KOB_KEY_ACL_STRICT=0 lets it start: restrict it (icacls <file> /inheritance:r /grant:r <you>:F)"
+    );
+    Ok(())
 }
 
 /// The SDDL of a file, from `icacls <file> /save <tmp>` (SDDL is locale-independent, unlike icacls' account names).
@@ -454,25 +478,37 @@ mod tests {
 
     #[test]
     fn sddl_names_the_other_accounts_that_can_read() {
-        // owner + SYSTEM + Administrators only: fine
-        assert!(sddl_readable_by_others("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-21-1-2-3-1001)").is_empty());
+        let me = Some("S-1-5-21-1-2-3-1001");
+        let others = |sddl: &str| sddl_readable_by_others(sddl, me);
+        // the account itself + SYSTEM + Administrators only: fine
+        assert!(others("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-21-1-2-3-1001)").is_empty());
         // a default user-profile ACL: Users have read/execute inherited from the folder
         let d = "O:S-1-5-21-1-2-3-1001G:S-1-5-21-1-2-3-513D:AI(A;ID;FA;;;BA)(A;ID;FA;;;SY)(A;ID;0x1200a9;;;BU)(A;ID;FA;;;S-1-5-21-1-2-3-1001)";
-        assert_eq!(sddl_readable_by_others(d), vec!["BU".to_string()]);
-        assert_eq!(sddl_readable_by_others("D:(A;;FR;;;WD)(A;;FA;;;AU)(A;;GR;;;WD)"), vec!["AU".to_string(), "WD".to_string()]);
-        assert_eq!(sddl_readable_by_others("D:(A;;GA;;;S-1-1-0)"), vec!["S-1-1-0".to_string()]);
+        assert_eq!(others(d), vec!["BU".to_string()]);
+        assert_eq!(others("D:(A;;FR;;;WD)(A;;FA;;;AU)(A;;GR;;;WD)"), vec!["AU".to_string(), "WD".to_string()]);
+        assert_eq!(others("D:(A;;GA;;;S-1-1-0)"), vec!["S-1-1-0".to_string()]);
+        // audit 2026-11-11 M-11: a named second account (or a group by its SID) may read: another account too
+        assert_eq!(others("D:P(A;;FA;;;S-1-5-21-1-2-3-1001)(A;;FR;;;S-1-5-21-1-2-3-1002)"), vec!["S-1-5-21-1-2-3-1002".to_string()]);
+        assert_eq!(others("D:P(A;;FA;;;S-1-5-21-1-2-3-1001)(A;;0x1200a9;;;S-1-5-80-99)"), vec!["S-1-5-80-99".to_string()]);
+        // the account running kobd unknown: its own entry counts as another account (refuse rather than guess)
+        assert_eq!(
+            sddl_readable_by_others("D:P(A;;FA;;;SY)(A;;FA;;;S-1-5-21-1-2-3-1001)", None),
+            vec!["S-1-5-21-1-2-3-1001".to_string()]
+        );
+        // a service running as SYSTEM, the owner-rights placeholder
+        assert!(sddl_readable_by_others("D:P(A;;FA;;;SY)(A;;FA;;;OW)", Some("S-1-5-18")).is_empty());
         // no read bit (write attributes / synchronise only), a deny, a non-DACL section, a SACL
-        assert!(sddl_readable_by_others("D:(A;;0x100100;;;WD)").is_empty());
-        assert!(sddl_readable_by_others("D:(D;;FA;;;WD)").is_empty());
-        assert!(sddl_readable_by_others("O:WDG:WD").is_empty());
-        assert!(sddl_readable_by_others("D:(A;;FA;;;SY)S:(A;;FR;;;WD)").is_empty());
-        assert!(sddl_readable_by_others("").is_empty());
-        // an unparsable mask counts as read (fail towards the warning)
-        assert_eq!(sddl_readable_by_others("D:(A;;0xZZ;;;WD)"), vec!["WD".to_string()]);
+        assert!(others("D:(A;;0x100100;;;WD)").is_empty());
+        assert!(others("D:(D;;FA;;;WD)").is_empty());
+        assert!(others("O:WDG:WD").is_empty());
+        assert!(others("D:(A;;FA;;;SY)S:(A;;FR;;;WD)").is_empty());
+        assert!(others("").is_empty());
+        // an unparsable mask counts as read (fail towards the refusal)
+        assert_eq!(others("D:(A;;0xZZ;;;WD)"), vec!["WD".to_string()]);
     }
 
     /// The Windows check against the real ACL of a real file: after `icacls /inheritance:r /grant:r <me>:F` nobody else may read it;
-    /// granting Everyone read is reported (a warning by default, an error with `KOB_KEY_ACL_STRICT`).
+    /// granting Everyone read is refused (the default), and loads with a warning under `KOB_KEY_ACL_STRICT=0`.
     #[cfg(windows)]
     #[test]
     fn windows_acl_of_a_real_file() {
@@ -490,13 +526,16 @@ mod tests {
             .unwrap_or(false);
         if ok {
             let sddl = windows_acl_sddl(&p).expect("the ACL is readable");
-            assert!(sddl_readable_by_others(&sddl).is_empty(), "{sddl}");
+            assert!(sddl_readable_by_others(&sddl, current_sid().as_deref()).is_empty(), "{sddl}");
             assert_eq!(HotKey::from_file(&p).unwrap().pubkey(), pubkey_of(&[0x33; 32]).unwrap());
-            // Everyone may read: reported, the key still loads (warning)
+            // Everyone may read: refused by default (audit 2026-11-11 M-11)
             assert!(std::process::Command::new("icacls").arg(&p).args(["/grant", "*S-1-1-0:R"]).output().unwrap().status.success());
             let sddl = windows_acl_sddl(&p).expect("the ACL is readable");
-            assert_eq!(sddl_readable_by_others(&sddl), vec!["WD".to_string()], "{sddl}");
-            assert!(HotKey::from_file(&p).is_ok());
+            assert_eq!(sddl_readable_by_others(&sddl, current_sid().as_deref()), vec!["WD".to_string()], "{sddl}");
+            if std::env::var_os(STRICT_ACL_ENV).is_none() {
+                let e = HotKey::from_file(&p).unwrap_err();
+                assert!(matches!(e, KeyError::Acl(..)) && e.to_string().contains("KOB_KEY_ACL_STRICT=0"), "{e}");
+            }
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -518,7 +557,7 @@ mod tests {
         #[cfg(windows)]
         {
             let sddl = windows_acl_sddl(&p).expect("the ACL is readable");
-            assert!(sddl_readable_by_others(&sddl).is_empty(), "{sddl}");
+            assert!(sddl_readable_by_others(&sddl, current_sid().as_deref()).is_empty(), "{sddl}");
         }
         // an existing file (a key that may hold funds) is left exactly as it was
         assert!(matches!(HotKey::create_file(&p), Err(KeyError::File(..))));
