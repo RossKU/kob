@@ -56,9 +56,8 @@ fn bail(e: String, code: i32) -> i32 {
 
 /// Parsed arguments and settings of a read-only command (`--help` prints `usage`).
 fn ctx(args: &[String], value_flags: &[&str], bool_flags: &[&str], usage: &str) -> Result<(Parsed, Common), i32> {
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        print!("{usage}{COMMON_HELP}");
-        return Err(0);
+    if let Some(code) = crate::help::help_or_usage(args, &[usage, COMMON_HELP], false) {
+        return Err(code);
     }
     let p = parse(args, value_flags, bool_flags).map_err(|e| bail(e, 2))?;
     let c = Common::from(&p).map_err(|e| bail(e, 2))?;
@@ -124,6 +123,10 @@ pub fn book_lines(book: &Book, price: &dyn Fn(i64) -> String, amount: &dyn Fn(i6
     }
     v.extend(book.asks.iter().rev().map(row));
     match (book.asks.first(), book.bids.first()) {
+        // a momentarily crossed book is normal (an executor is about to match it): never a negative spread
+        (Some(a), Some(b)) if b.price > a.price => {
+            v.push(format!("  -- crossed by {} (best ask {}, best bid {})", price(b.price - a.price), price(a.price), price(b.price)))
+        }
         (Some(a), Some(b)) => {
             v.push(format!("  -- spread {} (best ask {}, best bid {})", price(a.price - b.price), price(a.price), price(b.price)))
         }
@@ -138,6 +141,11 @@ pub fn book_lines(book: &Book, price: &dyn Fn(i64) -> String, amount: &dyn Fn(i6
         v.push(format!("  last fill: {}", price(l)));
     }
     v
+}
+
+/// Whether the best bid is above the best ask.
+fn is_crossed(book: &Book) -> bool {
+    matches!((book.asks.first(), book.bids.first()), (Some(a), Some(b)) if b.price > a.price)
 }
 
 fn levels_json(levels: &[Level], price: &dyn Fn(i64) -> String) -> Value {
@@ -172,17 +180,27 @@ pub fn run_book(args: &[String]) -> i32 {
         Ok(x) => x,
         Err(code) => return code,
     };
+    // a mistake in the arguments is a usage error (2), whatever the indexer would have said
+    if let Err(e) = book_args(&p) {
+        return bail(e, 2);
+    }
     print_view(&c, book_view(&c, &p))
+}
+
+/// The arguments of `kob book` that need no network: the token (ticker or covenant id) and the depth.
+fn book_args(p: &Parsed) -> Result<(&str, u32), String> {
+    let [key] = p.pos.as_slice() else { return Err("give exactly one token (ticker or covenant id)".into()) };
+    let depth: u32 = match p.get("--depth") {
+        Some(d) => d.parse().ok().filter(|d| (1..=500).contains(d)).ok_or(format!("--depth must be 1..500, got `{d}`"))?,
+        None => 20,
+    };
+    Ok((key.as_str(), depth))
 }
 
 /// The book view: its JSON and its lines.
 pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String> {
     {
-        let [key] = p.pos.as_slice() else { return Err("give exactly one token (ticker or covenant id)".into()) };
-        let depth: u32 = match p.get("--depth") {
-            Some(d) => d.parse().ok().filter(|d| (1..=500).contains(d)).ok_or(format!("--depth must be 1..500, got `{d}`"))?,
-            None => 20,
-        };
+        let (key, depth) = book_args(p)?;
         let indexer = c.need_indexer()?;
         let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
         // a token without a registry entry: its decimals from the scale of its market (`kob place`'s open token); a token
@@ -228,6 +246,7 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
             "bids": levels_json(&book.bids, &price),
             "best_ask": book.asks.first().map(|l| l.price.to_string()),
             "best_bid": book.bids.first().map(|l| l.price.to_string()),
+            "crossed": is_crossed(&book),
             "last_fill": last.map(|l| l.to_string()),
         });
         let mut lines = vec![format!(
@@ -415,6 +434,10 @@ pub fn run_orders(args: &[String]) -> i32 {
     };
     if let Some(x) = p.pos.first() {
         return bail(format!("unexpected argument `{x}`"), 2);
+    }
+    // no owner (no --maker, no key) is a usage error (2), not a failure of the indexer or the node
+    if let Err(e) = maker_of(&p, &c, args) {
+        return bail(e, 2);
     }
     print_view(&c, orders_view(&c, &p, args))
 }
@@ -606,6 +629,9 @@ pub fn run_balances(args: &[String]) -> i32 {
     if let Some(x) = p.pos.first() {
         return bail(format!("unexpected argument `{x}`"), 2);
     }
+    if let Err(e) = maker_of(&p, &c, args) {
+        return bail(e, 2);
+    }
     print_view(&c, balances_view(&c, &p, args))
 }
 
@@ -710,6 +736,24 @@ mod tests {
         let spread = l.iter().position(|x| x.contains("spread 5p (best ask 250p, best bid 245p)")).unwrap();
         assert!(row("260p") < row("250p") && row("250p") < spread && spread < row("245p"), "{l:?}");
         assert!(l.last().unwrap().contains("last fill: 248p"));
+        assert!(!is_crossed(&book));
+        // a crossed book (best bid above best ask) says by how much, never a negative spread
+        let crossed = Book {
+            asks: vec![Level { price: 250, amount: 5, orders: 1, tip: 0 }],
+            bids: vec![Level { price: 260, amount: 3, orders: 1, tip: 0 }],
+            ..Default::default()
+        };
+        assert!(is_crossed(&crossed));
+        let l = book_lines(&crossed, &|p| format!("{p}p"), &|a| format!("{a}a"), None);
+        assert!(l.iter().any(|x| x.contains("crossed by 10p (best ask 250p, best bid 260p)")), "{l:?}");
+        assert!(!l.iter().any(|x| x.contains("spread")), "{l:?}");
+        // a locked book (bid = ask) is a spread of zero, not crossed
+        let locked = Book {
+            asks: vec![Level { price: 250, amount: 5, orders: 1, tip: 0 }],
+            bids: vec![Level { price: 250, amount: 3, orders: 1, tip: 0 }],
+            ..Default::default()
+        };
+        assert!(!is_crossed(&locked));
         // a terminal order and one without a proven state are skipped
         let (by, skipped) = escrowed(&[
             json!({"covenant_id": "aa", "status": "filled"}),

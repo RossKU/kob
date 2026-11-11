@@ -68,9 +68,8 @@ fn build_with_funding(
 }
 
 fn ctx(args: &[String], value_flags: &[&str], bool_flags: &[&str], usage: &str) -> Result<(Parsed, Common, Signer), i32> {
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        print!("{usage}{COMMON_HELP}");
-        return Err(0);
+    if let Some(code) = crate::help::help_or_usage(args, &[usage, COMMON_HELP], false) {
+        return Err(code);
     }
     let fail = |e: String| {
         eprintln!("error: {e}");

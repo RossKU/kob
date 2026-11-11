@@ -51,7 +51,7 @@ fn the_network_defaults_to_mainnet_and_urls_are_redacted() {
         let mut a = vec!["orders", "--indexer", "http://127.0.0.1:1"];
         a.extend(sw);
         let (code, out) = kob(&a, &[]);
-        assert_eq!(code, 1, "{out}");
+        assert_eq!(code, 2, "{out}");
         assert!(out.contains("--maker"), "{out}");
     }
     let (code, out) = kob(&["orders", "--testnet", "--network", "mainnet"], &[]);
@@ -80,6 +80,7 @@ fn the_network_defaults_to_mainnet_and_urls_are_redacted() {
     }
     // a view of nobody: no key and no --maker
     let (code, out) = kob(&["orders", "--network", "testnet-10", "--indexer", "http://127.0.0.1:1"], &[]);
-    assert_eq!(code, 1, "{out}");
+    // a usage mistake (2), not a failure of the indexer (1)
+    assert_eq!(code, 2, "{out}");
     assert!(out.contains("--maker"), "{out}");
 }

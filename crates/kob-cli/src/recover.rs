@@ -772,9 +772,8 @@ fn summary(report: &Value, a: &Args) {
 
 /// Run `kob recover`; returns the process exit code.
 pub fn run(args: &[String]) -> i32 {
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        print!("{USAGE}");
-        return 0;
+    if let Some(code) = crate::help::help_or_usage(args, &[USAGE], false) {
+        return code;
     }
     let a = match parse_args(args) {
         Ok(a) => a,

@@ -559,23 +559,18 @@ pub fn execute(a: &Args) -> Result<(Value, bool), String> {
 
 /// Run `kob order sweep|cancel`; returns the process exit code.
 pub fn run(args: &[String]) -> i32 {
+    if let Some(code) = crate::help::help_or_usage(args, &[USAGE], true) {
+        return code;
+    }
     let op = match args.first().map(String::as_str) {
         Some("sweep") => Op::Sweep,
         Some("cancel") => Op::Cancel,
-        Some("--help") | Some("-h") | None => {
-            print!("{USAGE}");
-            return if args.is_empty() { 2 } else { 0 };
-        }
-        Some(other) => {
-            eprintln!("unknown `kob order {other}`\n\n{USAGE}");
-            return 2;
+        other => {
+            eprintln!("error: unknown `kob order {}`\n", other.unwrap_or(""));
+            return crate::help::print_usage_error(&[USAGE]);
         }
     };
     let rest = &args[1..];
-    if rest.iter().any(|a| a == "--help" || a == "-h") {
-        print!("{USAGE}");
-        return 0;
-    }
     let a = match parse_args(op, rest) {
         Ok(a) => a,
         Err(e) => {

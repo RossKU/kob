@@ -509,9 +509,8 @@ pub fn write_outputs(dir: &Path, plan: &CreationPlan) -> Result<Vec<String>, Str
 
 /// Run `kob token create`; returns the process exit code.
 pub fn run_issue(args: &[String]) -> i32 {
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        print!("{ISSUE_USAGE}");
-        return 0;
+    if let Some(code) = crate::help::help_or_usage(args, &[ISSUE_USAGE], false) {
+        return code;
     }
     match issue(args) {
         Ok(()) => 0,
@@ -705,9 +704,8 @@ the funding key's own.
 
 /// Run `kob token resume`; returns the process exit code.
 pub fn run_resume(args: &[String]) -> i32 {
-    if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
-        print!("{RESUME_USAGE}");
-        return i32::from(args.is_empty()) * 2;
+    if let Some(code) = crate::help::help_or_usage(args, &[RESUME_USAGE], true) {
+        return code;
     }
     let run = || -> Result<(), String> {
         let mut dir = None;
@@ -770,14 +768,12 @@ the covenant id are recomputed; the declaration is printed only when it is bound
 
 /// Run `kob token verify-declaration`; returns the process exit code.
 pub fn run_verify_declaration(args: &[String]) -> i32 {
-    let [path] = args else {
-        print!("{VERIFY_USAGE}");
-        return 2;
-    };
-    if path == "--help" || path == "-h" {
-        print!("{VERIFY_USAGE}");
-        return 0;
+    if let Some(code) = crate::help::help_or_usage(args, &[VERIFY_USAGE], true) {
+        return code;
     }
+    let [path] = args else {
+        return crate::help::print_usage_error(&[VERIFY_USAGE]);
+    };
     let run = || -> Result<(), String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
         let proof: kcc23::LaunchProof = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;

@@ -55,9 +55,8 @@ fn bail(e: &str, code: i32) -> i32 {
 
 /// Run `kob watch`.
 pub fn run(args: &[String]) -> i32 {
-    if args.iter().any(|a| a == "--help" || a == "-h") || args.is_empty() {
-        print!("{USAGE}{COMMON_HELP}");
-        return if args.is_empty() { 2 } else { 0 };
+    if let Some(code) = crate::help::help_or_usage(args, &[USAGE, COMMON_HELP], true) {
+        return code;
     }
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();

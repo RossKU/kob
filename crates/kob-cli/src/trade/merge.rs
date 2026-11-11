@@ -236,9 +236,8 @@ pub fn plan(
 
 /// Run `kob merge`.
 pub fn run(args: &[String]) -> i32 {
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        print!("{MERGE_USAGE}{COMMON_HELP}");
-        return 0;
+    if let Some(code) = crate::help::help_or_usage(args, &[MERGE_USAGE, COMMON_HELP], false) {
+        return code;
     }
     let fail = |e: String, code: i32| {
         eprintln!("error: {e}");

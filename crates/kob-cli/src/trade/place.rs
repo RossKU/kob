@@ -786,9 +786,8 @@ type Planned = (Common, crate::common::Signer, Plan, TokenMarket, Option<TokenMa
 
 /// Run `kob place`.
 pub fn run(args: &[String]) -> i32 {
-    if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
-        print!("{USAGE}{COMMON_HELP}");
-        return if args.is_empty() { 2 } else { 0 };
+    if let Some(code) = crate::help::help_or_usage(args, &[USAGE, COMMON_HELP], true) {
+        return code;
     }
     let p = match parse(args, VALUE_FLAGS, BOOL_FLAGS) {
         Ok(p) => p,

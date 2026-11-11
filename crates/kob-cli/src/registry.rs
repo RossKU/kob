@@ -9,6 +9,9 @@ const USAGE: &str = "usage: kob registry validate <tokens.json> [--network mainn
 
 /// Returns the process exit code: 0 valid, 1 invalid, 2 usage or I/O error.
 pub fn run_validate(args: &[&str]) -> i32 {
+    if let Some(code) = crate::help::help_or_usage(args, &[USAGE], false) {
+        return code;
+    }
     let mut path = None;
     let mut network = None;
     let mut it = args.iter();
@@ -77,6 +80,9 @@ genesis records. Collect fresh evidence (read-only node + explorer):
 
 /// `kob registry verify-genesis`. Returns the exit code: 0 the registry matches the evidence, 1 it does not, 2 usage or I/O.
 pub fn run_verify_genesis(args: &[&str]) -> i32 {
+    if let Some(code) = crate::help::help_or_usage(args, &[VERIFY_USAGE], false) {
+        return code;
+    }
     let (mut network, mut evidence, mut registry, mut json) = (None, None, None, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -87,10 +93,6 @@ pub fn run_verify_genesis(args: &[&str]) -> i32 {
             "--json" => {
                 json = true;
                 continue;
-            }
-            "--help" | "-h" => {
-                println!("{VERIFY_USAGE}");
-                return 0;
             }
             _ => {
                 eprintln!("{VERIFY_USAGE}");

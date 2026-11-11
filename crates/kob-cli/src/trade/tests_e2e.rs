@@ -900,6 +900,7 @@ fn book_orders_and_balances_views() {
     let (v, lines) = views::book_view(&c, &p).unwrap();
     assert_eq!((v["best_ask"].as_str(), v["best_bid"].as_str()), (Some("250000000"), Some("245000000")));
     assert_eq!(v["asks"][0]["price_text"], "2.5 KAS per TST");
+    assert_eq!(v["crossed"], false);
     let at = |s: &str| lines.iter().position(|l| l.starts_with("    ") && l.contains(s)).unwrap_or_else(|| panic!("{s}: {lines:?}"));
     let spread = lines.iter().position(|l| l.contains("spread 0.05 KAS per TST")).unwrap_or_else(|| panic!("{lines:?}"));
     assert!(at("2.6 KAS per TST") < at("2.5 KAS per TST") && at("2.5 KAS per TST") < spread && spread < at("2.45 KAS per TST"));

@@ -74,15 +74,20 @@ fn find_repo() -> Option<PathBuf> {
     }
 }
 
+const USAGE_PROGRAMS: &str = "usage: kob registry programs [--json]
+
+Prints the token-program profiles this build embeds: name, registry id, codec, template hash, layout, slots, carrier floor,
+witness scheme and review status. --json prints them as one JSON document.";
+
 /// `kob registry programs [--json]`.
 pub fn run_programs(args: &[&str]) -> i32 {
+    if let Some(code) = crate::help::help_or_usage(args, &[USAGE_PROGRAMS], false) {
+        return code;
+    }
     let json = match args {
         [] => false,
         ["--json"] => true,
-        _ => {
-            eprintln!("usage: kob registry programs [--json]");
-            return 2;
-        }
+        _ => return crate::help::print_usage_error(&[USAGE_PROGRAMS]),
     };
     if json {
         println!("{}", serde_json::to_string_pretty(profiles()).expect("profiles serialise"));
@@ -117,6 +122,9 @@ pub fn run_programs(args: &[&str]) -> i32 {
 
 /// `kob registry add-program`.
 pub fn run_add_program(args: &[&str]) -> i32 {
+    if let Some(code) = crate::help::help_or_usage(args, &[USAGE_ADD], false) {
+        return code;
+    }
     let mut input = None;
     let mut opt = DeriveOptions::default();
     let (mut write, mut json, mut repo, mut upstream) = (false, false, None, None);
@@ -186,10 +194,6 @@ pub fn run_add_program(args: &[&str]) -> i32 {
             },
             "--write" => write = true,
             "--json" => json = true,
-            "--help" | "-h" => {
-                println!("{USAGE_ADD}");
-                return 0;
-            }
             p if input.is_none() && !p.starts_with("--") => input = Some(p.to_string()),
             other => {
                 eprintln!("unexpected argument {other}\n\n{USAGE_ADD}");
