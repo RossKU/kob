@@ -332,8 +332,11 @@ test.describe('phone', () => {
   });
 });
 
-test('desktop 900 px: the brand shows its name beside the logo when the row has room for it (no wallet connected)', async ({ appPage: page }) => {
-  await page.setViewportSize({ width: 900, height: 800 });
+// 1024 px, not 900: the Trade tab is always there now (review L-09), and on the CI runner's wide fonts the 900 px row (still the wide layout) has no room left for the
+// name beside the logo; it comes back from about 960 px, which is what this checks
+test('desktop 1024 px: the brand shows its name beside the logo when the row has room for it (no wallet connected)', async ({ appPage: page }) => {
+  await wideFonts(page);
+  await page.setViewportSize({ width: 1024, height: 800 });
   await page.goto('/#/market');
   await expect(page.getByTestId('wallet-connect-list')).toBeVisible();
   await expect(page.locator('header.header')).toHaveAttribute('data-layout', 'wide');
