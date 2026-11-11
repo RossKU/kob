@@ -4,7 +4,11 @@
 #   docker build -f crates/kobd/Dockerfile --build-arg NETWORK=mainnet -t kobd:mainnet .
 #   install -d -o 10001 -g 10001 -m 0700 /srv/kob
 #   docker run -it --rm --network host -v /srv/kob:/data kobd:mainnet setup --no-start
-#   docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kobd:mainnet
+#   docker run -d --name kob --restart unless-stopped --network host --log-opt max-size=10m --log-opt max-file=3 \
+#     -v /srv/kob:/data kobd:mainnet
+#
+# The log always reaches the console (docker logs); --log-opt caps what Docker keeps of it (its json-file driver does not
+# rotate on its own).
 #
 # The build context is the repository root. Dockerfile.dockerignore, next to this file, keeps build outputs and anything that could
 # be a secret out of it; it needs BuildKit (the default builder since Docker 23.0).

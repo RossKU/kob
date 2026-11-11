@@ -6,6 +6,8 @@
 //! * No ANSI colour codes unless the console is a terminal (and `NO_COLOR` is unset); the file never has any.
 //! * With a log file the console keeps showing the log (a terminal, a pipe, `journalctl`, `docker logs`): the file is a copy
 //!   that is rotated, not a replacement. The start banner names the file.
+//! * A console that stops taking the log (a closed pipe, a full disk under a redirect) never takes the process down: the
+//!   console is dropped at its first failed write, with one warning in the log file, and the log goes on in the file alone.
 //! * The file is rotated by size: when the next event would take it past `max_bytes` it becomes `<file>.1`, the older ones shift
 //!   to `.2`, `.3`, ... and the one past `keep` is deleted, so the log takes at most `(keep + 1) * max_bytes`. A file that was
 //!   there before the start is appended to.
@@ -47,6 +49,10 @@ static FILE: Mutex<Option<Rotating>> = Mutex::new(None);
 static CONSOLE: AtomicBool = AtomicBool::new(true);
 /// The stream the log uses on the console.
 static TO_STDERR: AtomicBool = AtomicBool::new(false);
+/// A write to the console failed: the console is dropped from then on ([`console_write`]).
+static CONSOLE_FAILED: AtomicBool = AtomicBool::new(false);
+/// The warning about that failure, until a log file is attached to take it.
+static CONSOLE_WARNING: Mutex<Option<String>> = Mutex::new(None);
 
 /// A file that rotates by size.
 struct Rotating {
@@ -110,8 +116,13 @@ impl Rotating {
 
 /// Opens `opts.file` for the log from now on (as a copy: the console keeps showing the log).
 pub fn attach_file(opts: LogOptions) -> std::io::Result<()> {
-    let f = Rotating::open(opts)?;
-    *FILE.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+    let mut f = Rotating::open(opts)?;
+    let mut file = FILE.lock().unwrap_or_else(|e| e.into_inner());
+    // the console failed before the file was there: the file says so first
+    if let Some(w) = CONSOLE_WARNING.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = f.write(w.as_bytes());
+    }
+    *file = Some(f);
     Ok(())
 }
 
@@ -148,13 +159,45 @@ impl Write for ConsoleSink {
             return Ok(buf.len());
         }
         if TO_STDERR.load(Ordering::Relaxed) {
-            std::io::stderr().write(buf)
+            Ok(console_write(&mut std::io::stderr().lock(), buf))
         } else {
-            std::io::stdout().write(buf)
+            Ok(console_write(&mut std::io::stdout().lock(), buf))
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+/// Writes one event to the console `out`, never failing (as the file half does): an error (a closed pipe) drops the console
+/// for good, with one warning to the log file. An error returned to the subscriber would be reported with `eprintln!`, which
+/// panics when stderr is the same closed pipe, inside whichever task logged.
+fn console_write(out: &mut dyn Write, buf: &[u8]) -> usize {
+    if CONSOLE_FAILED.load(Ordering::Relaxed) {
+        return buf.len();
+    }
+    if let Err(e) = out.write_all(buf).and_then(|()| out.flush()) {
+        console_failed(&e);
+    }
+    buf.len()
+}
+
+/// The console failed (`e`): dropped from now on, and said once in the log file (or kept for the file until one is attached).
+fn console_failed(e: &std::io::Error) {
+    if CONSOLE_FAILED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let line = format!(
+        "{}  WARN the console stopped taking the log ({e}): it is no longer written there, only to this file\n",
+        utc_millis_text(now.as_millis() as u64)
+    );
+    let mut file = FILE.lock().unwrap_or_else(|e| e.into_inner());
+    match file.as_mut() {
+        Some(f) => {
+            let _ = f.write(line.as_bytes());
+        }
+        None => *CONSOLE_WARNING.lock().unwrap_or_else(|e| e.into_inner()) = Some(line),
     }
 }
 
@@ -222,9 +265,19 @@ pub fn init(to_stderr: bool) {
     let debugging = std::env::var_os("RUST_LOG").is_some();
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let ansi = console_is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    let console =
-        tracing_subscriber::fmt::layer().with_writer(ConsoleSink).with_ansi(ansi).with_timer(UtcMillis).with_target(debugging);
-    let file = tracing_subscriber::fmt::layer().with_writer(FileSink).with_ansi(false).with_timer(UtcMillis).with_target(debugging);
+    // neither half ever reports a failed write itself (`eprintln!`, which panics when stderr fails): they never fail
+    let console = tracing_subscriber::fmt::layer()
+        .with_writer(ConsoleSink)
+        .with_ansi(ansi)
+        .with_timer(UtcMillis)
+        .with_target(debugging)
+        .log_internal_errors(false);
+    let file = tracing_subscriber::fmt::layer()
+        .with_writer(FileSink)
+        .with_ansi(false)
+        .with_timer(UtcMillis)
+        .with_target(debugging)
+        .log_internal_errors(false);
     let _ = tracing_subscriber::registry().with(console.and_then(file)).with(filter).try_init();
 }
 
@@ -293,6 +346,33 @@ mod tests {
         assert_eq!(utc_millis_text(1_794_386_668_529), "2026-11-11 08:44:28.529Z");
         // a leap day
         assert_eq!(utc_millis_text(951_782_400_000), "2000-02-29 00:00:00.000Z");
+    }
+
+    /// Audit round 4 R4-L-7: a console write that fails (a closed pipe) is not an error to the subscriber, and the console is
+    /// not written again after it (the warning waits for the log file when none is attached yet).
+    #[test]
+    fn a_failing_console_is_dropped_after_its_first_error() {
+        struct Broken(usize);
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the pipe is being closed"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let was = CONSOLE_FAILED.swap(false, Ordering::Relaxed);
+        let mut b = Broken(0);
+        assert_eq!(console_write(&mut b, b"one\n"), 4, "no error for the subscriber");
+        assert_eq!(console_write(&mut b, b"two\n"), 4);
+        assert_eq!(b.0, 1, "not written again after the first failure");
+        assert!(CONSOLE_FAILED.load(Ordering::Relaxed));
+        if FILE.lock().unwrap().is_none() {
+            let w = CONSOLE_WARNING.lock().unwrap().take().expect("kept for the log file");
+            assert!(w.contains(" WARN the console stopped taking the log (the pipe is being closed)"), "{w}");
+        }
+        CONSOLE_FAILED.store(was, Ordering::Relaxed);
     }
 
     #[test]

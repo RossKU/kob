@@ -20,6 +20,11 @@ fn silent_node() -> (u16, std::thread::JoinHandle<()>) {
 }
 
 fn run(dir: &std::path::Path, port: u16, extra: &[&str]) -> Child {
+    run_to(dir, port, extra, Stdio::piped(), Stdio::piped())
+}
+
+/// [`run`] with the console on `out` and `err`.
+fn run_to(dir: &std::path::Path, port: u16, extra: &[&str], out: Stdio, err: Stdio) -> Child {
     let key = dir.join("operator.key");
     if !key.exists() {
         // a throwaway key, never funded (readable by its owner only: the executor refuses a key file others can read)
@@ -34,8 +39,8 @@ fn run(dir: &std::path::Path, port: u16, extra: &[&str]) -> Child {
         .arg(&key)
         .args(extra)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(out)
+        .stderr(err)
         .spawn()
         .unwrap()
 }
@@ -148,4 +153,37 @@ fn withdraw_without_a_configuration_or_with_a_bad_amount_sends_nothing() {
         .unwrap();
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("--amount"), "{}", String::from_utf8_lossy(&o.stderr));
+}
+
+/// Audit round 4 R4-L-7: a console that stops taking the log (a closed pipe: `kobd --executor 2>&1 | tee x` after `tee`
+/// ended) never takes the executor down. stdout and stderr are one pipe whose reading end is closed before the start: every
+/// console write fails. tracing-subscriber reports a failed write with `eprintln!` (fmt_layer.rs), which panics when stderr
+/// fails too: before the fix the process died at its first log line. Now the console is dropped after the first failure,
+/// with one warning in the log file, and the executor goes on logging there.
+#[test]
+fn a_closed_console_pipe_never_takes_the_executor_down() {
+    let (port, _node) = silent_node();
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("kobd.log");
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let mut child =
+        run_to(dir.path(), port, &["--log-file", log.to_str().unwrap()], writer.try_clone().unwrap().into(), writer.into());
+    let t0 = Instant::now();
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("the console stopped taking the log") && text.contains("starting the executor") {
+            break;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("the executor ended ({status}) with its console closed; the log file: {text:?}");
+        }
+        assert!(t0.elapsed() < Duration::from_secs(60), "timed out; the log file: {text:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(child.try_wait().unwrap(), None, "still running");
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(text.matches("the console stopped taking the log").count(), 1, "one warning: {text}");
+    let _ = child.kill();
+    let _ = child.wait();
 }

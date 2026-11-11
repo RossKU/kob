@@ -476,9 +476,14 @@ container once, then the container runs what it wrote:
 docker build -f crates/kobd/Dockerfile --build-arg NETWORK=mainnet -t kobd:mainnet .      # or NETWORK=testnet-10
 sudo install -d -o 10001 -g 10001 -m 0700 /srv/kob
 docker run -it --rm --network host -v /srv/kob:/data kobd:mainnet setup --no-start
-docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kobd:mainnet
+docker run -d --name kob --restart unless-stopped --network host --log-opt max-size=10m --log-opt max-file=3 \
+  -v /srv/kob:/data kobd:mainnet
 docker logs -f kob                                                       # the status lines
 ```
+
+`--log-opt max-size=10m --log-opt max-file=3` caps what `docker logs` keeps at about 30 MB: the log always reaches the console
+(a status line every 10 s at least), and Docker's default `json-file` driver never rotates it on its own. A log file set in the
+configuration is a separate, rotated copy on the volume.
 
 `--network host` lets the container reach the node's loopback RPC and keeps the read API on the host's loopback. Pause with
 `touch /srv/kob/kob-pause` (as uid 10001 or root), stop with `docker stop kob`. No image is published: build it from
