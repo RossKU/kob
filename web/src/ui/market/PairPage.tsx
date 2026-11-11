@@ -371,7 +371,7 @@ export function PairPage(props: { base: string; quote: string }) {
         </Section>
       }
       chart={
-        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card">
+        <Section title={t(wide ? 'market.chart.title' : 'market.chart.titleTabs')} data-testid="chart-section" class="mkt-area-chart mkt-card">
           <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} {...(wide ? {} : { depth: depthChart })} />
           <p class="small muted" style="margin:6px 0 0" data-testid="pair-chart-note">{t('pair.chart.note', { base: baseInfo.ticker, quote: quoteInfo.ticker })}</p>
           {idleNote ? <p class="small muted" style="margin:4px 0 0" data-testid="pair-chart-idle">{idleNote}</p> : null}

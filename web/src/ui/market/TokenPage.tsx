@@ -417,7 +417,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         </Section>
       }
       chart={
-        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" until={keptMarketAt} /> : undefined}>
+        <Section title={t(wide ? 'market.chart.title' : 'market.chart.titleTabs')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" until={keptMarketAt} /> : undefined}>
           <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} {...(wide ? {} : { depth: depthChart })} />
         </Section>
       }

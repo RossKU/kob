@@ -267,6 +267,8 @@ export default {
   'market.stats.trades': '24h trades',
 
   'market.chart.title': 'Price',
+  // below 1200 px the panel holds the Price / Depth tabs: its title names both
+  'market.chart.titleTabs': 'Chart',
   'market.chart.interval': 'Candle interval',
   // the depth chart as a tab of the price panel (under 1200 px, where it has no panel of its own)
   'market.chart.view': 'Chart view',
