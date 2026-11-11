@@ -67,7 +67,7 @@ const catalogues: Record<string, string[]> = {
 };
 
 /** keys that are not finding codes: helpers used by issue-text.ts */
-const HELPER_PREFIXES = ['issues.fmt.', 'issues.where.', 'issues.term.', 'issues.dur.'];
+const HELPER_PREFIXES = ['issues.fmt.', 'issues.where.', 'issues.term.', 'issues.dur.', 'issues.last.'];
 
 describe('finding catalogues are found in the sources', () => {
   it('reads a plausible number of codes from every catalogue (a broken regex must not pass silently)', () => {

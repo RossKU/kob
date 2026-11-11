@@ -15,8 +15,8 @@ import {
   IOC_KILL_DAA, IOC_LIFE_DAA, MARKET_ACTIVATION_DAA, MARKET_AUCTION_DAA, SLIPPAGE_BPS, durationToDaa, expiryFor, secondsToNextMidnight, unixToDaaBound,
 } from '../daa';
 import {
-  checkAmount, checkCarrierRatio, checkFok, checkMinFill, checkNotional, checkPrice, checkPriceBand, checkSelfTrade, checkTimes, checkTip, crossingTouch, depthWithin,
-  estimateFills, referencePrice, touchPrice,
+  checkAmount, checkCarrierRatio, checkFok, checkMinFill, checkNotional, checkPrice, checkMarketBand, checkSelfTrade, checkTimes, checkTip, crossingTouch, depthWithin,
+  estimateFills, touchPrice,
 } from '../guards';
 import { bpsFloor, ceilDiv, fitsI64, roundToTick } from '../units';
 import {
@@ -209,7 +209,7 @@ function planLimit(env: PlanEnv, i: LimitIntent): OrderPlan {
   d.fills = i.side === 'buy' ? restingFills(env, i.amount, i.price, i.minFill, i.maxFills) : 1n;
   if (i.side === 'sell' && i.maxFills !== undefined) pre.push(issue('SIDE_INVALID', { side: 'sell' }, 'maxFills'));
 
-  pre.push(...checkPriceBand(referencePrice(env.book), i.side, i.price));
+  pre.push(...checkMarketBand(env.book, env.lastFillPrice, i.side, i.price));
   const x = future ? { crossing: false, touch: null } : crossingTouch(env.book, i.side, i.price, tip);
   if (x.crossing && x.touch !== null) {
     const policy = i.crossing ?? 'auction';
@@ -281,7 +281,7 @@ function planImmediate(env: PlanEnv, i: IocIntent | FokIntent): OrderPlan {
   d.expiryDaa = (future ? (requested as bigint) : env.clock.daa) + life;
   d.fills = 1n;
   d.notes.push(i.type === 'fok' ? 'fokAllOrNothing' : 'iocRemainderReturned');
-  pre.push(...checkPriceBand(referencePrice(env.book), i.side, i.price));
+  pre.push(...checkMarketBand(env.book, env.lastFillPrice, i.side, i.price));
   // FOK: the pre-check refuses what one transaction cannot fill (checkFok); an IOC fills what one transaction takes and returns the rest
   if (i.type === 'fok' || future) return place(env, d, pre);
   const facts = fillsFacts(env, i.side, i.amount, i.price, tip, 1n, 'ioc', pre);
@@ -516,7 +516,7 @@ function planSchedule(env: PlanEnv, i: TwapIntent | DcaIntent): OrderPlan {
     if (wanted !== undefined && wanted < slices) pre.push(issue('MAX_FILLS_INVALID', undefined, 'maxFills'));
     d.fills = wanted !== undefined && wanted >= slices ? wanted : slices;
   }
-  pre.push(...checkPriceBand(referencePrice(env.book), side, i.price));
+  pre.push(...checkMarketBand(env.book, env.lastFillPrice, side, i.price));
   return place(env, d, pre);
 }
 
@@ -553,7 +553,7 @@ function planDutch(env: PlanEnv, i: DutchIntent): OrderPlan {
   d.expectedPrice = i.price;
   d.fills = i.side === 'buy' ? restingFills(env, i.amount, i.priceEnd, i.minFill, i.maxFills) : 1n;
   d.notes.push('auction', i.side === 'sell' ? 'dutch' : 'rising');
-  pre.push(...checkPriceBand(referencePrice(env.book), i.side, i.priceEnd, 'priceEnd'));
+  pre.push(...checkMarketBand(env.book, env.lastFillPrice, i.side, i.priceEnd, 'priceEnd'));
   // a rising bid whose end crosses asks of the visible book: budgeted like a crossing limit buy (the asks within its end, 3 per transaction)
   if (i.side === 'buy' && !future && crossingTouch(env.book, 'buy', i.priceEnd, tip).crossing) return crossingBuy(env, d, i.amount, i.priceEnd, tip, i.minFill, i.maxFills, pre);
   return place(env, d, pre);

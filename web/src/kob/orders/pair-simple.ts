@@ -15,7 +15,7 @@ import type {
 import { SIMPLE_TYPES } from '../intent-simple';
 import type { Duration, ExpiryKind } from '../daa';
 import { MARKET_ACTIVATION_DAA, MARKET_AUCTION_DAA, SLIPPAGE_BPS, daaToUnix } from '../daa';
-import { checkAmount, checkFok, checkMinFill, checkPriceBand, checkSelfTrade, checkTimes, crossingTouch, depthWithin, referencePrice, touchPrice } from '../guards';
+import { checkAmount, checkFok, checkMinFill, checkMarketBand, checkSelfTrade, checkTimes, crossingTouch, depthWithin, touchPrice } from '../guards';
 import { ceilDiv, maxBig } from '../units';
 import { hasError, issue } from './common-issues';
 import { activationDaa, auctionBound, checkBps, checkFills, decaySlope, lifeDaa, positiveDuration, resolveLifetime } from './simple';
@@ -69,11 +69,13 @@ const blank = (side: 'sell' | 'buy', amount: bigint, price: bigint, tip: bigint,
 
 const BAND_CODES: Record<string, PairIssueCode> = { PRICE_AGGRESSIVE_VS_MARKET: 'PAIR_PRICE_AGGRESSIVE_VS_MARKET', PRICE_FAR_FROM_MARKET: 'PAIR_PRICE_FAR_FROM_MARKET' };
 
-/** The price-band warnings of the shared guard, against the pair book's reference (B per whole A), as pair codes. */
+/** The price-band warnings of the shared guard, against the pair book's reference (B per whole A; the last trade rate when the book is empty), as pair codes. */
 export function pairBand(env: PairPlanEnv, side: 'sell' | 'buy', price: bigint, field = 'price'): PlanIssue[] {
-  return checkPriceBand(referencePrice(env.book), side, price, field).map((i) =>
-    pairIssue(BAND_CODES[i.code] ?? 'PAIR_PRICE_FAR_FROM_MARKET', { ...(i.params ?? {}), ticker: env.pair.quote.ticker }, i.field),
-  );
+  return checkMarketBand(env.book, env.lastFillPrice, side, price, field).map((i) => {
+    const out = pairIssue(BAND_CODES[i.code] ?? 'PAIR_PRICE_FAR_FROM_MARKET', { ...(i.params ?? {}), ticker: env.pair.quote.ticker }, i.field);
+    if (i.params?.basis === 'last') out.message = out.message.replace('the pair market', 'the last trade rate of the pair');
+    return out;
+  });
 }
 
 // ------------------------------------------------------------------------------------------------ the common tail

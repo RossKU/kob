@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BookView, Clock, OwnOrderRef } from './plan-types';
 import {
-  QUOTE_LIMIT, assessFok, checkAmount, checkCarrierRatio, checkFok, checkMinFill, checkNotional, checkPrice, checkPriceBand, checkSelfTrade, checkTimes, checkTip,
+  QUOTE_LIMIT, assessFok, checkAmount, checkCarrierRatio, checkFok, checkMarketBand, checkMinFill, checkNotional, checkPrice, checkPriceBand, checkSelfTrade, checkTimes, checkTip,
   crosses, crossingTouch, depthWithin, estimateFills, firmReferencePrice, referencePrice, touchPrice,
 } from './guards';
 import { CLOCK, bookOrder, level, market3x3, market8x8, marketKron } from '../testing/fixtures';
@@ -323,6 +323,28 @@ describe('field checks', () => {
     expect(codes(checkTimes(c, { activeFrom: c.daa + 1000n, expiryDaa: c.daa + 1000n }))).toEqual(['ACTIVE_AFTER_EXPIRY']);
     const past = checkTimes(c, { activeFrom: 0n, expiryDaa: c.daa + 100n, requestedActiveFrom: c.daa - 5n });
     expect(past.map((i) => [i.code, i.severity])).toEqual([['ACTIVE_IN_PAST', 'info']]);
+  });
+
+  it('market band: the book reference first (one-sided too), the last trade price only when the book is empty, nothing without either', () => {
+    const both: BookView = { asks: [level(1_100n, 1n)], bids: [level(900n, 1n)] };
+    // the book wins over the last trade (reference 1000): 1500 is 50% away from it
+    expect(codes(checkMarketBand(both, 100n, 'sell', 1_500n))).toEqual(['PRICE_FAR_FROM_MARKET']);
+    expect(checkMarketBand(both, 100n, 'sell', 1_500n)[0].params).not.toHaveProperty('basis');
+    // one side only: still the book, as before
+    expect(codes(checkMarketBand({ asks: [level(1_000n, 1n)], bids: [] }, 5n, 'sell', 800n))).toEqual(['PRICE_AGGRESSIVE_VS_MARKET']);
+    // empty book: the last trade, same thresholds, the finding says so
+    const empty: BookView = { asks: [], bids: [] };
+    const through = checkMarketBand(empty, 1_000n, 'sell', 900n);
+    expect(codes(through)).toEqual(['PRICE_AGGRESSIVE_VS_MARKET']);
+    expect(through[0].params).toMatchObject({ percent: '10', reference: 1_000n, basis: 'last' });
+    expect(through[0].message).toContain('the last trade price');
+    expect(issueText(through[0], {})).toBe('Your price is 10% through the last trade price (0.00001 KAS). Check for a typing error.');
+    expect(codes(checkMarketBand(empty, 1_000n, 'buy', 1_500n))).toEqual(['PRICE_AGGRESSIVE_VS_MARKET']);
+    expect(codes(checkMarketBand(empty, 1_000n, 'buy', 500n))).toEqual(['PRICE_FAR_FROM_MARKET']);
+    expect(issueText(checkMarketBand(empty, 1_000n, 'buy', 500n)[0], {})).toContain('50% from the last trade price');
+    expect(checkMarketBand(empty, 1_000n, 'sell', 950n)).toEqual([]);
+    expect(checkMarketBand(empty, null, 'sell', 1n)).toEqual([]);
+    expect(checkMarketBand(empty, undefined, 'sell', 1n)).toEqual([]);
   });
 
   it('price band: warns far through the market and far away, silent near it or without a reference', () => {

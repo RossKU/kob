@@ -262,7 +262,9 @@ function displayParams(code: string, issue: Pick<IssueLike, 'message' | 'params'
  * "N base units"; `input` / `output` / `field` / `path` of the finding are merged into the params.
  */
 export function issueText(issue: IssueLike, ctx: IssueTextContext = {}): string {
-  const key = `issues.${issue.code}`;
+  // the price-band findings against the last trade price (an empty book) have their own sentence: `issues.last.<code>`
+  const base = `issues.${issue.code}`;
+  const key = issue.params?.basis === 'last' && has(`issues.last.${issue.code}`) ? `issues.last.${issue.code}` : base;
   if (!has(key)) return issue.message;
   // a raw builder / node text is replaced by a plain sentence (the UI shows the raw text behind "Details", kit RawDetails)
   return t(key, displayParams(issue.code, withoutRaw(issue), ctx));

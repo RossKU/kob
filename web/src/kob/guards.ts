@@ -407,16 +407,35 @@ export function checkTimes(clock: Clock, t: { activeFrom: bigint; expiryDaa: big
 export const PRICE_THROUGH_BPS = 1_000n;
 export const PRICE_AWAY_BPS = 5_000n;
 
-export function checkPriceBand(reference: bigint | null, side: 'sell' | 'buy', price: bigint, field = 'price'): PlanIssue[] {
+/**
+ * `basis` 'last' says the reference is the last trade price, not the book's (an empty book): the finding then carries `basis: 'last'` (the sentence
+ * names the last trade, i18n `issues.last.<code>`) and its English fallback text reads "the last trade price".
+ */
+export function checkPriceBand(reference: bigint | null, side: 'sell' | 'buy', price: bigint, field = 'price', basis: 'book' | 'last' = 'book'): PlanIssue[] {
   if (reference === null || reference <= 0n) return [];
   const through = side === 'sell' ? reference - price : price - reference;
   const pct = (bps: bigint): string => formatUnits(bps, 2, { maxFraction: 1 });
+  const make = (code: 'PRICE_AGGRESSIVE_VS_MARKET' | 'PRICE_FAR_FROM_MARKET', bps: bigint): PlanIssue[] => {
+    const i = issue(code, basis === 'last' ? { percent: pct(bps), reference, basis } : { percent: pct(bps), reference }, field);
+    if (basis === 'last') i.message = i.message.replace('the market', 'the last trade price');
+    return [i];
+  };
   if (through > 0n) {
     const bps = (through * BPS) / reference;
-    return bps >= PRICE_THROUGH_BPS ? [issue('PRICE_AGGRESSIVE_VS_MARKET', { percent: pct(bps), reference }, field)] : [];
+    return bps >= PRICE_THROUGH_BPS ? make('PRICE_AGGRESSIVE_VS_MARKET', bps) : [];
   }
   const bps = (-through * BPS) / reference;
-  return bps >= PRICE_AWAY_BPS ? [issue('PRICE_FAR_FROM_MARKET', { percent: pct(bps), reference }, field)] : [];
+  return bps >= PRICE_AWAY_BPS ? make('PRICE_FAR_FROM_MARKET', bps) : [];
+}
+
+/**
+ * The price-band warnings of an order against its market: the book's reference (`referencePrice`: the midpoint, or the one side that exists) and,
+ * only when the book gives none (it is empty), the last trade price (`lastFill`, the newest fill of the indexer's trades). No reference at all: no warning.
+ */
+export function checkMarketBand(book: BookView, lastFill: bigint | null | undefined, side: 'sell' | 'buy', price: bigint, field = 'price'): PlanIssue[] {
+  const ref = referencePrice(book);
+  if (ref !== null && ref > 0n) return checkPriceBand(ref, side, price, field);
+  return checkPriceBand(lastFill ?? null, side, price, field, 'last');
 }
 
 /** Lines of the KAS a bid holds to pay for its fills, not to carry anything: the escrow and the reserve. */

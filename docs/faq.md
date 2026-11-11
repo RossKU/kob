@@ -133,5 +133,6 @@ Pinned to commit [`47792a0e`](https://github.com/RossKU/kob/tree/47792a0eba552e0
 - **The ticket warns before you sign.** A sell priced 10% or more below the market, or a buy 10% or more above it, shows "check for a
   typing error" ([`guards.ts` L403-L420](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/guards.ts#L403-L420),
   [`common-issues.ts` L55](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/orders/common-issues.ts#L55)). "The market" is the mid of the best bid and the best ask,
-  or the only side present ([`guards.ts` L32-L37](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/guards.ts#L32-L37)). On a book with no orders at all there is
-  nothing to compare with, so no warning shows yet.
+  or the only side present ([`guards.ts` L32-L37](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/guards.ts#L32-L37)). On a book with no orders at all the last trade
+  price is the reference instead (the sentence then says "the last trade price"), with the same 10% and 50% thresholds. With no orders and
+  no trade there is nothing to compare with, so no warning shows.

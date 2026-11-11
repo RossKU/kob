@@ -136,6 +136,15 @@ describe('KobPair: the crossing policy against the pair book (B prices, the KAS 
     expect(codes(tipped)).not.toContain('PAIR_MARKETABLE_AUCTION');
   });
 
+  it('price bands on an empty pair book use the last trade rate and say so', () => {
+    const env = makePairEnv({ book: { asks: [], bids: [] }, lastFillPrice: 1_500n });
+    const p = plan(env, { type: 'limit', side: 'buy', amount: 4_000n, price: 700n });
+    const f = p.issues.find((i) => i.code === 'PAIR_PRICE_FAR_FROM_MARKET')!;
+    expect(f.params).toMatchObject({ ticker: 'BBB', basis: 'last', reference: 1_500n });
+    expect(f.message).toContain('the last trade rate of the pair');
+    expect(codes(plan(makePairEnv({ book: { asks: [], bids: [] } }), { type: 'limit', side: 'buy', amount: 4_000n, price: 700n }))).not.toContain('PAIR_PRICE_FAR_FROM_MARKET');
+  });
+
   it('price bands warn in B (pair codes), with the quote ticker', () => {
     const p = pairValid(makePairEnv(), { type: 'limit', side: 'buy', amount: 4_000n, price: 700n });
     expect(codes(p)).toContain('PAIR_PRICE_FAR_FROM_MARKET');

@@ -58,6 +58,9 @@ export default {
   'issues.MARKETABLE_REJECTED': 'Your limit crosses the market at {touch}.',
   'issues.PRICE_AGGRESSIVE_VS_MARKET': 'Your price is {percent}% through the market ({reference}). Check for a typing error.',
   'issues.PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the market ({reference}): unlikely to fill soon.',
+  // the book is empty: the reference is the last trade price (finding param basis = 'last')
+  'issues.last.PRICE_AGGRESSIVE_VS_MARKET': 'Your price is {percent}% through the last trade price ({reference}). Check for a typing error.',
+  'issues.last.PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the last trade price ({reference}): unlikely to fill soon.',
   'issues.GUARDS_UNAVAILABLE': "Could not read the token's guard data; try again in a moment.",
   'issues.MARKET_REFERENCE_DIVERGES': 'The book shows {reference} per token, the last fill {lastFill} ({percent}% apart), both from the indexer: check the price before signing.',
   'issues.MARKET_REFERENCE_SOURCE': 'Reference: {reference} per token (book checked against the node); worst fill {worst} per token.',
@@ -329,6 +332,8 @@ export default {
   'issues.PAIR_MARKETABLE_REJECTED': 'Your limit crosses the pair book at {touch} {ticker} per token (you chose Refuse).',
   'issues.PAIR_PRICE_AGGRESSIVE_VS_MARKET': 'Your price is {percent}% through the pair market ({reference} {ticker} per token): check for a typing error.',
   'issues.PAIR_PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the pair market ({reference} {ticker} per token): unlikely to fill soon.',
+  'issues.last.PAIR_PRICE_AGGRESSIVE_VS_MARKET': 'Your price is {percent}% through the last trade rate of the pair ({reference} {ticker} per token): check for a typing error.',
+  'issues.last.PAIR_PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the last trade rate of the pair ({reference} {ticker} per token): unlikely to fill soon.',
   'issues.PAIR_MARKET_REFERENCE_SOURCE': 'Reference: {reference} {ticker} per token (indexer pair book); worst fill {worst} {ticker} per token.',
   'issues.PAIR_MARKET_REFERENCE_DIVERGES': 'The pair book shows {reference} {ticker} per token, the last KAS trades imply {lastFill} ({percent}% apart), both from the indexer: check the price before signing.',
   'issues.PAIR_INSUFFICIENT_TOKENS': 'Not enough {ticker}: needs {needed}, you hold {have} (short {shortfall}).',

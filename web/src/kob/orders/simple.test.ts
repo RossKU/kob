@@ -403,6 +403,16 @@ describe('market orders (matcher.md 10.2), golden cross-check on 3x3', () => {
     expect(bid(b).priceEnd).toBe('252500000');
   });
 
+  it('an empty book falls back to the last trade price for the typing-error warning; without a last trade nothing warns', () => {
+    const empty = { asks: [], bids: [] };
+    const i = { type: 'limit', side: 'sell', price: 100_000_000n, amount: 3n * TOK } as const;
+    const warned = planSimple(makeEnv({ book: empty }), i).issues;
+    expect(warned.map((x) => x.code)).not.toContain('PRICE_AGGRESSIVE_VS_MARKET');
+    const withLast = planSimple({ ...makeEnv({ book: empty }), lastFillPrice: 250_000_000n }, i).issues;
+    expect(withLast.map((x) => x.code)).toContain('PRICE_AGGRESSIVE_VS_MARKET');
+    expect(withLast.find((x) => x.code === 'PRICE_AGGRESSIVE_VS_MARKET')!.params).toMatchObject({ basis: 'last', reference: 250_000_000n });
+  });
+
   it('needs liquidity on the opposite side and a sane slippage', () => {
     const empty = makeEnv({ book: { asks: [], bids: [] } });
     expect(planSimple(empty, { type: 'market', side: 'sell', amount: TOK }).issues.map((i) => i.code)).toEqual(['NO_LIQUIDITY']);
