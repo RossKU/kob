@@ -74,8 +74,8 @@ export default defineConfig({
         ]),
     target === 'app'
       ? {
-          // build first: preview serves dist/, and a stale dist silently tests old code (KOB_E2E_NO_BUILD=1 skips it)
-          command: `${process.env.KOB_E2E_NO_BUILD ? '' : 'npm run build && '}npm run preview -- --port ${APP_PORT} --strictPort --host 127.0.0.1`,
+          // build first: preview serves dist/, and a stale dist silently tests old code (KOB_E2E_NO_BUILD=1 skips it; KOB_DIST=<dir> serves a build made with `vite build --outDir <dir> --emptyOutDir` instead, so parallel agents do not overwrite one dist/)
+          command: `${process.env.KOB_E2E_NO_BUILD ? '' : 'npm run build && '}npm run preview -- --port ${APP_PORT} --strictPort --host 127.0.0.1${process.env.KOB_DIST ? ` --outDir ${process.env.KOB_DIST}` : ''}`,
           url: baseURL,
           reuseExistingServer: !process.env.CI,
           timeout: 180_000,
