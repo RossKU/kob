@@ -10,10 +10,11 @@ export interface KnownWallet {
   installUrl: string;
 }
 
+// the install links are each project's own page, read on 2026-11-11 (kaspa.org/wallets/ is gone: 404): KasWare's site, Kaspire's site (its Web Store and APK links), Kastle's site (Forbole)
 export const KNOWN_WALLETS: readonly KnownWallet[] = [
   { id: 'kasware', label: 'KasWare', installUrl: 'https://www.kasware.xyz/' },
-  { id: 'kaspire', label: 'Kaspire', installUrl: 'https://kaspa.org/wallets/' },
-  { id: 'kastle', label: 'Kastle', installUrl: 'https://kaspa.org/wallets/' },
+  { id: 'kaspire', label: 'Kaspire', installUrl: 'https://kaspire.kaslab.space/' },
+  { id: 'kastle', label: 'Kastle', installUrl: 'https://kastle.cc/' },
 ];
 
 /** The wallets to offer for install: every known one that was not detected (Kastle only where it is switched on, `features.kastle`). */
