@@ -2,9 +2,13 @@
 // and the footer carries its NOTICE with a link to TradingView). The library is loaded on demand (its own chunk) so the rest of the app
 // does not pay for it; the panel keeps its size while it loads (skeleton) and when there is nothing to draw (empty state).
 //
-// Drawing tools (horizontal line, trend line, delete): the library has none, so they are a series primitive of its plugin API (chart-drawings-primitive.ts)
-// with the model and the browser storage in chart-drawings.ts. While a tool is on, a transparent layer over the plot area (the price and time axes stay
-// free) takes the clicks and taps; with no tool on, there is no layer and the chart pans and zooms as before. Drawings stay in this browser, per market.
+// Drawing tools (horizontal line, trend line, extended line, box, recolour, delete): the library has none, so they are a series primitive of its plugin API
+// (chart-drawings-primitive.ts) with the model and the browser storage in chart-drawings.ts. While a tool is on, a transparent layer over the plot area (the
+// price and time axes stay free) takes the clicks and taps; with no tool on, there is no layer and the chart pans and zooms as before. Drawings stay in this
+// browser, per market. The extended line is a tool of its own rather than a toggle: every tool is one pressed button that ends with the drawing it places, a
+// toggle would be a second kind of control (a state to read off the toolbar) and would let a drawing change kind. Colours: six swatches in the toolbar set the
+// colour of the NEXT drawing (remembered); the recolour tool, which works like the delete tool, gives the clicked drawing the selected colour. A click on a
+// drawing with no tool on cannot select it: there is no layer then, and the plot belongs to the chart's pan and zoom.
 //
 // Depth tab (under 1200 px, where the depth chart has no panel of its own: market.css): the page hands the depth chart in as `depth` and the panel's header gets a
 // "Price | Depth" switch, remembered in this browser. The price chart is only hidden behind the depth chart (visibility, its box keeps its size), never unmounted, so its
@@ -24,14 +28,15 @@ import { basisOf, chartSeries, fillCandleGaps, INTERVAL_MS, parseCandles, priceT
 import { flippedChartSeries } from './orientation';
 import { ratioCandles, ratioSeries, usdText } from './usd-model';
 import { pairRatioCandles } from './pair-market';
-import { DrawingsPrimitive, PICK_MOUSE, PICK_TOUCH } from './chart-drawings-primitive';
-import { drawingsMarket, loadDrawings, MAX_DRAWINGS, newDrawingId, saveDrawings, type Anchor, type Drawing } from './chart-drawings';
+import { DrawingsPrimitive, PICK_MOUSE, PICK_TOUCH, type DrawingColors } from './chart-drawings-primitive';
+import { COLOR_TOKEN, DEFAULT_COLOR, DRAWING_COLORS, drawingsMarket, isDrawingColor, loadDrawings, MAX_DRAWINGS, newDrawingId, saveDrawings, type Anchor, type Drawing, type DrawingColor } from './chart-drawings';
 
 type Lw = typeof import('lightweight-charts');
 let lwPromise: Promise<Lw> | null = null;
 const loadLw = (): Promise<Lw> => (lwPromise ??= import('lightweight-charts'));
 
 const INTERVAL_KEY = 'kob.chart.interval';
+const COLOR_KEY = 'kob.chart.draw.color';
 const VIEW_KEY = 'kob.chart.view';
 type View = 'price' | 'depth';
 
@@ -42,6 +47,16 @@ function storedView(): View {
     /* no storage */
   }
   return 'price';
+}
+
+function storedColor(): DrawingColor {
+  try {
+    const v = localStorage.getItem(COLOR_KEY);
+    if (isDrawingColor(v)) return v;
+  } catch {
+    /* no storage */
+  }
+  return DEFAULT_COLOR;
 }
 
 function storedInterval(): CandleInterval {
@@ -82,13 +97,22 @@ function palette() {
 
 const localeOf = () => 'en-US';
 
-/** The drawings' colours, from the theme's tokens: a subtle default line, the delete tool's hot colour, and the surface for the price tag's text and the dots. */
-function drawingColors() {
-  const muted = cssVar('--muted', '#b2b2b2');
-  return { line: alpha(muted.startsWith('#') ? muted : '#8b94a3', 0.85), hot: cssVar('--sell', '#f6465d'), surface: cssVar('--surface', '#141414') };
+/** Last-resort values of the swatches' tokens (as in styles.css, dark theme), for a page where the tokens are not there. */
+const SWATCH_FALLBACK: Record<DrawingColor, string> = { muted: '#b2b2b2', buy: '#2ebd85', sell: '#f6465d', info: '#79b4ff', warn: '#f2b350', accent: '#b48cf0' };
+
+/** The drawings' colours, from the theme's tokens: the swatches, the delete tool's hot colour, and the surface for the price tag's text and the dots. */
+function drawingColors(): DrawingColors {
+  const paint = Object.fromEntries(DRAWING_COLORS.map((c) => [c, cssVar(COLOR_TOKEN[c], SWATCH_FALLBACK[c])])) as Record<DrawingColor, string>;
+  // the default grey stays a little soft, as the tools always drew it
+  if (paint.muted.startsWith('#')) paint.muted = alpha(paint.muted, 0.85);
+  return { swatch: (c) => paint[c], hot: cssVar('--sell', '#f6465d'), surface: cssVar('--surface', '#141414') };
 }
 
-type Tool = 'hline' | 'trend' | 'erase';
+type Tool = 'hline' | 'trend' | 'xline' | 'box' | 'paint' | 'erase';
+/** The tools that place a drawing with two clicks (the first point, then the second). */
+type TwoPoint = 'trend' | 'xline' | 'box';
+const isTwoPoint = (t: Tool | null): t is TwoPoint => t === 'trend' || t === 'xline' || t === 'box';
+const TOOLS: readonly Tool[] = ['hline', 'trend', 'xline', 'box', 'paint', 'erase'];
 
 function timeText(sec: number, interval: CandleInterval, withDate: boolean): string {
   const d = new Date(sec * 1000);
@@ -338,6 +362,15 @@ export function PriceChart(props: PriceChartProps) {
   const loadedFor = useRef(storeKey);
   const [tool, setTool] = useState<Tool | null>(null);
   const [pending, setPending] = useState<Anchor | null>(null);
+  const [color, setColorState] = useState<DrawingColor>(storedColor);
+  const setColor = (c: DrawingColor) => {
+    setColorState(c);
+    try {
+      localStorage.setItem(COLOR_KEY, c);
+    } catch {
+      /* no storage */
+    }
+  };
   const [inset, setInset] = useState({ r: 0, b: 0 });
   const pointer = useRef('mouse');
   // another market (or network, or orientation): its own drawings
@@ -359,14 +392,17 @@ export function PriceChart(props: PriceChartProps) {
   const ready = state === 'ready' && libReady;
   const toolOn = ready ? tool : null;
   useEffect(() => {
-    chartRef.current?.drawings.set({ drawings, overlay: { pending: toolOn === 'trend' ? pending : null, cursor: null, hover: null } });
-  }, [libReady, drawings, pending, toolOn]);
+    chartRef.current?.drawings.set({
+      drawings,
+      overlay: { pending: isTwoPoint(toolOn) ? pending : null, pendingKind: isTwoPoint(toolOn) ? toolOn : 'trend', cursor: null, color, hover: null, hoverColor: toolOn === 'paint' ? color : null },
+    });
+  }, [libReady, drawings, pending, toolOn, color]);
   // the bar grid the drawings' times are placed on: the first bar's time and the interval
   useEffect(() => {
     const b = series.bars;
     chartRef.current?.drawings.set({ grid: b.length ? { t0: b[0]!.time, step: INTERVAL_MS[interval] / 1000 } : null });
   }, [libReady, series, interval]);
-  // Esc: first drops a trend line's first point, then leaves the tool
+  // Esc: first drops the first point of a two-point drawing, then leaves the tool
   useEffect(() => {
     if (!toolOn) return;
     const onKey = (e: KeyboardEvent) => {
@@ -402,25 +438,27 @@ export function PriceChart(props: PriceChartProps) {
     if (!prim || !toolOn) return;
     const { x, y } = layerPoint(e);
     const list = drawingsRef.current;
-    if (toolOn === 'erase') {
+    if (toolOn === 'erase' || toolOn === 'paint') {
       const id = prim.pick(x, y, pointer.current === 'mouse' ? PICK_MOUSE : PICK_TOUCH);
-      if (id) {
+      if (id && toolOn === 'erase') {
         commit(list.filter((d) => d.id !== id));
         prim.set({ overlay: { hover: null } });
+      } else if (id) {
+        commit(list.map((d) => (d.id === id && d.color !== color ? { ...d, color } : d)));
       }
       return;
     }
     const a = prim.anchorAt(x, y);
     if (!a || list.length >= MAX_DRAWINGS) return;
     if (toolOn === 'hline') {
-      commit([...list, { id: newDrawingId(list.map((d) => d.id)), kind: 'hline', price: a.price }]);
+      commit([...list, { id: newDrawingId(list.map((d) => d.id)), color, kind: 'hline', price: a.price }]);
       setTool(null);
     } else if (!pending) {
       setPending(a);
     } else {
       const p0 = prim.px(pending);
-      if (p0 && Math.hypot(p0.x - x, p0.y - y) < 4) return; // two points on one spot make no line
-      commit([...list, { id: newDrawingId(list.map((d) => d.id)), kind: 'trend', a: pending, b: a }]);
+      if (p0 && Math.hypot(p0.x - x, p0.y - y) < 4) return; // two points on one spot make no line (and no box)
+      commit([...list, { id: newDrawingId(list.map((d) => d.id)), color, kind: toolOn, a: pending, b: a }]);
       setPending(null);
       setTool(null);
     }
@@ -430,12 +468,17 @@ export function PriceChart(props: PriceChartProps) {
     const prim = chartRef.current?.drawings;
     if (!prim || e.pointerType !== 'mouse') return;
     const { x, y } = layerPoint(e);
-    if (toolOn === 'erase') prim.set({ overlay: { hover: prim.pick(x, y, PICK_MOUSE) } });
-    else if (toolOn === 'trend' && pending) prim.set({ overlay: { cursor: prim.anchorAt(x, y) } });
+    if (toolOn === 'erase' || toolOn === 'paint') prim.set({ overlay: { hover: prim.pick(x, y, PICK_MOUSE) } });
+    else if (isTwoPoint(toolOn) && pending) prim.set({ overlay: { cursor: prim.anchorAt(x, y) } });
   };
   const onLayerLeave = () => chartRef.current?.drawings.set({ overlay: { cursor: null, hover: null } });
-  const hint = !toolOn ? '' : full && toolOn !== 'erase' ? t('market.chart.draw.full', { max: MAX_DRAWINGS }) : t(toolOn === 'trend' ? (pending ? 'market.chart.draw.hint.trend2' : 'market.chart.draw.hint.trend1') : `market.chart.draw.hint.${toolOn}`);
+  const hint = !toolOn ? '' : full && toolOn !== 'erase' ? t('market.chart.draw.full', { max: MAX_DRAWINGS }) : t(isTwoPoint(toolOn) ? `market.chart.draw.hint.${toolOn}${pending ? 2 : 1}` : `market.chart.draw.hint.${toolOn}`);
   const priceTxt = (n: number) => n.toFixed(props.dp);
+  const listText = (d: Drawing): string => {
+    const colorName = t(`market.chart.draw.color.${d.color}`);
+    if (d.kind === 'hline') return t('market.chart.draw.listHline', { price: priceTxt(d.price), color: colorName });
+    return t(d.kind === 'trend' ? 'market.chart.draw.listTrend' : d.kind === 'xline' ? 'market.chart.draw.listXline' : 'market.chart.draw.listBox', { from: priceTxt(d.a.price), to: priceTxt(d.b.price), color: colorName });
+  };
 
   const shown = legend ?? legendOf.current(series.bars.length - 1);
 
@@ -462,16 +505,35 @@ export function PriceChart(props: PriceChartProps) {
           ))}
         </div>
         <div class="chart-tools chart-price-only" role="group" aria-label={t('market.chart.draw.tools')} title={t('market.chart.draw.local')} data-testid="chart-tools">
-          {(['hline', 'trend', 'erase'] as const).map((k) => (
+          {TOOLS.map((k) => (
             <button key={k} type="button" disabled={!ready} aria-pressed={toolOn === k ? 'true' : 'false'} aria-label={t(`market.chart.draw.${k}`)} title={`${t(`market.chart.draw.${k}`)}. ${t('market.chart.draw.local')}`} data-testid={`draw-${k}`} onClick={() => pickTool(k)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                {k === 'hline' ? <path d="M3 12h18" /> : k === 'trend' ? <><path d="M5 18L19 6" /><circle cx="5" cy="18" r="1.6" /><circle cx="19" cy="6" r="1.6" /></> : <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" />}
+                {k === 'hline' ? (
+                  <path d="M3 12h18" />
+                ) : k === 'trend' ? (
+                  <><path d="M5 18L19 6" /><circle cx="5" cy="18" r="1.6" /><circle cx="19" cy="6" r="1.6" /></>
+                ) : k === 'xline' ? (
+                  <><path d="M2 20L22 4" /><circle cx="8" cy="15.2" r="1.6" /><circle cx="16" cy="8.8" r="1.6" /></>
+                ) : k === 'box' ? (
+                  <rect x="4.5" y="7" width="15" height="10" rx="1" fill="currentColor" fill-opacity="0.16" />
+                ) : k === 'paint' ? (
+                  <path d="M12 3.5s6 6.2 6 10.3a6 6 0 0 1-12 0C6 9.7 12 3.5 12 3.5z" />
+                ) : (
+                  <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" />
+                )}
               </svg>
             </button>
           ))}
           <button type="button" disabled={!ready || drawings.length === 0} aria-label={t('market.chart.draw.clear')} title={`${t('market.chart.draw.clear')}. ${t('market.chart.draw.local')}`} data-testid="draw-clear" onClick={() => { setPending(null); commit([]); }}>
             {t('market.chart.draw.clearShort')}
           </button>
+        </div>
+        <div class="chart-swatches chart-price-only" role="group" aria-label={t('market.chart.draw.colors')} data-testid="chart-swatches">
+          {DRAWING_COLORS.map((c) => (
+            <button key={c} type="button" class="chart-sw" data-color={c} aria-pressed={color === c ? 'true' : 'false'} aria-label={t(`market.chart.draw.color.${c}`)} title={`${t(`market.chart.draw.color.${c}`)}. ${t('market.chart.draw.colorHint')}`} data-testid={`draw-color-${c}`} onClick={() => setColor(c)}>
+              <i aria-hidden="true" />
+            </button>
+          ))}
         </div>
         <span class="small muted chart-price-only" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' })}</span>
       </div>
@@ -482,7 +544,7 @@ export function PriceChart(props: PriceChartProps) {
           {drawings.length ? (
             <ul class="sr-only" aria-label={t('market.chart.draw.list')} data-testid="chart-draw-list">
               {drawings.map((d) => (
-                <li key={d.id} data-kind={d.kind}>{d.kind === 'hline' ? t('market.chart.draw.listHline', { price: priceTxt(d.price) }) : t('market.chart.draw.listTrend', { from: priceTxt(d.a.price), to: priceTxt(d.b.price) })}</li>
+                <li key={d.id} data-kind={d.kind} data-color={d.color}>{listText(d)}</li>
               ))}
             </ul>
           ) : null}

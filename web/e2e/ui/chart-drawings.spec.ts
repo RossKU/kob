@@ -1,5 +1,6 @@
-// Drawing tools on the market page's price chart (a horizontal line, a trend line, delete, clear all): placed with clicks, kept in this browser per
-// market and network (localStorage), restored after a reload, each market with its own, and usable on a phone by tapping. Lightweight Charts draws into
+// Drawing tools on the market page's price chart (a horizontal line, a trend line, an extended line, a box, recolour, delete, clear all, and six colour swatches
+// for the next drawing): placed with clicks, kept in this browser per market and network (localStorage) with their colours, restored after a reload, each market
+// with its own, and usable on a phone by tapping. Lightweight Charts draws into
 // canvases, so a drawing is read back through the chart's `data-drawings` count and the screen-reader list of the drawings (`chart-draw-list`).
 // Mock stack: the token page of EXKCC with a seeded history, and the EXKCC/EXUSD pair page for a second market.
 import { readFileSync } from 'node:fs';
@@ -54,16 +55,21 @@ async function drawHline(page: Page, fy: number): Promise<void> {
   await expect(layerOf(page)).toHaveCount(0); // a placed drawing ends its tool
 }
 
-async function drawTrend(page: Page, from: [number, number], to: [number, number]): Promise<void> {
-  await page.getByTestId('draw-trend').click();
+/** A two-click drawing (trend line, extended line, box) from one point of the plot to another, as fractions of the layer. */
+async function drawTwo(page: Page, tool: 'trend' | 'xline' | 'box', from: [number, number], to: [number, number]): Promise<void> {
+  await page.getByTestId(`draw-${tool}`).click();
   const a = await at(page, ...from);
   await page.mouse.click(a.x, a.y);
-  await expect(page.getByTestId('chart-draw-hint')).toContainText('second point');
+  await expect(page.getByTestId('chart-draw-hint')).toContainText(tool === 'box' ? 'opposite corner' : 'second point');
   const b = await at(page, ...to);
   await page.mouse.move(b.x - 20, b.y - 5);
   await page.mouse.click(b.x, b.y);
   await expect(layerOf(page)).toHaveCount(0);
 }
+
+const drawTrend = (page: Page, from: [number, number], to: [number, number]) => drawTwo(page, 'trend', from, to);
+const colorsOf = (page: Page) => listOf(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-color')));
+const kindsOf = (page: Page) => listOf(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-kind')));
 
 test.describe('desktop', () => {
   test.use({ viewport: { width: 1280, height: 900 } });
@@ -78,7 +84,7 @@ test.describe('desktop', () => {
     await expect(page.getByTestId('draw-clear')).toBeDisabled();
     // no tool on: no layer over the chart, the chart takes the pointer (pan and zoom)
     await expect(layerOf(page)).toHaveCount(0);
-    for (const id of ['draw-hline', 'draw-trend', 'draw-erase']) await expect(page.getByTestId(id)).toHaveAttribute('aria-pressed', 'false');
+    for (const id of ['draw-hline', 'draw-trend', 'draw-xline', 'draw-box', 'draw-paint', 'draw-erase']) await expect(page.getByTestId(id)).toHaveAttribute('aria-pressed', 'false');
     // the toolbar is not over the plot or its price axis, and says that drawings stay in this browser
     const tools = (await page.getByTestId('chart-tools').boundingBox())!;
     const box = (await page.locator('.chart-box').boundingBox())!;
@@ -186,7 +192,20 @@ test.describe('desktop', () => {
     await expect(chartOf(page)).toHaveAttribute('data-state', 'ready');
     await expect(page.getByTestId('draw-hline')).toHaveAccessibleName('Horizontal line');
     await expect(page.getByTestId('draw-trend')).toHaveAccessibleName('Trend line');
+    await expect(page.getByTestId('draw-xline')).toHaveAccessibleName('Extended line');
+    await expect(page.getByTestId('draw-box')).toHaveAccessibleName('Box');
+    await expect(page.getByTestId('draw-paint')).toHaveAccessibleName('Recolour a drawing');
     await expect(page.getByTestId('draw-erase')).toHaveAccessibleName('Delete a drawing');
+    // the swatches are a labelled group of toggle buttons, one pressed
+    await expect(page.getByTestId('chart-swatches')).toHaveAccessibleName('Drawing colour');
+    await expect(page.getByTestId('draw-color-muted')).toHaveAccessibleName('Grey');
+    await expect(page.getByTestId('draw-color-accent')).toHaveAccessibleName('Violet');
+    await expect(page.getByTestId('chart-swatches').locator('[aria-pressed="true"]')).toHaveCount(1);
+    await expect(page.getByTestId('draw-color-muted')).toHaveAttribute('aria-pressed', 'true');
+    await page.getByTestId('draw-color-buy').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('draw-color-buy')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('draw-color-muted')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('draw-clear')).toHaveAccessibleName('Clear all drawings');
     await page.getByTestId('draw-trend').focus();
     await page.keyboard.press('Enter');
@@ -199,6 +218,99 @@ test.describe('desktop', () => {
     await page.getByTestId('draw-erase').click();
     await expect(page.getByTestId('draw-trend')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('draw-erase')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('an extended line and a box are drawn in chosen colours, one is recoloured, the colours survive a reload, and both are deleted', async ({ appPage: page, mock }) => {
+    await mock.seedHistory({ hours: 48, trades: 600, seed: 7 });
+    await fund(mock);
+    const token = await openMarket(page, mock);
+    const chart = chartOf(page);
+    await expect(chart).toHaveAttribute('data-state', 'ready');
+    // the swatches sit in the toolbar, above the plot
+    const sw = (await page.getByTestId('chart-swatches').boundingBox())!;
+    const box = (await page.locator('.chart-box').boundingBox())!;
+    expect(sw.y + sw.height, 'swatches above the plot').toBeLessThanOrEqual(box.y + 1);
+    await expect(page.getByTestId('chart-swatches').getByRole('button')).toHaveCount(6);
+
+    // the swatch sets the colour of the NEXT drawing
+    await page.getByTestId('draw-color-info').click();
+    await expect(page.getByTestId('draw-color-info')).toHaveAttribute('aria-pressed', 'true');
+    await drawTwo(page, 'xline', [0.4, 0.8], [0.5, 0.7]);
+    await page.getByTestId('draw-color-warn').click();
+    await drawTwo(page, 'box', [0.3, 0.6], [0.7, 0.3]);
+    await expect(chart).toHaveAttribute('data-drawings', '2');
+    expect(await kindsOf(page)).toEqual(['xline', 'box']);
+    expect(await colorsOf(page)).toEqual(['info', 'warn']);
+    await expect(listOf(page).nth(0)).toContainText('Extended line from');
+    await expect(listOf(page).nth(1)).toContainText('Box from');
+
+    // Esc steps a two-point drawing back, as for the trend line
+    await page.getByTestId('draw-box').click();
+    const c1 = await at(page, 0.8, 0.8);
+    await page.mouse.click(c1.x, c1.y);
+    await expect(page.getByTestId('chart-draw-hint')).toContainText('opposite corner');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('chart-draw-hint')).toContainText('one corner');
+    await page.keyboard.press('Escape');
+    await expect(layerOf(page)).toHaveCount(0);
+    await expect(chart).toHaveAttribute('data-drawings', '2');
+
+    // recolour: pick a swatch, then click the box's outline (the extended line stays as it is)
+    await page.getByTestId('draw-color-sell').click();
+    await page.getByTestId('draw-paint').click();
+    await expect(page.getByTestId('draw-paint')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('chart-draw-hint')).toContainText('selected colour');
+    const edge = await at(page, 0.3, 0.45);
+    await page.mouse.click(edge.x, edge.y);
+    expect(await colorsOf(page)).toEqual(['info', 'sell']);
+    await page.keyboard.press('Escape');
+    await expect(layerOf(page)).toHaveCount(0);
+
+    // kept with their colours; the next-drawing swatch is remembered too
+    const stored = JSON.parse((await page.evaluate((k) => localStorage.getItem(k), STORE(token)))!);
+    expect(stored.items.map((d: { kind: string; color: string }) => [d.kind, d.color])).toEqual([['xline', 'info'], ['box', 'sell']]);
+    await page.reload();
+    await expect(chartOf(page)).toHaveAttribute('data-state', 'ready');
+    await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
+    expect(await colorsOf(page)).toEqual(['info', 'sell']);
+    expect(await kindsOf(page)).toEqual(['xline', 'box']);
+    await expect(page.getByTestId('draw-color-sell')).toHaveAttribute('aria-pressed', 'true');
+    // a theme change repaints with the same drawings and colours
+    await page.getByTestId('theme-toggle').click();
+    expect(await colorsOf(page)).toEqual(['info', 'sell']);
+
+    // delete: the extended line is hit far past its second point, along the whole visible line; the box inside its area
+    await page.getByTestId('draw-erase').click();
+    const lb = (await layerOf(page).boundingBox())!;
+    const p1 = { x: lb.x + lb.width * 0.4, y: lb.y + lb.height * 0.8 };
+    const p2 = { x: lb.x + lb.width * 0.5, y: lb.y + lb.height * 0.7 };
+    await page.mouse.click(p1.x + 4 * (p2.x - p1.x), p1.y + 4 * (p2.y - p1.y)); // four spans on: (0.8, 0.4), outside the box
+    await expect(chart).toHaveAttribute('data-drawings', '1');
+    expect(await kindsOf(page)).toEqual(['box']);
+    const off = await at(page, 0.9, 0.9); // nothing there
+    await page.mouse.click(off.x, off.y);
+    await expect(chart).toHaveAttribute('data-drawings', '1');
+    const inside = await at(page, 0.5, 0.45);
+    await page.mouse.click(inside.x, inside.y);
+    await expect(chart).toHaveAttribute('data-drawings', '0');
+    expect(await page.evaluate((k) => localStorage.getItem(k), STORE(token))).toBeNull();
+  });
+
+  test('drawings stored before colours existed come back in the default colour', async ({ appPage: page, mock }) => {
+    await mock.seedHistory({ hours: 48, trades: 600, seed: 7 });
+    await fund(mock);
+    const token = (await mock.token()).covenant_id;
+    const a = { time: 1_700_000_000, price: 0.024 };
+    const b = { time: 1_700_003_600, price: 0.026 };
+    await page.addInitScript(
+      ([k, items]) => localStorage.setItem(k as string, JSON.stringify({ v: 1, items })),
+      [STORE(token), [{ id: 'a', kind: 'hline', price: 0.025 }, { id: 'b', kind: 'trend', a, b }, { id: 'c', kind: 'hline', price: 0.02, color: 'javascript:1' }]],
+    );
+    await openMarket(page, mock);
+    await expect(chartOf(page)).toHaveAttribute('data-state', 'ready');
+    await expect(chartOf(page)).toHaveAttribute('data-drawings', '3');
+    expect(await colorsOf(page)).toEqual(['muted', 'muted', 'muted']);
+    await expect(page.getByTestId('draw-color-muted')).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('every market keeps its own drawings: the token market, its pair, and back', async ({ appPage: page, mock }) => {
@@ -276,6 +388,12 @@ test.describe('phone, 390 px wide, touch', () => {
     const box = (await page.locator('.chart-box').boundingBox())!;
     expect(tools.y + tools.height, 'toolbar above the plot').toBeLessThanOrEqual(box.y + 1);
     expect(tools.x + tools.width).toBeLessThanOrEqual(390);
+    // the swatches wrap below the tools when they do not fit beside them: inside the screen, above the plot, and a finger-sized target
+    const sw = (await page.getByTestId('chart-swatches').boundingBox())!;
+    expect(sw.x).toBeGreaterThanOrEqual(0);
+    expect(sw.x + sw.width).toBeLessThanOrEqual(390);
+    expect(sw.y + sw.height, 'swatches above the plot').toBeLessThanOrEqual(box.y + 1);
+    expect((await page.getByTestId('draw-color-sell').boundingBox())!.height).toBeGreaterThanOrEqual(30);
 
     await page.getByTestId('draw-hline').tap();
     await expect(layerOf(page)).toHaveCount(1);
@@ -295,13 +413,31 @@ test.describe('phone, 390 px wide, touch', () => {
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
     expect(await horizontalOverflow(page), 'market page').toBe(0);
 
+    // a box by two taps, in a colour picked with a tap, and recoloured with a tap
+    await page.getByTestId('draw-color-info').tap();
+    await page.getByTestId('draw-box').tap();
+    const c1 = await at(page, 0.15, 0.85);
+    await page.touchscreen.tap(c1.x, c1.y);
+    await expect(page.getByTestId('chart-draw-hint')).toContainText('opposite corner');
+    const c2 = await at(page, 0.5, 0.6);
+    await page.touchscreen.tap(c2.x, c2.y);
+    await expect(chartOf(page)).toHaveAttribute('data-drawings', '3');
+    expect(await colorsOf(page)).toEqual(['muted', 'muted', 'info']);
+    await page.getByTestId('draw-color-buy').tap();
+    await page.getByTestId('draw-paint').tap();
+    const e = await at(page, 0.3, 0.85);
+    await page.touchscreen.tap(e.x, e.y);
+    expect(await colorsOf(page)).toEqual(['muted', 'muted', 'buy']);
+    expect(await horizontalOverflow(page), 'market page').toBe(0);
+
     // a finger deletes a drawing with some margin around its line
     await page.getByTestId('draw-erase').tap();
     const near = await at(page, 0.9, 0.45);
     await page.touchscreen.tap(near.x, near.y + 9);
-    await expect(chartOf(page)).toHaveAttribute('data-drawings', '1');
+    await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
     await page.reload();
-    await expect(chartOf(page)).toHaveAttribute('data-drawings', '1');
-    expect(await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '{}').items?.length, STORE(token))).toBe(1);
+    await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
+    expect(await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '{}').items?.length, STORE(token))).toBe(2);
+    expect(await colorsOf(page)).toEqual(['muted', 'buy']);
   });
 });

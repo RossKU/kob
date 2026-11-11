@@ -1,7 +1,8 @@
-// Drawings on the price chart (a horizontal line, a trend line): the model, the browser storage and the pixel geometry the chart's tools use. No chart
-// library here, so that it is unit-tested in node; the drawing itself is chart-drawings-primitive.ts, the tools are PriceChart.tsx.
+// Drawings on the price chart (a horizontal line, a trend line, an extended line, a box): the model, the browser storage and the pixel geometry the chart's
+// tools use. No chart library here, so that it is unit-tested in node; the drawing itself is chart-drawings-primitive.ts, the tools are PriceChart.tsx.
 //
-// What a drawing is anchored to: a price (the series' own number, the one on the price axis) and, for a trend line's two points, a time in unix seconds.
+// What a drawing is anchored to: a price (the series' own number, the one on the price axis) and, for the two points of a trend line, an extended line or a
+// box (its two opposite corners), a time in unix seconds.
 // A time is not a bar index and not tied to an interval: the chart maps it to its x position through the bar grid on screen (`TimeGrid`: the time of the
 // first bar and the bar width), so a drawing keeps its place on a 5m chart, a 1H chart and a 1D chart, and on a point past the newest bar.
 //
@@ -9,6 +10,10 @@
 // browser. The market key is the token's covenant id (a pair: `<base>/<quote>`), with `:inv` after it for the inverted KAS chart (1/price: another
 // price axis, so the lines of one view are not the other's). Every access is guarded: no storage (a private window, blocked site data, a full disk)
 // means the drawings last until the page is left, never a broken chart. What is read is checked field by field: anything that is no drawing is dropped.
+//
+// Colour: every drawing carries one of a few swatches, stored as the swatch's name (never a CSS colour: nothing stored is ever used as markup or style). The
+// name maps to a theme token (`COLOR_TOKEN`) that is read when the chart paints, so a drawing reads on both themes and follows a theme change. A drawing stored
+// before colours existed has none and reads as the default swatch, the subtle grey it always had.
 
 export interface Anchor {
   /** unix seconds */
@@ -17,9 +22,26 @@ export interface Anchor {
   price: number;
 }
 
-export type Drawing =
-  | { id: string; kind: 'hline'; price: number }
-  | { id: string; kind: 'trend'; a: Anchor; b: Anchor };
+/** The swatches, in the order the toolbar shows them. */
+export const DRAWING_COLORS = ['muted', 'buy', 'sell', 'info', 'warn', 'accent'] as const;
+export type DrawingColor = (typeof DRAWING_COLORS)[number];
+/** What a drawing without a colour (a stored one from before colours) and a fresh toolbar use: the subtle line the tools always drew. */
+export const DEFAULT_COLOR: DrawingColor = 'muted';
+/** The theme token each swatch is read from (the accent is the chart's own violet, declared in market.css: the theme has no second hue that parts from buy green). */
+export const COLOR_TOKEN: Record<DrawingColor, string> = { muted: '--muted', buy: '--buy', sell: '--sell', info: '--info', warn: '--warn', accent: '--draw-accent' };
+
+export const isDrawingColor = (v: unknown): v is DrawingColor => (DRAWING_COLORS as readonly unknown[]).includes(v);
+
+/**
+ * hline: a price level across the pane. trend: the segment between two points. xline: the line through two points, extended past both to the plot's edges.
+ * box: the rectangle with the two points as opposite corners (a translucent fill and an outline).
+ */
+export type Drawing = { id: string; color: DrawingColor } & (
+  | { kind: 'hline'; price: number }
+  | { kind: 'trend'; a: Anchor; b: Anchor }
+  | { kind: 'xline'; a: Anchor; b: Anchor }
+  | { kind: 'box'; a: Anchor; b: Anchor }
+);
 
 /** At most this many drawings per market and network: the entry stays small and the chart quick, whatever a page does. */
 export const MAX_DRAWINGS = 40;
@@ -52,15 +74,18 @@ export function parseDrawings(raw: string | null): Drawing[] {
   const seen = new Set<string>();
   for (const it of items) {
     if (out.length >= MAX_DRAWINGS) break;
-    const o = it as { id?: unknown; kind?: unknown; price?: unknown; a?: unknown; b?: unknown } | null;
+    const o = it as { id?: unknown; kind?: unknown; price?: unknown; a?: unknown; b?: unknown; color?: unknown } | null;
     if (!o || typeof o.id !== 'string' || o.id.length === 0 || o.id.length > 40 || seen.has(o.id)) continue;
+    const color = isDrawingColor(o.color) ? o.color : DEFAULT_COLOR;
     if (o.kind === 'hline' && finite(o.price)) {
-      out.push({ id: o.id, kind: 'hline', price: o.price });
-    } else if (o.kind === 'trend') {
+      out.push({ id: o.id, color, kind: 'hline', price: o.price });
+    } else if (o.kind === 'trend' || o.kind === 'xline' || o.kind === 'box') {
       const a = anchorOf(o.a);
       const b = anchorOf(o.b);
       if (!a || !b) continue;
-      out.push({ id: o.id, kind: 'trend', a, b });
+      // two equal points give an extended line no direction
+      if (o.kind === 'xline' && a.time === b.time && a.price === b.price) continue;
+      out.push({ id: o.id, color, kind: o.kind, a, b });
     } else continue;
     seen.add(o.id);
   }
@@ -122,8 +147,13 @@ export const timeAt = (g: TimeGrid, logical: number): number => g.t0 + logical *
 
 // ------------------------------------------------------------------------------------------------ pixel shapes (hit test)
 
-/** A drawing in chart pixels (what is on screen now). A horizontal line spans the pane, so it has only its y. */
-export type Shape = { id: string; kind: 'hline'; y: number } | { id: string; kind: 'trend'; x1: number; y1: number; x2: number; y2: number };
+/**
+ * A drawing in chart pixels (what is on screen now). A horizontal line spans the pane, so it has only its y; an extended line is given by its two points
+ * (it is the whole line through them: the pane clips it); a box by two opposite corners.
+ */
+export type Shape =
+  | { id: string; kind: 'hline'; y: number }
+  | { id: string; kind: 'trend' | 'xline' | 'box'; x1: number; y1: number; x2: number; y2: number };
 
 /** Distance from point p to the segment (a, b). */
 export function segmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
@@ -134,12 +164,63 @@ export function segmentDistance(px: number, py: number, ax: number, ay: number, 
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-/** The drawing nearest to (x, y) within `tolerance` pixels (a finger needs more than a mouse), or null. */
+/** Distance from point p to the whole line through (a, b), past both points; to the point a when the two are one. */
+export function lineDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy);
+  return len === 0 ? Math.hypot(px - ax, py - ay) : Math.abs((px - ax) * dy - (py - ay) * dx) / len;
+}
+
+/** Distance from point p to the outline of the rectangle with opposite corners (x1, y1) and (x2, y2), whichever way round they are given; 0 on the outline. */
+export function boxOutlineDistance(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const l = Math.min(x1, x2);
+  const r = Math.max(x1, x2);
+  const t = Math.min(y1, y2);
+  const b = Math.max(y1, y2);
+  return Math.min(segmentDistance(px, py, l, t, r, t), segmentDistance(px, py, r, t, r, b), segmentDistance(px, py, r, b, l, b), segmentDistance(px, py, l, b, l, t));
+}
+
+export const insideBox = (px: number, py: number, x1: number, y1: number, x2: number, y2: number): boolean =>
+  px >= Math.min(x1, x2) && px <= Math.max(x1, x2) && py >= Math.min(y1, y2) && py <= Math.max(y1, y2);
+
+/**
+ * The part of the line through (a, b) that lies in the pane (0, 0)-(w, h): its two ends on the pane's edges, in the direction a -> b; null when the line
+ * misses the pane or has no direction. Liang-Barsky with an unbounded parameter: the clip a segment would get, with the line running on past both points.
+ */
+export function extendToPane(ax: number, ay: number, bx: number, by: number, w: number, h: number): { x1: number; y1: number; x2: number; y2: number } | null {
+  const dx = bx - ax;
+  const dy = by - ay;
+  if (dx === 0 && dy === 0) return null;
+  let t0 = -Infinity;
+  let t1 = Infinity;
+  // p * t <= q for each of the four edges
+  for (const [p, q] of [[-dx, ax], [dx, w - ax], [-dy, ay], [dy, h - ay]] as const) {
+    if (p === 0) {
+      if (q < 0) return null; // parallel to this edge and outside it
+    } else if (p < 0) t0 = Math.max(t0, q / p);
+    else t1 = Math.min(t1, q / p);
+  }
+  if (t0 > t1) return null;
+  return { x1: ax + t0 * dx, y1: ay + t0 * dy, x2: ax + t1 * dx, y2: ay + t1 * dy };
+}
+
+/**
+ * The drawing nearest to (x, y) within `tolerance` pixels (a finger needs more than a mouse), or null. A box is picked on its outline, and inside it as a last
+ * resort: a line or an edge nearer than the tolerance wins over the box's area, so a box does not hide what is drawn on it.
+ */
 export function pickShape(shapes: readonly Shape[], x: number, y: number, tolerance: number): string | null {
   let best: string | null = null;
   let bestD = tolerance;
   for (const s of shapes) {
-    const d = s.kind === 'hline' ? Math.abs(y - s.y) : segmentDistance(x, y, s.x1, s.y1, s.x2, s.y2);
+    let d: number;
+    if (s.kind === 'hline') d = Math.abs(y - s.y);
+    else if (s.kind === 'trend') d = segmentDistance(x, y, s.x1, s.y1, s.x2, s.y2);
+    else if (s.kind === 'xline') d = lineDistance(x, y, s.x1, s.y1, s.x2, s.y2);
+    else {
+      const e = boxOutlineDistance(x, y, s.x1, s.y1, s.x2, s.y2);
+      d = insideBox(x, y, s.x1, s.y1, s.x2, s.y2) ? Math.min(e, tolerance) : e;
+    }
     if (d <= bestD) {
       best = s.id;
       bestD = d;

@@ -144,6 +144,24 @@ body:has(.market-page) .container { max-width: 1520px; }
 .chart-tools button:disabled { opacity: 0.45; cursor: default; }
 .chart-tools svg { width: 16px; height: 16px; }
 @media (pointer: coarse) { .chart-tools button { min-width: 36px; height: 34px; } }
+/* drawing colours: the swatches are theme tokens (read again at every paint of the chart, so a theme change recolours the drawings); the accent is the one hue the theme
+   has no token for (violet, apart from buy green and info blue), declared here on :root because the chart's canvas reads it from there, as it reads the others */
+:root { --draw-accent: #7b3fc4; }
+:root[data-theme='dark'] { --draw-accent: #b48cf0; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) { --draw-accent: #b48cf0; } }
+/* the swatches: a second small pill beside the tools (it wraps below them on a narrow screen); the colour of a dot comes from its data-color, no inline style */
+.chart-swatches { display: inline-flex; align-items: center; gap: 2px; background: var(--surface-2); border-radius: 999px; padding: 2px; }
+.chart-sw { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 26px; padding: 0; border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
+.chart-sw i { display: block; width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 0 1px var(--border); }
+.chart-sw[aria-pressed='true'] { background: var(--surface); box-shadow: 0 0 0 1px var(--border); }
+.chart-sw[aria-pressed='true'] i { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--text); }
+.chart-sw[data-color='muted'] i { background: var(--muted); }
+.chart-sw[data-color='buy'] i { background: var(--buy); }
+.chart-sw[data-color='sell'] i { background: var(--sell); }
+.chart-sw[data-color='info'] i { background: var(--info); }
+.chart-sw[data-color='warn'] i { background: var(--warn); }
+.chart-sw[data-color='accent'] i { background: var(--draw-accent); }
+@media (pointer: coarse) { .chart-sw { width: 34px; height: 34px; } }
 /* the Price | Depth switch (below 1200 px): a small pill like the interval switch; what only the price chart has keeps its place (hidden, not removed) while the depth chart is shown, so the header does not change height */
 .chart-head .segmented button { min-height: 28px; padding-inline: 12px; font-size: 0.82rem; }
 @media (pointer: coarse) { .chart-head .segmented button { min-height: 34px; } }
@@ -156,7 +174,7 @@ body:has(.market-page) .container { max-width: 1520px; }
 .chart-depth-pane > figure { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .chart-depth-pane .depth-box { flex: 1 1 auto; height: auto; min-height: 0; }
 .chart-draw-layer { position: absolute; left: 0; top: 0; z-index: 2; cursor: crosshair; touch-action: pan-y; }
-.chart-draw-layer.tool-erase { cursor: pointer; }
+.chart-draw-layer.tool-erase, .chart-draw-layer.tool-paint { cursor: pointer; }
 .chart-draw-hint {
   position: absolute; left: 8px; bottom: 34px; z-index: 3; pointer-events: none; max-width: calc(100% - 90px); padding: 3px 8px; font-size: 0.78rem;
   background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm);
