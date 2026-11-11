@@ -998,7 +998,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             tracing::error!(
                 skew_seconds = skew,
                 bound_seconds = max,
-                "the local clock differs from the chain's (the newest block's timestamp): set the system clock (NTP); day orders near their deadline are not filled meanwhile"
+                "the local clock differs from the chain's (the newest block's timestamp of every node): set the system clock (NTP), or check the node if it is the only one and may have stopped advancing; day orders near their deadline are not filled meanwhile"
             );
         } else if was_off && skew.abs() <= max {
             tracing::info!(skew_seconds = skew, "the local clock agrees with the chain's again");

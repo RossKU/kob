@@ -95,6 +95,10 @@ impl ChainSource for Tier {
         self.gate()?;
         self.node.block_daa_score(hash).await
     }
+    async fn block_timestamp_ms(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
+        self.gate()?;
+        self.node.block_timestamp_ms(hash).await
+    }
     async fn chain_hashes(&self, start: Hash32) -> Result<ChainHashes, RpcError> {
         self.gate()?;
         ChainSource::chain_hashes(&*self.node, start).await
@@ -432,41 +436,95 @@ async fn a_public_node_that_is_behind_or_on_another_network_is_replaced_whicheve
     assert!(!kobd::rpc::judge::alarms().iter().any(|a| a.contains(".example")), "public nodes are replaced, they raise no alarm");
 }
 
-/// A node that over-reports its DAA (a lie, or a bug) never puts its honest partner behind, whichever role either has: a lead
-/// whose sink the partner knows is refuted at once, one whose sink the partner never learns after `LAG_CONFIRM_CHECKS` checks.
-/// Nothing is replaced and nothing is resolved.
+/// The resolver entries for a pair test: a local resolver, the network, no rate limit left over from another test, and the two
+/// nodes the entries stand for now.
+fn public_pair() -> (String, String) {
+    use kobd::rpc::resolver;
+    std::env::set_var("KOB_RESOLVERS", local_resolver());
+    resolver::set_network("testnet-10");
+    resolver::forget_churn();
+    (resolver::endpoint("resolver").unwrap(), resolver::endpoint("resolver:2").unwrap())
+}
+
+/// A node that over-reports its DAA with a sink no node ever learns (a lie, or a bug) never puts its honest partner behind,
+/// whichever role either has: the lead is refuted after `LAG_CONFIRM_CHECKS` checks, nothing is replaced, nothing is resolved,
+/// and the honest node is never suspect (it is behind by the other node's claim only).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_node_that_over_reports_its_daa_never_evicts_its_honest_partner() {
     use kobd::rpc::resolver;
     let _g = pair_serial().await;
-    std::env::set_var("KOB_RESOLVERS", local_resolver());
-    // the other pair tests resolved too: this one is not held back by their resolutions (`resolver::CHURN_WINDOW`)
-    resolver::forget_churn();
-    resolver::set_network("testnet-10");
-    let (first, second) = (resolver::endpoint("resolver").unwrap(), resolver::endpoint("resolver:2").unwrap());
+    let (first, second) = public_pair();
     let replaced = (resolver::replacements("resolver"), resolver::replacements("resolver:2"));
     let (honest, lying) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
     honest.push_empty(50);
     lying.push_empty(50);
     let (h, l) = (Tier::new(&honest), Tier::new(&lying));
     l.boost.store(5_000, Ordering::Relaxed);
-    for (authority, cross) in [(&h, &l), (&l, &h)] {
+    l.fake_sink.store(true, Ordering::Relaxed);
+    for (authority, cross, honest_node) in [(&h, &l, &first), (&l, &h, &second)] {
         let m = pair(("resolver", authority), ("resolver:2", cross));
-        // its real sink, which the honest node knows: refuted at every check
-        for _ in 0..10 {
-            m.check_health().await;
-        }
-        // a sink no node ever learns: refuted once it stayed unknown for the bound
-        l.fake_sink.store(true, Ordering::Relaxed);
         for _ in 0..kobd::rpc::multi::LAG_CONFIRM_CHECKS + 5 {
             m.check_health().await;
+            assert!(!kobd::rpc::judge::suspect(honest_node), "behind by the other node's claim only: not suspect");
         }
-        l.fake_sink.store(false, Ordering::Relaxed);
         assert_eq!((resolver::current("resolver"), resolver::current("resolver:2")), (Some(first.clone()), Some(second.clone())));
         assert_eq!((resolver::replacements("resolver"), resolver::replacements("resolver:2")), replaced);
     }
-    // level again: nothing is held against either node
-    l.boost.store(0, Ordering::Relaxed);
-    pair(("resolver", &h), ("resolver:2", &l)).check_health().await;
-    assert!(!kobd::rpc::judge::suspect(&first) && !kobd::rpc::judge::suspect(&second));
+}
+
+/// Audit round 3 R3-M-2: an authority that over-reports its DAA over its real sink is held to account. Its own answers deny the
+/// lead (its newest block is far below the virtual DAA score it reports): two checks in a row are a contradiction, it is
+/// given up, and the honest node is the authority at once (never suspect meanwhile).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_authority_whose_own_answers_deny_its_lead_is_replaced() {
+    use kobd::rpc::resolver;
+    let _g = pair_serial().await;
+    let (_first, second) = public_pair();
+    let (honest, lying) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
+    honest.push_empty(50);
+    lying.push_empty(50);
+    let (h, l) = (Tier::new(&honest), Tier::new(&lying));
+    l.boost.store(5_000, Ordering::Relaxed);
+    let m = pair(("resolver", &l), ("resolver:2", &h));
+    let base = resolver::replacements("resolver");
+    m.check_health().await;
+    assert_eq!(resolver::replacements("resolver"), base, "one check is not enough");
+    assert!(!kobd::rpc::judge::suspect(&second));
+    m.check_health().await;
+    assert_eq!(resolver::current("resolver"), Some(second.clone()), "the honest node is the authority now");
+    let why = resolver::last_reason("resolver").unwrap();
+    assert!(why.contains("a lead it does not have"), "{why}");
+}
+
+/// Audit round 3 R3-M-2: an authority that stops advancing while it still reports synced never confirms a lead (it cannot learn
+/// the other node's blocks), so the local clock referees: its newest block is minutes old while the other node's is current, at
+/// the watch's checks in a row, and it is given up like a node that lags. The clock is the test's (no waiting).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_frozen_authority_is_given_up_by_the_local_clock() {
+    use kobd::rpc::resolver;
+    let _g = pair_serial().await;
+    let (_first, second) = public_pair();
+    let (frozen, current) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
+    frozen.push_empty(100);
+    current.push_empty(5_000);
+    // the local clock: a second after the current node's newest block (the frozen one's is 490 s older)
+    let now = current.block_timestamp_ms(current.tip()).await.unwrap().unwrap() + 1_000;
+    let m = pair(("resolver", &frozen), ("resolver:2", &current)).with_clock(move || now);
+    let base = resolver::replacements("resolver");
+    m.check_health().await;
+    assert_eq!(resolver::replacements("resolver"), base, "one check is not enough");
+    m.check_health().await;
+    assert_eq!(resolver::current("resolver"), Some(second.clone()), "the current node is the authority now");
+    let why = resolver::last_reason("resolver").unwrap();
+    assert!(why.contains("stopped advancing"), "{why}");
+    // the same clock with both nodes current: nothing (a node behind by a few blocks is not frozen)
+    let (a, b) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
+    a.push_empty(5_000);
+    b.push_empty(5_000);
+    let before = resolver::replacements("resolver") + resolver::replacements("resolver:2");
+    let m = pair(("resolver", &a), ("resolver:2", &b)).with_clock(move || now);
+    for _ in 0..5 {
+        m.check_health().await;
+    }
+    assert_eq!(resolver::replacements("resolver") + resolver::replacements("resolver:2"), before);
 }

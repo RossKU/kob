@@ -430,6 +430,16 @@ struct Watch {
     busy: bool,
     lag: Vec<LagTrack>,
     last_refuted_warn: Option<Instant>,
+    /// The local clock, unix milliseconds (tests set another, `MultiNode::with_clock`).
+    clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    /// The most advanced node and its checks in a row with a virtual DAA score above its own newest block's by more than
+    /// [`LAG_DAA`] (a lead it does not have).
+    inflated: Option<(String, u32)>,
+}
+
+/// The local clock: unix milliseconds.
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// The most advanced node's lead over a node, as the answers of one check put it: kept until the node behind can confirm it.
@@ -453,6 +463,10 @@ struct LagTrack {
     node: String,
     streak: u32,
     claims: Vec<Claim>,
+    /// Checks in a row at which this node's newest block was more than [`FROZEN_AFTER`] old by the local clock while the most
+    /// advanced node's was current ([`FRESH_WITHIN`]), and the age at the last of them (seconds).
+    frozen: u32,
+    frozen_secs: u64,
 }
 
 /// What one check makes of a node's lag.
@@ -467,16 +481,25 @@ enum LagVerdict {
     Refuted(u64),
     /// Behind for the whole period, confirmed by this node itself (the smallest confirmed lead, DAA).
     Confirmed(u64),
+    /// Its newest block was old by the local clock for the whole period while the other node's was current: it stopped
+    /// advancing, or lags by minutes (the age, seconds). A node that cannot learn new blocks never confirms a lead.
+    Frozen(u64),
 }
 
 impl LagTrack {
-    /// The claims a streak needs before a lag is confirmed: one at its first check and one at its `checks`-th.
     /// The streak begins again (the node stays).
     fn clear(&mut self) {
         self.streak = 0;
         self.claims.clear();
     }
 
+    /// Whether this streak has evidence of its own that the node is behind (a lead it confirmed, or its newest block old by
+    /// the local clock): only then is it suspect (not promoted). The answers alone are the other node's claim.
+    fn evidence(&self) -> bool {
+        self.frozen > 0 || self.claims.iter().any(|c| c.lead.is_some_and(|l| l > LAG_DAA))
+    }
+
+    /// The claims a streak needs before a lag is confirmed: one at its first check and one at its `checks`-th.
     fn needed(checks: u32) -> usize {
         if checks <= 1 {
             1
@@ -489,6 +512,7 @@ impl LagTrack {
     fn observe(&mut self, behind: Option<u64>, checks: u32) -> bool {
         if behind.is_none() {
             self.clear();
+            self.frozen = 0;
             return false;
         }
         self.streak += 1;
@@ -500,6 +524,12 @@ impl LagTrack {
     /// confirmed streak begins again at the next check.
     fn verdict(&mut self, behind: Option<u64>, checks: u32) -> LagVerdict {
         let Some(behind) = behind else { return LagVerdict::Level };
+        if self.frozen >= checks.max(1) {
+            let secs = self.frozen_secs;
+            self.frozen = 0;
+            self.clear();
+            return LagVerdict::Frozen(secs);
+        }
         for c in self.claims.iter_mut().filter(|c| c.lead.is_none()) {
             c.age += 1;
         }
@@ -545,6 +575,14 @@ pub const LAG_CHECKS: u32 = 6;
 /// Checks (five minutes) within which a node must learn the most advanced node's sink of a check that put it behind; a sink it
 /// never learns was not real, and nothing is held against the node.
 pub const LAG_CONFIRM_CHECKS: u32 = 30;
+/// A node behind by the answers whose own newest block is older than this by the local clock, at [`LAG_CHECKS`] checks in a
+/// row while the most advanced node's is within [`FRESH_WITHIN`] of it, stopped advancing (or lags by minutes): it is behind,
+/// confirmed or not. The local clock is the referee a node cannot move: an honest current node's newest block is seconds old.
+pub const FROZEN_AFTER: Duration = Duration::from_secs(120);
+pub const FRESH_WITHIN: Duration = Duration::from_secs(60);
+/// Checks in a row at which the most advanced node reports a virtual DAA score more than [`LAG_DAA`] above its own newest
+/// block's (its own two answers disagree: a lead it does not have) before that counts against it as a contradiction.
+pub const INFLATED_CHECKS: u32 = 2;
 
 impl<N: ChainSource> MultiNode<N> {
     /// `nodes[0]` is the primary; `verifier` a second client of the primary for the acceptance data.
@@ -571,6 +609,8 @@ impl<N: ChainSource> MultiNode<N> {
                 busy: false,
                 lag: vec![],
                 last_refuted_warn: None,
+                clock: Arc::new(wall_ms),
+                inflated: None,
             })),
         }
     }
@@ -582,6 +622,13 @@ impl<N: ChainSource> MultiNode<N> {
             let mut w = self.watch.lock().unwrap_or_else(|e| e.into_inner());
             (w.every, w.lag_checks) = (every, lag_checks.max(1));
         }
+        self
+    }
+
+    /// The local clock the health watch compares the nodes' newest blocks with, unix milliseconds (tests; the default is the
+    /// system clock).
+    pub fn with_clock(self, clock: impl Fn() -> u64 + Send + Sync + 'static) -> Self {
+        self.watch.lock().unwrap_or_else(|e| e.into_inner()).clock = Arc::new(clock);
         self
     }
 
@@ -919,24 +966,44 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
             .map(|a| a.0)
             .collect()
     };
-    let sink = match wanting.is_empty() {
+    let lagging: Vec<usize> = answers.iter().filter(|(i, _, daa)| *i != top_i && behind_of(*daa).is_some()).map(|a| a.0).collect();
+    let ms_of = |r: Result<Result<Option<u64>, RpcError>, tokio::time::error::Elapsed>| r.ok().and_then(Result::ok).flatten();
+    // while a node is behind: the most advanced node's sink (the claims'), and that node judged by its own answers (its
+    // newest block's DAA score and time)
+    let sink = match lagging.is_empty() {
         false => match tokio::time::timeout(WATCH_TIMEOUT, src(top_i).dag_info()).await {
             Ok(Ok(d)) => Some(d.sink),
             _ => None, // no claim this check: taken at the next
         },
         true => None,
     };
+    let (top_sink_daa, top_sink_ms) = match sink {
+        Some(s) => (
+            ms_of(tokio::time::timeout(WATCH_TIMEOUT, src(top_i).block_daa_score(s)).await),
+            ms_of(tokio::time::timeout(WATCH_TIMEOUT, src(top_i).block_timestamp_ms(s)).await),
+        ),
+        None => (None, None),
+    };
+    // and each node behind: its own newest block's time
+    let mut behind_ms: Vec<(usize, Option<u64>)> = vec![];
+    for &i in &lagging {
+        let ms = match tokio::time::timeout(WATCH_TIMEOUT, src(i).dag_info()).await {
+            Ok(Ok(d)) => ms_of(tokio::time::timeout(WATCH_TIMEOUT, src(i).block_timestamp_ms(d.sink)).await),
+            _ => None,
+        };
+        behind_ms.push((i, ms));
+    }
     let pending: Vec<(usize, Vec<(usize, Hash32)>)> = {
         let mut w = lock();
-        answers
+        lagging
             .iter()
-            .filter(|(i, _, daa)| *i != top_i && behind_of(*daa).is_some())
-            .map(|(i, _, daa)| {
-                let t = &mut w.lag[*i];
-                if let Some(sink) = sink.filter(|_| wanting.contains(i)) {
-                    t.claims.push(Claim { sink, own: *daa, age: 0, lead: None });
+            .map(|&i| {
+                let own = answers.iter().find(|a| a.0 == i).map(|a| a.2).unwrap_or(0);
+                let t = &mut w.lag[i];
+                if let Some(sink) = sink.filter(|_| wanting.contains(&i)) {
+                    t.claims.push(Claim { sink, own, age: 0, lead: None });
                 }
-                (*i, t.claims.iter().enumerate().filter(|(_, c)| c.lead.is_none()).map(|(k, c)| (k, c.sink)).collect())
+                (i, t.claims.iter().enumerate().filter(|(_, c)| c.lead.is_none()).map(|(k, c)| (k, c.sink)).collect())
             })
             .collect()
     };
@@ -950,10 +1017,22 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
             }
         }
     }
+    let top_node = answers.iter().find(|a| a.0 == top_i).map(|a| a.1.clone()).unwrap_or_default();
     let mut verdicts = vec![];
-    let refuted_warn = {
+    let (refuted_warn, inflated) = {
         let mut w = lock();
         let checks = w.lag_checks;
+        let now = (w.clock)();
+        // the local clock is the referee: a node whose newest block is minutes old while the other's is current
+        let top_fresh = top_sink_ms.is_some_and(|m| now.abs_diff(m) <= FRESH_WITHIN.as_millis() as u64);
+        for (i, ms) in behind_ms {
+            let age = ms.map(|m| now.saturating_sub(m));
+            let t = &mut w.lag[i];
+            match age.filter(|a| top_fresh && *a > FROZEN_AFTER.as_millis() as u64) {
+                Some(a) => (t.frozen, t.frozen_secs) = (t.frozen + 1, a / 1000),
+                None => t.frozen = 0,
+            }
+        }
         for (i, k, daa) in learned {
             if let Some(c) = w.lag[i].claims.get_mut(k) {
                 c.lead = Some(daa.saturating_sub(c.own));
@@ -961,20 +1040,48 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
         }
         for (i, node, daa) in answers {
             let v = if i == top_i { LagVerdict::Level } else { w.lag[i].verdict(behind_of(daa), checks) };
-            verdicts.push((i, node, v));
+            let evidence = i != top_i && w.lag[i].evidence();
+            verdicts.push((i, node, v, evidence));
         }
+        // the most advanced node's own answers disagree: its virtual DAA score is far above its own newest block's
+        let over = top_sink_daa.filter(|d| top > d.saturating_add(LAG_DAA));
+        let inflated = match over {
+            Some(d) if !lagging.is_empty() => {
+                let n = match &w.inflated {
+                    Some((node, n)) if *node == top_node => n + 1,
+                    _ => 1,
+                };
+                w.inflated = Some((top_node.clone(), n));
+                (n >= INFLATED_CHECKS).then(|| {
+                    w.inflated = None;
+                    d
+                })
+            }
+            _ => {
+                w.inflated = None;
+                None
+            }
+        };
         let refuted = verdicts.iter().any(|v| matches!(v.2, LagVerdict::Refuted(_)));
         let due = w.last_refuted_warn.is_none_or(|t| t.elapsed() >= Duration::from_secs(600));
         if refuted && due {
             w.last_refuted_warn = Some(Instant::now());
         }
-        refuted && due
+        (refuted && due, inflated)
     };
-    for (i, node, v) in verdicts {
+    if let Some(d) = inflated {
+        let why =
+            format!("it reports a virtual DAA score {top}, {} above its own newest block's ({d}): a lead it does not have", top - d);
+        tracing::warn!(node = %board.shown(top_i), reason = %why, "a node claims a lead its own answers deny");
+        super::judge::contradicted(board.entry(top_i), &top_node, &why);
+    }
+    for (i, node, v, evidence) in verdicts {
         let entry = board.entry(i);
         match v {
             LagVerdict::Level => super::judge::lag(entry, &node, None, None),
-            LagVerdict::Unconfirmed(d) => super::judge::lag(entry, &node, Some(d), None),
+            // behind by the other node's claim only: not suspect until it has evidence of its own
+            LagVerdict::Unconfirmed(d) if evidence => super::judge::lag(entry, &node, Some(d), None),
+            LagVerdict::Unconfirmed(_) => super::judge::unconfirmed(&node),
             LagVerdict::Refuted(d) => {
                 if refuted_warn {
                     tracing::warn!(
@@ -989,6 +1096,10 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
             LagVerdict::Confirmed(d) => {
                 tracing::warn!(node = %board.shown(i), behind_daa = d, "a node stays behind the other node of the pair (confirmed by the node itself)");
                 super::judge::lag(entry, &node, Some(d), Some(d))
+            }
+            LagVerdict::Frozen(secs) => {
+                tracing::warn!(node = %board.shown(i), newest_block_age_secs = secs, "a node stopped advancing: its newest block is minutes old by the local clock while the other node's is current");
+                super::judge::frozen(entry, &node, secs)
             }
         }
     }
@@ -1038,6 +1149,9 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     }
     async fn block_daa_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
         self.nodes[0].block_daa_score(hash).await
+    }
+    async fn block_timestamp_ms(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
+        self.nodes[0].block_timestamp_ms(hash).await
     }
     async fn chain_hashes(&self, start: Hash32) -> Result<ChainHashes, RpcError> {
         self.nodes[0].chain_hashes(start).await
