@@ -20,7 +20,7 @@ describe('pages-config: config.json from the repository variables', () => {
   it('defaults to testnet-10 and the public resolver, and the app takes the file without a warning', () => {
     const { config, errors, notes } = pagesConfig({ KOB_PAGES_INDEXER_URL: `${IDX}/`, KOB_PAGES_EXTRA_INDEXER_URLS: ' https://b.example.net, https://c.example.com/kob ' });
     expect(errors).toEqual([]);
-    expect(config).toEqual({ network: 'testnet-10', indexerUrl: IDX, extraIndexerUrls: ['https://b.example.net', 'https://c.example.com/kob'], nodeUrl: '' });
+    expect(config).toEqual({ network: 'testnet-10', indexerUrl: IDX, extraIndexerUrls: ['https://b.example.net', 'https://c.example.com/kob'], nodeUrl: '', lockNetwork: true });
     expect(notes.join(' ')).toContain('resolver');
     const warnings: ConfigWarning[] = [];
     const patch = sanitizeLayer('config.json', JSON.parse(JSON.stringify(config)), false, warnings);
@@ -41,7 +41,7 @@ describe('pages-config: config.json from the repository variables', () => {
   it('takes mainnet, a second indexer, a wss node and an explorer', () => {
     const { config, errors } = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_EXTRA_INDEXER_URLS: 'https://b.example.net', KOB_PAGES_NODE_URL: 'wss://node.example.org/kaspa', KOB_PAGES_EXPLORER_URL: 'https://explorer.example.org/' });
     expect(errors).toEqual([]);
-    expect(config).toEqual({ network: 'mainnet', indexerUrl: IDX, extraIndexerUrls: ['https://b.example.net'], nodeUrl: 'wss://node.example.org/kaspa', explorerUrl: 'https://explorer.example.org' });
+    expect(config).toEqual({ network: 'mainnet', indexerUrl: IDX, extraIndexerUrls: ['https://b.example.net'], nodeUrl: 'wss://node.example.org/kaspa', explorerUrl: 'https://explorer.example.org', lockNetwork: true });
     const warnings: ConfigWarning[] = [];
     sanitizeLayer('config.json', config, false, warnings);
     expect(warnings).toEqual([]);
@@ -137,6 +137,13 @@ describe('pages-config: config.json from the repository variables', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('pins the site to its network unless KOB_PAGES_NETWORK_SWITCH asks for the header switch (founder 2026-11-11: no mainnet switch on a public site before the launch)', () => {
+    const base = { KOB_PAGES_NETWORK: 'testnet-10', KOB_PAGES_INDEXER_URL: IDX };
+    expect(pagesConfig(base).config?.lockNetwork).toBe(true);
+    for (const v of ['1', 'true', ' TRUE ']) expect(pagesConfig({ ...base, KOB_PAGES_NETWORK_SWITCH: v }).config).not.toHaveProperty('lockNetwork');
+    expect(pagesConfig({ ...base, KOB_PAGES_NETWORK_SWITCH: '0' }).config?.lockNetwork).toBe(true);
   });
 
   it('writes config.json, and the program list only on testnet-10 (mainnet keeps the pinned registry of build:release)', () => {

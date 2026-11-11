@@ -23,6 +23,10 @@
 //                                 sets it for the mainnet site). The page reads no config.json and connects to nothing, so no indexer is required, the variables
 //                                 above are ignored (a note says so) and no config.json is written.
 //
+//   KOB_PAGES_NETWORK_SWITCH      `1` / `true`: the header's network chip offers the switch to the other network (web/src/ui/shell/NetworkSwitch.tsx). Unset: the
+//                                 site is pinned to its network (config.json `lockNetwork: true`, the chip a plain label): a site of one network has no servers of
+//                                 the other, and switching a public site to mainnet is the mainnet launch (founder 2026-11-11: pinned until then).
+//
 //   KOB_PAGES_INTERNAL            `1`: the build is the internal mainnet app (a protected preview deployment, docs/ops/web-hosting.md 4c): `--dist` also writes
 //                                 robots.txt (Disallow: /) and adds `X-Robots-Tag: noindex, nofollow` to the dist's `_headers`, so no search engine keeps it.
 //
@@ -149,6 +153,7 @@ export function pagesConfig(env) {
 
   if (errors.length) return { config: null, errors, notes };
   const config = { network, indexerUrl, extraIndexerUrls, nodeUrl };
+  if (!/^(1|true)$/i.test((env.KOB_PAGES_NETWORK_SWITCH ?? '').trim())) config.lockNetwork = true;
   if (explorerUrl) config.explorerUrl = explorerUrl;
   if (tokenNamesUrl !== undefined) config.tokenNamesUrl = tokenNamesUrl;
   return { config, errors, notes };
