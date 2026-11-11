@@ -416,7 +416,7 @@ export function PairPage(props: { base: string; quote: string }) {
           ) : (
             <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} facts={<TokenFacts rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} compact data-testid="ticket-token-facts" />} />
           )}
-          <p class="small muted">
+          <p class="small muted pair-my-orders-row">
             <a href="#/portfolio/open" data-testid="pair-my-orders">{t('pair.myOrders')}</a>
           </p>
         </div>

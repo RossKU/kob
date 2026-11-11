@@ -13,14 +13,19 @@ import { t } from '../../i18n';
 import { kasValueText, kasValueTitle } from '../../app/fiat';
 import { useFiat } from '../../app/use-fiat';
 import { formatKas } from '../../kob/units';
-import { formatRowTimeUnix, rowTimeTitleUnix } from './format';
+import { formatRowTimeShortUnix, formatRowTimeUnix, rowTimeTitleUnix } from './format';
 import { PHONE_QUERY, useMedia } from '../shell/narrow';
 import { SortButton, SortControl, ariaSortOf } from './SortHeader';
 import type { SortColumn, SortState } from './sort';
 import './data-table.css';
 
-/** How a column shows in a card: the `head` (the name, a line of its own: Balances), the `title` (the market, beside the status), a `badge` (the status), a label / value `pair` (two to a line), a `wide` pair (a line of its own), the buttons (`action`), the chevron (`toggle`), or not at all. */
-export type DtCard = 'head' | 'title' | 'badge' | 'pair' | 'wide' | 'action' | 'toggle' | 'hidden';
+/**
+ * How a column shows in a card. Balances: the `head` (the asset, line 1), its value at the right of it (`end`), label / value `pair`s (line 2, the words drawn before each figure), the buttons (`action`). The order
+ * and fill lists (compact cards, data-table.css): the `title` (line 1: the market and the side), the `badge` (line 1, at the right: the time), the `pair`s (line 2: the figures in the table's
+ * order, no captions drawn, each keeps its column's words as its accessible name), the `meter` (line 3: the filled part) and the `status` chip, the buttons (`action`, line 3 at the right), the
+ * chevron (`toggle`), or not at all (`hidden`: it is in the details).
+ */
+export type DtCard = 'head' | 'end' | 'title' | 'badge' | 'pair' | 'wide' | 'meter' | 'status' | 'action' | 'toggle' | 'hidden';
 
 export interface DtColumn<K extends string = string> extends SortColumn<K> {
   /** numbers (amounts, prices, times of a column of figures) are right-aligned in the table */
@@ -56,8 +61,8 @@ function holdsContent(el: HTMLElement): boolean {
 function foldTable(el: HTMLElement, last: { current: string }): void {
   const room = Math.round(el.clientWidth);
   if (room === 0) return; // not on screen (another tab): nothing to measure
-  if (!el.querySelector('.dt-body .dt-row')) return; // no rows (loading, nothing listed): nothing to measure, and the structure the rows had stays until they are back
   const phone = typeof matchMedia === 'function' && matchMedia(PHONE_QUERY).matches;
+  if (!phone && !el.querySelector('.dt-body .dt-row')) return; // no rows (loading, nothing listed): nothing to measure, and the structure the rows had stays until they are back
   const state = `${room}|${phone}|${document.fonts?.status ?? ''}|${el.textContent ?? ''}`;
   if (state === last.current && el.dataset.fold) return;
   last.current = state;
@@ -122,7 +127,7 @@ export function DataTable<K extends string>(props: {
     };
   }, []);
   return (
-    <div ref={root} class={`dt dt-${props.grid}${props.class ? ` ${props.class}` : ''}`} role="table" aria-label={props.label} data-testid={props['data-testid']}>
+    <div ref={root} class={`dt dt-${props.grid}${props.grid === 'balances' ? '' : ' dt-list'}${props.class ? ` ${props.class}` : ''}`} role="table" aria-label={props.label} data-testid={props['data-testid']}>
       <div ref={probe} class="dt-probe" aria-hidden="true" />
       {props.sortable && !props.headless && !phone ? <SortControl id={props.id} class="dt-sortctl" columns={props.cols.filter((c): c is DtColumn<K> => !('plain' in c))} state={props.sort} own={props.own} onSort={props.onSort} /> : null}
       <div class="dt-head" role="row" data-testid={`${props.id}-head`} hidden={props.headless}>
@@ -177,11 +182,26 @@ export function DtCell(props: { k: string; label?: string; card?: DtCard; num?: 
   );
 }
 
+/** The time of a card (a phone's list row): `MM-DD HH:MM` within this year, else `YYYY-MM-DD HH:MM`. */
+export const timeShortText = (unix: number | bigint | null): string => formatRowTimeShortUnix(unix);
+
 /** The one time format of the Portfolio's tables (Open orders, Order history, Trade history): `formatRowTime` (today HH:MM:SS, else YYYY-MM-DD HH:MM, 24-hour, the viewer's zone). unix seconds; null reads "—". */
 export const timeText = (unix: number | bigint | null): string => formatRowTimeUnix(unix);
 
 /** The tooltip of a time cell: the full timestamp with the viewer's zone (undefined for a missing time). */
 export const timeTitle = (unix: number | bigint | null): string | undefined => rowTimeTitleUnix(unix) || undefined;
+
+/**
+ * The time cell of a list row: the table's text (`timeText`: today HH:MM:SS, else the date and the minute) and, in a card, the short form (`timeShortText`, drawn from `data-short` by
+ * data-table.css while the full text is not drawn there); the full timestamp with the zone is its tooltip.
+ */
+export function TimeCell(props: { unix: number | bigint | null; label: string; class?: string }) {
+  return (
+    <div role="cell" class={`dt-c dt-c-time dt-time${props.class ? ` ${props.class}` : ''}`} data-label={props.label} data-card="badge" data-short={timeShortText(props.unix)} title={timeTitle(props.unix)}>
+      <span class="dt-time-full">{timeText(props.unix)}</span>
+    </div>
+  );
+}
 
 /**
  * The one market cell of the tables: the token's icon and the pair (a link to its market when it has one, in every table the same weight and treatment). In a card the side (and,

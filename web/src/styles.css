@@ -628,6 +628,10 @@ body.modal-open { overflow: hidden; }
   border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); border-radius: var(--radius-sm); font: inherit; font-size: 0.75rem; padding: 0 6px; cursor: pointer; min-height: 20px;
 }
 .copy-btn:hover { color: var(--text); background: var(--surface-3); }
+/* a whole id that ends with an ellipsis where there is no room: the id gives way, the Copy button keeps its place */
+.copy-ellipsis { min-width: 0; max-width: 100%; }
+.copy-ellipsis > a, .copy-ellipsis > code { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.copy-ellipsis code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; word-break: normal; }
 /* the icon of the Copy button stands in for its words only where a table is folded (kit/data-table.css) */
 .copy-btn-icon { display: none; }
 

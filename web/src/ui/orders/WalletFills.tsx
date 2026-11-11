@@ -12,7 +12,7 @@ import {
   Amount, CopyText, EmptyState, ErrorBanner, KeyValueList, Loading, columnFraction, scaledUnits, sortBy, useAsync, type SortState, type SortValue,
 } from '../kit';
 import {
-  DataTable, DtCell, DtGroup, DtRow, KAS_FRACTION_MAX, MarketCell, MoneyCell, Num, RowToggle, timeText, timeTitle, toggleLabel, useOpenRow, type DtColumn, type DtPlain,
+  DataTable, DtCell, DtGroup, DtRow, KAS_FRACTION_MAX, MarketCell, MoneyCell, Num, RowToggle, TimeCell, timeText, toggleLabel, useOpenRow, type DtColumn, type DtPlain,
 } from '../kit/DataTable';
 import { IdentityBlock } from '../market/Fingerprint';
 import type { KascovMeta } from '../market/token-model';
@@ -33,7 +33,7 @@ export function fillColumns(usd = false): (DtColumn<FillSortKey> | DtPlain)[] {
     { key: 'price', label: t(usd ? 'orders.col.priceUsd' : 'orders.col.price'), kind: 'number', right: true },
     { key: 'amount', label: t('orders.col.amount'), kind: 'number', right: true },
     { key: 'value', label: t(usd ? 'orders.col.valueUsd' : 'orders.col.valueKas'), kind: 'number', right: true },
-    { key: 'tx', label: t('orders.fills.tx'), kind: 'text' },
+    { key: 'tx', label: t('orders.fills.tx'), kind: 'text', card: 'hidden' },
     { key: 'toggle', plain: true },
   ];
 }
@@ -65,8 +65,8 @@ interface Facts {
   market: string;
   marketHref: string | undefined;
   valueKas: bigint | null;
+  unix: number | null;
   time: string;
-  timeTip: string | undefined;
   amount: AmountText;
   identity: JSX.Element | null;
   key: string;
@@ -165,7 +165,7 @@ export function WalletFills(props: {
     const time = timeText(unix);
     const amount = amountCell(fill.amount, decimals);
     const identity = row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" /> : null;
-    return { unit, market: marketOf(w), marketHref, valueKas, time, timeTip: timeTitle(unix), amount, identity, key: `${fill.txid}-${row.id}-${fill.atMs}` };
+    return { unit, market: marketOf(w), marketHref, valueKas, unix, time, amount, identity, key: `${fill.txid}-${row.id}-${fill.atMs}` };
   };
 
   if (!props.loadEvents) return <p class="muted" data-testid="wallet-fills-off">{t('orders.fills.noIndexer')}</p>;
@@ -198,7 +198,7 @@ function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) 
   return (
     <DtGroup data-testid="wallet-fill-row" data-txid={fill.txid} data-order={row.id}>
       <DtRow>
-        <DtCell k="time" label={t('orders.fills.time')} card="badge" class="dt-time" title={f.timeTip}>{f.time}</DtCell>
+        <TimeCell unix={f.unix} label={t('orders.fills.time')} />
         <MarketCell name={f.market} href={f.marketHref} identity={f.identity} side={row.side} />
         <DtCell k="side" label={t('orders.col.side')} card="hidden" data-testid="wallet-fill-side" class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</DtCell>
         <DtCell k="price" label={t(props.fiat ? 'orders.col.priceUsd' : 'orders.col.price')} num>
@@ -206,7 +206,7 @@ function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) 
         </DtCell>
         <DtCell k="amount" label={t('orders.col.amount')} num><Num value={f.amount.text} title={f.amount.title} unit={f.unit.text} unitTitle={f.unit.title} /></DtCell>
         <DtCell k="value" label={t(props.fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas')} num><MoneyCell kas={f.valueKas} unit={false} fraction={props.kasDp} /></DtCell>
-        <DtCell k="tx" label={t('orders.fills.tx')}><CopyText value={fill.txid} head={6} tail={4} href={href} data-testid="wallet-fill-tx" /></DtCell>
+        <DtCell k="tx" label={t('orders.fills.tx')} card="hidden"><CopyText value={fill.txid} ellipsis href={href} data-testid="wallet-fill-tx" /></DtCell>
         <RowToggle open={open} onToggle={() => setOpen(!open)} controls={detailsId} label={toggleLabel(open)} data-testid="wallet-fill-toggle" />
       </DtRow>
       <div class="dt-details" id={detailsId} hidden={!open} data-testid="wallet-fill-details">
@@ -215,7 +215,7 @@ function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) 
           flow
           items={[
             { label: t('orders.orderId'), value: <CopyText value={row.id} head={8} tail={6} /> },
-            { label: t('orders.fills.tx'), value: <CopyText value={fill.txid} short={false} href={href} /> },
+            { label: t('orders.fills.tx'), value: <CopyText value={fill.txid} ellipsis href={href} /> },
             { label: t('orders.fills.time'), value: f.time },
             { label: t(props.fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas'), value: <MoneyCell kas={f.valueKas} /> },
           ]}

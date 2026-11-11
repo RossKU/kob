@@ -478,6 +478,10 @@ body:has(.market-page) .container { max-width: none; }
    screen. It is part of the page, not a button over it: the page keeps room under its end (body padding, constant, so the page does not change height when the bar comes and goes), and the toasts
    sit above it. */
 .mkt-trade-bar { display: none; }
+/* a phone: the panel's own tabs stand right under the ticket, so the link to the Portfolio's open orders is not drawn there (a keyboard user still reaches it, and sees it while it has the focus) */
+@media (max-width: 759px) {
+  .pair-my-orders-row:not(:focus-within) { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
 @media (max-width: 759px) {
   .mkt-trade-bar {
     display: flex; gap: 10px; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));

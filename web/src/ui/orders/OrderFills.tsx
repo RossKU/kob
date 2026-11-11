@@ -110,8 +110,8 @@ export function OrderFills(props: OrderFillsProps) {
                         ) : (
                           <td class="right num" title={r.price !== null ? priceTitle(r.price) : undefined}>{r.price !== null ? priceCell(r.price) : '—'}</td>
                         )}
-                        <td>
-                          <CopyText value={r.txid} head={6} tail={4} href={href} />
+                        <td class="tx-cell">
+                          <CopyText value={r.txid} ellipsis href={href} />
                         </td>
                       </tr>
                       );

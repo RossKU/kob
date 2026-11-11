@@ -9,7 +9,3 @@
 .or-warn { display: inline-flex; color: var(--warn); flex: none; }
 .or-details { padding: 10px 12px 12px; }
 .or-group.nested .or-market { padding-left: 14px; }
-/* in a card the filled part reads left to right, its bar under it */
-.dt[data-fold='cards'] .or-filled { align-items: flex-start; }
-.dt[data-fold='cards'] .or-filled > .num { text-align: left; }
-.dt[data-fold='cards'] .or-status { justify-content: flex-start; }

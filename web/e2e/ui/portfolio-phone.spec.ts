@@ -1,6 +1,6 @@
 // The Portfolio page on a phone (360 and 390 px, dark): every tab reads cleanly. No horizontal scroll, the summary strip's figures whole (never an ellipsis),
-// the Fills tab's transaction on one line, the order lists as aligned cards (full market, status at the right edge, a short budget label, a tap-sized Cancel),
-// the balances as cards. Seeded: long figures, a KAS-budget buy, an unregistered token named by its hex id, a dozen fills, a part-filled order.
+// the Fills tab's compact two-line cards (the transaction is in the details), the order lists as aligned compact cards (market and side, the time at the right; the figures on
+// one line; the status, the filled part and a tap-sized Cancel on the last), the balances as cards. Seeded: long figures, a KAS-budget buy, an unregistered token named by its hex id, a dozen fills, a part-filled order.
 // KOB_SHOTS=<dir> also saves a full-page screenshot of every tab (KOB_SHOT_TAG prefixes the names, KOB_THEME picks dark / light). Mock stack.
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -94,20 +94,39 @@ for (const width of [360, 390, 430]) {
       expect.soft(rb.x).toBeGreaterThanOrEqual(0);
       expect.soft(rb.x + rb.width).toBeLessThanOrEqual(width + 1);
 
-      /** the icon, the market and the status of every line at one x (the lines are cards of one grid) */
+      /** On every card the side (and the kind: `Sell · GTD`) stands on line 1 right after the market, and the time at the right of the same line, the same in every list. */
+async function expectSideOnLineOne(rows: Locator, where: string): Promise<void> {
+  const bad = await rows.evaluateAll((els) => els.flatMap((el) => {
+    const name = el.querySelector('.dt-market-name')?.getBoundingClientRect();
+    const side = el.querySelector('.dt-card-only')?.getBoundingClientRect();
+    const time = el.querySelector('.dt-time')?.getBoundingClientRect();
+    if (!name || !side || !time) return ['a card without its market, side or time'];
+    const out: string[] = [];
+    // (a long name wraps to two lines: the side and the time stand beside it, within its height)
+    const beside = (r: DOMRect) => Math.abs((r.top + r.bottom) / 2 - (name.top + name.bottom) / 2) <= 8;
+    if (!beside(side)) out.push(`the side is not beside the market (${Math.round(side.top - name.top)} px)`);
+    if (side.left < name.right - 1) out.push('the side is not after the market');
+    if (time.left < side.right - 1 || !beside(time)) out.push('the time is not at the right of line 1');
+    return out;
+  }));
+  expect.soft(bad, `${where}: line 1 of the cards`).toEqual([]);
+}
+
+/** the icon, the market and the status of every line at one x (the lines are cards of one shape: the status chip stands at the card's left edge on its last line) */
       const expectAligned = async (where: string) => {
         const lines = page.locator('[data-testid^="order-line-"]');
         expect(await lines.count()).toBeGreaterThanOrEqual(3);
         const xs = await lines.evaluateAll((els) => els.map((el) => ({
           icon: el.querySelector('.fp, [data-testid^="order-identity-"]')?.getBoundingClientRect().left ?? -1,
           market: el.querySelector('.or-market-name')?.getBoundingClientRect().left ?? -1,
-          status: el.querySelector('.or-status')?.getBoundingClientRect().right ?? -1,
+          status: el.querySelector('.or-status')?.getBoundingClientRect().left ?? -1,
         })));
         for (const k of ['icon', 'market', 'status'] as const) {
           const set = new Set(xs.map((x) => Math.round(x[k])));
           expect.soft(set.size, `${where}: ${k} x positions across the rows: ${[...set]}`).toBe(1);
         }
         await expectWhole(page.locator('.or-market-name, .or-price, .or-filled'), `${where}: the lines`);
+        await expectSideOnLineOne(page.locator('[data-testid^="order-line-"]'), where);
       };
 
       // Open orders
@@ -120,7 +139,7 @@ for (const width of [360, 390, 430]) {
       await expect.soft(page.getByTestId(`order-line-${ids.budget}`).locator('.or-amount')).toContainText('KAS budget');
       const cancel = page.getByTestId(`order-cancel-${ids.open}`);
       await expect(cancel).toBeVisible();
-      expect.soft((await cancel.boundingBox())!.height, 'Cancel tap target').toBeGreaterThanOrEqual(39.9);
+      expect.soft((await cancel.boundingBox())!.height, 'Cancel tap target').toBeGreaterThanOrEqual(31.9);
 
       // Order history: the same lines, aligned (the icon, the market and the status of every row at one x), a short budget label
       await page.getByTestId('orders-tab-history').click();
@@ -129,17 +148,30 @@ for (const width of [360, 390, 430]) {
       await shot(page, `${tag}-3-history`);
       await expectAligned('Order history');
 
-      // Fills: one card per fill, the transaction whole on one line
+      // Fills: one compact card per fill: line 1 the market and side, the time at the right; line 2 price, amount, value; the transaction is in the details
       await page.getByTestId('orders-tab-fills').click();
       const fills = page.getByTestId('wallet-fill-row');
       await expect(fills.first()).toBeVisible();
       expect(await fills.count()).toBeGreaterThanOrEqual(12);
       await noOverflow('Fills');
       await shot(page, `${tag}-4-fills`);
-      await expectOneLine(page.getByTestId('wallet-fill-tx'), 'the transaction');
-      await expectWhole(fills.locator('.dt-c-tx code'), 'the transaction');
-      const txt = await page.getByTestId('wallet-fill-tx').first().textContent();
-      expect.soft(txt, 'shortened txid').toMatch(/^[0-9a-f]{6}…[0-9a-f]{4}$/);
+      await expect(page.getByTestId('wallet-fill-tx').first()).toBeHidden();
+      await expectSideOnLineOne(fills, 'Fills');
+      const card = (await fills.first().boundingBox())!;
+      const wideFont = process.env.KOB_WIDE_FONTS === '1'; // a wide font may wrap the figures of line 2 to a second line: allowed, nothing is cut
+      if (!wideFont) expect.soft(card.height, 'a fill card is two lines').toBeLessThan(86);
+      const line2 = await fills.first().locator('.dt-c-price, .dt-c-amount, .dt-c-value').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+      if (!wideFont) expect.soft(new Set(line2).size, `price, amount and value on one line: ${line2}`).toBe(1);
+      // the time reads MM-DD HH:MM (this year) or YYYY-MM-DD HH:MM, whatever the table says
+      expect.soft(await fills.first().locator('.dt-time').getAttribute('data-short'), 'the card time').toMatch(/^(\d{4}-)?\d{2}-\d{2} \d{2}:\d{2}$/);
+      // no caption is drawn, each figure keeps its column's words for a screen reader
+      const caps = await fills.first().locator('.dt-c-price, .dt-c-amount, .dt-c-value').evaluateAll((els) => els.map((e) => ({ words: getComputedStyle(e, '::before').content, w: getComputedStyle(e, '::before').width })));
+      for (const c of caps) {
+        expect.soft(c.words, 'a caption for a screen reader').toMatch(/[A-Za-z]/);
+        expect.soft(c.w, 'the caption is not drawn').toBe('1px');
+      }
+      await fills.first().getByTestId('wallet-fill-toggle').click();
+      await expect(fills.first().getByTestId('wallet-fill-details')).toContainText(/[0-9a-f]{6}/);
 
       // the order card's detail still opens without overflow
       await page.getByTestId('orders-tab-active').click();

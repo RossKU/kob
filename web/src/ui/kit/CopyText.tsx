@@ -13,6 +13,8 @@ export interface CopyTextProps {
   tail?: number;
   /** when set, the shown text is a link to this URL, opened in a new tab (the transaction on the block explorer) */
   href?: string | null;
+  /** the whole text, ending with an ellipsis (CSS) where there is no room for it, never shortened in the middle (a transaction id in a list or its details); the title has it whole */
+  ellipsis?: boolean;
   /** accessible name of the copy button */
   label?: string;
   'data-testid'?: string;
@@ -54,7 +56,7 @@ export function CopyText(props: CopyTextProps) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
-  const shown = props.text ?? (props.short === false ? props.value : shortId(props.value, props.head ?? 6, props.tail ?? 6));
+  const shown = props.text ?? (props.short === false || props.ellipsis ? props.value : shortId(props.value, props.head ?? 6, props.tail ?? 6));
   const onCopy = async () => {
     const ok = await copyToClipboard(props.value);
     setState(ok ? 'copied' : 'failed');
@@ -62,7 +64,7 @@ export function CopyText(props: CopyTextProps) {
     timer.current = setTimeout(() => setState('idle'), 1500);
   };
   return (
-    <span class={`copy${props.class ? ` ${props.class}` : ''}`}>
+    <span class={`copy${props.ellipsis ? ' copy-ellipsis' : ''}${props.class ? ` ${props.class}` : ''}`}>
       {props.href ? (
         <a href={props.href} target="_blank" rel="noopener noreferrer" class="explorer-link" title={t('common.explorer')} data-testid={props['data-testid'] ? `${props['data-testid']}-link` : undefined}>
           <code class="mono wrap-anywhere" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{shown}</code>

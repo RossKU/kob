@@ -15,7 +15,7 @@ import {
   Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, type Tone,
 } from '../kit';
 import {
-  DtCell, DtGroup, DtRow, MarketCell, MoneyCell, Num, RowToggle, hasOpenChoice, timeText, timeTitle, toggleLabel, useOpenRow,
+  DtCell, DtGroup, DtRow, MarketCell, MoneyCell, Num, RowToggle, TimeCell, hasOpenChoice, timeText, timeTitle, toggleLabel, useOpenRow,
 } from '../kit/DataTable';
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
@@ -106,7 +106,7 @@ function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo |
   const budgetSpentText = budgetSpent !== null ? amountCell(budgetSpent, 8) : null;
   const budgetPct = budgetSpent !== null && bud!.placed !== null && bud!.placed > 0n ? Number((budgetSpent * 100n) / bud!.placed) : null;
   const valueKas = !row.pair && total !== null && row.price !== null ? quoteOf(total, row.price, row.scale, 'down') : null;
-  return { time, timeTip: timeTitle(unix), price: pairPrice(row.price), pct, unit, valueKas, budget, budgetTotalText, budgetPlaced: !!bud && bud.placed !== null, budgetSpentText, budgetPct, amountTotalText, filledAmountText, avgText: pairPrice(avg) };
+  return { unix, time, timeTip: timeTitle(unix), price: pairPrice(row.price), pct, unit, valueKas, budget, budgetTotalText, budgetPlaced: !!bud && bud.placed !== null, budgetSpentText, budgetPct, amountTotalText, filledAmountText, avgText: pairPrice(avg) };
 }
 
 const localDate = longDate;
@@ -238,7 +238,7 @@ export function OrderRow(props: OrderRowProps) {
 
   const cells: Record<string, JSX.Element> = {};
   cells.time = (
-    <DtCell k="time" label={t('orders.col.time')} card="badge" class="or-time dt-time" title={line.timeTip}>{line.time}</DtCell>
+    <TimeCell unix={line.unix} label={t('orders.col.time')} class="or-time" />
   );
   const marketHref = row.pair ? routeToHash(pairRoute(row.pair.base, row.pair.quote)) : row.token ? `#/market/${row.token}` : undefined;
   cells.market = (
@@ -262,7 +262,7 @@ export function OrderRow(props: OrderRowProps) {
     <DtCell k="price" label={t(fiat ? 'orders.col.priceLineUsd' : 'orders.col.priceLine')} num class="or-price">{priceFigure(row.price, line.price)}</DtCell>
   );
   cells.avg = (
-    <DtCell k="avg" label={t(fiat ? 'orders.col.avgPriceUsd' : 'orders.col.avgPrice')} num class="or-avg">{priceFigure(props.avg, line.avgText)}</DtCell>
+    <DtCell k="avg" label={t(fiat ? 'orders.col.avgPriceUsd' : 'orders.col.avgPrice')} card="hidden" num class="or-avg">{priceFigure(props.avg, line.avgText)}</DtCell>
   );
   cells.amount = (
     <DtCell k="amount" label={t('orders.col.amount')} num class="or-amount" title={line.budget ? t('orders.budgetOrder') : undefined}>
@@ -276,7 +276,7 @@ export function OrderRow(props: OrderRowProps) {
     </DtCell>
   );
   cells.filled = (
-    <DtCell k="filled" label={t('orders.col.filled')} num class="or-filled">
+    <DtCell k="filled" label={t('orders.col.filled')} card="meter" num class="or-filled">
       <span class="num">
         {line.filledAmountText !== null ? (
           <Num value={line.filledAmountText.text} title={line.filledAmountText.title} unit={line.unit.text} unitTitle={line.unit.title} />
@@ -298,7 +298,7 @@ export function OrderRow(props: OrderRowProps) {
     <DtCell k="total" label={t(fiat ? 'orders.col.totalUsd' : 'orders.col.total')} num class="or-value"><MoneyCell kas={line.valueKas} unit={false} {...(props.kasDp !== undefined ? { fraction: props.kasDp } : {})} /></DtCell>
   );
   cells.status = (
-    <DtCell k="status" label={t('orders.col.status')} class="or-status">
+    <DtCell k="status" label={t('orders.col.status')} card="status" class="or-status">
       <Badge tone={STATUS_TONE[row.status]}>{t(`orders.status.${row.status}`)}</Badge>
       {attention ? (
         <span class="or-warn" title={t('orders.line.attention')} aria-label={t('orders.line.attention')} role="img">
@@ -464,6 +464,18 @@ export function OrderRow(props: OrderRowProps) {
             ),
             show: !!row.budget && row.budget.left !== null,
           },
+          // what a phone's card leaves out of its lines: the average fill price (Order history) and the filled part with its unit
+          { label: t(fiat ? 'orders.col.avgPriceUsd' : 'orders.col.avgPrice'), value: <span data-testid="order-avg">{priceFigure(props.avg, line.avgText)}</span>, show: props.columns === 'history' },
+          {
+            label: t('orders.col.filled'),
+            value: (
+              <span data-testid="order-filled">
+                {line.filledAmountText !== null ? `${line.filledAmountText.text} ${line.unit.text}` : line.budgetSpentText !== null ? `${line.budgetSpentText.text} KAS` : '—'}
+                {(line.pct ?? line.budgetPct) !== null ? ` (${line.pct ?? line.budgetPct}%)` : ''}
+              </span>
+            ),
+            show: line.filledAmountText !== null || line.budgetSpentText !== null,
+          },
           { label: t('orders.expires'), value: <ExpiryText row={row} />, show: row.live },
           {
             label: t('orders.renew'),
@@ -488,7 +500,7 @@ export function OrderRow(props: OrderRowProps) {
           { label: t('orders.note'), value: row.label ?? '', show: !!row.label },
           {
             label: t('orders.placementTx'),
-            value: row.placementTx ? <CopyText value={row.placementTx} head={8} tail={6} href={placementUrl} data-testid={`order-tx-${row.id}`} /> : '—',
+            value: row.placementTx ? <CopyText value={row.placementTx} ellipsis href={placementUrl} data-testid={`order-tx-${row.id}`} /> : '—',
           },
           { label: t('orders.orderId'), value: <CopyText value={row.id} head={8} tail={6} data-testid={`order-id-${row.id}`} /> },
         ]}

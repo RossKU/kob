@@ -279,6 +279,16 @@ export function formatRowTime(ms: number | null | undefined, nowMs: number = Dat
   return dateOf(d) === today ? clock(d, true) : `${dateOf(d)} ${clock(d, false)}`;
 }
 
+/**
+ * The time of a CARD (a phone's list row): `MM-DD HH:MM` within the current year (today included), `YYYY-MM-DD HH:MM` before; 24-hour, in the viewer's zone. A missing time reads `—`.
+ */
+export function formatRowTimeShort(ms: number | null | undefined, nowMs: number = Date.now()): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—';
+  const d = new Date(ms);
+  const date = dateOf(d);
+  return `${d.getFullYear() === new Date(nowMs).getFullYear() ? date.slice(5) : date} ${clock(d, false)}`;
+}
+
 /** The full timestamp with the viewer's zone, for the `title` of a row time: `2026-11-10 22:35:02 GMT+9`. */
 export function rowTimeTitle(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return '';
@@ -286,6 +296,9 @@ export function rowTimeTitle(ms: number | null | undefined): string {
   const zone = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(d).find((p) => p.type === 'timeZoneName')?.value ?? '';
   return `${dateOf(d)} ${clock(d, true)}${zone ? ` ${zone}` : ''}`;
 }
+
+/** `formatRowTimeShort` of a unix-seconds time; null reads `—`. */
+export const formatRowTimeShortUnix = (unix: number | bigint | null | undefined, nowMs: number = Date.now()): string => (unix === null || unix === undefined ? '—' : formatRowTimeShort(Number(unix) * 1000, nowMs));
 
 /** `formatRowTime` of a unix-seconds time (the tables of the Portfolio); null reads `—`. */
 export const formatRowTimeUnix = (unix: number | bigint | null | undefined, nowMs: number = Date.now()): string => (unix === null || unix === undefined ? '—' : formatRowTime(Number(unix) * 1000, nowMs));

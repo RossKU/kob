@@ -25,7 +25,10 @@ async function overlaps(root: Locator, where: string): Promise<string[]> {
       const boxes = cells.map((c) => {
         const range = document.createRange();
         range.selectNodeContents(c);
-        const rects = [...range.getClientRects()].filter((r) => r.width > 0.5 && r.height > 0.5);
+        let rects = [...range.getClientRects()].filter((r) => r.width > 0.5 && r.height > 0.5);
+        // a whole transaction id ends with an ellipsis where its cell has no room: the text is clipped by its box, so the box (the id up to its ellipsis, and the Copy button) is what is painted
+        const whole = c.querySelector('.copy-ellipsis');
+        if (whole) rects = [...whole.querySelectorAll('a, code, button')].filter((e) => !(e.tagName === 'CODE' && e.parentElement?.tagName === 'A')).map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0.5 && r.height > 0.5);
         return { c, rects };
       });
       for (const { c, rects } of boxes) {

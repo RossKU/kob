@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { amountText, CELL_CHARS, columnFraction, compactZeros, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction, formatRowTime, formatRowTimeUnix, rowTimeTitle, displayPriceDp, columnPriceDp, displayPriceText, exactPriceText } from './format';
+import { amountText, CELL_CHARS, columnFraction, compactZeros, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction, formatRowTime, formatRowTimeShort, formatRowTimeShortUnix, formatRowTimeUnix, rowTimeTitle, displayPriceDp, columnPriceDp, displayPriceText, exactPriceText } from './format';
 
 describe('kit format', () => {
   it('shortens ids without touching short strings', () => {
@@ -199,6 +199,14 @@ describe('one time format', () => {
     expect(formatRowTime(null, now)).toBe('—');
     expect(formatRowTimeUnix(Math.floor(new Date(2026, 10, 10, 22, 35, 2).getTime() / 1000), now)).toBe('2026-11-10 22:35');
     expect(formatRowTimeUnix(null, now)).toBe('—');
+  });
+
+  it('shows the time of a card as MM-DD HH:MM within this year and with the year before', () => {
+    expect(formatRowTimeShort(new Date(2026, 10, 11, 9, 5, 7).getTime(), now)).toBe('11-11 09:05');
+    expect(formatRowTimeShort(new Date(2026, 0, 2, 3, 4, 5).getTime(), now)).toBe('01-02 03:04');
+    expect(formatRowTimeShort(new Date(2025, 11, 31, 23, 59, 1).getTime(), now)).toBe('2025-12-31 23:59');
+    expect(formatRowTimeShort(null, now)).toBe('—');
+    expect(formatRowTimeShortUnix(Math.floor(new Date(2026, 10, 10, 22, 35, 2).getTime() / 1000), now)).toBe('11-10 22:35');
   });
 
   it('titles the full timestamp with the viewer zone', () => {

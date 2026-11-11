@@ -36,6 +36,13 @@ test.describe('a tablet: the structure follows the room, not the history', () =>
       const table = await openPanel(page, mock, tab);
       const first = await fold(table);
       expect(['0', '1', '2'], `fold at 1000 px (${tab})`).toContain(first);
+      if (tab === 'fills') {
+        // the transaction id is whole (an ellipsis ends it where the column has no room), never shortened in the middle; the title has it whole too
+        const tx = table.getByTestId('wallet-fill-tx').first();
+        await expect(tx).toHaveText(/^[0-9a-f]{64}$/);
+        await expect(tx).toHaveAttribute('title', /^[0-9a-f]{64}$/);
+        await expect(table.getByTestId('wallet-fill-tx').first().locator('xpath=ancestor::*[contains(@class,"copy")][1]').locator('.copy-btn')).toBeVisible();
+      }
       await expect(table.locator('.dt-head')).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 'no sideways scroll').toBeLessThanOrEqual(0);
       // narrowed to a phone and widened back, widened and narrowed back: the same structure at 1000 px each time

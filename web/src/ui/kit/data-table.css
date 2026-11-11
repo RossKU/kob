@@ -9,6 +9,7 @@
 .dt-head, .dt-row {
   display: grid; grid-template-columns: var(--dt-cols); column-gap: 12px; align-items: center; padding: 0 12px; box-sizing: border-box; font-size: 0.86rem;
 }
+.dt-head[hidden] { display: none; } /* (a table with no rows: its header is not drawn; the grid above would show it) */
 .dt-head { padding-bottom: 6px; font-size: 0.74rem; color: var(--muted); border-bottom: 1px solid var(--border); }
 .dt-head > * { min-width: 0; }
 .dt-head .dt-hr { display: flex; justify-content: flex-end; text-align: right; }
@@ -38,7 +39,9 @@
 .dt-market-name > .small, .dt-market-name > .token-note { display: block; font-weight: 400; }
 /* a transaction id is shortened and never broken; its Copy button is a finger's */
 .dt-c-tx .wrap-anywhere { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
-.dt-c-tx .copy { flex-wrap: nowrap; }
+.dt-c-tx .copy { display: flex; flex-wrap: nowrap; }
+/* the transaction id is whole, ending with an ellipsis where the column has no room (a table fold never has to shorten it) */
+.dt-details .tx-cell { max-width: 16rem; }
 @media (pointer: coarse) { .dt-c-tx .copy-btn { min-height: 40px; padding: 0 10px; } }
 .dt-act { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
 .dt-chev { width: 28px; height: 32px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
@@ -69,9 +72,9 @@
   --dt-cols-2: 6.4em minmax(104px, 2fr) minmax(48px, 0.6fr) 38px minmax(80px, 1fr) minmax(96px, 1.2fr) minmax(80px, 1fr) minmax(100px, 1.3fr) minmax(84px, 1fr) var(--dt-chev);
 }
 .dt-fills {
-  --dt-cols: 10.4em minmax(120px, 2fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(140px, 1.3fr) var(--dt-chev);
-  --dt-cols-1: 6.4em minmax(104px, 2fr) 38px minmax(80px, 1fr) minmax(88px, 1.2fr) minmax(88px, 1fr) minmax(136px, 1.3fr) var(--dt-chev);
-  --dt-cols-2: 6.4em minmax(104px, 2fr) 38px minmax(80px, 1fr) minmax(96px, 1.2fr) minmax(136px, 1.3fr) var(--dt-chev);
+  --dt-cols: 10.4em minmax(120px, 2fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(140px, 2.2fr) var(--dt-chev);
+  --dt-cols-1: 6.4em minmax(104px, 2fr) 38px minmax(80px, 1fr) minmax(88px, 1.2fr) minmax(88px, 1fr) minmax(136px, 2.2fr) var(--dt-chev);
+  --dt-cols-2: 6.4em minmax(104px, 2fr) 38px minmax(80px, 1fr) minmax(96px, 1.2fr) minmax(136px, 2.2fr) var(--dt-chev);
 }
 .dt-balances {
   --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) minmax(150px, auto);
@@ -99,50 +102,89 @@
 .dt-orders-open[data-fold='2'] .dt-row > .dt-c-total, .dt-orders-history[data-fold='2'] .dt-row > .dt-c-total { grid-column: 6; }
 .dt-fills[data-fold='2'] .dt-head > .dt-h-value, .dt-orders-open[data-fold='2'] .dt-head > .dt-h-total, .dt-orders-history[data-fold='2'] .dt-head > .dt-h-total { display: none; }
 
-/* ---- cards: a phone, and a table that no fold lets hold its content (data-fold='cards'). Row 1: the market (the title, the side and the kind after it), the time at the right, the chevron; then the label / value pairs, as many to a line as fit (two on a phone); the buttons last. */
+/* ---- cards: a phone, and a table that no fold lets hold its content (data-fold='cards'). What every table's cards share first; then the Balances cards (label / value pairs), then the
+   compact cards of the order and fill lists (`dt-list`). */
 .dt[data-fold='cards'] .dt-head { display: none; }
 .dt[data-fold='cards'] .dt-sortctl { display: inline-flex; }
-.dt[data-fold='cards'] .dt-body { gap: 8px; }
 .dt[data-fold='cards'] .dt-group { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); overflow: hidden; }
-/* a card: two columns of label / value pairs; the title (the market) on the first line, the status at its right, the chevron in the corner; the wide pairs and the buttons take a line */
-.dt[data-fold='cards'] .dt-row { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(9rem, calc(50% - 6px)), 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
-.dt[data-fold='cards'] .dt-c { min-width: 0; text-align: left; }
-.dt[data-fold='cards'] .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
-.dt[data-fold='cards'] .dt-num { text-align: left; }
-.dt[data-fold='cards'] .dt-c[data-card='head'], .dt[data-fold='cards'] .dt-c[data-card='title'], .dt[data-fold='cards'] .dt-c[data-card='wide'], .dt[data-fold='cards'] .dt-c[data-card='action'] { grid-column: 1 / -1; }
-.dt[data-fold='cards'] .dt-c[data-card='head']::before, .dt[data-fold='cards'] .dt-c[data-card='title']::before, .dt[data-fold='cards'] .dt-c[data-card='badge']::before, .dt[data-fold='cards'] .dt-c[data-card='action']::before, .dt[data-fold='cards'] .dt-c[data-card='toggle']::before { content: none; }
-.dt[data-fold='cards'] .dt-c[data-card='title'], .dt[data-fold='cards'] .dt-c[data-card='head'] { grid-row: 1; padding-right: 40px; }
-.dt[data-fold='cards'] .dt-c[data-card='title'] { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-.dt[data-fold='cards'] .dt-row:has(.dt-c[data-card='badge']) .dt-c[data-card='title'] { grid-column: 1 / -2; padding-right: 0; }
-.dt[data-fold='cards'] .dt-c[data-card='badge'] { grid-column: -2 / -1; grid-row: 1; justify-self: end; margin-right: 40px; max-width: calc(100% - 40px); }
-.dt[data-fold='cards'] .dt-c[data-card='toggle'] { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }
-.dt[data-fold='cards'] .dt-c[data-card='toggle'] .dt-chev { width: 36px; height: 36px; }
-.dt[data-fold='cards'] .dt-c[data-card='action']:empty { display: none; }
-.dt[data-fold='cards'] .dt-act { justify-content: stretch; }
-.dt[data-fold='cards'] .dt-act .btn { flex: 1 1 auto; min-height: 40px; }
 .dt[data-fold='cards'] .dt-c[data-card='hidden'] { display: none; }
-.dt[data-fold='cards'] .dt-c-status .badge { text-align: center; }
 .dt[data-fold='cards'] .dt-card-only { display: block; }
-.dt[data-fold='cards'] .dt-c[data-card='badge'] { text-align: right; }
 .dt[data-fold='cards'] .dt-details { border-top: 1px solid var(--border); }
+.dt-balances[data-fold='cards'] .dt-body { gap: 8px; }
 
-/* a wider card (a tablet whose table did not fit): as many columns of pairs as fit (9rem each: two on a phone, four or five on a tablet), so a card is never
-   two half-empty columns; a wide pair takes two */
+/* Balances: a card of two columns of label / value pairs; the asset on the first line, the wide pairs and the buttons take a line */
+.dt-balances[data-fold='cards'] .dt-row { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(9rem, calc(50% - 6px)), 1fr)); align-items: start; gap: 6px 12px; padding: 10px 12px; min-height: 0; }
+.dt-balances[data-fold='cards'] .dt-c { min-width: 0; text-align: left; }
+.dt-balances[data-fold='cards'] .dt-c[data-label]::before { content: attr(data-label); display: block; margin-bottom: 1px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
+.dt-balances[data-fold='cards'] .dt-num { text-align: left; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='head'], .dt-balances[data-fold='cards'] .dt-c[data-card='wide'], .dt-balances[data-fold='cards'] .dt-c[data-card='action'] { grid-column: 1 / -1; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='head']::before, .dt-balances[data-fold='cards'] .dt-c[data-card='action']::before { content: none; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='head'] { grid-row: 1; }
+.dt-balances[data-fold='cards'] .dt-c[data-card='action']:empty { display: none; }
+.dt-balances[data-fold='cards'] .dt-act { justify-content: stretch; }
+.dt-balances[data-fold='cards'] .dt-act .btn { flex: 1 1 auto; min-height: 40px; }
+
+/* a wider Balances card (a tablet whose table did not fit): a wide pair takes two columns */
 @container dt (min-width: 640px) {
-  .dt[data-fold='cards'] .dt-c[data-card='wide'] { grid-column: span 2; }
+  .dt-balances[data-fold='cards'] .dt-c[data-card='wide'] { grid-column: span 2; }
 }
 @container dt (min-width: 520px) {
-  .dt[data-fold='cards'] .dt-c[data-card='action'] { flex: 1 1 100%; }
-  .dt[data-fold='cards'] .dt-act { justify-content: flex-end; }
-  .dt[data-fold='cards'] .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
+  .dt-balances[data-fold='cards'] .dt-c[data-card='action'] { flex: 1 1 100%; }
+  .dt-balances[data-fold='cards'] .dt-act { justify-content: flex-end; }
+  .dt-balances[data-fold='cards'] .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
 }
+
+/* The compact card of a list row (Open orders, Order history, Trade history), the shape of an exchange app's history:
+     line 1  the market and its side (the kind), at the right the time (MM-DD HH:MM) and the chevron of the details
+     line 2  the figures in the table's order, `price · amount · value`, no captions drawn (each keeps its column's words as its accessible name)
+     line 3  (orders) the status chip and the filled part, at the right the buttons
+   A flex row wraps by itself: a long figure takes the next line, nothing is cut. The two breaks are empty items of the full width (::after: after line 1, ::before: after line 2). */
+.dt-list[data-fold='cards'] .dt-body { gap: 6px; }
+.dt-list[data-fold='cards'] .dt-row { position: relative; display: flex; flex-wrap: wrap; align-items: center; column-gap: 0; row-gap: 0; padding: 6px 12px 8px; min-height: 0; }
+.dt-list[data-fold='cards'] .dt-row::after { content: ''; flex: 0 0 100%; height: 0; order: 1; }
+.dt-list[data-fold='cards'] .dt-row::before { content: ''; flex: 0 0 100%; height: 0; order: 3; }
+.dt-list[data-fold='cards'] .dt-c { min-width: 0; text-align: left; }
+/* the words of a column are drawn nowhere and read by a screen reader before its figure */
+.dt-list[data-fold='cards'] .dt-c[data-label]::before { content: attr(data-label) ': '; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.dt-list[data-fold='cards'] .dt-c[data-card='title']::before, .dt-list[data-fold='cards'] .dt-c[data-card='badge']::before, .dt-list[data-fold='cards'] .dt-c[data-card='action']::before, .dt-list[data-fold='cards'] .dt-c[data-card='toggle']::before { content: none; }
+.dt-list[data-fold='cards'] .dt-num { text-align: left; }
+/* line 1 */
+.dt-list[data-fold='cards'] .dt-c[data-card='title'] { order: -1; flex: 1 1 0; min-height: 30px; display: flex; flex-wrap: nowrap; align-items: center; gap: 0 8px; }
+/* the side (and the kind, muted: `Sell · Limit`) follows the market on line 1 in every list; a long name gives way (it wraps), the side does not */
+.dt-list[data-fold='cards'] .dt-market { flex: 0 1 auto; }
+.dt-list[data-fold='cards'] .dt-card-only.dt-sub { flex: none; white-space: nowrap; font-size: 0.82rem; }
+.dt-list[data-fold='cards'] .dt-c[data-card='badge'] { order: 0; flex: none; min-height: 30px; display: flex; align-items: center; margin-right: 32px; text-align: right; white-space: nowrap; }
+.dt-list[data-fold='cards'] .dt-time-full { display: none; }
+.dt-list[data-fold='cards'] .dt-time::after { content: attr(data-short); }
+.dt-list[data-fold='cards'] .dt-c[data-card='toggle'] { position: absolute; top: 1px; right: 2px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }
+.dt-list[data-fold='cards'] .dt-c[data-card='toggle'] .dt-chev { width: 36px; height: 36px; }
+/* line 2 */
+.dt-list[data-fold='cards'] .dt-c[data-card='pair'] { order: 2; flex: 0 1 auto; margin-top: 1px; font-size: 0.9rem; }
+.dt-list[data-fold='cards'] .dt-c[data-card='pair']:has(~ .dt-c[data-card='pair'])::after { content: '·'; content: '·' / ''; margin: 0 0.5em; color: var(--muted); }
+/* line 3 */
+.dt-list[data-fold='cards'] .dt-c[data-card='status'], .dt-list[data-fold='cards'] .dt-c[data-card='meter'], .dt-list[data-fold='cards'] .dt-c[data-card='action'] { margin-top: 6px; }
+.dt-list[data-fold='cards'] .dt-c[data-card='status'] { order: 4; flex: none; margin-right: 12px; justify-content: flex-start; }
+.dt-list[data-fold='cards'] .dt-c[data-card='meter'] { order: 5; flex: none; font-size: 0.8rem; color: var(--muted); }
+.dt-list[data-fold='cards'] .dt-c[data-card='action'] { order: 6; flex: none; margin-left: auto; }
+.dt-list[data-fold='cards'] .dt-c[data-card='action']:empty { display: none; }
+.dt-list[data-fold='cards'] .dt-act { justify-content: flex-end; }
+.dt-list[data-fold='cards'] .dt-act .btn { flex: none; min-height: 34px; }
+/* the filled part is its bar and its percentage; its amount is in the details */
+.dt-list[data-fold='cards'] .or-filled { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }
+.dt-list[data-fold='cards'] .or-filled:not(:has(.or-pct)) { display: none; }
+.dt-list[data-fold='cards'] .or-filled > .num { order: 1; }
+.dt-list[data-fold='cards'] .or-filled > .num > :not(.or-pct) { display: none; }
+.dt-list[data-fold='cards'] .or-filled .or-pct { margin-left: 0; font-size: inherit; }
+.dt-list[data-fold='cards'] .or-bar { order: 0; width: 44px; max-width: none; height: 4px; flex: none; }
+.dt-list[data-fold='cards'] .or-status { justify-content: flex-start; }
 
 /* finger targets (review M-11): the chevron that opens a row, its buttons and a time-sort header are 44 px / 40 px on a coarse pointer, also where the table is a table (a tablet in landscape) */
 .dt { --dt-chev: 28px; }
 @media (pointer: coarse) {
   .dt { --dt-chev: 44px; }
-  .dt-chev, .dt[data-fold='cards'] .dt-c[data-card='toggle'] .dt-chev { width: var(--dt-chev); height: 44px; }
-  .dt-c[data-card='toggle'], .dt[data-fold='cards'] .dt-c[data-card='toggle'] { width: 44px; height: 44px; }
+  .dt-chev, .dt-list[data-fold='cards'] .dt-c[data-card='toggle'] .dt-chev { width: var(--dt-chev); height: 44px; }
+  .dt-c[data-card='toggle'], .dt-list[data-fold='cards'] .dt-c[data-card='toggle'] { width: 44px; height: 44px; }
+  .dt-list[data-fold='cards'] .dt-c[data-card='toggle'] { top: 0; right: 0; }
   .dt-act .btn { min-height: 40px; }
   .dt-c a { display: inline-block; padding-block: 6px; }
 }
