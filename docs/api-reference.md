@@ -228,6 +228,7 @@ curl -s $API/v1/health
   "prefetch_window_blocks": 0, "prefetch_discards_total": 0, "prefetch_oversize_total": 0,
   "lag_tolerance_daa": 300,
   "untrusted_windows_total": 0, "untrusted_blocks_total": 0, "confirmed_blocks_total": 0, "lies_total": 0,
+  "authority_replaced_total": 0,
   "book_complete": true,
   "lean": false, "lean_orders_pruned_total": 0, "lean_rows_pruned_total": 0,
   "roles": ["indexer"],
@@ -302,6 +303,7 @@ Every key the handler returns:
 | `consecutive_failures` | Failed polls in a row; 0 after any progress. |
 | `prefetch_windows`, `prefetch_in_flight`, `prefetch_bytes`, `prefetch_bytes_peak`, `prefetch_window_blocks`, `prefetch_discards_total`, `prefetch_oversize_total` | Parallel fetch: windows queued ahead of the cursor and in flight, their bytes now and at most, the current window in chain blocks, plans dropped because the chain moved, windows refused as oversize. |
 | `untrusted_windows_total`, `untrusted_blocks_total`, `confirmed_blocks_total`, `lies_total` | Several nodes: windows and chain blocks fetched from a node other than the primary, how many were compared with the primary's copy before applying, and contradictions found. |
+| `authority_replaced_total` | Public chain authorities (resolver entries) given up for a finding since the start: judged useless, a disagreement that did not settle, or an answer that contradicted the store (not a lost connection). Metric `kob_indexer_authority_replaced_total`. |
 | `lean`, `lean_orders_pruned_total`, `lean_rows_pruned_total` | Lean storage: whether it is on, and the closed orders / rows it deleted since the start. |
 | `roles` | What the process does, from `executor` (the matcher and the keepers of `kobd --executor` work on this store) and `indexer` (the store keeps the history and this API serves it): `["indexer"]` for `kobd --indexer`, `["executor"]` for `kobd --executor` (a lean store, `lean: true`), `["executor", "indexer"]` for `kobd --executor --indexer` (a full store). The metrics carry `kob_role{role="executor"|"indexer"}`. |
 | `counters` | Object or `null` (`null` when the counter read failed; health never turns into an error for it): `orders_total`, `orders_listed`, `orders_by_status` (object status to count, statuses with 0 omitted), `rejects_total` (KOB1 payloads that produced no order), `fills_total`, `last_block_seq`, `last_block_daa`. |

@@ -424,6 +424,9 @@ pub struct MultiNode<N: ChainSource> {
     last_warn: Mutex<Option<Instant>>,
     /// The health watch (module documentation).
     watch: Arc<Mutex<Watch>>,
+    /// Public chain authorities whose answer contradicted the store at one cursor: the cursor, the hosts, and how many times
+    /// (`MultiNode::authority_contradicted`).
+    store_contradictions: Mutex<Option<(Hash32, Vec<String>, u32)>>,
 }
 
 /// The health watch's state: its period, how many checks in a row make a node behind, when it last ran, whether a check runs
@@ -584,6 +587,9 @@ pub const FROZEN_ALONE_AFTER: Duration = Duration::from_secs(600);
 /// its own sink, as it reports it AND as the node behind (which knows that block) reports it, before that counts against it as
 /// a contradiction: the block both sides place in the DAG does not back the lead it claims.
 pub const INFLATED_CHECKS: u32 = 2;
+/// Public chain authorities that may contradict the store at one cursor before the store halts there (`gap`) however many
+/// hosts they were on: two on different hosts agreeing with each other halt it at once (the store is at fault, not the nodes).
+pub const STORE_CONTRADICTIONS_MAX: u32 = 3;
 
 impl<N: ChainSource> MultiNode<N> {
     /// `nodes[0]` is the primary; `verifier` a second client of the primary for the acceptance data.
@@ -602,6 +608,7 @@ impl<N: ChainSource> MultiNode<N> {
             sink: Mutex::new(None),
             stalls: std::sync::atomic::AtomicU32::new(0),
             last_warn: Mutex::new(None),
+            store_contradictions: Mutex::new(None),
             // the first check one period after the start
             watch: Arc::new(Mutex::new(Watch {
                 every: WATCH_EVERY,
@@ -1206,13 +1213,39 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         self.board.drop_node(origin.node, why);
     }
 
-    /// A public chain authority (a resolver entry) that contradicts the store is given up for another (`rpc::judge`): the
-    /// follower asks the next one. A node named in the configuration is not.
-    fn authority_contradicted(&self, why: &str) -> bool {
+    /// A public chain authority (a resolver entry) that contradicts the store at the cursor `at` is given up for another
+    /// (`rpc::judge`): the follower asks the next one. Once a second authority on another host contradicts the store at the
+    /// same cursor (or [`STORE_CONTRADICTIONS_MAX`] authorities did), the two agree with each other against the store: the
+    /// cause is the store (a corrupted cursor, a bug), and it halts there (`gap`) instead of giving up public node after public
+    /// node. A node named in the configuration is not replaced: the store halts at once.
+    fn authority_contradicted(&self, at: Hash32, why: &str) -> super::StoreContradiction {
         let entry = self.board.entry(0).to_string();
-        let Some(node) = self.board.node_of(0).filter(|_| super::resolver::is_resolver(&entry)) else { return false };
+        let Some(node) = self.board.node_of(0).filter(|_| super::resolver::is_resolver(&entry)) else {
+            return super::StoreContradiction::Halt(None);
+        };
+        let host = super::resolver::host(&node);
+        let (hosts, times) = {
+            let mut sc = self.store_contradictions.lock().unwrap_or_else(|e| e.into_inner());
+            let rec = match sc.as_mut().filter(|(c, _, _)| *c == at) {
+                Some(rec) => rec,
+                None => sc.insert((at, vec![], 0)),
+            };
+            if !rec.1.contains(&host) {
+                rec.1.push(host.clone());
+            }
+            rec.2 += 1;
+            (rec.1.clone(), rec.2)
+        };
+        if hosts.len() >= 2 || times >= STORE_CONTRADICTIONS_MAX {
+            let why = format!(
+                "the public nodes {} contradicted the store {times} times at its cursor {at}, agreeing with each other against it: the store is at fault (a corrupted cursor or a kobd bug), not the nodes",
+                hosts.join(", ")
+            );
+            tracing::error!(cursor = %at, hosts = %hosts.join(", "), "public nodes on different hosts agree with each other against the store: halting");
+            return super::StoreContradiction::Halt(Some(why));
+        }
         super::judge::contradicted(&entry, &node, why);
-        true
+        super::StoreContradiction::Replaced
     }
 
     fn node_stats(&self) -> Vec<NodeStatus> {
@@ -1265,7 +1298,7 @@ impl<N: ChainSource> MultiNode<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::redact_url;
+    use crate::rpc::{redact_url, StoreContradiction};
 
     #[test]
     fn redacted_urls_keep_scheme_host_and_port_only() {
@@ -1436,13 +1469,40 @@ mod tests {
         });
         let (a, b) = (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap());
         let m = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&[1])));
-        assert!(m.authority_contradicted("stored chain contradicts the node"));
-        assert_eq!(super::super::resolver::current("resolver"), Some(b), "the other node is the authority now");
+        let (cursor, other) = (Hash32([1; 32]), Hash32([2; 32]));
+        let why = "stored chain contradicts the node";
+        let before = super::super::resolver::authority_replaced();
+        assert_eq!(m.authority_contradicted(cursor, why), StoreContradiction::Replaced);
+        assert_eq!(super::super::resolver::current("resolver"), Some(b.clone()), "the other node is the authority now");
         assert!(super::super::resolver::last_reason("resolver").unwrap().starts_with(&super::super::resolver::host(&a)));
+        assert_eq!(super::super::resolver::authority_replaced(), before + 1, "counted (kob_indexer_authority_replaced_total)");
+        // audit round 4 R4-L-1: the new authority, on another host, contradicts the store at the same cursor too: the two agree
+        // with each other against the store, which halts (gap) instead of giving up public node after public node
+        match m.authority_contradicted(cursor, why) {
+            StoreContradiction::Halt(Some(r)) => {
+                assert!(r.contains("a.example, b.example") && r.contains("the store is at fault"), "{r}")
+            }
+            v => panic!("{v:?}"),
+        }
+        assert_eq!(super::super::resolver::current("resolver"), Some(b.clone()), "not replaced: the store halts");
+        assert_eq!(super::super::resolver::authority_replaced(), before + 1);
+        // a contradiction at another cursor is judged afresh (the store moved on)
+        assert_eq!(m.authority_contradicted(other, why), StoreContradiction::Replaced);
+        // one host named again and again (the resolvers have no other): halted at the third contradiction at one cursor
+        let one = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&[1])));
+        *one.store_contradictions.lock().unwrap() = Some((cursor, vec![super::super::resolver::host(&b)], 1));
+        super::super::resolver::tests::set_current("resolver", &b);
+        assert_eq!(one.authority_contradicted(cursor, why), StoreContradiction::Replaced);
+        super::super::resolver::tests::set_current("resolver", &b);
+        assert!(matches!(one.authority_contradicted(cursor, why), StoreContradiction::Halt(Some(_))), "the third at one cursor");
         let spec = |url: &str| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check: false };
         let own = Fixed::new(&[1], Ok(&[]));
         let m = MultiNode::new(vec![(spec("ws://127.0.0.1:18210"), own.clone())], own);
-        assert!(!m.authority_contradicted("stored chain contradicts the node"), "a node of one's own halts the store as before");
+        assert_eq!(
+            m.authority_contradicted(cursor, why),
+            StoreContradiction::Halt(None),
+            "a node of one's own halts the store as before"
+        );
     }
 
     /// The pair's disagreement rules on the primary's single steps: the blocks both report are kept; a contradiction cuts the

@@ -220,6 +220,8 @@ struct State {
     reasons: HashMap<String, String>,
     /// entry -> when it resolved within [`CHURN_WINDOW`] (oldest first)
     resolutions: HashMap<String, VecDeque<Instant>>,
+    /// Chain authorities given up for a finding ([`replace`]; not a lost connection, [`failed`]): [`authority_replaced`].
+    authority_replaced: u64,
 }
 
 impl State {
@@ -259,6 +261,7 @@ fn state() -> &'static Mutex<State> {
             dropped: HashMap::new(),
             reasons: HashMap::new(),
             resolutions: HashMap::new(),
+            authority_replaced: 0,
         })
     })
 }
@@ -296,6 +299,13 @@ pub fn last_reason(url: &str) -> Option<String> {
 /// The node a resolver entry uses now, without resolving (`None`: none yet, or it is being replaced).
 pub fn current(url: &str) -> Option<String> {
     lock().current.get(url).cloned()
+}
+
+/// How many times the chain authority's entry gave its node up for a finding since the start (judged useless by
+/// `rpc::judge`, a disagreement that did not settle, or an answer that contradicted the store; not a lost connection): the
+/// metric `kob_indexer_authority_replaced_total`.
+pub fn authority_replaced() -> u64 {
+    lock().authority_replaced
 }
 
 /// How many times a resolver entry gave its node up (failures and replacements).
@@ -430,7 +440,7 @@ pub fn failed(url: &str, node: &str) {
             return;
         }
     }
-    replace(url, node, "its connection failed or was lost twice within 2 min");
+    give_up(url, node, "its connection failed or was lost twice within 2 min", false);
 }
 
 /// The connect timeout of a client of the resolver entry `url`: [`GRACE_CONNECT_TIMEOUT`] while its node is on its grace
@@ -454,6 +464,12 @@ pub fn connect_timeout(url: &str, default: Duration) -> Duration {
 /// the background (hosts different from the ones in use and from the failed ones). A report about a node the entry no longer
 /// uses is ignored.
 pub fn replace(url: &str, node: &str, why: &str) {
+    give_up(url, node, why, true)
+}
+
+/// [`replace`]; `finding`: for a finding about the node, not a lost connection (counted for the authority,
+/// [`authority_replaced`]).
+fn give_up(url: &str, node: &str, why: &str, finding: bool) {
     if !is_resolver(url) {
         return;
     }
@@ -461,6 +477,9 @@ pub fn replace(url: &str, node: &str, why: &str) {
         let mut s = lock();
         if s.current.get(url).map(String::as_str) != Some(node) {
             return;
+        }
+        if finding && url == RESOLVER {
+            s.authority_replaced += 1;
         }
         s.current.remove(url);
         *s.replaced.entry(url.to_string()).or_default() += 1;
@@ -564,8 +583,14 @@ pub(crate) mod tests {
         s.dropped.clear();
         s.reasons.clear();
         s.resolutions.clear();
+        s.authority_replaced = 0;
         s.resolve = resolve;
         s.background = false;
+    }
+
+    /// The entry `url` uses `node` now (a test sets the state it needs).
+    pub(crate) fn set_current(url: &str, node: &str) {
+        lock().current.insert(url.to_string(), node.to_string());
     }
 
     /// Resolutions are rate-limited: an entry resolves [`CHURN_FREE`] times within [`CHURN_WINDOW`], then waits

@@ -90,6 +90,9 @@ pub struct HealthSnapshot {
     /// `nodes[].cut_reason` says why). Absent when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub node_alarms: Vec<String>,
+    /// Public chain authorities given up for a finding since the start (`rpc::resolver::authority_replaced`: judged useless, a
+    /// disagreement that did not settle, or an answer that contradicted the store; not a lost connection).
+    pub authority_replaced_total: u64,
     /// The store holds every order the node's history still shows. `false` during a fast start ([`crate::faststart`]: the store
     /// follows the chain from the node's sink, and the history is being indexed into a second store; `backfill` then says how far
     /// that one is), and for good in a store that began after the oldest history (`start = "sink"` or a block hash, or a rebase past
@@ -346,6 +349,7 @@ impl HealthSnapshot {
             nodes: vec![],
             node_source: None,
             node_alarms: vec![],
+            authority_replaced_total: 0,
             book_complete: true,
             history_from_daa: None,
             catch_up: None,
@@ -598,6 +602,12 @@ impl HealthSnapshot {
             "gauge",
             "Alarms of nodes named in the configuration (node_alarms of /v1/health); 0 when every node is fine.",
             self.node_alarms.len() as u64,
+        );
+        m(
+            "kob_indexer_authority_replaced_total",
+            "counter",
+            "Public chain authorities given up for a finding (useless, a disagreement that did not settle, an answer contradicting the store); not lost connections.",
+            self.authority_replaced_total,
         );
         if !self.nodes.is_empty() {
             let mut per = |name: &str, kind: &str, help: &str, v: &dyn Fn(&crate::rpc::multi::NodeStatus) -> u64| {

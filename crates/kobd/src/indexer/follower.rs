@@ -479,6 +479,7 @@ impl<S: ChainSource> Follower<S> {
                 h.node_source = source;
             }
             h.node_alarms = alarms;
+            h.authority_replaced_total = crate::rpc::resolver::authority_replaced();
         });
         outcome
     }
@@ -836,12 +837,17 @@ impl<S: ChainSource> Follower<S> {
                 StepOutcome::Retry(msg)
             }
             Err(e @ IngestError::InconsistentRemoved(_)) => {
-                let msg = format!("stored chain contradicts the node: {e}");
-                // a public node that answers inconsistently is given up for another, and the follower asks it
-                if self.source.authority_contradicted(&msg) {
-                    let msg = format!("{msg}; the public node was given up for another, asking it");
-                    self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
-                    return StepOutcome::Retry(msg);
+                let mut msg = format!("stored chain contradicts the node: {e}");
+                // a public node that answers inconsistently is given up for another, and the follower asks it; once two
+                // public nodes on different hosts agree with each other against the store, the store halts (`rpc::multi`)
+                match self.source.authority_contradicted(start, &msg) {
+                    crate::rpc::StoreContradiction::Replaced => {
+                        let msg = format!("{msg}; the public node was given up for another, asking it");
+                        self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                        return StepOutcome::Retry(msg);
+                    }
+                    crate::rpc::StoreContradiction::Halt(Some(why)) => msg = format!("{msg}; {why}"),
+                    crate::rpc::StoreContradiction::Halt(None) => {}
                 }
                 self.health.update(|h| {
                     h.state = FollowerState::Gap;

@@ -93,6 +93,16 @@ pub fn classify_node_message(m: &str) -> NodeErrorKind {
     }
 }
 
+/// What the source made of a chain authority's answer that contradicts the store ([`ChainSource::authority_contradicted`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreContradiction {
+    /// The node was given up for another one (a public node): the follower asks that one.
+    Replaced,
+    /// The store halts at the contradiction (state `gap`). `Some(why)`: the source has reason to blame the store itself (two
+    /// public nodes on different hosts agree with each other against it), said in the gap reason.
+    Halt(Option<String>),
+}
+
 /// Everything the indexer asks of a node. Implemented by [`WrpcClient`] and by the in-memory
 /// node used in tests.
 pub trait ChainSource: Send + Sync + 'static {
@@ -145,12 +155,12 @@ pub trait ChainSource: Send + Sync + 'static {
     fn report_lie(&self, origin: Origin, why: &str) {
         let _ = (origin, why);
     }
-    /// The chain authority's answer contradicts the store (`why`): `true` when the source gave that node up for another one
-    /// (a public node, `rpc::resolver`), so the follower asks again instead of halting. The default: `false` (a node of
-    /// one's own is not replaced; the store halts at the contradiction).
-    fn authority_contradicted(&self, why: &str) -> bool {
-        let _ = why;
-        false
+    /// The chain authority's answer contradicts the store at the cursor `at` (`why`): [`StoreContradiction::Replaced`] when
+    /// the source gave that node up for another one (a public node, `rpc::resolver`), so the follower asks again instead of
+    /// halting. The default: halt (a node of one's own is not replaced; the store halts at the contradiction).
+    fn authority_contradicted(&self, at: Hash32, why: &str) -> StoreContradiction {
+        let _ = (at, why);
+        StoreContradiction::Halt(None)
     }
     /// Per-node counters for `/v1/health` (empty for a single node).
     fn node_stats(&self) -> Vec<multi::NodeStatus> {

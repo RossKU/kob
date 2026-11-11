@@ -2000,6 +2000,7 @@ Poll `/v1/health`, or scrape `GET /v1/metrics` (the same numbers as Prometheus t
 | `kob_indexer_deep_reorgs_total` above 0, `kob_indexer_lean_prune_failures_total` rising | a reorg deeper than the stored chain (its rows were not reverted: rebuild the store); lean pruning that keeps failing (the log says why) |
 | `node_alarms` non-empty, `kob_indexer_node_alarms` above 0 | a node named in the configuration is unusable (another network, no UTXO index, not synced for 2 min, hanging, behind the other node, contradicting it; Part C, *Node*): it is never replaced, fix it; a cross-checking one is cut off from the pair meanwhile |
 | `kob_indexer_node_replaced_total` rising every few minutes | the public nodes keep failing; `nodes[].cut_reason` says which host and why |
+| `kob_indexer_authority_replaced_total` rising | public chain authorities given up for a finding (useless, a disagreement that did not settle, an answer contradicting the store); `nodes[].cut_reason` of the authority says why |
 | `lag_seconds` above 1 h / 6 h / 12 h / 24 h | approaching the node's retention; 12 h is consensus finality, 24 h leaves little of the default 30 h pruning window |
 | `last_progress_unix_ms` older than 60 s | the follower is stuck (progress is stamped on every successful poll, including "nothing new") |
 | `vspc_timeouts_total` rising, `batch_window_blue` small, `lag_blue` not falling | the link to the node is slower than the chain (section 3, *Bandwidth*): run the indexer next to its node |
@@ -3199,7 +3200,11 @@ store halted at a **gap** does not end the process: the follower moves a pruned 
 reset that bound, every few minutes. The process stays up and says so (`kob_indexer_halted` 1, the status line, and the
 error `indexer still halted, nothing is indexed or traded` again every 10 minutes). A public chain authority whose answer
 contradicts the store (its removed chain blocks do not begin at the cursor) is given up for another instead, and the
-follower asks that one; only a node of your own halts the store there.
+follower asks that one; a node of your own halts the store there. When the next public authority, on another host,
+contradicts the store at the same cursor too (or three authorities did), the two agree with each other against the store:
+the cause is the store (a corrupted cursor or a kobd bug), not the nodes, and the store halts there (`gap`, the reason
+says `the store is at fault`; 7.4) instead of giving up public node after public node. Each authority given up for a
+finding is counted (`kob_indexer_authority_replaced_total`, `authority_replaced_total` in `/v1/health`).
 
 Logs (`RUST_LOG=info`, default) report every submission, conflict, rejection, acceptance, final
 transaction and reorg rollback with its transaction id. A batch that triggers or arms stops logs `the batch triggers or
