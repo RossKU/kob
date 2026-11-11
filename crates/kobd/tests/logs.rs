@@ -1,5 +1,6 @@
-//! The log of the real binary: `--log-file` writes the log to a file, a console that is not a terminal gets no ANSI colour
-//! codes (and nothing at all once a log file takes the log), and every start names the funding address.
+//! The log of the real binary: `--log-file` writes a copy of the log to a file (the console keeps it, a pipe included, so
+//! `journalctl` and `docker logs` see it), a console that is not a terminal gets no ANSI colour codes, every start names the
+//! funding address, and the log lines have kaspad's shape (UTC time to the millisecond, the level, no module path).
 
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
@@ -57,7 +58,7 @@ fn drain(mut child: Child) -> (String, String) {
 }
 
 #[test]
-fn a_log_file_takes_the_log_of_a_console_that_is_not_a_terminal_without_colour_codes() {
+fn a_log_file_copies_the_log_of_a_console_that_is_not_a_terminal_without_colour_codes() {
     let (port, _node) = silent_node();
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("logs").join("executor.log");
@@ -72,9 +73,14 @@ fn a_log_file_takes_the_log_of_a_console_that_is_not_a_terminal_without_colour_c
     assert!(text.contains(&format!("funding_address={address}")), "{text}");
     assert!(address.starts_with("kaspatest:"));
     assert!(!text.contains('\u{1b}'), "no ANSI colour codes in the file: {text:?}");
+    // kaspad's line shape: `2026-11-11 08:44:28.529Z  INFO starting the executor ...`, no module path
+    let first = text.lines().find(|l| l.contains("starting the executor")).unwrap();
+    assert!(first.len() > 24 && first.as_bytes()[10] == b' ' && &first[23..24] == "Z" && first.contains(" INFO "), "{first}");
+    assert!(!first.contains("kobd::"), "{first}");
+    // the console is a pipe: it shows the log too (the file is a copy), says where the file is, and never colour codes
     let (out, err) = drain(child);
-    // the console is a pipe: with a log file it shows nothing, and never colour codes
-    assert!(!out.contains("starting the executor") && !out.contains('\u{1b}'), "stdout: {out:?}");
+    assert!(out.contains("Log file: ") && out.contains("executor.log"), "stdout: {out:?}");
+    assert!(out.contains("starting the executor") && !out.contains('\u{1b}'), "stdout: {out:?}");
     assert!(!err.contains('\u{1b}'), "stderr: {err:?}");
 }
 

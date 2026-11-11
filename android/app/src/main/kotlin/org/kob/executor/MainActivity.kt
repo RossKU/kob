@@ -374,7 +374,7 @@ class MainActivity : Activity() {
         }
         val line = statusLine()
         if (running && !updating && line != null) {
-            // "indexer ... | nodes ... | N transactions sent, ... | funds X KAS | no warnings"
+            // "indexer ... | nodes ... | sent N, final N, pending N, profit X KAS | funds X KAS | no warnings"
             for (part in line.split(" | ")) if (!part.startsWith("indexer ") && !part.startsWith("nodes: ") && !part.startsWith("fast start: ")) s.append(part).append('\n')
         }
         ExecutorService.failure?.let { if (!running) warnings += "not started: $it" }

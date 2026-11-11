@@ -1,8 +1,11 @@
 //! The executor's log: the console, and optionally a size-rotated file (`--log-file`, `log_file` in the configuration).
 //!
+//! * One line per event, as kaspad prints them: the UTC time to the millisecond, the level, the message and its fields
+//!   (`2026-11-11 08:44:28.529Z  INFO status: ...`). The module path of the event is shown only while `RUST_LOG` is set
+//!   (a debugging session).
 //! * No ANSI colour codes unless the console is a terminal (and `NO_COLOR` is unset); the file never has any.
-//! * With a log file the console shows the log only while it is a terminal: a scheduled task or a service has no console
-//!   to write to, and its log is the file.
+//! * With a log file the console keeps showing the log (a terminal, a pipe, `journalctl`, `docker logs`): the file is a copy
+//!   that is rotated, not a replacement. The start banner names the file.
 //! * The file is rotated by size: when the next event would take it past `max_bytes` it becomes `<file>.1`, the older ones shift
 //!   to `.2`, `.3`, ... and the one past `keep` is deleted, so the log takes at most `(keep + 1) * max_bytes`. A file that was
 //!   there before the start is appended to.
@@ -105,14 +108,16 @@ impl Rotating {
     }
 }
 
-/// Opens `opts.file` for the log from now on. The console stops showing the log unless it is a terminal.
+/// Opens `opts.file` for the log from now on (as a copy: the console keeps showing the log).
 pub fn attach_file(opts: LogOptions) -> std::io::Result<()> {
     let f = Rotating::open(opts)?;
     *FILE.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
-    if !console_is_terminal() {
-        CONSOLE.store(false, Ordering::Relaxed);
-    }
     Ok(())
+}
+
+/// Whether the console half of the log goes to stderr.
+pub fn on_stderr() -> bool {
+    TO_STDERR.load(Ordering::Relaxed)
 }
 
 /// Shows or hides the log on the console (the file, when attached, keeps it either way). The setup dialogue hides it: raw log
@@ -183,14 +188,43 @@ impl<'a> MakeWriter<'a> for FileSink {
     }
 }
 
+/// The time of a log line: UTC to the millisecond (`2026-11-11 08:44:28.529Z`).
+struct UtcMillis;
+
+impl tracing_subscriber::fmt::time::FormatTime for UtcMillis {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        w.write_str(&utc_millis_text(now.as_millis() as u64))
+    }
+}
+
+/// `ms` (milliseconds since the Unix epoch) as `YYYY-MM-DD hh:mm:ss.mmmZ`.
+pub fn utc_millis_text(ms: u64) -> String {
+    let (secs, milli) = (ms / 1000, ms % 1000);
+    let (days, rem) = (secs / 86_400, secs % 86_400);
+    // the civil date of a day count (Howard Hinnant's days_from_civil, inverted)
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}.{milli:03}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
 /// Installs the subscriber: `RUST_LOG` (default `info`), the console on stdout (`to_stderr`: stderr, for the commands that
-/// keep stdout for one JSON object), ANSI colour only on a terminal.
+/// keep stdout for their output), ANSI colour only on a terminal, kaspad's line shape (the module path only under `RUST_LOG`).
 pub fn init(to_stderr: bool) {
     TO_STDERR.store(to_stderr, Ordering::Relaxed);
+    let debugging = std::env::var_os("RUST_LOG").is_some();
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let ansi = console_is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    let console = tracing_subscriber::fmt::layer().with_writer(ConsoleSink).with_ansi(ansi);
-    let file = tracing_subscriber::fmt::layer().with_writer(FileSink).with_ansi(false);
+    let console =
+        tracing_subscriber::fmt::layer().with_writer(ConsoleSink).with_ansi(ansi).with_timer(UtcMillis).with_target(debugging);
+    let file = tracing_subscriber::fmt::layer().with_writer(FileSink).with_ansi(false).with_timer(UtcMillis).with_target(debugging);
     let _ = tracing_subscriber::registry().with(console.and_then(file)).with(filter).try_init();
 }
 
@@ -250,6 +284,15 @@ mod tests {
         }
         assert_eq!(names(e.path()), ["x.log"]);
         assert_eq!(std::fs::metadata(e.path().join("x.log")).unwrap().len(), 5000);
+    }
+
+    #[test]
+    fn the_time_of_a_line_is_utc_to_the_millisecond() {
+        assert_eq!(utc_millis_text(0), "1970-01-01 00:00:00.000Z");
+        // 2026-11-11 08:44:28.529 UTC
+        assert_eq!(utc_millis_text(1_794_386_668_529), "2026-11-11 08:44:28.529Z");
+        // a leap day
+        assert_eq!(utc_millis_text(951_782_400_000), "2000-02-29 00:00:00.000Z");
     }
 
     #[test]

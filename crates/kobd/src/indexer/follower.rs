@@ -753,8 +753,10 @@ impl<S: ChainSource> Follower<S> {
                 if let Some((h, b)) = blue.filter(|(h, _)| *h == a.cursor.hash) {
                     *self.cursor_blue.lock().unwrap_or_else(|e| e.into_inner()) = Some((h, b));
                 }
+                // per-batch detail: DEBUG (`RUST_LOG=kobd=debug`); the status line every `--status-secs` says how the
+                // indexer is doing, as kaspad's "Processed N blocks in the last 10s" does
                 if a.added >= 100 || c.by_window {
-                    tracing::info!(
+                    tracing::debug!(
                         added = a.added,
                         removed = a.removed_hashes,
                         txs = n_txs,

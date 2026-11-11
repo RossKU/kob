@@ -48,14 +48,33 @@ pub fn cancel_only_generations() -> Vec<&'static str> {
     v
 }
 
-/// One line for the status line and the start log: `kobd 0.1.0 (commit 9e877ae7), payload v3, templates 1a2b3c4d5e6f7a8b`.
+/// The network this build is bound to, as `--version` names it: `testnet-10 build`, `mainnet build`, or `development build,
+/// no network` for the reference build (which takes the network from the configuration).
+pub fn build_kind() -> String {
+    match kob_protocol::artifacts::deployment_network() {
+        Some(n) => format!("{n} build"),
+        None => "development build, no network".to_string(),
+    }
+}
+
+/// The version as `kobd --version` prints it after the name: `0.1.0 (testnet-10 build, commit 9e877ae7c0de, payload v4,
+/// templates 1a2b3c4d5e6f7a8b)`. The start log and `/v1/health` carry the same facts.
+pub fn long() -> &'static str {
+    static LONG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    LONG.get_or_init(|| {
+        let commit = commit().map(|c| c.get(..12).unwrap_or(c)).unwrap_or("unknown");
+        format!(
+            "{VERSION} ({}, commit {commit}, payload v{}, templates {})",
+            build_kind(),
+            kob_protocol::payload::PAYLOAD_VERSION,
+            template_generation()
+        )
+    })
+}
+
+/// One line for the start log: `kobd 0.1.0 (testnet-10 build, commit 9e877ae7c0de, payload v4, templates 1a2b3c4d5e6f7a8b)`.
 pub fn build_line() -> String {
-    let commit = commit().map(|c| c.get(..12).unwrap_or(c)).unwrap_or("unknown");
-    format!(
-        "kobd {VERSION} (commit {commit}), payload v{}, templates {}",
-        kob_protocol::payload::PAYLOAD_VERSION,
-        template_generation()
-    )
+    format!("kobd {}", long())
 }
 
 /// The `kob_build_info` series (Prometheus): 1, with the build in its labels.
@@ -100,6 +119,12 @@ mod tests {
         assert!(g.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(v["template_generation"], g);
         assert!(build_line().contains(g) && build_info_metric().contains(&format!("template_generation=\"{g}\"")));
+        // `--version` names the network the build is bound to (or none) and the commit
+        assert!(long().starts_with(VERSION) && long().contains(&build_kind()) && long().contains("commit "), "{}", long());
+        match kob_protocol::artifacts::deployment_network() {
+            Some(n) => assert_eq!(build_kind(), format!("{n} build")),
+            None => assert_eq!(build_kind(), "development build, no network"),
+        }
         assert!(!cancel_only_generations().is_empty());
     }
 }

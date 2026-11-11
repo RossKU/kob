@@ -247,7 +247,7 @@ pub struct Backfill {
 impl Backfill {
     /// The part of the status line about the fast start: what the executor trades on and when the full book is there.
     pub fn status_text(&self) -> String {
-        let mut s = format!("fast start: trading on orders seen since {}", utc_clock(self.tip_since_unix));
+        let mut s = format!("fast start: trading on the orders since {}", utc_clock(self.tip_since_unix));
         if !self.gaps.is_empty() {
             let skipped: u64 = self.gaps.iter().map(SkippedGap::daa).sum();
             s.push_str(&format!(
@@ -256,11 +256,9 @@ impl Backfill {
             ));
         }
         match (self.eta_seconds, self.lag_seconds) {
-            (Some(eta), Some(lag)) => {
-                s.push_str(&format!("; full book in about {} ({} of history to index)", human_secs(eta), human_secs(lag)))
-            }
-            (None, Some(lag)) => s.push_str(&format!("; full book: estimating ({} of history to index)", human_secs(lag))),
-            _ => s.push_str("; full book: estimating"),
+            (Some(eta), Some(lag)) => s.push_str(&format!(", full book in about {} ({} to index)", human_secs(eta), human_secs(lag))),
+            (None, Some(lag)) => s.push_str(&format!(", full book: estimating ({} to index)", human_secs(lag))),
+            _ => s.push_str(", full book: estimating"),
         }
         s
     }
@@ -759,8 +757,8 @@ impl HealthSnapshot {
         if let Some(from) = self.history_from_daa {
             let ago = self.node_daa.filter(|_| from > 0).map(|n| format!("about {} ago", human_secs(n.saturating_sub(from) / 10)));
             s.push_str(&format!(
-                " | history begins {}: older orders are not in this store (book_complete false; a start at the node's pruning point reads all it retains)",
-                ago.unwrap_or_else(|| "at the start point".to_string())
+                " | history from {} (older orders are not in this store)",
+                ago.unwrap_or_else(|| "the start point".to_string())
             ));
         }
         if !self.gaps.is_empty() {
@@ -961,11 +959,11 @@ mod tests {
         h.node_daa = Some(100_004);
         h.book_complete = false;
         h.history_from_daa = Some(64_000);
-        assert!(h.status_line().contains("history begins about 60 min ago"), "{}", h.status_line());
+        assert!(h.status_line().contains("history from about 60 min ago"), "{}", h.status_line());
         assert!(h.status_line().contains("older orders are not in this store"), "{}", h.status_line());
         // the start block's score was not known: the line still says it
         h.history_from_daa = Some(0);
-        assert!(h.status_line().contains("history begins at the start point"), "{}", h.status_line());
+        assert!(h.status_line().contains("history from the start point"), "{}", h.status_line());
         assert_eq!(serde_json::to_value(&h).unwrap()["history_from_daa"], 0);
     }
 
@@ -1003,12 +1001,12 @@ mod tests {
         assert_eq!(
             b(Some(27_600), Some(107_000)).status_text(),
             format!(
-                "fast start: trading on orders seen since {}; full book in about 7 h 40 min (29 h 43 min of history to index)",
+                "fast start: trading on the orders since {}, full book in about 7 h 40 min (29 h 43 min to index)",
                 utc_clock(1_790_000_000 + 14 * 3600 + 32 * 60)
             )
         );
-        assert!(b(None, Some(107_000)).status_text().ends_with("full book: estimating (29 h 43 min of history to index)"));
-        assert!(b(None, None).status_text().ends_with("; full book: estimating"));
+        assert!(b(None, Some(107_000)).status_text().ends_with("full book: estimating (29 h 43 min to index)"));
+        assert!(b(None, None).status_text().ends_with(", full book: estimating"));
         // the health JSON a client reads
         let mut h = HealthSnapshot::new("testnet-10");
         assert!(h.book_complete && serde_json::to_value(&h).unwrap().get("backfill").is_none());

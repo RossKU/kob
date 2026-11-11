@@ -29,6 +29,18 @@ use super::submit::{ResendClock, Tracked, Tracker, TrackerConfig};
 use super::wallet::{address_of, p2pk_spk_string, Signer};
 use crate::keepers::{tick_with_subsidy as keeper_tick, JobKind, KeeperConfig, KeeperInput, SubsidyAllowance, SubsidyBudget};
 
+/// An event at DEBUG when `$quiet` holds, at INFO otherwise: what a dry run builds again on every tick is detail, what a live
+/// run submits is a state change (the log keeps the periodic status line and the state changes at INFO, as kaspad does).
+macro_rules! info_unless {
+    ($quiet:expr, $($t:tt)*) => {
+        if $quiet {
+            tracing::debug!($($t)*)
+        } else {
+            tracing::info!($($t)*)
+        }
+    };
+}
+
 /// A read of the book that blocks on a database: the runner runs it on the blocking thread pool, never on a runtime worker.
 pub type BookRead = Box<dyn FnOnce() -> anyhow::Result<MemoryBook> + Send>;
 
@@ -1301,7 +1313,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             for p in report.prepared {
                 let kind = "match";
                 if !p.plan.updates.is_empty() || p.plan.triggered() > 0 {
-                    tracing::info!(
+                    info_unless!(
+                        self.cfg.dry_run,
                         txid = %kob_protocol::json::to_hex(&p.txid()),
                         triggered = p.plan.triggered(),
                         updates = p.plan.updates.len(),
@@ -1309,7 +1322,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     );
                 }
                 for k in &p.plan.kept {
-                    tracing::info!(
+                    info_unless!(
+                        self.cfg.dry_run,
                         txid = %kob_protocol::json::to_hex(&p.txid()),
                         token = %kob_protocol::json::to_hex(&k.token),
                         amount = k.amount,
@@ -1569,7 +1583,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             tracing::debug!(token = %kob_protocol::json::to_hex(token), %why, "maintenance job not built");
         }
         for j in report.jobs {
-            tracing::info!(
+            info_unless!(
+                self.cfg.dry_run,
                 kind = j.kind.name(),
                 token = %kob_protocol::json::to_hex(&j.token),
                 txid = %kob_protocol::json::to_hex(&j.signed.tx.id),
@@ -1684,6 +1699,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         let mut low_funds_logged: Option<(std::time::Instant, u64)> = None;
         // since when the book source has been halted (`BookSource::fatal`)
         let mut halted_since: Option<std::time::Instant> = None;
+        // the reasons of the last tick's skipped books and jobs: a new reason is logged at INFO, a repeated one at DEBUG
+        let mut skipped_before: BTreeSet<String> = BTreeSet::new();
+        // the build, once (the status line no longer repeats it)
         tracing::info!("{}", crate::version::build_line());
         loop {
             let res = {
@@ -1709,7 +1727,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             match res {
                 Ok(r) => {
                     if !r.built.is_empty() || !r.skipped.is_empty() {
-                        tracing::info!(
+                        // the per-tick detail (the submissions themselves are logged at INFO where they are sent)
+                        tracing::debug!(
                             daa = r.daa,
                             built = r.built.len(),
                             submitted = r.submitted.len(),
@@ -1718,12 +1737,14 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                             gone = r.gone,
                             "tick"
                         );
-                        // why a book or job was skipped (an engine rejection, unprofitable, too large): the operator's only
-                        // trace of a batch that keeps failing (the soak's cross-limit budget finding needed it)
-                        for why in &r.skipped {
-                            tracing::info!(why = %why, "skipped");
-                        }
                     }
+                    // why a book or job was skipped (an engine rejection, unprofitable, too large): the operator's only
+                    // trace of a batch that keeps failing (the soak's cross-limit budget finding needed it). A reason is
+                    // logged at INFO when it appears, at DEBUG while it repeats tick after tick.
+                    for why in &r.skipped {
+                        info_unless!(skipped_before.contains(why), why = %why, "skipped");
+                    }
+                    skipped_before = r.skipped.iter().cloned().collect();
                     // only a funding actually read is judged (a step that planned nothing read none: not `0`), and on the
                     // whole balance: coins pending transactions hold are still the operator's (a busy operator's free
                     // coins are often a few KAS while its balance is large)
@@ -1845,7 +1866,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             dropped: t.dropped_total,
             oldest_pending_secs: t.oldest_pending_daa(rep.daa) / 10,
             clock_skew_alarm: self.clock_skew.filter(|_| self.clock_alarm()),
-            build: Some(crate::version::build_line()),
+            // the build is logged once at the start, not on every status line
+            build: None,
         }
     }
 }
@@ -1863,21 +1885,20 @@ pub fn kas_text(sompi: i64) -> String {
     }
 }
 
-/// The one-line status an operator watching the console reads (`kobd --executor --status-secs`, every 10 s by default, as kaspad's):
-/// where the book is, what the executor sent and earned since the start, its funds, and what needs attention. The metrics
-/// file (`--metrics-file`) carries the same facts for monitoring.
+/// The one-line status an operator watching the console reads (`kobd --executor --status-secs`, every 10 s by default, as kaspad
+/// prints its "Processed N blocks in the last 10s" line): where the book is, what the executor sent and earned since the start,
+/// its funds, the mode, and what needs attention. What does not change (the build, the configuration) is logged once at the
+/// start instead. The metrics file (`--metrics-file`) carries the same facts for monitoring.
 pub fn status_line(f: &StatusFacts) -> String {
     let mut parts = vec![];
+    if f.dry_run {
+        // the operator's choice, not a warning
+        parts.push("dry run (nothing is submitted)".to_string());
+    }
     if let Some(s) = &f.source {
         parts.push(s.clone());
     }
-    parts.push(format!(
-        "{} transactions sent, {} final, {} pending, profit of the final ones {} KAS",
-        f.submitted,
-        f.finalized,
-        f.pending,
-        kas_text(f.profit_sompi)
-    ));
+    parts.push(format!("sent {}, final {}, pending {}, profit {} KAS", f.submitted, f.finalized, f.pending, kas_text(f.profit_sompi)));
     parts.push(match f.funding_total {
         Some(t) => format!("funds {} KAS", kas_text(t as i64)),
         None => "funds not read yet".to_string(),
@@ -1914,9 +1935,6 @@ pub fn status_line(f: &StatusFacts) -> String {
     }
     if let Some(s) = f.clock_skew_alarm {
         warn.push(format!("the local clock is {s} s off the chain's (set it: NTP); day orders near their deadline are not filled"));
-    }
-    if f.dry_run {
-        warn.push("dry run: nothing is submitted".to_string());
     }
     parts.push(if warn.is_empty() { "no warnings".to_string() } else { format!("WARNING: {}", warn.join("; ")) });
     if let Some(b) = &f.build {
@@ -2152,16 +2170,23 @@ mod tests {
         };
         assert_eq!(
             status_line(&f),
-            "indexer following, caught up (2 DAA behind the node), 9 orders indexed | 14 transactions sent, 12 final, 1 pending, \
-             profit of the final ones 0.42 KAS | funds 182.4 KAS | no warnings"
+            "indexer following, caught up (2 DAA behind the node), 9 orders indexed | sent 14, final 12, pending 1, profit 0.42 KAS \
+             | funds 182.4 KAS | no warnings"
         );
+        // a dry run is a mode, not a warning
+        f.dry_run = true;
+        assert!(
+            status_line(&f).starts_with("dry run (nothing is submitted) | indexer following")
+                && status_line(&f).ends_with("| no warnings")
+        );
+        f.dry_run = false;
         f.source = None;
         f.funding_total = Some(5_000_000_000);
         f.paused = true;
         f.not_ready = Some("indexer catching_up, 900 DAA behind the node".into());
         f.rejected = 2;
         let s = status_line(&f);
-        assert!(s.starts_with("14 transactions sent"), "{s}");
+        assert!(s.starts_with("sent 14, final 12"), "{s}");
         assert!(
             s.ends_with(
                 "funds 50 KAS | WARNING: PAUSED (the pause file exists); waiting for the indexer (indexer catching_up, 900 DAA behind \

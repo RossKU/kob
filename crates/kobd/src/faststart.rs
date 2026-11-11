@@ -223,7 +223,7 @@ impl BookSource for FastSource {
         }
         let fast = match self.tip_health.snapshot().backfill {
             Some(b) => b.status_text(),
-            None => "fast start: trading on the orders seen since the start; full book: estimating".to_string(),
+            None => "fast start: trading on the orders since the start, full book: estimating".to_string(),
         };
         Some(match own {
             Some(o) => format!("{fast} | {o}"),
