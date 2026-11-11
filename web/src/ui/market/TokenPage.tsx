@@ -31,7 +31,7 @@ import { usdFlippedStatsModel, usdStatsModel } from './stats-usd';
 import { BookFrame, BookGrouping, OrderBook, StaleSince } from './OrderBook';
 import { FavoriteStar } from './FavoriteStar';
 import { isFavoriteToken, toggleToken, useFavorites } from './favorites';
-import { FlipButton, MarketFrame, MarketShell, PairSelector } from './MarketBar';
+import { FlipButton, MarketFrame, MarketShell, PairSelector, useWideMarket } from './MarketBar';
 import { ForgetMarket } from './ForgetMarket';
 import { settled } from './market-list';
 import { useHeldUntil } from './use-market-list';
@@ -248,6 +248,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const statsForView = sm.last || !last ? sm : { ...sm, last: last.text, lastSide: last.side };
   // the USD display (Settings): the KAS tiles of the strip in dollars (a flipped market's prices are tokens per KAS and stay; its KAS volume tile is dollars)
   const fiat = useFiat();
+  // three columns: the depth chart is a panel of its own; below that it is a tab of the price chart's panel
+  const wide = useWideMarket();
   const tapeLast = useMemo(() => {
     const r = tape?.rows.find((x) => x.price !== null);
     return r && tape?.basis ? { price: r.price!, basis: tape.basis } : null;
@@ -333,6 +335,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     openPair(next);
   };
 
+  const depthChart = (
+    <DepthChart fiat={inverted ? fiat : null} series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
+  );
+
   return (
     <MarketShell
       data-testid="token-page"
@@ -412,13 +418,15 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       }
       chart={
         <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" until={keptMarketAt} /> : undefined}>
-          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} />
+          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} {...(wide ? {} : { depth: depthChart })} />
         </Section>
       }
       depth={
-        <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card" actions={since !== null ? <SinceBadge since={since} area="depth" /> : undefined}>
-          <DepthChart fiat={inverted ? fiat : null} series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
-        </Section>
+        wide ? (
+          <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card" actions={since !== null ? <SinceBadge since={since} area="depth" /> : undefined}>
+            {depthChart}
+          </Section>
+        ) : undefined
       }
       ticket={
         <div class="stack mkt-area-ticket">

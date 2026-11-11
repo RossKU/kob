@@ -28,7 +28,7 @@ import { FavoriteStar } from './FavoriteStar';
 import { isFavoritePair, togglePair, useFavorites } from './favorites';
 import { PriceChart, type UsdChartSpec } from './PriceChart';
 import { useLiveRefresh } from './live';
-import { FlipButton, MarketFrame, MarketShell, PairSelector } from './MarketBar';
+import { FlipButton, MarketFrame, MarketShell, PairSelector, useWideMarket } from './MarketBar';
 import { ForgetMarket } from './ForgetMarket';
 import { settled } from './market-list';
 import { openPair } from './market-nav';
@@ -214,6 +214,8 @@ export function PairPage(props: { base: string; quote: string }) {
   const fillsView = settled(fills) ? (fills.data ?? null) : undefined;
   const pairFillsSrc = useMemo(() => ({ base: props.base, quote: props.quote, view: fillsView }), [props.base, props.quote, fillsView]);
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
+  // three columns: the depth chart is a panel of its own; below that it is a tab of the price chart's panel
+  const wide = useWideMarket();
 
   const sides = [baseSide, quoteSide];
   const blocked = sides.find((s) => s.state === 'blocked');
@@ -271,6 +273,18 @@ export function PairPage(props: { base: string; quote: string }) {
   const statsLoading = !!indexer && ((stats.data === undefined && stats.loading) || (candles.data === undefined && candles.loading) || (fills.data === undefined && fills.loading));
   const unavailable = !!indexer && book.data === null && !book.loading && !book.error;
   const onPick = (row: PairLevelRow) => setPrefill(pickOf(row, base));
+  const depthChart = (
+    <DepthChart
+      series={depthSeries}
+      loading={!!indexer && book.data === undefined && !book.error}
+      unavailable={!!book.error && !depthSeries}
+      ticker={baseInfo.ticker}
+      priceUnit={t('market.stats.unitOf', { base: baseInfo.ticker, quote: quoteInfo.ticker })}
+      dp={dp}
+      amountDp={Math.min(base.decimals, 4)}
+      source="book"
+    />
+  );
   return (
     <MarketShell
       data-testid="pair-page"
@@ -358,24 +372,17 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       chart={
         <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card">
-          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} />
+          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} {...(wide ? {} : { depth: depthChart })} />
           <p class="small muted" style="margin:6px 0 0" data-testid="pair-chart-note">{t('pair.chart.note', { base: baseInfo.ticker, quote: quoteInfo.ticker })}</p>
           {idleNote ? <p class="small muted" style="margin:4px 0 0" data-testid="pair-chart-idle">{idleNote}</p> : null}
         </Section>
       }
       depth={
-        <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card">
-          <DepthChart
-            series={depthSeries}
-            loading={!!indexer && book.data === undefined && !book.error}
-            unavailable={!!book.error && !depthSeries}
-            ticker={baseInfo.ticker}
-            priceUnit={t('market.stats.unitOf', { base: baseInfo.ticker, quote: quoteInfo.ticker })}
-            dp={dp}
-            amountDp={Math.min(base.decimals, 4)}
-            source="book"
-          />
-        </Section>
+        wide ? (
+          <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card">
+            {depthChart}
+          </Section>
+        ) : undefined
       }
       ticket={
         <div class="stack mkt-area-ticket">

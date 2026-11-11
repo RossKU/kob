@@ -5,6 +5,11 @@
 // Drawing tools (horizontal line, trend line, delete): the library has none, so they are a series primitive of its plugin API (chart-drawings-primitive.ts)
 // with the model and the browser storage in chart-drawings.ts. While a tool is on, a transparent layer over the plot area (the price and time axes stay
 // free) takes the clicks and taps; with no tool on, there is no layer and the chart pans and zooms as before. Drawings stay in this browser, per market.
+//
+// Depth tab (under 1200 px, where the depth chart has no panel of its own: market.css): the page hands the depth chart in as `depth` and the panel's header gets a
+// "Price | Depth" switch, remembered in this browser. The price chart is only hidden behind the depth chart (visibility, its box keeps its size), never unmounted, so its
+// interval, zoom and drawings are exactly as they were; the depth chart is mounted while it is shown, so it measures the box it fills.
+import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, MouseEventParams, Time, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
@@ -12,7 +17,7 @@ import type { CandleInterval } from '../../data/indexer-types';
 import type { IndexerApi } from '../../data/indexer';
 import { CANDLE_INTERVALS } from '../../data/indexer';
 import { t } from '../../i18n';
-import { ErrorBanner, useAsync } from '../kit';
+import { ErrorBanner, Segmented, useAsync } from '../kit';
 import { loadCandles, MAX_BARS, type ChartSource, type ChartView } from './candle-feed';
 import { useTheme } from '../shell/theme';
 import { basisOf, chartSeries, fillCandleGaps, INTERVAL_MS, parseCandles, priceText, type ChartBar, type VolumeBar } from './market-model';
@@ -27,6 +32,17 @@ let lwPromise: Promise<Lw> | null = null;
 const loadLw = (): Promise<Lw> => (lwPromise ??= import('lightweight-charts'));
 
 const INTERVAL_KEY = 'kob.chart.interval';
+const VIEW_KEY = 'kob.chart.view';
+type View = 'price' | 'depth';
+
+function storedView(): View {
+  try {
+    if (localStorage.getItem(VIEW_KEY) === 'depth') return 'depth';
+  } catch {
+    /* no storage */
+  }
+  return 'price';
+}
 
 function storedInterval(): CandleInterval {
   try {
@@ -110,6 +126,8 @@ export interface PriceChartProps {
   quoteTicker?: string;
   /** draw a KAS book the other way round (orientation.ts): 1/price, high and low swap, volume in the other asset. Display only. */
   inverted?: boolean;
+  /** the depth chart folded in as a tab (a layout without a depth panel of its own); omitted: the panel is the price chart only */
+  depth?: ComponentChildren;
 }
 
 interface Series {
@@ -133,7 +151,22 @@ export function PriceChart(props: PriceChartProps) {
       /* no storage */
     }
   };
+  const [view, setViewState] = useState<View>(storedView);
+  const setView = (v: View) => {
+    setViewState(v);
+    // a drawing tool does not stay on behind the depth chart
+    if (v === 'depth') {
+      setTool(null);
+      setPending(null);
+    }
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* no storage */
+    }
+  };
   const { indexer, token, usd } = props;
+  const showDepth = props.depth !== undefined && view === 'depth';
   const inverted = !!props.inverted;
   const usdKey = usd ? `${usd.base.token}/${usd.quote.token}` : '';
   // the series on screen and what it was loaded for: a live refresh reads only the bars since its newest one; a change of source, interval
@@ -407,16 +440,28 @@ export function PriceChart(props: PriceChartProps) {
   const shown = legend ?? legendOf.current(series.bars.length - 1);
 
   return (
-    <div data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length}>
-      <div class="chart-head">
-        <div class="chart-intervals" role="group" aria-label={t('market.chart.interval')} data-testid="chart-intervals">
+    <div data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length} data-view={showDepth ? 'depth' : 'price'}>
+      <div class="chart-head" data-view={showDepth ? 'depth' : 'price'}>
+        {props.depth !== undefined ? (
+          <Segmented
+            options={[
+              { value: 'price' as View, label: t('market.chart.view.price'), 'data-testid': 'chart-view-price' },
+              { value: 'depth' as View, label: t('market.chart.view.depth'), 'data-testid': 'chart-view-depth' },
+            ]}
+            value={view}
+            onChange={setView}
+            aria-label={t('market.chart.view')}
+            data-testid="chart-view"
+          />
+        ) : null}
+        <div class="chart-intervals chart-price-only" role="group" aria-label={t('market.chart.interval')} data-testid="chart-intervals">
           {CANDLE_INTERVALS.map((iv) => (
             <button key={iv} type="button" aria-pressed={iv === interval ? 'true' : 'false'} data-testid={`chart-interval-${iv}`} onClick={() => setInterval(iv)}>
               {t(`market.chart.iv.${iv}`)}
             </button>
           ))}
         </div>
-        <div class="chart-tools" role="group" aria-label={t('market.chart.draw.tools')} title={t('market.chart.draw.local')} data-testid="chart-tools">
+        <div class="chart-tools chart-price-only" role="group" aria-label={t('market.chart.draw.tools')} title={t('market.chart.draw.local')} data-testid="chart-tools">
           {(['hline', 'trend', 'erase'] as const).map((k) => (
             <button key={k} type="button" disabled={!ready} aria-pressed={toolOn === k ? 'true' : 'false'} aria-label={t(`market.chart.draw.${k}`)} title={`${t(`market.chart.draw.${k}`)}. ${t('market.chart.draw.local')}`} data-testid={`draw-${k}`} onClick={() => pickTool(k)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -428,51 +473,54 @@ export function PriceChart(props: PriceChartProps) {
             {t('market.chart.draw.clearShort')}
           </button>
         </div>
-        <span class="small muted" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' })}</span>
+        <span class="small muted chart-price-only" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' })}</span>
       </div>
       <ErrorBanner error={candles.error ?? libError} title={t('market.chart.error')} onRetry={candles.reload} />
-      <div class="chart-box">
-        <div class="chart-canvas" ref={boxRef} aria-hidden="true" />
-        {drawings.length ? (
-          <ul class="sr-only" aria-label={t('market.chart.draw.list')} data-testid="chart-draw-list">
-            {drawings.map((d) => (
-              <li key={d.id} data-kind={d.kind}>{d.kind === 'hline' ? t('market.chart.draw.listHline', { price: priceTxt(d.price) }) : t('market.chart.draw.listTrend', { from: priceTxt(d.a.price), to: priceTxt(d.b.price) })}</li>
-            ))}
-          </ul>
-        ) : null}
-        {toolOn ? (
-          <>
-            <div
-              class={`chart-draw-layer tool-${toolOn}`}
-              style={{ right: `${inset.r}px`, bottom: `${inset.b}px` }}
-              data-testid="chart-draw-layer"
-              data-tool={toolOn}
-              onPointerDown={(e) => (pointer.current = e.pointerType)}
-              onPointerMove={onLayerMove}
-              onPointerLeave={onLayerLeave}
-              onClick={onLayerClick}
-            />
-            <div class="chart-draw-hint" role="status" data-testid="chart-draw-hint">{hint}</div>
-          </>
-        ) : null}
-        {state === 'ready' && shown ? (
-          <div class="chart-legend" data-testid="chart-legend">
-            <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.o')}<b>{shown.o}</b></span>
-            <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.h')}<b>{shown.h}</b></span>
-            <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.l')}<b>{shown.l}</b></span>
-            <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.c')}<b>{shown.c}</b></span>
-            <span>{t('market.chart.v')}<b>{shown.v}</b></span>
-          </div>
-        ) : null}
-        {state === 'loading' || (state === 'ready' && !libReady && !libError) ? <div class="chart-overlay skeleton" data-testid="chart-loading" /> : null}
-        {state === 'empty' || state === 'unsupported' || state === 'off' ? (
-          <div class="chart-overlay mkt-empty" data-testid="chart-empty">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-              <path d="M4 19V5M4 19h16M8 15v-4M12 15V8M16 15v-6" stroke-linecap="round" />
-            </svg>
-            <span>{t(state === 'empty' ? 'market.chart.empty' : state === 'unsupported' ? 'market.chart.unsupported' : 'market.chart.off')}</span>
-          </div>
-        ) : null}
+      <div class="chart-stage">
+        <div class={showDepth ? 'chart-box chart-box-off' : 'chart-box'}>
+          <div class="chart-canvas" ref={boxRef} aria-hidden="true" />
+          {drawings.length ? (
+            <ul class="sr-only" aria-label={t('market.chart.draw.list')} data-testid="chart-draw-list">
+              {drawings.map((d) => (
+                <li key={d.id} data-kind={d.kind}>{d.kind === 'hline' ? t('market.chart.draw.listHline', { price: priceTxt(d.price) }) : t('market.chart.draw.listTrend', { from: priceTxt(d.a.price), to: priceTxt(d.b.price) })}</li>
+              ))}
+            </ul>
+          ) : null}
+          {toolOn ? (
+            <>
+              <div
+                class={`chart-draw-layer tool-${toolOn}`}
+                style={{ right: `${inset.r}px`, bottom: `${inset.b}px` }}
+                data-testid="chart-draw-layer"
+                data-tool={toolOn}
+                onPointerDown={(e) => (pointer.current = e.pointerType)}
+                onPointerMove={onLayerMove}
+                onPointerLeave={onLayerLeave}
+                onClick={onLayerClick}
+              />
+              <div class="chart-draw-hint" role="status" data-testid="chart-draw-hint">{hint}</div>
+            </>
+          ) : null}
+          {state === 'ready' && shown ? (
+            <div class="chart-legend" data-testid="chart-legend">
+              <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.o')}<b>{shown.o}</b></span>
+              <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.h')}<b>{shown.h}</b></span>
+              <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.l')}<b>{shown.l}</b></span>
+              <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.c')}<b>{shown.c}</b></span>
+              <span>{t('market.chart.v')}<b>{shown.v}</b></span>
+            </div>
+          ) : null}
+          {state === 'loading' || (state === 'ready' && !libReady && !libError) ? <div class="chart-overlay skeleton" data-testid="chart-loading" /> : null}
+          {state === 'empty' || state === 'unsupported' || state === 'off' ? (
+            <div class="chart-overlay mkt-empty" data-testid="chart-empty">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M4 19V5M4 19h16M8 15v-4M12 15V8M16 15v-6" stroke-linecap="round" />
+              </svg>
+              <span>{t(state === 'empty' ? 'market.chart.empty' : state === 'unsupported' ? 'market.chart.unsupported' : 'market.chart.off')}</span>
+            </div>
+          ) : null}
+        </div>
+        {showDepth ? <div class="chart-depth-pane" data-testid="chart-depth-pane">{props.depth}</div> : null}
       </div>
     </div>
   );

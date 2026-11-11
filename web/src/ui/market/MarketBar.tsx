@@ -10,7 +10,12 @@ import { BookFrame } from './OrderBook';
 import { openPair } from './market-nav';
 import { KAS, assetChoices, type DisplayedPair } from './market-select';
 import { tokenTitle } from './TokenBadges';
+import { useMedia } from '../shell/narrow';
 import type { TokenRow } from './token-model';
+
+/** Three columns: the depth chart is a panel of its own under the chart. Below it the depth chart is a tab of the price chart's panel (PriceChart `depth`). market.css has the same breakpoint. */
+export const WIDE_QUERY = '(min-width: 1200px)';
+export const useWideMarket = (): boolean => useMedia(WIDE_QUERY);
 
 /** A token as an option of the selector. */
 const choiceRow = (r: TokenRow) => ({ covenantId: r.covenantId, ticker: r.ticker, row: r });

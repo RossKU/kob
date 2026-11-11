@@ -268,6 +268,10 @@ export default {
 
   'market.chart.title': 'Price',
   'market.chart.interval': 'Candle interval',
+  // the depth chart as a tab of the price panel (under 1200 px, where it has no panel of its own)
+  'market.chart.view': 'Chart view',
+  'market.chart.view.price': 'Price',
+  'market.chart.view.depth': 'Depth',
   'market.chart.iv.1m': '1m',
   'market.chart.iv.5m': '5m',
   'market.chart.iv.1h': '1H',

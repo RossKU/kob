@@ -10,8 +10,8 @@ import { horizontalOverflow } from '../helpers/i18n';
 
 test.use({ autoOpen: false });
 
-/** What must not move: the ticket panel, its button and scroll area's footer, the book, the charts and the activity log under them. */
-const WATCHED = ['ticket-container', 'order-ticket', 'order-place', 'order-book', 'chart-section', 'depth-section', 'activity-list'] as const;
+/** What must not move: the ticket panel, its button and scroll area's footer, the book, the charts and the activity log under them. The depth chart is a panel of its own on three columns only (below 1200 px it is a tab of the chart's panel). */
+const watched = (page: Page): string[] => ['ticket-container', 'order-ticket', 'order-place', 'order-book', 'chart-section', ...((page.viewportSize()?.width ?? 0) >= 1200 ? ['depth-section'] : []), 'activity-list'];
 type Box = { x: number; y: number; width: number; height: number };
 
 /** Document coordinates (the page may scroll between two readings). */
@@ -25,7 +25,7 @@ const boxes = (page: Page): Promise<Record<string, Box>> =>
       out[id] = { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height };
     }
     return out;
-  }, [...WATCHED]);
+  }, watched(page));
 
 /** Three columns (from 1200 px): the book, the depth chart and the ticket end on one line (the depth chart's bottom), where the ticket's button is pinned. */
 async function expectOneBottomLine(page: Page): Promise<void> {
@@ -48,12 +48,12 @@ async function run(page: Page, mock: import('../fixtures').MockClient): Promise<
   await page.waitForTimeout(500);
   if ((page.viewportSize()?.width ?? 0) >= 1200) await expectOneBottomLine(page);
   const base = await boxes(page);
-  for (const id of WATCHED) expect(base[id], `${id} is on the page`).toBeDefined();
+  for (const id of watched(page)) expect(base[id], `${id} is on the page`).toBeDefined();
   const check = async (step: string) => {
     await settlePlan(page);
     await page.waitForTimeout(250);
     const now = await boxes(page);
-    for (const id of WATCHED) {
+    for (const id of watched(page)) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(now[id]![k] - base[id]![k]), `${step}: ${id}.${k} ${base[id]![k]} -> ${now[id]![k]}`).toBeLessThanOrEqual(1);
       }

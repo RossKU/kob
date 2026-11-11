@@ -1,4 +1,5 @@
 /* Token page (exchange layout): stats strip, order book | chart + depth | ticket, the activity log under them. Desktop 3 columns (>= 1200 px), tablet 2, phone 1.
+   The depth chart is a panel of its own on three columns only; below 1200 px it is the "Depth" tab of the price chart's panel (PriceChart.tsx), so no grid area is left for it.
    Every figure uses tabular numerals; panels keep their height while loading (skeletons), so nothing jumps when data arrives. */
 
 body:has(.market-page) .container { max-width: 1520px; }
@@ -23,12 +24,12 @@ body:has(.market-page) .container { max-width: 1520px; }
 .mkt-top .field > label { font-size: 0.78rem; color: var(--muted); font-weight: 600; }
 
 /* The ticket is a column of its own (never a cell of a row it shares with the book or the depth chart): it spans the rows of the other panels, so unfolding
-   "Advanced options" makes the ticket taller by itself, with no gap under the book or the depth chart (on two columns the trades under the ticket move down
+   "Advanced options" makes the ticket taller by itself, with no gap under the book or the depth chart (on two columns the activity log under the ticket moves down
    with it). A phone is one column. */
 .mkt-grid {
   display: grid; gap: 12px; align-items: start;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: 'chart' 'book' 'ticket' 'depth';
+  grid-template-areas: 'chart' 'book' 'ticket';
 }
 /* the ticket: a grid item of its own on a phone and on three columns, a column on two */
 .mkt-side { display: contents; }
@@ -36,6 +37,8 @@ body:has(.market-page) .container { max-width: 1520px; }
 .mkt-area-chart { grid-area: chart; }
 .mkt-area-ticket { grid-area: ticket; align-self: start; min-width: 0; }
 .mkt-area-depth { grid-area: depth; }
+/* the loading frame draws a depth panel too: it has no place below three columns, where the depth chart is a tab of the price panel */
+@media (max-width: 1199px) { .mkt-area-depth { display: none; } }
 /* The ticket panel has the height of its row and never changes it (founder, 2026-11-10; the usual exchange layout): beside the book and the chart its box
    takes no height of its own (contain: size), it fills the rows it spans, and the form scrolls inside it (ticket.css .tk-scroll) with the button pinned at the
    bottom. A floor keeps it usable when the panels beside it are short. A phone is one column: the panel has a fixed height of its own, so nothing under it moves. */
@@ -46,10 +49,9 @@ body:has(.market-page) .container { max-width: 1520px; }
 /* under the grid, on the full width of the page (siblings of .mkt-grid): the activity log (ui/activity), then the facts */
 .mkt-area-details { min-width: 0; }
 @media (min-width: 760px) {
-  /* two columns: the ticket beside the book only, the depth chart on the full width under both (beside the book and the depth chart together the ticket
-     had empty room under or inside it). The row is as tall as the taller of the book and the whole Limit form (--tk-fit, measured by the ticket): the form
+  /* two columns: the ticket beside the book only, the chart on the full width over both (the depth chart is a tab of the chart's panel). The row is as tall as the taller of the book and the whole Limit form (--tk-fit, measured by the ticket): the form
      does not scroll unless more of it is unfolded, and the book's card stretches to the ticket */
-  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book side' 'depth depth'; }
+  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book side'; }
   .mkt-side { display: flex; flex-direction: column; gap: 12px; grid-area: side; align-self: start; min-width: 0; }
   .mkt-side:has(.tk) { align-self: stretch; contain: size; min-height: max(34rem, var(--tk-fit, 0px)); }
   /* the column's full width (the item's own `align-self: start` would shrink it to the form's text, narrower with the field help hidden) */
@@ -142,7 +144,17 @@ body:has(.market-page) .container { max-width: 1520px; }
 .chart-tools button:disabled { opacity: 0.45; cursor: default; }
 .chart-tools svg { width: 16px; height: 16px; }
 @media (pointer: coarse) { .chart-tools button { min-width: 36px; height: 34px; } }
+/* the Price | Depth switch (below 1200 px): a small pill like the interval switch; what only the price chart has keeps its place (hidden, not removed) while the depth chart is shown, so the header does not change height */
+.chart-head .segmented button { min-height: 28px; padding-inline: 12px; font-size: 0.82rem; }
+@media (pointer: coarse) { .chart-head .segmented button { min-height: 34px; } }
+.chart-head[data-view='depth'] .chart-price-only { visibility: hidden; }
+.chart-stage { position: relative; }
 .chart-box { position: relative; height: 420px; }
+/* the depth tab: the price chart stays where it is, with its size and state, behind the depth chart (hidden is not unmounted) */
+.chart-box-off { visibility: hidden; }
+.chart-depth-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.chart-depth-pane > figure { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.chart-depth-pane .depth-box { flex: 1 1 auto; height: auto; min-height: 0; }
 .chart-draw-layer { position: absolute; left: 0; top: 0; z-index: 2; cursor: crosshair; touch-action: pan-y; }
 .chart-draw-layer.tool-erase { cursor: pointer; }
 .chart-draw-hint {
@@ -476,9 +488,9 @@ body:has(.market-page) .container { max-width: 1520px; }
 /* above the panels beside and over it: the depth chart's drawing (overflow: visible, in a positioned box) paints over a later plain block and would take the taps meant for
    the panel's tabs */
 .mkt-area-mine { position: relative; z-index: 1; }
-.mkt-grid.mkt-has-mine { grid-template-areas: 'chart' 'book' 'ticket' 'mine' 'depth'; }
+.mkt-grid.mkt-has-mine { grid-template-areas: 'chart' 'book' 'ticket' 'mine'; }
 @media (min-width: 760px) {
-  .mkt-grid.mkt-has-mine { grid-template-areas: 'chart chart' 'book side' 'depth depth' 'mine mine'; }
+  .mkt-grid.mkt-has-mine { grid-template-areas: 'chart chart' 'book side' 'mine mine'; }
 }
 @media (min-width: 1200px) {
   /* the ticket keeps its column and its rows; the panel takes the row under all of them, so the column below the ticket is not left empty */
