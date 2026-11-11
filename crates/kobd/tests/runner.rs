@@ -530,6 +530,16 @@ async fn a_day_order_near_its_deadline_is_left_alone_while_the_clock_is_off() {
     let mut b = crossing_book();
     b.orders[0].deadline = Some(kobd::matcher::book::utc_now() + 60);
     let mut r = runner(node.clone(), b, M);
+    // a dry run plans every step anew (nothing is submitted), so each step shows whether the day order is planned
+    r.cfg.dry_run = true;
+    // a block's timestamp is its miner's: two samples are no judgment yet
+    for _ in 0..kobd::matcher::run::CLOCK_SAMPLES_MIN - 1 {
+        r.clock_checked = None;
+        let rep = r.step().await.unwrap();
+        assert_eq!(rep.built.len(), 1, "planned: no judgment on fewer samples");
+        assert!(!r.clock_alarm());
+    }
+    r.clock_checked = None;
     let rep = r.step().await.unwrap();
     assert!(rep.built.is_empty(), "the day order is left alone");
     assert!(r.clock_alarm() && r.clock_skew.is_some_and(|s| (119..=121).contains(&s)), "{:?}", r.clock_skew);
@@ -538,12 +548,32 @@ async fn a_day_order_near_its_deadline_is_left_alone_while_the_clock_is_off() {
     assert!(r.executor_health(&rep).clock_alarm);
     let f = r.status_facts(&rep);
     assert!(kobd::matcher::run::status_line(&f).contains("the local clock is 1"), "{}", kobd::matcher::run::status_line(&f));
-    // the clock agrees again (checked at the next check): filled
+    // the clock agrees again: once the median of the last samples does, planned again
     node.0.lock().unwrap().tip_ms = Some(now_ms());
-    r.clock_checked = None;
-    let rep = r.step().await.unwrap();
+    let mut rep = r.step().await.unwrap();
+    for _ in 0..3 {
+        r.clock_checked = None;
+        rep = r.step().await.unwrap();
+    }
     assert_eq!(rep.built.len(), 1);
     assert!(!r.clock_alarm());
+}
+
+/// The founder: "block time is a lie". One node's timestamp never decides: a sample takes the node tip nearest the local
+/// clock (a node an hour off, or one that stopped advancing, is outvoted by one that agrees), and the median of the samples
+/// is judged, so one odd block (a single lying sample) neither raises the alarm nor holds day orders back.
+#[test]
+fn a_lying_block_timestamp_neither_raises_the_clock_alarm_nor_holds_day_orders() {
+    use kobd::matcher::run::{chain_skew_secs, median};
+    let local = 1_790_000_000_000u64;
+    assert_eq!(chain_skew_secs(local, &[local + 3_600_000, local - 2_000]), Some(2), "the liar an hour ahead is outvoted");
+    assert_eq!(chain_skew_secs(local, &[local - 900_000, local + 1_000]), Some(-1), "a node 15 min behind is outvoted");
+    assert_eq!(chain_skew_secs(local, &[local - 120_000, local - 121_000]), Some(120), "every node shows it: it counts");
+    assert_eq!(chain_skew_secs(local, &[]), None);
+    let v = |s: &[i64]| s.iter().copied().collect::<std::collections::VecDeque<i64>>();
+    assert_eq!(median(&v(&[0, 3_600, 0, 1, 0])), Some(0), "one odd sample does not move the median");
+    assert_eq!(median(&v(&[120, 0, 120])), Some(120));
+    assert_eq!(median(&v(&[])), None);
 }
 
 /// Audit round 2 R2-M-2: a batch carries the deadline of the day order it fills, and a resend is checked against it: once the

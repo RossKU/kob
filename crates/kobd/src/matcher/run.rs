@@ -250,6 +250,24 @@ pub const STARTS_FILE: &str = "executor-starts";
 pub const SUBSIDY_FILE: &str = "keeper-subsidy.json";
 /// How often the local clock is compared with the chain's.
 pub const CLOCK_CHECK_EVERY: Duration = Duration::from_secs(60);
+/// The clock samples kept (one per [`CLOCK_CHECK_EVERY`]), and how many are needed before their median is judged.
+pub const CLOCK_SAMPLES: usize = 5;
+pub const CLOCK_SAMPLES_MIN: usize = 3;
+
+/// One clock sample (seconds, the local clock minus the chain's) from the tip timestamps of the nodes `tips` at the local
+/// time `local_ms`: the one nearest the local clock. A block's timestamp is set by its miner, so no node's alone decides: a
+/// node whose timestamp lies (or that stopped advancing) is outvoted by any node that agrees with the local clock, and only
+/// a skew every node shows counts. `None`: no tip known.
+pub fn chain_skew_secs(local_ms: u64, tips: &[u64]) -> Option<i64> {
+    tips.iter().map(|t| (local_ms as i64 - *t as i64) / 1000).min_by_key(|s| s.unsigned_abs())
+}
+
+/// The median of `v` (the lower one of the two middle values); `None` when empty.
+pub fn median(v: &std::collections::VecDeque<i64>) -> Option<i64> {
+    let mut s: Vec<i64> = v.iter().copied().collect();
+    s.sort_unstable();
+    s.get((s.len().saturating_sub(1)) / 2).copied()
+}
 
 impl Default for RunConfig {
     fn default() -> Self {
@@ -422,6 +440,8 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     pub clock_skew: Option<i64>,
     pub clock_checked: Option<std::time::Instant>,
     clock_logged: Option<std::time::Instant>,
+    /// The last clock samples ([`chain_skew_secs`], seconds, oldest first; at most [`CLOCK_SAMPLES`]).
+    pub clock_samples: std::collections::VecDeque<i64>,
     /// Day orders left alone this step because the clock is off and their deadline is near ([`RunConfig::clock_skew_max_secs`]).
     pub deadline_near: BTreeSet<CovId>,
     /// Steps that failed (the node unreachable, the network wrong, ...).
@@ -635,6 +655,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             clock_skew: None,
             clock_checked: None,
             clock_logged: None,
+            clock_samples: std::collections::VecDeque::new(),
             deadline_near: BTreeSet::new(),
             tick_errors: 0,
             last_tick_error: None,
@@ -971,25 +992,31 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         Ok((free, total, coins))
     }
 
-    /// Compares the local clock with the chain's (the timestamp of the node's newest chain block) at most every
-    /// [`CLOCK_CHECK_EVERY`]: day-order deadlines are UTC times this process judges on its own clock (audit 2026-11-11
-    /// M-14). Beyond `clock_skew_max_secs` the skew is logged (an error, again every ten minutes while it lasts), shown on
-    /// the status line, in `/v1/health` and the metrics, and [`Runner::deadline_near`] keeps the day orders whose deadline is
-    /// within the skew (plus the bound) of the local clock out of every plan.
+    /// Compares the local clock with the chain's at most every [`CLOCK_CHECK_EVERY`]: day-order deadlines are UTC times of
+    /// the placement record that a matcher judges on its own clock (`docs/spec/matcher.md` §2.3; no covenant compares
+    /// anything with real time: a day order's on-chain bound is its `expiryDaa`, a DAA score). This is only a check of that
+    /// clock, never a clock of its own: a block's timestamp is its miner's, so each sample takes the node tip nearest the
+    /// local clock ([`chain_skew_secs`]: one node agreeing outvotes a lying or stopped one), and only the median of the last
+    /// [`CLOCK_SAMPLES`] samples, once there are [`CLOCK_SAMPLES_MIN`], is judged. Beyond `clock_skew_max_secs` the skew is
+    /// logged (an error, again every ten minutes while it lasts), shown on the status line, in `/v1/health` and the metrics,
+    /// and [`Runner::deadline_near`] keeps the day orders whose deadline is within the skew (plus the bound) of the local clock
+    /// out of every plan (audit 2026-11-11 M-14).
     async fn check_clock(&mut self) {
         if self.cfg.clock_skew_max_secs == 0 || self.clock_checked.is_some_and(|t| t.elapsed() < CLOCK_CHECK_EVERY) {
             return;
         }
         self.clock_checked = Some(std::time::Instant::now());
-        let tip = match self.node.tip_timestamp_ms().await {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::debug!(error = %e, "cannot read the chain's clock");
-                return;
-            }
+        let local = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let Some(sample) = chain_skew_secs(local, &self.node.tip_timestamps_ms().await) else {
+            tracing::debug!("cannot read the chain's clock");
+            return;
         };
-        let local = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-        let skew = (local - tip as i64) / 1000;
+        self.clock_samples.push_back(sample);
+        while self.clock_samples.len() > CLOCK_SAMPLES {
+            self.clock_samples.pop_front();
+        }
+        // a block's timestamp is its miner's: no judgment on fewer than three minutes of samples, then on their median
+        let Some(skew) = median(&self.clock_samples).filter(|_| self.clock_samples.len() >= CLOCK_SAMPLES_MIN) else { return };
         let max = self.cfg.clock_skew_max_secs as i64;
         let was_off = self.clock_skew.is_some_and(|s| s.abs() > max);
         let due = !was_off || self.clock_logged.is_none_or(|t| t.elapsed() >= LOW_FUNDS_LOG_EVERY);
@@ -998,7 +1025,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             tracing::error!(
                 skew_seconds = skew,
                 bound_seconds = max,
-                "the local clock differs from the chain's (the newest block's timestamp of every node): set the system clock (NTP), or check the node if it is the only one and may have stopped advancing; day orders near their deadline are not filled meanwhile"
+                "the local clock differs from the chain's (every node's newest blocks, over the last minutes): set the system clock (NTP); day orders near their deadline are not filled meanwhile"
             );
         } else if was_off && skew.abs() <= max {
             tracing::info!(skew_seconds = skew, "the local clock agrees with the chain's again");

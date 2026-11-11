@@ -1159,15 +1159,6 @@ impl ChainSource for MockNode {
         })
     }
 
-    async fn block_timestamp_ms(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
-        self.with(|s| {
-            if s.forgotten.contains(&hash) {
-                return Ok(None);
-            }
-            Ok(s.chain.iter().find(|b| b.hash == hash).or_else(|| s.side.get(&hash)).map(|b| b.header.timestamp))
-        })
-    }
-
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
         self.with(|s| {
             Ok(DagInfo {

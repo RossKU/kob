@@ -95,10 +95,6 @@ impl ChainSource for Tier {
         self.gate()?;
         self.node.block_daa_score(hash).await
     }
-    async fn block_timestamp_ms(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
-        self.gate()?;
-        self.node.block_timestamp_ms(hash).await
-    }
     async fn chain_hashes(&self, start: Hash32) -> Result<ChainHashes, RpcError> {
         self.gate()?;
         ChainSource::chain_hashes(&*self.node, start).await
@@ -297,7 +293,8 @@ fn pair<N: ChainSource>(a: (&str, &Arc<N>), b: (&str, &Arc<N>)) -> kobd::rpc::mu
     MultiNode::new(vec![(spec(a.0, false), a.1.clone()), (spec(b.0, true), b.1.clone())], a.1.clone()).with_watch(Duration::ZERO, 2)
 }
 
-/// A pair of named nodes: the cross-checking one falls behind (an alarm once it stays behind and confirmed the lead itself, the
+/// A pair of named nodes: the cross-checking one falls behind, an honest lag (its sink an ancestor of the other node's: an alarm
+/// once it stays behind and has placed the other node's sink in its own DAG, that far ahead, the
 /// node cut off from the pair and shown in the health), then catches up (the alarm ends, it is back). One on another network:
 /// an alarm at once. The authority is judged the same way, and stays the authority. The checks run on the test's task only (a
 /// follower request would start one on a task of its own too).
@@ -472,11 +469,12 @@ async fn a_node_that_over_reports_its_daa_never_evicts_its_honest_partner() {
     }
 }
 
-/// Audit round 3 R3-M-2: an authority that over-reports its DAA over its real sink is held to account. Its own answers deny the
-/// lead (its newest block is far below the virtual DAA score it reports): two checks in a row are a contradiction, it is
-/// given up, and the honest node is the authority at once (never suspect meanwhile).
+/// Audit round 3 R3-M-2: an authority that over-reports its DAA over its real sink is held to account. The DAG denies the
+/// lead: its sink, a block the honest node places in its own DAG too, is far below the virtual DAA score it reports, as both of
+/// them report that block. Two checks in a row are a contradiction, it is given up, and the honest node is the authority at
+/// once (never suspect meanwhile).
 #[tokio::test(flavor = "multi_thread")]
-async fn an_authority_whose_own_answers_deny_its_lead_is_replaced() {
+async fn an_authority_whose_lead_the_dag_denies_is_replaced() {
     use kobd::rpc::resolver;
     let _g = pair_serial().await;
     let (_first, second) = public_pair();
@@ -496,34 +494,49 @@ async fn an_authority_whose_own_answers_deny_its_lead_is_replaced() {
     assert!(why.contains("a lead it does not have"), "{why}");
 }
 
-/// Audit round 3 R3-M-2: an authority that stops advancing while it still reports synced never confirms a lead (it cannot learn
-/// the other node's blocks), so the local clock referees: its newest block is minutes old while the other node's is current, at
-/// the watch's checks in a row, and it is given up like a node that lags. The clock is the test's (no waiting).
+/// A local monotonic clock the test moves: `Instant` at the start plus the seconds in `offset` (no waiting).
+fn test_clock() -> (Arc<AtomicU64>, impl Fn() -> std::time::Instant + Send + Sync + 'static) {
+    let (t0, offset) = (std::time::Instant::now(), Arc::new(AtomicU64::new(0)));
+    let o = offset.clone();
+    (offset, move || t0 + Duration::from_secs(o.load(Ordering::Relaxed)))
+}
+
+/// Audit round 3 R3-M-2 (the founder: "nodes must be compared by the tip structure", "block time is a lie"): an authority whose
+/// sink stands still while it still reports synced never confirms a lead (it cannot learn the other node's blocks). Its sink
+/// has not changed for two minutes of the local monotonic clock while the other node's advances: it stopped advancing, and it
+/// is given up like a node that lags. No block timestamp is read. Both standing still (the network stalls) is nothing.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_frozen_authority_is_given_up_by_the_local_clock() {
+async fn a_frozen_authority_whose_sink_stands_still_is_given_up() {
     use kobd::rpc::resolver;
     let _g = pair_serial().await;
     let (_first, second) = public_pair();
     let (frozen, current) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
     frozen.push_empty(100);
-    current.push_empty(5_000);
-    // the local clock: a second after the current node's newest block (the frozen one's is 490 s older)
-    let now = current.block_timestamp_ms(current.tip()).await.unwrap().unwrap() + 1_000;
-    let m = pair(("resolver", &frozen), ("resolver:2", &current)).with_clock(move || now);
+    current.push_empty(400);
+    let (offset, clock) = test_clock();
+    let m = pair(("resolver", &frozen), ("resolver:2", &current)).with_clock(clock);
     let base = resolver::replacements("resolver");
     m.check_health().await;
-    assert_eq!(resolver::replacements("resolver"), base, "one check is not enough");
+    // a minute later: the current node advanced, the frozen one did not, not for long enough yet
+    offset.store(60, Ordering::Relaxed);
+    current.push_empty(10);
     m.check_health().await;
-    assert_eq!(resolver::current("resolver"), Some(second.clone()), "the current node is the authority now");
+    assert_eq!(resolver::replacements("resolver"), base, "a minute is not enough");
+    offset.store(125, Ordering::Relaxed);
+    current.push_empty(10);
+    m.check_health().await;
+    assert_eq!(resolver::current("resolver"), Some(second.clone()), "the advancing node is the authority now");
     let why = resolver::last_reason("resolver").unwrap();
-    assert!(why.contains("stopped advancing"), "{why}");
-    // the same clock with both nodes current: nothing (a node behind by a few blocks is not frozen)
+    assert!(why.contains("stopped advancing") && why.contains("has not changed"), "{why}");
+    // both standing still (the network stalls, or the test's chain does): nothing
     let (a, b) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
-    a.push_empty(5_000);
-    b.push_empty(5_000);
+    a.push_empty(500);
+    b.push_empty(500);
+    let (offset, clock) = test_clock();
     let before = resolver::replacements("resolver") + resolver::replacements("resolver:2");
-    let m = pair(("resolver", &a), ("resolver:2", &b)).with_clock(move || now);
-    for _ in 0..5 {
+    let m = pair(("resolver", &a), ("resolver:2", &b)).with_clock(clock);
+    for s in [0, 200, 400] {
+        offset.store(s, Ordering::Relaxed);
         m.check_health().await;
     }
     assert_eq!(resolver::replacements("resolver") + resolver::replacements("resolver:2"), before);

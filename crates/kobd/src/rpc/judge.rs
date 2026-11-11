@@ -261,13 +261,12 @@ pub fn unconfirmed(node: &str) {
     lock().behind.remove(node);
 }
 
-/// The health watch (`rpc::multi`) found `node`'s newest block `secs` old by the local clock for its whole period while the
-/// other node's was current: it stopped advancing (or lags by minutes) while it may still report synced. A finding, like a
+/// The health watch (`rpc::multi`) found `node`'s sink standing still (`why`, on the local monotonic clock) while the other
+/// node's advances, or for long with no other node: it stopped advancing, while it may still report synced. A finding, like a
 /// confirmed lag.
-pub fn frozen(url: &str, node: &str, secs: u64) {
+pub fn frozen(url: &str, node: &str, why: &str) {
     lock().behind.insert(node.to_string());
-    let why = format!("its newest block is {secs} s old by the local clock while the other node's is current (it stopped advancing)");
-    act(url, node, &[(Kind::Lag, Some(why))]);
+    act(url, node, &[(Kind::Lag, Some(why.to_string()))]);
 }
 
 /// `node` contradicted the other node of the pair (`rpc::multi`: a hash or the acceptance data). A named node's alarm stays

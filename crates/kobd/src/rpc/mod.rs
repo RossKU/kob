@@ -116,14 +116,6 @@ pub trait ChainSource: Send + Sync + 'static {
             Err(RpcError::Node("getBlock (header daaScore) is not supported by this source".into()))
         }
     }
-    /// The timestamp (unix milliseconds) in the header of a block the node knows (`None`: the node does not know it): the
-    /// health watch compares a node's sink with the local clock (`rpc::multi`, a node that stopped advancing).
-    fn block_timestamp_ms(&self, hash: Hash32) -> impl Future<Output = Result<Option<u64>, RpcError>> + Send {
-        async move {
-            let _ = hash;
-            Err(RpcError::Node("getBlock (header timestamp) is not supported by this source".into()))
-        }
-    }
     /// The selected chain from `start` as block hashes only (`getVirtualChainFromBlock` without transaction ids): what the
     /// follower plans its parallel windows on.
     fn chain_hashes(&self, start: Hash32) -> impl Future<Output = Result<ChainHashes, RpcError>> + Send;
@@ -652,26 +644,6 @@ impl ChainSource for WrpcClient {
         }
         match self.call::<Resp>("getBlock", serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": false })).await {
             Ok(r) => Ok(Some(r.block.header.daa_score)),
-            Err(RpcError::Node(_)) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    async fn block_timestamp_ms(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
-        #[derive(Deserialize)]
-        struct Header {
-            timestamp: u64,
-        }
-        #[derive(Deserialize)]
-        struct Block {
-            header: Header,
-        }
-        #[derive(Deserialize)]
-        struct Resp {
-            block: Block,
-        }
-        match self.call::<Resp>("getBlock", serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": false })).await {
-            Ok(r) => Ok(Some(r.block.header.timestamp)),
             Err(RpcError::Node(_)) => Ok(None),
             Err(e) => Err(e),
         }

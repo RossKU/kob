@@ -148,6 +148,11 @@ pub trait NodeApi: Send + Sync {
     fn tip_timestamp_ms(&self) -> impl Future<Output = Result<u64, RpcError>> + Send {
         async { Err(RpcError::Node("no tip timestamp from this node client".into())) }
     }
+    /// The tip timestamps of every node the client asks (`MultiSubmit`: the primary and the others; one node: its own): a
+    /// timestamp is the miner's, so the runner never trusts one alone (`matcher::run::chain_skew_secs`). Empty: none known.
+    fn tip_timestamps_ms(&self) -> impl Future<Output = Vec<u64>> + Send {
+        async { self.tip_timestamp_ms().await.ok().into_iter().collect() }
+    }
 }
 
 /// Connection settings.
@@ -599,25 +604,17 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
         self.primary.fee_estimate().await
     }
 
-    /// The newest of the nodes' tips: a node that stopped advancing (its sink minutes old) must not read as a wrong local
-    /// clock, nor widen the margin day orders keep, while another node is current (audit round 3 R3-M-2). One node, or none
-    /// answering but the primary: the primary's.
     async fn tip_timestamp_ms(&self) -> Result<u64, RpcError> {
-        if self.others.is_empty() {
-            return self.primary.tip_timestamp_ms().await;
-        }
+        self.primary.tip_timestamp_ms().await
+    }
+
+    /// Every node's tip timestamp (each within 5 s; one that does not answer is left out).
+    async fn tip_timestamps_ms(&self) -> Vec<u64> {
         let ask = |n: std::sync::Arc<N>| async move {
-            tokio::time::timeout(Duration::from_secs(5), n.tip_timestamp_ms())
-                .await
-                .unwrap_or_else(|_| Err(RpcError::Timeout(Duration::from_secs(5))))
+            tokio::time::timeout(Duration::from_secs(5), n.tip_timestamp_ms()).await.ok().and_then(Result::ok)
         };
         let all = std::iter::once(self.primary.clone()).chain(self.others.iter().map(|(_, n)| n.clone()));
-        let answers = futures_util::future::join_all(all.map(ask)).await;
-        let newest = answers.iter().filter_map(|r| r.as_ref().ok()).copied().max();
-        match newest {
-            Some(t) => Ok(t),
-            None => answers.into_iter().next().unwrap_or_else(|| Err(RpcError::Node("no node".into()))),
-        }
+        futures_util::future::join_all(all.map(ask)).await.into_iter().flatten().collect()
     }
 }
 
