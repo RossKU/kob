@@ -44,10 +44,15 @@
    token page). Every column but the icons has a floor and a share of the rest; the ids and addresses take what is left and end in an ellipsis. Narrower:
    the pie goes (the count or ✓ stays), then the Wallet column, then two lines per row. Rows have a fixed height and sit at their place by a transform
    (ActivityRows.tsx): a row arriving above them moves them without a layout shift. */
-.act-log { container: actlog / inline-size; font-size: 0.83rem; font-variant-numeric: tabular-nums; min-width: 0; scroll-margin-top: 120px; }
+/* The widths the columns grow to (founder 2026-11-12: the whole transaction id and the whole wallet when there is room). Tx and Wallet grow to their full text: 64 hex characters at 0.8rem
+   mono (about 30.7rem) and a 61-character address body at 0.78rem mono (about 28.5rem), with a little slack for a wider mono font; Amount and Price stop at what their figures need (a long
+   amount such as 123,456,789.12 TUSD with its dollar or KAS line under it: 9rem; the price and its "Price (KAS)" title: 6rem). A track grows toward its cap together with the others, so the figure columns
+   reach theirs first and Tx and Wallet take the rest. Where Tx and Wallet are full, the slack goes to the Amount track (1fr, its figures are right-aligned), so the numbers stay by their titles. A text
+   that still has no room ends with an ellipsis, never shortened in the middle. */
+.act-log { --act-tx-w: 31rem; --act-who-w: 29rem; --act-amt-w: 9rem; --act-px-w: 6rem; container: actlog / inline-size; font-size: 0.83rem; font-variant-numeric: tabular-nums; min-width: 0; scroll-margin-top: 120px; }
 .act-head, .act-row {
   display: grid; align-items: center; column-gap: 10px; padding: 0 8px; box-sizing: border-box;
-  grid-template-columns: 28px 56px minmax(80px, 1.2fr) minmax(90px, 1.8fr) minmax(110px, 0.8fr) minmax(84px, 0.6fr) 64px 84px;
+  grid-template-columns: 28px 56px minmax(80px, var(--act-tx-w)) minmax(90px, var(--act-who-w)) minmax(110px, var(--act-amt-w)) minmax(84px, var(--act-px-w)) 64px 84px;
 }
 .act-head { color: var(--muted); font-size: 0.74rem; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
 .act-head > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -114,14 +119,14 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-skel .act-c-conf .skeleton-line { width: 28px; }
 .act-skel .act-c-amt, .act-skel .act-c-time { min-width: 48px; }
 
-/* A wide log: the transaction id and the wallet columns stop growing at about 12rem (their whole text ends with an ellipsis there, ActivityRows.tsx); the figure columns take what is left, so the
-   numbers keep their room and the log is no longer 60 % hex (review M-08). Three classes: the same rule under a token or pair page wins over market.css's older cap on the figures. */
+/* A wide log: Tx and Wallet grow to their whole text first (the caps above), Amount and Price stay at their figures' width, the slack after that goes to Amount. Three classes: the same rule under a
+   token or pair page wins over any older rule on the figures. */
 @container actlog (min-width: 1200px) {
-  .act .act-log .act-head, .act .act-log .act-row { grid-template-columns: 28px 56px minmax(80px, 12rem) minmax(90px, 14rem) minmax(110px, 1fr) minmax(84px, 0.6fr) 64px 84px; }
+  .act .act-log .act-head, .act .act-log .act-row { grid-template-columns: 28px 56px minmax(80px, var(--act-tx-w)) minmax(90px, var(--act-who-w)) minmax(var(--act-amt-w), 1fr) minmax(84px, var(--act-px-w)) 64px 84px; }
 }
 /* a medium card: no pie (the count, or ✓), tighter columns */
 @container actlog (max-width: 899px) {
-  .act-head, .act-row { column-gap: 8px; grid-template-columns: 28px 50px minmax(70px, 1fr) minmax(80px, 1.2fr) minmax(100px, 1.1fr) minmax(70px, 0.7fr) 36px 76px; }
+  .act-head, .act-row { column-gap: 8px; grid-template-columns: 28px 50px minmax(70px, var(--act-tx-w)) minmax(80px, var(--act-who-w)) minmax(100px, var(--act-amt-w)) minmax(70px, var(--act-px-w)) 36px 76px; }
   .act-row .act-pie { display: none; }
 }
 /* a small card: the Wallet column folds (the owners stay in the row's title) */

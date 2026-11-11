@@ -335,6 +335,37 @@ test('the log fits its card at every width, on the Activity page and under a tok
   }
 });
 
+// founder 2026-11-12: Tx and Wallet get the width first; with room (a token page on a wide window) the whole transaction id and the whole wallet are shown, the figure columns stay at their figures' width
+test('a wide log shows the whole transaction id and wallet; Tx and Wallet are wider than the figure columns', async ({ appPage: page, mock }) => {
+  const token = await seedPair(page, mock);
+  const read = () =>
+    page.evaluate(() => {
+      const row = document.querySelector('[data-testid="activity-row"][data-kind="fill"]')!;
+      const w = (s: string) => Math.round((row.querySelector(s) as HTMLElement).getBoundingClientRect().width);
+      const cut = (s: string) => { const e = row.querySelector(s) as HTMLElement; return e.scrollWidth > e.clientWidth; };
+      const who = row.querySelector('.act-w') as HTMLElement;
+      return { tx: w('.act-c-tx'), who: w('.act-c-who'), amt: w('.act-c-amt'), px: w('.act-c-px'), txCut: cut('.act-c-tx'), whoCut: who.scrollWidth > who.clientWidth };
+    });
+  for (const width of [1280, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/#/market/${token}`);
+    await showActivity(page);
+    await expect(rows(page).first()).toBeVisible();
+    await expect(page.getByTestId('activity-wallet').first()).toHaveText(/^q[0-9a-z]{20,}/, { timeout: 15_000 });
+    const c = await read();
+    // Amount stops at its figures' width until Tx and Wallet are whole (the slack after that goes to it)
+    expect(c.tx, `tx at ${width}`).toBeGreaterThan(c.px * 2.5);
+    expect(c.who, `wallet at ${width}`).toBeGreaterThan(c.px * 2.5);
+    expect(c.px).toBeLessThanOrEqual(100);
+    if (width === 1280) {
+      expect(c.tx).toBeGreaterThan(c.amt * 1.5);
+      expect(c.amt).toBeLessThanOrEqual(150);
+    }
+    // CI's Linux fonts are wider than Windows': the whole text at 1920 is asserted only where the mono font is the narrow one
+    if (width === 1920 && process.env.KOB_WIDE_FONTS !== '1') expect({ txCut: c.txCut, whoCut: c.whoCut }).toEqual({ txCut: false, whoCut: false });
+  }
+});
+
 // live updates move nothing on the page: rows sit at fixed heights and slide by a transform, a row is never re-created, the tools keep their place
 test('20 live updates: no layout shift (CLS 0), rows kept (not re-created), the tools still', async ({ appPage: page, mock }) => {
   test.setTimeout(120_000);

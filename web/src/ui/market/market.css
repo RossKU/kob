@@ -360,12 +360,6 @@ body:has(.market-page) .container { max-width: none; }
 .ob .ob-skel { justify-self: end; width: 70%; height: 9px; margin: 0; }
 .ob-foot { margin: 6px 0 0; font-size: 0.74rem; line-height: 1.4; color: var(--muted); height: 1.4em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* ONE line (the whole sentence is its title): the note on estimated sizes comes and goes with the book */
 
-/* the activity log under the grid on a very wide page (the page uses the window's full width): the figure columns stop growing (the amount and the price keep a readable width, the numbers
-   do not drift away from their titles), the transaction id and the wallet take the rest (activity.css has the table; its container queries are on the log) */
-@container actlog (min-width: 1200px) {
-  .mkt-area-activity .act-head, .mkt-area-activity .act-row { grid-template-columns: 28px 56px minmax(80px, 1.2fr) minmax(90px, 1.8fr) minmax(110px, 11rem) minmax(84px, 8rem) 64px 84px; }
-}
-
 /* From 760 px the book's card is as tall as its grid row and takes no height of its own (contain: size; a floor of the least 8 levels per side), and the levels it lists
    are as many as fit (book-rows.ts measures the asks' side): the header, the spread row and the foot keep their heights, the two sides share what is left (flex 1 1 0, overflow hidden: a
    side's height is the grid's, never its rows'). A phone is one column: the card has its own height, a side is exactly its 12 slots tall (--ob-rows above). */
