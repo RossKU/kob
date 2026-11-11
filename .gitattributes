@@ -1,3 +1,4 @@
 * text=auto eol=lf
 *.hex -text
 *.bin binary
+*.cmd text eol=crlf

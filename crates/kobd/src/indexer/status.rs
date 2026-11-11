@@ -363,14 +363,18 @@ impl HealthSnapshot {
     }
 
     /// Why this process should end so that a supervisor restarts it (`kobd --executor`): the read API stopped serving, or the
-    /// follower is halted (`stopped`, `gap`) or cannot write its database (`storage_error`). The caller waits a few minutes
-    /// before acting on a halt (a gap the node's pruning caused is moved past on its own). `None`: nothing of the kind.
+    /// follower stopped (`stopped`: its record log could not be written) or cannot write its database (`storage_error`): what a
+    /// restart may cure once the disk has space again. The caller waits a few minutes before acting on a halt. A store halted at
+    /// a gap (`gap`) is not: the follower moves a pruned gap on its own, and a gap it gave up on (moved too often in this run,
+    /// or a store the node contradicts) needs the operator; a restart would only move the store again and reset that bound,
+    /// every few minutes, so the process stays up and says so (`kob_indexer_halted`, the status line). `None`: nothing of the
+    /// kind.
     pub fn halted(&self) -> Option<(bool, String)> {
         if let Some(e) = &self.api_error {
             return Some((true, format!("the read API stopped: {e}")));
         }
         // a storage error stays one while node errors come between the failed commits (only progress clears `halt_reason`)
-        let halted = matches!(self.state, FollowerState::Stopped | FollowerState::Gap | FollowerState::StorageError)
+        let halted = matches!(self.state, FollowerState::Stopped | FollowerState::StorageError)
             || (self.halt_reason.is_some() && self.state == FollowerState::NodeUnavailable);
         if !halted {
             return None;
@@ -1035,9 +1039,15 @@ mod tests {
         assert!(h.halted().is_some());
         h.halt_reason = None;
         assert!(h.halted().is_none());
+        // a store halted at a gap is not restarted: the follower moves a pruned gap itself, and a gap it gave up on needs the
+        // operator (a restart would reset the bound of moves, every few minutes)
         h.state = FollowerState::Gap;
         h.gap_reason = Some("pruned".into());
-        assert!(h.halted().unwrap().1.contains("gap: pruned"));
+        assert!(h.halted().is_none());
+        h.state = FollowerState::Stopped;
+        h.halt_reason = Some("record log write failed".into());
+        assert!(h.halted().unwrap().1.contains("stopped: record log write failed"));
+        h.halt_reason = None;
         h.state = FollowerState::Following;
         h.data_dir_free_bytes = Some(5);
         h.db_bytes = Some(7);

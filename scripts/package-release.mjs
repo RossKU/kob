@@ -9,7 +9,8 @@
 //                                                         binaries' --version is the tag (docs/ops/release.md 6)
 //
 // Two archives per network and target, `.zip` (Windows targets) or `.tar.gz` (every other target), each holding one directory of
-// its name: `kobd-<version>-<network>-<target>` with kobd (the daemon) and kob (the command line), QUICKSTART.md
+// its name: `kobd-<version>-<network>-<target>` with kobd (the daemon), kob (the command line), on Windows kobd-supervise.cmd
+// (scripts/windows: it starts kobd again when it exits with an error), QUICKSTART.md
 // (docs/ops/executor-quickstart.md), LICENSE, NOTICE and a SHA256SUMS of those files; and `kob-<version>-<network>-<target>` with
 // kob alone, README.md and REFERENCE.md (crates/kob-cli/), LICENSE, NOTICE and a SHA256SUMS of those files. The archive is written here, not by zip / tar: the bytes depend only on the inputs and on
 // SOURCE_DATE_EPOCH (default: the commit time of HEAD) as every entry's time, fixed modes and no owner names, so two builds of
@@ -171,9 +172,14 @@ function packageOne(o) {
     ['LICENSE', text(path.join(root, 'LICENSE')), 0o644],
     ['NOTICE', text(path.join(root, 'NOTICE')), 0o644],
   ];
+  // Windows: the loop that starts kobd again when it exits with an error (quickstart 6), with CRLF line endings (cmd.exe can
+  // misread labels in a batch file with LF ones)
+  const crlf = (p) => Buffer.from(text(p).toString('utf8').replace(/\n/g, '\r\n'), 'utf8');
+  const supervise = windows ? [['kobd-supervise.cmd', crlf(path.join(root, 'scripts/windows/kobd-supervise.cmd')), 0o755]] : [];
   write(`kobd-${o.version}-${o.network}-${o.target}`, [
     [`kobd${exe}`, read(path.join(o['bin-dir'], `kobd${exe}`)), 0o755],
     kob,
+    ...supervise,
     ['QUICKSTART.md', text(path.join(root, 'docs/ops/executor-quickstart.md')), 0o644],
     ...legal,
   ]);
