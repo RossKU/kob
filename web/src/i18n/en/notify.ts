@@ -51,7 +51,7 @@ export default {
   'notify.reorg.state.other': 'in a different state now',
   'notify.ev.payment.title': 'Payment received',
   'notify.ev.payment.body': 'Received {amount} {asset} at your address.',
-  'notify.ev.payment.bodyUsd': 'Received about {amount} (an estimate in US dollars) at your address.',
+  'notify.ev.payment.bodyUsd': 'Received {amount} {asset} (about {usd}) at your address.',
   'notify.ev.invoice.title': 'Invoice {status}',
   'notify.ev.invoice.body': 'The x402 invoice {reference} is now {status}.',
 

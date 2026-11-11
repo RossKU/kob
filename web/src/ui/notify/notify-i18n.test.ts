@@ -1,9 +1,10 @@
 // Every key the notification UI builds dynamically exists, and describeEvent renders every kind without leftover placeholders.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { has } from '../../i18n';
 import { NOTIFY_KINDS, type NotificationEvent } from '../../kob/notifications';
 import type { TokenInfo } from '../../kob/registry';
 import { rateOf } from '../../app/fiat';
+import { noteMarketDecimals, resetDeclarationsForTests } from '../../data/token-declarations';
 import { REORG_WHATS, describeEvent } from './describe';
 
 describe('notify i18n', () => {
@@ -59,10 +60,11 @@ describe('notifications with the USD display', () => {
   const tok = 'cc'.repeat(32);
   const ev = (over: Partial<NotificationEvent>): NotificationEvent => ({ id: 'p', kind: 'payment', at: 1, read: false, params: {}, ...over });
 
-  it('a KAS payment is dollars and says it is an estimate; a token payment is never converted', () => {
+  it('a KAS payment leads with the KAS amount and adds the dollar estimate; a token payment is never converted', () => {
     const kas = describeEvent(ev({ params: { amount: '3580000000000' } }), null, fiat);
-    expect(kas.body).toBe('Received about $1,066.84 (an estimate in US dollars) at your address.');
-    expect(describeEvent(ev({ params: { amount: '3580000000000' } }), null).body).toBe('Received 35800 KAS at your address.');
+    expect(kas.body).toBe('Received 35,800 KAS (about $1,066.84) at your address.');
+    expect(describeEvent(ev({ params: { amount: '3580000000000' } }), null).body).toBe('Received 35,800 KAS at your address.');
+    expect(describeEvent(ev({ params: { amount: '2946000' } }), null, fiat).body).toBe('Received 0.0295 KAS (about $0.0008779) at your address.');
     const reg = { byCovenantId: new Map([[tok, { ticker: 'EXT', decimals: 2 } as unknown as TokenInfo]]) };
     expect(describeEvent(ev({ token: tok, params: { amount: '12345' } }), reg, fiat).body).toBe('Received 123.45 EXT at your address.');
   });
@@ -73,5 +75,31 @@ describe('notifications with the USD display', () => {
     const d = describeEvent(ev({ kind: 'reorg', orderId: 'aa'.repeat(32), token: tok, side: 'sell', params: { what: 'fill', amount: '300', filled: '0', total: '1000', state: 'open', price: '2510000' } }), reg, fiat);
     expect(d.body).toContain('$0.000748 per EXT');
     expect(d.body).not.toContain('KAS');
+  });
+});
+
+describe('payment notifications name the amount and the unit like the portfolio does', () => {
+  const fiat = { rate: rateOf(0.0298)!, quote: { usd: 0.0298, at: 1_800_000_000, source: 'coingecko' }, testnet: false };
+  const id = '55aac2b5' + '0'.repeat(48) + '773e07bf';
+  const ev = (over: Partial<NotificationEvent>): NotificationEvent => ({ id: 'p', kind: 'payment', at: 1, read: false, params: {}, ...over });
+  afterEach(() => resetDeclarationsForTests());
+
+  it('a token with decimals and a ticker: whole tokens and the ticker, with or without USD', () => {
+    const reg = { byCovenantId: new Map([[id, { ticker: 'TUSD', decimals: 8 } as unknown as TokenInfo]]) };
+    for (const f of [null, fiat]) expect(describeEvent(ev({ token: id, params: { amount: '2663250640' } }), reg, f, 'testnet-10').body).toBe('Received 26.6325 TUSD at your address.');
+  });
+
+  it('an unnamed token: its short id, in whole tokens where its decimals are known, else the raw amount', () => {
+    const none = { byCovenantId: new Map() };
+    expect(describeEvent(ev({ token: id, params: { amount: '2663250640' } }), none, fiat, 'testnet-10').body).toBe('Received 2,663,250,640 55aac2…07bf at your address.');
+    noteMarketDecimals('testnet-10', id, 8);
+    expect(describeEvent(ev({ token: id, params: { amount: '2663250640' } }), none, fiat, 'testnet-10').body).toBe('Received 26.6325 55aac2…07bf at your address.');
+  });
+
+  it('KAS without USD, and with USD after the KAS amount', () => {
+    expect(describeEvent(ev({ params: { amount: '2946000' } }), null, null, 'testnet-10').body).toBe('Received 0.0295 KAS at your address.');
+    const usd = describeEvent(ev({ params: { amount: '2946000' } }), null, fiat, 'testnet-10');
+    expect(usd.title).toBe('Payment received');
+    expect(usd.body).toBe('Received 0.0295 KAS (about $0.0008779) at your address.');
   });
 });

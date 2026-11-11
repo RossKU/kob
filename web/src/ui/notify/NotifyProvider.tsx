@@ -17,6 +17,7 @@ import type { Fiat } from '../../app/fiat';
 import { currentFiat } from '../../app/use-fiat';
 import { describeEvent } from './describe';
 import { INVOICE_POLL_MS, ORDERS_POLL_MS, pollInvoices, pollWallet } from './poll';
+import { declaredToken, loadDeclaration, restoreDeclarations } from '../../data/token-declarations';
 import { useLiveRefresh } from '../market/live';
 
 export type BrowserPermission = 'granted' | 'denied' | 'default' | 'unsupported';
@@ -50,18 +51,21 @@ const STUB: NotifyApi = {
 export const NotifyContext = createContext<NotifyApi>(STUB);
 export const useNotify = (): NotifyApi => useContext(NotifyContext);
 
+/** How long a toast waits for the declaration of a token it names (data/token-declarations.ts); then it shows what is known. */
+const DECLARATION_WAIT_MS = 2500;
+
 const TONE: Partial<Record<NotifyKind, ToastTone>> = { fill: 'ok', payment: 'ok', expirySoon: 'warn', expired: 'warn', killed: 'warn' };
 
-function deliver(fresh: readonly NotificationEvent[], s: NotifySettings, registry: Parameters<typeof describeEvent>[1], fiat: Fiat | null): void {
+function deliver(fresh: readonly NotificationEvent[], s: NotifySettings, registry: Parameters<typeof describeEvent>[1], fiat: Fiat | null, network: string): void {
   const shown = fresh.length > 3 ? fresh.slice(0, 1) : fresh;
   for (const e of shown) {
-    const d = describeEvent(e, registry, fiat);
+    const d = describeEvent(e, registry, fiat, network);
     showToast(`${d.title}: ${d.body}`, TONE[e.kind] ?? 'info');
   }
   if (fresh.length > 3) showToast(t('notify.more', { count: fresh.length - 1 }), 'info');
   if (!s.browser || browserPermission() !== 'granted' || typeof document === 'undefined' || !document.hidden) return;
   for (const e of fresh.slice(0, 5)) {
-    const d = describeEvent(e, registry, fiat);
+    const d = describeEvent(e, registry, fiat, network);
     try {
       new Notification(d.title, { body: d.body, tag: e.id });
     } catch {
@@ -91,9 +95,17 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
       if (!store || !events.length) return;
       const s = settingsRef.current;
       const fresh = store.ingest(events, (k) => s.kinds[k]);
-      if (fresh.length) deliver(fresh, s, services.registry, currentFiat(services.config.network === 'testnet-10'));
+      if (!fresh.length) return;
+      const network = services.config.network;
+      const show = () => deliver(fresh, s, services.registry, currentFiat(network === 'testnet-10'), network);
+      // a token the page has not met yet has no name or decimals: its declaration is asked for first (a moment at most), so the toast reads "26.6325 TUSD", not raw units
+      const unknown = [...new Set(fresh.filter((e) => e.kind === 'payment' && e.token && !services.registry.byCovenantId.has(e.token) && declaredToken(network, e.token) === undefined).map((e) => e.token!))];
+      if (!unknown.length) return show();
+      restoreDeclarations(services.kob);
+      const asked = Promise.all(unknown.map((id) => loadDeclaration(services.kob, services.indexer, network, id)));
+      void Promise.race([asked, new Promise((r) => setTimeout(r, DECLARATION_WAIT_MS))]).then(show, show);
     },
-    [store, services.registry],
+    [store, services.registry, services.kob, services.indexer, services.config.network],
   );
 
   const poll = useCallback(async () => {

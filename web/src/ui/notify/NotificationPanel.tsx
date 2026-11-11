@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { useFiat } from '../../app/use-fiat';
+import { useDeclarationsVersion } from '../../app/use-declaration';
 import type { ConfigWarning, StoredOverride } from '../../config';
 import { t } from '../../i18n';
 import { formatRowTime, rowTimeTitle } from '../kit/format';
@@ -35,9 +36,10 @@ function BellIcon() {
 // A tap on a notification marks that one read and leaves the panel open (several can be read in a row); only the arrow at its right goes to the
 // page it is about. A text link inside the body took taps meant for the body on Android (Chrome moves a near-miss onto a link).
 function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
-  const { registry } = useServices();
+  const { registry, config } = useServices();
   const n = useNotify();
-  const d = describeEvent(props.e, registry, useFiat());
+  useDeclarationsVersion(); // the token's name and decimals follow its declaration once it is known
+  const d = describeEvent(props.e, registry, useFiat(), config.network);
   const go = props.e.kind === 'payment' && props.e.token ? t('notify.viewToken') : props.e.kind === 'invoice' ? t('notify.settings') : t('notify.viewOrders');
   return (
     <li class={`notify-item${props.e.read ? '' : ' notify-unread'}`} data-testid={`notify-item-${props.e.kind}`} data-read={props.e.read ? 'true' : 'false'} onClick={() => n.markRead(props.e.id)}>

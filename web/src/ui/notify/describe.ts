@@ -1,5 +1,7 @@
 // Text of one notification: the event's plain params rendered with i18n at DISPLAY time, plus where it links to.
 import { t } from '../../i18n';
+import { displayToken } from '../../app/token-display';
+import { amountCell, isUnnamed } from '../orders/cells';
 import { formatRowTime } from '../kit/format';
 import { kasPerTokenToUsd, sompiToUsd, usdText, type Fiat } from '../../app/fiat';
 import { routeToHash } from '../../app/router';
@@ -13,10 +15,18 @@ export const REORG_WHATS = ['fill', 'cancelled', 'refunded', 'killed', 'gone'] a
 
 export interface DescribedEvent { title: string; body: string; href: string }
 
-/** `registry` resolves token ids to tickers / decimals (an unknown token shows its short id and its raw base units). */
-export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry, 'byCovenantId'> | null, fiat: Fiat | null = null): DescribedEvent {
-  const info = e.token ? registry?.byCovenantId.get(e.token) : undefined;
-  const token = info?.ticker ?? (e.token ? shortId(e.token, 6, 4) : '?');
+const NO_REGISTRY: Pick<TokenRegistry, 'byCovenantId'> = { byCovenantId: new Map() };
+
+/**
+ * `registry` and `network` resolve a token id to its ticker and decimals the way every other view does (app/token-display.ts: the registry, else the token's
+ * KCC-23 declaration, its program's or market's decimals, this browser's issuance); a token none of them names shows its short id, and its amount in raw
+ * base units while nothing states its decimals. The same text is used by the bell list and the toast.
+ */
+export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry, 'byCovenantId'> | null, fiat: Fiat | null = null, network = ''): DescribedEvent {
+  const info = e.token ? displayToken(registry ?? NO_REGISTRY, network, e.token) : undefined;
+  // displayToken names an unnamed token by its long id: a notification says it short
+  const named = !!info && !isUnnamed(info.ticker, e.token);
+  const token = named ? info.ticker : e.token ? shortId(e.token, 6, 4) : '?';
   const side = e.side ? t(`notify.side.${e.side}`) : '';
   const p = e.params;
   // amounts are base units (decimal strings): shown in token units when the token is known
@@ -31,36 +41,32 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
   const base = { token, side, amount: amountText(p.amount), total: amountText(p.total ?? p.amount) };
   let params: Record<string, string | number> = base;
   if (e.kind === 'expirySoon' || e.kind === 'expired') params = { ...base, time: typeof p.at === 'number' && p.at > 0 ? formatRowTime(p.at * 1000, 0) : '' };
+  let bodyKey = `notify.ev.${e.kind}.body`;
   if (e.kind === 'payment') {
     let amount: string;
+    let usd = '';
     try {
       const raw = BigInt(String(p.amount ?? '0'));
-      amount = e.token ? tokenText(raw, info?.decimals ?? 0) : kasText(raw);
+      amount = amountCell(raw, e.token ? (info?.decimals ?? 0) : 8).text; // the figure the portfolio shows: at most 4 decimals, grouped
+      // the KAS amount always leads; while the USD display is in force it is followed by its dollar estimate (a token's amount is never converted)
+      if (fiat && !e.token) usd = usdText(sompiToUsd(raw, fiat.rate));
     } catch {
       amount = String(p.amount ?? '');
     }
-    // KAS in dollars while the USD display is in force (a read-only figure; the token's amount is never converted)
-    if (fiat && !e.token) {
-      try {
-        amount = usdText(sompiToUsd(BigInt(String(p.amount ?? '0')), fiat.rate));
-      } catch {
-        /* keep the KAS text */
-      }
-    }
-    params = { amount, asset: e.token ? token : fiat ? '' : 'KAS' };
+    params = { amount, asset: e.token ? token : 'KAS', usd };
+    if (usd) bodyKey = 'notify.ev.payment.bodyUsd';
   }
-  let bodyKey = e.kind === 'payment' && fiat && !e.token ? 'notify.ev.payment.bodyUsd' : `notify.ev.${e.kind}.body`;
   if (e.kind === 'reorg') {
     const what = String(p.what ?? '');
     if ((REORG_WHATS as readonly string[]).includes(what)) bodyKey = `notify.ev.reorg.${what}.body`;
     let price = '';
     try {
       // the order's own price: sompi per whole token of the token's scale (an unknown token: per its scale's base units)
-      if (p.price !== undefined && info && fiat) {
+      if (p.price !== undefined && info && named && fiat) {
         // KAS per whole token = price x 10^decimals / (scale x 1e8)
         const scale = scaleOfDecimals(info.decimals);
         price = `${usdText(kasPerTokenToUsd({ num: BigInt(String(p.price)) * pow10(info.decimals), den: scale * 100_000_000n }, fiat.rate))} per ${info.ticker}`;
-      } else if (p.price !== undefined) price = info ? `${pricePerTokenText(BigInt(String(p.price)), info.decimals, scaleOfDecimals(info.decimals))} KAS per ${info.ticker}` : t('notify.reorg.perScale', { price: kasText(BigInt(String(p.price))) });
+      } else if (p.price !== undefined) price = info && named ? `${pricePerTokenText(BigInt(String(p.price)), info.decimals, scaleOfDecimals(info.decimals))} KAS per ${info.ticker}` : t('notify.reorg.perScale', { price: kasText(BigInt(String(p.price))) });
     } catch {
       price = '';
     }
