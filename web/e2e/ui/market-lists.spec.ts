@@ -497,7 +497,7 @@ test.describe('the pair picker', () => {
     const rows = page.locator('[data-testid^="market-base-select-option-"]');
     await expect.poll(() => rows.count()).toBeGreaterThan(1);
     const heights = await rows.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
-    expect(new Set(heights).size).toBe(1);
+    expect(new Set(heights).size, JSON.stringify(heights)).toBe(1);
     expect(heights[0]).toBeGreaterThanOrEqual(44);
     await page.keyboard.press('Escape');
   });
