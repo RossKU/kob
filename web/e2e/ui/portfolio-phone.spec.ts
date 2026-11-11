@@ -147,6 +147,12 @@ async function expectSideOnLineOne(rows: Locator, where: string): Promise<void> 
       await noOverflow('Order history');
       await shot(page, `${tag}-3-history`);
       await expectAligned('Order history');
+      // a bid that holds a KAS budget never reads "0 KAS budget", and every filled order carries its filled bar and percentage (100 %)
+      const amounts = (await page.locator('[data-testid^="order-line-"] .or-amount').allTextContents()).map((x) => x.trim());
+      expect.soft(amounts.filter((x) => /^0s*KAS budget/.test(x)), 'a zero budget').toEqual([]);
+      const filledRows = page.locator('[data-testid^="order-row-"][data-status="filled"]');
+      expect.soft(await filledRows.locator('.or-pct').count(), 'a percentage on every filled order').toBe(await filledRows.count());
+      expect.soft(await filledRows.locator('.or-bar').count(), 'a bar on every filled order').toBe(await filledRows.count());
 
       // Fills: one compact card per fill: line 1 the market and side, the time at the right; line 2 price, amount, value; the transaction is in the details
       await page.getByTestId('orders-tab-fills').click();

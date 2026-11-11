@@ -155,7 +155,7 @@
 /* the side (and the kind, muted: `Sell · Limit`) follows the market on line 1 in every list; a long name gives way (it wraps), the side does not */
 .dt-list[data-fold='cards'] .dt-market { flex: 0 1 auto; }
 .dt-list[data-fold='cards'] .dt-card-only.dt-sub { flex: none; white-space: nowrap; font-size: 0.82rem; }
-.dt-list[data-fold='cards'] .dt-c[data-card='badge'] { order: 0; flex: none; min-height: 30px; display: flex; align-items: center; margin-right: 32px; text-align: right; white-space: nowrap; }
+.dt-list[data-fold='cards'] .dt-c[data-card='badge'] { order: 0; flex: none; min-height: 30px; display: flex; align-items: center; margin-left: 10px; margin-right: 32px; text-align: right; white-space: nowrap; }
 .dt-list[data-fold='cards'] .dt-time-full { display: none; }
 .dt-list[data-fold='cards'] .dt-time::after { content: attr(data-short); }
 .dt-list[data-fold='cards'] .dt-c[data-card='toggle'] { position: absolute; top: 1px; right: 2px; width: 36px; height: 36px; display: flex; justify-content: center; align-items: center; }

@@ -27,7 +27,7 @@ import type { Hex } from '../../kob/types';
 import { OrderFills, filledAmountOf } from './OrderFills';
 import { GTC_RULE, type OrderRowModel, type OrderStatusUi } from './orders-model';
 import { placedUnix } from './orders-sort';
-import { amountCell, longDate, priceDpOf, tokenUnit } from './cells';
+import { amountCell, longDate, priceDpOf, tokenUnit, type AmountText } from './cells';
 import { tCount } from './plural';
 import { unlistedHint, unlistedText } from './unlisted';
 import './order-line.css';
@@ -100,13 +100,24 @@ function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo |
   const budget = !(total !== null && filled !== null);
   // a plain KAS bid: its budget in KAS (the placed one when this browser placed it, else what is left), and how much of it the fills have spent
   const bud = row.budget;
-  const budgetTotal = bud ? bud.placed ?? bud.left : null;
-  const budgetSpent = bud && bud.placed !== null && bud.left !== null ? bud.placed - bud.left : null;
-  const budgetTotalText = budgetTotal !== null ? amountCell(budgetTotal, 8) : null;
+  // what the fills spent when the placement is not in this browser: the filled tokens at their average price (Order history reads it)
+  const filledBase = ((): bigint => {
+    const f = row.entry.view?.filled_amount;
+    return typeof f === 'string' && /^d+$/.test(f) ? BigInt(f) : 0n;
+  })();
+  const spentByFills = bud && !row.pair && avg !== null && avg !== undefined && filledBase > 0n ? quoteOf(filledBase, avg, row.scale, 'down') : null;
+  const budgetSpent = bud && bud.placed !== null && bud.left !== null ? bud.placed - bud.left : spentByFills;
   const budgetSpentText = budgetSpent !== null ? amountCell(budgetSpent, 8) : null;
-  const budgetPct = budgetSpent !== null && bud!.placed !== null && bud!.placed > 0n ? Number((budgetSpent * 100n) / bud!.placed) : null;
+  // the Amount column of a bid, never "0 KAS budget": the placed budget; else what is left while there is some; else, for an order that is over, the KAS it spent; else just the words
+  const budgetShown: { text: AmountText; unit: string; hint: string } | null =
+    bud && bud.placed !== null ? { text: amountCell(bud.placed, 8), unit: t('orders.budgetUnit'), hint: t('orders.budgetPlacedHint') }
+    : bud && bud.left !== null && bud.left > 0n ? { text: amountCell(bud.left, 8), unit: t('orders.budgetLeftUnit'), hint: t('orders.budgetLeftHint') }
+    : bud && spentByFills !== null ? { text: amountCell(spentByFills, 8), unit: t('orders.budgetSpentUnit'), hint: t('orders.budgetSpentOnlyHint') }
+    : null;
+  // how much of the budget is spent: of the placed budget, else 100 % for a bid that filled
+  const budgetPct = bud && budgetSpent !== null && bud.placed !== null && bud.placed > 0n ? Number((budgetSpent * 100n) / bud.placed) : bud && row.status === 'filled' ? 100 : null;
   const valueKas = !row.pair && total !== null && row.price !== null ? quoteOf(total, row.price, row.scale, 'down') : null;
-  return { unix, time, timeTip: timeTitle(unix), price: pairPrice(row.price), pct, unit, valueKas, budget, budgetTotalText, budgetPlaced: !!bud && bud.placed !== null, budgetSpentText, budgetPct, amountTotalText, filledAmountText, avgText: pairPrice(avg) };
+  return { unix, time, timeTip: timeTitle(unix), price: pairPrice(row.price), pct, unit, valueKas, budget, budgetShown, budgetSpentText, budgetPct, amountTotalText, filledAmountText, avgText: pairPrice(avg) };
 }
 
 const localDate = longDate;
@@ -268,8 +279,8 @@ export function OrderRow(props: OrderRowProps) {
     <DtCell k="amount" label={t('orders.col.amount')} num class="or-amount" title={line.budget ? t('orders.budgetOrder') : undefined}>
       {line.amountTotalText !== null ? (
         <Num value={line.amountTotalText.text} title={line.amountTotalText.title} unit={line.unit.text} unitTitle={line.unit.title} />
-      ) : line.budgetTotalText !== null ? (
-        <Num value={line.budgetTotalText.text} title={line.budgetTotalText.title ?? t(line.budgetPlaced ? 'orders.budgetPlacedHint' : 'orders.budgetLeftHint')} unit={t('orders.budgetUnit')} />
+      ) : line.budgetShown !== null ? (
+        <Num value={line.budgetShown.text.text} title={line.budgetShown.text.title ?? line.budgetShown.hint} unit={line.budgetShown.unit} />
       ) : (
         <span class="dt-val">{t('orders.budgetShort')}</span>
       )}
