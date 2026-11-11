@@ -531,6 +531,68 @@ pub fn refuse_failover(cfg: &crate::config::IndexerConfig) -> Result<()> {
     Ok(())
 }
 
+/// `path` as an absolute path without `.` and `..` components (relative to the working directory: the configuration's), in the
+/// case Windows ignores: what [`inside`] compares. Lexical only: nothing needs to exist.
+fn lexical(path: &std::path::Path) -> PathBuf {
+    use std::path::Component;
+    let abs = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().unwrap_or_default().join(path) };
+    let mut out = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c.as_os_str()),
+        }
+    }
+    if cfg!(windows) {
+        PathBuf::from(out.to_string_lossy().to_lowercase())
+    } else {
+        out
+    }
+}
+
+/// Whether `file` lies inside the directory `dir` (lexically, [`lexical`]).
+fn inside(file: &std::path::Path, dir: &std::path::Path) -> bool {
+    let (f, d) = (lexical(file), lexical(dir));
+    f != d && f.starts_with(&d)
+}
+
+/// The key file and the pause file must not lie inside the data directory (audit M-10): the data directory is what an operator
+/// deletes or moves aside to rebuild the store (quickstart 7, step 6), and either file would go with it. The key file there is
+/// refused (its funds would go with it). A pause file there (the setup of a build before 2026-11-11 wrote `kob-data/pause`)
+/// is warned about while the data directory exists, and refused when it does not: the directory was deleted, so a pause the
+/// operator had set went with it, and the start would recreate the directory and trade.
+fn refuse_files_in_data_dir(
+    key_file: Option<&std::path::Path>,
+    pause_file: Option<&std::path::Path>,
+    data_dir: &std::path::Path,
+) -> Result<()> {
+    if let Some(k) = key_file.filter(|k| inside(k, data_dir)) {
+        bail!(
+            "the key file {} is inside the data directory {}: a rebuild deletes the data directory (quickstart 7), and the key would go with it, and with it the funds. Move the key file next to kobd.toml (key_file = \"kob-operator.key\") and start again",
+            k.display(),
+            data_dir.display()
+        );
+    }
+    if let Some(p) = pause_file.filter(|p| inside(p, data_dir)) {
+        if !data_dir.exists() {
+            bail!(
+                "the pause file {} is inside the data directory {}, which does not exist (deleted for a rebuild?): a pause set there went with it, and this start would trade. Set pause_file = \"kob-pause\" in kobd.toml (a file next to it), create that file first if the executor should stay paused, and start again",
+                p.display(),
+                data_dir.display()
+            );
+        }
+        tracing::warn!(
+            pause_file = %p.display(),
+            data_dir = %data_dir.display(),
+            "the pause file is inside the data directory: deleting the data directory for a rebuild deletes the pause too. Set pause_file = \"kob-pause\" in kobd.toml (a file next to it)"
+        );
+    }
+    Ok(())
+}
+
 /// `kobd --executor`.
 pub async fn run(a: RunArgs) -> Result<()> {
     if a.no_match && a.no_keep {
@@ -541,6 +603,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
     a.select.config().map_err(anyhow::Error::msg)?;
     let cfg = build_config(&a.index)?;
     refuse_failover(&cfg)?;
+    refuse_files_in_data_dir(a.key_file.as_deref(), a.pause_file.as_deref(), &cfg.data_dir)?;
     // the operator's funds are read from the nodes' UTXO index: a node without it is unusable (`rpc::judge`)
     crate::rpc::judge::require_utxo_index();
     // listening before the slow part (opening the store, the first calls to the node): a Ctrl+C there is not lost
@@ -624,4 +687,32 @@ pub async fn run(a: RunArgs) -> Result<()> {
     let chain = node_client(&cfg);
     let node = multi_submit(&cfg, &chain);
     run_with_x402(indexer, chain, node, Box::new(signer), run_cfg, x402, shutdown).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Audit M-10: a key file inside the data directory is refused; a pause file there is refused when the data directory is
+    /// gone (a pause set there went with it) and only warned about while it exists; files next to it pass. `..` and `.` are
+    /// resolved before the comparison, and a sibling whose name starts with the directory's is not inside it.
+    #[test]
+    fn a_key_or_pause_file_inside_the_data_directory_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("kob-data");
+        let key = data.join("kob-operator.key");
+        let e = refuse_files_in_data_dir(Some(&key), None, &data).unwrap_err().to_string();
+        assert!(e.contains("key file") && e.contains("key_file = \"kob-operator.key\""), "{e}");
+        let pause = data.join("pause");
+        let e = refuse_files_in_data_dir(None, Some(&pause), &data).unwrap_err().to_string();
+        assert!(e.contains("does not exist") && e.contains("pause_file = \"kob-pause\""), "{e}");
+        std::fs::create_dir(&data).unwrap();
+        assert!(refuse_files_in_data_dir(None, Some(&pause), &data).is_ok(), "warned about while the directory exists");
+        // next to it, or a sibling with a longer name: outside
+        let next = dir.path().join("kob-pause");
+        assert!(refuse_files_in_data_dir(Some(&dir.path().join("kob-operator.key")), Some(&next), &data).is_ok());
+        assert!(!inside(&dir.path().join("kob-data2").join("k"), &data));
+        assert!(inside(&dir.path().join("x").join("..").join("kob-data").join(".").join("k"), &data));
+        assert!(!inside(&data, &data), "the directory itself is not a file inside it");
+    }
 }
