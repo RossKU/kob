@@ -61,3 +61,41 @@ test('the legend is one line and the volume has its unit', async ({ appPage: pag
   // the read-out is cut, never wrapped: it fits or ends in an ellipsis inside the legend
   expect(await page.locator('.chart-ohlc').evaluate((el) => el.getBoundingClientRect().right <= el.parentElement!.getBoundingClientRect().right + 1)).toBe(true);
 });
+
+// A narrow chart panel with a MOUSE (a narrow desktop window) has the Draw button too: the full row of tools needs about 465 px beside the intervals, and the three never overlap.
+for (const width of [360, 390, 500]) {
+  test.describe(`a mouse at ${width} px`, () => {
+    test.use({ hasTouch: false, isMobile: false, viewport: { width, height: 900 } });
+    test('the Draw button stands in for the tools, and the intervals, Draw and Expand do not overlap', async ({ appPage: page, mock }) => {
+      await mock.seedHistory({ hours: 48, trades: 600, seed: 7 });
+      await fund(mock);
+      await openMarket(page, mock);
+      await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'ready');
+      await expect(page.getByTestId('chart-draw-sheet')).toBeVisible();
+      await expect(page.getByTestId('chart-tools').filter({ visible: true })).toHaveCount(0);
+      const [iv, draw, ex] = await Promise.all(['chart-intervals', 'chart-draw-sheet', 'chart-expand'].map((id) => page.getByTestId(id).boundingBox()));
+      expect(iv!.x + iv!.width).toBeLessThanOrEqual(draw!.x);
+      expect(draw!.x + draw!.width).toBeLessThanOrEqual(ex!.x);
+      await page.getByTestId('chart-draw-sheet').click();
+      await expect(page.getByTestId('chart-draw-panel').getByTestId('draw-hline')).toBeVisible();
+    });
+  });
+}
+
+test.describe('a mouse at 850 and 1280 px keeps the full row of tools', () => {
+  for (const width of [850, 1280]) {
+    test.describe(`${width}`, () => {
+      test.use({ hasTouch: false, isMobile: false, viewport: { width, height: 900 } });
+      test(`${width} px`, async ({ appPage: page, mock }) => {
+        await mock.seedHistory({ hours: 48, trades: 600, seed: 7 });
+        await fund(mock);
+        await openMarket(page, mock);
+        await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'ready');
+        await expect(page.getByTestId('chart-tools')).toBeVisible();
+        await expect(page.getByTestId('chart-draw-sheet')).toHaveCount(0);
+        const [iv, tools] = await Promise.all(['chart-intervals', 'chart-tools'].map((id) => page.getByTestId(id).boundingBox()));
+        expect(iv!.x + iv!.width).toBeLessThanOrEqual(tools!.x);
+      });
+    });
+  }
+});

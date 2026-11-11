@@ -13,7 +13,7 @@
 // sheet (they do not scroll away behind an edge any more); the intervals and Expand stay in the row. The legend is a row of its own above the plot, never over it (the OHLC read-out with the volume and its unit, then
 // the unit of the price). Its height never depends on the live values: one line with an ellipsis on the read-out (the unit does not shrink; a phone drops the price unit, which the market bar names); a row
 // that grew and shrank with every tick would move everything below it. Prices are shown with the market's display decimals (the kit's price rule), the axis, the crosshair and the legend alike.
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, MouseEventParams, Time, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
 import type { CandleInterval } from '../../data/indexer-types';
@@ -38,6 +38,8 @@ type Lw = typeof import('lightweight-charts');
 let lwPromise: Promise<Lw> | null = null;
 const loadLw = (): Promise<Lw> => (lwPromise ??= import('lightweight-charts'));
 
+/** Below this width of the chart's panel the drawing tools are behind the Draw button (the full row needs about 465 px beside the intervals). */
+const NARROW_PANEL_PX = 480;
 const INTERVAL_KEY = 'kob.chart.interval';
 const COLOR_KEY = 'kob.chart.draw.color';
 
@@ -478,7 +480,21 @@ export function PriceChart(props: PriceChartProps) {
   // the volume's unit: the token (a flipped market's volume bars are KAS); a pair chart's volume is in its base token
   const volUnit = inverted ? 'KAS' : props.ticker;
   // a touch screen: the drawing tools and the colours are behind one "Draw" button (a sheet), so no row of them scrolls away behind an edge
-  const coarse = useMedia('(pointer: coarse)');
+  // The same where the chart's panel is narrow (a narrow window with a mouse): the row of tools would not fit beside the intervals, so the one Draw button stands in for it whatever the pointer.
+  // Measured on the panel (not the window: the panel is 500 px on 1280 and 330 on a phone), before the first paint, so the row never flashes.
+  const touch = useMedia('(pointer: coarse)');
+  const [panelWidth, setPanelWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const read = () => setPanelWidth(el.clientWidth);
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const coarse = touch || (panelWidth > 0 && panelWidth < NARROW_PANEL_PX);
   /** The drawing tools (and the clear-all button): the same buttons in the desktop row and in the touch sheet, where a pick closes the sheet so the chart is free to draw on. */
   const toolButtons = (pick: boolean) => (
     <>
