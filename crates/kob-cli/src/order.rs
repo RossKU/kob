@@ -21,15 +21,16 @@ use crate::common::{
 };
 use crate::inputs::{self, TokenView, View};
 use crate::recover::custody_targets;
+use crate::token::{default_key, key_option, KeySource};
 
 /// Usage text of `kob order`.
 pub const USAGE: &str = "\
 kob order: the maker's stray sweep in place and the maker's cancel, from an indexer order view
 
 USAGE
-  kob order sweep  --view <FILE>... --key <HEX | env:VAR | file:PATH> --node ws://HOST:PORT
+  kob order sweep  --view <FILE>... (--key-file <PATH> | --key-env <NAME>) --node ws://HOST:PORT
                    [--network NET] [--yes | --dry-run] [--fee-rate N] [--priority-fee] [--out-dir <DIR>] [--out <report.json>]
-  kob order cancel --view <FILE>... --key <KEY> --node ws://HOST:PORT [same options]
+  kob order cancel --view <FILE>... (--key-file <PATH> | --key-env <NAME>) --node ws://HOST:PORT [same options]
 
 INPUT
   --view        repeatable: an indexer order view (GET /v1/orders/{id}) or a page of views ({\"items\":[..]}, e.g.
@@ -37,7 +38,9 @@ INPUT
                 the order's current UTXO and its proven state; the node must hold an unspent output at the order's
                 script with its covenant id at that outpoint, else the view is refused as stale. The custody and every
                 stray are looked up on the node the same way (a stray the node does not hold is left out).
-  --key         the maker's signing secret (64 hex; env:NAME and file:PATH keep it out of shell history)
+  --key-file    the maker's signing key: a file holding the 64-hex secret
+  --key-env     ... or the environment variable holding it (default $KOB_KEY); the older `--key file:PATH`, `--key env:NAME`
+                and `--key HEX` still work and print a warning (a key on the command line is visible to other users)
   --node        the node: a JSON wRPC endpoint (18110 mainnet, 18210 testnet-10), a Borsh one (ws://HOST:17110, wss://.../borsh) or `resolver`; default $KOB_NODE_WRPC, else the public nodes the Kaspa resolvers name (a pair on two hosts that must agree on what a transaction is planned from)
                 (a URL with a password or an API key belongs in $KOB_NODE_WRPC: arguments are visible in `ps`)
   --network     network of the addresses: mainnet (default, or the network of a deployment build) or testnet-10
@@ -90,7 +93,7 @@ pub struct Args {
     /// View files.
     pub views: Vec<PathBuf>,
     /// Key source.
-    pub key: String,
+    pub key: Option<KeySource>,
     /// Node URL.
     pub node: String,
     /// Network.
@@ -111,10 +114,15 @@ pub struct Args {
 
 /// Parse the arguments after `kob order sweep|cancel`.
 pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
+    parse_args_with(op, args, default_key())
+}
+
+/// [`parse_args`] with the key used when none is named (`$KOB_KEY`).
+pub fn parse_args_with(op: Op, args: &[String], fallback_key: Option<KeySource>) -> Result<Args, String> {
     let mut a = Args {
         op,
         views: vec![],
-        key: String::new(),
+        key: None,
         node: String::new(),
         network: String::new(),
         dry_run: false,
@@ -129,7 +137,7 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
         let mut val = |what: &str| -> Result<String, String> { it.next().cloned().ok_or_else(|| format!("{what} needs a value")) };
         match flag.as_str() {
             "--view" => a.views.push(PathBuf::from(val("--view")?)),
-            "--key" => a.key = val("--key")?,
+            "--key" | "--key-file" | "--key-env" => a.key = Some(key_option(flag, &val(flag)?, a.key.is_some())?),
             "--node" => a.node = val("--node")?,
             "--network" => a.network = val("--network")?,
             "--dry-run" => a.dry_run = true,
@@ -150,8 +158,11 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
     if a.views.is_empty() {
         return Err("at least one --view file is required".into());
     }
-    if a.key.is_empty() {
-        return Err("--key is required".into());
+    if a.key.is_none() {
+        a.key = fallback_key;
+    }
+    if a.key.is_none() {
+        return Err("a key is required: give --key-file PATH or --key-env NAME, or set the environment variable KOB_KEY".into());
     }
     a.network = crate::common::resolve_network(&a.network)?;
     a.node = crate::wrpc::node_for(Some(std::mem::take(&mut a.node)), &a.network);
@@ -524,7 +535,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
 
 /// Run the operation over every view; returns the report and whether nothing failed or was refused.
 pub fn execute(a: &Args) -> Result<(Value, bool), String> {
-    let signer = Signer::load(&a.key)?;
+    let signer = Signer::load(a.key.as_ref().expect("checked"))?;
     let mut views = vec![];
     let mut rejected = vec![];
     for p in &a.views {

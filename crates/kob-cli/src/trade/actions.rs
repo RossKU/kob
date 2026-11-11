@@ -764,7 +764,7 @@ pub fn run_cancel(args: &[String]) -> i32 {
             let a = crate::order::Args {
                 op: crate::order::Op::Cancel,
                 views: vec![],
-                key: String::new(),
+                key: None,
                 node: node.clone(),
                 network: c.network.clone(),
                 dry_run: true,

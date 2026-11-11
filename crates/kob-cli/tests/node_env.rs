@@ -92,7 +92,8 @@ fn token_issue_is_a_deprecated_alias_of_token_create() {
     let args = ["--dry-run"];
     let (_, ok, new_out, new_err) = token_run("create", Some("ws://127.0.0.1:1"), &args);
     assert!(ok && new_out.contains("genesis tx"), "{new_out}{new_err}");
-    assert!(!new_err.contains("deprecated"), "{new_err}");
+    // `create` is the current name; its `--key HEX` (this helper's way to give the key) is the deprecated part, and never printed
+    assert!(!new_err.contains("token issue") && new_err.contains("`--key HEX` is deprecated") && !new_err.contains(SK), "{new_err}");
     let (_, ok, old_out, old_err) = token_run("issue", Some("ws://127.0.0.1:1"), &args);
     assert!(ok, "{old_out}{old_err}");
     assert!(old_err.contains("`kob token issue` is now `kob token create`") && old_err.contains("deprecated"), "{old_err}");

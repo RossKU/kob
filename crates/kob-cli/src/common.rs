@@ -311,7 +311,7 @@ pub fn lookup(node: &str, network: &str, spks: &[ScriptPublicKey]) -> Result<BTr
         wanted.insert(spk_bytes(spk));
     }
     let addrs: Vec<String> = addrs.into_iter().collect();
-    let entries = wrpc::utxos_by_addresses(node, &addrs, NODE_TIMEOUT).map_err(|e| format!("node {}: {e}", wrpc::shown(node)))?;
+    let entries = wrpc::utxos_by_addresses(node, &addrs, NODE_TIMEOUT).map_err(|e| wrpc::node_failure(node, &e))?;
     let mut out: BTreeMap<Vec<u8>, Vec<NodeUtxo>> = BTreeMap::new();
     for e in entries {
         // keyed by the script the node reports: an entry counts only for the exact script it carries
@@ -393,9 +393,9 @@ impl std::fmt::Debug for Signer {
 }
 
 impl Signer {
-    /// From a key source (`HEX | env:VAR | file:PATH`).
-    pub fn load(src: &str) -> Result<Signer, String> {
-        let sk = crate::token::read_key(&crate::token::parse_key_source(src))?;
+    /// From a key source (`--key-file`, `--key-env`, or a deprecated `--key` form).
+    pub fn load(src: &crate::token::KeySource) -> Result<Signer, String> {
+        let sk = crate::token::read_key(src)?;
         let secret = sk.secret_bytes();
         let pubkey = pubkey_of(&secret).map_err(|e| e.to_string())?;
         Ok(Signer { secret, pubkey })

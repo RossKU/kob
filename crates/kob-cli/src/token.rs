@@ -39,7 +39,7 @@ their owners from the genesis on, so the holder's key finds and spends them from
 USAGE
   kob token create --name <NAME> --ticker <TICKER> --decimals <N> --fund-utxo <TXID:INDEX:AMOUNT:OWNER>...
                   [--supply <UNITS>] [--holder <OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]>...]
-                  [--key <HEX | env:VAR | file:PATH>] [--out-dir <DIR>] [--yes | --dry-run] [--node ws://HOST:PORT]
+                  [--key-file <PATH> | --key-env <NAME>] [--out-dir <DIR>] [--yes | --dry-run] [--node ws://HOST:PORT]
 
 REQUIRED
   --name, --ticker      display name (1..=64 chars) and ticker (2..=12 of A-Z 0-9)
@@ -72,7 +72,10 @@ TRANSACTION
   --fee                 explicit GENESIS fee in sompi (default: fee-rate x mass); the preparation pays fee-rate x mass
   --fee-rate            sompi per mass unit (default 100)
   --change-to           address or 64-hex pubkey for the change (default: the funding key)
-  --key                 signing secret (64 hex). `env:NAME` and `file:PATH` keep it out of shell history.
+  --key-file PATH       the signing key: a file holding the 64-hex secret
+  --key-env NAME        ... or the environment variable holding it (default $KOB_KEY when the run signs)
+                        (the older `--key file:PATH`, `--key env:NAME` and `--key HEX` still work and print a warning:
+                        a key on the command line is visible to other users)
 
 OUTPUT
   --out-dir             write preparation_tx.json, genesis_tx.json, submit_preparation.json, submit_request.json (the
@@ -90,8 +93,8 @@ OUTPUT
                         two must agree. Needs --image.
   --yes, -y             submit without asking. Without it a terminal is shown the plan and asked (type yes); without a
                         terminal nothing is written or submitted. Not needed with --dry-run.
-  --dry-run             build and verify everything offline (signs and executes the funding inputs when --key is
-                        given, else the transaction stays unsigned); never submits (excludes --yes)
+  --dry-run             build and verify everything offline (signs and executes the funding inputs when a key is
+                        named (--key-file or --key-env), else the transaction stays unsigned); never submits (excludes --yes)
   --node URL            where to submit the signed transactions (`submitTransaction`): a JSON wRPC endpoint (port 18110
                         mainnet, 18210 testnet-10), a Borsh one (ws://HOST:17110, wss://.../borsh) or `resolver`. Default
                         $KOB_NODE_WRPC (a URL with a password or an API key belongs there: arguments are visible in `ps`),
@@ -283,6 +286,46 @@ pub fn parse_fund(s: &str) -> Result<FundArg, String> {
     })
 }
 
+/// The key of the older commands (`token create`, `recover`, `order`) from `--key-file PATH`, `--key-env NAME` or the
+/// deprecated `--key HEX | env:VAR | file:PATH` (which says on stderr what to write instead; it never prints the key). A second
+/// key option is refused.
+pub(crate) fn key_option(flag: &str, value: &str, have: bool) -> Result<KeySource, String> {
+    if have {
+        return Err("give the key once: --key-file PATH or --key-env NAME".into());
+    }
+    Ok(match flag {
+        "--key-file" => KeySource::File(PathBuf::from(value)),
+        "--key-env" => KeySource::Env(value.to_string()),
+        _ => {
+            let src = parse_key_source(value);
+            eprintln!("{}", deprecation(&src));
+            src
+        }
+    })
+}
+
+/// The warning of a deprecated `--key` form: the new spelling, never the key.
+fn deprecation(src: &KeySource) -> String {
+    match src {
+        KeySource::File(p) => {
+            format!("warning: `--key file:{0}` is deprecated; write `--key-file {0}`", p.display())
+        }
+        KeySource::Env(v) => format!("warning: `--key env:{v}` is deprecated; write `--key-env {v}`"),
+        KeySource::Hex(_) => {
+            "warning: `--key HEX` is deprecated: a key on the command line is visible to other users (ps, shell history); write `--key-file PATH` or `--key-env NAME`"
+                .to_string()
+        }
+    }
+}
+
+/// The key when none was named: the environment variable `KOB_KEY`, when it is set.
+pub(crate) fn default_key() -> Option<KeySource> {
+    std::env::var(crate::trade::opts::KEY_ENV)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(|_| KeySource::Env(crate::trade::opts::KEY_ENV.into()))
+}
+
 pub(crate) fn parse_key_source(s: &str) -> KeySource {
     if let Some(v) = s.strip_prefix("env:") {
         KeySource::Env(v.to_string())
@@ -295,6 +338,11 @@ pub(crate) fn parse_key_source(s: &str) -> KeySource {
 
 /// Parse the arguments after `kob token create`.
 pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
+    parse_issue_args_with(args, default_key())
+}
+
+/// [`parse_issue_args`] with the key a run that signs falls back to when none is named (`$KOB_KEY`).
+pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -> Result<IssueArgs, String> {
     let mut a = IssueArgs {
         name: String::new(),
         ticker: String::new(),
@@ -344,7 +392,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
             "--supply" => a.supply = Some(parse_u64(&val("--supply")?, "--supply")?),
             "--holder" => a.holders.push(parse_holder(&val("--holder")?)?),
             "--fund-utxo" => a.fund.push(parse_fund(&val("--fund-utxo")?)?),
-            "--key" => a.key = Some(parse_key_source(&val("--key")?)),
+            "--key" | "--key-file" | "--key-env" => a.key = Some(key_option(flag, &val(flag)?, a.key.is_some())?),
             "--out-dir" => a.out_dir = Some(PathBuf::from(val("--out-dir")?)),
             "--carrier" => a.carrier = parse_u64(&val("--carrier")?, "--carrier")?,
             "--fee" => a.fee = Some(parse_u64(&val("--fee")?, "--fee")?),
@@ -412,8 +460,12 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
     if a.yes && a.dry_run {
         return Err("--yes and --dry-run exclude each other".into());
     }
+    // a dry run signs only when a key is named; a run that submits falls back to $KOB_KEY
     if !a.dry_run && a.key.is_none() {
-        return Err("--key is required unless --dry-run (an unsigned transaction cannot be submitted)".into());
+        a.key = fallback_key;
+    }
+    if !a.dry_run && a.key.is_none() {
+        return Err("a key is required unless --dry-run (an unsigned transaction cannot be submitted): give --key-file PATH or --key-env NAME, or set the environment variable KOB_KEY".into());
     }
     a.network = crate::common::resolve_network(&a.network)?;
     a.node = Some(crate::wrpc::node_for(a.node.take(), &a.network));
@@ -512,7 +564,15 @@ pub fn run_issue(args: &[String]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[ISSUE_USAGE], false) {
         return code;
     }
-    match issue(args) {
+    // a mistake in the arguments is a usage error (2); what the run meets after that is 1
+    let a = match parse_issue_args(args) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return crate::help::USAGE_EXIT;
+        }
+    };
+    match issue(&a) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("error: {e}");
@@ -521,9 +581,8 @@ pub fn run_issue(args: &[String]) -> i32 {
     }
 }
 
-fn issue(args: &[String]) -> Result<(), String> {
-    let a = parse_issue_args(args)?;
-    let spec = to_spec(&a)?;
+fn issue(a: &IssueArgs) -> Result<(), String> {
+    let spec = to_spec(a)?;
     let mut plan = build_creation(&spec).map_err(|e| e.to_string())?;
     if let Some(src) = &a.key {
         let sk = read_key(src)?;
@@ -707,7 +766,8 @@ pub fn run_resume(args: &[String]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[RESUME_USAGE], true) {
         return code;
     }
-    let run = || -> Result<(), String> {
+    // a mistake in the arguments is a usage error (2); what the run meets after that is 1
+    let parse = || -> Result<(PathBuf, String, String), String> {
         let mut dir = None;
         let mut node = None;
         let mut network = String::new();
@@ -723,6 +783,16 @@ pub fn run_resume(args: &[String]) -> i32 {
         let dir = dir.ok_or("give the directory `kob token create` wrote")?;
         let network = crate::common::resolve_network(&network)?;
         let node = wrpc::node_for(node, &network);
+        Ok((dir, network, node))
+    };
+    let (dir, network, node) = match parse() {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return crate::help::USAGE_EXIT;
+        }
+    };
+    let run = || -> Result<(), String> {
         let read = |name: &str| -> Result<Value, String> {
             let text = std::fs::read_to_string(dir.join(name)).map_err(|e| format!("read {name}: {e}"))?;
             serde_json::from_str(&text).map_err(|e| format!("{name}: {e}"))
@@ -735,7 +805,7 @@ pub fn run_resume(args: &[String]) -> i32 {
                 .is_some_and(|i| !i.is_empty() && i.iter().all(|x| x["signatureScript"].as_str().is_some_and(|s| !s.is_empty())))
         };
         if !signed(&prep) || !signed(&genesis) {
-            return Err("the saved transactions are not signed (a dry run without --key): issue again".into());
+            return Err("the saved transactions are not signed (a dry run without a key): issue again".into());
         }
         let g = &genesis["inputs"][0]["previousOutpoint"];
         if genesis["inputs"].as_array().map(Vec::len) != Some(1) || g["transactionId"].as_str() != Some(prep_id) || g["index"] != 0 {
@@ -843,16 +913,45 @@ mod tests {
     }
 
     #[test]
+    fn the_key_rule_of_the_older_commands() {
+        let run = format!("--name X --ticker X --decimals 1 --fund-utxo {TX}:0:1:{PK} --supply 1 --network testnet-10");
+        let src =
+            |extra: &str, fallback: Option<KeySource>| parse_issue_args_with(&v(&format!("{run} {extra}")), fallback).map(|a| a.key);
+        assert_eq!(src("--key-file k.txt", None).unwrap(), Some(KeySource::File("k.txt".into())));
+        assert_eq!(src("--key-env MY_KEY", None).unwrap(), Some(KeySource::Env("MY_KEY".into())));
+        // the older spellings still work
+        assert_eq!(src("--key file:k.txt", None).unwrap(), Some(KeySource::File("k.txt".into())));
+        assert_eq!(src("--key env:MY_KEY", None).unwrap(), Some(KeySource::Env("MY_KEY".into())));
+        assert_eq!(src("--key 07", None).unwrap(), Some(KeySource::Hex("07".into())));
+        // one key only
+        assert!(src("--key-file a --key-env B", None).unwrap_err().contains("once"));
+        // without one: the fallback ($KOB_KEY) when the run signs, nothing in a dry run
+        let kob_key = Some(KeySource::Env("KOB_KEY".into()));
+        assert_eq!(src("", kob_key.clone()).unwrap(), kob_key);
+        assert_eq!(src("--dry-run", kob_key).unwrap(), None);
+        // the warning names the new spelling and never the key
+        let w = |s: &str| deprecation(&parse_key_source(s));
+        assert!(w("file:/tmp/k").contains("--key-file /tmp/k"));
+        assert!(w("env:MY_KEY").contains("--key-env MY_KEY"));
+        let hex = w(&"33".repeat(32));
+        assert!(hex.contains("--key-file") && hex.contains("--key-env") && !hex.contains("3333"), "{hex}");
+    }
+
+    #[test]
     fn requires_the_essentials() {
         assert!(parse_issue_args(&v("--name X --ticker X --decimals 1")).is_err());
         assert!(
-            parse_issue_args(&v(&format!("--name X --ticker X --decimals 1 --fund-utxo {TX}:0:1:{PK} --supply 1"))).is_err(),
-            "needs --key"
+            parse_issue_args_with(&v(&format!("--name X --ticker X --decimals 1 --fund-utxo {TX}:0:1:{PK} --supply 1")), None)
+                .is_err(),
+            "needs a key"
         );
         assert!(
-            parse_issue_args(&v(&format!("--name X --ticker X --decimals 1 --fund-utxo {TX}:0:1:{PK} --supply 1 --node ws://x:1")))
-                .is_err(),
-            "needs --key"
+            parse_issue_args_with(
+                &v(&format!("--name X --ticker X --decimals 1 --fund-utxo {TX}:0:1:{PK} --supply 1 --node ws://x:1")),
+                None
+            )
+            .is_err(),
+            "needs a key"
         );
         assert!(parse_issue_args(&v(&format!("--ticker X --decimals 1 --fund-utxo {TX}:0:1:{PK} --supply 1 --dry-run"))).is_err());
         assert!(parse_issue_args(&v(&format!("{} --bogus", base()))).is_err());

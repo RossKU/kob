@@ -931,7 +931,21 @@ fn input_formats_and_bad_input() {
         let a = recover::parse_args(&v("--from a.json --network testnet-10 --node resolver")).unwrap();
         assert_eq!(a.node, "resolver:testnet-10");
     }
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel")).is_err(), "--cancel needs --key");
+    assert!(
+        recover::parse_args_with(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel"), None).is_err(),
+        "--cancel needs a key"
+    );
+    // the new spellings, and one key only
+    let k =
+        recover::parse_args_with(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-file k.txt"), None).unwrap();
+    assert_eq!(k.key, Some(crate::token::KeySource::File("k.txt".into())));
+    assert!(recover::parse_args_with(
+        &v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-file a --key-env B"),
+        None
+    )
+    .is_err());
+    let k = order::parse_args_with(order::Op::Sweep, &v("--view a.json --key-env MY_KEY --network testnet-10"), None).unwrap();
+    assert_eq!(k.key, Some(crate::token::KeySource::Env("MY_KEY".into())));
     assert!(
         recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --dry-run")).is_err(),
         "--dry-run belongs to --cancel"
@@ -944,7 +958,7 @@ fn input_formats_and_bad_input() {
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --fee-rate 5 --cancel --key 00")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --bogus")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --lots 3")).is_err(), "no lot flags remain");
-    assert!(order::parse_args(order::Op::Sweep, &v("--view a.json --node ws://x:1")).is_err(), "needs --key");
+    assert!(order::parse_args_with(order::Op::Sweep, &v("--view a.json --node ws://x:1"), None).is_err(), "needs a key");
     // no --node: the public nodes (unless $KOB_NODE_WRPC names one)
     if std::env::var(crate::wrpc::NODE_ENV).is_err() {
         let a = order::parse_args(order::Op::Sweep, &v("--view a.json --key 00 --network testnet-10")).unwrap();

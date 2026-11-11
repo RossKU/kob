@@ -26,6 +26,7 @@ use crate::common::{
     OrderScript, Signer,
 };
 use crate::inputs::{self, Entry, Rejected};
+use crate::token::{default_key, key_option, KeySource};
 use crate::wrpc::NodeUtxo;
 
 /// Usage text of `kob recover`.
@@ -35,7 +36,7 @@ kob recover: find orders on the node from a backup, a recovery / export file or 
 USAGE
   kob recover --from <FILE>... --node ws://HOST:PORT [--network NET] [--maker <PUBKEY>] [--out <report.json>]
               [--amount-left [<COVENANT ID>=]<AMOUNT>]...
-              [--cancel --key <HEX | env:VAR | file:PATH> [--yes | --dry-run] [--fee-rate N] [--priority-fee] [--out-dir <DIR>]]
+              [--cancel (--key-file <PATH> | --key-env <NAME>) [--yes | --dry-run] [--fee-rate N] [--priority-fee] [--out-dir <DIR>]]
 
 INPUT
   --from        repeatable. The web wallet's backup ({\"format\":\"kob-backup\",..}), the indexer recovery / export file
@@ -80,8 +81,10 @@ CANCEL
                 sweep them with `kob order sweep|cancel` from an indexer view first).
                 The fee comes from the order's released KAS; if that is not enough, the smallest sufficient plain KAS UTXO
                 of the maker on the node is added.
-  --key         the maker's signing secret (64 hex; env:NAME and file:PATH keep it out of shell history); a key that is
-                not the order's maker is refused
+  --key-file    the maker's signing key: a file holding the 64-hex secret
+  --key-env     ... or the environment variable holding it (default $KOB_KEY); a key that is not the order's maker is
+                refused. The older `--key file:PATH`, `--key env:NAME` and `--key HEX` still work and print a warning (a
+                key on the command line is visible to other users)
   --yes, -y     sign and submit without asking. Without it, each cancel is described and a terminal asks (type yes);
                 without a terminal the cancel is refused (status `refused`, exit 1) and nothing is signed.
   --dry-run     build, sign and engine-validate, write, never submit (excludes --yes)
@@ -112,7 +115,7 @@ pub struct Args {
     /// Cancel live orders.
     pub cancel: bool,
     /// Key source.
-    pub key: Option<String>,
+    pub key: Option<KeySource>,
     /// Never submit.
     pub dry_run: bool,
     /// Submit without asking.
@@ -144,6 +147,11 @@ fn parse_hint(v: &str) -> Result<(Option<[u8; 32]>, String), String> {
 
 /// Parse the arguments after `kob recover`.
 pub fn parse_args(args: &[String]) -> Result<Args, String> {
+    parse_args_with(args, default_key())
+}
+
+/// [`parse_args`] with the key `--cancel` falls back to when none is named (`$KOB_KEY`).
+pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Result<Args, String> {
     let mut a = Args {
         from: vec![],
         node: String::new(),
@@ -170,7 +178,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
             "--out" => a.out = Some(PathBuf::from(val("--out")?)),
             "--amount-left" => a.amount_left.push(parse_hint(&val("--amount-left")?)?),
             "--cancel" => a.cancel = true,
-            "--key" => a.key = Some(val("--key")?),
+            "--key" | "--key-file" | "--key-env" => a.key = Some(key_option(flag, &val(flag)?, a.key.is_some())?),
             "--dry-run" => a.dry_run = true,
             "--yes" | "-y" => a.yes = true,
             "--fee-rate" => {
@@ -188,10 +196,13 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
     a.network = crate::common::resolve_network(&a.network)?;
     a.node = crate::wrpc::node_for(Some(std::mem::take(&mut a.node)), &a.network);
     if a.cancel && a.key.is_none() {
-        return Err("--cancel needs --key".into());
+        a.key = fallback_key;
+    }
+    if a.cancel && a.key.is_none() {
+        return Err("--cancel needs a key: give --key-file PATH or --key-env NAME, or set the environment variable KOB_KEY".into());
     }
     if !a.cancel && (a.key.is_some() || a.dry_run || a.yes || a.out_dir.is_some() || a.priority_fee) {
-        return Err("--key, --yes, --dry-run, --priority-fee and --out-dir belong to --cancel".into());
+        return Err("--key-file, --key-env, --yes, --dry-run, --priority-fee and --out-dir belong to --cancel".into());
     }
     if a.yes && a.dry_run {
         return Err("--yes and --dry-run exclude each other".into());
@@ -702,7 +713,7 @@ pub fn execute(a: &Args) -> Result<(Value, bool), String> {
     let mut found = search(entries, a.maker, &a.amount_left, &a.node, &a.network)?;
     let mut ok = true;
     if a.cancel {
-        let signer = Signer::load(a.key.as_deref().expect("checked"))?;
+        let signer = Signer::load(a.key.as_ref().expect("checked"))?;
         for f in found.iter_mut() {
             if f.status != Status::Live {
                 continue;
