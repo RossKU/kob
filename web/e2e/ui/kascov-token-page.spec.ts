@@ -86,7 +86,7 @@ for (const vp of VIEWPORTS) {
       // the units and the tab use the creator's ticker where KOB has no name of its own
       await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KASC/KAS');
       await expect(page.getByTestId('chart-unit')).toHaveText('KAS per KASC');
-      expect(await page.title()).toBe('KASC - KOB');
+      expect(await page.title()).toBe('KASC · KOB');
 
       // an empty book
       await expect(page.getByTestId('book-empty')).toHaveText('No orders yet');
@@ -121,7 +121,7 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('first-order')).toHaveCount(0);
       await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /3 decimals, the KaspaRocket convention/);
       await expect(page.getByTestId('book-empty')).toHaveText('No orders yet');
-      expect(await page.title()).toBe('ROCK - KOB');
+      expect(await page.title()).toBe('ROCK · KOB');
 
       await connectWallet(page);
       await expect(page.getByTestId('order-ticket')).toBeVisible();
@@ -147,7 +147,7 @@ for (const vp of VIEWPORTS) {
       await expect(why).toContainText('the indexer knows no token output of it for the node to confirm');
       await expect(page.getByTestId('order-ticket')).toHaveCount(0);
       await expect(page.getByTestId('book-empty')).toHaveText('No orders yet');
-      expect(await page.title()).toBe('GHST - KOB');
+      expect(await page.title()).toBe('GHST · KOB');
       expect(await horizontalOverflow(page)).toBe(0);
 
     });
@@ -159,7 +159,7 @@ for (const vp of VIEWPORTS) {
       await expect(nf).toContainText(NOBODY_ID);
       await expect(nf).toContainText('KOB found no token with the covenant id');
       await expect(page.getByTestId('token-public-reason')).toContainText('cannot be verified');
-      expect(await page.title()).toBe('Token not found - KOB');
+      expect(await page.title()).toBe('Token not found · KOB');
       expect(await horizontalOverflow(page)).toBe(0);
       // the same for every page that prints a full id or a long typed one
       for (const route of [`/market/${'f'.repeat(300)}`, `/market/${NOBODY_ID}/${GHOST_ID}`, `/market/${NOBODY_ID}/kas`, '/portfolio', '/create', '/settings']) {
@@ -174,11 +174,11 @@ for (const vp of VIEWPORTS) {
       await mockKascov(page, { tokens: [] });
       const exkcc = (await mock.token()).covenant_id;
       const titles: Record<string, string> = {
-        '/market': 'Market - KOB',
-        '/portfolio': 'Portfolio - KOB',
-        '/create': 'Create token - KOB',
-        '/settings': 'Settings - KOB',
-        [`/market/${exkcc}`]: 'EXKCC - KOB',
+        '/market': 'Market · KOB',
+        '/portfolio': 'Portfolio · KOB',
+        '/create': 'Create token · KOB',
+        '/settings': 'Settings · KOB',
+        [`/market/${exkcc}`]: 'EXKCC · KOB',
       };
       for (const [route, title] of Object.entries(titles)) {
         await page.goto(`/#${route}`);

@@ -61,9 +61,9 @@ describe('decimalsLine: where the decimals of a token not yet opened for trading
 
 describe('tab titles', () => {
   it('a page is named, then the app', () => {
-    expect(pageTitle('Market')).toBe('Market - KOB');
-    expect(pageTitle('THEN')).toBe('THEN - KOB');
-    expect(pageTitle(`${'ROCKET'} / ${'KAS'}`)).toBe('ROCKET / KAS - KOB');
+    expect(pageTitle('Market')).toBe('Market · KOB');
+    expect(pageTitle('THEN')).toBe('THEN · KOB');
+    expect(pageTitle(`${'ROCKET'} / ${'KAS'}`)).toBe('ROCKET / KAS · KOB');
   });
   it('the pages of the app have names', () => {
     for (const p of ['market', 'portfolio', 'create', 'settings']) expect(t(`shell.nav.${p}`)).not.toMatch(/^shell\./);
