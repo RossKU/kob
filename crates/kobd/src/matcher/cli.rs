@@ -52,7 +52,7 @@ pub struct CommonArgs {
     #[command(flatten)]
     pub fees: crate::fee::FeeArgs,
     /// Kill switch: nothing is built or submitted while this file exists. A file whose state cannot be read (permission
-    /// denied) counts as present. Keep it on persistent storage.
+    /// denied) or whose directory does not exist counts as present. Keep it on persistent storage.
     #[arg(long)]
     pub pause_file: Option<PathBuf>,
     /// Prometheus textfile-collector output (`.prom`).

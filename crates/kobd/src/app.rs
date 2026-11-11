@@ -19,7 +19,8 @@ use crate::setup::{
 
 /// The roles of a `kobd` process, as the setup and the role flags name them.
 ///
-/// * **Executor**: matches crossing orders and refunds expired ones with a funded hot key (`run`); lean storage and fast start.
+/// * **Executor**: matches crossing orders and refunds expired ones with a funded hot key (`run`); lean storage and fast start
+///   (on an empty data directory it trades within seconds; `--no-fast-start` or `fast_start = false`: the history first).
 /// * **Indexer**: follows the chain, keeps the full history and the record log and serves the read API (`index`; no key).
 /// * **Executor and Indexer**: both in one process (`run` over an archive store: `lean = false`). The public API and the
 ///   signing key then live on the same machine.
@@ -37,8 +38,9 @@ pub const COMBINED_WARNING: &str =
 /// `--executor` and `--indexer`: kaspad-style role flags of the setup and of a start (`kobd --executor --indexer`).
 #[derive(clap::Args, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RoleFlags {
-    /// The Executor role: match crossing orders and refund expired ones (needs a funded hot key). Lean storage and fast start;
-    /// a full store with --indexer.
+    /// The Executor role: match crossing orders and refund expired ones (needs a funded hot key). Lean storage (a full store
+    /// with --indexer) and fast start: on an empty data directory it trades within seconds and indexes the history meanwhile
+    /// (--no-fast-start: the history first).
     #[arg(long)]
     pub executor: bool,
     /// The Indexer role: follow the chain, keep the full history and the record log and serve the read API (no key). With
@@ -176,7 +178,7 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
         let key = if key_path.exists() { HotKey::from_file(&key_path)? } else { HotKey::create_file(&key_path)? };
         address = json!(key.address(&network).to_string());
         launch.key_file = Some(PathBuf::from(KEY_FILE));
-        launch.pause_file = Some(PathBuf::from(format!("{data_dir}/pause")));
+        launch.pause_file = Some(PathBuf::from(crate::setup::PAUSE_FILE));
     }
     let tokens_path = if opts.pinned_registry { None } else { Some(ensure_token_list(&opts.dir, &network)?.0) };
     let fast_start = SetupFile::fast_start_for(a.role);
@@ -315,7 +317,7 @@ mod tests {
         assert!(!out.to_string().contains(secret.trim()), "the secret is never printed");
         // the configuration is what a start without arguments reads
         let l = crate::setup::launch_args(&dir.join(CONFIG_FILE)).unwrap();
-        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", crate::setup::PAUSE_FILE]);
         let c = IndexerConfig::load(&dir.join(CONFIG_FILE)).unwrap();
         assert_eq!((c.network.as_str(), c.rpc_url.as_str()), ("testnet-10", "resolver"));
         assert!(c.fast_start, "the app's first start trades within seconds (docs/ops/executor.md, Fast start)");
@@ -353,7 +355,7 @@ mod tests {
         assert_eq!(out["address"], key.address("testnet-10").to_string());
         assert_eq!((out["role"].as_str(), out["roles"].clone()), (Some("run"), serde_json::json!(["executor", "indexer"])));
         let l = crate::setup::launch_args(&d.path().join(CONFIG_FILE)).unwrap();
-        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", crate::setup::PAUSE_FILE]);
         let c = IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap();
         assert!(!c.lean && c.records.enabled, "full history and the record log");
         assert!(c.fast_start, "the matcher trades within seconds of the first start");

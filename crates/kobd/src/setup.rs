@@ -36,6 +36,10 @@ pub const KEY_FILE: &str = "kob-operator.key";
 pub const LOG_FILE: &str = "kobd.log";
 /// The default data directory (database and record log), relative to the configuration.
 pub const DATA_DIR: &str = "kob-data";
+/// The pause file the setup configures (`pause_file`), next to the configuration and never in the data directory: the data
+/// directory is what an operator deletes to rebuild the store (docs/ops/executor-quickstart.md, upgrades), and a pause file
+/// there would go with it, so the executor would trade on its next start although its operator had paused it.
+pub const PAUSE_FILE: &str = "kob-pause";
 /// The token-program list a build without a pinned registry gets (testnet-10, [`program_registry`]).
 pub const TOKENS_FILE: &str = "kob-tokens.json";
 /// The balance at which the setup stops waiting for funds: `run`'s low-funds alert threshold (`--low-funds-kas`).
@@ -321,6 +325,16 @@ pub trait SetupNode {
     /// The host a resolver entry uses now, for the operator (`None`: not resolved).
     fn node_name(&mut self, url: &str) -> Option<String> {
         crate::rpc::resolver::current(url).map(|n| crate::rpc::resolver::host(&n))
+    }
+    /// The public node a resolver entry stands for, resolved now if it has none (`None`: not a resolver entry, or the
+    /// resolvers named none): the node a check of the entry asks.
+    fn resolve(&mut self, url: &str) -> Option<String> {
+        crate::rpc::resolver::is_resolver(url).then(|| crate::rpc::resolver::endpoint(url).ok()).flatten()
+    }
+    /// The check of `node`, the public node the resolver entry `url` stood for, failed: the entry moves to another public node,
+    /// so that "try again" asks another one (a report about a node the entry no longer uses changes nothing).
+    fn give_up(&mut self, url: &str, node: &str, why: &str) {
+        crate::rpc::resolver::replace(url, node, why);
     }
 }
 
@@ -661,7 +675,7 @@ pub fn run_setup_with(
                 io.say(&format!("{} is not a file.", full.display()));
             }
         }
-        launch.pause_file = Some(PathBuf::from(format!("{}/pause", data_dir.trim_end_matches(['/', '\\']))));
+        launch.pause_file = Some(PathBuf::from(PAUSE_FILE));
     }
 
     let tokens_path = if opts.pinned_registry {
@@ -750,14 +764,23 @@ fn check_public_pair(io: &mut dyn Console, node: &mut dyn SetupNode, network: &s
         io.say("Finding two public nodes through the Kaspa resolvers ...");
         let mut problems = vec![];
         for (entry, what) in [(crate::rpc::resolver::pseudo(1), "chain authority"), (crate::rpc::resolver::pseudo(2), "cross-check")] {
+            // the node this check asks, before the check can move the entry (a failed connection swaps the pair's roles)
+            let used = node.resolve(&entry);
             let res = node
                 .server_info(&entry)
                 .map_err(|e| format!("cannot reach a public node: {e}"))
                 .and_then(|i| judge_node(&i, network, role));
-            let name = node.node_name(&entry).unwrap_or_else(|| entry.clone());
+            let name =
+                used.as_deref().map(crate::rpc::resolver::host).or_else(|| node.node_name(&entry)).unwrap_or_else(|| entry.clone());
             match res {
                 Ok(found) => io.say(&format!("OK: {name} ({what}): {found}.")),
-                Err(why) => problems.push(format!("{name} ({what}): {why}")),
+                Err(why) => {
+                    // "try again" asks another public node, not the one that failed
+                    if let Some(n) = &used {
+                        node.give_up(&entry, n, &format!("it failed the setup's check: {why}"));
+                    }
+                    problems.push(format!("{name} ({what}): {why}"));
+                }
             }
         }
         if problems.is_empty() {
@@ -766,7 +789,7 @@ fn check_public_pair(io: &mut dyn Console, node: &mut dyn SetupNode, network: &s
         for p in &problems {
             io.say(&format!("Problem: {p}"));
         }
-        io.say("Press Enter to try again (other nodes are tried), or type skip to go on anyway.");
+        io.say("Press Enter to try again (another public node replaces each one that failed), or type skip to go on anyway.");
         let a = io.ask("> ").ok_or_else(ended)?;
         if a.eq_ignore_ascii_case("skip") {
             io.say("Going on: the executor keeps looking for public nodes when it starts.");
@@ -904,6 +927,8 @@ mod tests {
         refuse: usize,
         balances: VecDeque<u64>,
         urls: Vec<String>,
+        /// (entry, node, why) of every node the setup gave up
+        given_up: Vec<(String, String, String)>,
     }
 
     impl FakeNode {
@@ -919,6 +944,7 @@ mod tests {
                 refuse: 0,
                 balances: VecDeque::new(),
                 urls: vec![],
+                given_up: vec![],
             }
         }
     }
@@ -937,6 +963,12 @@ mod tests {
         }
         fn node_name(&mut self, url: &str) -> Option<String> {
             crate::rpc::resolver::is_resolver(url).then(|| format!("{}.public.example", url.replace(':', "-")))
+        }
+        fn resolve(&mut self, url: &str) -> Option<String> {
+            self.node_name(url).map(|h| format!("wss://{h}/x/borsh"))
+        }
+        fn give_up(&mut self, url: &str, node: &str, why: &str) {
+            self.given_up.push((url.into(), node.into(), why.into()));
         }
     }
 
@@ -991,7 +1023,7 @@ mod tests {
             launch: LaunchConfig {
                 role: LaunchRole::Run,
                 key_file: Some(KEY_FILE.into()),
-                pause_file: Some("kob-data/pause".into()),
+                pause_file: Some(PAUSE_FILE.into()),
                 x402_config: None,
                 args: vec!["--sweep-own-strays".into()],
             },
@@ -1011,12 +1043,12 @@ mod tests {
         assert_eq!(c.launch.as_ref(), Some(&f.launch));
         let l = launch_args(&p).unwrap();
         assert_eq!(l.dir, d.path());
-        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause", "--sweep-own-strays"]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", PAUSE_FILE, "--sweep-own-strays"]);
         assert_eq!(l.api, Some("127.0.0.1:8090".parse().unwrap()));
         let cl = command_line(&l, "kobd.exe");
         assert!(
             cl.ends_with(
-                "\nkobd.exe --executor --config kobd.toml --key-file kob-operator.key --pause-file kob-data/pause \
+                "\nkobd.exe --executor --config kobd.toml --key-file kob-operator.key --pause-file kob-pause \
                  --sweep-own-strays"
             ),
             "{cl}"
@@ -1060,6 +1092,11 @@ mod tests {
         let out = io.text();
         assert_eq!(got, Some(d.path().join(CONFIG_FILE)), "{out}");
         assert_eq!(node.urls, ["resolver", "resolver:2", "resolver", "resolver:2"], "both public nodes, checked again");
+        // the node that failed the check is given up, so that "try again" asks another one
+        assert_eq!(node.given_up.len(), 1, "{:?}", node.given_up);
+        let (entry, failed, why) = &node.given_up[0];
+        assert_eq!((entry.as_str(), failed.as_str()), ("resolver", "wss://resolver.public.example/x/borsh"));
+        assert!(why.contains("cannot reach a public node"), "{why}");
         assert!(out.contains("Network: testnet-10"), "{out}");
         assert!(out.contains("A bad node cannot steal funds") && out.contains("two public nodes on different hosts"), "{out}");
         assert!(out.contains("Problem: resolver.public.example (chain authority): cannot reach a public node"), "{out}");
@@ -1077,7 +1114,7 @@ mod tests {
         assert!(out.contains(&k.address("testnet-10").to_string()));
         // the configuration, the token list, and the command line it stands for
         let l = launch_args(&d.path().join(CONFIG_FILE)).unwrap();
-        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", PAUSE_FILE]);
         let c = IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap();
         assert_eq!(c.rpc_url, "resolver", "public nodes (index_cli adds the second, resolver:2)");
         assert_eq!(c.tokens_path, Some(PathBuf::from(TOKENS_FILE)));
@@ -1124,7 +1161,7 @@ mod tests {
         let launch = LaunchConfig {
             role: role.launch_role(),
             key_file: role.has_key().then(|| KEY_FILE.into()),
-            pause_file: role.has_key().then(|| "kob-data/pause".into()),
+            pause_file: role.has_key().then(|| PAUSE_FILE.into()),
             ..LaunchConfig::default()
         };
         SetupFile {
@@ -1155,7 +1192,7 @@ mod tests {
             body.to_string()
         };
         let head = "network = \"testnet-10\"\nrpc_url = \"resolver\"\ndata_dir = \"kob-data\"\ntokens_path = \"kob-tokens.json\"\n";
-        let run_launch = "\n[launch]\nrole = \"run\"\nkey_file = \"kob-operator.key\"\npause_file = \"kob-data/pause\"\nargs = []\n";
+        let run_launch = "\n[launch]\nrole = \"run\"\nkey_file = \"kob-operator.key\"\npause_file = \"kob-pause\"\nargs = []\n";
         // the Executor: lean storage (no record log), fast start
         assert_eq!(keys(AppRole::Executor), format!("{head}fast_start = true\nlean = true\nlog_file = \"kobd.log\"\n{run_launch}"));
         // the Indexer: nothing of the Executor
@@ -1188,7 +1225,7 @@ mod tests {
         };
         let (l, c) = built(AppRole::ExecutorIndexer);
         assert_eq!(l.role, LaunchRole::Run);
-        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
+        assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", PAUSE_FILE]);
         assert!(!c.lean, "no lean cap: the store keeps the history");
         assert!(c.records.enabled, "the record log is on");
         assert!(c.fast_start && c.api.enabled, "the matcher trades at once; the read API is served");
@@ -1294,7 +1331,7 @@ mod tests {
         let l = launch_args(&d.path().join(CONFIG_FILE)).unwrap();
         assert_eq!(
             l.args,
-            ["--config", CONFIG_FILE, "--key-file", kps.as_str(), "--pause-file", "data/pause", "--x402-config", "x402.json"]
+            ["--config", CONFIG_FILE, "--key-file", kps.as_str(), "--pause-file", PAUSE_FILE, "--x402-config", "x402.json"]
         );
     }
 

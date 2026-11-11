@@ -1,9 +1,11 @@
 //! Pause files (kill switches): `kobd --executor --pause-file`, the matcher's and keeper's `--pause-file` and the x402
 //! facilitator's `killSwitchFile`.
 //!
-//! A pause file pauses while it exists. It fails closed: only "no such file" means running; any other answer (permission
-//! denied on its directory, an I/O error, a path through a regular file) counts as paused, so a pause that cannot be
-//! checked is never ignored.
+//! A pause file pauses while it exists. It fails closed: only "no such file in an existing directory" means running; any
+//! other answer (permission denied on its directory, an I/O error, a path through a regular file, a directory that does not
+//! exist) counts as paused, so a pause that cannot be checked is never ignored. A missing directory is a pause file on a
+//! volume that is not mounted, a mistyped path, or a directory deleted together with the file in it: trading then waits until
+//! the directory exists again (a warning names it), never trades on the assumption that nothing paused it.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,9 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub fn is_set(path: &Path) -> bool {
     match std::fs::symlink_metadata(path) {
         Ok(_) => true,
-        // Windows reports a path through a regular file as NotFound (ERROR_PATH_NOT_FOUND), where Unix says
-        // NotADirectory: absent only when the nearest existing ancestor is a directory.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => below_a_non_directory(path),
+        // absent only when its directory exists (Windows reports a path through a regular file as NotFound,
+        // ERROR_PATH_NOT_FOUND, where Unix says NotADirectory: a directory that is a file is no directory either)
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => !in_a_directory(path),
         Err(e) => {
             static WARNED: AtomicBool = AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
@@ -25,14 +27,21 @@ pub fn is_set(path: &Path) -> bool {
     }
 }
 
-/// True when the nearest ancestor of `path` that exists is not a directory (or cannot be read).
-fn below_a_non_directory(path: &Path) -> bool {
-    for a in path.ancestors().skip(1).filter(|a| !a.as_os_str().is_empty()) {
-        match std::fs::metadata(a) {
-            Ok(m) => return !m.is_dir(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => return true,
-        }
+/// True when the directory of `path` exists (a relative path without one: the working directory). Warns once when it does not.
+fn in_a_directory(path: &Path) -> bool {
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => return true,
+    };
+    if std::fs::metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return true;
+    }
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            path = %path.display(),
+            "the pause file's directory does not exist: treated as paused (create the directory, or fix the path)"
+        );
     }
     false
 }
@@ -56,8 +65,11 @@ mod tests {
         assert!(is_set(&p) && is_set_opt(Some(&p)));
         // a path through a regular file: neither present nor absent
         assert!(is_set(&p.join("pause")));
-        // a missing directory is "absent" (nothing paused it)
-        assert!(!is_set(&d.path().join("missing").join("pause")));
+        // a missing directory is not "absent": the pause may have been deleted with it, or the volume is not mounted
+        assert!(is_set(&d.path().join("missing").join("pause")));
+        assert!(is_set(&d.path().join("missing").join("deeper").join("pause")));
+        std::fs::create_dir(d.path().join("missing")).unwrap();
+        assert!(!is_set(&d.path().join("missing").join("pause")), "running again once the directory is there");
     }
 
     #[cfg(unix)]
