@@ -339,7 +339,7 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-pending')).toHaveCount(0);
   });
 
-  test('desktop 1280 px: with an extension detected the gate has a button for each extension (the private key is offered by the header Connect there)', async ({ appPage: page, mock }) => {
+  test('desktop 1280 px: with an extension detected the gate has a button for each extension and the private key beside them', async ({ appPage: page, mock }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await mock.giveKas('alice', 500n * KAS);
     await page.goto('/#/create');
@@ -347,6 +347,8 @@ test.describe('token issuance', () => {
     await expect(button).toHaveCount(1);
     await expect(page.getByTestId('issue-connect-kasware')).toBeVisible();
     await expect(page.getByTestId('issue-connect-kasware')).toHaveText(/Connect KasWare/);
+    // the private key beside the extension, as in the header's pick
+    await expect(page.getByTestId('issue-connect-local-key')).toHaveText('Private key');
     await page.getByTestId('issue-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toBeVisible();
     await expect(page.getByTestId('issue-connect')).toHaveCount(0);

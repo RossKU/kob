@@ -649,7 +649,7 @@ export function IssueView() {
           data-testid="issue-connect"
           actions={
             // a phone, or a desktop with no extension detected: the one Connect of the header (the extension if there is one, else the private key entry);
-            // a desktop with extensions: a button for each
+            // a desktop with extensions: a button for each, and the private key beside them
             phoneWidth || wallet.detected.length === 0 ? (
               <ConnectBar gate />
             ) : (
@@ -659,6 +659,12 @@ export function IssueView() {
                     {t('issue.connect.button', { label: a.label })}
                   </Button>
                 ))}
+                {/* the private key beside the extensions, as the header's pick offers it (WalletButton.tsx) */}
+                {privateKeySigningAllowed() && visibilityCheckSupported() ? (
+                  <Button small onClick={() => wallet.openPrivateKey()} data-testid="issue-connect-local-key">
+                    {t('shell.wallet.connectKey')}
+                  </Button>
+                ) : null}
               </div>
             )
           }
