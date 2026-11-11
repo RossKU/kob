@@ -441,6 +441,13 @@ mainnet app side by side, deploy the second network by hand to a second Pages pr
 name, then the commands above with its `KOB_PAGES_NETWORK`, `KOB_PAGES_INDEXER_URL` and `--project-name`) or fork the workflow; each needs its
 own indexer (`docs/ops/chart-server.md`, section 7). Users who saved a network or indexer in Settings keep it; the bell's current status names it.
 
+**The header's network switch.** The network chip in the header opens a small panel; choosing the other network saves it (like Settings) and reloads the
+page. The servers in `config.json` (`indexerUrl`, `nodeUrl`, `extraIndexerUrls`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl`) belong to the network
+the file names: on the other network the page uses none of them (no indexer, the SDK's public node, the bundled registry) unless the visitor's own
+Settings name servers, so the book and the charts stay empty there. A browser that saved servers in Settings gets no switch (they would stay in force
+on the other network) and is pointed to Settings. To pin a deployment to its network, add `"lockNetwork": true` to `config.json` (`window.__KOB_CONFIG__`):
+the chip is then a plain label. `scripts/pages-config.mjs` does not write it.
+
 ## 7. Checking a deployment
 
 * Headers and files: `node web/scripts/check-pages.mjs <url> --dist web/dist` (the build of the same commit, with the same

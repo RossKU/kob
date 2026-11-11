@@ -86,6 +86,18 @@ export interface AppConfig {
    * off: the bell offers to). Any layer, the Settings screen included.
    */
   standalone: StandaloneSettings;
+  /**
+   * The network the deployment's own servers belong to (the `network` of config.json / `__KOB_CONFIG__`, else the default): its `indexerUrl`, `nodeUrl`,
+   * `extraIndexerUrls`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl` and a market-bound `home` are for THAT network. Computed, never read from a layer.
+   * When a stored setting or a link puts another `network` in force (`network` !== `deploymentNetwork`), the deployment's values of those fields are dropped
+   * (back to the defaults) unless the stored setting or the link names its own: another network is never read through the first one's servers.
+   */
+  deploymentNetwork: NetworkName;
+  /**
+   * The deployment pins its network: the header chip offers no switch (the chip is a plain label). config.json / `__KOB_CONFIG__` only (a link or a stored
+   * setting must not unlock or lock it); default false. It hides the header switch only: the Settings screen still saves a network.
+   */
+  lockNetwork: boolean;
 }
 
 export interface StandaloneSettings { manual: boolean; auto: boolean; autoReturn: boolean }
@@ -123,6 +135,8 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   logoBlocklistUrl: '',
   ipfsGatewayUrl: DEFAULT_IPFS_GATEWAY_URL,
   standalone: Object.freeze({ manual: false, auto: true, autoReturn: true }) as StandaloneSettings,
+  deploymentNetwork: 'mainnet' as NetworkName,
+  lockNetwork: false,
 });
 
 /** Default block explorer of each network (kaspa.stream: `<base>/transactions/<txid>`). */
@@ -228,6 +242,7 @@ export interface ConfigPatch {
   standaloneManual?: boolean;
   standaloneAuto?: boolean;
   standaloneAutoReturn?: boolean;
+  lockNetwork?: boolean;
 }
 
 export interface ConfigWarning { layer: string; field: string; message: string }
@@ -335,6 +350,14 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
       else bad('ipfsGatewayUrl', 'URL (use https; empty turns ipfs:// logos off)');
     }
   }
+  if ('lockNetwork' in raw) {
+    if (!deployment) warnings.push({ layer, field: 'lockNetwork', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
+    else {
+      const f = parseFlag(raw.lockNetwork);
+      if (f !== null) out.lockNetwork = f;
+      else bad('lockNetwork', 'flag');
+    }
+  }
   if ('standalone' in raw) {
     if (isObj(raw.standalone)) {
       for (const [k, field] of [['manual', 'standaloneManual'], ['auto', 'standaloneAuto'], ['autoReturn', 'standaloneAutoReturn']] as const) {
@@ -440,6 +463,28 @@ function apply(base: AppConfig, p: ConfigPatch): AppConfig {
       auto: p.standaloneAuto ?? base.standalone.auto,
       autoReturn: p.standaloneAutoReturn ?? base.standalone.autoReturn,
     },
+    deploymentNetwork: base.deploymentNetwork,
+    lockNetwork: p.lockNetwork ?? base.lockNetwork,
+  };
+}
+
+/**
+ * `cfg` for a network the deployment has no servers for: the deployment's indexer, further indexers, node, registry, explorer, logo blocklist and a
+ * market-bound landing screen go back to the defaults (no indexer, the SDK's public node for the network, the bundled registry, the explorer of the network),
+ * except what `own` (the stored setting / the link, which name their own servers) sets.
+ */
+function withoutDeploymentServers(cfg: AppConfig, own: ConfigPatch): AppConfig {
+  const bound = cfg.home.startsWith('usd:') || cfg.home.startsWith('market:');
+  return {
+    ...cfg,
+    indexerUrl: own.indexerUrl ?? DEFAULT_CONFIG.indexerUrl,
+    extraIndexerUrls: own.extraIndexerUrls ?? [...DEFAULT_CONFIG.extraIndexerUrls],
+    nodeUrl: own.nodeUrl ?? DEFAULT_CONFIG.nodeUrl,
+    registryUrl: own.registryUrl ?? DEFAULT_CONFIG.registryUrl,
+    explorerUrl: DEFAULT_CONFIG.explorerUrl,
+    logoBlocklistUrl: DEFAULT_CONFIG.logoBlocklistUrl,
+    quoteTokens: {},
+    home: bound && own.home === undefined ? DEFAULT_CONFIG.home : cfg.home,
   };
 }
 
@@ -449,17 +494,23 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
   let cfg = apply({ ...DEFAULT_CONFIG, features: { ...DEFAULT_CONFIG.features }, fees: { ...DEFAULT_CONFIG.fees }, quoteTokens: { ...DEFAULT_CONFIG.quoteTokens }, standalone: { ...DEFAULT_CONFIG.standalone } }, {});
   cfg = apply(cfg, sanitizeLayer('config.json', layers.file, false, warnings));
   cfg = apply(cfg, sanitizeLayer('__KOB_CONFIG__', layers.injected, true, warnings));
+  cfg = { ...cfg, deploymentNetwork: cfg.network };
   const deployment = cfg;
   const stored = sanitizeLayer('settings', layers.settings, false, warnings);
   cfg = apply(cfg, stored);
+  let queried: ConfigPatch = {};
   if (layers.query !== undefined && layers.query !== '') {
-    if (cfg.allowQueryOverrides) cfg = apply(cfg, queryLayer(layers.query, warnings));
-    else {
+    if (cfg.allowQueryOverrides) {
+      queried = queryLayer(layers.query, warnings);
+      cfg = apply(cfg, queried);
+    } else {
       const q = typeof layers.query === 'string' ? new URLSearchParams(layers.query) : layers.query;
       const used = ['indexer', 'node', 'network', 'kastle'].filter((k) => q.has(k));
       if (used.length) warnings.push({ layer: 'query', field: used.join(','), message: 'query overrides are disabled (allowQueryOverrides is false), ignored' });
     }
   }
+  // another network than the deployment's: its own servers are for the first network, so they do not apply (what the stored setting or the link names does)
+  if (cfg.network !== deployment.network) cfg = withoutDeploymentServers(cfg, { ...stored, ...queried });
   // only a stored value that is still in force (a link did not replace it) and differs from the deployment's
   const storedOverrides: StoredOverride[] = (['indexerUrl', 'nodeUrl'] as const)
     .filter((f) => stored[f] !== undefined && stored[f] === cfg[f] && cfg[f] !== deployment[f])

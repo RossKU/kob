@@ -270,6 +270,15 @@ small, .small { font-size: 0.85em; }
 .net-chip { display: inline-flex; align-items: center; white-space: pre; min-height: var(--chip-h); padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1; cursor: default; }
 .net-chip-warn { background: var(--warn-bg); color: var(--warn); }
 .net-chip-info { background: var(--info-bg); color: var(--info); }
+/* the chip as the button of the network switch (NetworkSwitch.tsx): the button is only the hit area, the chip inside is what is seen */
+.hp-trigger.net-chip-trigger { padding: 0; min-height: 0; border: 0; background: transparent; border-radius: 999px; gap: 0; }
+.net-chip-trigger .net-chip { cursor: pointer; }
+.net-chip-trigger:hover .net-chip, .net-chip-trigger[aria-expanded='true'] .net-chip { box-shadow: inset 0 0 0 1px currentColor; }
+.net-options { display: flex; flex-direction: column; gap: 2px; }
+.net-option { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: var(--ctl-h); padding: 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.net-option:hover:not(:disabled) { background: var(--surface-2); }
+.net-option[aria-current='true'] { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--primary); cursor: default; }
+.net-option:disabled { opacity: 0.6; cursor: not-allowed; }
 /* the header's popovers (status dot, phone menu) */
 .hp { position: relative; display: inline-flex; }
 .hp-trigger { display: inline-flex; align-items: center; gap: 4px; }

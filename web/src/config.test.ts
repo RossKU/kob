@@ -42,6 +42,7 @@ describe('mergeConfig', () => {
       features: { kastle: false, test: false, priorityFee: false }, fees: { dynamic: true, maxRate: 1000, maxFeeKas: 1 }, allowQueryOverrides: false,
       quoteTokens: {}, home: 'landing', explorerUrl: '', tokenNamesUrl: 'https://kascov.io/data', marketStartToleranceBps: 1000,
       logoBlocklistUrl: '', ipfsGatewayUrl: 'https://dweb.link/ipfs', standalone: { manual: false, auto: true, autoReturn: true },
+      deploymentNetwork: 'mainnet', lockNetwork: false,
     });
     expect(DEFAULT_CONFIG.features.kastle).toBe(false);
   });
@@ -376,5 +377,49 @@ describe('stored node / indexer overrides', () => {
     const linked = resolveConfig({ file: { allowQueryOverrides: true }, settings: { indexerUrl: 'https://other.example' }, query: '?indexer=https://q.example' });
     expect(linked.config.indexerUrl).toBe('https://q.example');
     expect(linked.storedOverrides).toEqual([]);
+  });
+});
+
+describe("the deployment's servers belong to the deployment's network", () => {
+  const file = {
+    network: 'testnet-10', indexerUrl: 'https://tn.example', nodeUrl: 'wss://tn.example/wrpc', extraIndexerUrls: ['https://tn2.example'], registryUrl: 'https://tn.example/registry.json',
+    explorerUrl: 'https://explorer.tn.example', logoBlocklistUrl: 'https://tn.example/blocklist', home: `market:${'a'.repeat(64)}`, quoteTokens: { ['b'.repeat(64)]: 'USD' },
+  };
+
+  it("the deployment's own network keeps them, and says which network that is", () => {
+    const c = resolveConfig({ file }).config;
+    expect(c).toMatchObject({ network: 'testnet-10', deploymentNetwork: 'testnet-10', indexerUrl: 'https://tn.example', nodeUrl: 'wss://tn.example/wrpc', registryUrl: 'https://tn.example/registry.json' });
+    // a stored network equal to the deployment's changes nothing
+    expect(resolveConfig({ file, settings: { network: 'testnet-10' } }).config).toEqual(c);
+  });
+
+  it('a stored network of the other one drops the indexer, further indexers, node, registry, explorer, blocklist, dollar token and market-bound landing screen', () => {
+    const r = resolveConfig({ file, settings: { network: 'mainnet' } });
+    expect(r.config).toMatchObject({
+      network: 'mainnet', deploymentNetwork: 'testnet-10', indexerUrl: '', nodeUrl: '', extraIndexerUrls: [], registryUrl: './registry/tokens.json', explorerUrl: '',
+      logoBlocklistUrl: '', quoteTokens: {}, home: 'landing',
+    });
+    expect(explorerBase(r.config)).toBe('https://kaspa.stream');
+    expect(r.storedOverrides).toEqual([]);
+  });
+
+  it('what the stored setting names itself stays (it chose those servers for that network); a landing screen that is not market-bound stays', () => {
+    const r = resolveConfig({ file: { ...file, home: 'list' }, settings: { network: 'mainnet', indexerUrl: 'https://main.example', registryUrl: './mine.json' } });
+    expect(r.config).toMatchObject({ network: 'mainnet', indexerUrl: 'https://main.example', nodeUrl: '', registryUrl: './mine.json', home: 'list' });
+    expect(r.storedOverrides.map((o) => o.field)).toEqual(['indexerUrl']);
+  });
+
+  it('a link that changes the network (allowQueryOverrides) drops them too, but keeps the servers it names', () => {
+    const r = resolveConfig({ file: { ...file, allowQueryOverrides: true }, query: '?network=mainnet&node=wss://q.example/wrpc' });
+    expect(r.config).toMatchObject({ network: 'mainnet', indexerUrl: '', nodeUrl: 'wss://q.example/wrpc' });
+  });
+
+  it('lockNetwork: from the deployment only, a flag', () => {
+    expect(resolveConfig({ file: { lockNetwork: true } }).config.lockNetwork).toBe(true);
+    expect(resolveConfig({ injected: { lockNetwork: 'yes' } }).config.lockNetwork).toBe(true);
+    const r = resolveConfig({ settings: { lockNetwork: true } });
+    expect(r.config.lockNetwork).toBe(false);
+    expect(r.warnings.map((w) => w.field)).toEqual(['lockNetwork']);
+    expect(resolveConfig({ file: { lockNetwork: 'maybe' } }).warnings.map((w) => w.field)).toEqual(['lockNetwork']);
   });
 });

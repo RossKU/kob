@@ -7,7 +7,7 @@ import { Badge } from '../kit';
 import { Brand, SiteHeader, ThemeToggle } from './Frame';
 import { NotifyBell } from '../notify/NotificationPanel';
 import { WalletButton } from './WalletButton';
-import { NetworkChip } from './NetworkBadge';
+import { NetworkSwitch } from './NetworkSwitch';
 import { TIGHT_QUERY, useHeaderLayout, useMedia, useNarrow, useSqueezeCheck } from './narrow';
 import { useRef } from 'preact/hooks';
 import { Popover } from './Popover';
@@ -122,7 +122,7 @@ export function Header(props: { route: Route; warnings: ConfigWarning[]; storedO
       <div class="header-tools">
         <ReorgIndicator />
         {narrow ? null : <StatusDot />}
-        <NetworkChip network={config.network} short={narrow || tight} {...(narrow ? { level } : {})} />
+        <NetworkSwitch config={config} narrow={narrow} short={narrow || tight} {...(narrow ? { level } : {})} />
         <div class="header-wallet">
           <WalletButton />
         </div>
