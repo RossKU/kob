@@ -78,7 +78,8 @@ test.describe('without a wallet, notifications off (the defaults)', () => {
     for (const tone of ['info', 'none']) {
       const color = await bell(page).evaluate((b, v) => {
         b.setAttribute('data-status-tone', v);
-        return getComputedStyle(b).color;
+        // the colour eases between the tones (the app's motion): read it when the transition is over, not part-way from the old tone
+        return Promise.all(b.getAnimations().map((x) => x.finished)).then(() => getComputedStyle(b).color);
       }, tone);
       expect(color).not.toBe(await cssColor(page, '--bad'));
       expect(color).not.toBe(await cssColor(page, '--warn'));

@@ -5,6 +5,11 @@
 
 :root {
   color-scheme: light dark;
+  /* motion: quick and restrained (a pro trading UI); only transform, opacity and colours move (never a box in the flow). The one ease and three durations: a hover, a press, an opening panel */
+  --dur-fast: 120ms;
+  --dur: 160ms;
+  --dur-slow: 200ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --bg: #fafafa;
   --surface: #ffffff;
   --surface-2: #f0f0f0;
@@ -352,7 +357,7 @@ small, .small { font-size: 0.85em; }
 .disclosure {
   background: none; border: 0; color: var(--text); font: inherit; padding: 0; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; text-align: left;
 }
-.disclosure::before { content: '\25B8'; display: inline-block; transition: transform 0.15s; }
+.disclosure::before { content: '\25B8'; display: inline-block; transition: transform var(--dur) var(--ease-out); }
 .disclosure[aria-expanded='true']::before { transform: rotate(90deg); }
 
 /* ------------------------------------------------------------------ buttons */
@@ -362,8 +367,11 @@ small, .small { font-size: 0.85em; }
   min-height: 36px; padding: 6px 14px; border-radius: var(--radius-sm);
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
   font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 .btn:hover:not(:disabled) { background: var(--surface-3); }
+/* the press: a hair smaller while the button is down (a scale does not touch the layout; the box in the flow stays) */
+.btn:active:not(:disabled):not([aria-disabled='true']) { transform: scale(0.97); }
 .btn:disabled, .btn[aria-disabled='true'] { opacity: 0.55; cursor: not-allowed; }
 .btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-contrast); }
 .btn-primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
@@ -441,25 +449,35 @@ small, .small { font-size: 0.85em; }
 .checkbox-row input { margin-top: 4px; }
 
 /* a segmented control is a pill: the group and every segment (the selected one's highlight) are fully rounded; the segments keep their boxes, so the heights and the hit areas stay, and the 1px divider keeps its width, now clear */
-.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; background: var(--surface-2); }
+/* the selected segment's colour is a mark of its own (`.slide-ind`, kit/slide-indicator.ts) that slides under the segments: the segments stay transparent and sit above it (z-index), the group's own
+   size and layout are untouched (the mark is absolutely positioned). `isolation` keeps that z-index inside the group. `data-tone` (Segmented.tsx) is the selected option's buy / sell colour */
+.segmented { position: relative; isolation: isolate; display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; background: var(--surface-2); }
 .segmented button {
   flex: 1 1 0; min-height: 36px; padding: 6px 16px; border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; border-radius: 999px;
+  position: relative; z-index: 1;
 }
 .segmented button + button { border-left: 1px solid transparent; }
 /* an unchecked segment only: a hover rule on every segment outranks the checked background below, and the pointer stays on the segment it has just pressed */
 .segmented button:not([aria-checked='true']):hover:not(:disabled) { background: var(--surface-3); }
-.segmented button[aria-checked='true'] { background: var(--primary); color: var(--primary-contrast); }
-.segmented button[aria-checked='true'].tone-buy { background: var(--buy); color: var(--surface); }
-.segmented button[aria-checked='true'].tone-sell { background: var(--sell); color: var(--surface); }
+.segmented button[aria-checked='true'] { color: var(--primary-contrast); }
+.segmented button[aria-checked='true'].tone-buy, .segmented button[aria-checked='true'].tone-sell { color: var(--surface); }
+.segmented .slide-ind { z-index: 0; border-radius: 999px; background: var(--primary); }
+.segmented[data-tone='buy'] .slide-ind { background: var(--buy); }
+.segmented[data-tone='sell'] .slide-ind { background: var(--sell); }
 .segmented button:disabled { opacity: 0.5; cursor: not-allowed; }
 .segmented.block { display: flex; width: 100%; }
 
-.tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.tabs { position: relative; display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
 .tabs button {
   background: none; border: 0; border-bottom: 3px solid transparent; padding: 8px 14px; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer;
 }
 .tabs button:hover { color: var(--text); }
-.tabs button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--primary); }
+.tabs button[aria-selected='true'] { color: var(--text); }
+/* the active tab's underline is a mark that slides along the strip (kit/slide-indicator.ts), on the place of the buttons' own 3px bottom border */
+.tabs .slide-ind { height: 3px; background: var(--primary); }
+
+/* the sliding mark of a segmented control and of a tab strip: out of the flow (the strip's size never changes), placed by script (transform + width; first paint with no transition) */
+.slide-ind { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; transition: transform var(--dur) var(--ease-out), width var(--dur) var(--ease-out), background-color var(--dur) var(--ease-out); }
 
 /* ------------------------------------------------------------------ table */
 
@@ -524,6 +542,11 @@ body.modal-open { overflow: hidden; }
   background: var(--surface); border: 1px solid var(--border); border-left-width: 5px; border-radius: var(--radius-sm);
   box-shadow: var(--shadow); padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start;
 }
+/* a card comes in from the right edge (a phone: from the top) with a fade; leaving is instant */
+@keyframes toast-in { from { opacity: 0; transform: translateX(16px); } }
+@keyframes toast-in-top { from { opacity: 0; transform: translateY(-12px); } }
+.toast { animation: toast-in var(--dur-slow) var(--ease-out) backwards; }
+@media (max-width: 719px) { .toast { animation-name: toast-in-top; } }
 .toast-ok { border-left-color: var(--ok); }
 .toast-warn { border-left-color: var(--warn); }
 .toast-error { border-left-color: var(--bad); }
@@ -672,3 +695,23 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 /* the one muted line that says what the USD display is (or why KAS is shown); under the Portfolio's summary strip it belongs to the strip */
 .fiat-note { margin: 4px 0 8px; line-height: 1.35; }
 .pf-fiat-note { margin: -4px 0 10px; }
+
+/* ------------------------------------------------------------------ motion (the tokens: :root) */
+
+/* a panel opens with a quick fade and a few pixels of rise; closing is instant (it is unmounted). `backwards`: nothing is left on the panel when the animation ends */
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px); } }
+.hp-panel, .picker-panel { animation: pop-in var(--dur) var(--ease-out) backwards; }
+
+/* the colours of the small controls, the menu rows and the table rows ease between their states (a theme change eases too) */
+.nav a, .net-chip-trigger .net-chip, .net-option, .menu-nav a, .picker-face, .picker-option, .copy-btn, .act-ib, .tk-help-toggle, .chart-tools button, .chart-intervals button,
+.chart-sw, .fav-star, .ml-fav-toggle, .ml-info, .sortbtn, .sort-pill button, .dt-chev, .tip-tag, .pc-token, .notify-go, .flip-btn,
+.tk-available, .tabs button, .segmented button, .act-seg button, .table tbody tr, tr.row-link {
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+
+/* reduced motion: nothing moves and nothing eases; a state is shown at once */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; }
+  .hp-panel, .picker-panel, .toast { animation: none; }
+  .btn:active:not(:disabled):not([aria-disabled='true']) { transform: none; }
+}

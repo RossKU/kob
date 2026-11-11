@@ -134,6 +134,8 @@ test('a phone: the chip (the short form with its status dot) opens the panel und
   await page.getByTestId('network-switch').click();
   const panel = page.getByTestId('network-switch-panel');
   await expect(panel).toBeVisible();
+  // the panel rises in over ~160 ms (the app's motion): measured when it has arrived
+  await panel.evaluate((el) => Promise.all(el.getAnimations().map((x) => x.finished)));
   const box = (await panel.boundingBox())!;
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(390);

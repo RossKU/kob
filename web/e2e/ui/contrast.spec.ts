@@ -25,13 +25,17 @@ async function open(page: Page, theme: Theme, route: string): Promise<void> {
   await still(page);
 }
 
-/** What the text of `el` stands on: its colour and the background colours from `el` up to the first opaque one. */
+/** What the text of `el` stands on: its colour and the background colours from `el` up to the first opaque one. The selected segment is transparent: its pill is the sliding mark
+ *  (`.slide-ind`, a sibling), which stands under it, so that mark's colour is what the text is on. */
 const colours = (el: Locator) =>
   el.evaluate((node) => {
     const backgrounds: string[] = [];
     for (let e: Element | null = node; e; e = e.parentElement) {
       const bg = getComputedStyle(e).backgroundColor;
       backgrounds.push(bg);
+      if (e === node && e.parentElement?.querySelector(':scope > .slide-ind') && bg === 'rgba(0, 0, 0, 0)' && e.matches("[aria-checked='true'], [aria-pressed='true']")) {
+        backgrounds.push(getComputedStyle(e.parentElement.querySelector(':scope > .slide-ind')!).backgroundColor);
+      }
       if (/^rgb\(/.test(bg)) break;
     }
     return { color: getComputedStyle(node).color, backgrounds };

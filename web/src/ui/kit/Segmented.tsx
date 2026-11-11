@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useRef } from 'preact/hooks';
+import { useSlideIndicator } from './slide-indicator';
 
 export interface SegmentedOption<V extends string = string> {
   value: V;
@@ -21,9 +22,11 @@ export interface SegmentedProps<V extends string = string> {
   'data-testid'?: string;
 }
 
-/** Radio-group toggle (buy / sell, order type families). Arrow keys move the selection; `data-testid` of each option goes on its button. */
+/** Radio-group toggle (buy / sell, order type families). Arrow keys move the selection; `data-testid` of each option goes on its button. The selected pill is a mark that slides between the options (slide-indicator.ts), the colour of a `buy` / `sell` option comes with it (`data-tone`). */
 export function Segmented<V extends string = string>(props: SegmentedProps<V>) {
   const ref = useRef<HTMLDivElement>(null);
+  const ind = useRef<HTMLSpanElement>(null);
+  useSlideIndicator(ref, ind, 'button[aria-checked="true"]', 'pill');
   const enabled = props.options.filter((o) => !o.disabled);
   const move = (dir: 1 | -1) => {
     const i = enabled.findIndex((o) => o.value === props.value);
@@ -41,6 +44,7 @@ export function Segmented<V extends string = string>(props: SegmentedProps<V>) {
       role="radiogroup"
       aria-label={props['aria-label']}
       data-testid={props['data-testid']}
+      data-tone={props.options.find((o) => o.value === props.value)?.tone}
       onKeyDown={(e) => {
         if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
           e.preventDefault();
@@ -51,6 +55,7 @@ export function Segmented<V extends string = string>(props: SegmentedProps<V>) {
         }
       }}
     >
+      <span ref={ind} class="slide-ind" aria-hidden="true" />
       {props.options.map((o) => {
         const checked = o.value === props.value;
         return (

@@ -17,7 +17,7 @@ import type { PairFillsView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Badge, ErrorBanner, Section, SortButton, ariaSortOf, scaledUnits, sortBy, useSortState, type SortColumn, type SortValue } from '../kit';
+import { Badge, ErrorBanner, Section, SortButton, ariaSortOf, scaledUnits, sortBy, useSlideIndicator, useSortState, type SortColumn, type SortValue } from '../kit';
 import { ListPager, RowsControl, showListStart } from '../market/ListPaging';
 import { pageWindow, type ListPageSize } from '../market/market-list';
 import { useHeldUntil, useListPage, useListPageSize, useRising } from '../market/use-market-list';
@@ -88,6 +88,10 @@ function ActivityLogView(props: ActivityLogProps) {
   };
   const kinds = useMemo(() => shownKinds(prefs), [prefs]);
   const listRef = useRef<HTMLDivElement>(null);
+  // the actor filter's pill slides between its three options (the same mark as the kit's Segmented)
+  const actorRef = useRef<HTMLDivElement>(null);
+  const actorInd = useRef<HTMLSpanElement>(null);
+  useSlideIndicator(actorRef, actorInd, 'button[aria-pressed="true"]', 'pill');
   const [onScreen, setOnScreen] = useState(() => typeof IntersectionObserver === 'undefined');
   useEffect(() => {
     const el = listRef.current;
@@ -277,7 +281,8 @@ function ActivityLogView(props: ActivityLogProps) {
 
   const tools = (
     <div class="act-tools">
-      <div class="act-seg" role="group" aria-label={t('activity.actor.label')} data-testid="activity-actor">
+      <div ref={actorRef} class="act-seg" role="group" aria-label={t('activity.actor.label')} data-testid="activity-actor">
+        <span ref={actorInd} class="slide-ind" aria-hidden="true" />
         {(['all', 'orders', 'executions'] as const).map((a) => (
           <button
             key={a}

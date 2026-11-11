@@ -39,6 +39,7 @@ export { Checkbox, Field, FieldShell, Select, type FieldProps, type FieldShellPr
 export { KeyValueList, type KeyValueItem } from './KeyValueList';
 export { Dialog, Modal, type ModalProps } from './Modal';
 export { Section, type SectionProps } from './Section';
+export { useSlideIndicator } from './slide-indicator';
 export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmented';
 export { Loading, Spinner, type SpinnerProps } from './Spinner';
 export { SortButton, SortControl, sortKeyOf, useSortState } from './SortHeader';
