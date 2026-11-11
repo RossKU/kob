@@ -68,10 +68,15 @@ impl WriterLock {
     /// Lock the data directory and the record-log directory of `cfg`.
     pub fn acquire(cfg: &IndexerConfig) -> Result<WriterLock, LockError> {
         let (dirs, files) = Self::lock_files(cfg)?;
+        // the pid and the executable's name only: the command line may carry secrets (a node URL with credentials), and this
+        // note is shown in the next writer's error (audit 2026-11-11 L-13)
+        let exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "kobd".into());
         let owner = format!(
-            "pid {} ({}), since unix {}\n",
+            "pid {} ({exe}), since unix {}\n",
             std::process::id(),
-            std::env::args().collect::<Vec<_>>().join(" "),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
         );
         for d in &dirs {
@@ -193,6 +198,11 @@ mod tests {
         let cfg = IndexerConfig { data_dir: d.path().join("data"), ..IndexerConfig::default() };
         let first = WriterLock::acquire(&cfg).unwrap();
         assert_eq!(first.dirs().len(), 2);
+        // the owner note names the pid and the executable, never the command line (it may carry secrets)
+        let note = std::fs::read_to_string(cfg.data_dir.join(OWNER_FILE)).unwrap();
+        assert!(note.starts_with(&format!("pid {} (", std::process::id())), "{note}");
+        let exe = note.split_once('(').and_then(|(_, r)| r.split_once(')')).map(|(e, _)| e).unwrap_or_default();
+        assert!(!exe.is_empty() && !exe.contains(' ') && !exe.contains(['/', '\\']), "{note}");
         assert!(matches!(WriterLock::acquire(&cfg), Err(LockError::Busy { .. })));
         drop(first);
         WriterLock::acquire(&cfg).unwrap();

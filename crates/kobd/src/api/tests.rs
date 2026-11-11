@@ -1742,6 +1742,36 @@ async fn ready_while_catching_up_and_the_health_names_the_catch_up_and_a_partial
     assert_eq!(v["book_complete"], true);
 }
 
+/// Audit 2026-11-11 M-13, M-16: `/v1/health` names the template generation and, under `kobd --executor`, the Executor's funds
+/// and submissions; `/v1/metrics` serves the Executor's own series after the indexer's, and the build.
+#[tokio::test]
+async fn health_and_metrics_carry_the_executor_and_the_build() {
+    let e = env(|_| {});
+    let app = router(e.state.clone());
+    let (_, v) = get(&app, "/v1/health").await;
+    assert_eq!(v["template_generation"], crate::version::template_generation());
+    assert!(v["cancel_only_generations"].as_array().is_some_and(|a| !a.is_empty()));
+    assert!(v.get("executor").is_none(), "an indexer alone has no executor part");
+    e.state.health.update(|h| {
+        h.executor = Some(crate::indexer::status::ExecutorHealth {
+            funds_sompi: Some("12300000000".into()),
+            pending: 2,
+            dropped_total: 1,
+            last_submit_unix: Some(1_790_000_000),
+            ..Default::default()
+        });
+        h.executor_metrics = "# TYPE kob_matcher_pending_txs gauge\nkob_matcher_pending_txs 2\n".into();
+    });
+    let (_, v) = get(&app, "/v1/health").await;
+    assert_eq!(v["executor"]["funds_sompi"], "12300000000");
+    assert_eq!((v["executor"]["pending"].clone(), v["executor"]["dropped_total"].clone()), (2.into(), 1.into()));
+    let (s, _, body) = raw(&app, "/v1/metrics", &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    let text = String::from_utf8(body).unwrap();
+    assert!(text.contains("kob_indexer_cursor_daa") && text.contains("kob_matcher_pending_txs 2"), "{text}");
+    assert!(text.contains("kob_build_info{"), "{text}");
+}
+
 /// `GET /v1/metrics` is public like the rest of `/v1/`; `[api] metrics = false` removes the route.
 #[tokio::test]
 async fn the_metrics_route_follows_the_config() {

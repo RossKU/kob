@@ -116,7 +116,9 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
 
 /// `GET /v1/metrics`: the follower's state in the Prometheus text format (the same numbers `/v1/health` serves).
 pub async fn metrics(State(app): State<Arc<App>>) -> ApiResult {
-    let text = app.state.health.snapshot().metrics_text();
+    // the indexer's series, then the Executor's own (its runner's, `kobd --executor`)
+    let snap = app.state.health.snapshot();
+    let text = snap.metrics_text() + &snap.executor_metrics;
     Ok(([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")], text).into_response())
 }
 

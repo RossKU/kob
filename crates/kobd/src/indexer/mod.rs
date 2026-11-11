@@ -282,11 +282,12 @@ impl Indexer {
     /// the same `ingest` handle. The follower moves the store past a gap the node's pruning caused instead of halting at it
     /// ([`recovery`]).
     pub fn spawn<S: ChainSource>(&self, source: Arc<S>) -> Result<Running, IndexerError> {
-        // validate the API configuration before anything is started
-        let api_state = if self.cfg.api.enabled { Some(self.api_state()?) } else { None };
+        // validate the API configuration and take its address before anything is started: a busy port fails the start
+        // instead of leaving a process without its API (audit 2026-11-11 M-4)
+        let api = if self.cfg.api.enabled { Some((self.api_state()?, bind_api(&self.cfg.api)?)) } else { None };
         let mut running = self.spawn_recovering(source);
-        if let Some(state) = api_state {
-            running.api = Some(serve_task(state, running.stop.subscribe()));
+        if let Some((state, listener)) = api {
+            running.api = Some(serve_task(state, listener, running.stop.subscribe()));
         }
         Ok(running)
     }
@@ -319,19 +320,51 @@ impl Indexer {
     /// Start the read API server over this indexer's store (`api_state`), whatever `api.enabled` says.
     pub fn spawn_api(&self) -> Result<ApiTask, IndexerError> {
         let state = self.api_state()?;
+        let listener = bind_api(&self.cfg.api)?;
         let (stop, rx) = watch::channel(false);
-        Ok(ApiTask { stop, task: serve_task(state, rx) })
+        Ok(ApiTask { stop, task: serve_task(state, listener, rx) })
     }
 }
 
-fn serve_task(state: ApiState, mut rx: watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
+/// Binds the read API's address now (on the current runtime): a port another process holds is an error of the start, not a
+/// log line of a task that then ends.
+fn bind_api(cfg: &crate::config::ApiConfig) -> Result<tokio::net::TcpListener, IndexerError> {
+    let refuse = |e: std::io::Error| {
+        IndexerError::Config(format!(
+            "the read API cannot listen on {}: {e} (another process holds the port? set [api] listen to a free address, or disable the API)",
+            cfg.listen
+        ))
+    };
+    let std_listener = std::net::TcpListener::bind(cfg.listen).map_err(refuse)?;
+    std_listener.set_nonblocking(true).map_err(refuse)?;
+    tokio::net::TcpListener::from_std(std_listener).map_err(refuse)
+}
+
+fn serve_task(state: ApiState, listener: tokio::net::TcpListener, mut rx: watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
+    let health = state.health.clone();
     tokio::spawn(async move {
+        let stopping = rx.clone();
         let sd = async move {
             let _ = rx.wait_for(|s| *s).await;
         };
-        if let Err(e) = api::serve(state, sd).await {
-            tracing::error!("API server stopped: {e}");
+        match listener.local_addr() {
+            Ok(a) => tracing::info!("read API listening on {a}"),
+            Err(e) => tracing::warn!("read API: {e}"),
         }
+        let r = api::serve_listener(listener, state, sd).await;
+        if *stopping.borrow() {
+            if let Err(e) = r {
+                tracing::warn!("API server stopped: {e}");
+            }
+            return;
+        }
+        // the API ended while the process runs: say why where a monitor and `kobd --executor` look (the executor exits on it)
+        let why = match r {
+            Err(e) => e.to_string(),
+            Ok(()) => "the server ended".to_string(),
+        };
+        tracing::error!("API server stopped: {why}");
+        health.update(|h| h.api_error = Some(why));
     })
 }
 
@@ -500,4 +533,46 @@ fn apply_frames_from(cfg: &IndexerConfig, tokens: Arc<TokenAllowlist>, from: u64
     check_lineage(&ing, &log, from)?;
     ing.replay_frames(log.records, log.frames)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(dir: &std::path::Path, listen: std::net::SocketAddr) -> IndexerConfig {
+        let tokens = dir.join("tokens.json");
+        std::fs::write(&tokens, "[]").unwrap();
+        let mut cfg = IndexerConfig {
+            network: "testnet-10".into(),
+            data_dir: dir.join("data"),
+            tokens_path: Some(tokens),
+            ..IndexerConfig::default()
+        };
+        cfg.api.listen = listen;
+        cfg
+    }
+
+    /// Audit 2026-11-11 M-4: the read API takes its port before anything starts, so a port another process holds fails the
+    /// start (a supervisor sees it) instead of leaving a process that trades with no API; and an API that ends while the
+    /// process runs says so in the health (`api_error`: `kobd --executor` exits on it).
+    #[tokio::test]
+    async fn a_busy_api_port_fails_the_start_and_a_dead_api_is_in_the_health() {
+        let dir = tempfile::tempdir().unwrap();
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let idx = Indexer::open(config(dir.path(), busy.local_addr().unwrap())).unwrap();
+        let node = crate::testkit::MockNode::new("testnet-10");
+        let e = idx.spawn(node.clone()).err().expect("refused");
+        assert!(e.to_string().contains("cannot listen on"), "{e}");
+        let e = idx.spawn_api().err().expect("refused");
+        assert!(e.to_string().contains("cannot listen on"), "{e}");
+        drop(busy);
+        // a free port: served; the health has no API error, and halted() is quiet while it serves
+        let api = idx.spawn_api().unwrap();
+        assert!(idx.health.snapshot().api_error.is_none());
+        api.stop().await;
+        assert!(idx.health.snapshot().api_error.is_none(), "a requested stop is no failure");
+        idx.health.update(|h| h.api_error = Some("accept failed".into()));
+        let (now, why) = idx.health.snapshot().halted().expect("halted");
+        assert!(now && why.contains("read API stopped"), "{why}");
+    }
 }

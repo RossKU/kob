@@ -5,6 +5,7 @@ pub mod api;
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod disk;
 pub mod executor;
 pub mod faststart;
 pub mod fee;

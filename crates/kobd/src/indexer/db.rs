@@ -54,6 +54,30 @@ pub enum DbError {
 
 pub type DbResult<T> = Result<T, DbError>;
 
+/// What a write-path failure says about the storage itself (audit 2026-11-11 M-5): a full disk, an I/O error, a corrupt or
+/// foreign database file, a read-only file. `None`: something else (a bug, a constraint), not the disk's fault.
+pub fn storage_problem(e: &super::ingest::IngestError) -> Option<&'static str> {
+    use rusqlite::ErrorCode;
+    let super::ingest::IngestError::Db(db) = e else { return None };
+    match db {
+        DbError::Io(_) => Some("an I/O error on the data directory: check the disk"),
+        DbError::Sqlite(rusqlite::Error::SqliteFailure(f, _)) => match f.code {
+            ErrorCode::DiskFull => Some(
+                "the disk of the data directory is full: free space (the indexer goes on by itself once it can write; kob_data_dir_free_bytes shows the space)",
+            ),
+            ErrorCode::SystemIoFailure => Some("an I/O error writing the database: check the disk"),
+            ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase => Some(
+                "the database file is corrupt: stop the executor and move the data directory's index.sqlite3 aside; a lean store (the Executor's) is rebuilt by its fast start, a full one by `kobd db replay` from the record log",
+            ),
+            ErrorCode::ReadOnly | ErrorCode::CannotOpen | ErrorCode::PermissionDenied => {
+                Some("the database cannot be written (a read-only or inaccessible file or directory): check its permissions")
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn pragmas(conn: &Connection, writer: bool) -> rusqlite::Result<()> {
     conn.busy_timeout(std::time::Duration::from_secs(30))?;
     if writer {
@@ -595,6 +619,24 @@ impl ReadPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit 2026-11-11 M-5: a full disk, an I/O error and a corrupt file are told as what they are (not as "node unavailable").
+    #[test]
+    fn storage_failures_are_named() {
+        use super::super::ingest::IngestError;
+        let sql = |code: i32| IngestError::Db(DbError::Sqlite(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)));
+        assert!(storage_problem(&sql(rusqlite::ffi::SQLITE_FULL)).unwrap().contains("disk of the data directory is full"));
+        assert!(storage_problem(&sql(rusqlite::ffi::SQLITE_IOERR)).unwrap().contains("I/O error"));
+        for c in [rusqlite::ffi::SQLITE_CORRUPT, rusqlite::ffi::SQLITE_NOTADB] {
+            let m = storage_problem(&sql(c)).unwrap();
+            assert!(m.contains("corrupt") && m.contains("fast start"), "{m}");
+        }
+        assert!(storage_problem(&sql(rusqlite::ffi::SQLITE_READONLY)).unwrap().contains("permissions"));
+        assert!(storage_problem(&IngestError::Db(DbError::Io(std::io::Error::other("x")))).is_some());
+        // not the disk's fault
+        assert_eq!(storage_problem(&sql(rusqlite::ffi::SQLITE_CONSTRAINT)), None);
+        assert_eq!(storage_problem(&IngestError::NoCursor), None);
+    }
 
     fn programs(c: &Connection) -> Vec<(u8, String, i64)> {
         let mut st = c

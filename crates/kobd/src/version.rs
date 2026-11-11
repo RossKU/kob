@@ -20,12 +20,63 @@ fn commit_of(env: Option<&'static str>) -> Option<&'static str> {
     env.map(str::trim).filter(|c| !c.is_empty())
 }
 
-/// `version` and `commit` as `/v1/health` serves them, and the `KOB1` payload version this build writes and reads.
+/// The template generation of this build: the first 16 hex digits of the blake3 hash of the order templates it pins
+/// (`kob_protocol::artifacts::PINNED`, their template hashes in order). Two builds with the same generation fill the same
+/// orders; an executor whose generation differs from the release's misses the orders of the other (`docs/ops/release.md`, 7;
+/// `docs/spec/template-retirement.md`).
+pub fn template_generation() -> &'static str {
+    static GEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    GEN.get_or_init(|| {
+        let mut h = blake3::Hasher::new();
+        for (_, hash) in kob_protocol::artifacts::PINNED.iter() {
+            h.update(hash.as_bytes());
+        }
+        h.finalize().to_hex()[..16].to_string()
+    })
+}
+
+/// The retirements whose templates this build still serves in their cancel-only role (`kob_protocol::retired`): the commits
+/// that retired them, oldest last.
+pub fn cancel_only_generations() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = vec![];
+    for r in kob_protocol::retired::retired() {
+        let by = r.retirement.retired_by();
+        if !v.contains(&by) {
+            v.push(by);
+        }
+    }
+    v
+}
+
+/// One line for the status line and the start log: `kobd 0.1.0 (commit 9e877ae7), payload v3, templates 1a2b3c4d5e6f7a8b`.
+pub fn build_line() -> String {
+    let commit = commit().map(|c| c.get(..12).unwrap_or(c)).unwrap_or("unknown");
+    format!(
+        "kobd {VERSION} (commit {commit}), payload v{}, templates {}",
+        kob_protocol::payload::PAYLOAD_VERSION,
+        template_generation()
+    )
+}
+
+/// The `kob_build_info` series (Prometheus): 1, with the build in its labels.
+pub fn build_info_metric() -> String {
+    format!(
+        "# HELP kob_build_info The build: crate version, commit, KOB1 payload version and template generation (labels).\n# TYPE kob_build_info gauge\nkob_build_info{{version=\"{VERSION}\",commit=\"{}\",payload_version=\"{}\",template_generation=\"{}\"}} 1\n",
+        commit().unwrap_or(""),
+        kob_protocol::payload::PAYLOAD_VERSION,
+        template_generation()
+    )
+}
+
+/// `version` and `commit` as `/v1/health` serves them, the `KOB1` payload version this build writes and reads, its template
+/// generation and the retired generations it serves for their makers' cancel.
 pub fn health_fields() -> Value {
     json!({
         "version": VERSION,
         "commit": commit(),
         "payload_version": kob_protocol::payload::PAYLOAD_VERSION,
+        "template_generation": template_generation(),
+        "cancel_only_generations": cancel_only_generations(),
     })
 }
 
@@ -43,5 +94,12 @@ mod tests {
         assert_eq!(v["version"], VERSION);
         assert_eq!(v["payload_version"], kob_protocol::payload::PAYLOAD_VERSION);
         assert_eq!(v["commit"].as_str(), commit());
+        // the template generation: 16 hex digits, stable, named in the build line and the metric
+        let g = template_generation();
+        assert_eq!(g.len(), 16);
+        assert!(g.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(v["template_generation"], g);
+        assert!(build_line().contains(g) && build_info_metric().contains(&format!("template_generation=\"{g}\"")));
+        assert!(!cancel_only_generations().is_empty());
     }
 }

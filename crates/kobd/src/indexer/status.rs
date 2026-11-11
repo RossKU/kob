@@ -19,6 +19,10 @@ pub enum FollowerState {
     /// network). Operator action needed, see docs/ops/executor.md (Part B, 7.4).
     Gap,
     Stopped,
+    /// The database cannot be written (the disk is full, an I/O error) or is corrupt: nothing is indexed until it is fixed.
+    /// The follower retries (space freed: it goes on); `kobd --executor` exits after a few minutes of it, so that a supervisor
+    /// restarts it (`last_error` says what and what to do; a corrupt lean store can be deleted, fast start rebuilds it).
+    StorageError,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,6 +120,70 @@ pub struct HealthSnapshot {
     /// history the store was following, so it continued from the node's pruning point. Empty (and absent here) when none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<SkippedGap>,
+    /// Why the follower is halted or cannot write (states `stopped`, `gap`, `storage_error`): what an alarm shows. Absent while
+    /// it runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub halt_reason: Option<String>,
+    /// The read API stopped serving (it could not keep its listener): why. `kobd --executor` exits on it (a supervisor restarts
+    /// it). Absent while it serves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_error: Option<String>,
+    /// Free bytes on the data directory's file system and the database's size (its file and write-ahead log), measured about
+    /// once a minute (`None`: not measured yet, or the platform cannot tell).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_dir_free_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub db_bytes: Option<u64>,
+    /// Reorgs that removed chain blocks this store no longer holds (deeper than its reorg window): their rows were not reverted.
+    pub deep_reorgs_total: u64,
+    /// Lean storage: the store is above its size cap (`lean_max_db_mb`) at the last pruning, and pruning failures since the
+    /// start.
+    pub lean_over_cap: bool,
+    pub lean_prune_failures_total: u64,
+    /// The Executor of this process (`kobd --executor`): its funds, submissions and alarms (absent for `kobd --indexer`).
+    /// Visible to whoever can reach this API, like the rest of `/v1/health`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executor: Option<ExecutorHealth>,
+    /// The Executor's own Prometheus series (the runner's), served after the indexer's by `GET /v1/metrics`.
+    #[serde(skip)]
+    pub executor_metrics: String,
+}
+
+/// The Executor's part of `/v1/health` (`HealthSnapshot::executor`), written by the runner after each step. Amounts are decimal
+/// strings of sompi, like every amount of the API.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ExecutorHealth {
+    /// The operator's balance (the coins pending transactions hold included) and what is spendable now; `None`: not read yet.
+    pub funds_sompi: Option<String>,
+    pub spendable_sompi: Option<String>,
+    /// The balance is below the alert threshold (`--low-funds-kas`).
+    pub low_funds: bool,
+    pub low_funds_threshold_sompi: String,
+    pub paused: bool,
+    pub dry_run: bool,
+    /// Transactions submitted and not accepted yet, and how long the oldest has waited (seconds, at 10 DAA per second).
+    pub pending: usize,
+    pub oldest_pending_seconds: u64,
+    pub submitted_total: u64,
+    pub finalized_total: u64,
+    /// Transactions given up (the node refused them at a check, or they lost a race) and other refusals.
+    pub dropped_total: u64,
+    pub rejected_total: u64,
+    /// Funding coins held because a mempool transaction this process does not track spends them.
+    pub held_coins: usize,
+    /// Unix time of the last submission a node took, and of the last step; `None`: none yet.
+    pub last_submit_unix: Option<u64>,
+    pub last_step_unix: u64,
+    /// The last step failed: why (`None`: it did not).
+    pub last_tick_error: Option<String>,
+    /// The local clock minus the chain's (the newest chain block's timestamp), seconds; `None`: not measured yet. `clock_alarm`:
+    /// beyond the bound (30 s), and day orders near their deadline are not filled.
+    pub clock_skew_seconds: Option<i64>,
+    pub clock_alarm: bool,
+    /// Starts of this data directory before this one (the process restarts).
+    pub restarts: u64,
+    /// Transactions in the in-flight journal (what a restart resends).
+    pub journal_entries: usize,
 }
 
 /// The catch-up of a store that is behind the node (`HealthSnapshot::catch_up`), measured over the last minute.
@@ -282,7 +350,33 @@ impl HealthSnapshot {
             roles: vec!["indexer"],
             backfill: None,
             gaps: vec![],
+            halt_reason: None,
+            api_error: None,
+            data_dir_free_bytes: None,
+            db_bytes: None,
+            deep_reorgs_total: 0,
+            lean_over_cap: false,
+            lean_prune_failures_total: 0,
+            executor: None,
+            executor_metrics: String::new(),
         }
+    }
+
+    /// Why this process should end so that a supervisor restarts it (`kobd --executor`): the read API stopped serving, or the
+    /// follower is halted (`stopped`, `gap`) or cannot write its database (`storage_error`). The caller waits a few minutes
+    /// before acting on a halt (a gap the node's pruning caused is moved past on its own). `None`: nothing of the kind.
+    pub fn halted(&self) -> Option<(bool, String)> {
+        if let Some(e) = &self.api_error {
+            return Some((true, format!("the read API stopped: {e}")));
+        }
+        // a storage error stays one while node errors come between the failed commits (only progress clears `halt_reason`)
+        let halted = matches!(self.state, FollowerState::Stopped | FollowerState::Gap | FollowerState::StorageError)
+            || (self.halt_reason.is_some() && self.state == FollowerState::NodeUnavailable);
+        if !halted {
+            return None;
+        }
+        let why = self.halt_reason.clone().or_else(|| self.gap_reason.clone()).or_else(|| self.last_error.clone());
+        Some((false, format!("the indexer is {}: {}", state_name(self.state), why.unwrap_or_else(|| "no reason recorded".into()))))
     }
 
     /// VSPC bytes on the wire per accepted transaction since the start (the bandwidth an indexer needs is
@@ -359,6 +453,45 @@ impl HealthSnapshot {
                 "gauge",
                 "DAA the full store of a fast start is behind the node.",
                 b.lag_daa.unwrap_or(0),
+            );
+        }
+        m(
+            "kob_indexer_halted",
+            "gauge",
+            "1 while the follower is halted (stopped, gap) or cannot write its database (storage_error): halt_reason of /v1/health says why.",
+            matches!(self.state, FollowerState::Stopped | FollowerState::Gap | FollowerState::StorageError) as u64,
+        );
+        m(
+            "kob_indexer_storage_error",
+            "gauge",
+            "1 while the database cannot be written (disk full, I/O error) or is corrupt.",
+            (self.state == FollowerState::StorageError) as u64,
+        );
+        m(
+            "kob_api_failed",
+            "gauge",
+            "1 once the read API stopped serving (api_error of /v1/health).",
+            self.api_error.is_some() as u64,
+        );
+        if let Some(b) = self.data_dir_free_bytes {
+            m("kob_data_dir_free_bytes", "gauge", "Free bytes on the data directory's file system.", b);
+        }
+        if let Some(b) = self.db_bytes {
+            m("kob_indexer_db_bytes", "gauge", "Bytes of the database (its file and write-ahead log).", b);
+        }
+        m(
+            "kob_indexer_deep_reorgs_total",
+            "counter",
+            "Reorgs deeper than the stored chain (their rows were not reverted).",
+            self.deep_reorgs_total,
+        );
+        if self.lean {
+            m("kob_indexer_lean_over_cap", "gauge", "1 while a lean store is above its size cap.", self.lean_over_cap as u64);
+            m(
+                "kob_indexer_lean_prune_failures_total",
+                "counter",
+                "Lean pruning batches that failed since the start.",
+                self.lean_prune_failures_total,
             );
         }
         m("kob_indexer_cursor_daa", "gauge", "DAA score of the cursor.", self.cursor_daa);
@@ -481,6 +614,7 @@ impl HealthSnapshot {
                 &|n| n.replaced as u64,
             );
         }
+        s.push_str(&crate::version::build_info_metric());
         s.push_str(
             "# HELP kob_role 1 for each role this process runs: executor (matcher and keepers), indexer (the full history and the read API).
 # TYPE kob_role gauge
@@ -542,7 +676,8 @@ impl HealthSnapshot {
             FollowerState::Following => "following",
             FollowerState::NodeUnavailable => "waiting for the node",
             FollowerState::Gap => "STOPPED at a gap (docs/ops/executor.md, Part B 7.4)",
-            FollowerState::Stopped => "stopped",
+            FollowerState::Stopped => "STOPPED",
+            FollowerState::StorageError => "CANNOT WRITE ITS DATABASE",
         };
         let lag = match self.lag_daa() {
             Some(l) if self.caught_up() => format!("caught up ({l} DAA behind the node)"),
@@ -596,10 +731,19 @@ impl HealthSnapshot {
                 s.push(')');
             }
         }
-        if matches!(self.state, FollowerState::NodeUnavailable | FollowerState::Gap) {
-            if let Some(e) = self.gap_reason.as_ref().or(self.last_error.as_ref()) {
+        if matches!(
+            self.state,
+            FollowerState::NodeUnavailable | FollowerState::Gap | FollowerState::Stopped | FollowerState::StorageError
+        ) {
+            if let Some(e) = self.halt_reason.as_ref().or(self.gap_reason.as_ref()).or(self.last_error.as_ref()) {
                 s.push_str(&format!(" ({e})"));
             }
+        }
+        if let Some(e) = &self.api_error {
+            s.push_str(&format!(" | READ API STOPPED: {e}"));
+        }
+        if self.lean && self.lean_over_cap {
+            s.push_str(" | WARNING: the lean store is above its size cap (lean_max_db_mb)");
         }
         if !self.node_alarms.is_empty() {
             s.push_str(&format!(" | NODE ALARM: {}", self.node_alarms.join("; ")));
@@ -628,12 +772,17 @@ impl HealthSnapshot {
         if self.caught_up() {
             return None;
         }
-        let state = serde_json::to_value(self.state).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        let state = state_name(self.state);
         Some(match self.lag_daa() {
             Some(lag) => format!("indexer {state}, {lag} DAA behind the node"),
             None => format!("indexer {state}, node position unknown"),
         })
     }
+}
+
+/// The state as `/v1/health` spells it (`catching_up`, `storage_error`, ...).
+pub fn state_name(s: FollowerState) -> String {
+    serde_json::to_value(s).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
 
 /// A duration for a person: `45 s`, `12 min`, `3 h 20 min`, `2 d 4 h`.
@@ -862,6 +1011,42 @@ mod tests {
         assert!(
             h.metrics_text().contains("kob_indexer_book_complete 0") && h.metrics_text().contains("kob_indexer_backfill_lag_daa 6000")
         );
+    }
+
+    /// Audit 2026-11-11 M-4, M-5: what ends `kobd --executor` (a halted follower, a storage error that node errors interrupt, a
+    /// dead API) and what does not (the node away, catching up); the metrics and the status line name it.
+    #[test]
+    fn a_halt_or_a_storage_error_is_named_and_ends_the_executor() {
+        let mut h = HealthSnapshot::new("testnet-10");
+        for s in [FollowerState::Starting, FollowerState::CatchingUp, FollowerState::Following, FollowerState::NodeUnavailable] {
+            h.state = s;
+            assert!(h.halted().is_none(), "{s:?}");
+        }
+        h.state = FollowerState::StorageError;
+        h.halt_reason = Some("the disk of the data directory is full: free space".into());
+        let (now, why) = h.halted().unwrap();
+        assert!(!now && why.contains("storage_error") && why.contains("disk"), "{why}");
+        assert!(h.status_line().contains("CANNOT WRITE ITS DATABASE") && h.status_line().contains("disk"), "{}", h.status_line());
+        let m = h.metrics_text();
+        assert!(m.contains("kob_indexer_storage_error 1") && m.contains("kob_indexer_halted 1"), "{m}");
+        assert_eq!(serde_json::to_value(&h).unwrap()["state"], "storage_error");
+        // a node error between two failed commits keeps it a storage error
+        h.state = FollowerState::NodeUnavailable;
+        assert!(h.halted().is_some());
+        h.halt_reason = None;
+        assert!(h.halted().is_none());
+        h.state = FollowerState::Gap;
+        h.gap_reason = Some("pruned".into());
+        assert!(h.halted().unwrap().1.contains("gap: pruned"));
+        h.state = FollowerState::Following;
+        h.data_dir_free_bytes = Some(5);
+        h.db_bytes = Some(7);
+        let m = h.metrics_text();
+        assert!(
+            m.contains("kob_data_dir_free_bytes 5") && m.contains("kob_indexer_db_bytes 7") && m.contains("kob_build_info{"),
+            "{m}"
+        );
+        assert!(m.contains("kob_indexer_halted 0"));
     }
 
     #[test]

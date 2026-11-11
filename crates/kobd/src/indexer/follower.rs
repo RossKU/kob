@@ -160,7 +160,12 @@ pub struct Follower<S: ChainSource> {
     lean_next: Mutex<Option<std::time::Instant>>,
     /// The catch-up pace (the lag over the last minute) and the instant its seconds are counted from.
     pace: Mutex<(BackfillPace, std::time::Instant)>,
+    /// When the data directory's free space and the database's size are measured next ([`Follower::disk_tick`]).
+    disk_next: Mutex<std::time::Instant>,
 }
+
+/// How often the free space of the data directory and the size of the database are measured.
+const DISK_EVERY: Duration = Duration::from_secs(60);
 
 /// Lean storage: pause between batches while one hit its limits (more to delete), and when the last one found nothing more.
 const LEAN_BUSY_EVERY: Duration = Duration::from_millis(100);
@@ -202,7 +207,32 @@ impl<S: ChainSource> Follower<S> {
             prefetch,
             lean_next: Mutex::new(lean.then(std::time::Instant::now)),
             pace: Mutex::new((BackfillPace::default(), std::time::Instant::now())),
+            disk_next: Mutex::new(std::time::Instant::now()),
         }
+    }
+
+    /// About once a minute: the free bytes of the data directory's file system and the database's size (`/v1/health`,
+    /// `kob_data_dir_free_bytes`, `kob_indexer_db_bytes`), so a disk that fills up is seen before it stops the store.
+    async fn disk_tick(&self) {
+        {
+            let mut next = self.disk_next.lock().unwrap_or_else(|e| e.into_inner());
+            if *next > std::time::Instant::now() {
+                return;
+            }
+            *next = std::time::Instant::now() + DISK_EVERY;
+        }
+        let db = self.blocking(|i| i.conn().path().filter(|p| !p.is_empty()).map(std::path::PathBuf::from)).await;
+        let Some(db) = db else { return };
+        let (free, size) = tokio::task::spawn_blocking(move || {
+            let dir = db.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+            (crate::disk::free_bytes(&dir), crate::disk::db_bytes(&db))
+        })
+        .await
+        .unwrap_or((None, None));
+        self.health.update(|h| {
+            h.data_dir_free_bytes = free;
+            h.db_bytes = size;
+        });
     }
 
     /// While the store is catching up: how fast it closes in on the node and when it will have, from its lag over the last minute
@@ -240,6 +270,12 @@ impl<S: ChainSource> Follower<S> {
         let began = std::time::Instant::now();
         let next = match self.blocking(move |i| i.lean_prune(node_daa)).await {
             Ok(Some(rep)) => {
+                if rep.over_cap != snap.lean_over_cap {
+                    if rep.over_cap {
+                        tracing::warn!("lean storage: the store is above its size cap (lean_max_db_mb); pruning closed orders to the reorg window");
+                    }
+                    self.health.update(|h| h.lean_over_cap = rep.over_cap);
+                }
                 if rep.rows > 0 || rep.pages > 0 {
                     tracing::debug!(orders = rep.orders, rows = rep.rows, pages = rep.pages, more = rep.more, "lean storage: pruned");
                     self.health.update(|h| {
@@ -257,6 +293,7 @@ impl<S: ChainSource> Follower<S> {
             Ok(None) => LEAN_IDLE_EVERY,
             Err(e) => {
                 tracing::warn!(error = %e, "lean storage: pruning failed; trying again later");
+                self.health.update(|h| h.lean_prune_failures_total += 1);
                 LEAN_IDLE_EVERY
             }
         };
@@ -311,17 +348,32 @@ impl<S: ChainSource> Follower<S> {
         self.health.update(|h| {
             h.state = state;
             h.last_poll_unix_ms = now_ms();
+            // progress ends a halt or a storage error; a node error between two failed commits does not
+            if matches!(state, FollowerState::Following | FollowerState::CatchingUp) {
+                h.halt_reason = None;
+            }
             if let Some(e) = err {
                 h.last_error = Some(e);
             }
         });
     }
 
-    /// A record-log write failed: stop following (state `stopped`, the reason in `last_error`).
+    /// A record-log write failed: stop following (state `stopped`, the reason in `last_error` and `halt_reason`).
     fn halt(&self, e: &IngestError) -> StepOutcome {
         let msg = format!("record log write failed, the follower stopped (free space or fix the disk, then restart): {e}");
         self.set_state(FollowerState::Stopped, Some(msg.clone()));
+        self.health.update(|h| h.halt_reason = Some(msg.clone()));
         StepOutcome::Halted(msg)
+    }
+
+    /// The database cannot be written or is corrupt (`what`, [`super::db::storage_problem`]): state `storage_error`, the reason
+    /// in `last_error` and `halt_reason`; the follower retries (a disk with free space again goes on).
+    fn storage_error(&self, what: &str, e: &IngestError) -> StepOutcome {
+        let msg = format!("{what}: {e}");
+        tracing::error!("the database cannot be written: {msg}");
+        self.set_state(FollowerState::StorageError, Some(msg.clone()));
+        self.health.update(|h| h.halt_reason = Some(msg.clone()));
+        StepOutcome::Retry(msg)
     }
 
     async fn ensure_cursor(&self) -> Result<Cursor, StepOutcome> {
@@ -739,8 +791,13 @@ impl<S: ChainSource> Follower<S> {
                     h.last_poll_unix_ms = now_ms();
                     // progress or a poll that confirmed we are at the node's sink
                     h.last_progress_unix_ms = now_ms();
+                    // a commit went through: no storage error any more
+                    h.halt_reason = None;
                     if a.removed_hashes > 0 {
                         h.reorgs_total += 1;
+                    }
+                    if a.unknown_removed > 0 {
+                        h.deep_reorgs_total += 1;
                     }
                     h.reverted_blocks_total += a.reverted_rows_blocks as u64;
                     h.blocks_applied_total += a.added as u64;
@@ -777,11 +834,14 @@ impl<S: ChainSource> Follower<S> {
                 StepOutcome::Gap(msg)
             }
             Err(e @ IngestError::Log(_)) => self.halt(&e),
-            Err(e) => {
-                let msg = format!("commit failed: {e}");
-                self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
-                StepOutcome::Retry(msg)
-            }
+            Err(e) => match super::db::storage_problem(&e) {
+                Some(what) => self.storage_error(what, &e),
+                None => {
+                    let msg = format!("commit failed: {e}");
+                    self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                    StepOutcome::Retry(msg)
+                }
+            },
         }
     }
 
@@ -888,6 +948,7 @@ impl<S: ChainSource> Follower<S> {
                 _ = async { let _ = shutdown.wait_for(|s| *s).await; } => break,
             };
             self.lean_tick().await;
+            self.disk_tick().await;
             let delay = match &outcome {
                 StepOutcome::Applied { more: true, .. } | StepOutcome::Rewound { .. } => {
                     failures = 0;
