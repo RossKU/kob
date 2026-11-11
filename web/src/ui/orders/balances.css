@@ -84,6 +84,14 @@
 .pf-embed-actions { display: flex; align-items: center; gap: 8px 12px; padding: 4px 0; flex: none; white-space: nowrap; }
 .pf-scope .segmented button { font-size: 0.82rem; white-space: nowrap; }
 @container pf (max-width: 759px) { .pf-scope { margin-left: 0; } .pf-scope + .pf-rows { margin-left: auto; } }
+/* a phone's market panel (founder 2026-11-12): "This market | All markets" and the rows per page are ONE line under the tabs at 360 to 430 px: the "Rows" word goes (the group is still named
+   "Rows per page" by its aria-label) and the segments take a tighter side padding; "All in Portfolio" (and Cancel all / Export) stay at the right end of that line where they fit, else on a line of their own, right-aligned */
+@container pf (max-width: 559px) {
+  .market-orders .pf-scope .segmented button, .market-orders .pf-rows .segmented button { padding-inline: 8px; }
+  .market-orders .pf-rows .ml-size > span { display: none; }
+  .market-orders .pf-scope + .pf-rows { margin-left: 0; }
+  .market-orders .pf-embed-actions { margin-left: auto; }
+}
 /* the empty state of a list is one compact line under the tabs, not a page */
 .mo-body .empty-state-compact, .portfolio-panel .empty-state-compact { padding: 10px 8px; }
 

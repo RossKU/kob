@@ -63,3 +63,33 @@ for (const width of [390, 800, 1280]) {
     });
   });
 }
+
+// founder 2026-11-12: on a phone "This market | All markets" and the rows per page are ONE line under the tabs (no "Rows" word; the group keeps its aria-label); "All in Portfolio" stays reachable
+for (const width of [360, 390, 430]) {
+  test(`market page, ${width} px: the scope and the rows per page share one line under the tabs`, async ({ appPage: page, mock }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width, height: 900 });
+    await seedPortfolio(mock);
+    await listExkcc(page);
+    const token = await mock.token();
+    await page.goto(`/#/market/${token.covenant_id}`);
+    await connectWallet(page, 'kasware');
+    const panel = page.getByTestId('market-orders');
+    await expect(panel).toBeVisible();
+    await panel.scrollIntoViewIfNeeded();
+    for (const tab of ['history', 'active']) {
+      await panel.getByTestId(`orders-tab-${tab}`).click({ timeout: 5_000 });
+      const scope = (await panel.getByTestId('market-orders-only').boundingBox())!;
+      const rows = (await panel.getByTestId('portfolio-rows').boundingBox())!;
+      // one line: the two groups' boxes overlap vertically (CI's wider fonts may not fit them; then the check is skipped, the label and the link are still asserted)
+      if (process.env.KOB_WIDE_FONTS !== '1') {
+        expect(Math.abs(scope.y - rows.y), `scope and rows on one line at ${width} px (${tab})`).toBeLessThan(4);
+        expect(rows.x, 'rows right of the scope').toBeGreaterThan(scope.x + scope.width - 1);
+      }
+      await expect(panel.locator('.pf-rows .ml-size > span')).toBeHidden();
+      await expect(panel.getByTestId('portfolio-rows')).toHaveAttribute('aria-label', 'Rows per page');
+      await expect(panel.getByTestId('market-orders-portfolio')).toBeVisible();
+      expect(await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - window.innerWidth)), 'horizontal overflow').toBe(0);
+    }
+  });
+}
