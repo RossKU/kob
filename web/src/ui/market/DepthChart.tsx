@@ -131,7 +131,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
           </div>
         )}
         {hover ? (
-          <div class="depth-tip" style={{ left: `${Math.min(Math.max(hover.x + 10, 0), Math.max(0, width - (props.onPick ? 230 : 170)))}px`, top: `${Math.max(0, hover.y - 44)}px` }}>
+          <div class="depth-tip" style={{ ...(hover.x > width / 2 ? { right: `${Math.max(0, width - hover.x + 10)}px` } : { left: `${Math.max(0, hover.x + 10)}px` }), maxWidth: `${Math.max(140, (hover.x > width / 2 ? hover.x : width - hover.x) - 12)}px`, top: `${Math.max(0, hover.y - 44)}px` }}>
             <div class={hover.side === 'bid' ? 'buy' : 'sell'}>{t(hover.side === 'bid' ? 'market.depth.bids' : 'market.depth.asks')}</div>
             <div>
               {fiat

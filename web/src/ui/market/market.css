@@ -215,7 +215,9 @@ body:has(.market-page) .container { max-width: 1520px; }
 .depth-svg .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
 .depth-tip {
   position: absolute; z-index: 5; pointer-events: none; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 4px 8px; font-size: 0.78rem; font-variant-numeric: tabular-nums; white-space: nowrap; box-shadow: var(--shadow);
+  padding: 4px 8px; font-size: 0.78rem; font-variant-numeric: tabular-nums; box-shadow: var(--shadow);
+  /* on the side of the pointer that has the room (DepthChart.tsx), never wider than the chart: on a phone a long line wraps instead of leaving the panel */
+  width: max-content; max-width: calc(100% - 4px);
 }
 .depth-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.78rem; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
 .depth-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
