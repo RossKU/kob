@@ -1,8 +1,9 @@
+import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import type { CancelPlan } from '../../kob/cancel';
 import type { PlacementRecord } from '../../kob/records';
-import { Banner, IssueLine, Section, Spinner } from '../kit';
+import { Banner, Button, IssueLine, Spinner } from '../kit';
 import { SendStatusLine, useSend } from '../confirm/SendStatus';
 
 export interface FlowStep {
@@ -40,7 +41,12 @@ export interface TxFlowProps {
    * submitted (`prev`) and replaces the planned step. A rejection ends the flow with its message.
    */
   next?(index: number, prev: { txid: string }): Promise<FlowStep>;
+  /** the card was dismissed (its x once the flow is over, or by itself a moment after every step went through) */
+  onClose?(): void;
 }
+
+/** How long the card of a flow whose every step went through stays (its toast says the same and stays longer). */
+const DONE_CLOSE_MS = 6000;
 
 /**
  * Runs one or several transactions one after the other, each checked silently and approved in the wallet (ui/confirm/send.ts) as soon as the flow
@@ -120,9 +126,21 @@ export function TxFlow(props: TxFlowProps) {
   const step = steps[index];
   const preparing = states.some((s) => s === 'preparing');
   const anySubmitted = states.some((s) => s === 'submitted');
+  const allThrough = !running && !message && states.every((s) => s === 'submitted');
+  // the notifications at the top right are where a flow reports (kit/Toast.tsx), like the order ticket's sends: never a panel in the page
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  useEffect(() => setHost(document.querySelector<HTMLElement>('[data-testid="toast-host"]')), []);
+  useEffect(() => {
+    if (!allThrough || !props.onClose) return;
+    const timer = setTimeout(() => props.onClose?.(), DONE_CLOSE_MS);
+    return () => clearTimeout(timer);
+  }, [allThrough]);
+  const tone = running ? 'info' : message || states.some((s) => s === 'failed') ? 'error' : anySubmitted ? 'ok' : 'info';
 
-  return (
-    <Section title={props.heading} data-testid="tx-flow">
+  const card = (
+    <div class={`toast toast-${tone} send-toast tx-flow-toast`} data-testid="tx-flow">
+      <div class="grow wrap-anywhere stack-sm">
+      <strong class="tx-flow-title">{props.heading}</strong>
       {steps.length > 1 ? (
         <ol class="progress" data-testid="flow-progress">
           {steps.map((s, i) => (
@@ -147,13 +165,20 @@ export function TxFlow(props: TxFlowProps) {
       <SendStatusLine sender={sender} data-testid="flow-status" />
       {!running ? (
         <div class="stack-sm" data-testid="flow-result">
-          {message ? <Banner tone="error" data-testid="flow-error">{message}</Banner> : null}
-          {anySubmitted ? <Banner tone="ok" data-testid="flow-done">{t('orders.flow.done', { count: states.filter((s) => s === 'submitted').length })}</Banner> : <Banner tone="info" data-testid="flow-stopped">{t('orders.flow.stopped')}</Banner>}
-          {states.some((s) => s === 'pending') ? <Banner tone="warn">{t('orders.flow.remaining', { count: states.filter((s) => s === 'pending').length })}</Banner> : null}
+          {message ? <p class="flow-line bad" data-testid="flow-error">{message}</p> : null}
+          {anySubmitted ? <p class="flow-line" data-testid="flow-done">{t('orders.flow.done', { count: states.filter((s) => s === 'submitted').length })}</p> : <p class="flow-line muted" data-testid="flow-stopped">{t('orders.flow.stopped')}</p>}
+          {states.some((s) => s === 'pending') ? <p class="flow-line warn">{t('orders.flow.remaining', { count: states.filter((s) => s === 'pending').length })}</p> : null}
         </div>
       ) : null}
-    </Section>
+      </div>
+      {!running && props.onClose ? (
+        <Button small variant="ghost" onClick={() => props.onClose?.()} aria-label={t('common.dismiss')} data-testid="tx-flow-dismiss">
+          {'×'}
+        </Button>
+      ) : null}
+    </div>
   );
+  return host ? createPortal(card, host) : card;
 }
 
 /** Plan-level errors (no transaction could be built) as one banner with translated findings. */

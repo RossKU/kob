@@ -588,6 +588,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
           steps={flow.steps}
           onStepSubmitted={onStepSubmitted}
           onDone={onFlowDone}
+          onClose={() => setFlow(null)}
           {...(flow.next ? { next: flow.next } : {})}
         />
       ) : null}
