@@ -120,7 +120,10 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     expect(bidPrices[0]!).toBeLessThan(askPrices.at(-1)!);
     const mid = Number(await page.getByTestId('book-mid').getAttribute('data-value'));
     expect(close(mid, (bidPrices[0]! + askPrices.at(-1)!) / 2, 0.001)).toBe(true);
+    // the depth chart (the Depth view of the book's panel) follows too
+    await page.getByTestId('book-view-depth').click();
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
+    await page.getByTestId('book-view-book').click();
 
     // the activity log is the same in both orientations (it is the log of every view of the market: amounts in the token, prices in KAS, the
     // colour the taker's side on the token)

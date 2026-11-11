@@ -1,5 +1,6 @@
-// The market page fits its window with no empty room (founder, 2026-11-11): on three columns the chart's box is what the ticket's row leaves over (the row is as tall as the ticket's whole
-// Limit form, never taller), so the ticket has no empty band between its "Advanced options" box and its pinned button, on a short, a full-HD and a tall window alike; the order book lists as
+// The market page fits its window with no empty room (founder, 2026-11-11): on three columns, ONE row (book | chart | ticket; the depth chart is a view of the book's panel), the chart takes the
+// whole row: its box is what the ticket's row leaves over (the row is as tall as the ticket's whole Limit form, never taller), so the ticket has no empty band between its "Advanced options" box and
+// its pinned button, on a short, a full-HD and a tall window alike, and its place button is on the first screen at 1280x800 and 1920x1080 (review H-01); the order book lists as
 // many levels per side as its card holds (8 to 40; a phone keeps 12); the 1D chart's time axis reads dates, an intraday one 24-hour times. Mock stack: the token page of EXKCC, and the pair page.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
@@ -24,7 +25,7 @@ async function expectNoEmptyBand(page: Page): Promise<void> {
 }
 
 for (const [width, height] of SIZES) {
-  test(`${width}x${height}: the ticket has no empty band; the book, the depth chart and the ticket end on one line; nothing moves once measured`, async ({ appPage: page, mock }) => {
+  test(`${width}x${height}: the ticket has no empty band; the book, the chart and the ticket end on one line; nothing moves once measured`, async ({ appPage: page, mock }) => {
     await page.setViewportSize({ width, height });
     await mock.seedHistory({ hours: 48, trades: 600, seed: 7 });
     await fund(mock);
@@ -32,9 +33,12 @@ for (const [width, height] of SIZES) {
     await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'ready');
     await expectNoEmptyBand(page);
     if (width >= 1200) {
-      const depth = await bottom(page, '[data-testid="depth-section"]');
-      expect(Math.abs((await bottom(page, '[data-testid="order-ticket"]')) - depth), 'the ticket ends at the depth chart').toBeLessThanOrEqual(1);
-      expect(Math.abs((await bottom(page, '[data-testid="book-section"]')) - depth), 'the book ends at the depth chart').toBeLessThanOrEqual(1);
+      await expect(page.getByTestId('depth-section'), 'no panel of its own for the depth chart').toHaveCount(0);
+      const chart = await bottom(page, '[data-testid="chart-section"]');
+      expect(Math.abs((await bottom(page, '[data-testid="order-ticket"]')) - chart), 'the ticket ends at the chart').toBeLessThanOrEqual(1);
+      expect(Math.abs((await bottom(page, '[data-testid="book-section"]')) - chart), 'the book ends at the chart').toBeLessThanOrEqual(1);
+      expect(await top(page, '[data-testid="book-section"]'), 'one row: the three start together').toBeCloseTo(await top(page, '[data-testid="chart-section"]'), 0);
+      expect(await top(page, '[data-testid="order-ticket"]')).toBeCloseTo(await top(page, '[data-testid="chart-section"]'), 0);
       // the chart's box is the rest of the ticket's row (floor 240 px), and the page height is the same on every window height (the row follows the form, not the window)
       expect(await heightOf(page, '.chart-box')).toBeGreaterThanOrEqual(240);
     } else {
@@ -46,6 +50,13 @@ for (const [width, height] of SIZES) {
     await page.waitForTimeout(700);
     expect(await boxes()).toEqual(a);
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+    // H-01: on the two usual desktop windows the ticket's place button is on the first screen, on load, without scrolling
+    if (width >= 1280 && height <= 1080) {
+      const place = (await page.getByTestId('order-place').boundingBox())!;
+      expect(place.y, 'the place button is below the top edge').toBeGreaterThanOrEqual(0);
+      expect(place.y + place.height, `the place button is inside the ${width}x${height} window`).toBeLessThanOrEqual(height);
+      expect(await page.evaluate(() => scrollY), 'nothing scrolled the page').toBe(0);
+    }
   });
 }
 
@@ -172,10 +183,10 @@ test.describe('the pair page fits its window too', () => {
       await page.setViewportSize({ width, height });
       await openPair(page, mock);
       await expectNoEmptyBand(page);
-      const depth = await bottom(page, '[data-testid="depth-section"]');
+      const chart = await bottom(page, '[data-testid="chart-section"]');
       // the ticket's column (the pair's has the link to the wallet's orders under the form)
-      expect(Math.abs((await bottom(page, '.mkt-area-ticket')) - depth)).toBeLessThanOrEqual(1);
-      expect(Math.abs((await bottom(page, '[data-testid="pair-book-section"]')) - depth)).toBeLessThanOrEqual(1);
+      expect(Math.abs((await bottom(page, '.mkt-area-ticket')) - chart)).toBeLessThanOrEqual(1);
+      expect(Math.abs((await bottom(page, '[data-testid="pair-book-section"]')) - chart)).toBeLessThanOrEqual(1);
       expect(await heightOf(page, '.chart-box')).toBeGreaterThanOrEqual(240);
       // the side of the pair book is as tall as the card gave it: the 8 slots it has at least, no level cut off (every level drawn fits the side)
       expect(await heightOf(page, '[data-testid="pair-book-asks"]')).toBeGreaterThanOrEqual(8 * 21);

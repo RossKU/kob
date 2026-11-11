@@ -53,12 +53,14 @@ test.describe('market data', () => {
     await expect(page.getByTestId('price-chart')).toHaveAttribute('data-interval', '1d');
     await page.getByTestId('chart-interval-5m').click();
 
-    // depth from /v1/depth
+    // depth from /v1/depth (the Depth view of the book's panel)
+    await page.getByTestId('book-view-depth').click();
     const depth = page.getByTestId('depth-chart');
     await expect(depth).toHaveAttribute('data-source', 'depth');
     await expect(depth).toHaveAttribute('data-state', 'ready');
     await expect(depth.locator('path.bid-area')).toHaveCount(1);
     await expect(depth.locator('path.ask-area')).toHaveCount(1);
+    await page.getByTestId('book-view-book').click();
 
     // the activity log (the fills of /v1/fills): newest first, both taker sides coloured, the time of each
     const log = page.getByTestId(TESTID.activityList);

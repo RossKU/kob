@@ -60,9 +60,13 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   await expect(book.locator('[data-testid="pair-level"][data-source="direct"][data-side="ask"]').last()).toHaveAttribute('data-price', '0.0505');
   await expect(book.locator('[data-testid="pair-level"][data-source="direct"][data-side="bid"]').first()).toHaveAttribute('data-price', '0.0495');
   await expect(book.locator('[data-testid="pair-level"][data-source="entry"][data-side="bid"]')).toHaveAttribute('data-price', '0.049');
-  await expect(book.getByTestId('pair-entry')).toHaveText('entry (1)');
+  // the source is a bar at the row's left edge (the legend under the book says it once; the row's title names it), never a chip on every row (review M-09)
+  await expect(book.locator('[data-testid="pair-level"][data-source="entry"]')).toHaveCount(1);
+  await expect(book.locator('[data-testid="pair-level"][data-source="entry"]')).toHaveAttribute('title', /1 if-done pair entry order/);
   await expect(book.locator('[data-testid="pair-level"][data-source="route"]').first()).toBeVisible();
-  await expect(book.getByTestId('pair-via-kas').first()).toHaveText('via KAS');
+  await expect(book.locator('[data-testid="pair-level"][data-source="route"]').first()).toHaveAttribute('title', /implied through the two KAS books/);
+  await expect(page.getByTestId('pair-via-kas')).toHaveCount(0);
+  await expect(page.getByTestId('pair-legend')).toContainText('Via KAS');
   // the spread line is the KAS page's: mid, signed spread, signed percent (negative when the book is crossed)
   await expect(book.getByTestId('pair-spread')).toHaveText(/^Mid [\d.,]+ · Spread -?[\d.,]+ \(-?[\d.]+%\)$/);
   // fixed decimals per column (decimal points line up)
@@ -328,7 +332,9 @@ test('picking a quote token keeps the layout: the chart stays in the same place 
   await expect(page.getByTestId('price-chart')).toBeVisible();
   const after = (await page.getByTestId('chart-section').boundingBox())!;
   const afterBox = (await page.getByTestId('price-chart').locator('.chart-box').boundingBox())!;
-  expect(afterBox.height).toBe(beforeBox.height);
+  // the pair's chart panel has its notes under the chart (derived from the two KAS markets): its box is the token's less them, the panel the same row
+  expect(beforeBox.height - afterBox.height, 'the pair chart is the token chart less its notes').toBeGreaterThanOrEqual(0);
+  expect(beforeBox.height - afterBox.height).toBeLessThan(48);
   expect(Math.abs(after.width - before.width)).toBeLessThan(2);
   expect(Math.abs(after.x - before.x)).toBeLessThan(2);
   // the book and the ticket keep their areas: book left of the chart, ticket right of it (three columns on a wide screen)

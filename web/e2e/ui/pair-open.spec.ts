@@ -92,7 +92,7 @@ test('both tokens unregistered, no token in the registry: the pair opens, an ord
   await expect(page.getByTestId('pair-book').locator('[data-testid="pair-level"][data-source="direct"][data-side="ask"]').last()).toHaveAttribute('data-price', '0.0505');
   // named by their covenant ids; the ids of both stay on the page
   await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', `${long(base)}/${long(QUOTE)}`);
-  await expect(page.getByTestId('pair-token-meta')).toHaveCount(2);
+  await expect(page.getByTestId('pair-token-details')).toHaveCount(2);
 
   await pickType(page, 'limit', 'sell');
   await fillFields(page, { price: '0.0515', amount: '2' });

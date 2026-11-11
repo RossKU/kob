@@ -87,8 +87,8 @@ test.describe('one market page, a pair selector', () => {
     expect(Math.abs(book1.width - book0.width)).toBeLessThan(2);
     expect(Math.abs(ticket1.x - ticket0.x)).toBeLessThan(2);
     expect(Math.abs(ticket1.width - ticket0.width)).toBeLessThan(2);
-    // (the pair page's header has its own layout since 2026-11-02: the pictures with the swap, the tickers below them: e2e/ui/pair-header.spec.ts)
-    expect(title1.y).toBeGreaterThan(title0.y);
+    // the same market bar (one row of the pictures, the pair, the figures: e2e/ui/market-bar.spec.ts, pair-header.spec.ts), so the pair selector stays at the same height
+    expect(Math.abs(title1.y - title0.y)).toBeLessThan(3);
     await expect(page.getByText('Trade against')).toHaveCount(0);
 
     // the flip control next to the pair swaps base and quote
@@ -194,10 +194,11 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     const base = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${base}`);
     const foot = page.locator('.ob-foot');
-    await expect(foot).toContainText('an ask a buy of EXKCC, a bid a sell of EXKCC');
+    // one short line; the whole sentences are its title
+    await expect(foot).toHaveAttribute('title', /an ask a buy of EXKCC, a bid a sell of EXKCC/);
     await page.getByTestId('market-flip').click();
-    await expect(foot).toContainText('an ask a buy of KAS, a bid a sell of KAS');
-    await expect(foot).not.toContainText('buy orders hold a KAS budget');
+    await expect(foot).toHaveAttribute('title', /an ask a buy of KAS, a bid a sell of KAS/);
+    await expect(foot).not.toHaveAttribute('title', /buy orders hold a KAS budget/);
   });
 
   test('the ticket in the inverted market: the quantity shows its KAS value, the tip says what it is, the type help speaks of the displayed Buy / Sell', async ({ appPage: page, mock }) => {

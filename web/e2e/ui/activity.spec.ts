@@ -232,13 +232,12 @@ test.describe('the log on the token and pair pages', () => {
     await expect(log.getByTestId('activity-market')).toHaveCount(0);
     await expect.poll(async () => [...new Set(await attrs(page, 'data-market'))]).toEqual([base]);
     await expect(log.getByTestId('activity-all-link')).toHaveAttribute('href', '#/activity');
-    // layout: under the chart, the depth chart and the book, above the facts; as wide as the grid; the depth chart spans the two middle columns
+    // layout: under the book, the chart and the ticket, above the facts; as wide as the grid
     const box = async (id: string) => (await page.getByTestId(id).first().boundingBox())!;
-    const [grid, act, depth, chart, details] = [(await page.locator('.mkt-grid').boundingBox())!, await box('activity'), await box('depth-section'), await box('chart-section'), (await page.locator('.mkt-area-details').boundingBox())!];
-    expect(act.y).toBeGreaterThan(depth.y + depth.height - 1);
+    const [grid, act, chart, details] = [(await page.locator('.mkt-grid').boundingBox())!, await box('activity'), await box('chart-section'), (await page.locator('.mkt-area-details').boundingBox())!];
+    expect(act.y).toBeGreaterThan(chart.y + chart.height - 1);
     expect(details.y).toBeGreaterThan(act.y + act.height - 1);
     expect(Math.abs(act.width - grid.width)).toBeLessThan(2);
-    expect(Math.abs(depth.width - chart.width)).toBeLessThan(2);
     await shot(page, 'token-1440', 'dark');
     await shot(page, 'token-1440', 'light');
     // the link opens the Activity page

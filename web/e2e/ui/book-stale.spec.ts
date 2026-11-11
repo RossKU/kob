@@ -85,7 +85,10 @@ test.describe('order book keeps the last good book', () => {
     await expect(asks(page)).toHaveCount(10);
     await expect(page.getByTestId('book-matching')).toHaveCount(0);
     await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
+    // the depth chart (the Depth view of the book's panel) draws it too
+    await page.getByTestId('book-view-depth').click();
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
+    await page.getByTestId('book-view-book').click();
     // the next good response replaces it: a positive spread again
     crossed = false;
     await page.getByTestId('book-refresh').click();

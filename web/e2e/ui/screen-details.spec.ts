@@ -46,6 +46,7 @@ test.describe('market panels when the indexer cannot be reached', () => {
     await page.getByTestId('activity-list').scrollIntoViewIfNeeded();
     await expect(page.getByTestId('activity-error')).toBeVisible();
     await expect(page.getByTestId('activity').getByText('No activity yet.')).toHaveCount(0);
+    await page.getByTestId('book-view-depth').click();
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'empty');
     await expect(page.getByTestId('depth-empty')).toHaveText('The book could not be loaded.');
     // no book, no grouping to offer (it showed "0.00000001")
@@ -66,6 +67,7 @@ test('a new page takes the keyboard focus to its content', async ({ appPage: pag
 
 test('the depth legend keeps the estimate mark with its amounts', async ({ appPage: page, mock }) => {
   await openMarket(page, mock, { connect: false });
+  await page.getByTestId('book-view-depth').click(); // the depth chart is the Depth view of the book's panel
   const summary = page.getByTestId('depth-summary');
   await expect(summary).toContainText(/^~ In view: /);
   // the price labels at the edges stay inside the chart

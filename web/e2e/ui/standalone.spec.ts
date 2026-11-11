@@ -63,6 +63,8 @@ test.describe('standalone mode', () => {
     // the market data is built from what is seen, and says since when
     // (the stats and the chart were read from the indexer before: that is kept; the depth is the node's book alone)
     for (const area of ['stats', 'chart']) await expect(page.getByTestId(`${area}-standalone`)).toHaveText(KEPT);
+    // (the depth chart is the Depth view of the book's panel)
+    await page.getByTestId('book-view-depth').click();
     await expect(page.getByTestId('depth-standalone')).toContainText(/^Since \d\d:\d\d only \(standalone mode\)$/);
     await expect(page.getByTestId('live-indicator')).toHaveText('Standalone');
     // the activity log: it was below the fold, so it had read nothing from the indexer: only what was seen since then, nothing older

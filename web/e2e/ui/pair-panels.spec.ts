@@ -82,8 +82,9 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per EXKCC');
   await expect(page.getByTestId('pair-chart-note')).toContainText('derived from EXKCC/KAS and EXUSD/KAS');
 
-  // depth chart of the pair book: both sides, in pair units
-  const depth = page.getByTestId('depth-section');
+  // depth chart of the pair book (the Depth view of the book's panel, at every width): both sides, in pair units
+  await page.getByTestId('book-view-depth').click();
+  const depth = page.getByTestId('book-depth-pane');
   await expect(depth.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
   await expect(depth.getByTestId('depth-chart')).toContainText('EXKCC');
   await expect(depth.locator('.bid-area')).toHaveCount(1);
@@ -127,10 +128,9 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await expect(page.getByTestId('pair-details').getByTestId('badge-family')).toHaveCount(2);
   await expect(facts.nth(1).getByTestId('token-program')).toContainText(/KCC-20 (.+) · template matched$/);
   await expect(facts.nth(1).getByTestId('token-status-details')).toBeVisible();
-  // the same places as a KAS market: depth under the chart, the activity log under the grid, the facts below everything
+  // the same places as a KAS market: the activity log under the grid, the facts below everything
   const box = async (id: string) => (await page.getByTestId(id).boundingBox())!;
-  expect((await box('depth-section')).y).toBeGreaterThan((await box('chart-section')).y);
-  expect((await box('activity')).y).toBeGreaterThan((await box('depth-section')).y + (await box('depth-section')).height - 1);
+  expect((await box('activity')).y).toBeGreaterThan((await box('chart-section')).y + (await box('chart-section')).height - 1);
   expect((await box('pair-details')).y).toBeGreaterThan((await box('activity')).y + (await box('activity')).height - 1);
 
   // flip: base and quote swap (EXUSD/EXKCC); every panel follows. The page shows both orientations of the pair as one market, so the fills of the
@@ -180,6 +180,7 @@ test('pair page without a pair fill: the prices still come from the two KAS mark
   await page.getByTestId('activity').scrollIntoViewIfNeeded();
   await expect(page.getByTestId('activity').getByTestId('activity-loading')).toHaveCount(0);
   await expect(page.getByTestId('activity').locator('[data-testid=activity-row][data-kind=fill]')).toHaveCount(0);
+  await page.getByTestId('book-view-depth').click();
   await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
   await expect(page.getByTestId('pair-token-details')).toHaveCount(2);
 });

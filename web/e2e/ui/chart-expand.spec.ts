@@ -1,5 +1,5 @@
 // The price chart's "Expand chart" button (token and pair market pages): at the chart panel's top right, an icon button with aria-pressed and the label "Expand chart" / "Restore".
-// Three columns (>= 1200 px): expanded, the order book and the depth chart give way and the chart spans the book's column and its own, the ticket stays; restored, every box is back
+// Three columns (>= 1200 px): expanded, the order book (with its Depth view) gives way and the chart spans the book's column and its own, the ticket stays; restored, every box is back
 // exactly. Two columns and a phone: the chart box is taller and nothing else disappears. Esc restores, the choice is kept in this browser, the chart keeps its interval and its drawings
 // and fits its new box (Lightweight Charts autoSize). The page never scrolls sideways. Mock stack: the token page of EXKCC with a seeded history.
 import type { Page } from '@playwright/test';
@@ -40,10 +40,10 @@ async function canvasFits(page: Page) {
 }
 
 for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
-  test(`${width} px: Expand hides the book and the depth chart and widens the chart, Restore brings every box back, Esc restores, the choice is kept`, async ({ appPage: page, mock }) => {
+  test(`${width} px: Expand hides the book and widens the chart, Restore brings every box back, Esc restores, the choice is kept`, async ({ appPage: page, mock }) => {
     await open(page, mock, width, height);
     await expect(page.getByTestId('book-section')).toBeVisible();
-    await expect(page.getByTestId('depth-section')).toBeVisible();
+    await expect(page.getByTestId('depth-section')).toHaveCount(0); // no panel of its own: the depth chart is the Depth view of the book's panel
     // the button: at the chart panel's top right, in the header row beside the drawing tools
     const head = await page.locator('.chart-head').boundingBox();
     const tools = await box(page, 'chart-tools');
@@ -56,7 +56,7 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
     await expect(btn(page)).toHaveAccessibleName('Expand chart');
 
     const fit0 = await tkFit(page);
-    const before = { book: await box(page, 'book-section'), chart: b0, depth: await box(page, 'depth-section'), ticket: await box(page, 'ticket-container'), plot: await chartBox(page) };
+    const before = { book: await box(page, 'book-section'), chart: b0, ticket: await box(page, 'ticket-container'), plot: await chartBox(page) };
     // state kept across the expand: the interval, a drawing
     await page.getByTestId('chart-interval-1h').click();
     await expect(page.getByTestId('price-chart')).toHaveAttribute('data-interval', '1h');
@@ -69,7 +69,6 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
     await expect(btn(page)).toHaveAttribute('aria-pressed', 'true');
     await expect(btn(page)).toHaveAccessibleName('Restore');
     await expect(page.getByTestId('book-section')).toBeHidden();
-    await expect(page.getByTestId('depth-section')).toBeHidden();
     const big = await box(page, 'chart-section');
     // the chart spans the book's column and its own: from the book's left edge to where the middle columns end, the ticket stays on the right
     expect(Math.abs(big.x - before.book.x), 'from the left edge of the book column').toBeLessThanOrEqual(1);
@@ -94,10 +93,8 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
     await btn(page).click();
     await expect(btn(page)).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('book-section')).toBeVisible();
-    await expect(page.getByTestId('depth-section')).toBeVisible();
     sameBox(await box(page, 'book-section'), before.book);
     sameBox(await box(page, 'chart-section'), before.chart);
-    sameBox(await box(page, 'depth-section'), before.depth);
     sameBox(await box(page, 'ticket-container'), before.ticket);
     sameBox(await chartBox(page), before.plot);
     await canvasFits(page);
@@ -111,7 +108,6 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
     await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'ready');
     await expect(btn(page)).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('book-section')).toBeHidden();
-    await expect(page.getByTestId('depth-section')).toBeHidden();
     // Esc with a drawing tool on leaves the tool and keeps the chart expanded; the next Esc restores
     await page.getByTestId('draw-trend').click();
     await expect(page.getByTestId('chart-draw-layer')).toHaveCount(1);
@@ -121,7 +117,6 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
     await page.keyboard.press('Escape');
     await expect(btn(page)).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('book-section')).toBeVisible();
-    await expect(page.getByTestId('depth-section')).toBeVisible();
     // after a reload the ticket measured its form again (--tk-fit), in the expanded page: the rows follow the form (its footer can read a line taller or shorter at that moment), so the box is
     // compared in full when the measure is the same and by its place and width when it is not
     const now = await box(page, 'chart-section');

@@ -177,7 +177,9 @@ test.describe('token page', () => {
     await expect(asks.last()).toContainText('2');
     // the bar of the deepest cumulative level is full width
     await expect(bids.last().locator('.book-bar, i')).toHaveAttribute('style', /width:\s*(100|9\d(\.\d+)?)%/);
+    await appPage.getByTestId('book-view-depth').click();
     await expect(appPage.getByTestId('depth-chart').locator('svg')).toBeVisible();
+    await appPage.getByTestId('book-view-book').click();
 
     // the activity log under the grid: the 8 seeded fills (Executions: the fills alone)
     await appPage.getByTestId('activity-actor-executions').click();

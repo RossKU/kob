@@ -1,6 +1,6 @@
-// Below 1200 px the depth chart has no panel of its own: it is the "Depth" view of the ORDER BOOK's panel (an "Order book | Depth" switch in the panel's header, the choice
-// remembered in this browser). The price chart is never hidden, at any width. A click on the depth chart prefills the ticket like a click on a book row (an ask a buy,
-// a bid a sell, at the price under the pointer, on the market's price step), also on three columns where the depth chart is a panel of its own. Mock stack.
+// The depth chart has no panel of its own at any width (founder, 2026-11-11): it is the "Depth" view of the ORDER BOOK's panel (an "Order book | Depth" switch in the panel's header, the
+// choice remembered in this browser), on three columns too. The price chart is never hidden, at any width. A click on the depth chart prefills the ticket like a click on a book row (an ask a buy,
+// a bid a sell, at the price under the pointer, on the market's price step). Mock stack.
 import type { Locator, Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { listExkcc } from '../helpers/env';
@@ -52,7 +52,7 @@ async function pickFrom(page: Page, depth: Locator, side: 'ask' | 'bid'): Promis
   expect(Math.round(price * 1e4) / 1e4).toBeCloseTo(price, 9);
 }
 
-for (const width of [390, 850]) {
+for (const width of [390, 850, 1280]) {
   test.describe(`${width} px`, () => {
     test.use({ viewport: { width, height: 900 } });
 
@@ -134,23 +134,3 @@ for (const width of [390, 850]) {
     });
   });
 }
-
-test.describe('1280 px', () => {
-  test.use({ viewport: { width: 1280, height: 900 } });
-
-  test('no switch: the book, the chart and the depth chart are panels of their own, and a click on the depth chart prefills the ticket', async ({ appPage: page, mock }) => {
-    await open(page, mock);
-    await expect(page.getByTestId('book-view')).toHaveCount(0);
-    await expect(page.getByTestId('book-section').getByTestId('order-book')).toBeVisible();
-    await expect(page.getByTestId('chart-section').locator('h2')).toHaveText('Price');
-    const depth = page.getByTestId('depth-section');
-    await expect(depth.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
-    const c = await rect(page.getByTestId('chart-section'));
-    const d = await rect(depth);
-    expect(d.y).toBeGreaterThan(c.y + c.height - 1);
-    await expect(page.getByTestId('chart-intervals')).toBeVisible();
-
-    await pickFrom(page, depth.getByTestId('depth-chart'), 'ask');
-    await pickFrom(page, depth.getByTestId('depth-chart'), 'bid');
-  });
-});

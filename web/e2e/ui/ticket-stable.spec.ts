@@ -10,8 +10,8 @@ import { horizontalOverflow } from '../helpers/i18n';
 
 test.use({ autoOpen: false });
 
-/** What must not move: the ticket panel, its button and scroll area's footer, the book, the charts and the activity log under them. The depth chart is a panel of its own on three columns only (below 1200 px it is a view of the book's panel). */
-const watched = (page: Page): string[] => ['ticket-container', 'order-ticket', 'order-place', 'order-book', 'chart-section', ...((page.viewportSize()?.width ?? 0) >= 1200 ? ['depth-section'] : []), 'activity-list'];
+/** What must not move: the ticket panel, its button and scroll area's footer, the book's panel (the depth chart is its Depth view), the chart and the activity log under them. */
+const watched = (_page: Page): string[] => ['ticket-container', 'order-ticket', 'order-place', 'order-book', 'book-section', 'chart-section', 'activity-list'];
 type Box = { x: number; y: number; width: number; height: number };
 
 /** Document coordinates (the page may scroll between two readings). */
@@ -27,12 +27,12 @@ const boxes = (page: Page): Promise<Record<string, Box>> =>
     return out;
   }, watched(page));
 
-/** Three columns (from 1200 px): the book, the depth chart and the ticket end on one line (the depth chart's bottom), where the ticket's button is pinned. */
+/** Three columns (from 1200 px): the book, the chart and the ticket are one row and end on one line, where the ticket's button is pinned. */
 async function expectOneBottomLine(page: Page): Promise<void> {
   const bottom = (id: string) => page.getByTestId(id).evaluate((el) => el.getBoundingClientRect().bottom + scrollY);
-  const depth = await bottom('depth-section');
-  expect(Math.abs((await bottom('order-ticket')) - depth), 'the ticket ends at the depth chart').toBeLessThanOrEqual(1);
-  expect(Math.abs((await bottom('book-section')) - depth), 'the book ends at the depth chart').toBeLessThanOrEqual(1);
+  const chart = await bottom('chart-section');
+  expect(Math.abs((await bottom('order-ticket')) - chart), 'the ticket ends at the chart').toBeLessThanOrEqual(1);
+  expect(Math.abs((await bottom('book-section')) - chart), 'the book ends at the chart').toBeLessThanOrEqual(1);
 }
 
 async function run(page: Page, mock: import('../fixtures').MockClient): Promise<void> {
@@ -102,7 +102,7 @@ test.describe('the ticket keeps its size', () => {
 
   test.describe('wide, 1920 px', () => {
     test.use({ viewport: { width: 1920, height: 1000 } });
-    test('the book, the depth chart and the ticket end on one line, through every type', async ({ appPage: page, mock }) => {
+    test('the book, the chart and the ticket end on one line, through every type', async ({ appPage: page, mock }) => {
       await run(page, mock);
       await pickType(page, 'limit', 'buy');
       await expectOneBottomLine(page);
