@@ -216,6 +216,11 @@ test.describe('with kascov.io', () => {
     await expect(chart).toHaveAttribute('data-state', 'ready');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await expect(toggle).toHaveAttribute('title', 'kascov price (third-party)');
+    // the logo is a static file of this app (never kascov.io's host: the CSP and the mock-only network would show it), decorative, and it loaded
+    const logo = toggle.locator('img.chart-kascov-logo');
+    await expect(logo).toHaveAttribute('alt', '');
+    await expect(logo).toHaveAttribute('src', /^(\.\/|\/)kascov-logo\.svg$/);
+    await expect.poll(() => logo.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0)).toBe(true);
     await expect(chart).toHaveAttribute('data-kascov', '0');
     await expect(legend).toHaveCount(0);
     expect(log.candleRequests).toEqual([]);

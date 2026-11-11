@@ -46,6 +46,8 @@ const NARROW_PANEL_PX = 480;
 const INTERVAL_KEY = 'kob.chart.interval';
 const COLOR_KEY = 'kob.chart.draw.color';
 const KASCOV_KEY = 'kob.chart.kascov';
+/** The kascov logo, a static file of this app (public/kascov-logo.svg), never loaded from kascov.io. */
+const KASCOV_LOGO_URL = `${import.meta.env.BASE_URL}kascov-logo.svg`;
 
 /** The viewer's choice of the optional kascov line (off unless they turned it on), kept in this browser. */
 function storedKascov(): boolean {
@@ -651,8 +653,8 @@ export function PriceChart(props: PriceChartProps) {
           <div class="chart-tools chart-size">
             {kascovAvail ? (
               <button type="button" aria-pressed={kascovOn ? 'true' : 'false'} aria-label={t('market.chart.kascov')} title={t('market.chart.kascov')} data-testid="chart-kascov-toggle" onClick={() => setKascovOn(!kascovOn)}>
-                {/* a plain circle: the line is a reference price drawn behind the candles, not a brand */}
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5" /></svg>
+                {/* kascov.io logo, used with the KOB founder's approval; source: https://kascov.io/ (its <link rel=icon> SVG, public/kascov-logo.svg, served from our own origin) */}
+                <img class="chart-kascov-logo" src={KASCOV_LOGO_URL} alt="" width="16" height="16" draggable={false} />
               </button>
             ) : null}
             <button type="button" aria-pressed={expanded ? 'true' : 'false'} aria-label={expanded ? t('market.chart.restore') : t('market.chart.expand')} title={expanded ? t('market.chart.restore') : t('market.chart.expand')} data-testid="chart-expand" onClick={() => setChartExpanded(!expanded)}>

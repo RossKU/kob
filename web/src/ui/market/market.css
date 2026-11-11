@@ -209,6 +209,9 @@ body:has(.market-page) .container { max-width: none; }
 .chart-tools button[aria-pressed='true'] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
 .chart-tools button:disabled { opacity: 0.45; cursor: default; }
 .chart-tools svg { width: 16px; height: 16px; }
+/* the kascov logo carries its own dark tile, so it reads on both themes; dimmed while the overlay is off */
+.chart-tools .chart-kascov-logo { width: 16px; height: 16px; border-radius: 4px; opacity: 0.6; }
+.chart-tools button:hover .chart-kascov-logo, .chart-tools button[aria-pressed='true'] .chart-kascov-logo { opacity: 1; }
 @media (pointer: coarse) { .chart-tools button { min-width: 36px; height: 34px; } }
 /* a touch screen: ONE "Draw" button (pill, like the tools' row it replaces) opens a small sheet with the tools and the colours; a dot of the colour on the button says a tool is on */
 .chart-colors .hp-trigger.chart-draw-btn { min-height: 0; height: 34px; padding: 0 12px; gap: 6px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 0.82rem; font-weight: 600; }
