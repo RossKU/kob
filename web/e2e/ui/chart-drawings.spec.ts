@@ -1,5 +1,5 @@
-// Drawing tools on the market page's price chart (a horizontal line, a trend line, an extended line, a box, recolour, delete, clear all, and six colour swatches
-// for the next drawing): placed with clicks, kept in this browser per market and network (localStorage) with their colours, restored after a reload, each market
+// Drawing tools on the market page's price chart (a horizontal line, a trend line, an extended line, a box, recolour, delete, clear all, and a palette of six colour swatches
+// behind one colour button for the next drawing): placed with clicks, kept in this browser per market and network (localStorage) with their colours, restored after a reload, each market
 // with its own, and usable on a phone by tapping. Lightweight Charts draws into
 // canvases, so a drawing is read back through the chart's `data-drawings` count and the screen-reader list of the drawings (`chart-draw-list`).
 // Mock stack: the token page of EXKCC with a seeded history, and the EXKCC/EXUSD pair page for a second market.
@@ -68,6 +68,19 @@ async function drawTwo(page: Page, tool: 'trend' | 'xline' | 'box', from: [numbe
 }
 
 const drawTrend = (page: Page, from: [number, number], to: [number, number]) => drawTwo(page, 'trend', from, to);
+/** Open the colour button's palette and pick a swatch by its colour key (the palette closes on a pick). */
+async function pickColor(page: Page, c: string, tap = false): Promise<void> {
+  const btn = page.getByTestId('chart-color');
+  const sw = page.getByTestId(`draw-color-${c}`);
+  if (tap) {
+    await btn.tap();
+    await sw.tap();
+  } else {
+    await btn.click();
+    await sw.click();
+  }
+  await expect(page.getByTestId('chart-swatches')).toHaveCount(0);
+}
 const colorsOf = (page: Page) => listOf(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-color')));
 const kindsOf = (page: Page) => listOf(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-kind')));
 
@@ -196,17 +209,43 @@ test.describe('desktop', () => {
     await expect(page.getByTestId('draw-box')).toHaveAccessibleName('Box');
     await expect(page.getByTestId('draw-paint')).toHaveAccessibleName('Recolour a drawing');
     await expect(page.getByTestId('draw-erase')).toHaveAccessibleName('Delete a drawing');
-    // the swatches are a labelled group of toggle buttons, one pressed
+    // one colour button (a menu button) names the current colour and opens a palette: a labelled group of toggle buttons, one pressed
+    const colorBtn = page.getByTestId('chart-color');
+    await expect(colorBtn).toHaveAccessibleName('Drawing colour: Grey');
+    await expect(colorBtn).toHaveAttribute('aria-haspopup', 'true');
+    await expect(colorBtn).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByTestId('chart-swatches')).toHaveCount(0);
+    await colorBtn.focus();
+    await page.keyboard.press('Enter');
+    await expect(colorBtn).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByTestId('chart-swatches')).toHaveAccessibleName('Drawing colour');
     await expect(page.getByTestId('draw-color-muted')).toHaveAccessibleName('Grey');
     await expect(page.getByTestId('draw-color-accent')).toHaveAccessibleName('Violet');
     await expect(page.getByTestId('chart-swatches').locator('[aria-pressed="true"]')).toHaveCount(1);
     await expect(page.getByTestId('draw-color-muted')).toHaveAttribute('aria-pressed', 'true');
+    // Esc closes it and the focus is back on the button
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('chart-swatches')).toHaveCount(0);
+    await expect(colorBtn).toBeFocused();
+    // so does a press outside it
+    await colorBtn.click();
+    await expect(page.getByTestId('chart-swatches')).toBeVisible();
+    await page.mouse.click(5, 300);
+    await expect(page.getByTestId('chart-swatches')).toHaveCount(0);
+    // a swatch from the keyboard: the palette closes, the button shows the new colour
+    await colorBtn.click();
     await page.getByTestId('draw-color-buy').focus();
     await page.keyboard.press('Enter');
+    await expect(page.getByTestId('chart-swatches')).toHaveCount(0);
+    await expect(colorBtn).toHaveAccessibleName('Drawing colour: Green');
+    await expect(colorBtn.locator('.chart-dot')).toHaveAttribute('data-color', 'buy');
+    await colorBtn.click();
     await expect(page.getByTestId('draw-color-buy')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('draw-color-muted')).toHaveAttribute('aria-pressed', 'false');
+    await page.keyboard.press('Escape');
+    // clear all is an icon button with a name and a tooltip
     await expect(page.getByTestId('draw-clear')).toHaveAccessibleName('Clear all drawings');
+    await expect(page.getByTestId('draw-clear')).toHaveAttribute('title', /Clear all drawings/);
     await page.getByTestId('draw-trend').focus();
     await page.keyboard.press('Enter');
     await expect(page.getByTestId('draw-trend')).toHaveAttribute('aria-pressed', 'true');
@@ -226,17 +265,21 @@ test.describe('desktop', () => {
     const token = await openMarket(page, mock);
     const chart = chartOf(page);
     await expect(chart).toHaveAttribute('data-state', 'ready');
-    // the swatches sit in the toolbar, above the plot
-    const sw = (await page.getByTestId('chart-swatches').boundingBox())!;
+    // the colour button sits above the plot, on the same row as the tools; its palette has six swatches
+    const sw = (await page.getByTestId('chart-color').boundingBox())!;
+    const tl = (await page.getByTestId('chart-tools').boundingBox())!;
     const box = (await page.locator('.chart-box').boundingBox())!;
-    expect(sw.y + sw.height, 'swatches above the plot').toBeLessThanOrEqual(box.y + 1);
+    expect(sw.y + sw.height, 'colour button above the plot').toBeLessThanOrEqual(box.y + 1);
+    expect(Math.abs(sw.y + sw.height / 2 - (tl.y + tl.height / 2)), 'colour button on the row of the tools').toBeLessThan(6);
+    await page.getByTestId('chart-color').click();
     await expect(page.getByTestId('chart-swatches').getByRole('button')).toHaveCount(6);
+    await page.keyboard.press('Escape');
 
     // the swatch sets the colour of the NEXT drawing
-    await page.getByTestId('draw-color-info').click();
-    await expect(page.getByTestId('draw-color-info')).toHaveAttribute('aria-pressed', 'true');
+    await pickColor(page, 'info');
+    await expect(page.getByTestId('chart-color')).toHaveAccessibleName('Drawing colour: Blue');
     await drawTwo(page, 'xline', [0.4, 0.8], [0.5, 0.7]);
-    await page.getByTestId('draw-color-warn').click();
+    await pickColor(page, 'warn');
     await drawTwo(page, 'box', [0.3, 0.6], [0.7, 0.3]);
     await expect(chart).toHaveAttribute('data-drawings', '2');
     expect(await kindsOf(page)).toEqual(['xline', 'box']);
@@ -256,7 +299,7 @@ test.describe('desktop', () => {
     await expect(chart).toHaveAttribute('data-drawings', '2');
 
     // recolour: pick a swatch, then click the box's outline (the extended line stays as it is)
-    await page.getByTestId('draw-color-sell').click();
+    await pickColor(page, 'sell');
     await page.getByTestId('draw-paint').click();
     await expect(page.getByTestId('draw-paint')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('chart-draw-hint')).toContainText('selected colour');
@@ -274,7 +317,7 @@ test.describe('desktop', () => {
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
     expect(await colorsOf(page)).toEqual(['info', 'sell']);
     expect(await kindsOf(page)).toEqual(['xline', 'box']);
-    await expect(page.getByTestId('draw-color-sell')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('chart-color')).toHaveAccessibleName('Drawing colour: Red');
     // a theme change repaints with the same drawings and colours
     await page.getByTestId('theme-toggle').click();
     expect(await colorsOf(page)).toEqual(['info', 'sell']);
@@ -310,7 +353,7 @@ test.describe('desktop', () => {
     await expect(chartOf(page)).toHaveAttribute('data-state', 'ready');
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '3');
     expect(await colorsOf(page)).toEqual(['muted', 'muted', 'muted']);
-    await expect(page.getByTestId('draw-color-muted')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('chart-color')).toHaveAccessibleName('Drawing colour: Grey');
   });
 
   test('every market keeps its own drawings: the token market, its pair, and back', async ({ appPage: page, mock }) => {
@@ -388,12 +431,21 @@ test.describe('phone, 390 px wide, touch', () => {
     const box = (await page.locator('.chart-box').boundingBox())!;
     expect(tools.y + tools.height, 'toolbar above the plot').toBeLessThanOrEqual(box.y + 1);
     expect(tools.x + tools.width).toBeLessThanOrEqual(390);
-    // the swatches wrap below the tools when they do not fit beside them: inside the screen, above the plot, and a finger-sized target
+    // the tools and the colour button (beside the read-out, or on a line under it): inside the screen, above the plot, the button and the swatches finger-sized
+    const acts = (await page.locator('.chart-actions').boundingBox())!;
+    expect(acts.x).toBeGreaterThanOrEqual(0);
+    expect(acts.x + acts.width).toBeLessThanOrEqual(390);
+    const cb = (await page.getByTestId('chart-color').boundingBox())!;
+    expect(cb.x + cb.width).toBeLessThanOrEqual(390);
+    expect(cb.y + cb.height, 'colour button above the plot').toBeLessThanOrEqual(box.y + 1);
+    expect(cb.height).toBeGreaterThanOrEqual(30);
+    await page.getByTestId('chart-color').tap();
     const sw = (await page.getByTestId('chart-swatches').boundingBox())!;
     expect(sw.x).toBeGreaterThanOrEqual(0);
     expect(sw.x + sw.width).toBeLessThanOrEqual(390);
-    expect(sw.y + sw.height, 'swatches above the plot').toBeLessThanOrEqual(box.y + 1);
     expect((await page.getByTestId('draw-color-sell').boundingBox())!.height).toBeGreaterThanOrEqual(30);
+    await page.getByTestId('draw-color-sell').tap();
+    await expect(page.getByTestId('chart-color')).toHaveAccessibleName('Drawing colour: Red');
 
     await page.getByTestId('draw-hline').tap();
     await expect(layerOf(page)).toHaveCount(1);
@@ -414,7 +466,7 @@ test.describe('phone, 390 px wide, touch', () => {
     expect(await horizontalOverflow(page), 'market page').toBe(0);
 
     // a box by two taps, in a colour picked with a tap, and recoloured with a tap
-    await page.getByTestId('draw-color-info').tap();
+    await pickColor(page, 'info', true);
     await page.getByTestId('draw-box').tap();
     const c1 = await at(page, 0.15, 0.85);
     await page.touchscreen.tap(c1.x, c1.y);
@@ -422,12 +474,12 @@ test.describe('phone, 390 px wide, touch', () => {
     const c2 = await at(page, 0.5, 0.6);
     await page.touchscreen.tap(c2.x, c2.y);
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '3');
-    expect(await colorsOf(page)).toEqual(['muted', 'muted', 'info']);
-    await page.getByTestId('draw-color-buy').tap();
+    expect(await colorsOf(page)).toEqual(['sell', 'sell', 'info']);
+    await pickColor(page, 'buy', true);
     await page.getByTestId('draw-paint').tap();
     const e = await at(page, 0.3, 0.85);
     await page.touchscreen.tap(e.x, e.y);
-    expect(await colorsOf(page)).toEqual(['muted', 'muted', 'buy']);
+    expect(await colorsOf(page)).toEqual(['sell', 'sell', 'buy']);
     expect(await horizontalOverflow(page), 'market page').toBe(0);
 
     // a finger deletes a drawing with some margin around its line
@@ -438,6 +490,6 @@ test.describe('phone, 390 px wide, touch', () => {
     await page.reload();
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
     expect(await page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '{}').items?.length, STORE(token))).toBe(2);
-    expect(await colorsOf(page)).toEqual(['muted', 'buy']);
+    expect(await colorsOf(page)).toEqual(['sell', 'buy']);
   });
 });

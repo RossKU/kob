@@ -296,7 +296,6 @@ export default {
   'market.chart.draw.paint': 'Recolour a drawing',
   'market.chart.draw.erase': 'Delete a drawing',
   'market.chart.draw.clear': 'Clear all drawings',
-  'market.chart.draw.clearShort': 'Clear',
   'market.chart.draw.hint.hline': 'Click or tap the chart to set the price level. Esc cancels.',
   'market.chart.draw.hint.trend1': 'Click or tap the first point of the line. Esc cancels.',
   'market.chart.draw.hint.trend2': 'Click or tap the second point of the line. Esc steps back.',
@@ -314,6 +313,7 @@ export default {
   'market.chart.draw.listBox': 'Box from {from} to {to} ({color})',
   // the swatches: the colour of the next drawing (and of what the recolour tool is clicked on)
   'market.chart.draw.colors': 'Drawing colour',
+  'market.chart.draw.colorNow': 'Drawing colour: {color}',
   'market.chart.draw.colorHint': 'Sets the colour of the next drawing; with the recolour tool, the colour of the drawing you click.',
   'market.chart.draw.color.muted': 'Grey',
   'market.chart.draw.color.buy': 'Green',

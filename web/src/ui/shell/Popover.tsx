@@ -18,6 +18,8 @@ export interface PopoverProps {
   panelTestId?: string;
   /** a tap on a link inside the panel closes it, also when the link leads to the page already open (no hash change then) */
   closeOnLink?: boolean;
+  /** a click on an element marked `data-pick` inside the panel closes it and puts the focus back on the button (a choice list that is done after one pick) */
+  closeOnPick?: boolean;
   children: ComponentChildren;
 }
 
@@ -75,7 +77,18 @@ export function Popover(props: PopoverProps) {
           role="region"
           aria-label={props.label}
           data-testid={props.panelTestId}
-          onClick={props.closeOnLink ? (e) => (e.target as HTMLElement).closest('a[href]') && setOpen(false) : undefined}
+          onClick={
+            props.closeOnLink || props.closeOnPick
+              ? (e) => {
+                  const el = e.target as HTMLElement;
+                  if (props.closeOnLink && el.closest('a[href]')) setOpen(false);
+                  else if (props.closeOnPick && el.closest('[data-pick]')) {
+                    setOpen(false);
+                    button.current?.focus();
+                  }
+                }
+              : undefined
+          }
         >
           {props.children}
         </div>
