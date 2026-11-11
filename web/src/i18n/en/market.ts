@@ -282,6 +282,23 @@ export default {
   'market.chart.off': 'No indexer is configured, so there is no price history.',
   'market.chart.error': 'The price history could not be loaded',
 
+  // drawing tools of the price chart (chart-drawings.ts): kept in this browser per market, never sent anywhere
+  'market.chart.draw.tools': 'Drawing tools',
+  'market.chart.draw.local': 'Drawings stay in this browser: they are saved here only, per market, and are not synced to other devices.',
+  'market.chart.draw.hline': 'Horizontal line',
+  'market.chart.draw.trend': 'Trend line',
+  'market.chart.draw.erase': 'Delete a drawing',
+  'market.chart.draw.clear': 'Clear all drawings',
+  'market.chart.draw.clearShort': 'Clear',
+  'market.chart.draw.hint.hline': 'Click or tap the chart to set the price level. Esc cancels.',
+  'market.chart.draw.hint.trend1': 'Click or tap the first point of the line. Esc cancels.',
+  'market.chart.draw.hint.trend2': 'Click or tap the second point of the line. Esc steps back.',
+  'market.chart.draw.hint.erase': 'Click or tap a drawing to delete it. Esc cancels.',
+  'market.chart.draw.full': 'This market has the most drawings the chart keeps ({max}); delete one to draw another.',
+  'market.chart.draw.list': 'Drawings on the chart',
+  'market.chart.draw.listHline': 'Horizontal line at {price}',
+  'market.chart.draw.listTrend': 'Trend line from {from} to {to}',
+
   'market.depth.bids': 'Bids',
   'market.depth.asks': 'Asks',
   'market.depth.tip': '{price} {priceUnit} · {amount} {ticker} cumulative',

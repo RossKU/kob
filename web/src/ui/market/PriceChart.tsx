@@ -1,7 +1,12 @@
 // Candlestick chart with a volume histogram (TradingView Lightweight Charts, Apache-2.0: the library's attribution logo stays on the chart
 // and the footer carries its NOTICE with a link to TradingView). The library is loaded on demand (its own chunk) so the rest of the app
 // does not pay for it; the panel keeps its size while it loads (skeleton) and when there is nothing to draw (empty state).
+//
+// Drawing tools (horizontal line, trend line, delete): the library has none, so they are a series primitive of its plugin API (chart-drawings-primitive.ts)
+// with the model and the browser storage in chart-drawings.ts. While a tool is on, a transparent layer over the plot area (the price and time axes stay
+// free) takes the clicks and taps; with no tool on, there is no layer and the chart pans and zooms as before. Drawings stay in this browser, per market.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useServices } from '../../app/context';
 import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, MouseEventParams, Time, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
 import type { CandleInterval } from '../../data/indexer-types';
 import type { IndexerApi } from '../../data/indexer';
@@ -14,6 +19,8 @@ import { basisOf, chartSeries, fillCandleGaps, INTERVAL_MS, parseCandles, priceT
 import { flippedChartSeries } from './orientation';
 import { ratioCandles, ratioSeries, usdText } from './usd-model';
 import { pairRatioCandles } from './pair-market';
+import { DrawingsPrimitive, PICK_MOUSE, PICK_TOUCH } from './chart-drawings-primitive';
+import { drawingsMarket, loadDrawings, MAX_DRAWINGS, newDrawingId, saveDrawings, type Anchor, type Drawing } from './chart-drawings';
 
 type Lw = typeof import('lightweight-charts');
 let lwPromise: Promise<Lw> | null = null;
@@ -58,6 +65,14 @@ function palette() {
 }
 
 const localeOf = () => 'en-US';
+
+/** The drawings' colours, from the theme's tokens: a subtle default line, the delete tool's hot colour, and the surface for the price tag's text and the dots. */
+function drawingColors() {
+  const muted = cssVar('--muted', '#b2b2b2');
+  return { line: alpha(muted.startsWith('#') ? muted : '#8b94a3', 0.85), hot: cssVar('--sell', '#f6465d'), surface: cssVar('--surface', '#141414') };
+}
+
+type Tool = 'hline' | 'trend' | 'erase';
 
 function timeText(sec: number, interval: CandleInterval, withDate: boolean): string {
   const d = new Date(sec * 1000);
@@ -184,7 +199,7 @@ export function PriceChart(props: PriceChartProps) {
           : 'ready';
 
   const boxRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<{ chart: IChartApi; candles: ISeriesApi<'Candlestick'>; volume: ISeriesApi<'Histogram'> } | null>(null);
+  const chartRef = useRef<{ chart: IChartApi; candles: ISeriesApi<'Candlestick'>; volume: ISeriesApi<'Histogram'>; drawings: DrawingsPrimitive } | null>(null);
   const [libReady, setLibReady] = useState(false);
   const [libError, setLibError] = useState<Error | null>(null);
   const [theme] = useTheme();
@@ -224,7 +239,9 @@ export function PriceChart(props: PriceChartProps) {
           const i = param.logical;
           setLegend(i === undefined || i === null ? null : legendOf.current(Math.round(i)));
         });
-        chartRef.current = { chart, candles: candlesSeries, volume };
+        const drawingsPrim = new DrawingsPrimitive(drawingColors);
+        candlesSeries.attachPrimitive(drawingsPrim);
+        chartRef.current = { chart, candles: candlesSeries, volume, drawings: drawingsPrim };
         setLibReady(true);
       },
       (e) => setLibError(e instanceof Error ? e : new Error(String(e))),
@@ -276,12 +293,121 @@ export function PriceChart(props: PriceChartProps) {
       fitKey.current = key;
       c.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - 120), to: bars.length + 3 });
     }
+    c.drawings.refresh();
   }, [libReady, series, props.dp, theme, interval, token, inverted]);
+
+  // ---- drawings: stored per network and market (and orientation), shown by the primitive, edited by the tools
+  const network = useServices().config.network;
+  const market = drawingsMarket(token, inverted);
+  const storeKey = `${network}|${market}`;
+  const [drawings, setDrawings] = useState<Drawing[]>(() => loadDrawings(network, market));
+  const drawingsRef = useRef(drawings);
+  const loadedFor = useRef(storeKey);
+  const [tool, setTool] = useState<Tool | null>(null);
+  const [pending, setPending] = useState<Anchor | null>(null);
+  const [inset, setInset] = useState({ r: 0, b: 0 });
+  const pointer = useRef('mouse');
+  // another market (or network, or orientation): its own drawings
+  useEffect(() => {
+    if (loadedFor.current === storeKey) return;
+    loadedFor.current = storeKey;
+    const list = loadDrawings(network, market);
+    drawingsRef.current = list;
+    setDrawings(list);
+    setTool(null);
+    setPending(null);
+  }, [storeKey, network, market]);
+  const commit = (next: Drawing[]) => {
+    if (loadedFor.current !== storeKey) return;
+    drawingsRef.current = next;
+    setDrawings(next);
+    saveDrawings(network, market, next);
+  };
+  const ready = state === 'ready' && libReady;
+  const toolOn = ready ? tool : null;
+  useEffect(() => {
+    chartRef.current?.drawings.set({ drawings, overlay: { pending: toolOn === 'trend' ? pending : null, cursor: null, hover: null } });
+  }, [libReady, drawings, pending, toolOn]);
+  // the bar grid the drawings' times are placed on: the first bar's time and the interval
+  useEffect(() => {
+    const b = series.bars;
+    chartRef.current?.drawings.set({ grid: b.length ? { t0: b[0]!.time, step: INTERVAL_MS[interval] / 1000 } : null });
+  }, [libReady, series, interval]);
+  // Esc: first drops a trend line's first point, then leaves the tool
+  useEffect(() => {
+    if (!toolOn) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (pending) setPending(null);
+      else setTool(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [toolOn, pending]);
+  // the layer takes the plot area only: the axes beside and under it keep their own pointer handling
+  useEffect(() => {
+    const c = chartRef.current;
+    if (!toolOn || !c) return;
+    const measure = () => setInset({ r: c.chart.priceScale('right').width(), b: c.chart.timeScale().height() });
+    measure();
+    if (typeof ResizeObserver === 'undefined' || !boxRef.current) return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(boxRef.current);
+    return () => ro.disconnect();
+  }, [toolOn, series]);
+  const pickTool = (next: Tool) => {
+    setTool(tool === next ? null : next);
+    setPending(null);
+  };
+  const full = drawings.length >= MAX_DRAWINGS;
+  const layerPoint = (e: MouseEvent) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  const onLayerClick = (e: MouseEvent) => {
+    const prim = chartRef.current?.drawings;
+    if (!prim || !toolOn) return;
+    const { x, y } = layerPoint(e);
+    const list = drawingsRef.current;
+    if (toolOn === 'erase') {
+      const id = prim.pick(x, y, pointer.current === 'mouse' ? PICK_MOUSE : PICK_TOUCH);
+      if (id) {
+        commit(list.filter((d) => d.id !== id));
+        prim.set({ overlay: { hover: null } });
+      }
+      return;
+    }
+    const a = prim.anchorAt(x, y);
+    if (!a || list.length >= MAX_DRAWINGS) return;
+    if (toolOn === 'hline') {
+      commit([...list, { id: newDrawingId(list.map((d) => d.id)), kind: 'hline', price: a.price }]);
+      setTool(null);
+    } else if (!pending) {
+      setPending(a);
+    } else {
+      const p0 = prim.px(pending);
+      if (p0 && Math.hypot(p0.x - x, p0.y - y) < 4) return; // two points on one spot make no line
+      commit([...list, { id: newDrawingId(list.map((d) => d.id)), kind: 'trend', a: pending, b: a }]);
+      setPending(null);
+      setTool(null);
+    }
+  };
+  const onLayerMove = (e: PointerEvent) => {
+    pointer.current = e.pointerType;
+    const prim = chartRef.current?.drawings;
+    if (!prim || e.pointerType !== 'mouse') return;
+    const { x, y } = layerPoint(e);
+    if (toolOn === 'erase') prim.set({ overlay: { hover: prim.pick(x, y, PICK_MOUSE) } });
+    else if (toolOn === 'trend' && pending) prim.set({ overlay: { cursor: prim.anchorAt(x, y) } });
+  };
+  const onLayerLeave = () => chartRef.current?.drawings.set({ overlay: { cursor: null, hover: null } });
+  const hint = !toolOn ? '' : full && toolOn !== 'erase' ? t('market.chart.draw.full', { max: MAX_DRAWINGS }) : t(toolOn === 'trend' ? (pending ? 'market.chart.draw.hint.trend2' : 'market.chart.draw.hint.trend1') : `market.chart.draw.hint.${toolOn}`);
+  const priceTxt = (n: number) => n.toFixed(props.dp);
 
   const shown = legend ?? legendOf.current(series.bars.length - 1);
 
   return (
-    <div data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length}>
+    <div data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length}>
       <div class="chart-head">
         <div class="chart-intervals" role="group" aria-label={t('market.chart.interval')} data-testid="chart-intervals">
           {CANDLE_INTERVALS.map((iv) => (
@@ -290,11 +416,45 @@ export function PriceChart(props: PriceChartProps) {
             </button>
           ))}
         </div>
+        <div class="chart-tools" role="group" aria-label={t('market.chart.draw.tools')} title={t('market.chart.draw.local')} data-testid="chart-tools">
+          {(['hline', 'trend', 'erase'] as const).map((k) => (
+            <button key={k} type="button" disabled={!ready} aria-pressed={toolOn === k ? 'true' : 'false'} aria-label={t(`market.chart.draw.${k}`)} title={`${t(`market.chart.draw.${k}`)}. ${t('market.chart.draw.local')}`} data-testid={`draw-${k}`} onClick={() => pickTool(k)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                {k === 'hline' ? <path d="M3 12h18" /> : k === 'trend' ? <><path d="M5 18L19 6" /><circle cx="5" cy="18" r="1.6" /><circle cx="19" cy="6" r="1.6" /></> : <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" />}
+              </svg>
+            </button>
+          ))}
+          <button type="button" disabled={!ready || drawings.length === 0} aria-label={t('market.chart.draw.clear')} title={`${t('market.chart.draw.clear')}. ${t('market.chart.draw.local')}`} data-testid="draw-clear" onClick={() => { setPending(null); commit([]); }}>
+            {t('market.chart.draw.clearShort')}
+          </button>
+        </div>
         <span class="small muted" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' })}</span>
       </div>
       <ErrorBanner error={candles.error ?? libError} title={t('market.chart.error')} onRetry={candles.reload} />
       <div class="chart-box">
         <div class="chart-canvas" ref={boxRef} aria-hidden="true" />
+        {drawings.length ? (
+          <ul class="sr-only" aria-label={t('market.chart.draw.list')} data-testid="chart-draw-list">
+            {drawings.map((d) => (
+              <li key={d.id} data-kind={d.kind}>{d.kind === 'hline' ? t('market.chart.draw.listHline', { price: priceTxt(d.price) }) : t('market.chart.draw.listTrend', { from: priceTxt(d.a.price), to: priceTxt(d.b.price) })}</li>
+            ))}
+          </ul>
+        ) : null}
+        {toolOn ? (
+          <>
+            <div
+              class={`chart-draw-layer tool-${toolOn}`}
+              style={{ right: `${inset.r}px`, bottom: `${inset.b}px` }}
+              data-testid="chart-draw-layer"
+              data-tool={toolOn}
+              onPointerDown={(e) => (pointer.current = e.pointerType)}
+              onPointerMove={onLayerMove}
+              onPointerLeave={onLayerLeave}
+              onClick={onLayerClick}
+            />
+            <div class="chart-draw-hint" role="status" data-testid="chart-draw-hint">{hint}</div>
+          </>
+        ) : null}
         {state === 'ready' && shown ? (
           <div class="chart-legend" data-testid="chart-legend">
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.o')}<b>{shown.o}</b></span>

@@ -131,7 +131,24 @@ body:has(.market-page) .container { max-width: 1520px; }
 }
 .chart-intervals button:hover { color: var(--text); }
 .chart-intervals button[aria-pressed='true'] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
+/* drawing tools: next to the interval switch, never over the plot (the price axis stays free); the layer takes clicks only while a tool is on */
+.chart-tools { display: inline-flex; align-items: center; gap: 2px; background: var(--surface-2); border-radius: 999px; padding: 2px; }
+.chart-tools button {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 26px; padding: 0 6px; border: 0; border-radius: 999px; background: transparent;
+  color: var(--muted); font: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+}
+.chart-tools button:hover:not(:disabled) { color: var(--text); }
+.chart-tools button[aria-pressed='true'] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
+.chart-tools button:disabled { opacity: 0.45; cursor: default; }
+.chart-tools svg { width: 16px; height: 16px; }
+@media (pointer: coarse) { .chart-tools button { min-width: 36px; height: 34px; } }
 .chart-box { position: relative; height: 420px; }
+.chart-draw-layer { position: absolute; left: 0; top: 0; z-index: 2; cursor: crosshair; touch-action: pan-y; }
+.chart-draw-layer.tool-erase { cursor: pointer; }
+.chart-draw-hint {
+  position: absolute; left: 8px; bottom: 34px; z-index: 3; pointer-events: none; max-width: calc(100% - 90px); padding: 3px 8px; font-size: 0.78rem;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
 .chart-canvas { position: absolute; inset: 0; }
 .chart-legend {
   position: absolute; top: 4px; left: 6px; z-index: 3; pointer-events: none; font-size: 0.78rem; font-variant-numeric: tabular-nums;
