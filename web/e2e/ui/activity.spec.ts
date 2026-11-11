@@ -314,6 +314,8 @@ test('the log fits its card at every width, on the Activity page and under a tok
       for (const e of document.querySelectorAll('[data-testid="activity"] *')) {
         const r = e.getBoundingClientRect();
         if (r.width === 0 || (e as HTMLElement).closest('.hp-panel')) continue;
+        // a phone's tools are one row that scrolls sideways inside itself (founder 2026-11-11): what is scrolled out of it is clipped by the row, not past the card
+        if ((e as HTMLElement).parentElement?.closest('.act-tools')) continue;
         if (r.right > card.right + 1 || r.left < card.left - 1) bad.push(`${e.tagName}.${String((e as HTMLElement).className).slice(0, 30)} ${Math.round(r.left)}-${Math.round(r.right)} card ${Math.round(card.left)}-${Math.round(card.right)}`);
       }
       return { bad: bad.slice(0, 5), scrollX: document.documentElement.scrollWidth - window.innerWidth };

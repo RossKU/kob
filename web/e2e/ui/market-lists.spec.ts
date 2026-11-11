@@ -653,8 +653,8 @@ test.describe('a phone', () => {
     await page.goto('/#/activity');
     await expect(logRows(page).first()).toBeVisible();
     expect(await sideways(page)).toBeLessThanOrEqual(0);
-    await page.getByTestId('activity-rows-20').click();
-    await expect(page.getByTestId('activity-rows')).toBeVisible();
+    // a phone has no Rows control in the log's tools (founder 2026-11-11: one row; 20 rows and the pager)
+    await expect(page.getByTestId('activity-rows-20')).toBeHidden();
     await shot(page, 'activity-390');
   });
 });
