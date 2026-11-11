@@ -318,7 +318,7 @@ hours, indexed in the background). To move an executor:
    The paths in `kobd.toml` are relative to the file; check `rpc_url` (an own node's address differs per machine).
 3. The key file must be readable by your account only, or the executor refuses it. On Linux: `chmod 600 kob-operator.key` (group or
    others may not read it). On Windows a copy takes the permissions of the folder it lands in, and the executor refuses a key file any
-   other account can read (Everyone, Users, or a named second account; only your account, SYSTEM and Administrators may). Restrict
+   other account can read (Everyone, Users, or a named second account; only your account, SYSTEM, Administrators, the built-in Administrator and TrustedInstaller may). Restrict
    it in a terminal in the folder (PowerShell or cmd):
 
    ```

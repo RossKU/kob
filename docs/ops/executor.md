@@ -1921,7 +1921,7 @@ stall or drain any executor:
 * **The hot key**: the hex text read from the key file or `KOB_OPERATOR_KEY` is wiped after parsing. On Windows the file's
   ACL is read (`icacls /save`, SDDL) and the start is refused, on every build, when any other account may read it: a group
   (Everyone, Users, Authenticated Users, ...) or a named account or group; only the account running kobd (its SID from
-  `whoami`), SYSTEM, Administrators and the owner placeholders may. An ACL that cannot be read (no `icacls`) or an account
+  `whoami`) and the privileged principals (SYSTEM, Administrators, the built-in Administrator, TrustedInstaller, the owner placeholders: they can read any file anyway) may. An ACL that cannot be read (no `icacls`) or an account
   whose SID `whoami` cannot tell is refused too. `KOB_KEY_ACL_STRICT=0` turns each refusal into a warning (not recommended).
   The fix: `icacls <file> /inheritance:r /grant:r <account>:F` (quickstart 5). `remove_var` does not scrub the environment
   block: prefer a key file or a systemd credential. `--pause-file` also stops resends of transactions a reorg moved back to
