@@ -210,7 +210,7 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
         }
     }
     if !r.records.is_empty() {
-        d.payload = payload::encode(&r.records)?;
+        d.payload = payload::encode_with_release(&r.records)?;
     }
     d.seal(budgets)
 }
@@ -890,7 +890,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         }
     }
     if !r.records.is_empty() {
-        d.payload = payload::encode(&r.records)?;
+        d.payload = payload::encode_with_release(&r.records)?;
     }
     let built = d.seal(budgets)?;
     // KasToToken: the router's bound on the payer's change (out j + pay + max_extra >= the intent value)

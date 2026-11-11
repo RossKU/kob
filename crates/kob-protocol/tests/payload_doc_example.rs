@@ -5,14 +5,30 @@
 mod common;
 
 use kob_protocol::build::build;
-use kob_protocol::payload::{encode, Record};
+use kob_protocol::payload::{decode, encode, Record, Release};
 
 const DOC: &str = include_str!("../../../docs/spec/kob1-payload.md");
 
-/// The payload of a golden-vector scenario, as the builder encodes it.
+/// The payload of a golden-vector scenario, as the builder encodes it, without the RELEASE record it appends to a placement
+/// (the release of this build: the examples do not change with every release). That record is checked here: the last one,
+/// this build's release, 6 bytes after the bytes the example spells.
 fn payload_of(name: &str) -> Vec<u8> {
     let (_, action) = common::scenarios().into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no scenario {name}"));
-    build(&action).unwrap_or_else(|e| panic!("{name}: {e}")).tx.payload
+    let p = build(&action).unwrap_or_else(|e| panic!("{name}: {e}")).tx.payload;
+    let mut records = decode(&p).unwrap().unwrap().records;
+    if !records.iter().any(|r| matches!(r, Record::Order { .. })) {
+        return p;
+    }
+    match Release::of_build() {
+        Some(version) => {
+            assert_eq!(records.pop(), Some(Record::Release { version }), "{name}: the builders append this build's release");
+            let rest = encode(&records).unwrap();
+            assert_eq!(p.len(), rest.len() + 6, "{name}: the RELEASE record is 6 bytes");
+            assert_eq!(&p[..rest.len()], &rest[..], "{name}: appended after the records");
+            rest
+        }
+        None => p,
+    }
 }
 
 /// The bytes of the first code block after `marker` in the Examples section: on each line, the hex groups before the

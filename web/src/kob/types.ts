@@ -307,6 +307,8 @@ export type PayloadRecord =
   | { type: 'sweep'; output: number; input: number }
   | { type: 'x402'; reference: Hex }
   | { type: 'note'; text: string }
+  /** the KOB release of the build that wrote the payload (optional record 0x84; kob-wasm's builders append it to every placement, e.g. `0.1.1`) */
+  | { type: 'release'; version: string }
   | { type: 'unknown'; recordType: number; value: Hex };
 
 export interface Payload { version: number; records: PayloadRecord[]; legacy?: boolean }

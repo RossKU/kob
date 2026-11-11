@@ -20,6 +20,9 @@
 //! a buy-first `KobIfdPair`'s B escrow, a sell-first one's A custody), then a sell-first `KobIfdPair`'s B PREFUND custody
 //! (the record's `prefund` part, present exactly when the state's `custody` is non-zero).
 //!
+//! A placement also carries the optional `RELEASE` record (0x84, [`Release`]): the KOB release of the build that wrote it
+//! ([`encode_with_release`], what the builders call), so an indexer can tell its operator that a newer release is in use.
+//!
 //! Payloads without order records (an x402 commitment, a note) are written as version 2, byte for byte what they were.
 //! An `ORDER` record of version 2 and any payload of version 3 describe templates this build does not pin: they do not
 //! decode, like a record of any other unknown template.
@@ -56,6 +59,11 @@ pub const REC_NOTE: u8 = 0x82;
 /// strays. Optional on purpose: an indexer that does not know it treats the continuation as any other unproven
 /// continuation of a cancel (state unknown, listed nowhere), never as something else.
 pub const REC_SWEEP: u8 = 0x83;
+/// The KOB release of the build that wrote the payload (optional, any version): `major:LEB128 minor:LEB128 patch:LEB128`.
+/// The builders append it to every payload that carries an `ORDER` record ([`encode_with_release`]); an indexer that sees
+/// a release newer than its own on chain tells its operator (informational only, `docs/spec/kob1-payload.md`, *RELEASE
+/// record*). Optional on purpose: a build that does not know it skips it, so a new placement stays readable by old builds.
+pub const REC_RELEASE: u8 = 0x84;
 
 /// Compact ORDER flag: the record carries a day-order deadline.
 const FLAG_DEADLINE: u8 = 0x01;
@@ -83,6 +91,84 @@ pub struct Custody {
     /// such field (2-byte custody part) and this must be all zero.
     #[serde(with = "crate::json::field")]
     pub extension_commitment: [u8; 32],
+}
+
+/// A KOB release: the core `major.minor.patch` of a semantic version (the workspace version a release is tagged with,
+/// `docs/ops/release.md`). Ordered by semver precedence of the core; JSON spells it `"0.1.1"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Release {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+}
+
+impl Release {
+    pub const fn new(major: u64, minor: u64, patch: u64) -> Release {
+        Release { major, minor, patch }
+    }
+
+    /// The release a payload of this build announces: the core of its crate version, `None` for a pre-release build
+    /// (`0.2.0-rc.1`: it announces nothing, so a release candidate on a test network never tells operators to update).
+    pub fn of_build() -> Option<Release> {
+        (!Release::build_is_prerelease()).then(Release::build_core)
+    }
+
+    /// The core of this build's crate version, pre-release or not.
+    pub fn build_core() -> Release {
+        let n = |s: &str| s.parse::<u64>().expect("cargo version component");
+        Release::new(n(env!("CARGO_PKG_VERSION_MAJOR")), n(env!("CARGO_PKG_VERSION_MINOR")), n(env!("CARGO_PKG_VERSION_PATCH")))
+    }
+
+    /// This build's crate version has a pre-release part (`-rc.1`).
+    pub fn build_is_prerelease() -> bool {
+        !env!("CARGO_PKG_VERSION_PRE").is_empty()
+    }
+
+    /// `seen` is a newer release than a build of version `core` (with a pre-release part when `prerelease`), by semver
+    /// precedence: a larger core, or the same core as a pre-release build (`0.2.0` is newer than `0.2.0-rc.1`).
+    pub fn is_newer_than(self, core: Release, prerelease: bool) -> bool {
+        self > core || (prerelease && self == core)
+    }
+
+    /// `self` is a newer release than this build ([`Release::is_newer_than`] of [`Release::build_core`]).
+    pub fn is_newer_than_build(self) -> bool {
+        self.is_newer_than(Release::build_core(), Release::build_is_prerelease())
+    }
+}
+
+impl std::fmt::Display for Release {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+impl std::str::FromStr for Release {
+    type Err = String;
+
+    /// `major.minor.patch`, decimal, no leading zeros (semver), nothing else.
+    fn from_str(s: &str) -> std::result::Result<Release, String> {
+        let bad = || format!("`{s}` is not a release version (major.minor.patch)");
+        let mut it = s.split('.').map(|p| {
+            if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) || (p.len() > 1 && p.starts_with('0')) {
+                return Err(bad());
+            }
+            p.parse::<u64>().map_err(|_| bad())
+        });
+        let (Some(a), Some(b), Some(c), None) = (it.next(), it.next(), it.next(), it.next()) else { return Err(bad()) };
+        Ok(Release::new(a?, b?, c?))
+    }
+}
+
+impl Serialize for Release {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Release {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Release, D::Error> {
+        String::deserialize(d)?.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 /// One payload record.
@@ -128,6 +214,10 @@ pub enum Record {
     /// (`verify_sweep`).
     #[serde(rename_all = "camelCase")]
     Sweep { output: u16, input: u16 },
+    /// The KOB release of the build that wrote the payload (optional type 0x84, [`REC_RELEASE`]): informational, never a
+    /// condition of anything. A value that is not exactly three canonical LEB128 integers decodes as [`Record::Unknown`].
+    #[serde(rename_all = "camelCase")]
+    Release { version: Release },
     /// x402 payment reference (opaque to KOB indexers).
     #[serde(rename_all = "camelCase")]
     X402 {
@@ -457,6 +547,13 @@ pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
                 put_varint(&mut v, u64::from(*input));
                 put_record(&mut out, REC_SWEEP, &v)?;
             }
+            Record::Release { version } => {
+                let mut v = vec![];
+                put_varint(&mut v, version.major);
+                put_varint(&mut v, version.minor);
+                put_varint(&mut v, version.patch);
+                put_record(&mut out, REC_RELEASE, &v)?;
+            }
             Record::X402 { reference } => {
                 if reference.is_empty() || reference.len() > 64 {
                     return Err(Error::Payload("x402 reference must be 1..=64 bytes".into()));
@@ -478,6 +575,31 @@ pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+/// [`encode`] as the builders write a payload: one that carries an `ORDER` record (a placement) also announces the release
+/// of this build ([`REC_RELEASE`], appended after the other records), unless the records already hold one or this is a
+/// pre-release build ([`Release::of_build`]). Every other payload is [`encode`]'s, byte for byte.
+pub fn encode_with_release(records: &[Record]) -> Result<Vec<u8>> {
+    let placement = records.iter().any(|r| matches!(r, Record::Order { .. }));
+    let has = records.iter().any(|r| matches!(r, Record::Release { .. }));
+    match Release::of_build() {
+        Some(version) if placement && !has => {
+            let mut all = records.to_vec();
+            all.push(Record::Release { version });
+            encode(&all)
+        }
+        _ => encode(records),
+    }
+}
+
+/// The release a payload announces: its first [`Record::Release`] (`None`: an older build's payload, a pre-release
+/// build's, or one without a placement; read it as "unknown or older").
+pub fn release_of(p: &Payload) -> Option<Release> {
+    p.records.iter().find_map(|r| match r {
+        Record::Release { version } => Some(*version),
+        _ => None,
+    })
 }
 
 /// True for the KAS kinds that hold tokens in covenant-id custody (and carry a custody part). The pair kinds hold one or
@@ -548,6 +670,12 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Payload>> {
                 Err(_) => Record::Unknown { record_type: REC_NOTE, value: v.to_vec() },
             },
             (REC_SWEEP, _) => decode_sweep(v)?,
+            // RELEASE is optional: a value that is not exactly three canonical integers is kept as an unknown optional
+            // record (it never fails the payload, and never names a release).
+            (REC_RELEASE, _) => match decode_release(v) {
+                Some(version) => Record::Release { version },
+                None => Record::Unknown { record_type: REC_RELEASE, value: v.to_vec() },
+            },
             (t, _) if t >= 0x80 => Record::Unknown { record_type: t, value: v.to_vec() },
             (t, _) => return Err(Error::Payload(format!("unknown critical record type {t:#04x}"))),
         });
@@ -628,6 +756,15 @@ fn decode_sweep(v: &[u8]) -> Result<Record> {
         return Err(Error::Payload(format!("sweep record has {} trailing bytes", v.len() - p)));
     }
     Ok(Record::Sweep { output, input })
+}
+
+/// RELEASE record (optional, any version): `major:LEB128 minor:LEB128 patch:LEB128`, canonical, nothing after them.
+fn decode_release(v: &[u8]) -> Option<Release> {
+    let mut p = 0;
+    let major = get_varint(v, &mut p, "release").ok()?;
+    let minor = get_varint(v, &mut p, "release").ok()?;
+    let patch = get_varint(v, &mut p, "release").ok()?;
+    (p == v.len()).then_some(Release::new(major, minor, patch))
 }
 
 /// AMEND record (version 4): `output:LEB128 input:LEB128 family:u8 kind:u8 flags:u8 state [deadline:LEB128]`.
@@ -1412,6 +1549,97 @@ mod tests {
         assert!(encode(&[Record::order(0, &bad_scale, c.clone(), None)]).is_err());
         let huge = AnyState::KobAsk(crate::state::AskState { scale: 1, amount_left: 1 << 40, price: 1 << 22, ..a });
         assert!(encode(&[Record::order(0, &huge, c, None)]).is_err());
+    }
+
+    /// The RELEASE record: the builders' encoding appends it to a placement and nothing else, it round-trips, a malformed
+    /// value never fails the payload, and a build that does not know the type (an older one) reads the same placement.
+    #[test]
+    fn release_record_rules() {
+        let st = compiled(TemplateId::KobAsk);
+        let order = Record::order(0, &st, Some(Custody { token_output: 1, extension_commitment: [0xee; 32] }), None);
+        let without = encode(std::slice::from_ref(&order)).unwrap();
+        let with = encode_with_release(std::slice::from_ref(&order)).unwrap();
+        let p = decode(&with).unwrap().unwrap();
+        match Release::of_build() {
+            Some(r) => {
+                assert_eq!(p.records, vec![order.clone(), Record::Release { version: r }]);
+                assert_eq!(release_of(&p), Some(r));
+                // appended after the placement: the ORDER record's bytes are unchanged, 3 header bytes + 3 integers follow
+                assert_eq!(&with[..without.len()], &without[..]);
+                assert_eq!(with.len(), without.len() + 6, "a release below 128.128.128 spells in 3 bytes");
+                assert_eq!(with[without.len()], REC_RELEASE);
+                assert_eq!(encode(&p.records).unwrap(), with);
+            }
+            None => assert_eq!(with, without),
+        }
+        // a payload without a placement record is encode's, byte for byte (the x402 commitment stays version 2)
+        let x = [Record::X402 { reference: vec![7; 32] }];
+        assert_eq!(encode_with_release(&x).unwrap(), encode(&x).unwrap());
+        // a release the records already hold is kept, not doubled
+        let mine = [order.clone(), Record::Release { version: Release::new(7, 8, 9) }];
+        assert_eq!(encode_with_release(&mine).unwrap(), encode(&mine).unwrap());
+        let p = decode(&encode(&mine).unwrap()).unwrap().unwrap();
+        assert_eq!(p.records, mine.to_vec());
+        assert_eq!(release_of(&p), Some(Release::new(7, 8, 9)));
+        // an older payload (no RELEASE record) names no release: "unknown or older"
+        assert_eq!(release_of(&decode(&without).unwrap().unwrap()), None);
+        // large components round-trip (LEB128)
+        let big = [order.clone(), Record::Release { version: Release::new(1, 300, u64::MAX) }];
+        assert_eq!(decode(&encode(&big).unwrap()).unwrap().unwrap().records, big.to_vec());
+        // a malformed value is an unknown optional record (kept verbatim), never an error and never a release
+        for bad in [&[][..], &[1, 2], &[1, 2, 3, 4], &[0x80, 0x00, 1, 2], &[0x80]] {
+            let mut b = without.clone();
+            b.push(REC_RELEASE);
+            b.extend_from_slice(&(bad.len() as u16).to_le_bytes());
+            b.extend_from_slice(bad);
+            let p = decode(&b).unwrap_or_else(|e| panic!("{bad:02x?}: {e}")).unwrap();
+            assert_eq!(p.records[1], Record::Unknown { record_type: REC_RELEASE, value: bad.to_vec() }, "{bad:02x?}");
+            assert_eq!(release_of(&p), None);
+            assert_eq!(encode(&p.records).unwrap(), b);
+        }
+        // the old reader: a build that does not know type 0x84 treats it as every optional type it does not know (skipped,
+        // kept verbatim), so it reads exactly the placement. The same bytes under a type no build assigns show that path.
+        let mut old = with.clone();
+        if old.len() > without.len() {
+            old[without.len()] = 0x9f;
+            let p = decode(&old).unwrap().unwrap();
+            assert_eq!(p.records[0], order);
+            assert!(matches!(p.records[1], Record::Unknown { record_type: 0x9f, .. }));
+            assert_eq!(recover_records_only(&p), vec![order.clone()]);
+        }
+        // JSON spells the version as a string
+        let j = serde_json::to_value(Record::Release { version: Release::new(0, 1, 1) }).unwrap();
+        assert_eq!(j, serde_json::json!({"type": "release", "version": "0.1.1"}));
+        assert_eq!(serde_json::from_value::<Record>(j).unwrap(), Record::Release { version: Release::new(0, 1, 1) });
+        assert!(serde_json::from_value::<Record>(serde_json::json!({"type": "release", "version": "0.1"})).is_err());
+    }
+
+    /// The ORDER records of a payload (what an indexer lists from it).
+    fn recover_records_only(p: &Payload) -> Vec<Record> {
+        p.records.iter().filter(|r| matches!(r, Record::Order { .. })).cloned().collect()
+    }
+
+    #[test]
+    fn release_versions_order_parse_and_compare() {
+        let r = |s: &str| s.parse::<Release>().unwrap();
+        assert!(r("0.1.1") > r("0.1.0"));
+        assert!(r("0.2.0") > r("0.1.9"));
+        assert!(r("0.10.0") > r("0.9.0"), "numeric, not lexical");
+        assert!(r("1.0.0") > r("0.99.99"));
+        assert_eq!(r("12.0.3").to_string(), "12.0.3");
+        for bad in ["", "0.1", "0.1.1.1", "0.1.x", "01.1.1", "0.1.-1", "0.1.1-rc.1", " 0.1.1", "0..1"] {
+            assert!(bad.parse::<Release>().is_err(), "{bad}");
+        }
+        // strictly newer only; the same core is newer than a pre-release build of it
+        assert!(r("0.1.1").is_newer_than(r("0.1.0"), false));
+        assert!(!r("0.1.0").is_newer_than(r("0.1.0"), false));
+        assert!(!r("0.0.9").is_newer_than(r("0.1.0"), false));
+        assert!(r("0.2.0").is_newer_than(r("0.2.0"), true));
+        assert!(!r("0.1.9").is_newer_than(r("0.2.0"), true));
+        // this build: its own release is never newer than itself
+        assert!(!Release::build_core().is_newer_than_build() || Release::build_is_prerelease());
+        assert_eq!(Release::of_build().is_some(), !Release::build_is_prerelease());
+        assert_eq!(Release::build_core().to_string(), env!("CARGO_PKG_VERSION").split('-').next().unwrap());
     }
 
     /// An `ORDER` record of version 2 and every payload of version 3 name templates this build does not pin: they do not

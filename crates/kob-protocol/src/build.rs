@@ -883,7 +883,7 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
     }
     let mut records = vec![Record::order(0, &r.order, custody, r.deadline)];
     records.extend(r.records.iter().cloned());
-    d.payload = payload::encode(&records)?;
+    d.payload = payload::encode_with_release(&records)?;
     d.seal(budgets)
 }
 
@@ -959,7 +959,7 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let mut parts = parts.into_iter();
     let mut records = vec![Record::order_with_prefund(0, &r.order, parts.next(), parts.next(), r.deadline)];
     records.extend(r.records.iter().cloned());
-    d.payload = payload::encode(&records)?;
+    d.payload = payload::encode_with_release(&records)?;
     d.seal(budgets)
 }
 
@@ -1156,7 +1156,7 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
     add_foreign_outputs(&mut d, foreign, maker)?;
     records.extend(r.records.iter().cloned());
     if !records.is_empty() {
-        d.payload = payload::encode(&records)?;
+        d.payload = payload::encode_with_release(&records)?;
     }
     d.seal(budgets)
 }
@@ -1235,7 +1235,7 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     };
     let mut records = vec![Record::amend(out as u16, oi as u16, &r.amended, r.deadline)];
     records.extend(r.records.iter().cloned());
-    d.payload = payload::encode(&records)?;
+    d.payload = payload::encode_with_release(&records)?;
     d.seal(budgets)
 }
 
@@ -1337,7 +1337,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
         }
     }
     if !r.records.is_empty() {
-        d.payload = payload::encode(&r.records)?;
+        d.payload = payload::encode_with_release(&r.records)?;
     }
     d.seal(budgets)
 }
@@ -1415,7 +1415,7 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     add_foreign_outputs(&mut d, foreign, maker)?;
     let mut records = vec![Record::Sweep { output: out as u16, input: oi as u16 }];
     records.extend(r.records.iter().cloned());
-    d.payload = payload::encode(&records)?;
+    d.payload = payload::encode_with_release(&records)?;
     d.seal(budgets)
 }
 
@@ -1652,7 +1652,7 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
         )?;
     }
     if !r.records.is_empty() {
-        d.payload = payload::encode(&r.records)?;
+        d.payload = payload::encode_with_release(&r.records)?;
     }
     d.seal(budgets)
 }
@@ -3253,7 +3253,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
         }
     }
     if !b.records.is_empty() {
-        d.payload = payload::encode(&b.records)?;
+        d.payload = payload::encode_with_release(&b.records)?;
     }
     d.seal(budgets).map(|t| Pass::Built(Box::new(t))).map_err(|e| dust_leg(e, &owner))
 }

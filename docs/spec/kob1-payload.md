@@ -36,6 +36,8 @@ A Kaspa transaction carries at most one payload. KOB uses it for four things:
    an order, or pays through a two-token route, carries its payment reference in the same payload
    as an `X402` record, so one transaction can do both.
 4. **Client tags** (optional, informational).
+5. **The update notice** (RELEASE record, optional, informational): a placement says which KOB release wrote it, so an
+   indexer or executor of an older release learns that a newer one is in use.
 
 **The payload is never trusted.** Everything in it is re-derived from the transaction itself
 before use (see *Validation*). A wrong or missing payload cannot create, alter or hide an order's
@@ -80,6 +82,7 @@ record   = type:u8 length:u16le value[length]
 | `0x81` | X402 | no | x402 payment reference, 1 to 64 opaque bytes (the facilitator's payment id / nonce) |
 | `0x82` | NOTE | no | UTF-8 client tag, at most 64 bytes (for example `kob-web/0.1`) |
 | `0x83` | SWEEP | no | a maker's sweep in place (any version): `output:LEB128 input:LEB128`, below |
+| `0x84` | RELEASE | no | the KOB release of the build that wrote the payload (any version): `major:LEB128 minor:LEB128 patch:LEB128`, below |
 
 ### Compact state
 
@@ -313,6 +316,39 @@ unproven: its state is unknown, and conforming indexers list it nowhere (not in 
 depth or counts). A fill racing an amend spends the same order outpoint: consensus accepts one of the two, and a fill
 built on the old state cannot spend the continuation (its redeem script no longer hashes to the order's script).
 
+### RELEASE record (the update notice)
+
+```
+major         LEB128    the release of the build that wrote the payload: the core major.minor.patch of its version
+minor         LEB128    (the workspace version a release is tagged with, docs/ops/release.md), canonical, nothing after
+patch         LEB128
+```
+
+**Who writes it.** A build writes one RELEASE record into every payload that carries an `ORDER` record (a create, the
+replacement of a cancel-replace), after the other records (`kob_protocol::payload::encode_with_release`,
+what every builder calls, so the CLI and the wallet, which builds through kob-wasm, write it alike). `0.1.1` is `84 0300 00 01 01`: 6 bytes
+while each part is below 128. A pre-release build (`0.2.0-rc.1`) writes none. A payload without an `ORDER` record (an
+amend, a sweep, an x402 commitment) carries none and is byte for byte what it was.
+
+**Compatibility.** The record is optional (type `0x84` ≥ `0x80`), so a build that does not know it, every build before
+it among them, skips it and reads the placement exactly as before; it is not part of the ORDER record (whose bytes, flags
+and trailing-byte rules do not change), not part of any covenant's state or script, and changes no template hash and no
+order already on chain. A decoder that knows it:
+
+* reads a value that is not exactly three canonical LEB128 integers as an unknown optional record (kept verbatim): it never
+  fails the payload and names no release;
+* takes the first RELEASE record of a payload; any position is valid;
+* reads a placement without one (every placement of an older build) as "release unknown or older".
+
+**What an indexer does with it** (the reference: `crates/kobd/src/indexer/release.rs`). Nothing in it is trusted, and it is
+never a condition of anything: a placement is listed, matched and kept exactly as it would be without it. An indexer counts
+the release only next to a placement it accepted (validation rules 1 to 8), and only a release strictly newer than its own
+build (semver precedence of the core; the same core is newer than a pre-release build of it). It reports the newest such
+release once it has seen it on at least **3 placements (distinct transactions) of at least 2 makers** (the order state's
+`maker`): one record, or one author, cannot raise the notice, and each placement costs a real order. The notice is
+informational: an operator is told (status line, `GET /v1/health` `newer_release_seen`, the `kob_newer_release_seen`
+metric, one INFO log line per release) and decides when to update; no behaviour changes.
+
 The legacy x402 text payload `X402:<hex>` is accepted by the decoder as a single X402 record
 (`legacy: true`); new clients write a KOB1 payload with an X402 record instead.
 
@@ -343,6 +379,7 @@ vectors `pair.create.*`).
 | In-place amend of an ask: KCC-20 / KRON | 175 / 143 |
 | In-place amend of a bid: KCC-20 / KRON | 179 / 147 |
 | Day order: + deadline | + 5 (version 2: + 8) |
+| Every payload with an `ORDER` record: + the RELEASE record | + 6 (each part of the release below 128) |
 | x402 reference only (32 B) + note | 56 (version 2, unchanged) |
 
 Each payload byte adds one byte to the transaction, so 2 grams to the fee mass (transient) and
@@ -351,7 +388,8 @@ Each payload byte adds one byte to the transaction, so 2 grams to the fee mass (
 
 ## Examples
 
-Hex of the `create.ask` vector (207 bytes), split at the fields (`crates/kob-protocol/tests/payload_doc_example.rs` rebuilds
+The examples leave out the RELEASE record the builders append to a placement (the build's release, 6 bytes: it changes
+with every release; `payload_doc_example.rs` checks it is there, last). Hex of the `create.ask` vector (207 bytes), split at the fields (`crates/kob-protocol/tests/payload_doc_example.rs` rebuilds
 the vector with the encoder and compares it with these blocks byte for byte; the fixture keys, ids and commitments are written
 as two 16-byte groups, the template hash, a build output that `scripts/check-pins.mjs` checks, in one):
 
