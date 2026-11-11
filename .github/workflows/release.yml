@@ -18,7 +18,11 @@ name: release
 # * workflow_dispatch is the dry run: the same builds, uploaded as workflow artifacts only (no release, no tag).
 #
 # No cache: a release binary is built from the commit alone (the reproducible job of ci.yml builds the executor twice and
-# compares). Nothing is signed: the Windows binary shows SmartScreen's "More info -> Run anyway" (the quickstart says so).
+# compares). No binary is code-signed: the Windows binary shows SmartScreen's "More info -> Run anyway" (the quickstart says so).
+# Every file of a release (the archives, the APK and SHA256SUMS) carries a build provenance attestation instead: keyless Sigstore,
+# signed by this workflow's GitHub identity at this commit and recorded in the repository's attestations, which
+# `gh attestation verify <file> --repo RossKU/kob` checks (docs/ops/release.md 6, executor-quickstart.md 1). It proves which
+# workflow run of which commit built the file, so a file swapped in the release afterwards (with a matching SHA256SUMS) fails it.
 
 on:
   push:
@@ -174,6 +178,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # the build provenance attestation: the OIDC token Sigstore signs with, and the repository's attestations store
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -188,13 +195,20 @@ jobs:
           merge-multiple: true
       - name: SHA256SUMS of every archive and the APK
         run: node scripts/package-release.mjs --sums dist
+      - name: Build provenance of every archive, the APK and SHA256SUMS (keyless Sigstore; gh attestation verify)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/kob-*
+            dist/kobd-*
+            dist/SHA256SUMS
       - name: Draft release of the tag with the archives, the APK and SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           APK_SIGNED: ${{ needs.android.outputs.signed }}
         run: |
-          notes="Prebuilt kobd (the daemon) and kob, the command line (docs/ops/executor-quickstart.md; kob-<version>-<network>-<target> holds kob alone) and the testnet-10 Android app (the .apk; quickstart 9). Check each file against SHA256SUMS. Release hashes (scripts/release-hashes.sh): to be added before publishing."
+          notes="Prebuilt kobd (the daemon) and kob, the command line (docs/ops/executor-quickstart.md; kob-<version>-<network>-<target> holds kob alone) and the testnet-10 Android app (the .apk; quickstart 9). Check each file against SHA256SUMS, and its build provenance with: gh attestation verify <file> --repo $GITHUB_REPOSITORY. Release hashes (scripts/release-hashes.sh): to be added before publishing."
           if [ "$APK_SIGNED" = true ]; then
             notes="$notes The APK is signed with the release key: it installs over an earlier release and keeps the app's data."
           else

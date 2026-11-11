@@ -442,8 +442,9 @@ jobs:
     # Not run for a web-only push (it takes 10 to 16 minutes, longer than the sharded e2e): a Rust push and the weekly schedule run it.
     # The release outputs are built twice, from two checkouts at different paths (a/ and b/) with their own target and node_modules
     # directories and no cache, and every file must come out identical: the web bundle (web/dist, with the kob-wasm bindings it embeds,
-    # scripts/build-wasm.sh --web --slim) and the kobd release binary. A difference means the output depends on the build
-    # directory, the time or another input outside the commit (docs/ops/release.md 6).
+    # scripts/build-wasm.sh --web --slim), the kobd release binary, and kobd and kob as release.yml builds the Linux mainnet archive
+    # (--features deploy-mainnet, KOB_GIT_COMMIT set, --target; the runner image differs). A difference means the output depends
+    # on the build directory, the time or another input outside the commit (docs/ops/release.md 6).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -475,11 +476,21 @@ jobs:
             (cd "$side" && bash scripts/build-wasm.sh --web --slim)
             (cd "$side/web" && npm ci && npm run fetch-sdk && npm run build:wasm -- --copy && npm run build)
             (cd "$side" && cargo build --locked --release -p kobd)
+            # the mainnet deployment build, as release.yml builds it: the commit is compiled in (/v1/health), in a target
+            # directory of its own so the plain build above stays as it is
+            (cd "$side" && KOB_GIT_COMMIT="$GITHUB_SHA" cargo build --locked --release --target x86_64-unknown-linux-gnu \
+              -p kobd -p kob-cli --features kobd/deploy-mainnet,kob-cli/deploy-mainnet --target-dir target/mainnet)
           done
-      - name: Every file of web/dist and the kobd binary are identical
+      - name: Every file of web/dist and the kobd binaries are identical
         run: |
           for side in a b; do (cd "$side/web/dist" && find . -type f -print0 | sort -z | xargs -0 sha256sum) > "dist-$side.sha256"; done
           wc -l < dist-a.sha256
           diff dist-a.sha256 dist-b.sha256
-          sha256sum a/target/release/kobd b/target/release/kobd
+          sha256sum a/target/release/kobd b/target/release/kobd a/target/mainnet/x86_64-unknown-linux-gnu/release/kobd b/target/mainnet/x86_64-unknown-linux-gnu/release/kobd
           cmp a/target/release/kobd b/target/release/kobd
+          for bin in kobd kob; do
+            cmp "a/target/mainnet/x86_64-unknown-linux-gnu/release/$bin" "b/target/mainnet/x86_64-unknown-linux-gnu/release/$bin"
+          done
+          # the mainnet build is the mainnet build (it refuses another network before touching a node)
+          out=$(timeout 60 a/target/mainnet/x86_64-unknown-linux-gnu/release/kobd --indexer --network testnet-10 --data-dir "$RUNNER_TEMP/refuse" 2>&1 || true)
+          echo "$out" | grep -q "this binary is the mainnet deployment build"
