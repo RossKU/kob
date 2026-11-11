@@ -159,6 +159,19 @@ impl BookSource for IndexerSource {
     fn status(&mut self) -> Option<String> {
         self.health.as_ref().map(|h| h.snapshot().status_line())
     }
+
+    fn fatal(&mut self) -> Option<(bool, String)> {
+        self.health.as_ref().and_then(|h| h.snapshot().halted())
+    }
+
+    fn report_executor(&mut self, health: crate::indexer::status::ExecutorHealth, metrics: String) {
+        if let Some(h) = &self.health {
+            h.update(|s| {
+                s.executor = Some(health);
+                s.executor_metrics = metrics;
+            });
+        }
+    }
 }
 
 /// One consistent read of the book ([`book::snapshot`]: one read transaction) on a reader connection.
@@ -553,6 +566,9 @@ pub async fn run(a: RunArgs) -> Result<()> {
         run_cfg.max_book_lag = Some(cfg.lag_tolerance_daa());
     }
     run_cfg.verify_live_min_lag = cfg.verify_live_min_lag_daa();
+    // the in-flight journal, the keepers' subsidy window and the start count live next to the database (audit 2026-11-11
+    // M-3, L-2)
+    run_cfg.state_dir = Some(cfg.data_dir.clone());
     tracing::info!(
         network = %cfg.network,
         rpc = %crate::rpc::redact_url(cfg.primary_url()),

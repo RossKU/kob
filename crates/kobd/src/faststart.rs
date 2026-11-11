@@ -202,6 +202,20 @@ impl BookSource for FastSource {
         self.active().metrics()
     }
 
+    fn fatal(&mut self) -> Option<(bool, String)> {
+        // the full store halting matters too: it never takes over then
+        let tip = self.tip.as_mut().and_then(|t| t.fatal());
+        tip.or_else(|| self.full.fatal().map(|(now, why)| (now, format!("the full store: {why}"))))
+    }
+
+    fn report_executor(&mut self, health: crate::indexer::status::ExecutorHealth, metrics: String) {
+        // both stores' health: the read API serves either
+        if let Some(t) = self.tip.as_mut() {
+            t.report_executor(health.clone(), metrics.clone());
+        }
+        self.full.report_executor(health, metrics);
+    }
+
     fn status(&mut self) -> Option<String> {
         let own = self.active().status();
         if self.tip.is_none() {
@@ -341,6 +355,8 @@ async fn coordinate(s: Stores, handover: oneshot::Receiver<()>, mut stop: watch:
             Ok(a) => Some(a),
             Err(e) => {
                 tracing::error!("the read API cannot start over the full store: {e}");
+                // the executor exits on it (`HealthSnapshot::halted`): a supervisor restarts it on the full store
+                full.health.update(|h| h.api_error = Some(format!("it cannot start over the full store: {e}")));
                 None
             }
         }

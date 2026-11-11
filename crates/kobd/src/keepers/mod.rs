@@ -309,14 +309,32 @@ impl SubsidyAllowance {
 /// The operator subsidies of a rolling window ([`KeeperConfig::subsidy_budget`]), kept by the runner across ticks and
 /// replacements: (virtual DAA score, sompi) of every subsidy charged. A subsidy is charged when its transaction is submitted
 /// (also without a verdict: it may be accepted), only the increase for a replacement; a transaction that never makes it into
-/// a block is not refunded (conservative: the total charged is at least what the operator actually paid). In memory only:
-/// a restart starts with an empty window.
-#[derive(Clone, Debug, Default)]
+/// a block is not refunded (conservative: the total charged is at least what the operator actually paid). The Executor keeps
+/// the window in a small file next to its database ([`SubsidyBudget::save`]): a restart continues it instead of granting a
+/// new budget.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubsidyBudget {
     spends: VecDeque<(u64, u64)>,
 }
 
 impl SubsidyBudget {
+    /// The window saved at `path` (none: an empty window). An unreadable file is an error (the caller starts empty and says so).
+    pub fn load(path: &std::path::Path) -> Result<SubsidyBudget, String> {
+        match std::fs::read_to_string(path) {
+            Ok(t) => serde_json::from_str(&t).map_err(|e| format!("{}: {e}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SubsidyBudget::default()),
+            Err(e) => Err(format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// Writes the window to `path` (atomically: a temporary file renamed over it).
+    pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        let tmp = path.with_extension("json.tmp");
+        let text = serde_json::to_string(self).map_err(|e| e.to_string())?;
+        std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
     /// Sompi charged within the window that ends at `daa` (charges at a later DAA score, from before a node switch to one
     /// that is behind, count too).
     pub fn spent(&self, cfg: &KeeperConfig, daa: u64) -> u64 {

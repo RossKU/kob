@@ -16,11 +16,21 @@
 //!   chain block accepts it and *final* (done) after `final_depth` more DAA; a `removed` chain
 //!   block moves its transactions back to pending (reorg), where they are re-checked.
 //! * While a transaction is pending or accepted-but-not-final, the outpoints it spends are
-//!   excluded from planning, so no order is planned twice; a pending transaction that is neither
-//!   accepted nor still possible within `pending_timeout` DAA is dropped and its orders back off.
+//!   excluded from planning, so no order is planned twice. A pending transaction no chain block accepted
+//!   within `pending_timeout` DAA is not forgotten: it is resent to the node, which settles it
+//!   ([`Tracker::recheck_pending`]). "Already in the mempool" (or taken again): it stays pending, its inputs
+//!   stay reserved, and it is checked again after another `pending_timeout` (a node keeps the
+//!   transactions submitted to it until they are mined or evicted, so forgetting one would make its own
+//!   funding coin refuse every later batch as a mempool double spend). Refused (its inputs went
+//!   elsewhere): it is dropped (logged, `dropped_total`) and its orders back off.
 //!   A pending transaction one of whose order inputs the book no longer lists on two steps in a row
 //!   and the node confirms spent (another transaction spent it: the race is lost) is dropped at once
 //!   ([`Tracker::drop_lost`]): the order whose input is gone backs off, the others are planned again.
+//! * A mempool double spend of one of the operator's own funding coins (a transaction this process does
+//!   not know holds it: one from before a restart that the journal missed, a withdraw, a second process on
+//!   the same key) backs off no order: the coin is held out of the funding for `hold_daa`, or until the
+//!   node's UTXO set no longer lists it ([`Tracker::held`]), and the batch is planned again at once over
+//!   the other coins.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,18 +44,41 @@ use super::node::{classify_submit_error, ChainUpdate, NodeApi, RpcError, SubmitO
 pub struct TrackerConfig {
     /// DAA after acceptance at which a transaction is final (default 100, §1.3).
     pub final_depth: u64,
-    /// DAA after which an unaccepted transaction is given up (default 600).
+    /// DAA after which an unaccepted transaction is checked with the node by an idempotent resend, and again every as many DAA
+    /// while the node holds it (default 600, a minute; [`Tracker::recheck_pending`]).
     pub pending_timeout: u64,
     /// First back-off of an order after a conflict (DAA; doubles per attempt).
     pub backoff_base: u64,
     /// Longest back-off (DAA).
     pub backoff_max: u64,
+    /// DAA a funding coin of the operator that a mempool transaction unknown to the tracker spends stays out of the funding
+    /// (default 3000, five minutes; earlier when the node's UTXO set no longer lists it).
+    pub hold_daa: u64,
 }
 
 impl Default for TrackerConfig {
     fn default() -> Self {
-        TrackerConfig { final_depth: 100, pending_timeout: 600, backoff_base: 20, backoff_max: 600 }
+        TrackerConfig { final_depth: 100, pending_timeout: 600, backoff_base: 20, backoff_max: 600, hold_daa: 3_000 }
     }
+}
+
+/// Whether a node's refusal says the transaction is already in the chain (rusty-kaspa `RejectAlreadyAccepted`): accepted
+/// earlier, by a block this process may not have followed (before a restart).
+pub fn accepted_by_consensus(msg: &str) -> bool {
+    msg.to_ascii_lowercase().contains("already accepted by the consensus")
+}
+
+/// What [`Tracker::recheck_pending`] did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Recheck {
+    /// Pending transactions the node still holds (or took again): kept.
+    pub kept: Vec<[u8; 32]>,
+    /// Of `kept`, those the node did not hold any more and took again (re-broadcast).
+    pub rebroadcast: Vec<[u8; 32]>,
+    /// Transactions the node refused (their inputs went elsewhere), with its answer: dropped, their orders back off.
+    pub dropped: Vec<(Tracked, String)>,
+    /// Transactions the node reports already accepted by the chain (before this process followed it): done.
+    pub accepted_earlier: Vec<Tracked>,
 }
 
 /// A transaction the tracker follows.
@@ -88,7 +121,6 @@ pub struct TrackerEvents {
     pub accepted: Vec<[u8; 32]>,
     pub finalized: Vec<Tracked>,
     pub rolled_back: Vec<[u8; 32]>,
-    pub dropped: Vec<[u8; 32]>,
 }
 
 /// The outpoint a node's double-spend rejection names: rusty-kaspa's `output (<txid>, <index>) already spent by transaction
@@ -185,6 +217,20 @@ pub struct Tracker {
     pub finalized_profit: i64,
     /// Pending transactions one of whose order inputs the last book did not list ([`Tracker::drop_lost`]).
     pub lost: BTreeSet<[u8; 32]>,
+    /// The operator's funding coins (its P2PK outpoints) at the last funding read ([`Tracker::note_operator_coins`]): a mempool
+    /// double spend naming one of them holds the coin instead of backing off the batch's orders.
+    pub operator_coins: BTreeSet<Outpoint>,
+    /// Funding coins a mempool transaction unknown to the tracker spends, and the DAA score until which they stay out of the
+    /// funding (`TrackerConfig::hold_daa`; dropped earlier once the node's UTXO set no longer lists them).
+    pub held: BTreeMap<Outpoint, u64>,
+    /// DAA score at which each pending transaction was last checked with the node ([`Tracker::recheck_pending`]).
+    pub checked: BTreeMap<[u8; 32], u64>,
+    /// Transactions given up: refused by the node at a recheck or a resend, or lost a race ([`Tracker::drop_lost`]).
+    pub dropped_total: u64,
+    /// Funding coins held after a mempool double spend ([`Tracker::held`]).
+    pub held_total: u64,
+    /// Unix time (seconds) of the last submission the node took (0: none yet).
+    pub last_submit_unix: u64,
 }
 
 impl Tracker {
@@ -192,14 +238,56 @@ impl Tracker {
         Tracker { cfg, ..Default::default() }
     }
 
-    /// Outpoints no plan may spend (pending and accepted-but-not-final transactions).
+    /// Outpoints no plan may spend (pending and accepted-but-not-final transactions, and held funding coins).
     pub fn spent_outpoints(&self) -> BTreeSet<Outpoint> {
-        self.txs.values().flat_map(|t| t.spends.iter().copied()).collect()
+        let mut s: BTreeSet<Outpoint> = self.txs.values().flat_map(|t| t.spends.iter().copied()).collect();
+        s.extend(self.held.keys().copied());
+        s
+    }
+
+    /// The operator's funding coins as the node lists them now: a held coin the node no longer lists (its spender was mined, or
+    /// it is gone) and one whose hold ran out are released.
+    pub fn note_operator_coins(&mut self, coins: BTreeSet<Outpoint>, daa: u64) {
+        self.held.retain(|op, until| *until > daa && coins.contains(op));
+        self.operator_coins = coins;
     }
 
     /// Order ids backed off at `daa`.
     pub fn backed_off(&self, daa: u64) -> BTreeSet<CovId> {
         self.backoff.iter().filter(|(_, (until, _))| *until > daa).map(|(k, _)| *k).collect()
+    }
+
+    /// Forgets the backoffs that ran out longer than `backoff_max` ago (their attempt count no longer doubles anything): the
+    /// map stays as small as the orders that recently lost a race.
+    pub fn prune_backoff(&mut self, daa: u64) {
+        let keep = self.cfg.backoff_max;
+        self.backoff.retain(|_, (until, _)| until.saturating_add(keep) > daa);
+    }
+
+    /// DAA the oldest pending (unaccepted) transaction has waited at `daa` (0: none pending).
+    pub fn oldest_pending_daa(&self, daa: u64) -> u64 {
+        self.txs.values().filter(|t| t.accepted.is_none()).map(|t| daa.saturating_sub(t.submitted_daa)).max().unwrap_or(0)
+    }
+
+    /// A mempool double spend of `t` that names one of the operator's funding coins (`msg`): the coin is held
+    /// ([`Tracker::held`]) and no order backs off. `false`: the double spend is about something else.
+    fn hold_funding(&mut self, t: &Tracked, msg: Option<&str>, daa: u64) -> bool {
+        let Some(op) = msg.and_then(double_spent_outpoint) else { return false };
+        if !self.operator_coins.contains(&op) || t.owners.contains_key(&op) || !t.spends.contains(&op) {
+            return false;
+        }
+        self.held.insert(op, daa.saturating_add(self.cfg.hold_daa));
+        self.held_total += 1;
+        tracing::warn!(
+            coin = %format!("{}:{}", kob_protocol::json::to_hex(&op.0), op.1),
+            hold_daa = self.cfg.hold_daa,
+            "a funding coin of the operator is spent by a mempool transaction this process does not track; it is held out of the funding (no order backs off)"
+        );
+        true
+    }
+
+    fn submitted_now(&mut self) {
+        self.last_submit_unix = super::book::utc_now();
     }
 
     fn back_off(&mut self, ids: &BTreeSet<CovId>, daa: u64) {
@@ -232,11 +320,13 @@ impl Tracker {
         match outcome {
             SubmitOutcome::Accepted | SubmitOutcome::AlreadyKnown => {
                 self.submitted += 1;
+                self.submitted_now();
                 for id in &t.orders {
                     self.backoff.remove(id);
                 }
                 self.txs.insert(t.txid, t);
             }
+            SubmitOutcome::DoubleSpend if self.hold_funding(&t, msg.as_deref(), daa) => self.conflicts += 1,
             SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput => {
                 self.conflicts += 1;
                 let ids = lost_orders(node, &t, outcome, msg.as_deref()).await;
@@ -278,32 +368,119 @@ impl Tracker {
                 Err(_) => SubmitOutcome::Unknown,
             };
             match outcome {
+                SubmitOutcome::AlreadyKnown if msg.as_deref().is_some_and(accepted_by_consensus) => {
+                    // accepted by a block this process did not follow (before a restart): done
+                    if let Some(t) = self.txs.remove(&id) {
+                        self.done_earlier(&t);
+                    }
+                }
                 SubmitOutcome::Accepted | SubmitOutcome::AlreadyKnown => {
                     if let Some(t) = self.txs.get_mut(&id) {
                         t.unconfirmed = false;
                     }
+                    self.checked.insert(id, daa);
                     self.submitted += 1;
+                    self.submitted_now();
                 }
                 SubmitOutcome::Unknown | SubmitOutcome::Busy => {}
                 SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput | SubmitOutcome::Rejected => {
                     if let Some(t) = self.txs.remove(&id) {
-                        if outcome == SubmitOutcome::Rejected {
-                            self.rejected += 1;
-                        } else {
-                            self.conflicts += 1;
-                        }
-                        let ids = if outcome == SubmitOutcome::Rejected {
-                            rejected_orders(&self.half_salt, self.rejected, &t.orders)
-                        } else {
-                            lost_orders(node, &t, outcome, msg.as_deref()).await
-                        };
-                        self.back_off(&ids, daa);
+                        self.give_up(node, &t, outcome, msg.as_deref(), daa).await;
                     }
                 }
             }
             out.push((id, outcome));
         }
         out
+    }
+
+    /// A tracked transaction the node refused (`outcome`, `msg`) at a resend: counted, and its orders back off (none for a held
+    /// funding coin).
+    async fn give_up<N: NodeApi>(&mut self, node: &N, t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>, daa: u64) {
+        self.dropped_total += 1;
+        self.checked.remove(&t.txid);
+        if outcome == SubmitOutcome::Rejected {
+            self.rejected += 1;
+            let ids = rejected_orders(&self.half_salt, self.rejected, &t.orders);
+            self.back_off(&ids, daa);
+            return;
+        }
+        self.conflicts += 1;
+        if outcome == SubmitOutcome::DoubleSpend && self.hold_funding(t, msg, daa) {
+            return;
+        }
+        let ids = lost_orders(node, t, outcome, msg).await;
+        self.back_off(&ids, daa);
+    }
+
+    /// A tracked transaction the node reports already in the chain: done, as a final one (its profit counts).
+    fn done_earlier(&mut self, t: &Tracked) {
+        self.checked.remove(&t.txid);
+        self.finalized_count += 1;
+        self.finalized_profit += t.profit;
+        tracing::info!(
+            txid = %kob_protocol::json::to_hex(&t.txid),
+            kind = %t.kind,
+            profit = t.profit,
+            "the node reports the transaction accepted by the chain already (by a block this process did not follow): done"
+        );
+    }
+
+    /// Pending transactions no chain block accepted for `pending_timeout` DAA since their submission or their last check are
+    /// resent (idempotent) and the node's answer settles each: still held ("already in the mempool") or taken again: kept and
+    /// checked again later; already in the chain: done; refused (an input went elsewhere): dropped, its orders back off (no
+    /// order for a held funding coin); no verdict: tried again at the next check. Not while `may_send` is false (the kill
+    /// switch, a dry run): nothing leaves the process then, and nothing is dropped either. A transaction whose submission had
+    /// no verdict is settled by [`Tracker::resubmit_unconfirmed`] instead.
+    pub async fn recheck_pending<N: NodeApi>(&mut self, node: &N, daa: u64, may_send: bool) -> Recheck {
+        let mut r = Recheck::default();
+        let txs = &self.txs;
+        self.checked.retain(|k, _| txs.contains_key(k));
+        if !may_send {
+            return r;
+        }
+        let interval = self.cfg.pending_timeout.max(1);
+        let due: Vec<([u8; 32], Value)> = self
+            .txs
+            .values()
+            .filter(|t| t.accepted.is_none() && !t.unconfirmed)
+            .filter(|t| {
+                daa >= self.checked.get(&t.txid).copied().unwrap_or(t.submitted_daa).max(t.submitted_daa).saturating_add(interval)
+            })
+            .map(|t| (t.txid, t.rpc_tx.clone()))
+            .collect();
+        for (id, rpc) in due {
+            let (outcome, msg) = match node.submit(rpc).await {
+                Ok(_) => (SubmitOutcome::Accepted, None),
+                Err(RpcError::Node(m)) => (classify_submit_error(&m), Some(m)),
+                Err(_) => (SubmitOutcome::Unknown, None),
+            };
+            match outcome {
+                SubmitOutcome::AlreadyKnown if msg.as_deref().is_some_and(accepted_by_consensus) => {
+                    if let Some(t) = self.txs.remove(&id) {
+                        self.done_earlier(&t);
+                        r.accepted_earlier.push(t);
+                    }
+                }
+                SubmitOutcome::Accepted | SubmitOutcome::AlreadyKnown => {
+                    self.checked.insert(id, daa);
+                    r.kept.push(id);
+                    if outcome == SubmitOutcome::Accepted {
+                        r.rebroadcast.push(id);
+                    }
+                }
+                SubmitOutcome::Unknown | SubmitOutcome::Busy => {
+                    self.checked.insert(id, daa);
+                }
+                SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput | SubmitOutcome::Rejected => {
+                    if let Some(t) = self.txs.remove(&id) {
+                        self.give_up(node, &t, outcome, msg.as_deref(), daa).await;
+                        r.dropped.push((t, msg.unwrap_or_default()));
+                    }
+                }
+            }
+        }
+        r
     }
 
     /// Drops the pending transactions that lost their race: one of their order inputs ([`Tracked::owners`], listed when the
@@ -326,7 +503,9 @@ impl Tracker {
             let Some(t) = self.txs.get(&txid) else { continue };
             if let Some(gone) = missing_owners(node, t).await {
                 self.txs.remove(&txid);
+                self.checked.remove(&txid);
                 self.conflicts += 1;
+                self.dropped_total += 1;
                 self.back_off(&gone, daa);
                 dropped.push(txid);
             }
@@ -381,32 +560,26 @@ impl Tracker {
         self.settle(daa, ev)
     }
 
-    /// Final: accepted + depth. Given up: never accepted within the timeout (a lost race).
+    /// Final: accepted + depth. A transaction no chain block accepted is never given up here: [`Tracker::recheck_pending`]
+    /// asks the node about it.
     fn settle(&mut self, daa: u64, mut ev: TrackerEvents) -> TrackerEvents {
         for t in self.txs.values_mut() {
             if t.accepted.is_some() {
                 t.unconfirmed = false;
             }
         }
-        let mut done = vec![];
-        for (k, t) in &self.txs {
-            match &t.accepted {
-                Some((_, d)) if daa >= d + self.cfg.final_depth => done.push((*k, true)),
-                None if daa >= t.submitted_daa + self.cfg.pending_timeout => done.push((*k, false)),
-                _ => {}
-            }
-        }
-        for (k, fin) in done {
+        let done: Vec<[u8; 32]> = self
+            .txs
+            .iter()
+            .filter(|(_, t)| t.accepted.as_ref().is_some_and(|(_, d)| daa >= d + self.cfg.final_depth))
+            .map(|(k, _)| *k)
+            .collect();
+        for k in done {
             let t = self.txs.remove(&k).expect("listed");
-            if fin {
-                self.finalized_count += 1;
-                self.finalized_profit += t.profit;
-                ev.finalized.push(t);
-            } else {
-                let ids = t.orders.clone();
-                self.back_off(&ids, daa);
-                ev.dropped.push(k);
-            }
+            self.checked.remove(&k);
+            self.finalized_count += 1;
+            self.finalized_profit += t.profit;
+            ev.finalized.push(t);
         }
         ev
     }
@@ -502,16 +675,120 @@ mod tests {
         let ev = t.apply(&ChainUpdate { removed: vec!["b1".into()], added: vec![] }, 1_020);
         assert_eq!(ev.rolled_back, vec![[1; 32]]);
         assert_eq!(t.pending(), 2);
-        // Re-accepted, then final after 100 DAA; the other one times out and backs off.
+        // Re-accepted, then final after 100 DAA; the other one is never given up by a chain update (the node is asked).
         let up =
             ChainUpdate { removed: vec![], added: vec![ChainBlock { hash: "b2".into(), daa_score: 1_030, accepted: vec![[1; 32]] }] };
         t.apply(&up, 1_031);
         let ev = t.apply(&ChainUpdate::default(), 1_600);
-        assert_eq!(ev.dropped, vec![[2; 32]]);
-        assert!(t.backed_off(1_600).contains(&[2; 32]));
         assert_eq!(ev.finalized.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[1; 32]], "accepted at 1030, final from 1130");
         assert_eq!((t.finalized_count, t.finalized_profit), (1, 7));
-        assert!(t.txs.is_empty());
+        assert_eq!(t.txs.keys().collect::<Vec<_>>(), vec![&[2; 32]], "the unaccepted one stays pending");
+        assert_eq!(t.oldest_pending_daa(1_600), 600);
+    }
+
+    /// A node for [`Tracker::recheck_pending`]: answers each submission from a queue (`None`: taken).
+    #[derive(Default)]
+    struct Answers(std::sync::Mutex<std::collections::VecDeque<Option<RpcError>>>, std::sync::atomic::AtomicUsize);
+
+    impl NodeApi for Answers {
+        async fn server_info(&self) -> Result<super::super::node::ServerInfo, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn dag_info(&self) -> Result<super::super::node::DagInfo, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn submit(&self, _tx: Value) -> Result<[u8; 32], RpcError> {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match self.0.lock().unwrap().pop_front().flatten() {
+                Some(e) => Err(e),
+                None => Ok([0; 32]),
+            }
+        }
+        async fn chain_from(&self, _start_hash: &str) -> Result<ChainUpdate, RpcError> {
+            Ok(ChainUpdate::default())
+        }
+        async fn utxos_by_addresses(&self, _a: &[String]) -> Result<Vec<super::super::node::AddressUtxo>, RpcError> {
+            Ok(vec![])
+        }
+    }
+
+    /// Audit 2026-11-11 M-2: an unaccepted transaction is not forgotten after `pending_timeout`: the node is asked (a resend),
+    /// and only its refusal drops it. While it says "already in the mempool" the inputs stay reserved and it is checked again
+    /// one interval later; "already accepted by the consensus" ends it as done; nothing is sent while sending is off.
+    #[tokio::test]
+    async fn an_unaccepted_transaction_is_rechecked_with_the_node_not_forgotten() {
+        let node = Answers::default();
+        let held = |id: u8| Some(RpcError::Node(format!("transaction {} is already in the mempool", format!("{id:02x}").repeat(32))));
+        let mut t = Tracker::new(TrackerConfig::default());
+        for n in 1..=4u8 {
+            t.txs.insert([n; 32], tracked(n, 1_000));
+        }
+        // not due yet, and nothing is sent while paused
+        assert_eq!(t.recheck_pending(&node, 1_599, true).await, Recheck::default());
+        assert_eq!(t.recheck_pending(&node, 1_600, false).await, Recheck::default());
+        assert_eq!(node.1.load(std::sync::atomic::Ordering::SeqCst), 0);
+        node.0.lock().unwrap().extend([
+            held(1),
+            None,
+            Some(RpcError::Node(format!("transaction {} was already accepted by the consensus", "03".repeat(32)))),
+            Some(RpcError::Node("at least one outpoint of the transaction is lacking a matching UTXO entry".into())),
+        ]);
+        let r = t.recheck_pending(&node, 1_600, true).await;
+        assert_eq!(r.kept, vec![[1; 32], [2; 32]]);
+        assert_eq!(r.rebroadcast, vec![[2; 32]], "the node no longer held it and took it again");
+        assert_eq!(r.accepted_earlier.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[3; 32]]);
+        assert_eq!(r.dropped.iter().map(|(x, _)| x.txid).collect::<Vec<_>>(), vec![[4; 32]]);
+        assert_eq!((t.dropped_total, t.finalized_count, t.finalized_profit), (1, 1, 7));
+        assert!(t.backed_off(1_600).contains(&[4; 32]) && !t.backed_off(1_600).contains(&[1; 32]));
+        assert!(t.spent_outpoints().contains(&([1; 32], 0)), "the held one's inputs stay reserved");
+        // the kept ones are checked again one interval after their check, not every step
+        assert_eq!(t.recheck_pending(&node, 2_100, true).await, Recheck::default());
+        node.0.lock().unwrap().extend([held(1), held(2)]);
+        assert_eq!(t.recheck_pending(&node, 2_200, true).await.kept, vec![[1; 32], [2; 32]]);
+        assert_eq!(t.oldest_pending_daa(2_200), 1_200);
+    }
+
+    /// Audit 2026-11-11 M-2: a mempool double spend of the operator's own funding coin holds the coin (out of the funding) and
+    /// backs off no order; the hold ends when the node no longer lists the coin, or after `hold_daa`.
+    #[tokio::test]
+    async fn a_double_spend_of_a_funding_coin_holds_the_coin_not_the_orders() {
+        let coin: Outpoint = ([0x77; 32], 1);
+        let ds = format!("output ({}, 1) already spent by transaction {} in the mempool", "77".repeat(32), "ee".repeat(32));
+        let node = Answers::default();
+        node.0.lock().unwrap().push_back(Some(RpcError::Node(ds.clone())));
+        let mut t = Tracker::new(TrackerConfig::default());
+        t.note_operator_coins([coin, ([0x78; 32], 0)].into_iter().collect(), 100);
+        let mut x = tracked(1, 100);
+        x.spends.insert(coin);
+        assert_eq!(t.submit(&node, x.clone(), 100).await, SubmitOutcome::DoubleSpend);
+        assert!(t.backed_off(100).is_empty(), "no order backs off");
+        assert_eq!((t.held.get(&coin).copied(), t.held_total), (Some(3_100), 1));
+        assert!(t.spent_outpoints().contains(&coin), "the coin is out of the funding");
+        // still listed: held; no longer listed (its spender was mined): released
+        t.note_operator_coins([coin].into_iter().collect(), 200);
+        assert!(t.held.contains_key(&coin));
+        t.note_operator_coins(BTreeSet::new(), 300);
+        assert!(t.held.is_empty());
+        // or the hold runs out
+        node.0.lock().unwrap().push_back(Some(RpcError::Node(ds)));
+        t.note_operator_coins([coin].into_iter().collect(), 400);
+        t.submit(&node, x, 400).await;
+        t.note_operator_coins([coin].into_iter().collect(), 3_399);
+        assert!(t.held.contains_key(&coin));
+        t.note_operator_coins([coin].into_iter().collect(), 3_400);
+        assert!(t.held.is_empty());
+    }
+
+    /// Audit 2026-11-11 L-5: backoffs that ran out long ago are forgotten.
+    #[test]
+    fn expired_backoffs_are_pruned() {
+        let mut t = Tracker::new(TrackerConfig::default());
+        t.back_off(&[[1; 32]].into_iter().collect(), 100);
+        t.back_off(&[[2; 32]].into_iter().collect(), 1_000);
+        t.prune_backoff(719);
+        assert_eq!(t.backoff.len(), 2);
+        t.prune_backoff(720);
+        assert_eq!(t.backoff.keys().collect::<Vec<_>>(), vec![&[2; 32]]);
     }
 
     #[test]
@@ -536,12 +813,11 @@ mod tests {
         let ev = t.observe(&seen(&[]), 1_030);
         assert_eq!(ev.rolled_back, vec![[1; 32]]);
         assert_eq!(t.pending(), 2);
-        // accepted again, final 100 DAA later; the unaccepted one is dropped at the timeout
+        // accepted again, final 100 DAA later; the unaccepted one stays pending (the node is asked about it, not the view)
         t.observe(&seen(&[([1; 32], "b3", 1_040)]), 1_041);
         let ev = t.observe(&seen(&[([1; 32], "b3", 1_040)]), 1_600);
         assert_eq!(ev.finalized.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[1; 32]]);
-        assert_eq!(ev.dropped, vec![[2; 32]]);
-        assert!(t.txs.is_empty());
+        assert_eq!(t.txs.keys().collect::<Vec<_>>(), vec![&[2; 32]]);
     }
 
     #[test]

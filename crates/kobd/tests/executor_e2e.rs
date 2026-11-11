@@ -669,6 +669,7 @@ async fn run_indexes_matches_and_shuts_down_cleanly() {
         };
         cfg.api.enabled = false;
         let indexer = Indexer::open(cfg).unwrap();
+        let health = indexer.health.clone();
         let exec = ExecNode::new(node.clone());
         let metrics = dir.path().join("kob.prom");
         let run_cfg = RunConfig {
@@ -676,6 +677,7 @@ async fn run_indexes_matches_and_shuts_down_cleanly() {
             tick: std::time::Duration::from_millis(100),
             metrics_file: Some(metrics.clone()),
             max_book_lag: Some(300),
+            state_dir: Some(dir.path().join("data")),
             ..RunConfig::default()
         };
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -700,5 +702,15 @@ async fn run_indexes_matches_and_shuts_down_cleanly() {
         let prom = std::fs::read_to_string(&metrics).unwrap();
         assert!(prom.contains("kob_matcher_submitted_total 1"), "{prom}");
         assert!(prom.contains("kob_matcher_rejected_total 0") && prom.contains("kob_matcher_book_stale 0"), "{prom}");
+        // the Executor's part of /v1/health and /v1/metrics (audit 2026-11-11 M-16)
+        let h = health.snapshot();
+        let ex = h.executor.expect("the runner reports to the health");
+        assert_eq!((ex.submitted_total, ex.pending), (1, 1));
+        assert!(ex.last_submit_unix.is_some() && ex.funds_sompi.is_some());
+        assert!(h.executor_metrics.contains("kob_matcher_submitted_total 1"));
+        // the pending fill is in the in-flight journal for the next start (audit 2026-11-11 M-3)
+        assert_eq!(ex.journal_entries, 1);
+        let journal = std::fs::read_to_string(dir.path().join("data").join(kobd::matcher::journal::FILE_NAME)).unwrap();
+        assert!(journal.lines().any(|l| l.contains("\"op\":\"add\"")), "{journal}");
     }
 }

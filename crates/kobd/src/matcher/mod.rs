@@ -16,6 +16,7 @@
 //! | [`node`] | node access over JSON wRPC (submission, DAA score, VSPC v2 acceptance) |
 //! | [`wallet`] | the hot key (environment or permission-checked file, never argv) and funding |
 //! | [`submit`] | submission, mempool-conflict handling, acceptance tracking and rollback |
+//! | [`journal`] | the in-flight journal: the tracked transactions on disk, so that a restart does not forget the mempool |
 //! | [`run`] | the `kobd match` / `keep` loop, book sources, metrics |
 //! | [`cli`] | command-line arguments and entry points |
 
@@ -27,6 +28,7 @@ pub mod chain;
 pub mod cli;
 pub mod engine;
 pub mod family;
+pub mod journal;
 pub mod lower;
 pub mod node;
 pub mod pair;

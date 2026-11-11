@@ -143,6 +143,11 @@ pub trait NodeApi: Send + Sync {
     fn submit_replacement(&self, _tx: Value) -> impl Future<Output = Result<[u8; 32], RpcError>> + Send {
         async { Err(RpcError::Node("submitTransactionReplacement is not supported by this node client".into())) }
     }
+    /// The timestamp (unix milliseconds) in the header of the node's sink, the newest chain block: the chain's clock, which
+    /// the runner compares with the local one (day-order deadlines are judged on the local clock). The default: unknown.
+    fn tip_timestamp_ms(&self) -> impl Future<Output = Result<u64, RpcError>> + Send {
+        async { Err(RpcError::Node("no tip timestamp from this node client".into())) }
+    }
 }
 
 /// Connection settings.
@@ -433,6 +438,16 @@ impl NodeApi for WrpcNode {
         Ok(u)
     }
 
+    async fn tip_timestamp_ms(&self) -> Result<u64, RpcError> {
+        let sink = self.dag_info().await?.sink;
+        let p = self.call("getBlock", json!({"hash": sink, "includeTransactions": false})).await?;
+        p.get("block")
+            .and_then(|b| b.get("header"))
+            .and_then(|h| h.get("timestamp"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| RpcError::Decode("getBlock without a header timestamp".into()))
+    }
+
     async fn fee_estimate(&self) -> Result<crate::fee::FeeEstimate, RpcError> {
         // a small answer: a short timeout, so a stalled node delays a tick by seconds, not by the request timeout
         let p = self.call_within("getFeeEstimate", json!({}), self.cfg.request_timeout.min(Duration::from_secs(5))).await?;
@@ -518,10 +533,15 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
                 b.submitted(i, r.is_ok() || known, r.as_ref().err().filter(|_| !known).map(|e| e.to_string()));
             }
         };
-        let (mut primary_err, mut other_verdict, mut first_err) = (None, None, None);
+        let (mut primary_err, mut other_verdict, mut first_err, mut known) = (None, None, None, None);
         while let Some((i, r)) = recv.recv().await {
             note(i, &r);
             match r {
+                // a node that holds the transaction already (or the chain does): it is out there, whatever another node says
+                // (the primary's refusal must not drop a transaction a mempool holds, audit 2026-11-11 L-11)
+                Err(RpcError::Node(m)) if classify_submit_error(&m) == SubmitOutcome::AlreadyKnown => {
+                    known.get_or_insert(RpcError::Node(m));
+                }
                 Ok(id) => {
                     // the rest go on for propagation; their outcomes are only counted
                     tokio::spawn(async move {
@@ -539,6 +559,9 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
                     first_err.get_or_insert(e);
                 }
             }
+        }
+        if let Some(k) = known {
+            return Err(k);
         }
         Err(match primary_err {
             Some(e @ RpcError::Node(_)) => e,
@@ -574,6 +597,10 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
 
     async fn fee_estimate(&self) -> Result<crate::fee::FeeEstimate, RpcError> {
         self.primary.fee_estimate().await
+    }
+
+    async fn tip_timestamp_ms(&self) -> Result<u64, RpcError> {
+        self.primary.tip_timestamp_ms().await
     }
 }
 
@@ -641,11 +668,18 @@ mod tests {
         // nobody takes it: the primary's verdict
         let ds = RpcError::Node("output already spent by transaction x in the mempool".into());
         let m = MultiSubmit::new(fake(Err(ds.clone()), 1), vec![(1, fake(Err(RpcError::Node("orphan".into())), 1))], None);
-        assert_eq!(m.submit(json!({})).await, Err(ds));
+        assert_eq!(m.submit(json!({})).await, Err(ds.clone()));
         // the primary failed on the wire: another node's verdict
         let m = MultiSubmit::new(
             fake(Err(RpcError::Timeout(Duration::from_secs(1))), 1),
             vec![(1, fake(Err(RpcError::Node("transaction x is already in the mempool".into())), 1))],
+            None,
+        );
+        assert_eq!(m.submit(json!({})).await, Err(RpcError::Node("transaction x is already in the mempool".into())));
+        // the primary refuses, another node already holds it: the transaction is out there (audit 2026-11-11 L-11)
+        let m = MultiSubmit::new(
+            fake(Err(ds.clone()), 1),
+            vec![(1, fake(Err(RpcError::Node("transaction x is already in the mempool".into())), 5))],
             None,
         );
         assert_eq!(m.submit(json!({})).await, Err(RpcError::Node("transaction x is already in the mempool".into())));

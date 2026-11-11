@@ -27,6 +27,8 @@ struct State {
     /// The `getFeeEstimate` answer (None: the node answers none).
     fee: Option<Value>,
     fee_calls: usize,
+    /// The chain's clock (the sink's timestamp, unix ms); None: the node does not tell.
+    tip_ms: Option<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -97,6 +99,9 @@ impl NodeApi for MockNode {
             Some(v) => kobd::fee::FeeEstimate::parse(v).map_err(RpcError::Decode),
             None => Err(RpcError::Transport("no answer".into())),
         }
+    }
+    async fn tip_timestamp_ms(&self) -> Result<u64, RpcError> {
+        self.0.lock().unwrap().tip_ms.ok_or_else(|| RpcError::Node("no tip timestamp".into()))
     }
 }
 
@@ -225,7 +230,7 @@ async fn unknown_submit_outcome_then_refusal_drops_it_and_backs_off() {
 }
 
 #[tokio::test]
-async fn unknown_submit_outcome_survives_repeated_transport_errors_and_times_out() {
+async fn unknown_submit_outcome_survives_repeated_transport_errors_until_the_node_answers() {
     let node = MockNode::new(NOW + 5);
     {
         let mut s = node.0.lock().unwrap();
@@ -240,12 +245,20 @@ async fn unknown_submit_outcome_survives_repeated_transport_errors_and_times_out
     assert_eq!(node.submits(), 3);
     assert_eq!(r.tracker.txs.len(), 1);
     assert!(r.tracker.txs.values().all(|t| t.unconfirmed));
-    // never accepted: dropped at the pending timeout, the orders back off
+    // never accepted: not given up at the pending timeout while nobody knows (audit 2026-11-11 M-2): the node may hold it, and
+    // forgetting it would free its inputs for a batch the node refuses; resent until the node answers
+    node.0.lock().unwrap().submit_replies.push_back(Err("transport: down".into()));
     node.0.lock().unwrap().daa = NOW + 5 + 700;
     let rep = r.step().await.unwrap();
-    assert!(r.tracker.txs.is_empty(), "given up at the pending timeout");
+    assert_eq!(r.tracker.txs.len(), 1, "still in doubt: kept");
+    assert!(rep.built.is_empty(), "its orders stay busy");
+    assert_eq!(node.submits(), 4);
+    // the node answers: its inputs went elsewhere, dropped and the orders back off
+    node.0.lock().unwrap().submit_replies.push_back(Err("transaction is an orphan where orphan is disallowed".into()));
+    let rep = r.step().await.unwrap();
+    assert!(r.tracker.txs.is_empty(), "the node's refusal drops it");
     assert!(rep.built.is_empty(), "the orders back off before they are planned again");
-    assert_eq!(node.submits(), 3, "no resend of a transaction that was dropped");
+    assert_eq!(r.tracker.dropped_total, 1);
 }
 
 #[tokio::test]
@@ -469,4 +482,94 @@ async fn a_lost_race_lowers_the_share_and_the_bound_still_plans_the_crossing() {
     assert!(r.selector.stats.sampled_ticks >= 1);
     let m = kobd::matcher::run::metrics_text(&r, &r.last.clone());
     assert!(m.contains("kob_select_units_total"), "{m}");
+}
+
+/// Audit 2026-11-11 M-2: a mempool double spend that names the operator's own funding coin (a transaction this process does not
+/// track holds it) backs off no order: the coin is set aside and the next step plans the same crossing over the other coin.
+#[tokio::test]
+async fn a_funding_coin_a_mempool_transaction_holds_is_set_aside_not_the_orders() {
+    let node = MockNode::new(NOW + 5);
+    let (big, small) = ([0xf1; 32], [0xf2; 32]);
+    {
+        let mut s = node.0.lock().unwrap();
+        s.funding[0].amount = 300 * KAS;
+        let mut other = s.funding[0].clone();
+        (other.transaction_id, other.amount) = (small, 100 * KAS);
+        s.funding.push(other);
+        s.submit_replies.push_back(Err(format!(
+            "output ({}, 0) already spent by transaction {} in the mempool",
+            kob_protocol::json::to_hex(&big),
+            "cd".repeat(32)
+        )));
+    }
+    let mut r = runner(node.clone(), crossing_book(), M);
+    let rep = r.step().await.unwrap();
+    assert_eq!((rep.built.len(), rep.conflicts.len()), (1, 1));
+    assert!(r.tracker.backoff.is_empty(), "no order backs off for the operator's own coin");
+    assert!(r.tracker.held.contains_key(&(big, 0)));
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.submitted.len(), 1, "planned again at once over the other coin");
+    let t = r.tracker.txs.values().next().unwrap();
+    assert!(t.spends.contains(&(small, 0)) && !t.spends.contains(&(big, 0)), "{:?}", t.spends);
+    let m = kobd::matcher::run::metrics_text(&r, &rep);
+    assert!(m.contains("kob_matcher_held_coins 1") && m.contains("kob_matcher_held_coins_total 1"), "{m}");
+    // the node no longer lists the coin (its spender was mined): released
+    node.0.lock().unwrap().funding.retain(|u| u.transaction_id != big);
+    r.step().await.unwrap();
+    assert!(r.tracker.held.is_empty());
+}
+
+/// Audit 2026-11-11 M-14: the local clock is compared with the chain's; beyond the bound the day orders near their deadline are
+/// not filled (whichever clock is right, a fill could fall after the maker's deadline), and the alarm is in the metrics.
+#[tokio::test]
+async fn a_day_order_near_its_deadline_is_left_alone_while_the_clock_is_off() {
+    let now_ms = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let node = MockNode::new(NOW + 5);
+    // the local clock two minutes ahead of the chain's
+    node.0.lock().unwrap().tip_ms = Some(now_ms() - 120_000);
+    let mut b = crossing_book();
+    b.orders[0].deadline = Some(kobd::matcher::book::utc_now() + 60);
+    let mut r = runner(node.clone(), b, M);
+    let rep = r.step().await.unwrap();
+    assert!(rep.built.is_empty(), "the day order is left alone");
+    assert!(r.clock_alarm() && r.clock_skew.is_some_and(|s| (119..=121).contains(&s)), "{:?}", r.clock_skew);
+    let m = kobd::matcher::run::metrics_text(&r, &rep);
+    assert!(m.contains("kob_clock_skew_alarm 1"), "{m}");
+    assert!(r.executor_health(&rep).clock_alarm);
+    let f = r.status_facts(&rep);
+    assert!(kobd::matcher::run::status_line(&f).contains("the local clock is 1"), "{}", kobd::matcher::run::status_line(&f));
+    // the clock agrees again (checked at the next check): filled
+    node.0.lock().unwrap().tip_ms = Some(now_ms());
+    r.clock_checked = None;
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.built.len(), 1);
+    assert!(!r.clock_alarm());
+}
+
+/// A book source whose indexer halted (`BookSource::fatal`).
+struct Halted(MemoryBook, bool);
+
+impl kobd::matcher::run::BookSource for Halted {
+    fn snapshot(&mut self, _operator: &[u8; 32]) -> anyhow::Result<MemoryBook> {
+        Ok(self.0.clone())
+    }
+    fn fatal(&mut self) -> Option<(bool, String)> {
+        Some((self.1, "the indexer is stopped: disk full".into()))
+    }
+}
+
+/// Audit 2026-11-11 M-4: a halted indexer (or a dead read API) ends the runner with an error once it lasts (so a supervisor
+/// restarts the process), at once for a dead API.
+#[tokio::test]
+async fn a_halted_book_source_ends_the_run_with_an_error() {
+    for (now, wait) in [(true, std::time::Duration::from_secs(3600)), (false, std::time::Duration::from_millis(300))] {
+        let node = MockNode::new(NOW + 5);
+        let cfg = RunConfig { roles: M, tick: std::time::Duration::from_millis(100), halt_exit_after: wait, ..RunConfig::default() };
+        let mut r = Runner::new(node, Halted(crossing_book(), now), Box::new(signer()), cfg);
+        let t0 = std::time::Instant::now();
+        let e =
+            tokio::time::timeout(std::time::Duration::from_secs(10), r.run(std::future::pending())).await.expect("ended").unwrap_err();
+        assert!(e.to_string().contains("disk full") && e.to_string().contains("supervisor"), "{e}");
+        assert!(now || t0.elapsed() >= wait);
+    }
 }

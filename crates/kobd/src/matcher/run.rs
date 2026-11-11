@@ -91,6 +91,17 @@ pub trait BookSource: Send {
     fn status(&mut self) -> Option<String> {
         None
     }
+
+    /// Why the process should end so that a supervisor restarts it (the in-process indexer halted or cannot write its
+    /// database, or its read API stopped, `HealthSnapshot::halted`): `(at once, why)`. The runner exits with an error when
+    /// it lasts `RunConfig::halt_exit_after` (at once for the first element true). The default: never.
+    fn fatal(&mut self) -> Option<(bool, String)> {
+        None
+    }
+
+    /// The runner's facts after each step, for `/v1/health` (`executor`) and the runner's metrics for `/v1/metrics` (the
+    /// in-process indexer's API serves them). The default: dropped.
+    fn report_executor(&mut self, _health: crate::indexer::status::ExecutorHealth, _metrics: String) {}
 }
 
 /// How long the step in flight may go on once the runner was asked to stop ([`Runner::run`]).
@@ -217,7 +228,24 @@ pub struct RunConfig {
     pub select: SelectConfig,
     /// Log a one-line status ([`status_line`]) this often (`--status-secs`); `None`: never.
     pub status_every: Option<Duration>,
+    /// Where the runner keeps what must survive a restart (the Executor's data directory): the in-flight journal
+    /// ([`super::journal`]), the keepers' subsidy window and the count of starts. `None`: in memory only. Never used in a dry
+    /// run (nothing is submitted).
+    pub state_dir: Option<PathBuf>,
+    /// The local clock may differ from the chain's (the newest chain block's timestamp) by this many seconds before an alarm,
+    /// and day orders near their deadline are left alone (0: no check).
+    pub clock_skew_max_secs: u64,
+    /// How long a halted book source (`BookSource::fatal`) is waited for before the runner ends with an error, so that a
+    /// supervisor restarts the process.
+    pub halt_exit_after: Duration,
 }
+
+/// The start counter's file name in [`RunConfig::state_dir`].
+pub const STARTS_FILE: &str = "executor-starts";
+/// The keepers' subsidy window's file name in [`RunConfig::state_dir`].
+pub const SUBSIDY_FILE: &str = "keeper-subsidy.json";
+/// How often the local clock is compared with the chain's.
+pub const CLOCK_CHECK_EVERY: Duration = Duration::from_secs(60);
 
 impl Default for RunConfig {
     fn default() -> Self {
@@ -240,6 +268,9 @@ impl Default for RunConfig {
             fee_policy: crate::fee::FeePolicy::default(),
             select: SelectConfig::default(),
             status_every: None,
+            state_dir: None,
+            clock_skew_max_secs: 30,
+            halt_exit_after: Duration::from_secs(180),
         }
     }
 }
@@ -281,11 +312,14 @@ pub struct StepReport {
     pub gone: usize,
     /// Stuck kills and refunds of this process replaced at a higher rate this step: (replaced txid, new txid).
     pub replaced: Vec<([u8; 32], [u8; 32])>,
+    /// Pending transactions the node refused when they were checked again ([`Tracker::recheck_pending`]): dropped.
+    pub dropped: Vec<[u8; 32]>,
 }
 
 /// A kill or refund this process submitted and may still replace at a higher rate ([`Runner::replace_stuck`]). Only
-/// transactions the node took from this process are ever recorded: nobody else's transaction is replaced.
-#[derive(Clone, Debug)]
+/// transactions the node took from this process are ever recorded: nobody else's transaction is replaced. Kept in the
+/// in-flight journal ([`super::journal`]) with its transaction, so a restart can still replace it.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InFlightJob {
     pub kind: JobKind,
     pub order: CovId,
@@ -362,10 +396,34 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     /// Orders the selection left for later, with the outpoint they had and the DAA score they were left at: one that another
     /// transaction takes before this process does counts as ceded (`kob_select_ceded_total`).
     pub ceded_watch: BTreeMap<CovId, (super::book::Outpoint, u64)>,
+    /// The in-flight journal (`RunConfig::state_dir`; never in a dry run).
+    pub journal: Option<super::journal::Journal>,
+    /// Earlier starts of this data directory (`RunConfig::state_dir`; 0 without one).
+    pub restarts: u64,
+    /// The local clock minus the chain's in seconds at the last check ([`Runner::check_clock`]), and when that was.
+    pub clock_skew: Option<i64>,
+    pub clock_checked: Option<std::time::Instant>,
+    clock_logged: Option<std::time::Instant>,
+    /// Day orders left alone this step because the clock is off and their deadline is near ([`RunConfig::clock_skew_max_secs`]).
+    pub deadline_near: BTreeSet<CovId>,
+    /// Steps that failed (the node unreachable, the network wrong, ...).
+    pub tick_errors: u64,
+    /// The last step's error, until a step succeeds.
+    pub last_tick_error: Option<String>,
 }
 
 /// A source of reserved outpoints ([`Runner::reservations`]).
 pub type Reservations = std::sync::Arc<dyn Fn() -> BTreeSet<super::book::Outpoint> + Send + Sync>;
+
+/// Counts a start of the runner over `dir` (a small file holding the number of starts): returns the starts before this one.
+fn count_start(dir: &Path) -> u64 {
+    let p = dir.join(STARTS_FILE);
+    let before = std::fs::read_to_string(&p).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0);
+    if let Err(e) = std::fs::write(&p, (before + 1).to_string()) {
+        tracing::debug!(error = %e, "cannot count the start");
+    }
+    before
+}
 
 fn rpc_json(signed: &kob_protocol::tx::SignedTx) -> anyhow::Result<serde_json::Value> {
     let (tx, _) = signed.tx.to_tx()?;
@@ -482,7 +540,52 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         };
         let plan_base_rate = cfg.engine.planner.fee_rate;
         let selector = Selector::new(cfg.select.clone());
+        // what must survive a restart: never in a dry run (it submits nothing, and must not resend what a live run left)
+        let state_dir = cfg.state_dir.clone().filter(|_| !cfg.dry_run);
+        let restarts = state_dir.as_deref().map(count_start).unwrap_or(0);
+        let keeper_subsidy = match state_dir.as_deref().map(|d| SubsidyBudget::load(&d.join(SUBSIDY_FILE))) {
+            Some(Ok(b)) => b,
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "the keepers' subsidy window could not be read: it starts empty");
+                SubsidyBudget::default()
+            }
+            None => SubsidyBudget::default(),
+        };
+        let (journal, restored) = match state_dir.as_deref().map(|d| super::journal::Journal::open(&d.join(super::journal::FILE_NAME)))
+        {
+            Some(Ok((j, r))) => (Some(j), r),
+            Some(Err(e)) => {
+                tracing::error!(error = %e, "the in-flight journal cannot be opened: transactions in flight are not kept across a restart");
+                (None, Default::default())
+            }
+            None => (None, Default::default()),
+        };
+        let mut tracker = tracker;
+        let mut keeper_inflight = BTreeMap::new();
+        let mut source = source;
+        if !restored.txs.is_empty() || restored.skipped > 0 {
+            tracing::info!(
+                transactions = restored.txs.len(),
+                skipped_lines = restored.skipped,
+                "in-flight journal: transactions of the last run are tracked again; the first step resends them (idempotent) and the node's answer settles each"
+            );
+        }
+        for (t, job) in restored.txs {
+            source.watch(t.txid);
+            if let Some(j) = job {
+                keeper_inflight.insert(t.txid, j);
+            }
+            tracker.txs.insert(t.txid, t);
+        }
         Runner {
+            journal,
+            restarts,
+            clock_skew: None,
+            clock_checked: None,
+            clock_logged: None,
+            deadline_near: BTreeSet::new(),
+            tick_errors: 0,
+            last_tick_error: None,
             selector,
             ceded_watch: BTreeMap::new(),
             fee_state: crate::fee::FeeState::default(),
@@ -508,10 +611,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             last_funding: None,
             last_funding_total: None,
             inventory_use,
-            keeper_inflight: BTreeMap::new(),
+            keeper_inflight,
             keeper_subsidised: 0,
             keeper_subsidy_sompi: 0,
-            keeper_subsidy: SubsidyBudget::default(),
+            keeper_subsidy,
             keeper_replaced: 0,
             keeper_replace_refused: 0,
         }
@@ -596,6 +699,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 ..t.clone()
             };
             self.source.watch(new);
+            // write-ahead: a kill now leaves the replacement in the journal for the next start to settle
+            if let Some(jn) = self.journal.as_mut() {
+                jn.add(&replacement, None);
+            }
             let (fee, fee_rate) = (replacement.fee, replacement.fee_rate);
             let added = job.subsidy.saturating_sub(j.subsidy);
             match self.node.submit_replacement(replacement.rpc_tx.clone()).await {
@@ -659,11 +766,17 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         Ok(subsidised)
     }
 
-    /// Charges `sompi` of operator subsidy to the rolling budget; logs when that uses it up.
+    /// Charges `sompi` of operator subsidy to the rolling budget (kept in `RunConfig::state_dir`: a restart continues the
+    /// window); logs when that uses it up.
     fn charge_subsidy(&mut self, daa: u64, sompi: u64) {
         let kc = &self.cfg.keeper;
         let before = self.keeper_subsidy.left(kc, daa);
         self.keeper_subsidy.charge(kc, daa, sompi);
+        if let Some(d) = self.cfg.state_dir.as_deref().filter(|_| !self.cfg.dry_run) {
+            if let Err(e) = self.keeper_subsidy.save(&d.join(SUBSIDY_FILE)) {
+                tracing::warn!(error = %e, "could not save the keepers' subsidy window (a restart would start it again)");
+            }
+        }
         if before > 0 && self.keeper_subsidy.left(kc, daa) == 0 {
             tracing::warn!(
                 budget = kc.subsidy_budget,
@@ -771,8 +884,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
     }
 
-    /// The spendable funding (P2PK UTXOs not in `spent`) and the whole P2PK balance.
-    async fn funding(&self, spent: &BTreeSet<super::book::Outpoint>) -> Result<(Vec<KeyUtxo>, u64), RpcError> {
+    /// The spendable funding (P2PK UTXOs not in `spent`), the whole P2PK balance and the outpoints of every P2PK coin.
+    async fn funding(
+        &self,
+        spent: &BTreeSet<super::book::Outpoint>,
+    ) -> Result<(Vec<KeyUtxo>, u64, BTreeSet<super::book::Outpoint>), RpcError> {
         let pk = self.signer.pubkey();
         let addr = address_of(&pk, &self.cfg.network).to_string();
         let spk = p2pk_spk_string(&pk);
@@ -784,6 +900,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             .filter(|u| u.covenant_id.is_none() && u.script_public_key == spk)
             .collect();
         let total = utxos.iter().map(|u| u.amount).sum();
+        let coins = utxos.iter().map(|u| (u.transaction_id, u.index)).collect();
         let free = utxos
             .into_iter()
             .filter(|u| !spent.contains(&(u.transaction_id, u.index)))
@@ -798,7 +915,57 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 pubkey: pk,
             })
             .collect();
-        Ok((free, total))
+        Ok((free, total, coins))
+    }
+
+    /// Compares the local clock with the chain's (the timestamp of the node's newest chain block) at most every
+    /// [`CLOCK_CHECK_EVERY`]: day-order deadlines are UTC times this process judges on its own clock (audit 2026-11-11
+    /// M-14). Beyond `clock_skew_max_secs` the skew is logged (an error, again every ten minutes while it lasts), shown on
+    /// the status line, in `/v1/health` and the metrics, and [`Runner::deadline_near`] keeps the day orders whose deadline is
+    /// within the skew (plus the bound) of the local clock out of every plan.
+    async fn check_clock(&mut self) {
+        if self.cfg.clock_skew_max_secs == 0 || self.clock_checked.is_some_and(|t| t.elapsed() < CLOCK_CHECK_EVERY) {
+            return;
+        }
+        self.clock_checked = Some(std::time::Instant::now());
+        let tip = match self.node.tip_timestamp_ms().await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::debug!(error = %e, "cannot read the chain's clock");
+                return;
+            }
+        };
+        let local = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        let skew = (local - tip as i64) / 1000;
+        let max = self.cfg.clock_skew_max_secs as i64;
+        let was_off = self.clock_skew.is_some_and(|s| s.abs() > max);
+        let due = !was_off || self.clock_logged.is_none_or(|t| t.elapsed() >= LOW_FUNDS_LOG_EVERY);
+        if skew.abs() > max && due {
+            self.clock_logged = Some(std::time::Instant::now());
+            tracing::error!(
+                skew_seconds = skew,
+                bound_seconds = max,
+                "the local clock differs from the chain's (the newest block's timestamp): set the system clock (NTP); day orders near their deadline are not filled meanwhile"
+            );
+        } else if was_off && skew.abs() <= max {
+            tracing::info!(skew_seconds = skew, "the local clock agrees with the chain's again");
+        }
+        self.clock_skew = Some(skew);
+    }
+
+    /// The local clock is beyond the bound from the chain's.
+    pub fn clock_alarm(&self) -> bool {
+        self.cfg.clock_skew_max_secs > 0 && self.clock_skew.is_some_and(|s| s.unsigned_abs() > self.cfg.clock_skew_max_secs)
+    }
+
+    /// The day orders of `orders` whose deadline is within the clock's skew plus the bound of the local time `utc`, while the
+    /// clock is off ([`Runner::clock_alarm`]): whichever clock is right, a fill could fall after the maker's deadline.
+    fn near_deadline(&self, orders: &[ListedOrder], utc: u64) -> BTreeSet<CovId> {
+        if !self.clock_alarm() {
+            return BTreeSet::new();
+        }
+        let margin = self.clock_skew.unwrap_or(0).unsigned_abs().saturating_add(self.cfg.clock_skew_max_secs);
+        orders.iter().filter(|o| o.deadline.is_some_and(|d| d.abs_diff(utc) <= margin)).map(|o| o.id()).collect()
     }
 
     /// The fee rates of a step that plans (`crate::fee`): the node's estimate is read at most every `refresh_ms`, the last good
@@ -852,6 +1019,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         let kind = t.kind.clone();
         let (fee, fee_rate) = (t.fee, t.fee_rate);
         self.source.watch(txid);
+        // write-ahead (`super::journal`): a kill between here and the node's answer leaves the entry for the next start to settle
+        if let Some(j) = self.journal.as_mut() {
+            j.add(&t, None);
+        }
         let outcome = self.tracker.submit(&self.node, t, daa).await;
         match outcome {
             SubmitOutcome::Accepted | SubmitOutcome::AlreadyKnown => {
@@ -903,6 +1074,25 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     _ => {}
                 }
             }
+            // a pending transaction no block accepted for a while: the node says whether it still holds it (never forgotten
+            // while it does: its funding coin would refuse every later batch as a mempool double spend)
+            let r = self.tracker.recheck_pending(&self.node, daa, true).await;
+            for (t, why) in &r.dropped {
+                tracing::warn!(
+                    txid = %kob_protocol::json::to_hex(&t.txid),
+                    kind = %t.kind,
+                    waited_daa = daa.saturating_sub(t.submitted_daa),
+                    %why,
+                    "a pending transaction was refused when checked again (its inputs went elsewhere); dropped"
+                );
+                rep.dropped.push(t.txid);
+            }
+            for id in &r.rebroadcast {
+                tracing::info!(txid = %kob_protocol::json::to_hex(id), "a pending transaction the node no longer held was sent again");
+            }
+            if !r.kept.is_empty() {
+                tracing::debug!(kept = r.kept.len(), "pending transactions still held by the node");
+            }
         }
         // Nothing is planned over a store that lags the chain: after a restart the store is where the last run left it (seconds
         // to hours behind), so the orders and the operator's tokens it lists may be spent already (the soak's restarts lost
@@ -942,12 +1132,16 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         self.watch_ceded(&listed, daa);
         self.refresh_fees().await;
         let mut spent = self.reserved_or_spent();
-        let (funding, total) = self.funding(&spent).await?;
+        let (funding, total, coins) = self.funding(&spent).await?;
+        // a held funding coin the node no longer lists is released (its spender was mined)
+        self.tracker.note_operator_coins(coins, daa);
         rep.funding = Some(funding.iter().map(|k| k.utxo.amount).sum());
         rep.funding_total = Some(total);
         self.last_funding = rep.funding;
         self.last_funding_total = rep.funding_total;
+        self.check_clock().await;
         let clock = Clock { daa, utc: utc_now() };
+        self.deadline_near = self.near_deadline(&book.orders, clock.utc);
         // the orders the node no longer holds (the book lags the chain): never planned, by the matcher or the keepers
         // (only while the book lags by `verify_live_min_lag`: the node round trip costs races when the book is current)
         let verify = info.has_utxo_index && daa.saturating_sub(book.daa_score) >= self.cfg.verify_live_min_lag;
@@ -965,6 +1159,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         excluded.extend(self.frozen_until.keys().copied());
         self.quarantined_until.retain(|_, until| *until > daa);
         excluded.extend(self.quarantined_until.keys().copied());
+        excluded.extend(self.deadline_near.iter().copied());
 
         if self.cfg.roles.matcher {
             // the inventory policy's budgets of the period (they bound what the tick may keep)
@@ -1252,6 +1447,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         excluded.extend(busy_orders(orders, &spent));
         excluded.extend(self.frozen_until.keys().copied());
         excluded.extend(self.quarantined_until.keys().copied());
+        excluded.extend(self.deadline_near.iter().copied());
         let inp = crate::maintenance::MaintenanceInput {
             tokens,
             orders: orders.to_vec(),
@@ -1313,10 +1509,54 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
     fn finish(&mut self, rep: &StepReport) {
         self.steps += 1;
         self.last = rep.clone();
+        self.last_tick_error = None;
+        if rep.daa > 0 {
+            self.tracker.prune_backoff(rep.daa);
+        }
+        self.publish(rep);
+    }
+
+    /// The journal brought in line with the tracker, the metrics file written and the runner's facts handed to the book source
+    /// (`/v1/health`, `/v1/metrics`): after every step, a failed one included.
+    fn publish(&mut self, rep: &StepReport) {
+        if let Some(j) = self.journal.as_mut() {
+            j.sync(&self.tracker.txs, &self.keeper_inflight);
+        }
         if let Some(p) = self.cfg.metrics_file.clone() {
             if let Err(e) = write_metrics(&p, self, rep) {
                 tracing::warn!(error = %e, "cannot write metrics");
             }
+        }
+        let health = self.executor_health(rep);
+        let metrics = metrics_text(self, rep);
+        self.source.report_executor(health, metrics);
+    }
+
+    /// The runner's part of `/v1/health` after the step that reported `rep`.
+    pub fn executor_health(&self, rep: &StepReport) -> crate::indexer::status::ExecutorHealth {
+        let t = &self.tracker;
+        let total = rep.funding_total.or(self.last_funding_total);
+        crate::indexer::status::ExecutorHealth {
+            funds_sompi: total.map(|v| v.to_string()),
+            spendable_sompi: rep.funding.or(self.last_funding).map(|v| v.to_string()),
+            low_funds: total.is_some_and(|f| f < self.cfg.low_funds) && !self.cfg.dry_run,
+            low_funds_threshold_sompi: self.cfg.low_funds.to_string(),
+            paused: rep.paused,
+            dry_run: self.cfg.dry_run,
+            pending: t.pending(),
+            oldest_pending_seconds: t.oldest_pending_daa(rep.daa) / 10,
+            submitted_total: t.submitted,
+            finalized_total: t.finalized_count,
+            dropped_total: t.dropped_total,
+            rejected_total: t.rejected,
+            held_coins: t.held.len(),
+            last_submit_unix: (t.last_submit_unix > 0).then_some(t.last_submit_unix),
+            last_step_unix: utc_now(),
+            last_tick_error: self.last_tick_error.clone(),
+            clock_skew_seconds: self.clock_skew,
+            clock_alarm: self.clock_alarm(),
+            restarts: self.restarts,
+            journal_entries: self.journal.as_ref().map(|j| j.live().count()).unwrap_or(0),
         }
     }
 
@@ -1328,6 +1568,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         let mut status_at: Option<std::time::Instant> = None;
         // when and at what balance the low-funds warning was last logged (the status line shows the funds every `--status-secs`)
         let mut low_funds_logged: Option<(std::time::Instant, u64)> = None;
+        // since when the book source has been halted (`BookSource::fatal`)
+        let mut halted_since: Option<std::time::Instant> = None;
+        tracing::info!("{}", crate::version::build_line());
         loop {
             let res = {
                 let step = self.step();
@@ -1385,7 +1628,33 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                         );
                     }
                 }
-                Err(e) => tracing::warn!(error = %e, "tick failed"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "tick failed");
+                    // a failed step still writes the metrics and the health (the failure counted), so a monitor sees it
+                    self.tick_errors += 1;
+                    self.last_tick_error = Some(e.to_string());
+                    let last = self.last.clone();
+                    self.publish(&last);
+                }
+            }
+            // a halted indexer (or a dead read API) does not come back by itself: end, so that the supervisor restarts the
+            // process (audit 2026-11-11 M-4)
+            match self.source.fatal() {
+                Some((now, why)) => {
+                    let since = *halted_since.get_or_insert_with(std::time::Instant::now);
+                    if now || since.elapsed() >= self.cfg.halt_exit_after {
+                        tracing::error!(%why, "exiting so that a supervisor restarts the executor");
+                        anyhow::bail!("{why}: the executor stopped (exit status 1) so that its supervisor restarts it");
+                    }
+                    if since.elapsed() < self.cfg.tick {
+                        tracing::error!(
+                            %why,
+                            exit_after_secs = self.cfg.halt_exit_after.as_secs(),
+                            "the executor exits unless this ends"
+                        );
+                    }
+                }
+                None => halted_since = None,
             }
             tokio::select! {
                 _ = &mut shutdown => return Ok(()),
@@ -1426,7 +1695,18 @@ pub struct StatusFacts {
     pub dry_run: bool,
     /// The last tick failed (the node unreachable, the network wrong): why.
     pub tick_error: Option<String>,
+    /// Transactions given up since the start (refused when checked again, lost races).
+    pub dropped: u64,
+    /// Seconds the oldest pending transaction has waited.
+    pub oldest_pending_secs: u64,
+    /// The local clock's skew from the chain's while it is beyond the bound (seconds).
+    pub clock_skew_alarm: Option<i64>,
+    /// The build ([`crate::version::build_line`]); `None`: not shown.
+    pub build: Option<String>,
 }
+
+/// A pending transaction waiting longer than this is named on the status line.
+pub const PENDING_WARN_SECS: u64 = 300;
 
 impl<N: NodeApi, S: BookSource> Runner<N, S> {
     /// The status line's facts after the step that reported `rep`.
@@ -1448,6 +1728,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             funding_address: Some(crate::matcher::wallet::address_of(&self.signer.pubkey(), &self.cfg.network).to_string()),
             dry_run: self.cfg.dry_run,
             tick_error: None,
+            dropped: t.dropped_total,
+            oldest_pending_secs: t.oldest_pending_daa(rep.daa) / 10,
+            clock_skew_alarm: self.clock_skew.filter(|_| self.clock_alarm()),
+            build: Some(crate::version::build_line()),
         }
     }
 }
@@ -1505,10 +1789,25 @@ pub fn status_line(f: &StatusFacts) -> String {
     if f.rejected > 0 {
         warn.push(format!("{} transactions rejected by the node (see the log)", f.rejected));
     }
+    if f.dropped > 0 {
+        warn.push(format!("{} transactions dropped (refused when checked again, or lost a race)", f.dropped));
+    }
+    if f.pending > 0 && f.oldest_pending_secs >= PENDING_WARN_SECS {
+        warn.push(format!(
+            "a transaction has been pending for {} (the node holds it; its inputs stay reserved)",
+            crate::indexer::status::human_secs(f.oldest_pending_secs)
+        ));
+    }
+    if let Some(s) = f.clock_skew_alarm {
+        warn.push(format!("the local clock is {s} s off the chain's (set it: NTP); day orders near their deadline are not filled"));
+    }
     if f.dry_run {
         warn.push("dry run: nothing is submitted".to_string());
     }
     parts.push(if warn.is_empty() { "no warnings".to_string() } else { format!("WARNING: {}", warn.join("; ")) });
+    if let Some(b) = &f.build {
+        parts.push(b.clone());
+    }
     parts.join(" | ")
 }
 
@@ -1547,6 +1846,45 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
     g("kob_matcher_finalized_profit_sompi", "Operator profit of final transactions.", t.finalized_profit.to_string());
     g("kob_matcher_pending_txs", "Submitted, not yet accepted.", t.pending().to_string());
     g("kob_matcher_tracked_txs", "Pending or accepted but not final.", t.txs.len().to_string());
+    g(
+        "kob_matcher_oldest_pending_seconds",
+        "Seconds the oldest pending transaction has waited (at 10 DAA per second; 0: none pending).",
+        (t.oldest_pending_daa(rep.daa) / 10).to_string(),
+    );
+    g(
+        "kob_matcher_dropped_total",
+        "Transactions given up: refused by the node when checked again, or a race lost (their orders back off).",
+        t.dropped_total.to_string(),
+    );
+    g(
+        "kob_matcher_held_coins",
+        "Funding coins held out of the funding: a mempool transaction this process does not track spends them.",
+        t.held.len().to_string(),
+    );
+    g("kob_matcher_held_coins_total", "Funding coins held since the start.", t.held_total.to_string());
+    g(
+        "kob_matcher_last_submit_seconds",
+        "Unix time of the last submission a node took (0: none since the start).",
+        t.last_submit_unix.to_string(),
+    );
+    g("kob_matcher_tick_errors_total", "Steps that failed (the node unreachable, the network wrong, ...).", r.tick_errors.to_string());
+    g("kob_matcher_last_tick_ok", "1 when the last step succeeded.", (r.last_tick_error.is_none() as u8).to_string());
+    g(
+        "kob_matcher_journal_entries",
+        "Transactions in the in-flight journal (what a restart resends).",
+        r.journal.as_ref().map(|j| j.live().count()).unwrap_or(0).to_string(),
+    );
+    g("kob_executor_restarts_total", "Earlier starts of this data directory (process restarts).", r.restarts.to_string());
+    g(
+        "kob_clock_skew_seconds",
+        "The local clock minus the chain's (the newest chain block's timestamp), seconds (0: not measured).",
+        r.clock_skew.unwrap_or(0).to_string(),
+    );
+    g(
+        "kob_clock_skew_alarm",
+        "1 while the local clock is beyond the bound from the chain's (day orders near their deadline are not filled).",
+        (r.clock_alarm() as u8).to_string(),
+    );
     // the last funding read (a step that waited read none); unknown before the first read: no alert
     let funding = rep.funding.or(r.last_funding);
     let total = rep.funding_total.or(r.last_funding_total);
@@ -1643,7 +1981,11 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
 
 fn write_metrics<N: NodeApi, S: BookSource>(p: &Path, r: &mut Runner<N, S>, rep: &StepReport) -> std::io::Result<()> {
     let tmp = p.with_extension("prom.tmp");
-    let extra = r.source.metrics();
+    let mut extra = r.source.metrics();
+    if extra.is_empty() {
+        // a book source without metrics of its own (a book file): the build is still named
+        extra = crate::version::build_info_metric();
+    }
     std::fs::write(&tmp, metrics_text(r, rep) + &extra)?;
     std::fs::rename(tmp, p)
 }

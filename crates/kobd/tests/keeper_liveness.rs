@@ -239,12 +239,24 @@ impl NodeApi for MockNode {
 const K: Roles = Roles { matcher: false, keeper: true };
 
 fn runner(node: MockNode, orders: Vec<ListedOrder>, roles: Roles, max_replacements: u32) -> Runner<MockNode, ViewSource<MemoryBook>> {
+    runner_in(node, orders, roles, max_replacements, None)
+}
+
+/// [`runner`] that keeps its state (the in-flight journal, the subsidy window) in `state_dir`.
+fn runner_in(
+    node: MockNode,
+    orders: Vec<ListedOrder>,
+    roles: Roles,
+    max_replacements: u32,
+    state_dir: Option<std::path::PathBuf>,
+) -> Runner<MockNode, ViewSource<MemoryBook>> {
     let mut b = book(orders);
     b.daa_score = node.0.lock().unwrap().daa;
     let mut cfg = RunConfig {
         roles,
         fee_policy: FeePolicy { refresh_ms: 0, max_age_ms: u64::MAX / 4, max_rate: 1_000, ..FeePolicy::default() },
         max_book_lag: None,
+        state_dir,
         ..RunConfig::default()
     };
     cfg.keeper.subsidy_max = KAS;
@@ -302,11 +314,70 @@ async fn a_stuck_kill_is_replaced_at_a_higher_rate_at_most_k_times() {
     assert_eq!(r.keeper_replaced, 2);
     let m = kobd::matcher::run::metrics_text(&r, &r.last.clone());
     assert!(m.contains("kob_keeper_replaced_total 2"), "{m}");
-    // dropped at the pending timeout (600 DAA after the first submission), the order backs off as before
+    // 600 DAA after the first submission the node is asked (a resend): it still holds it, so it stays tracked (audit
+    // 2026-11-11 M-2: a transaction a mempool holds is never forgotten)
+    node.0.lock().unwrap().submit_replies.push_back(Err("transaction aa is already in the mempool".into()));
     node.set_daa(KILL_DAA + 600);
     r.step().await.unwrap();
+    assert_eq!(r.tracker.txs.len(), 1, "kept: the node holds it");
+    // checked again 600 DAA later: the node refuses it now (its inputs went elsewhere), dropped and the order backs off
+    node.0.lock().unwrap().submit_replies.push_back(Err("transaction aa is missing outpoint (bb, 0)".into()));
+    node.set_daa(KILL_DAA + 1_200);
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.dropped.len(), 1);
     assert!(r.tracker.txs.is_empty());
     assert!(r.keeper_inflight.is_empty());
+    assert_eq!(r.tracker.dropped_total, 1);
+}
+
+/// Audit 2026-11-11 M-3: a restart (a kill) does not forget what the mempool holds. The kill submitted before it comes back from
+/// the in-flight journal as a submission without a verdict (its inputs reserved, its order busy), the first step resends it and
+/// the node's "already in the mempool" settles it, and it can still be replaced at a higher rate (its keeper job is in the
+/// journal too). The keepers' subsidy window and the start count survive as well.
+#[tokio::test]
+async fn a_restart_keeps_what_is_in_flight_and_can_still_replace_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = Some(dir.path().to_path_buf());
+    let node = MockNode::new(KILL_DAA, 200.0);
+    // one order (each `ioc` call lists a new outpoint)
+    let order = ioc(1, 10 * KAS as i64);
+    let mut r = runner_in(node.clone(), vec![order.clone()], K, 2, state.clone());
+    assert_eq!(r.restarts, 0);
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.submitted.len(), 1);
+    let (t0, rate0, spends0) = tracked(&r);
+    // a subsidy charged before the restart stays in the window after it (audit 2026-11-11 L-2)
+    let kc = r.cfg.keeper.clone();
+    r.keeper_subsidy.charge(&kc, KILL_DAA, 12_345);
+    r.keeper_subsidy.save(&dir.path().join(kobd::matcher::run::SUBSIDY_FILE)).unwrap();
+    let left = r.keeper_subsidy.left(&kc, KILL_DAA);
+    drop(r);
+    // the next start
+    let mut r = runner_in(node.clone(), vec![order.clone()], K, 2, state.clone());
+    assert_eq!(r.restarts, 1);
+    assert_eq!(r.keeper_subsidy.left(&kc, KILL_DAA), left, "the window continues");
+    let t = r.tracker.txs.get(&t0).expect("tracked again");
+    assert!(t.unconfirmed && t.accepted.is_none());
+    assert_eq!((t.fee_rate, t.spends.clone()), (rate0, spends0));
+    assert!(r.keeper_inflight.contains_key(&t0), "its keeper job is back: it may still be replaced");
+    assert!(r.tracker.spent_outpoints().contains(&(order.order.utxo.transaction_id, order.order.utxo.index)));
+    node.0.lock().unwrap().submit_replies.push_back(Err("transaction aa is already in the mempool".into()));
+    node.set_daa(KILL_DAA + 1);
+    let rep = r.step().await.unwrap();
+    assert!(rep.built.is_empty(), "nothing is built over the order the restored kill spends");
+    assert_eq!(node.0.lock().unwrap().submits.len(), 2, "resent once");
+    assert!(!r.tracker.txs[&t0].unconfirmed, "the node's answer settled it");
+    node.set_daa(KILL_DAA + 100);
+    let rep = r.step().await.unwrap();
+    assert_eq!(node.replacements(), 1);
+    assert_eq!(rep.replaced.len(), 1, "replaced at a higher rate after the restart");
+    drop(r);
+    // and once more: the replacement is what is in flight now
+    let r = runner_in(node.clone(), vec![order.clone()], K, 2, state);
+    assert_eq!(r.restarts, 2);
+    let (t1, rate1, _) = tracked(&r);
+    assert_ne!(t1, t0);
+    assert!(rate1 > rate0);
 }
 
 #[tokio::test]
@@ -323,10 +394,11 @@ async fn a_refused_replacement_falls_back_to_the_pending_timeout() {
     assert_eq!(tracked(&r).0, t0, "the original stays tracked");
     assert_eq!(tracked(&r).1, rate0);
     assert_eq!(r.keeper_replace_refused, 1);
-    // never tried again; the pending timeout drops it and the order backs off
+    // never tried again; at the pending timeout the node is asked, and its refusal drops it and the order backs off
     node.set_daa(KILL_DAA + 300);
     r.step().await.unwrap();
     assert_eq!(node.replacements(), 1, "a refused job is not replaced again");
+    node.0.lock().unwrap().submit_replies.push_back(Err("transaction aa is missing outpoint (bb, 0)".into()));
     node.set_daa(KILL_DAA + 600);
     let rep = r.step().await.unwrap();
     assert!(r.tracker.txs.is_empty() && rep.built.is_empty(), "dropped, the order backs off");
