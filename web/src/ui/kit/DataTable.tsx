@@ -156,28 +156,39 @@ export function MarketCell(props: { name: string; href: string | undefined; iden
   );
 }
 
-/** A figure and its unit: the number in a piece of its own (never broken), the unit small and muted after it. */
-export function Num(props: { value: string; unit?: string | null; title?: string; class?: string; 'data-testid'?: string }) {
+/** A figure and its unit: the number in a piece of its own (never broken), the unit small and muted after it (`unitTitle`: its tooltip, the covenant id of a token with no name of its own). */
+export function Num(props: { value: string; unit?: string | null; title?: string; unitTitle?: string; class?: string; 'data-testid'?: string }) {
   return (
     <span class={props.class} title={props.title} data-testid={props['data-testid']}>
       <span class="dt-val">{props.value}</span>
-      {props.unit ? <span class="dt-unit">{props.unit}</span> : null}
+      {props.unit ? <span class={`dt-unit${props.unitTitle ? " dt-unit-id" : ""}`} title={props.unitTitle}>{props.unit}</span> : null}
     </span>
   );
 }
 
+/** Most fraction digits a KAS figure shows in a table or a strip (review M-03); the tooltip has the rest. */
+export const KAS_FRACTION_MAX = 4;
+
 /**
- * An amount of KAS: the one cell every KAS figure of the tables goes through. kas is in sompi, null reads "—", fraction is a fixed number of decimals (default: the amount as it
- * is, trailing zeros dropped). Where the USD display is on (Settings, app/use-fiat.ts) it reads as dollars, with its exact KAS figure in the tooltip, and has no unit.
+ * An amount of KAS: the one cell every KAS figure of the tables goes through. kas is in sompi, null reads "—". `fraction` is a fixed number of decimals (the finest of its column, so the
+ * decimal points line up); without it the amount shows as it is with at most 4 decimals. The exact amount is the tooltip whenever the text is not it, and an amount that is there never reads
+ * as zero (`<0.0001`). Where the USD display is on (Settings, app/use-fiat.ts) it reads as dollars, with its exact KAS figure in the tooltip, and has no unit.
  */
 export function MoneyCell(props: { kas: bigint | null; fraction?: number; unit?: boolean; class?: string; 'data-testid'?: string }) {
   const fiat = useFiat();
   if (props.kas === null) return <span class={props.class} data-testid={props['data-testid']}>—</span>;
+  const testid = props['data-testid'] ? { 'data-testid': props['data-testid'] } : {};
   if (fiat) {
-    return <Num value={kasValueText(props.kas, fiat)} title={kasValueTitle(props.kas, fiat)} class={props.class} {...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {})} />;
+    return <Num value={kasValueText(props.kas, fiat)} title={kasValueTitle(props.kas, fiat)} class={props.class} {...testid} />;
   }
-  const text = formatKas(props.kas, { group: ',', ...(props.fraction !== undefined ? { minFraction: props.fraction, maxFraction: props.fraction } : {}) });
-  return <Num value={text} unit={props.unit === false ? null : 'KAS'} class={props.class} {...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {})} />;
+  const fixed = props.fraction !== undefined ? Math.min(props.fraction, 8) : undefined;
+  let text = formatKas(props.kas, { group: ',', ...(fixed !== undefined ? { minFraction: fixed, maxFraction: fixed } : { maxFraction: KAS_FRACTION_MAX }) });
+  const digits = fixed ?? KAS_FRACTION_MAX;
+  if (props.kas > 0n && digits < 8 && /^[0.,]+$/.test(text)) text = digits > 0 ? `<0.${'0'.repeat(digits - 1)}1` : '<1';
+  const exact = formatKas(props.kas, { group: ',' });
+  // a figure padded to its column's decimals ("40.7100") is the same amount: only a figure that lost digits needs the tooltip
+  const lost = digits < 8 && props.kas % 10n ** BigInt(8 - digits) !== 0n;
+  return <Num value={text} unit={props.unit === false ? null : 'KAS'} {...(lost ? { title: `${exact} KAS` } : {})} class={props.class} {...testid} />;
 }
 
 /** The chevron that opens a row's details: a button, `aria-expanded`, keyboard operable. */

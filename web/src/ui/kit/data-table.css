@@ -20,6 +20,8 @@
 /* an amount: the number is one piece (never broken), its unit follows it in the small muted style and may wrap on its own */
 .dt-val { white-space: nowrap; }
 .dt-unit { color: var(--muted); font-size: 0.82em; margin-left: 0.3em; overflow-wrap: anywhere; }
+/* the short id of a token with no name of its own (`8347…cd64`) is one piece */
+.dt-unit-id { display: inline-block; white-space: nowrap; overflow-wrap: normal; }
 .dt-sub { display: block; color: var(--muted); font-size: 0.76rem; font-weight: 400; }
 /* after .dt-sub (same weight): a card-only line (the market cell's "Sell · GTD", which the table has columns for) is not drawn in the table */
 .dt-card-only { display: none; }
@@ -52,9 +54,9 @@
 /* the grids of the three tables, from 1040 px: the room is shared by weight, the long texts (market, filled part) get most of it; a text that does not fit its cell wraps
    inside it, it never paints over a neighbour */
 /* the leading columns are the same in the three: Time, Market, (Type,) Side, Price, Amount, Total / Value; then what is particular to the table; the chevron last */
-.dt-orders-open { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(92px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) 70px 28px; }
-.dt-orders-history { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(92px, 1fr) minmax(92px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) 28px; }
-.dt-fills { --dt-cols: 10.4em minmax(120px, 2fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(92px, 1fr) minmax(140px, 1.3fr) 28px; }
+.dt-orders-open { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(92px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) 70px var(--dt-chev); }
+.dt-orders-history { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(92px, 1fr) minmax(92px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) var(--dt-chev); }
+.dt-fills { --dt-cols: 10.4em minmax(120px, 2fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(92px, 1fr) minmax(140px, 1.3fr) var(--dt-chev); }
 .dt-balances { --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) minmax(150px, auto); }
 
 /* a status too long for its cell ("expired (IOC/FOK)") wraps inside its chip */
@@ -129,4 +131,14 @@
     .dt-act { justify-content: flex-end; }
     .dt-act .btn { flex: 0 0 auto; min-width: 8rem; }
   }
+}
+
+/* finger targets (review M-11): the chevron that opens a row, its buttons and a time-sort header are 44 px / 40 px on a coarse pointer, also where the table is a table (a tablet in landscape) */
+.dt { --dt-chev: 28px; }
+@media (pointer: coarse) {
+  .dt { --dt-chev: 44px; }
+  .dt-chev, .dt-c[data-card='toggle'] .dt-chev, .dt-force-cards .dt-c[data-card='toggle'] .dt-chev { width: var(--dt-chev); height: 44px; }
+  .dt-c[data-card='toggle'], .dt-force-cards .dt-c[data-card='toggle'] { width: 44px; height: 44px; }
+  .dt-act .btn { min-height: 40px; }
+  .dt-c a { display: inline-block; padding-block: 6px; }
 }
