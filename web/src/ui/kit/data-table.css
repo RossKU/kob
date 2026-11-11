@@ -53,10 +53,11 @@
 
 /* the grids of the three tables, from 1040 px: the room is shared by weight, the long texts (market, filled part) get most of it; a text that does not fit its cell wraps
    inside it, it never paints over a neighbour */
+/* the Total / Value column holds a KAS figure with up to four fixed decimals (`450,000.0000`): 104 px keeps it whole on a wide font, so the table is not turned into cards by its own content */
 /* the leading columns are the same in the three: Time, Market, (Type,) Side, Price, Amount, Total / Value; then what is particular to the table; the chevron last */
-.dt-orders-open { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(92px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) 70px var(--dt-chev); }
-.dt-orders-history { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(92px, 1fr) minmax(92px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) var(--dt-chev); }
-.dt-fills { --dt-cols: 10.4em minmax(120px, 2fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(92px, 1fr) minmax(140px, 1.3fr) var(--dt-chev); }
+.dt-orders-open { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) 70px var(--dt-chev); }
+.dt-orders-history { --dt-cols: 10.4em minmax(120px, 2fr) minmax(48px, 0.6fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(92px, 1fr) minmax(112px, 1.3fr) minmax(92px, 1fr) var(--dt-chev); }
+.dt-fills { --dt-cols: 10.4em minmax(120px, 2fr) 40px minmax(92px, 1fr) minmax(96px, 1.2fr) minmax(104px, 1fr) minmax(140px, 1.3fr) var(--dt-chev); }
 .dt-balances { --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) minmax(150px, auto); }
 
 /* a status too long for its cell ("expired (IOC/FOK)") wraps inside its chip */

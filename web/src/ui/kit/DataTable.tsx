@@ -161,6 +161,8 @@ export function Num(props: { value: string; unit?: string | null; title?: string
   return (
     <span class={props.class} title={props.title} data-testid={props['data-testid']}>
       <span class="dt-val">{props.value}</span>
+      {/* a short id is one piece, so the line may break BEFORE it (a narrow cell on a wide font) instead of the cell overflowing into card layout */}
+      {props.unit && props.unitTitle ? <wbr /> : null}
       {props.unit ? <span class={`dt-unit${props.unitTitle ? " dt-unit-id" : ""}`} title={props.unitTitle}>{props.unit}</span> : null}
     </span>
   );
