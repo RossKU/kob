@@ -21,7 +21,7 @@ name: release
 # compares). No binary is code-signed: the Windows binary shows SmartScreen's "More info -> Run anyway" (the quickstart says so).
 # Every file of a release (the archives, the APK and SHA256SUMS) carries a build provenance attestation instead: keyless Sigstore,
 # signed by this workflow's GitHub identity at this commit and recorded in the repository's attestations, which
-# `gh attestation verify <file> --repo RossKU/kob` checks (docs/ops/release.md 6, executor-quickstart.md 1). It proves which
+# `gh attestation verify <file> --repo RossKU/kob --signer-workflow RossKU/kob/.github/workflows/release.yml --source-ref refs/tags/<tag>` checks (docs/ops/release.md 6, executor-quickstart.md 1). It proves which
 # workflow run of which commit built the file, so a file swapped in the release afterwards (with a matching SHA256SUMS) fails it.
 
 on:
@@ -208,7 +208,7 @@ jobs:
           TAG: ${{ github.ref_name }}
           APK_SIGNED: ${{ needs.android.outputs.signed }}
         run: |
-          notes="Prebuilt kobd (the daemon) and kob, the command line (docs/ops/executor-quickstart.md; kob-<version>-<network>-<target> holds kob alone) and the testnet-10 Android app (the .apk; quickstart 9). Check each file against SHA256SUMS, and its build provenance with: gh attestation verify <file> --repo $GITHUB_REPOSITORY. Release hashes (scripts/release-hashes.sh): to be added before publishing."
+          notes="Prebuilt kobd (the daemon) and kob, the command line (docs/ops/executor-quickstart.md; kob-<version>-<network>-<target> holds kob alone) and the testnet-10 Android app (the .apk; quickstart 9). Check each file against SHA256SUMS, and its build provenance with: gh attestation verify <file> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml --source-ref refs/tags/$TAG. Release hashes (scripts/release-hashes.sh): to be added before publishing."
           if [ "$APK_SIGNED" = true ]; then
             notes="$notes The APK is signed with the release key: it installs over an earlier release and keeps the app's data."
           else

@@ -77,11 +77,13 @@ release page as the archives. **Check the build provenance too** (releases publi
 file. With the GitHub CLI (`gh`, logged in):
 
 ```
-gh attestation verify kobd-<version>-mainnet-x86_64-pc-windows-msvc.zip --repo RossKU/kob
+gh attestation verify kobd-<version>-mainnet-x86_64-pc-windows-msvc.zip --repo RossKU/kob --signer-workflow RossKU/kob/.github/workflows/release.yml --source-ref refs/tags/v<version>
 ```
 
 It must print `Verification succeeded!` and name `.github/workflows/release.yml` of `RossKU/kob` at the tag's commit. A file
-swapped into the release afterwards (with its sum swapped too) fails it. It does not protect against a compromised workflow or
+swapped into the release afterwards (with its sum swapped too) fails it, and so does one another workflow of the repository
+built, or one built for another tag (the two `--signer-workflow` and `--source-ref` options; without them any workflow of
+the repository passes). It does not protect against a compromised workflow or
 repository at the tagged commit: for an executor that will hold funds, also compare the hashes with the release announcement
 and rebuild it from the tagged commit. The binaries are not code-signed.
 
@@ -339,9 +341,18 @@ flags for both roles; it adds `--config <file>` when the configuration is not in
 `kobd.toml` (every key of `docs/ops/executor.md`, Part B 4; `[launch] args` takes further start options, e.g.
 `args = ["--sweep-own-strays"]`), add them after the flags, or run the setup again (`kobd setup`).
 
-**Windows**: a Task Scheduler task "At startup" (run whether the user is logged on or not, as the account that owns the
-key file) with program `C:\kob\kobd.exe`, arguments `--executor` and *Start in* `C:\kob`. Set "If the task fails, restart
-every 1 minute". A task has no
+**Windows**: the archive holds `kobd-supervise.cmd`, the supervisor: it runs `kobd.exe` (next to it) with the arguments you
+give it and starts it again when it exits with an error (any exit status but 0, a stop, and 2, a stop that did not finish in
+time or a wrong option), after 10 s, the wait doubling to 5 min while it keeps failing within 10 min of its start; each
+restart is noted in `kobd-supervise.log` next to it. Task Scheduler's own "If the task fails, restart every" is not enough:
+it is not documented to act on a program's exit status. Make a Task Scheduler task "At startup" (run whether the user is
+logged on or not, as the account that owns the key file) with program `C:\kob\kobd-supervise.cmd`, arguments `--executor`
+and *Start in* `C:\kob`, and in its settings **untick "Stop the task if it runs longer than"** (checked with 3 days by
+default: the executor would be stopped after three days) and keep "If the task is already running: Do not start a new
+instance"; on a laptop also untick the conditions "Start the task only if the computer is on AC power" and "Stop if the
+computer switches to battery power". *End* on the task stops the supervisor; check that `kobd.exe` has ended too
+(`tasklist /fi "imagename eq kobd.exe"`), else end it with `taskkill /f /im kobd.exe` (the database survives a kill, section
+7). In a window, double-click `kobd-supervise.cmd` instead of `kobd.exe` to get the same restarts. A task has no
 console: its log is the file `kobd.log` the setup configured (see *Logs* below); read it with
 `Get-Content C:\kob\kobd.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
 while the executor runs: a mouse selection in the classic Windows console (Quick Edit mode) pauses the program's output
@@ -382,10 +393,11 @@ WantedBy=multi-user.target
 
 (`RestartSec=10` and `StartLimitIntervalSec=0` make systemd keep retrying: without them it gives up after five starts in ten
 seconds, for example while the network is still coming up after a boot.) A restart is also how the executor recovers from what it
-cannot fix while it runs: when its indexer stays halted or cannot write its database (a full disk, a corrupt file) for three
+cannot fix while it runs: when its indexer stays stopped or cannot write its database (a full disk, a corrupt file) for three
 minutes, or its read API stops serving, it logs why (`exiting so that a supervisor restarts the executor`) and exits with status
-1. Run it under a supervisor that restarts it (systemd as above, Docker's `--restart`, the Task Scheduler of section 6, the
-Android app). The hardened unit of the operations guide, with the key as a systemd credential, is `docs/ops/executor.md`, A.3.
+1. Run it under a supervisor that restarts it (systemd as above, Docker's `--restart`, `kobd-supervise.cmd` on Windows as
+above, the Android app). A store halted at a gap that needs you (`docs/ops/executor.md`, Part B 7.4) does not end the process:
+a restart would not cure it, so it stays up, halted, and the status line says so. The hardened unit of the operations guide, with the key as a systemd credential, is `docs/ops/executor.md`, A.3.
 
 **Docker (Linux)**: `crates/kobd/Dockerfile` builds the executor of one network from the source (pinned base images, a
 non-root user, uid 10001). The volume `/data` holds the configuration, the key file and the data directory
@@ -435,7 +447,8 @@ program changes. The program is not replaced while it runs, and it does not upda
    transactions in flight are kept in `kob-data`), move `kob-data` aside (or delete it) and start;
    the fast start rebuilds the live book within seconds. Make sure neither the key file nor the pause file is inside `kob-data`
    (the setup puts both next to the program; a configuration from an older setup has `pause_file = "kob-data/pause"`:
-   change it to `"kob-pause"` first, or the pause goes with the folder and the executor trades on its next start). An Indexer's archive of schema 5 to 9 is brought
+   change it to `"kob-pause"` first: the pause would go with the folder, so the executor refuses to start with a pause file inside a
+   missing data directory, and it refuses a key file inside the data directory always). An Indexer's archive of schema 5 to 9 is brought
    to schema 10 (the current one) offline with `kobd db --config kobd.toml migrate` in its folder (stop it first;
    free disk about the size of the store; the old file stays as `index.sqlite3.before-migrate` until you delete it; an older build refuses
    the migrated store; `docs/ops/executor.md`, 7.6a); any other archive rebuilds with `kobd db --config kobd.toml

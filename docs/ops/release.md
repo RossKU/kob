@@ -206,11 +206,11 @@ binds each file's SHA-256 to the workflow file, the run and the commit, and is s
 from the release page. Anyone checks a downloaded file with the GitHub CLI:
 
 ```
-gh attestation verify kobd-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz --repo RossKU/kob
+gh attestation verify kobd-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz --repo RossKU/kob --signer-workflow RossKU/kob/.github/workflows/release.yml --source-ref refs/tags/v<version>
 ```
 
-(it prints the workflow, `.github/workflows/release.yml`, and the commit; `--signer-workflow RossKU/kob/.github/workflows/release.yml`
-requires that workflow). A file or a `SHA256SUMS` swapped into the release afterwards fails it. It proves where a file was built,
+(it prints the workflow, `.github/workflows/release.yml`, and the commit; `--signer-workflow` requires that workflow and
+`--source-ref` the tag: without them a file any workflow of the repository built, on any ref, passes). A file or a `SHA256SUMS` swapped into the release afterwards fails it. It proves where a file was built,
 not that the tagged source is sound: the release hashes above and a rebuild remain the check of the source. A dry run
 (`workflow_dispatch`) attests nothing. No container image is
 published (`crates/kobd/Dockerfile` builds one from the source for operators who want a container, quickstart 6).
