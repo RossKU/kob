@@ -29,8 +29,10 @@
 //! in use and from the failed ones, in the background (a resolution that fails is tried again with the backoff below until it
 //! names a node, so an entry is never left without one). When no node is left, every entry resolves again on its next
 //! use, with a backoff (2 s doubling to 60 s) while the resolvers name none. Resolutions are rate-limited ([`CHURN_WINDOW`]:
-//! three per entry within ten minutes, then one per five minutes, and eight for all entries together), so a node that keeps
-//! being replaced cannot turn into a query storm on the public resolvers. Every change is logged with the hosts.
+//! three per entry within ten minutes, then one per five minutes, and eight for all entries together; only resolutions that
+//! named a node count, and the authority's entry, or any entry while no entry has a node, is never held back), so a node
+//! that keeps being replaced cannot turn into a query storm on the public resolvers, and a network blip that took both nodes
+//! heals within the backoff. Every change is logged with the hosts.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
@@ -76,7 +78,10 @@ pub const DROP_WINDOW: Duration = Duration::from_secs(120);
 
 /// Resolutions are rate-limited over this window (a node replaced over and over is not a node problem, and each resolution
 /// asks up to every resolver [`ROUNDS`] times): an entry resolves at most [`CHURN_FREE`] times within it before its next
-/// resolution waits [`CHURN_SPACING`] after its last, and all entries together at most [`CHURN_MAX`] times.
+/// resolution waits [`CHURN_SPACING`] after its last, and all entries together at most [`CHURN_MAX`] times. Only resolutions
+/// that named a node count (a failed one waits its own backoff, 2 s doubling to 60 s), and the chain authority's entry, or any
+/// entry while no entry has a node, is never held back: after a network blip that took both nodes, the pair is back within
+/// the backoff once the resolvers answer again.
 pub const CHURN_WINDOW: Duration = Duration::from_secs(600);
 pub const CHURN_FREE: usize = 3;
 pub const CHURN_SPACING: Duration = Duration::from_secs(300);
@@ -323,8 +328,10 @@ pub fn endpoint(url: &str) -> Result<String, String> {
                 ));
             }
             let now = Instant::now();
-            // one resolution per call (its repeats on a changed view are the same resolution)
-            let churn = if attempt == 1 { s.churn_wait(url, now) } else { Duration::ZERO };
+            // one resolution per call (its repeats on a changed view are the same resolution); never held back while the
+            // chain authority's role is empty or no entry has a node at all (a network blip took both: recovering is no churn)
+            let exempt = url == RESOLVER || s.current.is_empty();
+            let churn = if attempt == 1 && !exempt { s.churn_wait(url, now) } else { Duration::ZERO };
             if !churn.is_zero() {
                 // the refill thread sleeps until then; the first warning names why
                 let delay = s.backoff.get(url).map_or(Duration::from_secs(2), |b| b.delay);
@@ -332,12 +339,9 @@ pub fn endpoint(url: &str) -> Result<String, String> {
                 tracing::warn!(
                     entry = url,
                     retry_secs = churn.as_secs(),
-                    "public nodes were replaced too often lately: the next resolution waits (the pair goes on with the node it has)"
+                    "public nodes were replaced too often lately: the cross-check's next resolution waits (the chain authority goes on alone meanwhile)"
                 );
                 return Err(format!("no public node yet (nodes were replaced too often; again in {} s)", churn.as_secs() + 1));
-            }
-            if attempt == 1 {
-                s.resolutions.entry(url.to_string()).or_default().push_back(now);
             }
             let mut avoid: Vec<String> = s.failed.iter().cloned().collect();
             avoid.extend(in_use(&s, url));
@@ -368,6 +372,8 @@ pub fn endpoint(url: &str) -> Result<String, String> {
         }
         tracing::info!(entry = url, node = %h, resolver = %r.resolver, network = %network, role = role(url), "public Kaspa node (via the Kaspa resolver)");
         s.current.insert(url.to_string(), r.url.clone());
+        // only a resolution that named a node counts against the rate limit: a failed one has its own backoff
+        s.resolutions.entry(url.to_string()).or_default().push_back(Instant::now());
         return Ok(r.url);
     }
     unreachable!("the last attempt returns")
@@ -589,8 +595,10 @@ pub(crate) mod tests {
         assert!(s.churn_wait("resolver", min(3) + CHURN_WINDOW).is_zero());
         assert!(s.resolutions.values().all(|q| q.iter().all(|t| *t >= min(3))));
         drop(s);
-        // through endpoint: the fourth resolution of an entry within the window waits, and says so
+        // through endpoint: the fourth resolution of the cross-check's entry within the window waits, and says so (the
+        // authority has its node)
         reset(fake_resolve);
+        endpoint("resolver").unwrap();
         for _ in 0..CHURN_FREE {
             let n = endpoint("resolver:2").unwrap();
             lock().current.remove("resolver:2");
@@ -602,6 +610,57 @@ pub(crate) mod tests {
         lock().backoff.clear();
         forget_churn();
         assert!(endpoint("resolver:2").is_ok(), "the operator's try again");
+        // the authority's entry is never held back, however often it resolved
+        lock().resolutions.insert("resolver".into(), (0..CHURN_MAX).map(|_| Instant::now()).collect());
+        lock().current.remove("resolver");
+        assert!(endpoint("resolver").is_ok(), "the chain authority's role is never left empty for the rate limit");
+    }
+
+    /// Audit round 3 R3-M-1: a network blip of 15 to 30 s takes both nodes, and the resolvers cannot be reached while it lasts.
+    /// The failed resolutions do not count against the rate limit (they back off on their own, 2 s doubling, at most 60 s), and
+    /// while no entry has a node none is held back: once the resolvers answer, both entries have a node at their next attempt,
+    /// within a minute. No clock is waited for: the backoff's time is the test's to pass (it is cleared).
+    #[test]
+    fn a_network_blip_heals_within_the_backoff() {
+        fn down(_: &str, _: &[String]) -> Result<Resolved, String> {
+            Err("no Kaspa resolver named a testnet-10 node (connect: network unreachable)".into())
+        }
+        let _g = serial();
+        reset(fake_resolve);
+        let (a, b) = (endpoint("resolver").unwrap(), endpoint("resolver:2").unwrap());
+        // some churn before the blip: the cross-check's entry is at the free bound
+        lock().resolutions.get_mut("resolver:2").unwrap().extend([Instant::now(), Instant::now()]);
+        let counted = || lock().resolutions.values().map(|q| q.len()).sum::<usize>();
+        let before = counted();
+        // the link goes down: both nodes are given up (a second drop within the drop window each)
+        lock().resolve = down;
+        replace("resolver", &a, "its connection failed or was lost twice within 2 min");
+        let now_authority = current("resolver").unwrap();
+        assert_eq!(now_authority, b, "the survivor took the role");
+        replace("resolver", &b, "its connection failed or was lost twice within 2 min");
+        assert!(lock().current.is_empty(), "no node left");
+        // 30 s of failed resolutions: each backs off, none is counted, the backoff stays within a minute
+        for _ in 0..6 {
+            for entry in ["resolver", "resolver:2"] {
+                // its backoff has passed (the doubling is kept)
+                if let Some(b) = lock().backoff.get_mut(entry) {
+                    b.until = Instant::now();
+                }
+                assert!(endpoint(entry).unwrap_err().contains("no Kaspa resolver"));
+            }
+        }
+        assert_eq!(counted(), before, "a failed resolution is not churn");
+        for entry in ["resolver", "resolver:2"] {
+            let delay = lock().backoff.get(entry).map(|b| b.delay).unwrap();
+            assert_eq!(delay, Duration::from_secs(60), "{entry}: the backoff doubled to its cap, a minute, no further");
+        }
+        // the link is back: the next attempt of each entry (after its backoff) names a node, the cross-check's too
+        lock().resolve = fake_resolve;
+        lock().backoff.clear();
+        let x = endpoint("resolver:2").expect("no entry had a node: not held back");
+        let y = endpoint("resolver").expect("the authority is never held back");
+        assert_ne!(host(&x), host(&y));
+        assert_eq!(counted(), before + 2, "the two resolutions that named a node count");
     }
 
     #[test]
