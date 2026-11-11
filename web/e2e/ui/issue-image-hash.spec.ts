@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import { test, expect } from '../fixtures';
 import { OTHER_PNG, PNG } from '../helpers/kascov';
+import { clickConnectOption } from '../helpers/env';
 
 const KAS = 100_000_000n;
 const URL_ = 'https://logos.example.org/new-coin.png';
@@ -14,7 +15,7 @@ test.use({ autoOpen: false });
 test('a logo file is hashed in the browser, declared as image + image_hash, and the icon is checked against it', async ({ appPage: page, mock }) => {
   await mock.giveKas('alice', 500n * KAS);
   await page.goto('/#/create');
-  await page.getByTestId('wallet-connect-kasware').click();
+  await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
   await expect(page.getByTestId('wallet-address')).toBeVisible();
   await page.getByTestId('issue-name').fill('Hashed Logo Coin');
   await page.getByTestId('issue-ticker').fill('HLC');

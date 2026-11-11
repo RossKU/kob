@@ -2,6 +2,7 @@
 // Per-order-type specs belong to the ticket work; here: the list, the token page, live status, wallet, the shared-ticker note, health entries of the bell.
 import { expect, test, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
 import { TESTID } from '../testids';
+import { clickConnectOption } from '../helpers/env';
 
 /** The seeded token as the mock indexer reports it (prices: sompi per whole token, i.e. per 1e8 base units). */
 async function seeded(mock: import('../fixtures').MockClient) {
@@ -265,10 +266,12 @@ test.describe('token page', () => {
 
 test.describe('wallet', () => {
   test('connecting the wallet shows its address and network; disconnect returns to the connect button', async ({ appPage }) => {
-    const connect = appPage.getByTestId(TESTID.walletConnectKasware);
+    const connect = appPage.getByTestId('wallet-connect');
     await expect(connect).toBeVisible();
+    await connect.click(); // the pick: the installed extension and the private key (founder 2026-11-11)
+    await expect(appPage.getByTestId('wallet-choose').getByRole('button')).toHaveText(['Connect KasWare', 'Private key']);
     await expect(appPage.getByTestId(TESTID.walletConnectKaspire)).toHaveCount(0); // only the installed wallet is offered
-    await connect.click();
+    await appPage.getByTestId(TESTID.walletConnectKasware).click();
     const addr = appPage.getByTestId(TESTID.walletAddress);
     await expect(addr).toBeVisible();
     await expect(addr).toHaveAttribute('data-value', TEST_KEYS.alice.testnetAddress);
@@ -283,14 +286,14 @@ test.describe('wallet', () => {
     await expect(appPage.getByTestId('wallet-connected')).toHaveAttribute('data-network', 'testnet-10');
     await expect(appPage.getByTestId('banner-network-mismatch')).toHaveCount(0);
     await appPage.getByTestId('wallet-disconnect').click();
-    await expect(appPage.getByTestId(TESTID.walletConnectKasware)).toBeVisible();
+    await expect(appPage.getByTestId('wallet-connect')).toBeVisible();
   });
 
   test.describe('wallet on the wrong network', () => {
     // the wallet refuses to switch (KasWare cannot always be switched by a page): the app must block trading and say how to fix it
     test.use({ walletOptions: { network: 'mainnet', allowNetworkSwitch: false } });
     test('blocks trading and explains how to fix it', async ({ appPage }) => {
-      await appPage.getByTestId(TESTID.walletConnectKasware).click();
+      await clickConnectOption(appPage, TESTID.walletConnectKasware);
       await expect(appPage.getByTestId(TESTID.walletNetwork)).toHaveText('mainnet');
       const banner = appPage.getByTestId('banner-network-mismatch');
       await expect(banner).toContainText('testnet-10');

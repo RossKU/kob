@@ -7,16 +7,20 @@ import { mockWalletInitScript } from '../../src/testing/mock-wallets';
 
 test.use({ walletId: null, autoOpen: false });
 
-test('a click on Connect before the extension injects connects to the extension, not to the private key entry', async ({ appPage: page }) => {
+test('a click on Connect before the extension injects offers the extension (and the key), not the private key entry alone', async ({ appPage: page }) => {
   const config = buildWalletConfig({ wallet: 'kasware', secretKey: TEST_KEYS.alice.secretKey });
   // the extension is not there when the page starts; the test lets it appear (as real extensions do, a moment after the page's scripts) right after the click
   await page.addInitScript({ content: `window.__injectWallet = () => { ${mockWalletInitScript(config)} };` });
   await page.goto('/#/market');
   await page.getByTestId('wallet-connect-local-key').click(); // the button as it reads while no wallet is known yet
   await page.evaluate(() => (window as unknown as { __injectWallet: () => void }).__injectWallet());
-  await expect(page.getByTestId('wallet-address')).toBeVisible({ timeout: 15_000 });
+  // the first look finds the extension: the pick (the extension, the private key) opens, the private key entry does not
+  await expect(page.getByTestId('wallet-choose')).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId('signer-overlay')).toHaveCount(0);
   await expect(page.getByTestId('signer-frame')).toHaveCount(0);
+  await page.getByTestId('wallet-connect-kasware').click();
+  await expect(page.getByTestId('wallet-address')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId('signer-overlay')).toHaveCount(0);
 });
 
 test('without any extension the click opens the private key entry once the first look is over', async ({ appPage: page }) => {

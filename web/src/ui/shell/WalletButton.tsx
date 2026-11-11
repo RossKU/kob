@@ -61,8 +61,9 @@ export function WalletButton() {
 
 /**
  * Not connected: ONE button, "Connect", on every width, and no menu in front of it.
- *  - one extension wallet detected (KasWare, Kaspire): it connects to it at once;
- *  - two or more: a minimal pick between those (a dialog with one button each);
+ *  - an extension wallet detected (KasWare, Kaspire): a minimal pick (a dialog with one button each) between the extensions and the private key
+ *    entry, the extensions first (founder 2026-11-11: the key entry itself recommends an extension); where the browser cannot run the signer, one
+ *    extension connects at once and two or more are picked between;
  *  - none (every phone browser): it opens the private key entry, the sandboxed signer frame (SignerFrame.tsx), straight away, with its one line of caution
  *    there. There is no "no wallet detected" step. Where the browser cannot run the signer (it cannot check what the signer shows) the button says why.
  * The separate "Private key" button of the header is gone; on a desktop the private key mode is reachable from Settings too. The key is typed into the
@@ -77,7 +78,9 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
   const keyAllowed = privateKeySigningAllowed();
   const supported = keyAllowed && visibilityCheckSupported();
   const phone = isPhoneBrowser();
-  const only = w.detected.length === 1 ? w.detected[0]! : null;
+  // the private key is an option beside the extensions wherever the signer runs: then even one extension is picked, not connected at once
+  const only = w.detected.length === 1 && !supported ? w.detected[0]! : null;
+  const choose = w.detected.length > 1 || (w.detected.length > 0 && supported);
   const noExtension = w.detected.length === 0;
 
   const connectOne = (id: Parameters<typeof w.connect>[0]) => void w.connect(id).then(() => setDialog(null));
@@ -86,7 +89,7 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
   const [waiting, setWaiting] = useState(false);
   const decide = () => {
     if (only) void w.connect(only.id);
-    else if (w.detected.length > 1) setDialog('wallets');
+    else if (choose) setDialog('wallets');
     else if (supported) w.openPrivateKey();
     else setDialog('key');
   };
@@ -102,8 +105,8 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
   // no extension: the button opens the private key entry, and is named for it (the tests and the page's own scripts find it by that name)
   // the Create token page's gate (`gate`) is the same button and action, full size, with its own test ids (the header's are on the same page)
   const testid = props.gate
-    ? only ? `issue-connect-${only.id}` : w.detected.length > 1 ? 'issue-connect-choose' : 'issue-connect-local-key'
-    : narrow ? 'wallet-connect' : only ? `wallet-connect-${only.id}` : w.detected.length > 1 ? 'wallet-connect' : 'wallet-connect-local-key';
+    ? only ? `issue-connect-${only.id}` : choose ? 'issue-connect-choose' : 'issue-connect-local-key'
+    : narrow ? 'wallet-connect' : only ? `wallet-connect-${only.id}` : choose ? 'wallet-connect' : 'wallet-connect-local-key';
 
   return (
     <div class="wallet-actions" data-testid="wallet-connect-list" data-network={config.network}>
@@ -127,6 +130,11 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
                 {w.connecting ? t('shell.wallet.connecting') : t('shell.wallet.connect', { wallet: a.label })}
               </Button>
             ))}
+            {supported ? (
+              <Button block data-testid="wallet-connect-local-key" onClick={() => { setDialog(null); w.openPrivateKey(); }}>
+                {t('shell.wallet.connectKey')}
+              </Button>
+            ) : null}
           </div>
         </Modal>
       ) : null}

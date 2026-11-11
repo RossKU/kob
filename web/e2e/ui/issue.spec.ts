@@ -2,7 +2,7 @@
 // preparation declaring the token details, then the genesis spending it) with the mock KasWare wallet and with the private key (one approval in
 // the signer frame), and the blocking cases.
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { openSettingsAdvanced } from '../helpers/env';
+import { clickConnectOption, openSettingsAdvanced } from '../helpers/env';
 import { readReceipt, confirmReceipt, fillFields, pickType, placeOrder, waitReviewable } from '../helpers/ticket';
 
 const KAS = 100_000_000n;
@@ -13,7 +13,7 @@ test.describe('token issuance', () => {
   test('issues a fixed-supply token: form, review, confirmation, signing, result panel with the registry entry', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);
     await page.goto('/#/create');
-    await page.getByTestId('wallet-connect-kasware').click();
+    await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
     await expect(page.getByTestId('wallet-address')).toBeVisible();
 
     await expect(page.getByTestId('issue-form')).toBeVisible();
@@ -143,7 +143,7 @@ test.describe('token issuance', () => {
   test('a token created in one browser is found, listed and sold from a fresh profile of the same key', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);
     await page.goto('/#/create');
-    await page.getByTestId('wallet-connect-kasware').click();
+    await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
     await expect(page.getByTestId('wallet-address')).toBeVisible();
     await page.getByTestId('issue-name').fill('Fresh Profile Coin');
     await page.getByTestId('issue-ticker').fill('FRESH');
@@ -177,7 +177,7 @@ test.describe('token issuance', () => {
     });
     await page.goto(`/#/market/${tokenId}`);
     await page.reload();
-    await page.getByTestId('wallet-connect-kasware').click();
+    await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
     await expect(page.getByTestId('wallet-address')).toBeVisible();
     expect(await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk).length, alice)).toBe(0);
 
@@ -202,7 +202,7 @@ test.describe('token issuance', () => {
     await mock.seed({ tokens: [{ ticker: '', covenant_id: id, program: 'KCC20Ref', extension_commitment: null, decimals: null, hidden: true }] });
     await mock.giveTokens('alice', 500_000n, { token: id });
     await page.goto('/#/settings');
-    await page.getByTestId('wallet-connect-kasware').click();
+    await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
     await expect(page.getByTestId('wallet-address')).toBeVisible();
     await openSettingsAdvanced(page);
     await expect(page.getByTestId('tracker-empty')).toBeVisible();
@@ -237,7 +237,7 @@ test.describe('token issuance', () => {
   test('a ticker another registry token uses is a warning, never a block (the covenant id is the identity)', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);
     await page.goto('/#/create');
-    await page.getByTestId('wallet-connect-kasware').click();
+    await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
     await expect(page.getByTestId('wallet-address')).toBeVisible();
 
     await page.getByTestId('issue-name').fill('Second Example');
@@ -260,7 +260,7 @@ test.describe('token issuance', () => {
   test('holders that exceed the supply block the review; the wallet share is the remainder', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);
     await page.goto('/#/create');
-    await page.getByTestId('wallet-connect-kasware').click();
+    await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
     await expect(page.getByTestId('wallet-address')).toBeVisible();
 
     await page.getByTestId('issue-name').fill('Split Coin');
@@ -288,7 +288,7 @@ test.describe('token issuance', () => {
   test('a wallet without enough KAS sees the exact shortfall and cannot review', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 4n * KAS);
     await page.goto('/#/create');
-    await page.getByTestId('wallet-connect-kasware').click();
+    await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
     await expect(page.getByTestId('wallet-address')).toBeVisible();
 
     await page.getByTestId('issue-name').fill('Poor Coin');
@@ -304,7 +304,7 @@ test.describe('token issuance', () => {
   test('a creation whose genesis did not go out is offered again and sent without a new signature', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);
     await page.goto('/#/create');
-    await page.getByTestId('wallet-connect-kasware').click();
+    await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
     await expect(page.getByTestId('wallet-address')).toBeVisible();
     await page.getByTestId('issue-name').fill('Resume Coin');
     await page.getByTestId('issue-ticker').fill('RESUME');
@@ -339,20 +339,32 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-pending')).toHaveCount(0);
   });
 
-  for (const [name, width] of [['phone 390 px', 390], ['desktop 1280 px', 1280]] as const) {
-    test(`${name}: with an extension detected the gate's Connect connects it (a phone: the one Connect, a desktop: a button for the wallet)`, async ({ appPage: page, mock }) => {
-      await page.setViewportSize({ width, height: 800 });
-      await mock.giveKas('alice', 500n * KAS);
-      await page.goto('/#/create');
-      const button = page.getByTestId('issue-connect').getByRole('button');
-      await expect(button).toHaveCount(1);
-      await expect(page.getByTestId('issue-connect-kasware')).toBeVisible();
-      await expect(page.getByTestId('issue-connect-kasware')).toHaveText(width < 760 ? 'Connect' : /Connect KasWare/);
-      await page.getByTestId('issue-connect-kasware').click();
-      await expect(page.getByTestId('wallet-address')).toBeVisible();
-      await expect(page.getByTestId('issue-connect')).toHaveCount(0);
-    });
-  }
+  test('desktop 1280 px: with an extension detected the gate has a button for each extension (the private key is offered by the header Connect there)', async ({ appPage: page, mock }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await mock.giveKas('alice', 500n * KAS);
+    await page.goto('/#/create');
+    const button = page.getByTestId('issue-connect').getByRole('button');
+    await expect(button).toHaveCount(1);
+    await expect(page.getByTestId('issue-connect-kasware')).toBeVisible();
+    await expect(page.getByTestId('issue-connect-kasware')).toHaveText(/Connect KasWare/);
+    await page.getByTestId('issue-connect-kasware').click();
+    await expect(page.getByTestId('wallet-address')).toBeVisible();
+    await expect(page.getByTestId('issue-connect')).toHaveCount(0);
+  });
+
+  test('phone 390 px: with an extension detected the gate has the one Connect, which offers the extension and the private key (founder 2026-11-11)', async ({ appPage: page, mock }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mock.giveKas('alice', 500n * KAS);
+    await page.goto('/#/create');
+    const button = page.getByTestId('issue-connect').getByRole('button');
+    await expect(button).toHaveCount(1);
+    await expect(page.getByTestId('issue-connect-choose')).toHaveText('Connect');
+    await page.getByTestId('issue-connect-choose').click();
+    await expect(page.getByTestId('wallet-choose').getByRole('button')).toHaveText(['Connect KasWare', 'Private key']);
+    await page.getByTestId('wallet-connect-kasware').click();
+    await expect(page.getByTestId('wallet-address')).toBeVisible();
+    await expect(page.getByTestId('issue-connect')).toHaveCount(0);
+  });
 
   test('without a wallet the view asks for a connection and does not plan', async ({ appPage: page }) => {
     await page.goto('/#/create');

@@ -3,6 +3,7 @@
 import type { Page } from '@playwright/test';
 import { expect, openBell, statusEntry, test, TEST_KEYS, type MockClient } from '../fixtures';
 import { TESTID, orderRow } from '../testids';
+import { clickConnectOption } from '../helpers/env';
 
 async function seedAsk(mock: MockClient, price = 2_505_000, tokens = 5) {
   const tok = await mock.token();
@@ -29,7 +30,7 @@ async function enableNotifications(page: Page) {
 test.describe('chain re-organisations', () => {
   test('a routine re-org is silent: no banner, no indicator, no notification, and the page keeps working', async ({ appPage, mock }) => {
     const { order } = await seedAsk(mock);
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     await expect(appPage.getByTestId(orderRow(order.covenant_id))).toHaveAttribute('data-status', 'open');
     await enableNotifications(appPage);
@@ -57,7 +58,7 @@ test.describe('chain re-organisations', () => {
   test('a reverted fill of the user\'s own order is a notification naming the amount, the price and the state of the order', async ({ appPage, mock }) => {
     const { order } = await seedAsk(mock);
     await mock.fill(order.covenant_id, 2n * 100_000_000n, { taker: 'bob' });
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     const row = appPage.getByTestId(orderRow(order.covenant_id));
     await expect(row).toHaveAttribute('data-status', 'partial');

@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { test, expect } from '../fixtures';
 import type { Page } from '@playwright/test';
 import { formatKas } from '../../src/kob/units';
-import { mockClock } from '../helpers/env';
+import { clickConnectOption, mockClock } from '../helpers/env';
 import { chooseOption, optionValues } from '../helpers/dropdown';
 import { clickPlace, clickPlaceOnly, expectStopped, expectWalletSigned, fillFields, peekReceipt, pickType, placedBy, placeOrder, placeOrderAndRead, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
@@ -34,7 +34,7 @@ async function openTicket(page: Page, mock: { token(): Promise<{ covenant_id: st
   const token = await mock.token();
   await page.goto(`${process.env.KOB_E2E_BASE ?? '/'}#/market/${token.covenant_id}`);
   if (connect) {
-    await page.getByTestId('wallet-connect-kasware').click();
+    await clickConnectOption(page, 'wallet-connect-kasware');
     await expect(page.getByTestId('wallet-address')).toBeVisible();
   }
   await expect(page.getByTestId('order-ticket')).toBeVisible();

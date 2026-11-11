@@ -45,9 +45,10 @@ export async function openMarket(page: Page, mock: MockClient, opts: OpenOptions
 }
 
 /**
- * Presses the one Connect button of the header, whichever it is called: a desktop with one extension wallet shows `wallet-connect-<id>`, with none
- * `wallet-connect-local-key` (it opens the private key entry), with several `wallet-connect` (a dialog with one button each); a phone has `wallet-connect`
- * (one extension: connects at once; none: the private key entry; several: the dialog). Returns when the press is made; the caller waits for its effect.
+ * Presses the one Connect button of the header and, where that opens the pick, the option `optionTestId` in it. The header button is called
+ * `wallet-connect-local-key` with no extension detected on a desktop (it opens the private key entry), and `wallet-connect` otherwise: with an extension
+ * detected and the private key signer running it opens the pick (the extensions, then "Private key"; founder 2026-11-11), with an extension and no signer
+ * one extension connects at once; a phone's button is always `wallet-connect`. Returns when the options are pressed; the caller waits for the effect.
  */
 export async function openConnect(page: Page, optionTestId: string): Promise<void> {
   const option = page.getByTestId(optionTestId);
@@ -57,6 +58,8 @@ export async function openConnect(page: Page, optionTestId: string): Promise<voi
     return;
   }
   await page.getByTestId('wallet-connect').click();
+  // the pick (a dialog) opens when an extension is detected; with none the button went straight to the private key entry or the connection
+  if (await option.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true, () => false)) await option.click();
 }
 
 /** Follows a tab of the header (`nav-portfolio` ...): on a phone the tabs are in the menu, which is opened first. */
@@ -99,7 +102,7 @@ export async function clickConnectOption(page: Page, optionTestId: string): Prom
       await option.click({ timeout: 2_000 });
       return;
     }
-    // the phone layout: its one Connect button connects the one extension, opens the private key entry or (several wallets) a dialog with the options
+    // the pick: the Connect button opens a dialog with the extensions and the private key (with no extension it opens the private key entry instead)
     await page.getByTestId('wallet-connect').click({ timeout: 2_000 });
     if (await option.isVisible()) await option.click({ timeout: 2_000 });
   }).toPass({ timeout: 20_000 });

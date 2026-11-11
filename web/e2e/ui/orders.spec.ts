@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test, TEST_KEYS, type MockClient } from '../fixtures';
 import { TESTID, orderCancel, orderReplace, orderRow } from '../testids';
 import { loadKobNode } from '../../src/kob/wasm.node';
-import { listExkcc, openConnect, openOrdersSettings } from '../helpers/env';
+import { clickConnectOption, listExkcc, openConnect, openOrdersSettings } from '../helpers/env';
 import { runFlow, openOrderRow } from '../helpers/orders';
 
 /** an ask of `tokens` whole EXKCC at `price` sompi per whole token (2_505_000 = 0.02505 EXKCC per KAS) */
@@ -23,7 +23,7 @@ test.describe('my orders', () => {
 
   test('an order seeded for the wallet key appears with type, price, amount, status and escrowed balances', async ({ appPage, mock }) => {
     const { tok, order } = await seedAsk(mock);
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     const row = appPage.getByTestId(orderRow(order.covenant_id));
     await expect(row).toBeVisible();
@@ -59,14 +59,14 @@ test.describe('my orders', () => {
     await expect(appPage.getByTestId(`token-row-${tok.covenant_id}`).getByTestId('badge-unverified')).toHaveCount(0);
     await appPage.goto(`/#/market/${tok.covenant_id}`);
     await expect(appPage.getByTestId('token-header')).toContainText(listText);
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     await expect(appPage.getByTestId(orderRow(order.covenant_id)).getByTestId('order-token')).toHaveText(listText);
   });
 
   test('cancel: the click starts the flow and asks the wallet at once, the cancellation is accepted and the order is closed', async ({ appPage, mock, wallet }) => {
     const { order } = await seedAsk(mock);
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     await appPage.getByTestId(orderCancel(order.covenant_id)).click();
     await expect(appPage.getByTestId('tx-flow')).toBeVisible();
@@ -86,7 +86,7 @@ test.describe('my orders', () => {
 
   test('cancel-all asks for confirmation first; the confirmed flow asks the wallet at once', async ({ appPage, mock, wallet }) => {
     await seedAsk(mock);
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     await appPage.getByTestId(TESTID.ordersCancelAll).click();
     await expect(appPage.getByTestId('cancel-all-dialog')).toContainText('1 order');
@@ -100,7 +100,7 @@ test.describe('my orders', () => {
   test('amend: validates the form, previews the new price and starts the replacement', async ({ appPage, mock, wallet }) => {
     const { order } = await seedAsk(mock);
     await mock.giveKas('alice', 50n * 10n ** 8n); // the replacement needs a fresh carrier: a wallet without KAS gets a clear refusal instead
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     await openOrderRow(appPage, order.covenant_id);
     await appPage.getByTestId(orderReplace(order.covenant_id)).click();
@@ -121,7 +121,7 @@ test.describe('my orders', () => {
   test('amend end to end: the order is amended in place and rests at the new price under the same id', async ({ appPage, mock, wallet }) => {
     const { order } = await seedAsk(mock);
     await mock.giveKas('alice', 50n * 10n ** 8n);
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     await openOrderRow(appPage, order.covenant_id);
     await appPage.getByTestId(orderReplace(order.covenant_id)).click();
@@ -135,7 +135,7 @@ test.describe('my orders', () => {
 
   test('an in-place amend needs no KAS in the wallet: the order\'s own carrier pays the fee', async ({ appPage, mock, wallet }) => {
     const { order } = await seedAsk(mock);
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     await openOrderRow(appPage, order.covenant_id);
     await appPage.getByTestId(orderReplace(order.covenant_id)).click();
@@ -170,10 +170,10 @@ test.describe('recover', () => {
     };
     const storeKey = `kob.records.v1:testnet-10:${key.pubkey}`;
     await appPage.evaluate(([k, v]) => localStorage.setItem(k, v), [storeKey, JSON.stringify({ [order.covenant_id]: record })]);
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await appPage.goto('/#/portfolio/open');
     await appPage.reload();
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await openOrdersSettings(appPage);
     await expect(appPage.getByTestId('recover-count')).toContainText('1 placement');
 
@@ -191,7 +191,7 @@ test.describe('recover', () => {
     await appPage.reload(); // no page that still reads the indexer is left to write the record back
     await appPage.evaluate((k) => localStorage.removeItem(k), storeKey);
     await appPage.reload();
-    await appPage.getByTestId(TESTID.walletConnectKasware).click();
+    await clickConnectOption(appPage, TESTID.walletConnectKasware);
     await openOrdersSettings(appPage); // the section is folded again after a reload
     await expect(appPage.getByTestId('recover-count')).toContainText('0 placement');
     await appPage.getByTestId(TESTID.ordersImport).setInputFiles(path);

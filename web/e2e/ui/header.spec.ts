@@ -39,7 +39,7 @@ for (const width of [1280, 1024, 900, 880]) {
     const wide = (await page.getByTestId('nav-market').count()) === 1;
     if (width >= 880) expect(wide, `the desktop row fits ${width} px on a wide font`).toBe(true);
     const ids = wide
-      ? ['brand', 'nav-market', 'nav-settings', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'theme-toggle', 'notify-bell']
+      ? ['brand', 'nav-market', 'nav-settings', 'status-dot', 'network-chip', 'wallet-connect', 'theme-toggle', 'notify-bell']
       : ['brand', 'network-chip', 'wallet-connect', 'notify-bell', 'menu-button'];
     const { ys, right } = await rowOf(page, ids);
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
@@ -79,7 +79,7 @@ for (const [width, spare] of [[1280, 20]] as const) {
 test('desktop: a row that does not fit (wide fonts, a long translation) becomes the phone layout, still one row, and comes back when the window is wider', async ({ appPage: page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/#/market');
-  await expect(page.getByTestId('wallet-connect-kasware')).toBeVisible();
+  await expect(page.getByTestId('wallet-connect')).toBeVisible();
   await expect(page.getByTestId('nav-market')).toBeVisible();
   await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip, .header .brand span { letter-spacing: 12px; }' });
   await expect(page.getByTestId('menu-button')).toBeVisible();
@@ -106,7 +106,7 @@ test('a header that started narrow comes back to the full row when the window is
     await expect(page.getByTestId('nav-market'), `the tabs at ${width} px`).toBeVisible();
     await expect(page.getByTestId('nav-settings')).toBeVisible();
     await expect(page.getByTestId('menu-button')).toHaveCount(0);
-    const { ys, right } = await rowOf(page, ['brand', 'nav-market', 'status-dot', 'network-chip', 'wallet-connect-kasware', 'theme-toggle', 'notify-bell']);
+    const { ys, right } = await rowOf(page, ['brand', 'nav-market', 'status-dot', 'network-chip', 'wallet-connect', 'theme-toggle', 'notify-bell']);
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
     expect(right).toBeLessThanOrEqual(width);
   }
@@ -148,8 +148,10 @@ test('the brand leads to the landing screen (the empty hash), not to the market 
   await expect(page.getByTestId('brand')).toHaveAttribute('href', '#/');
 });
 
-test('desktop: Connect wallet connects the one extension at once; the connected chip shows the address and the buttons are gone', async ({ appPage: page }) => {
+test('desktop: Connect offers the one extension and the private key side by side (founder 2026-11-11); the extension connects, the chip shows the address and the buttons are gone', async ({ appPage: page }) => {
   await page.goto('/#/market');
+  await page.getByTestId('wallet-connect').click();
+  await expect(page.getByTestId('wallet-choose').getByRole('button')).toHaveText(['Connect KasWare', 'Private key']);
   await page.getByTestId('wallet-connect-kasware').click();
   await expect(page.getByTestId('wallet-address')).toContainText(/^kaspatest:q/);
   await expect(page.getByTestId('wallet-connect-list')).toHaveCount(0);
@@ -241,12 +243,14 @@ test.describe('phone', () => {
     await expect(page.getByTestId('menu-panel')).toBeVisible();
   });
 
-  test('Connect connects the extension at once (no sheet), the connected header shows the short address in one row (on a wide font too)', async ({ appPage: page }) => {
+  test('Connect offers the extension and the private key (the pick, no sheet); the extension connects, the connected header shows the short address in one row (on a wide font too)', async ({ appPage: page }) => {
     await wideFonts(page);
     await page.setViewportSize({ width: 375, height: 800 });
     await page.goto('/#/market');
     await page.getByTestId('wallet-connect').click();
     await expect(page.getByTestId('wallet-sheet')).toHaveCount(0);
+    await expect(page.getByTestId('wallet-choose').getByRole('button')).toHaveText(['Connect KasWare', 'Private key']);
+    await page.getByTestId('wallet-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{3}…\w{4}$/);
     await expect(page.getByTestId('wallet-sheet')).toHaveCount(0);
     // the runner's fonts are wider still than Verdana: a little more letter spacing stands for them
@@ -302,12 +306,13 @@ test('desktop 1440 px: the tabs sit in the true centre of the row where it has r
     expect((await header.boundingBox())!.height, 'one row').toBeLessThan(60);
   };
   await placement();
-  const connect = page.getByTestId('wallet-connect-kasware');
+  const connect = page.getByTestId('wallet-connect');
   await expect(connect).toHaveClass(/btn-pill/);
   const s = await connect.evaluate((e) => { const c = getComputedStyle(e); return { r: parseFloat(c.borderTopLeftRadius), h: e.getBoundingClientRect().height }; });
   expect(s.r).toBeGreaterThanOrEqual(s.h / 2 - 0.5);
   // connected: the wider wallet chip, still one row
   await connect.click();
+  await page.getByTestId('wallet-connect-kasware').click();
   await expect(page.getByTestId('wallet-connected')).toBeVisible();
   if (await page.getByTestId('nav-market').isVisible()) await placement();
   else expect((await header.boundingBox())!.height, 'one row').toBeLessThan(60);

@@ -23,6 +23,7 @@ export default {
   'shell.wallet.connect': 'Connect {wallet}',
   'shell.wallet.connectShort': 'Connect',
   'shell.wallet.chooseTitle': 'Connect a wallet',
+  'shell.wallet.connectKey': 'Private key',
   'shell.wallet.connecting': 'Connecting...',
   'shell.wallet.disconnect': 'Disconnect',
   'shell.wallet.connectedWith': 'Connected with {wallet}',
