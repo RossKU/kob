@@ -17,7 +17,7 @@ import { formatUtc } from '../../kob/daa';
 import { expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from '../../wallet/sign';
 import { signAndSubmitCreation } from '../../wallet/create';
 import { pendingSpends } from '../../app/pending-spends';
-import { Banner, Button, CopyText, Modal, RawDetails, Spinner, copyToClipboard } from '../kit';
+import { Banner, Button, CopyText, Modal, RawDetails, Spinner, copyToClipboard, unitParts } from '../kit';
 import { rowTimeTitleUnix, shortId } from '../kit/format';
 import type { ConfirmModel, Finding, Row, Section } from './confirm-model';
 import { buildIssuanceModel } from './issuance-model';
@@ -59,7 +59,7 @@ function Rows(props: { rows: Row[]; testPrefix: string }) {
         <div class={`cf-row ${tone(r.tone)}`} key={r.id}>
           <dt>{r.label}</dt>
           <dd data-testid={`${props.testPrefix}-${r.id}`}>
-            <span class="cf-value">{r.value}</span>
+            <span class="cf-value">{unitParts(r.value, true)}</span>
             {r.detail ? <span class="cf-detail">{r.detail}</span> : null}
           </dd>
         </div>

@@ -30,7 +30,7 @@ import { openTokenIdentity, type Row } from './confirm-model';
 import { DAA_PER_SECOND, untilWords } from '../../signer/words';
 import { expectedOutputs, signAndSubmit, waitForAcceptance } from '../../wallet/sign';
 import type { LiveSigning } from '../../wallet/types';
-import { Button, CopyText, Modal, RawDetails, Spinner } from '../kit';
+import { Button, CopyText, Modal, RawDetails, Spinner, unitParts } from '../kit';
 import { classifyFailure } from './confirm-flow';
 import { checkBeforeSigning, recordAccepted, registryOfJob, type SendJob } from './send';
 import { SigningTimer, rememberSigningMs } from './signing-time';
@@ -407,7 +407,7 @@ function OrderTable(props: { order: SummaryOrder; testid: string; cell: string; 
         {o.rows.map((r, i) => (
           <div class={`send-line${props.live.flash(`${props.cell}:r:${i}`)}`} key={i}>
             <dt><span key={r.label}>{r.label}</span></dt>
-            <dd {...(r.daa ? { 'data-daa': r.daa } : {})}>{r.daa ? <TimeValue daa={BigInt(r.daa)} value={r.value} now={props.live.daa} /> : <span key={r.value}>{r.value}</span>}</dd>
+            <dd {...(r.daa ? { 'data-daa': r.daa } : {})}>{r.daa ? <TimeValue daa={BigInt(r.daa)} value={r.value} now={props.live.daa} /> : <span key={r.value}>{unitParts(r.value, true)}</span>}</dd>
           </div>
         ))}
       </dl>
@@ -487,7 +487,7 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
           {s.lines.map((l, i) => (
             <div class={`send-line ${l.dir ?? ''}${live.flash(`l:${i}`)}`} key={i}>
               <dt><span key={l.label}>{l.label}</span></dt>
-              <dd><span key={l.value}>{l.value}</span></dd>
+              <dd><span key={l.value}>{unitParts(l.value, true)}</span></dd>
             </div>
           ))}
           <div class={`send-line send-fee${live.flash('fee')}`}>
@@ -508,7 +508,7 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
             {st.identity.map((r) => (
               <div class="send-line" key={r.id} data-testid="confirm-order-identity-row" data-row={r.id} data-tone={r.tone}>
                 <dt><span>{r.label}</span></dt>
-                <dd><span>{r.value}</span>{r.detail ? <small class="muted">{r.detail}</small> : null}</dd>
+                <dd><span>{unitParts(r.value, true)}</span>{r.detail ? <small class="muted">{r.detail}</small> : null}</dd>
               </div>
             ))}
           </dl>

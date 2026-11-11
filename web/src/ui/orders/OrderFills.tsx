@@ -9,7 +9,7 @@ import { has, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatKas } from '../../kob/units';
-import { Button, CopyText, ErrorBanner, displayPriceText, exactPriceText, formatRowTimeUnix, Loading, rowTimeTitleUnix, Table, useAsync } from '../kit';
+import { Button, CopyText, ErrorBanner, unitParts, displayPriceText, exactPriceText, formatRowTimeUnix, Loading, rowTimeTitleUnix, Table, useAsync } from '../kit';
 import { downloadText } from '../kit/download';
 import { fillHistory, fillsCsv, fillsFileName } from './fills-model';
 import type { OrderRowModel } from './orders-model';
@@ -71,7 +71,7 @@ export function OrderFills(props: OrderFillsProps) {
             <>
               <p data-testid="order-fills-summary">
                 {t('orders.fills.summary', { fills: countText('fill', h.rows.length), amount: `${amountText(h.amount)} ${unit.text}`.trim() })}
-                {h.avgPrice !== null ? <span title={priceTitle(h.avgPrice)}>{` · ${t('orders.fills.avg', { price: price(h.avgPrice) })}`}</span> : ''}
+                {h.avgPrice !== null ? <span title={priceTitle(h.avgPrice)}>{' · '}{unitParts(t('orders.fills.avg', { price: price(h.avgPrice) }), true)}</span> : ''}
                 {h.payout > 0n ? ` · ${fiat ? t('orders.fills.payoutUsd', { usd: kasValueText(h.payout, fiat) }) : t('orders.fills.payout', { kas: formatKas(h.payout) })}` : ''}
               </p>
               {h.rows.length ? (
@@ -86,7 +86,7 @@ export function OrderFills(props: OrderFillsProps) {
                           <th>{t('orders.fills.via')}</th>
                         </>
                       ) : (
-                        <th class="right">{t('orders.fills.priceIn', { unit: t(fiat ? 'orders.unit.usdPer' : 'orders.unit.kasPer', { ticker: unit.text || '?' }) })}</th>
+                        <th class="right">{unitParts(t('orders.fills.priceIn', { unit: t(fiat ? 'orders.unit.usdPer' : 'orders.unit.kasPer', { ticker: unit.text || '?' }) }))}</th>
                       )}
                       <th>{t('orders.fills.tx')}</th>
                     </tr>

@@ -47,6 +47,7 @@ export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmente
 export { Loading, Spinner, type SpinnerProps } from './Spinner';
 export { SortButton, SortControl, sortKeyOf, useSortState } from './SortHeader';
 export { ariaSortOf, chooseSort, nextSort, scaledUnits, sortBy, type SortColumn, type SortDir, type SortState, type SortValue } from './sort';
+export { UnitText, unitParts } from './UnitText';
 export { Table, TableMessage, type TableProps } from './Table';
 export { Tabs, type TabItem } from './Tabs';
 export { ToastHost, useToasts } from './Toast';

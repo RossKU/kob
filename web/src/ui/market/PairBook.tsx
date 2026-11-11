@@ -3,6 +3,7 @@
 // (if-done pair entries resting at their limit) and `route` (`via KAS`: implied through the two KAS books in one transaction; its price in italics); the legend under the book says
 // it once and a row's title names its source. A click on a level prefills the pair ticket: an ask means "buy BASE at this price", a bid "sell BASE at this price".
 import { t } from '../../i18n';
+import { unitParts } from '../kit';
 import { spreadLine, type PairBookModel, type PairLevelRow } from './pair-model';
 
 export interface PairBookProps {
@@ -58,7 +59,7 @@ export function PairBook(props: PairBookProps) {
   return (
     <div class="book ob pair-book tk-in" data-testid="pair-book" style={props.rows ? { '--ob-rows': String(props.rows) } : undefined}>
       <div class="ob-head" aria-hidden="true">
-        <span>{t('pair.book.price', { base: props.base, quote: props.quote })}</span>
+        <span>{unitParts(t('pair.book.price', { base: props.base, quote: props.quote }))}</span>
         <span>{t('pair.book.amount', { base: props.base })}</span>
         <span>{t('pair.book.total', { quote: props.quote })}</span>
       </div>

@@ -21,7 +21,7 @@ import type { CandleInterval } from '../../data/indexer-types';
 import type { IndexerApi } from '../../data/indexer';
 import { CANDLE_INTERVALS } from '../../data/indexer';
 import { t } from '../../i18n';
-import { ErrorBanner, useAsync } from '../kit';
+import { ErrorBanner, unitParts, useAsync } from '../kit';
 import { loadCandles, MAX_BARS, type ChartSource, type ChartView } from './candle-feed';
 import { useTheme } from '../shell/theme';
 import { useMedia } from '../shell/narrow';
@@ -682,7 +682,7 @@ export function PriceChart(props: PriceChartProps) {
           </span>
         ) : null}
         {/* the unit stays when there is nothing to read out (a market with no trades yet) */}
-        <span class="chart-unit" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' })}</span>
+        <span class="chart-unit" data-testid="chart-unit">{unitParts(t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' }))}</span>
       </div>
       <ErrorBanner error={candles.error ?? libError} title={t('market.chart.error')} onRetry={candles.reload} />
       <div class="chart-box">

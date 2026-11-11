@@ -2,6 +2,7 @@ import type { RefObject } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { kasTitleOf, sompiToUsdCompact, type Fiat } from '../../app/fiat';
 import { formatNumber, t } from '../../i18n';
+import { unitParts } from '../kit';
 import { depthGeometry, type DepthSeries } from './market-model';
 
 const HEIGHT = 160; // the least height (market.css: the depth chart's box floor on three columns, where the panel's height is the ticket's row split with the chart; elsewhere the box is 240 px): the drawing follows its box
@@ -146,7 +147,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
       <figcaption class="depth-legend">
         <span><i style="background:var(--buy)" />{t('market.depth.bids')}</span>
         <span><i style="background:var(--sell)" />{t('market.depth.asks')}</span>
-        {props.priceUnit ? <span data-testid="depth-price-unit">{t('market.depth.priceAxis', { unit: props.priceUnit })}</span> : null}
+        {props.priceUnit ? <span data-testid="depth-price-unit">{unitParts(t('market.depth.priceAxis', { unit: props.priceUnit }))}</span> : null}
         <span class="grow" />
         {summary ? (
           <span data-testid="depth-summary">

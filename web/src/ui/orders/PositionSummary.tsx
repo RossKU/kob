@@ -6,7 +6,7 @@ import type { Position } from '../../kob/positions';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { useFiat } from '../../app/use-fiat';
-import { Amount, Button, Loading, scaleOfDecimals, toError, useAsync } from '../kit';
+import { Amount, Button, Loading, scaleOfDecimals, toError, unitParts, useAsync } from '../kit';
 import { amountCell, longDate, priceDpOf, tokenUnit } from './cells';
 import { countText } from './plural';
 import { ratio, realisedPnl, summarizePositionFills, type PositionFills, type PositionSummary } from './position-model';
@@ -32,7 +32,7 @@ function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: b
   if (p.pair) {
     const q = p.pair.quote;
     const base = tk?.ticker ?? '?';
-    return <span data-unit="pair">{`${amountCell(p.value, q?.decimals ?? RAW_TOKEN_DECIMALS).text} ${q?.ticker ?? '?'} per ${base}`}</span>;
+    return <span data-unit="pair">{unitParts(`${amountCell(p.value, q?.decimals ?? RAW_TOKEN_DECIMALS).text} ${q?.ticker ?? '?'} per ${base}`, true)}</span>;
   }
   // one number of decimals for every price of the card (entry, exits, averages: `priceDpOf`, 5 significant digits, at most 6), the exact price in the title
   return <Amount kind="price" value={p.value} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} scale={p.scale} unit={t('orders.unit.kasPer', { ticker: tokenUnit(tk?.ticker, tk?.covenantId).text || '?' })} fraction={p.dp} group fiat={fiat} />;

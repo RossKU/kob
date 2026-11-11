@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
-import { Dropdown } from '../kit';
+import { Dropdown, unitParts } from '../kit';
 import { tapeTime } from './market-model';
 import type { BookRowView, BookView } from './orientation';
 
@@ -94,7 +94,7 @@ export function BookFrame(props: { head?: { price: string; size: string; total: 
   return (
     <div class="book ob" role="status" aria-label={t('common.loading')} data-testid={props['data-testid']} style={{ '--ob-rows': String(props.rows) }}>
       <div class="ob-head" aria-hidden="true">
-        <span>{props.head?.price}</span>
+        <span>{props.head ? unitParts(props.head.price) : null}</span>
         <span>{props.head?.size}</span>
         <span>{props.head?.total}</span>
       </div>
@@ -124,7 +124,7 @@ export function OrderBook(props: OrderBookProps) {
   return (
     <div class="book ob tk-in" data-testid="order-book" style={{ '--ob-rows': String(props.rows) }}>
       <div class="ob-head" aria-hidden="true">
-        <span>{m.head.price}</span>
+        <span>{unitParts(m.head.price)}</span>
         <span>{m.head.size}</span>
         <span>{m.head.total}</span>
       </div>

@@ -7,7 +7,7 @@ import type { TokenInfo } from '../../kob/registry';
 import type { Hex, OrderState } from '../../kob/types';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { formatUnits, parseKas, parsePricePerToken, safeRounding, tokenPriceToStatePrice, tryParseKas, tryParseUnits } from '../../kob/units';
-import { Banner, Button, Field, IssueLine, Modal, kasText, pricePerTokenText, toError } from '../kit';
+import { Banner, Button, Field, IssueLine, Modal, kasText, pricePerTokenText, toError, unitParts } from '../kit';
 import { planAmendFor, describeActionError } from './actions';
 import { buildReplacement, type AmendInput, type AmendKind } from './amend';
 import type { OrderRowModel } from './orders-model';
@@ -187,7 +187,7 @@ export function AmendDialog(props: AmendDialogProps) {
       <div class="stack-sm">
         {hasTp ? (
           <Field
-            label={t(kind === 'limit' ? 'orders.amend.price' : 'orders.amend.takeProfit', { unit })}
+            label={unitParts(t(kind === 'limit' ? 'orders.amend.price' : 'orders.amend.takeProfit', { unit }))}
             value={form.price}
             onValue={(v) => set('price', v)}
             inputMode="decimal"
@@ -196,11 +196,11 @@ export function AmendDialog(props: AmendDialogProps) {
           />
         ) : null}
         {hasStop ? (
-          <Field label={t('orders.amend.stop', { unit })} value={form.stop} onValue={(v) => set('stop', v)} inputMode="decimal" error={errText('stop', 'stop')} data-testid="amend-stop" />
+          <Field label={unitParts(t('orders.amend.stop', { unit }))} value={form.stop} onValue={(v) => set('stop', v)} inputMode="decimal" error={errText('stop', 'stop')} data-testid="amend-stop" />
         ) : null}
         {hasStop ? (
           <Field
-            label={t('orders.amend.stopLimit', { unit })}
+            label={unitParts(t('orders.amend.stopLimit', { unit }))}
             value={form.stopLimit}
             onValue={(v) => set('stopLimit', v)}
             inputMode="decimal"

@@ -6,7 +6,7 @@ import { formatUnits, safeRounding } from '../../kob/units';
 import { formatLocalTime, nextUtcMidnight } from '../../kob/daa';
 import { kasWords, tokenWords } from '../../signer/words';
 import { invertedToNativePriceText, nativeToInvertedPriceText } from '../market/orientation';
-import { Checkbox, Dropdown, Field, FieldShell, Segmented } from '../kit';
+import { Checkbox, Dropdown, Field, FieldShell, Segmented, unitParts } from '../kit';
 import { AmountSlider, type AmountSliderProps } from './AmountSlider';
 import {
   BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, baseToKas, kasTextOf, parseTouch, priceInfo,
@@ -123,7 +123,7 @@ export function TicketFields(props: TicketFieldsProps) {
       disabled
       readOnly
       data-testid="order-price-market"
-      suffix={<span class="tk-suffix"><span class="tk-unit">{props.flip ? t('ticket.unit.per', { unit: props.flip.name, per: 'KAS' }) : t('ticket.unit.per', { unit: props.quoteTicker ?? 'KAS', per: ticker })}</span></span>}
+      suffix={<span class="tk-suffix"><span class="tk-unit">{unitParts(props.flip ? t('ticket.unit.per', { unit: props.flip.name, per: 'KAS' }) : t('ticket.unit.per', { unit: props.quoteTicker ?? 'KAS', per: ticker }))}</span></span>}
     />
   );
   const fieldOf = (id: string): ComponentChildren => {
@@ -240,7 +240,7 @@ export function TicketFields(props: TicketFieldsProps) {
           // "X per Y", never the pair notation "TOKEN / KAS" (it reads as tokens per KAS)
           // a pair prices in its quote token B; a tip is KAS on every market
           const quote = spec.kind === 'tip' ? 'KAS' : props.quoteTicker ?? 'KAS';
-          suffix = <span class="tk-unit">{flipped ? t('ticket.unit.per', { unit: flipped.name, per: 'KAS' }) : props.flip ? t('ticket.flip.tipUnit', { name: props.flip.name }) : t('ticket.unit.per', { unit: quote, per: ticker })}</span>;
+          suffix = <span class="tk-unit">{unitParts(flipped ? t('ticket.unit.per', { unit: flipped.name, per: 'KAS' }) : props.flip ? t('ticket.flip.tipUnit', { name: props.flip.name }) : t('ticket.unit.per', { unit: quote, per: ticker }))}</span>;
           if (props.flip && spec.kind === 'tip' && value !== '') {
             const f = props.flip;
             const tip = Number(value);

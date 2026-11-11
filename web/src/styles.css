@@ -626,6 +626,9 @@ body.modal-open { overflow: hidden; }
 
 .amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .amount-unit { color: var(--muted); margin-left: 4px; font-size: 0.88em; }
+/* the "per TOKEN" part of a price unit (kit/UnitText.tsx): two steps smaller than the quote beside it (one on phones), never below 11px (founder 2026-11-12) */
+.unit-per { font-size: max(11px, 0.8em); }
+@media (max-width: 639px) { .unit-per { font-size: max(11px, 0.9em); } }
 .copy { display: inline-flex; align-items: center; gap: 4px; }
 .copy-btn {
   flex: none; white-space: nowrap;

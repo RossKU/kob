@@ -1,4 +1,5 @@
 import { t } from '../../i18n';
+import { unitParts } from '../kit';
 import type { StatsModel } from './market-model';
 
 function Stat(props: { label: string; value: string | null; title?: string | null; tone?: string | null; testid: string; loading: boolean; thin?: boolean }) {
@@ -52,7 +53,7 @@ export function MarketStats(props: {
         <span class="mkt-stat-label">{t('market.stats.last')}</span>
         <span class={`mkt-stat-value${lastTone ? ` tone-${lastTone}` : ''}`} translate={false} title={[m.lastExact, props.lastTitle].filter(Boolean).join(' · ') || undefined}>
           {m.last ?? (props.loading ? <span class="skeleton skeleton-line" style="display:inline-block;width:120px;height:22px;margin:0" /> : '—')}
-          <span class="mkt-stat-unit">{t('market.stats.unitOf', { quote, base })}</span>
+          <span class="mkt-stat-unit">{unitParts(t('market.stats.unitOf', { quote, base }))}</span>
         </span>
       </div>
       <Stat testid="stat-change" label={t('market.stats.change')} value={m.change} tone={m.changeTone} title={m.changeNote} thin={!!m.changeNote} loading={props.loading} />

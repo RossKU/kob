@@ -1,5 +1,6 @@
 import { kasPerTokenToUsd, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat } from '../../app/fiat';
 import { pow10, SOMPI_PER_KAS } from '../../kob/units';
+import { unitParts } from './UnitText';
 import { amountText, groupDigits, scaleOfDecimals, type AmountKind } from './format';
 
 export interface AmountProps {
@@ -70,7 +71,7 @@ export function Amount(props: AmountProps) {
   return (
     <span class={`amount num${props.class ? ` ${props.class}` : ''}`} translate={false} title={plain || undefined} data-value={plain || undefined} data-testid={props['data-testid']}>
       {withSign}
-      {unit && !missing ? <span class="amount-unit">{unit}</span> : null}
+      {unit && !missing ? <span class="amount-unit">{unitParts(unit)}</span> : null}
     </span>
   );
 }
