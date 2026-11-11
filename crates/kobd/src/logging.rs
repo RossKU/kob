@@ -182,6 +182,16 @@ fn console_write(out: &mut dyn Write, buf: &[u8]) -> usize {
     buf.len()
 }
 
+/// A failed console write as an English phrase where its kind says enough (the operating system's own text comes in the
+/// system's language).
+fn console_error(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::BrokenPipe => "the pipe was closed".into(),
+        std::io::ErrorKind::StorageFull => "the disk is full".into(),
+        _ => e.to_string(),
+    }
+}
+
 /// The console failed (`e`): dropped from now on, and said once in the log file (or kept for the file until one is attached).
 fn console_failed(e: &std::io::Error) {
     if CONSOLE_FAILED.swap(true, Ordering::Relaxed) {
@@ -189,8 +199,9 @@ fn console_failed(e: &std::io::Error) {
     }
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let line = format!(
-        "{}  WARN the console stopped taking the log ({e}): it is no longer written there, only to this file\n",
-        utc_millis_text(now.as_millis() as u64)
+        "{}  WARN the console stopped taking the log ({}): it is no longer written there, only to this file\n",
+        utc_millis_text(now.as_millis() as u64),
+        console_error(e)
     );
     let mut file = FILE.lock().unwrap_or_else(|e| e.into_inner());
     match file.as_mut() {
@@ -198,6 +209,17 @@ fn console_failed(e: &std::io::Error) {
             let _ = f.write(line.as_bytes());
         }
         None => *CONSOLE_WARNING.lock().unwrap_or_else(|e| e.into_inner()) = Some(line),
+    }
+}
+
+/// A line for the console that is no log event (the start banner) on stdout, or on stderr (`to_stderr`): written as the log's
+/// console half is ([`console_write`]), so a closed console never takes the process down (`println!` panics on it).
+pub fn console_line(line: &str, to_stderr: bool) {
+    let buf = format!("{line}\n");
+    if to_stderr {
+        console_write(&mut std::io::stderr().lock(), buf.as_bytes());
+    } else {
+        console_write(&mut std::io::stdout().lock(), buf.as_bytes());
     }
 }
 
@@ -370,7 +392,7 @@ mod tests {
         assert!(CONSOLE_FAILED.load(Ordering::Relaxed));
         if FILE.lock().unwrap().is_none() {
             let w = CONSOLE_WARNING.lock().unwrap().take().expect("kept for the log file");
-            assert!(w.contains(" WARN the console stopped taking the log (the pipe is being closed)"), "{w}");
+            assert!(w.contains(" WARN the console stopped taking the log (the pipe was closed)"), "{w}");
         }
         CONSOLE_FAILED.store(was, Ordering::Relaxed);
     }

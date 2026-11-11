@@ -241,11 +241,12 @@ pub fn main() -> ExitCode {
     match start(argv) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("Error: {e:?}");
+            // never `eprintln!`: a closed stderr would turn the exit status into a panic's (101)
+            use std::io::Write as _;
+            let _ = writeln!(std::io::stderr(), "Error: {e:?}");
             if double_click {
                 // the console window closes with the process: keep the error on screen until it is read
-                eprintln!();
-                eprintln!("Press Enter to close this window.");
+                let _ = writeln!(std::io::stderr(), "\nPress Enter to close this window.");
                 let _ = setup::read_line();
             }
             // a configuration file that is missing or does not parse: a mistake a restart does not cure, as a usage one
@@ -674,7 +675,7 @@ fn setup_then_launch(
     logging::set_console(console_was);
     match done? {
         Some(cfg) => {
-            println!();
+            logging::console_line("", false);
             launch(rt, program, &cfg, &[])
         }
         _ => Ok(()),
@@ -716,42 +717,44 @@ fn launch(rt: &tokio::runtime::Runtime, program: OsString, cfg: &Path, args: &[O
         }
     })?;
     refuse_second_writer(&start)?;
-    println!("Roles: {}.", l.roles.display());
-    println!("Running {} (the same as):", cfg.display());
+    // the banner goes to the console as the log does: a closed console never takes the start down
+    let say = |line: &str| logging::console_line(line, false);
+    say(&format!("Roles: {}.", l.roles.display()));
+    say(&format!("Running {} (the same as):", cfg.display()));
     let shown = setup::Launch { args: words.iter().map(|w| w.to_string_lossy().into_owned()).collect(), ..l.clone() };
     for line in setup::command_line(&shown, &setup::program_path()).lines() {
-        println!("    {line}");
+        say(&format!("    {line}"));
     }
     let mut paused = None;
     match &start {
         Start::Run(a) => {
-            println!("{}", start_note(a));
+            say(&start_note(a));
             if let Some(p) = &a.pause_file {
                 let p = l.dir.join(p);
                 if crate::pause::is_set(&p) {
-                    println!("PAUSED: {} exists, so nothing is built or submitted; delete it to resume.", p.display());
+                    say(&format!("PAUSED: {} exists, so nothing is built or submitted; delete it to resume.", p.display()));
                     paused = Some(p);
                 } else {
-                    println!("Pause trading without stopping: create the file {} (delete it to resume).", p.display());
+                    say(&format!("Pause trading without stopping: create the file {} (delete it to resume).", p.display()));
                 }
             }
         }
-        Start::Index(_) => println!("The Indexer follows the chain and serves the read API; it has no key."),
+        Start::Index(_) => say("The Indexer follows the chain and serves the read API; it has no key."),
     }
     if let Some(a) = address {
-        println!("Funding address (send KAS here; `{} address-balance` shows it and its balance): {a}", setup::program_path());
+        say(&format!("Funding address (send KAS here; `{} address-balance` shows it and its balance): {a}", setup::program_path()));
     }
     if let Ok(c) = crate::index_cli::build_config(start.opts()) {
         if c.api.enabled {
-            println!("Read API: http://{}/v1/health", c.api.listen);
+            say(&format!("Read API: http://{}/v1/health", c.api.listen));
         }
     }
     attach_log(&log, start.opts().config())?;
     match start.opts().status_every() {
-        Some(every) => println!("Stop it with Ctrl+C. A status line follows every {} s.", every.as_secs()),
-        None => println!("Stop it with Ctrl+C."),
+        Some(every) => say(&format!("Stop it with Ctrl+C. A status line follows every {} s.", every.as_secs())),
+        None => say("Stop it with Ctrl+C."),
     }
-    println!();
+    say("");
     if let Some(p) = paused {
         tracing::warn!(pause_file = %p.display(), "PAUSED at the start: the pause file exists (delete it to resume)");
     }
@@ -818,11 +821,7 @@ fn attach_log(log: &LogArgs, cfg_path: Option<&Path>) -> anyhow::Result<()> {
     let Some(o) = log_file_of(log, cfg_path) else { return Ok(()) };
     let line = format!("Log file: {}", log_file_text(&o));
     logging::attach_file(o.clone()).map_err(|e| anyhow!("cannot open the log file {}: {e}", o.file.display()))?;
-    if logging::on_stderr() {
-        eprintln!("{line}");
-    } else {
-        println!("{line}");
-    }
+    logging::console_line(&line, logging::on_stderr());
     Ok(())
 }
 
