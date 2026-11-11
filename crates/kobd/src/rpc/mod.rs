@@ -7,6 +7,7 @@
 pub mod borsh;
 pub mod bridge;
 pub mod failover;
+pub mod judge;
 pub mod multi;
 pub mod resolver;
 pub mod tls;
@@ -395,9 +396,23 @@ impl WrpcClient {
         self.call_raw_within(method, params, self.cfg.request_timeout).await
     }
 
+    /// The node the last connection went to (a resolver entry's public node; else the URL).
+    fn node_in_use(&self) -> String {
+        self.node.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// [`WrpcClient::call_raw`] with another timeout. A timeout drops the connection (a late answer must
-    /// never be read as the answer to the next request).
+    /// never be read as the answer to the next request). These are the small calls: a timeout of one counts against the node
+    /// ([`judge::timed_out`]: a node that hangs), unlike a VSPC batch's, which the windows adapt to.
     pub async fn call_raw_within(&self, method: &str, params: serde_json::Value, timeout: Duration) -> Result<String, RpcError> {
+        let r = self.call_small(method, params, timeout).await;
+        if matches!(r, Err(RpcError::Timeout(_))) {
+            judge::timed_out(&self.cfg.url, &self.node_in_use());
+        }
+        r
+    }
+
+    async fn call_small(&self, method: &str, params: serde_json::Value, timeout: Duration) -> Result<String, RpcError> {
         if self.cfg.all_borsh() {
             // the same JSON in and out, over Borsh (`bridge`)
             let enc = bridge::encode(method, &params).map_err(RpcError::Decode)?;
@@ -425,13 +440,13 @@ impl WrpcClient {
     }
 
     /// A failed connection, or one the node dropped (a transport error; a request that only took longer than its timeout is
-    /// not the node's failure: the windows adapt to it, `rpc::window`): a resolver entry moves to another public node
-    /// ([`resolver::failed`]).
+    /// not a lost connection: a VSPC batch's adapts the windows, `rpc::window`, and the small calls' are counted by
+    /// [`judge::timed_out`]): a resolver entry moves to another public node ([`resolver::failed`]).
     fn report(&self, e: &RpcError, node: Option<&str>) {
         let connecting = node.is_none();
         let node_failed = matches!(e, RpcError::Transport(_)) || (connecting && matches!(e, RpcError::Timeout(_)));
         if node_failed && resolver::is_resolver(&self.cfg.url) {
-            let node = node.map(str::to_string).unwrap_or_else(|| self.node.lock().unwrap_or_else(|e| e.into_inner()).clone());
+            let node = node.map(str::to_string).unwrap_or_else(|| self.node_in_use());
             resolver::failed(&self.cfg.url, &node);
         }
     }
@@ -667,7 +682,11 @@ impl ChainSource for WrpcClient {
     }
 
     async fn server_info(&self) -> Result<ServerInfo, RpcError> {
-        self.call("getServerInfo", serde_json::json!({})).await
+        let info: ServerInfo = self.call("getServerInfo", serde_json::json!({})).await?;
+        // a node that answers but is useless (another network, no UTXO index, not synced for long) is judged like a failed one
+        judge::server_info(&self.cfg.url, &self.node_in_use(), &info.network_id, info.is_synced, info.has_utxo_index)
+            .map_err(RpcError::Node)?;
+        Ok(info)
     }
 
     async fn utxos_by_addresses(&self, addresses: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {

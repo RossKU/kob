@@ -15,14 +15,19 @@
 //! matcher's, the x402 facilitator's, the setup's check) asks [`endpoint`] for the node it stands for, so all of them use the
 //! same node per entry, and the entries use different hosts.
 //!
-//! **Failure.** A client that cannot connect to its entry's node, or loses the connection, reports it ([`failed`]). Public
+//! **Failure.** A client that cannot connect to its entry's node, or loses the connection, reports it ([`failed`]); a node
+//! that answers but is useless (on another network, without the UTXO index, not synced, hanging, behind the other node, or
+//! contradicting it) is judged by `rpc::judge` and given up the same way ([`replace`], with the reason, which `/v1/health`
+//! shows per node as `cut_reason`). Public
 //! nodes close connections now and then under load, so the first drop of a node gets a **grace reconnect**: the same node is
 //! tried once more, with a short connect timeout ([`GRACE_CONNECT_TIMEOUT`]). When it is the authority's node, the other
 //! node is the authority at once meanwhile (no resolution, no wait: the survivor keeps the indexer running) and the dropped
-//! node gets its retry as the cross-checking one. A node that drops again within [`DROP_WINDOW`] of its last drop (the
+//! node gets its retry as the cross-checking one. A survivor the judge suspects (not synced, or behind the other node lately:
+//! `rpc::judge::suspect`) is never promoted: the authority's entry resolves a node of its own instead. A node that drops again within [`DROP_WINDOW`] of its last drop (the
 //! retry failing included) is given up at once ([`replace`], also what a persistent disagreement does): the authority takes
 //! the other entry's node over, and the entries left without a node resolve a replacement on a host different from the ones
-//! in use and from the failed ones, in the background. When no node is left, every entry resolves again on its next
+//! in use and from the failed ones, in the background (a resolution that fails is tried again with the backoff below until it
+//! names a node, so an entry is never left without one). When no node is left, every entry resolves again on its next
 //! use, with a backoff (2 s doubling to 60 s) while the resolvers name none. Every change is logged with the hosts.
 
 use std::collections::{HashMap, VecDeque};
@@ -196,6 +201,8 @@ struct State {
     background: bool,
     /// host -> when it last dropped a connection (its grace reconnect, [`failed`])
     dropped: HashMap<String, Instant>,
+    /// entry -> why its last node was given up (`host: reason`), for `/v1/health`
+    reasons: HashMap<String, String>,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -211,6 +218,7 @@ fn state() -> &'static Mutex<State> {
             resolve,
             background: true,
             dropped: HashMap::new(),
+            reasons: HashMap::new(),
         })
     })
 }
@@ -227,6 +235,17 @@ pub fn set_network(network: &str) {
         s.current.clear();
         s.backoff.clear();
     }
+}
+
+/// The network the resolver entries resolve for (empty: not set): the network every node of the process must be on
+/// (`rpc::judge`).
+pub fn network() -> String {
+    lock().network.clone()
+}
+
+/// Why the resolver entry `url` last gave its node up (`host: reason`; `None`: never).
+pub fn last_reason(url: &str) -> Option<String> {
+    lock().reasons.get(url).cloned()
 }
 
 /// The node a resolver entry uses now, without resolving (`None`: none yet, or it is being replaced).
@@ -325,22 +344,28 @@ pub fn failed(url: &str, node: &str) {
         let again = s.dropped.get(&h).is_some_and(|t| t.elapsed() < DROP_WINDOW);
         if !again {
             s.dropped.insert(h.clone(), Instant::now());
+            // a survivor the judge suspects (not synced, behind) is not promoted
             let survivor = (url == RESOLVER)
-                .then(|| s.current.iter().find(|(k, v)| k.as_str() != RESOLVER && host(v) != h).map(|(k, v)| (k.clone(), v.clone())))
+                .then(|| {
+                    s.current
+                        .iter()
+                        .find(|(k, v)| k.as_str() != RESOLVER && host(v) != h && !super::judge::suspect(v))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                })
                 .flatten();
             match survivor {
                 Some((entry, n)) => {
-                    // the other node is the authority at once; the dropped one gets its retry as the cross-check
+                    // the other node is the authority at once; the failed one gets its retry as the cross-check
                     s.current.insert(RESOLVER.to_string(), n.clone());
                     s.current.insert(entry.clone(), node.to_string());
-                    tracing::warn!(dropped = %h, authority = %host(&n), "public node dropped the connection: the other node is the chain authority now; reconnecting once to the dropped one as the cross-check");
+                    tracing::warn!(failed = %h, authority = %host(&n), "a public node's connection failed or was lost: the other node is the chain authority now; reconnecting once to the failed one as the cross-check");
                 }
-                None => tracing::warn!(entry = url, dropped = %h, "public node dropped the connection: reconnecting once"),
+                None => tracing::warn!(entry = url, failed = %h, "a public node's connection failed or was lost: reconnecting once"),
             }
             return;
         }
     }
-    replace(url, node);
+    replace(url, node, "its connection failed or was lost twice within 2 min");
 }
 
 /// The connect timeout of a client of the resolver entry `url`: [`GRACE_CONNECT_TIMEOUT`] while its node is on its grace
@@ -358,11 +383,12 @@ pub fn connect_timeout(url: &str, default: Duration) -> Duration {
     }
 }
 
-/// The resolver entry `url` gives `node` up at once (a second drop within [`DROP_WINDOW`], or a disagreement that does not
-/// settle, `rpc::multi`): the authority's entry takes over the node of another entry when there is one, and the entries
-/// without a node resolve replacements in the background (hosts different from the ones in use and from the failed ones). A
-/// report about a node the entry no longer uses is ignored.
-pub fn replace(url: &str, node: &str) {
+/// The resolver entry `url` gives `node` up at once for the reason `why` (a second drop within [`DROP_WINDOW`], a disagreement
+/// that does not settle or a contradiction, `rpc::multi`, or a finding of `rpc::judge`): the authority's entry takes over the
+/// node of another entry when there is one the judge does not suspect, and the entries without a node resolve replacements in
+/// the background (hosts different from the ones in use and from the failed ones). A report about a node the entry no longer
+/// uses is ignored.
+pub fn replace(url: &str, node: &str, why: &str) {
     if !is_resolver(url) {
         return;
     }
@@ -374,6 +400,7 @@ pub fn replace(url: &str, node: &str) {
         s.current.remove(url);
         *s.replaced.entry(url.to_string()).or_default() += 1;
         let h = host(node);
+        s.reasons.insert(url.to_string(), format!("{h}: {why}"));
         if !s.failed.contains(&h) {
             s.failed.push_back(h.clone());
             while s.failed.len() > 8 {
@@ -389,20 +416,27 @@ pub fn replace(url: &str, node: &str) {
         let mut need = vec![url.to_string()];
         need.extend(same);
         if url == RESOLVER {
-            // the survivor becomes the chain authority at once; its entry resolves a replacement
-            let survivor =
-                s.current.iter().filter(|(k, v)| k.as_str() != RESOLVER && host(v) != h).map(|(k, v)| (k.clone(), v.clone())).min();
+            // the survivor becomes the chain authority at once (its entry resolves a replacement), unless the judge suspects
+            // it (not synced, behind): then the authority's entry resolves a node of its own
+            let survivor = s
+                .current
+                .iter()
+                .filter(|(k, v)| k.as_str() != RESOLVER && host(v) != h && !super::judge::suspect(v))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .min();
             match survivor {
                 Some((entry, n)) => {
                     s.current.remove(&entry);
                     s.current.insert(RESOLVER.to_string(), n.clone());
-                    tracing::warn!(failed = %h, authority = %host(&n), from = %entry, "public node failed: the other node is the chain authority now; resolving a replacement");
+                    tracing::warn!(failed = %h, reason = why, authority = %host(&n), from = %entry, "public node given up: the other node is the chain authority now; resolving a replacement");
                     need[0] = entry;
                 }
-                None => tracing::warn!(failed = %h, "public node failed and no other is connected: resolving again"),
+                None => {
+                    tracing::warn!(failed = %h, reason = why, "public node given up and no other usable one is connected: resolving again")
+                }
             }
         } else {
-            tracing::warn!(entry = url, failed = %h, "public node failed: resolving a replacement");
+            tracing::warn!(entry = url, failed = %h, reason = why, "public node given up: resolving a replacement");
         }
         need.sort();
         need.dedup();
@@ -416,7 +450,13 @@ pub fn replace(url: &str, node: &str) {
     };
     for entry in refill {
         std::thread::spawn(move || {
-            let _ = endpoint(&entry);
+            // until the entry has a node: a resolution that fails backs off (2 s doubling to 60 s) and is tried again. No client
+            // asks for an entry that has no node (the pair goes on with the authority alone meanwhile), so one failed
+            // resolution would otherwise leave the pair un-cross-checked for good
+            while endpoint(&entry).is_err() {
+                let wait = lock().backoff.get(&entry).map(|b| b.until.saturating_duration_since(Instant::now()));
+                std::thread::sleep(wait.unwrap_or(Duration::from_secs(2)).max(Duration::from_millis(100)));
+            }
             lock().pending.retain(|e| *e != entry);
         });
     }
@@ -457,6 +497,7 @@ pub(crate) mod tests {
         s.backoff.clear();
         s.pending.clear();
         s.dropped.clear();
+        s.reasons.clear();
         s.resolve = resolve;
         s.background = false;
     }
@@ -574,17 +615,18 @@ pub(crate) mod tests {
         assert_eq!(endpoint("resolver").unwrap(), a, "one node per entry for every client");
         assert_eq!(endpoint("ws://127.0.0.1:18210").unwrap(), "ws://127.0.0.1:18210");
         // a report about a node the entry no longer uses: ignored
-        replace("resolver", "wss://z.example/x/borsh");
+        replace("resolver", "wss://z.example/x/borsh", "test");
         assert_eq!(current("resolver"), Some(a.clone()));
         // the authority fails: the survivor is the authority immediately, the cross-check entry has no node until replaced
-        replace("resolver", &a);
+        replace("resolver", &a, "test");
         assert_eq!(current("resolver"), Some(b.clone()), "failover to the survivor with no resolution");
         assert_eq!(current("resolver:2"), None);
         let c = endpoint("resolver:2").unwrap();
         assert_eq!(host(&c), "c.example", "the replacement differs from the survivor and from the failed host");
         assert_eq!((replacements("resolver"), replacements("resolver:2")), (1, 0));
+        assert_eq!(last_reason("resolver").as_deref(), Some("a.example: test"), "why, for /v1/health");
         // the cross-check node fails: the authority keeps its node, the replacement avoids every host seen failing or in use
-        replace("resolver:2", &c);
+        replace("resolver:2", &c, "test");
         assert_eq!(current("resolver"), Some(b.clone()));
         assert_eq!(host(&endpoint("resolver:2").unwrap()), "d.example");
         let d = describe();
@@ -612,7 +654,7 @@ pub(crate) mod tests {
         assert_eq!(host(&b), "b.example", "not the host the authority took meanwhile");
         // both entries on one host (an old race, or the resolvers had no other): its failure clears both, nobody is promoted
         lock().current.insert("resolver:2".into(), "wss://a.example/x/borsh".into());
-        replace("resolver", "wss://a.example/x/borsh");
+        replace("resolver", "wss://a.example/x/borsh", "test");
         assert_eq!((current("resolver"), current("resolver:2")), (None, None));
     }
 
@@ -649,6 +691,38 @@ pub(crate) mod tests {
         lock().dropped.insert(host(&d), Instant::now() - DROP_WINDOW - Duration::from_secs(1));
         failed("resolver:2", &d);
         assert_eq!(current("resolver:2"), Some(d.clone()), "a reconnect again, the window has passed");
+    }
+
+    /// A replacement whose resolution fails is tried again with the backoff until it names a node: the pair is never left
+    /// without its cross-checking node because one resolution failed (no client asks for an entry that has no node).
+    #[test]
+    fn a_failed_replacement_is_resolved_again() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let _g = serial();
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn flaky(network: &str, avoid: &[String]) -> Result<Resolved, String> {
+            match CALLS.fetch_add(1, Ordering::SeqCst) {
+                0 => Err("no Kaspa resolver named a testnet-10 node".into()),
+                _ => fake_resolve(network, avoid),
+            }
+        }
+        reset(fake_resolve);
+        let _a = endpoint("resolver").unwrap();
+        let b = endpoint("resolver:2").unwrap();
+        CALLS.store(0, Ordering::SeqCst);
+        {
+            let mut s = lock();
+            s.resolve = flaky;
+            s.background = true;
+        }
+        replace("resolver:2", &b, "test");
+        let t0 = Instant::now();
+        while current("resolver:2").is_none() && t0.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        lock().background = false;
+        assert_eq!(current("resolver:2").map(|n| host(&n)).as_deref(), Some("c.example"), "resolved again after the backoff");
+        assert!(CALLS.load(Ordering::SeqCst) >= 2);
     }
 
     /// Both nodes gone and the resolvers silent: every entry backs off (no resolution storm), then resolves again.

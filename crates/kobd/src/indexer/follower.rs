@@ -415,13 +415,16 @@ impl<S: ChainSource> Follower<S> {
         let outcome = if self.cfg.fetch_parallel > 1 { self.step_prefetch().await } else { self.step_sequential().await };
         let nodes = self.source.node_stats();
         let source = self.source.source_status();
-        if !nodes.is_empty() || source.is_some() {
-            // behind a failover the list is the active one's (it may be empty: a single node)
-            self.health.update(|h| {
+        // the alarms of named nodes (`rpc::judge`), process-wide
+        let alarms = crate::rpc::judge::alarms();
+        self.health.update(|h| {
+            if !nodes.is_empty() || source.is_some() {
+                // behind a failover the list is the active one's (it may be empty: a single node)
                 h.nodes = nodes;
                 h.node_source = source;
-            });
-        }
+            }
+            h.node_alarms = alarms;
+        });
         outcome
     }
 

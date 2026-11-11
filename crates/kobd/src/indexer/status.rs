@@ -81,6 +81,11 @@ pub struct HealthSnapshot {
     /// Absent without a failover. `nodes` lists the nodes of the active list.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_source: Option<crate::rpc::failover::FailoverStatus>,
+    /// Alarms of nodes named in the configuration (`rpc::judge`: on another network, no UTXO index, not synced for long,
+    /// hanging, behind the other node, contradicting it), `node: problem`. A public node is replaced instead (its
+    /// `nodes[].cut_reason` says why). Absent when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub node_alarms: Vec<String>,
     /// The store holds every order the node's history still shows. `false` during a fast start ([`crate::faststart`]: the store
     /// follows the chain from the node's sink, and the history is being indexed into a second store; `backfill` then says how far
     /// that one is), and for good in a store that began after the oldest history (`start = "sink"` or a block hash, or a rebase past
@@ -267,6 +272,7 @@ impl HealthSnapshot {
             lies_total: 0,
             nodes: vec![],
             node_source: None,
+            node_alarms: vec![],
             book_complete: true,
             history_from_daa: None,
             catch_up: None,
@@ -438,6 +444,12 @@ impl HealthSnapshot {
                 f.refused,
             );
         }
+        m(
+            "kob_indexer_node_alarms",
+            "gauge",
+            "Alarms of nodes named in the configuration (node_alarms of /v1/health); 0 when every node is fine.",
+            self.node_alarms.len() as u64,
+        );
         if !self.nodes.is_empty() {
             let mut per = |name: &str, kind: &str, help: &str, v: &dyn Fn(&crate::rpc::multi::NodeStatus) -> u64| {
                 s.push_str(&format!(
@@ -462,6 +474,12 @@ impl HealthSnapshot {
             per("kob_indexer_node_dropped", "gauge", "1 once the node contradicted the primary.", &|n| {
                 n.dropped_reason.is_some() as u64
             });
+            per(
+                "kob_indexer_node_replaced_total",
+                "counter",
+                "Public nodes the resolver entry gave up (failed, hanging, unsynced, behind, wrong network, no UTXO index, contradicting).",
+                &|n| n.replaced as u64,
+            );
         }
         s.push_str(
             "# HELP kob_role 1 for each role this process runs: executor (matcher and keepers), indexer (the full history and the read API).
@@ -557,6 +575,9 @@ impl HealthSnapshot {
                     let mut x = format!("{name} ({role}, {}", n.state);
                     if n.replaced > 0 {
                         x.push_str(&format!(", replaced {}x", n.replaced));
+                        if let Some(why) = &n.cut_reason {
+                            x.push_str(&format!(", last: {why}"));
+                        }
                     }
                     if n.disagreements > 0 {
                         x.push_str(&format!(", {} disagreements", n.disagreements));
@@ -579,6 +600,9 @@ impl HealthSnapshot {
             if let Some(e) = self.gap_reason.as_ref().or(self.last_error.as_ref()) {
                 s.push_str(&format!(" ({e})"));
             }
+        }
+        if !self.node_alarms.is_empty() {
+            s.push_str(&format!(" | NODE ALARM: {}", self.node_alarms.join("; ")));
         }
         if let Some(from) = self.history_from_daa {
             let ago = self.node_daa.filter(|_| from > 0).map(|n| format!("about {} ago", human_secs(n.saturating_sub(from) / 10)));

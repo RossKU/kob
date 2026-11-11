@@ -26,7 +26,18 @@
 //! gives the cross-checking node up for another (its resolver entry resolves a replacement), and three
 //! more the primary's node (the cross-checking one becomes the authority, `resolver::replace`). A cross-checking node that
 //! cannot answer is skipped (backoff) and the primary goes on alone meanwhile: no stall, and no contradiction is ignored,
-//! only none can be seen while there is no second node.
+//! only none can be seen while there is no second node. It has [`CROSS_CHECK_STEP_TIMEOUT`] for a single step near the sink
+//! (a hanging node must not hold the book back) and [`CROSS_CHECK_TIMEOUT`] for a window; its timeouts count against it
+//! (`rpc::judge`).
+//!
+//! **The health watch** checks every node of the list the same way, the authority and the others alike: every
+//! [`WATCH_EVERY`] each is asked `getServerInfo` (within [`WATCH_TIMEOUT`]). An answer is judged (`rpc::judge`: another
+//! network, no UTXO index, not synced for long), a timeout counts as one (a node that hangs), and a node more than [`LAG_DAA`]
+//! behind the most advanced one for [`LAG_CHECKS`] checks in a row is behind. A node that contradicts the other (a hash, or
+//! the acceptance data) is judged too. Whichever node it is, a resolver entry gives it up for another public node (the
+//! authority's role moves to the other node at once, unless that one is suspect itself, `rpc::resolver`); a node named in the
+//! configuration raises an alarm, and a cross-checking one is cut off from the pair until the alarm ends (the authority goes
+//! on alone meanwhile). Each node's `cut_reason` says why it was last cut off.
 //!
 //! `GET /v1/health` reports each node under `nodes`.
 
@@ -62,6 +73,10 @@ pub struct NodeStatus {
     pub node: Option<String>,
     /// How many times a resolver entry gave its node up (failed, or replaced after disagreeing).
     pub replaced: u32,
+    /// Why the node was last cut off from the pair: for a resolver entry the public node it gave up and why (`host: reason`);
+    /// for a node named in the configuration its alarms now (`rpc::judge`), or why it was dropped. `None`: never.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cut_reason: Option<String>,
     /// Answers of the primary it contradicted (a cross-checking node, `NodeSpec::cross_check`): other accepted transactions, a
     /// different chain block deep in the answer, a deep reorg seen by one node only. Not the tips differing for a moment.
     pub disagreements: u64,
@@ -69,8 +84,8 @@ pub struct NodeStatus {
     pub tip_differs: u64,
     /// `primary` (the chain authority) or `secondary`.
     pub role: String,
-    /// `ok`, `backoff` (failed lately: skipped until `backoff_secs`), `dropped` (contradicted the primary) or `idle` (neither
-    /// fetches nor takes submissions).
+    /// `ok`, `backoff` (failed lately: skipped until `backoff_secs`), `dropped` (contradicted the primary), `cut` (a named
+    /// node with an alarm, left out of the pair until it ends: `cut_reason`) or `idle` (neither fetches nor takes submissions).
     pub state: String,
     pub fetch: bool,
     pub submit: bool,
@@ -171,6 +186,22 @@ impl NodeBoard {
         }
     }
 
+    /// The node entry `i` stands for now: a resolver entry's public node (`None`: being replaced), else the URL.
+    pub fn node_of(&self, i: usize) -> Option<String> {
+        let e = &self.entries[i];
+        if super::resolver::is_resolver(e) {
+            super::resolver::current(e)
+        } else {
+            Some(e.clone())
+        }
+    }
+
+    /// A named node other than the primary with an alarm that cuts it off (`rpc::judge::cuts_off`): left out of the pair
+    /// until the alarm ends. One that contradicted the primary is dropped instead (`dropped_reason`).
+    fn cut(&self, i: usize) -> bool {
+        i > 0 && !super::resolver::is_resolver(&self.entries[i]) && super::judge::cuts_off(&self.entries[i])
+    }
+
     /// The cross-checking node `i` contradicted the primary.
     fn disagreed(&self, i: usize, why: &str, at_tip: bool) {
         self.with(i, |p| {
@@ -249,6 +280,14 @@ impl NodeBoard {
 
     fn failed(&self, i: usize, fault: Fault, e: &str) {
         let url = self.url(i);
+        let public = super::resolver::is_resolver(&self.entries[i]);
+        if fault == Fault::Lie {
+            // judged like any other failure (outside the node's lock: a resolver entry gives its node up for another, a named
+            // node raises an alarm and, unless it is the primary, is dropped below)
+            if let Some(node) = self.node_of(i) {
+                super::judge::contradicted(&self.entries[i], &node, e);
+            }
+        }
         self.with(i, |p| {
             let s = &mut p.status;
             s.windows_failed += 1;
@@ -256,7 +295,8 @@ impl NodeBoard {
             match fault {
                 Fault::Lie => {
                     s.lies += 1;
-                    if i > 0 && s.dropped_reason.is_none() {
+                    // a resolver entry's node was replaced: its successor is not dropped
+                    if i > 0 && !public && s.dropped_reason.is_none() {
                         tracing::error!(node = %url, reason = e, "node contradicts the primary: dropped");
                         s.dropped_reason = Some(e.to_string());
                     }
@@ -294,10 +334,14 @@ impl NodeBoard {
         })
     }
 
-    /// Stop using node `i` (never the primary).
+    /// Stop using node `i`: a resolver entry's node is replaced (the primary's too: the other node is the authority then); a
+    /// named primary stays the authority, with an alarm.
     pub fn drop_node(&self, i: usize, why: &str) {
         if i == 0 {
-            tracing::error!(reason = why, "the primary node's data was contradicted; it stays the authority");
+            tracing::error!(reason = why, node = %self.shown(0), "the primary node's data was contradicted");
+            if let Some(node) = self.node_of(0) {
+                super::judge::contradicted(&self.entries[0], &node, why);
+            }
             return;
         }
         self.failed(i, Fault::Lie, why);
@@ -313,15 +357,22 @@ impl NodeBoard {
             .map(|i| {
                 self.with(i, |p| {
                     let mut s = p.status.clone();
-                    if super::resolver::is_resolver(&self.entries[i]) {
+                    let cut = if super::resolver::is_resolver(&self.entries[i]) {
                         s.node = super::resolver::current(&self.entries[i]).map(|n| super::resolver::host(&n));
                         s.replaced = super::resolver::replacements(&self.entries[i]);
-                    }
+                        s.cut_reason = super::resolver::last_reason(&self.entries[i]);
+                        false
+                    } else {
+                        s.cut_reason = super::judge::alarm_of(&self.entries[i]).or_else(|| s.dropped_reason.clone());
+                        super::judge::cuts_off(&self.entries[i])
+                    };
                     let wait = p.backoff_until.map(|t| t.saturating_duration_since(now)).unwrap_or_default();
                     s.backoff_secs = wait.as_secs();
                     s.bytes_per_sec = p.ewma_bps.map(|b| b as u64);
                     s.state = if s.dropped_reason.is_some() {
                         "dropped"
+                    } else if cut && i > 0 {
+                        "cut"
                     } else if !wait.is_zero() {
                         "backoff"
                     } else if !s.fetch && !s.submit && i > 0 {
@@ -360,6 +411,17 @@ pub struct MultiNode<N: ChainSource> {
     stalls: std::sync::atomic::AtomicU32,
     /// When a contradiction was last logged (one line per ten seconds; the counters keep every one).
     last_warn: Mutex<Option<Instant>>,
+    /// The health watch (module documentation).
+    watch: Arc<Mutex<Watch>>,
+}
+
+/// The health watch's state: its period, how many checks in a row make a node behind, when it last ran, and each node's
+/// checks in a row behind.
+struct Watch {
+    every: Duration,
+    lag_checks: u32,
+    last: Option<Instant>,
+    behind: Vec<u32>,
 }
 
 /// The start of the error when the two nodes' newest chain blocks differ and nothing can be applied yet (routine on a public
@@ -370,8 +432,21 @@ pub const TIPS_DIFFER: &str = "the two nodes' newest chain blocks differ for a m
 /// many before the primary's node is: `MultiNode::vouched`).
 pub const STALLS_BEFORE_REPLACING: u32 = 3;
 
-/// How long the cross-checking node may take to vouch for one answer before the primary goes on alone for it.
-const CROSS_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the cross-checking node may take to vouch for one window before the primary goes on alone for it.
+pub const CROSS_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long it may take to vouch for one single step near the sink (a few chain blocks): a hanging node must not hold the book
+/// back for long.
+pub const CROSS_CHECK_STEP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The health watch's period, and how long one node's `getServerInfo` may take in it (module documentation).
+pub const WATCH_EVERY: Duration = Duration::from_secs(10);
+pub const WATCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A node more than this far (DAA, about 30 s of chain) behind the most advanced node of the list ...
+pub const LAG_DAA: u64 = 300;
+/// ... at this many health checks in a row (a minute) is behind: given up (a resolver entry) or an alarm (a named node).
+pub const LAG_CHECKS: u32 = 6;
 
 impl<N: ChainSource> MultiNode<N> {
     /// `nodes[0]` is the primary; `verifier` a second client of the primary for the acceptance data.
@@ -390,11 +465,52 @@ impl<N: ChainSource> MultiNode<N> {
             sink: Mutex::new(None),
             stalls: std::sync::atomic::AtomicU32::new(0),
             last_warn: Mutex::new(None),
+            // the first check one period after the start
+            watch: Arc::new(Mutex::new(Watch {
+                every: WATCH_EVERY,
+                lag_checks: LAG_CHECKS,
+                last: Some(Instant::now()),
+                behind: vec![],
+            })),
         }
     }
 
-    /// The node that vouches for the primary's answers now: the first cross-checking one that is neither dropped nor
-    /// backing off.
+    /// The health watch every `every`, a node behind after `lag_checks` checks in a row (tests; the defaults are
+    /// [`WATCH_EVERY`] and [`LAG_CHECKS`]).
+    pub fn with_watch(self, every: Duration, lag_checks: u32) -> Self {
+        {
+            let mut w = self.watch.lock().unwrap_or_else(|e| e.into_inner());
+            (w.every, w.lag_checks) = (every, lag_checks.max(1));
+        }
+        self
+    }
+
+    /// Starts the health watch (module documentation) on a task of its own when it is due: the follower's request never waits
+    /// for it (a node that hangs costs the watch its timeout, not the book).
+    fn health_watch(&self) {
+        let due = {
+            let mut w = self.watch.lock().unwrap_or_else(|e| e.into_inner());
+            let due = self.nodes.len() > 1 && w.last.is_none_or(|t| t.elapsed() >= w.every);
+            if due {
+                w.last = Some(Instant::now());
+            }
+            due
+        };
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+        if due {
+            let (nodes, verifier, board, watch) = (self.nodes.clone(), self.verifier.clone(), self.board.clone(), self.watch.clone());
+            rt.spawn(async move { watch_nodes(&nodes, &verifier, &board, &watch).await });
+        }
+    }
+
+    /// One health check of every node now, on the caller's task (tests; the follower's requests start it on a task of its own
+    /// every [`WATCH_EVERY`]).
+    pub async fn check_health(&self) {
+        watch_nodes(&self.nodes, &self.verifier, &self.board, &self.watch).await
+    }
+
+    /// The node that vouches for the primary's answers now: the first cross-checking one that is neither dropped, cut off
+    /// (a named node with an alarm) nor backing off.
     fn cross_checker(&self) -> Option<usize> {
         let now = Instant::now();
         (1..self.nodes.len()).find(|&i| {
@@ -404,22 +520,33 @@ impl<N: ChainSource> MultiNode<N> {
             self.specs[i].cross_check
                 && !replacing
                 && !self.board.dropped(i)
+                && !self.board.cut(i)
                 && !self.board.with(i, |p| p.backoff_until.is_some_and(|t| t > now))
         })
     }
 
-    /// The cross-checking node's acceptance data from `start` (`None`: no such node now, or it could not answer: the primary
-    /// goes on alone and the node backs off). Asked while the primary answers the same request, so it costs no extra round trip.
-    async fn cross_ids(&self, j: Option<usize>, start: Hash32, min_confirmations: Option<u64>) -> Option<(usize, ChainIds)> {
+    /// The cross-checking node's acceptance data from `start` (`None`: no such node now, or it could not answer within
+    /// `limit`: the primary goes on alone and the node backs off; a timeout counts against it, `rpc::judge`). Asked while the
+    /// primary answers the same request, so it costs no extra round trip.
+    async fn cross_ids(
+        &self,
+        j: Option<usize>,
+        start: Hash32,
+        min_confirmations: Option<u64>,
+        limit: Duration,
+    ) -> Option<(usize, ChainIds)> {
         let j = j?;
-        match tokio::time::timeout(CROSS_CHECK_TIMEOUT, self.nodes[j].chain_with_ids(start, min_confirmations)).await {
+        match tokio::time::timeout(limit, self.nodes[j].chain_with_ids(start, min_confirmations)).await {
             Ok(Ok(ids)) => Some((j, ids)),
             Ok(Err(e)) => {
                 self.board.failed(j, Fault::Failed, &format!("cross-check: {e}"));
                 None
             }
             Err(_) => {
-                self.board.failed(j, Fault::Failed, &format!("timeout: cross-check after {CROSS_CHECK_TIMEOUT:?}"));
+                self.board.failed(j, Fault::Failed, &format!("timeout: cross-check after {limit:?}"));
+                if let Some(node) = self.board.node_of(j) {
+                    super::judge::timed_out(self.board.entry(j), &node);
+                }
                 None
             }
         }
@@ -443,8 +570,10 @@ impl<N: ChainSource> MultiNode<N> {
         };
         let mine = WindowRequest { end_blue: Some(end_blue), sink_blue: Some(sink_blue), ..*w };
         let min = window_min_confirmations(sink_blue, end_blue, w.min_confirmations);
-        let (f, cross) =
-            tokio::join!(fetch_window_from(node, &mine, Verbosity::High, Origin::PRIMARY), self.cross_ids(Some(j), w.start, min));
+        let (f, cross) = tokio::join!(
+            fetch_window_from(node, &mine, Verbosity::High, Origin::PRIMARY),
+            self.cross_ids(Some(j), w.start, min, CROSS_CHECK_TIMEOUT)
+        );
         let Fetched { raw, sink_blue, end_blue, elapsed, origin } = f?;
         Ok(Fetched { raw: self.vouched(raw, cross)?, sink_blue, end_blue, elapsed, origin })
     }
@@ -494,7 +623,7 @@ impl<N: ChainSource> MultiNode<N> {
             let e = self.board.entry(i).to_string();
             if let Some(node) = super::resolver::current(&e) {
                 tracing::warn!(entry = %e, node = %super::resolver::host(&node), stalls = n, "a disagreement that does not settle: replacing this node");
-                super::resolver::replace(&e, &node);
+                super::resolver::replace(&e, &node, "it disagreed with the other node and the disagreement did not settle");
             }
         };
         if n == STALLS_BEFORE_REPLACING {
@@ -536,7 +665,7 @@ impl<N: ChainSource> MultiNode<N> {
         let fallback = !tried[0] && !self.specs[0].fetch;
         for k in 0..n {
             let i = (first + k) % n;
-            if tried[i] || !self.specs[i].fetch || self.board.dropped(i) {
+            if tried[i] || !self.specs[i].fetch || self.board.dropped(i) || self.board.cut(i) {
                 continue;
             }
             let (backing_off, rate) = self.board.with(i, |p| {
@@ -617,6 +746,59 @@ impl<N: ChainSource> MultiNode<N> {
     }
 }
 
+/// The health watch's check (module documentation): every node's `getServerInfo` at once, judged; then each node's DAA
+/// against the most advanced answer.
+async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board: &NodeBoard, watch: &Mutex<Watch>) {
+    let n = nodes.len();
+    let network = super::resolver::network();
+    let network = network.as_str();
+    let ask = |i: usize| async move {
+        // a resolver entry being replaced has no node to ask
+        let node = board.node_of(i)?;
+        let entry = board.entry(i);
+        // the primary on the verifier's connections: never behind its own windows
+        let src: &N = if i == 0 { verifier } else { &nodes[i] };
+        match tokio::time::timeout(WATCH_TIMEOUT, src.server_info()).await {
+            Ok(Ok(info)) => {
+                let judged = super::judge::server_info(entry, &node, &info.network_id, info.is_synced, info.has_utxo_index);
+                // the DAA of another network says nothing about this one's
+                let comparable = network.is_empty() || info.network_id == network;
+                judged.ok().filter(|()| comparable).map(|()| (i, node, info.virtual_daa_score))
+            }
+            // a failed call is reported where it failed (the client's connection, the judge)
+            Ok(Err(_)) => None,
+            Err(_) => {
+                super::judge::timed_out(entry, &node);
+                None
+            }
+        }
+    };
+    let answers: Vec<(usize, String, u64)> = futures_util::future::join_all((0..n).map(ask)).await.into_iter().flatten().collect();
+    let Some(top) = answers.iter().map(|a| a.2).max().filter(|_| answers.len() > 1) else { return };
+    let mut findings = vec![];
+    {
+        let mut w = watch.lock().unwrap_or_else(|e| e.into_inner());
+        w.behind.resize(n, 0);
+        let checks = w.lag_checks;
+        for (i, node, daa) in answers {
+            let behind = top.saturating_sub(daa);
+            let lagging = behind > LAG_DAA;
+            w.behind[i] = if lagging { w.behind[i] + 1 } else { 0 };
+            let sustained = w.behind[i] >= checks;
+            if sustained {
+                w.behind[i] = 0;
+            }
+            findings.push((i, node, lagging.then_some(behind), sustained));
+        }
+    }
+    for (i, node, behind, sustained) in findings {
+        if sustained {
+            tracing::warn!(node = %board.shown(i), behind_daa = behind, "a node stays behind the other node of the pair");
+        }
+        super::judge::lag(board.entry(i), &node, behind, sustained);
+    }
+}
+
 /// Keep the first `n` chain blocks of a window (`wire_bytes` shrinks in proportion to the chain blocks and transactions
 /// kept: the size accounting of the prefetch).
 fn cut(raw: &mut RawVspcResponse, n: usize) {
@@ -636,7 +818,9 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         let (start, min_confirmations) = (req.start_hash, req.min_confirmation_count);
         let j = self.cross_checker();
-        let (raw, cross) = tokio::join!(self.nodes[0].vspc_v2(req), self.cross_ids(j, start, min_confirmations));
+        self.health_watch();
+        let (raw, cross) =
+            tokio::join!(self.nodes[0].vspc_v2(req), self.cross_ids(j, start, min_confirmations, CROSS_CHECK_STEP_TIMEOUT));
         self.vouched(raw?, cross)
     }
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
@@ -668,6 +852,32 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     }
 
     async fn fetch_window(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
+        // the health watch runs while the cursor catches up too (it is due once per period, whichever window asks first)
+        self.health_watch();
+        self.fetch_any(w).await
+    }
+
+    async fn fetch_window_primary(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
+        // on the verifier's connections: never behind the primary's own windows of the parallel fetch
+        self.primary_window(&*self.verifier, &w).await
+    }
+
+    fn report_lie(&self, origin: Origin, why: &str) {
+        self.board.drop_node(origin.node, why);
+    }
+
+    fn node_stats(&self) -> Vec<NodeStatus> {
+        if self.nodes.len() > 1 {
+            self.board.snapshot()
+        } else {
+            vec![]
+        }
+    }
+}
+
+impl<N: ChainSource> MultiNode<N> {
+    /// [`ChainSource::fetch_window`] without the health watch.
+    async fn fetch_any(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
         let mut tried = vec![false; self.nodes.len()];
         let mut last: Option<RpcError> = None;
         while let Some(i) = self.pick(&tried) {
@@ -700,23 +910,6 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             }
         }
         Err(last.unwrap_or_else(|| RpcError::Transport("no node available for the window".into())))
-    }
-
-    async fn fetch_window_primary(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
-        // on the verifier's connections: never behind the primary's own windows of the parallel fetch
-        self.primary_window(&*self.verifier, &w).await
-    }
-
-    fn report_lie(&self, origin: Origin, why: &str) {
-        self.board.drop_node(origin.node, why);
-    }
-
-    fn node_stats(&self) -> Vec<NodeStatus> {
-        if self.nodes.len() > 1 {
-            self.board.snapshot()
-        } else {
-            vec![]
-        }
     }
 }
 

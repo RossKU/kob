@@ -241,9 +241,19 @@ impl WrpcNode {
         }
     }
 
-    /// One request; returns the response `params`.
+    /// One request; returns the response `params`. These are the small calls: a timeout counts against the node
+    /// (`crate::rpc::judge::timed_out`: a node that hangs), unlike a `chain_from` batch's or the short fee estimate's.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
-        self.call_within(method, params, self.cfg.request_timeout).await
+        let r = self.call_within(method, params, self.cfg.request_timeout).await;
+        if matches!(r, Err(RpcError::Timeout(_))) {
+            crate::rpc::judge::timed_out(&self.cfg.url, &self.node_in_use());
+        }
+        r
+    }
+
+    /// The node of the current connection (a resolver entry's public node; else the URL).
+    fn node_in_use(&self) -> String {
+        self.node.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// [`WrpcNode::call`] with another timeout.
@@ -324,8 +334,7 @@ impl WrpcNode {
     /// (`crate::rpc::resolver::failed`).
     fn report(&self) {
         if crate::rpc::resolver::is_resolver(&self.cfg.url) {
-            let node = self.node.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            crate::rpc::resolver::failed(&self.cfg.url, &node);
+            crate::rpc::resolver::failed(&self.cfg.url, &self.node_in_use());
         }
     }
 }
@@ -373,7 +382,11 @@ fn decode<T: serde::de::DeserializeOwned>(method: &str, v: Value) -> Result<T, R
 
 impl NodeApi for WrpcNode {
     async fn server_info(&self) -> Result<ServerInfo, RpcError> {
-        decode("getServerInfo", self.call("getServerInfo", json!({})).await?)
+        let info: ServerInfo = decode("getServerInfo", self.call("getServerInfo", json!({})).await?)?;
+        // a node that answers but is useless (another network, no UTXO index, not synced for long) is judged like a failed one
+        crate::rpc::judge::server_info(&self.cfg.url, &self.node_in_use(), &info.network_id, info.is_synced, info.has_utxo_index)
+            .map_err(RpcError::Node)?;
+        Ok(info)
     }
 
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
