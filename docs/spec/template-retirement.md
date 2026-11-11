@@ -55,14 +55,18 @@ one stops serving the orders of the previous generation (this document): a re-ve
 with a published migration window, and operators compare `template_generation` with the release's before and after it
 (`docs/ops/release.md`, 7).
 
-## Keeper service for the previous generation: not built yet
+## Keeper service for the previous generation: not built (founder decision)
 
-The keepers of this build do not refund, kill or close an order under a retired template (above). Serving them (refund and IOC
-or FOK kill, never a fill) is approved (audit 2026-11-11 M-13) and not built yet, because it is not a table entry like the
-cancel: a retired template's `refund` and `settle` entries are its own code, and the `BidRefund` retirement changed exactly how a
+The keepers of this build do not refund, kill or close an order under a retired template (above), and that is decided (audit
+2026-11-11 M-13): a template re-version comes with a published migration window instead (`docs/ops/release.md`, 7), within
+which makers cancel their resting orders and place them again under the new templates. An order left under a retired template
+is never stuck for good: its maker cancels it at any time in the current app or CLI (the cancel-only table above), and at worst
+it waits for its own expiry (a GTC order for its 90-day idle limit), after which its permissionless refund validates for anyone
+who builds it with the release the order was placed with. A keeper service for retired templates would not be a table entry
+like the cancel: a retired template's `refund` and `settle` entries are its own code, and the `BidRefund` retirement changed exactly how a
 bid's terminal `settle` pays its maker, which the refund of a bid goes through. A keeper refund of such an order needs, per
 retired template, a signing plan for that entry (today only `RetiredCancel` exists, `kob_protocol::tx::SigPlan`), a builder that
 pays the outputs the retired code requires (not today's), an ABI and dispatch check of the entry on load (as the cancel's), script
 engine tests of every retired template's refund and kill (as `retired_cancel_tests.rs` for the cancel), and the indexer handing
-such orders to the keepers as keeper-only. Until then the maker's cancel is the way out of such an order, and the permissionless
-refund still validates on chain for anyone who builds it with the release the order was placed with.
+such orders to the keepers as keeper-only. None of it is planned: the maker's cancel is the way out of such an order, and the
+permissionless refund still validates on chain for anyone who builds it with the release the order was placed with.

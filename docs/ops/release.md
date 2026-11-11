@@ -196,8 +196,10 @@ checked to be an arm64 ELF). `scripts/package-release.mjs` packs each into two a
 and a `SHA256SUMS` of those files, and `kob-<version>-<network>-<target>` (the command line alone, with its `README.md` and `REFERENCE.md`); the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
 release job attaches the twelve archives, the Android app and a `SHA256SUMS` of them all to a **draft** release of the tag: add the output of
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
-runs the same builds as a dry run that only uploads workflow artifacts. The binaries and archives are not code-signed (the
-Windows binary shows SmartScreen); the Android app is signed with the **release key** (below).
+runs the same builds as a dry run that only uploads workflow artifacts. **No paid code signing** (founder decision, audit
+2026-11-11 M-12): the binaries and archives are not code-signed, and the Windows binary shows SmartScreen ("More info", "Run
+anyway"); what an operator checks instead is `SHA256SUMS`, the build provenance below and, for an executor that holds funds,
+a rebuild from the tagged commit. The Android app is signed with the **release key** (below).
 
 **Build provenance.** The release job attests every file it attaches (the archives, the APK and `SHA256SUMS`) with
 `actions/attest-build-provenance` (keyless Sigstore: a short-lived certificate for the workflow's GitHub identity, no key to
@@ -248,6 +250,14 @@ would list none of the orders the new wallets place.
    line ends with the same facts (`kobd 0.1.0 (commit ...), payload v4, templates ...`), and the metrics carry them as the labels
    of `kob_build_info`. An executor whose `template_generation` differs from the release's does not see the orders placed under
    the release's templates: upgrade it.
+
+   **Template re-versions** (founder decision, audit 2026-11-11 M-13). A release that changes order templates (a new
+   `template_generation`) is announced with a **published migration window**: its dates, the old and the new generation, and
+   what makers of resting orders under the old templates do (cancel and place again, `docs/spec/template-retirement.md`).
+   Executors upgrade within the window. After it, an upgraded executor serves the old generation only for its makers' cancel:
+   no keeper refunds, kills or closes such an order (that service is not built, by decision). Nothing is stuck for good: the
+   maker cancels at any time, and at worst an order waits for its own expiry, a GTC order for its 90-day idle limit, after
+   which its permissionless refund validates (built with the release it was placed with).
    The release workflow (`.github/workflows/release.yml`) and `crates/kobd/Dockerfile` (`--build-arg KOB_GIT_COMMIT=...`) set
    `KOB_GIT_COMMIT` to the tagged commit; a plain `cargo build` leaves `commit` null. The value is read with `option_env!`
    at compile time: there is no build script, no `git` call and no timestamp, so the same source, toolchain and
