@@ -52,7 +52,8 @@ body:has(.market-page) .container { max-width: 1520px; }
   .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book side' 'depth depth'; }
   .mkt-side { display: flex; flex-direction: column; gap: 12px; grid-area: side; align-self: start; min-width: 0; }
   .mkt-side:has(.tk) { align-self: stretch; contain: size; min-height: max(34rem, var(--tk-fit, 0px)); }
-  .mkt-side:has(.tk) > .mkt-area-ticket { flex: 1 1 0; min-height: 0; }
+  /* the column's full width (the item's own `align-self: start` would shrink it to the form's text, narrower with the field help hidden) */
+  .mkt-side:has(.tk) > .mkt-area-ticket { flex: 1 1 0; min-height: 0; align-self: stretch; }
   .mkt-area-book { align-self: stretch; }
 }
 @media (min-width: 760px) {
