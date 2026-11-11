@@ -375,6 +375,7 @@ async fn session(mut socket: WebSocket, app: Arc<App>, _guard: WsGuard) {
                     let s = app.state.health.snapshot();
                     let f = frame(&Channel::Health, "health", json!({
                         "state": s.state, "cursor_daa": s.cursor_daa, "node_daa": s.node_daa, "lag_daa": s.lag_daa(),
+                        "newer_release_seen": s.newer_release_seen,
                     }));
                     if !send(&mut socket, &f).await {
                         break;

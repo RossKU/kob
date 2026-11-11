@@ -98,13 +98,19 @@ pub fn cursor_line(data: &Value) -> String {
 
 /// The line of a `health` frame.
 pub fn health_line(data: &Value) -> String {
-    format!(
+    let mut s = format!(
         "health  {}  daa {}  node {}  lag {}",
         text(data, "state").unwrap_or("?"),
         opt(int(data, "cursor_daa")),
         opt(int(data, "node_daa")),
         opt(int(data, "lag_daa"))
-    )
+    );
+    // the executor's update notice (a newer KOB release in use on chain); shown only as a release version, never as raw text
+    let newer = data.get("newer_release_seen").and_then(|n| text(n, "version"));
+    if let Some(v) = newer.and_then(|v| v.parse::<kob_protocol::payload::Release>().ok()) {
+        s.push_str(&format!("  | a newer KOB release is in use on chain ({v}): update"));
+    }
+    s
 }
 
 /// The note of a `reorg` frame.
@@ -202,6 +208,14 @@ mod tests {
             health_line(&json!({"state": "following", "cursor_daa": 995, "node_daa": null, "lag_daa": null})),
             "health  following  daa 995  node -  lag -"
         );
+        // the update notice of the executor; anything that is not a release version is not printed
+        let notice = json!({"state": "following", "cursor_daa": 995, "newer_release_seen": {"version": "0.1.1", "first_seen_daa": 7}});
+        assert_eq!(
+            health_line(&notice),
+            "health  following  daa 995  node -  lag -  | a newer KOB release is in use on chain (0.1.1): update"
+        );
+        let odd = json!({"state": "following", "cursor_daa": 995, "newer_release_seen": {"version": "\u{1b}[2J9.9.9"}});
+        assert_eq!(health_line(&odd), "health  following  daa 995  node -  lag -");
         assert!(reorg_line(&json!({"reverted_blocks": 1, "added_blocks": 2, "cursor_daa": 9}))
             .starts_with("reorg: 1 block(s) reverted, 2 added (daa 9)"));
         assert!(resync_line(&json!({"missed_events": 12})).contains("missed 12 events"));

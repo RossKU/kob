@@ -56,6 +56,8 @@ pub struct Delta {
     pub relevant_txs: u64,
     pub new_orders: u64,
     pub rejects: u64,
+    /// A placement announced a release newer than this build and the stored sightings changed (`super::release`).
+    pub release_noticed: bool,
 }
 
 pub struct Processor {
@@ -868,6 +870,8 @@ impl Processor {
             }
             Err(e) => return self.record_reject(conn, seq, &rec.txid, &format!("payload:{e}"), delta),
         };
+        // the release the placement announces, when it is newer than this build (the update notice, `super::release`)
+        let newer_release = payload::release_of(&p).filter(|r| r.is_newer_than_build());
         for r in &p.records {
             match r {
                 Record::Order { .. } => {}
@@ -913,6 +917,7 @@ impl Processor {
                 let custody = parts.first().map(|(c, t, _)| new_custody(c, *t));
                 let prefund = parts.get(1).map(|(c, t, _)| new_custody(c, *t));
                 let ext = ro.custody.as_ref().map(|c| c.state.extension());
+                let maker = Hash32(ro.order.maker());
                 let outcome = self.create_order(
                     conn,
                     delta,
@@ -939,6 +944,9 @@ impl Processor {
                 match outcome {
                     CreateOutcome::Created => {
                         created.insert(cov);
+                        if let Some(v) = newer_release {
+                            delta.release_noticed |= super::release::note(conn, v, maker, rec.txid, ctx.header.daa_score)?;
+                        }
                         // the placement record reveals the custody states: prove each against its output before storing it
                         for (c, token, tpl_hash) in &parts {
                             let token = *token;

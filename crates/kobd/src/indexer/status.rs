@@ -144,6 +144,9 @@ pub struct HealthSnapshot {
     /// Visible to whoever can reach this API, like the rest of `/v1/health`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executor: Option<ExecutorHealth>,
+    /// A KOB release newer than this build is in use on chain: placements of at least two makers announce it
+    /// (`super::release`). Informational only: update when convenient (docs/ops/release.md). `null` when there is none.
+    pub newer_release_seen: Option<super::release::NewerRelease>,
     /// The Executor's own Prometheus series (the runner's), served after the indexer's by `GET /v1/metrics`.
     #[serde(skip)]
     pub executor_metrics: String,
@@ -360,6 +363,7 @@ impl HealthSnapshot {
             lean_over_cap: false,
             lean_prune_failures_total: 0,
             executor: None,
+            newer_release_seen: None,
             executor_metrics: String::new(),
         }
     }
@@ -584,6 +588,12 @@ impl HealthSnapshot {
             );
         }
         m(
+            "kob_newer_release_seen",
+            "gauge",
+            "1 while a KOB release newer than this build is in use on chain (newer_release_seen of /v1/health says which): update.",
+            self.newer_release_seen.is_some() as u64,
+        );
+        m(
             "kob_indexer_node_alarms",
             "gauge",
             "Alarms of nodes named in the configuration (node_alarms of /v1/health); 0 when every node is fine.",
@@ -770,6 +780,9 @@ impl HealthSnapshot {
                 if self.gaps.len() == 1 { "" } else { "s" }
             ));
         }
+        if let Some(n) = &self.newer_release_seen {
+            s.push_str(&format!(" | {}", super::release::notice_text(n)));
+        }
         s
     }
 
@@ -948,6 +961,25 @@ mod tests {
 
     /// A store that began after the oldest history is not a complete book, for good: the health says where its history begins and the
     /// status line says that older orders are not in it.
+    #[test]
+    fn a_newer_release_on_chain_is_in_the_status_line_the_health_and_the_metrics() {
+        let mut h = HealthSnapshot::new("testnet-10");
+        h.state = FollowerState::Following;
+        h.node_daa = Some(4);
+        let plain = h.status_line();
+        assert!(!plain.contains("release"), "{plain}");
+        assert_eq!(serde_json::to_value(&h).unwrap()["newer_release_seen"], serde_json::Value::Null);
+        assert!(h.metrics_text().contains("\nkob_newer_release_seen 0\n"));
+        h.newer_release_seen =
+            Some(super::super::release::NewerRelease { version: kob_protocol::payload::Release::new(0, 1, 1), first_seen_daa: 123 });
+        assert_eq!(h.status_line(), format!("{plain} | a newer KOB release is in use on chain (0.1.1): update"));
+        assert_eq!(
+            serde_json::to_value(&h).unwrap()["newer_release_seen"],
+            serde_json::json!({"version": "0.1.1", "first_seen_daa": 123})
+        );
+        assert!(h.metrics_text().contains("\nkob_newer_release_seen 1\n"));
+    }
+
     #[test]
     fn a_store_that_began_late_says_so() {
         let mut h = HealthSnapshot::new("testnet-10");

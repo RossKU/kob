@@ -779,6 +779,10 @@ impl Extractor<'_> {
         if has_kob1 {
             match payload::decode(&tx.payload.0) {
                 Ok(Some(p)) => {
+                    // the release a placement announces, kept with it only when it is newer than this build (the update
+                    // notice, `super::release`): a build that replays the log later is this one or newer, for which an
+                    // older release never matters, so the log is the same as before whenever there is nothing to tell
+                    let newer_release = payload::release_of(&p).filter(|r| r.is_newer_than_build());
                     for r in p.records {
                         if let Record::Order { template: t, state, .. } = &r {
                             relevant = true;
@@ -795,6 +799,9 @@ impl Extractor<'_> {
                             // an in-place amend or sweep matters only next to a tracked order input (relevant through it)
                             kept.push(r);
                         }
+                    }
+                    if let Some(version) = newer_release.filter(|_| kept.iter().any(|r| matches!(r, Record::Order { .. }))) {
+                        kept.push(Record::Release { version });
                     }
                 }
                 Ok(None) => {}

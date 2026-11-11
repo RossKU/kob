@@ -27,6 +27,7 @@ pub mod reads;
 pub mod record;
 pub mod recordlog;
 pub mod recovery;
+pub mod release;
 pub mod status;
 pub mod storage;
 pub mod trust;
@@ -193,6 +194,10 @@ impl Indexer {
                 h.book_complete = false;
                 h.history_from_daa = Some(from);
             });
+        }
+        // the update notice survives a restart (until this build is that release)
+        if let Some(n) = ingest.newer_release_seen()? {
+            release::publish(&health, n);
         }
         if let Some(c) = ingest.cursor()? {
             let next = ingest.records_next();

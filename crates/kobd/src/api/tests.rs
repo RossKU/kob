@@ -1772,6 +1772,27 @@ async fn health_and_metrics_carry_the_executor_and_the_build() {
     assert!(text.contains("kob_build_info{"), "{text}");
 }
 
+/// The update notice: `/v1/health` `newer_release_seen` is `null` until a newer release is seen on chain, then
+/// `{version, first_seen_daa}`; `/v1/metrics` has `kob_newer_release_seen`.
+#[tokio::test]
+async fn health_names_a_newer_release_seen_on_chain() {
+    let e = env(|_| {});
+    let app = router(e.state.clone());
+    let (_, v) = get(&app, "/v1/health").await;
+    assert!(v.as_object().unwrap().contains_key("newer_release_seen"), "{v}");
+    assert_eq!(v["newer_release_seen"], Value::Null);
+    let (_, _, body) = raw(&app, "/v1/metrics", &[]).await;
+    assert!(String::from_utf8(body).unwrap().contains("\nkob_newer_release_seen 0\n"));
+    crate::indexer::release::publish(
+        &e.state.health,
+        crate::indexer::release::NewerRelease { version: kob_protocol::payload::Release::new(0, 9, 1), first_seen_daa: 42 },
+    );
+    let (_, v) = get(&app, "/v1/health").await;
+    assert_eq!(v["newer_release_seen"], serde_json::json!({"version": "0.9.1", "first_seen_daa": 42}));
+    let (_, _, body) = raw(&app, "/v1/metrics", &[]).await;
+    assert!(String::from_utf8(body).unwrap().contains("\nkob_newer_release_seen 1\n"));
+}
+
 /// `GET /v1/metrics` is public like the rest of `/v1/`; `[api] metrics = false` removes the route.
 #[tokio::test]
 async fn the_metrics_route_follows_the_config() {

@@ -785,6 +785,12 @@ impl<S: ChainSource> Follower<S> {
                 let orders_total =
                     if a.new_orders > 0 || a.reverted_rows_blocks > 0 { self.blocking(|i| i.order_count().ok()).await } else { None };
                 let records_next = self.blocking(|i| i.records_next()).await;
+                // the update notice: read again only when a placement of the batch announced a newer release
+                if a.release_noticed {
+                    if let Ok(Some(n)) = self.blocking(|i| i.newer_release_seen()).await {
+                        super::release::publish(&self.health, n);
+                    }
+                }
                 self.health.update(|h| {
                     h.state = if a.added == 0 || !more { FollowerState::Following } else { FollowerState::CatchingUp };
                     h.cursor_hash = Some(a.cursor.hash);

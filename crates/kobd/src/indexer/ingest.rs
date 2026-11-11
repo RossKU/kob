@@ -56,6 +56,8 @@ pub struct Applied {
     pub added: usize,
     pub relevant_txs: u64,
     pub new_orders: u64,
+    /// A placement of the batch announced a release newer than this build (`super::release`): the notice may have changed.
+    pub release_noticed: bool,
     pub rejects: u64,
     /// Log frame number and size, when a frame was written.
     pub log_n: Option<u64>,
@@ -433,6 +435,11 @@ impl Ingest {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM orders", [], |r| r.get::<_, i64>(0))? as u64)
     }
 
+    /// The newer release seen on chain often enough to tell the operator (`super::release`).
+    pub fn newer_release_seen(&self) -> DbResult<Option<super::release::NewerRelease>> {
+        super::release::newer_seen(&self.conn)
+    }
+
     /// The newest stored chain blocks, newest first.
     pub fn stored_blocks_desc(&self, limit: usize) -> DbResult<Vec<StoredBlock>> {
         let mut st = self.conn.prepare("SELECT seq, hash, daa FROM blocks ORDER BY seq DESC LIMIT ?1")?;
@@ -467,6 +474,7 @@ impl Ingest {
                 added: 0,
                 relevant_txs: 0,
                 new_orders: 0,
+                release_noticed: false,
                 rejects: 0,
                 log_n: None,
                 log_bytes: 0,
@@ -633,6 +641,7 @@ impl Ingest {
             added: blocks.len(),
             relevant_txs: delta.relevant_txs,
             new_orders: delta.new_orders,
+            release_noticed: delta.release_noticed,
             rejects: delta.rejects,
             log_n,
             log_bytes: log_len,
