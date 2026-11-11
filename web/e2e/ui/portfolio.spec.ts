@@ -88,7 +88,7 @@ test('a market page shows the same panel under the depth chart, this market only
   await expect(panel).toBeVisible();
   await expect(panel.getByTestId('orders-tab-active')).toHaveAttribute('aria-selected', 'true');
   await expect(panel.getByTestId(`order-line-${here}`)).toBeVisible();
-  await expect(panel.getByTestId('market-orders-only-input')).toBeChecked();
+  await expect(panel.getByTestId('market-orders-scope-here')).toHaveAttribute('aria-checked', 'true');
   // the details of a line on a market page are drawn only once opened (they share test ids with the ticket)
   await expect(panel.getByTestId(`order-details-${here}`)).toHaveCount(0);
   await panel.getByTestId(`order-toggle-${here}`).click();

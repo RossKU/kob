@@ -233,7 +233,7 @@ export function AmendDialog(props: AmendDialogProps) {
           <p class="small muted">{t('orders.amend.budgetKept')}</p>
         )}
         {canRenew ? (
-          <label class="row small" style="gap:8px" data-testid="amend-renew-label">
+          <label class="row small ord-check" style="gap:8px" data-testid="amend-renew-label">
             <input type="checkbox" checked={renew} onChange={(e) => { setRenew((e.currentTarget as HTMLInputElement).checked); setServerIssues([]); }} data-testid="amend-renew" />
             <span>{t('orders.amend.renew', { days: 90 })}</span>
           </label>

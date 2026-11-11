@@ -5,14 +5,16 @@ import { priceUsdText } from './fiat-price';
 import { useState } from 'preact/hooks';
 import type { EventView } from '../../data/indexer-types';
 import { useTxUrl } from '../../app/explorer';
-import { formatDateTime, has, t, RAW_TOKEN_DECIMALS } from '../../i18n';
+import { has, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { formatKas, formatPricePerToken, formatUnits } from '../../kob/units';
-import { Button, CopyText, ErrorBanner, fixedPricePerToken, Loading, Table, tickPriceFraction, useAsync } from '../kit';
+import { formatKas } from '../../kob/units';
+import { Button, CopyText, ErrorBanner, displayPriceText, exactPriceText, formatRowTimeUnix, Loading, rowTimeTitleUnix, Table, useAsync } from '../kit';
 import { downloadText } from '../kit/download';
 import { fillHistory, fillsCsv, fillsFileName } from './fills-model';
 import type { OrderRowModel } from './orders-model';
+import { amountCell, priceDpOf, tokenUnit } from './cells';
+import { countText } from './plural';
 
 export interface OrderFillsProps {
   row: OrderRowModel;
@@ -36,17 +38,20 @@ export function OrderFills(props: OrderFillsProps) {
   // the USD display: a price and the payout in dollars
   const fiat = useFiat();
   const data = useAsync(async (signal) => (open ? fillHistory(await props.loadEvents(row.id, signal), row.scale) : null), [open, row.id]);
-  // prices are the order's state prices (sompi per whole token of `row.scale` base units)
-  const price = (p: bigint) =>
-    fiat && !row.pair ? priceUsdText(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, fiat) : `${formatPricePerToken(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale)} ${t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })}`;
-  // the price column: fixed decimals for every row (from the token's tick, else 8), the unit in the header (decimal points line up)
-  const priceFraction = token ? (tickPriceFraction(token.tick, token.decimals, row.scale) ?? 8) : 8;
-  const priceCell = (p: bigint) => (fiat && !row.pair ? priceUsdText(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, fiat) : fixedPricePerToken(p, token?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, priceFraction));
-  const amountText = (a: bigint) => formatUnits(a, token?.decimals ?? RAW_TOKEN_DECIMALS, { group: ',' });
+  const decimals = token?.decimals ?? RAW_TOKEN_DECIMALS;
+  // prices are the order's state prices (sompi per whole token of `row.scale` base units). One number of decimals for the whole list and the average (the finest any of them needs,
+  // 5 significant digits, at most 6), the exact price in the title: the decimal points line up and no price is cut without saying so
+  const priceDp = priceDpOf([...(data.data?.rows ?? []).map((r) => r.price), data.data?.avgPrice].map((price) => ({ price, decimals, scale: row.scale })));
+  const unit = tokenUnit(token?.ticker, row.token);
+  const kasPer = t('orders.unit.kasPer', { ticker: unit.text || '?' });
+  const priceCell = (p: bigint) => (fiat && !row.pair ? priceUsdText(p, decimals, row.scale, fiat) : displayPriceText(p, decimals, row.scale, priceDp));
+  const priceTitle = (p: bigint) => (fiat && !row.pair ? undefined : `${exactPriceText(p, decimals, row.scale)} ${kasPer}`);
+  const price = (p: bigint) => (fiat && !row.pair ? priceUsdText(p, decimals, row.scale, fiat) : `${priceCell(p)} ${kasPer}`);
+  const amountText = (a: bigint) => amountCell(a, decimals).text;
   // a pair order: its fills are volume only (amounts of A and B, how it was filled), never a price
   const pairOrder = !!row.pair;
   const quote = props.quote;
-  const bText = (b: bigint | null | undefined) => (b === null || b === undefined ? '—' : quote ? formatUnits(b, quote.decimals, { group: ',' }) : b.toString());
+  const bText = (b: bigint | null | undefined) => (b === null || b === undefined ? '—' : quote ? amountCell(b, quote.decimals).text : b.toString());
   const h = data.data;
   const download = () => {
     if (!h) return;
@@ -56,7 +61,7 @@ export function OrderFills(props: OrderFillsProps) {
   return (
     <div class="order-fills small" data-testid={`order-fills-${row.id}`}>
       <Button small variant="ghost" onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid={`order-fills-toggle-${row.id}`}>
-        {t(open ? 'orders.fills.hide' : 'orders.fills.show', { amount: `${amountText(filledAmountOf(row))} ${token?.ticker ?? ''}`.trim() })}
+        {t(open ? 'orders.fills.hide' : 'orders.fills.show', { amount: `${amountText(filledAmountOf(row))} ${unit.text}`.trim() })}
       </Button>
       {open ? (
         <div class="stack-sm" style="margin-top:6px">
@@ -65,8 +70,8 @@ export function OrderFills(props: OrderFillsProps) {
           {h ? (
             <>
               <p data-testid="order-fills-summary">
-                {t('orders.fills.summary', { fills: h.rows.length, amount: `${amountText(h.amount)} ${token?.ticker ?? ''}`.trim() })}
-                {h.avgPrice !== null ? ` · ${t('orders.fills.avg', { price: price(h.avgPrice) })}` : ''}
+                {t('orders.fills.summary', { fills: countText('fill', h.rows.length), amount: `${amountText(h.amount)} ${unit.text}`.trim() })}
+                {h.avgPrice !== null ? <span title={priceTitle(h.avgPrice)}>{` · ${t('orders.fills.avg', { price: price(h.avgPrice) })}`}</span> : ''}
                 {h.payout > 0n ? ` · ${fiat ? t('orders.fills.payoutUsd', { usd: kasValueText(h.payout, fiat) }) : t('orders.fills.payout', { kas: formatKas(h.payout) })}` : ''}
               </p>
               {h.rows.length ? (
@@ -74,14 +79,14 @@ export function OrderFills(props: OrderFillsProps) {
                   <thead>
                     <tr>
                       <th>{t('orders.fills.time')}</th>
-                      <th class="right">{t('orders.fills.amountIn', { unit: token?.ticker ?? '?' })}</th>
+                      <th class="right">{t('orders.fills.amountIn', { unit: unit.text || '?' })}</th>
                       {pairOrder ? (
                         <>
                           <th class="right">{t('orders.fills.amountIn', { unit: quote?.ticker ?? '?' })}</th>
                           <th>{t('orders.fills.via')}</th>
                         </>
                       ) : (
-                        <th class="right">{t('orders.fills.priceIn', { unit: t(fiat ? 'orders.unit.usdPer' : 'orders.unit.kasPer', { ticker: token?.ticker ?? '?' }) })}</th>
+                        <th class="right">{t('orders.fills.priceIn', { unit: t(fiat ? 'orders.unit.usdPer' : 'orders.unit.kasPer', { ticker: unit.text || '?' }) })}</th>
                       )}
                       <th>{t('orders.fills.tx')}</th>
                     </tr>
@@ -95,15 +100,15 @@ export function OrderFills(props: OrderFillsProps) {
                       };
                       return (
                       <tr key={`${r.txid}-${r.atMs}`} data-testid="order-fill-row" data-txid={r.txid} class={href ? 'row-link' : undefined} onClick={open} title={href ? t('orders.explorerHint') : undefined}>
-                        <td>{r.atMs > 0 ? formatDateTime(Math.floor(r.atMs / 1000), { dateStyle: 'short', timeStyle: 'medium' }) : '—'}</td>
-                        <td class="right num">{amountText(r.amount)}</td>
+                        <td title={r.atMs > 0 ? rowTimeTitleUnix(Math.floor(r.atMs / 1000)) : undefined}>{r.atMs > 0 ? formatRowTimeUnix(Math.floor(r.atMs / 1000)) : '—'}</td>
+                        <td class="right num" title={amountCell(r.amount, decimals).title}>{amountText(r.amount)}</td>
                         {pairOrder ? (
                           <>
                             <td class="right num" data-testid="order-fill-b">{bText(r.pair?.amountB)}</td>
                             <td data-testid="order-fill-via">{r.pair ? (has(`pair.trades.cp.${r.pair.counterparty}`) ? t(`pair.trades.cp.${r.pair.counterparty}`) : r.pair.counterparty) : '—'}</td>
                           </>
                         ) : (
-                          <td class="right num">{r.price !== null ? priceCell(r.price) : '—'}</td>
+                          <td class="right num" title={r.price !== null ? priceTitle(r.price) : undefined}>{r.price !== null ? priceCell(r.price) : '—'}</td>
                         )}
                         <td>
                           <CopyText value={r.txid} head={6} tail={4} href={href} />

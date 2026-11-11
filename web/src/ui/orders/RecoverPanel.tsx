@@ -5,6 +5,7 @@ import type { PlacementRecord, RecordStore, ResolvedRecord } from '../../kob/rec
 import type { Hex } from '../../kob/types';
 import { Badge, Banner, Button, CopyText, Section, Table, TableMessage, downloadText, exportFileName, readFileText, showToast, toError } from '../kit';
 import { resolveRecords } from './orders-data';
+import { countText, tCount } from './plural';
 import { applyImport, backupFileText, parseImport, recoveryFileText, type ParsedImport } from './recover';
 
 export interface RecoverPanelProps {
@@ -37,11 +38,11 @@ export function RecoverPanel(props: RecoverPanelProps) {
 
   const exportBackup = () => {
     downloadText(exportFileName('backup', config.network), backupFileText(props.records, config.network));
-    showToast(t('orders.recover.exported', { count: n }), 'ok');
+    showToast(tCount('orders.recover.exported', n), 'ok');
   };
   const exportIndexer = () => {
     downloadText(exportFileName('maker-recovery', config.network), recoveryFileText(props.records, config.network));
-    showToast(t('orders.recover.exported', { count: n }), 'ok');
+    showToast(tCount('orders.recover.exported', n), 'ok');
   };
 
   const onFile = async (e: Event) => {
@@ -69,7 +70,7 @@ export function RecoverPanel(props: RecoverPanelProps) {
     setBusy('import');
     try {
       const res = await applyImport(props.store, pending.parsed.result);
-      setMessage({ tone: 'ok', text: t('orders.recover.imported', { added: res.added, kept: res.kept }) });
+      setMessage({ tone: 'ok', text: t('orders.recover.imported', { added: countText('newRecord', res.added), kept: res.kept }) });
       setPending(null);
       props.onChanged();
     } catch (err) {
@@ -106,7 +107,7 @@ export function RecoverPanel(props: RecoverPanelProps) {
   return (
     <Section title={t("orders.recover.title")} data-testid="recover-panel">
       <p>{t('orders.recover.why')}</p>
-      <p class="small muted" data-testid="recover-count">{t('orders.recover.count', { count: n })}</p>
+      <p class="small muted" data-testid="recover-count">{tCount('orders.recover.count', n)}</p>
       <div class="row">
         <Button onClick={exportBackup} disabled={n === 0} data-testid="orders-export">{t('orders.recover.exportBackup')}</Button>
         <Button onClick={exportIndexer} disabled={n === 0} data-testid="orders-export-indexer">{t('orders.recover.exportIndexer')}</Button>
@@ -121,7 +122,7 @@ export function RecoverPanel(props: RecoverPanelProps) {
       {pending ? (
         <div class="stack-sm" data-testid="import-preview" style="margin-top:8px">
           <Banner tone={pending.parsed.result.rejected.length ? 'warn' : 'info'} title={t('orders.recover.previewTitle', { name: pending.name })}>
-            {t('orders.recover.preview', { kind: t(`orders.recover.kind.${pending.parsed.kind}`), ok: pending.parsed.result.records.length, bad: pending.parsed.result.rejected.length })}
+            {t('orders.recover.preview', { kind: t(`orders.recover.kind.${pending.parsed.kind}`), ok: countText('record', pending.parsed.result.records.length), bad: pending.parsed.result.rejected.length })}
             {pending.parsed.result.rejected.length ? (
               <ul data-testid="import-rejected">
                 {pending.parsed.result.rejected.slice(0, 20).map((r, i) => (
@@ -132,7 +133,7 @@ export function RecoverPanel(props: RecoverPanelProps) {
           </Banner>
           <div class="row">
             <Button variant="primary" disabled={pending.parsed.result.records.length === 0} loading={busy === 'import'} onClick={() => void apply()} data-testid="orders-import-apply">
-              {t('orders.recover.apply', { count: pending.parsed.result.records.length })}
+              {tCount('orders.recover.apply', pending.parsed.result.records.length)}
             </Button>
             <Button onClick={() => setPending(null)}>{t('common.cancel')}</Button>
           </div>

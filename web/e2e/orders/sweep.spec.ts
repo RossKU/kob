@@ -22,7 +22,7 @@ test.describe('sweep strays in place', () => {
     await openOrders(page, mock);
 
     const row = page.getByTestId(`order-row-${id}`);
-    await expect(row.getByTestId('order-strays')).toContainText('3 UTXO(s) sent to this order: sweep them back');
+    await expect(row.getByTestId('order-strays')).toContainText('3 UTXOs were sent to this order: sweep them back');
     const panel = page.getByTestId('orders-strays');
     await expect(panel.getByTestId('stray-row')).toHaveCount(3);
     const foreignRow = panel.locator('[data-testid="stray-row"][data-foreign="1"]');
@@ -103,7 +103,7 @@ test.describe('sweep strays in place', () => {
     await page.getByTestId(`order-cancel-${id}`).click();
     const dialog = page.getByTestId('sweep-first-dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('now abandons 1 stray token UTXO(s) for good');
+    await expect(dialog).toContainText('now abandons 1 stray token UTXO for good');
     await expect(page.getByTestId('sweep-first-abandon')).toHaveText('Cancel anyway (abandon 1)');
     await page.getByTestId('sweep-first-confirm').click();
 

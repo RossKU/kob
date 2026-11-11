@@ -56,7 +56,7 @@ async function mergeOnce(page: Page, mock: MockClient, wallet: Parameters<typeof
   // one transaction per click: no multi-step progress list
   await expect(page.getByTestId('flow-progress')).toHaveCount(0);
   const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
-  await expect(page.getByTestId('flow-done')).toContainText('1 transaction(s) submitted');
+  await expect(page.getByTestId('flow-done')).toContainText('1 transaction submitted');
   const shown = (await shownAs(page)).slice(before);
   expect(shown).toHaveLength(1);
   return { placed: placed!, shown: shown[0]! };
@@ -165,7 +165,7 @@ test('a token the registry does not list is mergeable too: Merge shows under its
   await expect(page.getByTestId('flow-done')).toHaveCount(0, { timeout: 15_000 });
   await expect(page.getByTestId('tx-flow')).toContainText('UTXOs');
   const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
-  await expect(page.getByTestId('flow-done')).toContainText('1 transaction(s) submitted');
+  await expect(page.getByTestId('flow-done')).toContainText('1 transaction submitted');
   expect((await shownAs(page))[0]).toMatch(/into one in one transaction: 4 UTXOs become 2\./);
   // ONE token output holding the three smallest amounts (1 + 2 + 3), the fourth UTXO untouched
   expect(placed!.submission.token_outputs).toHaveLength(1);

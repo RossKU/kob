@@ -4,18 +4,18 @@ import { useEffect } from 'preact/hooks';
 import { pairRoute, routeToHash } from '../../app/router';
 import { useServices } from '../../app/context';
 import { useTxUrl } from '../../app/explorer';
-import { formatDateTime, formatNumber, t, RAW_TOKEN_DECIMALS } from '../../i18n';
+import { formatNumber, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import { unitsText } from '../../kob/pair';
-import { formatKas, formatPricePerToken, formatUnits, quoteOf, statePriceToTokenPrice } from '../../kob/units';
+import { quoteOf, statePriceToTokenPrice } from '../../kob/units';
 import { formatLocal, formatUtc } from '../../kob/daa';
 import type { Clock } from '../../kob/plan-types';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { useFiat } from '../../app/use-fiat';
 import {
-  Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, tickPriceFraction, type Tone,
+  Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, type Tone,
 } from '../kit';
 import {
-  DtCell, DtGroup, DtRow, MarketCell, MoneyCell, Num, RowToggle, hasOpenChoice, timeText, toggleLabel, useOpenRow,
+  DtCell, DtGroup, DtRow, MarketCell, MoneyCell, Num, RowToggle, hasOpenChoice, timeText, timeTitle, toggleLabel, useOpenRow,
 } from '../kit/DataTable';
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
@@ -27,6 +27,8 @@ import type { Hex } from '../../kob/types';
 import { OrderFills, filledAmountOf } from './OrderFills';
 import { GTC_RULE, type OrderRowModel, type OrderStatusUi } from './orders-model';
 import { placedUnix } from './orders-sort';
+import { amountCell, longDate, priceDpOf, tokenUnit } from './cells';
+import { tCount } from './plural';
 import { unlistedHint, unlistedText } from './unlisted';
 import './order-line.css';
 
@@ -66,6 +68,10 @@ export interface OrderRowProps {
   columns?: 'open' | 'history';
   /** the average fill price of the order (history; null: none, undefined: not read yet) */
   avg?: bigint | null;
+  /** the fixed decimals of the table's price columns (`priceDpOf` of every row of the table: the decimal points line up); absent: this order's own */
+  priceDp?: number;
+  /** the fixed decimals of the table's Total column (KAS); absent: as it is, at most 4 */
+  kasDp?: number;
 }
 
 /** An order that needs the reader: its details open by themselves (a warning, a renewal, an expiry, a source other than the indexer). */
@@ -76,35 +82,27 @@ export function needsAttention(row: OrderRowModel): boolean {
   );
 }
 
-/** What the one line of an order says (OrderRow), from its model: the time, the price, the trigger, the filled part and the value in KAS. */
+/** What the one line of an order says (OrderRow), from its model: the time, the price of a pair order, the filled part and the value in KAS (a KAS price is drawn by its cell, with the table's decimals). */
 function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo | undefined, clock: Clock | null | undefined, avg: bigint | null | undefined) {
   const decimals = tk?.decimals ?? RAW_TOKEN_DECIMALS;
   const unix = placedUnix(row, clock);
   const time = timeText(unix);
-  const priceOf = (v: bigint | null): string => (v === null ? '—' : row.pair ? pairPriceText(v, row, tk, b) : formatPricePerToken(v, decimals, row.scale, { group: ',' }));
-  const price = priceOf(row.price);
-  const trigger = row.stopPrice !== null ? t('orders.line.stop', { price: priceOf(row.stopPrice) }) : row.armed === false && row.live ? t('orders.waitingTrigger') : '—';
+  const pairPrice = (v: bigint | null | undefined): string => (v === null || v === undefined || !row.pair ? '—' : pairPriceText(v, row, tk, b));
   const total = row.amountTotal;
   const left = row.amountLeft;
   const filled = total !== null && left !== null ? (total > left ? total - left : 0n) : null;
   const pct = total !== null && total > 0n && filled !== null ? Number((filled * 100n) / total) : null;
-  const unit = tk ? tk.ticker : row.token ? longId(row.token) : '';
-  const amountText = (v: bigint) => formatUnits(v, decimals, { group: ',' });
-  const filledParts: [string, string] | null = total !== null && filled !== null ? [amountText(filled), amountText(total)] : null;
-  const filledText = filledParts ? `${filledParts[0]} / ${filledParts[1]}` : t('orders.budgetShort');
-  const amountTotalText = total !== null ? amountText(total) : null;
-  const filledAmountText = filled !== null ? amountText(filled) : null;
-  const avgText = avg === null || avg === undefined ? '—' : row.pair ? pairPriceText(avg, row, tk, b) : formatPricePerToken(avg, decimals, row.scale, { group: ',' });
+  // a token nobody named shows its short id in the unit slot, never the long hex (cells.ts)
+  const unit = tokenUnit(tk?.ticker, row.token);
+  const amountTotalText = total !== null ? amountCell(total, decimals) : null;
+  const filledAmountText = filled !== null ? amountCell(filled, decimals) : null;
   // a buy order that holds a KAS budget has no amount to show: the line says so in two words (the amount follows from the price; the details say it in full)
   const budget = !(total !== null && filled !== null);
   const valueKas = !row.pair && total !== null && row.price !== null ? quoteOf(total, row.price, row.scale, 'down') : null;
-  return { time, price, trigger, filledText, filledParts, pct, unit, valueKas, budget, amountTotalText, filledAmountText, avgText };
+  return { time, timeTip: timeTitle(unix), price: pairPrice(row.price), pct, unit, valueKas, budget, amountTotalText, filledAmountText, avgText: pairPrice(avg) };
 }
 
-const localDate = (unix: bigint): string => formatDateTime(Number(unix));
-
-/** The fixed decimals of a price shown in every order of a market (from the token's tick): `{ fraction }`, or nothing when the market has no tick. */
-const fixed = (fraction: number | null): { fraction?: number } => (fraction === null ? {} : { fraction });
+const localDate = longDate;
 
 /** A token the registry does not list is named by 8 + 8 hex of its covenant id (a 4 + 4 fragment can be copied by another token). */
 const shortId = longId;
@@ -126,7 +124,7 @@ function pairPriceText(value: bigint, row: OrderRowModel, a: TokenInfo | undefin
  * A state price of the order (sompi per whole token of `row.scale` base units) as KAS per whole token; per `scale` base units without the token. A pair
  * order's prices are in its quote token B per whole A (`quote`).
  */
-function PriceCell(p: { row: OrderRowModel; token: TokenInfo | undefined; quote?: TokenInfo | undefined; value: bigint | null; testid?: string }) {
+function PriceCell(p: { row: OrderRowModel; token: TokenInfo | undefined; quote?: TokenInfo | undefined; value: bigint | null; dp: number; testid?: string }) {
   const tk = p.token;
   const fiat = useFiat();
   if (p.value === null) return <>{'—'}</>;
@@ -134,9 +132,9 @@ function PriceCell(p: { row: OrderRowModel; token: TokenInfo | undefined; quote?
   return (
     <span data-testid={p.testid}>
       {tk ? (
-        <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: tk.ticker })} {...fixed(tickPriceFraction(tk.tick, tk.decimals, p.row.scale))} group fiat={fiat} />
+        <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: tokenUnit(tk.ticker, p.row.token).text })} fraction={p.dp} group fiat={fiat} />
       ) : (
-        <Amount kind="price" value={p.value} decimals={RAW_TOKEN_DECIMALS} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: p.row.token ? shortId(p.row.token) : '?' })} group fiat={fiat} />
+        <Amount kind="price" value={p.value} decimals={RAW_TOKEN_DECIMALS} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: tokenUnit(undefined, p.row.token).text || '?' })} fraction={p.dp} group fiat={fiat} />
       )}
     </span>
   );
@@ -219,9 +217,12 @@ export function OrderRow(props: OrderRowProps) {
   const line = lineFacts(row, tk, bToken, props.clock, props.avg);
   // the USD display: a KAS-per-token price of the table's cells in dollars (a pair price is a price in another token: never converted)
   const fiat = useFiat();
+  // the table's price columns: the same fixed decimals in every row (`priceDp`, the finest of the table), the exact price in the cell's title; this order's own where no table gives one
+  const ownDp = priceDpOf([row.price, row.stopPrice, row.allInPrice, row.auctionStart, row.auction?.currentPrice, props.avg].map((price) => ({ price, decimals: tk?.decimals ?? RAW_TOKEN_DECIMALS, scale: row.scale })));
+  const dp = props.priceDp ?? ownDp;
   const priceFigure = (value: bigint | null | undefined, text: string) =>
-    fiat && !row.pair && value !== null && value !== undefined ? (
-      <Amount kind="price" value={value} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} scale={row.scale} unit={false} fiat={fiat} class="dt-val" />
+    !row.pair && value !== null && value !== undefined ? (
+      <Amount kind="price" value={value} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} scale={row.scale} unit={false} fraction={dp} group fiat={fiat} class="dt-val" />
     ) : (
       <Num value={text} />
     );
@@ -230,7 +231,7 @@ export function OrderRow(props: OrderRowProps) {
 
   const cells: Record<string, JSX.Element> = {};
   cells.time = (
-    <DtCell k="time" label={t('orders.col.time')} card="badge" class="or-time dt-time">{line.time}</DtCell>
+    <DtCell k="time" label={t('orders.col.time')} card="badge" class="or-time dt-time" title={line.timeTip}>{line.time}</DtCell>
   );
   const marketHref = row.pair ? routeToHash(pairRoute(row.pair.base, row.pair.quote)) : row.token ? `#/market/${row.token}` : undefined;
   cells.market = (
@@ -258,13 +259,13 @@ export function OrderRow(props: OrderRowProps) {
   );
   cells.amount = (
     <DtCell k="amount" label={t('orders.col.amount')} num class="or-amount" title={line.budget ? t('orders.budgetOrder') : undefined}>
-      {line.amountTotalText !== null ? <Num value={line.amountTotalText} unit={line.unit} /> : <span class="dt-val">{t('orders.budgetShort')}</span>}
+      {line.amountTotalText !== null ? <Num value={line.amountTotalText.text} title={line.amountTotalText.title} unit={line.unit.text} unitTitle={line.unit.title} /> : <span class="dt-val">{t('orders.budgetShort')}</span>}
     </DtCell>
   );
   cells.filled = (
     <DtCell k="filled" label={t('orders.col.filled')} num class="or-filled">
       <span class="num">
-        {line.filledAmountText !== null ? <Num value={line.filledAmountText} unit={line.unit} /> : <span class="dt-val">—</span>}
+        {line.filledAmountText !== null ? <Num value={line.filledAmountText.text} title={line.filledAmountText.title} unit={line.unit.text} unitTitle={line.unit.title} /> : <span class="dt-val">—</span>}
         {line.pct !== null ? <span class="dt-unit or-pct"> {line.pct}%</span> : null}
       </span>
       {line.pct !== null ? (
@@ -275,7 +276,7 @@ export function OrderRow(props: OrderRowProps) {
     </DtCell>
   );
   cells.total = (
-    <DtCell k="total" label={t(fiat ? 'orders.col.totalUsd' : 'orders.col.total')} num class="or-value"><MoneyCell kas={line.valueKas} unit={false} /></DtCell>
+    <DtCell k="total" label={t(fiat ? 'orders.col.totalUsd' : 'orders.col.total')} num class="or-value"><MoneyCell kas={line.valueKas} unit={false} {...(props.kasDp !== undefined ? { fraction: props.kasDp } : {})} /></DtCell>
   );
   cells.status = (
     <DtCell k="status" label={t('orders.col.status')} class="or-status">
@@ -396,22 +397,22 @@ export function OrderRow(props: OrderRowProps) {
           // an auction's bound is its END price (the worst it can fill at), never labelled a limit; its start is only the expected price
           {
             label: t(row.auctionStart !== null ? 'orders.worstPrice' : 'orders.limitPrice'),
-            value: <PriceCell row={row} token={tk} quote={bToken} value={row.price} />,
+            value: <PriceCell row={row} token={tk} quote={bToken} value={row.price} dp={ownDp} />,
             'data-testid': 'order-price',
             show: row.price !== null || row.stopPrice === null,
           },
-          { label: t('orders.startPrice'), value: <PriceCell row={row} token={tk} quote={bToken} value={row.auctionStart} />, 'data-testid': 'order-start-price', show: row.auctionStart !== null },
-          { label: t('orders.stopPrice'), value: <PriceCell row={row} token={tk} quote={bToken} value={row.stopPrice} />, 'data-testid': 'order-stop', show: row.stopPrice !== null },
+          { label: t('orders.startPrice'), value: <PriceCell row={row} token={tk} quote={bToken} value={row.auctionStart} dp={ownDp} />, 'data-testid': 'order-start-price', show: row.auctionStart !== null },
+          { label: t('orders.stopPrice'), value: <PriceCell row={row} token={tk} quote={bToken} value={row.stopPrice} dp={ownDp} />, 'data-testid': 'order-stop', show: row.stopPrice !== null },
           // the price with the tip: only when there is a tip (else it repeats the price); an auction's is the worst too, never what was paid
           {
             label: t(row.auctionStart !== null ? 'orders.worstAllIn' : 'orders.allIn'),
-            value: <PriceCell row={row} token={tk} value={row.allInPrice} />,
+            value: <PriceCell row={row} token={tk} value={row.allInPrice} dp={ownDp} />,
             'data-testid': 'order-allin',
             show: row.allInPrice !== null && row.tip > 0n,
           },
           {
             label: t('orders.auctionNow'),
-            value: <PriceCell row={row} token={tk} value={row.auction?.currentPrice ?? null} />,
+            value: <PriceCell row={row} token={tk} value={row.auction?.currentPrice ?? null} dp={ownDp} />,
             show: row.auction !== null && !row.auction.complete && row.live && !row.pair,
           },
           {
@@ -421,9 +422,9 @@ export function OrderRow(props: OrderRowProps) {
                 {row.amountLeft !== null ? (
                   <>
                     {row.amountEstimated ? <span class="est" title={t('market.book.estimatedNote')}>~</span> : null}
-                    <Amount kind="token" value={row.amountLeft} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} group />
-                    {row.amountTotal !== null ? <> / <Amount kind="token" value={row.amountTotal} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} group /></> : null}{' '}
-                    {tk ? tk.ticker : row.token ? shortId(row.token) : ''}
+                    <Amount kind="token" value={row.amountLeft} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} maxFraction={4} group />
+                    {row.amountTotal !== null ? <> / <Amount kind="token" value={row.amountTotal} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} maxFraction={4} group /></> : null}{' '}
+                    <span title={line.unit.title}>{line.unit.text}</span>
                   </>
                 ) : (
                   <>{t('orders.budgetOrder')}</>
@@ -449,7 +450,7 @@ export function OrderRow(props: OrderRowProps) {
           },
           {
             label: t('orders.strays'),
-            value: <span data-testid="order-strays">{t(canSweep ? 'orders.straysValueSweep' : 'orders.straysValue', { count: row.strayCount })}</span>,
+            value: <span data-testid="order-strays">{tCount(canSweep ? 'orders.straysValueSweep' : 'orders.straysValue', row.strayCount)}</span>,
             show: row.strayCount > 0,
           },
           { label: t('orders.note'), value: row.label ?? '', show: !!row.label },

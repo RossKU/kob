@@ -1,13 +1,14 @@
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
-import { formatDateTime, formatNumber, t, RAW_TOKEN_DECIMALS } from '../../i18n';
+import { formatNumber, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import type { EventView } from '../../data/indexer-types';
 import type { Position } from '../../kob/positions';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { useFiat } from '../../app/use-fiat';
-import { Amount, Button, Loading, scaleOfDecimals, tickPriceFraction, toError, useAsync } from '../kit';
-import { formatUnits } from '../../kob/units';
+import { Amount, Button, Loading, scaleOfDecimals, toError, useAsync } from '../kit';
+import { amountCell, longDate, priceDpOf, tokenUnit } from './cells';
+import { countText } from './plural';
 import { ratio, realisedPnl, summarizePositionFills, type PositionFills, type PositionSummary } from './position-model';
 
 export interface PositionSummaryProps {
@@ -24,28 +25,26 @@ export interface PositionSummaryProps {
  * A state price (sompi per whole token of `scale` base units): KAS per whole token when the token is known, else KAS per `scale` base units.
  * Missing: a dash.
  */
-function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: bigint; pair?: PositionSummaryProps['pair'] }) {
+function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: bigint; dp: number; pair?: PositionSummaryProps['pair'] }) {
   const fiat = useFiat();
   if (p.value === null) return <>{'—'}</>;
   const tk = p.token;
   if (p.pair) {
     const q = p.pair.quote;
     const base = tk?.ticker ?? '?';
-    return <span data-unit="pair">{`${formatUnits(p.value, q?.decimals ?? RAW_TOKEN_DECIMALS, { group: ',' })} ${q?.ticker ?? '?'} per ${base}`}</span>;
+    return <span data-unit="pair">{`${amountCell(p.value, q?.decimals ?? RAW_TOKEN_DECIMALS).text} ${q?.ticker ?? '?'} per ${base}`}</span>;
   }
-  // fixed decimals from the market's tick: every price of the card (entry, exits, averages) has the same number of decimals
-  // whole tokens; a token of unknown decimals on the assumed 8 (never "base units")
-  const pf = tk ? tickPriceFraction(tk.tick, tk.decimals, p.scale) : null;
-  return <Amount kind="price" value={p.value} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} scale={p.scale} unit={t('orders.unit.kasPer', { ticker: tk?.ticker ?? '?' })} {...(pf === null ? {} : { fraction: pf })} group fiat={fiat} />;
+  // one number of decimals for every price of the card (entry, exits, averages: `priceDpOf`, 5 significant digits, at most 6), the exact price in the title
+  return <Amount kind="price" value={p.value} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} scale={p.scale} unit={t('orders.unit.kasPer', { ticker: tokenUnit(tk?.ticker, tk?.covenantId).text || '?' })} fraction={p.dp} group fiat={fiat} />;
 }
 
-function Prices({ values, token, scale, pair }: { values: readonly bigint[]; token: TokenInfo | undefined; scale: bigint; pair?: PositionSummaryProps['pair'] }) {
+function Prices({ values, token, scale, dp, pair }: { values: readonly bigint[]; token: TokenInfo | undefined; scale: bigint; dp: number; pair?: PositionSummaryProps['pair'] }) {
   return (
     <>
       {values.map((v, i) => (
         <span key={String(v)} class="pc-price">
           {i ? <span class="pc-sep">{', '}</span> : null}
-          <Price value={v} token={token} scale={scale} pair={pair} />
+          <Price value={v} token={token} scale={scale} dp={dp} pair={pair} />
         </span>
       ))}
     </>
@@ -79,31 +78,31 @@ function Stat(p: { label: ComponentChildren; aside?: ComponentChildren; children
 const pctText = (v: number): string => `${v > 0 ? '+' : ''}${formatNumber(v, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 
 /** Realised fills of the position: entry and exit legs with their average prices (loaded by the panel on demand). */
-function Fills({ fills: f, token, amount }: { fills: PositionFills; token: TokenInfo | undefined; amount: (v: bigint | null) => string }) {
+function Fills({ fills: f, token, amount, dp }: { fills: PositionFills; token: TokenInfo | undefined; amount: (v: bigint | null) => string; dp: number }) {
   const fiat = useFiat();
   const spread = f.spreadPerToken;
   return (
     <div class="pc-fills small" data-testid="position-fills">
       <div class="pc-fill-row" data-testid="position-fills-entry">
-        <span>{t('orders.position.fills.entry', { amount: amount(f.entry.amount), fills: f.entry.fills })}</span>
+        <span>{t('orders.position.fills.entry', { amount: amount(f.entry.amount), fills: countText('fill', f.entry.fills) })}</span>
         {f.entry.avgPrice !== null ? (
           <span class="pc-fill-avg num">
-            <span class="muted">{t('orders.position.fills.avg')}</span> <Price value={f.entry.avgPrice} token={token} scale={f.scale} />
+            <span class="muted">{t('orders.position.fills.avg')}</span> <Price value={f.entry.avgPrice} token={token} scale={f.scale} dp={dp} />
           </span>
         ) : null}
       </div>
       <div class="pc-fill-row" data-testid="position-fills-exits">
-        <span>{t('orders.position.fills.exits', { amount: amount(f.exits.amount), fills: f.exits.fills })}</span>
+        <span>{t('orders.position.fills.exits', { amount: amount(f.exits.amount), fills: countText('fill', f.exits.fills) })}</span>
         {f.exits.avgPrice !== null ? (
           <span class="pc-fill-avg num">
-            <span class="muted">{t('orders.position.fills.avg')}</span> <Price value={f.exits.avgPrice} token={token} scale={f.scale} />
+            <span class="muted">{t('orders.position.fills.avg')}</span> <Price value={f.exits.avgPrice} token={token} scale={f.scale} dp={dp} />
           </span>
         ) : null}
       </div>
       {spread !== null ? (
         <div class="pc-fill-row" data-testid="position-fills-spread">
           <span>{t('orders.position.fills.spread')}</span>
-          <Amount kind="price" value={spread} decimals={token?.decimals ?? RAW_TOKEN_DECIMALS} scale={f.scale} signed unit={t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })} fiat={fiat} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
+          <Amount kind="price" value={spread} decimals={token?.decimals ?? RAW_TOKEN_DECIMALS} scale={f.scale} signed unit={t('orders.unit.kasPer', { ticker: tokenUnit(token?.ticker, token?.covenantId).text || '?' })} fraction={dp} group fiat={fiat} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
         </div>
       ) : null}
     </div>
@@ -119,7 +118,8 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
   // the orders' scale: an entry and its exits quote per the same whole token
   const scaleRaw = position.entry?.scale ?? position.exits[0]?.scale ?? null;
   const scale = scaleRaw ? BigInt(scaleRaw) : token ? scaleOfDecimals(token.decimals) : 1n;
-  const amount = (v: bigint | null): string => (v === null ? '?' : token ? `${formatUnits(v, token.decimals, { group: ',' })} ${token.ticker}` : v.toString());
+  const unit = tokenUnit(token?.ticker, token?.covenantId).text;
+  const amount = (v: bigint | null): string => (v === null ? '?' : token ? `${amountCell(v, token.decimals).text} ${unit}` : v.toString());
   // one events request per member order, only once the user asked for the fills
   const fillsData = useAsync(
     async (signal): Promise<PositionFills | null> => {
@@ -154,11 +154,13 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
   const repeatTotal = r && cyclesLeft !== null ? BigInt(r.cyclesDone) + cyclesLeft : null;
   const until = r
     ? r.untilUnix !== null
-      ? t('orders.position.repeatUntil', { date: formatDateTime(Number(r.untilUnix)) })
+      ? t('orders.position.repeatUntil', { date: longDate(r.untilUnix) })
       : r.untilDaa !== null
         ? t('orders.position.repeatUntilDaa', { daa: formatNumber(r.untilDaa) })
         : null
     : null;
+  // every price of the card (the legs' prices, the planned exits, the average fill prices of the entry and the exits) on one number of decimals
+  const dp = priceDpOf([s.entryPrice, s.entryStop, ...tps, ...stops, plannedTp, plannedStop, fills?.entry.avgPrice, fills?.exits.avgPrice].map((price) => ({ price, decimals: token?.decimals ?? RAW_TOKEN_DECIMALS, scale })));
   const pnlClass = pnl?.pnl ? (pnl.pnl > 0n ? 'pc-pos' : 'pc-neg') : '';
 
   return (
@@ -167,22 +169,22 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
         <div class="pc-contents" data-testid="position-prices">
           <Stat label={entryStop ? t('orders.position.stat.entryStop') : t('orders.position.stat.entry')}>
             <span data-testid="position-entry-price">
-              <Price value={entryStop ? s.entryStop : s.entryPrice} token={token} scale={scale} pair={pair} />
+              <Price value={entryStop ? s.entryStop : s.entryPrice} token={token} scale={scale} dp={dp} pair={pair} />
             </span>
           </Stat>
           <Stat label={t('orders.position.stat.takeProfit')} class="pc-tp" sub={plannedTp !== null ? plannedNote('position-exit-planned') : undefined}>
             {plannedTp !== null ? (
               <span data-testid="position-exit-prices" data-planned="1">
-                <Price value={plannedTp} token={token} scale={scale} pair={pair} />
+                <Price value={plannedTp} token={token} scale={scale} dp={dp} pair={pair} />
               </span>
             ) : (
-              <span data-testid="position-exit-prices">{tps.length ? <Prices values={tps} token={token} scale={scale} pair={pair} /> : '—'}</span>
+              <span data-testid="position-exit-prices">{tps.length ? <Prices values={tps} token={token} scale={scale} dp={dp} pair={pair} /> : '—'}</span>
             )}
           </Stat>
           <Stat label={t('orders.position.stat.stop')} class="pc-sl" sub={plannedStop !== null ? plannedNote('position-stop-planned') : undefined}>
             {stops.length || plannedStop !== null ? (
               <span data-testid="position-exit-stops" {...(stops.length ? {} : { 'data-planned': '1' })}>
-                <Prices values={stops.length ? stops : [plannedStop as bigint]} token={token} scale={scale} pair={pair} />
+                <Prices values={stops.length ? stops : [plannedStop as bigint]} token={token} scale={scale} dp={dp} pair={pair} />
               </span>
             ) : (
               '—'
@@ -270,7 +272,7 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
                 {toError(fillsData.error).message}
               </span>
             ) : fills ? (
-              <Fills fills={fills} token={token} amount={amount} />
+              <Fills fills={fills} token={token} amount={amount} dp={dp} />
             ) : null
           ) : null}
         </div>

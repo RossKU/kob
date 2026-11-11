@@ -7,18 +7,19 @@ import { pairRoute, routeToHash } from '../../app/router';
 import { t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import { longId, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { formatUnits, quoteOf } from '../../kob/units';
+import { quoteOf } from '../../kob/units';
 import {
-  Amount, CopyText, ErrorBanner, KeyValueList, Loading, fixedPricePerToken, scaledUnits, sortBy, tickPriceFraction, useAsync, type SortState, type SortValue,
+  Amount, CopyText, EmptyState, ErrorBanner, KeyValueList, Loading, columnFraction, scaledUnits, sortBy, useAsync, type SortState, type SortValue,
 } from '../kit';
 import {
-  DataTable, DtCell, DtGroup, DtRow, MarketCell, MoneyCell, Num, RowToggle, timeText, toggleLabel, useOpenRow, type DtColumn, type DtPlain,
+  DataTable, DtCell, DtGroup, DtRow, KAS_FRACTION_MAX, MarketCell, MoneyCell, Num, RowToggle, timeText, timeTitle, toggleLabel, useOpenRow, type DtColumn, type DtPlain,
 } from '../kit/DataTable';
 import { IdentityBlock } from '../market/Fingerprint';
 import type { KascovMeta } from '../market/token-model';
 import { fillHistory, type FillRow } from './fills-model';
 import { PortfolioPager, pageOf } from './portfolio-paging';
 import type { OrderRowModel } from './orders-model';
+import { amountCell, priceDpOf, tokenUnit, type AmountText, type UnitText } from './cells';
 
 export const FILL_SORT_KEYS = ['time', 'market', 'side', 'price', 'amount', 'value', 'tx'] as const;
 export type FillSortKey = (typeof FILL_SORT_KEYS)[number];
@@ -60,13 +61,13 @@ interface WalletFill {
 }
 
 interface Facts {
-  ticker: string;
+  unit: UnitText;
   market: string;
   marketHref: string | undefined;
-  price: string;
   valueKas: bigint | null;
   time: string;
-  amount: string;
+  timeTip: string | undefined;
+  amount: AmountText;
   identity: JSX.Element | null;
   key: string;
 }
@@ -145,6 +146,9 @@ export function WalletFills(props: {
   const read = data.data ?? fillsSeen.get(key);
   const all = read ? sortBy(read, props.sort, valueOf) : read;
   const { rows: list, window: win } = pageOf(all ?? [], props.size, props.page);
+  // the price column has one number of decimals (the finest of the whole list, so a page turned keeps it), the KAS value column too (at most 4); the exact figures are the titles
+  const priceDp = priceDpOf((all ?? []).filter((w) => !w.row.pair).map((w) => ({ price: w.fill.price, decimals: w.token?.decimals ?? RAW_TOKEN_DECIMALS, scale: w.row.scale })));
+  const kasDp = Math.min(KAS_FRACTION_MAX, columnFraction((all ?? []).map((w) => (!w.row.pair && w.fill.price !== null ? quoteOf(w.fill.amount, w.fill.price, w.row.scale, 'down') : null)), 8));
   const cols = fillColumns(!!fiat);
   const ownCol = cols.find((c) => c.key === 'time') as DtColumn<FillSortKey>;
   const pager = all ? <PortfolioPager id="wallet-fills" window={win} total={all.length} onPage={props.onPage} /> : null;
@@ -153,15 +157,15 @@ export function WalletFills(props: {
   const factsOf = (w: WalletFill): Facts => {
     const { fill, row, token } = w;
     const decimals = token?.decimals ?? RAW_TOKEN_DECIMALS;
-    const ticker = token?.ticker ?? (row.token ? longId(row.token) : '?');
+    const unit = tokenUnit(token?.ticker, row.token);
     const marketHref = row.pair ? routeToHash(pairRoute(row.pair.base, row.pair.quote)) : row.token ? `#/market/${row.token}` : undefined;
-    // a KAS market's fill has a price and a KAS value; a pair fill is volume only (the B amount stands for its value)
-    const price = !row.pair && fill.price !== null ? fixedPricePerToken(fill.price, decimals, row.scale, (token ? tickPriceFraction(token.tick, decimals, row.scale) : null) ?? 8) : '—';
+    // a KAS market's fill has a price and a KAS value (drawn by their cells with the table's decimals); a pair fill is volume only (the B amount stands for its value)
     const valueKas = !row.pair && fill.price !== null ? quoteOf(fill.amount, fill.price, row.scale, 'down') : null;
-    const time = timeText(fill.atMs > 0 ? Math.floor(fill.atMs / 1000) : null);
-    const amount = formatUnits(fill.amount, decimals, { group: ',' });
+    const unix = fill.atMs > 0 ? Math.floor(fill.atMs / 1000) : null;
+    const time = timeText(unix);
+    const amount = amountCell(fill.amount, decimals);
     const identity = row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" /> : null;
-    return { ticker, market: marketOf(w), marketHref, price, valueKas, time, amount, identity, key: `${fill.txid}-${row.id}-${fill.atMs}` };
+    return { unit, market: marketOf(w), marketHref, valueKas, time, timeTip: timeTitle(unix), amount, identity, key: `${fill.txid}-${row.id}-${fill.atMs}` };
   };
 
   if (!props.loadEvents) return <p class="muted" data-testid="wallet-fills-off">{t('orders.fills.noIndexer')}</p>;
@@ -171,10 +175,10 @@ export function WalletFills(props: {
       <ErrorBanner error={data.error} onRetry={data.reload} />
       {all ? (
         <DataTable id="wallet-fills" grid="fills" label={t('orders.fills.title')} cols={cols} sort={props.sort} own={ownCol} onSort={props.onSort} sortable={all.length > 1} body={{ class: 'ml-in' }} data-testid="wallet-fills-table">
-          {list.length === 0 ? <p class="dt-empty" data-testid="wallet-fills-empty">{t('orders.fills.none')}</p> : null}
+          {list.length === 0 ? <EmptyState icon="list" compact data-testid="wallet-fills-empty">{t('orders.fills.none')}</EmptyState> : null}
           {list.map((item) => {
             const f = factsOf(item);
-            return <FillRowView key={f.key} item={item} f={f} txUrl={txUrl} fiat={!!fiat} />;
+            return <FillRowView key={f.key} item={item} f={f} txUrl={txUrl} fiat={!!fiat} priceDp={priceDp} kasDp={kasDp} />;
           })}
         </DataTable>
       ) : null}
@@ -184,7 +188,7 @@ export function WalletFills(props: {
 }
 
 /** One fill: its row, and under it (on a chevron) the order and the transaction in full. */
-function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) => string | null; fiat: boolean }) {
+function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) => string | null; fiat: boolean; priceDp: number; kasDp: number }) {
   const fiat = useFiat();
   const { fill, row } = props.item;
   const f = props.f;
@@ -194,14 +198,14 @@ function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) 
   return (
     <DtGroup data-testid="wallet-fill-row" data-txid={fill.txid} data-order={row.id}>
       <DtRow>
-        <DtCell k="time" label={t('orders.fills.time')} card="badge" class="dt-time">{f.time}</DtCell>
+        <DtCell k="time" label={t('orders.fills.time')} card="badge" class="dt-time" title={f.timeTip}>{f.time}</DtCell>
         <MarketCell name={f.market} href={f.marketHref} identity={f.identity} side={row.side} />
         <DtCell k="side" label={t('orders.col.side')} card="hidden" data-testid="wallet-fill-side" class={row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}>{t(`common.side.${row.side}`)}</DtCell>
         <DtCell k="price" label={t(props.fiat ? 'orders.col.priceUsd' : 'orders.col.price')} num>
-          {fiat && !row.pair && fill.price !== null ? <Amount kind="price" value={fill.price} decimals={props.item.token?.decimals ?? RAW_TOKEN_DECIMALS} scale={row.scale} unit={false} fiat={fiat} class="dt-val" /> : <Num value={f.price} />}
+          {!row.pair && fill.price !== null ? <Amount kind="price" value={fill.price} decimals={props.item.token?.decimals ?? RAW_TOKEN_DECIMALS} scale={row.scale} unit={false} fraction={props.priceDp} group fiat={fiat} class="dt-val" /> : <Num value="—" />}
         </DtCell>
-        <DtCell k="amount" label={t('orders.col.amount')} num><Num value={f.amount} unit={f.ticker} /></DtCell>
-        <DtCell k="value" label={t(props.fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas')} num><MoneyCell kas={f.valueKas} unit={false} /></DtCell>
+        <DtCell k="amount" label={t('orders.col.amount')} num><Num value={f.amount.text} title={f.amount.title} unit={f.unit.text} unitTitle={f.unit.title} /></DtCell>
+        <DtCell k="value" label={t(props.fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas')} num><MoneyCell kas={f.valueKas} unit={false} fraction={props.kasDp} /></DtCell>
         <DtCell k="tx" label={t('orders.fills.tx')}><CopyText value={fill.txid} head={6} tail={4} href={href} data-testid="wallet-fill-tx" /></DtCell>
         <RowToggle open={open} onToggle={() => setOpen(!open)} controls={detailsId} label={toggleLabel(open)} data-testid="wallet-fill-toggle" />
       </DtRow>

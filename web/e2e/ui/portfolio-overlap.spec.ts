@@ -83,7 +83,7 @@ for (const width of WIDTHS) {
     const mine = page.getByTestId('market-orders');
     await expect(mine).toBeVisible();
     // the panel shows this market only by default: the hex-named token's orders are on another market's page
-    await mine.getByTestId('market-orders-only-input').uncheck();
+    await mine.getByTestId('market-orders-scope-all').click();
     for (const [id, panel] of [['active', 'open'], ['history', 'history'], ['fills', 'fills']] as const) {
       await mine.getByTestId(`orders-tab-${id}`).click();
       await expect(mine.getByTestId(`portfolio-panel-${panel}`)).toBeVisible();

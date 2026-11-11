@@ -1,4 +1,5 @@
-import { formatKas, formatUnits } from '../../kob/units';
+import { formatUnits, quoteOf } from '../../kob/units';
+import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
@@ -11,15 +12,16 @@ export interface MarketOf {
   base: Hex;
   quote: Hex | null;
 }
-import { formatDateTime, t } from '../../i18n';
+import { t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import {
-  Banner, Button, ErrorBanner, Modal, RawDetails, Section, Tabs, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState,
+  Banner, Button, EmptyState, ErrorBanner, Modal, RawDetails, Section, Segmented, Tabs, columnFraction, formatRowTimeUnix, rowTimeTitleUnix, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState,
 } from '../kit';
-import { DataTable, MoneyCell, type DtColumn } from '../kit/DataTable';
+import { DataTable, KAS_FRACTION_MAX, MoneyCell, type DtColumn } from '../kit/DataTable';
+import { ConnectBar } from '../shell/WalletButton';
 import { useLiveRefresh } from '../market/live';
 import { RowsControl } from '../market/ListPaging';
 import { TipBadge } from '../market/TipBadge';
@@ -44,6 +46,8 @@ import { tickerOrId } from '../market/token-model';
 import { unwindAmount } from './position-model';
 import { fillHistory, fillsCsv, fillsFileName } from './fills-model';
 import { filledAmountOf } from './OrderFills';
+import { priceDpOf } from './cells';
+import { countText, tCount } from './plural';
 import { downloadText, exportFileName } from '../kit/download';
 import { backupFileText } from './recover';
 import {
@@ -74,6 +78,15 @@ const COMPACT_TABS_BELOW = 560;
  * market) and must not fall back to Open orders under the viewer's finger.
  */
 const embedMemory = new Map<string, { tab: PortfolioTab; onlyHere: boolean }>();
+
+/**
+ * The frame of a list under the tabs: on the Portfolio page a titled card (its actions at the right of the title); in a market page's panel no card and no title (the tab already names
+ * the list, review M-07): the list stands directly under the tabs and the actions are in the panel's head line.
+ */
+function ListFrame(props: { embed: boolean; title: string; actions?: ComponentChildren; 'data-testid': string; children: ComponentChildren }) {
+  if (props.embed) return <div class="mo-body" data-testid={props['data-testid']}>{props.children}</div>;
+  return <Section title={props.title} data-testid={props['data-testid']} {...(props.actions ? { actions: props.actions } : {})}>{props.children}</Section>;
+}
 
 /** The placeholder rows until the list is in. */
 const SKELETON_ROWS = 3;
@@ -348,7 +361,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       const go = () =>
         startFlow(
           heading,
-          good.map((p, i) => stepOf(good.length > 1 ? t('orders.flow.cancelStep', { n: i + 1, total: good.length, count: p.cancelIds.length }) : t('orders.flow.cancelTitle'), p)),
+          good.map((p, i) => stepOf(good.length > 1 ? t('orders.flow.cancelStep', { n: i + 1, total: good.length, orders: countText('order', p.cancelIds.length) }) : t('orders.flow.cancelTitle'), p)),
         );
       // C5-01: some orders hold more strays than their cancel can move: offer to sweep those first (they live on), then cancel
       const abandoning = abandoningOrders(good).filter((id) => rowById.get(id)?.live);
@@ -393,7 +406,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     // the records stay (marked) until the cancel is final: a fill may win the race, a reorg may undo it (C5-06)
     // (a sweep continues the order: markCancelling leaves its record unmarked, the send moved its last state to the continuation)
     if (pubkey) await markCancelling(wallet.records, { cancelIds: step.spends, built: step.plan.built }, result.txid);
-    showToast(step.toast ?? (step.plan.sweep ? t('orders.flow.sweepSubmitted', { count: step.plan.sweep.utxos }) : t('orders.flow.submitted', { count: step.spends.length })), 'ok');
+    showToast(step.toast ?? (step.plan.sweep ? tCount('orders.flow.sweepSubmitted', step.plan.sweep.utxos) : tCount('orders.flow.submitted', step.spends.length)), 'ok');
   };
   const onFlowDone = (o: FlowOutcome) => {
     setSweepFollowUp((c) => (c && c.pending ? (o.submitted > 0 ? { ...c, pending: false } : null) : c));
@@ -417,13 +430,39 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     return (
       <div class="stack" data-testid="orders-view">
         <h1>{t('orders.title')}</h1>
-        <p class="muted empty-prompt" data-testid="orders-connect">{t('orders.connect')}</p>
+        {/* the one disconnected state of the app: the sentence and the Connect of the header (review M-12) */}
+        <EmptyState icon="wallet" action={<ConnectBar gate />} data-testid="orders-connect">{t('orders.connect')}</EmptyState>
       </div>
     );
   }
 
   const marketRows = embed && onlyHere ? rows.filter((r) => inMarket(r)) : rows;
   const cancellable = cancellableIds(marketRows, null);
+  // the number formats of the two order tables (review H-05, M-03): ONE number of decimals for a price column, the finest any order of the whole list needs (so a page turned keeps it), and for the
+  // Total column (KAS, at most 4); the exact figures are in the cells' titles
+  const tableRows = shownAll.flatMap((item) => itemMemberIds(item)).map((id) => rowById.get(id)).filter((r): r is OrderRowModel => !!r);
+  const priceDp = priceDpOf(tableRows.filter((r) => !r.pair).flatMap((r) => {
+    const decimals = shownToken(r.token, r.scale)?.decimals ?? 0;
+    return [r.price, avgPrices.current.get(r.id)].map((price) => ({ price, decimals, scale: r.scale }));
+  }));
+  const kasDp = Math.min(
+    KAS_FRACTION_MAX,
+    columnFraction(tableRows.map((r) => (!r.pair && r.amountTotal !== null && r.price !== null ? quoteOf(r.amountTotal, r.price, r.scale, 'down') : null)), 8),
+  );
+  // Cancel all: only where there is something to cancel; the cancel race is its tooltip (and the confirmation's text)
+  const cancelAllButton =
+    tab === 'open' && cancellable.length > 0 ? (
+      <Button
+        small
+        variant="danger"
+        disabled={!canSign || !!busy}
+        title={canSign ? t('orders.raceNote') : t('orders.actions.needWallet')}
+        onClick={() => setConfirmAll({ token: null, ids: cancellable })}
+        data-testid="orders-cancel-all"
+      >
+        {t('orders.cancelAll', { count: cancellable.length })}
+      </Button>
+    ) : undefined;
   const cols = orderColumns(tab === 'history' ? 'history' : 'open', !!fiat);
   const ownCol = cols.find((c) => c.key === 'time') as DtColumn<OrderSortKey>; // the lists are newest first: the time, largest first
   // fill history (R-8): per order on demand, and every fill of the wallet as one CSV
@@ -446,6 +485,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       downloadText(fillsFileName(services.config.network), fillsCsv(out), 'text/csv');
       showToast(t('orders.fills.exported', { orders: out.length }), 'ok');
     });
+  const exportButton = loadEvents && filledRows.length > 0 ? <Button small onClick={exportFills} loading={busy === 'export-fills'} data-testid="orders-export-fills">{t('orders.fills.exportAll')}</Button> : undefined;
   // strays the wallet can still move: the folded section opens by itself while there are any (its notice says so on top)
   const liveStrays = strays.filter((x) => !x.spent && !x.lost).length;
   const settingsShown = settingsOpen ?? liveStrays > 0;
@@ -470,18 +510,15 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
         <div class="row-between market-orders-head">
           <h2 class="section-title" style="margin:0">{t('orders.market.title')}</h2>
           <div class="row">
-            <label class="check" data-testid="market-orders-only">
-              <input type="checkbox" checked={onlyHere} onChange={(e) => setOnlyHere((e.currentTarget as HTMLInputElement).checked)} data-testid="market-orders-only-input" />
-              <span>{t('orders.market.onlyHere')}</span>
-            </label>
-            <a class="small" href={routeToHash({ name: 'portfolio', tab })} data-testid="market-orders-portfolio">{t('orders.market.toPortfolio')}</a>
+            {tab === 'fills' ? exportButton : cancelAllButton}
+            <a class="small mo-all-link" href={routeToHash({ name: 'portfolio', tab })} data-testid="market-orders-portfolio">{t('orders.market.toPortfolio')}</a>
           </div>
         </div>
       ) : null}
       <div class="row-between" style={embed ? 'display:none' : undefined}>
         <h1 style="margin:0">{t('orders.title')}</h1>
         <div class="row">
-          {d?.clock ? <span class="small muted num" data-testid="orders-updated">{t('common.updated', { time: formatDateTime(Number(d.clock.unixSeconds), { dateStyle: undefined, timeStyle: 'medium' }) })}</span> : null}
+          {d?.clock ? <span class="small muted num" data-testid="orders-updated" title={rowTimeTitleUnix(d.clock.unixSeconds)}>{t('common.updated', { time: formatRowTimeUnix(d.clock.unixSeconds) })}</span> : null}
           <Button small onClick={data.reload} loading={data.loading && !!d} data-testid="orders-refresh">{t('common.refresh')}</Button>
         </div>
       </div>
@@ -516,7 +553,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       {planFail ? <PlanErrors plans={planFail.plans} failed={planFail.failed} /> : null}
       {oldTemplate > 0 ? (
         <Banner tone="warn" title={t('orders.oldTemplate.title')} data-testid="orders-old-template">
-          {t('orders.oldTemplate.body', { count: oldTemplate })}
+          {tCount('orders.oldTemplate.body', oldTemplate)}
         </Banner>
       ) : null}
 
@@ -616,7 +653,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
               <TipBadge
                 variant="tag"
                 label={t('orders.summary.estimate')}
-                detail={balances.summary.unpriced > 0 ? `${t(fiat ? 'orders.summary.estimateTipUsd' : 'orders.summary.estimateTip')} ${t('orders.summary.unpriced', { n: balances.summary.unpriced })}` : t(fiat ? 'orders.summary.estimateTipUsd' : 'orders.summary.estimateTip')}
+                detail={balances.summary.unpriced > 0 ? `${t(fiat ? 'orders.summary.estimateTipUsd' : 'orders.summary.estimateTip')} ${tCount('orders.summary.unpriced', balances.summary.unpriced, { n: balances.summary.unpriced })}` : t(fiat ? 'orders.summary.estimateTipUsd' : 'orders.summary.estimateTip')}
                 data-testid="portfolio-estimate"
                 data-detail-testid="portfolio-estimate-detail"
               />
@@ -626,11 +663,11 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.available')}</span></div>
-          <span class="pf-v num" data-testid="portfolio-available" title={balances.summary ? kasValueTitle(balances.summary.kasFree, fiat) : undefined}><MoneyCell kas={balances.summary ? balances.summary.kasFree : null} class="pf-money" /></span>
+          <span class="pf-v num" data-testid="portfolio-available" title={balances.summary ? kasValueTitle(balances.summary.kasFree, fiat) : undefined}><MoneyCell kas={balances.summary ? balances.summary.kasFree : null} fraction={2} class="pf-money" /></span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.inOrders')}</span></div>
-          <span class="pf-v num" data-testid="portfolio-in-orders" title={balances.summary ? kasValueTitle(balances.summary.kasLocked, fiat) : undefined}><MoneyCell kas={balances.summary ? balances.summary.kasLocked : null} class="pf-money" /></span>
+          <span class="pf-v num" data-testid="portfolio-in-orders" title={balances.summary ? kasValueTitle(balances.summary.kasLocked, fiat) : undefined}><MoneyCell kas={balances.summary ? balances.summary.kasLocked : null} fraction={2} class="pf-money" /></span>
         </div>
         <div class="pf-stat">
           <div class="pf-kline"><span class="pf-k">{t('orders.summary.open')}</span></div>
@@ -653,6 +690,21 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
             { id: 'fills', label: t(phone ? 'orders.tab.fillsShort' : 'orders.tab.fills', { count: filledRows.length }), 'data-testid': 'orders-tab-fills', ...(phone ? { 'aria-label': t('orders.tab.fills', { count: filledRows.length }) } : {}) },
           ]}
         />
+        {/* a market page's panel: whose orders, in the tab row (review M-07); the choice is kept for the visit */}
+        {embed ? (
+          <div class="pf-scope">
+            <Segmented
+              aria-label={t('orders.market.scope')}
+              value={onlyHere ? 'here' : 'all'}
+              onChange={(v) => setOnlyHere(v === 'here')}
+              options={[
+                { value: 'here', label: t('orders.market.scopeHere'), 'data-testid': 'market-orders-scope-here' },
+                { value: 'all', label: t('orders.market.scopeAll'), 'data-testid': 'market-orders-scope-all' },
+              ]}
+              data-testid="market-orders-only"
+            />
+          </div>
+        ) : null}
         {/* the rows per page of the lists: right of the tabs (under them on a phone); inert and unseen on Balances, which keeps the row's height */}
         <div class={`pf-rows${tab === 'balances' ? ' pf-rows-off' : ''}`} aria-hidden={tab === 'balances' ? 'true' : undefined} {...(tab === 'balances' ? { inert: true } : {})} data-testid="portfolio-rows-box">
           <RowsControl id="portfolio" size={rowsPer} onSize={(n) => setRows(n)} sizes={PORTFOLIO_PAGE_SIZES} />
@@ -682,25 +734,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
           ) : null}
 
           {tab === 'open' || tab === 'history' ? (
-            <Section
-              title={t(tab === 'history' ? 'orders.list.titleHistory' : 'orders.list.title')}
-              data-testid="orders-section"
-              actions={
-                tab === 'open' ? (
-                  <Button
-                    small
-                    variant="danger"
-                    disabled={!canSign || cancellable.length === 0 || !!busy}
-                    title={canSign ? undefined : t('orders.actions.needWallet')}
-                    onClick={() => setConfirmAll({ token: null, ids: cancellable })}
-                    data-testid="orders-cancel-all"
-                  >
-                    {t('orders.cancelAll', { count: cancellable.length })}
-                  </Button>
-                ) : undefined
-              }
-            >
-              {tab === 'open' ? <p class="small muted" data-testid="orders-race-note">{t('orders.raceNote')}</p> : null}
+            <ListFrame embed={!!embed} title={t(tab === 'history' ? 'orders.list.titleHistory' : 'orders.list.title')} data-testid="orders-section" actions={cancelAllButton}>
               {/* the rows come together, as soon as the indexer's answer is in: a trader acts on them, so they wait for nothing else (the balances, the node's answers) */}
               {/* one table per tab: opening Open orders or Order history draws its rows in (.ml-in), as Balances and Trade history do; a refresh or a page turned keeps the table and replays nothing */}
               <DataTable
@@ -721,16 +755,18 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                     {Array.from({ length: SKELETON_ROWS }, (_, i) => <div key={i} class="skeleton orders-skel" />)}
                   </div>
                 ) : null}
-                {d && shownAll.length === 0 ? <p class="muted center" data-testid="orders-empty">{t(tab === 'history' ? 'orders.emptyHistory' : 'orders.empty')}</p> : null}
+                {d && shownAll.length === 0 ? <EmptyState icon="list" compact={!!embed} data-testid="orders-empty">{t(tab === 'history' ? 'orders.emptyHistory' : 'orders.empty')}</EmptyState> : null}
                 {shown.map((item) =>
                   item.type === 'single' ? (
                     rowById.get(item.id) ? (
-                      <OrderRow key={item.id} columns={tab === 'history' ? 'history' : 'open'} avg={avgPrices.current.get(item.id)} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} clock={d?.clock ?? null} iconOf={iconOf} {...(embed ? { compact: true } : {})} {...(loadEvents ? { loadEvents } : {})} />
+                      <OrderRow key={item.id} columns={tab === 'history' ? 'history' : 'open'} avg={avgPrices.current.get(item.id)} priceDp={priceDp} kasDp={kasDp} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} clock={d?.clock ?? null} iconOf={iconOf} {...(embed ? { compact: true } : {})} {...(loadEvents ? { loadEvents } : {})} />
                     ) : null
                   ) : (
                     <PositionCard
                       key={item.id}
                       columns={tab === 'history' ? 'history' : 'open'}
+                      priceDp={priceDp}
+                      kasDp={kasDp}
                       position={item.position}
                       rows={rowById}
                       tokenOf={shownToken}
@@ -748,21 +784,13 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 )}
               </DataTable>
               {d ? <PortfolioPager id="portfolio" window={shownWindow} total={shownAll.length} onPage={setPageNo} /> : null}
-            </Section>
+            </ListFrame>
           ) : null}
 
           {tab === 'fills' ? (
-            <Section
-              title={t('orders.fills.title')}
-              data-testid="orders-fills-section"
-              actions={
-                loadEvents && filledRows.length > 0 ? (
-                  <Button small onClick={exportFills} loading={busy === 'export-fills'} data-testid="orders-export-fills">{t('orders.fills.exportAll')}</Button>
-                ) : undefined
-              }
-            >
+            <ListFrame embed={!!embed} title={t('orders.fills.title')} data-testid="orders-fills-section" actions={exportButton}>
               <WalletFills rows={filledRows} tokenOf={shownToken} loadEvents={loadEvents} iconOf={iconOf} sort={fillsSort} onSort={setFillsSort} size={rowsPer} page={pageNo} onPage={setPageNo} />
-            </Section>
+            </ListFrame>
           ) : null}
         </div>
       </div>
@@ -863,7 +891,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
             </>
           }
         >
-          <p>{t('orders.sweepFirst.body', { count: sweepFirst.count, orders: sweepFirst.ids.length })}</p>
+          <p>{t('orders.sweepFirst.body', { strays: countText('utxo', sweepFirst.count), orders: countText('order', sweepFirst.ids.length) })}</p>
           <p class="small muted">{t('orders.sweepFirst.note')}</p>
         </Modal>
       ) : null}
@@ -886,12 +914,12 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 }}
                 data-testid="cancel-all-confirm"
               >
-                {t('orders.cancelAll.confirm', { count: confirmAll.ids.length })}
+                {tCount('orders.cancelAll.confirm', confirmAll.ids.length)}
               </Button>
             </>
           }
         >
-          <p>{t('orders.cancelAll.body', { count: confirmAll.ids.length })}</p>
+          <p>{tCount('orders.cancelAll.body', confirmAll.ids.length)}</p>
           <p class="small muted">{t('orders.cancelAll.txNote')}</p>
           <p class="small muted">{t('orders.raceNote')}</p>
         </Modal>

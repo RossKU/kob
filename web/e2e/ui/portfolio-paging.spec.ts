@@ -120,7 +120,7 @@ for (const width of [390, 800, 1280]) {
       await expect(rows).not.toBeVisible();
     });
 
-    test("a market page's panel pages the same way, with 'This market only' ticked and not", async ({ appPage: page, mock }) => {
+    test("a market page's panel pages the same way, with this market and with all markets", async ({ appPage: page, mock }) => {
       test.setTimeout(240_000);
       await forgetRows(page);
       await seedPortfolio(mock);
@@ -139,7 +139,7 @@ for (const width of [390, 800, 1280]) {
       await panel.getByTestId('portfolio-older').click();
       await expect(panel.getByTestId('portfolio-showing')).toHaveText(`21–${Math.min(40, here)} of ${here}`);
       // all markets: back on the first page, the total can only grow
-      await panel.getByTestId('market-orders-only-input').uncheck();
+      await panel.getByTestId('market-orders-scope-all').click();
       await expect(panel.getByTestId('portfolio-showing')).toHaveText(/^1–20 of \d+$/);
       await panel.getByTestId('portfolio-rows-10').click();
       await expect(panel.locator('[data-testid^="order-row-"]')).toHaveCount(10);

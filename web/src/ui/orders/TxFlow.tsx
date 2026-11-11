@@ -5,6 +5,7 @@ import type { CancelPlan } from '../../kob/cancel';
 import type { PlacementRecord } from '../../kob/records';
 import { Banner, Button, IssueLine, Spinner } from '../kit';
 import { SendStatusLine, useSend } from '../confirm/SendStatus';
+import { tCount } from './plural';
 
 export interface FlowStep {
   /** the step in the progress list */
@@ -166,8 +167,8 @@ export function TxFlow(props: TxFlowProps) {
       {!running ? (
         <div class="stack-sm" data-testid="flow-result">
           {message ? <p class="flow-line bad" data-testid="flow-error">{message}</p> : null}
-          {anySubmitted ? <p class="flow-line" data-testid="flow-done">{t('orders.flow.done', { count: states.filter((s) => s === 'submitted').length })}</p> : <p class="flow-line muted" data-testid="flow-stopped">{t('orders.flow.stopped')}</p>}
-          {states.some((s) => s === 'pending') ? <p class="flow-line warn">{t('orders.flow.remaining', { count: states.filter((s) => s === 'pending').length })}</p> : null}
+          {anySubmitted ? <p class="flow-line" data-testid="flow-done">{tCount('orders.flow.done', states.filter((s) => s === 'submitted').length)}</p> : <p class="flow-line muted" data-testid="flow-stopped">{t('orders.flow.stopped')}</p>}
+          {states.some((s) => s === 'pending') ? <p class="flow-line warn">{tCount('orders.flow.remaining', states.filter((s) => s === 'pending').length)}</p> : null}
         </div>
       ) : null}
       </div>

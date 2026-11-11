@@ -195,7 +195,7 @@ test.describe('recover', () => {
     await openOrdersSettings(appPage); // the section is folded again after a reload
     await expect(appPage.getByTestId('recover-count')).toContainText('0 placement');
     await appPage.getByTestId(TESTID.ordersImport).setInputFiles(path);
-    await expect(appPage.getByTestId('import-preview')).toContainText('1 record(s) can be imported');
+    await expect(appPage.getByTestId('import-preview')).toContainText('1 record can be imported');
     await appPage.getByTestId('orders-import-apply').click();
     await expect(appPage.getByTestId('recover-message')).toContainText('Imported 1');
     await expect(appPage.getByTestId('recover-count')).toContainText('1 placement');

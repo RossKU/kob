@@ -72,3 +72,30 @@
 /* a balance's asset: its icon and fingerprint (Fingerprint.tsx, small), then its name; KAS has a plain round mark */
 .bal-asset { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .kas-icon { flex: none; display: block; }
+
+/* a market page's panel (OrdersView.tsx, embed): the list stands directly under the tabs, no card of its own and no title; "this market / all markets" is a segmented control in the tab row */
+.mo-body { min-width: 0; }
+.mo-body > .dt { margin-top: 2px; }
+.pf-scope { margin-left: auto; padding: 4px 0; }
+.pf-scope + .pf-rows { margin-left: 0; }
+.pf-scope .segmented button { font-size: 0.82rem; white-space: nowrap; }
+@container pf (max-width: 759px) { .pf-scope { margin-left: 0; } .pf-scope + .pf-rows { margin-left: auto; } }
+/* the empty state of a list is one compact line under the tabs, not a page */
+.mo-body .empty-state-compact, .portfolio-panel .empty-state-compact { padding: 10px 8px; }
+
+/* native checkboxes of this area (the automatic refund, the renewal of an amended order): a 20 px box, and on a finger (coarse pointer) the whole label is the 44 px target */
+.ord-check input[type='checkbox'] { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--primary); }
+.ord-check { cursor: pointer; }
+
+/* finger targets (review M-11): 32 px at the least, 44 px where the row has the room */
+@media (pointer: coarse) {
+  .ord-check { min-height: 44px; align-items: center; }
+  .pf-scope .segmented button { min-height: 40px; }
+  .pc-toggle { min-width: 44px; min-height: 44px; }
+  .pc-link { display: inline-flex; align-items: center; min-height: 32px; }
+  .pc-fills-box > .btn, .bal-refresh, .tip-tag { min-height: 36px; }
+  .tip-tag { padding-inline: 12px; }
+  .mo-all-link { display: inline-flex; align-items: center; min-height: 36px; padding-inline: 4px; }
+  .portfolio-settings > summary { display: flex; align-items: center; min-height: 44px; }
+  .or-group .btn-sm, .pc-head .btn-sm, .order-actions .btn-sm, .order-fills .btn-sm, .position-summary .btn-sm, .section-head .btn-sm { min-height: 40px; }
+}

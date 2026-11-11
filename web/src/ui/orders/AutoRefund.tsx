@@ -29,7 +29,7 @@ export function AutoRefundToggle() {
   const on = useAutoRefundSetting();
   return (
     // no wrap: on a phone the long text must stay beside its checkbox, not drop below it
-    <label class="row small" style="gap:8px;flex-wrap:nowrap;align-items:flex-start" data-testid="orders-auto-refund-label">
+    <label class="row small ord-check" style="gap:8px;flex-wrap:nowrap;align-items:flex-start" data-testid="orders-auto-refund-label">
       <input type="checkbox" checked={on} onChange={(e) => setAutoRefund((e.currentTarget as HTMLInputElement).checked)} data-testid="orders-auto-refund" />
       <span>{t('orders.autoRefund.toggle')}</span>
     </label>
