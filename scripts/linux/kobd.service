@@ -7,15 +7,20 @@
 #     sudo systemctl daemon-reload && sudo systemctl enable --now kob
 #     journalctl -u kob -f        # the log and the status line every 10 s
 #
-# Exit status 2 is a usage mistake or a stop that did not finish in time: RestartPreventExitStatus keeps systemd from
-# starting the same mistake again and again. Status 1 (an error the executor cannot fix while it runs) is restarted.
+# Exit status 2 is a usage mistake, a configuration file that is missing or does not parse, or a stop that did not finish in
+# time: RestartPreventExitStatus keeps systemd from starting the same mistake again and again. Status 1 (an error the
+# executor cannot fix while it runs) is restarted, 10 s later; five starts within 5 min (StartLimitIntervalSec,
+# StartLimitBurst) is a problem a restart does not cure (another kobd holds the data directory, the key file is refused, a
+# key or pause file in the data directory): systemd stops trying and the unit is "failed". Read why with
+# `journalctl -u kob -n 50`, fix it, then `sudo systemctl reset-failed kob && sudo systemctl start kob`.
 # `kobd --indexer` (the keyless role) or `kobd --executor --indexer` run the same way: change ExecStart.
 
 [Unit]
 Description=KOB executor
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=0
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 WorkingDirectory=/opt/kob

@@ -56,7 +56,7 @@ node and the other way round. Start on testnet-10 if you have never run one.
 The program is called `kobd` (the KOB daemon). Its files are `kobd.toml` (the configuration), `kobd.log` (the log) and `kob-operator.key` (the hot key); the folder is the program's own, or `$KOBD_DIR`. A folder of an older build, whose files were named `kob-executor.toml` and `kob-executor.log`, is not read: rename the two files (and `KOB_EXECUTOR_DIR` to `KOBD_DIR`).
 
 Each `kobd-...` archive holds `kobd` (the daemon: the Executor and the Indexer roles), `kob` (the command-line client), `kobd-supervise.cmd` (Windows) or
-`kobd.service` (a sample systemd unit; every other target), this page, `LICENSE` and a
+`kobd.service` (a sample systemd unit; Linux), this page, `LICENSE` and a
 `SHA256SUMS` of its files; the release also lists a `SHA256SUMS` of every archive and of the APK. The command line alone is also published as `kob-<version>-<network>-<target>` (the `kob` binary, its README, `LICENSE` and `NOTICE`). Check the archive you downloaded against
 it before you run anything:
 
@@ -437,7 +437,8 @@ the same text with a header of comments: `sudo cp /opt/kob/kobd.service /etc/sys
 Description=KOB executor
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=0
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 WorkingDirectory=/opt/kob
@@ -453,9 +454,13 @@ WantedBy=multi-user.target
 ```
 
 `journalctl -u kob -f` shows the log and the status line every 10 seconds (the log file, when one is set, is a copy of it).
-(`RestartSec=10` and `StartLimitIntervalSec=0` make systemd keep retrying: without them it gives up after five starts in ten
-seconds, for example while the network is still coming up after a boot. `RestartPreventExitStatus=2` keeps it from starting a
-usage mistake, or a stop that did not finish in time, again and again; exit status 1 is restarted.) A restart is also how the executor recovers from what it
+(`RestartSec=10` restarts an exit with status 1 ten seconds later. `StartLimitIntervalSec=300` and `StartLimitBurst=5` stop
+retrying after five starts within five minutes, as `kobd-supervise.cmd` does after five rapid failures: such a start error
+is one a restart does not cure (another kobd holds the data directory, the key file is refused, a key or pause file in the
+data directory), and systemd marks the unit failed instead of logging it every 10 s for ever. Read why with `journalctl -u
+kob -n 50`, fix it, then `sudo systemctl reset-failed kob && sudo systemctl start kob`. A network that is still coming up
+after a boot does not end kobd: it waits for its nodes. `RestartPreventExitStatus=2` keeps it from starting a usage mistake,
+a configuration file that is missing or does not parse, or a stop that did not finish in time, again and again.) A restart is also how the executor recovers from what it
 cannot fix while it runs: when its indexer stays stopped or cannot write its database (a full disk, a corrupt file) for three
 minutes, or its read API stops serving, it logs why (`exiting so that a supervisor restarts the executor`) and exits with status
 1. Run it under a supervisor that restarts it (systemd as above, Docker's `--restart`, `kobd-supervise.cmd` on Windows as

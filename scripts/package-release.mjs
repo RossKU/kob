@@ -176,10 +176,13 @@ function packageOne(o) {
   // Windows: the loop that starts kobd again when it exits with an error (quickstart 6), with CRLF line endings (cmd.exe can
   // misread labels in a batch file with LF ones)
   const crlf = (p) => Buffer.from(text(p).toString('utf8').replace(/\n/g, '\r\n'), 'utf8');
-  // every other target: a sample systemd unit (quickstart 6)
+  // Linux (not Android): a sample systemd unit (quickstart 6); macOS and the rest: none (launchd is not systemd)
+  const linux = o.target.includes('-linux-') && !o.target.includes('android');
   const supervise = windows
     ? [['kobd-supervise.cmd', crlf(path.join(root, 'scripts/windows/kobd-supervise.cmd')), 0o755]]
-    : [['kobd.service', text(path.join(root, 'scripts/linux/kobd.service')), 0o644]];
+    : linux
+      ? [['kobd.service', text(path.join(root, 'scripts/linux/kobd.service')), 0o644]]
+      : [];
   write(`kobd-${o.version}-${o.network}-${o.target}`, [
     [`kobd${exe}`, read(path.join(o['bin-dir'], `kobd${exe}`)), 0o755],
     kob,

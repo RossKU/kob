@@ -206,3 +206,19 @@ fn offline_match_from_a_kron_snapshot_file() {
     assert!(lines[0]["fills"][0]["kind"].as_str().unwrap().ends_with("Kron"), "{out}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Audit round 4 R4-L-6: a configuration file that does not parse, or is missing, is a mistake a restart does not cure: exit
+/// status 2, which the sample systemd unit (RestartPreventExitStatus=2) and kobd-supervise.cmd do not start again.
+#[test]
+fn a_configuration_that_is_missing_or_does_not_parse_exits_with_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let bad = dir.path().join("kobd.toml");
+    std::fs::write(&bad, "netwrok = \"testnet-10\"\n").unwrap();
+    for (file, what) in [(&bad, "netwrok"), (&dir.path().join("none.toml"), "kobd setup")] {
+        let (code, err) = exe_code(&["--executor", "--config", file.to_str().unwrap()]);
+        assert_eq!(code, Some(2), "{err}");
+        assert!(err.contains(what), "{err}");
+        let (code, _) = exe_code(&["config", "check", "--config", file.to_str().unwrap()]);
+        assert_eq!(code, Some(2));
+    }
+}

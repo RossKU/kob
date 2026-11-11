@@ -68,7 +68,8 @@ const INDEX_HELP: &str = "The Indexer alone keeps the full history and serves th
 `resolver`); --extra-node adds a further one. The commands: `kobd --help`.";
 
 /// A mistake on the command line (an option of another role, `--node` of earlier builds, a role the configuration was not set
-/// up for): exit status 2, as clap's own usage errors, so that a supervisor does not start the same command again.
+/// up for): exit status 2, as clap's own usage errors, so that a supervisor does not start the same command again. A
+/// configuration file that is missing or does not parse (`config::ConfigError`) exits with 2 too.
 #[derive(Debug)]
 pub struct Usage(pub String);
 
@@ -188,7 +189,8 @@ struct ConfigArgs {
 enum ConfigCmd {
     /// Check a configuration offline, without starting: parse it (an unknown or misspelt key is refused), resolve its paths and
     /// report the roles, the node, the data directory and its store, the read API, the log file, the pause file and the key
-    /// file's access. Contacts no node, takes no lock, writes nothing. Exit status 1 when a start would refuse it.
+    /// file's access. Contacts no node, takes no lock, writes nothing. Exit status 1 when a start would refuse it, 2 when
+    /// the file is missing or does not parse.
     Check {
         /// The configuration file. Default: kobd.toml of the executable's directory ($KOBD_DIR when set).
         #[arg(long, env = "KOB_INDEX_CONFIG")]
@@ -226,7 +228,12 @@ pub fn main() -> ExitCode {
                 eprintln!("Press Enter to close this window.");
                 let _ = setup::read_line();
             }
-            if e.downcast_ref::<Usage>().is_some() {
+            // a configuration file that is missing or does not parse: a mistake a restart does not cure, as a usage one
+            let config = matches!(
+                e.downcast_ref::<crate::config::ConfigError>(),
+                Some(crate::config::ConfigError::Parse(..) | crate::config::ConfigError::NotFound(_))
+            );
+            if e.downcast_ref::<Usage>().is_some() || config {
                 ExitCode::from(2)
             } else {
                 ExitCode::FAILURE

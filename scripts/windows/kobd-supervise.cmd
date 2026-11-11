@@ -4,7 +4,8 @@ rem Restart=always does on Linux (docs/ops/executor-quickstart.md, section 6). T
 rem
 rem     kobd-supervise.cmd --executor
 rem
-rem   * exit status 0 (a stop: Ctrl+C), 2 (a stop that did not finish in time, or a wrong option) or 130 (a second Ctrl+C):
+rem   * exit status 0 (a stop: Ctrl+C), 2 (a stop that did not finish in time, a wrong option, or a configuration file that
+rem     is missing or does not parse) or 130 (a second Ctrl+C):
 rem     not started again;
 rem   * any other status (1: the indexer cannot write its database or the read API stopped, and the executor exits so that it
 rem     is restarted; a crash): started again after 10 s, the wait doubling to 5 min while it keeps failing within 10 min of
