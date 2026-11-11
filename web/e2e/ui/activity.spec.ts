@@ -1,6 +1,6 @@
 // The activity log (ui/activity): the Activity page (#/activity, every market) and the same log on the token and pair pages,
 // against the mock indexer: one row per transaction, newest first, each row a link to the transaction on tn10.kaspa.stream (new tab, noopener);
-// fills and placements (phase 1), the Vis filters and their persistence, live rows, pause and the "+N new" hold,
+// fills and placements (phase 1), the Columns filters and their persistence, live rows, pause and the "+N new" hold,
 // a phone layout without horizontal scroll. `KOB_ACTIVITY_SHOTS=<dir>` also saves screenshots (1440 and 390 px, dark and light).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -85,15 +85,18 @@ test.describe('activity page', () => {
     await expect(first).toHaveAttribute('aria-label', /opens tn10\.kaspa\.stream in a new tab/);
     // the columns: market icons, short tx, wallet, amount (+ KAS value), price, confirmations, time
     const fill = rows(page).and(page.locator('[data-kind="fill"]')).first();
-    // the whole id (the column shows as much as fits, then an ellipsis), whole in its title too
-    await expect(fill.locator('.act-c-tx')).toHaveText(/^[0-9a-f]{64}$/);
+    // the id with a middle ellipsis (review M-08: the log is no longer 60 % hex), whole in its title
+    await expect(fill.locator('.act-c-tx')).toHaveText(/^[0-9a-f]{8}…[0-9a-f]{8}$/);
     await expect(fill.locator('.act-c-tx')).toHaveAttribute('title', /^[0-9a-f]{64}$/);
     await expect(fill.locator('.act-c-amt')).toContainText('EXKCC');
     await expect(fill.locator('.act-c-amt')).toContainText('KAS');
     await expect(fill.locator('.act-c-px')).toHaveText(/^0\.0\d+$/);
-    await expect(fill.locator('.act-c-time')).toHaveText(/^\d{2}(:\d{2}:\d{2}|-\d{2} \d{2}:\d{2})$/);
+    // one 24-hour time (today HH:MM:SS, else YYYY-MM-DD HH:MM), the full timestamp with the zone in the title; no subscript-zero figure in the cells
+    await expect(fill.locator('.act-c-time')).toHaveText(/^(\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/);
+    await expect(fill.locator('.act-c-time')).toHaveAttribute('title', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+    expect((await fill.locator('.act-c-amt, .act-c-px').allInnerTexts()).join(' ')).not.toMatch(/[₀-₉]/);
     // the owners of the filled orders are looked up: a short address (the full one in the title)
-    await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{40,}/, { timeout: 15_000 });
+    await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{5}…[0-9a-z]{6}/, { timeout: 15_000 });
     await expect(fill.getByTestId('activity-wallet')).toHaveAttribute('title', /kaspatest:/);
     // the legend under the table: phase 1 kinds and the confirmation marks
     await expect(page.getByTestId('activity-legend')).toContainText('fill, taker bought');
@@ -105,7 +108,7 @@ test.describe('activity page', () => {
     await shot(page, 'activity-1440', 'light');
   });
 
-  test('Vis: kinds (phase 1: placed and fills), the quick switch, "mine only"; remembered per viewer', async ({ appPage: page, mock }) => {
+  test('Columns: kinds (phase 1: placed and fills), the quick switch, "mine only"; remembered per viewer', async ({ appPage: page, mock }) => {
     await seedToken(page, mock);
     await page.goto('/#/activity');
     await expect(rows(page).first()).toBeVisible();
@@ -115,7 +118,8 @@ test.describe('activity page', () => {
     await page.getByTestId('activity-actor-executions').click();
     await expect.poll(async () => [...new Set(await attrs(page, 'data-kind'))]).toEqual(['fill']);
     await page.getByTestId('activity-actor-all').click();
-    // the Vis panel offers only what the current API lists, and says what comes with the indexer update
+    // the Columns panel offers only what the current API lists, and says what comes with the indexer update
+    await expect(page.getByTestId('activity-vis')).toHaveText('Columns ▾');
     await page.getByTestId('activity-vis').click();
     const panel = page.getByTestId('activity-vis-panel');
     await expect(panel.getByRole('checkbox')).toHaveCount(3);

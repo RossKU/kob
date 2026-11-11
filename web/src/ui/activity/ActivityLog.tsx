@@ -17,14 +17,14 @@ import type { PairFillsView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Badge, ErrorBanner, Section, SortButton, ariaSortOf, scaledUnits, sortBy, useSlideIndicator, useSortState, type SortColumn, type SortValue } from '../kit';
+import { Badge, EmptyState, ErrorBanner, Section, SortButton, ariaSortOf, scaledUnits, sortBy, useSlideIndicator, useSortState, type SortColumn, type SortValue } from '../kit';
 import { ListPager, RowsControl, showListStart } from '../market/ListPaging';
 import { pageWindow, type ListPageSize } from '../market/market-list';
 import { useHeldUntil, useListPage, useListPageSize, useRising } from '../market/use-market-list';
 import { Popover } from '../shell/Popover';
 import { clockText } from '../shell/standalone';
 import {
-  ACTIVITY_DEPTH, ALL_KINDS, confirmationsAt, AVAILABLE_KINDS, PAGE_ROWS, logHasNext, logPage, rowHref, SETTLE_DAA, filterRows, heldView, marketKeyOf, readPrefs, rowMakers, shownKinds, writePrefs,
+  ACTIVITY_DEPTH, ALL_KINDS, confirmationsAt, AVAILABLE_KINDS, PAGE_ROWS, logHasNext, logPage, rowHref, SETTLE_DAA, filterRows, heldView, logPriceDp, marketKeyOf, readPrefs, rowMakers, shownKinds, writePrefs,
   type ActivityKind, type ActivityPrefs, type ActivityRow, type ActorFilter, type MarketFilter, type MarketRef, type PrefsScope,
 } from './activity-model';
 import { KindGlyph, KindIcon, kindLabel } from './ActivityIcons';
@@ -254,6 +254,8 @@ function ActivityLogView(props: ActivityLogProps) {
   const rowsShown = open && shown.length > 0;
 
   const today = new Date().toDateString();
+  // the Price column's one number of fraction digits, from the rows on the page (a log of one market has that market's)
+  const priceDp = logPriceDp(shown, decimalsOf);
   const liveKind = data.mode === 'standalone' ? 'standalone' : data.mode === 'off' ? 'off' : held ? 'held' : data.mode;
 
   // ---- the header's tools
@@ -312,7 +314,7 @@ function ActivityLogView(props: ActivityLogProps) {
           <path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" />
         </svg>
       </button>
-      <Popover label={t('activity.vis.label')} trigger={<span class="act-vis">{t('activity.vis')} ▾</span>} triggerAttrs={{ 'data-testid': 'activity-vis' }} panelTestId="activity-vis-panel">
+      <Popover label={t('activity.vis.label')} trigger={<span class="act-vis">{t('activity.vis')} ▾</span>} triggerClass="act-vis-btn" triggerAttrs={{ 'data-testid': 'activity-vis' }} panelTestId="activity-vis-panel">
         <div class="act-vis-panel">
           <h4>{t('activity.vis.kinds')}</h4>
           {AVAILABLE_KINDS.map((k) => (
@@ -424,6 +426,7 @@ function ActivityLogView(props: ActivityLogProps) {
                   chainDaa={data.chain?.daa ?? null}
                   chainAt={data.chain?.atMs ?? null}
                   today={today}
+                  priceDp={priceDp}
                   fmt={fmt}
                 />
               );
@@ -431,7 +434,10 @@ function ActivityLogView(props: ActivityLogProps) {
           ) : !open || data.loading || pairPending ? (
             <RowsSkeleton rows={SKELETON_ROWS} />
           ) : data.error ? null : (
-            <div class="act-empty muted" data-testid="activity-empty">{data.rows.length ? t('activity.emptyFiltered') : t('activity.empty')}</div>
+            // one sentence in the kit's empty state: no indexer to ask (a plug), rows the filters hide, or nothing yet; there is no action to offer in any of them
+            <EmptyState icon={data.mode === 'off' && !data.rows.length ? 'plug' : 'list'} compact data-testid="activity-empty">
+              {data.rows.length ? t('activity.emptyFiltered') : data.mode === 'off' ? t('activity.emptyOff') : t('activity.empty')}
+            </EmptyState>
           )}
         </div>
       </div>

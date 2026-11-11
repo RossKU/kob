@@ -4,13 +4,15 @@
 // PHASE 1 (no indexer change): a row is a FILL (`/v1/fills`, the WebSocket `fills` channels; a pair's fills from `/v1/pairs/{a}/{b}/fills`) or a
 // PLACEMENT (`/v1/orders`, newest first by genesis, polled). Cancels, amends, refunds, kills, expiries and stop arms are recorded per order only
 // (`/v1/orders/{id}/events`): they need the global event list of phase 2 (`GET /v1/events`, an `events` WebSocket channel) and are not offered in
-// Vis until then (`AVAILABLE_KINDS`). Their icons and filter slots exist already so the stored filters keep their meaning.
+// Columns until then (`AVAILABLE_KINDS`). Their icons and filter slots exist already so the stored filters keep their meaning.
 //
 // Who: a fill names the order that was filled (its maker is looked up once per order, `/v1/orders/{id}`); the executor that sent the transaction is
 // not recorded by the indexer, so the log shows ROLES (maker-signed orders vs executions), never an executor's identity.
 import { explorerTxUrl, type AppConfig } from '../../config';
 import type { EventView, OrderView, PairFillsView, PairFillView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
+import { pow10 } from '../../kob/units';
+import { columnPriceDp, fitAmountColumn, shortId, unitsFraction } from '../kit/format';
 import { pageWindow, type ListPageSize, type PageWindow } from '../market/market-list';
 
 // ------------------------------------------------------------------------------------------------ kinds
@@ -376,21 +378,43 @@ export function confirmationsAt(row: Pick<ActivityRow, 'daa' | 'confirmations' |
   return { n, settled: row.settled || (n !== null && n >= SETTLE_DAA) };
 }
 
-/** `HH:MM:SS` today, `MM-DD HH:MM` on an earlier day (local time). */
-export function rowTime(ms: number | null, nowMs: number): string {
-  if (ms === null) return '--:--:--';
-  const d = new Date(ms);
-  const n = new Date(nowMs);
-  const p = (x: number) => String(x).padStart(2, '0');
-  const today = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
-  return today ? `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}` : `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-/** A short form of an address for the Wallet column: the network prefix dropped, the first and last four characters of the rest. */
+/**
+ * A short form of an address for the Wallet column: the network prefix dropped, the first and last six characters of the rest with a middle ellipsis (the cell's title has it
+ * whole). The time column is the kit's `formatRowTime` (one 24-hour format on every table and log: today HH:MM:SS, else YYYY-MM-DD HH:MM).
+ */
 export function shortWallet(address: string): string {
   const body = address.includes(':') ? address.slice(address.indexOf(':') + 1) : address;
-  return body.length <= 10 ? body : `${body.slice(0, 4)}…${body.slice(-4)}`;
+  return shortId(body, 6, 6);
 }
+
+// ------------------------------------------------------------------------------------------------ number formats
+
+/** Most fraction digits an amount shows in the log (the Portfolio's table rule); the exact amount is in the cell's title. */
+export const AMOUNT_FRACTION_MAX = 4;
+
+/**
+ * One amount cell of the log: at most AMOUNT_FRACTION_MAX fraction digits (fewer when the amount needs fewer), plain digits (never a subscript-zero form: a column of amounts is read
+ * by eye), and `<0.0001` for an amount too small to show (never a zero for something that is there). `exact` is the whole amount for the title, null when the text is already it.
+ * A column too narrow for the whole digits falls back to K / M / B (`fitAmountColumn`), so no digit is ever cut by the cell edge.
+ */
+export function amountCell(units: bigint, decimals: number, width = 12): { text: string; exact: string | null } {
+  const fraction = Math.min(unitsFraction(units, decimals), AMOUNT_FRACTION_MAX);
+  const cell = fitAmountColumn([units], decimals, { fraction, width })[0]!;
+  if (units > 0n && /^[0.,]+$/.test(cell.text)) return { text: `<0.${'0'.repeat(Math.max(0, fraction - 1))}1`, exact: cell.exact };
+  return cell;
+}
+
+/** A row's price at the high end of its range as KAS (sompi) per whole token: what the display rule (`displayPriceDp`) reads. Null for a pair row and a row without a price. */
+export function priceRefOf(row: Pick<ActivityRow, 'price' | 'market'>, decimalsOf: (token: Hex) => number): bigint | null {
+  if (!row.price || row.market.kind !== 'token' || row.price.scale <= 0n) return null;
+  return (row.price.high * pow10(decimalsOf(row.market.token))) / row.price.scale;
+}
+
+/**
+ * The fraction digits of the Price column: ONE number for the rows on the page (the finest any of their markets needs, 5 significant digits, at most 6), so every decimal point
+ * lines up whatever markets the log mixes. A log of one market (a token or pair page) has that market's.
+ */
+export const logPriceDp = (rows: readonly Pick<ActivityRow, 'price' | 'market'>[], decimalsOf: (token: Hex) => number): number => columnPriceDp(rows.map((r) => priceRefOf(r, decimalsOf)));
 
 // ------------------------------------------------------------------------------------------------ filters
 

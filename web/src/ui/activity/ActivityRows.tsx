@@ -5,13 +5,12 @@ import { kasPerTokenToUsd, kasTitleOf, rateTitle, sompiToUsd, usdText, usdTextFi
 import { navigate, pairRoute, tokenRoute } from '../../app/router';
 import { memo } from 'preact/compat';
 import { useEffect, useState } from 'preact/hooks';
-import { formatDateTime, t } from '../../i18n';
+import { t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { formatKas, pow10 } from '../../kob/units';
-import { compactZeros, fitAmountColumn, unitsFraction, zerosTitle } from '../kit';
-import { priceDecimals, priceText } from '../market/market-model';
+import { displayPriceText, exactPriceText, formatRowTime, rowTimeTitle, shortId } from '../kit';
 import { TokenIcon } from '../market/TokenIcon';
-import { SETTLE_DAA, confirmationsAt, daaNow, marketKeyOf, rowTime, type ActivityRow, type MarketRef } from './activity-model';
+import { SETTLE_DAA, amountCell, confirmationsAt, daaNow, marketKeyOf, shortWallet, type ActivityRow, type MarketRef } from './activity-model';
 import { KindIcon, kindLabel } from './ActivityIcons';
 
 /** How tokens and markets are named (one object per registry and network, so the rows' props stay equal between renders). */
@@ -112,8 +111,10 @@ export interface RowProps {
   pending: boolean;
   chainDaa: number | null;
   chainAt: number | null;
-  /** today's date (the time column shows HH:MM:SS today, MM-DD HH:MM before) */
+  /** today's date (the time column shows HH:MM:SS today, YYYY-MM-DD HH:MM before: the kit's `formatRowTime`) */
   today: string;
+  /** the fraction digits of the whole Price column (`logPriceDp`: one number, so the decimal points line up) */
+  priceDp: number;
   fmt: RowFormat;
 }
 
@@ -121,7 +122,8 @@ export interface RowProps {
 export const ActivityRowView = memo(function ActivityRowView(props: RowProps) {
   const r = props.row;
   const kindText = r.kinds.length > 1 ? r.kinds.map((k) => kindLabel(k, r.side)).join(' + ') : kindLabel(r.kind, r.side);
-  const fullTime = r.timeMs !== null ? `${formatDateTime(Math.floor(r.timeMs / 1000), { timeStyle: 'medium' })}${r.timeEstimated ? ` (${t('activity.timeEstimated')})` : ''}` : `DAA ${r.daa}`;
+  // the full timestamp with the zone (the time cell shows the short form); a placement's time is estimated from its DAA score, a row without any shows the score
+  const fullTime = r.timeMs !== null ? `${rowTimeTitle(r.timeMs)}${r.timeEstimated ? ` (${t('activity.timeEstimated')})` : ''}` : `DAA ${r.daa}`;
   const amount = amountOf(r, props.fmt);
   const label = t('activity.rowLabel', {
     kind: kindText, market: props.fmt.marketText(r.market), amount: amount.text, conf: r.settled ? t('activity.conf.settled') : t('activity.conf.confirming'), time: fullTime, explorer: props.fmt.explorerHost,
@@ -155,7 +157,7 @@ const RowCells = memo(
     const fmt = props.fmt;
     const addrs = props.addrs ? props.addrs.split('\n') : [];
     const amount = amountOf(r, fmt);
-    const px = r.price ? priceRange(r.price, r.market.kind === 'token' ? fmt.decimalsOf(r.market.token) : 0, r.market.kind === 'token' ? fmt.fiat : null) : null;
+    const px = r.price ? priceRange(r.price, r.market.kind === 'token' ? fmt.decimalsOf(r.market.token) : 0, props.priceDp, r.market.kind === 'token' ? fmt.fiat : null) : null;
     const price = px ? px.text : '—';
     return (
       <>
@@ -164,16 +166,16 @@ const RowCells = memo(
         </span>
         <span class="act-c-mk" role="cell" title={fmt.marketText(r.market)}>
           <MarketIcons market={r.market} nameOf={fmt.nameOf} label={fmt.marketText(r.market)} />
-          {r.moreMarkets > 0 ? <span class="act-more" title={t('activity.moreMarketsTitle', { n: r.moreMarkets })}>{t('activity.moreMarkets', { n: r.moreMarkets })}</span> : null}
-          <span class="act-txm">{r.txid}</span>
+          {r.moreMarkets > 0 ? <span class="act-more" title={t(r.moreMarkets === 1 ? 'activity.moreMarketsTitle.one' : 'activity.moreMarketsTitle.other', { n: r.moreMarkets })}>{t('activity.moreMarkets', { n: r.moreMarkets })}</span> : null}
+          <span class="act-txm" title={r.txid}>{shortId(r.txid, 8, 8)}</span>
         </span>
-        {/* the whole id: as much of it as the column has room for, then an ellipsis (the link and the title have it whole) */}
-        <span class="act-c-tx" role="cell" title={r.txid}>{r.txid}</span>
-        <span class="act-c-who" role="cell" title={addrs.length ? t('activity.wallet.title', { list: addrs.join(', ') }) : undefined} data-testid="activity-wallet">
+        {/* the id with a middle ellipsis (the first and last eight characters: enough to tell two apart); the title and the link have it whole */}
+        <span class="act-c-tx" role="cell" title={r.txid}>{shortId(r.txid, 8, 8)}</span>
+        <span class="act-c-who" role="cell" title={addrs.length ? t(addrs.length === 1 ? 'activity.wallet.title.one' : 'activity.wallet.title.other', { list: addrs.join(', ') }) : undefined} data-testid="activity-wallet">
           {addrs.length ? (
             addrs.slice(0, 2).flatMap((a, i) => [
               ...(i > 0 ? [<i key="s" class="act-sep" aria-hidden="true">{'⇄'}</i>] : []),
-              <span key={a} class="act-w">{walletBody(a)}</span>,
+              <span key={a} class="act-w">{shortWallet(a)}</span>,
             ])
           ) : (
             <span class="act-w muted">{props.pending ? t('activity.wallet.pending') : t('activity.wallet.unknown')}</span>
@@ -182,26 +184,23 @@ const RowCells = memo(
           {r.placed > 1 ? <i class="act-tag" title={t('activity.wallet.ladderTitle', { n: r.placed })}>{t('activity.wallet.ladder', { n: r.placed })}</i> : null}
           {r.counterparty ? <i class="act-tag">{t(`activity.cp.${r.counterparty}`)}</i> : null}
         </span>
-        <span class={`act-c-amt act-num${r.side ? ` act-${r.side}` : ''}`} role="cell" title={amount.exact ?? zerosTitle(amount.text)}>
-          <b>{compactZeros(amount.text)}</b>
-          {amount.sub ? <span class="act-sub" title={amount.subTitle ?? zerosTitle(amount.sub)}>{compactZeros(amount.sub)}</span> : null}
+        <span class={`act-c-amt act-num${r.side ? ` act-${r.side}` : ''}`} role="cell" title={amount.exact ?? undefined}>
+          <b>{amount.text}</b>
+          {amount.sub ? <span class="act-sub" title={amount.subTitle ?? undefined}>{amount.sub}</span> : null}
         </span>
-        <span class="act-c-px act-num" role="cell" title={px ? px.title : price}>{compactZeros(price)}</span>
+        <span class="act-c-px act-num" role="cell" title={px ? px.title : undefined}>{price}</span>
         <ConfCell daa={r.daa} confirmations={r.confirmations} settled={r.settled} chainDaa={props.chainDaa} chainAt={props.chainAt} />
-        <span class="act-c-time act-num" role="cell" title={props.fullTime}>{rowTime(r.timeMs, Date.parse(props.today))}</span>
+        <span class="act-c-time act-num" role="cell" title={props.fullTime}>{formatRowTime(r.timeMs, Date.parse(props.today))}</span>
       </>
     );
   },
-  (a, b) => a.row === b.row && a.addrs === b.addrs && a.pending === b.pending && a.chainDaa === b.chainDaa && a.chainAt === b.chainAt && a.today === b.today && a.fmt === b.fmt && a.fullTime === b.fullTime,
+  (a, b) => a.row === b.row && a.addrs === b.addrs && a.pending === b.pending && a.chainDaa === b.chainDaa && a.chainAt === b.chainAt && a.today === b.today && a.priceDp === b.priceDp && a.fmt === b.fmt && a.fullTime === b.fullTime,
 );
 
-/** An address without its network prefix (the column shows as much of it as fits). */
-const walletBody = (a: string): string => (a.includes(':') ? a.slice(a.indexOf(':') + 1) : a);
-
-/** The amount cell's two lines: the token amount and its KAS value (a pair: the B amount; a pair placement: its side). */
+/** The amount cell's two lines: the token amount and its KAS value (a pair: the B amount; a pair placement: its side); the exact figures go to the titles. */
 function amountOf(r: ActivityRow, fmt: RowFormat): { text: string; sub: string; subTitle: string | null; exact: string | null } {
   const token = r.amount?.token ?? null;
-  const a = r.amount && token ? cellText(r.amount.units, fmt.decimalsOf(token)) : null;
+  const a = r.amount && token ? amountCell(r.amount.units, fmt.decimalsOf(token)) : null;
   const text = a && token ? `${a.text} ${fmt.nameOf(token)}` : '—';
   let sub = '';
   let subTitle: string | null = null;
@@ -211,9 +210,15 @@ function amountOf(r: ActivityRow, fmt: RowFormat): { text: string; sub: string; 
     // dollars, the exact KAS figure and the rate in the tooltip
     sub = usdTextFit(sompiToUsd(r.value.sompi, fmt.fiat.rate), 16);
     subTitle = kasTitleOf(formatKas(r.value.sompi, { group: ',' }), fmt.fiat);
-  } else if (r.value?.kind === 'kas') sub = `${fitAmountColumn([r.value.sompi], 8, { fraction: 2, width: 16 })[0]!.text} KAS`;
-  else if (r.value?.kind === 'token') sub = `${cellText(r.value.units, fmt.decimalsOf(r.value.token)).text} ${fmt.nameOf(r.value.token)}`;
-  else if (r.pairSide) sub = t(r.pairSide === 'ask' ? 'activity.pairAsk' : 'activity.pairBid');
+  } else if (r.value?.kind === 'kas') {
+    const v = amountCell(r.value.sompi, 8, 16);
+    sub = `${v.text} KAS`;
+    subTitle = v.exact ? `${v.exact} KAS` : null;
+  } else if (r.value?.kind === 'token') {
+    const v = amountCell(r.value.units, fmt.decimalsOf(r.value.token));
+    sub = `${v.text} ${fmt.nameOf(r.value.token)}`;
+    subTitle = v.exact ? `${v.exact} ${fmt.nameOf(r.value.token)}` : null;
+  } else if (r.pairSide) sub = t(r.pairSide === 'ask' ? 'activity.pairAsk' : 'activity.pairBid');
   return { text, sub, subTitle, exact: a?.exact && token ? `${a.exact} ${fmt.nameOf(token)}` : null };
 }
 
@@ -249,20 +254,18 @@ function MarketIcons(props: { market: MarketRef; nameOf: (t: Hex) => string; lab
   );
 }
 
-/** An amount in one cell: the exact amount when it fits, else fewer decimals or K / M / B (the exact amount in `exact`). */
-function cellText(units: bigint, decimals: number): { text: string; exact: string | null } {
-  return fitAmountColumn([units], decimals, { fraction: Math.min(unitsFraction(units, decimals), 6), width: 12 })[0]!;
-}
-
-/** KAS per whole token (the row's own precision); a ladder shows its range. With `fiat`: dollars per whole token, and `title` carries the KAS price and the rate. */
-function priceRange(p: { low: bigint; high: bigint; scale: bigint }, decimals: number, fiat: Fiat | null = null): { text: string; title: string } {
-  const perToken = (x: bigint) => (p.scale > 0n ? (x * pow10(decimals)) / p.scale : x);
-  const dp = priceDecimals(perToken(p.high));
-  const one = (x: bigint) => priceText(x, decimals, p.scale, dp);
+/**
+ * KAS per whole token with the column's fixed decimals (`dp`: the display rule, one number for the whole column); a ladder shows its range. The cell's title has the exact price (every
+ * digit). With `fiat`: dollars per whole token, and `title` carries the exact KAS price and the rate.
+ */
+function priceRange(p: { low: bigint; high: bigint; scale: bigint }, decimals: number, dp: number, fiat: Fiat | null = null): { text: string; title: string } {
+  const one = (x: bigint) => displayPriceText(x, decimals, p.scale, dp);
+  const exact = (x: bigint) => exactPriceText(x, decimals, p.scale);
   const kas = p.low === p.high ? one(p.low) : `${one(p.low)}–${one(p.high)}`;
-  if (!fiat) return { text: kas, title: kas };
+  const kasExact = p.low === p.high ? exact(p.low) : `${exact(p.low)}–${exact(p.high)}`;
+  if (!fiat) return { text: kas, title: kasExact };
   // KAS per whole token = price x 10^decimals / (scale x 1e8)
   const usd = (x: bigint) => usdText(kasPerTokenToUsd({ num: x * pow10(decimals), den: (p.scale > 0n ? p.scale : 1n) * 100_000_000n }, fiat.rate));
   const text = p.low === p.high ? usd(p.low) : `${usd(p.low)}–${usd(p.high)}`;
-  return { text, title: `${kas} KAS · ${rateTitle(fiat)}` };
+  return { text, title: `${kasExact} KAS · ${rateTitle(fiat)}` };
 }

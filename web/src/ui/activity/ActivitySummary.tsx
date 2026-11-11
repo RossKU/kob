@@ -11,7 +11,7 @@ import { formatKas } from '../../kob/units';
 import type { IndexerApi } from '../../data/indexer';
 import type { ActivityStatsView, CandleView } from '../../data/indexer-types';
 import { t } from '../../i18n';
-import { Segmented, useAsync } from '../kit';
+import { formatRowTime, Segmented, useAsync } from '../kit';
 import { useStandalone } from '../shell/standalone';
 import {
   axisTop,
@@ -88,9 +88,12 @@ interface WindowActivity {
   activity: ActivityStatsView | null;
 }
 
-/** A KAS value of the summary as it is shown: KAS (compact, or to the cent when small), or dollars with the exact KAS figure and the rate in the tooltip. */
+/**
+ * A KAS value of the summary as it is shown: KAS (compact for a volume, or to the cent when small), or dollars; the tooltip has the exact KAS figure (and the rate in dollars), so a
+ * compact figure never hides its digits.
+ */
 function money(sompi: bigint, fiat: Fiat | null, fine = false): { text: string; title?: string } {
-  if (!fiat) return { text: fine ? fineKas(sompi) : compactKas(sompi) };
+  if (!fiat) return { text: fine ? fineKas(sompi) : compactKas(sompi), title: `${formatKas(sompi, { group: ',' })} KAS` };
   return { text: sompiToUsdCompact(sompi, fiat), title: kasTitleOf(formatKas(sompi, { group: ',' }), fiat) };
 }
 
@@ -116,13 +119,19 @@ function changeText(pct: number | null): { text: string; tone: string } {
   return { text: t('activity.summary.vsPrev', { pct: s }), tone: pct > 0 ? 'sum-up' : 'sum-down' };
 }
 
-const dateFmt = (ms: number) => new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+/** The dated form of the kit's row time (`YYYY-MM-DD HH:MM`, 24-hour): a clock one day later makes `formatRowTime` print the date, whatever day it is now. */
+const DAY_MS = 86_400_000;
+const stamp = (ms: number): string => formatRowTime(ms, ms + DAY_MS);
+const dateFmt = (ms: number): string => stamp(ms).slice(0, 10);
 function barWhen(ms: number, w: SummaryWindow): string {
-  const d = new Date(ms);
-  if (w === '1D' || w === '7D') return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  const day = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  if (w === '1D' || w === '7D') return stamp(ms);
+  const day = dateFmt(ms);
   return w === '1Y' ? t('activity.summary.weekOf', { day }) : day;
 }
+
+/** "1 trade", "2,481 trades": one / other keys chosen here (no "(s)"). */
+const tradesText = (n: number): string => t(n === 1 ? 'activity.summary.tradesN.one' : 'activity.summary.tradesN.other', { n: n.toLocaleString('en-US') });
+const countText = (key: 'tokens' | 'pairs', n: number): string => t(`activity.summary.${key}.${n === 1 ? 'one' : 'other'}`, { n: n.toLocaleString('en-US') });
 
 export function ActivitySummary() {
   const { indexer, standalone } = useServices();
@@ -217,7 +226,7 @@ export function ActivitySummary() {
             <p class="sum-readout" aria-live="polite" data-testid="summary-readout">
               {bar && w ? (
                 <>
-                  <strong>{barWhen(bar.t, win)}</strong> <span title={money(bar.quote, fiat).title}>{money(bar.quote, fiat).text}{fiat ? '' : ' KAS'}</span> · {t('activity.summary.tradesN', { n: bar.trades.toLocaleString('en-US') })}
+                  <strong>{barWhen(bar.t, win)}</strong> <span title={money(bar.quote, fiat).title}>{money(bar.quote, fiat).text}{fiat ? '' : ' KAS'}</span> · {tradesText(bar.trades)}
                 </>
               ) : (
                 ' '
@@ -239,7 +248,7 @@ export function ActivitySummary() {
                     type="button"
                     class="sum-bar"
                     aria-pressed={i === pick ? 'true' : 'false'}
-                    aria-label={t(fiat ? 'activity.summary.barUsd' : 'activity.summary.bar', { when: barWhen(b.t, win), kas: money(b.quote, fiat).text, trades: b.trades.toLocaleString('en-US') })}
+                    aria-label={t(fiat ? 'activity.summary.barUsd' : 'activity.summary.bar', { when: barWhen(b.t, win), kas: money(b.quote, fiat).text, trades: tradesText(b.trades) })}
                     title={money(b.quote, fiat).title}
                     onMouseEnter={() => setSel(i)}
                     onFocus={() => setSel(i)}
@@ -288,7 +297,7 @@ export function ActivitySummary() {
         <Stat
           label={t('activity.summary.withOrders')}
           value={books ? String(books.tokensWithOrders + books.pairs) : ''}
-          sub={books ? t('activity.summary.withOrdersSub', { tokens: books.tokensWithOrders, pairs: books.pairs }) : null}
+          sub={books ? t('activity.summary.withOrdersSub', { tokens: countText('tokens', books.tokensWithOrders), pairs: countText('pairs', books.pairs) }) : null}
           testid="summary-now-markets"
         />
       </div>

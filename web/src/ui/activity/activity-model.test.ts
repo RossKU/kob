@@ -3,10 +3,11 @@
 import { describe, expect, it } from 'vitest';
 import type { EventView, OrderView, PairFillView } from '../../data/indexer-types';
 import {
-  ACTIVITY_DEPTH, AVAILABLE_KINDS, DEFAULT_PREFS, PREFS_KEY, SETTLE_DAA, confirmationsAt, daaNow, filterRows, fillRows, heldView, inMarket, logHasNext, logPage, mergePairFills, mergeRows, orientRow, pairFillEvent, parsePrefs,
-  placedRows, readPrefs, rowHref, rowMakers, rowTime, shortWallet, shownKinds, writePrefs,
+  ACTIVITY_DEPTH, AVAILABLE_KINDS, DEFAULT_PREFS, PREFS_KEY, SETTLE_DAA, amountCell, confirmationsAt, daaNow, filterRows, fillRows, heldView, inMarket, logHasNext, logPage, logPriceDp, mergePairFills, mergeRows, orientRow, pairFillEvent, parsePrefs,
+  placedRows, priceRefOf, readPrefs, rowHref, rowMakers, shortWallet, shownKinds, writePrefs,
   type ActivityRow, type OrderFacts, type RowContext,
 } from './activity-model';
+import { formatRowTime } from '../kit/format';
 
 const T = 'aa'.repeat(32); // a token (8 decimals: scale 1e8)
 const U = 'bb'.repeat(32); // another token
@@ -305,13 +306,42 @@ describe('confirmations and time', () => {
     expect(confirmationsAt({ ...row, settled: true }, null).settled).toBe(true);
   });
 
-  it('HH:MM:SS today, MM-DD HH:MM before; the wallet column drops the network prefix', () => {
+  it('the time column is the kit time: HH:MM:SS today, YYYY-MM-DD HH:MM before, a dash without a time', () => {
     const now = new Date(2026, 10, 6, 12, 0, 0).getTime();
-    expect(rowTime(new Date(2026, 10, 6, 9, 5, 7).getTime(), now)).toBe('09:05:07');
-    expect(rowTime(new Date(2026, 10, 4, 23, 59, 1).getTime(), now)).toBe('11-04 23:59');
-    expect(rowTime(null, now)).toBe('--:--:--');
-    expect(shortWallet('kaspatest:qz7vabcdefghk3f2')).toBe('qz7v…k3f2');
+    expect(formatRowTime(new Date(2026, 10, 6, 9, 5, 7).getTime(), now)).toBe('09:05:07');
+    expect(formatRowTime(new Date(2026, 10, 4, 23, 59, 1).getTime(), now)).toBe('2026-11-04 23:59');
+    expect(formatRowTime(null, now)).toBe('—');
+  });
+
+  it('the wallet column drops the network prefix and keeps the first and last six characters', () => {
+    expect(shortWallet('kaspatest:qz7vabcdefghk3f2')).toBe('qz7vab…ghk3f2');
     expect(shortWallet('qq9d0hxa')).toBe('qq9d0hxa');
+  });
+});
+
+describe('number formats of the log (review H-05, M-03, L-05)', () => {
+  it('an amount shows at most four fraction digits, plain digits, with the exact amount for the title', () => {
+    expect(amountCell(1_500_000_000n, 8)).toEqual({ text: '15', exact: null });
+    expect(amountCell(123_456_789n, 8)).toEqual({ text: '1.2346', exact: '1.23456789' });
+    // never a subscript-zero form, never a zero for something that is there
+    expect(amountCell(85_000n, 8).text).toBe('0.0009');
+    expect(amountCell(85n, 8)).toEqual({ text: '<0.0001', exact: '0.00000085' });
+    expect(amountCell(0n, 8).text).toBe('0');
+    expect(amountCell(1n, 0).text).toBe('1');
+  });
+
+  it('the Price column has ONE number of decimals: the finest the rows on the page need, at most 6', () => {
+    const row = (high: bigint, scale = S): Pick<ActivityRow, 'price' | 'market'> => ({ price: { low: high, high, scale }, market: { kind: 'token', token: T } });
+    const dec = () => 8;
+    // 33.4 KAS needs 3 decimals, 0.0255 KAS needs 6 (5 significant digits, capped)
+    expect(priceRefOf(row(3_341_892_984n), dec)).toBe(3_341_892_984n);
+    expect(logPriceDp([row(3_341_892_984n)], dec)).toBe(3);
+    expect(logPriceDp([row(2_550_000n)], dec)).toBe(6);
+    expect(logPriceDp([row(3_341_892_984n), row(2_550_000n)], dec)).toBe(6);
+    expect(logPriceDp([row(1n)], dec)).toBe(6);
+    // a pair row has no price: the log falls back to the rule's default
+    expect(priceRefOf({ price: null, market: { kind: 'pair', base: T, quote: U } }, dec)).toBeNull();
+    expect(logPriceDp([], dec)).toBe(4);
   });
 });
 

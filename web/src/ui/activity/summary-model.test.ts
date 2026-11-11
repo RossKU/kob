@@ -71,7 +71,7 @@ describe('all time and the books now', () => {
 
 describe('numbers', () => {
   it('compacts KAS without rounding up', () => {
-    expect([compactKas(9_840n * KAS), compactKas(412_999n * KAS), compactKas(9_819_999n * KAS), compactKas(0n)]).toEqual(['9,840', '412k', '9.81M', '0']);
+    expect([compactKas(9_840n * KAS), compactKas(412_999n * KAS), compactKas(9_819_999n * KAS), compactKas(0n)]).toEqual(['9,840', '412K', '9.81M', '0']);
   });
 
   it('changes in percent, one decimal', () => {
@@ -110,7 +110,7 @@ describe('the activity totals', () => {
   });
 
   it('shows a small sum to the cent and a large one compact, never rounded up', () => {
-    expect([fineKas(0n), fineKas(37_999_999n), fineKas(1_250_000_000n), fineKas(84_000n * KAS), fineKas(412_999n * KAS)]).toEqual(['0', '0.37', '12.5', '84,000', '412k']);
+    expect([fineKas(0n), fineKas(37_999_999n), fineKas(1_250_000_000n), fineKas(84_000n * KAS), fineKas(412_999n * KAS)]).toEqual(['0', '0.37', '12.5', '84,000', '412K']);
     expect(fineKas(999n * KAS + 99_999_999n)).toBe('999.99');
   });
 });

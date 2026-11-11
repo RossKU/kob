@@ -181,12 +181,12 @@ export function changePct(now: bigint | number, prev: bigint | number | null): n
   return Number(((n - p) * 1000n) / p) / 10;
 }
 
-/** Whole KAS of a sompi amount, compact: 9,840 · 412k · 9.81M (no rounding up past what was traded). */
+/** Whole KAS of a sompi amount, compact: 9,840 · 412K · 9.81M (the suffixes are the kit's: K, M, B) (no rounding up past what was traded). */
 export function compactKas(sompi: bigint): string {
   const kas = Number(sompi / 1_000_000n) / 100;
   if (kas >= 1e9) return `${trim(kas / 1e9)}B`;
   if (kas >= 1e6) return `${trim(kas / 1e6)}M`;
-  if (kas >= 1e5) return `${Math.floor(kas / 1e3)}k`;
+  if (kas >= 1e5) return `${Math.floor(kas / 1e3)}K`;
   return Math.floor(kas).toLocaleString('en-US');
 }
 

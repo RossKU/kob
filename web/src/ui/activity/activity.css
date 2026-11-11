@@ -106,7 +106,6 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-pie { display: inline-block; width: 13px; height: 13px; border-radius: 50%; flex: none; background: conic-gradient(var(--warn) calc(var(--p) * 1%), var(--surface-3) 0); }
 .act-ok { color: var(--ok); font-weight: 700; }
 .act-c-time { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.act-empty { padding: 18px 8px; text-align: center; }
 .act-skel { height: var(--act-row-h); }
 .act-skel .skeleton { display: block; }
 .act-skel .skeleton-line { margin: 0; }
@@ -115,6 +114,11 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-skel .act-c-conf .skeleton-line { width: 28px; }
 .act-skel .act-c-amt, .act-skel .act-c-time { min-width: 48px; }
 
+/* A wide log: the transaction id and the wallet are short (a middle ellipsis, ActivityRows.tsx) and stop growing at about 12rem; the figure columns take what is left, so the
+   numbers keep their room and the log is no longer 60 % hex (review M-08). Three classes: the same rule under a token or pair page wins over market.css's older cap on the figures. */
+@container actlog (min-width: 1200px) {
+  .act .act-log .act-head, .act .act-log .act-row { grid-template-columns: 28px 56px minmax(80px, 12rem) minmax(90px, 14rem) minmax(110px, 1fr) minmax(84px, 0.6fr) 64px 84px; }
+}
 /* a medium card: no pie (the count, or ✓), tighter columns */
 @container actlog (max-width: 899px) {
   .act-head, .act-row { column-gap: 8px; grid-template-columns: 28px 50px minmax(70px, 1fr) minmax(80px, 1.2fr) minmax(100px, 1.1fr) minmax(70px, 0.7fr) 36px 76px; }
@@ -150,6 +154,9 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-foot-r { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .act-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 0.76rem; color: var(--muted); }
 .act-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* the kit's empty state inside the log keeps the height of a few rows, so the card does not collapse when the filters hide everything */
+.act-body > .empty-state { min-height: calc(3 * var(--act-row-h)); justify-content: center; }
 
 /* the token and pair pages: the log takes the full width under the exchange grid */
 .mkt-area-activity { min-width: 0; }
@@ -233,4 +240,18 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
   .sum-strip-now > .sum-orders { grid-column: 1 / -1; }
   .sum-chart { height: 100px; }
   .sum-bars { gap: 2px; }
+}
+
+/* ---- a touch screen (review M-11): the filters, the kind toggles, the Columns control, the summary's time window and the checkboxes of the Columns panel are 44 px to hit (the pointer's own
+   sizes above stay for a mouse). A native checkbox is drawn 20 px; the whole label row is its hit area. The chart's bars stay as wide as the window's buckets are. */
+@media (pointer: coarse) {
+  .act-tools .act-seg button { min-height: 44px; padding: 4px 14px; }
+  .act-tools .act-ib { width: 44px; height: 44px; }
+  .act-tools .act-vis-btn { min-height: 44px; min-width: 44px; }
+  .act-tools .segmented button { min-height: 36px; }
+  .act-new { min-height: 36px; }
+  .act-vis-row { min-height: 44px; }
+  .act-vis-row input[type='checkbox'] { width: 20px; height: 20px; margin: 0; flex: none; }
+  .act-mk-link { min-width: 32px; min-height: 32px; justify-content: center; }
+  .sum-band .segmented button { min-height: 44px; padding: 4px 16px; }
 }
