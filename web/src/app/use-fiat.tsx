@@ -51,11 +51,13 @@ export function KasPriceFeed() {
 
 /**
  * The one muted line under a view that shows values: what the USD is (the source, how old, "an estimate, not a quote", and on testnet that its KAS has no value),
- * or why KAS is shown although USD was chosen. Nothing while KAS is the display currency.
+ * or why KAS is shown although USD was chosen. Nothing while KAS is the display currency. What the USD is is said in Settings only (`full`, founder 2026-11-11:
+ * not on every page); a page says only why it shows KAS although USD was chosen.
  */
-export function FiatNote(props: { class?: string }) {
+export function FiatNote(props: { class?: string; full?: boolean }) {
   const s = useFiatState();
   if (s.kind === 'kas') return null;
+  if (s.kind !== 'fallback' && !props.full) return null;
   const cls = `small muted fiat-note${props.class ? ` ${props.class}` : ''}`;
   if (s.kind === 'fallback') {
     return (

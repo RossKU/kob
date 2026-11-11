@@ -90,9 +90,13 @@ test('the market list shows the price, 24 h volume, market cap and depth in doll
   await expect(page.getByTestId('sort-last')).toContainText('Price (USD)');
   await expect(page.getByTestId('sort-volume')).toContainText('24h volume (USD)');
   await expect(page.getByTestId('sort-depth')).toContainText('Depth ±2% (USD)');
-  // the note: the source, the age, an estimate and, on testnet, that its KAS has no value
-  const note = page.getByTestId('fiat-note');
+  // what the dollars are is said in Settings, not on the page (founder 2026-11-11): the source, the age, an estimate and, on testnet, that its KAS has no value
+  await expect(page.getByTestId('fiat-note')).toHaveCount(0);
+  const back = page.url();
+  await page.goto('/#/settings');
+  const note = page.getByTestId('settings-currency').getByTestId('fiat-note');
   await expect(note).toHaveText(/^USD at the KAS price from CoinGecko, (under a minute|\d+ min) ago\. An estimate, not a quote\. Testnet KAS has no value: priced as mainnet KAS, for display only\.$/);
+  await page.goto(back);
   // one line of text in a table cell: nothing wraps or overlaps
   for (const cell of [last, volume, depth]) {
     const box = await cell.locator('span').first().boundingBox();
@@ -104,6 +108,7 @@ test('an average of exchanges is named, and its USDT is said to be taken as USD'
   await mock.kasPrice({ usd: 0.0301, source: 'vwap:bybit,kucoin,gate' });
   await chooseUsd(page);
   await openList(page, mock);
+  await page.goto('/#/settings');
   await expect(page.getByTestId('fiat-note')).toContainText('USD (USDT) at the KAS price from Bybit, KuCoin, Gate,');
   await expect(page.getByTestId('fiat-note')).toHaveAttribute('data-source', 'vwap:bybit,kucoin,gate');
 });
@@ -127,7 +132,8 @@ test('a market page shows its last price and 24 h statistics in dollars; the ord
   await expect(page.getByTestId('stat-change')).toContainText('%');
   // the tooltip keeps the KAS figure
   await expect(last.locator('.mkt-stat-value')).toHaveAttribute('title', /KAS per EXKCC · USD estimate at \$0\.03 per KAS$/);
-  await expect(page.getByTestId('fiat-note')).toBeVisible();
+  // no note on the market page (founder 2026-11-11: Settings explains the dollars; the tooltip names the price)
+  await expect(page.getByTestId('fiat-note')).toHaveCount(0);
 
   // the order book and the ticket: KAS, never dollars; the price field takes what the user types
   await expect(page.getByTestId('book-section')).toBeVisible();
@@ -174,7 +180,7 @@ test('the Portfolio summary and the Balances value column are dollars with the K
   await page.keyboard.press('Escape');
   // an open-orders count is a count
   await expect(page.getByTestId('portfolio-open-count')).not.toContainText('$');
-  await expect(page.getByTestId('fiat-note')).toBeVisible();
+  await expect(page.getByTestId('fiat-note')).toHaveCount(0); // said in Settings
 
   // the balances: the Value column is dollars, the held amounts are KAS and tokens
   await expect(page.getByTestId('balances-panel')).toBeVisible();
@@ -207,7 +213,9 @@ test('a price older than 10 minutes is not used: KAS with a one-line notice; 9 m
   await chooseUsd(page);
   const id = await openList(page, mock);
   await expect(page.getByTestId(`token-last-${id}`)).toHaveText(/^\$/);
+  await page.goto('/#/settings');
   await expect(page.getByTestId('fiat-note')).toContainText('9 min ago');
+  await page.goBack();
 
   await mock.kasPrice({ ageS: 11 * 60 });
   await page.reload();
@@ -333,7 +341,7 @@ test('the Activity page: the summary (all time, windows, the volume chart and it
 
   await chooseUsd(page);
   await page.reload();
-  await expect(page.getByTestId('fiat-note').first()).toBeVisible();
+  await expect(page.getByTestId('fiat-note')).toHaveCount(0); // said in Settings
   const vol = page.getByTestId('summary-all-volume');
   await expect(vol).toContainText('$');
   await expect(vol).not.toContainText('KAS');

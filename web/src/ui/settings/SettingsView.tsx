@@ -2,6 +2,7 @@ import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { useCreatorImagePref, useIconPref } from '../../app/icon-pref';
 import { useDisplayCurrency, type DisplayCurrency } from '../../app/currency-pref';
+import { FiatNote } from '../../app/use-fiat';
 import { displayToken } from '../../app/token-display';
 import type { TrackedToken } from '../../data/token-tracker';
 import { TokenNote } from '../market/TokenNote';
@@ -123,6 +124,8 @@ function DisplayCurrencySettings() {
   return (
     <Section title={t('settings.currency.title')} data-testid="settings-currency">
       <p class="small muted">{t('settings.currency.explain')}</p>
+      {/* what the dollars are now: the source, how old, an estimate (the pages say nothing of it, only why they show KAS when they do) */}
+      <FiatNote full />
       <div class="stack-sm">
         <span class="small" id="settings-currency-label">{t('settings.currency.label')}</span>
         <Segmented<DisplayCurrency>
