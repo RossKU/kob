@@ -18,12 +18,14 @@
 //!   (`--book-file`), for deployments that keep the key away from the public API;
 //! * `x402`: the x402 facilitator alone (keyless; finality from the node's UTXO set);
 //! * `withdraw`: sends KAS out of the operator key over the configured node, the public resolver pair included
-//!   (`kobd::withdraw`).
+//!   (`kobd::withdraw`);
+//! * `health`: asks a running kobd's read API whether it is healthy (`GET /v1/health`), for a container's `HEALTHCHECK`.
 //!
 //! Roles that hold keys hold only the operator's hot key; the facilitator holds none.
 //!
-//! Exit status: 0 a stop, 1 an error (a supervisor starts it again), 2 a usage mistake ([`Usage`], clap's own) or a stop that
-//! did not finish in time (`shutdown`), 130 a second Ctrl+C. Commands that print a document on stdout keep the log on stderr.
+//! Exit status: 0 a stop, 1 an error (a supervisor starts it again), 2 a usage mistake ([`Usage`], clap's own), a
+//! configuration file that is missing or does not parse, or a stop that did not finish in time (`shutdown`), 130 a second
+//! Ctrl+C. Commands that print a document on stdout keep the log on stderr.
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -55,8 +57,8 @@ the setup when there is none. `kobd --executor`, `kobd --indexer` or both start 
 exactly these roles), with --config <file>, or from the options alone. Their options: `kobd --executor --help`, `kobd --indexer \
 --help`.
 
-Exit status: 0 stopped, 1 an error (a supervisor may start it again), 2 a usage mistake or a stop that did not finish in \
-time (do not start it again unchanged), 130 a second Ctrl+C.";
+Exit status: 0 stopped, 1 an error (a supervisor may start it again), 2 a usage mistake, a configuration file that is \
+missing or does not parse, or a stop that did not finish in time (do not start it again unchanged), 130 a second Ctrl+C.";
 
 const START_HELP: &str = "A start: `kobd` runs kobd.toml of the executable's directory ($KOBD_DIR when set), or the setup when \
 there is none; `kobd --executor`, `kobd --indexer` or both start those roles with that configuration (set up for exactly these \
@@ -176,6 +178,24 @@ enum Cmd {
     Keep(KeepArgs),
     /// The x402 facilitator alone: GET /supported, POST /verify, POST /settle, GET /health, GET /metrics.
     X402(X402Args),
+    /// Whether a running kobd is healthy: GET /v1/health of its read API (exit 0 when it answers 200 with "ok": true, else
+    /// 1): a container's HEALTHCHECK, a monitoring probe.
+    Health(HealthArgs),
+}
+
+/// `kobd health`.
+#[derive(clap::Args)]
+struct HealthArgs {
+    /// The health route to ask. Default: /v1/health at the read API's address of kobd.toml (`[api] listen`; an unspecified
+    /// address is asked on loopback), else http://127.0.0.1:8090/v1/health.
+    #[arg(long)]
+    url: Option<String>,
+    /// Directory of kobd.toml. Default: $KOBD_DIR or the executable's own directory.
+    #[arg(long)]
+    dir: Option<PathBuf>,
+    /// How long the answer may take, in seconds.
+    #[arg(long, default_value_t = 5)]
+    timeout_secs: u64,
 }
 
 /// `kobd config`.
@@ -340,7 +360,7 @@ fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow:
         Cmd::Match(a) => a.common.offline,
         Cmd::Keep(a) => a.common.offline,
         Cmd::X402(_) => false,
-        Cmd::Config(_) | Cmd::AddressBalance(_) | Cmd::Withdraw(_) | Cmd::Db(_) | Cmd::LogoReports(_) => true,
+        Cmd::Config(_) | Cmd::AddressBalance(_) | Cmd::Withdraw(_) | Cmd::Db(_) | Cmd::LogoReports(_) | Cmd::Health(_) => true,
     };
     logging::init(log_to_stderr);
     // the one-object JSON commands and the offline, read-only checks write no log file
@@ -348,6 +368,7 @@ fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow:
         &cli.cmd,
         Cmd::AddressBalance(_)
             | Cmd::Config(_)
+            | Cmd::Health(_)
             | Cmd::Setup(SetupArgs { non_interactive: true, .. })
             | Cmd::Db(DbArgs { sub: crate::index_cli::DbSub::Info { .. }, .. })
     );
@@ -385,6 +406,68 @@ fn command(rt: &tokio::runtime::Runtime, program: OsString, cli: Cli) -> anyhow:
         Cmd::Match(a) => rt.block_on(run_match(a)),
         Cmd::Keep(a) => rt.block_on(run_keep(a)),
         Cmd::X402(a) => rt.block_on(x402::run(a)),
+        Cmd::Health(a) => health_cmd(&a),
+    }
+}
+
+/// The URL `kobd health` asks: `--url`, else /v1/health at `listen` of the read API (an unspecified address on loopback).
+fn health_url(url: Option<&str>, listen: Option<std::net::SocketAddr>) -> String {
+    if let Some(u) = url {
+        return u.to_string();
+    }
+    let mut a = listen.unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], 8090)));
+    if a.ip().is_unspecified() {
+        a.set_ip(if a.is_ipv6() { std::net::Ipv6Addr::LOCALHOST.into() } else { std::net::Ipv4Addr::LOCALHOST.into() });
+    }
+    format!("http://{a}/v1/health")
+}
+
+/// Whether a `/v1/health` answer says healthy (`Ok`: its state) or why not.
+fn health_verdict(status: u16, body: &str) -> Result<String, String> {
+    if status != 200 {
+        return Err(format!("HTTP {status}"));
+    }
+    let v: serde_json::Value = serde_json::from_str(body).map_err(|_| "the answer is not the health document".to_string())?;
+    let state = v.get("state").and_then(serde_json::Value::as_str).unwrap_or("?").to_string();
+    match v.get("ok").and_then(serde_json::Value::as_bool) {
+        Some(true) => Ok(state),
+        Some(false) => {
+            let why = ["halt_reason", "gap_reason", "last_error"]
+                .iter()
+                .find_map(|k| v.get(*k).and_then(serde_json::Value::as_str))
+                .map(|w| format!(": {w}"))
+                .unwrap_or_default();
+            Err(format!("not ok (state {state}{why})"))
+        }
+        None => Err("the answer has no \"ok\"".into()),
+    }
+}
+
+/// `kobd health`: GET the read API's health route; exit 0 when it answers 200 with `"ok": true`, else an error (exit 1).
+fn health_cmd(a: &HealthArgs) -> anyhow::Result<()> {
+    let listen = if a.url.is_some() {
+        None
+    } else {
+        let dir = match &a.dir {
+            Some(d) => d.clone(),
+            None => setup::home_dir()?,
+        };
+        let path = dir.join(setup::CONFIG_FILE);
+        match path.is_file().then(|| crate::config::IndexerConfig::load(&path)).transpose()? {
+            Some(c) if !c.api.enabled => bail!("the read API is off in {}: nothing to ask (pass --url)", path.display()),
+            Some(c) => Some(c.api.listen),
+            None => None,
+        }
+    };
+    let url = health_url(a.url.as_deref(), listen);
+    let (status, body) =
+        crate::rpc::tls::http_get(&url, std::time::Duration::from_secs(a.timeout_secs.max(1))).map_err(|e| anyhow!("{e}"))?;
+    match health_verdict(status, &body) {
+        Ok(state) => {
+            println!("healthy: {url} ({state})");
+            Ok(())
+        }
+        Err(why) => bail!("unhealthy: {url}: {why}"),
     }
 }
 
@@ -1033,6 +1116,39 @@ fast_start = false
                 ),
             "{index}"
         );
+    }
+
+    /// Audit 2026-11-11 L-16: `kobd health` asks the read API of kobd.toml (an unspecified address on loopback) and is healthy
+    /// only on 200 with `"ok": true`; against a local server, end to end.
+    #[test]
+    fn health_asks_the_read_api_and_needs_ok() {
+        use std::net::SocketAddr;
+        assert_eq!(health_url(None, None), "http://127.0.0.1:8090/v1/health");
+        assert_eq!(health_url(None, Some("0.0.0.0:9000".parse::<SocketAddr>().unwrap())), "http://127.0.0.1:9000/v1/health");
+        assert_eq!(health_url(None, Some("[::]:9000".parse::<SocketAddr>().unwrap())), "http://[::1]:9000/v1/health");
+        assert_eq!(health_url(Some("http://h:1/v1/health"), None), "http://h:1/v1/health");
+        assert_eq!(health_verdict(200, r#"{"ok": true, "state": "following"}"#), Ok("following".to_string()));
+        let e = health_verdict(200, r#"{"ok": false, "state": "gap", "gap_reason": "downtime exceeded"}"#).unwrap_err();
+        assert!(e.contains("state gap") && e.contains("downtime exceeded"), "{e}");
+        assert!(health_verdict(503, "").unwrap_err().contains("HTTP 503"));
+        assert!(health_verdict(200, "<html>").is_err() && health_verdict(200, "{}").is_err());
+        // end to end: a local server that answers the health document once
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let srv = std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            let mut b = [0u8; 1024];
+            let _ = c.read(&mut b);
+            let body = r#"{"ok":true,"state":"following"}"#;
+            let _ = c.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+        });
+        let a = HealthArgs { url: Some(format!("http://127.0.0.1:{port}/v1/health")), dir: None, timeout_secs: 5 };
+        health_cmd(&a).unwrap();
+        srv.join().unwrap();
+        // nothing listens: an error (exit 1)
+        let a = HealthArgs { url: Some(format!("http://127.0.0.1:{port}/v1/health")), dir: None, timeout_secs: 5 };
+        assert!(health_cmd(&a).is_err());
     }
 
     /// `kobd config check` on a configuration the setup wrote: the roles, the node, the store, the files, offline.

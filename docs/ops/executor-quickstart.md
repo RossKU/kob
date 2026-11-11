@@ -286,7 +286,7 @@ topping up the fees of kills and refunds; `--keeper-subsidy-budget-kas` raises i
   |---|---|---|
   | 0 | A stop (Ctrl+C, `SIGTERM`, `docker stop`, `systemctl stop`). | Does not start it again. |
   | 1 | An error, for example `exiting so that a supervisor restarts the executor`. | Starts it again. |
-  | 2 | A usage mistake (clap's own, an option of another role, `--node`, a role the configuration was not set up for, `--lean` on the wrong role), or a stop that did not finish in time. | Does not start it again unchanged: the same command fails the same way. |
+  | 2 | A usage mistake (clap's own, an option of another role, `--node`, a role the configuration was not set up for, `--lean` on the wrong role), a configuration file that is missing or does not parse, or a stop that did not finish in time. | Does not start it again unchanged: the same command fails the same way. |
   | 130 | A second Ctrl+C. | Does not start it again. |
 * **Address and balance**: `kobd address-balance` (in the folder of `kobd.toml`, or with `--dir <folder>`)
   prints one JSON object: the key's address, the network and its plain balance read from the configured node
@@ -484,6 +484,12 @@ docker logs -f kob                                                       # the s
 `--log-opt max-size=10m --log-opt max-file=3` caps what `docker logs` keeps at about 30 MB: the log always reaches the console
 (a status line every 10 s at least), and Docker's default `json-file` driver never rotates it on its own. A log file set in the
 configuration is a separate, rotated copy on the volume.
+
+The image has a `HEALTHCHECK`: `kobd health`, which asks the read API (`[api] listen` of `kobd.toml`, by default
+`127.0.0.1:8090`) for `/v1/health` and is healthy while it answers with `"ok": true` (following or catching up, no lag
+alarm). `docker ps` shows `healthy` or `unhealthy`; Docker does not restart an unhealthy container by itself. A
+configuration with the read API off (`--no-api`) stays `unhealthy`: run it with `--no-healthcheck`. The same command works
+outside Docker: `kobd health [--url http://HOST:PORT/v1/health]`, exit status 0 healthy, 1 not.
 
 `--network host` lets the container reach the node's loopback RPC and keeps the read API on the host's loopback. Pause with
 `touch /srv/kob/kob-pause` (as uid 10001 or root), stop with `docker stop kob`. No image is published: build it from

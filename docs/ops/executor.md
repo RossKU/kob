@@ -307,7 +307,8 @@ matcher and keeper options (C, "Running"):
 
 Next to `kobd --executor`: `kobd address-balance [--dir D]` (the key's address and plain balance as one JSON object, from the configured
 node; never the secret), `kobd setup --non-interactive --node resolver|URL --executor|--indexer|--executor --indexer [--new-key]` (the setup's files and one
-JSON object, for scripts and the Android app) and `kobd withdraw --to ADDRESS --amount KAS|all [--yes] [--dry-run] [--json]` (KAS out of the
+JSON object, for scripts and the Android app), `kobd health [--url URL]` (asks a running kobd's read API for `/v1/health`: exit 0 when it
+answers with `"ok": true`, else 1; the Docker image's `HEALTHCHECK`) and `kobd withdraw --to ADDRESS --amount KAS|all [--yes] [--dry-run] [--json]` (KAS out of the
 operator key over the configured node, public resolver pair included; it takes the data directory's writer lock, so it refuses while the
 executor runs; `--json` prints one object on stdout, `{txid, network, from, to, amount_sompi, fee_sompi, inputs, remaining_coins}` with `txid` null for a dry run, or `{"error": "..."}` with exit status 1 on a refusal, and the details and the log go to stderr; Quick start, section 5). `kobd setup --non-interactive` keeps the configuration it replaces as `kobd.toml.bak` and names it in its JSON as `replaced` (null when nothing was replaced). `kobd config check` and `kobd db info` are offline and read-only (the table above).
 
@@ -353,8 +354,8 @@ Roles, Configuration and store, Node, Storage, Read API, Log, Executor, Fees, Ma
 `kobd --indexer --help` (the Indexer's options only); `kobd db <tool> --help` lists only the store options (`--config`, `--network`,
 `--data-dir`, `--tokens`) and, for `import-orders` and `rebase`, the node options. Exit status of `kobd`: 0 a stop; 1 an error (a
 supervisor starts it again, e.g. "exiting so that a supervisor restarts the executor"); 2 a usage mistake (clap's own, an option of
-another role, `--node` on a start, a role the configuration was not set up for, `--lean` on the wrong role) or a stop that did not
-finish in time (do not start it again unchanged); 130 a second Ctrl+C. The commands that print a document or a report on stdout
+another role, `--node` on a start, a role the configuration was not set up for, `--lean` on the wrong role), a configuration file
+that is missing or does not parse, or a stop that did not finish in time (do not start it again unchanged); 130 a second Ctrl+C. The commands that print a document or a report on stdout
 (`kobd db ...`, `kobd logo-reports ...`, `kobd address-balance`, `kobd setup --non-interactive`, `kobd withdraw`, `kobd config check`,
 `kobd match` and `kobd keep` with `--offline`) keep their log on stderr, so `kobd db export-orders | jq` works. Log lines have kaspad's
 shape, `2026-11-11 08:44:28.529Z  INFO status: ...` (UTC to the millisecond, the level, no Rust module path; the path is shown only

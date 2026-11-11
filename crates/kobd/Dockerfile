@@ -52,4 +52,7 @@ ENV KOBD_DIR=/data
 USER 10001:10001
 WORKDIR /data
 VOLUME ["/data"]
+# healthy while the read API answers /v1/health with "ok": true (the image has no curl: `kobd health` asks it, at the address
+# of [api] listen in /data/kobd.toml, else 127.0.0.1:8090); a long catch-up is covered by the start period
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10m --retries=3 CMD ["kobd", "health"]
 ENTRYPOINT ["kobd"]
