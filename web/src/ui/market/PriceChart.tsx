@@ -9,7 +9,8 @@
 // toggle would be a second kind of control (a state to read off the toolbar) and would let a drawing change kind. Colours: one button beside the tools shows the current colour
 // and opens a small palette of six swatches that sets the colour of the NEXT drawing (remembered); the recolour tool, which works like the delete tool, gives the clicked drawing the selected colour. A click on a
 // drawing with no tool on cannot select it: there is no layer then, and the plot belongs to the chart's pan and zoom. The header is ONE row: the interval switch on the left, the tools and the colour button on the right (what does not fit scrolls sideways inside the tools' row on
-// a phone; the colour button stays outside the scroller so its palette is not clipped); the legend is a row of its own above the plot, never over it (the OHLC read-out, its last item the unit of the price).
+// a phone; the colour button stays outside the scroller so its palette is not clipped); the legend is a row of its own above the plot, never over it (the OHLC read-out, then the unit of the price). Its height never depends on the live values: one line with an
+// ellipsis on the read-out (the unit does not shrink), and a fixed two lines on a phone; a row that grew and shrank with every tick would move everything below it.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { CandlestickData, HistogramData, IChartApi, ISeriesApi, MouseEventParams, Time, UTCTimestamp, WhitespaceData } from 'lightweight-charts';
@@ -513,13 +514,13 @@ export function PriceChart(props: PriceChartProps) {
       </div>
       <div class="chart-legend" data-testid="chart-legend">
         {state === 'ready' && shown ? (
-          <>
+          <span class="chart-ohlc">
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.o')}<b>{shown.o}</b></span>
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.h')}<b>{shown.h}</b></span>
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.l')}<b>{shown.l}</b></span>
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.c')}<b>{shown.c}</b></span>
             <span>{t('market.chart.v')}<b>{shown.v}</b></span>
-          </>
+          </span>
         ) : null}
         {/* the unit stays when there is nothing to read out (a market with no trades yet) */}
         <span class="chart-unit" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' })}</span>

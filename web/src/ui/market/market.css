@@ -183,15 +183,21 @@ body:has(.market-page) .container { max-width: 1520px; }
   background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .chart-canvas { position: absolute; inset: 0; }
-.chart-legend { min-height: 20px; margin-bottom: 4px; padding-left: 2px; font-size: 0.78rem; font-variant-numeric: tabular-nums; color: var(--muted); }
-.chart-legend > span { margin-right: 10px; }
-/* the read-out wraps between its items (a phone), so the unit is never cut off */
-.chart-legend > span { display: inline-block; white-space: nowrap; }
+/* the legend's height is fixed whatever the live values are (a row that changed between one and two lines would move everything below the chart): from 760 px one line, the read-out
+   cut with an ellipsis and the unit after it, which does not shrink; on a phone a fixed two lines, the read-out wrapping between its items. */
+.chart-legend { display: flex; align-items: baseline; height: 1.35em; margin-bottom: 4px; padding-left: 2px; overflow: hidden; font-size: 0.78rem; line-height: 1.35; font-variant-numeric: tabular-nums; color: var(--muted); }
+.chart-ohlc { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-ohlc > span { margin-right: 10px; }
+@media (max-width: 759px) {
+  .chart-legend { display: block; height: 2.7em; }
+  .chart-ohlc { display: contents; }
+  .chart-ohlc > span, .chart-legend > .chart-unit { display: inline-block; white-space: nowrap; }
+}
 .chart-legend b { font-weight: 600; color: var(--text); margin-left: 3px; }
 .chart-legend .tone-up b { color: var(--buy); }
 .chart-legend .tone-down b { color: var(--sell); }
 /* the unit of the price ("KAS per TUSD"): the last item of the legend, smaller and softer than the numbers */
-.chart-legend > .chart-unit { margin-right: 0; font-size: 0.72rem; opacity: 0.8; }
+.chart-legend > .chart-unit { flex: none; font-size: 0.72rem; opacity: 0.8; white-space: nowrap; }
 .chart-overlay { position: absolute; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center; }
 @media (max-width: 759px) { .chart-box { height: 320px; } }
 
