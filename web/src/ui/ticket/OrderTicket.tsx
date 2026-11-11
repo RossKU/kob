@@ -826,45 +826,46 @@ export function OrderTicket(props: OrderTicketProps) {
       {/* the panel has the height of its row of the page (market.css) and never changes it: the form scrolls inside .tk-scroll, the reason slot and the button are the
           footer, pinned to the bottom of the panel, so nothing that comes or goes in the form moves the button or anything beside or under the ticket */}
       <div class="tk-scroll" data-testid="order-scroll">
-      {/* the title row has a fixed height and the indicator an overlay of its own: it never changes the layout. It shows only when a plan takes longer than
+      {/* no visible title row (founder, 2026-11-11: the rows are for the form): the panel's name is a heading for screen readers, the field help's "?" is at the right end of the Buy | Sell row,
+          and the "Calculating..." indicator is an overlay at the right end of the Order type label row, so neither adds a row. The indicator shows only when a plan takes longer than
           PENDING_SHOW_MS (a background re-plan on a tick is over before that and shows nothing) */}
-      <div class="tk-titlerow">
-        <h2>{t('ticket.title')}</h2>
-        <button
-          type="button"
-          class="tk-help-toggle"
-          aria-pressed={helpOn ? 'true' : 'false'}
-          title={t(helpOn ? 'ticket.helpToggle.hide' : 'ticket.helpToggle.show')}
-          aria-label={t('ticket.helpToggle.label')}
-          data-testid="order-help-toggle"
-          onClick={toggleHelp}
-        >
-          ?
-        </button>
-        {pendingShown ? (
-          <span class="tk-pending" data-testid="order-pending">
-            <Loading text={t('ticket.pending')} />
-          </span>
-        ) : null}
-      </div>
+      <h2 class="sr-only">{t('ticket.title')}</h2>
 
       <div class="tk-form">
-        <Segmented<Side>
-          block
-          aria-label={t('ticket.side')}
-          value={shownSide}
-          onChange={(s) => onSide(inverted ? oppositeSide(s) : s)}
-          options={(['buy', 'sell'] as Side[]).map((s) => ({
-            value: s,
-            label: t(s === 'buy' ? 'common.buy' : 'common.sell'),
-            tone: s,
-            disabled: !sidesOf(form.type).includes(inverted ? oppositeSide(s) : s),
-            'data-testid': s === 'buy' ? 'order-side-buy' : 'order-side-sell',
-          }))}
-        />
+        <div class="tk-siderow">
+          <Segmented<Side>
+            block
+            aria-label={t('ticket.side')}
+            value={shownSide}
+            onChange={(s) => onSide(inverted ? oppositeSide(s) : s)}
+            options={(['buy', 'sell'] as Side[]).map((s) => ({
+              value: s,
+              label: t(s === 'buy' ? 'common.buy' : 'common.sell'),
+              tone: s,
+              disabled: !sidesOf(form.type).includes(inverted ? oppositeSide(s) : s),
+              'data-testid': s === 'buy' ? 'order-side-buy' : 'order-side-sell',
+            }))}
+          />
+          <button
+            type="button"
+            class="tk-help-toggle"
+            aria-pressed={helpOn ? 'true' : 'false'}
+            title={t(helpOn ? 'ticket.helpToggle.hide' : 'ticket.helpToggle.show')}
+            aria-label={t('ticket.helpToggle.label')}
+            data-testid="order-help-toggle"
+            onClick={toggleHelp}
+          >
+            ?
+          </button>
+        </div>
 
-        <div class="field" title={typeHelp}>
+        <div class="field tk-typefield" title={typeHelp}>
           <label id="order-type-label" for="order-type">{t('ticket.type.label')}</label>
+          {pendingShown ? (
+            <span class="tk-pending" data-testid="order-pending">
+              <Loading text={t('ticket.pending')} />
+            </span>
+          ) : null}
           <Dropdown
             id="order-type"
             labelledBy="order-type-label"

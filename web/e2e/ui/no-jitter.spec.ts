@@ -83,11 +83,12 @@ test('the ticket, its button and the order book keep their boxes through ticks, 
 
   const seen = await page.evaluate(() => {
     const j = (window as unknown as { __jitter: { boxes: Record<string, Set<string>>; levels: Set<string>; pending: number; samples: number; head: Set<string> } }).__jitter;
-    return { boxes: Object.fromEntries(Object.entries(j.boxes).map(([k, v]) => [k, [...v]])), levels: [...j.levels], pending: j.pending, samples: j.samples, head: [...j.head] };
+    return { boxes: Object.fromEntries(Object.entries(j.boxes).map(([k, v]) => [k, [...v]])), levels: [...j.levels], pending: j.pending, samples: j.samples, head: [...j.head], slots: document.querySelectorAll('[data-testid="book-asks"] .book-row').length };
   });
   expect(seen.samples).toBeGreaterThan(100);
   // the run really changed things: the number of levels moved, and the "Calculating..." state was up for a while
-  expect(seen.levels.length, `levels per side seen: ${seen.levels.join(' ')}`).toBeGreaterThan(1);
+  // (the card lists as many levels as it holds: the ticket's row, which has no title row, is as tall as 10 slots, and the seed starts with 10 levels, so a book that only grows stays at that count)
+  expect(seen.levels.length > 1 || seen.levels.some((l) => l.startsWith(`${seen.slots}/`)), `levels per side seen: ${seen.levels.join(' ')} (slots ${seen.slots})`).toBe(true);
   expect(seen.pending, 'the "Calculating..." indicator was never shown').toBeGreaterThan(0);
   // the warnings that never stop an order are not on the ticket at all
   await expect(page.getByTestId('order-notes')).toHaveCount(0);

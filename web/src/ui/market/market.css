@@ -151,6 +151,11 @@ body:has(.market-page) .container { max-width: none; }
 
 /* the header is ONE row: the interval switch at the left, the drawing tools and the colour button at the right. What does not fit (a phone) scrolls sideways inside the tools' row, with
    no visible scrollbar (the page never scrolls sideways); the colour button stays outside that row so its palette is not clipped. The legend is a row of its own above the plot. */
+/* the chart panel's title ("Price") is for assistive technology only: the controls (intervals, tools or the Draw button, colour, Expand) are the panel's first row, so the chart has the row the title took
+   (founder, 2026-11-11; the book's panel does the same with its title, BookTabs). A badge in the header (standalone mode) keeps a line of its own. */
+.mkt-area-chart > .section-head { margin-bottom: 0; }
+.mkt-area-chart > .section-head > h2 { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.mkt-area-chart > .section-head:has(> .row) { margin-bottom: 6px; }
 .chart-head { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0; }
 .chart-intervals { flex: none; position: relative; z-index: 1; }
 .chart-actions { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; margin-left: auto; min-width: 0; }
