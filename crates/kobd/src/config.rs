@@ -148,15 +148,16 @@ pub struct ApiConfig {
     /// (the route then answers 404). Default `false`.
     pub usd_price: bool,
     /// Show the Executor's balance (`executor.funds_sompi` and `spendable_sompi` of `/v1/health`, the funding series of
-    /// `/v1/metrics`) on a listener other hosts can reach too. Default `false`: a loopback listener shows them, any other omits
-    /// them (`executor.funds_hidden`), since "this host holds so much in a hot key" is worth hiding from the public.
+    /// `/v1/metrics`) on the read API. Default `false`: the API omits them (`executor.funds_hidden`) whatever it listens on,
+    /// since a loopback listener is often served to the public by a reverse proxy or a tunnel on the same host, and "this host
+    /// holds so much in a hot key" is worth hiding. The status line, `kobd address-balance` and the metrics file show it.
     pub executor_funds: bool,
 }
 
 impl ApiConfig {
-    /// Whether the read API may show the Executor's balance ([`ApiConfig::executor_funds`]).
+    /// Whether the read API may show the Executor's balance ([`ApiConfig::executor_funds`]: only when asked for).
     pub fn shows_executor_funds(&self) -> bool {
-        self.listen.ip().is_loopback() || self.executor_funds
+        self.executor_funds
     }
 
     /// A warning for a listener other hosts can reach with no trusted proxy: a reverse proxy or CDN in front of it makes every
