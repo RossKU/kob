@@ -45,6 +45,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | Document | What it covers |
 |---|---|
 | [security/AUDIT-2026-10.md](security/AUDIT-2026-10.md) | The internal pre-mainnet security audit (canary gate): invariants, findings, ablation, fuzzing, live testnet-10 attacks, residual risks |
+| [security/REDTEAM-2026-11-kaspero.md](security/REDTEAM-2026-11-kaspero.md) | Third-party red team report by Kaspero Labs (kaspa-redteam, 2026-11-09): 23,874 hostile transactions judged by consensus, no bug found; not an audit |
 
 ## Test reports (`docs/reports/`)
 

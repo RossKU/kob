@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KOB Red Team Report</title>
+<style>
+:root{--bg:#f6f4ef;--paper:#fff;--ink:#1c1d1f;--muted:#666a70;--line:#e3dfd6;--soft:#efece4;--green:#1f7a4d;--greenbg:#e5f2ea;--amber:#9a6400;--amberbg:#fbf0dc;--red:#a8322a;--redbg:#f8e5e2;--blue:#2c5a8a;--bluebg:#e6eef7}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif}
+.page{max-width:1040px;margin:0 auto;padding:40px 16px 56px}
+.sheet{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:40px 44px}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;border-bottom:2px solid var(--ink);padding-bottom:18px;margin-bottom:28px;flex-wrap:wrap}
+h1{font-size:28px;line-height:1.15;margin:0 0 6px;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:14px}
+.meta{text-align:right;font-size:13px;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:600}
+h2{font-size:18px;margin:34px 0 12px;letter-spacing:-.005em}
+h3{font-size:15px;margin:18px 0 8px}
+p{margin:0 0 10px}
+.verdict{display:flex;gap:16px;align-items:flex-start;background:var(--greenbg);border:1px solid #c5e2d1;border-radius:12px;padding:18px 20px;margin-bottom:22px}
+.verdict .big{font-size:20px;font-weight:700;color:var(--green);white-space:nowrap}
+.verdict p{margin:0}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:8px 0 6px}
+.tile{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fcfbf8}
+.tile .n{font-size:26px;font-weight:700;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.tile .l{font-size:12.5px;color:var(--muted);line-height:1.35}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 4px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;background:var(--soft)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.total td{font-weight:700;border-top:2px solid var(--ink)}
+code{font:12.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--soft);padding:1px 5px;border-radius:4px}
+.pill{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.ok{background:var(--greenbg);color:var(--green)}
+.design{background:var(--bluebg);color:var(--blue)}
+.open{background:var(--amberbg);color:var(--amber)}
+.bad{background:var(--redbg);color:var(--red)}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.card{border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h3{margin:0 0 6px;display:flex;justify-content:space-between;gap:10px;align-items:center}
+.card p{font-size:13.5px;margin:0 0 6px}
+.card .count{font-size:13px;color:var(--muted)}
+ul{margin:4px 0 10px;padding-left:20px}
+li{margin:3px 0}
+.small{font-size:12.5px;color:var(--muted)}
+footer{margin-top:30px;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+@media (max-width:760px){.sheet{padding:24px 18px}.tiles{grid-template-columns:repeat(2,1fr)}.cards{grid-template-columns:1fr}.meta{text-align:left}table{display:block;overflow-x:auto}}
+</style>
+</head>
+<body>
+<div class="page"><div class="sheet">
+
+<header>
+  <div>
+    <h1>KOB protocol v3: red team report</h1>
+    <div class="sub">Adversarial testing of the KOB order and router covenants with kaspa-redteam</div>
+  </div>
+  <div class="meta">
+    <div><b>Prepared for</b> Ross (KOB)</div>
+    <div><b>Tool</b> kaspa-redteam 0.17.2, attack library 0.10.2</div>
+    <div><b>Judge</b> rusty-kaspa 2.1.0 consensus, in process</div>
+    <div><b>Date</b> Nov 9, 2026 (v2: with the 46 spent-coin txs)</div>
+  </div>
+</header>
+
+<div class="verdict">
+  <div class="big">No bug found</div>
+  <p>Across the contracts, your harness dump and your testnet transactions, 23,874 hostile transactions were built and judged by consensus. 75 were accepted, and none of them is a bug: 60 are behaviour you confirmed is by design (inside <code>max_extra</code>), and 15 are open only because the tool can't read that token program yet. Below: what was tested, how, and each finding.</p>
+</div>
+
+<div class="tiles">
+  <div class="tile"><div class="n">23,874</div><div class="l">hostile transactions judged by consensus</div></div>
+  <div class="tile"><div class="n">1,925</div><div class="l">real transactions attacked (1,811 harness, 114 testnet-10)</div></div>
+  <div class="tile"><div class="n">75</div><div class="l">accepted attempts: 60 by design, 15 open, 0 bugs</div></div>
+  <div class="tile"><div class="n">907</div><div class="l">accepted attempts matching a designed tip, budget or the signer's own money (reported as notes)</div></div>
+</div>
+
+<h2>1. What was tested</h2>
+<table>
+  <thead><tr><th>Input</th><th>What it is</th><th class="num">Attacked</th><th class="num">Hostile txs judged</th><th class="num">Accepted</th></tr></thead>
+  <tbody>
+    <tr><td><b>Contracts</b><br><span class="small">production zip c9d545a6</span></td><td>The order, router and KCC-20 sources, searched by the tool: it builds honest spends of every entry it can reach, then mutates them. 14 groups (each order with the files it depends on, the upstream issuers, four router actors).</td><td class="num">130 of 178 paths</td><td class="num">963</td><td class="num">0</td></tr>
+    <tr><td><b>Harness dump</b><br><span class="small">kob-tx-dump/1, KOB 817fa73a</span></td><td>1,913 engine-built transactions over 12 token families: create, take, match, cond, ifd, rpt, pair, refund, cancel, amend, route, send, router intents. Keys of the taker, matcher and keepers given, so paths were attacked from those seats too.</td><td class="num">1,811 txs</td><td class="num">21,402</td><td class="num">67</td></tr>
+    <tr><td><b>Testnet-10</b><br><span class="small">122 txids + 46 with spent coins</span></td><td>Real accepted transactions with every coin they spent: 78 fetched from api-tn10, and 36 more from your spent-coin bundle (placements and merges whose parents are pruned). No keys (outsider's view). 22 have no covenant input (placements funded by plain coins only, a token creation, two native x402 payments).</td><td class="num">114 txs</td><td class="num">1,509</td><td class="num">8</td></tr>
+    <tr class="total"><td>Total</td><td></td><td class="num"></td><td class="num">23,874</td><td class="num">75</td></tr>
+  </tbody>
+</table>
+<p class="small">The 102 dump transactions not attacked are creations funded by plain coins only: there is no covenant input to attack. The order, KCC-20 and router programs in your transactions match our compile of the zip by template hash (KobAsk, KobBid, KobCondAsk, KobCondBid, KobPair, KCC20Ref, TokenToKas_sell recognized on testnet), so the sources tested are what is deployed.</p>
+
+<h2>2. The attacks</h2>
+<p>Each attack takes an honest transaction, changes one thing a covenant should forbid, and asks consensus. Accepted means the change goes through on chain. An accepted change that only moves a tip the covenant names, its spender's budget, or the signer's own money is reported as a note, not a finding.</p>
+<table>
+  <thead><tr><th>Attack</th><th>What it tries</th><th class="num">Judged</th><th class="num">Notes</th><th class="num">Findings</th></tr></thead>
+  <tbody>
+    <tr><td><code>OUT-01</code></td><td>Send an output to the attacker instead of its recipient (one output, or everything)</td><td class="num">8,409</td><td class="num">12</td><td class="num">19</td></tr>
+    <tr><td><code>OUT-03</code></td><td>Keep output 0, skim a later output</td><td class="num">5,209</td><td class="num">38</td><td class="num">43</td></tr>
+    <tr><td><code>IN-01</code></td><td>Spend a second covenant coin next to the first (double-count one check)</td><td class="num">3,172</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr><td><code>OUT-02</code></td><td>Keep the recipient, cut the value to 10%</td><td class="num">1,586</td><td class="num">8</td><td class="num">2</td></tr>
+    <tr><td><code>FEE-01</code></td><td>Halve every output, the rest becomes miner fee</td><td class="num">1,586</td><td class="num">9</td><td class="num">2</td></tr>
+    <tr><td><code>IN-02</code></td><td>Move the covenant input to another index</td><td class="num">1,586</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr><td><code>OUT-04</code></td><td>Keep the payouts, take what they leave over</td><td class="num">1,165</td><td class="num">840</td><td class="num">9</td></tr>
+    <tr><td><code>BOR-01</code></td><td>Make a coin the covenant holds borrowable and see if it bricks</td><td class="num">134</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr><td><code>FAM-10</code></td><td>Sweep a second token cell owned by the covenant to the attacker</td><td class="num">64</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr><td>All 33 attacks</td><td>Source search runs: signatures, secrets, state owner, outputs, fees, inputs, family and borrow packs</td><td class="num">963</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr class="total"><td>Total</td><td></td><td class="num">23,874</td><td class="num">907</td><td class="num">75</td></tr>
+  </tbody>
+</table>
+<p class="small">Notes, by reason: within <code>refundTip</code> 756, within <code>keeperTip</code> 76, within <code>max_extra</code> 6, the fee out of the signer's own share 2, paid from the signer's own coins 67. The notes column counts only the real transactions; the source search produced none. Each note names the field it matched; a leftover above that field stays a finding.</p>
+
+<h2>3. Findings</h2>
+<div class="cards">
+  <div class="card">
+    <h3>Router filler output <span class="pill design">by design</span></h3>
+    <p>OUT-01 and OUT-03 on the 0.18 to 0.2 KAS output to the x402 payer in KasToToken buys and in x402 intent executions: whoever executes can redirect or shorten it.</p>
+    <p>Your answer: it is a filler that holds the output index open, not pinned on purpose; the payer's loss stays within <code>max_extra</code>.</p>
+    <div class="count">34: OUT-01 19 (15 dump, 4 testnet), OUT-03 15 (dump)</div>
+  </div>
+  <div class="card">
+    <h3>Delivered cell carrier <span class="pill design">by design</span></h3>
+    <p>OUT-03 on the 1 KAS carrier of the token cell the router delivers (KasToToken, TokenSwap, TokenToKas and their Kron versions): the executor can shorten it and keep the difference.</p>
+    <p>Your answer: <code>max_extra</code> is one cap, the payer's signed worst case; token amount, owner and extension are pinned, the carrier's KAS is not.</p>
+    <div class="count">26: OUT-03 (22 dump, 4 testnet)</div>
+  </div>
+  <div class="card">
+    <h3>KForge-1785 refunds <span class="pill open">open</span></h3>
+    <p>OUT-04 on 8 refunds and 1 close: the leftover is 0.028 KAS, exactly the request's <code>refundTip</code> (2,800,000), so almost certainly the tip. But this family's order coins don't match the zip's order programs, so the tool can't read the field and name it.</p>
+    <p>Question: which order build does the KForge-1785 family use?</p>
+    <div class="count">9: OUT-04 (dump)</div>
+  </div>
+  <div class="card">
+    <h3>KRON sends <span class="pill open">open, tool side</span></h3>
+    <p>OUT-02, OUT-03 and FEE-01 on two KRON <code>send.tokens</code> transactions. The KRON cells are the taker's, but KRON isn't a known program to the tool yet, so it can't see that the signer owns them and keeps the outputs protected.</p>
+    <p>Not a KOB question: KRON support is next on our side (the 2,433 B and 2,732 B programs you sent).</p>
+    <div class="count">6: OUT-02 2, OUT-03 2, FEE-01 2 (dump)</div>
+  </div>
+</div>
+
+<h3>Worth a line in KOB's docs</h3>
+<p>Because <code>max_extra</code> is a single unearmarked cap, whoever executes a router intent can always keep up to <code>max_extra</code> of the payer's KAS. That is safe as long as wallets set it tight; a high default hands executors a free margin. This is about use, not the covenant. <b>Done on your side:</b> the default <code>max_extra</code> is now computed from the intent's shape (carrier + 0.14 KAS for a single ask, was + 1 KAS).</p>
+
+<h2>4. What this does not cover</h2>
+<ul>
+  <li><b>Matcher transactions from the source alone.</b> Paths that need several orders in one transaction (a conditional's <code>update</code>, if-done exits, pair settles, router <code>buy</code> / <code>sell</code> legs) are not built by the search yet. 48 of 178 source paths stayed unexplored. Your dump covers these shapes as real transactions; that is where they were tested.</li>
+  <li><b>Token-aware attacks</b> (FAM-10, BOR-01) ran only where the cell is the shipped KCC-20 reference build (198 attempts). The other builds, KRON included, were attacked through the generic input and output attacks only.</li>
+  <li><b>Signed paths on testnet</b> (29 of 114: cancels, an amend, one intent creation, and the placements and merges, which the maker signs for their own token cell) were tested as an outsider: without the key, only changes that break the signature. The dump's listed keys covered the taker, matcher and keeper seats.</li>
+  <li><b>Not in the testnet set:</b> a refund sent by the maker (keepers refund first; the payout is the maker's either way), and pair netting outside your soak (2 txs).</li>
+  <li><b>Consensus only.</b> The judge is rusty-kaspa's consensus validator; mempool relay policy (standardness, minimum fees) is not applied.</li>
+</ul>
+
+<h2>5. How it was run</h2>
+<table>
+  <tbody>
+    <tr><td style="width:150px"><b>Contracts</b></td><td><code>kaspa-redteam orders/KobCondAsk.sil orders/KobAsk.sil orders/KobBid.sil kcc20/KCC20Ref.sil --args orders/KobCondAsk.ctor.json</code>, and the same for each group</td></tr>
+    <tr><td><b>Harness dump</b></td><td>One baseline file per family and kind; keys = taker, matcher, keeper, keeper (intents). <code>kaspa-redteam orders/*.sil kcc20/KCC20Ref.sil argent/router/sil/*.sil --baseline-only --baseline &lt;file&gt;</code> (Kron families with <code>orders/kron/*.sil</code>; if-done txs again with their <code>ctor.json</code>)</td></tr>
+    <tr><td><b>Testnet-10</b></td><td><code>kaspa-redteam fetch &lt;txid&gt;:&lt;kind&gt; --network testnet-10</code>, then the same <code>--baseline-only</code> run. Your spent-coin bundle was converted to the same baseline format; all 36 with a covenant input replay exactly as given.</td></tr>
+  </tbody>
+</table>
+<p class="small">Every accepted attempt has a replayable file (<code>kaspa-redteam replay findings/OUT-03.json</code>) with the exact transaction and its spent coins. Your contracts and data stay private: nothing from them is in the public repository.</p>
+
+<footer>
+  <div>Kaspero Labs · kaspa-redteam (github.com/kasperolabs/kaspa-redteam)</div>
+  <div>A pass on this review is not an audit or a guarantee.</div>
+</footer>
+
+</div></div>
+</body>
+</html>
