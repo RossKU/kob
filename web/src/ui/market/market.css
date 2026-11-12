@@ -222,6 +222,10 @@ body:has(.market-page) .container { max-width: none; }
 .chart-colors .hp-trigger.chart-draw-btn { min-height: 0; height: 34px; padding: 0 12px; gap: 6px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 0.82rem; font-weight: 600; }
 .chart-colors .hp-trigger.chart-draw-btn:hover, .chart-colors .hp-trigger.chart-draw-btn[aria-expanded='true'] { color: var(--text); background: var(--surface-3); }
 .chart-colors .hp-trigger.chart-draw-btn[data-active='1'] { color: var(--text); box-shadow: 0 0 0 1px var(--primary); }
+/* the sheet hangs from the right end of the chart's actions (the panel's right edge), not from the Draw button: the kascov and full-size buttons after it
+   would otherwise push its left edge off a narrow screen */
+.chart-actions { position: relative; }
+.chart-colors .hp:has(> .chart-draw-sheet) { position: static; }
 .chart-colors .hp-panel.chart-draw-sheet { min-width: 0; width: max-content; max-width: calc(100vw - 32px); padding: 8px; display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
 .chart-draw-sheet .chart-tools { display: flex; justify-content: space-between; }
 .chart-draw-sheet .chart-swatches { justify-content: space-between; }
