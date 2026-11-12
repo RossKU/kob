@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  boxOutlineDistance, COLOR_TOKEN, DEFAULT_COLOR, DRAWING_COLORS, drawingsKey, drawingsMarket, extendToPane, insideBox, isDrawingColor, lineDistance, loadDrawings, logicalAt,
+  boxOutlineDistance, COLOR_TOKEN, DEFAULT_COLOR, DRAWING_COLORS, drawingsKey, drawingsMarket, extendToPane, insideBox, isDrawingColor, lineDistance, loadDrawings, logicalAt, logicalX,
   MAX_DRAWINGS, newDrawingId, parseDrawings, pickShape, saveDrawings, segmentDistance, serializeDrawings, timeAt, type Drawing, type Shape,
 } from './chart-drawings';
 
@@ -272,5 +272,45 @@ describe('the box', () => {
     // an edge near the pointer wins over the area of a larger box around it
     const inner: Shape = { id: 'i', kind: 'box', x1: 150, y1: 120, x2: 250, y2: 180 };
     expect(pickShape([box, inner], 200, 121, 8)).toBe('i');
+  });
+});
+
+describe('logicalX (the library answers x = 0 for a fractional index)', () => {
+  /** The library's mapping: bar i at 10 + 7 * i, and 0 for anything that is not a whole number (timeScale.indexToCoordinate). */
+  const lib = (i: number): number => (Number.isInteger(i) ? 10 + 7 * i : 0);
+
+  it('places a whole index as the library does', () => {
+    expect(logicalX(5, lib)).toBe(45);
+    expect(logicalX(-3, lib)).toBe(-11);
+  });
+
+  it('places a fractional index on the line between its two neighbours, not at the left edge', () => {
+    expect(logicalX(5.5, lib)).toBeCloseTo(48.5, 9);
+    expect(logicalX(5.25, lib)).toBeCloseTo(46.75, 9);
+    expect(logicalX(-0.5, lib)).toBeCloseTo(6.5, 9);
+    expect(logicalX(-2.75, lib)).toBeCloseTo(10 + 7 * -2.75, 9);
+  });
+
+  it('a time that is not on a bar boundary of another interval keeps its order and its place', () => {
+    const g1h = { t0: 1_700_000_000, step: 3600 };
+    const t1 = g1h.t0 + 40 * 3600 + 1200; // 20 minutes into bar 40
+    const t2 = g1h.t0 + 42 * 3600 + 2400; // 40 minutes into bar 42
+    const x1 = logicalX(logicalAt(g1h, t1), lib)!;
+    const x2 = logicalX(logicalAt(g1h, t2), lib)!;
+    expect(x1).toBeCloseTo(10 + 7 * (40 + 1 / 3), 9);
+    expect(x2).toBeCloseTo(10 + 7 * (42 + 2 / 3), 9);
+    expect(x2).toBeGreaterThan(x1);
+    // two times inside one (daily) bar are apart, not both at 0
+    const g1d = { t0: 1_700_006_400, step: 86400 };
+    const a = logicalX(logicalAt(g1d, g1d.t0 + 86400 + 5 * 3600), lib)!;
+    const b = logicalX(logicalAt(g1d, g1d.t0 + 86400 + 6 * 3600), lib)!;
+    expect(a).toBeGreaterThan(10);
+    expect(b - a).toBeCloseTo(7 / 24, 9);
+  });
+
+  it('no x from the library (no data): none', () => {
+    expect(logicalX(5.5, () => null)).toBeNull();
+    expect(logicalX(5, () => null)).toBeNull();
+    expect(logicalX(5.5, (i) => (i === 6 ? null : 1))).toBeNull();
   });
 });

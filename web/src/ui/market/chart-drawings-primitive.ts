@@ -4,7 +4,7 @@
 // paint time (`colors`), so a theme change needs only a repaint. Only types are imported from the library: its code stays in its own lazy chunk.
 import type { IChartApiBase, Logical, ISeriesApi, ISeriesPrimitive, ISeriesPrimitiveAxisView, IPrimitivePaneRenderer, IPrimitivePaneView, SeriesAttachedParameter, SeriesType, Time } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
-import { extendToPane, logicalAt, pickShape, timeAt, type Anchor, type Drawing, type DrawingColor, type Shape, type TimeGrid } from './chart-drawings';
+import { extendToPane, logicalAt, logicalX, pickShape, timeAt, type Anchor, type Drawing, type DrawingColor, type Shape, type TimeGrid } from './chart-drawings';
 
 export interface DrawingColors {
   /** the paint of a swatch (a theme token's value, read now) */
@@ -43,7 +43,13 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
   private tags: ISeriesPrimitiveAxisView[] = [];
   private readonly view: IPrimitivePaneView;
 
-  constructor(private readonly colors: () => DrawingColors) {
+  /** What the last paint put in the pane, as text (the panel's data-drawn* attributes, which the tests read): `shown` is the last text handed to `onShown`. */
+  private shown = '';
+
+  constructor(
+    private readonly colors: () => DrawingColors,
+    private readonly onShown?: (drawn: number, visible: number, at: string) => void,
+  ) {
     this.view = { zOrder: () => 'top', renderer: () => this.renderer };
   }
 
@@ -95,7 +101,9 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
     const chart = this.chart();
     const series = this.series();
     if (!chart || !series || !this.grid) return null;
-    const x = chart.timeScale().logicalToCoordinate(logicalAt(this.grid, a.time) as Logical);
+    // not `logicalToCoordinate(fractional)`: the library puts a fractional index at x = 0 (see logicalX)
+    const scale = chart.timeScale();
+    const x = logicalX(logicalAt(this.grid, a.time), (i) => scale.logicalToCoordinate(i as Logical));
     const y = series.priceToCoordinate(a.price);
     return x === null || y === null ? null : { x, y };
   }
@@ -121,6 +129,7 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
 
   updateAllViews(): void {
     this.shapes = this.computeShapes();
+    this.report();
     const { pending, cursor } = this.overlay;
     const a = pending ? this.px(pending) : null;
     const b = cursor ? this.px(cursor) : null;
@@ -145,6 +154,27 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
         tickVisible: () => true,
       });
     }
+  }
+
+  private report(): void {
+    if (!this.onShown) return;
+    const pane = this.chart()?.paneSize();
+    const w = pane?.width ?? 0;
+    const h = pane?.height ?? 0;
+    let visible = 0;
+    for (const s of this.shapes) {
+      if (s.kind === 'hline') {
+        if (s.y >= 0 && s.y <= h) visible++;
+      } else if (s.kind === 'xline') {
+        if (extendToPane(s.x1, s.y1, s.x2, s.y2, w, h)) visible++;
+      } else if (Math.max(s.x1, s.x2) >= 0 && Math.min(s.x1, s.x2) <= w && Math.max(s.y1, s.y2) >= 0 && Math.min(s.y1, s.y2) <= h) visible++;
+    }
+    // where each drawing's points are (kind:x1,x2 in whole pixels, a horizontal line has none): a drawing squeezed to the left edge, or out of its time order, shows here
+    const at = this.shapes.map((s) => (s.kind === 'hline' ? 'hline' : `${s.kind}:${Math.round(s.x1)},${Math.round(s.x2)}`)).join('|');
+    const text = `${this.shapes.length}/${visible}/${at}`;
+    if (text === this.shown) return;
+    this.shown = text;
+    this.onShown(this.shapes.length, visible, at);
   }
 
   /** What the drawing under the pointer is painted in: the colour a click would give it (recolour tool), else the delete tool's hot colour. */

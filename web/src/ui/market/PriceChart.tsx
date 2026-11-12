@@ -324,7 +324,12 @@ export function PriceChart(props: PriceChartProps) {
           const i = param.logical;
           setLegend(i === undefined || i === null ? null : legendOf.current(Math.round(i)));
         });
-        const drawingsPrim = new DrawingsPrimitive(drawingColors);
+        const drawingsPrim = new DrawingsPrimitive(drawingColors, (drawn, visible, at) => {
+          // what the last paint placed: the drawings with a position on the chart, and the ones touching the plot (a test reads these; a drawing panned off screen is placed but not visible)
+          panelRef.current?.setAttribute('data-drawn', String(drawn));
+          panelRef.current?.setAttribute('data-drawn-visible', String(visible));
+          panelRef.current?.setAttribute('data-drawn-at', at);
+        });
         candlesSeries.attachPrimitive(drawingsPrim);
         chartRef.current = { chart, candles: candlesSeries, kascov: kascovSeries, volume, drawings: drawingsPrim };
         setLibReady(true);

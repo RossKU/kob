@@ -145,6 +145,20 @@ export const logicalAt = (g: TimeGrid, time: number): number => (time - g.t0) / 
 /** The time of a logical index. */
 export const timeAt = (g: TimeGrid, logical: number): number => g.t0 + logical * g.step;
 
+/**
+ * The pane x of a fractional logical index. The library's `timeScale().logicalToCoordinate` answers 0 (the left edge) for any index that is not a whole number, so a time that is
+ * not on a bar boundary of the interval on screen (a point drawn on 5m, looked at on 1H or 1D; a time between two bars) would be placed at the left edge, not at its time. `at` is the library's
+ * mapping of a WHOLE index: the answer is the straight line through the two whole indexes around `logical` (bars are evenly spaced). Null when the library has no x (no data).
+ */
+export function logicalX(logical: number, at: (whole: number) => number | null): number | null {
+  const lo = Math.floor(logical);
+  const x0 = at(lo);
+  if (x0 === null) return null;
+  if (lo === logical) return x0;
+  const x1 = at(lo + 1);
+  return x1 === null ? null : x0 + (logical - lo) * (x1 - x0);
+}
+
 // ------------------------------------------------------------------------------------------------ pixel shapes (hit test)
 
 /**
