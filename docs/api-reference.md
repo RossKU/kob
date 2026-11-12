@@ -230,7 +230,7 @@ curl -s $API/v1/health
   "untrusted_windows_total": 0, "untrusted_blocks_total": 0, "confirmed_blocks_total": 0, "lies_total": 0,
   "authority_replaced_total": 0,
   "book_complete": true,
-  "lean": false, "lean_orders_pruned_total": 0, "lean_rows_pruned_total": 0,
+  "lean": false, "lean_orders_pruned_total": 0, "lean_rows_pruned_total": 0, "history_from": null,
   "roles": ["indexer"],
   "ok": true,
   "caught_up": true,
@@ -305,6 +305,7 @@ Every key the handler returns:
 | `untrusted_windows_total`, `untrusted_blocks_total`, `confirmed_blocks_total`, `lies_total` | Several nodes: windows and chain blocks fetched from a node other than the primary, how many were compared with the primary's copy before applying, and contradictions found. |
 | `authority_replaced_total` | Public chain authorities (resolver entries) given up for a finding since the start: judged useless, a disagreement that did not settle, or an answer that contradicted the store (not a lost connection). Metric `kob_indexer_authority_replaced_total`. |
 | `lean`, `lean_orders_pruned_total`, `lean_rows_pruned_total` | Lean storage: whether it is on, and the closed orders / rows it deleted since the start. |
+| `history_from` | number or null | A lean store's trade history is complete from this time (unix ms): the last event of the oldest closed order the store still holds that its pruning could delete (one without a live exit), else its oldest event; `null` for a full store (and an empty one). The pruning deletes closed orders oldest last activity first, with their fills, so trades, candles, 24 h figures and totals are whole from it on; before it, closed orders may be gone (live orders keep their own older events). A client labels older history as partial. |
 | `roles` | What the process does, from `executor` (the matcher and the keepers of `kobd --executor` work on this store) and `indexer` (the store keeps the history and this API serves it): `["indexer"]` for `kobd --indexer`, `["executor"]` for `kobd --executor` (a lean store, `lean: true`), `["executor", "indexer"]` for `kobd --executor --indexer` (a full store). The metrics carry `kob_role{role="executor"|"indexer"}`. |
 | `counters` | Object or `null` (`null` when the counter read failed; health never turns into an error for it): `orders_total`, `orders_listed`, `orders_by_status` (object status to count, statuses with 0 omitted), `rejects_total` (KOB1 payloads that produced no order), `fills_total`, `last_block_seq`, `last_block_daa`. |
 
@@ -958,9 +959,10 @@ one index range whatever the size of the history, and a reorg takes its blocks o
 * `executor_net` (sompi, string, may be negative) with `executor_net_txs`: `income - network fee` over the transactions where both are known.
 * `kas_locked` (sompi, string): the KAS in the live order UTXOs now, whatever `since` is.
 * `ts` (number or null): the newest event time; `since` is the minute used (`null` for all time).
+* `history_from` (number or null): where a lean store's history is complete from (unix ms; `null` for a full store), as in `/v1/health`.
 
 A store that keeps part of its history (`lean = true`) counts, since schema 11, everything it ever indexed: the pruning does not take back what it
-deletes (the windows and all time alike; all time's `orders` is the counter of every order ever stored). An empty store answers zeros. An indexer
+deletes (the windows and all time alike; all time's `orders` is the counter of every order ever stored). `history_from` says from when its other history (fills, candles) is whole; these totals are whole regardless. An empty store answers zeros. An indexer
 before schema 11 answers without the executor and miner fields (`fees_paid` only, the tip sum: never show it as the executors' income); one before
 schema 10 without `fills`, with `executors` always `null` and `traders` / `fees_paid` `null` beyond its scan caps (200,000 makers / fills).
 

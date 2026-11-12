@@ -1860,6 +1860,50 @@ async fn token_declarations_are_served_as_launch_proofs() {
     assert!(row(&h(TOKEN)).get("declaration").is_none(), "absent without a declaration (older clients see no new key)");
 }
 
+/// `history_from` (`/v1/health`, `/v1/stats`): where a lean store's trade history is complete from, the last event of the oldest
+/// closed order its pruning could have deleted (an entry with a live exit is kept whatever its age, and a live order keeps its
+/// own older events); `null` for a full store.
+#[tokio::test]
+async fn a_lean_store_says_where_its_history_is_complete_from() {
+    let e = env(|_| {});
+    let c = &e.w;
+    // a live ask whose placement is the oldest event (1 000); a filled entry (last activity DAA 100, events at 2 000) whose exit
+    // is live; the oldest prunable closed order (DAA 200, its last event at 9 000); a newer closed one (DAA 300, at 20 000)
+    seed_order(c, 1, 1, 300_000, 50, "open", Some(W), Some(W), true, MAKER);
+    seed_fill(c, 1, 0xe1, 1_000, 1, 0, 300_000);
+    seed_order(c, 2, 2, 250_000, 1, "filled", None, Some(0), true, MAKER);
+    seed_fill(c, 2, 0xe2, 2_000, 2, W, 250_000);
+    seed_order(c, 3, 1, 260_000, 60, "open", Some(W), Some(W), true, MAKER);
+    c.execute("UPDATE orders SET parent = ?1 WHERE covenant_id = ?2", params![cid(2), cid(3)]).unwrap();
+    seed_order(c, 4, 2, 240_000, 2, "filled", None, Some(0), true, MAKER);
+    seed_fill(c, 4, 0xe3, 5_000, 2, W, 240_000);
+    seed_fill(c, 4, 0xe4, 9_000, 2, W, 240_000);
+    seed_order(c, 5, 2, 230_000, 3, "filled", None, Some(0), true, MAKER);
+    seed_fill(c, 5, 0xe5, 20_000, 2, W, 230_000);
+    let app = router(e.state.clone());
+    // a full store: null
+    let (_, v) = get(&app, "/v1/health").await;
+    assert!(v.get("history_from").is_some_and(Value::is_null), "{v}");
+    let (_, v) = get(&app, "/v1/stats").await;
+    assert!(v.get("history_from").is_some_and(Value::is_null), "{v}");
+    // the same store, lean
+    e.state.health.update(|h| h.lean = true);
+    let app = router(e.state.clone());
+    let (_, v) = get(&app, "/v1/health").await;
+    assert_eq!(v["history_from"], 9_000);
+    let (_, v) = get(&app, "/v1/stats").await;
+    assert_eq!(v["history_from"], 9_000);
+    // the live exit closes: its entry is prunable and the oldest closed order (its last event at 2 000)
+    c.execute("UPDATE order_state SET status = 'filled' WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", params![cid(3)])
+        .unwrap();
+    assert_eq!(crate::indexer::reads::history_from(c).unwrap(), Some(2_000));
+    // no closed order at all: the oldest event; an empty store: none
+    c.execute("DELETE FROM order_state WHERE status = 'filled'", []).unwrap();
+    assert_eq!(crate::indexer::reads::history_from(c).unwrap(), Some(1_000));
+    c.execute("DELETE FROM order_events", []).unwrap();
+    assert_eq!(crate::indexer::reads::history_from(c).unwrap(), None);
+}
+
 /// `/v1/health` reports the minimum order value the executor lists, whatever its configuration sets.
 #[tokio::test]
 async fn health_reports_the_configured_minimum_order_value() {

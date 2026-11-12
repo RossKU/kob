@@ -266,8 +266,9 @@ indexer. Default off; `kobd setup` and the Android app write it for the Executor
   batch after each step, caught up at 20 to 30 DAA/s and stayed behind the node for hours.
 * **The read API serves the live book and the retention window**: `GET /v1/orders/{id}` of an order closed longer ago (or
   deleted by the cap) is 404,
-  candles, statistics and trades cover the window, `GET /v1/health` has `lean: true` (and the metrics
-  `kob_indexer_lean`, `kob_indexer_lean_orders_pruned_total`, `kob_indexer_lean_rows_pruned_total`). Use an archive indexer
+  candles, statistics and trades cover the window, `GET /v1/health` has `lean: true` and `history_from` (unix ms: the last event of the
+  oldest closed order still held, so the history is whole from it on; also in `GET /v1/stats`; `null` on a full store), and the metrics
+  `kob_indexer_lean`, `kob_indexer_lean_orders_pruned_total`, `kob_indexer_lean_rows_pruned_total`. Use an archive indexer
   (`lean = false`, record log on) for history, charts and recovery (`kobd db replay` needs the log).
 
 Measured on testnet-10 (`kobd --executor --dry-run` over the public pair with a fast start, 5 minutes, which indexes about 1.7 h of

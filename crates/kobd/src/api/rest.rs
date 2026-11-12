@@ -91,6 +91,8 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
     // Counters are informational: a busy database must not turn the health endpoint into an error. A few rows (kept by the
     // write path), read on the light lane: never behind the heavy reads.
     let counters = app.state.pool.with_light(reads::counters).await.ok();
+    // a lean store (the Executor's) prunes old closed orders: where its trade history is complete from (null: a full store)
+    let history_from = if snap.lean { app.state.pool.with_light(reads::history_from).await.ok().flatten() } else { None };
     let mut v = serde_json::to_value(&snap).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
         o.insert("ok".into(), json!(ok));
@@ -105,6 +107,7 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
         // the smallest order the executor lists (sompi, a decimal string like every amount): a smaller one is indexed, never listed
         o.insert("min_order_value_sompi".into(), json!(app.state.min_order_value_sompi.to_string()));
         o.insert("counters".into(), json!(counters));
+        o.insert("history_from".into(), json!(history_from));
         // which build answers: the crate version, the commit it was built from (null when the build did not say), and the KOB1
         // payload version it reads and writes (docs/ops/release.md, 7)
         if let Some(b) = crate::version::health_fields().as_object() {
@@ -419,7 +422,16 @@ pub async fn activity(State(app): State<Arc<App>>, Query(q): Params) -> ApiResul
         Some(s) if s >= 0 => Some(s - s % 60_000),
         Some(_) => return Err(ApiError::bad_request("since must be a unix time in milliseconds")),
     };
-    cached(&app, format!("activity {since:?}"), move |c| crate::indexer::activity::activity(c, since)).await
+    let lean = app.state.health.snapshot().lean;
+    cached(&app, format!("activity {since:?}"), move |c| {
+        let mut v = serde_json::to_value(crate::indexer::activity::activity(c, since)?).unwrap_or(Value::Null);
+        // a lean store's totals cover what it still holds: from when (unix ms, `reads::history_from`; null for a full store)
+        if let Some(o) = v.as_object_mut() {
+            o.insert("history_from".into(), json!(if lean { reads::history_from(c)? } else { None }));
+        }
+        Ok(v)
+    })
+    .await
 }
 
 /// `GET /v1/depth/{token}?levels=`: cumulative depth of the listed book, levels merged by per-basis price.

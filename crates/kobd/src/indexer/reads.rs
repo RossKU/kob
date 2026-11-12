@@ -2036,6 +2036,25 @@ fn kept_counters(conn: &Connection) -> DbResult<Option<BTreeMap<String, i64>>> {
     Ok(Some(rows.collect::<rusqlite::Result<_>>()?))
 }
 
+/// Where the trade history of a LEAN store is complete from (unix ms), for `history_from` of `/v1/health` and `/v1/stats`: the last
+/// event of the oldest closed order the store still holds that its pruning could delete (no live exit), else (no such order) its
+/// oldest event; `None` for an empty store. The lean pruning ([`super::lean`]) deletes closed orders oldest last activity first,
+/// with their fills, so every order with a fill after that time is still there; before it, closed orders may be gone (the live
+/// book keeps its own older events). Read only, two index reads (`order_state_closed_daa`, `order_events_cov`, `order_events_ts`).
+pub fn history_from(conn: &Connection) -> DbResult<Option<i64>> {
+    let closed: Option<i64> = conn.query_row(
+        "SELECT MAX(e.ts) FROM order_events e WHERE e.order_id = (\
+           SELECT s.order_id FROM order_state s WHERE s.status NOT IN ('open','partial') \
+           AND NOT EXISTS (SELECT 1 FROM orders p JOIN orders c ON c.parent = p.covenant_id JOIN order_state cs ON cs.order_id = c.id \
+                           WHERE p.id = s.order_id AND cs.status IN ('open','partial')) \
+           ORDER BY s.last_daa LIMIT 1)",
+        [],
+        |r| r.get(0),
+    )?;
+    let oldest: Option<i64> = conn.query_row("SELECT MIN(ts) FROM order_events", [], |r| r.get(0))?;
+    Ok(closed.max(oldest))
+}
+
 /// The `/v1/health` counters: from the counters the write path keeps (a few rows), else counted (a database not yet opened by
 /// a writer of this build: a scan of every order, event and state).
 pub fn counters(conn: &Connection) -> DbResult<Counters> {
