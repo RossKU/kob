@@ -540,9 +540,12 @@ pub struct StatsView {
     pub last: Option<String>,
     pub last_ts: Option<i64>,
     pub last_side: Option<&'static str>,
+    /// The price 24 h ago, the reference of `change_24h_bps`: the last trade at or before the window's start (`ts` − 24 h); the
+    /// first trade of the window only when the token had no earlier trade. `null` when the window holds no trade.
     pub open_24h: Option<String>,
     pub high_24h: Option<String>,
     pub low_24h: Option<String>,
+    /// (`last` − `open_24h`) × 10 000 / `open_24h`, truncated toward zero; `null` when the window holds no trade.
     pub change_24h_bps: Option<i64>,
     /// Base units.
     pub volume_24h: String,
@@ -638,11 +641,15 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         Some(n) => window_trades(conn, token, n - DAY_MS, n + 1, basis)?,
         None => (vec![], false),
     };
-    let open = window.first().map(|t| t.price);
+    // the price 24 h ago: the last trade at or before the window's start, else (no earlier trade) the window's first
+    let open = match (now, window.first()) {
+        (Some(n), Some(first)) => Some(last_trade_price_before(conn, token, basis, n - DAY_MS + 1)?.unwrap_or(first.price)),
+        _ => None,
+    };
     let high = window.iter().map(|t| t.price).max();
     let low = window.iter().map(|t| t.price).min();
     let change = match (open, last) {
-        (Some(o), Some(l)) if o > 0 && !window.is_empty() => i64::try_from(l.saturating_sub(o).saturating_mul(10_000) / o).ok(),
+        (Some(o), Some(l)) if o > 0 => i64::try_from(l.saturating_sub(o).saturating_mul(10_000) / o).ok(),
         _ => None,
     };
     let Touch { bid, ask, depth: depth_2pct, depth_bid, depth_ask, bid_orders: open_bids, ask_orders: open_asks } =
@@ -660,7 +667,7 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         last: last.map(|v| v.to_string()),
         last_ts,
         last_side,
-        open_24h: if window.is_empty() { None } else { open.map(|v| v.to_string()) },
+        open_24h: open.map(|v| v.to_string()),
         high_24h: high.map(|v| v.to_string()),
         low_24h: low.map(|v| v.to_string()),
         change_24h_bps: change,

@@ -1120,6 +1120,40 @@ async fn market_data_trades_candles_stats_depth() {
     assert!(v["items"].as_array().unwrap().is_empty());
 }
 
+/// `change_24h_bps` is measured against the price 24 h ago: the last trade at or before the window's start (`open_24h`), the
+/// window's first trade only when there was no earlier one (`market_data_trades_candles_stats_depth`). High, low, volume and
+/// count stay the window's.
+#[tokio::test]
+async fn the_24h_change_is_measured_against_the_price_24_hours_ago() {
+    let e = env(|_| {});
+    let c = &e.w;
+    seed_order(c, 6, 2, 240_000, 1, "open", None, Some(3 * W), true, 0xcc);
+    let t = 1_700_000_000_000i64;
+    const HOUR: i64 = 3_600_000;
+    // one-sided trades into bid 6 (each at its fill's price): 1.80 thirty hours before the newest, 2.00 twenty-five hours
+    // before (the price 24 h ago), then 2.60 and 2.50 inside the window
+    seed_fill(c, 6, 0xd1, t - 30 * HOUR, 2, W, 180_000);
+    seed_fill(c, 6, 0xd2, t - 25 * HOUR, 2, W, 200_000);
+    seed_fill(c, 6, 0xd3, t - HOUR, 2, W, 260_000);
+    seed_fill(c, 6, 0xd4, t, 2, 2 * W, 250_000);
+    let app = router(e.state.clone());
+    let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
+    // (2.50 - 2.00) / 2.00 = +25 %: the old rule (the window's first trade, 2.60) said -3.84 %
+    assert_eq!(
+        (v["open_24h"].as_str(), v["high_24h"].as_str(), v["low_24h"].as_str(), v["last"].as_str()),
+        (Some("200000"), Some("260000"), Some("250000"), Some("250000"))
+    );
+    assert_eq!(v["change_24h_bps"], 2500);
+    assert_eq!((v["volume_24h"].as_str(), v["trades_24h"].as_i64()), (Some("3000"), Some(2)));
+    // a trade exactly 24 h before the window's end is both the reference and the window's first trade: (2.50 - 2.10) / 2.10
+    // = 1 904.76 bps, truncated
+    seed_fill(c, 6, 0xd5, t - 24 * HOUR, 2, W, 210_000);
+    e.state.generation.bump();
+    let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
+    assert_eq!((v["open_24h"].as_str(), v["low_24h"].as_str(), v["trades_24h"].as_i64()), (Some("210000"), Some("210000"), Some(3)));
+    assert_eq!(v["change_24h_bps"], 1904);
+}
+
 /// The raw answer of `uri`: status, headers and the body bytes as they came (not decoded).
 async fn raw(app: &Router, uri: &str, headers: &[(&str, &str)]) -> (StatusCode, HeaderMap, Vec<u8>) {
     let mut req = Request::builder().uri(uri);

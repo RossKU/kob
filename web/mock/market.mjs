@@ -213,7 +213,8 @@ function mergedSide(levels, basis, side) {
 
 /**
  * `GET /v1/stats/{token}`: rolling 24 h window ending at the newest chain time (`chain.nowMs()`, trades with `ts >= now - 24h`) plus the
- * book top. `change_24h_bps` = (last - open_24h) * 10000 / open_24h, integer division truncated toward zero. Counts / volumes of an
+ * book top. `open_24h` is the price 24 h ago: the last trade at or before `now - 24h`, the window's first trade only when there is no earlier one
+ * (market.rs `stats`); `change_24h_bps` = (last - open_24h) * 10000 / open_24h, integer division truncated toward zero. Counts / volumes of an
  * empty window are 0 / "0"; prices of an empty window or empty side are null.
  */
 export function statsView(chain, tokenId) {
@@ -234,7 +235,8 @@ export function statsView(chain, tokenId) {
     volume += t.amount;
     quoteVolume += t.quote;
   }
-  const open = win[0]?.price ?? null;
+  const before = trades.filter((t) => t.ts <= now - DAY_MS);
+  const open = win.length === 0 ? null : (before[before.length - 1] ?? win[0]).price;
   const change = open !== null && open > 0n && last ? Number(((last.price - open) * 10_000n) / open) : null;
   const bestAsk = basis === null ? null : (mergedSide(levels.asks, basis, 1)[0]?.price ?? null);
   const bestBid = basis === null ? null : (mergedSide(levels.bids, basis, 2)[0]?.price ?? null);

@@ -116,6 +116,9 @@ curl -s "$API/v1/stats/$T"
   "depth_2pct_bid_sompi": "412116142984", "depth_2pct_ask_sompi": "531000000000" }
 ```
 
+`change_24h_bps` is `last` against `open_24h`, the price 24 h ago: the last trade at or before the start of the window (the
+window's first trade only for a token with no earlier trade), the standard definition of a 24 h change.
+
 **Candles**, hourly, the newest two:
 
 ```sh

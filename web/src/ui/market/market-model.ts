@@ -212,7 +212,8 @@ export interface StatsModel {
 }
 
 /**
- * A 24 h change rests on a thin window when it counts fewer trades than this: the open is the FIRST trade of the window, so one tiny trade can put the change at +900%.
+ * A 24 h change rests on a thin window when it counts fewer trades than this: the change compares the last trade with the price 24 h ago (the last trade before the
+ * window, else the window's first), so with one or two trades it compares two prints, and one tiny trade can put it at +900%.
  * Such a change is shown muted with its trade count in the tooltip (nothing else changes: same text, same cell).
  */
 export const THIN_TRADES_24H = 3;
