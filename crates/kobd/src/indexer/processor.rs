@@ -505,6 +505,8 @@ impl Processor {
         let mut spent: Vec<Spent> = Vec::new();
         let mut kob_in: i128 = 0;
         let mut orphan = false;
+        // a covenant input that is neither an order nor an order's custody or stray: the sender's own tokens (step 8)
+        let mut foreign_cov_in = false;
         // what every input held, from the outputs this store knows (the network fee of a record without the node's input values)
         let mut resolved_in: Option<i128> = Some(0);
         for (i, inp) in rec.inputs.iter().enumerate() {
@@ -526,6 +528,7 @@ impl Processor {
                     .query_row(params![&inp.txid.0[..], inp.index], |r| r.get(0))
                     .optional()?;
                 kob_in += i128::from(carrier.unwrap_or(0));
+                foreign_cov_in |= inp.cov.is_some() && carrier.is_none();
                 conn.prepare_cached(
                     "UPDATE token_utxos SET spent_block = ?1, spent_txid = ?2 WHERE txid = ?3 AND idx = ?4 AND spent_block IS NULL",
                 )?
@@ -689,7 +692,7 @@ impl Processor {
 
         // 8. an executor's transaction: what it left to its sender and what it paid the miners (`executor_txs`, `super::income`)
         if !spent.is_empty() {
-            self.executor_tx(conn, ctx, rec, &spent, kob_in, orphan, &continued, &created, resolved_in)?;
+            self.executor_tx(conn, ctx, rec, &spent, kob_in, (orphan, foreign_cov_in), &continued, &created, resolved_in)?;
         }
 
         // 7. KCC-23: a candidate preparation, or the verified launch proofs of a genesis (`super::kcc23`)
@@ -1849,7 +1852,9 @@ impl Processor {
     /// Step 8 of a transaction that spent tracked orders: unless it is only the makers' own (cancels, in-place amends and sweeps), it
     /// is an executor's, and gets its `executor_txs` row: its income ([`super::income`]: `kob_in`, what the KOB inputs held, minus
     /// the outputs the orders own or pay) and its network fee (the record's input value minus its outputs), each `None` when the
-    /// chain data does not settle it. `orphan`: an order UTXO was spent whose order is not stored (its outputs cannot be told).
+    /// chain data does not settle it, and whether it is an own trade (`own_trade`: the sender trades for itself, its income is not
+    /// counted, [`super::income`]). `orphan`: an order UTXO was spent whose order is not stored (its outputs cannot be told);
+    /// `foreign_cov_in`: a covenant input is no order's and no order's custody or stray.
     #[allow(clippy::too_many_arguments)]
     fn executor_tx(
         &self,
@@ -1858,7 +1863,7 @@ impl Processor {
         rec: &TxRecord,
         spent: &[Spent],
         kob_in: i128,
-        orphan: bool,
+        (orphan, foreign_cov_in): (bool, bool),
         continued: &HashSet<Hash32>,
         created: &HashSet<Hash32>,
         resolved_in: Option<i128>,
@@ -1909,8 +1914,15 @@ impl Processor {
                 };
                 kob_out.extend(guarded(|| income::pinned(&leg, n_out)).flatten()?);
             }
-            income::income(kob_in, &rec.outputs, &kob_out)
+            // the sender trades for itself: its own tokens go in (a covenant input that is no order's and no order's custody or
+            // stray), or tokens come out that no order owns and no covenant pins (the sender's inventory, the rest of a route)
+            let own = foreign_cov_in || rec.outputs.iter().enumerate().any(|(j, o)| o.cov.is_some() && !kob_out.contains(&j));
+            Some((income::income(kob_in, &rec.outputs, &kob_out)?, own))
         })();
+        let (income, own_trade) = match income {
+            Some((v, own)) => (Some(v), own),
+            None => (None, false),
+        };
         // the node's input values when the record has them, else what the inputs held by the outputs this store recorded
         // (`super::outputs`): known only when every input resolves
         let resolved = resolved_in.and_then(|v| u64::try_from(v).ok());
@@ -1921,8 +1933,18 @@ impl Processor {
             }
         }
         let fee = income::miner_fee(rec.in_value.or(resolved), &rec.outputs);
-        conn.prepare_cached("INSERT INTO executor_txs (block_seq, daa, ts, txid, income, miner_fee) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?
-            .execute(params![ctx.seq, ctx.header.daa_score as i64, ctx.header.timestamp as i64, &rec.txid.0[..], income, fee])?;
+        conn.prepare_cached(
+            "INSERT INTO executor_txs (block_seq, daa, ts, txid, income, miner_fee, own_trade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?
+        .execute(params![
+            ctx.seq,
+            ctx.header.daa_score as i64,
+            ctx.header.timestamp as i64,
+            &rec.txid.0[..],
+            income,
+            fee,
+            own_trade
+        ])?;
         Ok(())
     }
 }

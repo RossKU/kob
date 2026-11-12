@@ -2415,9 +2415,12 @@ archive indexer the copy and one pass (a 2.3 GB copy of index-a, schema 10 to 12
 first pass over index-a's history: minutes of batches while it follows the node); run `kobd db vacuum` (7.6b) once afterwards to give the
 space back. A build of schema 11 refuses the store.
 
-**Schema 12 to 13 (network fees of the history).** Schema 13 adds `recorded_outputs` (the plain outputs of the recorded transactions,
+**Schema 12 to 13 (network fees of the history, own trades).** Schema 13 adds `recorded_outputs` (the plain outputs of the recorded transactions,
 `indexer::outputs`, above): the input values a record written before 2026-11-12 lacks are resolved from it, so the network fee of such a
-transaction is known whenever every one of its inputs spends an output the store recorded or tracks. The short way again (`VACUUM INTO`, the
+transaction is known whenever every one of its inputs spends an output the store recorded or tracks. It also flags the executors'
+transactions in which the sender trades for itself (`executor_txs.own_trade`, `activity.own_n`; api-reference 3.21 `executor_income_own_trade_txs`):
+their income is not counted in "Paid to executors". A store of schema 11 or 12 cannot tell which of the incomes it counted were own trades, so
+the migration makes them unknown (the buckets count no income until a replay). The short way again (`VACUUM INTO`, the
 triggers created anew, the table added empty; a store of schema 11 also gets the schema 12 steps in the same run). The table fills from the
 transactions indexed from then on; the fees of the past need the history replayed: on a full indexer with its record log, `kobd db replay`
 (7.6, and the *Operator step* of *Schema 10 to 11*) instead of `kobd db migrate`. A lean store needs only `kobd db migrate` (it follows the

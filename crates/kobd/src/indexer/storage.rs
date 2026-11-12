@@ -671,10 +671,11 @@ fn check_activity(conn: &Connection) -> DbResult<()> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?)
     };
-    let rows: (i64, i64, i64) =
-        conn.query_row("SELECT COUNT(*), COUNT(income), COUNT(miner_fee) FROM main.executor_txs", [], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?;
+    let rows: (i64, i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(CASE WHEN own_trade = 0 THEN income END), COUNT(miner_fee) FROM main.executor_txs",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
     let (m, h) = (txs(super::activity::MINUTE)?, txs(super::activity::HOUR)?);
     if m != rows || h != rows {
         return Err(bad(format!(
@@ -881,7 +882,9 @@ fn opens_and_checks(cfg: &IndexerConfig, new: &Path, say: &mut impl FnMut(&str))
 ///   copy of an older store);
 /// * from 10, the activity buckets get the columns of the executors' transactions and the actors their `kept` flag (schema 11);
 /// * from 9 to 11, the orders get the KAS of their genesis output (`orders.genesis_value`, schema 12), read from the genesis UTXO rows;
-/// * (schema 13) `recorded_outputs` is created empty by `schema.sql` (the outputs of the past are in the record log: a replay fills it);
+/// * (schema 13) `recorded_outputs` is created empty by `schema.sql` (the outputs of the past are in the record log: a replay fills it), and
+///   the executors' transactions and the buckets get their own-trade flag and count (`executor_txs.own_trade`, `activity.own_n`: the
+///   transactions already counted as of unknown income stay unknown; a replay tells the own trades);
 ///
 /// then `schema.sql` adds the new tables, indexes and triggers, the activity totals are counted once (from 9), the executors' transactions
 /// the store holds are counted as of unknown income and network fee (`db::backfill_executor_txs`: the store has no record of their
@@ -962,6 +965,19 @@ fn upgrade_in_place(
         )?;
     }
     // (schema 12) the KAS of each order's genesis output
+    // (schema 13) the own trades of the executors' transactions, and their count in the buckets (a store of schema 11 or 12 has both tables)
+    if table_exists(&conn, "main", "executor_txs")? && !columns(&conn, "main", "executor_txs")?.iter().any(|c| c == "own_trade") {
+        conn.execute_batch("ALTER TABLE main.executor_txs ADD COLUMN own_trade INTEGER NOT NULL DEFAULT 0")?;
+        // which of the incomes a store of schema 11 or 12 counted were own trades the store cannot tell: they become unknown (a replay
+        // tells them), and the buckets count no income (the triggers are dropped: the rows and the buckets change together)
+        conn.execute_batch(
+            "UPDATE main.executor_txs SET income = NULL WHERE income IS NOT NULL; \
+             UPDATE main.activity SET income = 0, income_n = 0, net = 0, net_n = 0;",
+        )?;
+    }
+    if table_exists(&conn, "main", "activity")? && !columns(&conn, "main", "activity")?.iter().any(|c| c == "own_n") {
+        conn.execute_batch("ALTER TABLE main.activity ADD COLUMN own_n INTEGER NOT NULL DEFAULT 0")?;
+    }
     if !columns(&conn, "main", "orders")?.iter().any(|c| c == "genesis_value") {
         conn.execute_batch("ALTER TABLE main.orders ADD COLUMN genesis_value INTEGER")?;
     }

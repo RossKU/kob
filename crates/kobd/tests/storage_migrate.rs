@@ -686,7 +686,8 @@ fn migrated(v: &kobd::indexer::activity::ActivityView, from_9: bool) -> kobd::in
         executors: if from_9 { 0 } else { v.executors },
         executor_income: "0".into(),
         executor_income_txs: 0,
-        executor_income_unknown_txs: v.executor_income_txs + v.executor_income_unknown_txs,
+        executor_income_unknown_txs: v.executor_income_txs + v.executor_income_unknown_txs + v.executor_income_own_trade_txs,
+        executor_income_own_trade_txs: 0,
         miner_fees: "0".into(),
         miner_fee_txs: 0,
         miner_fee_unknown_txs: v.miner_fee_txs + v.miner_fee_unknown_txs,
@@ -851,7 +852,9 @@ async fn a_schema_10_store_counts_its_executors_transactions_as_unknown() {
         let g = c.hs.ingest.lock().unwrap();
         (kobd::indexer::activity::activity(g.conn(), None).unwrap(), table_digests(g.conn()))
     };
-    assert!(original.0.executor_income_txs > 0, "the flows have executors' transactions");
+    let executors_txs =
+        original.0.executor_income_txs + original.0.executor_income_unknown_txs + original.0.executor_income_own_trade_txs;
+    assert!(executors_txs > 0, "the flows have executors' transactions");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.sqlite3");
     snapshot_file(&c, &path);
@@ -888,7 +891,7 @@ async fn a_schema_10_store_counts_its_executors_transactions_as_unknown() {
     let unknown: (i64, i64) = after
         .query_row("SELECT COUNT(*), COUNT(income) + COUNT(miner_fee) FROM executor_txs", [], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap();
-    assert_eq!(unknown, (original.0.executor_income_txs, 0));
+    assert_eq!(unknown, (executors_txs, 0));
     let chain = |v: Vec<(String, u64, String)>| -> Vec<(String, u64, String)> {
         v.into_iter().filter(|d| !d.0.starts_with("logo_")).collect()
     };

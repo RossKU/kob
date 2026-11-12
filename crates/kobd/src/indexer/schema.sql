@@ -507,6 +507,7 @@ CREATE TABLE IF NOT EXISTS activity (
     miner_fee_n INTEGER NOT NULL DEFAULT 0,    -- transactions whose network fee is known
     net         INTEGER NOT NULL DEFAULT 0,    -- sompi: income - network fee of the transactions where both are known
     net_n       INTEGER NOT NULL DEFAULT 0,    -- those transactions
+    own_n       INTEGER NOT NULL DEFAULT 0,    -- (schema 13) own trades: their income is not counted (`executor_txs.own_trade`)
     PRIMARY KEY (iv, t)
 ) WITHOUT ROWID;
 
@@ -562,6 +563,8 @@ END;
 --   deliveries, continuations, custodies, exits; `indexer::income`), so the crossing spread, auction margins, priority tips and
 --   keeper tips. NULL: unknown (an order input whose state is unproven, a maker's cancel in the same transaction, a spend this
 --   build cannot classify, or a transaction a migration found already indexed);
+-- * `own_trade` (schema 13): 1 when the sender trades for itself (`indexer::income`: its own tokens go in, or tokens come out that no
+--   order owns and no covenant pins): its income is kept here but not counted in the totals (`own_n`); its network fee is;
 -- * `miner_fee`: its network fee, what its inputs held (`record::TxRecord::in_value`, the node's own UTXO entries) minus its
 --   outputs. NULL: unknown (a record written before 2026-11-12, or a node that did not report every input's value).
 CREATE TABLE IF NOT EXISTS executor_txs (
@@ -571,26 +574,30 @@ CREATE TABLE IF NOT EXISTS executor_txs (
     ts        INTEGER NOT NULL,
     txid      BLOB NOT NULL,
     income    INTEGER,
-    miner_fee INTEGER
+    miner_fee INTEGER,
+    own_trade INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS executor_txs_block ON executor_txs (block_seq);
 
 CREATE TRIGGER IF NOT EXISTS executor_txs_insert AFTER INSERT ON executor_txs BEGIN
-    INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n)
-        SELECT v.iv, NEW.ts - NEW.ts % v.iv, 0, 0, 0, 1, COALESCE(NEW.income, 0), NEW.income IS NOT NULL,
-               COALESCE(NEW.miner_fee, 0), NEW.miner_fee IS NOT NULL, COALESCE(NEW.income - NEW.miner_fee, 0),
-               NEW.income IS NOT NULL AND NEW.miner_fee IS NOT NULL
-        FROM (SELECT 60000 AS iv UNION ALL SELECT 3600000) v WHERE true
+    INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n, own_n)
+        SELECT v.iv, NEW.ts - NEW.ts % v.iv, 0, 0, 0, 1, COALESCE(c.income, 0), c.income IS NOT NULL,
+               COALESCE(NEW.miner_fee, 0), NEW.miner_fee IS NOT NULL, COALESCE(c.income - NEW.miner_fee, 0),
+               c.income IS NOT NULL AND NEW.miner_fee IS NOT NULL, NEW.own_trade
+        FROM (SELECT 60000 AS iv UNION ALL SELECT 3600000) v, (SELECT CASE WHEN NEW.own_trade = 0 THEN NEW.income END AS income) c WHERE true
         ON CONFLICT (iv, t) DO UPDATE SET txs = txs + 1, income = income + excluded.income, income_n = income_n + excluded.income_n,
             miner_fees = miner_fees + excluded.miner_fees, miner_fee_n = miner_fee_n + excluded.miner_fee_n,
-            net = net + excluded.net, net_n = net_n + excluded.net_n;
+            net = net + excluded.net, net_n = net_n + excluded.net_n, own_n = own_n + excluded.own_n;
 END;
 CREATE TRIGGER IF NOT EXISTS executor_txs_delete AFTER DELETE ON executor_txs
     WHEN NOT EXISTS (SELECT 1 FROM meta WHERE k = 'pruning') BEGIN
-    UPDATE activity SET txs = txs - 1, income = income - COALESCE(OLD.income, 0), income_n = income_n - (OLD.income IS NOT NULL),
+    UPDATE activity SET txs = txs - 1,
+                        income = income - (CASE WHEN OLD.own_trade = 0 THEN COALESCE(OLD.income, 0) ELSE 0 END),
+                        income_n = income_n - (OLD.own_trade = 0 AND OLD.income IS NOT NULL),
                         miner_fees = miner_fees - COALESCE(OLD.miner_fee, 0), miner_fee_n = miner_fee_n - (OLD.miner_fee IS NOT NULL),
-                        net = net - COALESCE(OLD.income - OLD.miner_fee, 0),
-                        net_n = net_n - (OLD.income IS NOT NULL AND OLD.miner_fee IS NOT NULL)
+                        net = net - (CASE WHEN OLD.own_trade = 0 THEN COALESCE(OLD.income - OLD.miner_fee, 0) ELSE 0 END),
+                        net_n = net_n - (OLD.own_trade = 0 AND OLD.income IS NOT NULL AND OLD.miner_fee IS NOT NULL),
+                        own_n = own_n - OLD.own_trade
         WHERE (iv = 60000 AND t = OLD.ts - OLD.ts % 60000) OR (iv = 3600000 AND t = OLD.ts - OLD.ts % 3600000);
     DELETE FROM activity WHERE ((iv = 60000 AND t = OLD.ts - OLD.ts % 60000) OR (iv = 3600000 AND t = OLD.ts - OLD.ts % 3600000))
         AND fills <= 0 AND orders <= 0 AND txs <= 0;

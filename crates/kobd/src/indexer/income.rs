@@ -17,6 +17,15 @@
 //! output `M - 1 - i`. An output the covenants leave free is the sender's (its change, or anything it chose to pay). It is what
 //! the transaction leaves for its sender before the network fee, the same figure whichever outputs the sender kept.
 //!
+//! A transaction in which the sender **trades for itself** (an own trade: `executor_txs.own_trade`) is not counted in the executors'
+//! income, so that it is what traders paid the executors for matching and keeping, never what an executor paid or got for tokens of its
+//! own. From the record alone, for all of the history: the transaction has a covenant input that is neither a tracked order UTXO nor an
+//! order's custody or stray (the sender's own tokens go in: an inventory sale, a taker selling), or a token output that no order owns and
+//! no spent order's covenant pins (tokens come out to the sender: an inventory buy, a taker buying, the rest of a route it keeps). A
+//! matcher's crossing, a route or netting between orders and a keeper's job move tokens only between orders and makers, and count. Not
+//! told apart (the record has no keys before 2026-11-09): an executor crossing one of its own orders against a trader's while no token
+//! comes to it (its own payout counts as an order's payout). The network fee of an own trade is counted like any other.
+//!
 //! The **network fee** is what the inputs held (the node's own UTXO entries, `record::TxRecord::in_value`) minus the outputs.
 //! Either is unknown (`None`) when the chain data does not settle it, never estimated.
 

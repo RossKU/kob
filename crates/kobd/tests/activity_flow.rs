@@ -8,7 +8,7 @@ mod common;
 use common::*;
 use kob_protocol::build::*;
 use kob_protocol::state::*;
-use kob_protocol::tx::{FeeOptions, KeyUtxo};
+use kob_protocol::tx::{FeeOptions, KeyUtxo, SignedTx};
 use kobd::indexer::activity::{self, ActivityView};
 use kobd::indexer::db::open_memory;
 use kobd::indexer::recordlog::{self, RecordLog};
@@ -244,7 +244,8 @@ async fn the_lean_pruning_does_not_take_back_the_totals() {
     assert_eq!(c.hs.status(&cov), "filled");
     let before = live(&c);
     assert_eq!((before.orders, before.fills, before.traders, before.executors), (1, 1, 1, 1));
-    assert_eq!(before.executor_income_txs, 1);
+    // the taker bought the tokens for itself: an own trade, not counted in the income (its network fee is)
+    assert_eq!((before.executor_income_txs, before.executor_income_own_trade_txs, before.miner_fee_txs), (0, 1, 1));
     let rows =
         |c: &Ctx| (c.hs.query::<i64>("SELECT COUNT(*) FROM orders", []), c.hs.query::<i64>("SELECT COUNT(*) FROM executor_txs", []));
     assert_eq!(rows(&c), (1, 1));
@@ -325,4 +326,103 @@ async fn a_fee_is_resolved_from_the_recorded_outputs_when_the_record_has_no_inpu
         v
     };
     assert_eq!(fees, [None, Some(fee2)]);
+}
+
+/// (counted income, counted transactions, own trades, unknown) of the totals
+fn counted(v: &ActivityView) -> (String, i64, i64, i64) {
+    (v.executor_income.clone(), v.executor_income_txs, v.executor_income_own_trade_txs, v.executor_income_unknown_txs)
+}
+
+/// The own-trade flag of the transaction's `executor_txs` row.
+fn own_trade(c: &Ctx, t: &SignedTx) -> i64 {
+    c.hs.query("SELECT own_trade FROM executor_txs WHERE txid = ?1", [&t.tx.id[..]])
+}
+
+/// "Paid to executors" is what traders paid executors for matching and keeping: a transaction in which the sender trades for itself is
+/// an own trade, not counted (its network fee is). An inventory buy (the sender takes an ask's tokens into its own output) and an
+/// inventory sale (the sender's own tokens go into a bid's delivery) are own trades; a crossing of two traders' orders and a keeper's
+/// refund count. The sender filling its own ask and keeping the tokens is an own trade too (the tokens come to it); its income (the
+/// price it paid itself, less nothing) is kept on the row but never in the totals.
+#[tokio::test]
+async fn an_executor_trading_for_itself_is_not_counted_as_paid_to_it() {
+    let c = Ctx::new();
+    // a trader's ask and bid, and an ask of the executor's own key (TAKER)
+    let (a, b) = (ask(MAKER_A, P250), bid(MAKER_B, P260));
+    let create_a = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
+    let create_b = c.w.create_tx(AnyState::KobBid(b.clone()), b.escrow(10 * WHOLE, 3).unwrap() as u64, MAKER_B, 0);
+    let own = ask(TAKER, P250);
+    let create_own = c.w.create_tx(AnyState::KobAsk(own.clone()), CARRIER, TAKER, 10 * WHOLE);
+    c.push(&[&create_a, &create_b, &create_own]).await;
+    let (cov_a, cov_own) = (c.w.cov(&create_a, 0), c.w.cov(&create_own, 0));
+
+    // 1. a pure match: the traders' ask and bid cross (4 whole tokens): counted, 4 x (2.601 - 2.499) KAS
+    let custody = c.w.token_at(&create_a, 1, Kcc20State::custody(10 * WHOLE, cov_a.0, EXT));
+    let legs = vec![
+        Leg::Ask { order: c.w.order(&create_a, 0, a.clone()), custody, amount: 4 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&create_b, 0, b.clone()), amount: 4 * WHOLE, t: None },
+    ];
+    let matched = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), legs)));
+    c.push(&[&matched]).await;
+    let spread = 4 * (P260 + TIP) - 4 * (P250 - TIP);
+    assert_eq!(own_trade(&c, &matched), 0);
+    assert_eq!(counted(&live(&c)), (spread.to_string(), 1, 0, 0));
+
+    // 2. an inventory buy: the executor takes 2 whole tokens of the trader's ask into its own token output
+    let a6 = AskState { amount_left: 6 * WHOLE, ..a.clone() };
+    let custody =
+        c.w.token_at(&matched, find_custody(&matched, &cov_a, 6 * WHOLE).unwrap(), Kcc20State::custody(6 * WHOLE, cov_a.0, EXT));
+    let leg = Leg::Ask { order: c.w.order(&matched, find_cov(&matched, &cov_a).unwrap(), a6), custody, amount: 2 * WHOLE, t: None };
+    let bought = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), vec![leg])));
+    c.push(&[&bought]).await;
+    assert_eq!(own_trade(&c, &bought), 1);
+    let v = live(&c);
+    assert_eq!(counted(&v), (spread.to_string(), 1, 1, 0), "not counted: the executor paid for tokens it keeps");
+    assert_eq!(v.miner_fee_txs, 2, "its network fee is counted");
+
+    // 3. an inventory sale: the executor's own tokens go into the trader's bid (6 whole tokens left to buy)
+    let cov_b = c.w.cov(&create_b, 0);
+    let mut sale = batch(
+        &c.w,
+        c.daa(),
+        vec![Leg::Bid { order: c.w.order(&matched, find_cov(&matched, &cov_b).unwrap(), b.clone()), amount: 2 * WHOLE, t: None }],
+    );
+    sale.taker_tokens = vec![c.w.token(TAKER, 2 * WHOLE)];
+    let sold = c.w.sign(&Action::Batch(sale));
+    c.push(&[&sold]).await;
+    assert_eq!(own_trade(&c, &sold), 1);
+    assert_eq!(counted(&live(&c)), (spread.to_string(), 1, 2, 0));
+
+    // 4. the executor fills its own ask and keeps the tokens: an own trade (the tokens come to it)
+    let custody = c.w.token_at(&create_own, 1, Kcc20State::custody(10 * WHOLE, cov_own.0, EXT));
+    let leg = Leg::Ask { order: c.w.order(&create_own, 0, own.clone()), custody, amount: 3 * WHOLE, t: None };
+    let self_fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), vec![leg])));
+    c.push(&[&self_fill]).await;
+    assert_eq!(own_trade(&c, &self_fill), 1);
+    assert_eq!(counted(&live(&c)), (spread.to_string(), 1, 3, 0));
+
+    // 5. a keeper's refund of an expired ask of a trader: counted (the refund tip)
+    let e = AskState { expiry_daa: c.daa() as i64 + 2_000, ..ask(MAKER_B, P245) };
+    let create_e = c.w.create_tx(AnyState::KobAsk(e.clone()), CARRIER, MAKER_B, 10 * WHOLE);
+    c.push(&[&create_e]).await;
+    let cov_e = c.w.cov(&create_e, 0);
+    let state = AnyState::KobAsk(e.clone());
+    let due = state.refund_due(c.w.utxo(&create_e, 0).block_daa_score as i64).unwrap();
+    let refund = c.w.sign(&Action::RefundOrder(RefundOrder {
+        prefund: None,
+        order: c.w.order(&create_e, 0, state),
+        foreign: vec![],
+        custody: Some(c.w.token_at(&create_e, 1, Kcc20State::custody(10 * WHOLE, cov_e.0, EXT))),
+        lock_time: due as u64,
+        funding: vec![c.w.coin(KEEPER, 10)],
+        change: Some(pk(KEEPER)),
+        fee: FeeOptions::default(),
+    }));
+    c.push(&[&refund]).await;
+    assert_eq!(own_trade(&c, &refund), 0);
+    let v = live(&c);
+    assert_eq!(counted(&v), ((spread + e.refund_tip).to_string(), 2, 3, 0));
+    assert_eq!(v.miner_fee_txs, 5, "every network fee, own trades too");
+    // the net is over the counted transactions only
+    let fees: i64 = [&matched, &refund].iter().map(|t| t.fee.fee as i64).sum();
+    assert_eq!((v.executor_net.clone(), v.executor_net_txs), ((spread + e.refund_tip - fees).to_string(), 2));
 }

@@ -13,7 +13,9 @@
 //!   how many were not (an unproven order state, a maker's cancel in the same transaction, a store migrated with its history).
 //! * **miner fees** likewise: the network fees of those transactions (`executor_txs.miner_fee`: what their inputs held, as the node
 //!   reported them, minus their outputs), known for the transactions indexed from records with input values (2026-11-12 on).
-//! * **executor net**: income minus network fee over the transactions where both are known.
+//!   A transaction in which the sender trades for itself (an **own trade**, [`super::income`]) is not counted in the income (its
+//!   network fee is), and is counted apart (`executor_income_own_trade_txs`).
+//! * **executor net**: income minus network fee over the counted transactions where both are known.
 //! * **traders**: the makers (order keys, not persons) with an order placed in the range: `actors` keeps the newest placement
 //!   block of each, so the range is one index range (`actors_last`) from the first block with an event at `since`.
 //! * **executors**: the scripts that funded the fill transactions of the range (`order_events.executor_id`, from the record log's
@@ -92,6 +94,10 @@ pub struct ActivityView {
     pub executor_income: String,
     pub executor_income_txs: i64,
     pub executor_income_unknown_txs: i64,
+    /// (schema 13) Executors' transactions of the range in which the sender traded for itself (its own tokens went in, or tokens came
+    /// out that no order owns and no covenant pins: an inventory buy or sale, a taker): their income is not counted in
+    /// `executor_income` (it is what the sender paid or got for tokens, not what traders paid it). Their network fees are.
+    pub executor_income_own_trade_txs: i64,
     /// The network fees of those transactions (sompi, a string), over `miner_fee_txs` of them; `miner_fee_unknown_txs` more are not
     /// counted (indexed from records without the inputs' values, before 2026-11-12).
     pub miner_fees: String,
@@ -139,7 +145,8 @@ pub fn activity(conn: &Connection, since: Option<i64>) -> DbResult<ActivityView>
         tips_paid: b.tips.to_string(),
         executor_income: b.income.to_string(),
         executor_income_txs: b.income_n,
-        executor_income_unknown_txs: b.txs - b.income_n,
+        executor_income_unknown_txs: b.txs - b.income_n - b.own_n,
+        executor_income_own_trade_txs: b.own_n,
         miner_fees: b.miner_fees.to_string(),
         miner_fee_txs: b.miner_fee_n,
         miner_fee_unknown_txs: b.txs - b.miner_fee_n,
@@ -162,12 +169,13 @@ struct Sums {
     miner_fee_n: i64,
     net: i128,
     net_n: i64,
+    own_n: i64,
 }
 
 /// The sums of the buckets from `from` on: the minutes up to the first whole hour at or after it, then the hours.
 fn buckets_from(conn: &Connection, from: i64) -> DbResult<Sums> {
     let hour = from.saturating_add(HOUR - 1) / HOUR * HOUR;
-    let cols = "fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n";
+    let cols = "fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n, own_n";
     let mut st = conn.prepare_cached(&format!(
         "SELECT {cols} FROM activity WHERE iv = ?1 AND t >= ?2 AND t < ?3 UNION ALL SELECT {cols} FROM activity WHERE iv = ?4 AND t >= ?3"
     ))?;
@@ -192,6 +200,7 @@ fn buckets_from(conn: &Connection, from: i64) -> DbResult<Sums> {
         s.miner_fee_n += r.get::<_, i64>(7)?;
         s.net += sompi(r, 8)?;
         s.net_n += r.get::<_, i64>(9)?;
+        s.own_n += r.get::<_, i64>(10)?;
     }
     Ok(s)
 }

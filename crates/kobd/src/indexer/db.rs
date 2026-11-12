@@ -261,18 +261,20 @@ pub fn backfill_activity(conn: &Connection) -> DbResult<bool> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(
         "DELETE FROM activity; DELETE FROM actors; \
-         INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n) \
+         INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n, own_n) \
            SELECT 60000, t, SUM(fills), SUM(fees), SUM(orders), SUM(txs), SUM(income), SUM(income_n), SUM(miner_fees), SUM(miner_fee_n), \
-                  SUM(net), SUM(net_n) FROM ( \
+                  SUM(net), SUM(net_n), SUM(own_n) FROM ( \
              SELECT ts - ts % 60000 AS t, kind = 'fill' AS fills, CASE WHEN kind = 'fill' THEN COALESCE(fee, 0) ELSE 0 END AS fees, \
-                    kind = 'create' AS orders, 0 AS txs, 0 AS income, 0 AS income_n, 0 AS miner_fees, 0 AS miner_fee_n, 0 AS net, 0 AS net_n \
+                    kind = 'create' AS orders, 0 AS txs, 0 AS income, 0 AS income_n, 0 AS miner_fees, 0 AS miner_fee_n, 0 AS net, 0 AS net_n, \
+                    0 AS own_n \
                FROM order_events WHERE kind IN ('fill', 'create') \
-             UNION ALL SELECT ts - ts % 60000, 0, 0, 0, 1, COALESCE(income, 0), income IS NOT NULL, COALESCE(miner_fee, 0), \
-                    miner_fee IS NOT NULL, COALESCE(income - miner_fee, 0), income IS NOT NULL AND miner_fee IS NOT NULL FROM executor_txs) \
+             UNION ALL SELECT ts - ts % 60000, 0, 0, 0, 1, COALESCE(ci, 0), ci IS NOT NULL, COALESCE(miner_fee, 0), \
+                    miner_fee IS NOT NULL, COALESCE(ci - miner_fee, 0), ci IS NOT NULL AND miner_fee IS NOT NULL, own_trade \
+               FROM (SELECT ts, miner_fee, own_trade, CASE WHEN own_trade = 0 THEN income END AS ci FROM executor_txs)) \
            GROUP BY t; \
-         INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n) \
+         INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n, own_n) \
            SELECT 3600000, t - t % 3600000, SUM(fills), SUM(fees), SUM(orders), SUM(txs), SUM(income), SUM(income_n), SUM(miner_fees), \
-                  SUM(miner_fee_n), SUM(net), SUM(net_n) FROM activity WHERE iv = 60000 GROUP BY t - t % 3600000; \
+                  SUM(miner_fee_n), SUM(net), SUM(net_n), SUM(own_n) FROM activity WHERE iv = 60000 GROUP BY t - t % 3600000; \
          INSERT INTO actors (kind, actor_id, last_block) \
            SELECT 1, maker_id, MAX(genesis_block) FROM orders WHERE maker_id IS NOT NULL GROUP BY maker_id; \
          INSERT INTO actors (kind, actor_id, last_block) \

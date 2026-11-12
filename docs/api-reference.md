@@ -932,7 +932,7 @@ one index range whatever the size of the history, and a reorg takes its blocks o
 ```json
 { "since": 1790000000000, "ts": 1790086000000, "orders": 42, "fills": 130, "traders": 9, "executors": 2,
   "fees_paid": "1250000", "tips_paid": "1250000",
-  "executor_income": "103000000000", "executor_income_txs": 120, "executor_income_unknown_txs": 0,
+  "executor_income": "103000000000", "executor_income_txs": 120, "executor_income_unknown_txs": 0, "executor_income_own_trade_txs": 31,
   "miner_fees": "240000000", "miner_fee_txs": 118, "miner_fee_unknown_txs": 2,
   "executor_net": "102780000000", "executor_net_txs": 118, "kas_locked": "880000000000" }
 ```
@@ -957,15 +957,23 @@ one index range whatever the size of the history, and a reorg takes its blocks o
   if-done exits): the spread between crossing orders, auction margins, the priority tips and the keeper tips, exact from the chain (the
   covenants pin those outputs: `kobd` `indexer::income`). The sum is over the `executor_income_txs` transactions whose income is known; the
   `executor_income_unknown_txs` others are not counted (an order input whose state is unproven, a maker's cancel in the same transaction, or a
-  transaction a `kobd db migrate` found already indexed). Negative when a sender pays more than it takes (an executor buying tokens for its own
-  inventory pays the maker KAS it gets back as tokens).
+  transaction a `kobd db migrate` found already indexed).
+* `executor_income_own_trade_txs` (number), schema 13: the executors' transactions of the range in which the sender traded for itself, not
+  counted in `executor_income` either, so that it is what traders paid the executors for matching and keeping. From the record alone, for all
+  of the history: the transaction has a covenant input that is neither a tracked order UTXO nor an order's custody or stray (the sender's own
+  tokens go in: an inventory sale, a taker selling), or a token output that no order owns and no spent order's covenant pins (tokens come out to
+  the sender: an inventory buy, a taker buying, the rest of a route it keeps). A matcher's crossing, a route or netting between orders and a
+  keeper's job count. Not told apart: an executor crossing one of its own orders against a trader's while no token comes to it (its payout
+  counts as the order's; the record has no keys before 2026-11-09). The network fee of an own trade counts in `miner_fees`. The income can
+  still be negative (a sender that pays a maker more than the covenant requires).
 * `miner_fees` (sompi, string) with `miner_fee_txs` and `miner_fee_unknown_txs`: the network fees of those transactions, what their inputs held
   (the node's own UTXO entries of the accepted transaction, recorded in the record log since 2026-11-12, format 5) minus their outputs. A
   transaction indexed from an older record (or a replay of an older log) gets its input values from the outputs the store recorded (the change
   of an earlier KOB transaction, an order's UTXO or custody, a token holding: `kobd` `indexer::outputs`) and is counted only when every input
   resolves; otherwise (its funding came from outside KOB) it is counted in `miner_fee_unknown_txs`: a client must not present the sum as
   complete while that count is above 0.
-* `executor_net` (sompi, string, may be negative) with `executor_net_txs`: `income - network fee` over the transactions where both are known.
+* `executor_net` (sompi, string, may be negative) with `executor_net_txs`: `income - network fee` over the counted transactions (not own trades)
+  where both are known.
 * `kas_locked` (sompi, string): the KAS in the live order UTXOs now, whatever `since` is.
 * `ts` (number or null): the newest event time; `since` is the minute used (`null` for all time).
 * `history_from` (number or null): where a lean store's history is complete from (unix ms; `null` for a full store), as in `/v1/health`.

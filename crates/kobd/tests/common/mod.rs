@@ -87,6 +87,19 @@ impl Ctx {
         // a P2PK script `<version 2 bytes> 0x20 <key> 0xac`, as hex
         let key: Option<Vec<u8>> =
             payer.as_deref().filter(|s| s.len() == 4 + 2 + 64 + 2).map(|s| kobd::hex::decode(&s[6..70]).unwrap());
+        // the sender is the maker of one of the orders it spends: what the order pays its maker is the sender's too, which the indexer
+        // cannot tell (an own trade, or a payout it counts as the order's): not compared
+        let own_order: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM order_events e JOIN orders o ON o.id = e.order_id JOIN ids m ON m.id = o.maker_id \
+                 WHERE e.txid = ?1 AND m.h = ?2",
+                rusqlite::params![&t.tx.id[..], key.as_deref().unwrap_or(&[])],
+                |r| r.get(0),
+            )
+            .unwrap();
+        if own_order > 0 {
+            return false;
+        }
         let holder = |txid: &[u8], idx: u32| -> Option<Vec<u8>> {
             conn.query_row(
                 "SELECT i.h FROM token_holdings h JOIN ids i ON i.id = h.owner_id WHERE h.txid = ?1 AND h.idx = ?2",
