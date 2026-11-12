@@ -426,7 +426,9 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
             .as_array()
             .unwrap()
             .iter()
-            .map(|l| (l["price"].as_str().unwrap().to_string(), l["amount"].as_str().unwrap().to_string(), l["orders"].as_i64().unwrap()))
+            .map(|l| {
+                (l["price"].as_str().unwrap().to_string(), l["amount"].as_str().unwrap().to_string(), l["orders"].as_i64().unwrap())
+            })
             .collect()
     };
     assert_eq!(lv("asks"), vec![("290000".into(), "10000".into(), 1), ("300000".into(), "13000".into(), 2)]);
@@ -442,7 +444,10 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
     let asks = v["asks"].as_array().unwrap();
     assert_eq!(asks.len(), 2, "{v}");
     assert_eq!((asks[0]["price"].as_str(), asks[0]["cum_quote"].as_str()), (Some("290000"), Some("2900000")));
-    assert_eq!((asks[1]["amount"].as_str(), asks[1]["cum_amount"].as_str(), asks[1]["cum_quote"].as_str()), (Some("13000"), Some("23000"), Some("6800000")));
+    assert_eq!(
+        (asks[1]["amount"].as_str(), asks[1]["cum_amount"].as_str(), asks[1]["cum_quote"].as_str()),
+        (Some("13000"), Some("23000"), Some("6800000"))
+    );
     let bids = v["bids"].as_array().unwrap();
     assert_eq!((bids[0]["price"].as_str(), bids[1]["cum_amount"].as_str()), (Some("210000"), Some("7000")));
 
@@ -451,7 +456,10 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
     let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
     assert_eq!((v["best_bid"].as_str(), v["best_ask"].as_str(), v["mid"].as_str()), (Some("210000"), Some("290000"), Some("250000")));
     assert_eq!(v["spread_bps"], 3200);
-    assert_eq!((v["depth_2pct_quote"].as_str(), v["depth_2pct_bid_sompi"].as_str(), v["depth_2pct_ask_sompi"].as_str()), (Some("0"), Some("0"), Some("0")));
+    assert_eq!(
+        (v["depth_2pct_quote"].as_str(), v["depth_2pct_bid_sompi"].as_str(), v["depth_2pct_ask_sompi"].as_str()),
+        (Some("0"), Some("0"), Some("0"))
+    );
     // the open counts are the orders of that book: the auction, the plain ask and the due TWAP; the two GTC bids (6 asks and 3 bids are live)
     assert_eq!((v["open_asks"].as_i64(), v["open_bids"].as_i64()), (Some(3), Some(2)));
     // an expired ask (soft expiry at the node's DAA score) leaves the book and its count
@@ -1189,7 +1197,11 @@ async fn a_quiet_market_ages_out_of_the_24h_figures() {
 
     // the same store read at chosen clocks (unix seconds)
     let at = |clock: Option<i64>| {
-        let ctx = crate::indexer::reads::ReadCtx { node_daa: Some(1000), settle_depth_daa: 100, now_unix: clock.map(|ms| (ms / 1000) as u64) };
+        let ctx = crate::indexer::reads::ReadCtx {
+            node_daa: Some(1000),
+            settle_depth_daa: 100,
+            now_unix: clock.map(|ms| (ms / 1000) as u64),
+        };
         crate::indexer::market::stats(c, &ctx, &Hash32([TOKEN; 32]), Some(3)).unwrap()
     };
     // no clock: the window ends at the newest event and holds both trades, the first one its open (no earlier trade): +25 %
@@ -1197,7 +1209,10 @@ async fn a_quiet_market_ages_out_of_the_24h_figures() {
     assert_eq!((s.ts, s.open_24h.as_deref(), s.trades_24h, s.change_24h_bps), (Some(p), Some("200000"), 2, Some(2500)));
     // 23 h after the last trade: the window (p - 1 h .. p + 23 h) holds the 2.50 only; the price 24 h ago is the 2.00 before it
     let s = at(Some(p + 23 * HOUR));
-    assert_eq!((s.ts, s.open_24h.as_deref(), s.high_24h.as_deref(), s.low_24h.as_deref()), (Some(p + 23 * HOUR), Some("200000"), Some("250000"), Some("250000")));
+    assert_eq!(
+        (s.ts, s.open_24h.as_deref(), s.high_24h.as_deref(), s.low_24h.as_deref()),
+        (Some(p + 23 * HOUR), Some("200000"), Some("250000"), Some("250000"))
+    );
     assert_eq!((s.trades_24h, s.volume_24h.as_str(), s.change_24h_bps), (1, "1000", Some(2500)));
     // 30 h after: nothing left in the window
     let s = at(Some(p + 30 * HOUR));
@@ -1894,8 +1909,11 @@ async fn a_lean_store_says_where_its_history_is_complete_from() {
     let (_, v) = get(&app, "/v1/stats").await;
     assert_eq!(v["history_from"], 9_000);
     // the live exit closes: its entry is prunable and the oldest closed order (its last event at 2 000)
-    c.execute("UPDATE order_state SET status = 'filled' WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", params![cid(3)])
-        .unwrap();
+    c.execute(
+        "UPDATE order_state SET status = 'filled' WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+        params![cid(3)],
+    )
+    .unwrap();
     assert_eq!(crate::indexer::reads::history_from(c).unwrap(), Some(2_000));
     // no closed order at all: the oldest event; an empty store: none
     c.execute("DELETE FROM order_state WHERE status = 'filled'", []).unwrap();
