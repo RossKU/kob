@@ -431,7 +431,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       <div class="stack" data-testid="orders-view">
         <h1>{t('orders.title')}</h1>
         {/* the one disconnected state of the app: the sentence and the Connect of the header (review M-12) */}
-        <EmptyState icon="wallet" action={<ConnectBar gate />} data-testid="orders-connect">{t('orders.connect')}</EmptyState>
+        <EmptyState icon="wallet" class="empty-state-wide" action={<ConnectBar gate />} data-testid="orders-connect">{t('orders.connect')}</EmptyState>
       </div>
     );
   }

@@ -556,6 +556,9 @@ small, .small { font-size: 0.85em; }
 .empty-state-compact { padding: 12px 8px; gap: 6px; }
 .empty-state-icon { color: var(--muted); opacity: 0.8; }
 .empty-state-text { margin: 0; max-width: 46ch; font-size: 0.95rem; }
+/* the connect sentences of Create token and Portfolio: a line count that does not drift with the width where the screen has room (Create two lines,
+   Portfolio one); a phone wraps them as it must, balanced so no word is left alone on a line */
+.empty-state-wide .empty-state-text { max-width: 60ch; text-wrap: balance; }
 .empty-state-action { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 /* a page with nothing to show until a wallet is connected: a plain line, not a banner (it is not news, only the empty state) */
 .empty-prompt { text-align: center; padding: 48px 16px; margin: 0; }

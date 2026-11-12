@@ -668,6 +668,7 @@ export function IssueView() {
         <div class="stack-sm" data-testid="issue-connect">
           <EmptyState
             icon="wallet"
+            class="empty-state-wide"
             data-testid="issue-connect-state"
             action={
               // a phone, or a desktop with no extension detected: the one Connect of the header (the extension if there is one, else the private key entry);
