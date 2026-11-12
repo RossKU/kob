@@ -1075,8 +1075,9 @@ async fn json_answers_are_gzip_only_for_a_client_that_accepts_it() {
     assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), want, "the same document");
 
     // a cached read (the response cache keeps the plain body) and a browser's list of encodings
-    let (_, hc, _) = raw(&app, &format!("/v1/stats/{}", h(TOKEN)), &[("accept-encoding", "br, gzip, deflate")]).await;
-    assert!(hc.get("content-encoding").is_none(), "a body below the threshold is sent as it is");
+    // (the activity totals: a market's stats outgrew the threshold with the two depth sides)
+    let (_, hc, small) = raw(&app, "/v1/stats", &[("accept-encoding", "br, gzip, deflate")]).await;
+    assert!(hc.get("content-encoding").is_none(), "a body below the threshold is sent as it is: {} B", small.len());
     let (_, hb, _) = raw(&app, "/v1/orders", &[("accept-encoding", "br")]).await;
     assert!(hb.get("content-encoding").is_none(), "only gzip is offered");
     let (_, hi, _) = raw(&app, "/v1/orders", &[("accept-encoding", "identity")]).await;
