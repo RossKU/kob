@@ -1,7 +1,7 @@
 // The summary at the top of the Activity page: all time, a time window (1D / 7D / 1M / 1Y) with its volume chart, and the books now (summary-model.ts).
 // Read from the indexer every minute: the token list, the pairs and the KAS candles of each token (daily for all time and the long windows, hourly for
-// 1D and 7D, only for tokens that traded in the last two weeks) and the store's activity totals (all time, and the chosen window: orders, traders, fees paid
-// to executors, the KAS locked). Figures an indexer does not report (an older one has no `/v1/stats`; executors are recorded by none) show "—". Nothing
+// 1D and 7D, only for tokens that traded in the last two weeks) and the store's activity totals (all time, and the chosen window: orders, traders, what the
+// executors earned, what they paid the miners, the KAS locked). Figures an indexer does not report (an older one has no `/v1/stats`; executors are recorded by none) show "—". Nothing
 // shows without an indexer or in standalone mode (the node alone has no history).
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
@@ -97,12 +97,16 @@ function money(sompi: bigint, fiat: Fiat | null, fine = false): { text: string; 
   return { text: sompiToUsdCompact(sompi, fiat), title: kasTitleOf(formatKas(sompi, { group: ',' }), fiat) };
 }
 
-function Stat(props: { label: string; value: string | null; sub?: string | null; kas?: boolean; usd?: boolean; tip?: string | undefined; testid: string }) {
+function Stat(props: { label: string; value: string | null; sub?: string | null; kas?: boolean; usd?: boolean; tip?: string | undefined; help?: string | undefined; testid: string }) {
   const known = props.value !== null;
+  // a figure with a help text: the exact value, then what the figure is (the label carries the help text alone)
+  const title = known ? (props.help && props.tip ? `${props.tip}\n${props.help}` : (props.tip ?? props.help)) : UNKNOWN;
   return (
     <div class="sum-stat" data-testid={props.testid}>
-      <span class="sum-k">{props.label}</span>
-      <span class="sum-v" title={known ? props.tip : UNKNOWN}>
+      <span class="sum-k" title={props.help}>
+        {props.label}
+      </span>
+      <span class="sum-v" title={title}>
         {known ? props.value : DASH}
         {known && props.kas && !props.usd ? <span class="sum-unit">KAS</span> : null}
       </span>
@@ -172,6 +176,10 @@ export function ActivitySummary() {
   const num = (n: number | null | undefined): string | null => (n === null || n === undefined ? null : n.toLocaleString('en-US'));
   const kas = (v: bigint | null | undefined): string | null => (v === null || v === undefined ? null : money(v, fiat, true).text);
   const kasTip = (v: bigint | null | undefined): string | undefined => (v === null || v === undefined ? undefined : money(v, fiat, true).title);
+  // what a tile of the executors' side is, and how many transactions it left out
+  const notCounted = (n: number | null | undefined): string => (n ? ` ${t(n === 1 ? 'activity.summary.notCounted.one' : 'activity.summary.notCounted.other', { n: n.toLocaleString('en-US') })}` : '');
+  const incomeHelp = (a: { executorIncomeUnknown: number | null }): string => t('activity.summary.paidHelp') + notCounted(a.executorIncomeUnknown);
+  const minersHelp = (a: { minerFeesUnknown: number | null }): string => t('activity.summary.minersHelp') + notCounted(a.minerFeesUnknown);
   if (off || (data.error && !d)) return null;
   const loading = !view;
   const w = view?.w;
@@ -190,13 +198,14 @@ export function ActivitySummary() {
           {view ? (view.all.since === null ? t('activity.summary.sinceNone') : t('activity.summary.since', { date: dateFmt(view.all.since) })) : NBSP}
         </span>
       </div>
-      <div class="sum-strip sum-strip-6">
+      <div class="sum-strip sum-strip-7">
         <Stat label={t('activity.summary.volume')} value={view ? money(view.all.quote, fiat).text : ''} tip={view ? money(view.all.quote, fiat).title : undefined} kas usd={!!fiat} testid="summary-all-volume" />
         <Stat label={t('activity.summary.trades')} value={view ? view.all.trades.toLocaleString('en-US') : ''} testid="summary-all-trades" />
         <Stat label={t('activity.summary.orders')} value={view ? num(view.allAct.orders) : ''} testid="summary-all-orders" />
         <Stat label={t('activity.summary.traders')} value={view ? num(view.allAct.traders) : ''} testid="summary-all-traders" />
         <Stat label={t('activity.summary.executors')} value={view ? num(view.allAct.executors) : ''} testid="summary-all-executors" />
-        <Stat label={t('activity.summary.paid')} value={view ? kas(view.allAct.paid) : ''} tip={view ? kasTip(view.allAct.paid) : undefined} kas usd={!!fiat} testid="summary-all-paid" />
+        <Stat label={t('activity.summary.paid')} value={view ? kas(view.allAct.executorIncome) : ''} tip={view ? kasTip(view.allAct.executorIncome) : undefined} help={view ? incomeHelp(view.allAct) : undefined} kas usd={!!fiat} testid="summary-all-paid" />
+        <Stat label={t('activity.summary.miners')} value={view ? kas(view.allAct.minerFees) : ''} tip={view ? kasTip(view.allAct.minerFees) : undefined} help={view ? minersHelp(view.allAct) : undefined} kas usd={!!fiat} testid="summary-all-miners" />
       </div>
 
       <div class="sum-band">
@@ -271,7 +280,8 @@ export function ActivitySummary() {
           <Stat label={t('activity.summary.executors')} value={winAct ? num(winAct.executors) : ''} testid="summary-window-executors" />
           <Stat label={t('activity.summary.orders')} value={winAct ? num(winAct.orders) : ''} testid="summary-window-orders" />
           <Stat label={t('activity.summary.traders')} value={winAct ? num(winAct.traders) : ''} testid="summary-window-traders" />
-          <Stat label={t('activity.summary.paid')} value={winAct ? kas(winAct.paid) : ''} tip={winAct ? kasTip(winAct.paid) : undefined} kas usd={!!fiat} testid="summary-window-paid" />
+          <Stat label={t('activity.summary.paid')} value={winAct ? kas(winAct.executorIncome) : ''} tip={winAct ? kasTip(winAct.executorIncome) : undefined} help={winAct ? incomeHelp(winAct) : undefined} kas usd={!!fiat} testid="summary-window-paid" />
+          <Stat label={t('activity.summary.miners')} value={winAct ? kas(winAct.minerFees) : ''} tip={winAct ? kasTip(winAct.minerFees) : undefined} help={winAct ? minersHelp(winAct) : undefined} kas usd={!!fiat} testid="summary-window-miners" />
         </div>
       </div>
 

@@ -306,8 +306,17 @@ export function depthView(chain, tokenId, q) {
  * `GET /v1/stats?since=`: the store's activity totals over the range from `since` (unix ms, rounded down to the minute; all time without it):
  * orders placed (create events), their distinct makers, what the fills released to their fillers (amount x tip / scale per fill, the order's tip)
  * and the KAS in the live order UTXOs now. `executors` is null: the mock chain records no fill's funder (an indexer of schema 10 counts them).
+ *
+ * The executors' side, per fill transaction (a synthetic but deterministic rule): income = the tips of its fills + ACTIVITY_SPREAD_SOMPI, miner fee =
+ * ACTIVITY_MINER_FEE_SOMPI, net = income - fee (all of them known, the unknown counts 0). `knobs` (`POST /mock/activity-stats`): `legacy` serves an older indexer
+ * (none of the new fields, only `fees_paid`), `incomeUnknownTxs` / `minerFeeUnknownTxs` are the unknown counts, `negativeIncome` negates the income (and the net follows).
+ * `fees_paid` stays the tip sum (deprecated), `tips_paid` is the same value.
  */
-export function activityView(chain, q) {
+export const ACTIVITY_SPREAD_SOMPI = 3_000_000n;
+export const ACTIVITY_MINER_FEE_SOMPI = 2_000_000n;
+export const DEFAULT_ACTIVITY_KNOBS = Object.freeze({ legacy: false, incomeUnknownTxs: 0, minerFeeUnknownTxs: 0, negativeIncome: false });
+
+export function activityView(chain, q, knobs = DEFAULT_ACTIVITY_KNOBS) {
   const raw = intParam(q, 'since');
   if (raw !== null && raw < 0) throw badRequest('since must be a unix time in milliseconds');
   const since = raw === null ? null : raw - (raw % 60_000);
@@ -315,6 +324,7 @@ export function activityView(chain, q) {
   const makers = new Set();
   let orders = 0;
   let fees = 0n;
+  const txs = new Map(); // fill transaction -> the tips of its fills
   let ts = null;
   for (const ev of chain.events) {
     ts = ts === null || ev.ts > ts ? ev.ts : ts;
@@ -325,10 +335,30 @@ export function activityView(chain, q) {
       if (o) makers.add(o.state.state.maker);
     } else if (ev.kind === 'fill' && o && ev.amount !== null) {
       const t = termsOf(o.state);
-      if (t.scale > 0n && t.tip > 0n) fees += (BigInt(ev.amount) * t.tip) / t.scale;
+      const tip = t.scale > 0n && t.tip > 0n ? (BigInt(ev.amount) * t.tip) / t.scale : 0n;
+      fees += tip;
+      txs.set(ev.txid, (txs.get(ev.txid) ?? 0n) + tip);
     }
   }
+  let income = 0n;
+  for (const tips of txs.values()) income += tips + ACTIVITY_SPREAD_SOMPI;
+  const minerFees = ACTIVITY_MINER_FEE_SOMPI * BigInt(txs.size);
+  if (knobs.negativeIncome) income = -income;
   let locked = 0n;
   for (const o of chain.orders.values()) if ((o.status === 'open' || o.status === 'partial') && o.current) locked += o.current.value;
-  return { since, ts, orders, traders: makers.size, executors: null, fees_paid: fees.toString(), kas_locked: locked.toString() };
+  const base = { since, ts, orders, traders: makers.size, executors: null, fees_paid: fees.toString(), kas_locked: locked.toString() };
+  if (knobs.legacy) return base;
+  const n = txs.size;
+  return {
+    ...base,
+    tips_paid: fees.toString(),
+    executor_income: income.toString(),
+    executor_income_txs: n,
+    executor_income_unknown_txs: knobs.incomeUnknownTxs,
+    miner_fees: minerFees.toString(),
+    miner_fee_txs: n,
+    miner_fee_unknown_txs: knobs.minerFeeUnknownTxs,
+    executor_net: (income - minerFees).toString(),
+    executor_net_txs: n,
+  };
 }

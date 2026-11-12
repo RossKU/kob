@@ -146,6 +146,8 @@ export async function startMockServer(opts = {}) {
   const sessions = new Set();
   // the KAS/USD price: `mode` ok | off (404, an indexer without `usd_price`) | down (503, no price yet); `ageS`: how old its `at` is (0 = taken now); `reads` counts the reads
   let kasPrice = { ...DEFAULT_KAS_PRICE, mode: 'ok', ageS: 0, reads: 0 };
+  // what `GET /v1/stats` serves of the executors' side (`POST /mock/activity-stats`; `/mock/reset` restores the default)
+  let activityKnobs = { ...M.DEFAULT_ACTIVITY_KNOBS };
 
   const seedAll = (withSeed, withFund, withHistory = false, withPair = false) => {
     if (withSeed) applyDefaultSeed(chain);
@@ -267,7 +269,7 @@ export async function startMockServer(opts = {}) {
     // ---- market data: trades, candles, 24 h stats, depth
     if (get && (m = /^\/v1\/trades\/([^/]+)$/.exec(path))) return ok(M.tradesPage(chain, m[1], q));
     if (get && (m = /^\/v1\/candles\/([^/]+)$/.exec(path))) return ok(M.candlesView(chain, m[1], q));
-    if (get && path === '/v1/stats') return ok(M.activityView(chain, q));
+    if (get && path === '/v1/stats') return ok(M.activityView(chain, q, activityKnobs));
     if (get && (m = /^\/v1\/stats\/([^/]+)$/.exec(path))) return ok(M.statsView(chain, m[1]));
     if (get && (m = /^\/v1\/depth\/([^/]+)$/.exec(path))) return ok(M.depthView(chain, m[1], q));
     // ---- token/token pairs (pair orders): the pair book, the pair list, candles derived from the two KAS series, pair fills (pairs.mjs)
@@ -324,6 +326,7 @@ export async function startMockServer(opts = {}) {
       blockLog.reset();
       feeEstimate = { ...DEFAULT_FEE_ESTIMATE };
       kasPrice = { ...DEFAULT_KAS_PRICE, mode: 'ok', ageS: 0, reads: 0 };
+      activityKnobs = { ...M.DEFAULT_ACTIVITY_KNOBS };
       seedAll(body.seed !== false, body.fund === true, body.history ?? false, body.pair ?? false);
       return ok(summary(chain));
     }
@@ -371,6 +374,17 @@ export async function startMockServer(opts = {}) {
         kasPrice.mode = body.mode;
       }
       return ok(kasPrice);
+    }
+    // the executors' side of `GET /v1/stats`: `{ legacy?, incomeUnknownTxs?, minerFeeUnknownTxs?, negativeIncome? }` (a field left out is kept): `legacy` serves an older
+    // indexer without the new fields, the unknown counts are the transactions it could not price, `negativeIncome` negates the income
+    if (post && path === '/mock/activity-stats') {
+      for (const k of ['incomeUnknownTxs', 'minerFeeUnknownTxs']) {
+        if (body[k] === undefined) continue;
+        if (!Number.isSafeInteger(body[k]) || body[k] < 0) throw badRequest(`${k} must be a non-negative integer`);
+        activityKnobs[k] = body[k];
+      }
+      for (const k of ['legacy', 'negativeIncome']) if (body[k] !== undefined) activityKnobs[k] = body[k] === true;
+      return ok(activityKnobs);
     }
     if (post && path === '/mock/fee-estimate') {
       feeEstimate = body.off ? null : { priority: Number(body.priority ?? 100), normal: Number(body.normal ?? 100), low: Number(body.low ?? 100) };

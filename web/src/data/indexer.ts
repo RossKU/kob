@@ -164,12 +164,32 @@ export const CANDLE_INTERVALS: readonly CandleInterval[] = ['1m', '5m', '1h', '1
 const count = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
 const sompiOf = (v: unknown): string | null => (typeof v === 'string' && /^\d+$/.test(v) ? v : null);
 
+/** A signed sompi decimal string (an executor's income and net can be negative: "-1500"). */
+const signedSompiOf = (v: unknown): string | null => (typeof v === 'string' && /^-?\d+$/.test(v) ? v : null);
+
 /** The activity totals as the summary reads them: a field of another shape is null (shown as a dash), and no `orders` or `kas_locked` means it is not this route. */
 function adaptActivity(r: Record<string, unknown>): ActivityStatsView | null {
   const orders = count(r.orders);
   const locked = sompiOf(r.kas_locked);
   if (orders === null || locked === null) return null;
-  return { since: count(r.since), ts: count(r.ts), orders, traders: count(r.traders), executors: count(r.executors), fees_paid: sompiOf(r.fees_paid), kas_locked: locked };
+  return {
+    since: count(r.since),
+    ts: count(r.ts),
+    orders,
+    traders: count(r.traders),
+    executors: count(r.executors),
+    fees_paid: sompiOf(r.fees_paid),
+    tips_paid: sompiOf(r.tips_paid),
+    executor_income: signedSompiOf(r.executor_income),
+    executor_income_txs: count(r.executor_income_txs),
+    executor_income_unknown_txs: count(r.executor_income_unknown_txs),
+    miner_fees: sompiOf(r.miner_fees),
+    miner_fee_txs: count(r.miner_fee_txs),
+    miner_fee_unknown_txs: count(r.miner_fee_unknown_txs),
+    executor_net: signedSompiOf(r.executor_net),
+    executor_net_txs: count(r.executor_net_txs),
+    kas_locked: locked,
+  };
 }
 
 /** HTTP answers that mean "this indexer does not serve that route" (an older build): the market-data readers resolve to null on them. */
@@ -208,7 +228,7 @@ export interface IndexerApi {
   stats(token: Hex, o?: RequestOptions): Promise<StatsView | null>;
   depth(token: Hex, q?: { levels?: number }, o?: RequestOptions): Promise<DepthView | null>;
   /**
-   * `GET /v1/stats?since=<unix ms>`: the store's activity totals (orders placed, traders, fees paid to executors, KAS locked; all time without `since`).
+   * `GET /v1/stats?since=<unix ms>`: the store's activity totals (orders placed, traders, what the executors earned and paid the miners, KAS locked; all time without `since`).
    * Resolves to `null` on an indexer without the route (404 / 405 / 501) or an answer of another shape: the Activity summary keeps its dash.
    */
   activity(q?: { since?: number }, o?: RequestOptions): Promise<ActivityStatsView | null>;

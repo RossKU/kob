@@ -86,13 +86,64 @@ describe('numbers', () => {
 });
 
 describe('the activity totals', () => {
-  const view: ActivityStatsView = { since: null, ts: 1, orders: 42, traders: 9, executors: null, fees_paid: '250000000', kas_locked: '880000000000' };
+  // an older indexer: only the tip sum (`fees_paid`), none of the executors' fields
+  const view: ActivityStatsView = {
+    since: null,
+    ts: 1,
+    orders: 42,
+    traders: 9,
+    executors: null,
+    fees_paid: '250000000',
+    tips_paid: null,
+    executor_income: null,
+    executor_income_txs: null,
+    executor_income_unknown_txs: null,
+    miner_fees: null,
+    miner_fee_txs: null,
+    miner_fee_unknown_txs: null,
+    executor_net: null,
+    executor_net_txs: null,
+    kas_locked: '880000000000',
+  };
+  const full: ActivityStatsView = {
+    ...view,
+    tips_paid: '250000000',
+    executor_income: '1250000000',
+    executor_income_txs: 7,
+    executor_income_unknown_txs: 2,
+    miner_fees: '40000000',
+    miner_fee_txs: 8,
+    miner_fee_unknown_txs: 1,
+    executor_net: '1000000000',
+    executor_net_txs: 6,
+  };
 
   it('reads them as numbers and sompi; every figure is a dash for an indexer without them', () => {
-    expect(activityFigures(view)).toEqual({ orders: 42, traders: 9, executors: null, paid: 250_000_000n, locked: 880_000_000_000n });
-    expect(activityFigures({ ...view, fees_paid: null, traders: null })).toMatchObject({ traders: null, paid: null });
-    const none = { orders: null, traders: null, executors: null, paid: null, locked: null };
+    expect(activityFigures(full)).toEqual({
+      orders: 42,
+      traders: 9,
+      executors: null,
+      executorIncome: 1_250_000_000n,
+      executorIncomeUnknown: 2,
+      minerFees: 40_000_000n,
+      minerFeesUnknown: 1,
+      locked: 880_000_000_000n,
+    });
+    expect(activityFigures({ ...full, traders: null })).toMatchObject({ traders: null, executorIncome: 1_250_000_000n });
+    const none = { orders: null, traders: null, executors: null, executorIncome: null, executorIncomeUnknown: null, minerFees: null, minerFeesUnknown: null, locked: null };
     expect([activityFigures(null), activityFigures(undefined)]).toEqual([none, none]);
+  });
+
+  it('an indexer without the new income and fee fields shows a dash, never the tip sum under their labels', () => {
+    expect(activityFigures(view)).toEqual({ orders: 42, traders: 9, executors: null, executorIncome: null, executorIncomeUnknown: null, minerFees: null, minerFeesUnknown: null, locked: 880_000_000_000n });
+    // each side on its own: an income without a fee figure, a fee without an income
+    expect(activityFigures({ ...view, executor_income: '5', executor_income_txs: 1, executor_income_unknown_txs: 0 })).toMatchObject({ executorIncome: 5n, executorIncomeUnknown: 0, minerFees: null, minerFeesUnknown: null });
+    expect(activityFigures({ ...view, miner_fees: '9', miner_fee_txs: 1, miner_fee_unknown_txs: 0 })).toMatchObject({ executorIncome: null, minerFees: 9n, minerFeesUnknown: 0 });
+  });
+
+  it('keeps the sign of an income that is negative, and a zero', () => {
+    expect(activityFigures({ ...full, executor_income: '-1500' }).executorIncome).toBe(-1500n);
+    expect(activityFigures({ ...full, executor_income: '0', miner_fees: '0' })).toMatchObject({ executorIncome: 0n, minerFees: 0n });
   });
 
   it('shows the executors an indexer counts, a dash where it counts none', () => {
@@ -107,6 +158,11 @@ describe('the activity totals', () => {
     expect(activitySince('7D', now)).toBe(Date.UTC(2026, 10, 1, 13, 20));
     expect(activitySince('1M', now)).toBe(Date.UTC(2026, 9, 9, 13, 20));
     expect(activitySince('1Y', now)).toBe(now - 364 * D - (now % 60_000));
+  });
+
+  it('shows a negative sum with its minus sign, and a negative that rounds to nothing as a plain 0', () => {
+    expect([fineKas(-1_250_000_000n), fineKas(-37_999_999n), fineKas(-84_000n * KAS), fineKas(-412_999n * KAS), fineKas(-1_500n)]).toEqual(['-12.5', '-0.37', '-84,000', '-412K', '0']);
+    expect([compactKas(-9_840n * KAS), compactKas(-9_819_999n * KAS), compactKas(-1_500n)]).toEqual(['-9,840', '-9.81M', '0']);
   });
 
   it('shows a small sum to the cent and a large one compact, never rounded up', () => {

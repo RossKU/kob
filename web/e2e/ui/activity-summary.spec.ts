@@ -16,6 +16,19 @@ const STATS_URL = /\/v1\/stats(\?|$)/;
 
 const num = (s: string | null) => Number((s ?? '').replace(/[^0-9.]/g, ''));
 
+/** the tooltips of the executors' tiles (the help text is the label's title and follows the exact figure in the figure's) */
+const INCOME_HELP = 'What KOB transactions left to the executors that sent them: the spread between crossing orders, auction margins and keeper tips, before network fees.';
+const MINERS_HELP = 'Network fees of the KOB transactions the executors sent.';
+
+/** sompi (a decimal string, maybe negative) as the tiles' tooltip words it: whole KAS, grouped by thousands, trailing zeros trimmed */
+function exactKas(sompi: string): string {
+  const v = BigInt(sompi);
+  const a = v < 0n ? -v : v;
+  const frac = (a % 100_000_000n).toString().padStart(8, '0').replace(/0+$/, '');
+  const whole = (a / 100_000_000n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${v < 0n ? '-' : ''}${whole}${frac ? `.${frac}` : ''} KAS`;
+}
+
 test.describe('activity summary', () => {
   test.use({ viewport: { width: 1440, height: 1000 } });
 
@@ -29,10 +42,23 @@ test.describe('activity summary', () => {
     await expect(page.getByTestId('summary-all-volume')).toContainText('KAS');
     expect(num(await page.getByTestId('summary-all-trades').locator('.sum-v').textContent())).toBeGreaterThan(0);
     await expect(page.getByTestId('activity-summary-since')).toContainText('since the first trade');
-    // the indexer's totals (GET /v1/stats): orders placed, traders, fees paid to executors, the KAS locked in live orders; executors are recorded by no indexer ("—")
+    // the indexer's totals (GET /v1/stats): orders placed, traders, what the executors earned and paid the miners, the KAS locked in live orders; executors are recorded by no indexer ("—")
     expect(num(await page.getByTestId('summary-all-orders').locator('.sum-v').textContent())).toBeGreaterThan(0);
     expect(num(await page.getByTestId('summary-all-traders').locator('.sum-v').textContent())).toBeGreaterThan(0);
     await expect(page.getByTestId('summary-all-paid').locator('.sum-v')).toContainText('KAS');
+    // what the executors earned and paid the miners, from the indexer's own fields (never the tip sum): the mock's fill transactions leave 0.03 KAS plus their tips each and cost 0.02 KAS each
+    const totals = await mock.get<{ executor_income: string; miner_fees: string; executor_income_txs: number }>('/v1/stats');
+    expect(totals.executor_income_txs).toBeGreaterThan(0);
+    for (const [id, help, sompi] of [['paid', INCOME_HELP, totals.executor_income], ['miners', MINERS_HELP, totals.miner_fees]] as const) {
+      const tile = page.getByTestId(`summary-all-${id}`);
+      await expect(tile.locator('.sum-v')).toContainText('KAS');
+      await expect(tile.locator('.sum-v')).toHaveAttribute('title', `${exactKas(sompi)}\n${help}`);
+      await expect(tile.locator('.sum-k')).toHaveAttribute('title', help);
+    }
+    await expect(page.getByTestId('summary-all-paid').locator('.sum-k')).toHaveText('Paid to executors');
+    await expect(page.getByTestId('summary-all-miners').locator('.sum-k')).toHaveText('Paid to miners');
+    await expect(page.getByTestId('summary-window-miners').locator('.sum-v')).toContainText('KAS');
+    await expect(page.getByTestId('summary-window-paid').locator('.sum-v')).toContainText('KAS');
     expect(num(await page.getByTestId('summary-now-locked').locator('.sum-v').textContent())).toBeGreaterThan(0);
     for (const id of ['summary-all-executors', 'summary-window-executors']) {
       await expect(page.getByTestId(id).locator('.sum-v')).toHaveText('—');
@@ -66,12 +92,48 @@ test.describe('activity summary', () => {
     expect(logBox.y).toBeGreaterThanOrEqual(sumBox.y + sumBox.height - 1);
   });
 
+  test('transactions the indexer could not price are said under the tile; a negative income keeps its minus sign', async ({ appPage: page, mock }) => {
+    await seed(page, mock);
+    await mock.activityStats({ incomeUnknownTxs: 3, minerFeeUnknownTxs: 1, negativeIncome: true });
+    await page.goto('/#/activity');
+    await expect(page.getByTestId('activity-summary')).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
+    for (const scope of ['all', 'window']) {
+      await expect(page.getByTestId(`summary-${scope}-paid`).locator('.sum-k')).toHaveAttribute('title', `${INCOME_HELP} 3 transactions not counted.`);
+      await expect(page.getByTestId(`summary-${scope}-paid`).locator('.sum-v')).toHaveAttribute('title', /^-[\d,.]+ KAS\n.* 3 transactions not counted\.$/);
+      await expect(page.getByTestId(`summary-${scope}-paid`).locator('.sum-v')).toHaveText(/^-[\d,.]+KAS$/);
+      await expect(page.getByTestId(`summary-${scope}-miners`).locator('.sum-k')).toHaveAttribute('title', `${MINERS_HELP} 1 transaction not counted.`);
+      await expect(page.getByTestId(`summary-${scope}-miners`).locator('.sum-v')).toHaveText(/^[\d,.]+KAS$/);
+    }
+    // none left out: no suffix (the default of the mock, checked by the test above)
+    await mock.activityStats({ incomeUnknownTxs: 0, minerFeeUnknownTxs: 0, negativeIncome: false });
+    await page.reload();
+    await expect(page.getByTestId('activity-summary')).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
+    await expect(page.getByTestId('summary-all-paid').locator('.sum-k')).toHaveAttribute('title', INCOME_HELP);
+    await expect(page.getByTestId('summary-all-miners').locator('.sum-k')).toHaveAttribute('title', MINERS_HELP);
+  });
+
+  test('an older indexer (only fees_paid, the tip sum) shows a dash for both tiles, not the tips', async ({ appPage: page, mock }) => {
+    await seed(page, mock);
+    await mock.activityStats({ legacy: true });
+    const old = await mock.get<Record<string, unknown>>('/v1/stats');
+    expect(old.fees_paid).toBeDefined();
+    expect(old.executor_income).toBeUndefined();
+    await page.goto('/#/activity');
+    await expect(page.getByTestId('activity-summary')).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
+    for (const id of ['summary-all-paid', 'summary-all-miners', 'summary-window-paid', 'summary-window-miners']) {
+      await expect(page.getByTestId(id).locator('.sum-v')).toHaveText('—');
+      await expect(page.getByTestId(id).locator('.sum-v')).toHaveAttribute('title', 'Not reported by this indexer yet');
+    }
+    // the rest of the totals are still there
+    expect(num(await page.getByTestId('summary-all-orders').locator('.sum-v').textContent())).toBeGreaterThan(0);
+  });
+
   test('an indexer without GET /v1/stats keeps the dash for every total and the rest of the summary works', async ({ appPage: page, mock }) => {
     await seed(page, mock);
     await page.route(STATS_URL, (route) => route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: { code: 'not_found', message: 'no such route' } }) }));
     await page.goto('/#/activity');
     await expect(page.getByTestId('activity-summary')).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
-    for (const id of ['summary-all-orders', 'summary-all-traders', 'summary-all-executors', 'summary-all-paid', 'summary-now-locked', 'summary-window-orders', 'summary-window-traders', 'summary-window-paid', 'summary-window-executors']) {
+    for (const id of ['summary-all-orders', 'summary-all-traders', 'summary-all-executors', 'summary-all-paid', 'summary-all-miners', 'summary-now-locked', 'summary-window-orders', 'summary-window-traders', 'summary-window-paid', 'summary-window-miners', 'summary-window-executors']) {
       await expect(page.getByTestId(id).locator('.sum-v')).toHaveText('—');
     }
     expect(num(await page.getByTestId('summary-all-trades').locator('.sum-v').textContent())).toBeGreaterThan(0);

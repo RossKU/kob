@@ -106,6 +106,13 @@ export class MockClient {
   kasPrice(v: { usd?: number; source?: string; ageS?: number; mode?: 'ok' | 'off' | 'down' } = {}) {
     return this.post<{ usd: number; source: string; ageS: number; mode: string; reads: number }>('/mock/kas-price', v);
   }
+  /**
+   * The executors' side of the mock indexer's `GET /v1/stats` (a field left out is kept): `legacy` serves an older indexer without the new fields, `incomeUnknownTxs` and
+   * `minerFeeUnknownTxs` are the transactions not counted, `negativeIncome` negates the executors' income. `mock.reset()` restores the default.
+   */
+  activityStats(v: { legacy?: boolean; incomeUnknownTxs?: number; minerFeeUnknownTxs?: number; negativeIncome?: boolean } = {}) {
+    return this.post<{ legacy: boolean; incomeUnknownTxs: number; minerFeeUnknownTxs: number; negativeIncome: boolean }>('/mock/activity-stats', v);
+  }
   /** The KAS price state and the reads so far. */
   kasPriceReads() {
     return this.get<{ reads: number }>('/mock/kas-price').then((r) => r.reads);

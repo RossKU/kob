@@ -1,9 +1,10 @@
 // The Activity page's summary (ActivitySummary.tsx): all time, a time window (1D / 7D / 1M / 1Y) with its volume chart, and the books now. Pure, tested
 // in summary-model.test.ts. Built from what the indexer serves: the KAS candles of every token (`/v1/candles`), the token list's open orders and the
-// pairs' live orders, and the store's activity totals (`/v1/stats?since=`: orders placed, traders, fees paid to executors, the KAS locked in orders).
+// pairs' live orders, and the store's activity totals (`/v1/stats?since=`: orders placed, traders, what the executors earned and paid the miners, the KAS locked in orders).
 // Volume and trades are the KAS markets' (exact, sompi): a pair fill carries no KAS price, and most go through the KAS books, whose fills these already
 // count. What an indexer does not report (an older one has no `/v1/stats`, or null executors: one before schema 10 recorded no fill's funder) is null:
-// the page shows "—".
+// the page shows "—". The executors' income and the miners' fees come from their own fields (`executor_income`, `miner_fees`): never from `fees_paid`, which is only the
+// priority-tip sum, so an indexer without them shows a dash, not a smaller number under the wrong label.
 import { unorderedPairKey } from '../market/pair-model';
 import type { ActivityStatsView, CandleView, IndexerTokenView, PairSummaryView } from '../../data/indexer-types';
 
@@ -134,16 +135,31 @@ export interface ActivityFigures {
   orders: number | null;
   traders: number | null;
   executors: number | null;
-  /** sompi released to the fillers */
-  paid: bigint | null;
+  /** sompi the range's KOB transactions left to the executors that sent them, before network fees (negative when they lost; null: an indexer without the field) */
+  executorIncome: bigint | null;
+  /** executor transactions whose income is not known, so not in `executorIncome` (null: not reported) */
+  executorIncomeUnknown: number | null;
+  /** sompi of network fees of those transactions (null: an indexer without the field) */
+  minerFees: bigint | null;
+  /** transactions whose fee is not known, so not in `minerFees` (null: not reported) */
+  minerFeesUnknown: number | null;
   /** sompi in the live orders now */
   locked: bigint | null;
 }
 
 /** The activity totals as the page shows them; every figure is null (a dash) for an indexer that does not report them. */
 export function activityFigures(v: ActivityStatsView | null | undefined): ActivityFigures {
-  if (!v) return { orders: null, traders: null, executors: null, paid: null, locked: null };
-  return { orders: v.orders, traders: v.traders, executors: v.executors, paid: v.fees_paid === null ? null : big(v.fees_paid), locked: big(v.kas_locked) };
+  if (!v) return { orders: null, traders: null, executors: null, executorIncome: null, executorIncomeUnknown: null, minerFees: null, minerFeesUnknown: null, locked: null };
+  return {
+    orders: v.orders,
+    traders: v.traders,
+    executors: v.executors,
+    executorIncome: v.executor_income === null ? null : signed(v.executor_income),
+    executorIncomeUnknown: v.executor_income === null ? null : v.executor_income_unknown_txs,
+    minerFees: v.miner_fees === null ? null : big(v.miner_fees),
+    minerFeesUnknown: v.miner_fees === null ? null : v.miner_fee_unknown_txs,
+    locked: big(v.kas_locked),
+  };
 }
 
 export interface BooksNow {
@@ -183,6 +199,7 @@ export function changePct(now: bigint | number, prev: bigint | number | null): n
 
 /** Whole KAS of a sompi amount, compact: 9,840 · 412K · 9.81M (the suffixes are the kit's: K, M, B) (no rounding up past what was traded). */
 export function compactKas(sompi: bigint): string {
+  if (sompi < 0n) return negated(compactKas(-sompi));
   const kas = Number(sompi / 1_000_000n) / 100;
   if (kas >= 1e9) return `${trim(kas / 1e9)}B`;
   if (kas >= 1e6) return `${trim(kas / 1e6)}M`;
@@ -192,6 +209,7 @@ export function compactKas(sompi: bigint): string {
 
 /** KAS of a sompi amount where it is small, to the cent (0.37 · 12.5 · 840); from 1,000 KAS up as [`compactKas`]. Never rounded up. */
 export function fineKas(sompi: bigint): string {
+  if (sompi < 0n) return negated(fineKas(-sompi));
   if (sompi >= 1_000n * 100_000_000n) return compactKas(sompi);
   const cents = sompi / 1_000_000n;
   const whole = cents / 100n;
@@ -216,8 +234,18 @@ export function barPct(quote: bigint, top: bigint): string {
   return `${(Number((quote * 1000n) / top) / 10).toFixed(1)}%`;
 }
 
+/** A figure of a negative amount: its minus sign, except where it rounds down to a plain 0. */
+function negated(text: string): string {
+  return text === '0' ? text : `-${text}`;
+}
+
 function trim(v: number): string {
   return (Math.floor(v * 100) / 100).toFixed(2).replace(/\.?0+$/, '');
+}
+
+/** A signed sompi decimal string (an income can be negative); anything else is 0. */
+function signed(s: string): bigint {
+  return /^-?\d+$/.test(s) ? BigInt(s) : 0n;
 }
 
 function big(s: string | null | undefined): bigint {

@@ -443,6 +443,12 @@ export interface CandlesView {
  * to the newest block (docs/api-reference.md 3.21). An indexer of schema 10 answers every figure (`executors`: the distinct scripts that funded the
  * range's fills, those it recorded); an earlier one has `traders` and `fees_paid` null beyond its scan caps and `executors` always null. `kas_locked`
  * (sompi) is the live order UTXOs now, whatever the range.
+ *
+ * The executors' side of the range (an older indexer has none of these fields: null): `executor_income` is what the KOB transactions left to the executors that
+ * sent them (crossing spread, auction margins, keeper tips) before network fees, summed over the transactions whose income is known (`executor_income_txs`;
+ * `executor_income_unknown_txs` are not counted); it can be NEGATIVE. `tips_paid` is the priority-tip sum; `fees_paid` is the same value, deprecated. `miner_fees`
+ * are the network fees of those transactions, over the ones whose fee is known (`miner_fee_txs`, `miner_fee_unknown_txs`). `executor_net` is income minus fee over
+ * the transactions where both are known (`executor_net_txs`); it can be negative, and the page does not show it yet.
  */
 export interface ActivityStatsView {
   since: number | null;
@@ -450,7 +456,19 @@ export interface ActivityStatsView {
   orders: number;
   traders: number | null;
   executors: number | null;
+  /** deprecated: the tip sum, the same as `tips_paid` */
   fees_paid: string | null;
+  tips_paid: string | null;
+  /** sompi, signed decimal */
+  executor_income: string | null;
+  executor_income_txs: number | null;
+  executor_income_unknown_txs: number | null;
+  miner_fees: string | null;
+  miner_fee_txs: number | null;
+  miner_fee_unknown_txs: number | null;
+  /** sompi, signed decimal */
+  executor_net: string | null;
+  executor_net_txs: number | null;
   kas_locked: string;
 }
 

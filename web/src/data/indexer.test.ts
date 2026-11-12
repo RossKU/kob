@@ -231,7 +231,21 @@ describe('HttpIndexer.tokenUtxos', () => {
 });
 
 describe('HttpIndexer activity totals (GET /v1/stats)', () => {
-  const body = { since: 1_790_000_000_000, ts: 1_790_086_000_000, orders: 42, traders: 9, executors: null, fees_paid: '1250000', kas_locked: '880000000000' };
+  // an older indexer: none of the executors' fields
+  const old = { since: 1_790_000_000_000, ts: 1_790_086_000_000, orders: 42, traders: 9, executors: null, fees_paid: '1250000', kas_locked: '880000000000' };
+  const gone = { tips_paid: null, executor_income: null, executor_income_txs: null, executor_income_unknown_txs: null, miner_fees: null, miner_fee_txs: null, miner_fee_unknown_txs: null, executor_net: null, executor_net_txs: null };
+  const body = {
+    ...old,
+    tips_paid: '1250000',
+    executor_income: '9000000',
+    executor_income_txs: 5,
+    executor_income_unknown_txs: 2,
+    miner_fees: '4000000',
+    miner_fee_txs: 6,
+    miner_fee_unknown_txs: 1,
+    executor_net: '3500000',
+    executor_net_txs: 4,
+  };
 
   it('asks with since (whole ms, never negative) or without, and returns the totals', async () => {
     const { f, calls } = stub(() => json(body));
@@ -240,6 +254,22 @@ describe('HttpIndexer activity totals (GET /v1/stats)', () => {
     await ix.activity();
     await ix.activity({ since: -5 });
     expect(calls.map((u) => u.pathname + u.search)).toEqual(['/v1/stats?since=1790000000000', '/v1/stats', '/v1/stats?since=0']);
+  });
+
+  it('reads what the executors earned, what the miners got and the net, income and net signed', async () => {
+    const got = await new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json({ ...body, executor_income: '-1500', executor_net: '-4001500' })).f }).activity();
+    expect(got).toMatchObject({ fees_paid: '1250000', tips_paid: '1250000', executor_income: '-1500', executor_income_txs: 5, executor_income_unknown_txs: 2, miner_fees: '4000000', miner_fee_txs: 6, miner_fee_unknown_txs: 1, executor_net: '-4001500', executor_net_txs: 4 });
+  });
+
+  it('an older indexer has none of the new fields: they are null, fees_paid stays', async () => {
+    expect(await new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json(old)).f }).activity()).toEqual({ ...old, ...gone });
+  });
+
+  it('a new field of another shape is null: a sign only where a sum may be negative, no fraction, no negative count', async () => {
+    const odd = { ...body, tips_paid: '-5', miner_fees: '-4000000', executor_income: '12.5', executor_net: 7, executor_income_txs: -1, executor_income_unknown_txs: '2', miner_fee_txs: 1.5, miner_fee_unknown_txs: null, executor_net_txs: 'x' };
+    const got = await new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json(odd)).f }).activity();
+    expect(got).toMatchObject({ ...gone, fees_paid: '1250000', orders: 42 });
+    expect((await new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json({ ...body, executor_income: '-', executor_net: '--1' })).f }).activity())).toMatchObject({ executor_income: null, executor_net: null });
   });
 
   it('keeps a null count and drops a field of another shape', async () => {
