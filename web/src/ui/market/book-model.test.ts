@@ -186,16 +186,26 @@ describe('price aggregation (tick grouping)', () => {
     ]);
   });
 
-  it('builds a grouped book: cumulative depth and the touch follow the grouping', () => {
+  it('builds a grouped book: the rows follow the grouping, the touch, spread and mid stay those of the ungrouped levels', () => {
     const view = { asks: [lv('101', 2), lv('105', 3), lv('112', 4)], bids: [lv('99', 1), lv('95', 2), lv('88', 5)] };
     const flat = buildBookModel(view);
     expect(flat.asks.map((r) => r.price)).toEqual([101n, 105n, 112n]);
     const m = buildBookModel(view, { group: 10n });
     expect(m.asks.map((r) => [r.price, r.amount, r.cumAmount])).toEqual([[110n, 5n, 5n], [120n, 4n, 9n]]);
     expect(m.bids.map((r) => [r.price, r.amount, r.cumAmount])).toEqual([[90n, 3n, 3n], [80n, 5n, 8n]]);
-    expect(m.bestAsk).toBe(110n);
-    expect(m.bestBid).toBe(90n);
+    // grouping rounds asks up and bids down: the grouped rows are 110 / 90, the book's touch is still 101 / 99
+    expect(m.bestAsk).toBe(101n);
+    expect(m.bestBid).toBe(99n);
+    expect(m.spread).toBe(2n);
+    expect(m.mid).toBe(100n);
+    expect(m.spreadBps).toBe(buildBookModel(view).spreadBps);
+    expect(m.spread).toBe(flat.spread);
+    expect(m.mid).toBe(flat.mid);
     expect(m.asks.at(-1)!.depthPct).toBe(100);
+    // the cumulative value is what the orders are worth at their own prices (2 x 101 + 3 x 105 = 517), not the amount at the group's rounded price (5 x 110 = 550)
+    expect(m.asks.map((r) => r.cumValue)).toEqual([517n, 965n]);
+    expect(m.bids.map((r) => r.cumValue)).toEqual([99n + 190n, 99n + 190n + 440n]);
+    expect(flat.asks.map((r) => r.cumValue)).toEqual([202n, 517n, 965n]);
   });
 
   it('infers the tick from the visible prices and offers 1x..1000x', () => {

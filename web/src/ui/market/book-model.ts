@@ -32,8 +32,10 @@ export interface BookModel {
   bids: BookRow[];
   /** asks in display order: highest price at the top, best ask directly above the spread */
   asksDisplay: BookRow[];
+  /** the touch: the best ask / bid of the UNGROUPED levels (grouping rounds asks up and bids down, so the grouped rows would widen the spread and move the mid) */
   bestAsk: bigint | null;
   bestBid: bigint | null;
+  /** best ask - best bid, ungrouped (negative for a crossed book) */
   spread: bigint | null;
   /** spread relative to the mid price in basis points, rounded down */
   spreadBps: number | null;
@@ -44,8 +46,11 @@ export interface BookModel {
   empty: boolean;
 }
 
-/** One price level: `price` sompi per whole token of the market's scale, `amount` base units. */
-export interface Level { price: bigint; amount: bigint; orders: number; estimated: boolean; inv?: Rational }
+/**
+ * One price level: `price` sompi per whole token of the market's scale, `amount` base units. `value`: the KAS (sompi) the level's orders are worth at their OWN prices (`amount x price / scale`
+ * per ungrouped level, rounded down, summed over a group): a grouped level's `price` is its worst price, so `amount x price` would overstate it. Absent: `amount x price / scale`.
+ */
+export interface Level { price: bigint; amount: bigint; orders: number; estimated: boolean; inv?: Rational; value?: bigint }
 
 const isOrder = (r: LevelView | BookOrderView): r is BookOrderView => 'covenant_id' in r;
 
@@ -98,7 +103,7 @@ function accumulate(levels: Level[], max: bigint, scale: bigint): BookRow[] {
   let cumValue = 0n;
   return levels.map((l) => {
     cumAmount += l.amount;
-    cumValue += quoteOf(l.amount, l.price, scale, 'down');
+    cumValue += l.value ?? quoteOf(l.amount, l.price, scale, 'down');
     const depthPct = max > 0n ? Number((cumAmount * 10_000n) / max) / 100 : 0;
     return { ...l, cumAmount, cumValue, depthPct };
   });
@@ -129,7 +134,7 @@ export function groupPrice(price: bigint, group: bigint, side: 'ask' | 'bid'): b
 }
 
 /** Merges levels onto grouped prices (amounts and orders add up, estimates stay marked). */
-export function groupLevels<L extends { price: bigint; amount: bigint; orders: number; estimated: boolean }>(levels: readonly L[], group: bigint, side: 'ask' | 'bid'): Level[] {
+export function groupLevels<L extends { price: bigint; amount: bigint; orders: number; estimated: boolean; value?: bigint }>(levels: readonly L[], group: bigint, side: 'ask' | 'bid'): Level[] {
   const by = new Map<bigint, Level>();
   for (const l of levels) {
     const price = groupPrice(l.price, group, side);
@@ -138,7 +143,8 @@ export function groupLevels<L extends { price: bigint; amount: bigint; orders: n
       cur.amount += l.amount;
       cur.orders += l.orders;
       cur.estimated ||= l.estimated;
-    } else by.set(price, { price, amount: l.amount, orders: l.orders, estimated: l.estimated });
+      if (cur.value !== undefined && l.value !== undefined) cur.value += l.value;
+    } else by.set(price, { price, amount: l.amount, orders: l.orders, estimated: l.estimated, ...(l.value !== undefined ? { value: l.value } : {}) });
   }
   return [...by.values()];
 }
@@ -199,16 +205,20 @@ export function buildBookModel(view: { asks: readonly (LevelView | BookOrderView
   const depth = Math.max(1, o.depth ?? 15);
   const group = o.group ?? 0n;
   const grouped = (ls: Level[], side: 'ask' | 'bid'): Level[] => (o.regroup ? o.regroup(ls, side) : groupLevels(ls, group, side));
-  const askLevels = grouped(levelsFromView(view.asks, scale), 'ask').sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : 0)).slice(0, depth);
-  const bidLevels = grouped(levelsFromView(view.bids, scale), 'bid').sort((a, b) => (a.price > b.price ? -1 : a.price < b.price ? 1 : 0)).slice(0, depth);
+  // the levels as the book holds them: the touch, spread and mid come from these; grouping (rounding asks up and bids down) only shapes the rows
+  const withValue = (ls: Level[]): Level[] => ls.map((l) => ({ ...l, value: quoteOf(l.amount, l.price, scale, 'down') }));
+  const rawAsks = withValue(levelsFromView(view.asks, scale));
+  const rawBids = withValue(levelsFromView(view.bids, scale));
+  const askLevels = grouped(rawAsks, 'ask').sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : 0)).slice(0, depth);
+  const bidLevels = grouped(rawBids, 'bid').sort((a, b) => (a.price > b.price ? -1 : a.price < b.price ? 1 : 0)).slice(0, depth);
   const sum = (ls: Level[]) => ls.reduce((s, l) => s + l.amount, 0n);
   const totalAskAmount = sum(askLevels);
   const totalBidAmount = sum(bidLevels);
   const max = totalAskAmount > totalBidAmount ? totalAskAmount : totalBidAmount;
   const asks = accumulate(askLevels, max, scale);
   const bids = accumulate(bidLevels, max, scale);
-  const bestAsk = asks.length ? asks[0].price : null;
-  const bestBid = bids.length ? bids[0].price : null;
+  const bestAsk = rawAsks.length ? rawAsks.reduce((m, l) => (l.price < m ? l.price : m), rawAsks[0]!.price) : null;
+  const bestBid = rawBids.length ? rawBids.reduce((m, l) => (l.price > m ? l.price : m), rawBids[0]!.price) : null;
   const both = bestAsk !== null && bestBid !== null;
   const mid = both ? (bestAsk + bestBid) / 2n : null;
   const spread = both ? bestAsk - bestBid : null;

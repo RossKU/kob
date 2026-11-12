@@ -349,6 +349,17 @@ describe('grouping of the inverted book', () => {
     expect(v.bids[0]!.priceText).toBe('40.000');
   });
 
+  it('the mid and the spread of the inverted book are those of the ungrouped book, at every grouping', () => {
+    const ungrouped = flippedBookView(buildBookModel(view(), { scale: S }), { ...CTX_BOOK, dp: 3 });
+    expect(ungrouped.spread).not.toBeNull();
+    for (const mult of [10n, 100n, 1000n]) {
+      const regroup = invertedRegrouper({ ...c, mult })!;
+      const v = flippedBookView(buildBookModel(view(), { regroup, scale: S }), { ...CTX_BOOK, dp: 3 });
+      expect(v.mid).toEqual(ungrouped.mid);
+      expect(v.spread).toEqual(ungrouped.spread);
+    }
+  });
+
   it('a price below one step is not rounded to zero', () => {
     const regroup = invertedRegrouper({ decimals: 8, scale: S, dp: 1, mult: 1000n })!; // step 100 tokens per KAS
     const out = regroup([lvl(2_500_000n)], 'ask'); // 40 tokens per KAS < 100

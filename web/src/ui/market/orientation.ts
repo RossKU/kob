@@ -162,7 +162,7 @@ export function invertedRegrouper(c: { decimals: number; scale: bigint; dp: numb
         // a price below one step: left as it is (never rounded to zero)
         const key = -l.price;
         const cur0 = by.get(key);
-        if (cur0) { cur0.amount += l.amount; cur0.orders += l.orders; cur0.estimated ||= l.estimated; } else by.set(key, { ...l });
+        if (cur0) { cur0.amount += l.amount; cur0.orders += l.orders; cur0.estimated ||= l.estimated; if (cur0.value !== undefined && l.value !== undefined) cur0.value += l.value; } else by.set(key, { ...l });
         continue;
       }
       const cur = by.get(k);
@@ -170,13 +170,14 @@ export function invertedRegrouper(c: { decimals: number; scale: bigint; dp: numb
         cur.amount += l.amount;
         cur.orders += l.orders;
         cur.estimated ||= l.estimated;
+        if (cur.value !== undefined && l.value !== undefined) cur.value += l.value;
         continue;
       }
       // the bucket's native price: P = basisKas scale / (dec k mult), rounded so that the order it prefills reaches the whole bucket
       const pn = basisKas * scale;
       const pd = dec * k * c.mult;
       const price = side === 'ask' ? ceilDiv(pn, pd) : pn / pd > 0n ? pn / pd : 1n;
-      by.set(k, { price, amount: l.amount, orders: l.orders, estimated: l.estimated, inv: reduce({ num: k * c.mult, den: scale }) });
+      by.set(k, { price, amount: l.amount, orders: l.orders, estimated: l.estimated, ...(l.value !== undefined ? { value: l.value } : {}), inv: reduce({ num: k * c.mult, den: scale }) });
     }
     return [...by.values()];
   };
@@ -356,8 +357,9 @@ export function flippedBookView(m: BookModel, c: BookViewCtx): BookView {
   let mid: BookView['mid'] = null;
   let spread: BookView['spread'] = null;
   if (m.bestAsk !== null && m.bestBid !== null) {
-    const bestBid = invOf(m.asks[0]!);
-    const bestAsk = invOf(m.bids[0]!);
+    // the touch of the ungrouped book (a bucket's inverted price is its worst price), inverted: the best native ask is the best displayed bid
+    const bestBid = inv(m.bestAsk);
+    const bestAsk = inv(m.bestBid);
     const midR = half(add(bestBid, bestAsk));
     const spreadR = sub(bestAsk, bestBid);
     mid = { text: ratioText(midR, c.dp), value: plain(midR, 12), title: exactIfRounded(ratioText(midR, c.dp), exactRatio(midR)) };
