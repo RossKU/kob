@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import { onVisibilityChange } from '../ui/kit/hooks';
 import { useServices } from './context';
 import { readCurrencyPref, useDisplayCurrency } from './currency-pref';
-import { estimateNote, fallbackNotice, fiatOf, resolveFiat, type Fiat, type FiatState } from './fiat';
+import { estimateNote, fallbackNotice, fiatOf, resolveFiat, type Fiat, type FiatState, type Rate } from './fiat';
 import { kasPrice, startKasPriceFeed, type PriceSnapshot } from './kas-price';
 
 function usePriceSnapshot(): PriceSnapshot {
@@ -33,19 +33,38 @@ export function useFiat(): Fiat | null {
   return useMemo(() => f, [quote, testnet]);
 }
 
+/**
+ * The KAS price (USD per KAS) for a figure that needs it whatever the display currency (the thin-book marker of the market views: "under $100"): the fresh quote's rate,
+ * else null (never a stale or guessed one). Mounting the view keeps the price loop running (`kasPrice.want`) although KAS is shown. Stable while the quote does not change.
+ */
+export function useKasRate(): Rate | null {
+  const snap = usePriceSnapshot();
+  useEffect(() => kasPrice.want(), []);
+  const f = fiatOf(resolveFiat({ currency: 'usd', feed: snap, nowMs: snap.nowMs, testnet: false }));
+  const quote = f?.quote;
+  return useMemo(() => f?.rate ?? null, [quote]);
+}
+
 /** The USD display in force right now, read outside a component (a toast that is made when an event arrives); null = KAS. */
 export function currentFiat(testnet: boolean, nowMs = Date.now()): Fiat | null {
   return fiatOf(resolveFiat({ currency: readCurrencyPref(), feed: kasPrice.snapshot, nowMs, testnet }));
 }
 
-/** The loop that reads the price: mounted once for the app, running only while USD is the display currency. */
+/** The loop that reads the price: mounted once for the app, running only while USD is the display currency or a market view wants the rate. */
 export function KasPriceFeed() {
   const { indexer } = useServices();
   const [currency] = useDisplayCurrency();
+  // also while a market view wants the rate for its thin-book marker (`useKasRate`)
+  const [wanted, setWanted] = useState(() => kasPrice.isWanted);
   useEffect(() => {
-    if (currency !== 'usd') return;
+    setWanted(kasPrice.isWanted);
+    return kasPrice.subscribeWanted(() => setWanted(kasPrice.isWanted));
+  }, []);
+  const active = currency === 'usd' || wanted;
+  useEffect(() => {
+    if (!active) return;
     return startKasPriceFeed({ indexer, onVisibility: onVisibilityChange });
-  }, [indexer, currency]);
+  }, [indexer, active]);
   return null;
 }
 

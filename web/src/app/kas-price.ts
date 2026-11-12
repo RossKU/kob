@@ -42,6 +42,32 @@ export class KasPriceStore {
     this.update((s) => ({ quote: q, seenAtMs: s.quote && s.quote.at === q.at && s.quote.usd === q.usd ? s.seenAtMs : nowMs, status: 'ok', nowMs }));
   }
 
+  private wanted = 0;
+  private readonly wantListeners = new Set<() => void>();
+
+  /** Whether a view that needs the rate whatever the display currency (the thin-book marker of the market views) is mounted: the loop runs for it too. */
+  get isWanted(): boolean {
+    return this.wanted > 0;
+  }
+
+  /** A view wants the rate: returns its release (idempotent). */
+  want(): () => void {
+    let held = true;
+    this.wanted += 1;
+    if (this.wanted === 1) for (const l of [...this.wantListeners]) l();
+    return () => {
+      if (!held) return;
+      held = false;
+      this.wanted -= 1;
+      if (this.wanted === 0) for (const l of [...this.wantListeners]) l();
+    };
+  }
+
+  subscribeWanted(l: () => void): () => void {
+    this.wantListeners.add(l);
+    return () => void this.wantListeners.delete(l);
+  }
+
   /** Back to the start (tests, and a new indexer). */
   reset(nowMs = Date.now()): void {
     this.update(() => ({ quote: null, seenAtMs: null, status: 'idle', nowMs }));

@@ -5,6 +5,8 @@
 // token = price / 1e8 * 10^decimals / price_basis. A book price (an order's state price: sompi per `scale` base units) is the same thing with
 // basis = scale, so every formatter below takes (price, decimals, basis) and works for both.
 import type { CandleInterval, CandleView, DepthView, StatsView, TradeView, TradesView } from '../../data/indexer-types';
+import { sompiToUsd, type Rate } from '../../app/fiat';
+import { cmpRational, formatRational, type Rational } from '../../kob/pair';
 import { formatNumber, t } from '../../i18n';
 import { formatPricePerToken, formatUnits, pow10, roundDiv, SOMPI_PER_KAS } from '../../kob/units';
 import { displayPriceDp } from '../kit/format';
@@ -182,8 +184,12 @@ export interface StatsModel {
   change: string | null;
   /** muted ('flat') while the change rests on a thin window (`changeNote`) */
   changeTone: Tone | null;
-  /** thin window only (fewer than `THIN_TRADES_24H` trades): the tooltip of the change, "Based on N trades in 24 h" */
+  /** the tooltip of the change when it rests on a thin window and / or a thin book: its lines ("Based on N trades in 24 h", "Thin book: ..."), one per line */
   changeNote?: string | null;
+  /** fewer than `THIN_TRADES_24H` trades (`data-thin`) */
+  changeThin?: boolean;
+  /** a thin book (`thinBookUnder`; `data-thin-book`) */
+  changeThinBook?: boolean;
   high: string | null;
   low: string | null;
   /** 24 h volume in tokens (compact) and exact */
@@ -217,6 +223,76 @@ export function thinChangeNote(bps: number | null, trades: number | null | undef
   return t(trades === 1 ? 'market.change.thinOne' : 'market.change.thin', { n: trades });
 }
 
+/** A book's thin-book threshold is this share of the token's fully diluted value (FDV)... */
+export const THIN_BOOK_FDV_SHARE = 0.001;
+/** ...but at least this many US dollars (CoinMarketCap's smallest test order for its liquidity score) */
+export const THIN_BOOK_MIN_USD = 100;
+/** ...and at most this many (its largest). The depth band is CoinGecko's +/-2 %. */
+export const THIN_BOOK_MAX_USD = 10_000;
+
+const FDV_SHARE_DEN = BigInt(Math.round(1 / THIN_BOOK_FDV_SHARE));
+
+/** The thin-book threshold in USD for a token of fully diluted value `fdvUsd`: `THIN_BOOK_FDV_SHARE` of it, clamped to `THIN_BOOK_MIN_USD` .. `THIN_BOOK_MAX_USD`. Exact. */
+export function thinBookThresholdUsd(fdvUsd: Rational): Rational {
+  const share: Rational = { num: fdvUsd.num, den: fdvUsd.den * FDV_SHARE_DEN };
+  const lo: Rational = { num: BigInt(THIN_BOOK_MIN_USD), den: 1n };
+  const hi: Rational = { num: BigInt(THIN_BOOK_MAX_USD), den: 1n };
+  return cmpRational(share, lo) < 0 ? lo : cmpRational(share, hi) > 0 ? hi : share;
+}
+
+/**
+ * The thin-book threshold (USD) when the book of a KAS market is thin, else null: the smaller of `depth_2pct_bid_sompi` and `depth_2pct_ask_sompi` (a missing side is 0) is
+ * worth less than `thinBookThresholdUsd` of the token's FDV = `supplyUnits` (its fixed total supply, base units) x the reference price (the mid, else the one side, else the
+ * last trade) x `rate` (USD per KAS, the app's price feed). Null without the rate, the supply, a price or the indexer's two figures (an older one): never a guess.
+ */
+export function thinBookUnder(
+  v: Pick<StatsView, 'price_basis' | 'mid' | 'best_ask' | 'best_bid' | 'last' | 'depth_2pct_bid_sompi' | 'depth_2pct_ask_sompi'> | null | undefined,
+  rate: Rate | null | undefined,
+  supplyUnits: bigint | null | undefined,
+): Rational | null {
+  if (!v || !rate || !supplyUnits || supplyUnits <= 0n) return null;
+  const bid = bigOrNull(v.depth_2pct_bid_sompi);
+  const ask = bigOrNull(v.depth_2pct_ask_sompi);
+  const basis = basisOf(v.price_basis);
+  const ref = bigOrNull(v.mid) ?? bigOrNull(v.best_ask) ?? bigOrNull(v.best_bid) ?? bigOrNull(v.last);
+  if (bid === null || ask === null || bid < 0n || ask < 0n || !basis || ref === null || ref <= 0n) return null;
+  // sompi per `basis` base units x base units / basis = the FDV in sompi (exact), then x the rate
+  const fdvUsd = sompiToUsd(ref * supplyUnits, rate);
+  const threshold = thinBookThresholdUsd({ num: fdvUsd.num, den: fdvUsd.den * basis });
+  const usd = sompiToUsd(bid < ask ? bid : ask, rate);
+  return cmpRational(usd, threshold) < 0 ? threshold : null;
+}
+
+/** What marks a 24 h change as thin: few trades and / or a thin book. `note` is the tooltip, each applicable line on its own line; null when neither applies or there is no change. */
+export interface ChangeMarks {
+  note: string;
+  thinTrades: boolean;
+  thinBook: boolean;
+}
+
+/** `thinBookUsd`: the threshold when the book is thin (`thinBookUnder`), else null. */
+export function changeMarks(bps: number | null, trades: number | null | undefined, thinBookUsd: Rational | null): ChangeMarks | null {
+  if (bps === null) return null;
+  const tradesLine = thinChangeNote(bps, trades);
+  if (!tradesLine && !thinBookUsd) return null;
+  // the book line and, under it, the rule it comes from (the named constants)
+  const bookLine = thinBookUsd
+    ? [
+        t('market.change.thinBook', { usd: '$' + formatRational(thinBookUsd, 0, 'nearest', 0, ',') }),
+        t('market.change.thinBookRule', {
+          share: formatNumber(THIN_BOOK_FDV_SHARE * 100, { maximumFractionDigits: 4 }) + '%', min: '$' + formatNumber(THIN_BOOK_MIN_USD), max: '$' + formatNumber(THIN_BOOK_MAX_USD),
+        }),
+      ].join('\n')
+    : null;
+  const lines = [tradesLine, bookLine].filter((x): x is string => !!x);
+  return { note: lines.join('\n'), thinTrades: !!tradesLine, thinBook: !!thinBookUsd };
+}
+
+/** The mark fields of a `StatsModel` (none when the change is not thin). */
+export function changeMarkFields(m: ChangeMarks | null): Pick<StatsModel, 'changeNote' | 'changeThin' | 'changeThinBook'> {
+  return m ? { changeNote: m.note, ...(m.thinTrades ? { changeThin: true } : {}), ...(m.thinBook ? { changeThinBook: true } : {}) } : {};
+}
+
 /** Signed percentage text of basis points: 287 -> `+2.87%`. */
 export function bpsPercentText(bps: number): string {
   const v = Math.trunc(bps);
@@ -228,7 +304,7 @@ export function bpsPercentText(bps: number): string {
 export const toneOf = (bps: number | null): Tone | null => (bps === null ? null : bps > 0 ? 'up' : bps < 0 ? 'down' : 'flat');
 
 /** Stats of `/v1/stats` for display. `null` stats (an indexer without the route) give an all-dash model. */
-export function statsModel(v: StatsView | null, decimals: number, dpHint?: number): StatsModel {
+export function statsModel(v: StatsView | null, decimals: number, dpHint?: number, rate?: Rate | null, supplyUnits?: bigint | null): StatsModel {
   const basis = v ? basisOf(v.price_basis) : null;
   const last = v && basis ? bigOrNull(v.last) : null;
   const ref = last ?? (v && basis ? bigOrNull(v.mid) ?? bigOrNull(v.best_ask) ?? bigOrNull(v.best_bid) : null);
@@ -244,13 +320,13 @@ export function statsModel(v: StatsView | null, decimals: number, dpHint?: numbe
     const b = bigOrNull(x);
     return b !== null && basis ? exactIfRounded(p(x), exactPriceText(b, decimals, basis)) : null;
   };
-  const changeNote = thinChangeNote(bps, v?.trades_24h);
+  const marks = changeMarks(bps, v?.trades_24h, thinBookUnder(v, rate, supplyUnits));
   return {
     last: p(v?.last),
     lastSide: v?.last_side === 'buy' || v?.last_side === 'sell' ? v.last_side : null,
     change: bps === null ? null : bpsPercentText(bps),
-    changeTone: changeNote ? 'flat' : toneOf(bps),
-    ...(changeNote ? { changeNote } : {}),
+    changeTone: marks ? 'flat' : toneOf(bps),
+    ...changeMarkFields(marks),
     high: p(v?.high_24h),
     low: p(v?.low_24h),
     lastExact: exact(v?.last),

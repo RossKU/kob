@@ -4,8 +4,12 @@ import { buildBookModel } from './book-model';
 import {
   basisToNumber, basisToTokenSompi, bpsPercentText, chartSeries, compactText, cumulate, depthFromBook, depthFromView, depthGeometry, fillCandleGaps,
   INTERVAL_MS, niceTicks, parseCandles, priceDecimals, priceText, statsModel, tapeFromFills, tapeFromTrades, tapeTime, amountText, type Candle,
-  thinChangeNote,
+  thinChangeNote, thinBookUnder, thinBookThresholdUsd, changeMarks, THIN_BOOK_FDV_SHARE, THIN_BOOK_MIN_USD, THIN_BOOK_MAX_USD,
 } from './market-model';
+import { rateOf } from '../../app/fiat';
+import { cmpRational, type Rational } from '../../kob/pair';
+
+const usd100: Rational = { num: 100n, den: 1n };
 import { tradeRows } from './trades-model';
 
 const TOK = '11'.repeat(32);
@@ -139,6 +143,57 @@ describe('24h stats', () => {
     expect(statsModel(older as unknown as StatsView, 8)).not.toHaveProperty('changeNote');
     expect(thinChangeNote(null, 1)).toBeNull();
     expect(thinChangeNote(500, 0)).toBeNull();
+  });
+  it('the thin-book threshold is 0.1 % of the fully diluted value, clamped to $100 .. $10,000', () => {
+    const usd = (n: number): Rational => ({ num: BigInt(n), den: 1n });
+    expect([THIN_BOOK_FDV_SHARE, THIN_BOOK_MIN_USD, THIN_BOOK_MAX_USD]).toEqual([0.001, 100, 10_000]);
+    // below the floor (FDV $50,000 -> $50): the floor; at the knee ($100,000 -> $100) and in between ($2.5M -> $2,500): the share itself; above the cap: the cap
+    expect(thinBookThresholdUsd(usd(50_000))).toEqual(usd(100));
+    expect(cmpRational(thinBookThresholdUsd(usd(100_000)), usd(100))).toBe(0);
+    expect(cmpRational(thinBookThresholdUsd(usd(2_500_000)), usd(2_500))).toBe(0);
+    expect(cmpRational(thinBookThresholdUsd(usd(9_999_999)), { num: 9_999_999n, den: 1000n })).toBe(0);
+    expect(cmpRational(thinBookThresholdUsd(usd(10_000_000)), usd(10_000))).toBe(0);
+    expect(thinBookThresholdUsd(usd(10_000_001 * 100))).toEqual(usd(10_000));
+    expect(thinBookThresholdUsd(usd(0))).toEqual(usd(100));
+  });
+  it('a thin book (the smaller side within 2 % worth under the threshold of the token\'s size) mutes the change and says so; both marks are lines of their own', () => {
+    const rate = rateOf(0.04)!;
+    // mid 12.345 KAS per token: 1,000,000 tokens are worth $493,800 -> threshold $493.8 = 12,345 KAS = 1,234,500,000,000 sompi
+    const book = (bid: string, ask: string, over: Partial<StatsView> = {}) => ({ ...stats, change_24h_bps: 500, depth_2pct_bid_sompi: bid, depth_2pct_ask_sompi: ask, ...over });
+    const supply = 10n ** 14n;
+    const under = (v: StatsView, r: typeof rate | null = rate, s: bigint | null = supply) => thinBookUnder(v, r, s);
+    // exactly the threshold is not under it; one sompi less is
+    expect(under(book('1234500000000', '9000000000000'))).toBeNull();
+    expect(cmpRational(under(book('9000000000000', '1234499999999'))!, { num: 4938n, den: 10n })).toBe(0);
+    // a missing side is 0
+    expect(under(book('0', '9000000000000'))).not.toBeNull();
+    // the threshold follows the size: 1,000 tokens (FDV $493.8) -> the $100 floor = 250,000,000,000 sompi; 1,000,000,000 tokens -> the $10,000 cap = 25,000,000,000,000 sompi
+    expect(under(book('250000000000', '250000000000'), rate, 10n ** 11n)).toBeNull();
+    expect(under(book('249999999999', '250000000000'), rate, 10n ** 11n)).not.toBeNull();
+    expect(under(book('25000000000000', '25000000000000'), rate, 10n ** 17n)).toBeNull();
+    expect(under(book('24999999999999', '25000000000000'), rate, 10n ** 17n)).not.toBeNull();
+    // the reference price: the mid, else the one side, else the last trade; none of them: no FDV, no marker
+    expect(under(book('0', '0', { mid: null, best_ask: null, best_bid: null }))).not.toBeNull();
+    expect(under(book('0', '0', { mid: null, best_ask: null, best_bid: null, last: null }))).toBeNull();
+    // no rate, no supply, or an older indexer without the two figures: never a guess
+    expect(under(book('0', '0'), null)).toBeNull();
+    expect(under(book('0', '0'), rate, null)).toBeNull();
+    expect(under(stats)).toBeNull();
+    const rule = "Threshold: 0.1% of the token's value, at least $100 and at most $10,000.";
+    const thinBook = statsModel(book('0', '9000000000000'), 8, undefined, rate, supply);
+    expect(thinBook).toMatchObject({ change: '+5.00%', changeTone: 'flat', changeNote: `Thin book: under $494 within 2% of the price\n${rule}`, changeThinBook: true });
+    expect(thinBook).not.toHaveProperty('changeThin');
+    const both = statsModel(book('0', '9000000000000', { trades_24h: 1 }), 8, undefined, rate, supply);
+    expect(both).toMatchObject({ changeTone: 'flat', changeNote: `Based on 1 trade in 24 h\nThin book: under $494 within 2% of the price\n${rule}`, changeThin: true, changeThinBook: true });
+    // a deep book (or no rate / supply) is as before
+    const deep = statsModel(book('9000000000000', '9000000000000'), 8, undefined, rate, supply);
+    expect(deep.changeTone).toBe('up');
+    expect(deep).not.toHaveProperty('changeNote');
+    expect(statsModel(book('0', '0'), 8).changeTone).toBe('up');
+    expect(statsModel(book('0', '0'), 8, undefined, rate).changeTone).toBe('up');
+    // no change shown: no mark
+    expect(changeMarks(null, 1, usd100)).toBeNull();
+    expect(statsModel(book('0', '0', { change_24h_bps: null }), 8, undefined, rate, supply)).not.toHaveProperty('changeNote');
   });
   it('is all dashes without trades or without the endpoint', () => {
     const none = statsModel({ ...stats, last: null, last_side: null, open_24h: null, high_24h: null, low_24h: null, change_24h_bps: null, volume_24h: null, quote_volume_24h: null, trades_24h: null }, 8);

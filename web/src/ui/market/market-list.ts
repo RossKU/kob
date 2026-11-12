@@ -17,9 +17,9 @@ import type { PairSummaryView, StatsView } from '../../data/indexer-types';
 import { ASSUMED_TOKEN_DECIMALS, t } from '../../i18n';
 import { exponentOf } from '../../kob/open-token';
 import { cmpRational, formatRational, significantDp, type Rational } from '../../kob/pair';
-import { kasPerTokenToUsd, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat } from '../../app/fiat';
+import { kasPerTokenToUsd, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat, type Rate } from '../../app/fiat';
 import { displayPriceDp, fitAmountColumn, fitDecimalTexts } from '../kit/format';
-import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, thinChangeNote, toneOf, unitsToNumber, type Tone } from './market-model';
+import { basisOf, basisToTokenSompi, bigOrNull, bpsPercentText, changeMarks, thinBookUnder, toneOf, unitsToNumber, type Tone } from './market-model';
 import { kascovTitleLine, spotPairPrice, spotPrice, withKascovLine } from './kascov-overlay';
 import { kasPerToken } from './orientation';
 import type { PairDepth, PairVolume } from './pair-market';
@@ -95,6 +95,8 @@ export interface Cell {
   tone?: Tone | null;
   /** a change over a thin window (few trades): shown muted, the tooltip says how many */
   thin?: boolean;
+  /** a change over a thin book (the smaller side within 2 % worth under $100): shown muted, the tooltip says so */
+  thinBook?: boolean;
 }
 
 const EMPTY: Cell = { text: null, title: null };
@@ -114,12 +116,14 @@ export function priceCell(r: Rational | null, dp: number, unit: string): Cell {
 
 /**
  * A 24 h change cell (`+2.87%`) coloured by its sign. `trades` (the market's 24 h trade count, when the indexer reports it): a change over fewer than
- * `THIN_TRADES_24H` trades is muted and its tooltip says "Based on N trades in 24 h" (`thin`); same text, same cell.
+ * `THIN_TRADES_24H` trades is muted and its tooltip says "Based on N trades in 24 h" (`thin`); the same for a `thinBook` (`thinBookUnder`), with its own tooltip line
+ * (`thinBook`); same text, same cell.
  */
-export function changeCell(bps: number | null, trades?: number | null): Cell {
+export function changeCell(bps: number | null, trades?: number | null, thinBookUsd: Rational | null = null): Cell {
   if (bps === null) return EMPTY;
-  const note = thinChangeNote(bps, trades);
-  return note ? { text: bpsPercentText(bps), title: note, tone: 'flat', thin: true } : { text: bpsPercentText(bps), title: null, tone: toneOf(bps) };
+  const marks = changeMarks(bps, trades, thinBookUsd);
+  if (!marks) return { text: bpsPercentText(bps), title: null, tone: toneOf(bps) };
+  return { text: bpsPercentText(bps), title: marks.note, tone: 'flat', ...(marks.thinTrades ? { thin: true } : {}), ...(marks.thinBook ? { thinBook: true } : {}) };
 }
 
 /**
@@ -241,7 +245,7 @@ export function kascovEntry(row: TokenRow): ListEntry {
  * display in force) the price, the 24 h volume, the market cap and the depth are shown in dollars (`usdCell`); the change and the spread are ratios and stay, and
  * the sort values stay KAS (the same order).
  */
-export function tokenEntry(row: TokenRow, slot: Slot<StatsView>, fiat: Fiat | null = null): ListEntry {
+export function tokenEntry(row: TokenRow, slot: Slot<StatsView>, fiat: Fiat | null = null, rate: Rate | null = null): ListEntry {
   const label = tokenLabel(row);
   const v = slot.state === 'ok' ? slot.value : null;
   const asks = row.openAsks ?? finiteInt(v?.open_asks);
@@ -272,7 +276,8 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>, fiat: Fiat | nu
   const qv = bigOrNull(v.quote_volume_24h);
   const trades = finiteInt(v.trades_24h);
   const spreadBps = finiteInt(v.spread_bps);
-  const mcap = marketCapCell(lastR, supplyOf(row), decimals, row.ticker || label);
+  const supply = supplyOf(row);
+  const mcap = marketCapCell(lastR, supply, decimals, row.ticker || label);
   const depthSompi = bigOrNull(v.depth_2pct_quote);
   const depth = depthCell(depthSompi, ordersNote(asks, bids));
   const inUsd = (kas: Cell, sompi: bigint | null): Cell => (fiat && sompi !== null ? usdCell(kas, sompiToUsd(sompi, fiat.rate), fiat) : kas);
@@ -287,7 +292,7 @@ export function tokenEntry(row: TokenRow, slot: Slot<StatsView>, fiat: Fiat | nu
     cells: {
       ...base.cells,
       last: withKascovLine(fiat && lastR ? usdCell(priceCell(lastR, dp, unit), kasPerTokenToUsd(lastR, fiat.rate), fiat) : priceCell(lastR, dp, unit), kLine(decimals, lastR)),
-      change: changeCell(bps, trades),
+      change: changeCell(bps, trades, thinBookUnder(v, rate, supply?.units)),
       volume: inUsd(volumeCell(qv, 8, 'KAS', trades === null ? null : t('market.list.trades', { n: trades })), qv),
       mcap: inUsd(mcap.cell, mcap.sompi ?? null),
       depth: inUsd(depth.cell, depthSompi),

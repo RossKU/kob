@@ -13,12 +13,13 @@
 //   trade        side flips (the taker of the token bought it = sold KAS), size in KAS
 //   24 h stats   last 1/last, high 1/low, low 1/high, change 1/(1+c)-1, volumes swap
 import type { DepthView, StatsView } from '../../data/indexer-types';
+import type { Rate } from '../../app/fiat';
 import { formatRational, parseDecimal, ratToNumber, reduce, significantDp, type Rational } from '../../kob/pair';
 import { formatUnits, pow10, quoteOf, SOMPI_PER_KAS } from '../../kob/units';
 import { columnFraction, fitAmountColumn, fitDecimalTexts, PRICE_DP_CAP, PRICE_SIGNIFICANT_DIGITS, tickKasFraction, type AmountCell } from '../kit/format';
 import type { BookModel, BookRow, Level } from './book-model';
 import {
-  amountText, basisOf, basisToNumber, bigOrNull, bpsPercentText, compactText, exactIfRounded, exactPriceText, priceText, thinChangeNote, toneOf, unitsToNumber,
+  amountText, basisOf, basisToNumber, bigOrNull, bpsPercentText, changeMarkFields, changeMarks, compactText, exactIfRounded, exactPriceText, priceText, thinBookUnder, toneOf, unitsToNumber,
   type Candle, type ChartBar, type DepthPoint, type DepthSeries, type StatsModel, type VolumeBar,
 } from './market-model';
 
@@ -369,7 +370,7 @@ export function flippedBookView(m: BookModel, c: BookViewCtx): BookView {
 // ------------------------------------------------------------------------------------------------ 24 h stats
 
 /** `/v1/stats` shown inverted. The shape of `StatsModel` is kept: `volume` is the BASE asset's (KAS) and `quoteVolume` the QUOTE's (the token). */
-export function statsModelFlipped(v: StatsView | null, decimals: number, dp: number): StatsModel {
+export function statsModelFlipped(v: StatsView | null, decimals: number, dp: number, rate?: Rate | null, supplyUnits?: bigint | null): StatsModel {
   const basis = v ? basisOf(v.price_basis) : null;
   const p = (x: unknown): string | null => {
     const b = bigOrNull(x);
@@ -387,13 +388,13 @@ export function statsModelFlipped(v: StatsView | null, decimals: number, dp: num
   const nativeBps = v && typeof v.change_24h_bps === 'number' && Number.isFinite(v.change_24h_bps) ? Math.trunc(v.change_24h_bps) : null;
   // price p1 = p0 (1 + c)  ->  1/p1 = (1/p0) / (1 + c): the inverted change is 1/(1 + c) - 1
   const bps = nativeBps !== null && nativeBps > -10_000 ? Math.round(100_000_000 / (10_000 + nativeBps) - 10_000) : null;
-  const changeNote = thinChangeNote(bps, v?.trades_24h);
+  const marks = changeMarks(bps, v?.trades_24h, thinBookUnder(v, rate, supplyUnits));
   return {
     last: p(v?.last),
     lastSide: v?.last_side === 'buy' ? 'sell' : v?.last_side === 'sell' ? 'buy' : null,
     change: bps === null ? null : bpsPercentText(bps),
-    changeTone: changeNote ? 'flat' : toneOf(bps),
-    ...(changeNote ? { changeNote } : {}),
+    changeTone: marks ? 'flat' : toneOf(bps),
+    ...changeMarkFields(marks),
     high: p(v?.low_24h),
     low: p(v?.high_24h),
     lastExact: exact(v?.last),

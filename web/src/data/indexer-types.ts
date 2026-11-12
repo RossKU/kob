@@ -481,6 +481,12 @@ export interface StatsView {
    * null for an empty book; absent on older executors
    */
   depth_2pct_quote?: string | null;
+  /**
+   * sompi: the two parts of `depth_2pct_quote` (the bids down to 2 % below the reference price, the asks up to 2 % above it; both bounds inclusive); "0" for a missing side
+   * or an empty book; absent on older executors (no thin-book marker then)
+   */
+  depth_2pct_bid_sompi?: string | null;
+  depth_2pct_ask_sompi?: string | null;
 }
 
 export interface DepthLevelView {

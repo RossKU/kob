@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marketPageTitle, pageTitle, useDocumentTitle } from '../../app/page-title';
 import { useDeclarationLookup } from '../../app/use-declaration';
-import { useFiat } from '../../app/use-fiat';
+import { useFiat, useKasRate } from '../../app/use-fiat';
 import { useServices, useWallet } from '../../app/context';
 import { OrdersView } from '../orders/OrdersView';
 import type { TicketPreset } from '../../app/router';
@@ -37,7 +37,7 @@ import { FavoriteStar } from './FavoriteStar';
 import { isFavoriteToken, toggleToken, useFavorites } from './favorites';
 import { FlipButton, MarketFrame, MarketShell, PairSelector } from './MarketBar';
 import { ForgetMarket } from './ForgetMarket';
-import { settled } from './market-list';
+import { settled, supplyOf } from './market-list';
 import { useHeldUntil } from './use-market-list';
 import { openPair } from './market-nav';
 import { displayedPair, marketFor, type DisplayedPair } from './market-select';
@@ -251,7 +251,11 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     [inverted, groups, decimals, bookScale, dp],
   );
 
-  const sm = useMemo(() => (inverted ? statsModelFlipped(stats.data ?? null, decimals, dp) : statsModel(stats.data ?? null, decimals, dp)), [stats.data, decimals, dp, inverted]);
+  // the KAS price whatever the display currency: the thin-book marker of the 24 h change
+  const rate = useKasRate();
+  // the token's fixed total supply (the registry's genesis record, else kascov's): the thin-book threshold scales with the token's fully diluted value
+  const supplyUnits = useMemo(() => (row ? supplyOf(row)?.units ?? null : null), [row?.info, row?.kascov]);
+  const sm = useMemo(() => (inverted ? statsModelFlipped(stats.data ?? null, decimals, dp, rate, supplyUnits) : statsModel(stats.data ?? null, decimals, dp, rate, supplyUnits)), [stats.data, decimals, dp, inverted, rate, supplyUnits]);
   const last = useMemo(() => {
     if (sm.last) return { text: sm.last, side: sm.lastSide };
     const r = tape?.rows.find((x) => x.price !== null);

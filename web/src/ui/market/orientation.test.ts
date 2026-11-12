@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DepthView, LevelView, StatsView } from '../../data/indexer-types';
 import { cmpRational, parseDecimal, ratToNumber } from '../../kob/pair';
 import { safeRounding } from '../../kob/units';
+import { rateOf } from '../../app/fiat';
 import { buildBookModel } from './book-model';
 import { statsModel, type Candle } from './market-model';
 import {
@@ -162,6 +163,10 @@ describe('24 h stats', () => {
     expect(m.changeTone).toBe('down');
     expect(m).not.toHaveProperty('changeNote');
     expect(statsModelFlipped(stats({ trades_24h: 2 }), 8, 2)).toMatchObject({ changeTone: 'flat', changeNote: 'Based on 2 trades in 24 h' });
+    // the flipped view marks a thin book the same way (the rate: $0.04 per KAS)
+    const thin = statsModelFlipped(stats({ depth_2pct_bid_sompi: '0', depth_2pct_ask_sompi: '900000000000' }), 8, 2, rateOf(0.04), 10n ** 16n);
+    expect(thin).toMatchObject({ changeTone: 'flat', changeNote: expect.stringMatching(/^Thin book: under \$100 within 2% of the price\nThreshold: /), changeThinBook: true });
+    expect(statsModelFlipped(stats({ depth_2pct_bid_sompi: '0', depth_2pct_ask_sompi: '900000000000' }), 8, 2, rateOf(0.04))).not.toHaveProperty('changeNote');
     expect(m.lastSide).toBe('sell');
     expect(m.volume).toBe('9'); // KAS turnover is the base volume now
     expect(m.quoteVolume).toBe('3'); // the token volume

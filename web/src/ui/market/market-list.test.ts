@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { rateOf, type Fiat } from '../../app/fiat';
 import type { PairSummaryView, StatsView } from '../../data/indexer-types';
 import type { TokenInfo } from '../../kob/registry';
 import {
@@ -118,6 +119,37 @@ describe('market list cells', () => {
     expect(tokenEntry(r, ok(stats(r.covenantId, { change_24h_bps: 90_000 }))).cells.change).toEqual({ text: '+900.00%', title: null, tone: 'up' });
   });
 
+  it('a row whose book is thin (smaller side within 2 % under 0.1 % of the token\'s value, $100 .. $10,000) shows its change muted with that line; no rate, no supply or no depth figures: no marker', () => {
+    const meta = (supply: bigint): KascovMeta => ({
+      ticker: null, name: null, usedTicker: false, usedName: false, verified: true, tickerDiffers: false, decimalsDiffers: false, decimals: 8, imageHash: null, imageUrl: null, supply,
+    });
+    // mid 0.0251 KAS per token at $0.04 per KAS: 100,000,000 tokens are worth $100,400 -> threshold $100.40 = 251,000,000,000 sompi (shown $100); 2,500,000,000 tokens -> $2,510
+    const r = row('EXKCC', ID('a'), { info: null, source: 'indexer', kascov: meta(10n ** 16n) });
+    const big = row('EXKCC', ID('a'), { info: null, source: 'indexer', kascov: meta(25n * 10n ** 16n) });
+    const rate = rateOf(0.04)!;
+    const book = (bid: string, ask: string, over: Partial<StatsView> = {}) => ok(stats(r.covenantId, { change_24h_bps: 40, depth_2pct_bid_sompi: bid, depth_2pct_ask_sompi: ask, ...over }));
+    const rule = "Threshold: 0.1% of the token's value, at least $100 and at most $10,000.";
+    const note = `Thin book: under $100 within 2% of the price\n${rule}`;
+    expect(tokenEntry(r, book('0', '900000000000'), null, rate).cells.change).toEqual({ text: '+0.40%', title: note, tone: 'flat', thinBook: true });
+    // both marks: each on its own line, both flags
+    expect(tokenEntry(r, book('250999999999', '900000000000', { trades_24h: 2 }), null, rate).cells.change)
+      .toEqual({ text: '+0.40%', title: `Based on 2 trades in 24 h\n${note}`, tone: 'flat', thin: true, thinBook: true });
+    // exactly the threshold, a deep book, no rate, an older indexer: as before
+    expect(tokenEntry(r, book('251000000000', '900000000000'), null, rate).cells.change).toEqual({ text: '+0.40%', title: null, tone: 'up' });
+    expect(tokenEntry(r, book('0', '0'), null, null).cells.change).toEqual({ text: '+0.40%', title: null, tone: 'up' });
+    expect(tokenEntry(r, ok(stats(r.covenantId, { change_24h_bps: 40 })), null, rate).cells.change).toEqual({ text: '+0.40%', title: null, tone: 'up' });
+    // a bigger token has a higher threshold ($2,510 = 62,750 KAS)
+    expect(tokenEntry(big, book('6274999999999', '9000000000000'), null, rate).cells.change.title).toContain('Thin book: under $2,510 within 2% of the price');
+    expect(tokenEntry(big, book('6275000000000', '9000000000000'), null, rate).cells.change.thinBook).toBeUndefined();
+    // no supply the app can vouch for: no FDV, no marker
+    expect(tokenEntry(row('EXKCC', ID('a')), book('0', '0'), null, rate).cells.change).toEqual({ text: '+0.40%', title: null, tone: 'up' });
+    // the USD display does not change it
+    const fiat = { rate, quote: { usd: 0.04, at: 1, source: 'coingecko' }, testnet: false } as Fiat;
+    expect(tokenEntry(r, book('0', '900000000000'), fiat, rate).cells.change).toEqual({ text: '+0.40%', title: note, tone: 'flat', thinBook: true });
+    // no change shown: nothing to mark
+    expect(tokenEntry(r, book('0', '0', { change_24h_bps: null }), null, rate).cells.change.text).toBeNull();
+  });
+
   it('a market without trades: no price or change, a zero volume, the spread of a one-sided book is none but the tooltip names the side there', () => {
     const r = row('EXKCC', ID('a'));
     const e = tokenEntry(r, ok(stats(r.covenantId, { last: null, open_24h: null, change_24h_bps: null, quote_volume_24h: '0', trades_24h: 0, best_bid: null, spread_bps: null, mid: null })));
@@ -146,6 +178,10 @@ describe('market list cells', () => {
     expect(changeCell(90_000, 3)).toEqual({ text: '+900.00%', title: null, tone: 'up' });
     expect(changeCell(90_000, null)).toEqual({ text: '+900.00%', title: null, tone: 'up' });
     expect(changeCell(90_000)).toEqual({ text: '+900.00%', title: null, tone: 'up' });
+    expect(changeCell(90_000, 5, { num: 100n, den: 1n })).toEqual({
+      text: '+900.00%', title: "Thin book: under $100 within 2% of the price\nThreshold: 0.1% of the token's value, at least $100 and at most $10,000.", tone: 'flat', thinBook: true,
+    });
+    expect(changeCell(null, 1, { num: 100n, den: 1n }).text).toBeNull();
   });
 
   it('a token without a registry tick shows about five significant digits; a token outside the registry is named by 8 + 8 hex', () => {

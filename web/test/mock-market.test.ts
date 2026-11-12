@@ -203,6 +203,8 @@ describe('mock market data (explicit trades)', () => {
       open_asks: 4,
       open_bids: 2,
       depth_2pct_quote: '34940000',
+      depth_2pct_bid_sompi: '17260000',
+      depth_2pct_ask_sompi: '17680000',
     });
     // moving the chain clock 30 h forward empties the window: volumes 0, window prices null, last stays
     await postOn(srv, '/mock/advance-daa', { seconds: 30 * 3600 });

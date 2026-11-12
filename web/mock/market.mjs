@@ -243,12 +243,15 @@ export function statsView(chain, tokenId) {
   const counts = tokensView(chain).tokens.find((t) => t.covenant_id === tok.covenant_id);
   // sompi the asks up to +2 % and the bids down to -2 % of the mid (with one side only: around its best price) are worth (the executor's `depth_2pct_quote`)
   const ref = mid ?? bestAsk ?? bestBid;
+  // its two parts (`depth_2pct_bid_sompi` / `depth_2pct_ask_sompi`): "0" for a missing side or an empty book
   let depth = null;
+  let depthBid = 0n;
+  let depthAsk = 0n;
   if (basis !== null && ref !== null && ref > 0n) {
     const worth = (m) => (m.amount * m.price) / basis;
-    depth = 0n;
-    for (const m of mergedSide(levels.asks, basis, 1)) if (m.price * 100n <= ref * 102n) depth += worth(m);
-    for (const m of mergedSide(levels.bids, basis, 2)) if (m.price * 100n >= ref * 98n) depth += worth(m);
+    for (const m of mergedSide(levels.asks, basis, 1)) if (m.price * 100n <= ref * 102n) depthAsk += worth(m);
+    for (const m of mergedSide(levels.bids, basis, 2)) if (m.price * 100n >= ref * 98n) depthBid += worth(m);
+    depth = depthAsk + depthBid;
   }
   return {
     token: tok.covenant_id,
@@ -272,6 +275,8 @@ export function statsView(chain, tokenId) {
     open_asks: counts?.open_asks ?? 0,
     open_bids: counts?.open_bids ?? 0,
     depth_2pct_quote: str(depth),
+    depth_2pct_bid_sompi: depthBid.toString(),
+    depth_2pct_ask_sompi: depthAsk.toString(),
   };
 }
 

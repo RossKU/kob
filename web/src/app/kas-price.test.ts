@@ -4,6 +4,23 @@ import { KasPriceStore, startKasPriceFeed, type FeedDeps } from './kas-price';
 
 const Q = (usd: number, at: number): KasUsdQuote => ({ usd, at, source: 'coingecko' });
 
+describe('the demand for the rate', () => {
+  it('counts the views that want the rate, tells when it turns on and off, and a release counts once', () => {
+    const store = new KasPriceStore();
+    const seen: boolean[] = [];
+    store.subscribeWanted(() => seen.push(store.isWanted));
+    expect(store.isWanted).toBe(false);
+    const a = store.want();
+    const b = store.want();
+    expect(seen).toEqual([true]);
+    a();
+    a();
+    expect(store.isWanted).toBe(true);
+    b();
+    expect(seen).toEqual([true, false]);
+  });
+});
+
 describe('the KAS price feed', () => {
   beforeEach(() => vi.useFakeTimers({ now: 1_800_000_000_000 }));
   afterEach(() => vi.useRealTimers());

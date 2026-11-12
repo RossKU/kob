@@ -6,6 +6,7 @@
 // groups the fills of one transaction on one token, priced at the resting side's amount-weighted price, its side the aggressor's, its amount and
 // quote the asks' (the bids' when no ask filled). Nothing older than the mode is in them: the views that show them say "since HH:MM".
 import type { BookView, CandleInterval, CandlesView, DepthView, LevelView, StatsView, TradesView } from './indexer-types';
+import { depth2pctSides } from './depth-band';
 import type { StreamFill } from '../kob/stream-orders';
 import type { Hex } from '../kob/types';
 
@@ -136,19 +137,15 @@ export function statsView(token: Hex, fills: readonly SeenFill[], basis: bigint,
   const bestBid = bids[0]?.price ?? null;
   const mid = bestAsk !== null && bestBid !== null ? (bestAsk + bestBid) / 2n : null;
   const spread = mid !== null && mid > 0n ? Number(((bestAsk! - bestBid!) * 10_000n) / mid) : null;
-  const ref = mid ?? bestAsk ?? bestBid;
-  let depth: bigint | null = null;
-  if (ref !== null && ref > 0n) {
-    depth = 0n;
-    for (const m of asks) if (m.price * 100n <= ref * 102n) depth += (m.amount * m.price) / basis;
-    for (const m of bids) if (m.price * 100n >= ref * 98n) depth += (m.amount * m.price) / basis;
-  }
+  const band = depth2pctSides(asks, bids, basis);
+  const depth = band ? band.bid + band.ask : null;
   const s = (v: bigint | null): string | null => (v === null ? null : v.toString());
   return {
     token, price_basis: basis.toString(), decimals: null, ts: nowMs, last: s(last?.price ?? null), last_ts: last?.ts ?? null, last_side: last?.side ?? null,
     open_24h: s(open), high_24h: s(high), low_24h: s(low), change_24h_bps: change, volume_24h: volume.toString(), quote_volume_24h: quoteVolume.toString(), trades_24h: win.length,
     best_bid: s(bestBid), best_ask: s(bestAsk), mid: s(mid), spread_bps: spread,
     open_asks: book.asks.reduce((n, r) => n + ('orders' in r ? r.orders : 1), 0), open_bids: book.bids.reduce((n, r) => n + ('orders' in r ? r.orders : 1), 0), depth_2pct_quote: s(depth),
+    depth_2pct_bid_sompi: (band?.bid ?? 0n).toString(), depth_2pct_ask_sompi: (band?.ask ?? 0n).toString(),
   };
 }
 

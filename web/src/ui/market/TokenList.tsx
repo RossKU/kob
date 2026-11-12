@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useMedia } from '../shell/narrow';
 import { useServices } from '../../app/context';
-import { FiatNote, useFiat } from '../../app/use-fiat';
+import { FiatNote, useFiat, useKasRate } from '../../app/use-fiat';
 import { useDeclarationLookup } from '../../app/use-declaration';
 import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import type { IndexerTokenView, PairBookView, PairFillsView, StatsView } from '../../data/indexer-types';
@@ -111,7 +111,7 @@ function Figure(props: { cell: Cell; entry: ListEntry; testid: string; cls?: str
   return (
     <td class={`right num nowrap${props.cls ? ` ${props.cls}` : ''}`} data-testid={props.testid} title={title ?? undefined}>
       {c.text !== null ? (
-        <span class={c.tone ? `tone-${c.tone}` : undefined} data-thin={c.thin ? 'true' : undefined}>{c.text}</span>
+        <span class={c.tone ? `tone-${c.tone}` : undefined} data-thin={c.thin ? 'true' : undefined} data-thin-book={c.thinBook ? 'true' : undefined}>{c.text}</span>
       ) : props.entry.loading ? (
         <span class="skeleton skeleton-line ml-skel" role="status" aria-label={t('common.loading')} />
       ) : (
@@ -293,6 +293,8 @@ export function TokenList(props: { invalidToken?: string }) {
   const { registry, indexer, kob, config, standalone } = useServices();
   // USD display (Settings): the price, volume, market cap and depth of the token rows in dollars; null = KAS
   const fiat = useFiat();
+  // the KAS price whatever the display currency: the thin-book marker of the 24 h change ("under $100 within 2 %")
+  const rate = useKasRate();
   // standalone mode (data/standalone.ts): the list and its figures are what this page saw on the node since the mode started, read again as it sees more
   const sa = useStandalone(standalone);
   const saKey = sa?.active ? `standalone:${sa.version}` : 'indexer';
@@ -399,9 +401,9 @@ export function TokenList(props: { invalidToken?: string }) {
     const inList = query.trim() ? rows : (showNameless ? rows : rows.filter((r) => !isNameless(r))).filter((r) => !hiddenSet.has(r.covenantId.toLowerCase()));
     const visible = favoritesOnly ? favoriteRows : hiddenOnly ? hiddenRows : inList;
     const byId = new Map(visible.map((r) => [r.covenantId, r]));
-    const entries = filterTokens(visible, query).map((r) => (r.source === 'kascov' ? kascovEntry(r) : tokenEntry(r, slotOf(r.covenantId), fiat)));
+    const entries = filterTokens(visible, query).map((r) => (r.source === 'kascov' ? kascovEntry(r) : tokenEntry(r, slotOf(r.covenantId), fiat, rate)));
     return sortEntries(entries, sort).map((e) => ({ entry: e, row: byId.get(e.key)! }));
-  }, [rows, favoriteRows, favoritesOnly, hiddenRows, hiddenOnly, hiddenSet, query, sort, stats, indexer, showNameless, fiat]);
+  }, [rows, favoriteRows, favoritesOnly, hiddenRows, hiddenOnly, hiddenSet, query, sort, stats, indexer, showNameless, fiat, rate]);
   const namelessCount = useMemo(() => rows.filter(isNameless).length, [rows]);
   const shownPairs = useMemo(() => {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);

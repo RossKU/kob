@@ -142,6 +142,10 @@ Pinned to commit [`47792a0e`](https://github.com/RossKU/kob/tree/47792a0eba552e0
   the 24 h low reads 0.0002 and the chart has a spike down. The fill leaves the 24 h figures after 24 h and stays in the chart's history.
   When the window holds only one or two trades, the app shows the 24 h change muted, with "Based on 1 trade in 24 h" (or "2 trades") as its
   tooltip: such a figure compares two prints, not a trend.
+  It is muted too, with "Thin book: under $X within 2% of the price" in the tooltip (a line of its own next to the trade count), when the smaller side of the book (the bids
+  down to 2% below the mid, the asks up to 2% above it) is worth less than $X at the current KAS price. $X is 0.1% of the token's value (its fixed total supply times its
+  price), at least $100 and at most $10,000, so a bigger token needs a deeper book; without a known supply or a KAS price there is no marker. The $100 to $10,000 range is
+  CoinMarketCap's order sizes for its liquidity score, and the band is CoinGecko's +/-2% depth.
 - **The ticket warns before you sign.** A sell priced 10% or more below the market, or a buy 10% or more above it, shows "check for a
   typing error" ([`guards.ts` L403-L420](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/guards.ts#L403-L420),
   [`common-issues.ts` L55](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/orders/common-issues.ts#L55)). "The market" is the mid of the best bid and the best ask,

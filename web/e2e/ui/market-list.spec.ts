@@ -84,6 +84,59 @@ test('a token row shows its last price in KAS, the 24 h change, KAS volume, spre
   await expect(page.getByTestId('pair-table')).toHaveCount(0);
 });
 
+/** The example registry with EXKCC listed and carrying a verified fixed-supply genesis record of 1,000,000 tokens (8 decimals): the app knows its fully diluted value. */
+async function listWithSupply(page: Page): Promise<void> {
+  const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
+  for (const t of reg.templates) t.review_status = 'reviewed';
+  const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
+  exkcc.verified = true;
+  exkcc.genesis_verified = true;
+  exkcc.genesis = { txid: 'ab'.repeat(32), daa_score: 10, outputs: [1, 2], supply: 100_000_000_000_000, minter_outputs: [], live_minters: [], checked_at_daa: 20, source: 'e2e' };
+  await page.route('**/registry/tokens.json', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }),
+  );
+}
+
+test('a thin book (the smaller side within 2 % worth less than 0.1 % of the token\'s value, $100 to $10,000) mutes the 24 h change with its rule in the tooltip, in the list and on the token page', async ({ appPage: page, mock }) => {
+  const id = (await mock.token()).covenant_id;
+  await listWithSupply(page);
+  // KAS at $0.001: 1,000,000 tokens at about 0.025 KAS are worth about $25, the threshold is the $100 floor, and no mock book is that deep
+  await mock.kasPrice({ usd: 0.001 });
+  await page.goto('/#/market');
+  const row = page.getByTestId(`token-row-${id}`);
+  await expect(row).toHaveAttribute('data-state', 'ready');
+  const stats = await mock.get(`/v1/stats/${id}`);
+  // the executor's two sides of the 2 % band (sompi strings), together `depth_2pct_quote`
+  expect(stats.depth_2pct_bid_sompi).toMatch(/^\d+$/);
+  expect(stats.depth_2pct_ask_sompi).toMatch(/^\d+$/);
+  expect(BigInt(stats.depth_2pct_bid_sompi) + BigInt(stats.depth_2pct_ask_sompi)).toBe(BigInt(stats.depth_2pct_quote));
+  const rule = String.raw`Threshold: 0\.1% of the token's value, at least \$100 and at most \$10,000\.$`;
+  const cell = row.getByTestId(`token-change-${id}`);
+  await expect(cell.locator('span')).toHaveAttribute('data-thin-book', 'true');
+  await expect(cell.locator('span')).toHaveClass(/tone-flat/);
+  await expect(cell).toHaveAttribute('title', new RegExp(String.raw`(^|\n)Thin book: under \$100 within 2% of the price\n${rule}`));
+  // the same figure on the token page's market bar
+  await page.goto(`/#/market/${id}`);
+  const change = page.getByTestId('stat-change').locator('.mkt-stat-value');
+  await expect(change).toHaveAttribute('data-thin-book', 'true');
+  await expect(change).toHaveAttribute('title', new RegExp(String.raw`(^|\n)Thin book: under \$100 within 2% of the price\n${rule}`));
+  // a dear KAS makes the token worth more, so the threshold is the $10,000 cap and rises with the price: the marker follows the numbers
+  await mock.kasPrice({ usd: 900 });
+  await page.goto('/#/market');
+  await page.reload();
+  const again = page.getByTestId(`token-row-${id}`);
+  await expect(again).toHaveAttribute('data-state', 'ready');
+  const min = Math.min(Number(stats.depth_2pct_bid_sompi), Number(stats.depth_2pct_ask_sompi));
+  const thin = (min / 1e8) * 900 < 10_000;
+  const span = again.getByTestId(`token-change-${id}`).locator('span');
+  if (thin) {
+    await expect(span).toHaveAttribute('data-thin-book', 'true');
+    await expect(again.getByTestId(`token-change-${id}`)).toHaveAttribute('title', /Thin book: under \$10,000 within 2% of the price/);
+  } else {
+    await expect(span).not.toHaveAttribute('data-thin-book', 'true');
+  }
+});
+
 test('sorting: 24 h volume first, every header sorts (click and keyboard), search keeps the order; the table of favourite pairs follows the same order', async ({ appPage: page, mock }) => {
   const exkcc = await twoMarkets(page, mock);
   expect(await rowIds(page)).toEqual([QUOTE, exkcc]);
