@@ -1489,11 +1489,11 @@ impl Harness {
         Harness { node, ingest, follower, health, events }
     }
 
-    /// Lean storage: prune until a batch finds nothing more (a no-op for a store that is not lean). `sync` does it, as the
-    /// follower's loop does between its steps.
+    /// Lean storage or archive pruning: prune until a batch finds nothing more (a no-op for a store that does not prune). `sync` does it,
+    /// as the follower's loop does between its steps.
     pub fn lean_prune_all(&self) {
         for _ in 0..100_000 {
-            match self.ingest.lock().unwrap().lean_prune(None) {
+            match self.ingest.lock().unwrap().prune_batch(None) {
                 Ok(Some(r)) if r.more => continue,
                 _ => return,
             }

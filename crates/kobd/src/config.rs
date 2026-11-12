@@ -354,6 +354,13 @@ pub struct IndexerConfig {
     /// and events) are deleted first, retention or not, until it is under the cap; the live book is never pruned. 0: no cap.
     /// Default 500.
     pub lean_max_db_mb: u64,
+    /// Archive pruning ([`crate::indexer::archive`]) of a store that keeps its history (`lean = false`): once final (out of the reorg
+    /// window), the spent UTXO rows of orders that are no longer live, the in-place amends and the spent token holdings older than
+    /// `spent_holdings_retention_days` are deleted in small periodic batches; every other answer of the API stays the same. Default true.
+    pub archive_pruning: bool,
+    /// Archive pruning: days a spent token holding stays (`GET /v1/token-utxos?spent=true`) after it was created (at least the reorg
+    /// window; a live order's custody stays whatever its age). Default 30. A lean store keeps `lean_retention_days` of them.
+    pub spent_holdings_retention_days: u64,
     /// Pause between polls once the cursor is at the node's sink.
     pub poll_interval_ms: u64,
     /// First delay after a failed call; doubles up to `max_backoff_ms`.
@@ -447,6 +454,8 @@ impl Default for IndexerConfig {
             lean: false,
             lean_retention_days: 30,
             lean_max_db_mb: 500,
+            archive_pruning: true,
+            spent_holdings_retention_days: 30,
             poll_interval_ms: 500,
             backoff_ms: 1_000,
             max_backoff_ms: 30_000,
@@ -617,6 +626,13 @@ impl IndexerConfig {
     /// reorg window (a closed order inside it can still be reverted).
     pub fn lean_retention_daa(&self) -> u64 {
         let retention_secs = self.lean_retention_days.saturating_mul(86_400);
+        retention_secs.max(self.reorg_window_hours.saturating_mul(3600)).saturating_mul(self.daa_per_second)
+    }
+
+    /// Spent holdings created this many DAA before the node's position go under archive pruning: `spent_holdings_retention_days`, and never
+    /// less than the reorg window.
+    pub fn spent_holdings_retention_daa(&self) -> u64 {
+        let retention_secs = self.spent_holdings_retention_days.saturating_mul(86_400);
         retention_secs.max(self.reorg_window_hours.saturating_mul(3600)).saturating_mul(self.daa_per_second)
     }
 

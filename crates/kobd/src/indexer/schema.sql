@@ -77,7 +77,11 @@ CREATE TABLE IF NOT EXISTS orders (
     listed        INTEGER NOT NULL,
     unlisted_reason TEXT,
     origin        TEXT NOT NULL DEFAULT 'chain', -- chain | import
-    quote_id      INTEGER                 -- pair orders: ids.id of the quote token B; token_id is the base token A. NULL for every other kind
+    quote_id      INTEGER,                -- pair orders: ids.id of the quote token B; token_id is the base token A. NULL for every other kind
+    -- (schema 12) the KAS of the genesis output (the `order_utxos.value` of `genesis_txid`:`genesis_out`): a re-listing reads it
+    -- (`processor::relist_proven`) once the archive pruning has deleted the spent UTXO row (`indexer::archive`). NULL: not known (a store
+    -- migrated from an earlier schema whose genesis row was gone); the genesis UTXO row of such an order is never pruned.
+    genesis_value INTEGER
 );
 CREATE INDEX IF NOT EXISTS orders_book ON orders (token_id, side, price);
 -- a maker's orders newest first (`GET /v1/orders?maker=`, keyset paged): read in index order, one page per request
@@ -256,20 +260,25 @@ CREATE TABLE IF NOT EXISTS token_holdings (
 -- The programs of one token's holdings, read by a skip-scan (MIN(program), then the next above it) for every evaluated order and every
 -- open-list token (`reads::proven_programs`: 0.1 ms; the DISTINCT it replaced read all of a token's holdings, 18 s on the soak), and
 -- asked once per inserted holding (`processor::insert_holding`: has the token a holding under this program yet). `holding_programs` is that
--- set with a count, kept by the triggers below in the transaction of every insert and delete of a holding (a batch, a revert, a replay,
--- the lean pruning): a few rows per token instead of the 190 MB `(token_cov_id, program)` index over every holding that served the same
+-- set with a count, kept by the triggers below in the transaction of every insert and delete of a holding (a batch, a revert, a replay;
+-- not the pruning, schema 12): a few rows per token instead of the 190 MB `(token_cov_id, program)` index over every holding that served the same
 -- two reads. `kobd db migrate` counts it once (`db::backfill_holding_programs`) for a store that did not have it.
 CREATE TABLE IF NOT EXISTS holding_programs (
     token_id     INTEGER NOT NULL,        -- ids.id of the token covenant id
     program      TEXT NOT NULL,
-    n            INTEGER NOT NULL,        -- holdings of the token under the program, spent ones included
+    n            INTEGER NOT NULL,        -- holdings of the token under the program, spent ones included (pruned ones too, schema 12)
     PRIMARY KEY (token_id, program)
 ) WITHOUT ROWID;
 CREATE TRIGGER IF NOT EXISTS holding_programs_insert AFTER INSERT ON token_holdings BEGIN
     INSERT INTO holding_programs (token_id, program, n) VALUES (NEW.token_id, NEW.program, 1)
         ON CONFLICT (token_id, program) DO UPDATE SET n = n + 1;
 END;
-CREATE TRIGGER IF NOT EXISTS holding_programs_delete AFTER DELETE ON token_holdings BEGIN
+-- (Schema 12) A delete under the `meta` key `pruning` (the lean and the archive pruning, which delete final spent holdings) takes nothing
+-- back: a program the chain proved for a token stays proved once the holdings that proved it are gone (a revert, which never reaches a
+-- pruned row, still takes back exactly what its block added). `n` is then the holdings ever counted, not the ones the store holds; every
+-- read asks only whether the row exists.
+CREATE TRIGGER IF NOT EXISTS holding_programs_delete AFTER DELETE ON token_holdings
+    WHEN NOT EXISTS (SELECT 1 FROM meta WHERE k = 'pruning') BEGIN
     UPDATE holding_programs SET n = n - 1 WHERE token_id = OLD.token_id AND program = OLD.program;
     DELETE FROM holding_programs WHERE token_id = OLD.token_id AND program = OLD.program AND n <= 0;
 END;

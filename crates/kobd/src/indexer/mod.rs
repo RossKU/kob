@@ -7,6 +7,7 @@
 //! (queries) -> `api` (REST + WebSocket). Raw node responses are never stored.
 
 pub mod activity;
+pub mod archive;
 pub mod book;
 pub mod candles;
 pub mod db;
@@ -126,6 +127,7 @@ fn ingest_config(cfg: &IndexerConfig) -> IngestConfig {
         declaration_window_daa: cfg.declaration_window_hours.saturating_mul(3600).saturating_mul(cfg.daa_per_second),
         verify_threads: ingest::verify_threads(cfg.verify_threads),
         lean: cfg.lean.then(|| lean::LeanConfig::new(cfg.lean_retention_daa(), cfg.lean_max_db_bytes())),
+        archive: (!cfg.lean && cfg.archive_pruning).then(|| archive::ArchiveConfig::new(cfg.spent_holdings_retention_daa())),
     }
 }
 
@@ -143,6 +145,10 @@ impl Indexer {
         let writer = lock::WriterLock::acquire(&cfg)?;
         let tokens = load_tokens(&cfg)?;
         let conn = db::open_writer_with(&cfg.db_path(), &cfg.network, cfg.lean)?;
+        if !cfg.lean && cfg.archive_pruning {
+            // the index the archive pruning reads (a few seconds once, on a store of millions of holdings)
+            archive::ensure_indexes(&conn)?;
+        }
         let mut db_next = ingest::records_next_n(&conn)?;
         let log = if cfg.records.enabled {
             let dir = cfg.records_dir();
@@ -455,6 +461,9 @@ pub fn replay_from_log(cfg: &IndexerConfig) -> Result<ReplayReport, IndexerError
     let mut ing = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
     ing.init_cursor(&ingest::Cursor { hash: start, daa: 0 })?;
     let (frames, relevant, orders) = ing.replay_frames(log.records, log.frames)?;
+    // the archive pruning of what is final at the log's last cursor (`archive`); the follower prunes the rest as it applies blocks (a log
+    // keeps the chain blocks of its transactions only, so a rebuild may end with none in the window: nothing is final until it does)
+    ing.archive_prune_all()?;
     Ok(ReplayReport { frames, relevant, orders, skipped: log.skipped, dropped: log.dropped })
 }
 
@@ -506,6 +515,7 @@ pub fn replay_onto_database(cfg: &IndexerConfig) -> Result<ForwardReport, Indexe
     check_lineage(&ing, &log, from)?;
     // each frame commits together with the position after it: an interrupted run continues where it stopped
     let (frames, relevant, orders) = ing.replay_frames(log.records, log.frames)?;
+    ing.archive_prune_all()?;
     // `dropped` counts the decoded frames from `from` on
     Ok(ForwardReport { from, replay: ReplayReport { frames, relevant, orders, skipped: log.skipped, dropped: log.dropped } })
 }

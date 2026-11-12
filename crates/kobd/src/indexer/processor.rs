@@ -786,13 +786,14 @@ impl Processor {
     /// while another program was the only one proved (the token has two programs, a KRON token upgraded from one to the other, say) get
     /// the listing rules again, as of their placement. Without it an honest order of the second program stayed out of the books for good,
     /// even though its own custody is the proof (audit 2026-10-30 V7: V2 / V4 regression). The rows they had are kept in `order_amends`
-    /// stamped with the block, so a reorg gives them back exactly ([`revert_block`]).
+    /// stamped with the block, so a reorg gives them back exactly ([`revert_block`]). The carrier the rules measure is the genesis output's
+    /// KAS (`orders.genesis_value`, schema 12: the archive pruning deletes the spent UTXO row; the row itself where an order lacks it).
     fn relist_proven(&self, conn: &Connection, token: &Hash32, program: TemplateId, seq: i64) -> DbResult<()> {
         let Some(tpl) = kob_protocol::artifacts::try_token_template(program).map(|t| t.hash.to_vec()) else { return Ok(()) };
         type Row = (Vec<u8>, String, Vec<u8>, i64, i64);
         let rows: Vec<Row> = conn
             .prepare_cached(
-                concat!("SELECT o.covenant_id, o.contract, ", sql_genesis!("o"), ", o.genesis_daa, u.value FROM orders o INDEXED BY orders_token_tpl                  JOIN order_utxos u ON u.txid = o.genesis_txid AND u.idx = o.genesis_out", sql_order_ids!("o"), " WHERE o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.token_tpl_id = (SELECT id FROM ids WHERE h = ?2) AND o.listed = 0 AND o.unlisted_reason = 'token_program_conflict'                  AND o.quote_id IS NULL ORDER BY o.genesis_block, o.covenant_id LIMIT ?3"),
+                concat!("SELECT o.covenant_id, o.contract, ", sql_genesis!("o"), ", o.genesis_daa, COALESCE(o.genesis_value, u.value) FROM orders o INDEXED BY orders_token_tpl                  LEFT JOIN order_utxos u ON u.txid = o.genesis_txid AND u.idx = o.genesis_out", sql_order_ids!("o"), " WHERE o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.token_tpl_id = (SELECT id FROM ids WHERE h = ?2) AND o.listed = 0 AND o.unlisted_reason = 'token_program_conflict'                  AND o.quote_id IS NULL AND COALESCE(o.genesis_value, u.value) IS NOT NULL ORDER BY o.genesis_block, o.covenant_id LIMIT ?3"),
             )?
             .query_map(params![&token.0[..], &tpl, Self::RELIST_MAX], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
             .collect::<rusqlite::Result<_>>()?;
@@ -1037,8 +1038,8 @@ impl Processor {
             intern(conn, &h)?;
         }
         conn.prepare_cached(
-            "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, ext_id, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_id)
-             VALUES (?1,?2,(SELECT id FROM ids WHERE h = ?3),?4,?5,(SELECT id FROM ids WHERE h = ?6),(SELECT id FROM ids WHERE h = ?7),(SELECT id FROM ids WHERE h = ?8),(SELECT id FROM ids WHERE h = ?9),?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,kob_gpack(?22,?2,?6,?7,?8,?31),?23,?24,?25,?26,?27,?28,?29,?30,(SELECT id FROM ids WHERE h = ?31))",
+            "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, ext_id, scale, min_fill, price, tip, tif, expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, parent, listed, unlisted_reason, origin, quote_id, genesis_value)
+             VALUES (?1,?2,(SELECT id FROM ids WHERE h = ?3),?4,?5,(SELECT id FROM ids WHERE h = ?6),(SELECT id FROM ids WHERE h = ?7),(SELECT id FROM ids WHERE h = ?8),(SELECT id FROM ids WHERE h = ?9),?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,kob_gpack(?22,?2,?6,?7,?8,?31),?23,?24,?25,?26,?27,?28,?29,?30,(SELECT id FROM ids WHERE h = ?31),?32)",
         )?
         .execute(params![
             &n.covenant_id.0[..],
@@ -1072,6 +1073,7 @@ impl Processor {
             reason,
             n.origin,
             quote.map(|q| q.0.to_vec()),
+            n.out_value as i64,
         ])?;
         self.insert_utxo(conn, &n.covenant_id, &n.txid, n.out_index, n.out_value, &n.out_spk, Some(&state_bytes), n.block_seq, n.daa)?;
         for c in n.custody.iter().chain(n.prefund.iter()) {

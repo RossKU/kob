@@ -27,8 +27,11 @@ use tokio::sync::Semaphore;
 /// [`super::activity`]): `kobd db migrate` computes the fees of the fills a store holds (their executors are unknown). 11: the executors'
 /// transactions with their income and network fee (`executor_txs`, [`super::income`]) and their totals in `activity`, and totals the lean
 /// pruning does not take back (`counters.orders_all`, `actors.kept`): `kobd db migrate` counts the executors' transactions a store already
-/// holds as of unknown income and fee (`kobd db replay` rebuilds their income from the record log).
-pub const SCHEMA_VERSION: i64 = 11;
+/// holds as of unknown income and fee (`kobd db replay` rebuilds their income from the record log). 12: the pruning (lean and archive,
+/// [`super::archive`]) no longer takes back the proof of a token's program (the `holding_programs_delete` trigger), and an order keeps the
+/// KAS of its genesis output (`orders.genesis_value`), so the archive pruning may delete the spent UTXO rows: `kobd db migrate` fills the
+/// column from the genesis rows ([`backfill_genesis_values`]).
+pub const SCHEMA_VERSION: i64 = 12;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]
@@ -217,6 +220,7 @@ fn migrate(conn: &Connection) -> DbResult<()> {
         );
     }
     backfill_all_time(conn)?;
+    backfill_genesis_values(conn)?;
     let unknown = backfill_unknown_pair_extensions(conn)?;
     if unknown > 0 {
         tracing::info!(unknown, "token events: an unknown pair-token commitment an earlier build recorded as zero is now none");
@@ -317,6 +321,24 @@ pub fn backfill_all_time(conn: &Connection) -> DbResult<bool> {
     meta_set(&tx, "orders_all", "1")?;
     tx.commit()?;
     Ok(true)
+}
+
+/// The KAS of each order's genesis output (schema 12, `orders.genesis_value`) of a store that did not keep it: read from the genesis UTXO
+/// rows, which no build before schema 12 deleted (an order whose row is not there keeps NULL, and the archive pruning keeps its genesis row
+/// whatever happens). Once, in one transaction (`meta.genesis_values`); a fresh database has no orders. Returns the orders filled.
+pub fn backfill_genesis_values(conn: &Connection) -> DbResult<usize> {
+    if meta_get(conn, "genesis_values")?.is_some() {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let n = tx.execute(
+        "UPDATE orders SET genesis_value = (SELECT u.value FROM order_utxos u WHERE u.txid = orders.genesis_txid AND u.idx = orders.genesis_out) \
+         WHERE genesis_value IS NULL AND genesis_txid IS NOT NULL",
+        [],
+    )?;
+    meta_set(&tx, "genesis_values", "1")?;
+    tx.commit()?;
+    Ok(n)
 }
 
 /// The (token, program) counts of `holding_programs` (schema.sql) of a database that has not had them: counted from the holdings once, in

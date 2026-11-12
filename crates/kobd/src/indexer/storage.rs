@@ -1,5 +1,5 @@
-//! `kobd db migrate`: brings a data directory written by an earlier build (schema 5 to 10) to the layout of schema 11 in ONE offline
-//! run, and gives the space back.
+//! `kobd db migrate`: brings a data directory written by an earlier build (schema 5 to 11) to the layout of schema 12 in ONE offline
+//! run, and gives the space back. `kobd db vacuum` ([`vacuum`]): gives the free pages of a store of this build back, offline.
 //!
 //! The store is not altered in place. A new file is built beside it and replaces it only when it has been verified; the old file
 //! stays as `index.sqlite3.before-migrate` (the rollback) until the operator deletes it. The steps, each reported with its time:
@@ -26,8 +26,8 @@
 //! The data directory's writer lock ([`super::lock`]) is held throughout: no `run` or `index` can write it meanwhile. Free disk
 //! needed: the new store (about 3/4 of the old one) plus the temporary files of the index builds, while the old store stays. A run
 //! that stops half way leaves only `index.sqlite3.migrating`, deleted by the next run; the old store is not touched before the
-//! swap. A store of schema 9 or 10 takes the short way ([`upgrade_in_place`]: copied as it is and given the new columns, tables and
-//! triggers). A store that is of schema 11 already is left as it is (the record log step still runs).
+//! swap. A store of schema 9 to 11 takes the short way ([`upgrade_in_place`]: copied as it is and given the new columns, tables and
+//! triggers). A store that is of schema 12 already is left as it is (the record log step still runs).
 //!
 //! Schema 11 counts the executors' transactions the store already holds as of unknown income and network fee (`db::backfill_executor_txs`):
 //! the store keeps no record of who owns their outputs. `kobd db replay` rebuilds their income from the record log (their network fees
@@ -874,18 +874,20 @@ fn opens_and_checks(cfg: &IndexerConfig, new: &Path, say: &mut impl FnMut(&str))
     Ok(())
 }
 
-/// Schema 9 or 10 to 11 (steps 1 to 3 for a store whose tables keep their layout): the store is copied as it is (`VACUUM INTO`, which
-/// also gives the free pages back), its triggers are dropped (`schema.sql` creates this build's), and
+/// Schema 9, 10 or 11 to 12 (steps 1 to 3 for a store whose tables keep their layout): the store is copied as it is (`VACUUM INTO`, which
+/// also gives the free pages back), its triggers are dropped (`schema.sql` creates this build's: schema 12 changed the one that keeps the
+/// programs of the holdings), and
 /// * from 9, the fill events get their two columns and their fees (`amount x tip / scale` at the tip the order had at the fill, as in the
 ///   copy of an older store);
 /// * from 10, the activity buckets get the columns of the executors' transactions and the actors their `kept` flag (schema 11);
+/// * from 9 to 11, the orders get the KAS of their genesis output (`orders.genesis_value`, schema 12), read from the genesis UTXO rows;
 ///
 /// then `schema.sql` adds the new tables, indexes and triggers, the activity totals are counted once (from 9), the executors' transactions
 /// the store holds are counted as of unknown income and network fee (`db::backfill_executor_txs`: the store has no record of their
 /// outputs' owners; `kobd db replay` rebuilds them from the record log), the all-time order counter is set, the totals are checked against
 /// the rows, and every table of the old store holds as many rows in the new one (the keys of `meta` and `counters` all there; the
 /// activity buckets, which may gain the minutes of executors' transactions without a fill, are checked against the rows instead). No row
-/// is rewritten but the fills (from 9); nothing of the old store is touched.
+/// is rewritten but the fills (from 9) and the orders' new column; nothing of the old store is touched.
 fn upgrade_in_place(
     cfg: &IndexerConfig,
     from: i64,
@@ -946,7 +948,7 @@ fn upgrade_in_place(
         )?;
         conn.execute_batch("DROP TABLE temp.amend_tips")?;
         note(&mut rep.steps, say, "fees", t, format!("{fills} fills, {amends} amends"));
-    } else {
+    } else if from == 10 {
         conn.execute_batch(
             "ALTER TABLE main.activity ADD COLUMN txs INTEGER NOT NULL DEFAULT 0; \
              ALTER TABLE main.activity ADD COLUMN income INTEGER NOT NULL DEFAULT 0; \
@@ -958,6 +960,10 @@ fn upgrade_in_place(
              ALTER TABLE main.actors ADD COLUMN kept INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
+    // (schema 12) the KAS of each order's genesis output
+    if !columns(&conn, "main", "orders")?.iter().any(|c| c == "genesis_value") {
+        conn.execute_batch("ALTER TABLE main.orders ADD COLUMN genesis_value INTEGER")?;
+    }
 
     let t = Instant::now();
     conn.execute_batch(include_str!("schema.sql"))?;
@@ -967,6 +973,8 @@ fn upgrade_in_place(
     }
     let unknown = db::backfill_executor_txs(&conn)?;
     db::backfill_all_time(&conn)?;
+    let genesis_values = db::backfill_genesis_values(&conn)?;
+    say(&format!("  orders: the KAS of {genesis_values} genesis outputs kept on the order (schema 12)"));
     check_activity(&conn)?;
     conn.execute("INSERT OR REPLACE INTO main.meta (k, v) VALUES ('schema_version', ?1)", [db::SCHEMA_VERSION.to_string()])?;
     note(
@@ -1019,7 +1027,12 @@ fn upgrade_in_place(
 
 /// Step 4: `new` takes the place of `path`; the old file is kept beside it.
 fn swap(path: &Path, new: &Path) -> DbResult<PathBuf> {
-    let old = suffixed(path, BEFORE_MIGRATE);
+    swap_as(path, new, BEFORE_MIGRATE)
+}
+
+/// `new` takes the place of `path`; the old file (with its `-wal` and `-shm`) is kept beside it with `suffix`.
+fn swap_as(path: &Path, new: &Path, suffix: &str) -> DbResult<PathBuf> {
+    let old = suffixed(path, suffix);
     if old.exists() {
         return Err(bad(format!("{} exists already: delete it (or move it away) first", old.display())));
     }
@@ -1123,5 +1136,106 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
     } else {
         rep.log_bytes_after = rep.log_bytes_before;
     }
+    Ok(rep)
+}
+
+/// What [`vacuum`] did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct VacuumReport {
+    /// Bytes of the store (file and write-ahead log) before and after.
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+    /// Free pages the store held (what the rewrite gave back), and the page size.
+    pub free_pages: u64,
+    pub page_size: u64,
+}
+
+/// (pages, free pages, page size) of a store file, read-only.
+fn page_stats(path: &Path) -> DbResult<(i64, i64, i64)> {
+    let c = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI)?;
+    c.busy_timeout(Duration::from_secs(30))?;
+    Ok(c.query_row(
+        "SELECT (SELECT page_count FROM pragma_page_count), (SELECT freelist_count FROM pragma_freelist_count), \
+         (SELECT page_size FROM pragma_page_size)",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?)
+}
+
+/// The suffix of the copy `kobd db vacuum` writes, and of the old file while it is swapped out.
+const VACUUMING: &str = "vacuuming";
+const BEFORE_VACUUM: &str = "before-vacuum";
+
+/// `kobd db vacuum`: the store of the data directory of `cfg`, rewritten without its free pages (offline: it takes the writer lock). The
+/// pruning (lean or archive) frees pages that SQLite uses again for new rows but never gives back to the file system by itself (a lean
+/// store gives them back as it goes, `lean::release_pages`); a store that just had most of its history pruned (the first archive pruning
+/// of a store that kept everything) is mostly free pages. The copy (`VACUUM INTO index.sqlite3.vacuuming`, the pages in use only) opens as
+/// a store of this build and passes `PRAGMA quick_check` before it takes the place of the store, whose file is then deleted. The store is
+/// not touched before the swap: a run that fails or is stopped leaves only the partial copy, deleted by the next run. Free disk needed: the
+/// pages in use (at most the store's size), checked first.
+pub fn vacuum(cfg: &IndexerConfig, mut say: impl FnMut(&str)) -> Result<VacuumReport, IndexerError> {
+    let _writer = super::lock::WriterLock::acquire(cfg)?;
+    let path = cfg.db_path();
+    if !path.exists() {
+        return Err(IndexerError::Config(format!("{} does not exist: there is nothing to vacuum", path.display())));
+    }
+    let version = stored_version(&path)?;
+    if version != db::SCHEMA_VERSION {
+        return Err(IndexerError::Config(format!(
+            "{}: schema {version}, this build's is {}: run `kobd db migrate` (it rewrites the store without its free pages as well)",
+            path.display(),
+            db::SCHEMA_VERSION
+        )));
+    }
+    let mut rep = VacuumReport { bytes_before: file_bytes(&path), ..Default::default() };
+    let (pages, free, size) = page_stats(&path)?;
+    (rep.free_pages, rep.page_size) = (free.max(0) as u64, size.max(0) as u64);
+    let used = (pages - free).max(0) as u64 * rep.page_size;
+    say(&format!(
+        "{}: {} bytes, {} free pages of {} bytes ({} bytes in use)",
+        path.display(),
+        rep.bytes_before,
+        rep.free_pages,
+        rep.page_size,
+        used
+    ));
+    let dir = path.parent().unwrap_or(Path::new("."));
+    if let Some(avail) = crate::disk::free_bytes(dir) {
+        // the copy, and a margin for its write-ahead log and the temporary files of the check
+        let need = used + used / 10 + (64 << 20);
+        if avail < need {
+            return Err(IndexerError::Config(format!(
+                "{} has {avail} bytes free; the copy needs about {need}: free space first (nothing was changed)",
+                dir.display()
+            )));
+        }
+    }
+    let new = suffixed(&path, VACUUMING);
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
+    }
+    let t = Instant::now();
+    let copied = (|| -> DbResult<()> {
+        {
+            let src =
+                Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI)?;
+            src.busy_timeout(Duration::from_secs(30))?;
+            src.execute("VACUUM INTO ?1", [new.to_string_lossy().as_ref()])?;
+        }
+        say(&format!("copy: {} bytes ({:.1} s)", file_bytes(&new), t.elapsed().as_secs_f64()));
+        opens_and_checks(cfg, &new, &mut say)
+    })();
+    if let Err(e) = copied {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
+        }
+        return Err(e.into());
+    }
+    let old = swap_as(&path, &new, BEFORE_VACUUM)?;
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", old.display()));
+    }
+    rep.bytes_after = file_bytes(&path);
+    say(&format!("store: {} bytes -> {} bytes ({:.1} s in all)", rep.bytes_before, rep.bytes_after, t.elapsed().as_secs_f64()));
     Ok(rep)
 }

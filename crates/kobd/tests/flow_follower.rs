@@ -1125,3 +1125,100 @@ async fn a_follower_that_caught_up_leaves_parallel_fetch_instead_of_trailing_the
     assert!(h.prefetch_bytes_peak > 0, "the backlog was fetched ahead: {h:?}");
     assert_eq!(c.hs.snapshot(), fresh_snapshot(&c.hs.node.chain()));
 }
+
+/// What the read API answers from a store (the reads that do not list spent holdings), as JSON.
+fn reads_json(h: &Harness) -> Vec<String> {
+    use kobd::indexer::reads;
+    let g = h.ingest.lock().unwrap();
+    let conn = g.conn();
+    let ctx = reads::ReadCtx { node_daa: Some(h.node.tip_daa()), settle_depth_daa: 5, now_unix: None };
+    let mut out = vec![];
+    let ids: Vec<Vec<u8>> = {
+        let mut st = conn.prepare("SELECT covenant_id FROM orders ORDER BY covenant_id").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+    };
+    for id in &ids {
+        let cov = Hash32::from_slice(id).unwrap();
+        out.push(j(&reads::order(conn, &ctx, &cov).unwrap()));
+        out.push(j(&reads::order_events(conn, &ctx, &cov, 500, None).unwrap()));
+    }
+    out.push(j(&reads::orders(conn, &ctx, &reads::OrderFilter::default(), 500, None).unwrap()));
+    for t in [Hash32(TOKEN_COV), Hash32(TOKEN_COV_KRON)] {
+        out.push(j(&reads::book(conn, &ctx, &t, 50, false).unwrap()));
+        let f = reads::HoldingFilter { owner: None, token: Some(t), include_spent: false };
+        out.push(j(&reads::holdings(conn, &ctx, &f, 500, None).unwrap()));
+    }
+    out.push(j(&reads::strays(conn, &ctx, None, 100).unwrap()));
+    out.push(j(&reads::fills(conn, &ctx, None, None, None, 500).unwrap()));
+    out.push(j(&reads::token_list(conn, &allowlist()).unwrap()));
+    out.push(j(&kobd::indexer::activity::activity(conn, None).unwrap()));
+    out.push(j(&kobd::indexer::book::snapshot(conn, None).unwrap()));
+    out
+}
+
+fn j<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_string(v).unwrap()
+}
+
+/// Archive pruning under random traffic and random reorgs (inside a reorg window of 12 blocks): a store that prunes between its steps
+/// answers every read as a store that keeps everything, round after round, and its pruning deletes what it may.
+#[tokio::test]
+async fn archive_pruning_answers_as_a_full_store_under_random_traffic_and_reorgs() {
+    use kobd::indexer::archive::ArchiveConfig;
+    let mut pruned_rows = 0i64;
+    for (seed, fam) in [(21u64, Family::Kcc20), (22, Family::Kron), (23, Family::Kcc20)] {
+        let node = MockNode::new("testnet-10");
+        let cfg = |archive: bool| IngestConfig {
+            reorg_window_daa: 12,
+            checkpoint_daa: u64::MAX / 4,
+            archive: archive.then(|| ArchiveConfig {
+                step_rows: 2,
+                rows_per_batch: 15,
+                budget: std::time::Duration::from_secs(60),
+                ..ArchiveConfig::new(u64::MAX / 8)
+            }),
+            ..IngestConfig::default()
+        };
+        let mut c = Ctx::with(Harness::with_node(node.clone(), open_memory("testnet-10").unwrap(), None, cfg(true)));
+        c.w.validate = false;
+        let full = Harness::with_node(node.clone(), open_memory("testnet-10").unwrap(), None, cfg(false));
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut gen = Gen { live: vec![], salt: 1000 * seed as i64, fam };
+        for round in 1..=60 {
+            let mut txs = vec![];
+            for _ in 0..rng.below(4) {
+                if let Some(t) = gen.action(&c, &mut rng, round) {
+                    c.w.note_daa(&[&t], c.daa() + 1);
+                    txs.push(t);
+                }
+            }
+            if round > 4 && rng.below(4) == 0 {
+                let chain = node.chain();
+                let depth = 1 + rng.below(3.min(chain.len() as u64 - 1)) as usize;
+                let mut pool: Vec<_> = chain[chain.len() - depth..].iter().flat_map(|b| b.txs.clone()).collect();
+                pool.retain(|_| rng.below(6) != 0);
+                let mut new_blocks: Vec<Vec<_>> = (0..depth + rng.below(2) as usize).map(|_| vec![]).collect();
+                for tx in pool {
+                    let k = rng.below(new_blocks.len() as u64) as usize;
+                    new_blocks[k].push(tx);
+                }
+                new_blocks.last_mut().unwrap().extend(txs.iter().map(|t| wire_tx(&t.tx)));
+                node.reorg(depth, new_blocks);
+            } else {
+                node.push_block(txs.iter().map(|t| wire_tx(&t.tx)).collect());
+                node.push_empty(rng.below(3) as usize);
+            }
+            c.hs.sync().await;
+            full.sync().await;
+            assert_eq!(reads_json(&c.hs), reads_json(&full), "seed {seed} round {round}");
+        }
+        let n = |h: &Harness| {
+            h.query::<i64>(
+                "SELECT (SELECT COUNT(*) FROM order_utxos) + (SELECT COUNT(*) FROM token_utxos) + (SELECT COUNT(*) FROM order_amends)",
+                [],
+            )
+        };
+        pruned_rows += n(&full) - n(&c.hs);
+    }
+    assert!(pruned_rows > 0, "the pruning deleted rows");
+}

@@ -80,6 +80,8 @@ pub struct IngestConfig {
     pub verify_threads: usize,
     /// Lean storage ([`super::lean`]): the batches `Ingest::lean_prune` deletes; `None`: the store keeps its history.
     pub lean: Option<super::lean::LeanConfig>,
+    /// Archive pruning ([`super::archive`]) of a store that keeps its history; `None`: nothing is pruned (a lean store prunes by `lean`).
+    pub archive: Option<super::archive::ArchiveConfig>,
 }
 
 impl Default for IngestConfig {
@@ -90,6 +92,7 @@ impl Default for IngestConfig {
             declaration_window_daa: 72 * 3600 * 10,
             verify_threads: verify_threads(0),
             lean: None,
+            archive: None,
         }
     }
 }
@@ -259,6 +262,44 @@ impl Ingest {
     /// Lean storage: the store prunes (`lean_prune`).
     pub fn is_lean(&self) -> bool {
         self.cfg.lean.is_some()
+    }
+
+    /// The store prunes (lean or archive): the follower runs [`Ingest::prune_batch`] between its steps.
+    pub fn prunes(&self) -> bool {
+        self.cfg.lean.is_some() || self.cfg.archive.is_some()
+    }
+
+    /// One bounded pruning batch of the store's kind (lean, else archive); `None` when the store does not prune.
+    pub fn prune_batch(&mut self, node_daa: Option<u64>) -> Result<Option<super::lean::LeanReport>, IngestError> {
+        if self.cfg.lean.is_some() {
+            return self.lean_prune(node_daa);
+        }
+        self.archive_prune(node_daa)
+    }
+
+    /// One bounded batch of the archive pruning ([`super::archive::prune`]) at the node position `node_daa` (the cursor's, when
+    /// unknown); `None` when the store does not prune so. A batch that deleted something bumps the data generation.
+    pub fn archive_prune(&mut self, node_daa: Option<u64>) -> Result<Option<super::lean::LeanReport>, IngestError> {
+        let Some(a) = self.cfg.archive else { return Ok(None) };
+        let Some(cursor) = get_cursor(&self.conn)? else { return Ok(None) };
+        let rep = super::archive::prune(&mut self.conn, &a, cursor.daa, node_daa, self.cfg.reorg_window_daa)?;
+        if rep.rows > 0 {
+            self.generation.bump();
+        }
+        Ok(Some(rep))
+    }
+
+    /// The archive pruning until a batch finds nothing more, at the cursor (`kobd db replay`: the rebuilt store holds what a pruned one
+    /// does). Returns the rows deleted.
+    pub fn archive_prune_all(&mut self) -> Result<usize, IngestError> {
+        let mut rows = 0;
+        while let Some(rep) = self.archive_prune(None)? {
+            rows += rep.rows;
+            if !rep.more {
+                break;
+            }
+        }
+        Ok(rows)
     }
 
     /// Lean storage: changes the size cap in bytes (0: none) of a lean store (tests).

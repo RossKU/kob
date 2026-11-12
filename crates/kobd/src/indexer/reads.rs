@@ -572,8 +572,9 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
         };
     }
     if rows.len() > max {
-        // over the cap: the rows of tokens with a holding first, then the others in the list's order
-        let mut held = conn.prepare_cached(concat!("SELECT 1 FROM token_holdings WHERE token_id = ", id_of!("?1"), " LIMIT 1"))?;
+        // over the cap: the rows of tokens with a holding first, then the others in the list's order (`holding_programs`: a token that ever had
+        // a holding, whether or not the pruning has deleted it since, schema 12)
+        let mut held = conn.prepare_cached(concat!("SELECT 1 FROM holding_programs WHERE token_id = ", id_of!("?1"), " LIMIT 1"))?;
         let mut proven: std::collections::HashMap<Vec<u8>, bool> = std::collections::HashMap::new();
         let mut keep: Vec<(Vec<u8>, Reverse<i64>, Vec<u8>)> = Vec::with_capacity(max);
         let mut rest: Vec<(Vec<u8>, Reverse<i64>, Vec<u8>)> = Vec::new();

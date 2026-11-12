@@ -1,5 +1,5 @@
 //! The indexer's command line: the options of a start (`kobd --indexer`, and the set `kobd --executor` shares), the
-//! database tools, `kobd db <tool>` (migrate, replay, export-orders, export-book, import-orders, rebase), and the token-logo
+//! database tools, `kobd db <tool>` (migrate, vacuum, replay, export-orders, export-book, import-orders, rebase), and the token-logo
 //! reports, `kobd logo-reports <command>`.
 
 use crate::config::NodeConfig;
@@ -211,6 +211,10 @@ pub enum DbSub {
         #[arg(long)]
         no_compress_log: bool,
     },
+    /// Give the free pages of the store back to the file system (offline; stop the executor first): a copy without them is checked and
+    /// takes the place of the store, whose file is deleted. Once after the first pruning of a store that kept its whole history (the
+    /// archive pruning frees most of it; docs/ops/executor.md 7.6b). Needs free disk for the copy (the pages in use).
+    Vacuum,
     /// Print a maker order export (JSON) from the database.
     ExportOrders {
         /// Maker public key (hex); default: all makers.
@@ -637,6 +641,13 @@ pub async fn run_db(a: DbArgs) -> Result<()> {
             if let Some(old) = r.kept_old {
                 println!("the previous store file is kept as {}: delete it once the executor has run on the new one", old.display());
             }
+        }
+        DbSub::Vacuum => {
+            let r = indexer::storage::vacuum(&cfg, |line| println!("{line}"))?;
+            println!(
+                "store {} -> {} bytes ({} free pages of {} bytes given back)",
+                r.bytes_before, r.bytes_after, r.free_pages, r.page_size
+            );
         }
         DbSub::ExportOrders { maker, live_only } => {
             // read-only: allowed next to a running writer of the same data directory (nothing indexed yet: an empty export)

@@ -159,7 +159,7 @@ pub struct Follower<S: ChainSource> {
     cursor_blue: Mutex<Option<(Hash32, u64)>>,
     /// Windows fetched ahead of the cursor (parallel fetch).
     prefetch: tokio::sync::Mutex<Prefetch>,
-    /// Lean storage: when the next pruning batch is due (`None`: the store is not lean).
+    /// Lean storage or archive pruning: when the next pruning batch is due (`None`: the store does not prune).
     lean_next: Mutex<Option<std::time::Instant>>,
     /// The catch-up pace (the lag over the last minute) and the instant its seconds are counted from.
     pace: Mutex<(BackfillPace, std::time::Instant)>,
@@ -197,7 +197,7 @@ impl<S: ChainSource> Follower<S> {
     ) -> Self {
         let window = Mutex::new(cfg.window());
         let prefetch = tokio::sync::Mutex::new(Prefetch::new(cfg.prefetch_limits()));
-        let lean = ingest.lock().unwrap_or_else(|e| e.into_inner()).is_lean();
+        let lean = ingest.lock().unwrap_or_else(|e| e.into_inner()).prunes();
         Follower {
             source,
             ingest,
@@ -271,7 +271,7 @@ impl<S: ChainSource> Follower<S> {
         }
         let node_daa = snap.node_daa;
         let began = std::time::Instant::now();
-        let next = match self.blocking(move |i| i.lean_prune(node_daa)).await {
+        let next = match self.blocking(move |i| i.prune_batch(node_daa)).await {
             Ok(Some(rep)) => {
                 if rep.over_cap != snap.lean_over_cap {
                     if rep.over_cap {
@@ -280,7 +280,7 @@ impl<S: ChainSource> Follower<S> {
                     self.health.update(|h| h.lean_over_cap = rep.over_cap);
                 }
                 if rep.rows > 0 || rep.pages > 0 {
-                    tracing::debug!(orders = rep.orders, rows = rep.rows, pages = rep.pages, more = rep.more, "lean storage: pruned");
+                    tracing::debug!(orders = rep.orders, rows = rep.rows, pages = rep.pages, more = rep.more, "storage: pruned");
                     self.health.update(|h| {
                         h.lean_orders_pruned_total += rep.orders as u64;
                         h.lean_rows_pruned_total += rep.rows as u64;
@@ -295,7 +295,7 @@ impl<S: ChainSource> Follower<S> {
             }
             Ok(None) => LEAN_IDLE_EVERY,
             Err(e) => {
-                tracing::warn!(error = %e, "lean storage: pruning failed; trying again later");
+                tracing::warn!(error = %e, "storage: pruning failed; trying again later");
                 self.health.update(|h| h.lean_prune_failures_total += 1);
                 LEAN_IDLE_EVERY
             }

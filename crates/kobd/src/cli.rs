@@ -11,7 +11,7 @@
 //! * `setup`: the interactive first run (`kobd::setup`), which writes `kobd.toml` next to the binary;
 //!   `setup --non-interactive` and `address-balance` are its JSON forms for a wrapper (the Android app, `kobd::app`);
 //! * `config check`: the configuration read offline, with what a start would use (`kobd config check`);
-//! * `db <tool>`: the tools of a data directory's database (info, migrate, replay, export-orders, export-book, import-orders,
+//! * `db <tool>`: the tools of a data directory's database (info, migrate, vacuum, replay, export-orders, export-book, import-orders,
 //!   rebase);
 //! * `logo-reports`: the administrator's side of the token-logo reports (list, restore, hide, export, import);
 //! * `match`, `keep`: the matcher and the keepers alone, planning against a book snapshot file that an indexer exports
@@ -165,8 +165,8 @@ enum Cmd {
     AddressBalance(AddressBalanceArgs),
     /// Send KAS out of the operator key over the configured node (the public resolver pair included). Stop the executor first.
     Withdraw(WithdrawArgs),
-    /// The database of a data directory: info, migrate (bring an earlier build's store to this build's layout), replay (rebuild
-    /// it from the record log), export-orders, export-book, import-orders, rebase.
+    /// The database of a data directory: info, migrate (bring an earlier build's store to this build's layout), vacuum (give its free
+    /// pages back), replay (rebuild it from the record log), export-orders, export-book, import-orders, rebase.
     Db(DbArgs),
     /// Token-logo reports (`[logo_reports]`): review what was reported, restore a logo, hide one for good. Works next to a
     /// running executor of the same data directory (a short write to its database); there is no administrative route on the network.

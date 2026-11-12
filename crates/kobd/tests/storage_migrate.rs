@@ -899,3 +899,95 @@ async fn a_schema_10_store_counts_its_executors_transactions_as_unknown() {
     assert_eq!(again.from_schema, db::SCHEMA_VERSION);
     assert!(again.kept_old.is_none());
 }
+
+/// A schema 11 store (no genesis value on its orders, the trigger that let a pruning take back the proof of a token's program) takes the
+/// short way to schema 12: its orders get the KAS of their genesis outputs from the genesis UTXO rows, its triggers are this build's, every
+/// table reads as before, and a second run finds nothing to do.
+#[tokio::test]
+async fn a_schema_11_store_gets_the_genesis_values_and_the_trigger_that_keeps_a_proved_program() {
+    let c = flows().await;
+    let (original, values) = {
+        let g = c.hs.ingest.lock().unwrap();
+        let mut st = g.conn().prepare("SELECT covenant_id, genesis_value FROM orders ORDER BY covenant_id").unwrap();
+        let values: Vec<(Vec<u8>, Option<i64>)> =
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect();
+        (table_digests(g.conn()), values)
+    };
+    assert!(values.len() >= 3 && values.iter().all(|v| v.1.is_some_and(|x| x > 0)), "{values:?}");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    snapshot_file(&c, &path);
+    {
+        // the store a schema 11 build left
+        let w = Connection::open(&path).unwrap();
+        w.execute_batch(
+            "DROP TRIGGER holding_programs_delete; \
+             CREATE TRIGGER holding_programs_delete AFTER DELETE ON token_holdings BEGIN \
+                 UPDATE holding_programs SET n = n - 1 WHERE token_id = OLD.token_id AND program = OLD.program; \
+                 DELETE FROM holding_programs WHERE token_id = OLD.token_id AND program = OLD.program AND n <= 0; \
+             END; \
+             ALTER TABLE orders DROP COLUMN genesis_value; \
+             DELETE FROM meta WHERE k = 'genesis_values'; \
+             UPDATE meta SET v = '11' WHERE k = 'schema_version';",
+        )
+        .unwrap();
+    }
+    assert!(matches!(db::open_writer(&path, "testnet-10"), Err(db::DbError::OldLayout(_, 11))), "refused until migrated");
+    let mut lines = vec![];
+    let rep = storage::migrate(&config(dir.path()), storage::Options::default(), |l| lines.push(l.to_string())).unwrap();
+    assert_eq!(rep.from_schema, 11, "{lines:?}");
+    let after = open_ro(&path);
+    let migrated: Vec<(Vec<u8>, Option<i64>)> = {
+        let mut st = after.prepare("SELECT covenant_id, genesis_value FROM orders ORDER BY covenant_id").unwrap();
+        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect();
+        v
+    };
+    assert_eq!(migrated, values, "the genesis values are the ones the processor records");
+    let trigger: String =
+        after.query_row("SELECT sql FROM sqlite_master WHERE name = 'holding_programs_delete'", [], |r| r.get(0)).unwrap();
+    assert!(trigger.contains("pruning"), "{trigger}");
+    let chain = |v: Vec<(String, u64, String)>| -> Vec<(String, u64, String)> {
+        v.into_iter().filter(|d| !d.0.starts_with("logo_")).collect()
+    };
+    assert_eq!(chain(table_digests(&after)), chain(original));
+    drop(after);
+    std::fs::remove_file(rep.kept_old.unwrap()).unwrap();
+    let again = storage::migrate(&config(dir.path()), storage::Options::default(), |_| {}).unwrap();
+    assert_eq!(again.from_schema, db::SCHEMA_VERSION);
+    assert!(again.kept_old.is_none());
+}
+
+/// `kobd db vacuum`: the free pages a pruning left go back to the file system, and every row stays.
+#[tokio::test]
+async fn vacuum_gives_the_free_pages_back_and_keeps_every_row() {
+    let c = flows().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    snapshot_file(&c, &path);
+    let before = table_digests(&open_ro(&path));
+    {
+        // what a pruning leaves: pages that held rows, free now
+        let w = Connection::open(&path).unwrap();
+        w.execute_batch(
+            "CREATE TABLE junk (x BLOB); \
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000) INSERT INTO junk SELECT randomblob(2000) FROM n; \
+             DROP TABLE junk;",
+        )
+        .unwrap();
+    }
+    let size = std::fs::metadata(&path).unwrap().len();
+    let mut lines = vec![];
+    let rep = storage::vacuum(&config(dir.path()), |l| lines.push(l.to_string())).unwrap();
+    assert!(rep.free_pages > 500, "{rep:?} {lines:?}");
+    assert_eq!(rep.bytes_before, size);
+    assert!(rep.bytes_after * 2 < rep.bytes_before, "{rep:?}");
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), rep.bytes_after);
+    assert_eq!(table_digests(&open_ro(&path)), before);
+    // nothing is left beside the store
+    let left: Vec<String> =
+        std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(left.iter().all(|f| !f.contains("vacuum")), "{left:?}");
+    // a store of another schema is refused untouched
+    Connection::open(&path).unwrap().execute("UPDATE meta SET v = '11' WHERE k = 'schema_version'", []).unwrap();
+    assert!(storage::vacuum(&config(dir.path()), |_| {}).is_err());
+}

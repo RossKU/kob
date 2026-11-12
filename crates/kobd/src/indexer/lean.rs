@@ -20,16 +20,36 @@
 //! of the retention window; the history is an archive indexer's job (`lean = false`).
 //!
 //! What stays whatever the retention: the rows an open order's state is derived from (a partly filled order's fill events sum
-//! to its filled amount, `processor::FILLED_AMOUNT_SQL`), an if-done entry that a live exit names as its parent, token
-//! events and KCC-23 declarations (tiny), the counters.
+//! to its filled amount, `processor::FILLED_AMOUNT_SQL`), an if-done entry that a live exit names as its parent, the spent custody
+//! holdings of a live order (a pair order's next custody is checked against them, [`live_order_holding`]), token events and KCC-23
+//! declarations (tiny), the counters.
 //!
 //! The activity totals (`GET /v1/stats`: the `activity` buckets, the actors, `counters.orders_all`) are of everything the store ever
 //! indexed: a batch runs with the `meta` key `pruning`, which keeps the delete triggers from taking back what they counted (schema.sql,
-//! schema 11), and removes it before it commits. The executors' transactions (`executor_txs`) past the retention go too.
+//! schema 11) and, schema 12, the proof of a token's program that its deleted holdings gave (`holding_programs`), and removes it before
+//! it commits. The executors' transactions (`executor_txs`) past the retention go too.
 
 use super::db::DbResult;
 use rusqlite::{params, Connection};
 use std::time::{Duration, Instant};
+
+/// The SQL condition (on the `token_holdings` row aliased `$h`) of a holding the pruning keeps whatever its age: the custody, or a
+/// stray, of a live order. A pair order's spent custodies name the extension commitments its next custody may carry
+/// (`processor::pair_custody_exts`), and an export of a live pair order reads its latest custody of the second token
+/// (`recover::prefund_ext`). One seek of each of `ids`, `orders` and `order_state` per custody row.
+macro_rules! live_order_holding {
+    ($h:literal) => {
+        concat!(
+            "(",
+            $h,
+            ".role IN ('custody','stray') AND EXISTS (SELECT 1 FROM ids li JOIN orders lo ON lo.covenant_id = li.h \
+             JOIN order_state ls ON ls.order_id = lo.id WHERE li.id = ",
+            $h,
+            ".owner_id AND ls.status IN ('open','partial')))"
+        )
+    };
+}
+pub(crate) use live_order_holding;
 
 /// How much one batch deletes at most, and how long it may take. A batch is one write transaction made of small steps (a few dozen
 /// closed orders with all their rows, a few hundred rows of each table pruned by age) that stops when its time budget is spent, so the
@@ -181,8 +201,12 @@ pub fn prune(
         ),
         (
             "token_holdings",
-            "DELETE FROM token_holdings WHERE rowid IN (SELECT rowid FROM token_holdings INDEXED BY token_holdings_spent_daa WHERE spent_block IS NOT NULL AND spent_block < ?1 \
-             AND created_daa < ?2 LIMIT ?3)",
+            concat!(
+                "DELETE FROM token_holdings WHERE rowid IN (SELECT h.rowid FROM token_holdings h INDEXED BY token_holdings_spent_daa WHERE h.spent_block IS NOT NULL AND h.spent_block < ?1 \
+                 AND h.created_daa < ?2 AND NOT ",
+                live_order_holding!("h"),
+                " LIMIT ?3)"
+            ),
         ),
         (
             "executor_txs",
