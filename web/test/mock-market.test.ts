@@ -189,10 +189,10 @@ describe('mock market data (explicit trades)', () => {
       last: '2470000',
       last_ts: H + HOUR + 5_000,
       last_side: 'sell',
-      open_24h: '2500000', // T0 (30 h ago) is outside the window
+      open_24h: '2400000', // the last trade at or before the window's start: T0 (30 h ago)
       high_24h: '2510000',
       low_24h: '2470000',
-      change_24h_bps: -120, // (2_470_000 - 2_500_000) * 10000 / 2_500_000
+      change_24h_bps: 291, // (2_470_000 - 2_400_000) * 10000 / 2_400_000
       volume_24h: '1300000000',
       quote_volume_24h: '32370000',
       trades_24h: 5,
