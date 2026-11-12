@@ -446,7 +446,8 @@ export interface CandlesView {
  *
  * The executors' side of the range (an older indexer has none of these fields: null): `executor_income` is what the KOB transactions left to the executors that
  * sent them (crossing spread, auction margins, keeper tips) before network fees, summed over the transactions whose income is known (`executor_income_txs`;
- * `executor_income_unknown_txs` are not counted); it can be NEGATIVE. `tips_paid` is the priority-tip sum; `fees_paid` is the same value, deprecated. `miner_fees`
+ * `executor_income_unknown_txs` are not counted, nor the `executor_income_own_trade_txs` in which an executor traded for itself: an inventory buy or sale, a
+ * taker); it can be NEGATIVE. `tips_paid` is the priority-tip sum; `fees_paid` is the same value, deprecated. `miner_fees`
  * are the network fees of those transactions, over the ones whose fee is known (`miner_fee_txs`, `miner_fee_unknown_txs`). `executor_net` is income minus fee over
  * the transactions where both are known (`executor_net_txs`); it can be negative, and the page does not show it yet.
  */
@@ -463,6 +464,8 @@ export interface ActivityStatsView {
   executor_income: string | null;
   executor_income_txs: number | null;
   executor_income_unknown_txs: number | null;
+  /** executor transactions in which the sender traded for itself: not in `executor_income` (an older indexer: null) */
+  executor_income_own_trade_txs: number | null;
   miner_fees: string | null;
   miner_fee_txs: number | null;
   miner_fee_unknown_txs: number | null;

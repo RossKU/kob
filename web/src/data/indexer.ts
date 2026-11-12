@@ -183,6 +183,7 @@ function adaptActivity(r: Record<string, unknown>): ActivityStatsView | null {
     executor_income: signedSompiOf(r.executor_income),
     executor_income_txs: count(r.executor_income_txs),
     executor_income_unknown_txs: count(r.executor_income_unknown_txs),
+    executor_income_own_trade_txs: count(r.executor_income_own_trade_txs),
     miner_fees: sompiOf(r.miner_fees),
     miner_fee_txs: count(r.miner_fee_txs),
     miner_fee_unknown_txs: count(r.miner_fee_unknown_txs),

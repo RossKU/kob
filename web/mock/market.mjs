@@ -357,6 +357,7 @@ export function activityView(chain, q, knobs = DEFAULT_ACTIVITY_KNOBS) {
     executor_income: income.toString(),
     executor_income_txs: n,
     executor_income_unknown_txs: knobs.incomeUnknownTxs,
+    executor_income_own_trade_txs: 0,
     miner_fees: minerFees.toString(),
     miner_fee_txs: n,
     miner_fee_unknown_txs: knobs.minerFeeUnknownTxs,

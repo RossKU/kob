@@ -17,7 +17,7 @@ const STATS_URL = /\/v1\/stats(\?|$)/;
 const num = (s: string | null) => Number((s ?? '').replace(/[^0-9.]/g, ''));
 
 /** the tooltips of the executors' tiles (the help text is the label's title and follows the exact figure in the figure's) */
-const INCOME_HELP = 'What KOB transactions left to the executors that sent them: the spread between crossing orders, auction margins and keeper tips, before network fees.';
+const INCOME_HELP = 'What KOB transactions left to the executors that sent them: the spread between crossing orders, auction margins and keeper tips, before network fees. Transactions in which an executor trades for itself are not counted.';
 const MINERS_HELP = 'Network fees of the KOB transactions the executors sent.';
 
 /** sompi (a decimal string, maybe negative) as the tiles' tooltip words it: whole KAS, grouped by thousands, trailing zeros trimmed */

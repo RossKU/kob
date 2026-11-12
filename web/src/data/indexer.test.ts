@@ -233,13 +233,14 @@ describe('HttpIndexer.tokenUtxos', () => {
 describe('HttpIndexer activity totals (GET /v1/stats)', () => {
   // an older indexer: none of the executors' fields
   const old = { since: 1_790_000_000_000, ts: 1_790_086_000_000, orders: 42, traders: 9, executors: null, fees_paid: '1250000', kas_locked: '880000000000' };
-  const gone = { tips_paid: null, executor_income: null, executor_income_txs: null, executor_income_unknown_txs: null, miner_fees: null, miner_fee_txs: null, miner_fee_unknown_txs: null, executor_net: null, executor_net_txs: null };
+  const gone = { tips_paid: null, executor_income: null, executor_income_txs: null, executor_income_unknown_txs: null, executor_income_own_trade_txs: null, miner_fees: null, miner_fee_txs: null, miner_fee_unknown_txs: null, executor_net: null, executor_net_txs: null };
   const body = {
     ...old,
     tips_paid: '1250000',
     executor_income: '9000000',
     executor_income_txs: 5,
     executor_income_unknown_txs: 2,
+    executor_income_own_trade_txs: 3,
     miner_fees: '4000000',
     miner_fee_txs: 6,
     miner_fee_unknown_txs: 1,
@@ -266,7 +267,7 @@ describe('HttpIndexer activity totals (GET /v1/stats)', () => {
   });
 
   it('a new field of another shape is null: a sign only where a sum may be negative, no fraction, no negative count', async () => {
-    const odd = { ...body, tips_paid: '-5', miner_fees: '-4000000', executor_income: '12.5', executor_net: 7, executor_income_txs: -1, executor_income_unknown_txs: '2', miner_fee_txs: 1.5, miner_fee_unknown_txs: null, executor_net_txs: 'x' };
+    const odd = { ...body, tips_paid: '-5', miner_fees: '-4000000', executor_income: '12.5', executor_net: 7, executor_income_txs: -1, executor_income_unknown_txs: '2', executor_income_own_trade_txs: -3, miner_fee_txs: 1.5, miner_fee_unknown_txs: null, executor_net_txs: 'x' };
     const got = await new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json(odd)).f }).activity();
     expect(got).toMatchObject({ ...gone, fees_paid: '1250000', orders: 42 });
     expect((await new HttpIndexer({ baseUrl: 'http://x', fetch: stub(() => json({ ...body, executor_income: '-', executor_net: '--1' })).f }).activity())).toMatchObject({ executor_income: null, executor_net: null });

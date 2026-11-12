@@ -155,7 +155,9 @@ export function activityFigures(v: ActivityStatsView | null | undefined): Activi
     traders: v.traders,
     executors: v.executors,
     executorIncome: v.executor_income === null ? null : signed(v.executor_income),
-    executorIncomeUnknown: v.executor_income === null ? null : v.executor_income_unknown_txs,
+    // not counted: unknown, and the own trades (an indexer before them reports none)
+    executorIncomeUnknown:
+      v.executor_income === null || v.executor_income_unknown_txs === null ? null : v.executor_income_unknown_txs + (v.executor_income_own_trade_txs ?? 0),
     minerFees: v.miner_fees === null ? null : big(v.miner_fees),
     minerFeesUnknown: v.miner_fees === null ? null : v.miner_fee_unknown_txs,
     locked: big(v.kas_locked),

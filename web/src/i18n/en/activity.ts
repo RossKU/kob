@@ -13,7 +13,7 @@ export default {
   'activity.summary.traders': 'Traders',
   'activity.summary.executors': 'Executors',
   'activity.summary.paid': 'Paid to executors',
-  'activity.summary.paidHelp': 'What KOB transactions left to the executors that sent them: the spread between crossing orders, auction margins and keeper tips, before network fees.',
+  'activity.summary.paidHelp': 'What KOB transactions left to the executors that sent them: the spread between crossing orders, auction margins and keeper tips, before network fees. Transactions in which an executor trades for itself are not counted.',
   'activity.summary.miners': 'Paid to miners',
   'activity.summary.minersHelp': 'Network fees of the KOB transactions the executors sent.',
   'activity.summary.notCounted.one': '{n} transaction not counted.',
