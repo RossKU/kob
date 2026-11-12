@@ -197,8 +197,9 @@ pub struct InputVerbose {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SpentUtxo {
+    /// The spent output's value (`High` verbosity and up; `None` when the node did not report it).
     #[serde(default)]
-    pub amount: u64,
+    pub amount: Option<u64>,
     /// Version (2 bytes) followed by the script, as hex.
     pub script_public_key: HexBytes,
     /// DAA score of the block that created the spent output. The node reports `null` here in VSPC v2

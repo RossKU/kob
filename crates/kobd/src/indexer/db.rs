@@ -24,8 +24,11 @@ use tokio::sync::Semaphore;
 /// it ([`refuse_old_layout`]). 9: an order names its maker, template hashes, extension commitment and quote token by id too, the page indexes
 /// of the orders and holdings end at the block ([`super::ids`], schema.sql). 10: a fill event keeps its fee and the script that funded
 /// it (`order_events.fee`, `executor_id`, `scripts`), and the activity totals are kept by triggers (`activity`, `actors`;
-/// [`super::activity`]): `kobd db migrate` computes the fees of the fills a store holds (their executors are unknown).
-pub const SCHEMA_VERSION: i64 = 10;
+/// [`super::activity`]): `kobd db migrate` computes the fees of the fills a store holds (their executors are unknown). 11: the executors'
+/// transactions with their income and network fee (`executor_txs`, [`super::income`]) and their totals in `activity`, and totals the lean
+/// pruning does not take back (`counters.orders_all`, `actors.kept`): `kobd db migrate` counts the executors' transactions a store already
+/// holds as of unknown income and fee (`kobd db replay` rebuilds their income from the record log).
+pub const SCHEMA_VERSION: i64 = 11;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]
@@ -206,6 +209,14 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if backfill_activity(conn)? {
         tracing::info!("counted the activity totals once (kept by triggers from now on)");
     }
+    let unknown_txs = backfill_executor_txs(conn)?;
+    if unknown_txs > 0 {
+        tracing::info!(
+            unknown_txs,
+            "counted the executors' transactions indexed before their income was recorded (income and network fee unknown)"
+        );
+    }
+    backfill_all_time(conn)?;
     let unknown = backfill_unknown_pair_extensions(conn)?;
     if unknown > 0 {
         tracing::info!(unknown, "token events: an unknown pair-token commitment an earlier build recorded as zero is now none");
@@ -243,9 +254,67 @@ pub fn backfill_activity(conn: &Connection) -> DbResult<bool> {
     }
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(
-        "DELETE FROM activity; DELETE FROM actors;          INSERT INTO activity (iv, t, fills, fees, orders)            SELECT 60000, ts - ts % 60000, SUM(kind = 'fill'), SUM(CASE WHEN kind = 'fill' THEN COALESCE(fee, 0) ELSE 0 END), SUM(kind = 'create')            FROM order_events WHERE kind IN ('fill', 'create') GROUP BY ts - ts % 60000;          INSERT INTO activity (iv, t, fills, fees, orders)            SELECT 3600000, t - t % 3600000, SUM(fills), SUM(fees), SUM(orders) FROM activity WHERE iv = 60000 GROUP BY t - t % 3600000;          INSERT INTO actors (kind, actor_id, last_block)            SELECT 1, maker_id, MAX(genesis_block) FROM orders WHERE maker_id IS NOT NULL GROUP BY maker_id;          INSERT INTO actors (kind, actor_id, last_block)            SELECT 2, executor_id, MAX(block_seq) FROM order_events WHERE kind = 'fill' AND executor_id IS NOT NULL GROUP BY executor_id;",
+        "DELETE FROM activity; DELETE FROM actors; \
+         INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n) \
+           SELECT 60000, t, SUM(fills), SUM(fees), SUM(orders), SUM(txs), SUM(income), SUM(income_n), SUM(miner_fees), SUM(miner_fee_n), \
+                  SUM(net), SUM(net_n) FROM ( \
+             SELECT ts - ts % 60000 AS t, kind = 'fill' AS fills, CASE WHEN kind = 'fill' THEN COALESCE(fee, 0) ELSE 0 END AS fees, \
+                    kind = 'create' AS orders, 0 AS txs, 0 AS income, 0 AS income_n, 0 AS miner_fees, 0 AS miner_fee_n, 0 AS net, 0 AS net_n \
+               FROM order_events WHERE kind IN ('fill', 'create') \
+             UNION ALL SELECT ts - ts % 60000, 0, 0, 0, 1, COALESCE(income, 0), income IS NOT NULL, COALESCE(miner_fee, 0), \
+                    miner_fee IS NOT NULL, COALESCE(income - miner_fee, 0), income IS NOT NULL AND miner_fee IS NOT NULL FROM executor_txs) \
+           GROUP BY t; \
+         INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n) \
+           SELECT 3600000, t - t % 3600000, SUM(fills), SUM(fees), SUM(orders), SUM(txs), SUM(income), SUM(income_n), SUM(miner_fees), \
+                  SUM(miner_fee_n), SUM(net), SUM(net_n) FROM activity WHERE iv = 60000 GROUP BY t - t % 3600000; \
+         INSERT INTO actors (kind, actor_id, last_block) \
+           SELECT 1, maker_id, MAX(genesis_block) FROM orders WHERE maker_id IS NOT NULL GROUP BY maker_id; \
+         INSERT INTO actors (kind, actor_id, last_block) \
+           SELECT 2, executor_id, MAX(block_seq) FROM order_events WHERE kind = 'fill' AND executor_id IS NOT NULL GROUP BY executor_id;",
     )?;
     meta_set(&tx, "activity", "1")?;
+    tx.commit()?;
+    Ok(true)
+}
+
+/// The event kinds of an executor's transaction (anything but the maker's cancel, amend and sweep and the placement): what
+/// [`backfill_executor_txs`] counts as one.
+pub const EXECUTOR_EVENT_KINDS: &str = "('fill', 'kill', 'refund', 'arm', 'trail', 'update', 'rearm', 'unknown')";
+
+/// The executors' transactions a store indexed before it recorded their income (schema 11, `executor_txs`): one row per transaction with an
+/// executor's event (a fill, a refund, a kill, an arm, a trail, a merge, an unclassified spend; one chain block each) and neither its income
+/// nor its network fee, so the totals count them as unknown instead of leaving them out unseen. Once, in one transaction (`meta.executor_txs`); a
+/// fresh database has none. Returns the transactions counted.
+pub fn backfill_executor_txs(conn: &Connection) -> DbResult<usize> {
+    if meta_get(conn, "executor_txs")?.is_some() {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let n = tx.execute(
+        &format!(
+            "INSERT INTO executor_txs (block_seq, daa, ts, txid, income, miner_fee) \
+             SELECT block_seq, MIN(daa), MIN(ts), txid, NULL, NULL FROM order_events \
+             WHERE kind IN {EXECUTOR_EVENT_KINDS} AND block_seq > 0 GROUP BY block_seq, txid ORDER BY MIN(id)"
+        ),
+        [],
+    )?;
+    meta_set(&tx, "executor_txs", "1")?;
+    tx.commit()?;
+    Ok(n)
+}
+
+/// The all-time counters the lean pruning does not take back (schema 11, `counters.orders_all`) of a store that did not have them: the
+/// orders it holds. Once (`meta.orders_all`).
+pub fn backfill_all_time(conn: &Connection) -> DbResult<bool> {
+    if meta_get(conn, "orders_all")?.is_some() {
+        return Ok(false);
+    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT INTO counters (name, n) SELECT 'orders_all', COUNT(*) FROM orders WHERE true ON CONFLICT (name) DO UPDATE SET n = excluded.n",
+        [],
+    )?;
+    meta_set(&tx, "orders_all", "1")?;
     tx.commit()?;
     Ok(true)
 }

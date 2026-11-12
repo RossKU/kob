@@ -17,6 +17,17 @@ pub fn conn() -> rusqlite::Connection {
     open_memory("testnet-10").unwrap()
 }
 
+/// The owner of the token state a token input reveals (its redeem script, the last push of its signature script), any pinned program.
+pub fn revealed_owner(sigscript: &[u8]) -> Option<Vec<u8>> {
+    let pushes = kobd::script::parse_pushes(sigscript)?;
+    let redeem = pushes.last()?;
+    let (id, state) = kobd::model::identify_redeem(redeem).or_else(|| kobd::model::identify_kron_token(redeem))?;
+    if !id.is_token() {
+        return None;
+    }
+    Some(TokenState::decode_with(token_template(id), state).ok()?.owner().to_vec())
+}
+
 /// A chain world and an indexer following its mock node.
 pub struct Ctx {
     pub w: World,
@@ -34,11 +45,98 @@ impl Ctx {
         Ctx { w: World::new(), hs }
     }
 
-    /// Include the transactions in one block and let the indexer catch up.
+    /// Include the transactions in one block and let the indexer catch up. Every executor's transaction among them is checked against
+    /// its builder's own figures ([`Ctx::check_income`]).
     pub async fn push(&self, txs: &[&SignedTx]) -> Hash32 {
         let b = self.w.include(&self.hs.node, txs);
         self.hs.sync().await;
+        for t in txs {
+            self.check_income(t);
+        }
         b
+    }
+
+    /// The indexer's `executor_txs` row of `t` (income, network fee), if `t` is an executor's transaction it indexed.
+    pub fn executor_row(&self, t: &SignedTx) -> Option<(Option<i64>, Option<i64>)> {
+        use rusqlite::OptionalExtension;
+        let g = self.hs.ingest.lock().unwrap();
+        g.conn()
+            .query_row("SELECT income, miner_fee FROM executor_txs WHERE txid = ?1 ORDER BY id DESC LIMIT 1", [&t.tx.id[..]], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()
+            .unwrap()
+    }
+
+    /// The indexer's figures of an executor's transaction against what the transaction itself says, independently of how the indexer
+    /// tells the orders' outputs: the network fee is every input's value (the builder's own UTXO entries) minus every output; the
+    /// income is that fee plus what the sender took out minus what it put in, the sender being the script of the first plain input
+    /// (its KAS) and its key (the token UTXOs the indexer proved it holds). Returns whether the income was compared: a transaction
+    /// with an input or a token output whose owner is not known either way is not (`None` income is not compared either).
+    pub fn check_income(&self, t: &SignedTx) -> bool {
+        use rusqlite::OptionalExtension;
+        let Some((income, fee)) = self.executor_row(t) else { return false };
+        let ins: i128 = t.tx.inputs.iter().map(|i| i128::from(i.utxo.amount)).sum();
+        let outs: i128 = t.tx.outputs.iter().map(|o| i128::from(o.value)).sum();
+        let id = kobd::hex::encode(&t.tx.id);
+        assert_eq!(fee, Some((ins - outs) as i64), "network fee of {id}");
+        let Some(income) = income else { return false };
+        let g = self.hs.ingest.lock().unwrap();
+        let conn = g.conn();
+        let payer = t.tx.inputs.iter().find(|i| i.utxo.covenant_id.is_none()).map(|i| i.utxo.script_public_key.clone());
+        // a P2PK script `<version 2 bytes> 0x20 <key> 0xac`, as hex
+        let key: Option<Vec<u8>> =
+            payer.as_deref().filter(|s| s.len() == 4 + 2 + 64 + 2).map(|s| kobd::hex::decode(&s[6..70]).unwrap());
+        let holder = |txid: &[u8], idx: u32| -> Option<Vec<u8>> {
+            conn.query_row(
+                "SELECT i.h FROM token_holdings h JOIN ids i ON i.id = h.owner_id WHERE h.txid = ?1 AND h.idx = ?2",
+                rusqlite::params![txid, idx],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap()
+        };
+        let tracked = |txid: &[u8], idx: u32| -> bool {
+            conn.query_row(
+                "SELECT (SELECT COUNT(*) FROM order_utxos WHERE txid = ?1 AND idx = ?2) + (SELECT COUNT(*) FROM token_utxos WHERE txid = ?1 AND idx = ?2)",
+                rusqlite::params![txid, idx],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+                > 0
+        };
+        let (mut sender_in, mut sender_out) = (0i128, 0i128);
+        for i in &t.tx.inputs {
+            if tracked(&i.transaction_id, i.index) {
+                continue;
+            }
+            let mine = match i.utxo.covenant_id {
+                None => payer.as_deref() == Some(i.utxo.script_public_key.as_str()),
+                Some(_) => key.is_some() && (holder(&i.transaction_id, i.index) == key || revealed_owner(&i.signature_script) == key),
+            };
+            if !mine {
+                return false;
+            }
+            sender_in += i128::from(i.utxo.amount);
+        }
+        for (j, o) in t.tx.outputs.iter().enumerate() {
+            let mine = match &o.covenant {
+                None => payer.as_deref() == Some(o.script_public_key.as_str()),
+                Some(_) => {
+                    let h = holder(&t.tx.id, j as u32);
+                    if h.is_none() && !tracked(&t.tx.id, j as u32) {
+                        // a covenant output that is no order's and no proven holding: whose is not known here
+                        return false;
+                    }
+                    key.is_some() && h == key
+                }
+            };
+            if mine {
+                sender_out += i128::from(o.value);
+            }
+        }
+        assert_eq!(i128::from(income), (ins - outs) + sender_out - sender_in, "income of {id}");
+        true
     }
 
     /// The node's current DAA score (a fresh lock time for the next transaction).

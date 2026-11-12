@@ -370,7 +370,7 @@ pub fn wire_tx(t: &TxJson) -> Tx {
                 sequence: Some(i.sequence),
                 verbose_data: Some(InputVerbose {
                     utxo_entry: Some(SpentUtxo {
-                        amount: i.utxo.amount,
+                        amount: Some(i.utxo.amount),
                         script_public_key: HexBytes(unhex(&i.utxo.script_public_key)),
                         block_daa_score: None, // the real node reports null here
                         covenant_id: i.utxo.covenant_id.map(Hash32),
@@ -412,7 +412,7 @@ pub fn noise_tx(salt: u64, covenant: bool) -> Tx {
             sequence: Some(0),
             verbose_data: Some(InputVerbose {
                 utxo_entry: Some(SpentUtxo {
-                    amount: 2_000,
+                    amount: Some(2_000),
                     script_public_key: HexBytes(vec![0, 0, 0x20, 1, 0xac]),
                     block_daa_score: None,
                     covenant_id: None,
@@ -1318,11 +1318,15 @@ pub fn snapshot(conn: &Connection) -> String {
     );
     // a status whose last order changed status keeps a zero row (incremental), which a rebuild never writes
     dump("SELECT name, n FROM counters WHERE n != 0 ORDER BY name", 2, &mut out, "counter", &[]);
-    dump("SELECT iv, t, fills, fees, orders FROM activity ORDER BY iv, t", 5, &mut out, "activity", &[]);
+    dump(&format!("SELECT {ACTIVITY_COLS} FROM activity ORDER BY iv, t"), 12, &mut out, "activity", &[]);
+    dump("SELECT block_seq, daa, ts, txid, income, miner_fee FROM executor_txs ORDER BY daa, txid", 6, &mut out, "executor_tx", &[0]);
     dump(ACTORS_KEPT, 3, &mut out, "actor", &[2]);
     assert_read_invariants(conn);
     out
 }
+
+/// The columns of an activity bucket (schema.sql).
+const ACTIVITY_COLS: &str = "iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n";
 
 /// What the read paths rely on, checked on every [`snapshot`]: the row counters the triggers keep equal the counts of the
 /// tables (`/v1/health`), and an order has a current UTXO exactly when its status is `open` or `partial` (the books, counts
@@ -1345,11 +1349,13 @@ pub fn assert_read_invariants(conn: &Connection) {
         let n = st.column_count();
         st.query_map([], |r| (0..n).map(|i| r.get(i)).collect()).unwrap().map(|r| r.unwrap()).collect()
     };
+    // (a lean store that has pruned keeps the totals of what it deleted: they are not the rows' any more, `indexer::lean`)
+    if crate::indexer::db::meta_get(conn, "pruned").unwrap().is_some() {
+        return;
+    }
     assert_eq!(
-        rows("SELECT iv, t, fills, fees, orders FROM activity ORDER BY iv, t"),
-        rows(
-            "SELECT v.iv, e.ts - e.ts % v.iv AS t, SUM(e.kind = 'fill'), SUM(CASE WHEN e.kind = 'fill' THEN COALESCE(e.fee, 0) ELSE 0 END),              SUM(e.kind = 'create') FROM order_events e, (SELECT 60000 AS iv UNION ALL SELECT 3600000) v WHERE e.kind IN ('fill', 'create')              GROUP BY 1, 2 ORDER BY 1, 2"
-        ),
+        rows(&format!("SELECT {ACTIVITY_COLS} FROM activity ORDER BY iv, t")),
+        rows(COUNTED_ACTIVITY),
         "the kept activity buckets differ from the counted ones"
     );
     assert_eq!(
@@ -1360,6 +1366,9 @@ pub fn assert_read_invariants(conn: &Connection) {
         "the kept makers and executors differ from the counted ones"
     );
 }
+
+/// The activity buckets the events and the executors' transactions give (what the triggers must have kept).
+const COUNTED_ACTIVITY: &str = "SELECT v.iv, x.ts - x.ts % v.iv AS t, SUM(x.f), SUM(x.fe), SUM(x.o), SUM(x.tx), SUM(x.inc), SUM(x.inc_n), SUM(x.mf), SUM(x.mf_n),      SUM(x.net), SUM(x.net_n) FROM (        SELECT ts, kind = 'fill' AS f, CASE WHEN kind = 'fill' THEN COALESCE(fee, 0) ELSE 0 END AS fe, kind = 'create' AS o, 0 AS tx, 0 AS inc,               0 AS inc_n, 0 AS mf, 0 AS mf_n, 0 AS net, 0 AS net_n FROM order_events WHERE kind IN ('fill', 'create')        UNION ALL SELECT ts, 0, 0, 0, 1, COALESCE(income, 0), income IS NOT NULL, COALESCE(miner_fee, 0), miner_fee IS NOT NULL,               COALESCE(income - miner_fee, 0), income IS NOT NULL AND miner_fee IS NOT NULL FROM executor_txs) x,      (SELECT 60000 AS iv UNION ALL SELECT 3600000) v GROUP BY 1, 2 ORDER BY 1, 2";
 
 /// The makers (their keys) and executors (their scripts) the activity totals keep, with the newest block of each.
 const ACTORS_KEPT: &str = "SELECT a.kind, CASE a.kind WHEN 1 THEN (SELECT h FROM ids WHERE id = a.actor_id) ELSE (SELECT spk FROM scripts WHERE id = a.actor_id) END,      a.last_block FROM actors a ORDER BY 1, 2";
@@ -1669,7 +1678,7 @@ pub fn kcc23_wire(t: &kaspa_consensus_core::tx::Transaction, full: bool) -> Tx {
                 sequence: Some(i.sequence),
                 verbose_data: Some(InputVerbose {
                     utxo_entry: Some(SpentUtxo {
-                        amount: 100_000_000,
+                        amount: Some(100_000_000),
                         script_public_key: HexBytes(vec![0, 0, 0x20, 0x51, 0xac]),
                         block_daa_score: None,
                         covenant_id: None,

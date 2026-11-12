@@ -357,7 +357,7 @@ fn legacy_store(src: &Path, dest: &Path, kind: Legacy) {
         run(format!("INSERT INTO {t} ({names}) SELECT {names} FROM cur.{t} ORDER BY 1"));
     }
     // (the activity totals came with schema 10)
-    run("INSERT INTO meta (k, v) SELECT k, v FROM cur.meta WHERE k NOT IN ('schema_version', 'activity')".to_string());
+    run("INSERT INTO meta (k, v) SELECT k, v FROM cur.meta WHERE k NOT IN ('schema_version', 'activity', 'executor_txs', 'orders_all')".to_string());
     if whole {
         // schema 5: no row counters, no program counts, the indexes of that time
         w.execute_batch(
@@ -679,6 +679,23 @@ fn amend_req(c: &Ctx, at: &SignedTx, idx: usize, a: &AskState, amended: AskState
     }
 }
 
+/// What a migrated store reports of the totals `v` a store that indexed the same chain itself reports: the executors' transactions it
+/// held are counted as of unknown income and network fee (schema 11); from schema 9 the executors are unknown too.
+fn migrated(v: &kobd::indexer::activity::ActivityView, from_9: bool) -> kobd::indexer::activity::ActivityView {
+    kobd::indexer::activity::ActivityView {
+        executors: if from_9 { 0 } else { v.executors },
+        executor_income: "0".into(),
+        executor_income_txs: 0,
+        executor_income_unknown_txs: v.executor_income_txs + v.executor_income_unknown_txs,
+        miner_fees: "0".into(),
+        miner_fee_txs: 0,
+        miner_fee_unknown_txs: v.miner_fee_txs + v.miner_fee_unknown_txs,
+        executor_net: "0".into(),
+        executor_net_txs: 0,
+        ..v.clone()
+    }
+}
+
 /// Every event's fee, by event id.
 fn fees(conn: &Connection) -> Vec<(i64, String, Option<i64>)> {
     let mut st = conn.prepare("SELECT id, kind, fee FROM order_events ORDER BY id").unwrap();
@@ -759,12 +776,12 @@ async fn a_schema_9_store_gets_the_fees_and_totals_of_a_fresh_store_and_no_execu
     assert_eq!(fees(&after), fresh.0, "every fill's fee, at the tip in force at the fill");
     assert_eq!(kept_totals(&after), fresh.1);
     let v = kobd::indexer::activity::activity(&after, None).unwrap();
-    assert_eq!(v, kobd::indexer::activity::ActivityView { executors: 0, ..fresh.2.clone() }, "every figure but the executors");
+    assert_eq!(v, migrated(&fresh.2, true), "every figure but the executors");
     let known: i64 = after.query_row("SELECT COUNT(*) FROM order_events WHERE executor_id IS NOT NULL", [], |r| r.get(0)).unwrap();
     assert_eq!(known, 0);
     // a window: the same
     let w = kobd::indexer::activity::activity(&after, Some(since)).unwrap();
-    assert_eq!(w, kobd::indexer::activity::ActivityView { executors: 0, ..fresh.4.clone() });
+    assert_eq!(w, migrated(&fresh.4, true));
     assert!(fresh.4.fills >= 1);
     // every other table reads as it did (the logo rows were put into the file only)
     let chain = |v: Vec<(String, u64, String)>| -> Vec<(String, u64, String)> {
@@ -816,13 +833,69 @@ async fn a_lean_schema_9_store_stays_lean() {
         let g = c.hs.ingest.lock().unwrap();
         kobd::indexer::activity::activity(g.conn(), None).unwrap()
     };
-    assert_eq!(
-        kobd::indexer::activity::activity(&after, None).unwrap(),
-        kobd::indexer::activity::ActivityView { executors: 0, ..original }
-    );
+    assert_eq!(kobd::indexer::activity::activity(&after, None).unwrap(), migrated(&original, true));
     drop(after);
     std::fs::remove_file(rep.kept_old.unwrap()).unwrap();
     let again = storage::migrate(&lean, storage::Options::default(), |_| {}).unwrap();
+    assert_eq!(again.from_schema, db::SCHEMA_VERSION);
+    assert!(again.kept_old.is_none());
+}
+
+/// A schema 10 store (activity totals without the executors' transactions, actors without `kept`) takes the short way to schema 11: its
+/// executors' transactions are counted as of unknown income and network fee, everything else reads as before, the store goes on being
+/// indexed with the income of the new transactions known, and a second run finds nothing to do.
+#[tokio::test]
+async fn a_schema_10_store_counts_its_executors_transactions_as_unknown() {
+    let c = flows().await;
+    let original = {
+        let g = c.hs.ingest.lock().unwrap();
+        (kobd::indexer::activity::activity(g.conn(), None).unwrap(), table_digests(g.conn()))
+    };
+    assert!(original.0.executor_income_txs > 0, "the flows have executors' transactions");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    snapshot_file(&c, &path);
+    {
+        // the store a schema 10 build left: no executors' transactions, the narrower totals, the version
+        let w = Connection::open(&path).unwrap();
+        let triggers: Vec<String> = {
+            let mut st = w.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").unwrap();
+            let v = st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+            v
+        };
+        for t in triggers {
+            w.execute_batch(&format!("DROP TRIGGER \"{t}\"")).unwrap();
+        }
+        w.execute_batch(
+            "DROP TABLE executor_txs; \
+             CREATE TABLE a10 (iv INTEGER NOT NULL, t INTEGER NOT NULL, fills INTEGER NOT NULL, fees INTEGER NOT NULL, orders INTEGER NOT NULL, PRIMARY KEY (iv, t)) WITHOUT ROWID; \
+             INSERT INTO a10 SELECT iv, t, fills, fees, orders FROM activity WHERE fills > 0 OR orders > 0; \
+             DROP TABLE activity; ALTER TABLE a10 RENAME TO activity; \
+             CREATE TABLE r10 (kind INTEGER NOT NULL, actor_id INTEGER NOT NULL, last_block INTEGER NOT NULL, PRIMARY KEY (kind, actor_id)) WITHOUT ROWID; \
+             INSERT INTO r10 SELECT kind, actor_id, last_block FROM actors; DROP TABLE actors; ALTER TABLE r10 RENAME TO actors; \
+             CREATE INDEX actors_last ON actors (kind, last_block); \
+             DELETE FROM counters WHERE name = 'orders_all'; DELETE FROM meta WHERE k IN ('executor_txs', 'orders_all'); \
+             UPDATE meta SET v = '10' WHERE k = 'schema_version';",
+        )
+        .unwrap();
+    }
+    assert!(matches!(db::open_writer(&path, "testnet-10"), Err(db::DbError::OldLayout(_, 10))), "refused until migrated");
+    let mut lines = vec![];
+    let rep = storage::migrate(&config(dir.path()), storage::Options::default(), |l| lines.push(l.to_string())).unwrap();
+    assert_eq!(rep.from_schema, 10, "{lines:?}");
+    let after = open_ro(&path);
+    assert_eq!(kobd::indexer::activity::activity(&after, None).unwrap(), migrated(&original.0, false));
+    let unknown: (i64, i64) = after
+        .query_row("SELECT COUNT(*), COUNT(income) + COUNT(miner_fee) FROM executor_txs", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!(unknown, (original.0.executor_income_txs, 0));
+    let chain = |v: Vec<(String, u64, String)>| -> Vec<(String, u64, String)> {
+        v.into_iter().filter(|d| !d.0.starts_with("logo_")).collect()
+    };
+    assert_eq!(chain(table_digests(&after)), chain(original.1));
+    drop(after);
+    std::fs::remove_file(rep.kept_old.unwrap()).unwrap();
+    let again = storage::migrate(&config(dir.path()), storage::Options::default(), |_| {}).unwrap();
     assert_eq!(again.from_schema, db::SCHEMA_VERSION);
     assert!(again.kept_old.is_none());
 }

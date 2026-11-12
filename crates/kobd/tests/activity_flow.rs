@@ -8,6 +8,7 @@ mod common;
 use common::*;
 use kob_protocol::build::*;
 use kob_protocol::state::*;
+use kob_protocol::tx::FeeOptions;
 use kobd::indexer::activity::{self, ActivityView};
 use kobd::indexer::db::open_memory;
 use kobd::indexer::recordlog::{self, RecordLog};
@@ -91,6 +92,7 @@ async fn a_fill_counts_its_fee_and_executor_and_a_reorg_takes_them_back() {
     for (_, b) in old.iter_mut() {
         for t in b.blocks.iter_mut().flat_map(|b| b.txs.iter_mut()) {
             t.payer = None;
+            t.in_value = None;
         }
         // such a frame is format 2 (no payer section, no declaration)
         assert_eq!(b.encode(1)[..2], [0, recordlog::FORMAT]);
@@ -102,6 +104,155 @@ async fn a_fill_counts_its_fee_and_executor_and_a_reorg_takes_them_back() {
         ing.conn().query_row("SELECT COUNT(*) FROM order_events WHERE executor_id IS NOT NULL", [], |r| r.get::<_, i64>(0)).unwrap(),
         0
     );
-    // and a frame with a payer is format 4
-    assert!(logged.records.iter().any(|(_, b)| b.encode(1)[..2] == [0, recordlog::FORMAT_PAYER]));
+    // a frame with a payer and input values is format 5, with a payer alone format 4
+    assert!(logged.records.iter().any(|(_, b)| b.encode(1)[..2] == [0, recordlog::FORMAT_IN_VALUE]));
+    let mut payer_only = logged.records.clone();
+    for (_, b) in payer_only.iter_mut() {
+        for t in b.blocks.iter_mut().flat_map(|b| b.txs.iter_mut()) {
+            t.in_value = None;
+        }
+    }
+    assert!(payer_only.iter().any(|(_, b)| b.encode(1)[..2] == [0, recordlog::FORMAT_PAYER]));
+}
+
+/// (executor income, its transactions, unknown ones, miner fees, their transactions, unknown ones, tips paid)
+fn earned(v: &ActivityView) -> (String, i64, i64, String, i64, i64, String) {
+    (
+        v.executor_income.clone(),
+        v.executor_income_txs,
+        v.executor_income_unknown_txs,
+        v.miner_fees.clone(),
+        v.miner_fee_txs,
+        v.miner_fee_unknown_txs,
+        v.tips_paid.clone(),
+    )
+}
+
+/// An ask and a bid cross in one executor's transaction (a partial fill of both): what the transaction leaves its sender is the bid's
+/// all-in spend minus the ask's all-in proceeds, hand-computed (4 whole tokens, scale 1 000): 4 x (2.60 + 0.001 tip) KAS released by the
+/// bid against 4 x (2.50 - 0.001 tip) KAS paid to the ask's maker = 0.408 KAS, of which 0.008 KAS are the two tips (the only figure the
+/// old `fees_paid` saw). The network fee is the transaction's own; a reorg takes all of it back, a rebuild from the record log gives it
+/// again, and a log of records without input values (before 2026-11-12) leaves the fee unknown and counted as such.
+#[tokio::test]
+async fn a_crossing_pays_its_executor_the_spread_and_the_tips_and_its_fee_to_the_miners() {
+    let dir = tempfile::tempdir().unwrap();
+    let (log, _) = RecordLog::open(dir.path(), 1 << 20, 0).unwrap();
+    let c = Ctx::with(Harness::new(open_memory("testnet-10").unwrap(), Some(log)));
+    let (a, b) = (ask(MAKER_A, P250), bid(MAKER_B, P260));
+    let create_a = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
+    let create_b = c.w.create_tx(AnyState::KobBid(b.clone()), b.escrow(10 * WHOLE, 3).unwrap() as u64, MAKER_B, 0);
+    c.push(&[&create_a, &create_b]).await;
+    let placed = live(&c);
+    assert_eq!(earned(&placed), ("0".into(), 0, 0, "0".into(), 0, 0, "0".into()), "placements are the makers' own");
+    let cov_a = c.w.cov(&create_a, 0);
+    let custody = c.w.token_at(&create_a, 1, Kcc20State::custody(10 * WHOLE, cov_a.0, EXT));
+    let legs = vec![
+        Leg::Ask { order: c.w.order(&create_a, 0, a.clone()), custody, amount: 4 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&create_b, 0, b.clone()), amount: 4 * WHOLE, t: None },
+    ];
+    let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), legs)));
+    c.push(&[&fill]).await;
+    let income = 4 * (P260 + TIP) - 4 * (P250 - TIP);
+    assert_eq!(income, 40_800_000);
+    let fee = fill.fee.fee as i64;
+    assert!(fee > 0);
+    let v = live(&c);
+    assert_eq!(earned(&v), (income.to_string(), 1, 0, fee.to_string(), 1, 0, (8 * TIP).to_string()));
+    assert_eq!((v.executor_net.clone(), v.executor_net_txs), ((income - fee).to_string(), 1));
+    assert_eq!(v.fees_paid, v.tips_paid, "the old name is the tip sum");
+    assert!(c.check_income(&fill), "the builder's own figures agree");
+
+    // reorged out and accepted again
+    c.hs.node.reorg(1, vec![vec![]]);
+    c.hs.sync().await;
+    assert_eq!(earned(&live(&c)), earned(&placed));
+    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM executor_txs", []), 0);
+    c.w.include(&c.hs.node, &[&fill]);
+    c.hs.sync().await;
+    let filled = live(&c);
+    assert_eq!(earned(&filled), earned(&v));
+    let snap = c.hs.snapshot();
+    drop(c);
+
+    let logged = recordlog::read_all(dir.path()).unwrap();
+    let rebuilt = |records: Vec<_>| {
+        let mut ing =
+            kobd::indexer::ingest::Ingest::new(open_memory("testnet-10").unwrap(), processor(), None).with_config(wide_window());
+        ing.init_cursor(&kobd::indexer::ingest::Cursor { hash: logged.records[0].1.start, daa: 0 }).unwrap();
+        ing.replay(records).unwrap();
+        ing
+    };
+    let ing = rebuilt(logged.records.clone());
+    assert_eq!(totals(ing.conn()), filled);
+    assert_eq!(snapshot(ing.conn()), snap);
+    assert!(logged.records.iter().any(|(_, b)| b.encode(1)[..2] == [0, recordlog::FORMAT_IN_VALUE]));
+    // the same log without input values: the income stays known, the fee is unknown and counted as such
+    let mut old = logged.records.clone();
+    for (_, b) in old.iter_mut() {
+        for t in b.blocks.iter_mut().flat_map(|b| b.txs.iter_mut()) {
+            t.in_value = None;
+        }
+    }
+    let v = totals(rebuilt(old).conn());
+    assert_eq!(earned(&v), (income.to_string(), 1, 0, "0".into(), 0, 1, (8 * TIP).to_string()));
+    assert_eq!((v.executor_net.as_str(), v.executor_net_txs), ("0", 0), "net only where both are known");
+}
+
+/// A keeper's refund of an expired ask keeps the order's refund tip: the order UTXO and its custody carrier go back to the maker less it.
+#[tokio::test]
+async fn a_keepers_refund_earns_its_refund_tip() {
+    let c = Ctx::new();
+    let a = AskState { expiry_daa: c.daa() as i64 + 2_000, ..ask(MAKER_A, P250) };
+    let create = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
+    c.push(&[&create]).await;
+    let cov = c.w.cov(&create, 0);
+    let custody = c.w.token_at(&create, 1, Kcc20State::custody(10 * WHOLE, cov.0, EXT));
+    let state = AnyState::KobAsk(a.clone());
+    let due = state.refund_due(c.w.utxo(&create, 0).block_daa_score as i64).unwrap();
+    let refund = c.w.sign(&Action::RefundOrder(RefundOrder {
+        prefund: None,
+        order: c.w.order(&create, 0, state),
+        foreign: vec![],
+        custody: Some(custody),
+        lock_time: due as u64,
+        funding: vec![c.w.coin(KEEPER, 10)],
+        change: Some(pk(KEEPER)),
+        fee: FeeOptions::default(),
+    }));
+    c.push(&[&refund]).await;
+    assert_eq!(c.hs.status(&cov), "refunded");
+    // the maker's output at the order's index: both carriers less the tip
+    assert_eq!(refund.tx.outputs[0].value as i64, 2 * CARRIER as i64 - a.refund_tip);
+    let v = live(&c);
+    assert_eq!(earned(&v), (a.refund_tip.to_string(), 1, 0, refund.fee.fee.to_string(), 1, 0, "0".into()));
+    assert!(c.check_income(&refund));
+}
+
+/// A lean store prunes the closed orders and their history, but not the totals: all time is everything it ever indexed (the orders,
+/// fills, makers, executors, tips, income and fees).
+#[tokio::test]
+async fn the_lean_pruning_does_not_take_back_the_totals() {
+    let c = Ctx::with(Harness::lean(8));
+    let a = ask(MAKER_A, P250);
+    let create = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
+    c.push(&[&create]).await;
+    let cov = c.w.cov(&create, 0);
+    let custody = c.w.token_at(&create, 1, Kcc20State::custody(10 * WHOLE, cov.0, EXT));
+    let leg = Leg::Ask { order: c.w.order(&create, 0, a.clone()), custody, amount: 10 * WHOLE, t: None };
+    let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), vec![leg])));
+    c.push(&[&fill]).await;
+    assert_eq!(c.hs.status(&cov), "filled");
+    let before = live(&c);
+    assert_eq!((before.orders, before.fills, before.traders, before.executors), (1, 1, 1, 1));
+    assert_eq!(before.executor_income_txs, 1);
+    let rows =
+        |c: &Ctx| (c.hs.query::<i64>("SELECT COUNT(*) FROM orders", []), c.hs.query::<i64>("SELECT COUNT(*) FROM executor_txs", []));
+    assert_eq!(rows(&c), (1, 1));
+    // the reorg window passes: the filled order and the executor's transaction are pruned
+    c.hs.node.push_empty(20);
+    c.hs.sync().await;
+    assert_eq!(rows(&c), (0, 0), "pruned");
+    let after = live(&c);
+    assert_eq!(ActivityView { ts: before.ts, ..after.clone() }, before, "every total as before");
+    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM meta WHERE k = 'pruning'", []), 0, "the key never outlives the pruning");
 }

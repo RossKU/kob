@@ -22,6 +22,10 @@
 //! What stays whatever the retention: the rows an open order's state is derived from (a partly filled order's fill events sum
 //! to its filled amount, `processor::FILLED_AMOUNT_SQL`), an if-done entry that a live exit names as its parent, token
 //! events and KCC-23 declarations (tiny), the counters.
+//!
+//! The activity totals (`GET /v1/stats`: the `activity` buckets, the actors, `counters.orders_all`) are of everything the store ever
+//! indexed: a batch runs with the `meta` key `pruning`, which keeps the delete triggers from taking back what they counted (schema.sql,
+//! schema 11), and removes it before it commits. The executors' transactions (`executor_txs`) past the retention go too.
 
 use super::db::DbResult;
 use rusqlite::{params, Connection};
@@ -126,7 +130,8 @@ pub fn ensure_indexes(conn: &Connection) -> DbResult<()> {
          CREATE INDEX IF NOT EXISTS pair_fills_daa ON pair_fills (daa); \
          CREATE INDEX IF NOT EXISTS order_utxos_spent_daa ON order_utxos (created_daa) WHERE spent_block IS NOT NULL; \
          CREATE INDEX IF NOT EXISTS token_utxos_spent_daa ON token_utxos (created_daa) WHERE spent_block IS NOT NULL; \
-         CREATE INDEX IF NOT EXISTS token_holdings_spent_daa ON token_holdings (created_daa) WHERE spent_block IS NOT NULL;",
+         CREATE INDEX IF NOT EXISTS token_holdings_spent_daa ON token_holdings (created_daa) WHERE spent_block IS NOT NULL; \
+         CREATE INDEX IF NOT EXISTS executor_txs_daa ON executor_txs (daa);",
     )?;
     Ok(())
 }
@@ -153,6 +158,8 @@ pub fn prune(
     ensure_indexes(conn)?;
     let tx = conn.transaction()?;
     tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS lean_batch (cov BLOB PRIMARY KEY, id INTEGER NOT NULL) WITHOUT ROWID; DELETE FROM lean_batch;")?;
+    // what the batch deletes stays in the activity totals (the delete triggers take nothing back while the key is there)
+    tx.execute("INSERT INTO meta (k, v) VALUES ('pruning', '1') ON CONFLICT (k) DO UPDATE SET v = excluded.v", [])?;
 
     // closed orders past the retention whose exits (if-done children) are not live; the partial index `order_state_closed_daa` lists
     // them oldest first, so the oldest are the first rows read whatever the size of the store
@@ -161,7 +168,7 @@ pub fn prune(
                 AND NOT EXISTS (SELECT 1 FROM orders c JOIN order_state cs ON cs.order_id = c.id \
                                 WHERE c.parent = p.covenant_id AND cs.status IN ('open','partial')) \
                 ORDER BY s.last_daa LIMIT ?3";
-    let aged: [(&str, &str); 3] = [
+    let aged: [(&str, &str); 4] = [
         (
             "order_utxos",
             "DELETE FROM order_utxos WHERE rowid IN (SELECT rowid FROM order_utxos INDEXED BY order_utxos_spent_daa WHERE spent_block IS NOT NULL AND spent_block < ?1 \
@@ -177,9 +184,13 @@ pub fn prune(
             "DELETE FROM token_holdings WHERE rowid IN (SELECT rowid FROM token_holdings INDEXED BY token_holdings_spent_daa WHERE spent_block IS NOT NULL AND spent_block < ?1 \
              AND created_daa < ?2 LIMIT ?3)",
         ),
+        (
+            "executor_txs",
+            "DELETE FROM executor_txs WHERE id IN (SELECT id FROM executor_txs INDEXED BY executor_txs_daa WHERE daa < ?2 AND block_seq < ?1 LIMIT ?3)",
+        ),
     ];
     // rows left to delete from each table by age in this batch
-    let mut left_rows = [cfg.rows_per_batch; 3];
+    let mut left_rows = [cfg.rows_per_batch; 4];
     let (mut pair_left, mut rejects_left) = (cfg.rows_per_batch, cfg.rows_per_batch);
     let mut orders_left = cfg.orders_per_batch;
     loop {
@@ -256,6 +267,11 @@ pub fn prune(
             break;
         }
     }
+    if rep.rows > 0 {
+        // the store no longer holds all it indexed (the totals do): `meta.pruned`, from the first batch that deleted a row
+        tx.execute("INSERT OR IGNORE INTO meta (k, v) VALUES ('pruned', '1')", [])?;
+    }
+    tx.execute("DELETE FROM meta WHERE k = 'pruning'", [])?;
     tx.commit()?;
     // the freed pages go back to the file in steps, while the budget lasts (and at least one step)
     let mut handed = 0;

@@ -136,6 +136,12 @@ pub struct TxRecord {
     /// then unknown). Flagged by bit 29 of the encoded `pos`; a frame holding one is written as record-log format 4
     /// (`recordlog::FORMAT_PAYER`).
     pub payer: Option<Vec<u8>>,
+    /// What the transaction's inputs held in all: the sum of the values of the outputs it spent, as the node reported each one
+    /// (VSPC v2 `utxoEntry.amount`, `High` verbosity), so that its network fee is that minus the sum of its outputs (which the
+    /// record keeps, every one). Kept for a transaction that spends a tracked order when the node reported the value of every
+    /// input, `None` otherwise and in every record written before 2026-11-12 (its fee is then unknown). Flagged by bit 28 of the
+    /// encoded `pos`; a frame holding one is written as record-log format 5 (`recordlog::FORMAT_IN_VALUE`).
+    pub in_value: Option<u64>,
 }
 
 /// Stand-in stored for a KOB1 payload that did not decode (`KOB1` and a version byte no reader supports): the record keeps the
@@ -148,6 +154,8 @@ const HOLDS_FLAG: u64 = 1 << 31;
 const KCC23_FLAG: u64 = 1 << 30;
 /// Set in the encoded `pos` when the record has a payer section ([`TxRecord::payer`]).
 const PAYER_FLAG: u64 = 1 << 29;
+/// Set in the encoded `pos` when the record has an input-value section ([`TxRecord::in_value`]).
+const IN_VALUE_FLAG: u64 = 1 << 28;
 /// The longest payer script kept (a standard script public key is at most 37 bytes with its version; a longer one is not kept).
 pub const MAX_PAYER_SPK: usize = 64;
 
@@ -279,7 +287,8 @@ impl TxRecord {
             self.pos as u64
                 | if self.holds.is_empty() { 0 } else { HOLDS_FLAG }
                 | if self.kcc23.is_none() { 0 } else { KCC23_FLAG }
-                | if self.payer.is_none() { 0 } else { PAYER_FLAG },
+                | if self.payer.is_none() { 0 } else { PAYER_FLAG }
+                | if self.in_value.is_none() { 0 } else { IN_VALUE_FLAG },
         );
         w.bytes(&self.payload);
         w.var(self.inputs.len() as u64);
@@ -332,6 +341,9 @@ impl TxRecord {
         if let Some(p) = &self.payer {
             w.bytes(p);
         }
+        if let Some(v) = self.in_value {
+            w.var(v);
+        }
     }
 
     /// Adds the templates the record refers to (order reveals, holding programs) to a frame's tables.
@@ -355,7 +367,8 @@ impl TxRecord {
         let has_holds = raw_pos & HOLDS_FLAG != 0;
         let has_kcc23 = raw_pos & KCC23_FLAG != 0;
         let has_payer = raw_pos & PAYER_FLAG != 0;
-        let pos = (raw_pos & !(HOLDS_FLAG | KCC23_FLAG | PAYER_FLAG)) as u32;
+        let has_in_value = raw_pos & IN_VALUE_FLAG != 0;
+        let pos = (raw_pos & !(HOLDS_FLAG | KCC23_FLAG | PAYER_FLAG | IN_VALUE_FLAG)) as u32;
         let payload = r.bytes()?.to_vec();
         let n_in = r.count(34)?;
         let mut inputs = Vec::with_capacity(n_in);
@@ -405,7 +418,8 @@ impl TxRecord {
         } else {
             None
         };
-        Ok(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer })
+        let in_value = if has_in_value { Some(r.var()?) } else { None };
+        Ok(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer, in_value })
     }
 
     /// The record of a transaction relevant only for its KCC-23 declaration section: nothing of KOB, so no payload, inputs or
@@ -421,6 +435,7 @@ impl TxRecord {
             holds: vec![],
             kcc23: Some(d),
             payer: None,
+            in_value: None,
         }
     }
 
@@ -641,6 +656,7 @@ fn raw_record(tx: &Tx) -> TxRecord {
         holds: vec![],
         kcc23: None,
         payer: None,
+        in_value: None,
     }
 }
 
@@ -737,6 +753,11 @@ pub fn payer_of(tx: &Tx) -> Option<Vec<u8>> {
     let u = tx.inputs.iter().filter_map(spent_of).find(|u| u.covenant_id.is_none())?;
     let spk = &u.script_public_key.0;
     (!spk.is_empty() && spk.len() <= MAX_PAYER_SPK).then(|| spk.clone())
+}
+
+/// The sum of the values of the outputs `tx` spends, when the node reported every one (`None` otherwise: the fee is then unknown).
+pub fn in_value_of(tx: &Tx) -> Option<u64> {
+    tx.inputs.iter().try_fold(0u64, |s, i| s.checked_add(spent_of(i)?.amount?))
 }
 
 /// Turns accepted transactions into records, consulting the database for relevance.
@@ -934,8 +955,11 @@ impl Extractor<'_> {
         };
         // who funded it, when it spends a tracked order (a fill, a cancel, a keeper's call): the first input that spends no covenant
         // output (an Executor's funding), its script as the node reports it
-        let payer = if inputs.iter().any(|i| i.daa > 0 || i.reveal.is_some()) { payer_of(tx) } else { None };
-        Ok(Some(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer }))
+        // and what its inputs held (its network fee is that minus its outputs, `activity`)
+        let spends_order = inputs.iter().any(|i| i.daa > 0 || i.reveal.is_some());
+        let payer = if spends_order { payer_of(tx) } else { None };
+        let in_value = if spends_order { in_value_of(tx) } else { None };
+        Ok(Some(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer, in_value }))
     }
 }
 
@@ -972,6 +996,7 @@ mod tests {
             ],
             kcc23: None,
             payer: Some([&[0u8, 0, 0x20][..], &[7u8; 32], &[0xac]].concat()),
+            in_value: Some(u64::MAX - 1),
         };
         let mut w = Writer::new();
         rec.encode(&mut w);
@@ -1013,6 +1038,7 @@ mod tests {
             holds: vec![],
             kcc23: None,
             payer: None,
+            in_value: None,
         };
         let mut w = Writer::new();
         rec.encode(&mut w);
@@ -1038,7 +1064,7 @@ mod tests {
                 sequence: Some(0),
                 verbose_data: Some(InputVerbose {
                     utxo_entry: Some(SpentUtxo {
-                        amount: 5_000,
+                        amount: Some(5_000),
                         script_public_key: crate::hex::HexBytes(p2sh_spk(&minter_redeem(&m).unwrap())),
                         block_daa_score: None,
                         covenant_id: Some(cov),
@@ -1090,7 +1116,7 @@ mod tests {
                 sequence: Some(0),
                 verbose_data: Some(InputVerbose {
                     utxo_entry: Some(SpentUtxo {
-                        amount: 5_000,
+                        amount: Some(5_000),
                         script_public_key: crate::hex::HexBytes(vec![0, 0, 0x20, 1, 0xac]),
                         block_daa_score: None,
                         covenant_id: None,

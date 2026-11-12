@@ -13,6 +13,7 @@ pub mod db;
 pub mod flags;
 pub mod follower;
 pub mod ids;
+pub mod income;
 pub mod ingest;
 pub mod kcc23;
 pub mod lean;

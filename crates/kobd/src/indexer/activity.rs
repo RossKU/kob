@@ -4,8 +4,16 @@
 //!
 //! * **orders** placed in the range: the `create` events at or after `since`, summed from the per-minute and per-hour buckets of
 //!   `activity` (the minutes up to the first whole hour, the hours after it); all time: the `orders` counter.
-//! * **fills** and **fees paid** likewise: the fill events, and what they released to the filler, `amount x tip / scale` at the
-//!   tip the order had at the fill (`order_events.fee`, written with the event: a later amend does not change it).
+//! * **fills** and **tips paid** likewise: the fill events, and the priority tips they released to the filler, `amount x tip / scale`
+//!   at the tip the order had at the fill (`order_events.fee`, written with the event: a later amend does not change it). `fees_paid`
+//!   is the same figure under its first name (deprecated: it was never all the executors earned).
+//! * **executor income** (schema 11): what the executors' transactions of the range (fills, refunds, kills, expiries, arms, trails,
+//!   merges) left to their senders before the network fee: the crossing spread, auction margins, priority and keeper tips
+//!   (`executor_txs.income`, [`super::income`]), summed over the transactions whose income is known, with how many were counted and
+//!   how many were not (an unproven order state, a maker's cancel in the same transaction, a store migrated with its history).
+//! * **miner fees** likewise: the network fees of those transactions (`executor_txs.miner_fee`: what their inputs held, as the node
+//!   reported them, minus their outputs), known for the transactions indexed from records with input values (2026-11-12 on).
+//! * **executor net**: income minus network fee over the transactions where both are known.
 //! * **traders**: the makers (order keys, not persons) with an order placed in the range: `actors` keeps the newest placement
 //!   block of each, so the range is one index range (`actors_last`) from the first block with an event at `since`.
 //! * **executors**: the scripts that funded the fill transactions of the range (`order_events.executor_id`, from the record log's
@@ -14,6 +22,8 @@
 //! * **locked**: the KAS in the live order UTXOs now (`order_utxos_spent`: the unspent ones), whatever the range.
 //!
 //! The buckets are of block time, the newest blocks' time stamps monotone to within seconds, which the day-sized windows do not see.
+//! They hold everything the store ever indexed: the lean pruning does not take back what it deletes (schema 11), so a lean store's
+//! totals of all time are not only those of the history it still holds; nor is its all-time order count (`counters.orders_all`).
 
 use super::db::DbResult;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -71,8 +81,25 @@ pub struct ActivityView {
     pub traders: i64,
     /// Distinct scripts that funded the fill transactions of the range (fills recorded without one are not counted).
     pub executors: i64,
-    /// Sompi the fills of the range released to their fillers (a string).
+    /// Deprecated: the priority tips the fills of the range released to their fillers (sompi, a string), the same as `tips_paid`.
+    /// It was never all the executors earned: see `executor_income`.
     pub fees_paid: String,
+    /// The priority tips the fills of the range released to their fillers (sompi, a string): `floor(amount x tip / scale)` per fill.
+    pub tips_paid: String,
+    /// What the executors' transactions of the range left to their senders before the network fee (sompi, a string, may be negative:
+    /// a sender that pays more than it takes): the crossing spread, auction margins and the priority and keeper tips. The sum over
+    /// `executor_income_txs` transactions; `executor_income_unknown_txs` more are not counted.
+    pub executor_income: String,
+    pub executor_income_txs: i64,
+    pub executor_income_unknown_txs: i64,
+    /// The network fees of those transactions (sompi, a string), over `miner_fee_txs` of them; `miner_fee_unknown_txs` more are not
+    /// counted (indexed from records without the inputs' values, before 2026-11-12).
+    pub miner_fees: String,
+    pub miner_fee_txs: i64,
+    pub miner_fee_unknown_txs: i64,
+    /// Income minus network fee over the `executor_net_txs` transactions where both are known (sompi, a string, may be negative).
+    pub executor_net: String,
+    pub executor_net_txs: i64,
     /// Sompi in the live order UTXOs now (a string).
     pub kas_locked: String,
 }
@@ -81,7 +108,8 @@ pub struct ActivityView {
 pub fn activity(conn: &Connection, since: Option<i64>) -> DbResult<ActivityView> {
     let ts = conn.query_row("SELECT MAX(ts) FROM order_events", [], |r| r.get::<_, Option<i64>>(0))?;
     let from = since.unwrap_or(0).max(0);
-    let (fills, fees, mut orders) = buckets_from(conn, from)?;
+    let b = buckets_from(conn, from)?;
+    let mut orders = b.orders;
     // the first block of the range (`traders`, `executors`): none means nothing happened since
     let first_seq = match since {
         None => Some(0),
@@ -96,33 +124,76 @@ pub fn activity(conn: &Connection, since: Option<i64>) -> DbResult<ActivityView>
         Some(seq) => (actors_from(conn, 1, seq)?, actors_from(conn, 2, seq)?),
     };
     if since.is_none() {
-        // every order, imported ones too (an order a tool wrote without its `create` event)
-        orders = conn.query_row("SELECT COALESCE((SELECT n FROM counters WHERE name = 'orders'), 0)", [], |r| r.get(0))?;
+        // every order ever stored, imported ones too (an order a tool wrote without its `create` event), pruned ones too
+        orders = conn.query_row("SELECT COALESCE((SELECT n FROM counters WHERE name = 'orders_all'), 0)", [], |r| r.get(0))?;
     }
     let locked: i64 = conn.query_row("SELECT COALESCE(SUM(value), 0) FROM order_utxos WHERE spent_block IS NULL", [], |r| r.get(0))?;
-    Ok(ActivityView { since, ts, orders, fills, traders, executors, fees_paid: fees.to_string(), kas_locked: locked.to_string() })
+    Ok(ActivityView {
+        since,
+        ts,
+        orders,
+        fills: b.fills,
+        traders,
+        executors,
+        fees_paid: b.tips.to_string(),
+        tips_paid: b.tips.to_string(),
+        executor_income: b.income.to_string(),
+        executor_income_txs: b.income_n,
+        executor_income_unknown_txs: b.txs - b.income_n,
+        miner_fees: b.miner_fees.to_string(),
+        miner_fee_txs: b.miner_fee_n,
+        miner_fee_unknown_txs: b.txs - b.miner_fee_n,
+        executor_net: b.net.to_string(),
+        executor_net_txs: b.net_n,
+        kas_locked: locked.to_string(),
+    })
 }
 
-/// (fills, fees, orders) of the buckets from `from` on: the minutes up to the first whole hour at or after it, then the hours.
-fn buckets_from(conn: &Connection, from: i64) -> DbResult<(i64, i128, i64)> {
+/// The sums of the buckets of a range (`activity`, schema.sql).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Sums {
+    fills: i64,
+    tips: i128,
+    orders: i64,
+    txs: i64,
+    income: i128,
+    income_n: i64,
+    miner_fees: i128,
+    miner_fee_n: i64,
+    net: i128,
+    net_n: i64,
+}
+
+/// The sums of the buckets from `from` on: the minutes up to the first whole hour at or after it, then the hours.
+fn buckets_from(conn: &Connection, from: i64) -> DbResult<Sums> {
     let hour = from.saturating_add(HOUR - 1) / HOUR * HOUR;
-    let mut st = conn.prepare_cached(
-        "SELECT fills, fees, orders FROM activity WHERE iv = ?1 AND t >= ?2 AND t < ?3 \
-         UNION ALL SELECT fills, fees, orders FROM activity WHERE iv = ?4 AND t >= ?3",
-    )?;
+    let cols = "fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n";
+    let mut st = conn.prepare_cached(&format!(
+        "SELECT {cols} FROM activity WHERE iv = ?1 AND t >= ?2 AND t < ?3 UNION ALL SELECT {cols} FROM activity WHERE iv = ?4 AND t >= ?3"
+    ))?;
     let mut rows = st.query(params![MINUTE, from, hour, HOUR])?;
-    let (mut fills, mut fees, mut orders) = (0i64, 0i128, 0i64);
-    while let Some(r) = rows.next()? {
-        fills += r.get::<_, i64>(0)?;
-        // a sum that left 64 bits (it cannot with real fees, [`MAX_FEE`]) reads as a float rather than failing the read
-        fees += match r.get_ref(1)? {
+    // a sompi sum that left 64 bits (it cannot with real amounts, [`MAX_FEE`]) reads as a float rather than failing the read
+    let sompi = |r: &rusqlite::Row<'_>, i: usize| -> rusqlite::Result<i128> {
+        Ok(match r.get_ref(i)? {
             rusqlite::types::ValueRef::Integer(v) => i128::from(v),
             rusqlite::types::ValueRef::Real(v) => v as i128,
             _ => 0,
-        };
-        orders += r.get::<_, i64>(2)?;
+        })
+    };
+    let mut s = Sums::default();
+    while let Some(r) = rows.next()? {
+        s.fills += r.get::<_, i64>(0)?;
+        s.tips += sompi(r, 1)?;
+        s.orders += r.get::<_, i64>(2)?;
+        s.txs += r.get::<_, i64>(3)?;
+        s.income += sompi(r, 4)?;
+        s.income_n += r.get::<_, i64>(5)?;
+        s.miner_fees += sompi(r, 6)?;
+        s.miner_fee_n += r.get::<_, i64>(7)?;
+        s.net += sompi(r, 8)?;
+        s.net_n += r.get::<_, i64>(9)?;
     }
-    Ok((fills, fees, orders))
+    Ok(s)
 }
 
 /// The actors of `kind` (1 makers, 2 executors) active at block `seq` or later.

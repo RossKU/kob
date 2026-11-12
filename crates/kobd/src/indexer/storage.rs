@@ -1,4 +1,4 @@
-//! `kobd db migrate`: brings a data directory written by an earlier build (schema 5 to 9) to the layout of schema 10 in ONE offline
+//! `kobd db migrate`: brings a data directory written by an earlier build (schema 5 to 10) to the layout of schema 11 in ONE offline
 //! run, and gives the space back.
 //!
 //! The store is not altered in place. A new file is built beside it and replaces it only when it has been verified; the old file
@@ -26,7 +26,12 @@
 //! The data directory's writer lock ([`super::lock`]) is held throughout: no `run` or `index` can write it meanwhile. Free disk
 //! needed: the new store (about 3/4 of the old one) plus the temporary files of the index builds, while the old store stays. A run
 //! that stops half way leaves only `index.sqlite3.migrating`, deleted by the next run; the old store is not touched before the
-//! swap. A store that is of schema 10 already is left as it is (the record log step still runs).
+//! swap. A store of schema 9 or 10 takes the short way ([`upgrade_in_place`]: copied as it is and given the new columns, tables and
+//! triggers). A store that is of schema 11 already is left as it is (the record log step still runs).
+//!
+//! Schema 11 counts the executors' transactions the store already holds as of unknown income and network fee (`db::backfill_executor_txs`):
+//! the store keeps no record of who owns their outputs. `kobd db replay` rebuilds their income from the record log (their network fees
+//! stay unknown: the log of the past has no input values).
 
 use super::db::{self, DbError, DbResult};
 use super::recordlog;
@@ -288,7 +293,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
     {
         let t = Instant::now();
         conn.execute(
-            "INSERT INTO main.meta (k, v) SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity')",
+            "INSERT INTO main.meta (k, v) SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity', 'executor_txs', 'orders_all')",
             [],
         )?;
         done("meta", count(conn, "main", "meta")?, t, say);
@@ -658,6 +663,24 @@ fn check_activity(conn: &Connection) -> DbResult<()> {
             "activity: the buckets ({m:?} by minute, {h:?} by hour) do not add up to the events ({events:?}). Nothing was migrated (the old store is untouched)"
         )));
     }
+    // (schema 11) the executors' transactions, their income and network fees
+    let txs = |iv: i64| -> DbResult<(i64, i64, i64)> {
+        Ok(conn.query_row(
+            "SELECT COALESCE(SUM(txs), 0), COALESCE(SUM(income_n), 0), COALESCE(SUM(miner_fee_n), 0) FROM main.activity WHERE iv = ?1",
+            [iv],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?)
+    };
+    let rows: (i64, i64, i64) =
+        conn.query_row("SELECT COUNT(*), COUNT(income), COUNT(miner_fee) FROM main.executor_txs", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+    let (m, h) = (txs(super::activity::MINUTE)?, txs(super::activity::HOUR)?);
+    if m != rows || h != rows {
+        return Err(bad(format!(
+            "activity: the executors' transactions in the buckets ({m:?} by minute, {h:?} by hour) are not the rows ({rows:?}). Nothing was migrated (the old store is untouched)"
+        )));
+    }
     Ok(())
 }
 
@@ -722,11 +745,11 @@ fn verify(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<()> {
     }
     let (a, _) = digest(
         conn,
-        "SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity') ORDER BY k",
+        "SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity', 'executor_txs', 'orders_all') ORDER BY k",
     )?;
     let (b, _) = digest(
         conn,
-        "SELECT k, v FROM main.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity') ORDER BY k",
+        "SELECT k, v FROM main.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity', 'executor_txs', 'orders_all') ORDER BY k",
     )?;
     if a != b {
         return Err(bad(
@@ -808,6 +831,8 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
     db::backfill_counters(&conn)?;
     db::backfill_holding_programs(&conn)?;
     db::backfill_activity(&conn)?;
+    db::backfill_executor_txs(&conn)?;
+    db::backfill_all_time(&conn)?;
     check_activity(&conn)?;
     // the counters the old store kept against the ones counted from the rows
     if table_exists(&conn, "old", "counters")? {
@@ -849,12 +874,26 @@ fn opens_and_checks(cfg: &IndexerConfig, new: &Path, say: &mut impl FnMut(&str))
     Ok(())
 }
 
-/// Schema 9 to 10 (steps 1 to 3 for a store of the previous schema, whose tables keep their layout): the store is copied as it is
-/// (`VACUUM INTO`, which also gives the free pages back), the fill events get their two columns and their fees (`amount x tip / scale` at the
-/// tip the order had at the fill, as in the copy of an older store), `schema.sql` adds the new tables, indexes and triggers, the
-/// activity totals are counted once and checked against the events, and every table of the old store holds as many rows in the new one.
-/// No row is rewritten but the fills; nothing of the old store is touched.
-fn upgrade_from_9(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &mut impl FnMut(&str)) -> DbResult<()> {
+/// Schema 9 or 10 to 11 (steps 1 to 3 for a store whose tables keep their layout): the store is copied as it is (`VACUUM INTO`, which
+/// also gives the free pages back), its triggers are dropped (`schema.sql` creates this build's), and
+/// * from 9, the fill events get their two columns and their fees (`amount x tip / scale` at the tip the order had at the fill, as in the
+///   copy of an older store);
+/// * from 10, the activity buckets get the columns of the executors' transactions and the actors their `kept` flag (schema 11);
+///
+/// then `schema.sql` adds the new tables, indexes and triggers, the activity totals are counted once (from 9), the executors' transactions
+/// the store holds are counted as of unknown income and network fee (`db::backfill_executor_txs`: the store has no record of their
+/// outputs' owners; `kobd db replay` rebuilds them from the record log), the all-time order counter is set, the totals are checked against
+/// the rows, and every table of the old store holds as many rows in the new one (the keys of `meta` and `counters` all there; the
+/// activity buckets, which may gain the minutes of executors' transactions without a fill, are checked against the rows instead). No row
+/// is rewritten but the fills (from 9); nothing of the old store is touched.
+fn upgrade_in_place(
+    cfg: &IndexerConfig,
+    from: i64,
+    old: &Path,
+    new: &Path,
+    rep: &mut Report,
+    say: &mut impl FnMut(&str),
+) -> DbResult<()> {
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
     }
@@ -879,26 +918,64 @@ fn upgrade_from_9(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report,
     conn.execute("ATTACH DATABASE ?1 AS old", [uri_of(old)])?;
 
     // (no transaction: without a journal the file is thrown away on any error)
-    let t = Instant::now();
-    conn.execute_batch(
-        "ALTER TABLE main.order_events ADD COLUMN fee INTEGER;          ALTER TABLE main.order_events ADD COLUMN executor_id INTEGER;          CREATE TEMP TABLE amend_tips (order_id INTEGER NOT NULL, id INTEGER NOT NULL, tip INTEGER, PRIMARY KEY (order_id, id)) WITHOUT ROWID;          INSERT INTO temp.amend_tips (order_id, id, tip)            SELECT order_id, id, json_extract(kob_dtext(detail), '$.previous.tip') FROM main.order_events WHERE kind = 'amend' ORDER BY 1, 2;",
-    )?;
-    let amends = count(&conn, "temp", "amend_tips")?;
-    // an amend without its previous tip (none should be) makes the fee unknown, not the order's current tip
-    let fills = conn.execute(
-        "UPDATE main.order_events SET fee = (SELECT kob_fill_fee(order_events.amount, COALESCE((SELECT COALESCE(a.tip, -1) FROM temp.amend_tips a            WHERE a.order_id = order_events.order_id AND a.id > order_events.id ORDER BY a.id LIMIT 1), o.tip), o.scale)            FROM main.orders o WHERE o.id = order_events.order_id)          WHERE kind = 'fill'",
-        [],
-    )?;
-    conn.execute_batch("DROP TABLE temp.amend_tips")?;
-    note(&mut rep.steps, say, "fees", t, format!("{fills} fills, {amends} amends"));
+    let triggers: Vec<String> = {
+        let mut st = conn.prepare("SELECT name FROM main.sqlite_master WHERE type = 'trigger' ORDER BY name")?;
+        let v = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    for name in &triggers {
+        conn.execute_batch(&format!("DROP TRIGGER main.\"{name}\""))?;
+    }
+    if from == 9 {
+        let t = Instant::now();
+        conn.execute_batch(
+            "ALTER TABLE main.order_events ADD COLUMN fee INTEGER; \
+             ALTER TABLE main.order_events ADD COLUMN executor_id INTEGER; \
+             CREATE TEMP TABLE amend_tips (order_id INTEGER NOT NULL, id INTEGER NOT NULL, tip INTEGER, PRIMARY KEY (order_id, id)) WITHOUT ROWID; \
+             INSERT INTO temp.amend_tips (order_id, id, tip) \
+               SELECT order_id, id, json_extract(kob_dtext(detail), '$.previous.tip') FROM main.order_events WHERE kind = 'amend' ORDER BY 1, 2;",
+        )?;
+        let amends = count(&conn, "temp", "amend_tips")?;
+        // an amend without its previous tip (none should be) makes the fee unknown, not the order's current tip
+        let fills = conn.execute(
+            "UPDATE main.order_events SET fee = (SELECT kob_fill_fee(order_events.amount, COALESCE((SELECT COALESCE(a.tip, -1) FROM temp.amend_tips a \
+               WHERE a.order_id = order_events.order_id AND a.id > order_events.id ORDER BY a.id LIMIT 1), o.tip), o.scale) \
+               FROM main.orders o WHERE o.id = order_events.order_id) \
+             WHERE kind = 'fill'",
+            [],
+        )?;
+        conn.execute_batch("DROP TABLE temp.amend_tips")?;
+        note(&mut rep.steps, say, "fees", t, format!("{fills} fills, {amends} amends"));
+    } else {
+        conn.execute_batch(
+            "ALTER TABLE main.activity ADD COLUMN txs INTEGER NOT NULL DEFAULT 0; \
+             ALTER TABLE main.activity ADD COLUMN income INTEGER NOT NULL DEFAULT 0; \
+             ALTER TABLE main.activity ADD COLUMN income_n INTEGER NOT NULL DEFAULT 0; \
+             ALTER TABLE main.activity ADD COLUMN miner_fees INTEGER NOT NULL DEFAULT 0; \
+             ALTER TABLE main.activity ADD COLUMN miner_fee_n INTEGER NOT NULL DEFAULT 0; \
+             ALTER TABLE main.activity ADD COLUMN net INTEGER NOT NULL DEFAULT 0; \
+             ALTER TABLE main.activity ADD COLUMN net_n INTEGER NOT NULL DEFAULT 0; \
+             ALTER TABLE main.actors ADD COLUMN kept INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
 
     let t = Instant::now();
     conn.execute_batch(include_str!("schema.sql"))?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
-    db::backfill_activity(&conn)?;
+    if from == 9 {
+        db::backfill_activity(&conn)?;
+    }
+    let unknown = db::backfill_executor_txs(&conn)?;
+    db::backfill_all_time(&conn)?;
     check_activity(&conn)?;
     conn.execute("INSERT OR REPLACE INTO main.meta (k, v) VALUES ('schema_version', ?1)", [db::SCHEMA_VERSION.to_string()])?;
-    note(&mut rep.steps, say, "activity", t, "the new tables and the totals".to_string());
+    note(
+        &mut rep.steps,
+        say,
+        "activity",
+        t,
+        format!("the new tables and the totals; {unknown} executors' transactions of unknown income and network fee"),
+    );
 
     let t = Instant::now();
     let tables: Vec<String> = {
@@ -909,9 +986,23 @@ fn upgrade_from_9(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report,
     };
     for table in tables {
         let table = table.as_str();
-        let (a, b) = (count(&conn, "old", table)?, count(&conn, "main", table)?);
-        // the version is the one row of meta that changes; the totals' key is new
-        let b = if table == "meta" { b - u64::from(db::meta_get(&conn, "activity")?.is_some()) } else { b };
+        let a = count(&conn, "old", table)?;
+        let b = match table {
+            // the version is the one row of meta that changes, the backfills add keys and the all-time counter: every old key is there
+            "meta" => {
+                conn.query_row("SELECT COUNT(*) FROM old.meta o WHERE EXISTS (SELECT 1 FROM main.meta n WHERE n.k = o.k)", [], |r| {
+                    r.get::<_, i64>(0)
+                })? as u64
+            }
+            "counters" => conn.query_row(
+                "SELECT COUNT(*) FROM old.counters o WHERE EXISTS (SELECT 1 FROM main.counters n WHERE n.name = o.name)",
+                [],
+                |r| r.get::<_, i64>(0),
+            )? as u64,
+            // checked against the rows above (`check_activity`)
+            "activity" => a,
+            _ => count(&conn, "main", table)?,
+        };
         if a != b {
             return Err(bad(format!(
                 "{table}: {b} rows in the new store against {a}. Nothing was migrated (the old store is untouched)"
@@ -998,8 +1089,8 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
         say(&format!("schema {} -> {}: building the new store beside the old one", rep.from_schema, db::SCHEMA_VERSION));
         let new = suffixed(&path, MIGRATING);
         let t = Instant::now();
-        let built = if rep.from_schema == 9 {
-            upgrade_from_9(cfg, &path, &new, &mut rep, &mut say)
+        let built = if rep.from_schema >= 9 {
+            upgrade_in_place(cfg, rep.from_schema, &path, &new, &mut rep, &mut say)
         } else {
             build(cfg, &path, &new, rep.from_schema, &mut rep, &mut say)
         };

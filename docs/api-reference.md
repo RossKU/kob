@@ -87,7 +87,7 @@ token base-unit quantity is a decimal string**. Counts, scales, DAA scores, ids 
 
 | Spelled as a decimal string | Fields (wherever they appear) |
 |---|---|
-| sompi | `value`, `cur_value`, `payout`, `price`, `quote`, `tip`, `budget_rate`, `reserve`, `start_price`, `end_price`, `current_price`, `quote_volume`, `quote_volume_24h`, `cum_quote`, `tip_kas`, `prefund`, `delivery_carrier`, the prices of candles/stats/depth/trades (`o`, `h`, `l`, `c`, `last`, `open_24h`, `high_24h`, `low_24h`, `best_bid`, `best_ask`, `mid`), `depth_2pct_quote`, `depth_2pct_bid_sompi`, `depth_2pct_ask_sompi`, `fees_paid`, `kas_locked` |
+| sompi | `value`, `cur_value`, `payout`, `price`, `quote`, `tip`, `budget_rate`, `reserve`, `start_price`, `end_price`, `current_price`, `quote_volume`, `quote_volume_24h`, `cum_quote`, `tip_kas`, `prefund`, `delivery_carrier`, the prices of candles/stats/depth/trades (`o`, `h`, `l`, `c`, `last`, `open_24h`, `high_24h`, `low_24h`, `best_bid`, `best_ask`, `mid`), `depth_2pct_quote`, `depth_2pct_bid_sompi`, `depth_2pct_ask_sompi`, `fees_paid`, `tips_paid`, `executor_income`, `miner_fees`, `executor_net`, `kas_locked` |
 | token base units | `amount`, `amount_left`, `filled_amount`, `initial_amount`, `min_fill`, `volume`, `volume_24h`, `cum_amount`, `amount_a`, `amount_b`, `expected_amount`, `rpt_amount`, `rearm_amount`, `price_basis`, `quote_price_basis` (a count of base units) |
 | pair price fractions | `price_num`, `price_den`, and `value`/`num`/`den` of a pair candle rate |
 | order state | the 64-bit fields inside `state` / `placed_state` (the contract's own field names, e.g. `minFill`, `amountLeft`, `price`) |
@@ -904,9 +904,9 @@ curl -s $API/v1/logo-blocklist
 
 The activity totals of the whole store, not of one token: what the web app's Activity summary shows beside the candles. Heavy; cached
 (per data generation, keyed by `since`). Since schema 10 every figure is read from aggregates the store keeps by triggers in the
-transaction of every write (per-minute and per-hour buckets of the fills, their fees and the orders placed; the newest block of each maker
-and executor), so the cost is a few hundred bucket rows and one index range whatever the size of the history, and a reorg takes its blocks
-out of the totals exactly.
+transaction of every write (per-minute and per-hour buckets of the fills, their tips, the orders placed and, since schema 11, the executors'
+transactions with their income and network fees; the newest block of each maker and executor), so the cost is a few hundred bucket rows and
+one index range whatever the size of the history, and a reorg takes its blocks out of the totals exactly.
 
 | Param | Type | Default | Meaning |
 |---|---|---|---|
@@ -914,7 +914,10 @@ out of the totals exactly.
 
 ```json
 { "since": 1790000000000, "ts": 1790086000000, "orders": 42, "fills": 130, "traders": 9, "executors": 2,
-  "fees_paid": "1250000", "kas_locked": "880000000000" }
+  "fees_paid": "1250000", "tips_paid": "1250000",
+  "executor_income": "103000000000", "executor_income_txs": 120, "executor_income_unknown_txs": 0,
+  "miner_fees": "240000000", "miner_fee_txs": 118, "miner_fee_unknown_txs": 2,
+  "executor_net": "102780000000", "executor_net_txs": 118, "kas_locked": "880000000000" }
 ```
 
 * `orders`: orders placed in the range, of every kind, listed or not (the chain's placements, not the book's listings): the `create` events at
@@ -926,13 +929,31 @@ out of the totals exactly.
   input that spends no covenant output: an Executor's funding key), from the same first block. Only fills indexed from record-log frames written
   since 2026-11-09 (format 4, which records that script) name one: the fills a store indexed before (and a replay of an older log) have no
   executor and are not counted, nor is a fill whose transaction no plain input funded.
-* `fees_paid` (sompi, string): what the range's fills released to their fillers, `floor(amount x tip / scale)` per fill event at the tip the
-  order had at the fill (an amend after it does not change it). A fill whose terms are unknown (an imported history without a tip) counts 0.
+* `tips_paid` (sompi, string): the priority tips the range's fills released to their fillers, `floor(amount x tip / scale)` per fill event at
+  the tip the order had at the fill (an amend after it does not change it). A fill whose terms are unknown (an imported history without a tip)
+  counts 0. `fees_paid` is the same figure under its first name: **deprecated** (kept for older clients; it was never all the executors earned).
+* `executor_income` (sompi, string, may be negative) with `executor_income_txs` and `executor_income_unknown_txs` (numbers), schema 11: what the
+  executors' transactions of the range left to the executors that sent them, before network fees. An executor's transaction is one that spends a
+  tracked order by anything but the maker's own cancel, amend or sweep: a fill (one transaction however many orders it fills), a refund, a kill,
+  an expiry, a keeper's arm or trail, a merge of a repeating entry. Its income is the KAS of the KOB order inputs it spent (the order UTXOs and
+  their custody carriers) minus the KAS of the outputs the orders own or pay (maker payouts, refunds, deliveries, continuations, custodies,
+  if-done exits): the spread between crossing orders, auction margins, the priority tips and the keeper tips, exact from the chain (the
+  covenants pin those outputs: `kobd` `indexer::income`). The sum is over the `executor_income_txs` transactions whose income is known; the
+  `executor_income_unknown_txs` others are not counted (an order input whose state is unproven, a maker's cancel in the same transaction, or a
+  transaction a `kobd db migrate` found already indexed). Negative when a sender pays more than it takes (an executor buying tokens for its own
+  inventory pays the maker KAS it gets back as tokens).
+* `miner_fees` (sompi, string) with `miner_fee_txs` and `miner_fee_unknown_txs`: the network fees of those transactions, what their inputs held
+  (the node's own UTXO entries of the accepted transaction, recorded in the record log since 2026-11-12, format 5) minus their outputs. A
+  transaction indexed from an older record (or a replay of an older log) has no known fee and is counted in `miner_fee_unknown_txs`: a client
+  must not present the sum as complete while that count is above 0.
+* `executor_net` (sompi, string, may be negative) with `executor_net_txs`: `income - network fee` over the transactions where both are known.
 * `kas_locked` (sompi, string): the KAS in the live order UTXOs now, whatever `since` is.
 * `ts` (number or null): the newest event time; `since` is the minute used (`null` for all time).
 
-A store that keeps part of its history (`lean = true`) counts what it keeps. An empty store answers zeros. An indexer before schema 10 answers
-without `fills`, with `executors` always `null` and `traders` / `fees_paid` `null` beyond its scan caps (200,000 makers / fills).
+A store that keeps part of its history (`lean = true`) counts, since schema 11, everything it ever indexed: the pruning does not take back what it
+deletes (the windows and all time alike; all time's `orders` is the counter of every order ever stored). An empty store answers zeros. An indexer
+before schema 11 answers without the executor and miner fields (`fees_paid` only, the tip sum: never show it as the executors' income); one before
+schema 10 without `fills`, with `executors` always `null` and `traders` / `fees_paid` `null` beyond its scan caps (200,000 makers / fills).
 
 ### 3.22 `GET /v1/price/kas-usd`
 

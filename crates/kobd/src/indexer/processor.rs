@@ -145,12 +145,13 @@ fn load_order(conn: &Connection, cov: &Hash32) -> DbResult<Option<OrderRow>> {
 #[derive(Debug, Clone)]
 struct UtxoRow {
     covenant_id: Hash32,
+    value: i64,
 }
 
 fn load_order_utxo(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Option<UtxoRow>> {
     Ok(conn
-        .prepare_cached("SELECT o.covenant_id FROM order_utxos u JOIN orders o ON o.id = u.order_id WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL")?
-        .query_row(params![&txid.0[..], idx], |r| Ok(UtxoRow { covenant_id: hash_at(r, 0)? }))
+        .prepare_cached("SELECT o.covenant_id, u.value FROM order_utxos u JOIN orders o ON o.id = u.order_id WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL")?
+        .query_row(params![&txid.0[..], idx], |r| Ok(UtxoRow { covenant_id: hash_at(r, 0)?, value: r.get(1)? }))
         .optional()?)
 }
 
@@ -418,6 +419,8 @@ struct Spent {
     reveal: Option<Reveal>,
     before: Option<AnyState>,
     utxo_daa: i64,
+    /// The KAS of the spent order UTXO.
+    value: i64,
     /// Filled by the continuation step.
     after: Option<AnyState>,
     /// A verified in-place amend continued the order (the record's day-order deadline).
@@ -498,14 +501,24 @@ impl Processor {
         // trailing `update` ratchets from one of them; `docs/spec/matcher.md` §4).
         let evidence_prices: Vec<i64> = rec.inputs.iter().filter_map(|i| evidence_touch(i.reveal.as_ref()?).map(|(_, p)| p)).collect();
 
-        // 1. spends of tracked outputs
+        // 1. spends of tracked outputs (and what the KOB inputs held: an executor's income, step 8)
         let mut spent: Vec<Spent> = Vec::new();
+        let mut kob_in: i128 = 0;
+        let mut orphan = false;
         for (i, inp) in rec.inputs.iter().enumerate() {
             if let Some(u) = load_order_utxo(conn, &inp.txid, inp.index)? {
-                if let Some(s) = self.spend_order(conn, seq, rec, i, u)? {
-                    spent.push(s);
+                kob_in += i128::from(u.value);
+                match self.spend_order(conn, seq, rec, i, u)? {
+                    Some(s) => spent.push(s),
+                    None => orphan = true,
                 }
             } else {
+                // a custody or a stray of an order (its carrier)
+                let carrier: Option<i64> = conn
+                    .prepare_cached("SELECT value FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
+                    .query_row(params![&inp.txid.0[..], inp.index], |r| r.get(0))
+                    .optional()?;
+                kob_in += i128::from(carrier.unwrap_or(0));
                 conn.prepare_cached(
                     "UPDATE token_utxos SET spent_block = ?1, spent_txid = ?2 WHERE txid = ?3 AND idx = ?4 AND spent_block IS NULL",
                 )?
@@ -664,6 +677,11 @@ impl Processor {
             }
             let closes = !continued.contains(&s.cov);
             self.record_spend_events(conn, ctx, rec, s, closes, &exits, &spent, delta)?;
+        }
+
+        // 8. an executor's transaction: what it left to its sender and what it paid the miners (`executor_txs`, `super::income`)
+        if !spent.is_empty() {
+            self.executor_tx(conn, ctx, rec, &spent, kob_in, orphan, &continued, &created)?;
         }
 
         // 7. KCC-23: a candidate preparation, or the verified launch proofs of a genesis (`super::kcc23`)
@@ -1349,6 +1367,7 @@ impl Processor {
     // spends
 
     fn spend_order(&self, conn: &Connection, seq: i64, rec: &TxRecord, input_idx: usize, u: UtxoRow) -> DbResult<Option<Spent>> {
+        let value = u.value;
         let Some(order) = load_order(conn, &u.covenant_id)? else { return Ok(None) };
         let inp = &rec.inputs[input_idx];
         let reveal = inp.reveal.clone().filter(|r| r.template == order.template);
@@ -1376,6 +1395,7 @@ impl Processor {
             reveal,
             before,
             utxo_daa: inp.daa as i64,
+            value,
             after: None,
             amend: None,
             sweep: false,
@@ -1815,6 +1835,76 @@ impl Processor {
         })
         .flatten()
     }
+
+    /// Step 8 of a transaction that spent tracked orders: unless it is only the makers' own (cancels, in-place amends and sweeps), it
+    /// is an executor's, and gets its `executor_txs` row: its income ([`super::income`]: `kob_in`, what the KOB inputs held, minus
+    /// the outputs the orders own or pay) and its network fee (the record's input value minus its outputs), each `None` when the
+    /// chain data does not settle it. `orphan`: an order UTXO was spent whose order is not stored (its outputs cannot be told).
+    #[allow(clippy::too_many_arguments)]
+    fn executor_tx(
+        &self,
+        conn: &Connection,
+        ctx: &BlockCtx<'_>,
+        rec: &TxRecord,
+        spent: &[Spent],
+        kob_in: i128,
+        orphan: bool,
+        continued: &HashSet<Hash32>,
+        created: &HashSet<Hash32>,
+    ) -> DbResult<()> {
+        use super::income::{self, Leg, Spend};
+        if spent.iter().all(|s| s.act == Act::Cancel) {
+            return Ok(());
+        }
+        let spent_covs: HashSet<Hash32> = spent.iter().map(|s| s.cov).collect();
+        let n_out = rec.outputs.len();
+        let income = (|| {
+            if orphan {
+                return None;
+            }
+            // every output carrying an order's covenant id (continuations, exits, placements) and every token output owned by one
+            let mut kob_out: BTreeSet<usize> = rec
+                .outputs
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| o.cov.is_some_and(|(_, c)| spent_covs.contains(&c) || created.contains(&c)))
+                .map(|(j, _)| j)
+                .collect();
+            kob_out.extend(rec.tok_outs.iter().map(|t| t.out as usize));
+            // and what each spent order's covenant pins by position
+            for s in spent {
+                let spend = match s.act {
+                    Act::Fill(n) => Spend::Fill(n),
+                    Act::Merge { .. } => Spend::Merge,
+                    Act::Refund => Spend::Refund,
+                    Act::Update => Spend::Update,
+                    // a maker's cancel next to an executor's legs routes outputs no covenant pins; an unclassified spend likewise
+                    Act::Cancel | Act::Unknown => return None,
+                };
+                let (state, reveal) = (s.before.as_ref()?, s.reveal.as_ref()?);
+                let quote = match s.act {
+                    Act::Fill(n) => self.fill_quote(state, s, n),
+                    _ => None,
+                };
+                let leg = Leg {
+                    state,
+                    spend,
+                    input: s.input_idx,
+                    reveal,
+                    continues: continued.contains(&s.cov),
+                    parent_spent: model::parent_of(state).is_some_and(|p| spent_covs.contains(&Hash32(p))),
+                    quote,
+                    value: s.value,
+                };
+                kob_out.extend(guarded(|| income::pinned(&leg, n_out)).flatten()?);
+            }
+            income::income(kob_in, &rec.outputs, &kob_out)
+        })();
+        let fee = income::miner_fee(rec.in_value, &rec.outputs);
+        conn.prepare_cached("INSERT INTO executor_txs (block_seq, daa, ts, txid, income, miner_fee) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?
+            .execute(params![ctx.seq, ctx.header.daa_score as i64, ctx.header.timestamp as i64, &rec.txid.0[..], income, fee])?;
+        Ok(())
+    }
 }
 
 /// The listing inputs of a pair order's two tokens (`None` for the KAS kinds): A with the order's scale, minimum fill, amount
@@ -2224,6 +2314,7 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     super::candles::mark_block(conn, seq)?;
     changed += conn.execute("DELETE FROM order_events WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM pair_fills WHERE block_seq = ?1", [seq])?;
+    changed += conn.execute("DELETE FROM executor_txs WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM order_utxos WHERE created_block = ?1", [seq])?;
     changed += conn.execute(
         "UPDATE order_utxos SET spent_block = NULL, spent_txid = NULL, spent_entry = NULL, spent_amount = NULL WHERE spent_block = ?1",

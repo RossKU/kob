@@ -188,7 +188,7 @@ fn tx(t: RpcOptionalTransaction) -> Result<Tx, String> {
                         .utxo_entry
                         .map(|u| {
                             Ok::<_, String>(SpentUtxo {
-                                amount: u.amount.unwrap_or(0),
+                                amount: u.amount,
                                 script_public_key: spk_bytes(
                                     u.script_public_key.as_ref().ok_or_else(|| format!("spent output of {id} without script"))?,
                                 ),

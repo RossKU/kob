@@ -1170,6 +1170,19 @@ async fn activity_totals_over_a_range() {
         )
         .unwrap();
     }
+    // the executors' transactions (schema 11): income and network fee, either unknown (NULL)
+    for (block, ts, income, fee) in [
+        (2i64, t0 - 9 * 86_400_000, Some(50_000i64), Some(2_000i64)),
+        (3, t0 - 30_000, Some(900_000), Some(3_000)),
+        (4, t0, None, Some(1_000)),
+        (4, t0, Some(-10_000), None),
+    ] {
+        c.execute(
+            "INSERT INTO executor_txs (block_seq, daa, ts, txid, income, miner_fee) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![block, block * 100, ts, cid(block as u8 + 60), income, fee],
+        )
+        .unwrap();
+    }
     // live order UTXOs: two unspent (1 000 000 each) and one spent
     c.execute("INSERT INTO order_utxos (txid, idx, order_id, value, spk, created_block, created_daa, spent_block) VALUES (?1, 0, (SELECT id FROM orders WHERE covenant_id = ?2), 7, x'00', 1, 100, 1)", params![cid(0x90), cid(1)]).unwrap();
     for (n, cov) in [(0x91u8, 1u8), (0x92, 4)] {
@@ -1185,6 +1198,25 @@ async fn activity_totals_over_a_range() {
     assert_eq!((v["fees_paid"].as_str(), v["kas_locked"].as_str()), (Some("6000"), Some("2000000")));
     assert_eq!(v["executors"].as_i64(), Some(2), "A and B; the fill without a recorded script is not counted");
     assert_eq!(v["ts"].as_i64(), Some(t0));
+    // income 50 000 + 900 000 - 10 000 over 3 transactions (1 unknown), fees 2 000 + 3 000 + 1 000 over 3 (1 unknown), net where both
+    // are known: 48 000 + 897 000
+    let earned = |v: &serde_json::Value| {
+        (
+            v["executor_income"].as_str().map(str::to_string),
+            v["executor_income_txs"].as_i64(),
+            v["executor_income_unknown_txs"].as_i64(),
+            v["miner_fees"].as_str().map(str::to_string),
+            v["miner_fee_txs"].as_i64(),
+            v["miner_fee_unknown_txs"].as_i64(),
+            v["executor_net"].as_str().map(str::to_string),
+            v["executor_net_txs"].as_i64(),
+        )
+    };
+    let want = |a: &str, b, c, d: &str, f, g, h: &str, i| {
+        (Some(a.to_string()), Some(b), Some(c), Some(d.to_string()), Some(f), Some(g), Some(h.to_string()), Some(i))
+    };
+    assert_eq!(earned(&v), want("940000", 3, 1, "6000", 3, 1, "945000", 2));
+    assert_eq!(v["tips_paid"], v["fees_paid"], "the tip sum, under its old name too");
 
     // the last day: orders 3 and 4 (makers MAKER and 0xcc), the fills of blocks 3 and 4 (1 whole and 1.5 whole at 2 000)
     let (s, v) = get(&app, &format!("/v1/stats?since={}", t0 - 86_400_000 + 17)).await;
@@ -1193,6 +1225,7 @@ async fn activity_totals_over_a_range() {
     assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fills"].as_i64()), (Some(2), Some(2), Some(2)));
     assert_eq!(v["fees_paid"], "5000");
     assert_eq!(v["executors"].as_i64(), Some(1), "B");
+    assert_eq!(earned(&v), want("890000", 2, 1, "4000", 2, 1, "897000", 1));
     // from a minute inside an hour: the minutes up to the hour and the hours after it, every bucket once
     let (_, v) = get(&app, &format!("/v1/stats?since={}", t0 - 30_000)).await;
     assert_eq!((v["fills"].as_i64(), v["fees_paid"].as_str()), (Some(2), Some("5000")));
@@ -1206,16 +1239,47 @@ async fn activity_totals_over_a_range() {
     assert_eq!((v["fills"].as_i64(), v["executors"].as_i64()), (Some(0), Some(0)));
 
     // the aggregates follow a delete as a revert does it: the fills and orders of block 4 go, and the totals are those of blocks 1 to 3
-    c.execute_batch("DELETE FROM order_events WHERE block_seq = 4; DELETE FROM orders WHERE genesis_block = 4;").unwrap();
+    c.execute_batch(
+        "DELETE FROM order_events WHERE block_seq = 4; DELETE FROM orders WHERE genesis_block = 4; DELETE FROM executor_txs WHERE block_seq = 4;",
+    )
+    .unwrap();
     e.state.generation.bump();
     let (_, v) = get(&app, "/v1/stats").await;
     assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fills"].as_i64()), (Some(3), Some(2), Some(2)));
     assert_eq!((v["fees_paid"].as_str(), v["executors"].as_i64()), (Some("3000"), Some(2)));
-    c.execute_batch("DELETE FROM order_events WHERE block_seq = 3; DELETE FROM orders WHERE genesis_block = 3;").unwrap();
+    assert_eq!(earned(&v), want("950000", 2, 0, "5000", 2, 0, "945000", 2));
+    // the lean pruning deletes old rows under the `pruning` key: nothing is taken back (block 2 is gone from the store, not from the totals)
+    let all = v.clone();
+    c.execute_batch(
+        "INSERT INTO meta (k, v) VALUES ('pruning', '1'); DELETE FROM order_events WHERE block_seq = 2; \
+         DELETE FROM executor_txs WHERE block_seq = 2; DELETE FROM orders WHERE genesis_block = 2; DELETE FROM meta WHERE k = 'pruning';",
+    )
+    .unwrap();
+    e.state.generation.bump();
+    let (_, v) = get(&app, "/v1/stats").await;
+    for k in [
+        "orders",
+        "traders",
+        "fills",
+        "executors",
+        "fees_paid",
+        "executor_income",
+        "miner_fees",
+        "executor_net",
+        "executor_income_txs",
+    ] {
+        assert_eq!(v[k], all[k], "{k}");
+    }
+    // a revert of block 3 still takes back what it added; what was pruned stays (the fill, the maker and the executor of block 2)
+    c.execute_batch(
+        "DELETE FROM order_events WHERE block_seq = 3; DELETE FROM orders WHERE genesis_block = 3; DELETE FROM executor_txs WHERE block_seq = 3;",
+    )
+    .unwrap();
     e.state.generation.bump();
     let (_, v) = get(&app, "/v1/stats").await;
     assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fills"].as_i64()), (Some(2), Some(2), Some(1)));
     assert_eq!((v["fees_paid"].as_str(), v["executors"].as_i64()), (Some("1000"), Some(1)));
+    assert_eq!(earned(&v), want("50000", 1, 0, "2000", 1, 0, "48000", 1));
     let left: i64 = c.query_row("SELECT COUNT(*) FROM activity WHERE t >= ?1", [t0 - 3_600_000], |r| r.get(0)).unwrap();
     assert_eq!(left, 0, "an emptied bucket is no row");
 

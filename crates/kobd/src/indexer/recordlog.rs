@@ -19,7 +19,8 @@
 //! to) and length-prefixed states, so a frame decodes whatever the templates are when it is read; a reveal of a template
 //! this build does not pin is dropped and counted, never misread. Format 3 ([`FORMAT_KCC23`], since 2026-10-19) is format 2
 //! with KCC-23 declaration sections in its records, written only for the frames that hold one; format 4 ([`FORMAT_PAYER`],
-//! since 2026-11-09) is format 3 with payer sections (who funded a transaction that spends a tracked order), likewise. A
+//! since 2026-11-09) is format 3 with payer sections (who funded a transaction that spends a tracked order), likewise; format 5
+//! ([`FORMAT_IN_VALUE`], since 2026-11-12) is format 4 with input-value sections (what such a transaction's inputs held), likewise. A
 //! frame this build cannot decode (format 1, written before 2026-10-01 without a marker, or a newer format) is kept and
 //! skipped by [`read_all`] with a counted warning
 //! (`open` checks the chain only and never decodes a body).
@@ -154,6 +155,13 @@ pub const FORMAT_KCC23: u8 = 3;
 /// counted "newer format" warning) only those frames instead of misreading them. A record of an earlier frame has no payer: the
 /// submitter of its transaction is unknown.
 pub const FORMAT_PAYER: u8 = 4;
+
+/// Format 5 (since 2026-11-12): format 4 whose records may carry an input-value section (`record::TxRecord::in_value`: what the inputs of
+/// a transaction spending a tracked order held, as the node reported them, so its network fee is known; flagged by bit 28 of a record's
+/// position). Only a frame that holds such a section is written as format 5 (payer and KCC-23 sections may be in it too); every other
+/// frame stays format 2, 3 or 4, so a build before input values skips (with a counted "newer format" warning) only those frames instead
+/// of misreading them. A record of an earlier frame has no input value: the network fee of its transaction is unknown.
+pub const FORMAT_IN_VALUE: u8 = 5;
 
 impl LogOp {
     fn encode(&self, w: &mut Writer) {
@@ -349,12 +357,14 @@ impl LogBatch {
     }
 
     /// Encodes the batch as a format-2 frame body (format 3 when a record carries a KCC-23 declaration section, 4 when one carries a
-    /// payer section).
+    /// payer section, 5 when one carries an input-value section).
     pub fn encode(&self, now_ms: u64) -> Vec<u8> {
         let mut w = Writer::new();
         w.u8(0);
         let txs = || self.blocks.iter().flat_map(|b| &b.txs);
-        w.u8(if txs().any(|t| t.payer.is_some()) {
+        w.u8(if txs().any(|t| t.in_value.is_some()) {
+            FORMAT_IN_VALUE
+        } else if txs().any(|t| t.payer.is_some()) {
             FORMAT_PAYER
         } else if txs().any(|t| t.kcc23.is_some()) {
             FORMAT_KCC23
@@ -390,10 +400,10 @@ impl LogBatch {
         w.buf
     }
 
-    /// Decodes a frame body (format 2, 3 or 4).
+    /// Decodes a frame body (format 2, 3, 4 or 5).
     pub fn decode(body: &[u8]) -> Result<DecodedBatch, WireError> {
         match body {
-            [0, FORMAT | FORMAT_KCC23 | FORMAT_PAYER, rest @ ..] => {
+            [0, FORMAT | FORMAT_KCC23 | FORMAT_PAYER | FORMAT_IN_VALUE, rest @ ..] => {
                 let mut r = Reader::new(rest);
                 let written_ms = r.var()?;
                 let orders = read_table(&mut r)?;
@@ -1045,6 +1055,7 @@ mod tests {
                     holds: vec![],
                     kcc23: None,
                     payer: None,
+                    in_value: None,
                 }],
             }],
             ops: vec![LogOp::CloseGap { txid: Hash32([1; 32]), index: 2, covenant_id: Hash32([3; 32]) }],
@@ -1422,6 +1433,7 @@ mod tests {
             holds: vec![],
             kcc23: None,
             payer: None,
+            in_value: None,
         }
     }
 
