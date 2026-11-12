@@ -201,15 +201,23 @@ export function summarizePositionFills(entryEvents: readonly EventView[], exitEv
 export interface RealisedPnl {
   /** base units that completed the round trip: filled by the entry AND by the exits */
   amountClosed: bigint;
-  /** realised profit or loss in sompi (the spread per whole token times the amount closed over the scale, rounded toward zero; 0 when nothing closed yet); null when the fills carry no prices */
+  /**
+   * realised profit or loss in sompi (the spread per whole token times the amount closed over the scale, rounded toward zero; 0 when the entry filled and nothing closed yet);
+   * null when the fills carry no prices, or when the entry has no fills to measure against (an exit group whose entry is gone)
+   */
   pnl: bigint | null;
   /** the spread relative to the entry's average price, percent (2 decimals); null when unknown */
   returnPct: number | null;
 }
 
-/** Realised PnL of a position from its loaded fills (before network fees): the spread per whole token times the amount both entered and exited. */
+/**
+ * Realised PnL of a position from its loaded fills: the spread per whole token times the amount both entered and exited. BEFORE priority tips, stop-exit keeper tips and
+ * network fees: a fill event carries none of them (the indexer's events have no tip field; a tip in force can have been amended since), so none is subtracted and the note says so.
+ */
 export function realisedPnl(f: PositionFills): RealisedPnl {
   const amountClosed = f.entry.amount < f.exits.amount ? f.entry.amount : f.exits.amount;
+  // no entry fill (an exit group whose entry is gone, or an entry that never filled): there is nothing to measure the exits against, which is not a realised zero
+  if (f.entry.amount <= 0n) return { amountClosed: 0n, pnl: null, returnPct: null };
   if (amountClosed <= 0n) return { amountClosed: 0n, pnl: 0n, returnPct: null };
   if (f.spreadPerToken === null) return { amountClosed, pnl: null, returnPct: null };
   const base = f.entry.avgPrice;

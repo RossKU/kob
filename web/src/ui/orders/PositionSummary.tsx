@@ -198,7 +198,7 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
           sub={
             pnl ? (
               <span title={t('orders.position.stat.pnlNote')}>
-                {t('orders.position.stat.pnlClosed', { amount: amount(pnl.amountClosed) })}
+                {pnl.pnl !== null || pnl.amountClosed > 0n ? t('orders.position.stat.pnlClosed', { amount: amount(pnl.amountClosed) }) : null}
                 {pnl.returnPct !== null ? <span class={pnlClass}> · {pctText(pnl.returnPct)}</span> : null}
               </span>
             ) : loadEvents && !showFills ? (

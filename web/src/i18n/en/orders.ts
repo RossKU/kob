@@ -294,7 +294,7 @@ export default {
   'orders.position.stat.pnl': 'Realised PnL',
   'orders.position.stat.pnlClosed': '{amount} closed',
   'orders.position.stat.pnlHint': 'load the fills',
-  'orders.position.stat.pnlNote': '(Exit average - entry average) × round-trip amount, before network fees.',
+  'orders.position.stat.pnlNote': '(Exit average - entry average) × round-trip amount, before tips and network fees.',
 
   'orders.flow.cancelHeading': 'Cancel order',
   'orders.flow.cancelTitle': 'Cancel order',

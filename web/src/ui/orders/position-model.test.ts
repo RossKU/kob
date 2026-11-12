@@ -158,6 +158,13 @@ describe('realisedPnl', () => {
     expect(realisedPnl({ entry: leg(2n, 0n), exits: leg(2n, 5n), spreadPerToken: 5n, scale: 1n }).returnPct).toBeNull();
   });
 
+  it('an exit group whose entry is gone has no realised figure: unknown (a dash), not "0 KAS, 0 closed"', () => {
+    expect(realisedPnl({ entry: leg(0n, null), exits: leg(3n, 27_000n), spreadPerToken: null, scale: 1n })).toEqual({ amountClosed: 0n, pnl: null, returnPct: null });
+    expect(realisedPnl({ entry: leg(0n, null), exits: leg(0n, null), spreadPerToken: null, scale: 1n })).toEqual({ amountClosed: 0n, pnl: null, returnPct: null });
+    // from the loaded fills: exits only
+    expect(realisedPnl(summarizePositionFills([], [fill(2, 'a1', 3, '27000')], 'buy', 1)).pnl).toBeNull();
+  });
+
   it('works on summarizePositionFills output (sell first: sold at 30,000, bought back at 25,000 sompi per 100 units, 200 units)', () => {
     const f = summarizePositionFills([fill(1, 'e1', 200, '30000')], [fill(2, 'a1', 200, '25000')], 'sell', 100);
     expect(realisedPnl(f)).toEqual({ amountClosed: 200n, pnl: 10_000n, returnPct: 16.66 });
