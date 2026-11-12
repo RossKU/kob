@@ -11,7 +11,7 @@ import { scaleOfDecimals } from '../kit';
 import { applyKascov, kascovRowOf } from './kascov-merge';
 import type { TokenRow } from './token-model';
 import { useHeldToken, type HeldTokenState } from './use-held-token';
-import { useKascov } from './use-kascov';
+import { useKascov, type KascovState } from './use-kascov';
 import { useOpenToken, type OpenTokenState } from './use-open-token';
 import { usePublicToken, type PublicTokenState } from './use-public-token';
 
@@ -43,6 +43,8 @@ export interface MarketToken {
   onChain: boolean;
   /** an answer that can still change the row is on its way (the lists, the wallet's holdings, the token outputs, kascov.io) */
   resolving: boolean;
+  /** the state of kascov.io's token list (use-kascov.ts): the chart's kascov toggle follows it */
+  kascovStatus: KascovState['status'];
 }
 
 export function useMarketToken(id: string, o: MarketTokenOptions): MarketToken {
@@ -98,5 +100,5 @@ export function useMarketToken(id: string, o: MarketTokenOptions): MarketToken {
   // the token outputs are asked for last and always answer (a row or a reason): until then a token in neither list, or a listed row with no program, is undecided
   const undecided = (!listedRow || ambiguous) && !held.row && !pub.row && pub.reason === null;
   const resolving = rowsLoading || held.loading || pub.loading || undecided || (!baseRow && kascov.status === 'loading');
-  return { row, headerRow, ticketInfo, open, held, pub, shown, onChain, resolving };
+  return { row, headerRow, ticketInfo, open, held, pub, shown, onChain, resolving, kascovStatus: kascov.status };
 }

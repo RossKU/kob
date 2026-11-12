@@ -25,6 +25,7 @@ import { requestPairFlip } from '../ticket/pair-flip';
 import { DepthChart } from './DepthChart';
 import { FavoriteStar } from './FavoriteStar';
 import { isFavoritePair, togglePair, useFavorites } from './favorites';
+import { kascovChartGate } from './kascov-overlay';
 import { PriceChart, type UsdChartSpec } from './PriceChart';
 import { useLiveRefresh } from './live';
 import { FlipButton, MarketBar, MarketFrame, MarketShell, PairSelector } from './MarketBar';
@@ -399,7 +400,7 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       chart={
         <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card">
-          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} {...(baseRow?.kascov?.spot && quoteRow?.kascov?.spot ? { kascov: [{ token: props.base, decimals: baseInfo.decimals }, { token: props.quote, decimals: quoteInfo.decimals }] } : {})} />
+          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} {...kascovChartGate(baseToken.kascovStatus, [{ token: props.base, decimals: baseInfo.decimals, priced: !!baseRow?.kascov?.spot }, { token: props.quote, decimals: quoteInfo.decimals, priced: !!quoteRow?.kascov?.spot }])} />
           <p class="small muted" style="margin:6px 0 0" data-testid="pair-chart-note">{t('pair.chart.note', { base: baseInfo.ticker, quote: quoteInfo.ticker })}</p>
           {idleNote ? <p class="small muted" style="margin:4px 0 0" data-testid="pair-chart-idle">{idleNote}</p> : null}
         </Section>

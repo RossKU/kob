@@ -41,6 +41,7 @@ import { settled } from './market-list';
 import { useHeldUntil } from './use-market-list';
 import { openPair } from './market-nav';
 import { displayedPair, marketFor, type DisplayedPair } from './market-select';
+import { kascovChartGate } from './kascov-overlay';
 import { PriceChart } from './PriceChart';
 import { TokenFacts, tokenTitle } from './TokenBadges';
 import { TokenDetails, TokenHeader } from './TokenHeader';
@@ -114,7 +115,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [entered, setEntered] = useState<{ id: string; decimals: number } | null>(null);
   const enteredDecimals = entered && entered.id === id ? entered.decimals : null;
   // the token however it is known, its synthesised TokenInfo where it has no registry entry, and how it is named (use-market-token.ts)
-  const { row, headerRow, ticketInfo, open, held, pub, shown, onChain } = useMarketToken(id, { rows: allRows, rowsLoading: tokens.loading, refreshKey: liveKey, decimals: enteredDecimals, declared: declaredOf });
+  const { row, headerRow, ticketInfo, open, held, pub, shown, onChain, kascovStatus } = useMarketToken(id, { rows: allRows, rowsLoading: tokens.loading, refreshKey: liveKey, decimals: enteredDecimals, declared: declaredOf });
 
   // KOB's own genesis check of the token (once per token and session, data/genesis-check.ts): "Genesis verified", "Genesis check failed", or "Genesis not verified" with the
   // reason, replacing kascov's remark; a token the registry verified is not checked. The result gates nothing.
@@ -443,7 +444,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       }
       chart={
         <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" until={keptMarketAt} /> : undefined}>
-          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} {...(headerRow?.kascov?.spot ? { kascov: [{ token: id, decimals }] } : {})} />
+          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} {...kascovChartGate(kascovStatus, [{ token: id, decimals, priced: !!headerRow?.kascov?.spot }])} />
         </Section>
       }
       ticket={

@@ -315,6 +315,9 @@ export default {
   'market.chart.kascov.legend': 'kascov {price}',
   'market.chart.kascov.unavailable': 'kascov unavailable',
   'market.chart.kascov.title': "Third-party reference from kascov.io: a marginal pool price on other venues, before fees. KOB does not use it; KOB's prices come from its own book.",
+  'market.chart.kascov.none.token': 'kascov has no price for this token',
+  'market.chart.kascov.none.pair': 'kascov has no price for one of these tokens',
+  'market.chart.kascov.none.list': 'kascov prices are not available right now',
 
   // drawing tools of the price chart (chart-drawings.ts): kept in this browser per market, never sent anywhere
   'market.chart.draw.tools': 'Drawing tools',

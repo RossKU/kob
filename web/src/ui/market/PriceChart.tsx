@@ -32,7 +32,7 @@ import { ratioCandles, ratioSeries, usdText } from './usd-model';
 import { pairRatioCandles } from './pair-market';
 import { setChartExpanded, useChartExpanded } from './chart-expand';
 import { crosshairLabel, tickLabel } from './chart-time';
-import { laidOnBars, lineData, overlayPriceText, pairPoints, tokenPoints } from './kascov-overlay';
+import { type KascovWhy, laidOnBars, lineData, overlayPriceText, pairPoints, tokenPoints } from './kascov-overlay';
 import { useKascovCandles } from './use-kascov-candles';
 import { DrawingsPrimitive, PICK_MOUSE, PICK_TOUCH, type DrawingColors } from './chart-drawings-primitive';
 import { COLOR_TOKEN, DEFAULT_COLOR, DRAWING_COLORS, drawingsMarket, isDrawingColor, loadDrawings, MAX_DRAWINGS, newDrawingId, saveDrawings, type Anchor, type Drawing, type DrawingColor } from './chart-drawings';
@@ -157,6 +157,8 @@ export interface PriceChartProps {
    * (data/kascov.ts `priced`); without it the chart has no kascov toggle. Third party and optional: kascov-overlay.ts.
    */
   kascov?: readonly { token: string; decimals: number }[];
+  /** Without `kascov`: why kascov has no price here (kascov-overlay.ts `kascovChartGate`). The toggle is then shown disabled, with the reason as its tooltip. Neither given: kascov is off, no toggle. */
+  kascovWhy?: KascovWhy;
 }
 
 interface Series {
@@ -258,6 +260,9 @@ export function PriceChart(props: PriceChartProps) {
       /* no storage */
     }
   };
+  // shown whenever kascov is on for the deployment; without a price it is faded and does nothing (the remembered choice stays as it was and takes effect on a priced market)
+  const kascovBtn = kascovAvail || props.kascovWhy !== undefined;
+  const kascovReason = t(`market.chart.kascov.none.${props.kascovWhy ?? (usd ? 'pair' : 'token')}`);
   const kascovShown = kascovAvail && kascovOn;
   const kascovIds = useMemo(() => kascovLegs.map((l) => l.token), [kascovKey]);
   const kascovLine = useKascovCandles({ enabled: kascovShown, ids: kascovIds, bucket: kascovBucketFor(interval) });
@@ -651,8 +656,8 @@ export function PriceChart(props: PriceChartProps) {
           )}
           {/* the size of the chart: outside the tools' scroller, so a phone never scrolls it away */}
           <div class="chart-tools chart-size">
-            {kascovAvail ? (
-              <button type="button" aria-pressed={kascovOn ? 'true' : 'false'} aria-label={t('market.chart.kascov')} title={t('market.chart.kascov')} data-testid="chart-kascov-toggle" onClick={() => setKascovOn(!kascovOn)}>
+            {kascovBtn ? (
+              <button type="button" aria-pressed={kascovShown ? 'true' : 'false'} aria-disabled={kascovAvail ? undefined : 'true'} aria-label={t('market.chart.kascov')} title={kascovAvail ? t('market.chart.kascov') : kascovReason} data-testid="chart-kascov-toggle" onClick={() => (kascovAvail ? setKascovOn(!kascovOn) : undefined)}>
                 {/* kascov.io logo, used with the KOB founder's approval; source: https://kascov.io/ (its <link rel=icon> SVG, public/kascov-logo.svg, served from our own origin) */}
                 <img class="chart-kascov-logo" src={KASCOV_LOGO_URL} alt="" width="16" height="16" draggable={false} />
               </button>

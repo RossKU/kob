@@ -192,14 +192,31 @@ test.describe('with kascov.io', () => {
     const legend = page.getByTestId('chart-kascov');
     const chart = page.getByTestId('price-chart');
 
-    // kascov does not price the token: no toggle, no candle request, no line in the tooltip
+    // kascov does not price the token: the toggle is there but faded and disabled (aria-disabled, so its tooltip shows), a click asks for nothing, no line in the tooltip
     let log = await mockKascov(page, { tokens: priced({ unpriced_reason: "no single covenant holds this token's inventory" }), candles });
     await page.goto('/#/market');
     await expect(page.getByTestId(`token-last-${exkcc}`)).not.toHaveAttribute('title', /kascov/);
     await page.goto(`/#/market/${exkcc}`);
     await expect(chart).toHaveAttribute('data-state', 'ready');
-    await expect(toggle).toHaveCount(0);
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-disabled', 'true');
+    await expect(toggle).not.toHaveAttribute('disabled');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(toggle).toHaveAttribute('title', 'kascov has no price for this token');
+    await toggle.click({ force: true }); // Playwright treats aria-disabled as not enabled
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(chart).toHaveAttribute('data-kascov', '0');
     expect(log.candleRequests).toEqual([]);
+    // a remembered ON (a choice made on a priced market) shows off here, asks for nothing and is not erased
+    await page.evaluate(() => localStorage.setItem('kob.chart.kascov', '1'));
+    await page.reload();
+    await expect(chart).toHaveAttribute('data-state', 'ready');
+    await expect(toggle).toHaveAttribute('aria-disabled', 'true');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(chart).toHaveAttribute('data-kascov', '0');
+    expect(log.candleRequests).toEqual([]);
+    expect(await page.evaluate(() => localStorage.getItem('kob.chart.kascov'))).toBe('1');
+    await page.evaluate(() => localStorage.removeItem('kob.chart.kascov'));
 
     // priced: the list's price cell keeps its text and tooltip and gains one line (the percent is against KOB's own price)
     log = await mockKascov(page, { tokens: priced({ spot_num_sompi: 1_250_000, spot_den: base }), candles });
@@ -215,6 +232,7 @@ test.describe('with kascov.io', () => {
     await page.goto(`/#/market/${exkcc}`);
     await expect(chart).toHaveAttribute('data-state', 'ready');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(toggle).not.toHaveAttribute('aria-disabled');
     await expect(toggle).toHaveAttribute('title', 'kascov price (third-party)');
     // the logo is a static file of this app (never kascov.io's host: the CSP and the mock-only network would show it), decorative, and it loaded
     const logo = toggle.locator('img.chart-kascov-logo');

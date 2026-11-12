@@ -108,14 +108,15 @@ Pinned to commit [`47792a0e`](https://github.com/RossKU/kob/tree/47792a0eba552e0
   token list. Supply, decimals, prices and orders never do
   ([`kascov.ts` L1-L13](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/data/kascov.ts#L1-L13)). Where kascov disagrees with what KOB derives, KOB wins and the list says so.
 - **kascov's price and candles are an optional, third-party overlay. KOB uses them for nothing.** kascov replays the pools of other
-  venues, so its price is a marginal pool price there, before fees; it is not a price from KOB's book. Where kascov prices a token, the
-  chart has a small round toggle, off by default, that draws kascov's price as one thin line behind KOB's candles, with a muted
+  venues, so its price is a marginal pool price there, before fees; it is not a price from KOB's book. The
+  chart has a small round kascov toggle, off by default; where kascov prices the token it draws kascov's price as one thin line behind KOB's candles, with a muted
   "kascov 0.01625" in the legend and a tooltip saying what it is. The market list adds one line to a price cell's tooltip, for example
   "kascov: 0.01625 KAS (-35%)" (against KOB's own price in that cell), and nothing visible changes. A token pair gets a figure only when
   kascov prices both tokens. The line never moves the chart's price scale, and no warning, ordering, check or figure of KOB reads it.
   **Privacy:** the list's tooltip uses the token list KOB already loads and asks for nothing more. The chart's candle request names the
   token you are viewing, so kascov.io sees it (and your IP address), but only while the toggle is on; with it off no request is made.
-  Without a kascov price, or with kascov turned off in the deployment, there is no toggle and no line.
+  Where kascov has no price for the token (or one of a pair's tokens, or its list is not available), the toggle is still there but faded and does nothing, with the reason as its
+  tooltip, and nothing is asked of kascov. With kascov turned off in the deployment, there is no toggle and no line.
 - **Prices come from KOB's own book on chain.** The KOB indexer reads the order UTXOs and the fills from the chain. The book is the
   resting orders, and the last price is the last fill that actually happened. It is not a number anyone types in. Makers choose their
   own limit prices, as on any exchange, but a price only becomes "the price" once someone trades at it.

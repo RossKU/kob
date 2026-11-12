@@ -108,3 +108,21 @@ export function kascovTitleLine(kascov: Rational | null, own: Rational | null, u
 export function withKascovLine<C extends { text: string | null; title: string | null }>(cell: C, line: string | null): C {
   return line === null ? cell : { ...cell, title: cell.title ? `${cell.title}\n${line}` : line };
 }
+
+/** Why the chart's kascov toggle is shown disabled: the token has no kascov price, one of a pair's tokens has none, or the kascov list is not loaded (yet / at all). */
+export type KascovWhy = 'token' | 'pair' | 'list';
+
+/**
+ * What a market page tells the chart about its kascov toggle. `status` is the token list's state (use-kascov.ts); `legs` the chart's tokens (one, or BASE then QUOTE for a
+ * pair) with whether kascov prices each. `{}` while kascov is off for the deployment (no toggle); `{ kascov }` when every leg is priced (the working toggle); else
+ * `{ kascovWhy }` (the toggle shown disabled, with the reason). Pure.
+ */
+export function kascovChartGate(
+  status: 'off' | 'loading' | 'unavailable' | 'ok',
+  legs: readonly { token: string; decimals: number; priced: boolean }[],
+): { kascov?: readonly { token: string; decimals: number }[]; kascovWhy?: KascovWhy } {
+  if (status === 'off') return {};
+  if (status !== 'ok') return { kascovWhy: 'list' };
+  if (legs.length > 0 && legs.every((l) => l.priced)) return { kascov: legs.map((l) => ({ token: l.token, decimals: l.decimals })) };
+  return { kascovWhy: legs.length > 1 ? 'pair' : 'token' };
+}

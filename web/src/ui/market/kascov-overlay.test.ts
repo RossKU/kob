@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { KascovCandle } from '../../data/kascov-candles';
 import { ratToNumber, type Rational } from '../../kob/pair';
-import { kascovTitleLine, kasPerWholeToken, laidOnBars, lineData, overlayPriceText, pairPoints, spotPairPrice, spotPrice, tokenPoints, withKascovLine } from './kascov-overlay';
+import { kascovChartGate, kascovTitleLine, kasPerWholeToken, laidOnBars, lineData, overlayPriceText, pairPoints, spotPairPrice, spotPrice, tokenPoints, withKascovLine } from './kascov-overlay';
 
 const c = (t: number, quoteSompi: bigint, baseAmount: bigint): KascovCandle => ({ t, quoteSompi, baseAmount });
 const R = (num: bigint, den: bigint): Rational => ({ num, den });
@@ -87,5 +87,27 @@ describe('the market list tooltip line', () => {
     expect(withKascovLine(cell, 'kascov: 2 KAS')).toEqual({ text: '1', title: 'one\nkascov: 2 KAS' });
     expect(withKascovLine({ text: null, title: null }, 'kascov: 2 KAS')).toEqual({ text: null, title: 'kascov: 2 KAS' });
     expect(withKascovLine(cell, null)).toBe(cell);
+  });
+});
+
+describe('the chart toggle gate (kascovChartGate)', () => {
+  const a = { token: 'aa', decimals: 8, priced: true };
+  const b = { token: 'bb', decimals: 2, priced: true };
+  it('kascov off for the deployment: no toggle at all', () => {
+    expect(kascovChartGate('off', [a])).toEqual({});
+  });
+  it('every leg priced: the working toggle with its legs, in order', () => {
+    expect(kascovChartGate('ok', [a])).toEqual({ kascov: [{ token: 'aa', decimals: 8 }] });
+    expect(kascovChartGate('ok', [a, b])).toEqual({ kascov: [{ token: 'aa', decimals: 8 }, { token: 'bb', decimals: 2 }] });
+  });
+  it('a token without a price (or not in the list): disabled, "token" for one leg and "pair" when either leg of a pair lacks one', () => {
+    expect(kascovChartGate('ok', [{ ...a, priced: false }])).toEqual({ kascovWhy: 'token' });
+    expect(kascovChartGate('ok', [a, { ...b, priced: false }])).toEqual({ kascovWhy: 'pair' });
+    expect(kascovChartGate('ok', [{ ...a, priced: false }, b])).toEqual({ kascovWhy: 'pair' });
+    expect(kascovChartGate('ok', [])).toEqual({ kascovWhy: 'token' });
+  });
+  it('the list not loaded yet or failed: disabled with the list reason, whatever the legs', () => {
+    expect(kascovChartGate('loading', [a])).toEqual({ kascovWhy: 'list' });
+    expect(kascovChartGate('unavailable', [a, b])).toEqual({ kascovWhy: 'list' });
   });
 });
