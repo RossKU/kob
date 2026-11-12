@@ -2,3 +2,5 @@
 *.hex -text
 *.bin binary
 *.cmd text eol=crlf
+*.sil linguist-language=JavaScript
+*.ag linguist-language=Rust
