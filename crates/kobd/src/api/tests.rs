@@ -1778,7 +1778,7 @@ async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_onl
     assert_eq!((items[0]["a_traded"].as_bool(), items[0]["b_traded"].as_bool()), (Some(true), Some(true)));
     assert_eq!(
         (items[0]["pair_volume_a"].as_str(), items[0]["pair_volume_b"].as_str(), items[0]["pair_fills"].as_u64()),
-        (Some("4000"), Some("8000"), Some(2))
+        (Some("2000"), Some("4000"), Some(1))
     );
     // bucket 2: quote did not trade, its last close carries forward: 2.70 / 1.30 = 27 000 / 13
     assert_eq!(rate(&items[1], "o"), ("2076".into(), "27000".into(), "13".into()));
@@ -1802,7 +1802,8 @@ async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_onl
         (Some("2000"), Some("2"), Some("1"))
     );
     assert_eq!((items[2]["amount_a"].as_str(), items[2]["amount_b"].as_str()), (Some("2000"), Some("4000")));
-    assert_eq!(v["volume_24h"], serde_json::json!({"amount_a": "5000", "amount_b": "10000", "fills": 3}));
+    // the netting fill (both its orders record it) counts once: 2 000 + the route fill's 1 000 of A in 2 transactions
+    assert_eq!(v["volume_24h"], serde_json::json!({"amount_a": "3000", "amount_b": "6000", "fills": 2}));
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills?limit=1", h(BASE), h(QUOTE))).await;
     let cursor = v["next_cursor"].as_str().unwrap().to_string();
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills?limit=5&before={cursor}", h(BASE), h(QUOTE))).await;

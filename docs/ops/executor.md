@@ -1688,10 +1688,11 @@ window is the `limit` intervals ending with the bucket of the newest KAS trade o
 **B base units per `price_basis` base units of A** (`pa × basis(B) / pb` for A's KAS price `pa` per `basis(A)` and B's `pb` per
 `basis(B)`): `num / den` the exact reduced fraction, `value` its floor (rounded down). The view carries `price_basis` (A's),
 `quote_price_basis` (B's), both tokens' `decimals`, `price_source: "kas_books"` and per candle the pair volume of the bucket
-(`pair_volume_a`, `pair_volume_b`: base units of A and B of the pair fills, `pair_fills`: their count).
+(`pair_volume_a`, `pair_volume_b`: base units of A and B of the pair fills, `pair_fills`: the transactions; each transaction once, so a
+netting fill, which both its orders record, counts once: per transaction the larger of its ask and bid sides).
 
 `GET /v1/pairs/{base}/{quote}/fills?limit=&before=` (`limit` default 50, at most `max_page_size`; `before` a fill id): the pair
-fills of the pair, newest first, `next_cursor` for the next page, and `volume_24h` (`amount_a`, `amount_b`, `fills` over the
+fills of the pair, newest first, `next_cursor` for the next page, and `volume_24h` (`amount_a`, `amount_b`, `fills`: each transaction once, as the candles, over the
 24 h ending at the newer of the newest chain block time the indexer knows and its wall clock):
 
 ```json

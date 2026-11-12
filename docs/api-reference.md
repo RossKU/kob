@@ -493,7 +493,7 @@ never from pair fills.
 
 A rate is B base units per `price_basis` base units of A: `num / den` the exact reduced fraction, `value` its floor.
 `a_traded` / `b_traded` say which side traded in KAS in the bucket (the other side carries its last close forward). `h` and `l`
-are the bounds the two series allow, not observed trades. `pair_volume_*` and `pair_fills` count pair-order fills of the bucket.
+are the bounds the two series allow, not observed trades. `pair_volume_*` and `pair_fills` are the pair-order fills of the bucket, each transaction once: a netting fill (an ask and a bid of the pair filling each other) is one trade though both orders record it (its larger side's amounts; `pair_fills` counts transactions).
 
 **`GET /v1/pairs/{base}/{quote}/fills?limit=&before=`** (`limit` default 50, at most `max_page_size`; `before` a fill id):
 
@@ -507,7 +507,7 @@ are the bounds the two series allow, not observed trades. `pair_volume_*` and `p
 ```
 
 `side` is `ask` (the order sold A) or `bid`. `counterparty` is `route`, `netting` or `inventory`. `price_source` is always `none`:
-a pair fill is volume only and never sets a price. `volume_24h` covers the 24 hours ending at the newer of the newest chain block
+a pair fill is volume only and never sets a price. `volume_24h` counts each transaction once like the candles (a netting fill is one, `fills` counts transactions) and covers the 24 hours ending at the newer of the newest chain block
 time the indexer has recorded and its wall clock (as `/v1/stats/{token}`). `amount_b`, `price`, `price_num`, `price_den`, `tip_kas` may be null.
 
 ### 3.8 `GET /v1/orders`

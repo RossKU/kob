@@ -45,7 +45,7 @@ use crate::hex::Hash32;
 use kob_protocol::state::{AnyState, TIF_GTC};
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// One price level of a pair book (decimal strings: base units can exceed 2^53).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -510,7 +510,8 @@ pub struct PairCandleView {
     /// Whether A / B traded in KAS in this bucket (`false`: that side carries its last close forward).
     pub a_traded: bool,
     pub b_traded: bool,
-    /// Pair volume of the bucket: pair-order fills of this pair (`pair_fills`), base units of A and of B, and their count.
+    /// Pair volume of the bucket: pair-order fills of this pair (`pair_fills`), base units of A and of B, and the transactions
+    /// (`pair_fills`: a netting fill, which both its orders record, once).
     pub pair_volume_a: String,
     pub pair_volume_b: String,
     pub pair_fills: u64,
@@ -540,7 +541,38 @@ pub fn pair_rate(pa: i128, pb: i128, basis_b: i128) -> Option<PairRate> {
     Some(PairRate { value: (n / d).to_string(), num: n.to_string(), den: d.to_string() })
 }
 
-/// Pair volume per bucket in `[start, end)`: `t -> (A base units, B base units, fills)`.
+/// One `pair_fills` row as the volume reads it: `(txid, ts, side, amount_a, amount_b)`.
+type PairFillRow = (Vec<u8>, i64, i64, i64, Option<i64>);
+
+/// The pair volume of `pair_fills` rows, one entry per TRANSACTION in the order first seen: `(ts, A base units, B base units)`.
+/// Every pair order a transaction fills records its own row, so a netting fill (an ask and a bid of the pair filling each other)
+/// is two rows of one trade: a transaction's volume is the larger of its two sides' sums (each side's rows summed in 128 bits, a
+/// negative or missing amount as 0), so a netting fill counts once and the routed rest of a partly netted order still counts.
+fn tx_volumes(rows: impl IntoIterator<Item = PairFillRow>) -> Vec<(i64, i128, i128)> {
+    // txid -> (ts, [A of asks, A of bids], [B of asks, B of bids]); `order` keeps the first-seen order
+    let mut by: HashMap<Vec<u8>, (i64, [i128; 2], [i128; 2])> = HashMap::new();
+    let mut order: Vec<Vec<u8>> = Vec::new();
+    for (txid, ts, side, a, b) in rows {
+        let k = usize::from(side != 1);
+        let e = by.entry(txid.clone()).or_insert_with(|| {
+            order.push(txid);
+            (ts, [0; 2], [0; 2])
+        });
+        e.1[k] = e.1[k].saturating_add(a.max(0) as i128);
+        e.2[k] = e.2[k].saturating_add(b.unwrap_or(0).max(0) as i128);
+    }
+    order.into_iter().filter_map(|t| by.remove(&t)).map(|(ts, a, b)| (ts, a[0].max(a[1]), b[0].max(b[1]))).collect()
+}
+
+/// The `pair_fills` rows of `query` (its parameters `params`), read for [`tx_volumes`].
+fn pair_fill_rows(conn: &Connection, query: &str, params: impl rusqlite::Params) -> DbResult<Vec<PairFillRow>> {
+    let mut st = conn.prepare_cached(query)?;
+    let rows = st.query_map(params, |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Pair volume per bucket in `[start, end)`: `t -> (A base units, B base units, transactions)` ([`tx_volumes`]: a netting fill
+/// once).
 fn pair_volume(
     conn: &Connection,
     a: &Hash32,
@@ -549,19 +581,17 @@ fn pair_volume(
     start: i64,
     end: i64,
 ) -> DbResult<BTreeMap<i64, (i128, i128, u64)>> {
-    let mut st = conn.prepare_cached(
-        "SELECT ts, amount_a, amount_b FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND ts >= ?3 AND ts < ?4 \
-         ORDER BY ts LIMIT 200000",
+    let rows = pair_fill_rows(
+        conn,
+        "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND ts >= ?3 \
+         AND ts < ?4 ORDER BY ts LIMIT 200000",
+        params![a.0.to_vec(), b.0.to_vec(), start, end],
     )?;
-    let rows = st.query_map(params![a.0.to_vec(), b.0.to_vec(), start, end], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?))
-    })?;
     let mut m: BTreeMap<i64, (i128, i128, u64)> = BTreeMap::new();
-    for r in rows {
-        let (ts, x, y) = r?;
+    for (ts, x, y) in tx_volumes(rows) {
         let e = m.entry(ts.div_euclid(iv) * iv).or_default();
-        e.0 = e.0.saturating_add(x.max(0) as i128);
-        e.1 = e.1.saturating_add(y.unwrap_or(0).max(0) as i128);
+        e.0 = e.0.saturating_add(x);
+        e.1 = e.1.saturating_add(y);
         e.2 += 1;
     }
     Ok(m)
@@ -700,8 +730,10 @@ pub struct PairFillView {
 /// [`ReadCtx::window_end`]).
 #[derive(Debug, Clone, Serialize)]
 pub struct PairVolume {
+    /// Base units of A and of B traded, each transaction once (a netting fill, which both its orders record, counts once).
     pub amount_a: String,
     pub amount_b: String,
+    /// Transactions that filled pair orders of the pair (a netting fill is one).
     pub fills: u64,
 }
 
@@ -761,15 +793,15 @@ pub fn pair_fills(
     let next_cursor = if more { items.last().map(|f| f.id.to_string()) } else { None };
     let newest: Option<i64> = conn.query_row("SELECT MAX(ts) FROM order_events", [], |r| r.get(0))?;
     let since = ctx.window_end(newest).unwrap_or(0) - 86_400_000;
-    let mut st =
-        conn.prepare_cached("SELECT amount_a, amount_b FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND ts >= ?3")?;
+    let rows = pair_fill_rows(
+        conn,
+        "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND ts >= ?3",
+        params![base.0.to_vec(), quote.0.to_vec(), since],
+    )?;
     let (mut va, mut vb, mut n) = (0i128, 0i128, 0u64);
-    for r in
-        st.query_map(params![base.0.to_vec(), quote.0.to_vec(), since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)))?
-    {
-        let (x, y) = r?;
-        va = va.saturating_add(x.max(0) as i128);
-        vb = vb.saturating_add(y.unwrap_or(0).max(0) as i128);
+    for (_, x, y) in tx_volumes(rows) {
+        va = va.saturating_add(x);
+        vb = vb.saturating_add(y);
         n += 1;
     }
     Ok(PairFillsView {
@@ -797,6 +829,28 @@ mod tests {
         assert!(n * 7 <= big * d, "rounded down");
         let (n, d) = bounded_price(big, 7, true).unwrap();
         assert!(n * 7 >= big * d, "rounded up");
+    }
+
+    /// A transaction's pair volume counts once however many of its pair orders record it.
+    #[test]
+    fn a_netting_fill_is_one_trade_of_the_pair_volume() {
+        let tx = |n: u8| vec![n; 32];
+        let v = tx_volumes([
+            // a netting fill: the ask and the bid each record 2 000 A for 4 000 B
+            (tx(1), 10, 1, 2_000, Some(4_000)),
+            (tx(1), 10, 2, 2_000, Some(4_000)),
+            // a route fill of one ask
+            (tx(2), 20, 1, 1_000, Some(2_000)),
+            // an ask of 10 000 nets 6 000 against a bid and routes the other 4 000: 10 000 A, 20 000 B
+            (tx(3), 30, 1, 10_000, Some(20_000)),
+            (tx(3), 30, 2, 6_000, Some(12_000)),
+            // two asks routed in one transaction: both sold, 3 000 + 500
+            (tx(4), 40, 1, 3_000, Some(6_000)),
+            (tx(4), 40, 1, 500, None),
+            // a hostile negative amount counts as 0
+            (tx(5), 50, 2, -7, Some(-1)),
+        ]);
+        assert_eq!(v, vec![(10, 2_000, 4_000), (20, 1_000, 2_000), (30, 10_000, 20_000), (40, 3_500, 6_000), (50, 0, 0)]);
     }
 
     #[test]
