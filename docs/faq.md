@@ -138,8 +138,8 @@ Pinned to commit [`47792a0e`](https://github.com/RossKU/kob/tree/47792a0eba552e0
 - **There is no floor.** The last price stays on the chart as history and binds nobody; buyers pay the asks that are actually on the book.
 - **The 24 h figures show the mistake as it happened.** The 24 h change compares the last trade with the price 24 h ago: the last trade
   at or before the start of the 24 h window, or the window's first trade when the token had no earlier trade
-  ([`market.rs` L644-L654](https://github.com/RossKU/kob/blob/5729c692f73a8137b73c2dd0dad45cec0a17e78e/crates/kobd/src/indexer/market.rs#L644-L654), commit
-  [`5729c692`](https://github.com/RossKU/kob/commit/5729c692f73a8137b73c2dd0dad45cec0a17e78e)). While the 0.0002 fill is the last trade, the change reads about -90% against a
+  ([`market.rs` L644-L654](https://github.com/RossKU/kob/blob/5bb4c3c03a2c585f5320feb473822963ea6786e2/crates/kobd/src/indexer/market.rs#L644-L654), commit
+  [`5bb4c3c0`](https://github.com/RossKU/kob/commit/5bb4c3c03a2c585f5320feb473822963ea6786e2)). While the 0.0002 fill is the last trade, the change reads about -90% against a
   market that traded near 0.002 before the window; once later buys trade near 0.002 again, the change is back near 0%, the 24 h low reads 0.0002
   and the chart has a spike down. Only on a market with no trade before the window, where the 0.0002 fill is the window's first trade, does it become the reference:
   a later buy at 0.002 then shows +900% (10×, not +100%). The fill leaves the 24 h figures after 24 h and stays in the chart's history.
