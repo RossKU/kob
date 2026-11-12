@@ -1,4 +1,4 @@
-﻿// The notifications on a phone (below 640 px): one at a time, at the top just under the header, over the page; a "+N" chip counts the ones waiting and opens
+// The notifications on a phone (below 640 px): one at a time, at the top just under the header, over the page; a "+N" chip counts the ones waiting and opens
 // the bell; a flow's card (waiting for the wallet, or done) is the one shown while it is there; a success closes by itself after a few seconds. A desktop is
 // covered by header.spec.ts and manage.spec.ts (bottom right, stacked).
 import { test, expect } from '../fixtures';
