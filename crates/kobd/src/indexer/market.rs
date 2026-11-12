@@ -535,7 +535,8 @@ pub struct StatsView {
     pub token: String,
     pub price_basis: String,
     pub decimals: Option<u32>,
-    /// newest chain block time the indexer knows (ms): the end of the 24 h window
+    /// The end of the 24 h window (ms): the newer of the newest chain block time the indexer knows and its wall clock
+    /// ([`ReadCtx::window_end`]), so a quiet market's figures age out.
     pub ts: Option<i64>,
     pub last: Option<String>,
     pub last_ts: Option<i64>,
@@ -627,7 +628,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
 
 pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<u32>) -> DbResult<StatsView> {
     let basis = price_basis(conn, token, decimals)?;
-    let now = newest_event_ts(conn)?;
+    let now = ctx.window_end(newest_event_ts(conn)?);
     let (mut last, mut last_ts, mut last_side) = (None, None, None);
     if let Some(newest) = newest_fill_ts(conn, token)? {
         let (tail, _) = window_trades(conn, token, newest, newest + 1, basis)?;

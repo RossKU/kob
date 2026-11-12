@@ -42,6 +42,14 @@ impl ReadCtx {
     pub fn settled(&self, daa: i64) -> bool {
         self.confirmations(daa).is_some_and(|c| c >= self.settle_depth_daa as i64)
     }
+
+    /// The end of a rolling 24 h window (ms): the newer of the newest chain block time the store holds an event for
+    /// (`newest_event`) and the wall clock, so that the figures of a quiet market age out instead of standing still at its
+    /// last event. `None` when neither is known.
+    pub fn window_end(&self, newest_event: Option<i64>) -> Option<i64> {
+        let clock = self.now_unix.map(|s| (s.min(i64::MAX as u64 / 1_000) as i64) * 1_000);
+        newest_event.max(clock)
+    }
 }
 
 fn hx(b: Vec<u8>) -> String {

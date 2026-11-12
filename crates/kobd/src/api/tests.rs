@@ -994,6 +994,15 @@ async fn aggregated_amounts_never_overflow() {
     assert_eq!(v["asks"][0]["orders"], 2);
 }
 
+/// `t` moved by whole days to the first time a minute or more after the wall clock: a fixture's newest trade then ends its 24 h
+/// window itself (the window ends at the newer of the newest event and the wall clock), and every residue of `t` under a day
+/// (its candle buckets) is kept.
+fn ahead(t: i64) -> i64 {
+    const DAY: i64 = 86_400_000;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64 + 60_000;
+    t + ((now - t).max(0) + DAY - 1) / DAY * DAY
+}
+
 fn seed_fill(c: &Connection, cov: u8, tx: u8, ts: i64, side: i64, amount: i64, price: i64) {
     intern(c, &cid(TOKEN)).unwrap();
     c.execute(
@@ -1013,7 +1022,7 @@ async fn market_data_trades_candles_stats_depth() {
     seed_order(c, 3, 1, 250_000, 3, "open", Some(5 * W), Some(5 * W), true, MAKER);
     seed_order(c, 6, 2, 240_000, 1, "open", None, Some(3 * W), true, 0xcc);
     seed_order(c, 7, 2, 260_000, 2, "open", None, Some(7 * W), true, 0xcc);
-    let t0 = 1_700_000_000_000i64;
+    let t0 = ahead(1_700_000_000_000);
     // A: ask 2 (genesis DAA 200) and bid 7 (200) cross, 2 whole tokens: a tie goes to the asks (resting), a buy at the ask's 250 000
     seed_fill(c, 2, 0xa1, t0, 1, 2 * W, 250_000);
     seed_fill(c, 7, 0xa1, t0, 2, 2 * W, 260_000);
@@ -1072,7 +1081,7 @@ async fn market_data_trades_candles_stats_depth() {
     let (s, _) = get(&app, &format!("/v1/candles/{}?interval=1m&from=10&to=5", h(TOKEN))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 
-    // stats: 24 h window ending at the newest event
+    // stats: 24 h window ending at the newest event (later than the wall clock here)
     let (s, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(
@@ -1128,7 +1137,7 @@ async fn the_24h_change_is_measured_against_the_price_24_hours_ago() {
     let e = env(|_| {});
     let c = &e.w;
     seed_order(c, 6, 2, 240_000, 1, "open", None, Some(3 * W), true, 0xcc);
-    let t = 1_700_000_000_000i64;
+    let t = ahead(1_700_000_000_000);
     const HOUR: i64 = 3_600_000;
     // one-sided trades into bid 6 (each at its fill's price): 1.80 thirty hours before the newest, 2.00 twenty-five hours
     // before (the price 24 h ago), then 2.60 and 2.50 inside the window
@@ -1152,6 +1161,49 @@ async fn the_24h_change_is_measured_against_the_price_24_hours_ago() {
     let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
     assert_eq!((v["open_24h"].as_str(), v["low_24h"].as_str(), v["trades_24h"].as_i64()), (Some("210000"), Some("210000"), Some(3)));
     assert_eq!(v["change_24h_bps"], 1904);
+}
+
+/// The 24 h window ends at the newer of the newest event and the wall clock: a market (and a pair) that stopped trading ages
+/// out of its 24 h figures instead of showing its last day forever; the last price stays.
+#[tokio::test]
+async fn a_quiet_market_ages_out_of_the_24h_figures() {
+    let e = env(|_| {});
+    let c = &e.w;
+    seed_order(c, 6, 2, 240_000, 1, "open", None, Some(3 * W), true, 0xcc);
+    seed_pair(c);
+    // the store's newest events, long before the wall clock: 2.00 two hours before the last trade at 2.50, and a pair fill
+    let p = 1_700_000_000_000i64;
+    const HOUR: i64 = 3_600_000;
+    seed_fill(c, 6, 0xd1, p - 2 * HOUR, 2, W, 200_000);
+    seed_fill(c, 6, 0xd2, p, 2, W, 250_000);
+    seed_pair_fill(c, 0x31, 0xd3, p, 1, W, 2 * W, 2000, "route");
+    let app = router(e.state.clone());
+    let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
+    assert_eq!((v["last"].as_str(), v["last_ts"].as_i64()), (Some("250000"), Some(p)));
+    assert!(v["open_24h"].is_null() && v["high_24h"].is_null() && v["low_24h"].is_null() && v["change_24h_bps"].is_null(), "{v}");
+    assert_eq!((v["volume_24h"].as_str(), v["quote_volume_24h"].as_str(), v["trades_24h"].as_i64()), (Some("0"), Some("0"), Some(0)));
+    assert!(v["ts"].as_i64().unwrap() > p + 365 * 24 * HOUR, "the window ends at the wall clock: {v}");
+    let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills", h(BASE), h(QUOTE))).await;
+    assert_eq!(v["volume_24h"], serde_json::json!({"amount_a": "0", "amount_b": "0", "fills": 0}));
+    assert_eq!(v["items"].as_array().unwrap().len(), 1, "the fill itself stays listed");
+
+    // the same store read at chosen clocks (unix seconds)
+    let at = |clock: Option<i64>| {
+        let ctx = crate::indexer::reads::ReadCtx { node_daa: Some(1000), settle_depth_daa: 100, now_unix: clock.map(|ms| (ms / 1000) as u64) };
+        crate::indexer::market::stats(c, &ctx, &Hash32([TOKEN; 32]), Some(3)).unwrap()
+    };
+    // no clock: the window ends at the newest event and holds both trades, the first one its open (no earlier trade): +25 %
+    let s = at(None);
+    assert_eq!((s.ts, s.open_24h.as_deref(), s.trades_24h, s.change_24h_bps), (Some(p), Some("200000"), 2, Some(2500)));
+    // 23 h after the last trade: the window (p - 1 h .. p + 23 h) holds the 2.50 only; the price 24 h ago is the 2.00 before it
+    let s = at(Some(p + 23 * HOUR));
+    assert_eq!((s.ts, s.open_24h.as_deref(), s.high_24h.as_deref(), s.low_24h.as_deref()), (Some(p + 23 * HOUR), Some("200000"), Some("250000"), Some("250000")));
+    assert_eq!((s.trades_24h, s.volume_24h.as_str(), s.change_24h_bps), (1, "1000", Some(2500)));
+    // 30 h after: nothing left in the window
+    let s = at(Some(p + 30 * HOUR));
+    assert_eq!((s.trades_24h, s.open_24h, s.change_24h_bps, s.last.as_deref()), (0, None, None, Some("250000")));
+    // a clock behind the newest event never cuts it short
+    assert_eq!(at(Some(p - 5 * HOUR)).ts, Some(p));
 }
 
 /// The raw answer of `uri`: status, headers and the body bytes as they came (not decoded).
@@ -1676,22 +1728,21 @@ fn seed_pair_fill(c: &Connection, cov: u8, tx: u8, ts: i64, side: i64, amount_a:
     .unwrap();
 }
 
-const T0: i64 = 1_700_000_100_000;
-
 #[tokio::test]
 async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_only() {
     let e = env(|_| {});
     seed_pair(&e.w);
+    let t0 = ahead(1_700_000_100_000);
     // bucket 1 (5 m): base trades at 2.60 and 2.80 KAS, quote at 1.30; bucket 2: base at 2.70 only (quote carries 1.30 forward)
-    seed_kas_fill(&e.w, 0x41, BASE, 0x61, T0, 2, W, Some(260_000_000));
-    seed_kas_fill(&e.w, 0x41, BASE, 0x62, T0 + 1_000, 2, W, Some(280_000_000));
-    seed_kas_fill(&e.w, 0x42, QUOTE, 0x63, T0 + 2_000, 1, W, Some(130_000_000));
-    seed_kas_fill(&e.w, 0x41, BASE, 0x64, T0 + 300_000, 2, W, Some(270_000_000));
+    seed_kas_fill(&e.w, 0x41, BASE, 0x61, t0, 2, W, Some(260_000_000));
+    seed_kas_fill(&e.w, 0x41, BASE, 0x62, t0 + 1_000, 2, W, Some(280_000_000));
+    seed_kas_fill(&e.w, 0x42, QUOTE, 0x63, t0 + 2_000, 1, W, Some(130_000_000));
+    seed_kas_fill(&e.w, 0x41, BASE, 0x64, t0 + 300_000, 2, W, Some(270_000_000));
     // a pair fill (a netting fill of the pair orders): its event has no price and is never a KAS trade
-    seed_kas_fill(&e.w, 0x31, BASE, 0x65, T0 + 3_000, 1, 2 * W, None);
-    seed_pair_fill(&e.w, 0x31, 0x65, T0 + 3_000, 1, 2 * W, 4 * W, 2000, "netting");
-    seed_pair_fill(&e.w, 0x32, 0x65, T0 + 3_000, 2, 2 * W, 4 * W, 2000, "netting");
-    seed_pair_fill(&e.w, 0x31, 0x66, T0 + 301_000, 1, W, 2 * W, 2000, "route");
+    seed_kas_fill(&e.w, 0x31, BASE, 0x65, t0 + 3_000, 1, 2 * W, None);
+    seed_pair_fill(&e.w, 0x31, 0x65, t0 + 3_000, 1, 2 * W, 4 * W, 2000, "netting");
+    seed_pair_fill(&e.w, 0x32, 0x65, t0 + 3_000, 2, 2 * W, 4 * W, 2000, "netting");
+    seed_pair_fill(&e.w, 0x31, 0x66, t0 + 301_000, 1, W, 2 * W, 2000, "route");
     let app = router(e.state.clone());
 
     // the KAS series of base: two trades in bucket 1, one in bucket 2 (the pair fill is not one)

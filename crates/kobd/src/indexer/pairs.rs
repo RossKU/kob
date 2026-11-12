@@ -696,7 +696,8 @@ pub struct PairFillView {
     pub settled: bool,
 }
 
-/// 24 h pair volume (window ending at the newest chain block time the indexer knows).
+/// 24 h pair volume (the window ending at the newer of the newest chain block time the indexer knows and its wall clock,
+/// [`ReadCtx::window_end`]).
 #[derive(Debug, Clone, Serialize)]
 pub struct PairVolume {
     pub amount_a: String,
@@ -758,8 +759,8 @@ pub fn pair_fills(
     let more = items.len() > limit;
     items.truncate(limit);
     let next_cursor = if more { items.last().map(|f| f.id.to_string()) } else { None };
-    let now: Option<i64> = conn.query_row("SELECT MAX(ts) FROM order_events", [], |r| r.get(0))?;
-    let since = now.unwrap_or(0) - 86_400_000;
+    let newest: Option<i64> = conn.query_row("SELECT MAX(ts) FROM order_events", [], |r| r.get(0))?;
+    let since = ctx.window_end(newest).unwrap_or(0) - 86_400_000;
     let mut st =
         conn.prepare_cached("SELECT amount_a, amount_b FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND ts >= ?3")?;
     let (mut va, mut vb, mut n) = (0i128, 0i128, 0u64);

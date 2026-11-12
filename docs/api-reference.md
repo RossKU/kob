@@ -507,8 +507,8 @@ are the bounds the two series allow, not observed trades. `pair_volume_*` and `p
 ```
 
 `side` is `ask` (the order sold A) or `bid`. `counterparty` is `route`, `netting` or `inventory`. `price_source` is always `none`:
-a pair fill is volume only and never sets a price. `volume_24h` covers the 24 hours ending at the newest chain block time the
-indexer has recorded. `amount_b`, `price`, `price_num`, `price_den`, `tip_kas` may be null.
+a pair fill is volume only and never sets a price. `volume_24h` covers the 24 hours ending at the newer of the newest chain block
+time the indexer has recorded and its wall clock (as `/v1/stats/{token}`). `amount_b`, `price`, `price_num`, `price_den`, `tip_kas` may be null.
 
 ### 3.8 `GET /v1/orders`
 
@@ -799,8 +799,9 @@ the window's fills; the web app loads a chart once and then asks only for the ba
 
 ### 3.17 `GET /v1/stats/{token}`
 
-24 hour statistics and the top of the book. No parameters. Heavy; cached. The 24 h window ends at the newest chain block time the
-indexer recorded (not the wall clock), so a stalled follower shows stale numbers rather than an empty day.
+24 hour statistics and the top of the book. No parameters. Heavy; cached. The 24 h window ends at `ts`: the newer of the newest chain
+block time the indexer recorded and its wall clock, so a market that stopped trading ages out of its 24 h figures (the last price
+stays) instead of showing its last day forever. A follower that stalls ages out the same way; `/v1/health` says that it stalled.
 
 ```json
 { "token": "<hex32>", "price_basis": "1000", "decimals": 3, "ts": 1790000000000,

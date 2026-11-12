@@ -1614,8 +1614,8 @@ timestamps are the chain block's unix milliseconds.
   start resumes, and until a token's rows exist its charts are read from the fills. An earlier build opens the upgraded database and ignores the
   three tables (it does not maintain them): the next start of this build sees that the newest fill event is not the one the aggregates
   were last maintained at (`meta.candles_event`) and rebuilds all of them, so a rollback and a second upgrade never serve a stale chart.
-* **Stats**: the 24 h window ends at the newest chain block time the indexer recorded (not the wall clock), so a stalled follower
-  shows stale numbers instead of an empty day; `change_24h_bps` = (last - open) / open, `open_24h` the price 24 h ago (the last trade at or before the window's start; the window's first trade only for a token with no earlier trade). `best_bid` / `best_ask` /
+* **Stats**: the 24 h window ends at `ts`, the newer of the newest chain block time the indexer recorded and its wall clock, so a
+  quiet market's figures age out (the last price stays; a stalled follower ages out too, and `/v1/health` says it stalled); `change_24h_bps` = (last - open) / open, `open_24h` the price 24 h ago (the last trade at or before the window's start; the window's first trade only for a token with no earlier trade). `best_bid` / `best_ask` /
   `spread_bps` come from the listed book, and so does `depth_2pct_quote` (sompi worth of asks within +2 % of the mid and bids within -2 %, one scan of the live orders with the touch; `depth_2pct_bid_sompi` / `depth_2pct_ask_sompi` are its two sides, `"0"` for a missing side); any value that does not exist yet is `null`.
 * **Depth**: the listed book's aggregated levels converted to the basis, equal prices merged, best first, with `cum_amount` and
   `cum_quote`; `estimated` marks bid levels whose amounts are buying-power upper bounds.
@@ -1692,7 +1692,7 @@ window is the `limit` intervals ending with the bucket of the newest KAS trade o
 
 `GET /v1/pairs/{base}/{quote}/fills?limit=&before=` (`limit` default 50, at most `max_page_size`; `before` a fill id): the pair
 fills of the pair, newest first, `next_cursor` for the next page, and `volume_24h` (`amount_a`, `amount_b`, `fills` over the
-24 h ending at the newest chain block time the indexer knows):
+24 h ending at the newer of the newest chain block time the indexer knows and its wall clock):
 
 ```json
 { "id": 7, "txid": "<hex32>", "ts": 1790000000000, "daa": 123, "order": "<hex32>", "contract": "KobPair", "side": "ask",
