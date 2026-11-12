@@ -581,6 +581,12 @@ async fn a_batch_on_a_big_store_takes_a_bounded_time() {
              DELETE FROM meta WHERE k = 'archive_seq';"
         ))
         .unwrap();
+    // What is bounded is the batch's work and its writes, not how fast the disk flushes them: a batch here deletes about 3,000 rows
+    // scattered over the tables and their indexes, so its commit writes about 3,000 pages (12 MB of WAL, then the checkpoint writes them
+    // to the file). With `synchronous = FULL` that commit took 77 ms of a 90 ms batch on a desktop NVMe, against 13 ms of work, and the
+    // median batch took 1.3 to 2.1 s on the Windows CI runner's disk. Without the flushes a batch takes 36 ms here (the work and the
+    // writes into the OS cache).
+    h.ingest.lock().unwrap().conn().pragma_update(None, "synchronous", "OFF").unwrap();
     let (mut times, mut batches, mut rows) = (vec![], 0, 0);
     loop {
         let t = std::time::Instant::now();
@@ -597,8 +603,8 @@ async fn a_batch_on_a_big_store_takes_a_bounded_time() {
     times.sort();
     let (median, worst) = (times[times.len() / 2], times[times.len() - 1]);
     println!("{batches} batches, {rows} rows; median {median:?}, longest {worst:?}");
-    // a batch is steps of a stretch of blocks and a few hundred rows that stop after 12 ms of work (a commit on a slow disk of a CI runner
-    // can take a second once in a while: the median is what is bounded closely)
+    // a batch is steps of a stretch of blocks and a few hundred rows that stop after 12 ms of work (a write can still stall on a CI
+    // runner once in a while: the median is what is bounded closely)
     assert!(median < std::time::Duration::from_millis(300), "the median batch took {median:?}");
     assert!(worst < std::time::Duration::from_secs(10), "a batch took {worst:?}");
     let left: Vec<i64> = ["order_utxos", "token_utxos", "token_holdings"].iter().map(|t| count(&h, t)).collect();
