@@ -234,7 +234,10 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .sum-grp > .sum-stat { flex: 1 1 0; background: var(--surface); padding: 10px 14px; }
 /* the lines that come with the figures wrap to two lines: they hold both while the figures load (the column is taller than the chart card, so a line that grew would move what is below) */
 .sum-tiles .sum-s { min-height: 3em; }
+/* the three-tile row is about 110 px a tile: on a wider-fonted machine a line can take three lines, so it holds three (a row of five, from 600 px, holds two) */
+.sum-tiles .sum-grp-act .sum-s { min-height: 4.5em; }
 @container (min-width: 600px) {
+  .sum-tiles .sum-grp-act .sum-s { min-height: 3em; }
   .sum-strip-7, .sum-tiles { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
   .sum-strip-7 > .sum-grp-pay, .sum-tiles > .sum-grp-pay { grid-column: 1 / -1; }
 }
