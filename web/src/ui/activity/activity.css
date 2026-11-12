@@ -190,7 +190,6 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .sum-hint { font-size: 0.8rem; color: var(--muted); }
 .sum-band .segmented button { min-height: 28px; padding: 2px 12px; font-size: 0.8rem; }
 .sum-strip { display: grid; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.sum-strip-7 { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .sum-strip-now { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
 .sum-strip > .sum-stat { background: var(--surface); padding: 10px 14px; }
 .sum-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -220,34 +219,42 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .sum-bar[aria-pressed='true'] span, .sum-bar:hover span { opacity: 1; }
 .sum-bar:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
 .sum-x { display: flex; justify-content: space-between; padding-left: 48px; font-size: 0.7rem; color: var(--muted); }
-.sum-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.sum-tiles > .sum-stat { background: var(--surface); padding: 10px 14px; }
-/* the lines that come with the figures wrap to two lines: they hold both while the figures load (seven tiles make the column taller than the chart card, so a
-   line that grew would move what is below) */
-.sum-tiles .sum-s { min-height: 3em; }
-/* seven tiles: whatever the column count (2 or 3), the last one is alone on its row and takes it whole (no empty cell showing the border colour) */
-.sum-tiles > .sum-stat:last-child { grid-column: 1 / -1; }
 .sum-split { display: flex; gap: 2px; height: 6px; border-radius: 999px; overflow: hidden; margin: 4px 0 2px; background: var(--surface-2); }
 .sum-split i { flex-basis: 0; }
 .sum-bid { background: var(--buy); }
 .sum-ask { background: var(--sell); }
 .sum-pair { background: var(--info); }
 .sum-note { margin: 0; font-size: 0.75rem; color: var(--muted); }
+/* The seven tiles come in three groups (activity 3, participants 2, payments 2) that each stay on one row, so no tile is ever left alone on a row. The breakpoints follow the
+   strip's own width (a container query: browser zoom and the side column change it): wide = one row of all seven; medium = [activity + participants] / [payments]; narrow =
+   one group per row. Tiles stretch equally within their row; the 1px lines are the gaps over the border colour. */
+.sum-cq { container-type: inline-size; min-width: 0; }
+.sum-strip-7, .sum-tiles { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.sum-grp { display: flex; gap: 1px; min-width: 0; }
+.sum-grp > .sum-stat { flex: 1 1 0; background: var(--surface); padding: 10px 14px; }
+/* the lines that come with the figures wrap to two lines: they hold both while the figures load (the column is taller than the chart card, so a line that grew would move what is below) */
+.sum-tiles .sum-s { min-height: 3em; }
+@container (min-width: 600px) {
+  .sum-strip-7, .sum-tiles { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .sum-strip-7 > .sum-grp-pay, .sum-tiles > .sum-grp-pay { grid-column: 1 / -1; }
+}
+@container (min-width: 1000px) {
+  .sum-strip-7 { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr); }
+  .sum-strip-7 > .sum-grp-pay { grid-column: auto; }
+}
+/* the side column (340 px) is always the three-row form; the same container rules above apply when the group spans the width under the chart */
+@container (max-width: 559px) {
+  .sum-grp > .sum-stat { padding: 10px 8px; }
+  .sum-grp .sum-v { font-size: 1.1rem; }
+}
 .sum-loading .sum-v:empty, .sum-loading .sum-v-big { color: transparent; background: var(--skeleton); border-radius: 4px; }
 @media (max-width: 899px) {
   .sum-win { grid-template-columns: minmax(0, 1fr); }
   /* the chart readout sits under the figure (side by side while it is empty, it would drop to a row of its own when text arrives) and holds two lines */
   .sum-chart-head { flex-direction: column; align-items: stretch; }
   .sum-readout { min-height: 3em; }
-  .sum-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-/* seven all-time tiles: three to a row (the last one alone, taking its row) from where seven would clip their labels */
-@media (max-width: 1099px) {
-  .sum-strip-7 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .sum-strip-7 > .sum-stat:last-child { grid-column: 1 / -1; }
 }
 @media (max-width: 560px) {
-  .sum-tiles, .sum-strip-7 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sum-strip-now { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sum-strip-now > .sum-orders { grid-column: 1 / -1; }
   .sum-chart { height: 100px; }

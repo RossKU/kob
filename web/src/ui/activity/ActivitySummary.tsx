@@ -198,14 +198,22 @@ export function ActivitySummary() {
           {view ? (view.all.since === null ? t('activity.summary.sinceNone') : t('activity.summary.since', { date: dateFmt(view.all.since) })) : NBSP}
         </span>
       </div>
+      <div class="sum-cq">
       <div class="sum-strip sum-strip-7">
-        <Stat label={t('activity.summary.volume')} value={view ? money(view.all.quote, fiat).text : ''} tip={view ? money(view.all.quote, fiat).title : undefined} kas usd={!!fiat} testid="summary-all-volume" />
-        <Stat label={t('activity.summary.trades')} value={view ? view.all.trades.toLocaleString('en-US') : ''} testid="summary-all-trades" />
-        <Stat label={t('activity.summary.orders')} value={view ? num(view.allAct.orders) : ''} testid="summary-all-orders" />
-        <Stat label={t('activity.summary.traders')} value={view ? num(view.allAct.traders) : ''} testid="summary-all-traders" />
-        <Stat label={t('activity.summary.executors')} value={view ? num(view.allAct.executors) : ''} testid="summary-all-executors" />
-        <Stat label={t('activity.summary.paid')} value={view ? kas(view.allAct.executorIncome) : ''} tip={view ? kasTip(view.allAct.executorIncome) : undefined} help={view ? incomeHelp(view.allAct) : undefined} kas usd={!!fiat} testid="summary-all-paid" />
-        <Stat label={t('activity.summary.miners')} value={view ? kas(view.allAct.minerFees) : ''} tip={view ? kasTip(view.allAct.minerFees) : undefined} help={view ? minersHelp(view.allAct) : undefined} kas usd={!!fiat} testid="summary-all-miners" />
+        <div class="sum-grp sum-grp-act" role="group">
+          <Stat label={t('activity.summary.volume')} value={view ? money(view.all.quote, fiat).text : ''} tip={view ? money(view.all.quote, fiat).title : undefined} kas usd={!!fiat} testid="summary-all-volume" />
+          <Stat label={t('activity.summary.trades')} value={view ? view.all.trades.toLocaleString('en-US') : ''} testid="summary-all-trades" />
+          <Stat label={t('activity.summary.orders')} value={view ? num(view.allAct.orders) : ''} testid="summary-all-orders" />
+        </div>
+        <div class="sum-grp sum-grp-who" role="group">
+          <Stat label={t('activity.summary.traders')} value={view ? num(view.allAct.traders) : ''} testid="summary-all-traders" />
+          <Stat label={t('activity.summary.executors')} value={view ? num(view.allAct.executors) : ''} testid="summary-all-executors" />
+        </div>
+        <div class="sum-grp sum-grp-pay" role="group">
+          <Stat label={t('activity.summary.paid')} value={view ? kas(view.allAct.executorIncome) : ''} tip={view ? kasTip(view.allAct.executorIncome) : undefined} help={view ? incomeHelp(view.allAct) : undefined} kas usd={!!fiat} testid="summary-all-paid" />
+          <Stat label={t('activity.summary.miners')} value={view ? kas(view.allAct.minerFees) : ''} tip={view ? kasTip(view.allAct.minerFees) : undefined} help={view ? minersHelp(view.allAct) : undefined} kas usd={!!fiat} testid="summary-all-miners" />
+        </div>
+      </div>
       </div>
 
       <div class="sum-band">
@@ -274,14 +282,22 @@ export function ActivitySummary() {
             <span>{t('activity.summary.agoNow')}</span>
           </div>
         </div>
+        <div class="sum-cq sum-cq-tiles">
         <div class="sum-tiles">
-          <Stat label={t('activity.summary.trades')} value={w ? w.trades.toLocaleString('en-US') : ''} sub={w ? trades.text : null} testid="summary-window-trades" />
-          <Stat label={t('activity.summary.active')} value={w ? String(w.activeTokens) : ''} sub={t('activity.summary.activeSub')} testid="summary-window-active" />
-          <Stat label={t('activity.summary.executors')} value={winAct ? num(winAct.executors) : ''} testid="summary-window-executors" />
-          <Stat label={t('activity.summary.orders')} value={winAct ? num(winAct.orders) : ''} testid="summary-window-orders" />
-          <Stat label={t('activity.summary.traders')} value={winAct ? num(winAct.traders) : ''} testid="summary-window-traders" />
-          <Stat label={t('activity.summary.paid')} value={winAct ? kas(winAct.executorIncome) : ''} tip={winAct ? kasTip(winAct.executorIncome) : undefined} help={winAct ? incomeHelp(winAct) : undefined} kas usd={!!fiat} testid="summary-window-paid" />
-          <Stat label={t('activity.summary.miners')} value={winAct ? kas(winAct.minerFees) : ''} tip={winAct ? kasTip(winAct.minerFees) : undefined} help={winAct ? minersHelp(winAct) : undefined} kas usd={!!fiat} testid="summary-window-miners" />
+          <div class="sum-grp sum-grp-act" role="group">
+            <Stat label={t('activity.summary.trades')} value={w ? w.trades.toLocaleString('en-US') : ''} sub={w ? trades.text : null} testid="summary-window-trades" />
+            <Stat label={t('activity.summary.active')} value={w ? String(w.activeTokens) : ''} sub={t('activity.summary.activeSub')} testid="summary-window-active" />
+            <Stat label={t('activity.summary.orders')} value={winAct ? num(winAct.orders) : ''} testid="summary-window-orders" />
+          </div>
+          <div class="sum-grp sum-grp-who" role="group">
+            <Stat label={t('activity.summary.traders')} value={winAct ? num(winAct.traders) : ''} testid="summary-window-traders" />
+            <Stat label={t('activity.summary.executors')} value={winAct ? num(winAct.executors) : ''} testid="summary-window-executors" />
+          </div>
+          <div class="sum-grp sum-grp-pay" role="group">
+            <Stat label={t('activity.summary.paid')} value={winAct ? kas(winAct.executorIncome) : ''} tip={winAct ? kasTip(winAct.executorIncome) : undefined} help={winAct ? incomeHelp(winAct) : undefined} kas usd={!!fiat} testid="summary-window-paid" />
+            <Stat label={t('activity.summary.miners')} value={winAct ? kas(winAct.minerFees) : ''} tip={winAct ? kasTip(winAct.minerFees) : undefined} help={winAct ? minersHelp(winAct) : undefined} kas usd={!!fiat} testid="summary-window-miners" />
+          </div>
+        </div>
         </div>
       </div>
 
