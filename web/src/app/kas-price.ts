@@ -1,6 +1,6 @@
 // The KAS/USD price feed of the optional USD display: one store for the whole page and the loop that fills it.
 //
-// The loop runs only while USD is the display currency (app/currency-pref.ts), asks the indexer (`kasUsd`, data/kas-price.ts) once at the start and then every
+// The loop runs only while USD is the display currency (app/currency-pref.ts) or a market view wants the rate for its thin-book marker (`want()`), asks the indexer (`kasUsd`, data/kas-price.ts) once at the start and then every
 // KAS_USD_POLL_MS (a minute) while the page is shown, and once more when the page is shown again after a poll was due. An indexer that has no such route (null:
 // 404) is "unavailable" and is asked again only after KAS_USD_RETRY_UNSUPPORTED_MS; a failed read (a 503 before the indexer's first price, a network error) keeps the
 // last quote (its age decides whether it is still used, app/fiat.ts) and doubles the wait up to KAS_USD_MAX_BACKOFF_MS, which the first success resets. Nothing here is

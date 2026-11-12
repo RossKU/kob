@@ -2,7 +2,8 @@
 // header strip and its Activity panel, the Activity page's summary, volume chart and feed, the Portfolio's summary and balances), with the KAS figure in the tooltip and a one-line
 // note that says what the dollars are. The order book, the ticket's inputs, the price chart and everything signed stay in KAS, and no price the user types is converted.
 // The price is the indexer's (`GET /v1/price/kas-usd`: the mock serves $0.03 taken now unless a test steers it); a missing, unavailable or too old (over 10 minutes) price
-// falls back to KAS with a notice, and the app never asks for it while KAS is the display currency.
+// falls back to KAS with a notice. While KAS is the display currency the app asks for it only on the market views, for the thin-book marker of the 24 h change (its
+// threshold is in dollars; founder 2026-11-12), and never shows a dollar there.
 import { expect, test, type MockClient } from '../fixtures';
 import { connectWallet, fund, gotoNav, listExkcc, openMarket, showActivity } from '../helpers/env';
 import { seedOrders } from '../helpers/orders';
@@ -28,15 +29,21 @@ async function openList(page: import('@playwright/test').Page, mock: MockClient)
   return id;
 }
 
-test('KAS is the default: nothing is dollars, no note, and the app never asks for a price', async ({ appPage: page, mock }) => {
+test('KAS is the default: nothing is dollars, no note, and the price is asked only on the market views (the thin-book marker)', async ({ appPage: page, mock }) => {
+  // a page without a market view never asks
+  await page.goto('/#/settings');
+  await expect(page.getByTestId('settings-currency')).toBeVisible();
+  await page.waitForTimeout(1_500);
+  expect(await mock.kasPriceReads()).toBe(0);
   const id = await openList(page, mock);
   await expect(page.getByTestId(`token-last-${id}`)).not.toContainText('$');
   await expect(page.getByTestId(`token-volume-${id}`)).not.toContainText('$');
   await expect(page.getByTestId('sort-last')).toContainText('Price (KAS)');
   await expect(page.getByTestId('fiat-note')).toHaveCount(0);
   await expect(page.getByTestId('fiat-notice')).toHaveCount(0);
-  await page.waitForTimeout(1_500);
-  expect(await mock.kasPriceReads()).toBe(0);
+  // the market list reads it for the marker, and still shows no dollar
+  await expect.poll(() => mock.kasPriceReads()).toBeGreaterThan(0);
+  await expect(page.getByTestId(`token-last-${id}`)).not.toContainText('$');
 });
 
 test('Settings: the choice applies at once, is kept in this browser (kob.currency) across a reload, and choosing KAS removes it; the price is asked only while USD is chosen', async ({ appPage: page, mock }) => {
