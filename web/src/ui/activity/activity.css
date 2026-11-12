@@ -267,3 +267,6 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
   .act-mk-link { min-width: 32px; min-height: 32px; justify-content: center; }
   .sum-band .segmented button { min-height: 44px; padding: 4px 16px; }
 }
+
+/* the Activity page uses the window's width like the token and pair pages (market.css): no frame cap, so the log's Tx and Wallet can grow to their whole text */
+body:has(.act-page) .container { max-width: none; }
