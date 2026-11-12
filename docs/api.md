@@ -49,7 +49,7 @@ H = heavy (rate-limit cost 5). `{token}`, `{covenant_id}`, `{base}` and `{quote}
 | `GET /v1/health/ready` | Load-balancer probe: `200` or `503` | | 1 |
 | `GET /v1/tokens` | Tokens with markets: ids, decimals, warnings, open order counts | | 1 |
 | `GET /v1/tokens/{covenant_id}/declaration` | The token's KCC-23 launch proof (`404` if none) | | 1 |
-| `GET /v1/books/{token}?depth=&aggregate=` | KAS order book: price levels or individual orders | | H |
+| `GET /v1/books/{token}?depth=&aggregate=` | KAS order book (resting orders at their quote now): price levels or individual orders | | H |
 | `GET /v1/pairs?token=` | Token/token pairs with live pair orders (a JSON array) | | H |
 | `GET /v1/pairs/{base}/{quote}/book?depth=` | Pair book: direct, entry and implied route levels | | H |
 | `GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=` | Pair candles derived from the two KAS series | | H |

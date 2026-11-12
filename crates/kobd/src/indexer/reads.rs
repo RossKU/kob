@@ -597,9 +597,11 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LevelView {
-    /// Sompi per whole token (`scale` base units).
+    /// Sompi per whole token (`scale` base units): the orders' quote at the evaluation DAA score ([`resting_level`]: an
+    /// auction's current price, else the limit).
     pub price: String,
-    /// Base units at this level (the sum of the orders' remaining amounts; a bid's is its buying power).
+    /// Base units at this level (the sum of the orders' remaining amounts; a bid's is its buying power; a TWAP order's: one
+    /// slice, at most `maxFill`).
     pub amount: String,
     /// True when any order at this level has no exact remaining amount (bids: their buying power is an upper bound).
     pub amount_estimated: bool,
@@ -758,20 +760,51 @@ pub(crate) fn fillable_now(now: i64, now_unix: Option<u64>) -> String {
     w
 }
 
+/// SQL predicate (alias `o`): not an IOC / FOK order (`tif` 1 / 2: a market, IOC or FOK taker in flight, filled against the
+/// book or killed): the KAS books list resting orders only, as the pair books do (the `pairs` module doc).
+const RESTING_TIF: &str = "COALESCE(o.tif, 0) = 0";
+
+/// What a live order of the KAS book rests with at DAA `now`, as the pair books read the KAS orders (`pairs::kas_orders`):
+/// `(quote, amount)`, the quote its current price (an auction's: a decaying ask, a rising bid, an armed stop entry,
+/// [`auction_of`]; else the limit `price`) and the amount `remaining` (a TWAP order's one slice: at most `maxFill`). None for
+/// an order that is not resting liquidity now: an IOC / FOK taker, or a TWAP order whose next slice is not due (its UTXO,
+/// created at `udaa`, not yet `interval` DAA old: the covenant's CSV). An order whose tip state is unknown rests at its limit.
+pub(crate) fn resting_level(
+    contract: &str,
+    state: Option<Vec<u8>>,
+    udaa: i64,
+    price: i64,
+    remaining: Option<i64>,
+    now: i64,
+) -> Option<(i64, Option<i64>)> {
+    use kob_protocol::state::TIF_GTC;
+    let Some(s) = tip_state(contract, state) else { return Some((price, remaining)) };
+    let resting = |tif: i64, interval: i64| tif == TIF_GTC && (interval <= 0 || now >= udaa.saturating_add(interval));
+    let slice = |max_fill: i64| if max_fill > 0 { remaining.map(|r| r.min(max_fill)) } else { remaining };
+    let amount = match &s {
+        AnyState::KobAsk(a) | AnyState::KobAskKron(a) => resting(a.tif, a.interval).then(|| slice(a.max_fill))?,
+        AnyState::KobBid(b) | AnyState::KobBidKron(b) => resting(b.tif, b.interval).then(|| slice(b.max_fill))?,
+        _ => remaining,
+    };
+    let quote = auction_of(&s, udaa, Some(now.max(0) as u64)).and_then(|a| a.current_price.parse::<i64>().ok()).unwrap_or(price);
+    Some((quote, amount))
+}
+
 fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<BookOrderView>> {
     let dir = if side == 1 { "ASC" } else { "DESC" };
-    let live = fillable_now(book_daa(conn, ctx)?, ctx.now_unix);
+    let now = book_daa(conn, ctx)?;
+    let live = fillable_now(now, ctx.now_unix);
     let pinned = pinned_template();
     let sql = format!(
         "SELECT o.covenant_id, o.contract, o_mk.h, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
-                s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, kob_ustate(u.state, {GENESIS_O}), u.created_daa \
+                s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, kob_ustate(u.state, {GENESIS_O}), u.created_daa, s.last_daa \
          {LIVE_FROM} \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
-         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} \
-         ORDER BY {PER_BASE_UNIT} {dir}, o.genesis_block ASC, o.covenant_id ASC LIMIT ?3"
+         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} AND {RESTING_TIF} \
+         ORDER BY {PER_BASE_UNIT} {dir}, o.genesis_block ASC, o.covenant_id ASC"
     );
     let mut st = conn.prepare(&sql)?;
-    let rows = st.query_map(rusqlite::params![token.0.to_vec(), side, depth as i64], |r| {
+    let rows = st.query_map(rusqlite::params![token.0.to_vec(), side], |r| {
         let expiry: Option<i64> = r.get(7)?;
         let genesis_daa: i64 = r.get(8)?;
         let exact: i64 = r.get(9)?;
@@ -780,10 +813,17 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
         let contract: String = r.get(1)?;
         let price: i64 = r.get(3)?;
         let deadline: Option<i64> = r.get(13)?;
-        let state = tip_state(&contract, r.get(14)?);
+        let raw_state: Option<Vec<u8>> = r.get(14)?;
         let utxo_daa: Option<i64> = r.get(15)?;
+        let last_daa: i64 = r.get(16)?;
+        // a taker in flight or a TWAP order between its slices is not in the book (the aggregated levels leave it out the same way)
+        let Some((quote, _)) = resting_level(&contract, raw_state.clone(), utxo_daa.unwrap_or(last_daa), price, remaining, now) else {
+            return Ok(None);
+        };
+        let scale: Option<i64> = r.get(6)?;
+        let state = tip_state(&contract, raw_state);
         let auction = state.as_ref().zip(utxo_daa).and_then(|(s, d)| auction_of(s, d, ctx.node_daa));
-        Ok(BookOrderView {
+        let view = BookOrderView {
             covenant_id: hx(r.get(0)?),
             contract,
             maker: hxo(r.get(2)?),
@@ -792,7 +832,7 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
             auction,
             tip: sompi(r.get(4)?),
             min_fill: sompi(r.get(5)?),
-            scale: r.get(6)?,
+            scale,
             amount_left: sompi(remaining),
             amount_estimated: exact == 0 || remaining.is_none(),
             expired: expiry.is_some_and(|e| ctx.node_daa.is_some_and(|n| n as i64 >= e)),
@@ -804,9 +844,20 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
             genesis_daa,
             confirmations: ctx.confirmations(genesis_daa),
             settled: ctx.settled(genesis_daa),
-        })
+        };
+        Ok(Some((quote, scale.unwrap_or(1).max(1), view)))
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut out: Vec<(i64, i64, BookOrderView)> = rows.filter_map(Result::transpose).collect::<rusqlite::Result<Vec<_>>>()?;
+    // best first by the quote now per base unit (an auction moves away from its limit); the SQL order (age, covenant id) breaks ties
+    out.sort_by(|(qa, sa, _), (qb, sb, _)| {
+        let o = (*qa as i128 * *sb as i128).cmp(&(*qb as i128 * *sa as i128));
+        if side == 1 {
+            o
+        } else {
+            o.reverse()
+        }
+    });
+    Ok(out.into_iter().take(depth).map(|(_, _, v)| v).collect())
 }
 
 /// One aggregated level before it is rendered: `((price, scale), (amount, orders, estimated))`.
@@ -815,26 +866,33 @@ pub(crate) type RawBookLevel = ((i64, i64), (i128, i64, bool));
 /// Aggregated levels of one side: per (`price`, `scale`), the amounts summed in 128 bits (base units of hostile orders can sum
 /// past an `i64`, where SQLite's `SUM` fails), ordered EXACTLY by the price per base unit (`price / scale`, compared by
 /// cross-multiplication; asks ascending, bids descending; at one price per base unit by `price`, then `scale`, in the same
-/// direction). Every live listed order of the side a matcher may fill now ([`fillable_now`]) is read (the book of one token). Numbers only:
+/// direction). Every live listed order of the side a matcher may fill now ([`fillable_now`]) that rests there is read (the book of one
+/// token), at its quote now for its resting amount ([`resting_level`]: no IOC / FOK taker, a TWAP order once its slice is due and for
+/// that slice, an auction at its current price). Numbers only:
 /// [`book_side_levels`] renders the first `depth` of them, the 24 h statistics read the ones near the touch without a string per level (one
 /// scan of the token's live orders either way).
 pub(crate) fn book_side_sorted(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64) -> DbResult<Vec<RawBookLevel>> {
-    let live = fillable_now(book_daa(conn, ctx)?, ctx.now_unix);
+    let now = book_daa(conn, ctx)?;
+    let live = fillable_now(now, ctx.now_unix);
     let pinned = pinned_template();
     let sql = format!(
-        "SELECT o.price, COALESCE(o.scale, 1), s.remaining_amount, s.amount_exact \
+        "SELECT o.price, COALESCE(o.scale, 1), s.remaining_amount, s.amount_exact, o.contract, kob_ustate(u.state, {GENESIS_O}), \
+                COALESCE(u.created_daa, s.last_daa) \
          {LIVE_FROM} \
-         LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned}"
+         LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
+         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} AND {RESTING_TIF}"
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(rusqlite::params![token.0.to_vec(), side], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, i64>(3)?))
+        let (price, remaining): (i64, Option<i64>) = (r.get(0)?, r.get(2)?);
+        let level = resting_level(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, now);
+        Ok((level, r.get::<_, i64>(1)?, r.get::<_, i64>(3)?))
     })?;
     // (price, scale) -> (amount, orders, estimated)
     let mut levels: BTreeMap<(i64, i64), (i128, i64, bool)> = BTreeMap::new();
     for r in rows {
-        let (price, scale, remaining, exact) = r?;
+        let (level, scale, exact) = r?;
+        let Some((price, remaining)) = level else { continue };
         let l = levels.entry((price, scale.max(1))).or_insert((0, 0, false));
         l.0 += remaining.unwrap_or(0).max(0) as i128;
         l.1 += 1;

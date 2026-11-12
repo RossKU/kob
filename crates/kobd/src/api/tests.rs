@@ -376,13 +376,88 @@ async fn the_kas_book_lists_only_orders_a_matcher_may_fill_now() {
     // the orders themselves stay visible, the expired one flagged
     let (_, v) = get(&app, &format!("/v1/orders/{}", h(2))).await;
     assert_eq!((v["status"].as_str(), v["expired"].as_bool()), (Some("partial"), Some(true)));
-    // one block earlier every one of them was fillable (the IOC from its activation to its kill time)
+    // one block earlier every one of them was fillable, but the IOC is a taker in flight, never a resting order of the book
+    // (from its activation to its kill time too)
     e.state.health.update(|h| h.node_daa = Some(650));
     set("UPDATE orders SET active_from = 600 WHERE covenant_id = ?1", 3);
     set("UPDATE orders SET deadline = NULL WHERE covenant_id = ?1", 7);
     let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(TOKEN))).await;
-    assert_eq!(ids(&v["asks"]), vec![h(2), h(3), h(1)]);
+    assert_eq!(ids(&v["asks"]), vec![h(2), h(3)]);
     assert_eq!(ids(&v["bids"]), vec![h(7), h(6)]);
+}
+
+/// The KAS book, `/v1/depth` and the stats' touch, depth and order counts read the same RESTING book, as the pair books do:
+/// each order at its quote now (an auction's current price, not its limit), no IOC / FOK taker in flight, a TWAP order only
+/// once its next slice is due and for that one slice (`maxFill`).
+#[tokio::test]
+async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote() {
+    use kob_protocol::state::{AnyState, AskState, BidState};
+    let e = env(|_| {});
+    let c = &e.w;
+    let ask = |price: i64| AskState { token_cov_id: [TOKEN; 32], tip: 0, ..crate::testkit::ask(MAKER, price) };
+    let bid = |price: i64| BidState { token_cov_id: [TOKEN; 32], tip: 0, ..crate::testkit::bid(0xcc, price) };
+    // node DAA 1000; a UTXO of block n was created at DAA 100 n
+    // a plain ask at 3.00 KAS (10 whole tokens)
+    seed_live(c, 0x51, &AnyState::KobAsk(ask(300_000)), 1, 10 * W);
+    // a TWAP ask at 3.00, slices of 3 whole tokens every 500 DAA: its UTXO at DAA 200, the slice due from 700 (now: due)
+    seed_live(c, 0x52, &AnyState::KobAsk(AskState { interval: 500, max_fill: 3 * W, ..ask(300_000) }), 2, 10 * W);
+    // a TWAP ask at 2.95 between its slices (UTXO at 100, next slice from 2 100): not in the book
+    seed_live(c, 0x53, &AnyState::KobAsk(AskState { interval: 2_000, max_fill: 3 * W, ..ask(295_000) }), 1, 10 * W);
+    // a decaying ask from 3.20 toward 2.80, 0.03 per 100 DAA from DAA 0: at 1 000, 3.20 - 10 x 0.03 = 2.90
+    let decay = AskState { slope: 3_000, decay_step: 100, price_end: 280_000, ..ask(320_000) };
+    seed_live(c, 0x54, &AnyState::KobAsk(decay), 1, 10 * W);
+    // an IOC ask at 2.50 and a FOK ask at 2.60, both before their kill time (UTXOs at 500 and 600: killed from 1 100, 1 200)
+    seed_live(c, 0x55, &AnyState::KobAsk(AskState { tif: 1, ..ask(250_000) }), 5, 10 * W);
+    seed_live(c, 0x56, &AnyState::KobAsk(AskState { tif: 2, ..ask(260_000) }), 6, 10 * W);
+    // a plain bid at 2.00 (buying power 5 whole tokens), a rising bid from 1.80 toward 2.60, +0.03 per 100 DAA: 2.10 at 1 000
+    // (2 whole tokens), and an IOC bid at 2.80 (UTXO at 700)
+    seed_live(c, 0x61, &AnyState::KobBid(bid(200_000)), 1, 5 * W);
+    let rise = BidState { slope: 3_000, decay_step: 100, price_end: 260_000, ..bid(180_000) };
+    seed_live(c, 0x62, &AnyState::KobBid(rise), 1, 2 * W);
+    seed_live(c, 0x63, &AnyState::KobBid(BidState { tif: 1, ..bid(280_000) }), 7, 5 * W);
+    let app = router(e.state.clone());
+
+    // the levels: asks 2.90 (the auction, 10 000 base units), 3.00 (the plain ask's 10 000 and the TWAP slice's 3 000); bids
+    // 2.10 (the rising bid), 2.00
+    let (s, v) = get(&app, &format!("/v1/books/{}", h(TOKEN))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let lv = |side: &str| -> Vec<(String, String, i64)> {
+        v[side]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| (l["price"].as_str().unwrap().to_string(), l["amount"].as_str().unwrap().to_string(), l["orders"].as_i64().unwrap()))
+            .collect()
+    };
+    assert_eq!(lv("asks"), vec![("290000".into(), "10000".into(), 1), ("300000".into(), "13000".into(), 2)]);
+    assert_eq!(lv("bids"), vec![("210000".into(), "2000".into(), 1), ("200000".into(), "5000".into(), 1)]);
+    // per order: the same orders, best quote first (the auction's limit 3.20 stays its `price`)
+    let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(TOKEN))).await;
+    assert_eq!(ids(&v["asks"]), vec![h(0x54), h(0x51), h(0x52)]);
+    assert_eq!((v["asks"][0]["price"].as_str(), v["asks"][0]["quote"].as_str()), (Some("320000"), Some("290000")));
+    assert_eq!(ids(&v["bids"]), vec![h(0x62), h(0x61)]);
+
+    // depth: cumulative over the same levels (2.90 x 10 = 29 KAS, then 3.00 x 13 = 39 KAS)
+    let (_, v) = get(&app, &format!("/v1/depth/{}", h(TOKEN))).await;
+    let asks = v["asks"].as_array().unwrap();
+    assert_eq!(asks.len(), 2, "{v}");
+    assert_eq!((asks[0]["price"].as_str(), asks[0]["cum_quote"].as_str()), (Some("290000"), Some("2900000")));
+    assert_eq!((asks[1]["amount"].as_str(), asks[1]["cum_amount"].as_str(), asks[1]["cum_quote"].as_str()), (Some("13000"), Some("23000"), Some("6800000")));
+    let bids = v["bids"].as_array().unwrap();
+    assert_eq!((bids[0]["price"].as_str(), bids[1]["cum_amount"].as_str()), (Some("210000"), Some("7000")));
+
+    // stats: touch 2.10 / 2.90 (the IOC ask at 2.50 and bid at 2.80 would have crossed the book), mid 2.50, spread 0.80 / 2.50 = 3 200 bps;
+    // the 2 % band around 2.50 (2.45 ..= 2.55) is empty; 3 asks and 2 bids rest (of 6 and 3 live orders)
+    let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
+    assert_eq!((v["best_bid"].as_str(), v["best_ask"].as_str(), v["mid"].as_str()), (Some("210000"), Some("290000"), Some("250000")));
+    assert_eq!(v["spread_bps"], 3200);
+    assert_eq!((v["depth_2pct_quote"].as_str(), v["depth_2pct_bid_sompi"].as_str(), v["depth_2pct_ask_sompi"].as_str()), (Some("0"), Some("0"), Some("0")));
+
+    // 300 DAA later: the auction is at 3.20 - 13 x 0.03 = 2.81, the rising bid at 1.80 + 13 x 0.03 = 2.19, and the band around
+    // their mid 2.50 still empty; the IOC orders are past their kill time
+    e.state.health.update(|h| h.node_daa = Some(1300));
+    let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
+    assert_eq!((v["best_bid"].as_str(), v["best_ask"].as_str()), (Some("219000"), Some("281000")));
 }
 
 #[tokio::test]

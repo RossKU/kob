@@ -419,8 +419,11 @@ curl -s $API/v1/tokens/$TOKEN/declaration
 The KAS book of a token (pair orders are in no KAS book). Asks ascending, bids descending by **price per base unit**
 (`price / scale`). Only orders a conforming matcher may fill now are listed: live (`open`/`partial`), listed, with their exact
 custody for asks, not flagged `possibly_frozen`, and active at the node's DAA score (not before `activeFrom`, not past the soft
-expiry, not idle 90 days, an IOC/FOK not past its kill time, a day order not past its deadline). Others stay visible in
-`/v1/orders`. Cached.
+expiry, not idle 90 days, a day order not past its deadline). The book is **resting liquidity**, as the pair books are: an IOC /
+FOK order (`tif` 1 / 2: market, IOC and FOK takers) is a taker in flight, filled or killed, and never in it; a TWAP / DCA order
+(`interval` > 0) is in it only once its next slice is due (its UTXO `interval` DAA old), for that one slice (`maxFill`); an
+auction (a decaying ask, a rising bid, an armed stop entry) is at its quote at the node's DAA score, not its limit. Others stay
+visible in `/v1/orders`. `/v1/depth` and the touch, depth and order counts of `/v1/stats/{token}` read this same book. Cached.
 
 | Param | Type | Default | Meaning |
 |---|---|---|---|
@@ -437,12 +440,12 @@ curl -s "$API/v1/books/$TOKEN?depth=5"
   "bids": [ { "price": "240000", "amount": "50000", "amount_estimated": true, "orders": 1, "scale": 1000 } ] }
 ```
 
-Aggregated level: `price` (sompi per whole token), `amount` (base units summed in 128 bits; a bid's amount is its buying power, an
-upper bound), `amount_estimated` (true when any order at the level has no exact remaining amount), `orders` (number), `scale`
+Aggregated level: `price` (sompi per whole token: the orders' quote now), `amount` (base units summed in 128 bits; a bid's amount is
+its buying power, an upper bound; a TWAP order's, its one slice), `amount_estimated` (true when any order at the level has no exact remaining amount), `orders` (number), `scale`
 (number). Levels group by `(price, scale)`; the listed orders of a token with `decimals` all share its scale, but a token
 without `decimals` may have several, and then equal `price / scale` can appear as two rows. `node_daa` is a number or `null`.
 
-With `aggregate=false`, each of `asks` / `bids` is an array of orders: `covenant_id`, `contract`, `maker` (hex or null), `price`
+With `aggregate=false`, each of `asks` / `bids` is an array of the same orders, best `quote` first: `covenant_id`, `contract`, `maker` (hex or null), `price`
 (the limit; an auction's start), `quote` (the price at the node's DAA score), `auction` (object or null: `kind` `decay`, `rise`,
 `stop` or `entry` (pair kinds `pair_*`), `origin_daa`, `start_price`, `end_price`, `current_price`, `elapsed_daa`, `complete`),
 `tip`, `min_fill`, `scale`, `amount_left`, `amount_estimated`, `status`, `cur_value`, `expiry_daa`, `expired`, `deadline`
