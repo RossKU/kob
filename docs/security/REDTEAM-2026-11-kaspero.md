@@ -1,7 +1,7 @@
 # KOB protocol v3: red team report (Kaspero Labs, 2026-11-09)
 
 > Third-party report by Kaspero Labs, published with their permission. The text below is theirs, converted from the
-> original page ([REDTEAM-2026-11-kaspero.html](REDTEAM-2026-11-kaspero.html)); the maintainer's notes are in the last
+> original page ([REDTEAM-2026-11-kaspero.html](REDTEAM-2026-11-kaspero.html), rendered: [REDTEAM-2026-11-kaspero.png](REDTEAM-2026-11-kaspero.png)); the maintainer's notes are in the last
 > section. A pass on this review is not an audit or a guarantee, and it is not an independent audit of KOB (`SECURITY.md`,
 > [AUDIT-2026-10.md](AUDIT-2026-10.md)).
 
