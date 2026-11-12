@@ -8,17 +8,19 @@ import type { ComponentChildren } from 'preact';
  */
 export function unitParts(text: string, single = false): ComponentChildren {
   const at = text.indexOf(' per ');
-  if (text.startsWith('per ') && !single) return <span class="unit-per">{text}</span>;
+  if (text.startsWith('per ') && !single) return <span class="unit-per" key={text}>{text}</span>;
   if (at <= 0) return text;
   const rest = text.slice(at + 1);
   const close = rest.indexOf(')');
   const per = close < 0 ? rest : rest.slice(0, close);
   const tail = close < 0 ? '' : rest.slice(close);
   if (single && /\s.*\S/.test(per.slice(4))) return text;
+  // one element keyed by the whole text: when the text changes while the page is machine-translated (a market flip), the unit is re-created and translated afresh
+  // (app/translation-safe.ts: texts that change must not stay loose text nodes beside elements)
   return (
-    <>
+    <span key={text}>
       {text.slice(0, at)}{' '}<span class="unit-per">{per}</span>{tail}
-    </>
+    </span>
   );
 }
 

@@ -81,10 +81,23 @@ for (const width of [360, 390, 430]) {
       await panel.getByTestId(`orders-tab-${tab}`).click({ timeout: 5_000 });
       const scope = (await panel.getByTestId('market-orders-only').boundingBox())!;
       const rows = (await panel.getByTestId('portfolio-rows').boundingBox())!;
-      // one line: the two groups' boxes overlap vertically (CI's wider fonts may not fit them; then the check is skipped, the label and the link are still asserted)
-      if (process.env.KOB_WIDE_FONTS !== '1') {
+      // the one-line check holds with the fonts of a phone (Segoe UI, Roboto: the probe text is about 382 px at 16 px); a font as wide as the CI runner's (DejaVu Sans, about 442 px; KOB_WIDE_FONTS=1
+      // emulates it) wraps the rows under the scope, which is allowed: nothing is cut (the overflow check below)
+      const probe = await page.evaluate(() => {
+        const e = document.createElement('span');
+        e.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font-size:16px';
+        e.textContent = 'This market All markets Hamburgefonstiv 0123456789';
+        document.body.append(e);
+        const w = e.getBoundingClientRect().width;
+        e.remove();
+        return w;
+      });
+      if (probe < 410 && process.env.KOB_WIDE_FONTS !== '1') {
+        const bar = (await panel.locator('.pf-tabbar').boundingBox())!;
         expect(Math.abs(scope.y - rows.y), `scope and rows on one line at ${width} px (${tab})`).toBeLessThan(4);
         expect(rows.x, 'rows right of the scope').toBeGreaterThan(scope.x + scope.width - 1);
+        // room to spare for a font a little wider than the one measured (the founder's phone is Android)
+        expect(bar.x + bar.width - (rows.x + rows.width), `spare px at the right of the rows at ${width} px (${tab})`).toBeGreaterThanOrEqual(30);
       }
       await expect(panel.locator('.pf-rows .ml-size > span')).toBeHidden();
       await expect(panel.getByTestId('portfolio-rows')).toHaveAttribute('aria-label', 'Rows per page');
