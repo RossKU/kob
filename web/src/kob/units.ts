@@ -182,6 +182,12 @@ export function tokenPriceToStatePrice(perToken: bigint, decimals: number, scale
 
 /** Exact decimal string of a state price (sompi per `scale` base units) in KAS per whole token (up to `maxFraction` digits, default 8). */
 export function formatPricePerToken(price: bigint, decimals: number, scale: bigint, opt: FormatOptions = {}): string {
+  // a price DIFFERENCE (the realised spread of a losing round trip, the spread of a crossed book) can be negative: format the magnitude, then sign it
+  // (nothing signed for a difference that rounds to zero at these digits: never `-0.00`)
+  if (price < 0n) {
+    const text = formatPricePerToken(-price, decimals, scale, opt);
+    return /[1-9]/.test(text) ? `-${text}` : text;
+  }
   // KAS per token = price * 10^decimals / scale / 1e8; scale the numerator to `maxFraction` fractional digits of KAS and round half up
   const maxFraction = opt.maxFraction ?? 8;
   const digits = BigInt(Math.max(maxFraction, 0));

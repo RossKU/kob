@@ -119,6 +119,15 @@ describe('fixed-decimal column helpers', () => {
     expect(amountText({ kind: 'price', value: 25_100n, decimals: 8, scale: 100_000_000n, fraction: 6 })).toBe('0.000251');
     expect(amountText({ kind: 'kas', value: null, fraction: 4 })).toBe('—');
   });
+
+  it('renders a negative price (the realised spread of a losing round trip) at fixed decimals instead of throwing', () => {
+    expect(fixedPricePerToken(-2_500_000_000n, 8, 100_000_000n, 3)).toBe('-25.000');
+    expect(amountText({ kind: 'price', value: -25_100n, decimals: 8, scale: 100_000_000n, fraction: 6 })).toBe('-0.000251');
+    // the title / exact text (no fixed decimals) of the same value
+    expect(amountText({ kind: 'price', value: -25_100n, decimals: 8, scale: 100_000_000n })).toBe('-0.000251');
+    expect(pricePerTokenText(-1n, 12, 1_000_000_000n)).toBe('-0.00001');
+    expect(exactPriceText(-2_500_000_000n, 8, 100_000_000n)).toBe('-25');
+  });
 });
 
 describe('amount columns never cut a digit', () => {

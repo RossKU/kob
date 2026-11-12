@@ -125,6 +125,14 @@ describe('state price (per scale base units) <-> per whole token', () => {
     expect(formatPricePerToken(1n, 12, 1_000_000_000n, { maxFraction: 8 })).toBe('0.00001');
     expect(formatPricePerToken(1n, 3, 3n, { maxFraction: 8 })).toBe('0.00000333');
   });
+
+  it('formats a negative price difference (a losing round trip) without throwing, and never signs a zero', () => {
+    // exits' average below the entry's: -0.5 KAS per token
+    expect(formatPricePerToken(-50_000_000n, 8, 100_000_000n)).toBe('-0.5');
+    expect(formatPricePerToken(-1_234_567_890n, 8, 100_000_000n, { maxFraction: 2, trim: false, group: ',' })).toBe('-12.35');
+    expect(formatPricePerToken(-250_000_000_000n, 8, 100_000_000n, { maxFraction: 2, trim: false, group: ',' })).toBe('-2,500.00');
+    expect(formatPricePerToken(-1n, 8, 100_000_000n, { maxFraction: 2, trim: false })).toBe('0.00');
+  });
 });
 
 describe('ticks', () => {

@@ -34,7 +34,7 @@ export const tokenTextShort = (base: bigint, decimals: number, maxFraction = 4):
 export function pricePerTokenText(price: bigint, decimals: number, scale: bigint): string {
   if (scale <= 0n) return kasText(price);
   const t = formatPricePerToken(price, decimals, scale, { maxFraction: 8 });
-  if (price > 0n && /^0(\.0*)?$/.test(t)) return formatPricePerToken(price, decimals, scale, { maxFraction: 18 });
+  if (price !== 0n && /^-?0(\.0*)?$/.test(t)) return formatPricePerToken(price, decimals, scale, { maxFraction: 18 });
   return t;
 }
 
