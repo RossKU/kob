@@ -1615,7 +1615,7 @@ timestamps are the chain block's unix milliseconds.
   were last maintained at (`meta.candles_event`) and rebuilds all of them, so a rollback and a second upgrade never serve a stale chart.
 * **Stats**: the 24 h window ends at the newest chain block time the indexer recorded (not the wall clock), so a stalled follower
   shows stale numbers instead of an empty day; `change_24h_bps` = (last - first trade of the window) / first. `best_bid` / `best_ask` /
-  `spread_bps` come from the listed book, and so does `depth_2pct_quote` (sompi worth of asks within +2 % of the mid and bids within -2 %, one scan of the live orders with the touch); any value that does not exist yet is `null`.
+  `spread_bps` come from the listed book, and so does `depth_2pct_quote` (sompi worth of asks within +2 % of the mid and bids within -2 %, one scan of the live orders with the touch; `depth_2pct_bid_sompi` / `depth_2pct_ask_sompi` are its two sides, `"0"` for a missing side); any value that does not exist yet is `null`.
 * **Depth**: the listed book's aggregated levels converted to the basis, equal prices merged, best first, with `cum_amount` and
   `cum_quote`; `estimated` marks bid levels whose amounts are buying-power upper bounds.
 

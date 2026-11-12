@@ -560,6 +560,11 @@ pub struct StatsView {
     /// Sompi: what the resting asks up to 2 % above the mid and the resting bids down to 2 % below it are worth (a bid at its escrow's buying power: an upper bound),
     /// i.e. how much can trade without moving the price more than 2 %. With one side only the reference is that side's best price; `null` for an empty book.
     pub depth_2pct_quote: Option<String>,
+    /// Sompi: the part of the 2 % band on the bid side (the resting bids down to 2 % below the reference price; same reference and value as `depth_2pct_quote`).
+    /// `"0"` for a missing side or an empty book (a string like every sompi figure; always present).
+    pub depth_2pct_bid_sompi: String,
+    /// Sompi: the part of the 2 % band on the ask side (the resting asks up to 2 % above the reference price). `"0"` for a missing side or an empty book.
+    pub depth_2pct_ask_sompi: String,
 }
 
 const DAY_MS: i64 = 86_400_000;
@@ -572,6 +577,9 @@ struct Touch {
     ask: Option<i128>,
     /// Sompi the resting asks up to [`DEPTH_BAND_PERCENT`] % above the reference price and the resting bids down to that much below it are worth.
     depth: Option<i128>,
+    /// The two parts of `depth` (bids, asks); 0 for a missing side or no reference.
+    depth_bid: i128,
+    depth_ask: i128,
 }
 
 /// The band of `depth_2pct_quote`: percent above (asks) and below (bids) the reference price.
@@ -582,6 +590,17 @@ fn depth_reference(bid: Option<i128>, ask: Option<i128>) -> Option<i128> {
     bid.zip(ask).map(|(b, a)| a.saturating_add(b) / 2).or(bid).or(ask).filter(|r| *r > 0)
 }
 
+/// The depth band around the reference price from the levels of both sides, best first, as (price per basis, value in sompi): the value of the bids down to
+/// [`DEPTH_BAND_PERCENT`] % below and of the asks up to that much above the reference (both bounds inclusive), as (bid, ask). None for a book with no reference.
+fn depth_bands(bids: &[(i128, i128)], asks: &[(i128, i128)]) -> Option<(i128, i128)> {
+    let r = depth_reference(bids.first().map(|l| l.0), asks.first().map(|l| l.0))?;
+    let up = r.saturating_mul(100 + DEPTH_BAND_PERCENT);
+    let down = r.saturating_mul(100 - DEPTH_BAND_PERCENT);
+    let a = asks.iter().take_while(|l| l.0.saturating_mul(100) <= up).fold(0i128, |s, l| s.saturating_add(l.1));
+    let b = bids.iter().take_while(|l| l.0.saturating_mul(100) >= down).fold(0i128, |s, l| s.saturating_add(l.1));
+    Some((b, a))
+}
+
 fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbResult<Touch> {
     let asks = reads::book_side_sorted(conn, ctx, token, 1)?;
     let bids = reads::book_side_sorted(conn, ctx, token, 2)?;
@@ -589,15 +608,12 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     // levels are in book order (exact price per base unit, best first), so the first one is the best and the band is a prefix
     let ask = asks.first().map(price);
     let bid = bids.first().map(price);
-    let depth = depth_reference(bid, ask).map(|r| {
-        let up = r.saturating_mul(100 + DEPTH_BAND_PERCENT);
-        let down = r.saturating_mul(100 - DEPTH_BAND_PERCENT);
-        let value = |l: &reads::RawBookLevel| (l.1 .0).saturating_mul(l.0 .0 as i128) / (l.0 .1.max(1) as i128);
-        let a = asks.iter().take_while(|l| price(l).saturating_mul(100) <= up).fold(0i128, |s, l| s.saturating_add(value(l)));
-        let b = bids.iter().take_while(|l| price(l).saturating_mul(100) >= down).fold(0i128, |s, l| s.saturating_add(value(l)));
-        a.saturating_add(b)
-    });
-    Ok(Touch { bid, ask, depth })
+    let value = |l: &reads::RawBookLevel| (price(l), (l.1 .0).saturating_mul(l.0 .0 as i128) / (l.0 .1.max(1) as i128));
+    let (bid_levels, ask_levels): (Vec<_>, Vec<_>) = (bids.iter().map(value).collect(), asks.iter().map(value).collect());
+    let bands = depth_bands(&bid_levels, &ask_levels);
+    let (depth_bid, depth_ask) = bands.unwrap_or((0, 0));
+    let depth = bands.map(|(b, a)| a.saturating_add(b));
+    Ok(Touch { bid, ask, depth, depth_bid, depth_ask })
 }
 
 pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<u32>) -> DbResult<StatsView> {
@@ -623,7 +639,7 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         (Some(o), Some(l)) if o > 0 && !window.is_empty() => i64::try_from(l.saturating_sub(o).saturating_mul(10_000) / o).ok(),
         _ => None,
     };
-    let Touch { bid, ask, depth: depth_2pct } = touch(conn, ctx, token, basis)?;
+    let Touch { bid, ask, depth: depth_2pct, depth_bid, depth_ask } = touch(conn, ctx, token, basis)?;
     let mid = bid.zip(ask).map(|(b, a)| a.saturating_add(b) / 2);
     let spread = match (bid, ask, mid) {
         (Some(b), Some(a), Some(m)) if m > 0 => i64::try_from(a.saturating_sub(b).saturating_mul(10_000) / m).ok(),
@@ -673,6 +689,8 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         open_asks,
         open_bids,
         depth_2pct_quote: depth_2pct.map(|v| v.to_string()),
+        depth_2pct_bid_sompi: depth_bid.to_string(),
+        depth_2pct_ask_sompi: depth_ask.to_string(),
     })
 }
 
@@ -776,6 +794,28 @@ mod tests {
         assert_eq!(depth_reference(None, None), None);
         // a price that is not positive is no reference
         assert_eq!(depth_reference(Some(0), None), None);
+    }
+
+    #[test]
+    fn depth_bands_split_the_two_percent_band_by_side() {
+        // both sides: reference = mid of 1000 and 1020 = 1010, band 989.8 ..= 1030.2; the asks at 1020 and 1030 are in, 1031 is out; the bids at 1000 and 990 in, 989 out
+        let bids = [(1000, 5), (990, 7), (989, 100)];
+        let asks = [(1020, 3), (1030, 11), (1031, 100)];
+        assert_eq!(depth_bands(&bids, &asks), Some((12, 14)));
+        // one side only: the reference is that side's best price (bids: 1000, band down to 980; asks: 1020, band up to 1040.4), the other side is 0
+        assert_eq!(depth_bands(&bids, &[]), Some((112, 0)));
+        assert_eq!(depth_bands(&[], &asks), Some((0, 114)));
+        // an empty book has no reference
+        assert_eq!(depth_bands(&[], &[]), None);
+        // a side with no level in the band is 0 (a far bid under a near ask: reference 600, band 588 ..= 612)
+        assert_eq!(depth_bands(&[(200, 9)], &[(1000, 4)]), Some((0, 0)));
+    }
+
+    #[test]
+    fn depth_band_bounds_are_inclusive_at_exactly_two_percent() {
+        // one side only (reference 10 000): an ask at exactly +2 % (10 200) counts, one sompi more does not; a bid at exactly -2 % (9 800) counts, one less does not
+        assert_eq!(depth_bands(&[], &[(10_000, 1), (10_200, 2), (10_201, 4)]), Some((0, 3)));
+        assert_eq!(depth_bands(&[(10_000, 1), (9_800, 2), (9_799, 4)], &[]), Some((3, 0)));
     }
 
     /// A fill of `amount` base units at `price` sompi per whole token of 100 base units (scale 100); the basis is 100.

@@ -112,7 +112,8 @@ curl -s "$API/v1/stats/$T"
   "open_24h": "249951908643110", "high_24h": "258685009287168", "low_24h": "247095947035342", "change_24h_bps": 308,
   "volume_24h": "44442132", "quote_volume_24h": "112271556316902", "trades_24h": 6910, "window_truncated": false,
   "best_bid": "257536738010170", "best_ask": "257845044900630", "mid": "257690891455400", "spread_bps": 11,
-  "open_asks": 17, "open_bids": 38, "depth_2pct_quote": "943116142984" }
+  "open_asks": 17, "open_bids": 38, "depth_2pct_quote": "943116142984",
+  "depth_2pct_bid_sompi": "412116142984", "depth_2pct_ask_sompi": "531000000000" }
 ```
 
 **Candles**, hourly, the newest two:

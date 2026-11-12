@@ -87,7 +87,7 @@ token base-unit quantity is a decimal string**. Counts, scales, DAA scores, ids 
 
 | Spelled as a decimal string | Fields (wherever they appear) |
 |---|---|
-| sompi | `value`, `cur_value`, `payout`, `price`, `quote`, `tip`, `budget_rate`, `reserve`, `start_price`, `end_price`, `current_price`, `quote_volume`, `quote_volume_24h`, `cum_quote`, `tip_kas`, `prefund`, `delivery_carrier`, the prices of candles/stats/depth/trades (`o`, `h`, `l`, `c`, `last`, `open_24h`, `high_24h`, `low_24h`, `best_bid`, `best_ask`, `mid`), `depth_2pct_quote`, `fees_paid`, `kas_locked` |
+| sompi | `value`, `cur_value`, `payout`, `price`, `quote`, `tip`, `budget_rate`, `reserve`, `start_price`, `end_price`, `current_price`, `quote_volume`, `quote_volume_24h`, `cum_quote`, `tip_kas`, `prefund`, `delivery_carrier`, the prices of candles/stats/depth/trades (`o`, `h`, `l`, `c`, `last`, `open_24h`, `high_24h`, `low_24h`, `best_bid`, `best_ask`, `mid`), `depth_2pct_quote`, `depth_2pct_bid_sompi`, `depth_2pct_ask_sompi`, `fees_paid`, `kas_locked` |
 | token base units | `amount`, `amount_left`, `filled_amount`, `initial_amount`, `min_fill`, `volume`, `volume_24h`, `cum_amount`, `amount_a`, `amount_b`, `expected_amount`, `rpt_amount`, `rearm_amount`, `price_basis`, `quote_price_basis` (a count of base units) |
 | pair price fractions | `price_num`, `price_den`, and `value`/`num`/`den` of a pair candle rate |
 | order state | the 64-bit fields inside `state` / `placed_state` (the contract's own field names, e.g. `minFill`, `amountLeft`, `price`) |
@@ -805,7 +805,7 @@ indexer recorded (not the wall clock), so a stalled follower shows stale numbers
   "open_24h": "240000", "high_24h": "260000", "low_24h": "240000", "change_24h_bps": 416,
   "volume_24h": "4000", "quote_volume_24h": "990000", "trades_24h": 3, "window_truncated": false,
   "best_bid": "240000", "best_ask": "250000", "mid": "245000", "spread_bps": 408, "open_asks": 4, "open_bids": 3,
-  "depth_2pct_quote": "3500000" }
+  "depth_2pct_quote": "3500000", "depth_2pct_bid_sompi": "1500000", "depth_2pct_ask_sompi": "2000000" }
 ```
 
 `last`, `last_ts`, `last_side`, `open_24h`, `high_24h`, `low_24h`, `change_24h_bps`, `best_bid`, `best_ask`, `mid`,
@@ -815,6 +815,9 @@ strings; `trades_24h`, `open_asks`, `open_bids`, `change_24h_bps` and `spread_bp
 `depth_2pct_quote` (sompi, a string or null) is what the resting asks up to 2 % above the mid and the resting bids down to 2 %
 below it are worth (amount x limit price; a bid counts its escrow's buying power, an upper bound): how much can trade without moving the price more than 2 %. With
 one side only, the reference price is that side's best price; `null` for an empty book. It comes from the same scan of the token's live orders as `best_bid` / `best_ask`.
+`depth_2pct_bid_sompi` and `depth_2pct_ask_sompi` (sompi strings, additive) are the two parts of that figure: the bids down to 2 % below the reference price and the
+asks up to 2 % above it, same reference, same value and both bounds inclusive. A side with nothing in the band, a missing side and an empty book are `"0"` (the fields
+are always present; an older indexer sends neither). The web app marks a thin book from them (the smaller side worth less than 0.1 % of the token's value, $100 at least and $10,000 at most).
 `window_truncated` is true when the day held more than 20,000 fill rows and the figures cover the newest ones. `best_bid`,
 `best_ask`, `mid` and the open counts come from the listed book of section 3.6.
 
