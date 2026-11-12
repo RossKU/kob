@@ -1,4 +1,4 @@
-// The notifications on a phone (below 640 px): one at a time, at the top just under the header, over the page; a "+N" chip counts the ones waiting and opens
+﻿// The notifications on a phone (below 640 px): one at a time, at the top just under the header, over the page; a "+N" chip counts the ones waiting and opens
 // the bell; a flow's card (waiting for the wallet, or done) is the one shown while it is there; a success closes by itself after a few seconds. A desktop is
 // covered by header.spec.ts and manage.spec.ts (bottom right, stacked).
 import { test, expect } from '../fixtures';
@@ -16,7 +16,7 @@ test('a phone: the flow card is the notification shown, the success toast waits 
   await expect(card).toBeVisible();
   const header = (await page.locator('header.header').boundingBox())!;
   const box = (await card.boundingBox())!;
-  expect(box.y, 'under the header').toBeGreaterThanOrEqual(header.y + header.height);
+  expect(box.y, 'under the header (sub-pixel rounding allowed)').toBeGreaterThanOrEqual(header.y + header.height - 1);
   expect(box.y, 'just under the header').toBeLessThanOrEqual(header.y + header.height + 16);
   expect(box.x, 'left gutter').toBeGreaterThanOrEqual(11.5);
   expect(box.x, 'left gutter').toBeLessThanOrEqual(12.5);
@@ -37,7 +37,7 @@ test('a phone: the flow card is the notification shown, the success toast waits 
   await expect(toast).toBeVisible();
   await expect(chip).toHaveCount(0);
   // (it slides down from under the header first)
-  await expect.poll(async () => (await toast.boundingBox())!.y, { message: 'under the header' }).toBeGreaterThanOrEqual(header.y + header.height);
+  await expect.poll(async () => (await toast.boundingBox())!.y, { message: 'under the header' }).toBeGreaterThanOrEqual(header.y + header.height - 1);
   const tb = (await toast.boundingBox())!;
   expect(tb.height, 'compact: two lines at most').toBeLessThanOrEqual(80);
   const close = (await toast.getByRole('button', { name: 'Dismiss' }).boundingBox())!;
