@@ -20,6 +20,7 @@ pub mod kcc23;
 pub mod lean;
 pub mod lock;
 pub mod market;
+pub mod outputs;
 pub mod packed;
 pub mod packed_dicts;
 pub mod pairs;

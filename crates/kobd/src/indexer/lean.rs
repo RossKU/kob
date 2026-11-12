@@ -188,7 +188,7 @@ pub fn prune(
                 AND NOT EXISTS (SELECT 1 FROM orders c JOIN order_state cs ON cs.order_id = c.id \
                                 WHERE c.parent = p.covenant_id AND cs.status IN ('open','partial')) \
                 ORDER BY s.last_daa LIMIT ?3";
-    let aged: [(&str, &str); 4] = [
+    let aged: [(&str, &str); 5] = [
         (
             "order_utxos",
             "DELETE FROM order_utxos WHERE rowid IN (SELECT rowid FROM order_utxos INDEXED BY order_utxos_spent_daa WHERE spent_block IS NOT NULL AND spent_block < ?1 \
@@ -212,9 +212,15 @@ pub fn prune(
             "executor_txs",
             "DELETE FROM executor_txs WHERE id IN (SELECT id FROM executor_txs INDEXED BY executor_txs_daa WHERE daa < ?2 AND block_seq < ?1 LIMIT ?3)",
         ),
+        (
+            // a lean store follows the node, whose input values every record has: the recorded outputs (`super::outputs`, for records
+            // without them) are kept only while their block can be reverted
+            "recorded_outputs",
+            "DELETE FROM recorded_outputs WHERE (txid, idx) IN (SELECT txid, idx FROM recorded_outputs INDEXED BY recorded_outputs_created WHERE created_block < ?1 LIMIT ?3)",
+        ),
     ];
     // rows left to delete from each table by age in this batch
-    let mut left_rows = [cfg.rows_per_batch; 4];
+    let mut left_rows = [cfg.rows_per_batch; 5];
     let (mut pair_left, mut rejects_left) = (cfg.rows_per_batch, cfg.rows_per_batch);
     let mut orders_left = cfg.orders_per_batch;
     loop {

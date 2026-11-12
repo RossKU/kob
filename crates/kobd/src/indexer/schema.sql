@@ -639,3 +639,22 @@ CREATE TRIGGER IF NOT EXISTS actors_fill_update AFTER UPDATE OF kind, executor_i
         WHERE NEW.kind = 'fill' AND NEW.executor_id IS NOT NULL
         ON CONFLICT (kind, actor_id) DO UPDATE SET last_block = MAX(last_block, excluded.last_block);
 END;
+
+-- The plain outputs of the recorded transactions (`indexer::outputs`): what an input of a later recorded transaction held when its record
+-- has no input values (a frame written before 2026-11-12), so its network fee is still known when every input resolves. Stamped with the
+-- block that created and the one that spent them (a revert deletes and un-spends); a spent row goes once final, an unspent one after
+-- `outputs::RETENTION_DAA`.
+CREATE TABLE IF NOT EXISTS recorded_outputs (
+    txid          BLOB NOT NULL,
+    idx           INTEGER NOT NULL,
+    value         INTEGER NOT NULL,
+    created_block INTEGER NOT NULL,
+    created_daa   INTEGER NOT NULL,
+    spent_block   INTEGER,
+    spent_daa     INTEGER,
+    PRIMARY KEY (txid, idx)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS recorded_outputs_created ON recorded_outputs (created_block);
+CREATE INDEX IF NOT EXISTS recorded_outputs_spent ON recorded_outputs (spent_block) WHERE spent_block IS NOT NULL;
+CREATE INDEX IF NOT EXISTS recorded_outputs_spent_daa ON recorded_outputs (spent_daa) WHERE spent_daa IS NOT NULL;
+CREATE INDEX IF NOT EXISTS recorded_outputs_live_daa ON recorded_outputs (created_daa) WHERE spent_daa IS NULL;

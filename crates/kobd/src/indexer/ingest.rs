@@ -615,6 +615,8 @@ impl Ingest {
         set_cursor(&tx, &cursor)?;
         // the reorg window: chain blocks older than it are final and no longer kept
         tx.execute("DELETE FROM blocks WHERE daa < ?1", [cursor.daa.saturating_sub(self.cfg.reorg_window_daa) as i64])?;
+        // the recorded outputs no later input can need (spent and final, or unspent past their retention)
+        super::outputs::prune(&tx, cursor.daa, self.cfg.reorg_window_daa)?;
         // KCC-23 candidate preparations no genesis spent within the declaration window (a logged genesis carries the
         // preparations it binds, so a replay, which prunes at the logged cursors only, never depends on this table for it)
         super::kcc23::prune(&tx, cursor.daa.saturating_sub(self.cfg.declaration_window_daa))?;

@@ -961,8 +961,10 @@ one index range whatever the size of the history, and a reorg takes its blocks o
   inventory pays the maker KAS it gets back as tokens).
 * `miner_fees` (sompi, string) with `miner_fee_txs` and `miner_fee_unknown_txs`: the network fees of those transactions, what their inputs held
   (the node's own UTXO entries of the accepted transaction, recorded in the record log since 2026-11-12, format 5) minus their outputs. A
-  transaction indexed from an older record (or a replay of an older log) has no known fee and is counted in `miner_fee_unknown_txs`: a client
-  must not present the sum as complete while that count is above 0.
+  transaction indexed from an older record (or a replay of an older log) gets its input values from the outputs the store recorded (the change
+  of an earlier KOB transaction, an order's UTXO or custody, a token holding: `kobd` `indexer::outputs`) and is counted only when every input
+  resolves; otherwise (its funding came from outside KOB) it is counted in `miner_fee_unknown_txs`: a client must not present the sum as
+  complete while that count is above 0.
 * `executor_net` (sompi, string, may be negative) with `executor_net_txs`: `income - network fee` over the transactions where both are known.
 * `kas_locked` (sompi, string): the KAS in the live order UTXOs now, whatever `since` is.
 * `ts` (number or null): the newest event time; `since` is the minute used (`null` for all time).

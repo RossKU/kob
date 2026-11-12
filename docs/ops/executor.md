@@ -2292,7 +2292,11 @@ build only together with the store and the log it had before (7.6a, *Cut-over*).
 what the transaction's inputs held, the sum of the node's own UTXO entries of the accepted transaction (VSPC v2 `utxoEntry.amount`; nothing is
 asked of any other service), so its network fee is that minus its outputs (`record::TxRecord::in_value`, flagged by bit 28 of `pos`). A frame that
 holds one is written as format 5 (marker `0x00 0x05`); a record of an earlier frame has none, and the fee of its transaction is unknown
-(`GET /v1/stats` counts it in `miner_fee_unknown_txs`). An older build skips every format-5 frame likewise.
+from the record alone. The store then resolves what each input held from the outputs it recorded (`indexer::outputs`: the plain outputs of the
+recorded transactions, `recorded_outputs`, kept until spent and final or 7 days unspent, and the order, custody and holding rows): an Executor's
+change funds its next transaction, so most of its transactions resolve, live and in a replay alike; one whose funding came from outside KOB
+stays unknown (`GET /v1/stats` counts it in `miner_fee_unknown_txs`). Where the record has the node's values the node's are used (a disagreement
+is logged). An older build skips every format-5 frame likewise.
 
 **Schema.** The database is schema 12 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
 dictionary-packed genesis states and event details; schema 8: integer ids in the child tables; schema 9: integer ids in the orders too and shorter
@@ -2372,8 +2376,8 @@ keeper's arm or trail, a merge: every spend of a tracked order but the maker's o
 paid the miners (`executor_txs`), and keeps their totals in the activity buckets (`GET /v1/stats`: `executor_income`, `miner_fees`,
 `executor_net` with the counts of the transactions counted and not counted; api-reference 3.21). The income is exact from the records: the KAS of
 the KOB order inputs (order UTXOs, their custody carriers) minus the outputs the covenants make the orders own or pay (`indexer::income`). The
-network fee needs what the inputs held, which the record log keeps from this build on (format 5, above): a transaction indexed from an older record
-has an unknown fee, counted as such. Schema 11 also keeps the all-time totals of a lean store whole: the pruning no longer takes back what it deletes
+network fee needs what the inputs held, which the record log keeps from this build on (format 5, above); for an older record the store resolves it
+from the outputs it recorded (above), and a transaction not every input of which resolves has an unknown fee, counted as such. Schema 11 also keeps the all-time totals of a lean store whole: the pruning no longer takes back what it deletes
 (`counters.orders_all`, `actors.kept`, the `meta` key `pruning` held by the pruning's transaction).
 
 A store of schema 10 takes the short way, like *Schema 9 to 10*: `VACUUM INTO`, its triggers dropped and created anew, the new columns of
@@ -2383,7 +2387,7 @@ after `kobd db migrate` the history before the migration shows as "N transaction
 are counted. **Operator step, by store:**
 
 * **A full indexer with its record log** (the public read API, index-a): rebuild instead of migrating, so the income of the whole history is
-  counted (the network fees of the past stay unknown: the log of the past has no input values):
+  counted, and their network fees too wherever every input resolves from the recorded outputs (above):
   ```
   systemctl stop kob-index
   mv /var/lib/kob-index/index.sqlite3 /var/lib/kob-index/index.sqlite3.schema10

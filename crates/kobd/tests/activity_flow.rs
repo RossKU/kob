@@ -8,7 +8,7 @@ mod common;
 use common::*;
 use kob_protocol::build::*;
 use kob_protocol::state::*;
-use kob_protocol::tx::FeeOptions;
+use kob_protocol::tx::{FeeOptions, KeyUtxo};
 use kobd::indexer::activity::{self, ActivityView};
 use kobd::indexer::db::open_memory;
 use kobd::indexer::recordlog::{self, RecordLog};
@@ -255,4 +255,74 @@ async fn the_lean_pruning_does_not_take_back_the_totals() {
     let after = live(&c);
     assert_eq!(ActivityView { ts: before.ts, ..after.clone() }, before, "every total as before");
     assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM meta WHERE k = 'pruning'", []), 0, "the key never outlives the pruning");
+}
+
+/// The network fee of a record without the node's input values (a frame written before 2026-11-12) is still known when every input
+/// spends an output the store recorded: here a second crossing funded by the first one's change (its other inputs are the orders and
+/// the custody). The first crossing's funding came from outside KOB: its fee stays unknown. Live, the node's values are used and the
+/// recorded ones must agree with them (the processor asserts it); a reorg of the second block un-spends the change, and its replay spends
+/// it again.
+#[tokio::test]
+async fn a_fee_is_resolved_from_the_recorded_outputs_when_the_record_has_no_input_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let (log, _) = RecordLog::open(dir.path(), 1 << 20, 0).unwrap();
+    let c = Ctx::with(Harness::new(open_memory("testnet-10").unwrap(), Some(log)));
+    let (a, b) = (ask(MAKER_A, P250), bid(MAKER_B, P260));
+    let create_a = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
+    let create_b = c.w.create_tx(AnyState::KobBid(b.clone()), b.escrow(10 * WHOLE, 3).unwrap() as u64, MAKER_B, 0);
+    c.push(&[&create_a, &create_b]).await;
+    let (cov_a, cov_b) = (c.w.cov(&create_a, 0), c.w.cov(&create_b, 0));
+    let custody = c.w.token_at(&create_a, 1, Kcc20State::custody(10 * WHOLE, cov_a.0, EXT));
+    let legs = vec![
+        Leg::Ask { order: c.w.order(&create_a, 0, a.clone()), custody, amount: 4 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&create_b, 0, b.clone()), amount: 4 * WHOLE, t: None },
+    ];
+    let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), legs)));
+    c.push(&[&fill]).await;
+    // the second crossing spends the first one's change
+    let change = fill.fee.change_output.expect("a change output") as usize;
+    let a6 = AskState { amount_left: 6 * WHOLE, ..a.clone() };
+    let custody = c.w.token_at(&fill, find_custody(&fill, &cov_a, 6 * WHOLE).unwrap(), Kcc20State::custody(6 * WHOLE, cov_a.0, EXT));
+    let legs = vec![
+        Leg::Ask { order: c.w.order(&fill, find_cov(&fill, &cov_a).unwrap(), a6), custody, amount: 2 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&fill, find_cov(&fill, &cov_b).unwrap(), b.clone()), amount: 2 * WHOLE, t: None },
+    ];
+    let mut second = batch(&c.w, c.daa(), legs);
+    second.funding = vec![KeyUtxo { utxo: c.w.utxo(&fill, change), pubkey: pk(TAKER) }];
+    let fill2 = c.w.sign(&Action::Batch(second));
+    c.push(&[&fill2]).await;
+    let (fee1, fee2) = (fill.fee.fee as i64, fill2.fee.fee as i64);
+    let income = 6 * (P260 + TIP) - 6 * (P250 - TIP);
+    let v = live(&c);
+    assert_eq!(earned(&v), (income.to_string(), 2, 0, (fee1 + fee2).to_string(), 2, 0, (12 * TIP).to_string()));
+    // the second block reorged out and in again: the change it spent is unspent, then spent again
+    c.hs.node.reorg(1, vec![vec![]]);
+    c.hs.sync().await;
+    let spent = |c: &Ctx| c.hs.query::<i64>("SELECT COUNT(*) FROM recorded_outputs WHERE spent_block IS NOT NULL", []);
+    assert_eq!(spent(&c), 0);
+    c.w.include(&c.hs.node, &[&fill2]);
+    c.hs.sync().await;
+    assert_eq!(spent(&c), 1, "the first crossing's change");
+    assert_eq!(earned(&live(&c)), earned(&v));
+    drop(c);
+
+    let logged = recordlog::read_all(dir.path()).unwrap();
+    let mut old = logged.records.clone();
+    for (_, b) in old.iter_mut() {
+        for t in b.blocks.iter_mut().flat_map(|b| b.txs.iter_mut()) {
+            t.in_value = None;
+        }
+    }
+    let mut ing = kobd::indexer::ingest::Ingest::new(open_memory("testnet-10").unwrap(), processor(), None).with_config(wide_window());
+    ing.init_cursor(&kobd::indexer::ingest::Cursor { hash: logged.records[0].1.start, daa: 0 }).unwrap();
+    ing.replay(old).unwrap();
+    // the second fee is resolved (and is the node's), the first is not
+    let r = totals(ing.conn());
+    assert_eq!(earned(&r), (income.to_string(), 2, 0, fee2.to_string(), 1, 1, (12 * TIP).to_string()));
+    let fees: Vec<Option<i64>> = {
+        let mut st = ing.conn().prepare("SELECT miner_fee FROM executor_txs ORDER BY id").unwrap();
+        let v = st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        v
+    };
+    assert_eq!(fees, [None, Some(fee2)]);
 }

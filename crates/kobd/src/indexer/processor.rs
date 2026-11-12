@@ -505,7 +505,14 @@ impl Processor {
         let mut spent: Vec<Spent> = Vec::new();
         let mut kob_in: i128 = 0;
         let mut orphan = false;
+        // what every input held, from the outputs this store knows (the network fee of a record without the node's input values)
+        let mut resolved_in: Option<i128> = Some(0);
         for (i, inp) in rec.inputs.iter().enumerate() {
+            let known = match load_order_utxo(conn, &inp.txid, inp.index)? {
+                Some(u) => Some(u.value),
+                None => super::outputs::input_value(conn, &inp.txid, inp.index, daa)?,
+            };
+            resolved_in = resolved_in.zip(known).map(|(s, v)| s + i128::from(v));
             if let Some(u) = load_order_utxo(conn, &inp.txid, inp.index)? {
                 kob_in += i128::from(u.value);
                 match self.spend_order(conn, seq, rec, i, u)? {
@@ -529,6 +536,7 @@ impl Processor {
                 .execute(params![seq, &txid.0[..], &inp.txid.0[..], inp.index])?;
             }
         }
+        super::outputs::record(conn, rec, seq, daa)?;
         let spent_covs: HashSet<Hash32> = spent.iter().map(|s| s.cov).collect();
         // In-place amends the payload announces (AMEND records): each is verified against the continuation it names.
         let amends: Vec<Record> = match payload::decode(&rec.payload) {
@@ -681,7 +689,7 @@ impl Processor {
 
         // 8. an executor's transaction: what it left to its sender and what it paid the miners (`executor_txs`, `super::income`)
         if !spent.is_empty() {
-            self.executor_tx(conn, ctx, rec, &spent, kob_in, orphan, &continued, &created)?;
+            self.executor_tx(conn, ctx, rec, &spent, kob_in, orphan, &continued, &created, resolved_in)?;
         }
 
         // 7. KCC-23: a candidate preparation, or the verified launch proofs of a genesis (`super::kcc23`)
@@ -1853,6 +1861,7 @@ impl Processor {
         orphan: bool,
         continued: &HashSet<Hash32>,
         created: &HashSet<Hash32>,
+        resolved_in: Option<i128>,
     ) -> DbResult<()> {
         use super::income::{self, Leg, Spend};
         if spent.iter().all(|s| s.act == Act::Cancel) {
@@ -1902,7 +1911,16 @@ impl Processor {
             }
             income::income(kob_in, &rec.outputs, &kob_out)
         })();
-        let fee = income::miner_fee(rec.in_value, &rec.outputs);
+        // the node's input values when the record has them, else what the inputs held by the outputs this store recorded
+        // (`super::outputs`): known only when every input resolves
+        let resolved = resolved_in.and_then(|v| u64::try_from(v).ok());
+        if let (Some(node), Some(ours)) = (rec.in_value, resolved) {
+            if node != ours {
+                tracing::warn!(txid = %rec.txid.to_hex(), node, ours, "the inputs' values the node reported differ from the recorded outputs'");
+                debug_assert_eq!(node, ours, "input values of {}", rec.txid.to_hex());
+            }
+        }
+        let fee = income::miner_fee(rec.in_value.or(resolved), &rec.outputs);
         conn.prepare_cached("INSERT INTO executor_txs (block_seq, daa, ts, txid, income, miner_fee) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?
             .execute(params![ctx.seq, ctx.header.daa_score as i64, ctx.header.timestamp as i64, &rec.txid.0[..], income, fee])?;
         Ok(())
@@ -2317,6 +2335,7 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     changed += conn.execute("DELETE FROM order_events WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM pair_fills WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM executor_txs WHERE block_seq = ?1", [seq])?;
+    changed += super::outputs::revert(conn, seq)?;
     changed += conn.execute("DELETE FROM order_utxos WHERE created_block = ?1", [seq])?;
     changed += conn.execute(
         "UPDATE order_utxos SET spent_block = NULL, spent_txid = NULL, spent_entry = NULL, spent_amount = NULL WHERE spent_block = ?1",
