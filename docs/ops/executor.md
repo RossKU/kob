@@ -231,8 +231,10 @@ indexer. Default off; `kobd setup` and the Android app write it for the Executor
 
 * **Kept**: every open or partly filled order with all its rows (events, UTXOs, custody, strays, flags, amends; a partly
   filled order's fill events sum to its filled amount, so they stay), an if-done entry that a live exit names as its parent,
-  everything stamped with a chain block of the reorg window (a revert stays exact), token events and KCC-23 declarations
-  (tiny), the health counters. The matcher, the keepers and the maintenance jobs read nothing else: the book is the live set
+  the spent custody holdings of a live order (a pair order's next custody is checked against them; schema 12), everything stamped
+  with a chain block of the reorg window (a revert stays exact), token events and KCC-23 declarations (tiny), the health counters,
+  and the proof that a token has a program (`holding_programs`: schema 12, the pruning of the holdings that proved it no longer takes
+  it back, so the token list, the listing rules and the standard scale stay as they were). The matcher, the keepers and the maintenance jobs read nothing else: the book is the live set
   (`order_state` open / partial, `indexer::book`), the operator's unspent holdings, the possibly-frozen flags; trigger
   evidence is read from the transaction being planned, not from stored fills.
 * **Deleted**, in a batch at most every 30 s (while a batch left work, after a pause of twice its time, at least 0.1 s), in the
@@ -825,6 +827,28 @@ maintenance jobs and the live book of the read API read, the reorg window, and `
 (`lean_max_db_mb`, 500) deletes the oldest closed orders first, but only while the store is larger. The record log is off.
 The history is an archive indexer's job (`lean = false`).
 
+**Archive pruning** (`archive_pruning = true`, the default, on a store with `lean = false`; schema 12, `indexer::archive`): an indexer that
+keeps the history still deletes the rows that no read of the API and no later write needs, once they are final (spent in a chain block out
+of the reorg window, `MIN(blocks.seq)`, the same rule as the lean pruning), in the same small batches in the follower's loop (one write
+transaction of steps, 12 ms of work, at most every 30 s while idle and only while the store follows the node):
+
+* the **spent order UTXOs and spent token UTXOs of orders that are no longer live** (`order_utxos`, `token_utxos`): every read and every
+  write reads an order's UTXOs only while they are unspent (its tip, its custody, the outpoints a block spends). An order's rows go when the
+  spend that closed it is final; a live order keeps all of them, and so do the rows a gap closed (a recovery import can revive the order at
+  them). The KAS of the genesis output, which a re-listing reads, is kept on the order (`orders.genesis_value`). Each spent row is visited
+  once, by the block that spent it (`meta.archive_seq`: the first block not yet visited);
+* the **in-place amends of final blocks** (`order_amends`): what a revert of their block would restore, read by nothing else;
+* the **spent token holdings created more than `spent_holdings_retention_days` (30) ago** (`token_holdings`), except the custody of a live
+  order: `GET /v1/token-utxos?spent=true` lists the spent holdings of that window (api-reference 3.14). The proof of a token's program stays.
+
+Orders, events, fills, candles, pair fills and the activity totals are never touched: every other answer of the API is the same as a store
+that keeps everything (`tests/archive_prune.rs` compares the main endpoints of a pruning store and a full one after every few rounds of
+traffic, after a reorg inside the window and after a rebuild from the log). `kobd db replay` prunes the same way once its frames are in. The
+file does not shrink by itself: SQLite uses the freed pages again for new rows, so it stops growing for a while; give them back once with
+`kobd db vacuum` (7.6b) after the first pruning of a big store. Measured on a copy of the soak's archive indexer (index-a, 2026-11-12): the
+spent order UTXOs of closed orders 829 MB, the spent token UTXOs 279 MB, the amends 52 MB, and the spent holdings past 30 days the most of
+the rest (`token_holdings` of the custody of closed orders and of key owners). `archive_pruning = false` keeps every row, as before schema 12.
+
 The database is a *derived view* of the record log: `kobd db replay` rebuilds it from the
 records and the follower re-syncs the tail from the node (section 7.6). Measured numbers are in
 section 3; they come from `cargo test -p kobd --test storage -- --nocapture`.
@@ -1371,6 +1395,8 @@ fast_start = false               # `kobd --executor`, empty data dir: trade at o
 lean = false                     # keep the live book and lean_retention_days of closed orders, no record log, a shrinking file; A.1.2
 lean_retention_days = 30         # lean: days a closed order (and its fills and events) stays readable
 lean_max_db_mb = 500             # lean: above this size the oldest closed orders go first (0: no cap)
+archive_pruning = true           # lean = false: delete the final spent UTXO rows of closed orders, final amends, old spent holdings; Storage policy
+spent_holdings_retention_days = 30 # archive pruning: days a spent token holding stays (GET /v1/token-utxos?spent=true)
 poll_interval_ms = 500
 rpc_timeout_secs = 180
 fetch_parallel = 4               # VSPC windows fetched at once while far behind (1: one at a time); section 3, *Parallel fetch*
@@ -2268,13 +2294,14 @@ asked of any other service), so its network fee is that minus its outputs (`reco
 holds one is written as format 5 (marker `0x00 0x05`); a record of an earlier frame has none, and the fee of its transaction is unknown
 (`GET /v1/stats` counts it in `miner_fee_unknown_txs`). An older build skips every format-5 frame likewise.
 
-**Schema.** The database is schema 11 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
+**Schema.** The database is schema 12 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
 dictionary-packed genesis states and event details; schema 8: integer ids in the child tables; schema 9: integer ids in the orders too and shorter
 page indexes; schema 10: a fill event's fee and executor, `order_events.fee` and `executor_id` (`scripts`), and the activity totals the
 triggers keep, `activity` and `actors`; schema 11: the executors' transactions with their income and network fee, `executor_txs`, and
-totals the lean pruning does not take back, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
-writer and reader: move it aside and replay (above). **A database of schema 5 to 10 is refused untouched as well** (`database ... is of schema N: this build reads
-schema 11 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) brings it to schema 11 in one offline run, and
+totals the lean pruning does not take back; schema 12: the KAS of an order's genesis output, `orders.genesis_value`, and a pruning that keeps
+the proof of a token's program, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
+writer and reader: move it aside and replay (above). **A database of schema 5 to 11 is refused untouched as well** (`database ... is of schema N: this build reads
+schema 12 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) brings it to schema 12 in one offline run, and
 **from then on a build of an older schema refuses the store** (a newer schema is refused by every build), so the way back to the older build is the
 `index.sqlite3.before-migrate` file `kobd db migrate` keeps (or a backup taken before). An old configuration's `[receipts]` table is ignored. Roll indexers out before
 wallets whenever the KOB1 payload version changes: an indexer refuses a payload version it does not know, so it would list
@@ -2289,7 +2316,7 @@ systemctl start kob-index
 rm /var/lib/kob-index/index.sqlite3.before-migrate                 # once the executor has run on the new store
 ```
 
-One run takes a store of schema 5 to 10 to schema 11 (a store of schema 9 or 10 by the short way below, *Schema 9 to 10* and *Schema 10 to 11*). **The old store is not altered**: a new file, `index.sqlite3.migrating`, is built beside it and
+One run takes a store of schema 5 to 11 to schema 12 (a store of schema 9 to 11 by the short way below, *Schema 9 to 10*, *Schema 10 to 11* and *Schema 11 to 12*). **The old store is not altered**: a new file, `index.sqlite3.migrating`, is built beside it and
 replaces it only when it has been verified, so a run that fails or is stopped leaves the old store as it was (the next run deletes the partial file). In order:
 (1) **copy**: the tables are created from `schema.sql` (and the token-logo tables of `logo_reports.sql`, whose rows no chain gives back, are carried over) without
 their indexes and triggers and filled from the old store in bulk (`INSERT ... SELECT`, about 7 minutes) through views that give every layout the shape of schema 7: the values the
@@ -2303,7 +2330,7 @@ table the rows of the old store (states decoded, ids as the 32 bytes) and the ro
 row that does not come back identical, a row whose order or token does not exist (the integer layout cannot hold it) or a count that differs stops the migration with the old store untouched; the new
 file must also pass `PRAGMA quick_check` and open as a store of this build (75 s); (4) **swap**: the old file becomes `index.sqlite3.before-migrate`, the rollback, and the new file takes
 its place; (5) the sealed record-log segments are gzip-compressed (the newest stays whole; a rotation compresses the segment it just sealed from now on,
-which holds the writer for about 3 seconds per 256 MiB segment). `--no-compress-log` leaves step 5 out. A store that is of schema 11 already is left as it is. In step 1 a fill event also gets its fee
+which holds the writer for about 3 seconds per 256 MiB segment). `--no-compress-log` leaves step 5 out. A store that is of schema 12 already is left as it is. In step 1 a fill event also gets its fee
 (schema 10): `floor(amount x tip / scale)` at the tip the order had at the fill, the tip the next in-place amend of the order replaced
 (`detail.previous.tip` of its `amend` event) or else the order's own, which is what the processor writes; its executor stays unknown. Step 2
 also counts the activity totals once and checks that the minute and hour buckets add up to the events.
@@ -2372,6 +2399,17 @@ are counted. **Operator step, by store:**
 From then on a build of schema 10 refuses the store, and **a build before this one skips every format-5 frame** (nearly every frame with a fill):
 roll back only together with the store and the log it had before.
 
+**Schema 11 to 12 (pruning that keeps the API whole).** Schema 12 lets a store prune what no read needs (*Storage policy*, archive pruning)
+without changing an answer: an order keeps the KAS of its genesis output (`orders.genesis_value`, which a re-listing reads once the genesis
+UTXO row is pruned), and the `holding_programs_delete` trigger no longer takes back the proof of a token's program when the pruning (lean or
+archive) deletes the holdings that proved it (before, a lean store could lose it: the token list, the listing rules and the standard scale
+then changed). A store of schema 11 takes the short way: `VACUUM INTO`, its triggers dropped and created anew, the new column added and
+filled from the genesis UTXO rows (one pass over the orders), every table keeping its rows. Seconds for an executor's lean store; for an
+archive indexer the copy and one pass (a 2.3 GB copy of index-a, schema 10 to 12: 40 s in all, the copy 22 s, the check 8 s). **Operator step:** `kobd db migrate` on every store
+(offline; the cut-over below for a public indexer). The first start of the new build then prunes an archive store in the background (the
+first pass over index-a's history: minutes of batches while it follows the node); run `kobd db vacuum` (7.6b) once afterwards to give the
+space back. A build of schema 11 refuses the store.
+
 **Cut-over of a public indexer.** The migration of a copy takes about a minute and a half for a 4 GB store, so the read API stays up while it
 runs and is down only for the swap:
 
@@ -2403,6 +2441,25 @@ source store of any layout. The two importers copy
 `orders.genesis_state` and `order_events.detail` as they are: from a source of schema 6 or older (whole values) that is a valid row; a source
 written by schema 7, 8 or 9 has packed values that name dictionary columns (maker, token) the destination row may not have, so it must not be
 imported that way.
+
+#### 7.6b Giving the pruned space back: `kobd db vacuum`
+
+```
+systemctl stop kob-index                                           # offline: it takes the writer lock
+kobd db vacuum --data-dir /var/lib/kob-index
+systemctl start kob-index
+```
+
+The pruning (lean or archive) frees pages that SQLite uses again for new rows but never gives back to the file system: a lean store gives
+them back as it goes (incremental vacuum), an archive store does not (it was not created for it). After the first archive pruning of a store
+that kept everything (minutes of background batches once schema 12 runs: at `RUST_LOG=kobd=debug` the lines `storage:
+pruned` stop saying `more=true`; `PRAGMA freelist_count` of a read-only `sqlite3` shell shows the free pages), most of its file is free pages: `kobd db vacuum` writes a copy of the pages in use
+(`VACUUM INTO index.sqlite3.vacuuming`), checks that it opens as a store of this build and passes `PRAGMA quick_check`, and puts it in the
+store's place (the old file is deleted). **Downtime**: the indexer is stopped for the copy and the check (a 2.3 GB copy of index-a: 11 s and
+8 s on the soak host; it scales with the pages in use). **Free disk**: the pages in use plus a tenth (checked first: nothing is changed
+without it), at most the size of the store. A run that fails or is stopped leaves the store as it was and only the partial copy, deleted
+by the next run. It refuses a store of another schema (`kobd db migrate` rewrites the store without its free pages anyway). Once is enough:
+what the pruning frees afterwards is a trickle that new rows take up.
 
 #### 7.7 Wrong network / DB
 

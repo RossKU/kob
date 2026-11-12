@@ -708,12 +708,19 @@ gap) and why a consumer must still check a UTXO against the node before spending
 |---|---|---|---|
 | `owner` | hex32 or address | none | The state's 32-byte owner: an x-only public key or a covenant id in hex (an order id lists its custody and strays), **or** a Kaspa P2PK (Schnorr) address. A script-hash address is `400` ("owner address must be a P2PK (Schnorr) address"); anything else unparseable is `400`. The address prefix is not compared with the configured network. |
 | `token` | hex32 | none | The token's covenant id. |
-| `spent` | bool (`true`/`1`/`false`/`0`) | `false` | `false`: live UTXOs only; `true`: also spent ones. |
+| `spent` | bool (`true`/`1`/`false`/`0`) | `false` | `false`: live UTXOs only; `true`: also spent ones, of the retention below. |
 | `limit` | integer | 100 | At most `max_page_size`. |
 | `cursor` | string | none | The previous `next_cursor` (`<created block seq>:<txid>:<index>`). `400` "invalid cursor" if malformed. |
 
 At least one of `owner` and `token` is required: `400` ("owner or token is required"). The query matches the 32-byte owner
 whatever its kind, so filter on `owner_kind` when spending. Items come **oldest first** (created block, txid, index).
+
+**Retention of spent holdings.** The live holdings are always all there. With `spent=true` an indexer that keeps the history (`lean =
+false`) lists the spent holdings **created in the last 30 days** (`spent_holdings_retention_days`, default 30; never less than the 12 h
+reorg window): an older spent holding is deleted once its spend is final (out of the reorg window), unless it is the custody of an order
+that is still live (open or partly filled). An executor's lean store keeps `lean_retention_days` (30 by default) of them the same way,
+and under its size cap less. An indexer configured with `archive_pruning = false` keeps every spent holding.
+([ops/executor.md](ops/executor.md), *Storage policy*: on such an indexer every other answer of the API is the whole history.)
 
 ```
 curl -s "$API/v1/token-utxos?owner=$KEY&token=$TOKEN&limit=100"
