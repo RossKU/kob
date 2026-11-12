@@ -725,29 +725,53 @@ impl Ingest {
     /// Each frame is applied in one transaction together with the position after it (`records_next_n`), so a replay that
     /// stops part way can be run again: it continues from the first frame not committed.
     pub fn replay_frames(&mut self, records: Vec<(u64, LogBatch)>, frames: u64) -> Result<(u64, u64, u64), IngestError> {
-        let mut relevant = 0u64;
-        let count = frames;
-        let mut last_daa = None;
+        let mut run = ReplayRun::default();
         for (n, rec) in records {
-            let cursor = Cursor { hash: rec.cursor.hash, daa: rec.cursor.daa };
-            last_daa = Some(cursor.daa);
-            let applied = self.commit_batch(
-                Some(rec.start),
-                &rec.removed,
-                Blocks::Logged(&rec.blocks),
-                Some(cursor),
-                false,
-                &rec.ops,
-                false,
-                Some(n),
-            )?;
-            relevant += applied.relevant_txs;
+            self.replay_frame(&mut run, n, rec)?;
         }
-        // frames this build skipped after the last applied one: the database still ends at the log's end
-        meta_set(&self.conn, "records_next_n", &count.to_string())?;
-        if let Some(daa) = last_daa {
+        self.replay_finish(run, frames)
+    }
+
+    /// Apply record-log frame `n` of a replay, in one transaction together with the position after it: the step of
+    /// [`Ingest::replay_frames`] for frames streamed from the log one at a time (`recordlog::for_each_from`).
+    pub fn replay_frame(&mut self, run: &mut ReplayRun, n: u64, rec: LogBatch) -> Result<(), IngestError> {
+        let cursor = Cursor { hash: rec.cursor.hash, daa: rec.cursor.daa };
+        run.last_daa = Some(cursor.daa);
+        let applied = self.commit_batch(
+            Some(rec.start),
+            &rec.removed,
+            Blocks::Logged(&rec.blocks),
+            Some(cursor),
+            false,
+            &rec.ops,
+            false,
+            Some(n),
+        )?;
+        run.relevant += applied.relevant_txs;
+        Ok(())
+    }
+
+    /// End a replay of a log of `frames` frames: the database ends at the log's end, frames this build skipped after the
+    /// last applied one included. Returns (frames, relevant txs, orders).
+    pub fn replay_finish(&mut self, run: ReplayRun, frames: u64) -> Result<(u64, u64, u64), IngestError> {
+        meta_set(&self.conn, "records_next_n", &frames.to_string())?;
+        if let Some(daa) = run.last_daa {
             meta_set(&self.conn, "log_cursor_daa", &daa.to_string())?;
         }
-        Ok((count, relevant, self.order_count()?))
+        Ok((frames, run.relevant, self.order_count()?))
+    }
+}
+
+/// A replay in progress ([`Ingest::replay_frame`]): what it applied so far.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayRun {
+    relevant: u64,
+    last_daa: Option<u64>,
+}
+
+impl ReplayRun {
+    /// No frame applied yet.
+    pub fn is_empty(&self) -> bool {
+        self.last_daa.is_none()
     }
 }

@@ -983,6 +983,82 @@ pub fn log_bytes(dir: &Path) -> std::io::Result<u64> {
     Ok(t)
 }
 
+/// Where a chain-verified log ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogEnd {
+    /// Every complete frame of the log (decoded or not): the database position after a replay.
+    pub frames: u64,
+    /// A torn (partial) last frame follows them; it is ignored.
+    pub torn: bool,
+}
+
+/// Verify the chain of the whole log without decoding a frame (one frame in memory at a time). A replay calls it before it
+/// applies anything, so a broken log is refused with nothing applied.
+pub fn verify(dir: &Path) -> Result<LogEnd, RecordLogError> {
+    let end = scan(&list_segments(dir)?, |_, _| Ok(false))?;
+    Ok(LogEnd { frames: end.frames, torn: end.torn })
+}
+
+/// What [`for_each_from`] read besides the frames it handed over.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Streamed {
+    /// Complete frames read (`upto` when given).
+    pub frames: u64,
+    pub torn: bool,
+    /// Frames from `from` on this build could not decode, with the reason (they stay in the log).
+    pub skipped: Vec<(u64, String)>,
+    /// What the decoded frames had to drop.
+    pub dropped: DecodeStats,
+}
+
+/// Decode the frames from number `from` on, one at a time, and hand each decoded one to `apply` as it is read, in order: memory
+/// holds one frame whatever the size of the log. The frames before `from` are verified but not decoded; an undecodable frame is
+/// counted in [`Streamed::skipped`] and not handed over. The chain is verified as the frames are read, so a broken frame after
+/// some were handed over is an error only then: a replay [`verify`]s the log first and passes its `frames` as `upto`, the frame
+/// to stop before (a log that ends before it is an error). The first error of `apply` stops the read and is returned.
+pub fn for_each_from<E: From<RecordLogError>>(
+    dir: &Path,
+    from: u64,
+    upto: Option<u64>,
+    mut apply: impl FnMut(u64, LogBatch) -> Result<(), E>,
+) -> Result<Streamed, E> {
+    let segs = list_segments(dir).map_err(RecordLogError::from)?;
+    let mut skipped = Vec::new();
+    let mut dropped = DecodeStats::default();
+    let mut failed = None;
+    let end = scan(&segs, |n, body| {
+        if upto.is_some_and(|u| n >= u) {
+            return Ok(true);
+        }
+        if n >= from {
+            match LogBatch::decode(body) {
+                Ok(d) => {
+                    dropped.add(&d.stats);
+                    if let Err(e) = apply(n, d.batch) {
+                        failed = Some(e);
+                        return Ok(true);
+                    }
+                }
+                Err(e) => skipped.push((n, e.to_string())),
+            }
+        }
+        Ok(false)
+    })?;
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    if let Some(u) = upto {
+        if end.frames < u {
+            return Err(RecordLogError::Corrupt {
+                n: end.frames,
+                reason: format!("the log changed while it was read: {u} frames were verified, {} were read", end.frames),
+            }
+            .into());
+        }
+    }
+    Ok(Streamed { frames: end.frames, torn: end.torn, skipped, dropped })
+}
+
 /// Every frame of a log directory in order, verified.
 pub struct Replay {
     /// The frames this build decoded, with their numbers.
@@ -998,25 +1074,15 @@ pub struct Replay {
 }
 
 /// The frames from number `from` on (decoded; an undecodable one in `skipped`), chain verified over the whole log. The
-/// frames before `from` are verified but not decoded.
+/// frames before `from` are verified but not decoded. It holds every decoded frame in memory (tests and small logs): a replay
+/// streams them with [`for_each_from`].
 pub fn read_from(dir: &Path, from: u64) -> Result<Replay, RecordLogError> {
-    let segs = list_segments(dir)?;
     let mut records = Vec::new();
-    let mut skipped = Vec::new();
-    let mut dropped = DecodeStats::default();
-    let end = scan(&segs, |n, body| {
-        if n >= from {
-            match LogBatch::decode(body) {
-                Ok(d) => {
-                    dropped.add(&d.stats);
-                    records.push((n, d.batch));
-                }
-                Err(e) => skipped.push((n, e.to_string())),
-            }
-        }
-        Ok(false)
+    let s = for_each_from(dir, from, None, |n, b| {
+        records.push((n, b));
+        Ok::<_, RecordLogError>(())
     })?;
-    Ok(Replay { records, torn: end.torn, frames: end.frames, skipped, dropped })
+    Ok(Replay { records, torn: s.torn, frames: s.frames, skipped: s.skipped, dropped: s.dropped })
 }
 
 /// Every frame of a log directory in order, chain verified. A frame that is authentic (its chain hash verifies) but that
@@ -1186,6 +1252,41 @@ mod tests {
         assert!(!r.torn);
         assert_eq!(r.records[3].1, batch(3));
         assert_eq!(record_count(d.path()).unwrap(), 5);
+    }
+
+    /// The stream hands the frames from `from` over one at a time across segments, stops before `upto`, refuses a log that ends
+    /// before `upto`, and stops at the first error of the caller.
+    #[test]
+    fn frames_stream_across_segments_and_stop_where_asked() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut log, _) = RecordLog::open(d.path(), 1, 0).unwrap();
+        for i in 0..6 {
+            log.append(&batch(i), 1000).unwrap();
+        }
+        drop(log);
+        assert_eq!(segment_paths(d.path()).unwrap().len(), 6);
+        assert_eq!(verify(d.path()).unwrap(), LogEnd { frames: 6, torn: false });
+        let mut got = Vec::new();
+        let s = for_each_from(d.path(), 2, Some(5), |n, b| {
+            got.push((n, b));
+            Ok::<_, RecordLogError>(())
+        })
+        .unwrap();
+        assert_eq!(got, (2..5).map(|i| (i as u64, batch(i))).collect::<Vec<_>>());
+        assert_eq!((s.frames, s.torn), (5, false));
+        let short = for_each_from(d.path(), 0, Some(7), |_, _| Ok::<_, RecordLogError>(()));
+        assert!(matches!(short, Err(RecordLogError::Corrupt { n: 6, .. })), "{short:?}");
+        let mut seen = 0;
+        let stopped = for_each_from(d.path(), 0, None, |n, _| {
+            seen += 1;
+            if n == 3 {
+                Err(RecordLogError::Stopped("caller".into()))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(stopped, Err(RecordLogError::Stopped(_))));
+        assert_eq!(seen, 4);
     }
 
     #[test]

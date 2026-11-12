@@ -431,6 +431,73 @@ async fn onto_database_refuses_a_log_of_another_history() {
     assert_eq!(snapshot(&open_writer(&cfg.db_path(), "testnet-10").unwrap()), before, "nothing was applied");
 }
 
+/// Both replays stream the frames from the log and apply each as it is decoded (memory holds one frame, not the log): on a log of
+/// one frame per segment (every sealed one gzip-compressed), `kobd db replay` builds the live database and `--onto-database`
+/// brings a backup to it, with the position and frame count of the log; a log whose chain breaks in a middle segment is
+/// refused before a database exists.
+#[tokio::test]
+async fn a_multi_segment_log_streams_into_the_same_database_and_a_broken_one_into_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    let mut cfg = test_config(dir.path(), &node);
+    cfg.records.segment_bytes = 1;
+    let (live, backup, _mid) = three_batches(dir.path(), &cfg, &node).await;
+    let log_dir = cfg.records_dir();
+    let frames = recordlog::record_count(&log_dir).unwrap();
+    let segs = recordlog::segment_paths(&log_dir).unwrap();
+    assert!(segs.len() as u64 == frames && frames >= 3, "{} segments, {frames} frames", segs.len());
+    assert!(segs[..segs.len() - 1].iter().all(|p| p.extension().is_some_and(|e| e == "gz")), "{segs:?}");
+    // what the in-memory read decodes is what the stream hands over, in order
+    let all = recordlog::read_all(&log_dir).unwrap();
+    let mut streamed = Vec::new();
+    let s = recordlog::for_each_from(&log_dir, 1, Some(frames), |n, b| {
+        streamed.push((n, b));
+        Ok::<_, recordlog::RecordLogError>(())
+    })
+    .unwrap();
+    assert_eq!((s.frames, s.torn, s.skipped.len()), (frames, false, 0));
+    assert_eq!(streamed, all.records[1..]);
+
+    // a rebuild elsewhere from the log alone
+    let mut cfg2 = cfg.clone();
+    cfg2.data_dir = dir.path().join("rebuilt");
+    cfg2.records.dir = Some(log_dir.clone());
+    let rep = replay_from_log(&cfg2).unwrap();
+    assert_eq!((rep.frames, rep.orders, rep.skipped.len(), rep.dropped.dropped()), (frames, 3, 0, 0));
+    let conn = open_writer(&cfg2.db_path(), "testnet-10").unwrap();
+    assert_eq!(kobd::indexer::ingest::records_next_n(&conn).unwrap(), frames);
+    assert_eq!(snapshot(&conn), live);
+    drop(conn);
+
+    // the backup brought forward over the same log
+    restore_db(&cfg, &backup);
+    let backup_next = kobd::indexer::ingest::records_next_n(&open_writer(&cfg.db_path(), "testnet-10").unwrap()).unwrap();
+    let rep = kobd::indexer::replay_onto_database(&cfg).unwrap();
+    assert_eq!((rep.from, rep.replay.frames), (backup_next, frames));
+    let idx = Indexer::open(cfg.clone()).unwrap();
+    assert_eq!(idx.ingest.lock().unwrap().records_next(), Some(frames));
+    assert_eq!(snap(&idx), live);
+    drop(idx);
+
+    // a middle segment cut short: refused before a database exists, and a backup is left as it was
+    let broken = dir.path().join("records-broken");
+    copy_dir(&log_dir, &broken);
+    let mid_seg = broken.join(segs[segs.len() / 2].file_name().unwrap());
+    let bytes = std::fs::read(&mid_seg).unwrap();
+    std::fs::write(&mid_seg, &bytes[..bytes.len() / 2]).unwrap();
+    let mut cfg3 = cfg.clone();
+    cfg3.data_dir = dir.path().join("rebuilt-broken");
+    cfg3.records.dir = Some(broken.clone());
+    assert!(replay_from_log(&cfg3).is_err());
+    assert!(!cfg3.db_path().exists(), "no database was created");
+    let mut cfg4 = cfg.clone();
+    cfg4.records.dir = Some(broken);
+    restore_db(&cfg4, &backup);
+    let before = snapshot(&open_writer(&cfg4.db_path(), "testnet-10").unwrap());
+    assert!(kobd::indexer::replay_onto_database(&cfg4).is_err());
+    assert_eq!(snapshot(&open_writer(&cfg4.db_path(), "testnet-10").unwrap()), before, "nothing was applied");
+}
+
 /// An unspent output as the node's `getUtxosByAddresses` reports it.
 fn node_utxo(spk: &[u8], cov: Hash32, txid: Hash32, idx: u32, amount: u64) -> (String, AddressUtxo) {
     (

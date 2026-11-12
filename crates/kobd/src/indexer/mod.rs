@@ -42,7 +42,7 @@ use crate::tokens::TokenAllowlist;
 use follower::{Follower, FollowerConfig};
 use ingest::{Ingest, IngestConfig};
 use processor::Processor;
-use recordlog::RecordLog;
+use recordlog::{LogBatch, RecordLog};
 use status::{HealthState, IndexEvent};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, watch};
@@ -440,32 +440,47 @@ pub fn replay_from_log(cfg: &IndexerConfig) -> Result<ReplayReport, IndexerError
             cfg.db_path().display()
         )));
     }
-    let log = recordlog::read_all(&cfg.records_dir())?;
-    if log.frames == 0 {
+    let dir = cfg.records_dir();
+    // the chain of the whole log first (nothing decoded, nothing kept): a broken log is refused before a database exists
+    let end = recordlog::verify(&dir)?;
+    if end.frames == 0 {
         return Err(IndexerError::Config("record log is empty".into()));
     }
-    if log.torn {
+    if end.torn {
         tracing::warn!("the last record-log frame is torn (crash during append); it is ignored");
     }
-    for (n, reason) in &log.skipped {
+    // the frames are applied as they are decoded (memory holds one frame, whatever the size of the log); the database is
+    // created at the first frame this build decodes, whose `start` is its first cursor
+    let mut ing: Option<Ingest> = None;
+    let mut run = ingest::ReplayRun::default();
+    let streamed = recordlog::for_each_from(&dir, 0, Some(end.frames), |n, rec| {
+        let ing = match &mut ing {
+            Some(ing) => ing,
+            None => {
+                let tokens = load_tokens(cfg)?;
+                let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
+                let new = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
+                new.init_cursor(&ingest::Cursor { hash: rec.start, daa: 0 })?;
+                ing.insert(new)
+            }
+        };
+        ing.replay_frame(&mut run, n, rec)?;
+        Ok::<_, IndexerError>(())
+    })?;
+    for (n, reason) in &streamed.skipped {
         tracing::warn!(frame = n, %reason, "record-log frame skipped: this build cannot decode it (it stays in the log)");
     }
-    if log.dropped.dropped() > 0 {
-        tracing::warn!(dropped = ?log.dropped, "record-log items of template layouts this build does not have were skipped");
+    if streamed.dropped.dropped() > 0 {
+        tracing::warn!(dropped = ?streamed.dropped, "record-log items of template layouts this build does not have were skipped");
     }
-    let Some((_, first)) = log.records.first() else {
-        return Err(IndexerError::Config(format!("none of the {} record-log frames could be decoded by this build", log.frames)));
+    let Some(mut ing) = ing else {
+        return Err(IndexerError::Config(format!("none of the {} record-log frames could be decoded by this build", end.frames)));
     };
-    let start = first.start;
-    let tokens = load_tokens(cfg)?;
-    let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
-    let mut ing = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
-    ing.init_cursor(&ingest::Cursor { hash: start, daa: 0 })?;
-    let (frames, relevant, orders) = ing.replay_frames(log.records, log.frames)?;
+    let (frames, relevant, orders) = ing.replay_finish(run, end.frames)?;
     // the archive pruning of what is final at the log's last cursor (`archive`); the follower prunes the rest as it applies blocks (a log
     // keeps the chain blocks of its transactions only, so a rebuild may end with none in the window: nothing is final until it does)
     ing.archive_prune_all()?;
-    Ok(ReplayReport { frames, relevant, orders, skipped: log.skipped, dropped: log.dropped })
+    Ok(ReplayReport { frames, relevant, orders, skipped: streamed.skipped, dropped: streamed.dropped })
 }
 
 /// What [`replay_onto_database`] did.
@@ -496,43 +511,41 @@ pub fn replay_onto_database(cfg: &IndexerConfig) -> Result<ForwardReport, Indexe
             "the database holds no record-log frame: move it aside and rebuild it with `kobd db replay`".into(),
         ));
     }
-    let log = recordlog::read_from(&cfg.records_dir(), from)?;
-    if log.frames < from {
-        return Err(recordlog::RecordLogError::BehindDatabase { log_next: log.frames, db_next: from }.into());
+    let dir = cfg.records_dir();
+    // the chain of the whole log first: a broken log is refused before a frame is applied
+    let end = recordlog::verify(&dir)?;
+    if end.frames < from {
+        return Err(recordlog::RecordLogError::BehindDatabase { log_next: end.frames, db_next: from }.into());
     }
-    if log.frames == from {
+    if end.frames == from {
         let orders = Ingest::new(conn, processor(cfg, load_tokens(cfg)?), None).order_count()?;
         let replay = ReplayReport { frames: from, relevant: 0, orders, skipped: vec![], dropped: Default::default() };
         return Ok(ForwardReport { from, replay });
     }
-    if log.torn {
+    if end.torn {
         tracing::warn!("the last record-log frame is torn (crash during append); it is ignored");
-    }
-    for (n, reason) in &log.skipped {
-        tracing::warn!(frame = n, %reason, "record-log frame skipped: this build cannot decode it (it stays in the log)");
     }
     let tokens = load_tokens(cfg)?;
     let mut ing = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
-    check_lineage(&ing, &log, from)?;
     // each frame commits together with the position after it: an interrupted run continues where it stopped
-    let (frames, relevant, orders) = ing.replay_frames(log.records, log.frames)?;
+    let (streamed, (frames, relevant, orders)) = apply_frames(&mut ing, &dir, from, Some(end.frames), true)?;
     ing.archive_prune_all()?;
     // `dropped` counts the decoded frames from `from` on
-    Ok(ForwardReport { from, replay: ReplayReport { frames, relevant, orders, skipped: log.skipped, dropped: log.dropped } })
+    Ok(ForwardReport { from, replay: ReplayReport { frames, relevant, orders, skipped: streamed.skipped, dropped: streamed.dropped } })
 }
 
-/// The frame at the database position must continue the database: its `start` is the cursor the database ends at.
-fn check_lineage(ing: &Ingest, log: &recordlog::Replay, from: u64) -> Result<(), IndexerError> {
-    let cursor = ing.cursor()?;
-    let Some((n, first)) = log.records.first().filter(|(n, _)| *n == from) else {
+/// The frame at the database position must continue the database: its `start` is the cursor the database ends at. `first` is
+/// the first frame from `from` on this build decoded (none: not one could be).
+fn check_lineage(cursor: Option<&ingest::Cursor>, from: u64, first: Option<(u64, &LogBatch)>) -> Result<(), IndexerError> {
+    let Some((n, first)) = first.filter(|(n, _)| *n == from) else {
         return Err(IndexerError::Config(format!(
             "record-log frame {from} cannot be decoded by this build, so it cannot be checked against the database's cursor; \
              nothing was changed (rebuild the database from the log with `kobd db replay` into a fresh data directory)"
         )));
     };
-    if cursor.as_ref().map(|c| c.hash) != Some(first.start) {
+    if cursor.map(|c| c.hash) != Some(first.start) {
         return Err(recordlog::RecordLogError::Lineage {
-            n: *n,
+            n,
             frame_start: first.start,
             db_cursor: cursor.map_or_else(|| "unset".to_string(), |c| c.hash.to_string()),
         }
@@ -541,14 +554,44 @@ fn check_lineage(ing: &Ingest, log: &recordlog::Replay, from: u64) -> Result<(),
     Ok(())
 }
 
+/// Applies the record-log frames from `from` on (before `upto`) to the database as they are decoded (one in memory at a time),
+/// one transaction per frame with the position after it, once the first one passes the lineage check (nothing is applied when
+/// it fails), and ends the replay at the log's end. `warn_skipped` warns of each frame this build could not decode. Returns
+/// what the read skipped and dropped, and (frames, relevant txs, orders).
+fn apply_frames(
+    ing: &mut Ingest,
+    dir: &std::path::Path,
+    from: u64,
+    upto: Option<u64>,
+    warn_skipped: bool,
+) -> Result<(recordlog::Streamed, (u64, u64, u64)), IndexerError> {
+    let cursor = ing.cursor()?;
+    let mut run = ingest::ReplayRun::default();
+    let streamed = recordlog::for_each_from(dir, from, upto, |n, rec| {
+        if run.is_empty() {
+            check_lineage(cursor.as_ref(), from, Some((n, &rec)))?;
+        }
+        ing.replay_frame(&mut run, n, rec)?;
+        Ok::<_, IndexerError>(())
+    })?;
+    if warn_skipped {
+        for (n, reason) in &streamed.skipped {
+            tracing::warn!(frame = n, %reason, "record-log frame skipped: this build cannot decode it (it stays in the log)");
+        }
+    }
+    if run.is_empty() {
+        check_lineage(cursor.as_ref(), from, None)?;
+    }
+    let done = ing.replay_finish(run, streamed.frames)?;
+    Ok((streamed, done))
+}
+
 /// Applies the record-log frames from `from` on to the database (one transaction per frame, the position with it) after the
 /// lineage check, through a connection of its own and without a log attached (nothing is appended).
 fn apply_frames_from(cfg: &IndexerConfig, tokens: Arc<TokenAllowlist>, from: u64) -> Result<(), IndexerError> {
-    let log = recordlog::read_from(&cfg.records_dir(), from)?;
     let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
     let mut ing = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
-    check_lineage(&ing, &log, from)?;
-    ing.replay_frames(log.records, log.frames)?;
+    apply_frames(&mut ing, &cfg.records_dir(), from, None, false)?;
     Ok(())
 }
 
