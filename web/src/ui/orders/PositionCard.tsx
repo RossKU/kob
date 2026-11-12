@@ -40,6 +40,8 @@ export interface PositionCardProps {
   /** the table's fixed decimals of a price column and of the KAS Total column (OrdersView: the finest of the whole list), for the member lines */
   priceDp?: number;
   kasDp?: number;
+  /** the average fill price of an ended member order (the Total of its line is what it traded; null: none, undefined: not read yet) */
+  avgOf?: (id: Hex) => bigint | null | undefined;
 }
 
 /** An if-done / OCO-entry / repeat position: the entry with its exits, one cancel for all of them (ONE transaction where possible). */
@@ -130,13 +132,13 @@ export function PositionCard(props: PositionCardProps) {
       <div class="pc-members stack-sm">
         {p.orphanExits ? <p class="small muted pc-note">{t('orders.position.orphan')}</p> : null}
         {entryRow ? (
-          <OrderRow columns={props.columns ?? 'open'} {...(props.priceDp !== undefined ? { priceDp: props.priceDp } : {})} {...(props.kasDp !== undefined ? { kasDp: props.kasDp } : {})} row={entryRow} token={props.tokenOf(entryRow.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === entryRow.id} clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
+          <OrderRow columns={props.columns ?? 'open'} {...(props.priceDp !== undefined ? { priceDp: props.priceDp } : {})} {...(props.kasDp !== undefined ? { kasDp: props.kasDp } : {})} {...(props.avgOf ? { avg: props.avgOf(entryRow.id) } : {})} row={entryRow} token={props.tokenOf(entryRow.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === entryRow.id} clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
         ) : null}
         {exitRows.length ? (
           <div class="position-exits stack-sm" data-testid="position-exits">
             <div class="pc-section-label">{t('orders.position.exits')}</div>
             {exitRows.map((r) => (
-              <OrderRow columns={props.columns ?? 'open'} {...(props.priceDp !== undefined ? { priceDp: props.priceDp } : {})} {...(props.kasDp !== undefined ? { kasDp: props.kasDp } : {})} key={r.id} row={r} token={props.tokenOf(r.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === r.id} nested clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
+              <OrderRow columns={props.columns ?? 'open'} {...(props.priceDp !== undefined ? { priceDp: props.priceDp } : {})} {...(props.kasDp !== undefined ? { kasDp: props.kasDp } : {})} key={r.id} {...(props.avgOf ? { avg: props.avgOf(r.id) } : {})} row={r} token={props.tokenOf(r.token)} canSign={props.canSign} actions={props.actions} busy={props.busy === r.id} nested clock={props.clock ?? null} {...(props.compact ? { compact: true } : {})} {...(props.iconOf ? { iconOf: props.iconOf } : {})} {...(props.loadEvents ? { loadEvents: props.loadEvents } : {})} />
             ))}
           </div>
         ) : null}

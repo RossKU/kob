@@ -23,7 +23,7 @@ export function orderColumns(tab: 'open' | 'history', usd = false): (DtColumn<Or
   const avg: DtColumn<OrderSortKey> = { key: 'avg', label: t(usd ? 'orders.col.avgPriceUsd' : 'orders.col.avgPrice'), kind: 'number', right: true };
   const amount: DtColumn<OrderSortKey> = { key: 'amount', label: t('orders.col.amount'), kind: 'number', right: true };
   const filled: DtColumn<OrderSortKey> = { key: 'filled', label: t('orders.col.filled'), kind: 'number', right: true };
-  const total: DtColumn<OrderSortKey> = { key: 'total', label: t(usd ? 'orders.col.totalUsd' : 'orders.col.total'), kind: 'number', right: true };
+  const total: DtColumn<OrderSortKey> = { key: 'total', label: t(tab === 'history' ? (usd ? 'orders.col.tradedUsd' : 'orders.col.traded') : usd ? 'orders.col.totalUsd' : 'orders.col.total'), kind: 'number', right: true };
   const status: DtColumn<OrderSortKey> = { key: 'status', label: t('orders.col.status'), kind: 'text' };
   return tab === 'history'
     ? [time, market, type, side, price, amount, total, avg, filled, status, { key: 'toggle', plain: true }]
@@ -37,19 +37,50 @@ export function placedUnix(row: OrderRowModel, clock: Clock | null | undefined):
   return placedRecord > 0n ? placedRecord : genesis !== null && clock ? daaToUnix(clock, genesis) : null;
 }
 
+/**
+ * The filled amount of an order, base units (null: unknown). The indexer's `filled_amount` is what the fills took; `amount_left` is 0 for every ended order but a
+ * killed one, so `total - left` reads an order cancelled after a partial fill as 100 % filled. Only a row without the field (a node-read or recorded order) falls back to it.
+ */
+export function filledAmount(row: OrderRowModel): bigint | null {
+  const f = row.entry.view?.filled_amount;
+  if (typeof f === 'string' && /^\d+$/.test(f)) return BigInt(f);
+  if (row.amountTotal === null || row.amountLeft === null) return null;
+  return row.amountTotal > row.amountLeft ? row.amountTotal - row.amountLeft : 0n;
+}
+
 /** The filled part of an order in hundredths of a percent (null: a KAS budget, which has no amount to compare). */
 export function filledPermyriad(row: OrderRowModel): number | null {
   const total = row.amountTotal;
-  const left = row.amountLeft;
-  if (total === null || left === null || total <= 0n) return null;
-  const filled = total > left ? total - left : 0n;
-  return Number((filled * 10_000n) / total);
+  const filled = filledAmount(row);
+  if (total === null || filled === null || total <= 0n) return null;
+  return Number(((filled > total ? total : filled) * 10_000n) / total);
 }
 
-/** The filled amount of an order, base units (null: unknown). */
-export function filledAmount(row: OrderRowModel): bigint | null {
-  if (row.amountTotal === null || row.amountLeft === null) return null;
-  return row.amountTotal > row.amountLeft ? row.amountTotal - row.amountLeft : 0n;
+/**
+ * The KAS a plain bid has spent on its fills when its placement is not in this browser (no budget record): the filled tokens at the order's average fill price (null: not a bid
+ * with a budget, nothing filled, or no average price yet). `filled_amount` is a decimal string.
+ */
+export function bidSpentByFills(row: OrderRowModel, avg: bigint | null | undefined): bigint | null {
+  const filled = filledAmount(row) ?? 0n;
+  return row.budget && !row.pair && avg !== null && avg !== undefined && filled > 0n ? quoteOf(filled, avg, row.scale, 'down') : null;
+}
+
+/** An order that is over (filled, cancelled, refunded, killed or closed): its fills are all it ever did. */
+export const orderEnded = (row: OrderRowModel): boolean => !row.live && row.status !== 'unknown';
+
+/**
+ * The Total column, KAS (null: none). An open order: its initial amount at its limit price (what it offers). An ended order: what actually traded, the filled amount at the
+ * average fill price `avg` (the order's own fills, read from its events; null / undefined until they are: no figure yet), 0 when nothing filled. A pair order has none.
+ */
+export function orderTotalKas(row: OrderRowModel, avg: bigint | null | undefined): bigint | null {
+  if (row.pair) return null;
+  if (orderEnded(row)) {
+    const filled = filledAmount(row);
+    if (filled === null) return null;
+    if (filled === 0n) return 0n;
+    return avg !== null && avg !== undefined ? quoteOf(filled, avg, row.scale, 'down') : null;
+  }
+  return row.amountTotal !== null && row.price !== null ? quoteOf(row.amountTotal, row.price, row.scale, 'down') : null;
 }
 
 /** The value of one column for an order. `marketText`: the market as the line names it; `decimalsOf`: the decimals of the order's token; `avgOf`: its average fill price (null: not known). */
@@ -79,7 +110,7 @@ export function orderSortValue(
       return v !== null ? scaledUnits(v, decimals) : null;
     }
     case 'total':
-      return !row.pair && row.amountTotal !== null && row.price !== null ? quoteOf(row.amountTotal, row.price, row.scale, 'down') : null;
+      return orderTotalKas(row, ctx.avgOf(row));
     case 'status':
       return t(`orders.status.${row.status}`);
   }

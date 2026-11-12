@@ -1,4 +1,4 @@
-import { formatUnits, quoteOf } from '../../kob/units';
+import { formatUnits } from '../../kob/units';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
@@ -56,7 +56,7 @@ import {
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
 import { buildListItems, cancellableIds, filterItems, itemMemberIds, tabCounts } from './list-model';
-import { ORDER_SORT_KEYS, orderColumns, orderSortValue, type OrderSortKey } from './orders-sort';
+import { ORDER_SORT_KEYS, orderColumns, orderSortValue, orderEnded, orderTotalKas, type OrderSortKey } from './orders-sort';
 import { loadOrderEvents, loadOrders, type OrdersData } from './orders-data';
 import '../market/market.css';
 
@@ -238,7 +238,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   });
   const { rows: shown, window: shownWindow } = pageOf(shownAll, rowsPer, pageNo);
   const [, setAvgVersion] = useState(0);
-  const wantAvg = tab === 'history' ? shown.flatMap((i) => itemMemberIds(i)).map((id) => rowById.get(id)).filter((r): r is OrderRowModel => !!r && filledAmountOf(r) > 0n && !avgPrices.current.has(r.id)) : [];
+  // (an ended member of a position still on the Open tab has its Total from them too)
+  const wantAvg = shown.flatMap((i) => itemMemberIds(i)).map((id) => rowById.get(id)).filter((r): r is OrderRowModel => !!r && (tab === 'history' || orderEnded(r)) && filledAmountOf(r) > 0n && !avgPrices.current.has(r.id));
   const wantAvgKey = wantAvg.map((r) => r.id).join(',');
   useEffect(() => {
     if (!wantAvg.length || !services.indexer || d?.indexerError) return;
@@ -447,7 +448,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   }));
   const kasDp = Math.min(
     KAS_FRACTION_MAX,
-    columnFraction(tableRows.map((r) => (!r.pair && r.amountTotal !== null && r.price !== null ? quoteOf(r.amountTotal, r.price, r.scale, 'down') : null)), 8),
+    columnFraction(tableRows.map((r) => orderTotalKas(r, avgPrices.current.get(r.id))), 8),
   );
   // Cancel all: only where there is something to cancel; the cancel race is its tooltip (and the confirmation's text)
   const cancelAllButton =
@@ -763,6 +764,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                   ) : (
                     <PositionCard
                       key={item.id}
+                      avgOf={(id) => avgPrices.current.get(id)}
                       columns={tab === 'history' ? 'history' : 'open'}
                       priceDp={priceDp}
                       kasDp={kasDp}

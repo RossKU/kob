@@ -26,7 +26,7 @@ import type { EventView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { OrderFills, filledAmountOf } from './OrderFills';
 import { GTC_RULE, type OrderRowModel, type OrderStatusUi } from './orders-model';
-import { placedUnix } from './orders-sort';
+import { bidSpentByFills, filledAmount, orderEnded, orderTotalKas, placedUnix } from './orders-sort';
 import { amountCell, longDate, priceDpOf, tokenUnit, type AmountText } from './cells';
 import { tCount } from './plural';
 import { unlistedHint, unlistedText } from './unlisted';
@@ -89,9 +89,9 @@ function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo |
   const time = timeText(unix);
   const pairPrice = (v: bigint | null | undefined): string => (v === null || v === undefined || !row.pair ? '—' : pairPriceText(v, row, tk, b));
   const total = row.amountTotal;
-  const left = row.amountLeft;
-  const filled = total !== null && left !== null ? (total > left ? total - left : 0n) : null;
-  const pct = total !== null && total > 0n && filled !== null ? Number((filled * 100n) / total) : null;
+  // what the fills took (the indexer's `filled_amount`; `amount_left` is 0 for every ended order, so total - left would read a cancelled partial fill as 100 %)
+  const filled = total !== null ? filledAmount(row) : null;
+  const pct = total !== null && total > 0n && filled !== null ? Math.min(100, Number((filled * 100n) / total)) : null;
   // a token nobody named shows its short id in the unit slot, never the long hex (cells.ts)
   const unit = tokenUnit(tk?.ticker, row.token);
   const amountTotalText = total !== null ? amountCell(total, decimals) : null;
@@ -101,11 +101,7 @@ function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo |
   // a plain KAS bid: its budget in KAS (the placed one when this browser placed it, else what is left), and how much of it the fills have spent
   const bud = row.budget;
   // what the fills spent when the placement is not in this browser: the filled tokens at their average price (Order history reads it)
-  const filledBase = ((): bigint => {
-    const f = row.entry.view?.filled_amount;
-    return typeof f === 'string' && /^d+$/.test(f) ? BigInt(f) : 0n;
-  })();
-  const spentByFills = bud && !row.pair && avg !== null && avg !== undefined && filledBase > 0n ? quoteOf(filledBase, avg, row.scale, 'down') : null;
+  const spentByFills = bidSpentByFills(row, avg);
   const budgetSpent = bud && bud.placed !== null && bud.left !== null ? bud.placed - bud.left : spentByFills;
   const budgetSpentText = budgetSpent !== null ? amountCell(budgetSpent, 8) : null;
   // the Amount column of a bid, never "0 KAS budget": the placed budget; else what is left while there is some; else, for an order that is over, the KAS it spent; else just the words
@@ -116,7 +112,8 @@ function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo |
     : null;
   // how much of the budget is spent: of the placed budget, else 100 % for a bid that filled
   const budgetPct = bud && budgetSpent !== null && bud.placed !== null && bud.placed > 0n ? Number((budgetSpent * 100n) / bud.placed) : bud && row.status === 'filled' ? 100 : null;
-  const valueKas = !row.pair && total !== null && row.price !== null ? quoteOf(total, row.price, row.scale, 'down') : null;
+  // an open order: its initial amount at its limit price; an ended one: what traded (the filled amount at the average fill price)
+  const valueKas = orderTotalKas(row, avg);
   return { unix, time, timeTip: timeTitle(unix), price: pairPrice(row.price), pct, unit, valueKas, budget, budgetShown, budgetSpentText, budgetPct, amountTotalText, filledAmountText, avgText: pairPrice(avg) };
 }
 
@@ -306,7 +303,7 @@ export function OrderRow(props: OrderRowProps) {
     </DtCell>
   );
   cells.total = (
-    <DtCell k="total" label={t(fiat ? 'orders.col.totalUsd' : 'orders.col.total')} num class="or-value"><MoneyCell kas={line.valueKas} unit={false} {...(props.kasDp !== undefined ? { fraction: props.kasDp } : {})} /></DtCell>
+    <DtCell k="total" label={t(props.columns === 'history' ? (fiat ? 'orders.col.tradedUsd' : 'orders.col.traded') : fiat ? 'orders.col.totalUsd' : 'orders.col.total')} num class="or-value" title={t(orderEnded(row) ? 'orders.total.tradedTip' : 'orders.total.limitTip')}><MoneyCell kas={line.valueKas} unit={false} {...(props.kasDp !== undefined ? { fraction: props.kasDp } : {})} /></DtCell>
   );
   cells.status = (
     <DtCell k="status" label={t('orders.col.status')} card="status" class="or-status">
