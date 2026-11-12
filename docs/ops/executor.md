@@ -2298,14 +2298,15 @@ change funds its next transaction, so most of its transactions resolve, live and
 stays unknown (`GET /v1/stats` counts it in `miner_fee_unknown_txs`). Where the record has the node's values the node's are used (a disagreement
 is logged). An older build skips every format-5 frame likewise.
 
-**Schema.** The database is schema 12 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
+**Schema.** The database is schema 13 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
 dictionary-packed genesis states and event details; schema 8: integer ids in the child tables; schema 9: integer ids in the orders too and shorter
 page indexes; schema 10: a fill event's fee and executor, `order_events.fee` and `executor_id` (`scripts`), and the activity totals the
 triggers keep, `activity` and `actors`; schema 11: the executors' transactions with their income and network fee, `executor_txs`, and
 totals the lean pruning does not take back; schema 12: the KAS of an order's genesis output, `orders.genesis_value`, and a pruning that keeps
-the proof of a token's program, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
-writer and reader: move it aside and replay (above). **A database of schema 5 to 11 is refused untouched as well** (`database ... is of schema N: this build reads
-schema 12 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) brings it to schema 12 in one offline run, and
+the proof of a token's program; schema 13: the plain outputs of the recorded transactions, `recorded_outputs`, from which the network fee of
+a record without input values is resolved, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
+writer and reader: move it aside and replay (above). **A database of schema 5 to 12 is refused untouched as well** (`database ... is of schema N: this build reads
+schema 13 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) brings it to schema 13 in one offline run, and
 **from then on a build of an older schema refuses the store** (a newer schema is refused by every build), so the way back to the older build is the
 `index.sqlite3.before-migrate` file `kobd db migrate` keeps (or a backup taken before). An old configuration's `[receipts]` table is ignored. Roll indexers out before
 wallets whenever the KOB1 payload version changes: an indexer refuses a payload version it does not know, so it would list
@@ -2320,7 +2321,7 @@ systemctl start kob-index
 rm /var/lib/kob-index/index.sqlite3.before-migrate                 # once the executor has run on the new store
 ```
 
-One run takes a store of schema 5 to 11 to schema 12 (a store of schema 9 to 11 by the short way below, *Schema 9 to 10*, *Schema 10 to 11* and *Schema 11 to 12*). **The old store is not altered**: a new file, `index.sqlite3.migrating`, is built beside it and
+One run takes a store of schema 5 to 12 to schema 13 (a store of schema 9 to 12 by the short way below, *Schema 9 to 10*, *Schema 10 to 11*, *Schema 11 to 12* and *Schema 12 to 13*). **The old store is not altered**: a new file, `index.sqlite3.migrating`, is built beside it and
 replaces it only when it has been verified, so a run that fails or is stopped leaves the old store as it was (the next run deletes the partial file). In order:
 (1) **copy**: the tables are created from `schema.sql` (and the token-logo tables of `logo_reports.sql`, whose rows no chain gives back, are carried over) without
 their indexes and triggers and filled from the old store in bulk (`INSERT ... SELECT`, about 7 minutes) through views that give every layout the shape of schema 7: the values the
@@ -2334,7 +2335,7 @@ table the rows of the old store (states decoded, ids as the 32 bytes) and the ro
 row that does not come back identical, a row whose order or token does not exist (the integer layout cannot hold it) or a count that differs stops the migration with the old store untouched; the new
 file must also pass `PRAGMA quick_check` and open as a store of this build (75 s); (4) **swap**: the old file becomes `index.sqlite3.before-migrate`, the rollback, and the new file takes
 its place; (5) the sealed record-log segments are gzip-compressed (the newest stays whole; a rotation compresses the segment it just sealed from now on,
-which holds the writer for about 3 seconds per 256 MiB segment). `--no-compress-log` leaves step 5 out. A store that is of schema 12 already is left as it is. In step 1 a fill event also gets its fee
+which holds the writer for about 3 seconds per 256 MiB segment). `--no-compress-log` leaves step 5 out. A store that is of schema 13 already is left as it is. In step 1 a fill event also gets its fee
 (schema 10): `floor(amount x tip / scale)` at the tip the order had at the fill, the tip the next in-place amend of the order replaced
 (`detail.previous.tip` of its `amend` event) or else the order's own, which is what the processor writes; its executor stays unknown. Step 2
 also counts the activity totals once and checks that the minute and hour buckets add up to the events.
@@ -2413,6 +2414,14 @@ archive indexer the copy and one pass (a 2.3 GB copy of index-a, schema 10 to 12
 (offline; the cut-over below for a public indexer). The first start of the new build then prunes an archive store in the background (the
 first pass over index-a's history: minutes of batches while it follows the node); run `kobd db vacuum` (7.6b) once afterwards to give the
 space back. A build of schema 11 refuses the store.
+
+**Schema 12 to 13 (network fees of the history).** Schema 13 adds `recorded_outputs` (the plain outputs of the recorded transactions,
+`indexer::outputs`, above): the input values a record written before 2026-11-12 lacks are resolved from it, so the network fee of such a
+transaction is known whenever every one of its inputs spends an output the store recorded or tracks. The short way again (`VACUUM INTO`, the
+triggers created anew, the table added empty; a store of schema 11 also gets the schema 12 steps in the same run). The table fills from the
+transactions indexed from then on; the fees of the past need the history replayed: on a full indexer with its record log, `kobd db replay`
+(7.6, and the *Operator step* of *Schema 10 to 11*) instead of `kobd db migrate`. A lean store needs only `kobd db migrate` (it follows the
+node, whose input values every new record has). A build of schema 12 refuses the store.
 
 **Cut-over of a public indexer.** The migration of a copy takes about a minute and a half for a 4 GB store, so the read API stays up while it
 runs and is down only for the swap:

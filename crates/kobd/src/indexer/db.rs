@@ -30,8 +30,10 @@ use tokio::sync::Semaphore;
 /// holds as of unknown income and fee (`kobd db replay` rebuilds their income from the record log). 12: the pruning (lean and archive,
 /// [`super::archive`]) no longer takes back the proof of a token's program (the `holding_programs_delete` trigger), and an order keeps the
 /// KAS of its genesis output (`orders.genesis_value`), so the archive pruning may delete the spent UTXO rows: `kobd db migrate` fills the
-/// column from the genesis rows ([`backfill_genesis_values`]).
-pub const SCHEMA_VERSION: i64 = 12;
+/// column from the genesis rows ([`backfill_genesis_values`]). 13: the plain outputs of the recorded transactions (`recorded_outputs`,
+/// [`super::outputs`]), from which the network fee of a record without input values is resolved: `kobd db migrate` adds the table empty
+/// (`kobd db replay` fills it from the record log, and resolves the fees of the history with it).
+pub const SCHEMA_VERSION: i64 = 13;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]

@@ -874,13 +874,14 @@ fn opens_and_checks(cfg: &IndexerConfig, new: &Path, say: &mut impl FnMut(&str))
     Ok(())
 }
 
-/// Schema 9, 10 or 11 to 12 (steps 1 to 3 for a store whose tables keep their layout): the store is copied as it is (`VACUUM INTO`, which
+/// Schema 9 to 12 to 13 (steps 1 to 3 for a store whose tables keep their layout): the store is copied as it is (`VACUUM INTO`, which
 /// also gives the free pages back), its triggers are dropped (`schema.sql` creates this build's: schema 12 changed the one that keeps the
 /// programs of the holdings), and
 /// * from 9, the fill events get their two columns and their fees (`amount x tip / scale` at the tip the order had at the fill, as in the
 ///   copy of an older store);
 /// * from 10, the activity buckets get the columns of the executors' transactions and the actors their `kept` flag (schema 11);
 /// * from 9 to 11, the orders get the KAS of their genesis output (`orders.genesis_value`, schema 12), read from the genesis UTXO rows;
+/// * (schema 13) `recorded_outputs` is created empty by `schema.sql` (the outputs of the past are in the record log: a replay fills it);
 ///
 /// then `schema.sql` adds the new tables, indexes and triggers, the activity totals are counted once (from 9), the executors' transactions
 /// the store holds are counted as of unknown income and network fee (`db::backfill_executor_txs`: the store has no record of their
