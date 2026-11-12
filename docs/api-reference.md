@@ -822,7 +822,7 @@ one side only, the reference price is that side's best price; `null` for an empt
 asks up to 2 % above it, same reference, same value and both bounds inclusive. A side with nothing in the band, a missing side and an empty book are `"0"` (the fields
 are always present; an older indexer sends neither). The web app marks a thin book from them (the smaller side worth less than 0.1 % of the token's value, $100 at least and $10,000 at most).
 `window_truncated` is true when the day held more than 20,000 fill rows and the figures cover the newest ones. `best_bid`,
-`best_ask`, `mid` and the open counts come from the listed book of section 3.6.
+`best_ask`, `mid`, the depth and the open counts (`open_asks` / `open_bids`: the orders of its two sides) come from the resting book of section 3.6.
 
 ### 3.18 `GET /v1/depth/{token}`
 

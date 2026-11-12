@@ -555,6 +555,8 @@ pub struct StatsView {
     pub best_ask: Option<String>,
     pub mid: Option<String>,
     pub spread_bps: Option<i64>,
+    /// The orders of the book's two sides (`/v1/books`: resting orders a matcher may fill now, the same set as `best_bid` /
+    /// `best_ask` and the depth).
     pub open_asks: i64,
     pub open_bids: i64,
     /// Sompi: what the resting asks up to 2 % above the mid and the resting bids down to 2 % below it are worth (a bid at its escrow's buying power: an upper bound),
@@ -580,6 +582,9 @@ struct Touch {
     /// The two parts of `depth` (bids, asks); 0 for a missing side or no reference.
     depth_bid: i128,
     depth_ask: i128,
+    /// The orders of each side's levels (the same book).
+    bid_orders: i64,
+    ask_orders: i64,
 }
 
 /// The band of `depth_2pct_quote`: percent above (asks) and below (bids) the reference price.
@@ -613,7 +618,8 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     let bands = depth_bands(&bid_levels, &ask_levels);
     let (depth_bid, depth_ask) = bands.unwrap_or((0, 0));
     let depth = bands.map(|(b, a)| a.saturating_add(b));
-    Ok(Touch { bid, ask, depth, depth_bid, depth_ask })
+    let orders = |ls: &[reads::RawBookLevel]| ls.iter().map(|l| l.1 .1).sum::<i64>();
+    Ok(Touch { bid, ask, depth, depth_bid, depth_ask, bid_orders: orders(&bids), ask_orders: orders(&asks) })
 }
 
 pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<u32>) -> DbResult<StatsView> {
@@ -639,33 +645,13 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         (Some(o), Some(l)) if o > 0 && !window.is_empty() => i64::try_from(l.saturating_sub(o).saturating_mul(10_000) / o).ok(),
         _ => None,
     };
-    let Touch { bid, ask, depth: depth_2pct, depth_bid, depth_ask } = touch(conn, ctx, token, basis)?;
+    let Touch { bid, ask, depth: depth_2pct, depth_bid, depth_ask, bid_orders: open_bids, ask_orders: open_asks } =
+        touch(conn, ctx, token, basis)?;
     let mid = bid.zip(ask).map(|(b, a)| a.saturating_add(b) / 2);
     let spread = match (bid, ask, mid) {
         (Some(b), Some(a), Some(m)) if m > 0 => i64::try_from(a.saturating_sub(b).saturating_mul(10_000) / m).ok(),
         _ => None,
     };
-    let (mut open_asks, mut open_bids) = (0i64, 0i64);
-    // the orders the book lists (`reads::BOOK_WHERE`, a template this build pins): an ask only with its exact custody, nothing
-    // with no amount left (read from the live set, `reads::LIVE_FROM`)
-    let mut st = conn.prepare(&format!(
-        "SELECT o.side, COUNT(*) {} \
-         WHERE o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND {} \
-         AND {} AND {} AND {} GROUP BY o.side",
-        reads::LIVE_FROM,
-        reads::NOT_FROZEN,
-        reads::HAS_AMOUNT,
-        reads::CUSTODY_OK,
-        reads::pinned_template()
-    ))?;
-    for r in st.query_map(params![token.0.to_vec()], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
-        let (side, n) = r?;
-        if side == 1 {
-            open_asks = n;
-        } else {
-            open_bids = n;
-        }
-    }
     Ok(StatsView {
         token: token.to_hex(),
         price_basis: basis.to_string(),

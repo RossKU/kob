@@ -452,6 +452,15 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
     assert_eq!((v["best_bid"].as_str(), v["best_ask"].as_str(), v["mid"].as_str()), (Some("210000"), Some("290000"), Some("250000")));
     assert_eq!(v["spread_bps"], 3200);
     assert_eq!((v["depth_2pct_quote"].as_str(), v["depth_2pct_bid_sompi"].as_str(), v["depth_2pct_ask_sompi"].as_str()), (Some("0"), Some("0"), Some("0")));
+    // the open counts are the orders of that book: the auction, the plain ask and the due TWAP; the two GTC bids (6 asks and 3 bids are live)
+    assert_eq!((v["open_asks"].as_i64(), v["open_bids"].as_i64()), (Some(3), Some(2)));
+    // an expired ask (soft expiry at the node's DAA score) leaves the book and its count
+    e.w.execute("UPDATE orders SET expiry_daa = 1000 WHERE covenant_id = ?1", params![cid(0x51)]).unwrap();
+    e.state.generation.bump();
+    let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
+    assert_eq!((v["open_asks"].as_i64(), v["open_bids"].as_i64()), (Some(2), Some(2)));
+    e.w.execute("UPDATE orders SET expiry_daa = 400000000 WHERE covenant_id = ?1", params![cid(0x51)]).unwrap();
+    e.state.generation.bump();
 
     // 300 DAA later: the auction is at 3.20 - 13 x 0.03 = 2.81, the rising bid at 1.80 + 13 x 0.03 = 2.19, and the band around
     // their mid 2.50 still empty; the IOC orders are past their kill time
