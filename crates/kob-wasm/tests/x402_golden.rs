@@ -527,3 +527,25 @@ fn pay_native_requires_the_payer_cap() {
     assert!(!below.contains("is required") && below.contains("amount"), "{below}");
     x402::pay_native(&req(json!({ "paymentId": "pay-native-cap-0001", "maxAmountSompi": "50000000" }))).expect("at the cap");
 }
+
+/// A `nowMs` that is not a time (NaN, an infinity or a negative number) is refused. Cast to an
+/// integer it would be 0 or the largest one, and at 0 an expired invoice would count as valid.
+#[test]
+fn check_invoice_refuses_a_broken_clock() {
+    use kob_x402::wire::{Finality, Network};
+    let offer =
+        kob_x402::client::native::native_requirements(Network::Testnet10, 50_000_000, &address(MERCHANT), 60, Finality::Accepted)
+            .unwrap();
+    let expires = NOW_MS + 600_000;
+    let invoice = kob_x402::invoice::Invoice::new(Network::Testnet10, "order-1", expires, None, vec![offer]);
+    let id = invoice.id_hex().unwrap();
+    let json = serde_json::to_string(&invoice).unwrap();
+    let ok: Value = serde_json::from_str(&x402::check_invoice(&json, &id, NOW_MS as f64).unwrap()).unwrap();
+    assert_eq!(ok["expiresAtMs"], json!(expires));
+    let late = x402::check_invoice(&json, &id, (expires + 1) as f64).expect_err("an expired invoice");
+    assert!(late.contains("invoice_expired"), "{late}");
+    for broken in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+        let e = x402::check_invoice(&json, &id, broken).expect_err("a broken clock must be refused");
+        assert!(e.contains("nowMs"), "{broken}: {e}");
+    }
+}

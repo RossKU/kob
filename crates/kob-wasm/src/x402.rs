@@ -1817,7 +1817,14 @@ pub fn invoice_id(json: &str) -> R<String> {
 ///
 /// Validity covers the version, network, reference, expiry and accepts. The result is `{ id,
 /// expiresAtMs, kaspaUri }`, where `kaspaUri` is the `kaspa:` fallback of a KAS invoice, or null.
-pub fn check_invoice(json: &str, id: &str, now_ms: u64) -> R<String> {
+///
+/// A `nowMs` that is not a finite number of at least 0 is refused, so a broken clock never makes an
+/// expired invoice count as valid.
+pub fn check_invoice(json: &str, id: &str, now_ms: f64) -> R<String> {
+    if !now_ms.is_finite() || now_ms < 0.0 {
+        return Err(perr(format!("nowMs: {now_ms} is not a time")));
+    }
+    let now_ms = now_ms as u64;
     let inv = invoice_of(json)?;
     kob_x402::invoice::check_id(&inv, id).map_err(xerr)?;
     let network = net(&inv.network)?;

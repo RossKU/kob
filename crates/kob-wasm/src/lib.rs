@@ -2041,7 +2041,7 @@ mod x402_exports {
     /// Checks that an invoice hashes to `id` and is valid at `nowMs`.
     #[wasm_bindgen(js_name = x402CheckInvoice)]
     pub fn x402_check_invoice(invoice: &str, id: &str, now_ms: f64) -> Result<String, JsError> {
-        js(x402::check_invoice(invoice, id, now_ms as u64))
+        js(x402::check_invoice(invoice, id, now_ms))
     }
 
     /// Signed self-spend that makes an unsettled payment unconfirmable.
