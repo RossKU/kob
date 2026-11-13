@@ -1,13 +1,19 @@
-// SWEEP records (KOB1 optional record 0x83, kob-protocol `payload::verify_sweep`): the maker's sweep of an order's strays IN PLACE.
+// Sweep records (KOB1 optional record 0x83, `payload::verify_sweep` in kob-protocol).
 //
-// A sweep record names (output, input): the maker's `cancel` of the order spent at `input` continues its covenant id at `output` under the SAME
-// script (the same state, so the same price, amount and custody). kob-wasm builds sweeps (`sweepOrder`) but exposes no recovery for them, so this
-// module re-checks a record against the built transaction exactly as `verify_sweep` does, with the previous state taken from the order input's
-// signing plan (whose script `decodeSigning` checks against the spent UTXO):
-//   * the input is spent by its maker's `cancel`, carries a covenant id and is the P2SH of that state; no other input carries the id;
-//   * the output is the P2SH of the SAME state, bound to the same covenant id with the order input as its authorising input, and the only
-//     output bound to that id.
-// Pure (no I/O); used by the pre-sign decoder and by the record store after a sweep was accepted.
+// A sweep moves an order's strays in place. The record names an output and an input. The maker's
+// `cancel` of the order spent at the input continues the covenant id at the output under the same
+// script, so the state, price, amount and custody stay the same.
+//
+// kob-wasm builds sweeps (`sweepOrder`) but has no recovery for them. This module re-checks a
+// record against the built transaction as `verify_sweep` does. The previous state comes from the
+// order input's signing plan, whose script `decodeSigning` checks against the spent UTXO.
+//
+// - The input is spent by its maker's `cancel`, carries a covenant id and is the P2SH of that
+//   state. No other input carries the id.
+// - The output is the P2SH of the same state, bound to the same covenant id with the order input as
+//   its authorising input. It is the only output bound to that id.
+//
+// Pure, no I/O. The pre-sign decoder and the record store use it.
 import { isOrderKind } from './order-facts';
 import type { Hex, OrderState, Payload, SigPlan, TxJson } from './types';
 import type { KobWasm } from './wasm';
@@ -23,6 +29,7 @@ export interface RecoveredSweep {
   order: OrderState;
 }
 
+/** A sweep record that does not hold, with the reason shown to the user. */
 export interface SweepFailure { output: number; input: number; reason: string }
 
 /** The sweep records of a payload (none when it does not decode). */
@@ -37,7 +44,7 @@ export function sweepRecordsOf(kob: KobWasm, payloadHex: string): { output: numb
   return (p?.records ?? []).flatMap((r) => (r.type === 'sweep' ? [{ output: r.output, input: r.input }] : []));
 }
 
-/** Verifies one sweep record against the transaction and the signing plans of its inputs (`verify_sweep`). */
+/** Verifies one sweep record against the transaction and the signing plans (`verify_sweep`). */
 export function verifySweep(kob: KobWasm, tx: TxJson, plans: readonly SigPlan[], rec: { output: number; input: number }): RecoveredSweep | SweepFailure {
   const { output, input } = rec;
   const bad = (reason: string): SweepFailure => ({ output, input, reason: `sweep record for output ${output}: ${reason}` });
@@ -69,9 +76,10 @@ export function verifySweep(kob: KobWasm, tx: TxJson, plans: readonly SigPlan[],
   return { output, input, covenantId: id, value: BigInt(out.value), order: prev };
 }
 
+/** True when `verifySweep` rejected the record. */
 export const isSweepFailure = (r: RecoveredSweep | SweepFailure): r is SweepFailure => 'reason' in r;
 
-/** Every sweep record of a built transaction, verified: the sweeps that hold and the records that do not. */
+/** Verifies every sweep record of a built transaction and splits them into held and failed. */
 export function recoverSweeps(kob: KobWasm, tx: TxJson, plans: readonly SigPlan[]): { sweeps: RecoveredSweep[]; failed: SweepFailure[] } {
   const sweeps: RecoveredSweep[] = [];
   const failed: SweepFailure[] = [];

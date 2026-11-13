@@ -1,59 +1,89 @@
-// Positions: an if-done / if-one-cancels entry or a repeat entry grouped with its exits, one logical position for the UI (matcher.md 6, 6.1, 10.8, 10.9).
+// Positions. An if-done or if-one-cancels entry, or a repeat entry, is grouped with its exits into
+// one logical position for the UI (docs/spec/matcher.md, sections 6 and 6.1).
 //
-// How the indexer links orders (crates/kobd/src/indexer/reads.rs): an exit's `parent` is its entry's covenant id; the detail view of an
-// entry lists `children` (exit ids); `repeat` is `{role:'entry', rpt_amount, rearm_amount = rpt_amount - 1}` on a repeating entry and
-// `{role:'exit', parent}` on a booked exit. We use all three, so grouping works on list views (no `children`) and detail views alike.
-// A pair position (a `KobIfdPair` entry and its `KobCondPair` exits) is one pair: amounts are base units of A, `quote` names B.
+// The indexer links orders in `crates/kobd/src/indexer/reads.rs`.
+//
+// - An exit's `parent` is its entry's covenant id.
+// - The detail view of an entry lists `children`, the exit ids.
+// - `repeat` is `{role:'entry', rpt_amount, rearm_amount}` on a repeating entry, with
+//   `rearm_amount = rpt_amount - 1`, and `{role:'exit', parent}` on a booked exit.
+//
+// Grouping uses all three, so it works on list views (no `children`) and on detail views.
+//
+// A pair position is a `KobIfdPair` entry with its `KobCondPair` exits. Its amounts are base units
+// of A, and `quote` names B.
 import type { OrderView } from '../data/indexer-types';
 import { pairOfView } from './pair-view';
 import type { Hex } from './types';
 
+/** How a position is built: one order, an entry with exits, or a repeating entry. */
 export type PositionKind = 'single' | 'ifd' | 'repeat';
+/** Lifecycle state of a position, derived from its members. See `Position.status`. */
 export type PositionStatus = 'open' | 'partial' | 'exits-only' | 'waiting' | 'closed';
 
+/** One logical position: an entry with its exits, or a standalone order. */
 export interface Position {
-  /** entry covenant id (or the order's own id for a standalone order; the parent id for an orphan exit group) */
+  /** Entry covenant id. A standalone order uses its own id, an orphan exit group the parent id. */
   id: Hex;
   kind: PositionKind;
-  /** null when only exits are known (entry closed or not in the input) */
+  /** Null when only exits are known (the entry is closed or not in the input). */
   entry: OrderView | null;
-  /** exits ordered by genesis DAA (oldest first) */
+  /** Exits ordered by genesis DAA, oldest first. */
   exits: OrderView[];
-  /** exits whose entry is not among the input views */
+  /** True when the exits' entry is not among the input views. */
   orphanExits: boolean;
   side: 'sell' | 'buy';
-  /** a pair position: its quote token B (amounts stay base units of A); null for a KAS-quoted position */
+  /**
+   * The quote token B of a pair position (amounts stay base units of A). Null when quoted in KAS.
+   */
   quote: Hex | null;
   /**
-   * open: entry live, nothing filled yet. partial: entry live with fills (exits exist). exits-only: entry gone, exits still live.
-   * waiting: a repeating entry that is sold out (amount 0) and waits for its exits to re-arm it. closed: every member terminal.
+   * - open: the entry is live and nothing is filled yet.
+   * - partial: the entry is live with fills (exits exist).
+   * - exits-only: the entry is gone and exits are still live.
+   * - waiting: a repeating entry that is sold out (amount 0) and waits for its exits to re-arm it.
+   * - closed: every member is terminal.
    */
   status: PositionStatus;
-  /** the entry's initial amount in base units (single: the order's); null when unknown */
+  /** The entry's initial amount in base units. Null when unknown. */
   amountTotal: bigint | null;
-  /** base units the entry has filled so far (single: filled_amount) */
+  /** Base units the entry has filled so far. */
   amountDone: bigint;
-  /** open base units: the entry's amount left plus the amount left of every live exit; null when the entry's quantity is a KAS budget */
+  /**
+   * Open base units: the entry's amount left plus the amount left of every live exit. Null for a
+   * KAS budget.
+   */
   amountLeft: bigint | null;
   /**
-   * Repeat positions only. `done` = booked exits that sold out on their take-profit (completed cycles, one per exit); `rearmAmount` = base units
-   * the entry can still re-arm (`repeat.rearm_amount`, i.e. rptAmount - 1); null when the entry is not in the input.
+   * Repeat positions only.
+   * - `done`: booked exits that sold out on their take-profit, one per completed cycle.
+   * - `rearmAmount`: base units the entry can still re-arm (`repeat.rearm_amount`, which is
+   *   rptAmount - 1). Null when the entry is not in the input.
    */
   cycles: { done: number; rearmAmount: bigint | null } | null;
-  /** every LIVE (open / partial) order of the position, entry first then exits: exactly what `planCancelAll` cancels in one go */
+  /**
+   * Every live (open or partial) order of the position, entry first. `planCancelAll` cancels
+   * exactly these.
+   */
   cancelIds: Hex[];
 }
 
-// `killed`: an IOC / FOK / market order whose unfilled rest was returned (indexer processor.rs `(None, Some("kill")) => "killed"`)
+// `killed` is an IOC, FOK or market order whose unfilled rest was returned (`processor.rs` in the
+// indexer).
 const TERMINAL = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
 const LIVE = new Set(['open', 'partial']);
+/** True for a status after which an order never changes again. */
 export const isTerminalStatus = (s: string): boolean => TERMINAL.has(s);
+/** True for a status of an order that can still trade or be cancelled. */
 export const isLiveStatus = (s: string): boolean => LIVE.has(s);
 
 const byGenesis = (a: OrderView, b: OrderView): number =>
   a.genesis.daa - b.genesis.daa || a.genesis.block_seq - b.genesis.block_seq || (a.covenant_id < b.covenant_id ? -1 : 1);
 
-/** Contract name without the family suffix: `KobIfdBidKron` -> `KobIfdBid` (the KRON family shares every rule of the KCC-20 kinds). */
+/**
+ * Contract name without the family suffix, `KobIfdBidKron` -> `KobIfdBid`. The KRON family shares
+ * every rule of the KCC-20 kinds.
+ */
 export const baseContract = (c: string | null | undefined): string => (c ?? '').replace(/Kron$/, '');
 
 const parentOf = (v: OrderView): Hex | null => v.parent ?? (v.repeat?.role === 'exit' ? (v.repeat.parent ?? null) : null);
@@ -91,9 +121,12 @@ function build(id: Hex, entry: OrderView | null, exits: OrderView[], orphan: boo
 }
 
 /**
- * Groups views into positions. An entry is any order that is the parent of another in the input (or lists `children`, or is a repeat entry);
- * its exits are the orders naming it as `parent`. Exits whose entry is absent form an orphan group per parent id. Everything else is a
- * `single`. Result: newest genesis first (by the entry, or the newest exit of an orphan group), ties broken by id.
+ * Groups views into positions.
+ *
+ * An entry is any order that is the parent of another in the input, lists `children` or is a repeat
+ * entry. Its exits are the orders naming it as `parent`. Exits whose entry is absent form one
+ * orphan group per parent id. Every other order is a `single`. The result is sorted newest genesis
+ * first, by the entry or by the newest exit of an orphan group, with ties broken by id.
  */
 export function groupPositions(views: OrderView[]): Position[] {
   const byId = new Map(views.map((v) => [v.covenant_id, v]));
@@ -105,7 +138,7 @@ export function groupPositions(views: OrderView[]): Position[] {
     (exitsOf.get(p) ?? exitsOf.set(p, []).get(p)!).push(v);
     attached.add(v.covenant_id);
   }
-  // children lists cover exits the input already contains but whose own `parent` is missing (older list views)
+  // `children` also covers exits the input contains whose own `parent` is missing.
   for (const v of views) {
     for (const c of v.children ?? []) {
       const ch = byId.get(c);
