@@ -171,7 +171,8 @@ is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fil
   other order can claim: its own input index, or (the unsold rest of an IOC sell, a pair order's custody rest or return)
   the index of its own custody input. One output never serves two orders. The custody of a `KobAsk` / `KobCondAsk` that
   rests after a partial fill is not positional: it may sit at any output, which the order's own covenant id owns (only
-  that order can spend it), so no other order can claim it either.
+  that order can spend it), so no other order can claim it either. Nor is the custody a `KobIfdPair` merge creates
+  when the entry held none: it sits at the output the filler names (`aOut` / `bOut`), owned by the entry's covenant id.
 - **Stop bands** are exact: `stop ∓ ⌊stop × bps / 10000⌋` quote units per whole token, rounded in the maker's
   favour, at any stop price (a stop leg needs a stop of at most 922,337,203,685,477 quote units per whole token).
 - **No on-chain price-time priority**; the tip is the priority lever. Self-trade prevention is the
