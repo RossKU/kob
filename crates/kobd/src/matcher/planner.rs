@@ -1,10 +1,12 @@
-//! Planner types and settings shared by the global batch planner ([`super::batch`]).
+//! Plan types and settings of the global batch planner ([`super::batch`]).
 //!
-//! The batch itself is planned over every book at once by [`super::batch::plan_batch`]: one transaction may fill several
-//! token books, the pair orders of any pair (netted and routed), every order class together, and arm the stops its plain fills trigger
-//! (`docs/spec/matcher.md` §3, §4). This module holds what a plan is ([`Plan`], [`Fill`], [`PlanUpdate`]), the planner
-//! settings ([`PlannerConfig`]), the physical limits a transaction is sized against ([`PHYSICAL_TX_BYTES`]) and the cost
-//! estimates ([`est_fee`], [`update_cost`]).
+//! [`super::batch::plan_batch`] plans one batch over every book at once. One transaction may fill
+//! several token books and the pair orders of any pair (netted and routed), for every order class
+//! together, and it arms the stops its plain fills trigger (`docs/spec/matcher.md` §3 and §4).
+//!
+//! This module holds the plan ([`Plan`], [`Fill`], [`PlanUpdate`]), the planner settings
+//! ([`PlannerConfig`]), the size limit a transaction is planned against ([`PHYSICAL_TX_BYTES`])
+//! and the cost estimates ([`est_fee`], [`update_cost`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,42 +16,51 @@ use serde::{Deserialize, Serialize};
 use super::book::{BookKey, CovId, Outpoint};
 use super::candidate::*;
 
-/// The largest transaction a node relays and a block can hold, in serialized bytes: rusty-kaspa v2.1.0 charges a
-/// transaction `transient mass = 4 × size` (`consensus/core/src/mass/mod.rs:367`, `TRANSIENT_BYTE_TO_MASS_FACTOR`
-/// `consensus/core/src/constants.rs:31`) and its mempool refuses a transient mass above the block limit of 1,000,000
-/// (`mining/src/mempool/check_transaction_limits.rs:24`, limits `consensus/core/src/config/params.rs:626`), so no
-/// transaction exceeds 250,000 bytes. The compute (500,000) and storage (500,000) limits are checked on the built
-/// transaction ([`kob_protocol::tx::MassReport::within_block_limits`]); the planner starts from this size and shrinks its
-/// budget when a built batch overruns one of them (`super::engine`).
+/// Largest transaction a node relays and a block can hold, in serialized bytes: 250,000.
+///
+/// rusty-kaspa v2.1.0 charges a transaction a transient mass of `4 × size`
+/// (`TRANSIENT_BYTE_TO_MASS_FACTOR`, `consensus/core/src/constants.rs:31`). Its mempool refuses a
+/// transient mass above the block limit of 1,000,000
+/// (`mining/src/mempool/check_transaction_limits.rs:24`). The compute and storage limits
+/// (500,000 each) are checked on the built transaction
+/// ([`kob_protocol::tx::MassReport::within_block_limits`]). The planner starts from this size and
+/// shrinks its budget when a built batch overruns one of them (`super::engine`).
 pub const PHYSICAL_TX_BYTES: u64 = kob_protocol::tx::BLOCK_TRANSIENT_LIMIT / 4;
 
 /// Planner settings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PlannerConfig {
-    /// `t = DAA − margin` (§3.3; default 5).
+    /// Auction time is `t = DAA − safety_margin` (§3.3). Default 5.
     pub safety_margin: u64,
-    /// Fee rate, sompi per gram (at least 100).
+    /// Fee rate in sompi per gram, at least 100.
     pub fee_rate: u64,
-    /// Optional operator cap on the size of one transaction, bytes. 0 (the default): the physical limit
-    /// ([`PHYSICAL_TX_BYTES`] and the block mass limits of the built transaction). A larger batch only costs a larger
-    /// fee, which the batch pays; a matcher that builds too large simply loses races, so nothing else bounds it.
+    /// Operator cap on the size of one transaction, in bytes. 0 (the default) means the physical
+    /// limit: [`PHYSICAL_TX_BYTES`] and the block mass limits of the built transaction.
+    ///
+    /// A larger batch only costs a larger fee, which the batch pays. A matcher that builds too
+    /// large only loses races, so nothing else bounds it.
     pub max_tx_bytes: u64,
-    /// Smallest profit (sompi) a batch must make after its fee.
+    /// Smallest profit in sompi a batch must make after its fee.
     pub min_profit: i64,
-    /// Arm (or ratchet) the listed stops a batch's plain fills trigger but the batch does not fill, with an `update`
-    /// whenever the batch stays profitable (its cost is charged, its `keeperTip` is income, §4.4). Off: stops are only
+    /// Whether a batch arms or ratchets stops.
+    ///
+    /// With `true`, a batch arms (or ratchets) the listed stops that its plain fills trigger but
+    /// that it does not fill, with an `update`, whenever the batch stays profitable. The cost of
+    /// the update is charged and its `keeperTip` is income (§4.4). With `false`, stops are only
     /// filled by the batch that triggers them.
     pub arm: bool,
-    /// Most transactions one order may take part in within a tick: its first fill and the chained fills of its unaccepted
-    /// continuations (§7).
+    /// Most transactions one order may take part in within a tick: its first fill and the chained
+    /// fills of its unaccepted continuations (§7).
     pub max_chain: usize,
-    /// Optional operator knob: at most this many best-priority candidates per (book, class, side). 0 (the default): every
-    /// candidate. The planner's walks are sorted and bounded by the tick's wall-clock budget, so no cap is needed for time
-    /// (a cap only hides the tail of a book.
+    /// Optional operator cap: at most this many best-priority candidates per (book, class, side).
+    /// 0 (the default) means every candidate.
+    ///
+    /// The walks of the planner are sorted and bounded by the wall-clock budget of the tick, so no
+    /// cap is needed for time. A cap only hides the tail of a book.
     pub max_candidates_per_group: usize,
-    /// Token surplus the operator may keep as inventory (`docs/spec/matcher.md` §3.5, *inventory*). Off by default: the
-    /// reference planner then holds no tokens.
+    /// Token surplus the operator may keep as inventory (`docs/spec/matcher.md` §3.5, *inventory*).
+    /// Off by default, so the reference planner holds no tokens.
     pub inventory: InventoryPolicy,
 }
 
@@ -72,14 +83,16 @@ impl Default for PlannerConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UnitPrice {
+    /// Price in sompi.
     #[serde(with = "kob_protocol::json::field")]
     pub sompi: u64,
+    /// Base units the price is for.
     #[serde(with = "kob_protocol::json::field")]
     pub per: u64,
 }
 
 impl UnitPrice {
-    /// The KAS `q` base units are worth at this price, rounded down (0 for a malformed price).
+    /// Value in sompi of `q` base units at this price, rounded down. 0 for a malformed price.
     pub fn value(&self, q: i64) -> i128 {
         if self.per == 0 || q <= 0 {
             return 0;
@@ -92,49 +105,62 @@ impl UnitPrice {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InventoryToken {
-    /// The token's covenant id (hex).
+    /// The covenant id of the token (hex).
     #[serde(with = "kob_protocol::json::field")]
     pub token: [u8; 32],
-    /// The owner's own valuation of the token (it sells its inventory off-matcher), used instead of the plain KAS bids.
-    /// Optional.
+    /// The owner's own valuation of the token, used instead of the plain KAS bids. Optional.
+    ///
+    /// The owner sells the inventory off-matcher.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ref_price: Option<UnitPrice>,
-    /// Least surplus (base units) worth keeping. With `ref_price`: none unless set. Without it the bound is the dust rule,
-    /// the smallest fill one of the valued bids accepts (its minimum fill), so the kept amount alone could fill it (no
-    /// unsellable dust); `min_amount` only raises it (a value below the dust rule changes nothing).
+    /// Least surplus in base units worth keeping.
+    ///
+    /// With `ref_price` there is no bound unless this is set. Without it the bound is the dust
+    /// rule: the smallest fill one of the valued bids accepts (its minimum fill), so that the kept
+    /// amount alone could fill it and no unsellable dust is left. `min_amount` only raises the
+    /// bound, and a value below the dust rule changes nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_amount: Option<i64>,
-    /// Most base units of the token kept per period ([`InventoryPolicy::period_daa`]); none: no bound. A batch that would
-    /// keep more than what is left of it keeps none (the surplus goes to the pair ask as without the policy).
+    /// Most base units of the token kept per period ([`InventoryPolicy::period_daa`]). None means
+    /// no bound.
+    ///
+    /// A batch that would keep more than what is left of it keeps none, and the surplus goes to
+    /// the pair ask as without the policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_amount: Option<i64>,
 }
 
-/// A `refPrice` more than this many times above the best plain KAS ask of its token, or below its best plain bid by the
-/// same factor, is out of line with the book (stale after a price move, or a unit slip: `per` meant as one whole token is
-/// `10^decimals` times off): the token is not kept while that holds.
+/// A `refPrice` is out of line with the book when it is more than this many times above the best
+/// plain KAS ask of its token, or below its best plain bid by the same factor.
+///
+/// Such a price is stale after a price move, or has a unit slip: a `per` meant as one whole token
+/// is `10^decimals` times off. The token is not kept while that holds.
 pub const REF_PRICE_BAND: i128 = 4;
 
 /// One day at the nominal 10 DAA per second: the default budget period of the inventory policy.
 pub const INVENTORY_PERIOD_DAA: u64 = 864_000;
 
-/// Default `maxFee` of the inventory policy (sompi per period): 10 KAS a day. A policy file that names none keeps surpluses
-/// until the batches that kept one paid this much network fee in the period (a finite budget unless the operator sets a
-/// larger one).
+/// Default `maxFee` of the inventory policy, in sompi per period: 10 KAS.
+///
+/// A policy file that names none keeps surpluses until the batches that kept one paid this much
+/// network fee in the period.
 pub const DEFAULT_INVENTORY_MAX_FEE: u64 = 1_000_000_000;
 
-/// What the inventory policy has used in the current period (kept per token, network fee of the batches that kept a
-/// surplus), recorded by the runner after each tick and read by the planner ([`InventoryPolicy::rule`]).
+/// What the inventory policy has used in the current period.
+///
+/// The runner records it after each tick and the planner reads it ([`InventoryPolicy::rule`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InventoryUse {
     /// DAA score the period started at (None: no period yet).
     pub since: Option<u64>,
+    /// Base units kept per token.
     pub kept: BTreeMap<[u8; 32], i64>,
+    /// Network fee, in sompi, of the batches that kept a surplus.
     pub fee: u64,
 }
 
 impl InventoryUse {
-    /// Reads the use a previous run saved ([`InventoryUse::save`]); none when the file does not exist.
+    /// Reads the use a previous run saved ([`InventoryUse::save`]). None: the file does not exist.
     pub fn load(path: &std::path::Path) -> Result<Option<Self>, String> {
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
@@ -155,8 +181,8 @@ impl InventoryUse {
         }
         Ok(Some(InventoryUse { since, kept, fee }))
     }
-    /// Writes the use (a small JSON file next to the indexer's database), so a restart continues the period's budgets
-    /// instead of starting them again. Written to a temporary file and renamed.
+    /// Writes the use, a small JSON file next to the indexer's database, so a restart continues the
+    /// budgets of the period. It is written to a temporary file and renamed.
     pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
         let kept: serde_json::Map<String, serde_json::Value> =
             self.kept.iter().map(|(t, a)| (kob_protocol::json::to_hex(t), serde_json::Value::from(*a))).collect();
@@ -165,13 +191,13 @@ impl InventoryUse {
         std::fs::write(&tmp, v.to_string()).map_err(|e| format!("{}: {e}", tmp.display()))?;
         std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
     }
-    /// Starts a new period when `period` DAA have passed since the current one began (or none has).
+    /// Starts a new period when `period` DAA have passed since the current one began, or none has.
     pub fn roll(&mut self, daa: u64, period: u64) {
         if self.since.is_none_or(|s| daa >= s.saturating_add(period.max(1))) {
             *self = InventoryUse { since: Some(daa), ..InventoryUse::default() };
         }
     }
-    /// Records a batch that kept `kept` and paid `fee`.
+    /// Records a batch that kept `kept` and paid `fee`. A batch that kept nothing is not recorded.
     pub fn record(&mut self, kept: &[Kept], fee: u64) {
         if kept.is_empty() {
             return;
@@ -184,53 +210,62 @@ impl InventoryUse {
     }
 }
 
-/// The surplus-inventory policy (owner decision 2026-10-06, `docs/spec/matcher.md` §3.5): when a batch leaves a token
-/// surplus that would go to a pair ask's delivery (the ask's guarantee is a floor), the operator may take it into its own
-/// key instead and count its value as income, so a crossed pair match that pays no KAS (no tips, no KAS bid able to take
-/// the surplus) still pays its fee. A surplus a KAS bid takes in the same transaction is still sold there first (no
-/// inventory risk); only the rest is kept. The matcher only accumulates: the owner sells the inventory off-matcher, and the
-/// maintenance jobs never sell a listed token ([`InventoryPolicy::holds`]).
+/// The surplus-inventory policy (`docs/spec/matcher.md` §3.5).
+///
+/// When a batch leaves a token surplus that would go to the delivery of a pair ask (the guarantee
+/// of the ask is a floor), the operator may take it into its own key instead and count its value
+/// as income. A crossed pair match that pays no KAS (no tips, and no KAS bid able to take the
+/// surplus) then still pays its fee. A surplus that a KAS bid takes in the same transaction is
+/// still sold there first, so it carries no inventory risk, and only the rest is kept.
+///
+/// The matcher only accumulates. The owner sells the inventory off-matcher, and the maintenance
+/// jobs never sell a listed token ([`InventoryPolicy::holds`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct InventoryPolicy {
-    /// Master switch (off by default).
+    /// Master switch. Off by default.
     pub accept_surplus_tokens: bool,
-    /// The share of a kept surplus's valuation counted as income, basis points (default 8,000: 80 %).
+    /// The share of the valuation of a kept surplus counted as income, in basis points. Default
+    /// 8,000 (80 %).
     pub haircut_bps: u32,
-    /// The tokens it may keep (an allowlist; every other token's surplus goes to the pair ask as before).
+    /// The tokens it may keep, as an allowlist. The surplus of every other token goes to the pair
+    /// ask.
     pub tokens: Vec<InventoryToken>,
-    /// KAS carrier (sompi) on the operator's token output that holds a kept surplus, and on the UTXO a maintenance merge of
-    /// inventory leaves. Default [`KEEP_CARRIER`] (2 KAS), the smallest round value at which the output adds no fee in
-    /// either fee mode; at least [`KEEP_CARRIER_MIN`]. The carriers of order outputs (deliveries, custodies) are the orders'
-    /// own terms and never change.
+    /// KAS carrier in sompi of the operator's token output that holds a kept surplus, and of the
+    /// UTXO a maintenance merge of inventory leaves.
+    ///
+    /// Default [`KEEP_CARRIER`] (2 KAS), at least [`KEEP_CARRIER_MIN`]. The carriers of order
+    /// outputs (deliveries, custodies) are the terms of the orders and never change here.
     #[serde(with = "kob_protocol::json::field")]
     pub keep_carrier: u64,
-    /// Most network fee (sompi) the batches that keep a surplus may pay per period (default
-    /// [`DEFAULT_INVENTORY_MAX_FEE`], 10 KAS). Checked before each batch (the batches of the same tick count): once it is
-    /// reached no surplus is kept until the period ends.
+    /// Most network fee in sompi the batches that keep a surplus may pay per period. Default
+    /// [`DEFAULT_INVENTORY_MAX_FEE`] (10 KAS). None means no bound.
+    ///
+    /// Checked before each batch, and the batches of the same tick count. Once the bound is
+    /// reached, no surplus is kept until the period ends.
     #[serde(with = "kob_protocol::json::field", skip_serializing_if = "Option::is_none")]
     pub max_fee: Option<u64>,
-    /// The budget period of `maxFee` and `tokens[].maxAmount`, DAA (default [`INVENTORY_PERIOD_DAA`], one day).
+    /// The budget period of `maxFee` and `tokens[].maxAmount`, in DAA. Default
+    /// [`INVENTORY_PERIOD_DAA`], one day.
     #[serde(with = "kob_protocol::json::field")]
     pub period_daa: u64,
-    /// What the current period has used (kept by the runner, not part of the file).
+    /// What the current period has used. The runner keeps it, and it is not part of the file.
     #[serde(skip)]
     pub used: InventoryUse,
 }
 
-/// Default carrier of a kept surplus's token output (sompi; [`InventoryPolicy::keep_carrier`]): 2 KAS.
+/// Default carrier of the output of a kept surplus ([`InventoryPolicy::keep_carrier`]): 2 KAS.
 ///
-/// Measured (`tests/matcher_crossmatch.rs`, `the_kept_output_carrier_adds_no_fee`): a token output carries a covenant id, so
-/// its KIP-9 storage plurality is 2 (rusty-kaspa `utxo_plurality`: 100-byte units of the stored UTXO) and its storage mass is
-/// `4 × 10^12 / carrier` grams. The relay fee (`rate × max(compute, 2 × bytes)`) never prices storage mass, so the fee of a
-/// batch is the same at every carrier the block storage limit allows (above 0.08 KAS). The storage-inclusive priority fee
-/// is unchanged while the storage mass stays below the batch's fee mass: the smallest batch that keeps a surplus (one KRON /
-/// KRON netting, 11,773 bytes, fee mass 23,546) stays unchanged at 1.72 KAS and above and pays more at 1.5 KAS, so 2 KAS
-/// (storage 20,217) is the smallest round carrier that adds nothing in either mode, for every program pair.
+/// 2 KAS is the smallest round carrier at which the output adds no fee in either fee mode, for
+/// every program pair. Measurements: `docs/ops/executor.md`, "The kept output's carrier", and
+/// `docs/spec/matcher.md` §3.5.
 pub const KEEP_CARRIER: u64 = 200_000_000;
 
-/// Least [`InventoryPolicy::keep_carrier`] (sompi): 0.5 KAS, the largest token-program floor (KaspaCom KCC20 0.2.5), well
-/// above the KIP-9 bound of a token output (0.08 KAS: a storage mass of `4 × 10^12 / carrier` within the block limit).
+/// Least [`InventoryPolicy::keep_carrier`] in sompi: 0.5 KAS.
+///
+/// It is the largest token-program floor (KaspaCom KCC20 0.2.5). It is well above the KIP-9 bound
+/// of a token output (0.08 KAS, the carrier at which its storage mass `4 × 10^12 / carrier` meets
+/// the block limit).
 pub const KEEP_CARRIER_MIN: u64 = 50_000_000;
 
 impl Default for InventoryPolicy {
@@ -248,15 +283,17 @@ impl Default for InventoryPolicy {
 }
 
 impl InventoryPolicy {
-    /// Reads a policy file (strict JSON, the camelCase fields of [`InventoryPolicy`]; `--inventory-policy`) and checks it.
+    /// Reads a policy file and checks it. The file is strict JSON with the camelCase fields of
+    /// [`InventoryPolicy`] (`--inventory-policy`).
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let p: InventoryPolicy = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         p.check().map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(p)
     }
-    /// The policy's own consistency: a haircut of at most 100 %, each token once, a `refPrice` positive, a `minAmount` not
-    /// negative, a `maxAmount` positive and not below `minAmount`, a period of at least one DAA.
+    /// The consistency of the policy itself: a haircut of at most 100 %, each token once, a
+    /// `refPrice` positive, a `minAmount` not negative, a `maxAmount` positive and not below
+    /// `minAmount`, and a period of at least one DAA.
     pub fn check(&self) -> Result<(), String> {
         if self.haircut_bps > 10_000 {
             return Err(format!("haircutBps {} above 10000", self.haircut_bps));
@@ -293,8 +330,8 @@ impl InventoryPolicy {
         }
         Ok(())
     }
-    /// The rule of `token` when the policy is on, lists it, and the period's budgets (`maxFee`, the token's `maxAmount`)
-    /// are not used up.
+    /// The rule of `token` when the policy is on, lists it, and the budgets of the period
+    /// (`maxFee`, the `maxAmount` of the token) are not used up.
     pub fn rule(&self, token: &[u8; 32]) -> Option<&InventoryToken> {
         if !self.accept_surplus_tokens || self.max_fee.is_some_and(|m| self.used.fee >= m) {
             return None;
@@ -302,7 +339,7 @@ impl InventoryPolicy {
         let r = self.tokens.iter().find(|t| &t.token == token)?;
         (self.room(r) > 0).then_some(r)
     }
-    /// What is left of the token's `maxAmount` this period (`i64::MAX`: no bound).
+    /// What is left of the `maxAmount` of the token this period (`i64::MAX`: no bound).
     pub fn room(&self, r: &InventoryToken) -> i64 {
         match r.max_amount {
             Some(m) => m.saturating_sub(self.used.kept.get(&r.token).copied().unwrap_or(0)).max(0),
@@ -313,23 +350,27 @@ impl InventoryPolicy {
     pub fn haircut(&self, v: i128) -> i128 {
         v.max(0) * self.haircut_bps.min(10_000) as i128 / 10_000
     }
-    /// Whether `token` is held as surplus inventory: listed, whether or not the switch is on (tokens already accumulated stay
-    /// put). The maintenance jobs never sell such a token (`crate::maintenance`).
+    /// Whether `token` is held as surplus inventory: it is listed, whether or not the switch is
+    /// on. Tokens already accumulated stay put, and the maintenance jobs never sell such a token
+    /// (`crate::maintenance`).
     pub fn holds(&self, token: &[u8; 32]) -> bool {
         self.tokens.iter().any(|t| &t.token == token)
     }
 }
 
-/// Byte estimate of the operator's token output a kept surplus adds (the output and its leader `next_states` entry).
+/// Byte estimate of the operator's token output that a kept surplus adds: the output and its
+/// leader `next_states` entry.
 pub const KEPT_OUTPUT_BYTES: u64 = OUTPUT_BYTES + NEXT_STATE_BYTES;
 
 /// A token surplus the batch keeps as the operator's inventory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Kept {
+    /// Covenant id of the token.
     pub token: [u8; 32],
     /// Base units the operator's token output receives.
     pub amount: i64,
-    /// Their valuation under the policy (after the haircut), sompi: counted as income of the batch.
+    /// Their valuation under the policy (after the haircut), in sompi. It counts as income of the
+    /// batch.
     pub value: i64,
 }
 
@@ -347,31 +388,38 @@ impl PlannerConfig {
 /// One planned fill.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Fill {
+    /// The candidate that is filled.
     pub cand: Cand,
-    /// Base units filled (a pair order: n base units of its base token A; its candidate is its primary leg, the other leg is
-    /// no fill of its own).
+    /// Base units filled. For a pair order: n base units of its base token A. Its candidate is its
+    /// primary leg, and the other leg is no fill of its own.
     pub amount: i64,
-    /// An unarmed stop leg / stop entry triggered in this transaction: the index (in [`Plan::fills`], which is the leg
-    /// index of the lowered batch) of the plain resting fill that is its evidence (a pair stop: the KAS-book fill of A, or the
-    /// resting `KobPair` fill).
+    /// For an unarmed stop leg or stop entry triggered in this transaction: the index of the plain
+    /// resting fill that is its evidence.
+    ///
+    /// The index is into [`Plan::fills`], which is the leg index of the lowered batch. For a pair
+    /// stop, the evidence is the KAS-book fill of A or the resting `KobPair` fill.
     pub evidence: Option<usize>,
-    /// A pair stop armed by two KAS-book fills (mode 0): the fill of B.
+    /// For a pair stop armed by two KAS-book fills (mode 0): the fill of B.
     pub evidence_b: Option<usize>,
-    /// The auction time the fill is priced at (§3.3: the earliest tick at which the batch pays, [`super::auction`]); its
-    /// quote is the auction's there. None: the lock time.
+    /// The auction time the fill is priced at. None means the lock time.
+    ///
+    /// It is the earliest tick at which the batch pays (§3.3, [`super::auction`]), and the quote is
+    /// the quote of the auction at that time.
     pub t: Option<u64>,
 }
 
 /// What an update does to its order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UpdateKind {
-    /// An unarmed stop leg or stop entry becomes armed (its band auction starts at the continuation's DAA score).
+    /// An unarmed stop leg or stop entry becomes armed. Its band auction starts at the DAA score of
+    /// the continuation.
     Arm,
     /// A trailing stop's trigger moves by the steps its evidence justifies.
     Trail,
 }
 
 impl UpdateKind {
+    /// Lowercase name of the kind, `"arm"` or `"trail"`.
     pub fn name(self) -> &'static str {
         match self {
             UpdateKind::Arm => "arm",
@@ -380,57 +428,70 @@ impl UpdateKind {
     }
 }
 
-/// An arm or trailing ratchet without a fill of the order (`kob_protocol::build::BatchUpdate`), next to its evidence.
+/// An arm or trailing ratchet without a fill of the order, next to its evidence.
+///
+/// It becomes a `kob_protocol::build::BatchUpdate`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanUpdate {
+    /// Covenant id of the order.
     pub id: CovId,
+    /// Book of the order.
     pub book: BookKey,
     /// The order UTXO the update spends.
     pub outpoint: Outpoint,
+    /// What the update does to the order.
     pub kind: UpdateKind,
-    /// Index in [`Plan::fills`] of the plain resting fill that is the evidence (a pair order: the KAS-book fill of A, or the
-    /// resting `KobPair` fill).
+    /// Index in [`Plan::fills`] of the plain resting fill that is the evidence. For a pair order it
+    /// is the KAS-book fill of A or the resting `KobPair` fill.
     pub evidence: usize,
-    /// A pair order armed by two KAS-book fills (mode 0): the fill of B.
+    /// For a pair order armed by two KAS-book fills (mode 0): the fill of B.
     pub evidence_b: Option<usize>,
     /// Sompi the batch takes from the order (its `keeperTip`).
     pub take: i64,
-    /// Estimated cost of the update (its bytes at the fee rate, at least the measured marginal fee).
+    /// Estimated cost of the update: its bytes at the fee rate, at least the measured marginal fee.
     pub cost: i64,
-    /// Trailing ratchet: the steps the evidence justifies (1 for an arm).
+    /// Trailing ratchet: the steps the evidence justifies. 1 for an arm.
     pub steps: i64,
 }
 
-/// A planned transaction: fills of any number of books and pair orders (§3) and the updates their evidence pays for (§4).
+/// A planned transaction: fills of any number of books and pair orders (§3), and the updates their
+/// evidence pays for (§4).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plan {
-    /// The book of the first fill (logs); [`Plan::books`] lists every book the plan trades.
+    /// The book of the first fill (for logs). [`Plan::books`] lists every book the plan trades.
     pub book: BookKey,
+    /// Lock time of the transaction.
     pub lock_time: u64,
     /// Pair order fills first (one per order), then the other fills in allocation order.
     pub fills: Vec<Fill>,
     /// Arms and trailing ratchets without a fill (their inputs follow the token inputs).
     pub updates: Vec<PlanUpdate>,
-    /// Σ bid-side spends − Σ ask-side proceeds (sompi): the spread plus the tips of every book and route.
+    /// Σ bid-side spends − Σ ask-side proceeds, in sompi: the spread plus the tips of every book
+    /// and route.
     pub margin: i64,
-    /// Σ keeper tips the updates take (sompi).
+    /// Σ keeper tips the updates take, in sompi.
     pub tips: i64,
+    /// Estimated size of the transaction in bytes.
     pub est_bytes: u64,
+    /// Estimated fee of the transaction in sompi.
     pub est_fee: i64,
-    /// Token surpluses the operator keeps as inventory ([`InventoryPolicy`]; empty with the policy off).
+    /// Token surpluses the operator keeps as inventory ([`InventoryPolicy`]). Empty with the policy
+    /// off.
     pub kept: Vec<Kept>,
 }
 
 impl Plan {
-    /// Estimated operator profit: the margin, the update tips and the value of the kept inventory less the fee.
+    /// Estimated operator profit: the margin, the update tips and the value of the kept inventory,
+    /// less the fee.
     pub fn profit(&self) -> i64 {
         self.margin.saturating_add(self.tips).saturating_add(self.kept_value()).saturating_sub(self.est_fee)
     }
-    /// The policy value of the inventory the plan keeps (sompi): income the built transaction's KAS accounting does not see.
+    /// The policy value of the inventory the plan keeps, in sompi. It is income that the KAS
+    /// accounting of the built transaction does not see.
     pub fn kept_value(&self) -> i64 {
         self.kept.iter().fold(0i64, |a, k| a.saturating_add(k.value))
     }
-    /// Every covenant id the plan spends (legs, merged entries and updated orders).
+    /// Every covenant id the plan spends: legs, merged entries and updated orders.
     pub fn spent_ids(&self) -> BTreeSet<CovId> {
         let mut s = BTreeSet::new();
         for f in &self.fills {
@@ -448,7 +509,8 @@ impl Plan {
     pub fn amount_of(&self, id: &CovId) -> i64 {
         self.fills.iter().filter(|f| &f.cand.id == id).map(|f| f.amount).sum()
     }
-    /// Every book the plan fills (a pair order fill counts in the markets of both its tokens, scale 0).
+    /// Every book the plan fills. A pair order fill counts in the markets of both its tokens, scale
+    /// 0.
     pub fn books(&self) -> BTreeSet<BookKey> {
         let mut s = BTreeSet::new();
         for f in &self.fills {
@@ -471,33 +533,38 @@ impl Plan {
         }
         s
     }
-    /// True when the plan fills a pair order.
+    /// Whether the plan fills a pair order.
     pub fn has_pair(&self) -> bool {
         self.fills.iter().any(|f| f.cand.pair.is_some())
     }
-    /// Fills triggered in this transaction (unarmed stops next to their evidence).
+    /// Fills triggered in this transaction: unarmed stops next to their evidence.
     pub fn triggered(&self) -> usize {
         self.fills.iter().filter(|f| f.evidence.is_some()).count()
     }
 }
 
-/// Whether `bid` pays at least what `ask` receives per token base unit (all-in, §2.1): `(quote ± tip) / scale` of both,
-/// compared exactly by cross-multiplication (within one book one scale; across the books of a market, a pair order's legs,
-/// like with like).
+/// Whether `bid` pays at least what `ask` receives per base unit of the token.
+///
+/// Both sides are `(quote ± tip) / scale` (§2.1), compared exactly by cross-multiplication. Within
+/// one book there is one scale. Across the books of a market and across the legs of a pair order,
+/// like is compared with like.
 pub fn crosses(bid: &Cand, ask: &Cand) -> bool {
     let (bn, bd) = bid.per_base();
     let (an, ad) = ask.per_base();
     bn * ad >= an * bd
 }
 
-/// Estimated fee of `bytes` at `fee_rate` (sompi per gram): the fee mass is max(compute, 2 × size); compute adds ~10 grams
-/// per script-public-key byte and the budgets, which the 10% margin covers.
+/// Estimated fee of `bytes` at `fee_rate` (sompi per gram).
+///
+/// The fee mass is max(compute, 2 × size). Compute adds about 10 grams per script-public-key byte
+/// and the budgets, which the 10 % margin covers.
 pub fn est_fee(bytes: u64, fee_rate: u64) -> i64 {
     (fee_rate as i128 * (2 * bytes as i128 + bytes as i128 / 10)).min(i64::MAX as i128) as i64
 }
 
-/// Estimated marginal cost of one update in a batch: its bytes at the fee rate, and at least the measured marginal fee of
-/// an update of its token program (`keeper_tips.json` `updateFee`, at the minimum fee rate) scaled to the fee rate.
+/// Estimated marginal cost of one update in a batch: its bytes at the fee rate, and at least the
+/// measured marginal fee of an update of its token program (`keeper_tips.json` `updateFee`, at the
+/// minimum fee rate) scaled to the fee rate.
 pub fn update_cost(u: &UpCand, fee_rate: u64) -> i64 {
     let floor = (u.fee_floor as i128 * fee_rate as i128 / kob_protocol::tx::MIN_FEE_RATE as i128).min(i64::MAX as i128) as i64;
     est_fee(u.bytes, fee_rate).max(floor)
@@ -507,8 +574,9 @@ pub fn update_cost(u: &UpCand, fee_rate: u64) -> i64 {
 mod inventory_tests {
     use super::*;
 
-    /// The documented policy file (`docs/ops/executor.md`, "Surplus inventory") parses, and the checks refuse what makes no
-    /// sense: an unknown key, a haircut above 100 %, a zero reference price, a token listed twice.
+    /// The documented policy file (`docs/ops/executor.md`, "Surplus inventory") parses, and the
+    /// checks refuse what makes no sense: an unknown key, a haircut above 100 %, a zero reference
+    /// price, a token listed twice.
     #[test]
     fn the_policy_file_parses_and_is_checked() {
         let doc = r#"{
@@ -552,7 +620,8 @@ mod inventory_tests {
         assert!(below.check().is_err(), "maxAmount below minAmount");
     }
 
-    /// A policy file that names no `maxFee` has a finite fee budget; the period's use survives a restart (saved and read back).
+    /// A policy file that names no `maxFee` has a finite fee budget. The use of the period survives
+    /// a restart: it is saved and read back.
     #[test]
     fn the_default_fee_budget_is_finite_and_the_use_is_saved() {
         let p: InventoryPolicy = serde_json::from_str(r#"{"acceptSurplusTokens": true}"#).unwrap();
@@ -572,7 +641,8 @@ mod inventory_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The period budgets: a token's `maxAmount` and the policy's `maxFee`, reset when the period ends.
+    /// The period budgets, the `maxAmount` of a token and the `maxFee` of the policy, reset when
+    /// the period ends.
     #[test]
     fn the_period_budgets_stop_keeping_until_the_period_ends() {
         let doc = r#"{
