@@ -1,20 +1,28 @@
-//! x402 bindings: JSON in / JSON out over the `kob-x402` payer and merchant SDK (native KAS, KCC-20,
-//! swap-and-pay), its preflight verifier, revocation and the hashes / digests of the binding.
+//! Bindings for the x402 payer and merchant SDK, as JSON in and JSON out.
 //!
-//! Conventions of `kob-protocol` apply: 64-bit integers are decimal strings (numbers are accepted on
-//! input), bytes are lowercase hex, transactions are kaspa-wasm safe JSON. Nothing here reads a clock
-//! or does I/O: `nowMs` and the chain snapshot are arguments, so the module runs on
-//! `wasm32-unknown-unknown` (the SDK's `SystemClock` is never touched).
+//! The module covers native KAS, KCC-20 and swap-and-pay payments, the preflight verifier,
+//! revocation, and the hashes and digests of the binding. It wraps the `kob-x402` crate.
 //!
-//! Errors are `String`s holding a JSON object `{ "reason", "diagnostic", "message", "retryable",
-//! "details"? }` (the `extensions.kaspa` shape) so the JS side can branch on the diagnostic.
+//! # Conventions
 //!
-//! Wallet flow: `x402BuildKcc20Unsigned` / `x402FinishKcc20` and `x402PrepareSwap` / `x402FinishSwap`
-//! return the unsigned transaction with its signing requests (`built.sign`), the wallet signs, and
-//! only signatures come back. Native KAS payments sign the request authorization digest with the
-//! funding key (a raw Schnorr signature over a digest, which browser wallets do not offer), so
-//! `x402PayNative` takes a local key; the KCC-20 and swap profiles commit the digest in the transaction
-//! payload instead and work with any wallet that signs the transaction.
+//! - The conventions of `kob-protocol` apply. Integers of 64 bits are decimal strings, and numbers
+//!   are also accepted on input. Bytes are lowercase hex. Transactions are kaspa-wasm safe JSON.
+//! - Nothing here reads a clock or does I/O. `nowMs` and the chain snapshot are arguments, so the
+//!   module runs on `wasm32-unknown-unknown` and never touches the `SystemClock` of the SDK.
+//! - An error is a `String` that holds the JSON object `{ "reason", "diagnostic", "message",
+//!   "retryable", "details"? }`. It is the `extensions.kaspa` shape, so the JS side can branch on
+//!   the diagnostic.
+//!
+//! # Wallet flow
+//!
+//! `x402BuildKcc20Unsigned` with `x402FinishKcc20`, and `x402PrepareSwap` with `x402FinishSwap`,
+//! return the unsigned transaction and its signing requests in `built.sign`. The wallet signs, and
+//! only signatures come back.
+//!
+//! A native KAS payment signs the request authorization digest with the funding key. That is a raw
+//! Schnorr signature over a digest, which browser wallets do not offer, so `x402PayNative` takes a
+//! local key. The KCC-20 and swap profiles commit the digest in the transaction payload instead,
+//! and work with any wallet that signs the transaction.
 
 use std::collections::BTreeMap;
 
@@ -42,7 +50,7 @@ type R<T> = Result<T, String>;
 
 const MAX_TX_JSON: usize = 4 << 20;
 
-// ------------------------------------------------------------------------------------------------ plumbing
+// Plumbing.
 
 fn parse<T: serde::de::DeserializeOwned>(what: &str, json: &str) -> R<T> {
     serde_json::from_str(json).map_err(|e| perr(format!("{what}: {e}")))
@@ -52,7 +60,9 @@ fn out<T: Serialize>(v: &T) -> R<String> {
     serde_json::to_string(v).map_err(|e| e.to_string())
 }
 
-/// A non-verifier failure (bad request shape, bad key): reported with the `invalid_payload` reason.
+/// A failure that is not the verifier's, such as a bad request shape or key.
+///
+/// It is reported with the `invalid_payload` reason.
 fn perr(message: impl Into<String>) -> String {
     json!({ "reason": "invalid_payload", "diagnostic": "invalid_kaspa_x402_payload", "message": message.into(), "retryable": false })
         .to_string()
@@ -136,7 +146,7 @@ fn secrets_of(keys: &[String]) -> R<BTreeMap<[u8; 32], [u8; 32]>> {
     Ok(m)
 }
 
-// ------------------------------------------------------------------------------------------------ wire structs
+// Wire structs.
 
 /// A KAS UTXO as the SDK's chain context reports it.
 #[derive(Clone, Debug, Deserialize)]
@@ -190,9 +200,10 @@ fn key_utxos(list: &[PayerUtxo], pubkey: &[u8; 32]) -> R<Vec<KeyUtxo>> {
     Ok(out)
 }
 
-/// Token identity as the caller configures it (either family: the family is the program's).
-/// `templateHash` / `extensionCommitment` default to the embedded registry entry of the covenant id
-/// (mainnet registry only); a KRON token has no extension commitment (omit it).
+/// Token identity as the caller configures it, for either family. The family is the program's.
+///
+/// `templateHash` and `extensionCommitment` default to the embedded registry entry of the covenant
+/// id, on the mainnet registry only. A KRON token has no extension commitment, so omit it.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TokenSpec {
@@ -209,21 +220,25 @@ struct TokenSpec {
     decimals: Option<u8>,
 }
 
-/// Where a token description comes from: decides whether its `custody` label is believed.
+/// Where a token description comes from. It decides whether its `custody` label is believed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Trust {
-    /// The caller's own configuration (the payer's pinned allowlist, the merchant's offer configuration): a custody
-    /// label may only TIGHTEN what the shipped registry derives from the program's capabilities.
+    /// The caller's own configuration, such as the payer's pinned allowlist or the merchant's offer
+    /// configuration. A custody label may only tighten what the shipped registry derives from the
+    /// capabilities of the program.
     Configured,
-    /// Derived from an offer a merchant sent: nothing in it is believed. A registry token takes its program,
-    /// extension commitment and custody from the shipped registry; any other program is classified
-    /// `issuer-controlled` (fail closed: pin it in `tokens` to accept it).
+    /// Derived from an offer that a merchant sent, so nothing in it is believed. A registry token
+    /// takes its program, extension commitment and custody from the shipped registry. Any other
+    /// program is classified `issuer-controlled`, which fails closed. Pin it in `tokens` to accept
+    /// it.
     Offer,
 }
 
-/// The custody class of a token program from the SHIPPED registry's template capabilities (`None`: the program is
-/// not in the registry, its capabilities are unknown). `unconditional` only when the registry lists no capability
-/// (no admin, freeze, seize, mint or burn path), exactly like `TokenAllowlist::from_registry`.
+/// The custody class of a token program, from the template capabilities of the shipped registry.
+///
+/// It is `None` when the program is not in the registry, so its capabilities are unknown. The
+/// class is `unconditional` only when the registry lists no capability, which means no admin,
+/// freeze, seize, mint or burn path. `TokenAllowlist::from_registry` applies the same rule.
 fn program_custody(template_hash: &[u8; 32]) -> Option<Custody> {
     let reg = Registry::default_registry();
     reg.templates.iter().find(|t| kob_protocol::registry::parse_hex32(&t.template_hash) == Some(*template_hash)).map(|t| {
@@ -243,7 +258,7 @@ fn allowed(network: Network, s: &TokenSpec, trust: Trust) -> R<AllowedToken> {
     } else {
         None
     };
-    // an offer cannot override the registry's program / extension commitment of a registry token
+    // An offer cannot override the program or extension commitment of a registry token.
     let (spec_template, spec_extension) = match (trust, reg_token) {
         (Trust::Offer, Some(_)) => (&None, &None),
         _ => (&s.template_hash, &s.extension_commitment),
@@ -262,7 +277,7 @@ fn allowed(network: Network, s: &TokenSpec, trust: Trust) -> R<AllowedToken> {
     let (program, family) = (tpl.id, tpl.family);
     let extension_commitment = match (spec_extension, reg_token, family) {
         (Some(h), _, _) => h32("extensionCommitment", h)?,
-        // a KRON token has no extension commitment
+        // A KRON token has no extension commitment.
         (None, _, Family::Kron) => [0; 32],
         (None, Some(t), _) => t
             .extension_commitment
@@ -277,7 +292,7 @@ fn allowed(network: Network, s: &TokenSpec, trust: Trust) -> R<AllowedToken> {
         (_, Some("issuer-controlled")) => Some(Custody::IssuerControlled),
         (_, Some(o)) => return Err(perr(format!("unknown custody {o:?}"))),
     };
-    // the class is the PROGRAM's (registry capabilities); a label can only tighten it
+    // The class is the program's, from the registry capabilities. A label can only tighten it.
     let custody = match (program_custody(&template_hash), requested) {
         (Some(Custody::IssuerControlled), Some(Custody::Unconditional)) => {
             return Err(perr(format!(
@@ -287,7 +302,7 @@ fn allowed(network: Network, s: &TokenSpec, trust: Trust) -> R<AllowedToken> {
         }
         (Some(Custody::IssuerControlled), _) => Custody::IssuerControlled,
         (Some(Custody::Unconditional), r) => r.unwrap_or(Custody::Unconditional),
-        // not in the registry: the caller's own label, else fail closed
+        // Not in the registry: the caller's own label, else fail closed.
         (None, Some(r)) => r,
         (None, None) => Custody::IssuerControlled,
     };
@@ -300,15 +315,15 @@ fn allowed(network: Network, s: &TokenSpec, trust: Trust) -> R<AllowedToken> {
         ticker: s.ticker.clone().or_else(|| reg_token.map(|t| t.ticker.clone())).unwrap_or_default(),
         decimals: s.decimals.or_else(|| reg_token.map(|t| t.decimals)).unwrap_or(0),
     };
-    // a KRON token has no extension commitment field: the allowlist entry is all zero
+    // A KRON token has no extension commitment field, so its allowlist entry is all zero.
     if family == Family::Kron && extension_commitment != [0; 32] {
         return Err(perr("a KRON token has no extension commitment (omit it or give all zeros)"));
     }
     Ok(allowed)
 }
 
-/// The tokens a payment may involve, from the offer itself (merchant token, route pay assets) unless
-/// the caller pins its own allowlist.
+/// The tokens a payment may involve, taken from the offer itself (merchant token, route pay
+/// assets) unless the caller pins its own allowlist.
 fn token_specs_of_offer(offer: &PaymentRequirements) -> Vec<TokenSpec> {
     let mut v = Vec::new();
     if let Some(t) = offer.extra.get("token").and_then(Value::as_object) {
@@ -355,7 +370,7 @@ fn policy_for(
         None => (token_specs_of_offer(offer), Trust::Offer),
     };
     for s in &specs {
-        // a duplicate covenant id (merchant asset listed twice) is harmless
+        // A duplicate covenant id, such as a merchant asset listed twice, is harmless.
         let _ = p.tokens.insert(allowed(network, s, trust)?);
     }
     Ok(p)
@@ -365,7 +380,7 @@ fn requirements_of(v: Value) -> R<PaymentRequirements> {
     serde_json::from_value(v).map_err(|e| perr(format!("offer: {e}")))
 }
 
-// ------------------------------------------------------------------------------------------------ results
+// Results.
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -377,7 +392,8 @@ struct PayOut {
     expires_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     payer_spent: Option<String>,
-    /// Swap-and-pay: sompi taken from the payer's KAS coins (fee, carriers, and the cost when paying KAS).
+    /// Swap-and-pay only: sompi taken from the payer's KAS coins. It covers the fee, the carriers
+    /// and, when paying KAS, the cost.
     #[serde(skip_serializing_if = "Option::is_none")]
     kas_spent: Option<String>,
     warnings: Vec<String>,
@@ -407,13 +423,15 @@ fn pay_out_with(payload: PaymentPayload, payer_spent: Option<u64>, kas_spent: Op
     })
 }
 
-// ------------------------------------------------------------------------------------------------ hashes and digests
+// Hashes and digests.
 
+/// Canonical JSON of a JSON text.
 pub fn canonical(json: &str) -> R<String> {
     let v: Value = parse("value", json)?;
     canonical_json(&v).map_err(xerr)
 }
 
+/// SHA-256 of a text's UTF-8 bytes, as hex.
 pub fn sha256_hex(text: &str) -> String {
     to_hex(&sha256(text.as_bytes()))
 }
@@ -424,13 +442,14 @@ pub fn requirements_hash(req: &str) -> R<String> {
     Ok(to_hex(&canonical_hash(&v).map_err(xerr)?))
 }
 
-/// The reference SDK's request fingerprint (`body` is JSON text; `null` for none).
+/// The request fingerprint of the reference SDK. `body` is JSON text, or `null` for none.
 pub fn request_hash(method: &str, url: &str, body: &str, requirements_hash_hex: &str) -> R<String> {
     let b: Value = parse("body", body)?;
     let body = if b.is_null() { None } else { Some(&b) };
     Ok(to_hex(&http_request_hash(method, url, body, requirements_hash_hex).map_err(xerr)?))
 }
 
+/// The script public key of an address, as hex.
 pub fn address_to_spk(address: &str) -> R<String> {
     let a = kaspa_addresses::Address::try_from(address).map_err(|e| perr(format!("address: {e}")))?;
     Ok(spk_to_hex(&kaspa_txscript::pay_to_address_script(&a)))
@@ -459,8 +478,9 @@ fn profile(s: &str) -> R<Profile> {
     Profile::parse(s).ok_or_else(|| perr(format!("unknown profile {s:?}")))
 }
 
-/// The binding's Schnorr-signed authorization digest (`kaspa-x402-exact-request-authorization-v2`, which binds the payment
-/// identifier).
+/// The Schnorr-signed authorization digest of the binding.
+///
+/// The digest is `kaspa-x402-exact-request-authorization-v2`, and it binds the payment identifier.
 pub fn signed_auth_digest(json: &str) -> R<String> {
     let a: SignedAuthIn = parse("auth", json)?;
     let (txid, rh, qh) =
@@ -502,7 +522,9 @@ struct CommitIn {
     expires_at: String,
 }
 
-/// The KOB payload-commitment digest (`kob-x402-payload-commitment-v2`, which binds the payment identifier).
+/// The payload-commitment digest of KOB, `kob-x402-payload-commitment-v2`.
+///
+/// It binds the payment identifier.
 pub fn payload_commit_digest(json: &str) -> R<String> {
     let a: CommitIn = parse("commit", json)?;
     let (rh, qh) = (h32("requestHash", &a.request_hash)?, h32("hash", &a.payment_requirements_hash)?);
@@ -524,7 +546,7 @@ pub fn payload_commit_digest(json: &str) -> R<String> {
     Ok(to_hex(&d))
 }
 
-// ------------------------------------------------------------------------------------------------ merchant offers
+// Merchant offers.
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -536,6 +558,7 @@ struct NativeOfferIn {
     finality: String,
 }
 
+/// The `accepts` entry of a native KAS offer.
 pub fn native_requirements(json: &str) -> R<String> {
     let p: NativeOfferIn = parse("offer", json)?;
     let r =
@@ -608,13 +631,13 @@ pub fn kcc20_requirements(json: &str) -> R<String> {
     out(&token_offer_req(&parse("offer", json)?)?)
 }
 
-/// Just `extra.token` of that entry.
+/// Just `extra.token` of the entry that `kcc20_requirements` returns.
 pub fn token_offer(json: &str) -> R<String> {
     let r = token_offer_req(&parse("offer", json)?)?;
     out(r.extra.get("token").ok_or_else(|| perr("no extra.token"))?)
 }
 
-/// Pinned program hash and extension commitment of a registry token.
+/// The pinned program hash and extension commitment of a registry token.
 pub fn resolve_token(network: &str, asset: &str) -> R<String> {
     let network = net(network)?;
     let a = allowed(network, &TokenSpec { covenant_id: asset.into(), ..TokenSpec::default() }, Trust::Configured)?;
@@ -646,12 +669,14 @@ struct SwapOfferIn {
     pay_assets: Vec<TokenSpec>,
 }
 
+/// The `accepts` entry of a swap-and-pay offer.
 pub fn swap_requirements(json: &str) -> R<String> {
     route_requirements(json, false)
 }
 
-/// An intent-based swap-and-pay offer (`extra.route.binding` = `kob-intent-v1`): the same input as
-/// [`swap_requirements`]; every token must be on the router's program.
+/// An intent-based swap-and-pay offer, with `extra.route.binding` = `kob-intent-v1`.
+///
+/// The input is the same as [`swap_requirements`]. Every token must be on the router's program.
 pub fn intent_requirements(json: &str) -> R<String> {
     route_requirements(json, true)
 }
@@ -671,7 +696,8 @@ fn route_requirements(json: &str, intent: bool) -> R<String> {
         ("kcc20", None) => return Err(perr("token metadata is required when the merchant receives a token")),
         (o, _) => return Err(perr(format!("unknown receive {o:?}"))),
     };
-    // `covenantId: "KAS"` is the KAS pay asset (only when the merchant receives a token)
+    // `covenantId: "KAS"` is the KAS pay asset. It is allowed only when the merchant receives a
+    // token.
     let pay_tokens: Vec<Option<AllowedToken>> =
         p.pay_assets
             .iter()
@@ -705,13 +731,13 @@ fn route_requirements(json: &str, intent: bool) -> R<String> {
     out(&swap::swap_requirements(&params).map_err(xerr)?)
 }
 
-// ------------------------------------------------------------------------------------------------ payer: native
+// Payer, native.
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct NativeOptions {
-    /// Payer cap on the offer's amount in sompi. Required, as in the Rust `PayOptions::new`: a missing cap is refused
-    /// rather than defaulted to whatever the merchant asks (audit A1-3).
+    /// Payer cap on the amount of the offer, in sompi. Required, as in the Rust `PayOptions::new`.
+    /// A missing cap is refused, so it never defaults to whatever the merchant asks.
     #[serde(default)]
     max_amount_sompi: Option<String>,
     #[serde(default)]
@@ -726,7 +752,7 @@ struct NativeOptions {
     payment_id: Option<String>,
     #[serde(default)]
     resource: Option<Resource>,
-    /// Authorization lifetime in seconds (default: the offer's `maxTimeoutSeconds`).
+    /// Authorization lifetime in seconds. Default: the `maxTimeoutSeconds` of the offer.
     #[serde(default)]
     ttl_seconds: Option<u64>,
 }
@@ -774,7 +800,7 @@ pub fn pay_native(json: &str) -> R<String> {
     pay_out(payload, None, vec![])
 }
 
-// ------------------------------------------------------------------------------------------------ payer: kcc20
+// Payer, KCC-20.
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -789,7 +815,7 @@ struct TokenOptions {
     payment_id: Option<String>,
     #[serde(default)]
     max_fee_sompi: Option<String>,
-    /// Payer bound on the merchant carrier and on the token change carrier (default 2 KAS).
+    /// Payer bound on the merchant carrier and on the token change carrier. Default: 2 KAS.
     #[serde(default)]
     max_carrier_sompi: Option<String>,
 }
@@ -817,20 +843,21 @@ impl TokenOptions {
 struct Kcc20In {
     offer: Value,
     request_hash: String,
-    /// Local keys (all-in-one builders).
+    /// Local keys, for the all-in-one builders.
     #[serde(default)]
     secret_keys: Vec<String>,
-    /// The wallet's x-only key (unsigned builders; funding UTXOs are locked to it).
+    /// The x-only key of the wallet, for the unsigned builders. Funding UTXOs are locked to it.
     #[serde(default)]
     payer_public_key: Option<String>,
-    /// kob-protocol `TokenUtxo` JSON.
+    /// `TokenUtxo` JSON of kob-protocol.
     token_utxos: Vec<TokenUtxo>,
     #[serde(default)]
     funding: Vec<PayerUtxo>,
     now_ms: Num,
     #[serde(default)]
     options: TokenOptions,
-    /// Payer-pinned token allowlist (default: the tokens the offer names, classified from the shipped registry).
+    /// Payer-pinned token allowlist. Default: the tokens the offer names, classified from the
+    /// shipped registry.
     #[serde(default)]
     tokens: Option<Vec<TokenSpec>>,
     #[serde(default)]
@@ -838,12 +865,13 @@ struct Kcc20In {
 }
 
 impl Kcc20In {
-    /// The payer key for funding UTXOs.
+    /// The payer key for funding UTXOs, if the request names one.
     fn funding_key(&self) -> R<Option<[u8; 32]>> {
         if let Some(pk) = &self.payer_public_key {
             return Ok(Some(h32("payerPublicKey", pk)?));
         }
-        // with local keys, funding coins are P2PK coins of any held key: filtered per key below
+        // With local keys, funding coins are P2PK coins of any held key. They are filtered per key
+        // later.
         Ok(None)
     }
 }
@@ -856,9 +884,12 @@ fn funding_for(list: &[PayerUtxo], keys: &[[u8; 32]]) -> R<Vec<KeyUtxo>> {
     Ok(all)
 }
 
-/// The payer-side policy gate of a KCC-20 payment, run BEFORE anything is built or signed (the wallet is never asked to
-/// sign an offer the payer's own policy refuses): allowlist (the payer's pin, else the shipped registry; custody is the
-/// PROGRAM's, never the offer's), custody opt-in and the carrier ceiling.
+/// The payer-side policy gate of a KCC-20 payment.
+///
+/// It runs before anything is built or signed, so the wallet is never asked to sign an offer that
+/// the payer's own policy refuses. It checks the allowlist (the pin of the payer, else the shipped
+/// registry, with the custody taken from the program and never from the offer), the custody
+/// opt-in and the carrier ceiling.
 fn gate_kcc20(p: &Kcc20In, offer: &PaymentRequirements) -> R<()> {
     let network = offer.network().map_err(xerr)?;
     let policy = policy_for(network, offer, &p.tokens, p.allow_issuer_controlled, &p.options.max_carrier_sompi)?;
@@ -901,7 +932,7 @@ fn signatures(json: &str) -> R<Vec<InputSignature>> {
     parse("signatures", json)
 }
 
-/// Step 2 of the wallet flow: checks the signatures, tightens the budgets, assembles the payload.
+/// Step 2 of the wallet flow: checks the signatures, tightens budgets and assembles the payload.
 pub fn finish_kcc20(built: &str, template: &str, sigs: &str) -> R<String> {
     let b: BuiltTx = parse("built", built)?;
     let t: PayloadTemplate = parse("template", template)?;
@@ -909,17 +940,17 @@ pub fn finish_kcc20(built: &str, template: &str, sigs: &str) -> R<String> {
     pay_out(payload, None, vec![])
 }
 
-// ------------------------------------------------------------------------------------------------ payer: swap
+// Payer, swap.
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct SwapOptionsIn {
-    /// The payer's bound on the swap's cost, counted in `maxPayAsset`. Required: a swap without it is refused (no
-    /// unbounded swap).
+    /// Payer bound on the cost of the swap, counted in `maxPayAsset`. Required, because a swap
+    /// without a bound is refused.
     #[serde(default)]
     max_pay: Option<String>,
-    /// `"KAS"` (default: an unqualified bound counts sompi only) or the pay token's covenant id. A route that pays with
-    /// another asset is refused.
+    /// `"KAS"` or the covenant id of the pay token. Default: an unqualified bound counts sompi
+    /// only. A route that pays with another asset is refused.
     #[serde(default)]
     max_pay_asset: Option<String>,
     #[serde(default)]
@@ -934,10 +965,11 @@ struct SwapOptionsIn {
     max_fee_sompi: Option<String>,
     #[serde(default)]
     payment_identifier: Option<String>,
-    /// Payer bound on the merchant carrier and on the change carrier (default 2 KAS).
+    /// Payer bound on the merchant carrier and on the change carrier. Default: 2 KAS.
     #[serde(default)]
     max_carrier_sompi: Option<String>,
-    /// The most sompi the payment may take from the payer's KAS coins (fee, carriers, the cost when paying KAS).
+    /// The most sompi that the payment may take from the payer's KAS coins. It covers the fee, the
+    /// carriers and, when paying KAS, the cost.
     #[serde(default)]
     max_kas_sompi: Option<String>,
 }
@@ -973,7 +1005,7 @@ impl SwapOptionsIn {
 #[serde(rename_all = "camelCase")]
 struct SwapIn {
     offer: Value,
-    /// `{ lockTime, orders: [OrderRef] }` (kob-x402 `Quote` JSON).
+    /// `{ lockTime, orders: [OrderRef] }`, the `Quote` JSON of kob-x402.
     quote: Quote,
     request_hash: String,
     #[serde(default)]
@@ -987,7 +1019,7 @@ struct SwapIn {
     now_ms: Num,
     #[serde(default)]
     options: SwapOptionsIn,
-    /// Payer-pinned token allowlist (default: the tokens the offer names).
+    /// Payer-pinned token allowlist. Default: the tokens the offer names.
     #[serde(default)]
     tokens: Option<Vec<TokenSpec>>,
     #[serde(default)]
@@ -1085,7 +1117,8 @@ impl PreparedJson {
     }
 }
 
-/// A payer bound counted in `asset` (`None`: KAS, so a bare number never changes unit with the route's pay asset).
+/// A payer bound counted in `asset`. `None` means KAS, so a bare number never changes unit with the
+/// pay asset of the route.
 fn pay_bound(asset: Option<&str>, amount: u64) -> PayBound {
     match asset {
         Some(a) if !a.eq_ignore_ascii_case("KAS") => PayBound { asset: a.to_ascii_lowercase(), amount },
@@ -1097,7 +1130,9 @@ fn swap_out(pay: SwapPayment) -> R<String> {
     pay_out_with(pay.payload, Some(pay.payer_spent), Some(pay.kas_spent), pay.warnings)
 }
 
-/// Step 1 of the wallet flow: builds the unsigned swap payment (`built.sign` = what the wallet signs).
+/// Step 1 of the wallet flow: builds the unsigned swap payment.
+///
+/// `built.sign` is what the wallet signs.
 pub fn prepare_swap(json: &str) -> R<String> {
     let p: SwapIn = parse("request", json)?;
     let c = swap_ctx(&p, false)?;
@@ -1107,7 +1142,7 @@ pub fn prepare_swap(json: &str) -> R<String> {
     out(&PreparedJson::from(&prepared))
 }
 
-/// Step 2 of the wallet flow.
+/// Step 2 of the wallet flow: assembles the payment from the prepared swap and the signatures.
 pub fn finish_swap(prepared: &str, sigs: &str) -> R<String> {
     let p: PreparedJson = parse("prepared", prepared)?;
     swap_out(p.into_prepared()?.complete(&signatures(sigs)?).map_err(xerr)?)
@@ -1133,15 +1168,16 @@ pub fn pay_swap(json: &str) -> R<String> {
     swap_out(pay)
 }
 
-// ------------------------------------------------------------------------------------------------ preflight
+// Preflight.
 
-/// A chain view over a fixed set of UTXOs: the ones the payment's own transaction carries as hints.
+/// A chain view over a fixed set of UTXOs, which are the ones that the payment's own transaction
+/// carries as hints.
 ///
-/// Preflight is the payer running the facilitator's verification (scripts through the engine with
-/// enforced budgets, signatures, mass, fee floor, exact merchant gain, authorization, expiry,
-/// allowlist) over the artifact it is about to disclose. The existence of the spent outputs is the
-/// caller's own chain data: the SDK cross-checks the consumed outpoints against the UTXOs it loaded
-/// before it calls this.
+/// Preflight is the payer running the verification of the facilitator over the artifact it is
+/// about to disclose. The verification covers scripts run through the engine with enforced budgets,
+/// signatures, mass, the fee floor, the exact merchant gain, the authorization, the expiry and the
+/// allowlist. The existence of the spent outputs is the caller's own chain data. The SDK
+/// cross-checks the consumed outpoints against the UTXOs it loaded before it calls this.
 struct Snapshot {
     utxos: BTreeMap<Outpoint, ChainUtxo>,
     daa: u64,
@@ -1209,20 +1245,23 @@ struct PreflightIn {
     tokens: Option<Vec<TokenSpec>>,
     #[serde(default)]
     allow_issuer_controlled: bool,
-    /// Swap-and-pay and intents: the payer's bound on what the payment costs, in units of `maxPayAsset`, checked when given
-    /// (without it the preflight only verifies; the builders require it for a swap).
+    /// Swap-and-pay and intents: the payer's bound on the cost, in units of `maxPayAsset`. It is
+    /// checked when given. Without it the preflight only verifies, and the builders require it for
+    /// a swap.
     #[serde(default)]
     max_pay: Option<String>,
-    /// The asset `maxPay` counts (`"KAS"` by default, or a token covenant id).
+    /// The asset that `maxPay` counts: `"KAS"` by default, or a token covenant id.
     #[serde(default)]
     max_pay_asset: Option<String>,
-    /// The payer's ceiling on the merchant carrier (default 2 KAS).
+    /// The payer's ceiling on the merchant carrier. Default: 2 KAS.
     #[serde(default)]
     max_carrier_sompi: Option<String>,
 }
 
-/// Runs the facilitator's verification over a built payment. Returns `{ok: true, ...}` or
-/// `{ok: false, diagnostic, reason, message, retryable, details?}` (it does not throw on a failed check).
+/// Runs the verification of the facilitator over a built payment.
+///
+/// It returns `{ok: true, ...}` or `{ok: false, diagnostic, reason, message, retryable,
+/// details?}`, and it does not throw on a failed check.
 pub fn preflight(json: &str) -> R<String> {
     let p: PreflightIn = parse("request", json)?;
     let offer = requirements_of(p.offer)?;
@@ -1242,13 +1281,14 @@ pub fn preflight(json: &str) -> R<String> {
             None => None,
         };
         kob_x402::intent::verify_intent(&ctx, &offer, &p.payload, &p.request_hash).and_then(|(v, f)| {
-            // the payer's worst case: the intent's KAS (KasToToken) or the units it may sell
+            // The worst case of the payer: the KAS of the intent (KasToToken) or the units it may
+            // sell.
             let worst = match f.state.max_sell() {
                 Some(units) => units as u64,
                 None => f.intent.amount,
             };
-            // the bound counts one asset: KAS, or the covenant id of the very token the intent sells (another token's units are
-            // not this one's)
+            // The bound counts one asset: KAS, or the covenant id of the very token that the intent
+            // sells. The units of another token are not this one's.
             let bound_asset = pay_bound(p.max_pay_asset.as_deref(), 0).asset;
             let pays_kas = f.state.max_sell().is_none();
             let same_asset = if pays_kas {
@@ -1268,7 +1308,8 @@ pub fn preflight(json: &str) -> R<String> {
             Ok((v, Some(worst)))
         })
     } else if p.payload.payload.route.is_some() || offer.has_route() {
-        // the payer's preflight checks its bound; without one this only verifies (a merchant-side check, nothing is spent)
+        // The payer's preflight checks its bound. Without one this only verifies, as a
+        // merchant-side check that spends nothing.
         match &p.max_pay {
             Some(m) => {
                 let bound = pay_bound(p.max_pay_asset.as_deref(), u64s("maxPay", m)?);
@@ -1298,7 +1339,7 @@ pub fn preflight(json: &str) -> R<String> {
     }
 }
 
-// ------------------------------------------------------------------------------------------------ revoke
+// Revoke.
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1306,7 +1347,8 @@ struct RevokeIn {
     payload: PaymentPayload,
     #[serde(default)]
     secret_keys: Vec<String>,
-    /// Wallet mode (no `secretKeys`): the payer's x-only key; the answer is `{ built, spent }` for the wallet to sign.
+    /// Wallet mode, when `secretKeys` is absent: the x-only key of the payer. The answer is
+    /// `{ built, spent }`, for the wallet to sign.
     #[serde(default)]
     payer_public_key: Option<String>,
     #[serde(default)]
@@ -1317,12 +1359,16 @@ struct RevokeIn {
     tokens: Option<Vec<TokenSpec>>,
 }
 
-/// The self-spend that makes a signed but unsettled payment unconfirmable: one of its payer-owned
-/// inputs spent back to the payer (a P2PK KAS input first, else a P2PK-owned token input). Returns
-/// `{ transaction (safe JSON text), transactionId, spent: {txid, index} }`; in wallet mode (`payerPublicKey` instead of
-/// `secretKeys`, kcc20 and swap-and-pay payments) `{ built, spent }`: the wallet signs `built.sign`, then
-/// `x402FinishRevoke` (C5 X-10). A native payment's revoke needs the local key (it is a plain self-spend of the key the
-/// native payment itself signs a digest with).
+/// The self-spend that makes a signed but unsettled payment unconfirmable.
+///
+/// It spends one payer-owned input of the payment back to the payer: a P2PK KAS input first, else a
+/// P2PK-owned token input. The result is `{ transaction (safe JSON text), transactionId, spent:
+/// {txid, index} }`.
+///
+/// In wallet mode the request has `payerPublicKey` instead of `secretKeys`, for KCC-20 and
+/// swap-and-pay payments. The result is then `{ built, spent }`. The wallet signs `built.sign`,
+/// and `finish_revoke` completes the transaction. The revoke of a native payment needs the local
+/// key, because it is a plain self-spend of the key that signs the digest of the native payment.
 pub fn revoke(json: &str) -> R<String> {
     let p: RevokeIn = parse("request", json)?;
     let offer = p.payload.accepted.clone();
@@ -1352,7 +1398,8 @@ pub fn revoke(json: &str) -> R<String> {
             "spent": rev.spent.to_json(),
         }));
     }
-    // kcc20 and swap-and-pay: rebuild the signed payment from the artifact and use the swap revoker
+    // KCC-20 and swap-and-pay: rebuild the signed payment from the artifact and use the swap
+    // revoker.
     let policy = policy_for(network, &offer, &p.tokens, true, &None)?;
     let safe = SafeTx::parse(&p.payload.payload.transaction, MAX_TX_JSON).map_err(xerr)?;
     let parsed = safe.to_consensus().map_err(xerr)?;
@@ -1398,8 +1445,9 @@ pub fn revoke(json: &str) -> R<String> {
     }))
 }
 
-/// Step 2 of the wallet revoke: the signed self-spend from `{ built, spent }` and the wallet's signatures. Returns
-/// `{ transaction (safe JSON text), transactionId, spent }`.
+/// Step 2 of the wallet revoke: the signed self-spend from `{ built, spent }` and the signatures.
+///
+/// It returns `{ transaction (safe JSON text), transactionId, spent }`.
 pub fn finish_revoke(prepared: &str, sigs: &str) -> R<String> {
     #[derive(Deserialize)]
     struct P {
@@ -1418,7 +1466,7 @@ pub fn finish_revoke(prepared: &str, sigs: &str) -> R<String> {
     }))
 }
 
-// ------------------------------------------------------------------------------------------------ payer: intents
+// Payer, intents.
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1482,7 +1530,7 @@ impl IntentOptionsIn {
 #[serde(rename_all = "camelCase")]
 struct IntentIn {
     offer: Value,
-    /// `"KAS"` or the pay token's covenant id (one of the offer's `payAssets`).
+    /// `"KAS"` or the covenant id of the pay token, which is one of the `payAssets` of the offer.
     pay_asset: String,
     request_hash: String,
     #[serde(default)]
@@ -1523,7 +1571,7 @@ fn intent_ctx(p: &IntentIn, need_secrets: bool) -> R<SwapCtx> {
     })
 }
 
-/// What a payer keeps of an intent payment to cancel it later.
+/// What a payer keeps of an intent payment so that it can cancel it later.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct IntentHandle {
@@ -1589,7 +1637,7 @@ impl PreparedIntentJson {
     }
 }
 
-/// The payer's worst case in units of the pay asset: the units the intent may sell, or its KAS.
+/// The worst case of the payer, in pay-asset units: what the intent may sell, or its KAS.
 fn worst_of(p: &kob_x402::client::intent::PreparedIntent) -> u64 {
     if p.worst_tokens > 0 {
         p.worst_tokens as u64
@@ -1598,9 +1646,12 @@ fn worst_of(p: &kob_x402::client::intent::PreparedIntent) -> u64 {
     }
 }
 
-/// The signed creation (`paymentPayload`), the payer's worst case in units of the pay asset (`payerSpent`), the most KAS the
-/// creation takes from the payer's coins (`kasSpent`: the intent's KAS and the creation fee, plus a token intent's lock carrier)
-/// and the intent handle (`intent`).
+/// The result of an intent creation, as JSON.
+///
+/// It holds the signed creation (`paymentPayload`), the worst case of the payer in units of the pay
+/// asset (`payerSpent`), and the intent handle (`intent`). It also holds `kasSpent`, the most KAS
+/// that the creation takes from the payer's coins: the KAS of the intent and the creation fee,
+/// plus the lock carrier of a token intent.
 fn intent_out(p: kob_x402::client::intent::IntentPayment, worst: u64, worst_kas: u64) -> R<String> {
     let handle = IntentHandle { actor: p.actor.clone(), state: p.state.clone(), intent: p.intent.clone(), lock: p.lock.clone() };
     let base: Value =
@@ -1610,7 +1661,9 @@ fn intent_out(p: kob_x402::client::intent::IntentPayment, worst: u64, worst_kas:
     out(&Value::Object(o))
 }
 
-/// Step 1 of the wallet flow: builds the unsigned intent creation (`built.sign` = what the wallet signs, once).
+/// Step 1 of the wallet flow: builds the unsigned intent creation.
+///
+/// `built.sign` is what the wallet signs, once.
 pub fn prepare_intent(json: &str) -> R<String> {
     let p: IntentIn = parse("request", json)?;
     let c = intent_ctx(&p, false)?;
@@ -1627,8 +1680,8 @@ pub fn prepare_intent(json: &str) -> R<String> {
     out(&PreparedIntentJson::from(&prepared))
 }
 
-/// Step 2 of the wallet flow: the payment payload (`paymentPayload`) and the intent handle (`intent`) the payer keeps
-/// to cancel the intent.
+/// Step 2 of the wallet flow: the payment payload (`paymentPayload`) and the intent handle
+/// (`intent`) that the payer keeps to cancel the intent.
 pub fn finish_intent(prepared: &str, sigs: &str) -> R<String> {
     let p: PreparedIntentJson = parse("prepared", prepared)?;
     let prepared = p.into_prepared()?;
@@ -1669,8 +1722,11 @@ struct CancelIn {
     fee_rate: Option<u64>,
 }
 
-/// The payer's cancel of an intent: `{ built }` (unsigned, the wallet signs the intent input) or, with `secretKeys`,
-/// `{ transaction (safe JSON text), transactionId }`. The intent's KAS and its locked tokens return to the payer.
+/// The cancel of an intent by its payer.
+///
+/// The result is `{ built }`, unsigned, when the wallet signs the intent input. With `secretKeys`
+/// it is `{ transaction (safe JSON text), transactionId }`. The KAS of the intent and its locked
+/// tokens return to the payer.
 pub fn cancel_intent(json: &str) -> R<String> {
     let p: CancelIn = parse("request", json)?;
     let req = kob_protocol::build::CancelIntent {
@@ -1708,10 +1764,13 @@ struct ExpireIn {
     fee_rate: Option<u64>,
 }
 
-/// The expiry of an intent (C5 X-10: anyone may submit it once the node's past median time reached the intent's deadline, so
-/// a payer or a keeper need not wait for the facilitator that took the payment): `{ transaction (safe JSON text),
-/// transactionId, lockTime }`. No signature: the intent's KAS (less at most `EXPIRE_MAX_FEE`) and its locked tokens return
-/// to the payer's key.
+/// The expiry of an intent.
+///
+/// Anyone may submit it once the past median time of the node has reached the deadline of the
+/// intent, so a payer or a keeper need not wait for the facilitator that took the payment. The
+/// result is `{ transaction (safe JSON text), transactionId, lockTime }`. It needs no signature.
+/// The KAS of the intent, less at most `EXPIRE_MAX_FEE`, and its locked tokens return to the key of
+/// the payer.
 pub fn expire_intent(json: &str) -> R<String> {
     let p: ExpireIn = parse("request", json)?;
     let req = kob_protocol::build::ExpireIntent {
@@ -1733,7 +1792,7 @@ pub fn expire_intent(json: &str) -> R<String> {
     }))
 }
 
-/// Step 2 of the wallet cancel: the signed cancel from `{ built }` and the wallet's signatures.
+/// Step 2 of the wallet cancel: the signed cancel from `{ built }` and the signatures.
 pub fn finish_cancel(built: &str, sigs: &str) -> R<String> {
     #[derive(Deserialize)]
     struct B {
@@ -1743,19 +1802,21 @@ pub fn finish_cancel(built: &str, sigs: &str) -> R<String> {
     finish_cancel_built(&b.built, &signatures(sigs)?)
 }
 
-// ------------------------------------------------------------------------------------------------ invoices
+// Invoices.
 
 fn invoice_of(json: &str) -> R<kob_x402::invoice::Invoice> {
     parse("invoice", json)
 }
 
-/// The id of an invoice (SHA-256 of its canonical JSON, hex).
+/// The id of an invoice: the SHA-256 of its canonical JSON, as hex.
 pub fn invoice_id(json: &str) -> R<String> {
     invoice_of(json)?.id_hex().map_err(xerr)
 }
 
-/// Checks that a fetched invoice hashes to `id` and is structurally valid at `nowMs` (version, network, reference,
-/// expiry, accepts); returns `{ id, expiresAtMs, kaspaUri }` (`kaspaUri`: the `kaspa:` fallback of a KAS invoice, or null).
+/// Checks that a fetched invoice hashes to `id` and is valid at `nowMs`.
+///
+/// Validity covers the version, network, reference, expiry and accepts. The result is `{ id,
+/// expiresAtMs, kaspaUri }`, where `kaspaUri` is the `kaspa:` fallback of a KAS invoice, or null.
 pub fn check_invoice(json: &str, id: &str, now_ms: u64) -> R<String> {
     let inv = invoice_of(json)?;
     kob_x402::invoice::check_id(&inv, id).map_err(xerr)?;
@@ -1764,11 +1825,13 @@ pub fn check_invoice(json: &str, id: &str, now_ms: u64) -> R<String> {
     out(&json!({ "id": id.to_ascii_lowercase(), "expiresAtMs": exp, "kaspaUri": inv.kaspa_uri() }))
 }
 
-// ------------------------------------------------------------------------------------------------ retry
+// Retry.
 
-/// The retry step after a failed paid request (`kob_x402::client::retry`, the table the TS client mirrors): the request is
-/// `{ status?, diagnostic?, retryable? }` (`status` an HTTP status, 0 = no answer; without it the diagnostic alone decides) and
-/// the answer `{ "step": "resend" | "rebuild" | "stop" }`.
+/// The retry step after a failed paid request, from `kob_x402::client::retry`.
+///
+/// The TS client mirrors the same table. The request is `{ status?, diagnostic?, retryable? }`,
+/// where `status` is an HTTP status and 0 means no answer. Without a status the diagnostic alone
+/// decides. The answer is `{ "step": "resend" | "rebuild" | "stop" }`.
 pub fn retry_decision(json: &str) -> R<String> {
     use kob_x402::client::retry::{classify, classify_status, Next};
     #[derive(Deserialize)]
@@ -1787,7 +1850,7 @@ pub fn retry_decision(json: &str) -> R<String> {
     out(&json!({ "step": step.as_str() }))
 }
 
-/// Every diagnostic spelling of `kob_x402` (`extensions.kaspa.diagnostic`).
+/// Every diagnostic spelling of `kob_x402`, as in `extensions.kaspa.diagnostic`.
 pub fn diagnostics() -> R<String> {
     out(&kob_x402::error::Diag::ALL.iter().map(|d| d.as_str()).collect::<Vec<_>>())
 }
