@@ -1,12 +1,18 @@
-//! `kob registry validate`: parse and validate a token registry file (`registry/tokens.json` format).
-//! `kob registry verify-genesis`: re-derive every token's genesis check (C1) and live-mint-authority check (C2) from chain
-//! evidence (`registry/evidence/<network>-genesis.json`) and compare with the registry.
+//! `kob registry validate` and `kob registry verify-genesis`.
+//!
+//! `validate` parses and validates a token registry file (the `registry/tokens.json` format).
+//!
+//! `verify-genesis` re-derives the genesis check (C1) and the live-mint-authority check (C2) of
+//! every token from chain evidence (`registry/evidence/<network>-genesis.json`) and compares them
+//! with the registry.
 
 use kob_protocol::genesis_evidence::{registry_mismatches, verify_evidence, Evidence};
 use kob_protocol::registry::{Registry, RegistryError};
 
 const USAGE: &str = "usage: kob registry validate <tokens.json> [--network mainnet|testnet-10|devnet] (a deployment build defaults to its own network)";
 
+/// Run `kob registry validate`.
+///
 /// Returns the process exit code: 0 valid, 1 invalid, 2 usage or I/O error.
 pub fn run_validate(args: &[&str]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[USAGE], false) {
@@ -49,7 +55,7 @@ pub fn run_validate(args: &[&str]) -> i32 {
             return 1;
         }
     };
-    // a deployment build checks the file for its own network unless another is named
+    // A deployment build checks the file for its own network unless another is named.
     let network = network.or_else(|| kob_protocol::artifacts::deployment_network().map(str::to_string));
     let res = match &network {
         Some(n) => reg.validate_for_network(n),
@@ -78,7 +84,9 @@ Defaults: --network the deployment build's own (a reference build needs it), --e
 genesis records. Collect fresh evidence (read-only node + explorer):
   node web/scripts/registry-genesis-evidence.mjs";
 
-/// `kob registry verify-genesis`. Returns the exit code: 0 the registry matches the evidence, 1 it does not, 2 usage or I/O.
+/// Run `kob registry verify-genesis`.
+///
+/// Returns the exit code: 0 the registry matches the evidence, 1 it does not, 2 usage or I/O error.
 pub fn run_verify_genesis(args: &[&str]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[VERIFY_USAGE], false) {
         return code;
@@ -230,11 +238,11 @@ mod tests {
         let ev = repo_file("registry/evidence/mainnet-genesis.json");
         assert_eq!(run_verify_genesis(&["--network", "mainnet", "--registry", &reg, "--evidence", &ev]), 0);
         assert_eq!(run_verify_genesis(&["--network", "mainnet", "--registry", &reg, "--evidence", &ev, "--json"]), 0);
-        // wrong network, missing file, usage
+        // Wrong network, missing file, usage.
         assert_eq!(run_verify_genesis(&["--network", "testnet-10", "--registry", &reg, "--evidence", &ev]), 1);
         assert_eq!(run_verify_genesis(&["--network", "mainnet", "--registry", &reg, "--evidence", "no-such-file.json"]), 2);
         assert_eq!(run_verify_genesis(&["--registry", &reg]), 2);
-        // a registry that claims something the evidence does not show
+        // A registry that claims something the evidence does not show.
         let text = std::fs::read_to_string(&reg).unwrap();
         let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
         v["tokens"][0]["genesis"]["supply"] = serde_json::json!(1);

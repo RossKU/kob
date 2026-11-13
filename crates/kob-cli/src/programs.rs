@@ -1,7 +1,12 @@
-//! `kob registry programs`: the token-program profiles this build embeds (`crates/kob-protocol/data/programs.json`).
-//! `kob registry add-program`: derive the profile of a new token program from its bytes (a `silverc` artifact or a raw
-//! redeem script observed on chain), print what the reviewer must still establish, and with `--write` add the program to
-//! the tree as `pending-review` (its bytes, its profile, a conformance test stub). See `docs/spec/token-programs.md`.
+//! `kob registry programs` and `kob registry add-program`.
+//!
+//! `programs` lists the token-program profiles that this build embeds
+//! (`crates/kob-protocol/data/programs.json`).
+//!
+//! `add-program` derives the profile of a new token program from its bytes, which are a `silverc`
+//! artifact or a raw redeem script observed on chain. It prints what the reviewer must still
+//! establish. With `--write` it adds the program to the tree as `pending-review`: its bytes, its
+//! profile and a conformance test stub. See `docs/spec/token-programs.md`.
 
 use std::path::{Path, PathBuf};
 
@@ -61,7 +66,7 @@ fn read_input(arg: &str) -> Result<(ProgramInput, Vec<u8>), String> {
     Err(format!("{arg} is neither a file nor a hex redeem script"))
 }
 
-/// Repository root: the first ancestor of the current directory holding the profile table.
+/// The repository root: the first ancestor of the current directory that holds the profile table.
 fn find_repo() -> Option<PathBuf> {
     let mut d = std::env::current_dir().ok()?;
     loop {
@@ -79,7 +84,7 @@ const USAGE_PROGRAMS: &str = "usage: kob registry programs [--json]
 Prints the token-program profiles this build embeds: name, registry id, codec, template hash, layout, slots, carrier floor,
 witness scheme and review status. --json prints them as one JSON document.";
 
-/// `kob registry programs [--json]`.
+/// Run `kob registry programs [--json]` and return the process exit code.
 pub fn run_programs(args: &[&str]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[USAGE_PROGRAMS], false) {
         return code;
@@ -120,7 +125,7 @@ pub fn run_programs(args: &[&str]) -> i32 {
     0
 }
 
-/// `kob registry add-program`.
+/// Run `kob registry add-program` and return the process exit code.
 pub fn run_add_program(args: &[&str]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[USAGE_ADD], false) {
         return code;
@@ -219,7 +224,7 @@ pub fn run_add_program(args: &[&str]) -> i32 {
             return 1;
         }
     };
-    // a program no builder serves gets no registry entry: it is described, never listed
+    // A program that no builder serves gets no registry entry. It is described and never listed.
     let entry = derived.blocked.is_none().then(|| registry_template(&derived.profile, upstream.as_deref()));
     if json {
         let doc = serde_json::json!({
@@ -300,18 +305,18 @@ next steps (docs/spec/token-programs.md, \"Onboarding a token program\"):
   4. run the conformance stub and the order suites on the program, then the reviewer checklist
   5. only after review: review.status reviewed in the profile and the registry entry, scripts/build-deploy.sh mainnet";
 
-/// The profile as `data/programs.json` formats it (two-space indent inside the `programs` array).
+/// The profile as `data/programs.json` formats it: two-space indent inside the `programs` array.
 fn profile_entry_text(p: &ProgramProfile) -> String {
     let v = serde_json::to_string_pretty(p).expect("profile serialises");
     v.lines().map(|l| format!("    {l}")).collect::<Vec<_>>().join("\n")
 }
 
 fn write_program(root: &Path, p: &ProgramProfile, bytes: &[u8]) -> Result<Vec<String>, String> {
-    // the table refuses it too (`check_shape`); refused here before anything is written
+    // The table refuses it too (`check_shape`), but it is refused here before anything is written.
     p.check_shape().map_err(|e| e.to_string())?;
     let mut written = vec![];
-    // 1. the profile, appended to the table without reformatting the existing entries; every check of the table runs before
-    // anything is written (a refused program leaves no file behind)
+    // 1. The profile, appended to the table without reformatting the existing entries. Every check
+    // of the table runs before anything is written, so a refused program leaves no file behind.
     let table = root.join("crates/kob-protocol/data/programs.json");
     let text = std::fs::read_to_string(&table).map_err(|e| e.to_string())?;
     let mut file = kob_protocol::profile::ProfileFile::parse(&text).map_err(|e| e.to_string())?;
@@ -324,7 +329,7 @@ fn write_program(root: &Path, p: &ProgramProfile, bytes: &[u8]) -> Result<Vec<St
     let close = text.rfind("\n  ]").ok_or("data/programs.json: no closing `]` of `programs`")?;
     let new_text = format!("{},\n{}{}", &text[..close], profile_entry_text(p), &text[close..]);
     kob_protocol::profile::ProfileFile::parse(&new_text).map_err(|e| format!("the edited table does not parse: {e}"))?;
-    // 2. the bytes
+    // 2. The bytes.
     let src = root.join(&p.source.path);
     if src.exists() {
         if std::fs::read(&src).map_err(|e| e.to_string())? != bytes {
@@ -337,7 +342,7 @@ fn write_program(root: &Path, p: &ProgramProfile, bytes: &[u8]) -> Result<Vec<St
     }
     std::fs::write(&table, new_text).map_err(|e| e.to_string())?;
     written.push("crates/kob-protocol/data/programs.json".into());
-    // 3. the conformance test stub
+    // 3. The conformance test stub.
     let stub_rel = format!("crates/kob-tests/tests/program_{}.rs", p.name.to_ascii_lowercase());
     let stub = root.join(&stub_rel);
     if !stub.exists() {
@@ -347,8 +352,10 @@ fn write_program(root: &Path, p: &ProgramProfile, bytes: &[u8]) -> Result<Vec<St
     Ok(written)
 }
 
-/// The conformance test stub of a new program: the live profile check plus one ignored test per review task, each naming
-/// what to measure or prove (docs/spec/token-programs.md, the reviewer checklist).
+/// The conformance test stub of a new program.
+///
+/// It holds the live profile check and one ignored test per review task, each naming what to
+/// measure or prove (`docs/spec/token-programs.md`, the reviewer checklist).
 pub fn test_stub(p: &ProgramProfile) -> String {
     TEST_STUB
         .replace("{name}", &p.name)
@@ -403,7 +410,7 @@ fn order_suites_and_ablation_on_the_program() {}
 mod tests {
     use super::*;
 
-    /// `--write` on a scratch tree: the bytes, the table entry appended without touching the existing entries, the stub.
+    /// `--write` on a scratch tree: the bytes, the table entry appended to the others, the stub.
     #[test]
     fn add_program_writes_a_pending_review_entry_and_a_stub() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -412,12 +419,13 @@ mod tests {
         std::fs::create_dir_all(root.join("crates/kob-protocol/data")).unwrap();
         std::fs::create_dir_all(root.join("crates/kob-tests/tests")).unwrap();
         let table = std::fs::read_to_string(repo.join("crates/kob-protocol/data/programs.json")).unwrap();
-        // the scratch table is the embedded one without KForge (embedded since): the write adds it again
+        // The scratch table is the embedded one without KForge, and the write adds it again.
         let at = table.find(",\n    {\n      \"name\": \"KForgeToken1785\"").expect("the KForge entry");
         let table = format!("{}{}", &table[..at], &table[at + table[at..].find("\n  ]").unwrap()..]);
         std::fs::write(root.join("crates/kob-protocol/data/programs.json"), &table).unwrap();
         let bytes = std::fs::read(repo.join("contracts/third-party/kforge/program.bin")).unwrap();
-        // record code 10, as in the embedded table (the derivation alone takes the next free one, 11, now that KForge is embedded)
+        // Record code 10, as in the embedded table. The derivation alone takes the next free code,
+        // which is 11 while KForge is embedded.
         let opt = DeriveOptions {
             name: Some("KForgeToken1785".into()),
             slots: Some(Slots { inputs: 1, outputs: 3 }),
@@ -436,9 +444,9 @@ mod tests {
         assert_eq!(std::fs::read(root.join(&p.source.path)).unwrap(), bytes);
         let stub = std::fs::read_to_string(root.join("crates/kob-tests/tests/program_kforgetoken1785.rs")).unwrap();
         assert!(stub.contains("TemplateId::KForgeToken1785") && stub.contains("#[ignore = \"review:"));
-        // a second write of the same program is refused
+        // A second write of the same program is refused.
         assert!(write_program(&root, &d.profile, &bytes).unwrap_err().contains("already"));
-        // a refused program (here under another source path) leaves no file behind
+        // A refused program, here under another source path, leaves no file behind.
         let mut dup = d.profile.clone();
         dup.source.path = "contracts/third-party/elsewhere/program.bin".into();
         assert!(write_program(&root, &dup, &bytes).unwrap_err().contains("already"));
@@ -446,8 +454,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A program with KCC-1 entry tags (the redeem script of a mainnet token, `kob-protocol/tests/fixtures`) is profiled but
-    /// never written: no builder implements its witness scheme.
+    /// A program with KCC-1 entry tags is profiled but never written.
+    ///
+    /// The program is the redeem script of a mainnet token in `kob-protocol/tests/fixtures`. No
+    /// builder implements its witness scheme.
     #[test]
     fn add_program_profiles_a_tagged_program_but_never_writes_it() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
