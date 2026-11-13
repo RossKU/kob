@@ -1,13 +1,18 @@
 //! The single-writer lock of a data directory.
 //!
-//! The database and the record log have exactly one writer: the record log is a hash chain whose next frame
-//! commits to the previous one, so two processes appending to it (on TN10, `kobd db import-orders` run next to a
-//! running Executor) interleave and break the chain (`record log frame N is corrupt: chain hash mismatch`), after which
-//! both refuse the directory. Every command that writes a data directory (the Executor, the Indexer, `kobd db import-orders`,
-//! `kobd db rebase`, `kobd db replay`) therefore takes an exclusive OS lock on `<data_dir>/kob-writer.lock` and on
-//! `<records_dir>/kob-writer.lock` (the log may be configured elsewhere) for as long as it runs; the OS releases it
-//! when the process exits, crashed or not. Readers do not lock: the read API and `kobd db export-orders` open the
-//! database read-only and work next to a writer.
+//! The database and the record log have exactly one writer. The record log is a hash chain, and the
+//! next frame commits to the previous one. Two processes that append to it interleave and break the
+//! chain (`record log frame N is corrupt: chain hash mismatch`), after which both refuse the
+//! directory. This happens when `kobd db import-orders` runs next to a running Executor.
+//!
+//! Every command that writes a data directory therefore takes an exclusive OS lock on
+//! `<data_dir>/kob-writer.lock` and on `<records_dir>/kob-writer.lock`, for as long as it runs. The
+//! log may be configured elsewhere, so it has its own lock. The commands are the Executor, the
+//! Indexer, `kobd db import-orders`, `kobd db rebase` and `kobd db replay`. The OS releases the
+//! lock when the process exits, crashed or not.
+//!
+//! Readers do not lock. The read API and `kobd db export-orders` open the database read-only and
+//! work next to a writer.
 
 use crate::config::IndexerConfig;
 use std::fs::{File, OpenOptions, TryLockError};
@@ -23,6 +28,7 @@ pub struct WriterLock {
     dirs: Vec<PathBuf>,
 }
 
+/// Why a data directory could not be locked.
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
     #[error(
@@ -39,7 +45,7 @@ impl WriterLock {
     fn lock_files(cfg: &IndexerConfig) -> Result<(Vec<PathBuf>, Vec<File>), LockError> {
         let mut dirs = vec![cfg.data_dir.clone()];
         if cfg.records.enabled {
-            // the log has its own lock: another data directory configured with the same `records.dir` is a second writer too
+            // Another data directory configured with the same `records.dir` is a second writer too.
             dirs.push(cfg.records_dir());
         }
         let mut files = vec![];
@@ -49,15 +55,18 @@ impl WriterLock {
         Ok((dirs, files))
     }
 
-    /// Whether a writer could lock the directories of `cfg` now: the same refusal as [`acquire`](Self::acquire), nothing kept
-    /// and nothing written (not even the owner note). For a command to refuse before it prints or logs anything.
+    /// Whether a writer could lock the directories of `cfg` now, without keeping any lock.
+    ///
+    /// It refuses like [`acquire`](Self::acquire) and writes nothing, not even the owner note. A
+    /// command calls it to refuse before it prints or logs anything.
     pub fn check(cfg: &IndexerConfig) -> Result<(), LockError> {
         let mut dirs = vec![cfg.data_dir.clone()];
         if cfg.records.enabled {
             dirs.push(cfg.records_dir());
         }
         for d in &dirs {
-            // no lock file, no holder: and a check creates nothing (a command that fails later must not have touched the directory)
+            // No lock file means no holder. A check creates nothing, so a command that fails later
+            // has not touched the directory.
             if d.join(LOCK_FILE).exists() {
                 lock_dir(d)?;
             }
@@ -65,11 +74,12 @@ impl WriterLock {
         Ok(())
     }
 
-    /// Lock the data directory and the record-log directory of `cfg`.
+    /// Locks the data directory and the record-log directory of `cfg`.
     pub fn acquire(cfg: &IndexerConfig) -> Result<WriterLock, LockError> {
         let (dirs, files) = Self::lock_files(cfg)?;
-        // the pid and the executable's name only: the command line may carry secrets (a node URL with credentials), and this
-        // note is shown in the next writer's error (audit 2026-11-11 L-13)
+        // The note holds the pid and the executable's name only. The command line may carry
+        // secrets, such as a node URL with credentials, and the next writer shows this note in its
+        // error.
         let exe = std::env::current_exe()
             .ok()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -80,12 +90,16 @@ impl WriterLock {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
         );
         for d in &dirs {
-            // informative only (the lock is the OS lock): which process holds it, for the error message of the next one
+            // Informative only, the lock itself is the OS lock. The next writer's error names the
+            // holder.
             let _ = std::fs::write(d.join(OWNER_FILE), &owner);
         }
         Ok(WriterLock { _files: files, dirs })
     }
 
+    /// The directories this lock covers.
+    ///
+    /// These are the data directory, then the record-log directory if the log is enabled.
     pub fn dirs(&self) -> &[PathBuf] {
         &self.dirs
     }
@@ -114,16 +128,19 @@ fn lock_dir(dir: &Path) -> Result<File, LockError> {
     }
 }
 
-/// Takes the exclusive lock of `file` without waiting: `WouldBlock` if another open file description holds it.
+/// Takes the exclusive lock of `file` without waiting.
 ///
-/// On Unix this is `flock(LOCK_EX | LOCK_NB)` called directly: std's `File::try_lock` is unsupported on Android (it returns
-/// `Unsupported` there, which made the executor on the phone exit at once), and `flock` is what std uses on Linux and macOS
-/// anyway, so the semantics are the same on every Unix. Elsewhere (Windows) std's lock is used.
+/// It returns `WouldBlock` if another open file description holds the lock.
+///
+/// On Unix this calls `flock(LOCK_EX | LOCK_NB)` directly. std's `File::try_lock` returns
+/// `Unsupported` on Android, and `flock` is what std uses on Linux and macOS, so the semantics are
+/// the same on every Unix. Elsewhere, such as Windows, std's lock is used.
 #[cfg(unix)]
 fn try_lock_exclusive(file: &File) -> Result<(), TryLockError> {
     use std::os::fd::AsRawFd;
     loop {
-        // SAFETY: `flock` on a descriptor that `file` keeps open for the whole call; it touches no memory of ours.
+        // SAFETY: `flock` works on a descriptor that `file` keeps open for the whole call. It
+        // touches no memory of ours.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             return Ok(());
         }
@@ -177,7 +194,7 @@ mod tests {
         lock_dir(d.path()).expect("the OS lock is released with the file");
     }
 
-    /// The path every Unix target takes (Android included): `flock` through libc, not std's `File::try_lock`.
+    /// Checks the path every Unix target takes, Android included: `flock` through libc.
     #[cfg(unix)]
     #[test]
     fn the_flock_helper_refuses_a_second_descriptor_and_releases_on_close() {
@@ -194,11 +211,11 @@ mod tests {
     #[test]
     fn writer_lock_covers_the_data_and_the_records_directory() {
         let d = tempfile::tempdir().unwrap();
-        // the record log defaults to <data_dir>/records and has its own lock
+        // The record log defaults to <data_dir>/records and has its own lock.
         let cfg = IndexerConfig { data_dir: d.path().join("data"), ..IndexerConfig::default() };
         let first = WriterLock::acquire(&cfg).unwrap();
         assert_eq!(first.dirs().len(), 2);
-        // the owner note names the pid and the executable, never the command line (it may carry secrets)
+        // The owner note names the pid and the executable, never the command line.
         let note = std::fs::read_to_string(cfg.data_dir.join(OWNER_FILE)).unwrap();
         assert!(note.starts_with(&format!("pid {} (", std::process::id())), "{note}");
         let exe = note.split_once('(').and_then(|(_, r)| r.split_once(')')).map(|(e, _)| e).unwrap_or_default();

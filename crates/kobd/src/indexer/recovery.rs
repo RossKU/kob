@@ -1,20 +1,26 @@
-//! A follower that gets past a gap the node's pruning caused.
+//! A follower that moves the store past a gap caused by the node's pruning.
 //!
-//! A store whose cursor the node has pruned (a downtime longer than the node's retention, or a store that began at the
-//! node's pruning point and was slow enough for the node to move it past the cursor) gets the node's answer `the queried
-//! hash does not have retention root on its chain`, and a plain follower halts at that gap for good ([`Follower::run`],
-//! docs/ops/executor.md Part B 7.4). The recovering follower does what the operator would do by hand (`kobd db rebase`) and
-//! carries on: it moves the store to the node's pruning point (to the sink for a store configured to start there), with the
-//! tracked orders reconciled with the node's UTXO set ([`crate::recover::rebase`]: outputs the node no longer has are closed
-//! with reason `gap`, continuations under the same script are adopted; nothing the store has is deleted), and follows from
-//! there with a new follower.
+//! The node answers `the queried hash does not have retention root on its chain` when it has
+//! pruned the store's cursor. That happens after a downtime longer than the node's retention, or
+//! when a store began at the node's pruning point and was too slow, so the node moved the point
+//! past the cursor. A plain follower halts at that gap for good ([`Follower::run`],
+//! docs/ops/executor.md Part B 7.4).
 //!
-//! The move loses what only the pruned chain could tell: an order created inside the skipped stretch and still open is not in
-//! the store until its maker imports it (7.5). So it is never silent: the warning in the log, [`SkippedGap`] in the health
-//! (`gaps` in `GET /v1/health`, `kob_indexer_gaps_total`, the status line).
+//! The recovering follower does what an operator does by hand with `kobd db rebase`:
+//! - It moves the store to the node's pruning point, or to the sink for a store configured to
+//!   start there.
+//! - It reconciles the tracked orders with the node's UTXO set ([`crate::recover::rebase`]).
+//!   Outputs the node no longer has are closed with reason `gap`, and continuations under the
+//!   same script are adopted. Nothing the store has is deleted.
+//! - It follows from there with a new follower.
 //!
-//! A run moves a store at most [`MAX_GAP_REBASES`] times; a store the node keeps pruning from under it is not catching up, and
-//! stays halted at the gap the status line shows.
+//! The move loses what only the pruned chain could tell. An order created inside the skipped
+//! stretch and still open is not in the store until its maker imports it (7.5). The move is
+//! therefore never silent: it logs a warning and records a [`SkippedGap`] in the health. The gap
+//! shows as `gaps` in `GET /v1/health`, in `kob_indexer_gaps_total` and in the status line.
+//!
+//! A run moves a store at most [`MAX_GAP_REBASES`] times. A store that the node keeps pruning
+//! from under it is not catching up, and it stays halted at the gap the status line shows.
 
 use super::follower::{Follower, FollowerConfig};
 use super::ingest::Ingest;
@@ -31,7 +37,7 @@ fn now_unix() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// What a follower is built from (a new one follows each move).
+/// What a follower is built from. A new follower is built after each move.
 pub(super) struct Parts<S: ChainSource> {
     pub source: Arc<S>,
     pub ingest: Arc<Mutex<Ingest>>,
@@ -62,8 +68,9 @@ pub(super) async fn follow<S: ChainSource>(p: Parts<S>, mut stop: watch::Receive
                 failures = 0;
             }
             Err(e) => {
-                // the node cannot be asked now (not synced, no UTXO index, the pruning point moved again): the next look is
-                // later, and a failed move does not count against the bound
+                // The node cannot be asked now: it is not synced, has no UTXO index, or moved
+                // its pruning point again. The next look is later, and a failed move does not
+                // count against the bound.
                 failures = failures.saturating_add(1);
                 tracing::warn!(error = %e, attempt = failures, "the store cannot be moved past the pruned gap yet; trying again");
                 p.health.update(|h| h.last_error = Some(format!("moving the store past the gap: {e}")));
