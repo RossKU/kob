@@ -1,26 +1,54 @@
-//! Judging a node by its answers, not only by its connection.
+//! Judging a node by its answers, and not only by its connection.
 //!
-//! A node can accept the connection and still be useless: on another network, without the UTXO index the Executor reads its
-//! funds from, not synced, hanging (its requests time out), behind the other node of the pair (`rpc::multi`, its health
-//! watch), or contradicting it. Each of these counts as a failure of the node, like a lost connection, and the same checks
-//! apply to every node of the pair, the chain authority and the cross-checking node alike:
+//! A node can accept the connection and still be useless. The checks below treat each of these as a
+//! failure of the node, like a lost connection. They apply to every node of a pair, to the chain
+//! authority and to the cross-checking node alike.
 //!
-//! * a **resolver entry** (`rpc::resolver`, a public node) gives the node up for another at once ([`resolver::replace`],
-//!   logged as a warning with the reason, which `/v1/health` shows per node as `cut_reason`): on another network, without the
-//!   UTXO index (when the process needs it, [`require_utxo_index`]), reporting not synced for [`UNSYNCED_GRACE`],
-//!   [`TIMEOUTS`] request timeouts within [`TIMEOUT_WINDOW`], behind the other node for a minute (a lag the node itself
-//!   confirmed, `rpc::multi`: never a node's own claim to be ahead), contradicting it, or, as the chain authority, chain
-//!   requests that keep failing while the cursor stalls ([`chain_failing`]);
-//! * a **node the operator named** (a fixed URL) cannot be replaced: the same findings raise an **alarm** instead. It is
-//!   logged as an error when it begins, listed under `node_alarms` in `/v1/health` (and as the node's `cut_reason`), counted
-//!   by `kob_indexer_node_alarms` and appended to the status line, until the node is fine again (a lag or sync alarm: fine for
-//!   [`ALARM_CLEAR_AFTER`] without a break, so a node hovering at the bound does not flap). A cross-checking node with an
-//!   alarm is left out of the pair meanwhile (the authority carries on alone; one that contradicted the authority is
-//!   dropped by that pair until a restart, as before); the authority itself stays the authority, except when its chain
-//!   requests keep failing: then another node of the list that can lead takes the role over (`rpc::multi`).
+//! - It is on another network.
+//! - It has no UTXO index, when the process needs one (the Executor reads its funds there).
+//! - It is not synced.
+//! - It hangs, so its requests time out.
+//! - It is behind the other node of the pair (the health watch of `rpc::multi`).
+//! - It contradicts the other node.
+//! - It is the chain authority and its chain requests keep failing while the cursor stalls
+//!   ([`chain_failing`]).
 //!
-//! A VSPC request that times out is not counted: the batch windows adapt to a slow link (`rpc::window`). The small calls
-//! (`getServerInfo`, `getBlock`, `getSinkBlueScore`, ...) are what a hanging node fails.
+//! # Public and named nodes
+//!
+//! A resolver entry (`rpc::resolver`) stands for a public node. The first finding gives the node up
+//! for another one at once ([`resolver::replace`]). The reason is logged as a warning and shown per
+//! node as `cut_reason` in `/v1/health`. The findings that count are:
+//!
+//! - another network;
+//! - no UTXO index, when [`require_utxo_index`] was called;
+//! - not synced for [`UNSYNCED_GRACE`];
+//! - [`TIMEOUTS`] request timeouts within [`TIMEOUT_WINDOW`];
+//! - behind the other node for a minute, as the node itself confirmed (a node's claim to be ahead
+//!   never counts);
+//! - a contradiction of the other node;
+//! - chain requests that keep failing while the cursor stalls, for the chain authority.
+//!
+//! A node the operator named with a fixed URL is never replaced. The same findings raise an alarm.
+//! The alarm is logged as an error when it begins. It is listed under `node_alarms` in
+//! `/v1/health`, shown as the node's `cut_reason`, counted by `kob_indexer_node_alarms` and added
+//! to the status line. It lasts until the node is fine again.
+//!
+//! A lag, sync or chain alarm ends only after [`ALARM_CLEAR_AFTER`] without a break. A node that
+//! hovers at the bound therefore does not flap.
+//!
+//! # Effect of an alarm
+//!
+//! - A cross-checking node with an alarm is left out of the pair meanwhile. The authority carries
+//!   on alone.
+//! - A cross-checking node that contradicted the authority is dropped by that pair until a restart.
+//! - The authority keeps its role, except when its chain requests keep failing. Then another node
+//!   of the list that can lead takes the role over (`rpc::multi`).
+//!
+//! # What is not counted
+//!
+//! A VSPC request that times out is not counted, because the batch windows adapt to a slow link
+//! (`rpc::window`). The small calls (`getServerInfo`, `getBlock`, `getSinkBlueScore` and the like)
+//! are what a hanging node fails.
 
 use super::{redact_url, resolver};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -28,22 +56,26 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// A node that reports not synced for this long is given up (public) or raises an alarm (named). A public node reports not
-/// synced for a few seconds now and then; a node that has fallen out of the network for minutes does not come back soon.
+/// A node that reports not synced for this long is given up (public) or raises an alarm (named). A
+/// public node reports not synced for a few seconds now and then. A node that has fallen out of the
+/// network for minutes does not come back soon.
 pub const UNSYNCED_GRACE: Duration = Duration::from_secs(120);
 
 /// Request timeouts of one node within [`TIMEOUT_WINDOW`] that make it a hanging node.
 pub const TIMEOUTS: usize = 3;
+/// The window in which [`TIMEOUTS`] timeouts make a node a hanging node.
 pub const TIMEOUT_WINDOW: Duration = Duration::from_secs(600);
 
-/// A named node's lag or sync alarm ends once the node has been fine for this long without a break (one fine answer is not
-/// enough: a node hovering around the bound would raise an error every minute or two).
+/// A named node's lag or sync alarm ends once the node has been fine for this long without a break.
+/// One fine answer is not enough, because a node hovering around the bound would raise an error
+/// every minute or two.
 pub const ALARM_CLEAR_AFTER: Duration = Duration::from_secs(60);
 
-/// [`ALARM_CLEAR_AFTER`] in milliseconds, or another value a test set ([`set_alarm_clear_after`]).
+/// [`ALARM_CLEAR_AFTER`] in milliseconds, or the value a test set ([`set_alarm_clear_after`]).
 static CLEAR_AFTER_MS: AtomicU64 = AtomicU64::new(ALARM_CLEAR_AFTER.as_millis() as u64);
 
-/// How long a lag or sync alarm needs fine answers to end (tests: zero ends it at the first one).
+/// How long a lag or sync alarm needs fine answers to end. A test sets zero to end it at the first
+/// one.
 #[doc(hidden)]
 pub fn set_alarm_clear_after(d: Duration) {
     CLEAR_AFTER_MS.store(d.as_millis() as u64, Ordering::Relaxed);
@@ -53,7 +85,8 @@ fn clear_after() -> Duration {
     Duration::from_millis(CLEAR_AFTER_MS.load(Ordering::Relaxed))
 }
 
-/// The alarms that end only after [`ALARM_CLEAR_AFTER`] of fine answers (the others end with their finding).
+/// The alarms that end only after [`ALARM_CLEAR_AFTER`] of fine answers. The others end with their
+/// finding.
 fn sticky(kind: Kind) -> bool {
     matches!(kind, Kind::Lag | Kind::Sync | Kind::Chain)
 }
@@ -61,33 +94,42 @@ fn sticky(kind: Kind) -> bool {
 /// What a finding is about: one alarm per named node and kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
+    /// The node is on another network.
     Network,
+    /// The node has no UTXO index, which the process needs.
     UtxoIndex,
+    /// The node reports not synced.
     Sync,
+    /// The node hangs, so its requests time out.
     Timeouts,
+    /// The node is behind the other node, or its sink stands still.
     Lag,
+    /// The node contradicted the other node.
     Contradiction,
-    /// Its chain requests keep failing while the cursor does not move (`rpc::multi`, `MultiNode::authority_failing`).
+    /// Its chain requests keep failing while the cursor does not move (`rpc::multi`,
+    /// `MultiNode::authority_failing`).
     Chain,
 }
 
 #[derive(Default)]
 struct Judge {
-    /// node -> since when it reports not synced
+    /// Node to the time since it reports not synced.
     unsynced: HashMap<String, Instant>,
-    /// node -> its recent request timeouts (oldest first)
+    /// Node to its recent request timeouts, oldest first.
     timeouts: HashMap<String, VecDeque<Instant>>,
-    /// nodes behind the other node of their pair at the last health check
+    /// Nodes that were behind the other node of their pair at the last health check.
     behind: HashSet<String>,
-    /// (named node, kind) -> what is wrong
+    /// (Named node, kind) to what is wrong.
     alarms: BTreeMap<(String, Kind), String>,
-    /// (named node, kind) of a sticky alarm -> since when its node has been fine without a break
+    /// (Named node, kind) of a sticky alarm to the time since its node has been fine without a
+    /// break.
     fine_since: BTreeMap<(String, Kind), Instant>,
 }
 
 impl Judge {
-    /// A named node's findings now: the alarms that begin (what is wrong) and end. A sticky alarm ([`sticky`]) ends only
-    /// after [`clear_after`] of fine answers in a row.
+    /// A named node's findings now. Returns the alarms that begin (what is wrong) and the kinds
+    /// that end. A sticky alarm ([`sticky`]) ends only after [`clear_after`] of fine answers in a
+    /// row.
     fn alarm(&mut self, url: &str, findings: &[(Kind, Option<String>)], now: Instant) -> (Vec<String>, Vec<Kind>) {
         let (mut began, mut ended) = (vec![], vec![]);
         for (kind, why) in findings {
@@ -113,7 +155,7 @@ impl Judge {
         (began, ended)
     }
 
-    /// Why `node` counts as not synced now (`None`: synced, or not for long enough yet).
+    /// Why `node` counts as not synced now. `None` means synced, or not for long enough yet.
     fn sync(&mut self, node: &str, synced: bool, now: Instant) -> Option<String> {
         if synced {
             self.unsynced.remove(node);
@@ -124,7 +166,8 @@ impl Judge {
             .then(|| format!("it has reported not synced for over {} min", UNSYNCED_GRACE.as_secs() / 60))
     }
 
-    /// A request to `node` timed out: why it counts as hanging (`None`: not often enough yet).
+    /// A request to `node` timed out. Returns why it counts as hanging, or `None` when not often
+    /// enough yet.
     fn timed_out(&mut self, node: &str, now: Instant) -> Option<String> {
         let q = self.timeouts.entry(node.to_string()).or_default();
         q.push_back(now);
@@ -132,14 +175,14 @@ impl Judge {
         (q.len() >= TIMEOUTS).then(|| format!("{TIMEOUTS} requests timed out within {} min (it hangs)", TIMEOUT_WINDOW.as_secs() / 60))
     }
 
-    /// Everything known about a node that was given up (its successor starts clean).
+    /// Forgets everything known about a node that was given up, so that its successor starts clean.
     fn forget(&mut self, node: &str) {
         self.unsynced.remove(node);
         self.timeouts.remove(node);
         self.behind.remove(node);
     }
 
-    /// Timeout alarms whose timeouts left the window end.
+    /// Ends the timeout alarms whose timeouts left the window.
     fn expire(&mut self, now: Instant) -> Vec<String> {
         let mut ended = vec![];
         let timeouts = &mut self.timeouts;
@@ -174,20 +217,22 @@ fn lock() -> std::sync::MutexGuard<'static, Judge> {
 
 static NEED_UTXO_INDEX: AtomicBool = AtomicBool::new(false);
 
-/// The process needs the UTXO index of its nodes (`kobd --executor`: the operator's funds are read there): a node without it
-/// is a finding from now on.
+/// The process needs the UTXO index of its nodes (`kobd --executor` reads the operator's funds
+/// there). A node without it is a finding from now on.
 pub fn require_utxo_index() {
     NEED_UTXO_INDEX.store(true, Ordering::Relaxed);
 }
 
-/// Acts on the findings about `node`, the node the configured `url` stands for: the first finding gives a resolver entry's
-/// node up (it is returned); a named node's alarms begin and end with them. Never called with the judge's lock held, since
+/// Acts on the findings about `node`, the node the configured `url` stands for. The first finding
+/// gives a resolver entry's node up, and the node is returned. For a named node the alarms begin
+/// and end with the findings. It is never called with the judge's lock held, because
 /// [`resolver::replace`] asks [`suspect`].
 fn act(url: &str, node: &str, findings: &[(Kind, Option<String>)]) -> Option<(Kind, String)> {
     if resolver::is_resolver(url) {
         let bad = findings.iter().find_map(|(k, w)| w.clone().map(|w| (*k, w)));
         if let Some((_, why)) = &bad {
-            // a report about a node the entry no longer uses changes nothing (another client reported it first)
+            // A report about a node the entry no longer uses changes nothing. Another client
+            // reported it first.
             if resolver::current(url).as_deref() == Some(node) {
                 lock().forget(node);
                 resolver::replace(url, node, why);
@@ -209,9 +254,11 @@ fn act(url: &str, node: &str, findings: &[(Kind, Option<String>)]) -> Option<(Ki
     None
 }
 
-/// A `getServerInfo` answer of `node` (the node the configured `url` stands for now). `Err`: the answer must not be used, the
-/// public node is on another network and was given up (the caller retries on its successor). A named node on another network
-/// raises an alarm and its answer is used as it is (the follower and the runner refuse another network themselves).
+/// Takes a `getServerInfo` answer of `node`, the node the configured `url` stands for now.
+///
+/// `Err` means the answer must not be used. The public node is on another network and was given up,
+/// so the caller retries on its successor. A named node on another network raises an alarm and its
+/// answer is used as it is, because the follower and the runner refuse another network themselves.
 pub fn server_info(url: &str, node: &str, network_id: &str, synced: bool, utxo_index: bool) -> Result<(), String> {
     let network = resolver::network();
     let need_utxo = NEED_UTXO_INDEX.load(Ordering::Relaxed);
@@ -227,7 +274,8 @@ pub fn server_info(url: &str, node: &str, network_id: &str, synced: bool, utxo_i
     }
 }
 
-/// A small request to `node` timed out (not a VSPC batch: those adapt, `rpc::window`).
+/// A small request to `node` timed out. A VSPC batch is not counted, because those adapt
+/// (`rpc::window`).
 pub fn timed_out(url: &str, node: &str) {
     let why = lock().timed_out(node, Instant::now());
     if why.is_some() {
@@ -235,10 +283,13 @@ pub fn timed_out(url: &str, node: &str) {
     }
 }
 
-/// The pair's health watch (`rpc::multi`) compared `node` with the other node: `behind` (DAA) when the answers put it behind by
-/// more than the watch's bound now (it is not promoted to authority meanwhile, [`suspect`]), and `confirmed` once the node
-/// itself confirmed that lag over the watch's whole period (a finding: the other node's sink, which it learned later, was
-/// that far ahead of it). `None` for both: level, or the other node's lead was not borne out (a fine answer).
+/// The pair's health watch (`rpc::multi`) compared `node` with the other node.
+///
+/// `behind` is the lag in DAA when the answers put the node behind by more than the watch's bound.
+/// The node is not promoted to authority meanwhile ([`suspect`]). `confirmed` is set once the node
+/// itself confirmed that lag over the watch's whole period. That is a finding, because the sink of
+/// the other node, which it learned later, was that far ahead. `None` for both means level, or the
+/// other node's lead was not borne out, which is a fine answer.
 pub fn lag(url: &str, node: &str, behind: Option<u64>, confirmed: Option<u64>) {
     {
         let mut j = lock();
@@ -259,35 +310,39 @@ pub fn lag(url: &str, node: &str, behind: Option<u64>, confirmed: Option<u64>) {
     }
 }
 
-/// `node` is behind by the other node's answers only (no evidence of its own yet, `rpc::multi`): not suspect, and its alarms
-/// neither begin nor end.
+/// `node` is behind by the other node's answers only, with no evidence of its own yet
+/// (`rpc::multi`). It is not suspect, and its alarms neither begin nor end.
 pub fn unconfirmed(node: &str) {
     lock().behind.remove(node);
 }
 
-/// The health watch (`rpc::multi`) found `node`'s sink standing still (`why`, on the local monotonic clock) while the other
-/// node's advances, or for long with no other node: it stopped advancing, while it may still report synced. A finding, like a
-/// confirmed lag.
+/// The health watch (`rpc::multi`) found the sink of `node` standing still, as `why` says, on the
+/// local monotonic clock. Either the other node's sink advances, or no other node exists and the
+/// sink stood still for long. The node stopped advancing, though it may still report synced. This
+/// is a finding like a confirmed lag.
 pub fn frozen(url: &str, node: &str, why: &str) {
     lock().behind.insert(node.to_string());
     act(url, node, &[(Kind::Lag, Some(why.to_string()))]);
 }
 
-/// `node` contradicted the other node of the pair (`rpc::multi`: a hash or the acceptance data). A named node's alarm stays
-/// until the process restarts (it is dropped from the pair for good, as before).
+/// `node` contradicted the other node of the pair (`rpc::multi`: a hash or the acceptance data).
+/// The alarm of a named node stays until the process restarts. The pair drops that node for good.
 pub fn contradicted(url: &str, node: &str, why: &str) {
     act(url, node, &[(Kind::Contradiction, Some(format!("it contradicted the other node: {why}")))]);
 }
 
-/// The chain requests of `node` keep failing (`why`) while the follower's cursor does not move (`rpc::multi`,
-/// `MultiNode::authority_failing`; a demoted node's probe, `multi::probe_demoted`): a public node is given up for another (the
-/// other node of the pair is the authority at once unless it is suspect), a named node raises an alarm (sticky: it ends after
-/// [`ALARM_CLEAR_AFTER`] of chain answers, [`chain_ok`]).
+/// The chain requests of `node` keep failing, as `why` says, while the follower's cursor does not
+/// move. The callers are `MultiNode::authority_failing` (`rpc::multi`) and the probe of a demoted
+/// node (`multi::probe_demoted`).
+///
+/// A public node is given up for another. The other node of the pair is the authority at once,
+/// unless it is suspect. A named node raises a sticky alarm. It ends after [`ALARM_CLEAR_AFTER`] of
+/// chain answers ([`chain_ok`]).
 pub fn chain_failing(url: &str, node: &str, why: &str) {
     act(url, node, &[(Kind::Chain, Some(why.to_string()))]);
 }
 
-/// `node` answered a chain request: a fine answer for a chain alarm ([`chain_failing`]).
+/// `node` answered a chain request. That is a fine answer for a chain alarm ([`chain_failing`]).
 pub fn chain_ok(url: &str, node: &str) {
     act(url, node, &[(Kind::Chain, None)]);
 }
@@ -297,8 +352,8 @@ pub fn chain_alarm(url: &str) -> bool {
     lock().alarms.contains_key(&(url.to_string(), Kind::Chain))
 }
 
-/// Whether the judge suspects `node` now (it reports not synced, or it was behind the other node at the last check): such a
-/// node is not promoted to chain authority (`rpc::resolver`).
+/// Whether the judge suspects `node` now. It reports not synced, or it was behind the other node at
+/// the last check. Such a node is not promoted to chain authority (`rpc::resolver`).
 pub fn suspect(node: &str) -> bool {
     let j = lock();
     j.unsynced.contains_key(node) || j.behind.contains(node)
@@ -311,15 +366,17 @@ fn expire() {
     }
 }
 
-/// Whether the named node `url` has an alarm that cuts it off from a pair now (`rpc::multi`). A contradiction does not: the
-/// pair that saw it drops the node itself (until the process restarts), and another pair over the same URL judges it on what
-/// it sees.
+/// Whether the named node `url` has an alarm that cuts it off from a pair now (`rpc::multi`).
+///
+/// A contradiction does not cut off. The pair that saw it drops the node itself until the process
+/// restarts. Another pair over the same URL judges the node on what it sees.
 pub fn cuts_off(url: &str) -> bool {
     expire();
     lock().alarms.keys().any(|(u, k)| u == url && *k != Kind::Contradiction)
 }
 
-/// The alarms of the named node `url` (`None`: none), joined: what `/v1/health` shows as its `cut_reason`.
+/// The alarms of the named node `url`, joined. `None` means none. `/v1/health` shows them as its
+/// `cut_reason`.
 pub fn alarm_of(url: &str) -> Option<String> {
     expire();
     let j = lock();
@@ -327,7 +384,8 @@ pub fn alarm_of(url: &str) -> Option<String> {
     (!v.is_empty()).then(|| v.join("; "))
 }
 
-/// Every alarm of a named node now, `node: problem` (the URL redacted): `node_alarms` of `/v1/health`.
+/// Every alarm of a named node now as `node: problem`, with the URL redacted. `/v1/health` shows
+/// them as `node_alarms`.
 pub fn alarms() -> Vec<String> {
     expire();
     lock().alarms.iter().map(|((url, _), w)| format!("{}: {w}", redact_url(url))).collect()
@@ -363,8 +421,8 @@ mod tests {
         assert!(k.alarms.is_empty());
     }
 
-    /// A lag or sync alarm of a named node ends only after a minute of fine answers without a break (a node hovering at the
-    /// bound does not flap); another kind ends with its finding.
+    /// A lag or sync alarm of a named node ends only after a minute of fine answers without a
+    /// break. A node hovering at the bound does not flap. Another kind ends with its finding.
     #[test]
     fn lag_and_sync_alarms_end_after_a_minute_of_fine_answers() {
         let mut j = Judge::default();
@@ -387,8 +445,8 @@ mod tests {
         assert_eq!(j.alarm("n", &net(None), s(201)).1, vec![Kind::Network]);
     }
 
-    /// A named node is never replaced: its findings raise alarms, which end with the findings; a public node's finding
-    /// replaces it at once, and a node on another network is never used.
+    /// A named node is never replaced. Its findings raise alarms, which end with the findings. A
+    /// public node's finding replaces it at once, and a node on another network is never used.
     #[test]
     fn a_named_node_raises_alarms_and_a_public_one_is_replaced() {
         let _g = resolver::tests::serial();
